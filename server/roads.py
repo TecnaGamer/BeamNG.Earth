@@ -1774,9 +1774,8 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None):
             foot = np.array([p + nrm * pw / 2, p - nrm * pw / 2, p])
             if len(A):
                 hit = fast._ef.points_near_segments(foot, A, B, np.full(len(A), PIER_ROAD_M)) \
-                    if fast.AVAILABLE and hasattr(fast._ef, "points_near_segments") else np.array([
-                        any(float(np.min(np.hypot(*(q - (A + np.clip(((q - A) * (B - A)).sum(1) / np.maximum(
-                            ((B - A) ** 2).sum(1), 1e-9), 0, 1)[:, None] * (B - A))).T))) < PIER_ROAD_M) for q in foot])
+                    if fast.AVAILABLE and hasattr(fast._ef, "points_near_segments") else \
+                    (_seg_dist(foot, A, B).min(axis=1) < PIER_ROAD_M)
                 if np.asarray(hit).any():
                     continue
             zt = float(np.interp(sc, s, z)) - under
