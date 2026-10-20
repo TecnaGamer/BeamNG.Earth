@@ -1179,9 +1179,9 @@ def _seg_dist(p, a, b):
     return np.hypot(p[:, None, 0] - q[..., 0], p[:, None, 1] - q[..., 1])
 
 
-def cut_outside(pts, blockers, spacing=2.0):
+def cut_outside(pts, blockers, spacing=2.0, min_piece=MIN_PIECE_M):
     """The pieces of a polyline (k, 3) outside every blocker (centreline xy (m, 2), half width): densified
-    to `spacing`, points inside a blocker removed, runs of at least MIN_PIECE_M kept. Pure."""
+    to `spacing`, points inside a blocker removed, runs of at least min_piece kept. Pure."""
     if not blockers:
         return [pts]
     d = densify(np.asarray(pts, np.float64), spacing)
@@ -1189,7 +1189,7 @@ def cut_outside(pts, blockers, spacing=2.0):
     if fast.AVAILABLE:          # the Rust test (the same distances; 712 calls a tile set, ~1 s of numpy)
         segs, starts, hws = _blocker_segments(blockers)
         inside = np.asarray(fast._ef.inside_blockers(np.ascontiguousarray(d[:, :2]), segs, starts, hws))
-        return _runs_outside(d, inside)
+        return _runs_outside(d, inside, min_piece)
     inside = np.zeros(len(d), bool)
     for line, hw in blockers:
         if len(line) < 2:
@@ -1201,7 +1201,7 @@ def cut_outside(pts, blockers, spacing=2.0):
         idx = np.nonzero(near)[0]
         dist = _seg_dist(d[idx, :2], line[:-1], line[1:]).min(axis=1)
         inside[idx[dist < hw]] = True
-    return _runs_outside(d, inside)
+    return _runs_outside(d, inside, min_piece)
 
 
 _BLOCKERS = ()                  # ((blockers list, its segment arrays), ...): the last few lists (a tile alternates
@@ -1229,7 +1229,7 @@ def _blocker_segments(blockers):
     return arr[:3]
 
 
-def _runs_outside(d, inside):
+def _runs_outside(d, inside, min_piece=MIN_PIECE_M):
     out, start = [], None
     for k in range(len(d) + 1):
         if k < len(d) and not inside[k]:
@@ -1237,7 +1237,7 @@ def _runs_outside(d, inside):
                 start = k
         elif start is not None:
             run = d[start:k]
-            if len(run) >= 2 and float(np.sum(np.hypot(*np.diff(run[:, :2], axis=0).T))) >= MIN_PIECE_M:
+            if len(run) >= 2 and float(np.sum(np.hypot(*np.diff(run[:, :2], axis=0).T))) >= min_piece:
                 out.append(run)
             start = None
     return out
@@ -1406,11 +1406,14 @@ def join_walk_ends(runs, carriageways):
                 continue
             gap = qj[:2] - qi[:2]
             L = math.hypot(*gap)
-            if L < 0.3 or L > JOIN_GAP_M:
+            if L > JOIN_GAP_M or abs(qi[2] - qj[2]) > max(0.15, L * 0.2):
                 continue
-            u = gap / L
-            if float(u @ di) < cos_t or float(-u @ dj) < cos_t:
-                continue                        # each end must leave toward the other
+            if L > 1e-6:
+                u = gap / L
+                if float(u @ di) < cos_t or float(-u @ dj) < cos_t:
+                    continue                    # each end must leave toward the other
+            elif float(di @ dj) > -cos_t:
+                continue
             pairs.append((L, a, b))
     runs = [dict(r) for r in runs]
     alias = list(range(len(runs)))              # a merged run's index (runs consumed by merges point to it)
@@ -1427,9 +1430,13 @@ def join_walk_ends(runs, carriageways):
         if ki == kj:
             continue
         ri, rj = runs[ki], runs[kj]
+        # An earlier merge may have reversed either run. Locate the original
+        # endpoint again rather than applying its old start/end flag to a chain.
+        ei = np.linalg.norm(ri["pts"][-1] - qi) < np.linalg.norm(ri["pts"][0] - qi)
+        ej = np.linalg.norm(rj["pts"][-1] - qj) < np.linalg.norm(rj["pts"][0] - qj)
         # the pieces in travel order: ri toward its joined end, then rj away from its joined end
-        pi_ = ri["pts"] if ei else ri["pts"][::-1]
-        pj_ = rj["pts"] if not ej else rj["pts"][::-1]
+        pi_ = (ri["pts"] if ei else ri["pts"][::-1]).copy()
+        pj_ = (rj["pts"] if not ej else rj["pts"][::-1]).copy()
         si = ri["side"] if ei else -ri["side"]
         sj = rj["side"] if not ej else -rj["side"]
         if si != sj:
@@ -1439,6 +1446,9 @@ def join_walk_ends(runs, carriageways):
         if any(_seg_dist_min(cl, q[:2]) < h + hw * 0.5 for cl, h in carriageways for q in gap_pts):
             continue                            # the gap would cross a road
         used.update((a, b))
+        if L < 1e-6:
+            pi_[-1] = pj_[0] = (pi_[-1] + pj_[0]) / 2
+            pj_ = pj_[1:]
         pts = np.vstack([pi_, gap_pts, pj_]) if len(gap_pts) else np.vstack([pi_, pj_])
         j0 = ri["j"][0] if ei else ri["j"][1]
         j1 = rj["j"][1] if not ej else rj["j"][0]
@@ -2795,7 +2805,7 @@ def drains(run, side, caps, walk_w=None):
 
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
-               walls=None, deck_context=None):
+               walls=None, deck_context=None, frontage_walks=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -2924,7 +2934,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 # whole runs near the tile first (joined across tile borders below), clipped to the tile after
                 for piece in clip_polyline(line, *near):
                     for cpiece, (j0, j1) in junctions.apply_cuts(piece, jcuts.get((fid, side), [])):
-                        for run in cut_outside(cpiece, wb, 0.5):
+                        for run in cut_outside(cpiece, wb, 0.5, min_piece=0.05):
                             run = densify(simplify(run))
                             if len(run) < 2:
                                 continue
@@ -2948,6 +2958,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                             chunks.append(_chunk(look, w, c))
     if walks is not None:
         runs_near = join_walk_ends(runs_near, [(p2[:, :2], s2.width / 2) for _, s2, p2, _ in roads])
+        if frontage_walks is not None:
+            frontage_walks.extend(runs_near)
         for rn in runs_near:
             fid, side, w, run0 = rn["fid"], rn["side"], rn["w"], rn["pts"]
             for run in clip_polyline(run0, *exact):

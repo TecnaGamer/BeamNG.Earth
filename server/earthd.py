@@ -962,9 +962,12 @@ class Server:
             res = fut.result()
             log.debug("far buildings tile %d_%d: %.2f s (queue + build)", tx, ty, time.perf_counter() - t0)
             return res
-        return buildingsmod.far_tile(anchor.frame, tx, ty, self.mapdata,
-                                     lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                                     self.out_dir, self.vfs_dir, aid)
+        g = self.grader_for(anchor)
+
+        def elev(la, lo):
+            z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom))
+            return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+        return buildingsmod.far_tile(anchor.frame, tx, ty, self.mapdata, elev, self.out_dir, self.vfs_dir, aid)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -1011,17 +1014,17 @@ class Server:
         items = town = None
         if self.buildings:
             items = buildingsmod.road_tile_items(
-                anchor.frame, tx, ty, self.mapdata,
-                lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+                anchor.frame, tx, ty, self.mapdata, elev,
                 decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty))
             town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
         rwalls = []
         ctx = []
+        frontage_walks = []
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor),
                                      structures=buildingsmod.centres(items, tx, ty) if items else (),
-                                     tunnels=anchor.tunnels, walls=rwalls)
+                                     tunnels=anchor.tunnels, walls=rwalls, frontage_walks=frontage_walks)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
@@ -1033,6 +1036,7 @@ class Server:
             park = parkingmod.clear_of(park, props, drives)
             park = parkingmod.tile_lot_spots(anchor.frame, tx, ty, self.mapdata, elev, items, park)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
+            buildingsmod.pave_frontages(items, frontage_walks, x0, y0)
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0)
         mesh = blockworker._with_plazas(mesh, anchor.frame, tx, ty, elev, (x0, y0, 0.0), self.surface)
@@ -1043,9 +1047,7 @@ class Server:
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
         bld = None
         if self.buildings:
-            bld = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata,
-                                         lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                                         None, None, items)
+            bld = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata, elev, None, None, items)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh)
 
