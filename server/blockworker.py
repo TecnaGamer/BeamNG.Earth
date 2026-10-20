@@ -266,16 +266,16 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     items = town = None
     if buildings:
         import buildings as buildingsmod
-        items = buildingsmod.road_tile_items(frame, tx, ty, _s.md,
-                                             lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+        items = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev,
                                              decks=_tile_decks(bridges, cells, tx, ty))
         town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
     rwalls = []
     ctx = []
+    frontage_walks = []
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, structures=buildingsmod.centres(items, tx, ty) if items else (),
-                                 tunnels=tunnels, walls=rwalls)
+                                 tunnels=tunnels, walls=rwalls, frontage_walks=frontage_walks)
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
     x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
@@ -287,6 +287,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
         park = parkingmod.clear_of(park, props, drives)
         park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park)
         buildingsmod.brick_walks(walks, items, lat, lon)
+        buildingsmod.pave_frontages(items, frontage_walks, x0, y0)
     mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift)
     mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
     dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(roadsmod.tile_bbox(tx, ty)), ctx,
@@ -295,8 +296,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     bld = None
     if buildings:
         import buildings as buildingsmod
-        bld = buildingsmod.road_tile(frame, tx, ty, _s.md,
-                                     lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), None, None,
+        bld = buildingsmod.road_tile(frame, tx, ty, _s.md, elev, None, None,
                                      items)
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
                                bld, props, wires, park, tunnel_mesh=tmesh)
@@ -391,8 +391,12 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
     """earthd.Server.build_far_bld_tile here (road-tile pool): buildings.far_tile."""
     import buildings as buildingsmod
     frame = geodesy.EnuFrame(lat, lon)
-    return buildingsmod.far_tile(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                 out_dir, vfs_dir, aid)
+    g, _ = _s.anchor(aid, lat, lon)
+
+    def elev(la, lo):
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    return buildingsmod.far_tile(frame, tx, ty, _s.md, elev, out_dir, vfs_dir, aid)
 
 
 def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):

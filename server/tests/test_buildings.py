@@ -533,17 +533,23 @@ class OverRoadTest(unittest.TestCase):
         items = bld.tile_buildings(self.f, 0, 0, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)))
         self.assertEqual(len(items), 1)
 
-    def test_a_footprint_over_a_street_is_lifted_over_it(self):
+    def test_a_footprint_over_a_street_keeps_grounded_wings(self):
         b = Feats(["O", "H"], [self.ll(10, 10, 80, 60), self.ll(150, 10, 30, 30)],
                   **{"class": ["", ""], "height": [16.0, 9.0]})
         street = np.array([[0.0, 40.0], [256.0, 40.0]])         # through the first, past the second
         items = bld.tile_buildings(self.f, 0, 0, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)),
                                    roads_xy=[street])
-        by_area = sorted(items, key=lambda it: -bld._area2(it[0].ring))
-        over, house = by_area[0][0], by_area[1][0]
+        over = next(s for s, _, _ in items if s.min_h > 0.5)
+        house = next(s for s, _, _ in items if s.ring[:, 0].min() > 100)
         self.assertEqual(over.min_h, bld.OVER_ROAD_CLEAR_M)
         self.assertAlmostEqual(over.min_h + over.height, 16.0, delta=0.01, msg="its top where it was")
         self.assertEqual(house.min_h, 0.0)
+        wings = [s for s, _, _ in items if s.base_part]
+        self.assertTrue(wings)
+        self.assertGreater(sum(bld._area2(s.ring) / 2 for s in wings), 4000)
+        for wing in wings:
+            self.assertEqual(wing.min_h, 0.0)
+            self.assertEqual(bld.road_through(wing.ring, [street]), 0.0)
         self.assertAlmostEqual(bld.road_through(over.ring, [street - 0]), 80.0, delta=2.5)
 
 
