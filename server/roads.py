@@ -22,6 +22,7 @@ flagged as bridge / tunnel or off ground level are left out), the navgraph.
 import json
 import logging
 import math
+import time
 import os
 import threading
 from collections import namedtuple
@@ -53,6 +54,8 @@ LEAD_S = 14.0           # s of driving ahead
 LEAD_MAX_M = 2000.0
 CORRIDOR_M = 160.0      # m either side of the path
 SIDE_PENALTY = 4.0      # a tile off the path counts this many times its sideways distance (path_key)
+AHEAD_M = 0.0           # (KyzoFox) --road-ahead: moving at AHEAD_MIN_V or more, the path ahead is wanted this far
+AHEAD_MIN_V = 4.0       # ... (the profiles' longer reach on top of LEAD_S; the same corridor and path_key order)
 
 # class -> (width m, paved by default). Classes not here (footway, path, steps, cycleway, ...) are
 # left out for now.
@@ -1584,8 +1587,10 @@ def wanted_tiles(x, y, vx=0.0, vy=0.0):
     within CORRIDOR_M of the path ahead, up to LEAD_S of driving (LEAD_MAX_M at most)."""
     want = set(tiles_near(x, y, SEND_M))
     s = math.hypot(vx, vy)
-    lead = min(LEAD_MAX_M, s * LEAD_S)
-    if s < FAST_MS or lead <= SEND_M:
+    lead = min(LEAD_MAX_M, s * LEAD_S) if s >= FAST_MS else 0.0
+    if AHEAD_M > 0 and s >= AHEAD_MIN_V:        # (KyzoFox) --road-ahead
+        lead = max(lead, AHEAD_M)
+    if lead <= SEND_M:
         return want
     ux, uy = vx / s, vy / s
     d = 0.0
@@ -1653,10 +1658,12 @@ def _chunk(look, w, c):
 DECK = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}      # bridge decks (roadmesh.deck)
 DECK_STEP = 4.0         # m between deck profile points
 DECK_CLEAR = 0.05       # m a deck stays above the ground under it (no z-fighting where it rests on it)
-DECK_ROAD_CLEAR = 6.5   # m a deck's top stays over a road crossing under it (5 m headroom + the slab)
+# KyzoFox 1.5.4: bridges high enough for trucks. Set by earthd's --bridge-clearance / --bridge-max-grade through
+# the environment, so the road-tile worker processes get them too. Originals: 6.5 m, 6 %, at grade under 3 m.
+DECK_ROAD_CLEAR = float(os.environ.get("BNE_BRIDGE_CLEAR", "7.5"))   # m a deck's top stays over a road under it (6 m headroom + slab)
 DECK_GRADE = 0.05       # that requirement falls 5 % along the deck from the crossing
-DECK_MAX_GRADE = 0.06   # a deck climbs no steeper than this from an abutment
-AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
+DECK_MAX_GRADE = float(os.environ.get("BNE_BRIDGE_MAX_GRADE", "0.12"))   # a deck climbs no steeper than this from an abutment
+AT_GRADE_M = float(os.environ.get("BNE_AT_GRADE_M", "1.5"))   # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
 
@@ -3000,6 +3007,14 @@ class Tracker:
         self.building = set()
         self.pool = None        # its own BUILD_PER_POSE threads (vegetation.Tracker)
         self.futs = {}
+        self.empty = set()      # (KyzoFox fast) tiles that came back with nothing (no roads there, or failed)
+        self.retry = {}         # (KyzoFox 1.5.4) failed tile -> monotonic time it is built again
+        self.partial = {}       # ... tile sent without its buildings -> monotonic time it was
+        self.ready = None       # ... ready(aid, tx, ty): its buildings' data downloaded (earthd); None: always
+
+    def backlog(self, x, y, radius):
+        """(KyzoFox fast, roads first) True while a road tile within radius is not built yet."""
+        return any(k not in self.sent and k not in self.empty for k in tiles_near(x, y, radius))
 
     def close(self):
         if self.pool is not None:
@@ -3013,21 +3028,37 @@ class Tracker:
         if aid != self.aid:
             for f in self.futs.values():
                 f.cancel()
-            self.aid, self.sent, self.building, self.futs = aid, set(), set(), {}
+            self.aid, self.sent, self.building, self.futs, self.empty = aid, set(), set(), {}, set()
+            self.retry = {}
+            self.partial = {}
         if self.pool is None:
             from concurrent.futures import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-tile")
         vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
-        fast = math.hypot(vx, vy) >= FAST_MS
+        spd = math.hypot(vx, vy)
+        fast = spd >= FAST_MS or (AHEAD_M > 0 and spd >= AHEAD_MIN_V)     # (KyzoFox) the path order with --road-ahead
         wanted = wanted_tiles(x, y, vx, vy)
         start = set(tiles_near(x, y, SEND_M)) if ground_busy else wanted
-        want = [k for k in start if k not in self.sent and k not in self.building]
+        now = time.monotonic()
+        # (KyzoFox 1.5.4) tiles sent without their buildings (their data was not downloaded yet): built again once
+        # it is there (ready(aid, tx, ty), when given) and the player is PARTIAL_MIN_M away (never with the car on it)
+        for k, t in list(self.partial.items()):
+            if k not in self.sent:
+                self.partial.pop(k, None)
+            elif (now - t >= PARTIAL_RETRY_S and tile_distance(k[0], k[1], x, y) >= PARTIAL_MIN_M
+                  and (self.ready is None or self.ready(aid, k[0], k[1]))):
+                self.partial.pop(k, None)
+                self.sent.discard(k)
+        want = [k for k in start if k not in self.sent and k not in self.building and k not in self.empty
+                and self.retry.get(k, 0.0) <= now]
         want.sort(key=path_key(x, y, vx, vy) if fast else view_key(conn, aid, x, y))
         for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
             self.building.add((tx, ty))
+            self.t0 = getattr(self, "t0", {}); self.t0[(tx, ty)] = time.monotonic()
             fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         drop = [k for k in self.sent if k not in wanted and tile_distance(k[0], k[1], x, y) > DROP_M]
+        self.empty = {k for k in self.empty if k in wanted or tile_distance(k[0], k[1], x, y) <= DROP_M}
         for k in drop:
             self.sent.discard(k)
             conn.send({"type": "roads_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
@@ -3041,13 +3072,29 @@ class Tracker:
             return
         try:
             res = fut.result()
-        except Exception as e:      # network trouble: the next pose asks again
-            log.debug("roads tile %s: %s: %s", key, type(e).__name__, e)
+        except Exception as e:      # network trouble: asked again after TILE_RETRY_S
+            # KyzoFox 1.5.4: it went into self.empty, which on_pose never builds again while the tile is within
+            # reach: one failed fetch left a stretch of road (and its bridge) missing until the player was 960 m past
+            # it (the user's truck drove off a bridge's end into the gap, Greene County, AL, 2026-10-20)
+            log.info("roads tile %s failed (%s: %s); again in %.0f s", key, type(e).__name__, e, TILE_RETRY_S)
+            self.retry[key] = time.monotonic() + TILE_RETRY_S
             return
+        dt = time.monotonic() - getattr(self, "t0", {}).pop(key, time.monotonic())
+        self.times = getattr(self, "times", []); self.times.append(dt)
+        if len(self.times) >= 20:               # (KyzoFox fast) a summary every 20 road tiles
+            ts = sorted(self.times)
+            log.info("roads: 20 tiles built, median %.1f s, slowest %.1f s (sent %d, building %d)",
+                     ts[len(ts) // 2], ts[-1], len(self.sent), len(self.building))
+            self.times = []
         if res is None:
+            self.empty.add(key)
+            # (KyzoFox 1.5.4) the mod's road guard waits for the squares ahead: this one has no roads
+            conn.send({"type": "roads_empty", "anchorId": aid, "key": f"{key[0]}_{key[1]}"})
             return
-        path, n = res
+        path, n = res[0], res[1]
         self.sent.add(key)
+        if len(res) > 2 and res[2]:             # (KyzoFox 1.5.4) sent without its buildings: again later
+            self.partial[key] = time.monotonic()
         m = {"type": "roads_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
         if pool is not None:                # its meshes at pooled shape paths (matslots.py)
@@ -3057,6 +3104,9 @@ class Tracker:
         conn.send(m)
 
 
+PARTIAL_RETRY_S = 3.0           # s before a road tile sent without its buildings is built again (data permitting) ...
+PARTIAL_MIN_M = 300.0           # ... once the player is this far from it (its deck is never rebuilt under the car)
+TILE_RETRY_S = 3.0              # s before a road tile whose build failed is built again (Tracker._built)
 BLD_PARTS_MAX = 4               # building meshes per road tile ("bld", "bld2".."bld4": the mod's list)
 
 

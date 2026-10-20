@@ -212,15 +212,15 @@ class BridgeProfilesTest(unittest.TestCase):
     def test_short_bridge_no_wall_and_splits_merge(self):
         import roads
         flat = lambda xy: np.full(len(xy), 10.0)
-        # a 60 m bridge over a road at its middle: capped at 6 % from each abutment, not 6.5 m high
+        # a 60 m bridge over a road at its middle: capped at DECK_MAX_GRADE from each abutment, not DECK_ROAD_CLEAR high
         ln = np.c_[np.arange(0.0, 61.0, 4.0), np.zeros(16)]
         (z,) = roads.deck_profile([ln], flat, [(0, 30.0, 10.0)])
         s = ln[:, 0]
         self.assertLessEqual(np.abs(np.diff(z) / np.diff(s)).max(), roads.DECK_MAX_GRADE + 0.02)
-        self.assertLess(z.max(), 10.0 + 0.06 * 30 + 0.1)
+        self.assertLess(z.max(), 10.0 + roads.DECK_MAX_GRADE * 30 + 0.1)
         # a ramp starting in the intersection it climbs from (Queens Plaza, report #55): flush with the cross street
         (z,) = roads.deck_profile([ln], flat, [(0, 6.0, 10.0), (0, 30.0, 10.0)])
-        self.assertLess(float(np.interp(6.0, s, z)), 10.0 + 0.15, "no hump across the cross street")
+        self.assertLess(float(np.interp(6.0, s, z)), 10.0 + roads.DECK_MAX_GRADE * 2.5, "no hump across the cross street")
         self.assertGreater(z.max(), 10.0 + 0.06 * 18 - 0.3, "the crossing farther on still lifts the deck")
         # no sag between two crossings 120 m apart (the Queensboro Bridge over Roosevelt Island)
         ln2 = np.c_[np.arange(0.0, 401.0, 4.0), np.zeros(101)]

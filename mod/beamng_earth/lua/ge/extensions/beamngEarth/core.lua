@@ -53,6 +53,7 @@ local banner = require('beamngEarth/banner') -- the connection banner (docs/DEVT
 local hudapps = require('beamngEarth/hudapps') -- the same three as BeamNG UI apps (the ".Earth" app layout)
 local edgeguard = require('beamngEarth/edgeguard') -- never fall off the last block (docs/ROADMAP.md)
 local drophold = require('beamngEarth/drophold') -- a car dropped far away waits for its ground
+local roadguard = require('beamngEarth/roadguard') -- (KyzoFox fast) the game waits for the road ahead to load
 local groundcover = require('beamngEarth/groundcover') -- grass on the surface layers (docs/ROADMAP.md v1.5)
 local roads = require('beamngEarth/roads') -- DecalRoads from the server's road tiles (docs/ROADMAP.md v1.6)
 local sea = require('beamngEarth/sea') -- the sea's WaterBlock tiles (server seatiles.py)
@@ -401,6 +402,7 @@ local function finishRebase()
   gov:heavyNow() -- phase 2 must follow phase 1's vehicle move; its frame is a heavy slot anyway
   local sw = stopwatch.new()
   local msg, tr, xf = rb.msg, rb.terrain, rb.xf
+  st.recouple = rebase.recoupleStart(rb.couplings, st.clock)   -- (trailers hitched again: rebase.lua)
   local ok, err = loadBlock(tr)
   -- the world shifts under the grass: made fresh (with tools/gcpatch the engine would keep it)
   groundcover.rebuild()
@@ -468,14 +470,17 @@ local function commitRebase(msg, purpose)
   -- nothing to move for an identity transform (resync); setClusterPosRelRot from the GE-side
   -- position would only pull the car back to where GE last saw it
   local moved, playerId = {}, nil
+  local couplings = {}
   if not isIdentity(xf) then
     holdMotionBlur()
+    couplings = rebase.couplings()      -- (KyzoFox fast: re-hitched after phase 2, rebase.recoupleStart)
     moved, playerId = rebase.moveVehicles(xf, geodesy)
   end
   local m = playerId and moved[playerId]
   st.rebasing = { msg = msg, terrain = tr, purpose = purpose, newAnchor = newAnchor, xf = xf,
     wait = rebaseLag, waited = 0,
-    playerOld = m and m.old or { st.player and st.player.x or 0, st.player and st.player.y or 0, st.player and st.player.z or 0 } }
+    playerOld = m and m.old or { st.player and st.player.x or 0, st.player and st.player.y or 0, st.player and st.player.z or 0 },
+    couplings = couplings }
   st.lagProbe = { moved = moved, playerId = playerId, frames = 0 }
   st.rebasing.phase1Ms = sw()
   if moveVisible(st.lagProbe) then
@@ -714,6 +719,8 @@ local function onMessage(msg)
     roads.onTile(msg, st.anchorId)
   elseif t == 'roads_drop' then
     roads.onDrop(msg)
+  elseif t == 'roads_empty' then
+    roads.onEmpty(msg)
   elseif t == 'far_tile' then
     farfield.onTile(msg)
   elseif t == 'far_swap' then
@@ -1141,6 +1148,56 @@ local function updateGuard()
   end
 end
 
+-- KyzoFox 1.5.4: the road guard (roadguard.lua): the game's own pause while the road ahead of a driving car is
+-- not loaded yet (a bridge deck missing or not solid: falls at highway speed), resumed once it is.
+local roadGuard = roadguard.new()
+local roadGuardFailed = false
+local roadGuardMsgAt = -math.huge
+M.roadGuardState = function() return roadGuard end
+local function updateRoadGuard()
+  if roadGuardFailed then return end
+  local stg = rawget(_G, 'beamngEarth_settings')
+  roadguard.enabled = not (stg and stg.get and stg.get('roadGuard') == false)
+  local p = st.pending
+  local ok, err = pcall(function()
+    -- only with a healthy server and a settled world: a teleport / rebase coming, a car being placed: it gives way
+    local live = st.inOurLevel and serverHealthy() and st.anchorId ~= nil and not st.placeFrames and roads.enabled
+      and not (p and p.ready)
+    if not live then
+      if roadGuard.pausedByUs then roadguard.release(roadGuard, st.clock) end
+      return
+    end
+    local veh = getPlayerVehicle(0)
+    local car = nil
+    if veh then
+      local pos, vel = veh:getPosition(), veh:getVelocity()
+      car = { x = pos.x, y = pos.y, vx = vel.x, vy = vel.y }
+    end
+    local aid = st.anchorId
+    local act = roadguard.step(roadGuard, car, st.paused or simPaused(), st.clock,
+      function(x, y) return roads.squareState(aid, x, y) end)
+    if act == 'pause' then
+      simPause(true)
+      log('I', 'beamngEarth', 'road guard: waiting for the road ahead (' .. tostring(roadGuard.last) .. ')')
+    elseif act == 'resume' then
+      if simPaused() then simPause(false) end
+      log('I', 'beamngEarth', 'road guard: road ahead ready, resumed')
+    end
+    if roadGuard.pausedByUs and st.clock - roadGuardMsgAt > 1 then
+      roadGuardMsgAt = st.clock
+      if guihooks and guihooks.trigger then
+        guihooks.trigger('Message', { ttl = 1.5, category = 'beamngEarth_roadGuard', icon = 'hourglass_empty',
+          msg = 'BeamNG.Earth: waiting for the road ahead to load...' })
+      end
+    end
+  end)
+  if not ok then
+    roadGuardFailed = true
+    pcall(roadguard.release, roadGuard, st.clock)
+    log('E', 'beamngEarth', 'road guard turned off: ' .. tostring(err))
+  end
+end
+
 local function updateBanner(dt)
   local i = bannerInfo
   i.net, i.session = net.state(), st.sessionId ~= nil
@@ -1375,6 +1432,10 @@ local function onUpdate(dtReal, dtSim)
       return -- positions are in neither frame for decisions this frame
     end
   end
+  if st.recouple then
+    local okR, plan = pcall(rebase.recoupleTick, st.recouple, st.clock)
+    st.recouple = okR and plan or nil
+  end
 
   updatePlayer(dtReal)
   if st.active then
@@ -1412,6 +1473,7 @@ local function onUpdate(dtReal, dtSim)
     t = mark('navgraph', t)
     updateSky(dtReal)
     updateGuard()
+    updateRoadGuard()
     t = mark('sky', t)
   end
   drawUi(dtReal)

@@ -161,4 +161,64 @@ end]], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], t[1], t[2], t[3], p
   if not ok2 then log('W', 'beamngEarth', 'recovery point update skipped: ' .. tostring(err2)) end
 end
 
+-- KyzoFox 1.5.4: trailers stay hitched through a rebase. moveVehicles moves the truck and its trailer with two
+-- requests; the physics can apply them a step apart, the coupler between them then stretched by the whole rebase
+-- distance for that step and broke (the user, 2026-10-19 between Canton, GA and Tuscaloosa, AL: the trailer came off at
+-- every "Loading n/222", tyres screeching). The fifth wheel does not latch again by itself until its kingpin has been
+-- 0.6 m away (vehicle/controller/couplings/fifthwheel.lua: state 'detaching'), so the couplings known before the move
+-- (core_trailerRespawn's registry; it keeps an entry through a break, onCouplerDetached returns on breakForce > 0) are
+-- attached again after it, a few times over RECOUPLE_AT, with obj:attachExternalCoupler as the fifth wheel itself does
+-- (its onCouplerAttached then sets it attached), only where the vehicle reports nothing attached.
+M.RECOUPLE_AT = { 0, 0.15, 0.4, 0.8, 1.5, 2.5 }   -- s after the rebase's phase 2
+
+-- The couplings now: { { veh, trailer, node, trailerNode } } (head vehicle id, trailer id, their coupler node cids).
+function M.couplings()
+  local out = {}
+  local tr = rawget(_G, 'core_trailerRespawn')
+  if type(tr) ~= 'table' or type(tr.getTrailerData) ~= 'function' then return out end
+  local ok, reg = pcall(tr.getTrailerData)
+  if not ok or type(reg) ~= 'table' then return out end
+  for vehId, c in pairs(reg) do
+    if type(c) == 'table' and tonumber(c.trailerId) and tonumber(c.node) and tonumber(c.trailerNode) then
+      out[#out + 1] = { veh = tonumber(vehId), trailer = tonumber(c.trailerId), node = tonumber(c.node),
+        trailerNode = tonumber(c.trailerNode) }
+    end
+  end
+  table.sort(out, function(a, b) return a.veh < b.veh end)
+  return out
+end
+
+-- The vehicle Lua that attaches coupling c again if its vehicle has nothing attached. Pure.
+function M.recoupleCommand(c)
+  return string.format([[
+local N, TID, TN = %d, %d, %d
+local att = (beamstate.isCouplerAttached and beamstate.isCouplerAttached())
+  or (extensions.couplings and extensions.couplings.isCouplerAttached and extensions.couplings.isCouplerAttached())
+local nd = v and v.data and v.data.nodes and v.data.nodes[N]
+if not att and nd then
+  obj:attachExternalCoupler(N, TID, TN, nd.couplerStrength or 10000000, math.max(nd.couplerRadius or 0.5, 0.5),
+    nd.couplerLockRadius or 0.025, nd.couplerLatchSpeed or 0.3, 0)
+end]], c.node, c.trailer, c.trailerNode)
+end
+
+-- A re-hitch plan for these couplings starting at time now (s), or nil when there are none.
+function M.recoupleStart(couplings, now)
+  if type(couplings) ~= 'table' or #couplings == 0 then return nil end
+  return { couplings = couplings, t0 = now, next = 1 }
+end
+
+-- Send the plan's due attempts at time now (s); returns the plan, or nil once it is done.
+function M.recoupleTick(plan, now)
+  if not plan then return nil end
+  while plan.next <= #M.RECOUPLE_AT and now - plan.t0 >= M.RECOUPLE_AT[plan.next] do
+    for _, c in ipairs(plan.couplings) do
+      local veh = scenetree.findObjectById(c.veh)
+      if veh and scenetree.findObjectById(c.trailer) then pcall(veh.queueLuaCommand, veh, M.recoupleCommand(c)) end
+    end
+    plan.next = plan.next + 1
+  end
+  if plan.next > #M.RECOUPLE_AT then return nil end
+  return plan
+end
+
 return M

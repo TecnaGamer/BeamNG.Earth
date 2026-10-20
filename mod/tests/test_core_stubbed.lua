@@ -584,7 +584,7 @@ do
   T.check(core.teleport(10.5, 20.5, nil, { record = false }) == true and #places.recentList() == n2
     and places.recentList()[1] == top, 'recent places: a tool teleport (record = false) is not recorded')
 end
-T.check(core.setFarBudget(3) == 3 and core.setFarBudget(10) == 4, 'far budget setter (governor target, 1-4 ms)')
+T.check(core.setFarBudget(3) == 3 and core.setFarBudget(10) == 8, 'far budget setter (governor target, 1-8 ms)')
 
 -- M1 (docs/V1_4_SPEC.md 3.1): a FORMAT 4 server sends hello.cells; the mod reads formats 3 and 4
 local infos = {}

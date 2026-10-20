@@ -40,8 +40,14 @@ GAME_EXE_LINUX = os.path.join("BinLinux", "BeamNG.drive.x64")
 GAME_EXE_WIN = "BeamNG.drive.x64.exe"
 GCPATCH_NAME = "libbngearth_gcpatch.so"
 # the recommended server options (start.py's)
-RECOMMENDED = ["--deshadow", "full", "--near-visual", "detail", "--airports", "on", "--sea", "on", "--trees", "on",
-               "--buildings", "on"]
+# BeamNG.Earth 1.5.4 (KyzoFox build): the .exe starts with the BALANCED profile (roads 3 km ahead + 768 m around,
+# roads first, trees 1 km, far buildings 1.2 km, sidewalks on; no photo touch-up, horizon, airports or sea).
+# Anything after "--" on the command line still overrides these.
+RECOMMENDED = ["--deshadow", "off", "--colormatch", "off", "--near-visual", "mesh", "--no-horizon",
+               "--far-radius", "20000", "--background-duty", "0.1", "--airports", "off", "--sea", "off",
+               "--road-widths", "off", "--road-processes", "3", "--roads-first", "on",
+               "--road-reach", "768", "--road-ahead", "3000", "--road-builds", "6",
+               "--trees", "on", "--tree-reach", "1000", "--buildings", "on", "--far-buildings-reach", "1200"]
 SERVER_PORT = 47613         # earthd's default
 GAME_GONE_S = 30            # no game process this long: the game closed (wait_for_game)
 GAME_START_S = 180          # waiting for the game's process after asking Steam

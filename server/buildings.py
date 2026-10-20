@@ -1657,6 +1657,12 @@ def _part_heights(a, i):
 
 
 ROAD_THROUGH_M = 15.0       # a footprint that public roads run through this far is a structure over them
+# KyzoFox 1.5.4: most footprints a road runs through are simply misplaced (machine-learned outlines, or an outline
+# a few metres off): lifting them OVER_ROAD_CLEAR_M made blocks float over highways. Now only a really big footprint
+# (an expressway deck / station slab) is lifted; a smaller one is left out, and a machine-learned one (not
+# OpenStreetMap) that a road crosses at all for ML_ROAD_SKIP_M is left out too.
+OVER_ROAD_MIN_AREA_M2 = 4000.0
+ML_ROAD_SKIP_M = 4.0
 OVER_ROAD_CLEAR_M = 5.5     # ... lifted this high (an expressway's or a station's slab over the streets: Baltimore's
                             # 17,500 m2 one by I-83, the AI drove into its wall at 35 mph, 2026-10-14)
 THROUGH_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified",
@@ -2089,10 +2095,16 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue
             if key is not None:
                 seen.add(key)
-            rings.append(ring)
             mh = at.get("min_height")
             mh = float(mh) if mh is not None and np.isfinite(mh) and mh > 0 else 0.0
-            if mh <= 0.5 and roads_xy and road_through(ring, roads_xy) >= ROAD_THROUGH_M:
+            through = road_through(ring, roads_xy) if (mh <= 0.5 and roads_xy) else 0.0
+            if through > 0.0:
+                ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
+                if (ml and through >= ML_ROAD_SKIP_M) or \
+                        (through >= ROAD_THROUGH_M and _area2(ring) / 2 < OVER_ROAD_MIN_AREA_M2):
+                    continue            # (KyzoFox fast) a misplaced footprint on a road: not drawn
+            rings.append(ring)
+            if mh <= 0.5 and through >= ROAD_THROUGH_M:
                 mh = OVER_ROAD_CLEAR_M
                 h = at.get("height")
                 if h is None or not np.isfinite(h) or h < mh + 3.0:
@@ -2517,7 +2529,8 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid):
                            garages_xy=garage_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
-                           water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0))
+                           water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
+                           roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0))  # (KyzoFox: as near)
     mesh = build(items, lite=True)
     data = {"v": 1}
     if mesh is not None:

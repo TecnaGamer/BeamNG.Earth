@@ -184,13 +184,19 @@ IMG_WARM_MARGIN = 200.0         # m beyond the block's half width that warm_imag
 # 2026-10-15). Points AHEAD_S s ahead on the straight path (at most AHEAD_MAX_M), at netfetch "prefetch"
 # priority: only a host's spare tokens, so the builds' own downloads never wait for it
 AHEAD_ON = True                 # --download-ahead
-AHEAD_S = (10.0, 20.0, 30.0, 45.0, 60.0)
-AHEAD_MAX_M = 4000.0
+ROADS_FIRST_FAR_M = 768.0       # (KyzoFox 1.5.4) far tiles one at a time while road tiles this near are missing
+ROADS_FIRST = True              # --roads-first (KyzoFox fast): trees / far buildings wait while near road tiles are missing
+TREE_REACH = None               # --tree-reach m (None: vegetation.SEND_M)
+FAR_BLD_REACH = None            # --far-buildings-reach m (None: buildings.FAR_SEND_M)
+AHEAD_S = (10.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0)
+AHEAD_MAX_M = 4000.0            # m at most (KyzoFox 1.5.4: at least the road tiles' reach ahead + AHEAD_PAST_M)
+AHEAD_PAST_M = 1500.0
 AHEAD_MIN_V = 8.0               # m/s: slower, the blocks around (and surface.prefetch's 3 km) cover it
 AHEAD_MOVE_M = 150.0            # m the player moves before the next round
 AHEAD_MARGIN_M = 250.0          # m around the block's half width at each point
-AHEAD_LAYERS = ("buildings", "building_parts", "infrastructure", "land_use")    # the road tiles' cells (not
-                                                                                # landcover / roads: surface.prefetch)
+# the road tiles' cells (landcover: surface.prefetch). KyzoFox 1.5.4: with roads and water, which the road tiles
+# fetched themselves when they needed them, a fast car's next tile waiting on the download
+AHEAD_LAYERS = ("roads", "buildings", "building_parts", "infrastructure", "water", "land_use")
 BASE_PX = 1024                  # detail mode: the block's base photo (1 km -> 1 m per texel; USGS is ~1.9 m)
 BASE_AO_VFS = "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png"   # every surface layer's aoBaseTex
 BASE_AO = 251                   # its flat value (tools/make_level_assets.py)
@@ -1108,14 +1114,15 @@ class Server:
         if last is not None and last[0] == anchor.id and math.hypot(x - last[1], y - last[2]) < AHEAD_MOVE_M:
             return
         self.ahead_last = (anchor.id, x, y)
-        k = min(1.0, AHEAD_MAX_M / (v * AHEAD_S[-1]))
+        # the points spread over the whole distance whatever the speed (the road tiles reach as far ahead at 10 m/s)
+        k = max(AHEAD_MAX_M, getattr(roadsmod, "AHEAD_M", 0.0) + AHEAD_PAST_M) / (v * AHEAD_S[-1])
         pts = []
         for t in AHEAD_S:
             la, lo, _ = anchor.frame.enu_to_geodetic(x + vx * t * k, y + vy * t * k, 0.0)
             pts.append((float(la), float(lo)))
         reach = self.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
         zoom = anchor.hm_zoom
-        layers = AHEAD_LAYERS if (self.mapdata is not None and self.buildings) else ()
+        layers = (AHEAD_LAYERS if self.buildings else ("roads",)) if self.mapdata is not None else ()
         self.ahead_busy = True
 
         def run():
@@ -2131,9 +2138,12 @@ class Connection:
         self.zmax_region = None
         self.weather = weathermod.Tracker()     # real weather: fetch rule, last message sent
         self.roads = roadsmod.Tracker()         # road tiles sent to the mod (--roads on)
-        self.veg = vegetationmod.Tracker()      # vegetation tiles sent to the mod (--trees on)
+        self.roads.ready = self.roads_data_ready
+        self.veg = (vegetationmod.Tracker(TREE_REACH, TREE_REACH + 256.0) if TREE_REACH
+                    else vegetationmod.Tracker())   # vegetation tiles sent to the mod (--trees on; --tree-reach)
         # far buildings (--buildings on); none under the road tiles (they carry the buildings themselves)
-        self.bldfar = vegetationmod.Tracker(buildingsmod.FAR_SEND_M, buildingsmod.FAR_DROP_M,
+        self.bldfar = vegetationmod.Tracker(FAR_BLD_REACH or buildingsmod.FAR_SEND_M,
+                                            (FAR_BLD_REACH + 300.0) if FAR_BLD_REACH else buildingsmod.FAR_DROP_M,
                                             buildingsmod.FAR_PER_POSE, "bldfar",
                                             skip_m=roadsmod.SEND_M if self.s.mapdata is not None else None)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
@@ -2409,8 +2419,19 @@ class Connection:
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = roadsmod.Tracker()
+            self.roads.ready = self.roads_data_ready
         else:
             log.debug("ignoring message type %r", kind)
+
+    def roads_data_ready(self, aid, tx, ty):
+        """(KyzoFox 1.5.4) Are road tile (tx, ty)'s building layers downloaded (blockworker.BLD_LAYERS)? A tile sent
+        without them is built again then (roads.Tracker.partial). File tests only (the event loop)."""
+        anchor = self.s.anchors.get(aid)
+        md = self.s.mapdata
+        if anchor is None or md is None:
+            return False
+        return all(md.has(k, ly) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, margin=0.0)
+                   for ly in blockworker.BLD_LAYERS)
 
     def on_cache(self, msg):
         """The settings page: capGb sets the cap (0 = unlimited), clear: true empties the cache (but this
@@ -2719,16 +2740,20 @@ class Connection:
             self.s.warm_imagery(self.s.anchors[aid], *self.focus, *self.vel)
             self.s.download_ahead(self.s.anchors[aid], *self.focus, *self.vel)
             self.base_refresh(aid)
+        roads_wait = False
         if self.s.mapdata is not None and aid == self.active:
             self.roads.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_roads_tile,
                                vel=self.vel, ground_busy=self.terrain_wait > 0)
-        if self.s.veg is not None and aid == self.active:
+            # KyzoFox fast, roads first: while road tiles within 512 m are still missing, trees and far buildings
+            # start nothing new (the CPU, the processes and the network go to the roads)
+            roads_wait = ROADS_FIRST and self.roads.backlog(*self.focus, min(512.0, roadsmod.SEND_M))
+        if self.s.veg is not None and aid == self.active and not roads_wait:
             anchor = self.s.anchors.get(aid)
             if anchor is not None:                            # a teleport's cells built at once, ahead
                 la, lo, _ = anchor.frame.enu_to_geodetic(*self.focus, 0.0)
                 self.s.veg.warm_around(float(la), float(lo))
             self.veg.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_veg_tile)
-        if self.s.buildings and aid == self.active:
+        if self.s.buildings and aid == self.active and not roads_wait:
             self.bldfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_far_bld_tile)
         if self.s.traffic and aid == self.active:
             self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
@@ -3145,7 +3170,11 @@ class Connection:
             # While a physics block builds, one far tile at a time: they share the interpreter (GIL), and
             # three far workers made a block build 3-10x slower (landcover 1.4 s vs 0.1 s), too slow to
             # follow a car at 58 m/s (2026-10-12). The far tile finishing next refills the workers.
-            workers = HM_BUSY_TILE_WORKERS if self.s.hm_inflight else self.s.tile_workers
+            # (KyzoFox 1.5.4) and while road tiles near the player are missing (roads first: a far tile's photo is
+            # ~0.5 s of CPU, which the road tile ahead of a fast car needs more)
+            roads_wait = (ROADS_FIRST and self.s.mapdata is not None and self.focus is not None
+                          and self.roads.backlog(*self.focus, ROADS_FIRST_FAR_M))
+            workers = HM_BUSY_TILE_WORKERS if (self.s.hm_inflight or roads_wait) else self.s.tile_workers
             while anchor is not None and not self.teleport_pending and len(self.inflight) < workers:
                 t = self._next_tile()
                 if t is None:
@@ -3243,9 +3272,21 @@ async def main_async(args):
     mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
                if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
     pacer.DUTY = args.background_duty
-    global DETAIL_RING_M, AHEAD_ON
+    global DETAIL_RING_M, AHEAD_ON, ROADS_FIRST, TREE_REACH, FAR_BLD_REACH
     DETAIL_RING_M = args.detail_ring
     AHEAD_ON = args.download_ahead == "on"
+    # KyzoFox fast: how far roads reach and how many tiles build at once; trees / far buildings reach; roads first
+    roadsmod.SEND_M = float(args.road_reach)
+    roadsmod.DROP_M = max(roadsmod.DROP_M, roadsmod.SEND_M + 384.0)
+    roadsmod.BUILD_PER_POSE = max(1, int(args.road_builds))
+    roadsmod.AHEAD_M = max(0.0, float(args.road_ahead))
+    roadsmod.DROP_M = max(roadsmod.DROP_M, roadsmod.SEND_M + 384.0)
+    ROADS_FIRST = args.roads_first == "on"
+    TREE_REACH = args.tree_reach
+    FAR_BLD_REACH = args.far_buildings_reach
+    log.info("fast settings: roads ahead %.0f m", roadsmod.AHEAD_M)
+    log.info("fast settings: roads reach %.0f m, %d tiles at once, roads first %s, trees reach %s, far buildings reach %s",
+             roadsmod.SEND_M, roadsmod.BUILD_PER_POSE, args.roads_first, TREE_REACH or "default", FAR_BLD_REACH or "default")
     block_pools, far_pool = [], None
     if args.block_process == "on":
         ctx = multiprocessing.get_context("spawn")
@@ -3538,6 +3579,22 @@ def main():
                          "land cover, Forest items of stock shapes in the mod")
     ap.add_argument("--road-processes", type=int, default=ROAD_PROCESSES,
                     help="processes building the road tiles (--block-process on); 0 = threads in the server")
+    ap.add_argument("--road-reach", type=float, default=640.0,
+                    help="KyzoFox fast: road tiles are built this far around the player (m; the original: 640)")
+    ap.add_argument("--bridge-clearance", type=float, default=7.5,
+                    help="KyzoFox fast: a bridge deck's top over a road under it (m; 6 m headroom + slab; the original: 6.5)")
+    ap.add_argument("--bridge-max-grade", type=float, default=0.12,
+                    help="KyzoFox fast: how steeply a bridge deck may rise from its ends (0.12 = 12 %%; the original: 0.06)")
+    ap.add_argument("--road-ahead", type=float, default=0.0,
+                    help="KyzoFox fast: road tiles are also built this far ahead along the driving direction (m; 0 = off)")
+    ap.add_argument("--road-builds", type=int, default=4,
+                    help="KyzoFox fast: road tiles built at the same time (the original: 4)")
+    ap.add_argument("--roads-first", choices=("on", "off"), default="on",
+                    help="KyzoFox fast: trees and far buildings wait while road tiles near the player are missing")
+    ap.add_argument("--tree-reach", type=float, default=None,
+                    help="KyzoFox fast: trees are built this far around the player (m; the original: 1280)")
+    ap.add_argument("--far-buildings-reach", type=float, default=None,
+                    help="KyzoFox fast: far (lite) buildings are built this far around the player (m; the original: 1600)")
     ap.add_argument("--download-ahead", choices=("on", "off"), default="on",
                     help="fetch the elevation tiles and map cells 10-60 s ahead of a driving player (AHEAD_S)")
     ap.add_argument("--detail-ring", type=float, default=DETAIL_RING_M,
@@ -3584,6 +3641,11 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    # KyzoFox fast: bridge settings to every process (the road-tile workers import roads.py themselves)
+    os.environ["BNE_BRIDGE_CLEAR"] = str(args.bridge_clearance)
+    os.environ["BNE_BRIDGE_MAX_GRADE"] = str(args.bridge_max_grade)
+    roadsmod.DECK_ROAD_CLEAR, roadsmod.DECK_MAX_GRADE = args.bridge_clearance, args.bridge_max_grade
+    log.info("fast settings: bridges %.1f m over roads, decks up to %.0f %% steep", args.bridge_clearance, args.bridge_max_grade * 100)
     args.cells = resolve_cells(args.cells, args.near_visual)
     args.block = resolve_block(args.block, args.near_visual)
     args.horizon = resolve_horizon(args.horizon, args.near_visual)

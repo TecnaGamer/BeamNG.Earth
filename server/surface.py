@@ -107,7 +107,14 @@ def classify(classes, u, square, lat=None, lon=None):
     classes = np.asarray(classes, np.uint8)
     idx = _LUT[classes]
     if lat is not None and lon is not None:
-        idx = np.where((classes == 50) & lawns(lat, lon), np.uint8(LAWN), idx)
+        # (KyzoFox 1.5.4: lawns() only at the built-up samples, the only ones it can change: on rural ground
+        # that is almost none of a block)
+        urban = classes == 50
+        if urban.any():
+            idx = idx.copy()
+            sub = idx[urban]
+            sub[lawns(np.asarray(lat, np.float64)[urban], np.asarray(lon, np.float64)[urban])] = np.uint8(LAWN)
+            idx[urban] = sub
     u = np.asarray(u, np.float64)
     if min(u.shape) < 2:            # no slope from a single row / column
         return idx.astype(np.uint8)
@@ -129,6 +136,15 @@ def _hash01(ix, iy, seed):
 
 def _value_noise(x, y, seed):
     """Smooth value noise in [-1, 1] at points (x, y) given in lattice units."""
+    return _value_noises(x, y, (seed,))[0]
+
+
+def _value_noises(x, y, seeds):
+    """_value_noise(x, y, seed) for each of seeds, the lattice work done once (warp's dx and dy share their points).
+    KyzoFox 1.5.4: the four corner hashes come from a table of the lattice points the samples touch. A 1 km
+    block's million samples sit in a few thousand lattice cells (12-40 m features, 2 m samples), and hashing every
+    corner of every sample was most of the terrain block's "landcover" time (warp + lawns: 6 noises). The same values
+    exactly (the same hash and arithmetic, looked up)."""
     x0 = np.floor(x)
     y0 = np.floor(y)
     fx = x - x0
@@ -137,11 +153,40 @@ def _value_noise(x, y, seed):
     fy = fy * fy * (3.0 - 2.0 * fy)
     ix = x0.astype(np.int64)
     iy = y0.astype(np.int64)
-    a = _hash01(ix, iy, seed)
-    b = _hash01(ix + 1, iy, seed)
-    c = _hash01(ix, iy + 1, seed)
-    d = _hash01(ix + 1, iy + 1, seed)
-    return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy
+    table = None
+    if ix.size >= NOISE_TABLE_MIN:
+        bx, by = int(ix.min()), int(iy.min())
+        w, h = int(ix.max()) - bx + 2, int(iy.max()) - by + 2
+        if w * h * NOISE_TABLE_SHARE <= ix.size:
+            gy, gx = np.mgrid[by:by + h, bx:bx + w]
+            k = (iy - by) * w + (ix - bx)
+            table = (gx, gy, k, w)
+    out = []
+    for seed in seeds:
+        if table is not None:
+            gx, gy, k, w = table
+            tab = _hash01(gx, gy, seed).ravel()
+            a, b, c, d = tab[k], tab[k + 1], tab[k + w], tab[k + w + 1]
+        else:
+            a = _hash01(ix, iy, seed)
+            b = _hash01(ix + 1, iy, seed)
+            c = _hash01(ix, iy + 1, seed)
+            d = _hash01(ix + 1, iy + 1, seed)
+        top = b - a
+        top *= fx
+        top += a                        # a + (b - a) * fx
+        bot = d - c
+        bot *= fx
+        bot += c                        # c + (d - c) * fx
+        bot -= top
+        bot *= fy
+        bot += top                      # top + (bot - top) * fy
+        out.append(bot)
+    return out
+
+
+NOISE_TABLE_MIN = 4096      # samples from which _value_noise hashes a lattice table ...
+NOISE_TABLE_SHARE = 4       # ... when the table has at most a quarter as many points as there are samples
 
 
 def warp(lat, lon):
@@ -156,8 +201,9 @@ def warp(lat, lon):
     dx = np.zeros_like(lat)
     dy = np.zeros_like(lat)
     for k, (size, amp) in enumerate(WARP_OCTAVES):
-        dx += amp * _value_noise(xm / size, ym / size, 2 * k + 1)
-        dy += amp * _value_noise(xm / size, ym / size, 2 * k + 2)
+        nx, ny = _value_noises(xm / size, ym / size, (2 * k + 1, 2 * k + 2))
+        dx += amp * nx
+        dy += amp * ny
     return lat + dy / M_PER_DEG, lon + dx / np.maximum(m_lon, 1e-6)
 
 

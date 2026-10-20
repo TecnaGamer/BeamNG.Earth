@@ -30,8 +30,8 @@ local M = {}
 
 local max, min, huge = math.max, math.min, math.huge
 
-M.DEFAULT_TARGET_MS = 2.0
-M.MIN_TARGET_MS, M.MAX_TARGET_MS = 1.0, 4.0
+M.DEFAULT_TARGET_MS = 4.0   -- KyzoFox fast (original 2.0): roads and tiles appear faster
+M.MIN_TARGET_MS, M.MAX_TARGET_MS = 1.0, 8.0   -- KyzoFox fast (original max 4.0)
 M.LOADING_TARGET_MS = 8.0
 M.RAMP_UP = 0.05           -- ms per frame while there is work
 M.RAMP_UP_LOADING = 0.25   -- ms per frame in loading mode
@@ -47,7 +47,7 @@ M.EST_ALPHA = 0.2          -- cost EMA gain
 -- textures cost the NEXT frame's engine "Ticking" 50-250 ms, which no unit's measured Lua cost included, so the bucket
 -- kept importing at full rate and every frame ran 100+ ms): each frame's engine tick beyond ENGINE_FREE_MS is a debt on
 -- the bucket (chargeEngine), at most ENGINE_MAX_DEBT_MS, so imports wait until the budget has paid for it.
-M.ENGINE_FREE_MS = 2.0
+M.ENGINE_FREE_MS = 5.0   -- KyzoFox fast (original 2.0): a mid-range GPU's normal tick is not a debt
 M.ENGINE_MAX_DEBT_MS = 50.0
 -- Prior cost estimates (ms) per unit kind: in-game P5/P6 (2026-10-10): a 2k-tri .cdae first load
 -- 3.4 ms (8k-tri 1.5 ms; v1.2 drive EMA 1.93), a 2k-tri .dae 7.5-25 ms; unhide is free; setPosition

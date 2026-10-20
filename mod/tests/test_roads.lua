@@ -165,6 +165,33 @@ for _, g in ipairs(gone) do got[g[1]] = g[2] end
 T.check(#gone == 2 and got[12] == 40 and got[13] == 41, 'objects deleted: both slots reported with their serials')
 T.check(#roads.takeSlotsGone('other') == 0, 'reports are per server session')
 
+-- KyzoFox 1.5.4: a tile sent again under the same key before its meshes were made: the old tile's queued meshes
+-- (their slot paths already reported gone, so the server may have given them to another tile) are not made into the
+-- new tile (houses floating near Cleburne, AL: another tile's buildings at this tile's place, 2026-10-19)
+for _, o in ipairs(statics()) do o:delete() end
+roads.takeSlotsGone('sA')
+gov.allow, gov.tries = 0, 0                 -- no mesh made this frame
+roads.onTile({ anchorId = 2, key = '6_8', path = '/t/wc.json', n = 0, slots = {
+  walk = { '/temp/beamngEarth/sA/slot_00020.cdae', 50 }, walkcol = { '/temp/beamngEarth/sA/slot_00021.cdae', 51 } } }, 2)
+roads.update(gov, 2)
+T.check(#statics() == 0, 'resend: nothing made yet')
+roads.onTile({ anchorId = 2, key = '6_8', path = '/t/wc.json', n = 0, slots = {
+  walk = { '/temp/beamngEarth/sA/slot_00030.cdae', 60 }, walkcol = { '/temp/beamngEarth/sA/slot_00031.cdae', 61 } } }, 2)
+gone = roads.takeSlotsGone('sA')
+T.check(#gone == 2, 'resend: the first copy\'s slots reported gone (never loaded)')
+gov.allow, gov.tries = nil, 0
+roads.update(gov, 2); roads.update(gov, 2)
+shapes = {}
+for _, o in ipairs(statics()) do shapes[o.fields.shapeName] = (shapes[o.fields.shapeName] or 0) + 1 end
+T.check(not shapes['/temp/beamngEarth/sA/slot_00020.cdae'] and not shapes['/temp/beamngEarth/sA/slot_00021.cdae'],
+  'resend: the reported slots are never loaded')
+T.check(shapes['/temp/beamngEarth/sA/slot_00030.cdae'] == 1 and shapes['/temp/beamngEarth/sA/slot_00031.cdae'] == 1
+  and #statics() == 2, 'resend: the new copy\'s meshes made once each')
+roads.onDrop({ anchorId = 2, key = '6_8' })
+roads.update(gov, 2)
+T.check(#statics() == 0, 'resend: every mesh goes with the tile (none orphaned)')
+roads.takeSlotsGone('sA')
+
 -- a sidewalk mesh never turns solid around the player's car: held while the car is in its boxes
 files['/t/h.json'] = '{ chunks = { }, walk = { shape = "/t/walks_2_7_7.cdae", pos = { 0, 0, 0 } }, ' ..
   'colliders = { walk = { { 100, 100, 0, 120, 110, 1 } } } }'

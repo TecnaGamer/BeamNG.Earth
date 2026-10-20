@@ -572,6 +572,20 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(order[:3], [(0, 0), (1, 0), (5, 0)])
         self.assertEqual(order[-1], (-2, 0))
 
+    def test_road_ahead_setting_extends_the_path(self):
+        # (KyzoFox) --road-ahead: from AHEAD_MIN_V up, the path is wanted AHEAD_M ahead (the same corridor)
+        old = roads.AHEAD_M
+        try:
+            roads.AHEAD_M = 3000.0
+            want = roads.wanted_tiles(0.0, 0.0, 10.0, 0.0)
+            ahead = want - set(roads.tiles_near(0, 0, roads.SEND_M))
+            self.assertTrue(ahead and all(roads.tile_bbox(*k)[0] > 0 for k in ahead), "only ahead (east)")
+            self.assertGreaterEqual(max(roads.tile_bbox(*k)[2] for k in ahead), 3000.0 - roads.TILE)
+            self.assertEqual(roads.wanted_tiles(0.0, 0.0, 1.0, 0.0), set(roads.tiles_near(0, 0, roads.SEND_M)),
+                             "standing still: the square only")
+        finally:
+            roads.AHEAD_M = old
+
     def test_at_speed_the_path_ahead_is_built_and_kept(self):
         conn = FakeConn()
         tr = roads.Tracker()
@@ -615,6 +629,97 @@ class TrackerTest(unittest.TestCase):
         self.assertTrue(all(roads.tile_distance(*map(int, m["key"].split("_")), 3000.0, 0.0) > roads.DROP_M for m in drops))
         a2 = {m["key"] for m in conn.sent if m["type"] == "roads_tile" and m["anchorId"] == 2}
         self.assertEqual(a2, {f"{tx}_{ty}" for tx, ty in roads.tiles_near(3000.0, 0.0, roads.SEND_M)})
+
+
+class TrackerRetryTest(unittest.TestCase):
+    """KyzoFox 1.5.4: a road tile whose build failed is built again (it stayed missing while within reach: a
+    stretch of road and its bridge never appeared), and a tile without roads is reported (roads_empty)."""
+
+    def test_failed_tile_built_again_and_empty_reported(self):
+        conn = FakeConn()
+        tr = roads.Tracker()
+        calls = {}
+        old = roads.TILE_RETRY_S
+        roads.TILE_RETRY_S = 0.05
+
+        def build(aid, tx, ty):
+            n = calls[(tx, ty)] = calls.get((tx, ty), 0) + 1
+            if (tx, ty) == (0, 0) and n == 1:
+                raise OSError("fetch timed out")
+            if (tx, ty) == (1, 1):
+                return None
+            return (f"/p/{aid}_{tx}_{ty}", 1)
+
+        async def go():
+            loop = asyncio.get_running_loop()
+            for _ in range(80):
+                tr.on_pose(conn, 1, 128.0, 128.0, loop, build)
+                await asyncio.sleep(0.01)
+        try:
+            asyncio.run(go())
+        finally:
+            roads.TILE_RETRY_S = old
+        sent = {m["key"] for m in conn.sent if m["type"] == "roads_tile"}
+        self.assertGreaterEqual(calls[(0, 0)], 2, "the failed tile is built again")
+        self.assertIn("0_0", sent, "... and sent")
+        empty = [m for m in conn.sent if m["type"] == "roads_empty"]
+        self.assertEqual([m["key"] for m in empty], ["1_1"], "a tile without roads is reported once")
+        self.assertEqual(calls[(1, 1)], 1, "... and not built again")
+
+
+class TrackerPartialTest(unittest.TestCase):
+    """KyzoFox 1.5.4: a road tile sent without its buildings (their data not downloaded yet) is built again once
+    the data is there and the player is PARTIAL_MIN_M from it, never under the car."""
+
+    def test_partial_tiles_rebuilt_away_from_the_car(self):
+        conn = FakeConn()
+        tr = roads.Tracker()
+        tr.ready = lambda aid, tx, ty: True
+        calls = {}
+        old = roads.PARTIAL_RETRY_S
+        roads.PARTIAL_RETRY_S = 0.02
+
+        def build(aid, tx, ty):
+            n = calls[(tx, ty)] = calls.get((tx, ty), 0) + 1
+            return (f"/p/{tx}_{ty}", 1, True) if n == 1 else (f"/p/{tx}_{ty}", 1)
+
+        async def go():
+            loop = asyncio.get_running_loop()
+            for _ in range(80):
+                tr.on_pose(conn, 1, 128.0, 128.0, loop, build)
+                await asyncio.sleep(0.01)
+        try:
+            asyncio.run(go())
+        finally:
+            roads.PARTIAL_RETRY_S = old
+        self.assertEqual(calls[(0, 0)], 1, "the car's own tile is not rebuilt under it")
+        self.assertEqual(calls[(3, 0)], 2, "a tile 640 m away is built again with its buildings")
+        sent = [m["key"] for m in conn.sent if m["type"] == "roads_tile"]
+        self.assertEqual(sent.count("3_0"), 2)
+        self.assertFalse(tr.partial.get((3, 0)), "complete now")
+
+    def test_not_rebuilt_before_the_data_is_there(self):
+        conn = FakeConn()
+        tr = roads.Tracker()
+        tr.ready = lambda aid, tx, ty: False
+        calls = {}
+        old = roads.PARTIAL_RETRY_S
+        roads.PARTIAL_RETRY_S = 0.0
+
+        def build(aid, tx, ty):
+            calls[(tx, ty)] = calls.get((tx, ty), 0) + 1
+            return (f"/p/{tx}_{ty}", 1, True)
+
+        async def go():
+            loop = asyncio.get_running_loop()
+            for _ in range(40):
+                tr.on_pose(conn, 1, 128.0, 128.0, loop, build)
+                await asyncio.sleep(0.01)
+        try:
+            asyncio.run(go())
+        finally:
+            roads.PARTIAL_RETRY_S = old
+        self.assertTrue(all(n == 1 for n in calls.values()), "each built once while its data is missing")
 
 
 class PaintRoadsTest(unittest.TestCase):

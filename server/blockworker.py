@@ -239,6 +239,17 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     import roads as roadsmod
     g, _ = _s.anchor(aid, lat, lon)
     frame = geodesy.EnuFrame(lat, lon)
+    # KyzoFox 1.5.4: the roads never wait for the buildings' map data. A road tile whose building layers are not
+    # downloaded yet is built now without its buildings (they are fetched meanwhile) and marked partial: the server
+    # builds it again, with them, once the player is far enough from it (roads.Tracker.PARTIAL_*). Its buildings,
+    # parts, infrastructure and water came first, on demand: a fast car's next road tile (and its bridge deck) waited
+    # 15-19 s on their downloads (the user's log, 2026-10-20).
+    partial = False
+    if buildings and _s.md is not None:
+        missing = _bld_missing(roadsmod.cells_of_tile(frame, tx, ty, margin=0.0))
+        if missing:
+            _fetch_later(missing)
+            buildings, partial = False, True
     cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
              for k in roadsmod.cells_of_tile(frame, tx, ty)]
 
@@ -298,8 +309,45 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
         bld = buildingsmod.road_tile(frame, tx, ty, _s.md,
                                      lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), None, None,
                                      items)
-    return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
-                               bld, props, wires, park, tunnel_mesh=tmesh)
+    res = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
+                              bld, props, wires, park, tunnel_mesh=tmesh)
+    return (res[0], res[1], True) if partial and res is not None else res
+
+
+BLD_LAYERS = ("buildings", "building_parts", "infrastructure", "water")    # (buildings.road_tile_items' besides roads)
+_later = {"pool": None, "busy": set(), "lock": threading.Lock()}
+
+
+def _bld_missing(keys):
+    """[(cell key, (layers not downloaded yet))] of the building layers of these cells (a file test each)."""
+    out = []
+    for k in keys:
+        todo = tuple(ly for ly in BLD_LAYERS if not _s.md.has(k, ly))
+        if todo:
+            out.append((k, todo))
+    return out
+
+
+def _fetch_later(missing):
+    """Download these cells' layers in the background (this process's own threads; each once at a time)."""
+    from concurrent.futures import ThreadPoolExecutor
+    with _later["lock"]:
+        if _later["pool"] is None:
+            _later["pool"] = ThreadPoolExecutor(2, thread_name_prefix="bld-data")
+        todo = [(k, ly) for k, ly in missing if (str(k), ly) not in _later["busy"]]
+        for k, ly in todo:
+            _later["busy"].add((str(k), ly))
+
+    def get(k, ly):
+        try:
+            _s.md.cell(k, layers=ly, kind="demand")
+        except Exception as e:      # tried again when the tile is
+            log.debug("building data %s %s: %s: %s", k, ly, type(e).__name__, e)
+        finally:
+            with _later["lock"]:
+                _later["busy"].discard((str(k), ly))
+    for k, ly in todo:
+        _later["pool"].submit(get, k, ly)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):

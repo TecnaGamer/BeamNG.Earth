@@ -54,11 +54,13 @@ class DownloadAheadTest(unittest.TestCase):
 
     def test_points_ahead_on_the_path(self):
         s, a = server(), anchor()
-        self.run_at(s, a, 0.0, 0.0, 0.0, 40.0)          # 40 m/s north: 60 s would be 2400 m (< AHEAD_MAX_M)
+        self.run_at(s, a, 0.0, 0.0, 0.0, 40.0)          # 40 m/s north
         self.assertEqual(len(s.dem.asked), len(earthd.AHEAD_S))
         lats = [k[1] for k in s.dem.asked]
         self.assertEqual(lats, sorted(lats), "nearest point first, going north")
-        self.assertAlmostEqual((lats[-1] - 36.17) * 111000, 40.0 * earthd.AHEAD_S[-1], delta=60)
+        # (KyzoFox 1.5.4) the points spread over the whole look-ahead distance at any speed
+        far = max(earthd.AHEAD_MAX_M, earthd.roadsmod.AHEAD_M + earthd.AHEAD_PAST_M)
+        self.assertAlmostEqual((lats[-1] - 36.17) * 111000, far, delta=60)
         self.assertTrue(s.mapdata.cells and all(k == "prefetch" for _, _, k in s.mapdata.cells))
         self.assertFalse(s.ahead_busy)
 
@@ -79,12 +81,13 @@ class DownloadAheadTest(unittest.TestCase):
         self.run_at(s, a, 50.0 + earthd.AHEAD_MOVE_M, 0.0, 30.0, 0.0)
         self.assertGreater(len(s.dem.asked), n)
 
-    def test_no_buildings_no_cells(self):
+    def test_no_buildings_roads_only(self):
+        # (KyzoFox 1.5.4) without buildings the road layer is still fetched ahead (the road tiles need it)
         s, a = server(), anchor()
         s.buildings = False
         self.run_at(s, a, 0.0, 0.0, 30.0, 0.0)
         self.assertTrue(s.dem.asked)
-        self.assertEqual(s.mapdata.cells, [])
+        self.assertTrue(s.mapdata.cells and all(layers == ("roads",) for _, layers, _ in s.mapdata.cells))
 
 
 if __name__ == "__main__":

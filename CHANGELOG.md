@@ -2,6 +2,73 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.5.4 (KyzoFox build, on top of 1.5.3 beta)
+
+Everything in 1.5.3 beta, plus these fixes. Where 1.5.3 already fixed something (bridge and building collision at
+high speed, road tiles built along your path, the ground first, the edge pause, failed road tiles asked for again),
+its fix is kept as it is.
+
+### Bridges
+- **Overpasses are high enough for trucks.** A short bridge over a road had both ends on the ground (the elevation
+  data is too coarse to show the real approach embankments), so its deck could climb only a little before it was over
+  the lanes: about 2.5 m on the I-20 overpass near Temple, GA, and trucks hit it. The roads leading onto such a bridge
+  now rise on a smooth ramp (at most 5 %) to the height the deck needs, like real approach fills, so the deck clears
+  the road under it by 7.5 m (about 5.3 m under the girders). Long viaducts, bridges over water and ground that is
+  already high enough are left as they were. Turn the ramps off with the environment variable
+  `BNE_APPROACH_RAMPS=off`; `BNE_APPROACH_GRADE` sets their grade.
+- **Motorways and trunk roads are never raised**, only the smaller roads crossing over them. The raise depends only on
+  the road and the bridge it leads to, so it is the same in every map area (no road drawn under raised ground at an
+  area's edge); it follows the road, and its fill slope never reaches a road beside it.
+- **Bridge clearance and deck steepness are settings:** `--bridge-clearance` (default 7.5 m over a road, was 6.5) and
+  `--bridge-max-grade` (default 12 %, was 6 %).
+
+### Buildings
+- **No more buildings floating in the sky.** When the server sent a road tile again, meshes of the first copy still
+  waiting to be made were made anyway. Their shape files had already been handed back to the server and reused for
+  another tile, so that tile's buildings appeared here at its ground height: groups of houses hanging in the air
+  (near Cleburne, AL). Those leftover meshes were also never deleted. A re-sent tile now drops everything still
+  queued from its first copy.
+- **Fewer blocks floating over highways.** A building outline that a road runs through is usually just misplaced (a
+  machine-learned outline, or one a few metres off). Only a really big one (an expressway deck or a station slab) is
+  still lifted over the road; smaller ones and machine-learned ones a road crosses are left out. The far buildings
+  follow the same rule.
+
+### Loading at speed
+- **Roads never wait for buildings.** A road tile used to wait until its buildings' map data had downloaded, which
+  held the road and its bridge deck in front of a fast car for 15-19 s. The road tile is now built and sent at once
+  (about 3x faster) and its buildings follow once their data is in. It is only rebuilt with them when you are at least
+  300 m away, never with you on it.
+- **Roads further ahead.** `--road-ahead` (3 km in the BALANCED profile) extends 1.5.3's road tiles along your path
+  from about 15 km/h up, in the same order you reach them.
+- **Downloads further ahead.** The look-ahead downloads now include the road and water layers and reach past your road
+  reach (1.5 km beyond it at any speed).
+- **Roads first.** While road tiles near you are missing, trees, far buildings and far terrain tiles start nothing new
+  (far terrain tiles one at a time), leaving the CPU and network to the roads.
+- **Squares with no roads are not built again and again**, and a failed road tile waits 3 s before it is tried again
+  instead of on every update.
+- **Terrain blocks build faster.** Most of a block's build time was the land-cover noise math, hashed again for each
+  of a block's million samples. It now hashes each lattice point once, shares the work between the two warp
+  directions, and works out lawns only on built-up land. Same terrain, bit for bit; that step is about 4x faster on
+  rural roads (2.5x in towns).
+- **A larger per-frame loading budget in the game** (4 ms, up to 8 ms; was 2 and 4), so roads and tiles appear sooner
+  on mid-range PCs.
+
+### Missing roads
+- **The game waits for the road ahead instead of letting you fall.** While you drive, the next 4 s of road must be
+  loaded, with its bridge decks and tunnels solid. If they are not, the game pauses itself with "waiting for the road
+  ahead to load" and carries on by itself once they are (at most 25 s). Resuming by hand still works. Turn it off with
+  the `roadGuard` setting.
+
+### Trailers
+- **The trailer stays hitched when the world re-centres.** Every ~15 km the world moves back to the origin
+  ("Loading n/222"). The truck and its trailer were moved separately, the coupling could break for that moment, and
+  the fifth wheel would not latch again by itself. Couplings are now re-attached right after the move.
+
+### Launcher
+- **BALANCED profile:** `Play BALANCED.bat`, and the launcher and the built .exe start with the same settings
+  (roads 3 km ahead and 768 m around, roads first, trees 1 km, far buildings 1.2 km; no photo touch-up, horizon,
+  airports or sea). Anything after `--` still overrides them. `BUILD EXE.bat` builds the .exe.
+
 ## 1.5.3 beta (2026-10-19)
 
 Works with BeamNG.drive 0.40.

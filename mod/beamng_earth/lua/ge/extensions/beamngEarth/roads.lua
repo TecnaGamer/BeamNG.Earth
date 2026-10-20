@@ -63,6 +63,8 @@ M.URGENT_GAP_S = 1
 -- it for good (in-game 2026-10-19, once the urgent rebuilds above made that coincidence common).
 M.SWAP_QUIET_FRAMES = 3
 M.SWAP_QUIET_MS = 150
+-- (KyzoFox) the surfaces driven on over the air: the road guard (M.squareState) waits for them to be solid
+M.DRIVE_SURFACES = { deck = true, tunnel = true }
 
 local newColliders = {}    -- { id, walkQ entry } of the colliders made since the last reloadCollision
 local parked = {}          -- walkQ entries of colliders whose tile is not near enough yet
@@ -83,6 +85,7 @@ local sinceChange = stopwatch.new()  -- ms since a tile arrived / went or a road
 local sinceReload = stopwatch.new()
 local collisionDirty = false
 local lastReloadAt = -math.huge   -- now() of the last be:reloadCollision (ours or another's): M.ahead
+local emptyKeys = {}       -- (KyzoFox) key "a:tx_ty" -> true: the server has no roads there (roads_empty; the road guard)
 local deletesDirty = false  -- only far colliders deleted since the last rebuild (RELOAD_DELETES_S)
 
 -- Every road object lives in one SimGroup. A Lua reload (Lua:requestReload) rebuilds the VM without
@@ -218,6 +221,17 @@ local function dropTile(key)
   local keep = {}
   for _, q in ipairs(parked) do if q.key ~= key then keep[#keep + 1] = q end end
   parked = keep
+  -- KyzoFox 1.5.4: and its meshes not made yet. A tile sent again under the same key (dropped here first)
+  -- left its old walkQ / held / createQ entries, which the new tile then made: their pooled shape paths had just been
+  -- reported gone, so the server put another tile's shape there and the game drew that tile's buildings here, at
+  -- that tile's ground height (houses floating in the sky near Cleburne, AL, 2026-10-19). The old mesh ids also
+  -- overwrote the new tile's and were never deleted.
+  local function purge(list)
+    local k2 = {}
+    for _, q in ipairs(list) do if q.key ~= key then k2[#k2 + 1] = q end end
+    return k2
+  end
+  walkQ, held, createQ = purge(walkQ), purge(held), purge(createQ)
   if t.props then require('beamngEarth/trees').dropKey((key:gsub(':', ':p', 1))) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
   tiles[key] = nil
@@ -227,6 +241,7 @@ end
 local function switchAnchor(aid)
   if aid == anchorId then return end
   anchorId = aid
+  emptyKeys = {}
   for key, t in pairs(tiles) do
     if t.anchor ~= aid and not t.ghost then dropTile(key) end
   end
@@ -351,6 +366,7 @@ function M.onTile(msg, currentAnchor)
   switchAnchor(currentAnchor)
   if msg.anchorId ~= currentAnchor then return false end
   local key = tileKey(msg.anchorId, msg.key)
+  emptyKeys[key] = nil
   if tiles[key] then dropTile(key) end
   local text = readFile(msg.path)
   local ok, data = pcall(jsonDecode, text or '')
@@ -376,7 +392,7 @@ function M.onTile(msg, currentAnchor)
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
   sinceChange = stopwatch.new()
   if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
-    walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road' }
+    walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
   else
     for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
   end
@@ -389,7 +405,7 @@ function M.onTile(msg, currentAnchor)
     tiles[key].park = true
   end
   if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
-    walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire' }
+    walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
   end
   -- sidewalks, bridge decks, buildings (split in parts under the engine's 16-bit index limit), the buildings'
   -- lean collision mesh: colliders only near the car (M.COLLIDE_M); with a bldcol the drawn buildings only render
@@ -403,7 +419,7 @@ function M.onTile(msg, currentAnchor)
   for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
-      local q = { key = key, walk = w, what = what,
+      local q = { key = key, walk = w, what = what, tile = tiles[key],
         renderOnly = (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk') }
       if not q.renderOnly then tiles[key].colWant[what] = true end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
@@ -468,6 +484,39 @@ local function updateFar(gov)
       gov:charge('roadWalk', now() - t0)
     end
   end
+end
+
+-- KyzoFox 1.5.4: server message `roads_empty` {anchorId, key}: no roads in that square (the road guard need not
+-- wait for it).
+function M.onEmpty(msg)
+  if type(msg) ~= 'table' or msg.anchorId == nil or msg.key == nil then return end
+  emptyKeys[tileKey(msg.anchorId, msg.key)] = true
+end
+
+-- The road guard's question (roadguard.lua): can the car drive over the square around (x, y) of anchor aid? 'ready'
+-- (its road tile made, its decks and tunnels solid), 'empty' (no roads there), or what it waits for: 'missing' (no tile
+-- yet), 'building' (its road or a deck / tunnel still queued), 'solidifying' (a deck made, the collision not rebuilt).
+-- A rebase's ghost tile over the point counts (its meshes moved with the world and stay solid).
+function M.squareState(aid, x, y)
+  local n = M.TILE_M
+  local k = tostring(math.floor(x / n)) .. '_' .. tostring(math.floor(y / n))
+  local key = tileKey(aid, k)
+  local t = tiles[key]
+  if not t or t.ghost then
+    if emptyKeys[key] then return 'empty' end
+    for _, g in pairs(tiles) do
+      if g.ghost and g.cx and math.abs(x - g.cx) <= n / 2 and math.abs(y - g.cy) <= n / 2 then return 'ready' end
+    end
+    return 'missing'
+  end
+  if (t.queued or 0) > 0 then return 'building' end
+  for _, list in ipairs({ walkQ, parked, held }) do
+    for _, q in ipairs(list) do
+      if q.key == key and (q.what == 'road' or M.DRIVE_SURFACES[q.what]) then return 'building' end
+    end
+  end
+  if t.unsolid then return 'solidifying' end
+  return 'ready'
 end
 
 -- Server message `roads_drop` {anchorId, key}. (A ghost goes when covered: releaseGhosts.)
@@ -639,6 +688,7 @@ function M.update(gov, currentAnchor, player)
   while #walkQ > 0 and gov:try('roadWalk') do
     local q = table.remove(walkQ, M.nextWalk(walkQ))
     local t = tiles[q.key]
+    if t and q.tile and q.tile ~= t then t = nil end   -- (an entry of an earlier tile under this key: not made)
     -- (only a colliding mesh waits: a render-only one (q.renderOnly: the drawn sidewalks and buildings beside their lean
     -- collision meshes) cannot catch the car, and holding it hid a whole tile's sidewalks while the car stood in their
     -- box: a roundabout's island band was never drawn, 2026-10-17 Harbor Point)
@@ -657,6 +707,7 @@ function M.update(gov, currentAnchor, player)
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad then t[q.what] = id else
           t[q.what] = id; collisionDirty = true; newColliders[#newColliders + 1] = { id, q }
+          if M.DRIVE_SURFACES[q.what] then t.unsolid = true end   -- (KyzoFox) not solid until the next rebuild
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
       else lastError = tostring(id) end
@@ -677,6 +728,7 @@ function M.update(gov, currentAnchor, player)
     be:reloadCollision()
     lastReloadAt = now()
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
+    for _, t in pairs(tiles) do t.unsolid = nil end
     gov:charge('roadWalk', now() - t0)
   end
 end
@@ -836,6 +888,7 @@ function M.collisionRebuilt()
   local removed = noteNewColliders()
   lastReloadAt = now()
   collisionDirty, deletesDirty, sinceReload = removed > 0, false, stopwatch.new()
+  if not collisionDirty then for _, t in pairs(tiles) do t.unsolid = nil end end
 end
 
 -- Every road removed now (setting off, mod unload).
@@ -870,6 +923,7 @@ function M.reset()
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
   far, farQ = {}, {}
   collisionDirty, deletesDirty = false, false
+  emptyKeys = {}
 end
 
 -- On / off (the settings page, through core.setRoadsEnabled, which asks the server for the tiles

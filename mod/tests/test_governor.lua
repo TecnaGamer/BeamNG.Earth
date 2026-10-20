@@ -1,6 +1,11 @@
 -- luajit mod/tests/test_governor.lua  (main-thread frame governor, V1_2_DESIGN 5.4, 5.7)
 local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
 local governor = require('beamngEarth/governor')
+-- (KyzoFox 1.5.4) the shipped budgets are larger (4 ms, up to 8; engine ticks free to 5 ms): checked here, then the
+-- original values pinned, which the timings below were worked out for
+T.check(governor.DEFAULT_TARGET_MS == 4 and governor.MAX_TARGET_MS == 8 and governor.ENGINE_FREE_MS == 5,
+  'KyzoFox budgets: 4 ms default, 8 ms max, 5 ms engine tick free')
+governor.DEFAULT_TARGET_MS, governor.MAX_TARGET_MS, governor.ENGINE_FREE_MS = 2.0, 4.0, 2.0
 
 -- A fake wall clock: frames advance it by their base time, units by their cost.
 local now = 0
