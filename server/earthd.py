@@ -3895,12 +3895,10 @@ def main():
     import budget
     if args.nice:
         try:
-            if hasattr(os, "nice"):
-                os.nice(args.nice)      # all threads: below the game's main and physics threads
-            elif sys.platform == "win32":   # Windows: the "below normal" priority class
-                import ctypes
-                k32 = ctypes.windll.kernel32
-                k32.SetPriorityClass(k32.GetCurrentProcess(), 0x4000)
+            # all threads: below the game's main and physics threads (Windows: the "below normal" class)
+            how = budget.lower_priority(args.nice)
+            if how:
+                log.info("server priority: %s", how)
         except (OSError, AttributeError) as e:
             log.warning("could not lower the process priority: %s", e)
     if args.sched == "auto":

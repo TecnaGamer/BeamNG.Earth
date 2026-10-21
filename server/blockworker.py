@@ -129,13 +129,12 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     few cores (2026-10-19: at 180 mph the next block waited 6 s behind the road tiles ahead and a ball fell off the
     block's edge)."""
     global _s
-    if nice and hasattr(os, "nice"):
-        try:
-            os.nice(int(nice))
-        except OSError:
-            pass
-    logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     import budget
+    try:
+        budget.lower_priority(nice, worker=True)    # (Windows: the far field's workers idle, budget.WIN_IDLE_ABOVE)
+    except (OSError, AttributeError):
+        pass
+    logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()
