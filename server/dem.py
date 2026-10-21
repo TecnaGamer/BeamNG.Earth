@@ -52,7 +52,8 @@ URGENT_WORKERS = 16         # Dem.urgent(): its own fetch threads (with the 16 s
 # tile holds changes (the decoding, the ground filter).
 MIRROR_MB = 1024
 MIRROR_MAX_AGE_S = 30 * 86400
-DECODED_VERSION = 1
+DECODED_VERSION = 2          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
+                             # filled (fill_holes)
 MAX_ZOOM = 15               # AWS stops at z15 (the far field's zooms: zoom_for's default cap)
 # The near terrain and the road profiles read Mapterhorn's lidar one zoom deeper where it has it (the user, 2026-10-21:
 # "the terrain data gets smoothed ... sharper terrain features get lost": z16 is ~0.8 m a pixel at 48 N, z15 ~1.6 m, the
@@ -93,6 +94,52 @@ def decode_terrarium(data, size):
         im = im.resize((size, size), Image.BILINEAR)
     fast.require(1, "decode_terrarium")
     return fast._ef.terrarium_heights(np.ascontiguousarray(np.asarray(im)))
+
+
+HOLE_FILL_M = 600.0          # lidar holes up to ~2x this wide filled (a coarse tile's are whole city blocks: a
+HOLE_FILL_MAX_PX = 24        # Rotterdam district read 67 % zeros at z9-z11, ~1 % after 24 px; 2026-10-21); wider
+                             # zero areas are the sea
+
+
+def hole_px(z, y):
+    """fill_holes' rounds for tile row y at zoom z: HOLE_FILL_M in its pixels, 2 .. HOLE_FILL_MAX_PX."""
+    n = 2 ** z
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+    px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+    return int(min(HOLE_FILL_MAX_PX, max(2, round(HOLE_FILL_M / px))))
+
+
+def fill_holes(a, k=HOLE_FILL_MAX_PX):
+    """Lidar tile a with its small exact-0 holes filled from their surroundings. National lidar terrain models have
+    no ground under buildings, and Mapterhorn writes those cells as 0 (Rotterdam's AHN: 74 % of the zeros in
+    Spangen on land, 2026-10-21): a polder at -1.5 m got 0 m pits, and seacarve read them as the sea. Zeros take
+    the mean of their non-zero 4-neighbours, k rounds; zero areas wider than that (the sea, which reads exactly
+    0) keep 0, the band filled into their edge too. Pure."""
+    a = np.asarray(a, np.float32)
+    hole = a == 0
+    if not hole.any() or hole.all():
+        return a
+    out = a.copy()
+    todo = hole.copy()
+    for _ in range(k):
+        if not todo.any():
+            break
+        p = np.pad(out, 1, mode="edge")
+        v = np.pad(~todo, 1, mode="edge").astype(np.float32)
+        s = (p[:-2, 1:-1] * v[:-2, 1:-1] + p[2:, 1:-1] * v[2:, 1:-1] + p[1:-1, :-2] * v[1:-1, :-2]
+             + p[1:-1, 2:] * v[1:-1, 2:])
+        n = v[:-2, 1:-1] + v[2:, 1:-1] + v[1:-1, :-2] + v[1:-1, 2:]
+        got = todo & (n > 0)
+        out[got] = s[got] / n[got]
+        todo &= ~got
+    if todo.any():
+        # what is left is a wide zero area: it and the rim filled into it stay 0
+        wide = todo.copy()
+        for _ in range(k):
+            p = np.pad(wide, 1)
+            wide = wide | ((p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:]) & hole)
+        out[wide] = 0.0
+    return out
 
 
 def _resize(a, size):
@@ -359,16 +406,27 @@ class Dem:
             return np.zeros((TILE, TILE), np.float32) if a is None else a
         if a is not None:
             self.served[key] = MAPTERHORN["name"]
-            if self.ground_filter and z == GLOBAL_ZOOM and not self._lidar(x, y):
-                a = self._ground12(x, y, a)
+            if self.ground_filter:
+                if z == GLOBAL_ZOOM:
+                    lidar = self._lidar(x, y)
+                    a = fill_holes(a, hole_px(z, y)) if lidar else self._ground12(x, y, a)
+                elif z > GLOBAL_ZOOM:
+                    a = fill_holes(a, hole_px(z, y))        # lidar: no ground under buildings
+                else:
+                    d = GLOBAL_ZOOM - z                     # a coarse tile over lidar: its holes too
+                    if self._lidar((x << d) + (1 << d) // 2, (y << d) + (1 << d) // 2):
+                        a = fill_holes(a, hole_px(z, y))
             return a
         if z > MAX_ZOOM:                # (no lidar this deep here: the z15 tile upsampled)
             a = self._from_ancestor(z, x, y, MAX_ZOOM)
             self.served[key] = MAPTERHORN["name"]
             return a
         if self.ground_filter and z > GLOBAL_ZOOM:
-            # no lidar here: the surface model's ground, upsampled
-            a = self._from_ground12(z, x, y)
+            # deeper than the lidar goes here (Rotterdam: AHN to z14, z15 404): its deepest tile upsampled; no
+            # lidar at all: the surface model's ground, upsampled. z12 under lidar gave 19 m steps and 0.5 m stairs
+            # on city roads (Pleinweg's grade 1.5 % from z12, 0.4 % from z14; 2026-10-21)
+            az = self._deepest_lidar(z, x, y)
+            a = self._from_ancestor(z, x, y, az) if az else self._from_ground12(z, x, y)
             self.served[key] = MAPTERHORN["name"]
             return a
         try:
@@ -437,6 +495,19 @@ class Dem:
         g = dsmground.ground(big, px)
         self._count("dem:ground12")
         return np.ascontiguousarray(g[m:m + TILE, m:m + TILE])
+
+    def _deepest_lidar(self, z, x, y):
+        """The deepest zoom between GLOBAL_ZOOM + 1 and z - 1 at which Mapterhorn has the ancestor of tile (z, x, y)
+        (national lidar), else None (404s are remembered, so a miss is asked once per tile)."""
+        for az in range(z - 1, GLOBAL_ZOOM, -1):
+            d = z - az
+            try:
+                if self._download(MAPTERHORN, az, x >> d, y >> d) is not None:
+                    return az
+            except netfetch.FetchError:
+                self._partial()
+                return None
+        return None
 
     def _from_ground12(self, z, x, y):
         """Tile (z, x, y), z > 12, bilinear from its z12 ancestor's ground (edges held at the ancestor's)."""
