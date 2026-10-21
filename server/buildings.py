@@ -1845,19 +1845,19 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
         for i in near.tolist():
-            if str(cls[i]) not in THROUGH_CLASSES or roadsmod.level_ranges(f, i):
+            if str(cls[i]) not in THROUGH_CLASSES:
                 continue
-            a = f.coord_off[f.ring_off[f.part_off[i]]]
-            b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
-            ll = f.lonlat[a:b]
-            if len(ll) < 2:
-                continue
-            e, n = mapgeom.enu_xy(f, frame, ll)
-            xy = np.stack([e - x0, n - y0], 1)
-            if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
-                    or xy[:, 1].min() > size + margin:
-                continue
-            out.append(xy)
+            # A bridge/tunnel rule can cover only a small range of a long road. Keep its ground
+            # approaches in the building-clearance test, without joining across the off-ground part.
+            for ll in roadsmod.ground_parts(f, i):
+                if len(ll) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(f, frame, ll)
+                xy = np.stack([e - x0, n - y0], 1)
+                if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
+                        or xy[:, 1].min() > size + margin:
+                    continue
+                out.append(xy)
     return out
 
 

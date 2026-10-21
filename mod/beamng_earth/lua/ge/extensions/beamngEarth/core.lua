@@ -43,6 +43,7 @@ local lattice = require('beamngEarth/lattice')
 local governor = require('beamngEarth/governor')
 local camshift = require('beamngEarth/camshift')
 local stopwatch = require('beamngEarth/stopwatch')
+local messagequeue = require('beamngEarth/messagequeue')
 local horizon = require('beamngEarth/horizon')
 local ui = require('beamngEarth/ui')
 local settings = require('beamngEarth/settings') -- the pause-menu page's values (docs/DEVTOOLS.md)
@@ -112,6 +113,7 @@ local farRadius = nil         -- status.radius: the server's far-field radius (m
 local cacheInfo = nil         -- the server's last 'cache' message (download cache usage); outlives levels
 local updateInfo = nil       -- a newer version on GitHub: { current, latest, url } (server updates.py)
 local cacheClears = 0         -- answers to a clear so far (the settings page waits for the next one)
+local messages = messagequeue.new() -- the connection and its FIFO outlive levels
 
 local function resetState()
   st = {
@@ -156,6 +158,7 @@ local function resetState()
     loadingUntil = 0,        -- governor loading mode until this clock (after a teleport)
     slowFor = 0,             -- s the player has been below SLOW_SPEED
     serverBacklog = nil,     -- status.backlog of the server's last status (v1.4 M0), nil before / from v1.3.1
+    messages = messages.stats, -- dispatch backlog, progress and wall-cost maxima (read-only diagnostics)
     anchorLatency = nil,     -- s from prepare_anchor to anchor_ready of the last rebase request (M4 stale rule)
     terrainLatency = nil,    -- s from prepare_terrain to terrain_ready of the last one (M4 follow re-check)
     visibleDistance = nil,   -- LevelInfo.visibleDistance set for the horizon (M1h); nil = VISIBLE_DISTANCE
@@ -824,6 +827,10 @@ local function onMessage(msg)
   end
 end
 
+local function messageError(msg, err)
+  log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err))
+end
+
 ------------------------------------------------------------------------------------------
 -- per frame
 
@@ -1362,10 +1369,11 @@ local function onUpdate(dtReal, dtSim)
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
     -- launcher's sign that the game still runs, launcher.game_connected; its messages only store what the
     -- server is). The user, 2026-10-20: the mod should be effectively off when not playing the BeamNG.Earth map.
-    for _, msg in ipairs(net.update(dtReal)) do
-      local ok, err = pcall(onMessage, msg)
-      if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
-    end
+    -- Keep the connection FIFO across level changes: a decoded batch can still be pending
+    -- from the last in-level frame and must precede the next socket poll.
+    local loading = st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S
+    messages:update(function() return net.update(dtReal) end, onMessage,
+      loading and messagequeue.LOADING_MS or messagequeue.DRIVING_MS, messageError)
     return
   end
   if frameMs0 > M.HITCH_MS and st.inOurLevel then pcall(noteHitch, frameMs0) end
@@ -1409,13 +1417,14 @@ local function onUpdate(dtReal, dtSim)
     if not st.anchor then defaultStart() end
   end
   -- the governor's frame opens first: its clock is the wall time since the last onUpdate (hptimer)
-  gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
+  local loading = st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S
+  gov:setLoading(loading)
   gov:beginFrame(farfield.hasWork() or roads.hasWork())
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
-  for _, msg in ipairs(net.update(dtReal)) do
-    local ok, err = pcall(onMessage, msg)
-    if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
-  end
+  -- File-backed tile handlers decode synchronously. Spread a burst across frames without letting
+  -- later tiles, swaps or connection events overtake it. One atomic handler can exceed this limit.
+  messages:update(function() return net.update(dtReal) end, onMessage,
+    loading and messagequeue.LOADING_MS or messagequeue.DRIVING_MS, messageError)
   t = mark('net', t)
   if not scenetree.MissionGroup then return end -- no level loaded
   tickMotionBlur()
@@ -1620,6 +1629,7 @@ M.onFilesChanged = onFilesChanged
 local function onExtensionUnloaded()
   groundcover.enginePatch(false)
   net.close()
+  messages:clear()
   farfield.clear()
   roads.clear()
   sea.clear()
@@ -1749,7 +1759,7 @@ function M.status()
     baseRefreshes = st.baseRefreshes,
     rebaseDistance = rebase.distance, lastFollowMs = st.lastFollowMs, lastRebaseMs = st.lastRebaseMs,
     lastRebaseWaitFrames = st.lastRebaseWait, rebaseLag = rebaseLag, lastMoveLag = st.lastMoveLag, player = st.player, far = farfield.stats(), governor = gov:snapshot(), status = st.status,
-    serverBacklog = st.serverBacklog, followCount = st.followCount, rebaseCount = st.rebaseCount,
+    serverBacklog = st.serverBacklog, messages = st.messages, followCount = st.followCount, rebaseCount = st.rebaseCount,
     cells = crossover.cells(), blockSize = blockSize, anchorLatency = st.anchorLatency,
     terrainLatency = st.terrainLatency, horizon = horizonOn, farRadius = farRadius,
     visibleDistance = st.visibleDistance or VISIBLE_DISTANCE, banner = banner.current().id, guard = st.guard.mode,
@@ -1766,6 +1776,7 @@ end
 -- net.close() drops its '_disconnected' event, so reset the connection state here.
 function M.reconnect()
   net.close()
+  messages:clear() -- the explicit close discards all old-session wire and decoded messages
   onMessage({ type = '_disconnected', error = 'reconnect requested' })
 end
 

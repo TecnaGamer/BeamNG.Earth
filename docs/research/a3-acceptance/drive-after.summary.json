@@ -1,0 +1,35 @@
+{
+ "polls": 89,
+ "seconds": 88.1,
+ "frames": 6871,
+ "fps": 78.2,
+ "frame_ms": {
+  "avg": 12.78,
+  "p50": 11.4,
+  "p95": 19.87,
+  "p99": 30.45,
+  "max": 104.22059999996
+ },
+ "frames_over": {
+  "over33": 39,
+  "over50": 8,
+  "over100": 2
+ },
+ "miles": 1.02,
+ "avg_mph_moving": 42.7,
+ "standing_s": 3.0,
+ "off_route_max_m": 7.4,
+ "arrows_fallback_polls": 14,
+ "remaining_m": null,
+ "hitch_causes": {
+  "engine.RenderShadows": [
+   6,
+   104
+  ],
+  "mod.far": [
+   2,
+   80
+  ]
+ },
+ "events": []
+}

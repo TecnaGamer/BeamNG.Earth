@@ -1,0 +1,334 @@
+{
+  "final-control-a": {
+    "profile_sha256": "6162e89c2d2fee20641e319a70f01079471cd2c25221547667d6d71a6c98829a",
+    "fixed_time": {
+      "time": 0.916667,
+      "year": 2026,
+      "month": 10,
+      "day": 20,
+      "utcOffset": 2.0,
+      "hour": 10.0,
+      "date": "2026-10-20"
+    },
+    "weather": "clear, visibility 60000 m",
+    "lua_sha256": {
+      "core.lua": "a02fb8eb0097845e262d4cc0614118effb97ac376185120f7d5c56213d1401d5",
+      "farfield.lua": "021f98ba4652d7074f0cec04982f4337fc51fd69c48129e3f2b4929d994cd047",
+      "roads.lua": "4dcd352f1cc7343f146167ed41530d951d32b0d3e19ea149840e1d9e06b6345e",
+      "satmat.lua": "e52791033a55a510afbc6cc45478d2305a1933a1b246c7f4ded9dcfe6b8abc9e"
+    },
+    "terrain_shadow_override": "keep",
+    "render": {
+      "gpu": {
+        "memoryMB": 0,
+        "version": "32.0.21045.5002",
+        "name": "AMD Radeon RX 6800 XT"
+      },
+      "adapterType": "Direct3D12",
+      "vulkanEnabled": false
+    },
+    "tod": {
+      "month": 10,
+      "latitude": 48.990478515625,
+      "utcOffset": 2,
+      "startTime": 0.10000000149012,
+      "day": 20,
+      "time": 0.91666698455811,
+      "dayLength": 1800,
+      "play": false,
+      "longitude": 12.071765899658,
+      "year": 2026
+    },
+    "imagery_shadows": {
+      "enabled": 490,
+      "disabled": 0
+    },
+    "fps_limit_reason_start": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "fps_limit_reason_end": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    }
+  },
+  "final-control-a2": {
+    "profile_sha256": "6162e89c2d2fee20641e319a70f01079471cd2c25221547667d6d71a6c98829a",
+    "fixed_time": {
+      "time": 0.916667,
+      "year": 2026,
+      "month": 10,
+      "day": 20,
+      "utcOffset": 2.0,
+      "hour": 10.0,
+      "date": "2026-10-20"
+    },
+    "weather": "clear, visibility 60000 m",
+    "lua_sha256": {
+      "core.lua": "a02fb8eb0097845e262d4cc0614118effb97ac376185120f7d5c56213d1401d5",
+      "farfield.lua": "021f98ba4652d7074f0cec04982f4337fc51fd69c48129e3f2b4929d994cd047",
+      "roads.lua": "4dcd352f1cc7343f146167ed41530d951d32b0d3e19ea149840e1d9e06b6345e",
+      "satmat.lua": "e52791033a55a510afbc6cc45478d2305a1933a1b246c7f4ded9dcfe6b8abc9e",
+      "terrain.lua": "a7c52c2ee71a2ac6ee704f8b5155f284461bc8498a80c026c50d0931f2e74b53"
+    },
+    "terrain_shadow_override": "keep",
+    "render": {
+      "gpu": {
+        "memoryMB": 0,
+        "version": "32.0.21045.5002",
+        "name": "AMD Radeon RX 6800 XT"
+      },
+      "adapterType": "Direct3D12",
+      "vulkanEnabled": false
+    },
+    "tod": {
+      "month": 10,
+      "latitude": 48.990478515625,
+      "utcOffset": 2,
+      "startTime": 0.10000000149012,
+      "day": 20,
+      "time": 0.91666698455811,
+      "dayLength": 1800,
+      "play": false,
+      "longitude": 12.071765899658,
+      "year": 2026
+    },
+    "imagery_shadows": {
+      "enabled": 492,
+      "disabled": 0
+    },
+    "fps_limit_reason_start": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "fps_limit_reason_end": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    }
+  },
+  "final-combined-c": {
+    "profile_sha256": "6162e89c2d2fee20641e319a70f01079471cd2c25221547667d6d71a6c98829a",
+    "fixed_time": {
+      "time": 0.916667,
+      "year": 2026,
+      "month": 10,
+      "day": 20,
+      "utcOffset": 2.0,
+      "hour": 10.0,
+      "date": "2026-10-20"
+    },
+    "weather": "clear, visibility 60000 m",
+    "lua_sha256": {
+      "core.lua": "cd6e6610225914fd78036b70ad0bc115991fc2755557a9f0723dac39e7cb70dc",
+      "farfield.lua": "021f98ba4652d7074f0cec04982f4337fc51fd69c48129e3f2b4929d994cd047",
+      "roads.lua": "4dcd352f1cc7343f146167ed41530d951d32b0d3e19ea149840e1d9e06b6345e",
+      "satmat.lua": "e52791033a55a510afbc6cc45478d2305a1933a1b246c7f4ded9dcfe6b8abc9e",
+      "terrain.lua": "b34700eee49e34dba867548c3944c1fe77a477f64bb781c1c74d068b4255bb9b",
+      "messagequeue.lua": "8f694eeaf97e76e6ce978b0ef4bfa512df3a7e24c9aba1998948d3a21158e4fb"
+    },
+    "terrain_shadow_override": "keep",
+    "render": {
+      "gpu": {
+        "memoryMB": 0,
+        "version": "32.0.21045.5002",
+        "name": "AMD Radeon RX 6800 XT"
+      },
+      "adapterType": "Direct3D12",
+      "vulkanEnabled": false
+    },
+    "tod": {
+      "month": 10,
+      "latitude": 48.990478515625,
+      "utcOffset": 2,
+      "startTime": 0.10000000149012,
+      "day": 20,
+      "time": 0.91666698455811,
+      "dayLength": 1800,
+      "play": false,
+      "longitude": 12.071765899658,
+      "year": 2026
+    },
+    "imagery_shadows": {
+      "enabled": 483,
+      "disabled": 0
+    },
+    "fps_limit_reason_start": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "fps_limit_reason_end": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    }
+  },
+  "final-combined-c2": {
+    "profile_sha256": "6162e89c2d2fee20641e319a70f01079471cd2c25221547667d6d71a6c98829a",
+    "fixed_time": {
+      "time": 0.916667,
+      "year": 2026,
+      "month": 10,
+      "day": 20,
+      "utcOffset": 2.0,
+      "hour": 10.0,
+      "date": "2026-10-20"
+    },
+    "weather": "clear, visibility 60000 m",
+    "lua_sha256": {
+      "core.lua": "cd6e6610225914fd78036b70ad0bc115991fc2755557a9f0723dac39e7cb70dc",
+      "farfield.lua": "021f98ba4652d7074f0cec04982f4337fc51fd69c48129e3f2b4929d994cd047",
+      "roads.lua": "4dcd352f1cc7343f146167ed41530d951d32b0d3e19ea149840e1d9e06b6345e",
+      "satmat.lua": "e52791033a55a510afbc6cc45478d2305a1933a1b246c7f4ded9dcfe6b8abc9e",
+      "terrain.lua": "b34700eee49e34dba867548c3944c1fe77a477f64bb781c1c74d068b4255bb9b",
+      "messagequeue.lua": "8f694eeaf97e76e6ce978b0ef4bfa512df3a7e24c9aba1998948d3a21158e4fb"
+    },
+    "terrain_shadow_override": "keep",
+    "render": {
+      "gpu": {
+        "memoryMB": 0,
+        "version": "32.0.21045.5002",
+        "name": "AMD Radeon RX 6800 XT"
+      },
+      "adapterType": "Direct3D12",
+      "vulkanEnabled": false
+    },
+    "tod": {
+      "month": 10,
+      "latitude": 48.990478515625,
+      "utcOffset": 2,
+      "startTime": 0.10000000149012,
+      "day": 20,
+      "time": 0.91666698455811,
+      "dayLength": 1800,
+      "play": false,
+      "longitude": 12.071765899658,
+      "year": 2026
+    },
+    "imagery_shadows": {
+      "enabled": 480,
+      "disabled": 0
+    },
+    "fps_limit_reason_start": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "fps_limit_reason_end": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    }
+  },
+  "final-installed-stream": {
+    "profile_sha256": "6162e89c2d2fee20641e319a70f01079471cd2c25221547667d6d71a6c98829a",
+    "fixed_time": {
+      "time": 0.916667,
+      "year": 2026,
+      "month": 10,
+      "day": 20,
+      "utcOffset": 2.0,
+      "hour": 10.0,
+      "date": "2026-10-20"
+    },
+    "weather": "clear, visibility 60000 m",
+    "lua_sha256": {
+      "core.lua": "cd6e6610225914fd78036b70ad0bc115991fc2755557a9f0723dac39e7cb70dc",
+      "farfield.lua": "021f98ba4652d7074f0cec04982f4337fc51fd69c48129e3f2b4929d994cd047",
+      "roads.lua": "4dcd352f1cc7343f146167ed41530d951d32b0d3e19ea149840e1d9e06b6345e",
+      "satmat.lua": "e52791033a55a510afbc6cc45478d2305a1933a1b246c7f4ded9dcfe6b8abc9e",
+      "terrain.lua": "b34700eee49e34dba867548c3944c1fe77a477f64bb781c1c74d068b4255bb9b",
+      "messagequeue.lua": "8f694eeaf97e76e6ce978b0ef4bfa512df3a7e24c9aba1998948d3a21158e4fb"
+    },
+    "terrain_shadow_override": "keep",
+    "render": {
+      "gpu": {
+        "memoryMB": 0,
+        "version": "32.0.21045.5002",
+        "name": "AMD Radeon RX 6800 XT"
+      },
+      "adapterType": "Direct3D12",
+      "vulkanEnabled": false
+    },
+    "tod": {
+      "month": 10,
+      "latitude": 48.990478515625,
+      "utcOffset": 2,
+      "startTime": 0.10000000149012,
+      "day": 20,
+      "time": 0.91666698455811,
+      "dayLength": 1800,
+      "play": false,
+      "longitude": 12.071765899658,
+      "year": 2026
+    },
+    "imagery_shadows": {
+      "enabled": 492,
+      "disabled": 0
+    },
+    "fps_limit_reason_start": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "fps_limit_reason_end": {
+      "backgroundCap": 90,
+      "backgroundActive": true,
+      "fpsCap": 90,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 90,
+      "foregroundActive": true,
+      "vsync": false
+    }
+  }
+}

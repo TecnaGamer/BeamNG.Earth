@@ -66,6 +66,7 @@ TUNNEL_KEEP_M = 5.0         # m beside a covered tunnel's road where the ground 
 OVER_TUNNEL_SMALL_M = 0.5   # ... but for a change smaller than this (a road crossing over it, graded flush)
 WALL_AHEAD_M = 2.5          # ... only beside a segment or this little past its end (a joint between two: VERTEX_STEP)
 RETRY_S = 60.0              # s before a cell whose road data failed is asked for again
+CROSSOVER_CONTEXT_M = 96.0 # widest accepted roads (40 m), profile smoothing and the local repair's fade
 
 # Overpass approach ramps (from KyzoFox's 1.5.4, PR #64). A short bridge over a road had its ends on the ground on both
 # sides (the DEM is too coarse for the real approach embankments), and roads.deck_profile_once caps how steeply a deck
@@ -243,6 +244,7 @@ class Grader:
         self.key_locks = {}     # cell key -> Lock: one thread plans a cell, the others wait for it
         self.covers = {}        # cell key -> [(xy (k, 2), half width)]: the tunnels whose ground over them stays
         self.opens = {}         # cell key -> [(xy (k, 2), Spec)]: the tunnels' open sections (roads in the open)
+        self.crossovers = {}    # cell key -> Plans of surface roads crossing an explicitly mapped tunnel
 
     def _cell_plans(self, key):
         with self.lock:
@@ -290,19 +292,65 @@ class Grader:
                     self._lift_approaches(key, plans, pspecs)
                 except Exception as e:      # ungraded approaches rather than no grading
                     log.debug("grading: approaches of %s: %s: %s", key, type(e).__name__, e)
-            secs = self._tunnel_sections(feats, key, [p for _f, p in plans])
+            road_plans = [p for _f, p in plans]
+            crossovers = self._surface_crossings(feats, key, road_plans)
+            secs = self._tunnel_sections(feats, key, road_plans, crossovers)
             plans.extend((fid + TUNNEL_TAG, Plan(xy, z, spec.width / 2 + shoulder(spec)))
                          for fid, spec, xy, z, k in secs if k == 0)
             plans.extend(self._mouth_plans(secs))
             covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in secs if k]
             opens = [(xy, spec) for _f, spec, xy, _z, k in secs if k == 0]
         else:
-            covers, opens = [], []
+            covers, opens, crossovers = [], [], []
         with self.lock:
             self.cells.setdefault(key, plans)
             self.covers.setdefault(key, covers)
             self.opens.setdefault(key, opens)
+            self.crossovers.setdefault(key, crossovers)
             return self.cells[key]
+
+    def _surface_crossings(self, feats, key, road_plans):
+        """The surface road owns its carriageway above an explicit tunnel, even when a coarse DEM
+        cannot resolve the two levels. The lower road's approaches must not dig a trench through it.
+        Keep only a short piece around each crossing, so normal junction grading elsewhere is unchanged.
+        """
+        out = []
+        ts = roadsmod.tunnel_specs(feats)
+        for i in range(len(feats)):
+            if ts[i] is None:
+                continue
+            for j, ring in enumerate(roadsmod.tunnel_parts(feats, i)):
+                ring = np.asarray(self._longest(str(feats.ids[i]), j, ring, key), np.float64)
+                if len(ring) < 2:
+                    continue
+                e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                xy = np.c_[e, n]
+                repair = ts[i].width / 2 + 3 * SIGMA_M
+                lo, hi = xy.min(0), xy.max(0)
+                for p in road_plans:
+                    if p.bbox[2] < lo[0] or p.bbox[0] > hi[0] or p.bbox[3] < lo[1] or p.bbox[1] > hi[1]:
+                        continue
+                    # End touches are the tunnel's own approaches, not an upper road.
+                    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p.xy, axis=0).T))]
+                    crossings = sorted({round(float(sp), 6) for _pi, sp, q in
+                                        roadsmod._crossings([p.xy], [xy]) if 1.0 < sp < s[-1] - 1.0
+                                        and min(np.linalg.norm(q - xy[0]), np.linalg.norm(q - xy[-1])) > 1.0})
+                    if not crossings:
+                        continue
+                    for sp in crossings:
+                        # The DEM often resolves the lower road and leaves a false dip in the
+                        # upper one. Bridge it from the undisturbed profile beyond the smoother's
+                        # footprint instead of smoothing the lower road's elevation into it.
+                        a, b = max(0.0, sp - repair), min(s[-1], sp + repair)
+                        start, end = max(0.0, a - T_MAX), min(s[-1], b + T_MAX)
+                        local_s = np.r_[start, s[(s > start) & (s < end)], end]
+                        local_xy = np.c_[np.interp(local_s, s, p.xy[:, 0]), np.interp(local_s, s, p.xy[:, 1])]
+                        z = np.interp(local_s, s, p.z)
+                        inside = (local_s >= a) & (local_s <= b)
+                        z[inside] = np.maximum(z[inside], np.interp(local_s[inside], [a, b],
+                                                                 np.interp([a, b], s, p.z)))
+                        out.append(Plan(local_xy, z, p.half))
+        return out
 
     def _clip_box(self, key):
         """The cell's box in the frame (east / north), CLIP_MARGIN_M wider each side; None for a key without bounds."""
@@ -511,12 +559,23 @@ class Grader:
                 best = parts[j]
         return best
 
-    def _tunnel_sections(self, feats, key=None, road_plans=()):
+    def _tunnel_sections(self, feats, key=None, road_plans=(), crossovers=()):
         """[(fid, spec, xy, z, kind)] of the tunnels' sections (roads.tunnel_sections on the ungraded ground, its
         ends graded by road_plans: the cell's road Plans, as roads.TunnelProfiles.ends grades them with the roads'
         plans alone): kind 0 an open road at z, 1 a low arch, 2 a full tunnel."""
         out = []
         ts = roadsmod.tunnel_specs(feats)
+        ground = []
+        if any(sp is not None for sp in ts):
+            # Use exactly the source geometries and carriageway widths that
+            # BridgeProfiles._load gives TunnelProfiles, without grading shoulders.
+            rs = roadsmod.road_specs(feats)
+            for i in range(len(feats)):
+                if rs[i] is None:
+                    continue
+                for ring in roadsmod.ground_parts(feats, i):
+                    e, n = roadsmod.mapgeom.enu_xy(feats, self.frame, ring)
+                    ground.append((np.c_[e, n], rs[i].width))
         for i in range(len(feats)):
             if ts[i] is None:
                 continue
@@ -534,7 +593,13 @@ class Grader:
                 if road_plans:
                     g = g.copy()
                     g[[0, -1]] = grade_points(xy[[0, -1], 0], xy[[0, -1], 1], g[[0, -1]], list(road_plans))
-                floor, kinds = roadsmod.tunnel_sections(s, g)
+                covered = roadsmod.tunnel_crossing_mask(xy, ground)
+                upper = None
+                if covered.any() and crossovers:
+                    footprint = roadsmod.tunnel_crossing_mask(xy, ground, margin=0.0, extend=False)
+                    upper = grade_points(xy[:, 0], xy[:, 1], g, crossovers, ROAD_LIFT)
+                    upper[~footprint] = np.nan
+                floor, kinds = roadsmod.tunnel_sections(s, g, covered=covered, upper=upper)
                 i0 = 0
                 while i0 < len(kinds):
                     i1 = i0
@@ -604,18 +669,21 @@ class Grader:
         """Make cell key's plans now (worker threads: the lookahead ahead of the player)."""
         self._cell_plans(key)
 
+    def _plan_keys(self, lat, lon):
+        pad = max(T_MAX + 40.0, CROSSOVER_CONTEXT_M) / 111320.0
+        padlon = pad / max(0.05, math.cos(math.radians(float(np.mean(lat)))))
+        keys = mapcells.cells_for_bbox(float(lat.min()) - pad, float(lon.min()) - padlon,
+                                      float(lat.max()) + pad, float(lon.max()) + padlon)
+        if len(keys) > SPREAD_CELLS:        # points far apart: only the cells around them
+            keys = mapcells.cells_near_points(lat, lon, pad, padlon)
+        return keys
+
     def plans(self, lat, lon, roads_only=False):
         """The Plans touching the points' area (each road once); roads_only: not the tunnels' (TUNNEL_TAG)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
-        pad = (T_MAX + 40.0) / 111320.0
-        padlon = pad / max(0.05, math.cos(math.radians(float(np.mean(lat)))))
-        keys = mapcells.cells_for_bbox(float(lat.min()) - pad, float(lon.min()) - padlon,
-                                       float(lat.max()) + pad, float(lon.max()) + padlon)
-        if len(keys) > SPREAD_CELLS:        # points far apart: only the cells around them
-            keys = mapcells.cells_near_points(lat, lon, pad, padlon)
         got = {}
-        for key in keys:
+        for key in self._plan_keys(lat, lon):
             for fid_part, p in self._cell_plans(key):
                 if roads_only and TUNNEL_TAG in fid_part:
                     continue
@@ -648,7 +716,52 @@ class Grader:
             # left ungraded under it stood a few cm over the E6's lanes as patches of bare ground, GitHub #2)
             keep &= np.abs(out - base.ravel()) >= OVER_TUNNEL_SMALL_M
             out[keep] = base.ravel()[keep]
+        if not roads_only:
+            out = self._surface_over_tunnels(e, n, out, lift, self._plan_keys(lat, lon))
         return out.reshape(shape)
+
+    def _surface_over_tunnels(self, e, n, base, lift, keys):
+        """Restore only the upper carriageway at grade-separated crossings. A narrow shoulder fade
+        leaves the tunnel portals at the lower road's approach height.
+        """
+        with self.lock:
+            unique = {}
+            for key in keys:
+                for p in self.crossovers.get(key, ()):
+                    unique.setdefault((p.half, p.xy.tobytes(), p.z.tobytes()), p)
+            plans = [unique[key] for key in sorted(unique)]
+        if not plans or not len(e):
+            return base
+        x0, y0, x1, y1 = e.min(), n.min(), e.max(), n.max()
+        plans = [p for p in plans if not (p.bbox[2] < x0 or p.bbox[0] > x1 or p.bbox[3] < y0 or p.bbox[1] > y1)]
+        if not plans:
+            return base
+        weight = np.zeros(len(e))
+        for p in plans:
+            lo, hi = p.xy.min(0) - p.half - WALL_T_M, p.xy.max(0) + p.half + WALL_T_M
+            ii = np.flatnonzero((e >= lo[0]) & (e <= hi[0]) & (n >= lo[1]) & (n <= hi[1]))
+            if not len(ii):
+                continue
+            points = np.c_[e[ii], n[ii]]
+            distances = roadsmod._seg_dist(points, p.xy[:-1], p.xy[1:])
+            nearest = distances.argmin(1)
+            distance = distances[np.arange(len(ii)), nearest]
+            ab = np.diff(p.xy, axis=0)
+            lengths = np.hypot(*ab.T)
+            arc = np.r_[0.0, np.cumsum(lengths)]
+            t = np.clip(((points - p.xy[nearest]) * ab[nearest]).sum(1) /
+                        np.maximum(lengths[nearest] ** 2, 1e-12), 0.0, 1.0)
+            along = arc[nearest] + t * lengths[nearest]
+            v = np.clip(np.minimum(along, arc[-1] - along) / T_MAX, 0.0, 1.0)
+            u = np.clip((distance - p.half) / WALL_T_M, 0.0, 1.0)
+            weight[ii] = np.maximum(weight[ii], (1 - u * u * (3 - 2 * u)) * v * v * (3 - 2 * v))
+        ii = np.flatnonzero(weight > 0)
+        if not len(ii):
+            return base
+        target = grade_points(e[ii], n[ii], base[ii], plans, lift)
+        out = base.copy()
+        out[ii] += weight[ii] * (target - out[ii])
+        return out
 
     def open_tunnels(self, lat, lon):
         """[(lat (k,), lon (k,), Spec)] of the tunnels' open sections planned near the points: roads on the ground

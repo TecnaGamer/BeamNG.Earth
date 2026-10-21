@@ -1,0 +1,563 @@
+{
+  "date": "2026-10-20",
+  "base_commit": "011d6b54e42407b2f3a6deaddc47305cf2325a47",
+  "working_tree_changes": true,
+  "scope": "A3 east from Regensburg; generator fixes apply globally",
+  "reported_site": {
+    "name": "A3 above Graßer Weg, Regensburg (BW54)",
+    "lat": 48.99120980722417,
+    "lon": 12.077944536143328,
+    "benchmark_id": "a3_grasser_weg",
+    "user_screenshot_reproduced": true,
+    "matching_view": "west",
+    "baseline_images": [
+      "docs/research/a3-live/before/a3_grasser_weg__east.jpg",
+      "docs/research/a3-live/before/a3_grasser_weg__west.jpg",
+      "docs/research/a3-live/before/a3_grasser_weg__overhead.jpg"
+    ],
+    "candidate_images": [
+      "docs/research/a3-live/candidate-1/a3_grasser_weg__east.jpg",
+      "docs/research/a3-live/candidate-1/a3_grasser_weg__west.jpg",
+      "docs/research/a3-live/candidate-1/a3_grasser_weg__overhead.jpg"
+    ],
+    "run_metadata": [
+      "docs/research/a3-live/before/run.json",
+      "docs/research/a3-live/candidate-1/run.json"
+    ],
+    "visual_result": "The baseline reproduces the user's transverse ramps, trench and exposed stone structure. The candidate restores a continuous motorway surface in the three fixed views.",
+    "generator_change": "Preserve the upper surface-road profile where an explicitly mapped tunnel crosses below it; keep the lower tunnel covered through both carriageways and suppress its decorative grass cap at the crossing.",
+    "source_functions": [
+      "server/grading.py: Grader._surface_crossings / _surface_over_tunnels",
+      "server/roads.py: tunnel_crossing_mask / tunnel_sections",
+      "server/roadmesh.py: tunnel"
+    ]
+  },
+  "road_inputs": {
+    "bbox": [
+      48.975,
+      12.055,
+      49.055,
+      12.465
+    ],
+    "filter": {
+      "class": "motorway",
+      "source_record": "r2925465"
+    },
+    "versions": {
+      "pipeline": 2,
+      "overture": "2026-09-23.1",
+      "worldcover": "v200-2021",
+      "canopy": "v2-ml3"
+    },
+    "coverage": {
+      "loaded": 140,
+      "missing": [],
+      "complete": true,
+      "unreadable": {}
+    },
+    "summary": {
+      "roads": 38,
+      "mixed_ground_and_structure": 11,
+      "selected_views": 12
+    }
+  },
+  "validation": {
+    "focused_python_tests": 354,
+    "lua_scripts_passed": 47,
+    "collision_regression": {
+      "checks": 11,
+      "failures_against_original": 8
+    },
+    "frozen_benchmark": {
+      "places": 13,
+      "shots": 27,
+      "composition": "12 original audit locations plus the exact reported site with east, west and overhead views",
+      "path": "docs/benchmarks-a3-regensburg-east.json"
+    },
+    "in_game_before_after_run": true,
+    "fps_improvement_measured": false,
+    "python_tests_skipped": 0,
+    "test_counts_scope": "354 distinct focused Python methods verified across the initial, repaired Windows-path fixture, and subsequent surface-fix runs. 47 Lua scripts passed. This is not a full Python-suite pass.",
+    "road_physics": {
+      "baseline": {
+        "summary": "docs/research/a3-live/drive-before/summary.json",
+        "samples": "docs/research/a3-live/drive-before/samples.jsonl",
+        "crash_image": "docs/research/a3-live/drive-before/event_0_crash.jpg",
+        "crash_lat": 48.991186362884,
+        "crash_lon": 12.077734357084,
+        "approach_kmh": 98.98,
+        "damage_before": 1,
+        "damage_after": 9118,
+        "crash_events": 1
+      },
+      "candidate": {
+        "summary": "docs/research/a3-live/drive-after/summary.json",
+        "samples": "docs/research/a3-live/drive-after/samples.jsonl",
+        "crossing_approach_kmh": 99.66,
+        "damage_before_and_after_crossing": 1,
+        "crossing_sample_longitudes": [
+          12.077785303715,
+          12.07814422505
+        ],
+        "recorded_miles": 1.02,
+        "recorded_seconds": 88.1,
+        "detected_events": [],
+        "maximum_damage_entire_run": 63,
+        "first_later_damage_lon": 12.089419919315,
+        "arrows_fallback_polls": 14
+      },
+      "conclusion": "The fatal collision at the reported crossing is reproduced before and avoided after at approximately 100 km/h. The longer candidate drive still accumulates minor damage later; this is not a claim of a damage-free route or a performance improvement.",
+      "packaged_fast_west": {
+        "summary": "docs/research/a3-live/packaged-fast-west/summary.json",
+        "samples": "docs/research/a3-live/packaged-fast-west/samples.jsonl",
+        "vehicle": "etk800 / 846x_ttsport_plus_DCT",
+        "target_kmh": 200,
+        "crossing_kmh": [
+          193.64,
+          194.838
+        ],
+        "crossing_longitudes": [
+          12.078260585188,
+          12.077466516058
+        ],
+        "maximum_kmh": 196.777,
+        "maximum_damage_entire_run": 0,
+        "recorded_miles": 1.24,
+        "recorded_seconds": 66.0,
+        "events": [],
+        "end_reason": "autodrive_ended",
+        "tested_executable_sha256": "c6590136179fa46555acdd5e6cf9c929eaead934b7bef51cdf703a928c722508",
+        "final_visual_changes_do_not_modify_physics_or_fixed_deck_tunnel_geometry": true
+      }
+    },
+    "offline_geometry": {
+      "samples": "docs/research/a3-live/grading-metrics.json",
+      "method": "Cached source geometry and DEM; 0.5 m samples across both 13 m carriageways and their edges",
+      "maximum_centerline_grade_percent_before": 61.1546,
+      "maximum_centerline_grade_percent_after": 2.8033,
+      "maximum_sampled_height_step_m_before": 3.9308,
+      "maximum_sampled_height_step_m_after": 0.017,
+      "tunnel_clearance_audit": "docs/research/a3-live/tunnel-mesh-clearance.json",
+      "candidate_tunnel_samples_above_carriageways": 0,
+      "bridge_profile_audit": "docs/research/a3-live/fixed-profile-audit.json",
+      "bridge_profiles": 13,
+      "maximum_bridge_profile_vertical_error_m_before": 0.8493,
+      "maximum_bridge_profile_vertical_error_m_after": 0.0193
+    },
+    "lua_assertions_passed": 4736,
+    "checks": "docs/research/a3-live/final-checks/summary.json",
+    "frame_time_tail_improvement_measured": true,
+    "fps_note": "The final installed average is within the control range; the reproducible performance gain is fewer large stalls and lower p99, not an established average-FPS gain.",
+    "visual_sweep": {
+      "before": "docs/research/a3-live/packaged-cameras/run.json",
+      "final": "docs/research/a3-live/final-cameras/run.json",
+      "review": "docs/research/a3-live/final-cameras/visual-review.json",
+      "places": 13,
+      "images_per_run": 27,
+      "all_captures_and_restore_successful": true,
+      "result": "All previously flagged mainline stripes, dirt octagons and merge patches are absent in the final reviewed frames; no new obvious raised mainline obstruction is visible. This does not establish collision safety outside the driven site.",
+      "fixed_view_set_digest": "9e369e3be6156c9c"
+    },
+    "render_surface_fixes": {
+      "dirt_overlap": "docs/research/a3-live/barbing-dirt-overlap.json",
+      "wide_paved_drape": "docs/research/a3-live/paved-merge-drape-comparison.json",
+      "independent_reproduction": "docs/research/a3-live/surface-metrics/comparison.json",
+      "behavior": [
+        "Trim dirt/gravel render ribbons to the edge of paved ground carriageways, including neighboring tile context.",
+        "Sample wide ground base ribbons across their width at no more than 2 m, retaining original UVs, materials, physics and fixed bridge/tunnel profiles."
+      ],
+      "geometry_cost": "Representative wide road meshes have about 4.5x the vertices and about 5x the file bytes; object and material counts are unchanged. Final installed streaming was measured after this change."
+    }
+  },
+  "real_world_comparison": {
+    "observed": "2026-10-20",
+    "metadata": "docs/research/a3-live/reference/reference.json",
+    "layout": "A3 crosses above Graßer Weg on one motorway bridge per directional carriageway. Graßer Weg and its sidewalks pass below, with no centre pier in the opening.",
+    "streetview": [
+      {
+        "pano": "Db80W-T46VwV5cOWTn0OAQ",
+        "captured": "2022-06",
+        "heading": 90,
+        "image": "docs/research/a3-live/reference/streetview-a3-east-2022.png",
+        "url": "https://www.google.com/maps/@?api=1&map_action=pano&pano=Db80W-T46VwV5cOWTn0OAQ&heading=90&pitch=0&fov=80",
+        "observation": "Continuous motorway carriageway over the crossing, with guardrails and construction on the opposite carriageway."
+      },
+      {
+        "pano": "uaKfYOHpWpLrSTCMP7ihVg",
+        "captured": "2022-08",
+        "heading": 165,
+        "image": "docs/research/a3-live/reference/streetview-grasser-north-underpass-2022.png",
+        "url": "https://www.google.com/maps/@?api=1&map_action=pano&pano=uaKfYOHpWpLrSTCMP7ihVg&heading=165&pitch=0&fov=80",
+        "observation": "Concrete motorway deck and sound wall above a single opening containing the lower road and sidewalks."
+      },
+      {
+        "pano": "L2B3rRoON4DzsZib8jatdg",
+        "captured": "2022-08",
+        "heading": 320,
+        "image": "docs/research/a3-live/reference/streetview-grasser-south-approach-2022.png",
+        "url": "https://www.google.com/maps/@?api=1&map_action=pano&pano=L2B3rRoON4DzsZib8jatdg&heading=320&pitch=0&fov=50"
+      }
+    ],
+    "official_bw54": {
+      "url": "https://www.regierung.oberpfalz.bayern.de/mam/service/planfeststellung_strassen/dokumente/u_11_00_regelungsverzeichnis.pdf#page=39",
+      "section": "2.1.5; printed page 31; A3 chainage 492+879",
+      "spans": 1,
+      "clear_opening_m": 12.0,
+      "minimum_clear_height_m": 4.5,
+      "width_between_railings_m": 36.5,
+      "crossing_angle_gon": 89.9
+    },
+    "limitation": "Street View predates completion of the six-lane widening in October 2024. It establishes grade separation and carriageway continuity, not precise finished 2026 appearance."
+  },
+  "limitations": [
+    "Physical validation covers the reported crossing; visual validation covers 13 fixed places. Other A3 locations and the global held-out set are not accepted by these runs.",
+    "Some streaming stutters and terrain backlog remain. The final installed mean FPS is roughly unchanged; lower p99 and fewer >50 ms frames are the demonstrated performance gains.",
+    "Kinematic speed/pose captures do not establish collision safety. Real-physics drive evidence is recorded separately.",
+    "Coarse roadside cut/fill terrain, sparse vegetation at shoulder lines and minor off-mainline ramp/junction infill remain visible.",
+    "The complete Python suite was not run; only focused checks are claimed. Optional OBS/ffmpeg recording remains unvalidated on Windows."
+  ],
+  "references": [
+    {
+      "title": "Official A3 Regensburg widening and bridges",
+      "url": "https://www.autobahn.de/planen-bauen/projekt/a3-regensburg"
+    },
+    {
+      "title": "Bavarian planning record, BW54 over Graßer Weg, section 2.1.5",
+      "url": "https://www.regierung.oberpfalz.bayern.de/mam/service/planfeststellung_strassen/dokumente/u_11_00_regelungsverzeichnis.pdf#page=39"
+    },
+    {
+      "title": "Autobahn project record: Graßer Weg bridge halves renewed in 2021 and 2023",
+      "url": "https://autobahnen-regensburg.de/a3/a3-ausbau-regensburg-rosenhof/"
+    },
+    {
+      "title": "Google Maps URLs",
+      "url": "https://developers.google.com/maps/documentation/urls/get-started"
+    }
+  ],
+  "performance": {
+    "method": {
+      "route": "Same A3 Regensburg eastbound 6 km profile",
+      "nominal_speed_kmh": 200,
+      "nominal_duration_s": 108,
+      "motion": "Kinematic streaming benchmark; actual physics is not used to advance along the profile",
+      "frame_metrics": "Per-frame harness data; the harness reports 1 Hz state snapshots and excludes its own polling frames from performance percentiles",
+      "graphics": "Same saved graphics settings; foreground and background cap verified at 90 FPS for every final comparison run",
+      "order": [
+        "final-control-a",
+        "final-prebind-b",
+        "final-control-a2",
+        "final-combined-c",
+        "final-combined-c2"
+      ],
+      "cumulative_counters": "Differences use final minus first snapshot. Terrain commit arrays are deduplicated by followCount; initial sample hitch records are excluded.",
+      "arrival_latency": "Enqueue timestamps and per-message acknowledgements are not recorded; 1 Hz queue samples cannot establish exact worst-case dispatch latency or prove absence of delayed/lost arrivals."
+    },
+    "changes": [
+      {
+        "files": [
+          "mod/beamng_earth/lua/ge/extensions/beamngEarth/terrain.lua"
+        ],
+        "behavior": "Prepare every incoming TerrainMaterial base-photo field before the terrainFile setter binds the material slices. Skip the second updateMaterial pass only after a successful .ter swap. PNG imports and standalone photo refresh retain full material rebinding; failed preparation or file setters restore the prior base fields before the normal import fallback.",
+        "visual_evidence": "docs/research/a3-live/terrain-material-visual/results.json",
+        "stationary_timing_evidence": "docs/research/a3-live/terrain-material-probe.json"
+      },
+      {
+        "files": [
+          "mod/beamng_earth/lua/ge/extensions/beamngEarth/core.lua",
+          "mod/beamng_earth/lua/ge/extensions/beamngEarth/messagequeue.lua"
+        ],
+        "behavior": "Drain file-backed message handlers in strict FIFO under a 3 ms driving / 8 ms loading wall budget, with at least one atomic handler per frame. Poll another network batch only after the current one drains, applying transport backpressure. Retain pending messages across level resets on the continuous connection; discard them on explicit reconnect/unload.",
+        "budget_scope": "The wall deadline includes receiving/decoding the batch, but one receive/decode or handler remains atomic and may exceed the deadline."
+      }
+    ],
+    "rejected_experiments": {
+      "terrain_priority_reservation": "Improved tile import throughput but increased hitch counts; removed from the production candidate.",
+      "far_terrain_shadow_policy": "No convincing standalone improvement. Disabling TerrainBlock shadows shifted deferred rebuild work from RenderShadows into Render. Shadow settings and postApply are retained.",
+      "saved_variants": "docs/research/a3-live/work-sources.zip :: work/experimental_stream_reservation"
+    },
+    "runs": {
+      "final-control-a": {
+        "variant": "control",
+        "summary": "docs/research/a3-live/final-control-a/summary.json",
+        "samples": "docs/research/a3-live/final-control-a/samples.jsonl",
+        "frames": "docs/research/a3-live/final-control-a/frames.jsonl",
+        "km": 6.001,
+        "wallS": 108.1,
+        "effectiveRatio": 0.999,
+        "fpsMean": 57.9,
+        "p95": 32.84,
+        "p99": 47.09,
+        "maxMs": 129.75,
+        "over50": 51,
+        "over50Steady": 44,
+        "falls": 0,
+        "resets": 0,
+        "headingResyncs": 3,
+        "queuedMax": 979,
+        "liveEnd": 477,
+        "unique_follow_commits": 15,
+        "median_terrain_load_ms": 27.378,
+        "median_extra_after_ter_apply_ms": 11.47,
+        "median_commit_render_shadows_ms": 76.5,
+        "net_largest_mod_part_in_noninitial_hitches": 22,
+        "max_net_component_in_noninitial_hitches_ms": 61.9
+      },
+      "final-control-a2": {
+        "variant": "control repeat",
+        "summary": "docs/research/a3-live/final-control-a2/summary.json",
+        "samples": "docs/research/a3-live/final-control-a2/samples.jsonl",
+        "frames": "docs/research/a3-live/final-control-a2/frames.jsonl",
+        "km": 6.0,
+        "wallS": 107.9,
+        "effectiveRatio": 1.001,
+        "fpsMean": 61.3,
+        "p95": 29.82,
+        "p99": 42.27,
+        "maxMs": 104.97,
+        "over50": 24,
+        "over50Steady": 21,
+        "falls": 0,
+        "resets": 0,
+        "headingResyncs": 2,
+        "queuedMax": 941,
+        "liveEnd": 489,
+        "unique_follow_commits": 15,
+        "median_terrain_load_ms": 21.839,
+        "median_extra_after_ter_apply_ms": 9.408,
+        "median_commit_render_shadows_ms": 62.4,
+        "net_largest_mod_part_in_noninitial_hitches": 10,
+        "max_net_component_in_noninitial_hitches_ms": 37.3
+      },
+      "final-prebind-b": {
+        "variant": "material reorder only",
+        "summary": "docs/research/a3-live/final-prebind-b/summary.json",
+        "samples": "docs/research/a3-live/final-prebind-b/samples.jsonl",
+        "frames": "docs/research/a3-live/final-prebind-b/frames.jsonl",
+        "km": 6.0,
+        "wallS": 107.9,
+        "effectiveRatio": 1.001,
+        "fpsMean": 56.7,
+        "p95": 32.52,
+        "p99": 46.47,
+        "maxMs": 125.52,
+        "over50": 46,
+        "over50Steady": 43,
+        "falls": 0,
+        "resets": 0,
+        "headingResyncs": 4,
+        "queuedMax": 959,
+        "liveEnd": 483,
+        "unique_follow_commits": 15,
+        "median_terrain_load_ms": 13.691,
+        "median_extra_after_ter_apply_ms": 0.233,
+        "median_commit_render_shadows_ms": 41.9,
+        "net_largest_mod_part_in_noninitial_hitches": 22,
+        "max_net_component_in_noninitial_hitches_ms": 67
+      },
+      "final-combined-c": {
+        "variant": "material reorder plus FIFO dispatch",
+        "summary": "docs/research/a3-live/final-combined-c/summary.json",
+        "samples": "docs/research/a3-live/final-combined-c/samples.jsonl",
+        "frames": "docs/research/a3-live/final-combined-c/frames.jsonl",
+        "km": 6.0,
+        "wallS": 108.0,
+        "effectiveRatio": 1.0,
+        "fpsMean": 63.1,
+        "p95": 28.69,
+        "p99": 37.26,
+        "maxMs": 85.23,
+        "over50": 14,
+        "over50Steady": 14,
+        "falls": 0,
+        "resets": 0,
+        "headingResyncs": 14,
+        "queuedMax": 905,
+        "liveEnd": 483,
+        "unique_follow_commits": 15,
+        "median_terrain_load_ms": 12.424,
+        "median_extra_after_ter_apply_ms": 0.208,
+        "median_commit_render_shadows_ms": 33.6,
+        "net_largest_mod_part_in_noninitial_hitches": 0,
+        "max_net_component_in_noninitial_hitches_ms": 8.3,
+        "dispatch": {
+          "processed_during_capture": 4130,
+          "handler_errors_during_capture": 0,
+          "pending_at_end": 0,
+          "max_pending_at_1hz_samples": 5,
+          "samples_with_pending": 8,
+          "samples": 108,
+          "maximum_received_batch_recorded": 67,
+          "max_dispatch_ms_at_1hz_samples": 8.222,
+          "cumulative_max_handler_excluded": "The cumulative maximum remains the initial anchor_ready handler before the drive, so it is not a driving hitch measurement."
+        }
+      },
+      "final-combined-c2": {
+        "variant": "same combined candidate repeat",
+        "summary": "docs/research/a3-live/final-combined-c2/summary.json",
+        "samples": "docs/research/a3-live/final-combined-c2/samples.jsonl",
+        "frames": "docs/research/a3-live/final-combined-c2/frames.jsonl",
+        "km": 6.0,
+        "wallS": 107.9,
+        "effectiveRatio": 1.001,
+        "fpsMean": 61.9,
+        "p95": 28.58,
+        "p99": 37.08,
+        "maxMs": 84.53,
+        "over50": 19,
+        "over50Steady": 17,
+        "falls": 0,
+        "resets": 0,
+        "headingResyncs": 4,
+        "queuedMax": 915,
+        "liveEnd": 486,
+        "unique_follow_commits": 15,
+        "median_terrain_load_ms": 12.536,
+        "median_extra_after_ter_apply_ms": 0.208,
+        "median_commit_render_shadows_ms": 34.7,
+        "net_largest_mod_part_in_noninitial_hitches": 0,
+        "max_net_component_in_noninitial_hitches_ms": 6.4,
+        "dispatch": {
+          "processed_during_capture": 4189,
+          "handler_errors_during_capture": 0,
+          "pending_at_end": 0,
+          "max_pending_at_1hz_samples": 5,
+          "samples_with_pending": 8,
+          "samples": 108,
+          "maximum_received_batch_recorded": 54,
+          "max_dispatch_ms_at_1hz_samples": 8.271,
+          "cumulative_max_handler_excluded": "The cumulative maximum remains the initial anchor_ready handler before the drive, so it is not a driving hitch measurement."
+        }
+      }
+    },
+    "conclusion": {
+      "accepted_candidate": "Material reorder plus FIFO dispatch; source frozen for final suite/review and separate real AI driving acceptance.",
+      "control_range": {
+        "p99_ms": [
+          42.27,
+          47.09
+        ],
+        "frames_over_50ms": [
+          24,
+          51
+        ],
+        "fps_mean": [
+          57.9,
+          61.3
+        ]
+      },
+      "candidate_range": {
+        "p99_ms": [
+          37.08,
+          37.26
+        ],
+        "frames_over_50ms": [
+          14,
+          19
+        ],
+        "fps_mean": [
+          61.9,
+          63.1
+        ]
+      },
+      "interpretation": "Both repeated candidate drives improve p99 and >50 ms frame counts over both controls. Net-dominant captured hitches disappear; the remaining frame spikes include terrain rendering and other atomic engine/mod operations. The material-only run reduces measured terrain commit work but does not by itself establish an overall FPS improvement.",
+      "remaining_limits": [
+        "Stutters remain; this is not a claim of stutter-free streaming.",
+        "The route still uses coarse far-terrain levels and accumulates tile backlog at 200 km/h.",
+        "Kinematic heading corrections and zero falls/resets do not prove collision safety, road clearance, or a damage-free physical drive."
+      ]
+    },
+    "focused_tests": {
+      "test_terrain_swap_checks": 28,
+      "test_detail_mode_checks": 25,
+      "test_messagequeue_checks": 15,
+      "test_core_dispatch_checks": 10,
+      "test_core_session_checks": 266,
+      "test_core_robustness_checks": 61,
+      "status": "Passed before the frozen live combined-candidate runs; final full-suite/deployment results are recorded separately."
+    },
+    "candidate_source_sha256": {
+      "mod/beamng_earth/lua/ge/extensions/beamngEarth/terrain.lua": "b34700eee49e34dba867548c3944c1fe77a477f64bb781c1c74d068b4255bb9b",
+      "mod/beamng_earth/lua/ge/extensions/beamngEarth/core.lua": "cd6e6610225914fd78036b70ad0bc115991fc2755557a9f0723dac39e7cb70dc",
+      "mod/beamng_earth/lua/ge/extensions/beamngEarth/messagequeue.lua": "8f694eeaf97e76e6ce978b0ef4bfa512df3a7e24c9aba1998948d3a21158e4fb"
+    },
+    "final_installed": {
+      "summary": "docs/research/a3-live/final-installed-stream/summary.json",
+      "environment": "docs/research/a3-live/final-installed-stream/environment.json",
+      "metrics": {
+        "fpsMean": 58.1,
+        "p95": 29.8,
+        "p99": 38.25,
+        "maxMs": 81.13,
+        "over50": 18,
+        "km": 6.0,
+        "effectiveRatio": 1.0,
+        "falls": 0,
+        "resets": 0,
+        "pass": true,
+        "queuedMax": 223,
+        "underLevels": {
+          "-1": 3852,
+          "1": 1154,
+          "3": 208,
+          "2": 30,
+          "none": 997
+        }
+      },
+      "mode": "same 6 km kinematic 200 km/h profile; final frozen bundle with both visual fixes and normal launcher options",
+      "server_options": "Recommended launcher defaults, --status-interval 1; no --nice override",
+      "actual_server_priority_class": "Normal (32), read back from Windows",
+      "limiter_start": {
+        "backgroundCap": 90,
+        "backgroundActive": true,
+        "fpsCap": 90,
+        "windowFocused": false,
+        "vr": false,
+        "foregroundCap": 90,
+        "foregroundActive": true,
+        "vsync": false
+      },
+      "limiter_end": {
+        "backgroundCap": 90,
+        "backgroundActive": true,
+        "fpsCap": 90,
+        "windowFocused": false,
+        "vr": false,
+        "foregroundCap": 90,
+        "foregroundActive": true,
+        "vsync": false
+      },
+      "interpretation": "Tail improvement survives the additional road-mesh geometry. Mean FPS is roughly unchanged relative to the controls; some frame spikes and terrain backlog remain."
+    }
+  },
+  "deployment": {
+    "installed_target": "C:\\Users\\ealff\\AppData\\Local\\Programs\\BeamNG.Earth\\BeamNG.Earth-1.5.3-beta.exe",
+    "sha256": "7bedc12f4a5244f622593b3f671e5be2395964aae030a081e0d573eb8c8681b6",
+    "windows_resource_version": "1.5.3-beta-a3-local",
+    "source_version": "1.5.3-beta",
+    "source_manifest": "C:\\DevTools\\BeamNG.Earth\\releases\\a3-20261020-2\\source-files.sha256.json",
+    "original_upstream_backup": "C:\\DevTools\\BeamNG.Earth\\releases\\a3-20261020\\backups\\BeamNG.Earth-1.5.3-beta.exe",
+    "original_upstream_sha256": "42dbeef324a3c3f55400a155b18b89cbf344888a68c92d635784866fc914ce3f",
+    "intermediate_backup": "C:\\DevTools\\BeamNG.Earth\\releases\\a3-20261020-2\\backups\\BeamNG.Earth-1.5.3-beta.exe",
+    "settings_sha256_before": "0457f26cb1155d76f0d9d26928bb9acfd4d70b13b51fb1034dccdd3453bec2f2",
+    "settings_sha256_after": "0457f26cb1155d76f0d9d26928bb9acfd4d70b13b51fb1034dccdd3453bec2f2",
+    "cache_cap_bytes": 50000000000,
+    "normal_launcher_and_game_running": false,
+    "new_dependencies_or_services": false,
+    "git": "Source prepared on codex/a3-road-streaming-fixes for a PR from Alfao/BeamNG.Earth to TecnaGamer/BeamNG.Earth; no merge.",
+    "shutdown": "Game closed normally at user request after validation; task launcher/backend exited afterward."
+  },
+  "updated_utc": "2026-10-20T21:25:19.875760+00:00",
+  "cleanup": {
+    "record": "docs/research/a3-live/cleanup.json",
+    "scratch_archive": "docs/research/a3-live/work-sources.zip",
+    "scratch_manifest": "docs/research/a3-live/work-sources.sha256.json",
+    "scratch_archive_sha256": "357d357153210e24039f2e39a3f7f5cbce73b26be49c495ba99982fd6dd9c547",
+    "reproduction": "Extract at the repository root to restore the original work/ paths before running disposable probes.",
+    "errors": []
+  },
+  "published_evidence": {
+    "directory": "docs/research/a3-acceptance",
+    "readme": "docs/research/a3-acceptance/README.md",
+    "contents": "Exact before/after game captures, raw frame timings and summaries for both control/candidate repetitions plus final installed capture, three physical drive sample sets, focused check results, and visual review. Full local diagnostic references elsewhere in this report are not included in the PR."
+  }
+}

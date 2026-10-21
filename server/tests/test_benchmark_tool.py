@@ -331,6 +331,11 @@ class RulesTest(unittest.TestCase):
 
     def test_readiness(self):
         self.assertEqual(bm.readiness(self.prog(), 7), [])
+        pending = self.prog()
+        pending["messages"] = {"queued": 4}
+        self.assertIn("incoming messages: 4 waiting", bm.readiness(pending, 7))
+        pending["messages"]["queued"] = 0
+        self.assertEqual(bm.readiness(pending, 7), [])
         self.assertIn("teleport not committed yet", bm.readiness(self.prog(), 8))
         self.assertEqual(bm.readiness(self.prog(), 8, need_anchor=False), [])
         p = self.prog()
@@ -938,6 +943,8 @@ class CompareTest(unittest.TestCase):
             self.assertIn("not focused", (Path(tmp) / "cmp" / "index.html").read_text())
         self.assertIn("window not focused", bm.summary_line(
             {"load": {"ready_s": 3}, "views": [{"name": "g", "perf": {"fps": 30, "p95": 34, "focused": False}}]}))
+        self.assertIn("active cap 60 fps", bm.summary_line(
+            {"views": [{"name": "g", "perf": {"focused": False, "fpsLimit": {"fpsCap": 60}}}]}))
 
     def test_compare_two_fake_runs(self):
         """Two runs of the same build against the fake game: every shot pair identical."""

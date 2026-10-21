@@ -254,5 +254,89 @@ class OverTunnelsParity(unittest.TestCase):
         np.testing.assert_array_equal(r, p)
 
 
+class RoadOverUnderpass(unittest.TestCase):
+    def test_raw_dem_peak_cannot_put_a_tunnel_above_the_graded_surface_road(self):
+        # A short raw DEM peak can clear the minimum-run/height tests while the upper
+        # road's smoothed profile lies below even the lowest tunnel vault. Do not turn
+        # that unresolved crossing into a roof and raised terrain through the motorway.
+        f = features([[(0, -140), (0, 140)], [(-60, 0), (60, 0)]],
+                     ["motorway", "tertiary"], widths=[(0, 13.0), (1, 7.0)], flags=[(1, "is_tunnel")])
+
+        def raw(lat, lon):
+            e, n, _ = FRAME.geodetic_to_enu(lat, lon, 0.0)
+            return 100 + 6 * np.exp(-(e * e + n * n) / 16)
+
+        g = grading.Grader(FRAME, FakeMD(f), raw)
+        elev = lambda la, lo: g.apply(la, lo, raw(la, lo), grading.ROAD_LIFT)
+        tunnel = roads.TunnelProfiles(FRAME, lambda key: f, elev)
+        tunnel.raw = raw
+        tunnel.ends = lambda la, lo: g.apply(la, lo, raw(la, lo), grading.ROAD_LIFT, roads_only=True)
+        lat, lon, _ = FRAME.enu_to_geodetic(np.zeros(1), np.zeros(1), 0.0)
+        asphalt = elev(lat, lon)
+        parts = tunnel.parts([f], (-100.0, -100.0, 100.0, 100.0))
+        raised = roads.arch_raise(parts, tunnel.heights, np.zeros(1), np.zeros(1), asphalt, tunnel.mouths)
+        self.assertLess(float(raised[0] - asphalt[0]), 0.02, "no terrain obstruction through the asphalt")
+        self.assertFalse(parts, "raw cover cannot supply missing final road clearance")
+
+    def test_upper_road_preserves_real_crest(self):
+        f = features([[(-180, 0), (180, 0)], [(0, -80), (0, 80)]],
+                     ["motorway", "tertiary"], widths=[(0, 13.0), (1, 7.0)],
+                     flags=[(1, "is_tunnel", 0.4, 0.6)], levels=[(1, -1, 0.4, 0.6)])
+
+        def elev(lat, lon):
+            e, n, _ = FRAME.geodetic_to_enu(lat, lon, 0.0)
+            return 100 + 2 * np.exp(-(e / 24) ** 2) - 8 * (1 - np.exp(-(n / 12) ** 2))
+
+        g = grading.Grader(FRAME, FakeMD(f), elev)
+        x = np.arange(-80, 80.1, 2.0)
+        lat, lon, _ = FRAME.enu_to_geodetic(x, np.zeros(len(x)), 0.0)
+        z = g.apply(lat, lon, elev(lat, lon))
+        self.assertGreater(z[len(x) // 2], 101.5,
+                           "filling an underpass dip must not cut an actual upper-road crest to its endpoint chord")
+
+    def test_surface_overlay_is_independent_of_cache_warm_order(self):
+        import threading
+        from types import SimpleNamespace
+
+        xy = np.array([[-60.0, 0.0], [0.0, 0.0], [60.0, 0.0]])
+        low = grading.Plan(xy, np.full(3, 100.0), 4.0)
+        high = grading.Plan(xy, np.full(3, 104.0), 4.0)
+        unrelated = grading.Plan(xy, np.full(3, 500.0), 4.0)
+        x, y, base = np.array([-12.0, 0.0, 12.0]), np.zeros(3), np.zeros(3)
+
+        def sample(entries):
+            g = SimpleNamespace(lock=threading.Lock(), crossovers=dict(entries))
+            return grading.Grader._surface_over_tunnels(g, x, y, base, 0.0, ["a", "b"])
+
+        before = sample([("a", [low]), ("b", [high])])
+        after = sample([("unrelated", [unrelated]), ("b", [high]), ("a", [low])])
+        np.testing.assert_array_equal(before, after,
+                                      err_msg="worker completion and unrelated prior cell loads cannot change terrain")
+        np.testing.assert_allclose(after, 102.0, atol=1e-9,
+                                   err_msg="distinct repaired profiles with matching endpoints are both retained")
+
+    def test_upper_road_stays_smooth_over_unresolved_lower_road(self):
+        # A3 / Graßer Weg: the tunnel tag proves two levels even though the DEM resolves
+        # part of the lower road in the upper carriageway and shows less than 4 m cover.
+        f = features([[(-180, 0), (180, 0)], [(0, -80), (0, 80)]],
+                     ["motorway", "tertiary"], widths=[(0, 13.0), (1, 7.0)],
+                     flags=[(1, "is_tunnel", 0.4, 0.6)], levels=[(1, -1, 0.4, 0.6)])
+
+        def elev(lat, lon):
+            e, n, _ = FRAME.geodetic_to_enu(lat, lon, 0.0)
+            return (100 + 0.02 * e - 6 * (1 - np.exp(-(n / 12) ** 2))
+                    - 3 * np.exp(-(e / 8) ** 2) * np.exp(-(n / 8) ** 2))
+
+        g = grading.Grader(FRAME, FakeMD(f), elev)
+        x = np.arange(-80, 80.1, 0.5)
+        lat, lon, _ = FRAME.enu_to_geodetic(x, np.zeros(len(x)), 0.0)
+        z = g.apply(lat, lon, elev(lat, lon))
+        self.assertLess(abs(z[len(x) // 2] - 100), 0.08, "upper road bridges the DEM's false dip")
+        self.assertLess(np.abs(np.diff(z) / 0.5).max(), 0.035, "no kink at the repair's ends")
+        lat, lon, _ = FRAME.enu_to_geodetic(np.zeros(2), np.array([-16.0, 16.0]), 0.0)
+        portals = g.apply(lat, lon, elev(lat, lon), roads_only=True)
+        self.assertTrue((portals < 97).all(), "lower portals keep their approach elevation")
+
+
 if __name__ == "__main__":
     unittest.main()

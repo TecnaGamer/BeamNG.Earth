@@ -108,7 +108,7 @@ class ProfileTest(unittest.TestCase):
         us = [-1, 0, 1.5, 6.99, 7, 8.2, 9, 15.5, 29.9, 30, 99]
         lua_pts = ", ".join(f"{{ t = {p['t']}, speed = {p['speed']}, heading = {p['heading']} }}" for p in pts)
         out = run_lua(f"""
-assert(dofile('{DRIVER}') == 'ok')
+assert(dofile('{DRIVER.as_posix()}') == 'ok')
 local D = BNGE_DRIVE
 local prof = D.makeProfile({{ {lua_pts} }}, 0)
 for _, u in ipairs({{ {', '.join(str(u) for u in us)} }}) do
@@ -259,7 +259,7 @@ class DriverJsonTest(unittest.TestCase):
     def test_driver_polls_feed_the_summary(self):
         """The driver under luajit (stub engine, fallback JSON encoder): 3 s at 40 m/s with a poll
         each second, a commit frame and a poll's harness frame; summarize() reads the polls."""
-        script = LUA_ENGINE % {"stubs": STUBS, "driver": DRIVER} + r"""
+        script = LUA_ENGINE % {"stubs": STUBS.as_posix(), "driver": DRIVER.as_posix()} + r"""
 local D = BNGE_DRIVE
 local res = D.install({ points = { { s = 0, speed = 40, heading = 90 } }, km = 0.1 })
 assert(res:match('"ok":true'), res)
@@ -337,6 +337,41 @@ class RunGeTest(unittest.TestCase):
 
     def restored(self, calls):
         return any("BNGE_DRIVE_CAR" in c and "no test vehicle" in c for _, c in calls)
+
+    def test_start_discards_stale_hitches_and_keeps_first_drive_hitch(self):
+        stale = {"ms": 120, "mod": {"net": 100}}
+        fresh = {"ms": 60, "mod": {"roads": 50}}
+        pending = [stale]
+        perf = {"frames": 1000, "maxMs": 4000}
+        clock = FakeClock()
+        call, _ = self.fake(clock, done_after=1)
+
+        def with_hitches(code):
+            if "beamngEarth_core.hitches()" in code:
+                self.assertIn("BNGE_DRIVE.install", code)
+                self.assertLess(code.index("beamngEarth_core.hitches()"), code.index("BNGE_DRIVE.install"))
+                pending.clear()
+            if "beamngEarth_perfmon.snapshot()" in code:
+                self.assertLess(code.index("beamngEarth_perfmon.snapshot()"), code.index("BNGE_DRIVE.install"))
+                perf.clear()
+            if "return BNGE_DRIVE.install" in code:
+                pending.append(fresh)  # the first drive frame after activation
+                perf.update({"frames": 1, "maxMs": 16.7})
+            result = call(code)
+            if "return BNGE_DRIVE.poll()" in code:
+                row = json.loads(result)
+                row["hitches"] = list(pending)
+                row["perf"] = dict(perf)
+                pending.clear()
+                return json.dumps(row)
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            polls = drive.run_ge(self.args(tmp), drive.straight(10.0, 0.0, 0.01), with_hitches, clock)
+        self.assertEqual(polls[0]["hitches"], [fresh])
+        self.assertEqual(polls[0]["perf"], {"frames": 1, "maxMs": 16.7})
+        summary = drive.summarize(polls, drive.straight(10.0, 0.0, 0.01))
+        self.assertEqual(summary["hitch_causes"], {"mod.roads": [1, 60]})
 
     def test_test_vehicle_always_restored(self):
         """The drive uses its own stock test car; the user's vehicle comes back on every path,

@@ -167,7 +167,7 @@ class BuildTileTest(unittest.TestCase):
     def test_build_clips_and_styles(self):
         f = features([[(-300, 50), (300, 50)], [(100, 10), (100, 200)]], ["primary", "track"])
         chunks = [c for c in roads.build_tile(FRAME, 0, 0, [f], flat) if c["m"] in {l["m"] for l in roads.LOOK.values()}]
-        self.assertEqual(len(chunks), 2, "one surface chunk per road (lines and sidewalks aside)")
+        self.assertEqual(len(chunks), 3, "the track is split at the paved road (lines and sidewalks aside)")
         prim = next(c for c in chunks if c["w"] == roads.STYLE["primary"][0] + 2 * roads.EDGE_STRIP_M)
         xs = [n[0] for n in prim["n"]]
         self.assertAlmostEqual(min(xs), -roads.OVERLAP, delta=0.05)
@@ -720,8 +720,11 @@ class PaintRoadsTest(unittest.TestCase):
         lat, lon = self.grid()
         f = sf.grid_affine(lat, lon)
         c, r = f(lon[10, 20], lat[10, 20])
-        self.assertAlmostEqual(float(c), 20, places=3)
-        self.assertAlmostEqual(float(r), 10, places=3)
+        self.assertEqual(float(c), 20.0, "pixel centres stay exact before ImageDraw truncates them")
+        self.assertEqual(float(r), 10.0)
+        c, r = f((lon[10, 20] + lon[10, 21]) / 2, lat[10, 20])
+        self.assertAlmostEqual(float(c), 20.5, places=6, msg="subpixel road positions stay subpixel")
+        self.assertEqual(float(r), 10.0)
 
     def test_paved_and_dirt_painted_at_width(self):
         lat, lon = self.grid()

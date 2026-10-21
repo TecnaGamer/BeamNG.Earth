@@ -157,8 +157,9 @@ T.near(cam.pos.z, 1600, 1e-6, 'view lat/lon/alt: the ENU height')
 T.check(B.perfStart().ok and loaded.beamngEarth_perfmon, 'perfStart loads perfmon')
 local pf = B.perfRead()
 T.check(pf.ok and pf.fps == 60 and pf.worst == nil and pf.focused == true, 'perfRead: the snapshot without worst')
-Engine = { getCurrentFpsLimitReason = function() return { windowFocused = false } end }
-T.check(B.perfRead().focused == false, 'perfRead: the window focus (30 fps cap in the background)')
+Engine = { getCurrentFpsLimitReason = function() return { windowFocused = false, fpsCap = 60 } end }
+pf = B.perfRead()
+T.check(pf.focused == false and pf.fpsLimit.fpsCap == 60, 'perfRead: the actual background cap and window focus')
 Engine = nil
 
 -- restore: weather, sky, perfmon first; the camera separately

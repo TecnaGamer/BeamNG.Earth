@@ -466,6 +466,8 @@ function D.pollTable()
   end
   if pm and pm.snapshot then out.perf = pm.snapshot() end
   if core and core.hitches then out.hitches = core.hitches() end   -- what each frame over 50 ms went to (core.lua)
+  local okLimit, limit = pcall(function() return Engine.getCurrentFpsLimitReason() end)
+  if okLimit and type(limit) == 'table' then out.fpsLimit = limit end
   return out
 end
 

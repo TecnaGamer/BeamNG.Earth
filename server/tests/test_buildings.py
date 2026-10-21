@@ -32,6 +32,23 @@ class PolygonTest(unittest.TestCase):
         self.assertAlmostEqual(area, bld._area2(L) / 2)
 
 
+class GroundRoadClearanceTest(unittest.TestCase):
+    def test_bridge_range_keeps_ground_approaches_clear_of_buildings(self):
+        from test_roads import FRAME, features
+        f = features([[(0, 40), (240, 40)]], ["motorway"], flags=[(0, "is_bridge", 0.4, 0.6)])
+        lines = bld.road_lines(FRAME, [f], 0.0, 0.0)
+        self.assertEqual(len(lines), 2, "ground approaches either side of the bridge")
+        self.assertGreater(bld.road_through(rect(10, 30, 50, 20), lines), 45.0,
+                           "building clearance also applies to the road's ground ranges")
+        self.assertEqual(bld.road_through(rect(105, 30, 25, 20), lines), 0.0,
+                         "no ground line is invented across the bridge range")
+
+    def test_fully_elevated_road_is_not_a_ground_building_blocker(self):
+        from test_roads import FRAME, features
+        f = features([[(0, 40), (240, 40)]], ["motorway"], flags=[(0, "is_bridge")])
+        self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0), [])
+
+
 class RegionStyleTest(unittest.TestCase):
     """Building habits by region (2026-10-15: Swiss villages had come out as American clapboard houses)."""
 

@@ -495,8 +495,8 @@ class ConstantsTest(unittest.TestCase):
         """crossover.defaultErr after setCells (from hello.cells) and farfield.exactLevelFor agree
         with the server's layout for both cell counts: a quarter of the layout's vertex spacing,
         and the level on the physics lattice."""
-        lua = (f"package.path = '{modsim.MOD_DIR.parent}/?.lua;' .. package.path\n"
-               f"dofile('{modsim.MOD_ROOT.parent / 'tests' / 'stubs.lua'}')\n"
+        lua = (f"package.path = '{modsim.MOD_DIR.parent.as_posix()}/?.lua;' .. package.path\n"
+               f"dofile('{(modsim.MOD_ROOT.parent / 'tests' / 'stubs.lua').as_posix()}')\n"
                "local X = require('beamngEarth/crossover')\n"
                "local F = require('beamngEarth/farfield')\n"
                "for _, c in ipairs({ 32, 64 }) do\n"

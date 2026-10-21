@@ -1,0 +1,326 @@
+{
+  "version": 1,
+  "about": "A3 east from Regensburg, fixed road-review cameras from Overture 2026-09-23.1 / OpenStreetMap r2925465@913. Generated 2026-10-20; keep camera positions fixed between runs. Ground approaches are prioritized; these views do not assert any obstruction was visually confirmed.",
+  "defaults": {
+    "date": "2026-09-22",
+    "hour": 10,
+    "weather": "clear",
+    "views": [
+      {
+        "name": "driver",
+        "agl": 1.7,
+        "pitch": 0,
+        "fov": 70,
+        "under": true
+      },
+      {
+        "name": "overhead",
+        "agl": 100,
+        "pitch": -80,
+        "fov": 70
+      }
+    ]
+  },
+  "places": [
+    {
+      "id": "a3_grasser_weg",
+      "name": "A3 above Gra\u00dfer Weg",
+      "lat": 48.99120980722417,
+      "lon": 12.077944536143328,
+      "heading": 90,
+      "heldout": false,
+      "why": "User reported severely broken motorway at this location",
+      "date": "2026-10-20",
+      "hour": 10,
+      "weather": "clear",
+      "group": "reported_regression",
+      "tags": [
+        "road",
+        "motorway",
+        "underpass"
+      ],
+      "views": [
+        {
+          "name": "east",
+          "agl": 1.7,
+          "under": true,
+          "heading": 90,
+          "pitch": 0,
+          "fov": 70
+        },
+        {
+          "name": "west",
+          "agl": 1.7,
+          "under": true,
+          "heading": 270,
+          "pitch": 0,
+          "fov": 70
+        },
+        {
+          "name": "overhead",
+          "agl": 110,
+          "under": true,
+          "heading": 90,
+          "pitch": -80,
+          "fov": 70
+        }
+      ],
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&pano=Db80W-T46VwV5cOWTn0OAQ&heading=270&pitch=0&fov=70",
+        "officialPlan": "https://www.regierung.oberpfalz.bayern.de/mam/service/planfeststellung_strassen/dokumente/u_11_00_regelungsverzeichnis.pdf#page=39"
+      }
+    },
+    {
+      "id": "road_06b18695_8354_4c62_a131_c344c1f16ebd",
+      "name": "A3 east, review view 01",
+      "lat": 48.99174969731375,
+      "lon": 12.06445398846433,
+      "heading": 128.83,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Ground portion of a mixed-level road",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9917497%2C12.0644540&heading=128.8&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9917497&lng=12.0644540&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9917497/12.0644540"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "06b18695-8354-4c62-a131-c344c1f16ebd"
+    },
+    {
+      "id": "road_40135717_580f_4df9_9058_30e53ebaff3f",
+      "name": "A3 east, review view 02",
+      "lat": 49.000131139120285,
+      "lon": 12.369861333637235,
+      "heading": 89.46,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Ground portion of a mixed-level road",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=49.0001311%2C12.3698613&heading=89.5&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=49.0001311&lng=12.3698613&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/49.0001311/12.3698613"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "40135717-580f-4df9-9058-30e53ebaff3f"
+    },
+    {
+      "id": "road_9f48cb8e_a829_48fa_99e3_61abe452cf59",
+      "name": "A3 east, review view 03",
+      "lat": 48.993473693249626,
+      "lon": 12.290564533037369,
+      "heading": 90.57,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Ground portion of a mixed-level road",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9934737%2C12.2905645&heading=90.6&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9934737&lng=12.2905645&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9934737/12.2905645"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "9f48cb8e-a829-48fa-99e3-61abe452cf59"
+    },
+    {
+      "id": "road_c6e11d7e_93fb_4835_a229_2450eebadced",
+      "name": "A3 east, review view 04",
+      "lat": 48.99607948159219,
+      "lon": 12.137564483479151,
+      "heading": 77.33,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Ground portion of a mixed-level road",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9960795%2C12.1375645&heading=77.3&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9960795&lng=12.1375645&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9960795/12.1375645"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "c6e11d7e-93fb-4835-a229-2450eebadced"
+    },
+    {
+      "id": "road_1e5aaca4_cbb9_4cee_b74c_fcc594eea511",
+      "name": "A3 east, review view 05",
+      "lat": 48.99498345,
+      "lon": 12.4081777,
+      "heading": 105.78,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9949834%2C12.4081777&heading=105.8&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9949834&lng=12.4081777&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9949834/12.4081777"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "1e5aaca4-cbb9-4cee-b74c-fcc594eea511"
+    },
+    {
+      "id": "road_239c44fd_297f_4224_aff9_b356834c551b",
+      "name": "A3 east, review view 06",
+      "lat": 48.998742392878704,
+      "lon": 12.19176451666614,
+      "heading": 106.22,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9987424%2C12.1917645&heading=106.2&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9987424&lng=12.1917645&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9987424/12.1917645"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "239c44fd-297f-4224-aff9-b356834c551b"
+    },
+    {
+      "id": "road_27d34b3a_6675_4ac2_91ac_5a2d3ae6d764",
+      "name": "A3 east, review view 07",
+      "lat": 48.99288465,
+      "lon": 12.41973815,
+      "heading": 105.38,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9928847%2C12.4197382&heading=105.4&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9928847&lng=12.4197382&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9928847/12.4197382"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "27d34b3a-6675-4ac2-91ac-5a2d3ae6d764"
+    },
+    {
+      "id": "road_31aee65d_28db_4943_bc84_d822cb31d823",
+      "name": "A3 east, review view 08",
+      "lat": 48.999669459208356,
+      "lon": 12.360518273324693,
+      "heading": 82.26,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9996695%2C12.3605183&heading=82.3&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9996695&lng=12.3605183&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9996695/12.3605183"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "31aee65d-28db-4943-bc84-d822cb31d823"
+    },
+    {
+      "id": "road_4c4a0a7b_1962_4270_839d_cd4b9935bfff",
+      "name": "A3 east, review view 09",
+      "lat": 48.995119097961656,
+      "lon": 12.13108135547525,
+      "heading": 77.22,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9951191%2C12.1310814&heading=77.2&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9951191&lng=12.1310814&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9951191/12.1310814"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "4c4a0a7b-1962-4270-839d-cd4b9935bfff"
+    },
+    {
+      "id": "road_855a047c_857d_4dd2_8a5b_79a188d797a7",
+      "name": "A3 east, review view 10",
+      "lat": 49.00057690222072,
+      "lon": 12.172679796719276,
+      "heading": 88.08,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=49.0005769%2C12.1726798&heading=88.1&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=49.0005769&lng=12.1726798&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/49.0005769/12.1726798"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "855a047c-857d-4dd2-8a5b-79a188d797a7"
+    },
+    {
+      "id": "road_9ca5df7b_0ab4_4a0a_ae51_9c30d536c727",
+      "name": "A3 east, review view 11",
+      "lat": 48.998457490581956,
+      "lon": 12.153793836105567,
+      "heading": 77.34,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9984575%2C12.1537938&heading=77.3&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9984575&lng=12.1537938&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9984575/12.1537938"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "9ca5df7b-0ab4-4a0a-ae51-9c30d536c727"
+    },
+    {
+      "id": "road_9fcc2f29_2a8f_4f8e_bd7f_62da4f7fde57",
+      "name": "A3 east, review view 12",
+      "lat": 48.99328220450487,
+      "lon": 12.118709317409456,
+      "heading": 77.3,
+      "heldout": false,
+      "group": "road_audit",
+      "tags": [
+        "road",
+        "motorway"
+      ],
+      "why": "Road review",
+      "references": {
+        "streetview": "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=48.9932822%2C12.1187093&heading=77.3&pitch=0&fov=70",
+        "mapillary": "https://www.mapillary.com/app/?lat=48.9932822&lng=12.1187093&z=17",
+        "osm": "https://www.openstreetmap.org/#map=19/48.9932822/12.1187093"
+      },
+      "source_record": "r2925465@913",
+      "gers_id": "9fcc2f29-2a8f-4f8e-bd7f-62da4f7fde57"
+    }
+  ]
+}

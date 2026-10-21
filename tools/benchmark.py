@@ -312,6 +312,8 @@ def readiness(p, anchor_before=None, need_anchor=True, exact=True, backlog=False
         reasons.append(f"anchor request pending ({p['pending']})")
     elif need_anchor and not committed(p, anchor_before):
         reasons.append("teleport not committed yet")
+    if (p.get("messages") or {}).get("queued"):
+        reasons.append(f"incoming messages: {p['messages']['queued']} waiting")
     far = p.get("far") or {}
     if not far.get("done"):
         reasons.append("far field: waiting for far_done")
@@ -631,7 +633,7 @@ class Bench:
                 "placed": {k: r.get(k) for k in ("x", "y", "z", "ground", "groundFrom")},
                 "wait_s": round(self.clock.monotonic() - t0, 2), "timedOut": w["timedOut"], "reasons": w["reasons"],
                 "perf": {k: perf.get(k) for k in ("fps", "avgMs", "p50", "p95", "p99", "maxMs", "over33", "over50",
-                                                   "over100", "frames", "simRatio", "focused")}}
+                                                   "over100", "frames", "simRatio", "focused", "fpsLimit")}}
 
     # -- restore
     def go_home(self, home):
@@ -790,8 +792,11 @@ def summary_line(pr):
         if v.get("error"):
             parts.append(f"{v['name']} FAILED {v['error']}")
             continue
-        parts.append(f"{v['name']} {p.get('fps') or 0:.0f} fps p95 {p.get('p95') or 0:.1f} ms"
-                     + (" (window not focused: capped at 30 fps)" if p.get("focused") is False else ""))
+        note = ""
+        if p.get("focused") is False:
+            cap = (p.get("fpsLimit") or {}).get("fpsCap")
+            note = f" (window not focused: active cap {cap:g} fps)" if _num(cap) else " (window not focused)"
+        parts.append(f"{v['name']} {p.get('fps') or 0:.0f} fps p95 {p.get('p95') or 0:.1f} ms" + note)
     return ", ".join(parts)
 
 

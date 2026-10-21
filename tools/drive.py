@@ -411,7 +411,10 @@ def run_ge(a, profile, call=None, clock=time):
             clock.sleep(3.0)                    # spawned and settled on the ground
         print("driver:", lua_(code), flush=True)
         lua_("if not beamngEarth_perfmon then extensions.load('beamngEarth_perfmon') end return 1")
-        res = json.loads(lua_(f"return BNGE_DRIVE.install({lua_long(json.dumps(cfg))})"))
+        # Diagnostic windows survive previous drives and setup; reset them in the activation call.
+        res = json.loads(lua_("if beamngEarth_core and beamngEarth_core.hitches then beamngEarth_core.hitches() end "
+                              "if beamngEarth_perfmon and beamngEarth_perfmon.snapshot then beamngEarth_perfmon.snapshot() end "
+                              f"return BNGE_DRIVE.install({lua_long(json.dumps(cfg))})"))
         if "error" in res:
             raise SystemExit("install: " + res["error"])
         print("installed", res, flush=True)

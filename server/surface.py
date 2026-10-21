@@ -229,6 +229,9 @@ def grid_affine(lat, lon):
         B = np.stack([np.asarray(lon_, np.float64) - lo0, np.asarray(lat_, np.float64) - la0,
                       np.ones(np.shape(lon_))], axis=-1)
         cr = B @ coef
+        # ImageDraw truncates coordinates: affine roundoff at 64 - epsilon moves a centred road a whole sample.
+        nearest = np.rint(cr)
+        cr = np.where(np.abs(cr - nearest) < 1e-7, nearest, cr)
         return cr[..., 0], cr[..., 1]
     return f
 

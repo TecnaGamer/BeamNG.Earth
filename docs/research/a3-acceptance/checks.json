@@ -1,0 +1,357 @@
+{
+  "lua": {
+    "scripts": 47,
+    "failed": [],
+    "assertions_passed": 4736,
+    "results": [
+      {
+        "file": "test_banner.lua",
+        "returncode": 0,
+        "assertions_passed": 50,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_benchmark.lua",
+        "returncode": 0,
+        "assertions_passed": 50,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_camshift.lua",
+        "returncode": 0,
+        "assertions_passed": 72,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_core_dispatch.lua",
+        "returncode": 0,
+        "assertions_passed": 10,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_core_robustness.lua",
+        "returncode": 0,
+        "assertions_passed": 61,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_core_stubbed.lua",
+        "returncode": 0,
+        "assertions_passed": 266,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_credits.lua",
+        "returncode": 0,
+        "assertions_passed": 69,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_crossover.lua",
+        "returncode": 0,
+        "assertions_passed": 931,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_detail_mode.lua",
+        "returncode": 0,
+        "assertions_passed": 25,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_dev.lua",
+        "returncode": 0,
+        "assertions_passed": 66,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_drive_driver.lua",
+        "returncode": 0,
+        "assertions_passed": 430,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_drophold.lua",
+        "returncode": 0,
+        "assertions_passed": 35,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_edgeguard.lua",
+        "returncode": 0,
+        "assertions_passed": 33,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_farfield.lua",
+        "returncode": 0,
+        "assertions_passed": 173,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_farfield_spares.lua",
+        "returncode": 0,
+        "assertions_passed": 23,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_follow.lua",
+        "returncode": 0,
+        "assertions_passed": 111,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_framing.lua",
+        "returncode": 0,
+        "assertions_passed": 16,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_geodesy.lua",
+        "returncode": 0,
+        "assertions_passed": 480,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_governor.lua",
+        "returncode": 0,
+        "assertions_passed": 447,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_gps.lua",
+        "returncode": 0,
+        "assertions_passed": 39,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_horizon.lua",
+        "returncode": 0,
+        "assertions_passed": 29,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_hudapps.lua",
+        "returncode": 0,
+        "assertions_passed": 11,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_imagery.lua",
+        "returncode": 0,
+        "assertions_passed": 73,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_issuefmt.lua",
+        "returncode": 0,
+        "assertions_passed": 36,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_keybinds.lua",
+        "returncode": 0,
+        "assertions_passed": 3,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_lattice.lua",
+        "returncode": 0,
+        "assertions_passed": 51,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_m4_probes.lua",
+        "returncode": 0,
+        "assertions_passed": 36,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_messagequeue.lua",
+        "returncode": 0,
+        "assertions_passed": 15,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_navgraph.lua",
+        "returncode": 0,
+        "assertions_passed": 22,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_parking.lua",
+        "returncode": 0,
+        "assertions_passed": 20,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_perfmon.lua",
+        "returncode": 0,
+        "assertions_passed": 7,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_places.lua",
+        "returncode": 0,
+        "assertions_passed": 139,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_postfx.lua",
+        "returncode": 0,
+        "assertions_passed": 3,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_rebase.lua",
+        "returncode": 0,
+        "assertions_passed": 33,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_report.lua",
+        "returncode": 0,
+        "assertions_passed": 15,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_retex.lua",
+        "returncode": 0,
+        "assertions_passed": 77,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_road_collision_budget.lua",
+        "returncode": 0,
+        "assertions_passed": 11,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_roads.lua",
+        "returncode": 0,
+        "assertions_passed": 65,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_sea.lua",
+        "returncode": 0,
+        "assertions_passed": 39,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_seasonlook.lua",
+        "returncode": 0,
+        "assertions_passed": 9,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_settings.lua",
+        "returncode": 0,
+        "assertions_passed": 143,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_sky.lua",
+        "returncode": 0,
+        "assertions_passed": 102,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_statusbar.lua",
+        "returncode": 0,
+        "assertions_passed": 16,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_surface_layers.lua",
+        "returncode": 0,
+        "assertions_passed": 52,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_terrain_swap.lua",
+        "returncode": 0,
+        "assertions_passed": 28,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_trees.lua",
+        "returncode": 0,
+        "assertions_passed": 40,
+        "assertions_failed": 0
+      },
+      {
+        "file": "test_weather.lua",
+        "returncode": 0,
+        "assertions_passed": 274,
+        "assertions_failed": 0
+      }
+    ]
+  },
+  "diff_check": {
+    "returncode": 0,
+    "output": ""
+  },
+  "python_initial": {
+    "modules": [
+      "test_roads",
+      "test_roadwidth",
+      "test_tunnels",
+      "test_fixed_road_profiles",
+      "test_grading",
+      "test_roadmesh",
+      "test_buildings",
+      "test_sidewalk_collision",
+      "test_surface",
+      "test_road_audit",
+      "test_autodrive_perf",
+      "test_autodrive_tool",
+      "test_drive_tool",
+      "test_benchmark_tool",
+      "test_fast",
+      "test_protocol_agreement",
+      "test_install"
+    ],
+    "run": 346,
+    "failures": 3,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 133.5
+  },
+  "python": {
+    "unique_tests_verified": 354,
+    "remaining_failures": 0,
+    "initial_fixture_failures": 3,
+    "initial_errors": 0,
+    "skipped": 0,
+    "repair_run": {
+      "tests": 16,
+      "passed": 16,
+      "seconds": 2.719,
+      "scope": [
+        "test_drive_tool (all15 methods)",
+        "test_protocol_agreement.ConstantsTest.test_default_err_and_exact_level_in_lua"
+      ],
+      "fix": "Use Path.as_posix() for Lua dofile/package.path literals on Windows",
+      "full_suite_rerun": false
+    },
+    "method": "343 initial passing methods plus all three failed methods verified after fixing the two test files; initial traceback retained in python.txt",
+    "additional_checks": {
+      "test_a3_stream_tool": 2,
+      "passed": 2,
+      "log": "a3-stream-tool.txt"
+    },
+    "visual_revision_checks": {
+      "passed": 112,
+      "new_methods": 6,
+      "scope": "road, roadmesh, roadwidth, 5 surface junctions, tunnel, grading and fixed profiles",
+      "reproduction": "barbing-dirt-overlap.json, paved-merge-drape-comparison.json",
+      "full_suite_rerun": false
+    }
+  },
+  "benchmark_metadata_recheck": {
+    "python_method": "test_benchmark_tool.CompareTest.test_unfocused_window",
+    "passed": true,
+    "lua": "test_benchmark.lua: 50 passed, 0 failed"
+  }
+}

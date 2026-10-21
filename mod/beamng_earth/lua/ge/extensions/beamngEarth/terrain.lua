@@ -97,6 +97,8 @@ M.square = 2.0   -- the block's square size (m per sample), from the last load
 -- tools/make_level_assets.py, because runtime TerrainMaterials made every updateMaterial cost ~1 s,
 -- in-game 2026-10-12)
 M.runtimeMade = {}
+M.looked = {}   -- material name -> the square size its look was applied for
+local baseNow = nil
 local function toSamples(metres) return math.max(1, math.floor(metres / M.square + 0.5)) end
 
 local function applyLook(m, name)
@@ -106,6 +108,17 @@ local function applyLook(m, name)
     if k:sub(-7) == 'TexSize' then v = toSamples(v) end
     pcall(function() m:setField(k, 0, tostring(v)) end)
   end
+end
+
+local function baseFields(path, size)
+  return path or M.LEVEL_BASE.tex, path and tostring(toSamples(size or 1024)) or M.LEVEL_BASE.size
+end
+
+local function setMaterialBase(m, name, path, tex, size)
+  -- Runtime-made layers need their look once per square size. Level materials carry theirs.
+  if path and M.runtimeMade[name] and M.looked[name] ~= M.square then applyLook(m, name); M.looked[name] = M.square end
+  m:setField('baseColorBaseTex', 0, tex)
+  m:setField('baseColorBaseTexSize', 0, size)
 end
 
 -- Make sure every { name, groundmodel } exists as a TerrainMaterial (M.MATERIAL is the level's own).
@@ -281,6 +294,7 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   local sq = tonumber(squareSize)
   if not tb or not M.slots or not sq or math.abs(sq - M.square) > 1e-9 then return false end
   if type(terPath) ~= 'string' or not FS:fileExists(terPath) then return false end
+  if tb:getField('terrainFile', 0) == terPath then return false end -- no reload: the caller must import/rebind
   local slots = { M.MATERIAL }
   if layers then
     if type(layers.materials) ~= 'table' or #layers.materials == 0 or not ensureSurfaceMaterials(layers.materials) then
@@ -290,22 +304,45 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
     for i, nm in ipairs(layers.materials) do slots[i] = nm[1] end
   end
   local sw = stopwatch.new()
+  local saved = {}
   local ok, err = pcall(function()
+    if base ~= nil then
+      local path = base or nil
+      local tex, size = baseFields(path, baseSize)
+      for _, name in ipairs(slots) do
+        local m = scenetree.findObject(name)
+        if m then
+          if not saved[name] then
+            saved[name] = { material = m, tex = m:getField('baseColorBaseTex', 0),
+              size = m:getField('baseColorBaseTexSize', 0), looked = M.looked[name] }
+          end
+          setMaterialBase(m, name, path, tex, size)
+        end
+      end
+    end
     tb:setField('maxHeight', 0, tostring(maxHeight))
     tb:setPosition(vec3(x, y, z))
+    -- The file setter binds all material slices itself. Prepare their photo first: updateMaterial
+    -- afterwards dirties the shared texture arrays again (~30 ms extra deferred render work in the
+    -- stationary 0.40 probe, with identical checker appearance across all eight surface layers).
     tb:setField('terrainFile', 0, terPath)
     tb:postApply()
   end)
   local tApply = sw()
   if not ok then
+    for name, old in pairs(saved) do
+      pcall(function() old.material:setField('baseColorBaseTex', 0, old.tex) end)
+      pcall(function() old.material:setField('baseColorBaseTexSize', 0, old.size) end)
+      M.looked[name] = old.looked
+    end
     log('W', 'beamngEarth', 'terrain .ter swap failed: ' .. tostring(err))
     return false
   end
   M.slots = slots
+  if base ~= nil then baseNow = base or nil end
   M.swaps = (M.swaps or 0) + 1
   applyRender(tb)
-  if base ~= nil then M.setBase(base or nil, baseSize) end
-  -- ms of the last swap: the .ter load (postApply) and the whole call (with the base photo)
+  -- ms of the last swap: base field preparation + .ter application, then the whole call
   M.lastSwap = { apply = tApply, total = sw() }
   return true
 end
@@ -313,22 +350,15 @@ end
 -- Detail mode: every layer's base colour = the aerial photo `path` (PNG, row 0 = north, `size` m over the
 -- block from its SW corner, converted to samples); nil = the level's flat base. Also gives the level's own material its look (once). The engine
 -- re-reads a material on updateMaterial (index = the block's material slot); ~6 ms for a 2048² PNG.
-local baseNow = nil
-M.looked = {}   -- material name -> the square size its look was applied for
 function M.setBase(path, size)
   local tb = M.get()
   if not tb then return false end
-  local tex = path or M.LEVEL_BASE.tex
-  local sz = path and tostring(toSamples(size or 1024)) or M.LEVEL_BASE.size
+  local tex, sz = baseFields(path, size)
   local names = M.slots or { M.MATERIAL }
   for i, name in ipairs(names) do
     local m = scenetree.findObject(name)
     if m then
-      -- runtime-made layers: their look once per Lua session (they outlive a Lua reload; a changed square
-      -- size changes the sample sizes). The level's materials carry theirs (make_level_assets.py)
-      if path and M.runtimeMade[name] and M.looked[name] ~= M.square then applyLook(m, name); M.looked[name] = M.square end
-      m:setField('baseColorBaseTex', 0, tex)
-      m:setField('baseColorBaseTexSize', 0, sz)
+      setMaterialBase(m, name, path, tex, sz)
       pcall(function() tb:updateMaterial(i - 1, name) end)
     end
   end

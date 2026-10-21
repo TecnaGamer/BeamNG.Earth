@@ -271,7 +271,7 @@ level after a console teleport).
   "the server has no download cache" when it sent no `cache` after its hello: no answer would come);
   `uiState().status.cache` = `{ line, clears, clearedBytes, clearedText }`.
 
-## Visual benchmark (tools/benchmark.py; built offline 2026-10-11, in-game run pending)
+## Visual benchmark (tools/benchmark.py; built 2026-10-11, A3 live check 2026-10-20)
 ROADMAP "Automated visual checks" and "Principle: improvements must generalise": every tuning
 change is checked on a fixed, diverse set of places with before/after screenshots and numbers, plus
 a held-out set that is not looked at while tuning.
@@ -387,12 +387,152 @@ mapped), a Lua reload; SSIM against a brute-force implementation, the compare re
 every saved value and mode comes back, the free camera relative to the moved car and its own zoom,
 a failing part).
 
-Not done yet: the first in-game run (the readiness rules, whether a vehicle reset releases the
-parking brake, the screenshot path, the free camera at
-`agl` beyond the physics block, the time it takes, the noise floor are all unmeasured), hiding the
+Live check (2026-10-20): the exact Graßer Weg site completed before/after runs with east, west and
+overhead screenshots. Both runs reached ready without timeout in about 29 seconds, placed cameras
+from collision rays, wrote all three images and restored the home/camera/weather state without
+reported errors. Artifacts: `docs/research/a3-live/{before,candidate-1}/run.json` and images. This is
+one site's validation, not acceptance of the full diverse or held-out set.
+
+Still to check: the free camera at `agl` beyond the physics block, the repeat-run image noise floor,
+vehicle reset/parking-brake behaviour across other places, hiding the
 credits overlay and HUD for the shots (they are in every image, the same in both runs), a per-view
 sun / weather override, matching the real photo itself (the photo benchmark is compared run to run;
 the photo stays on Commons).
+
+## Road quality loop (A3 Regensburg east, 2026-10-20)
+
+`tools/road_audit.py` inspects the same road inputs as the generator, deduplicates global feature IDs,
+splits ground/bridge/tunnel ranges, and writes coverage, data versions, geometry hashes and GeoJSON.
+It uses the download cache by default; missing cells are listed and return exit code 2. `--fetch`
+permits the normal rate-limited map-data pipeline to fill gaps. Outputs contain map inputs, not a
+rendered mesh or proof that a road is driveable.
+
+```text
+python tools/road_audit.py --bbox 48.975,12.055,49.055,12.465 --class motorway --source-record r2925465 --heading 90 --out docs/research/a3-regensburg
+python tools/benchmark.py plan --benchmarks docs/benchmarks-a3-regensburg-east.json
+```
+
+The A3 scan has 38 unique road features, 11 with both ground and bridge portions, in Overture
+2026-09-23.1 / OSM relation r2925465@913. The frozen set has 13 locations and 27 shots: the original
+12 eastbound review locations with driver/overhead cameras, plus the reported Graßer Weg crossing
+at 48.9912098, 12.0779445 with east, west and overhead cameras. The west view reproduces the user's
+screenshot. Reference links open Google Street View, Mapillary or OSM at the same position and
+heading. Street View coverage and dates were checked at Graßer Weg; the other locations still need
+that comparison.
+No imagery credentials are required for these links. Google documents the link format in its
+[Maps URLs guide](https://developers.google.com/maps/documentation/urls/get-started).
+
+For context, this stretch was widened to three lanes plus a shoulder in each direction, with 16
+bridges built or widened; the [official project page](https://www.autobahn.de/planen-bauen/projekt/a3-regensburg)
+records completion on 20 October 2024. Compare against imagery dates: older construction photos
+can disagree with current road geometry. Never encode this route's coordinates in generator rules.
+
+At Graßer Weg, [the official BW54 plan](https://www.regierung.oberpfalz.bayern.de/mam/service/planfeststellung_strassen/dokumente/u_11_00_regelungsverzeichnis.pdf#page=39)
+places A3 above the lower road: one span, 12 m clear opening, at least 4.5 m clearance and 36.5 m
+between railings. Google panoramas `Db80W-T46VwV5cOWTn0OAQ` (A3, June 2022) and
+`uaKfYOHpWpLrSTCMP7ihVg` (underpass, August 2022) show the continuous motorway and lower Graßer
+Weg. Saved images and URLs are in `docs/research/a3-live/reference/`; they establish topology but
+predate the finished widening.
+
+The live baseline reproduced the transverse ramps/trench and crashed at the crossing after an
+approximately 99 km/h approach (damage 1 to 9118). With the upper carriageway profile preserved
+over the mapped tunnel, the earlier eastbound GM drive approaches at 99.7 km/h and passes the same
+crossing with damage still 1. Its 1.02-mile recording contains no detected crash/stop events; minor
+damage appears later and reaches 63. A subsequent real-physics westbound drive of the packaged
+candidate uses the ETK 846 (`846x_ttsport_plus_DCT`) with a 200 km/h target. It covers 1.24 miles in
+66 seconds with zero damage throughout and no detected events; the samples immediately around
+Graßer Weg are 193.64 and 194.84 km/h, with a run maximum of 196.78 km/h. This is measured crossing
+acceptance in both directions, not acceptance of every road on the route. Artifacts are in
+`docs/research/a3-live/{drive-before,drive-after,packaged-fast-west}/`.
+
+Streaming is measured separately with the repeatable 6 km, nominal 200 km/h kinematic case in
+`tools/roadstudy/a3_stream.py`. Two control runs (`final-control-a`, `final-control-a2`) and two
+combined-candidate runs (`final-combined-c`, `final-combined-c2`) use fixed clear weather, 60 km
+visibility and 20 October 2026 at 10:00 UTC+2. All four complete at the intended speed without
+falls, resets or failed tile loads. The harness temporarily matches the runtime background FPS
+policy to the foreground limit (90 FPS here) and restores it afterward; it does not save a new
+graphics preference. The observed ranges across the two runs of each build are:
+
+| Metric | Control A1/A2 | Candidate C1/C2 | Final installed bundle |
+| --- | ---: | ---: | ---: |
+| Mean FPS | 57.9–61.3 | 61.9–63.1 | 58.1 |
+| p99 frame time | 42.27–47.09 ms | 37.08–37.26 ms | 38.25 ms |
+| Frames above 50 ms | 24–51 | 14–19 | 18 |
+| Worst frame | 104.97–129.75 ms | 84.53–85.23 ms | 81.13 ms |
+
+The last column is an additional capture (`final-installed-stream`) after the pavement fixes below,
+using the normal packaged launcher defaults. The wider road meshes contain more geometry; the
+tail improvement survives, while the installed mean FPS lies within the control range. Do not
+describe this as an established mean-FPS gain.
+
+The candidate dispatches incoming messages in FIFO order with a 3 ms driving / 8 ms loading
+budget; one atomic handler can finish beyond that budget. It also prepares terrain materials
+before loading the TerrainBlock. These changes reduce stutters in this controlled case without
+lowering shadow quality. Frames above 50 ms remain, and two repetitions do not establish that all
+driving conditions are improved. Keep the complete `environment.json`, `summary.json`,
+`samples.jsonl` and `frames.jsonl` from each run under `docs/research/a3-live/`.
+
+The first 13-location / 27-shot packaged sweep (`packaged-cameras`) exposed dirt-track ribbons
+covering paved lanes and terrain showing through wide asphalt meshes at merges. Dirt/gravel
+ribbons now stop at paved carriageway edges, and wide ground meshes sample across their width at
+no more than 2 m. Physics and fixed bridge/tunnel profiles are unchanged. In the measured merge
+fields, exposed terrain reached 6.20 cm before; after correction all sampled terrain lies below
+the asphalt. These meshes have about 4.5 times the vertices in the representative patches.
+
+The entire 13-place / 27-shot sweep was repeated on the rebuilt final package (`final-cameras`),
+with successful capture and state restoration. Visual comparison confirms the flagged mainline
+stripes, octagons and merge patches are absent. Coarse embankments, shoulder vegetation and small
+side-road infill remain; neither these stills nor the local physical drive establish worldwide
+road correctness. Fixed screenshots, physics samples, geometry audits and deployment identity are indexed in
+`docs/research/2026-10-20-a3-road-quality.json`.
+
+Disposable probes, build helpers and rejected experiment sources are preserved in
+`docs/research/a3-live/work-sources.zip`, with a SHA256 manifest alongside it. Extract at the
+repository root to restore their original `work/` paths for reproduction. The scratch build
+directories were removed after validation; release executables, rollback backups and evidence remain.
+
+Run the loop with the game stopped between code revisions, matching graphics settings, vehicle,
+speed, traffic and data cache. Keep the original reference set fixed:
+
+1. Capture the same views with `tools/benchmark.py run --benchmarks docs/benchmarks-a3-regensburg-east.json
+   --label a3-before --out docs/research/a3-before`, then use `a3-after` after a change.
+   The benchmark restores the original player/camera/weather state and refuses a moving player.
+2. Compare with `tools/benchmark.py compare docs/research/a3-before docs/research/a3-after
+   --out docs/research/a3-comparison`. Inspect ground continuity, road-edge intrusions, bridge heights
+   and supports at each location, alongside the matching real-world reference. Input-level mixed
+   ground/bridge flags are review priorities, not confirmed visual defects.
+3. Record a real drive using `python tools/autodrive_perf.py --from 48.99328,12.11871
+   --to 49.00013,12.36986 --snap-kmh 80 --minutes 5 --out docs/research/a3-drive-after`.
+   The game must be on the Earth level with its built-in MCP server enabled and the companion
+   server running. Autodrive's legal speed may be below the reported high-speed case; also repeat
+   the player's actual vehicle/speed with the in-game Ctrl+Shift+Y recorder. Check route adherence,
+   crashes/stops and simulation speed, not only mean FPS. Compare p95/p99, maximum frame time and
+   frames over 50/100 ms. Do not treat a failed or slower drive as a performance win.
+4. Repeat the controlled streaming case with `python tools/roadstudy/a3_stream.py
+   --out docs/research/a3-live/<run-label>`. Wait for its settled-start checks; retain the default
+   `--terrain-shadows keep` for acceptance runs. `on` / `off` are diagnostic overrides only. The
+   saved benchmark restore payload is `environment.json.saved.saved`; restore time/weather through
+   the benchmark helper after the study. This kinematic drive measures streaming and cannot establish collision
+   safety; retain the real-physics drive as a separate check.
+5. Check the existing diverse/held-out benchmark before accepting a general generator change.
+
+Windows: the prepared `C:\DevTools\BeamNG.Earth\dev.cmd` shell provides Python; `dev.cmd play`
+runs the checkout's patched server and synchronizes its Lua mod. The drive harness now samples
+Windows CPU/memory without extra dependencies, with optional `--server-pid` and `--game-pid`.
+Missing process data stays null. Restart the harness after restarting a source server; optional
+OBS/ffmpeg recording has not been validated on Windows. Keep output directories under the ignored
+`docs/research/` run folders.
+
+A locally packaged candidate was installed at the existing shortcut target,
+`C:\Users\ealff\AppData\Local\Programs\BeamNG.Earth\BeamNG.Earth-1.5.3-beta.exe`, with the original
+executable retained for rollback. The shortcut therefore launches the updated bundle on the next
+normal start. Release source/output hashes and backup identity belong in the deployment manifest,
+indexed by `docs/research/2026-10-20-a3-road-quality.json`. The final installed executable SHA256 is
+`7bedc12f4a5244f622593b3f671e5be2395964aae030a081e0d573eb8c8681b6` (local build, not the upstream
+release digest). For a server-only launch use `--no-game -- --status-interval 1`:
+`--no-game` still synchronizes the packaged mod, and the separator passes `--status-interval` to the
+companion server. Stop the identified previous server first; a running game needs a Lua reload or
+restart to use newly synchronized Lua. Preserve the user's settings and saved download-cache cap.
 
 ## Reports (GitHub issues: map / performance / bug / idea; `report.lua`, 2026-10-13, kinds 2026-10-14)
 - **Ctrl+Shift+E:** captures the moment at once: a screenshot, the location (lat/lon, anchor), the

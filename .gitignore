@@ -10,6 +10,8 @@ backups/
 # not the per-run folders
 docs/research/*/
 docs/research/*.jsonl
+# Small, reviewed acceptance evidence accompanying the A3 regression fixes.
+!docs/research/a3-acceptance/
 
 # editor / OS
 .vscode/

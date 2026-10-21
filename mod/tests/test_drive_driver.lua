@@ -193,6 +193,14 @@ T.check(pt.mod and pt.mod.serverBacklog == 12 and pt.mod.far.live == 811, 'mod s
 T.check(pt.perf and pt.perf.fps == 60 and tagged == 1, 'perfmon tagged and snapshotted')
 T.check(pt.drive.vN == 59 and math.abs(pt.drive.vSum / pt.drive.vN - 40) < 1e-6, 'physics speed sampled (= profile)')
 T.near(pt.wallMs, 1000, 1e-6, 'wall ms since install')
+local savedEngine = Engine
+Engine = { getCurrentFpsLimitReason = function() return { windowFocused = false, limit = 90 } end }
+local limitPoll = D.pollTable()
+T.check(limitPoll.fpsLimit and limitPoll.fpsLimit.windowFocused == false and limitPoll.fpsLimit.limit == 90,
+  'poll records the actual FPS limiter reason and background focus')
+Engine.getCurrentFpsLimitReason = function() error('unavailable') end
+T.check(D.pollTable().fpsLimit == nil, 'missing limiter telemetry does not break the drive')
+Engine = savedEngine
 frame()
 pt = D.pollTable()
 T.check(#pt.frames.ms == 1 and pt.frames.flags[1] == D.FLAG_HARNESS, 'the frame after a poll is a harness frame')

@@ -1,0 +1,48 @@
+{
+ "polls": 33,
+ "seconds": 32.0,
+ "frames": 2740,
+ "fps": 84.0,
+ "frame_ms": {
+  "avg": 11.9,
+  "p50": 11.13,
+  "p95": 15.49,
+  "p99": 22.1,
+  "max": 95.828299999994
+ },
+ "frames_over": {
+  "over33": 5,
+  "over50": 2,
+  "over100": 0
+ },
+ "miles": 0.28,
+ "avg_mph_moving": 34.5,
+ "standing_s": 3.0,
+ "off_route_max_m": 7.4,
+ "arrows_fallback_polls": 0,
+ "remaining_m": 1145.915209499,
+ "hitch_causes": {
+  "engine.Ticking": [
+   1,
+   53
+  ],
+  "engine.RenderShadows": [
+   1,
+   96
+  ]
+ },
+ "events": [
+  {
+   "kind": "crash",
+   "damage": 9118,
+   "mph_before": 61.5,
+   "t": 291.0,
+   "x": 436.8,
+   "y": 78.7,
+   "lat": 48.991186362884,
+   "lon": 12.077734357084,
+   "arrows": "r25",
+   "screenshot": "event_0_crash.jpg"
+  }
+ ]
+}

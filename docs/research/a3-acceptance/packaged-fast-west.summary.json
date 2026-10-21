@@ -1,0 +1,37 @@
+{
+ "polls": 67,
+ "seconds": 66.0,
+ "frames": 3549,
+ "fps": 54.0,
+ "frame_ms": {
+  "avg": 18.52,
+  "p50": 17.01,
+  "p95": 24.76,
+  "p99": 32.44,
+  "max": 123.32220000008
+ },
+ "frames_over": {
+  "over33": 41,
+  "over50": 7,
+  "over100": 1
+ },
+ "miles": 1.24,
+ "avg_mph_moving": 69.9,
+ "standing_s": 2.0,
+ "off_route_max_m": 9.1,
+ "arrows_fallback_polls": 24,
+ "remaining_m": null,
+ "hitch_causes": {
+  "engine.RenderShadows": [
+   6,
+   78
+  ],
+  "engine.LuaGC": [
+   1,
+   124
+  ]
+ },
+ "events": [],
+ "targetKmh": 200.0,
+ "endReason": "autodrive_ended"
+}

@@ -194,6 +194,7 @@ function B.progress()
   if not st then return toJson({ mod = false }) end
   local out = { mod = true, anchorId = st.anchorId, pending = st.pending and st.pending.purpose or nil,
     status = st.status, serverBacklog = st.serverBacklog, active = st.active }
+  if st.messages then out.messages = { queued = st.messages.queued, total = st.messages.total } end
   if st.player then
     out.player = { lat = st.player.lat, lon = st.player.lon, x = st.player.x, y = st.player.y, z = st.player.z,
       speed = st.player.speed }
@@ -364,9 +365,10 @@ function B.perfRead()
   local s = p.snapshot()
   s.worst = nil
   s.ok = true
-  -- the game caps itself at 30 fps without the window focus (tools/perfmon.py): say so
+  -- Report the actual engine policy: background caps differ between installations.
   local okL, lim = pcall(function() return Engine.getCurrentFpsLimitReason() end)
   s.focused = not (okL and type(lim) == 'table' and lim.windowFocused == false)
+  if okL and type(lim) == 'table' then s.fpsLimit = lim end
   return toJson(s)
 end
 

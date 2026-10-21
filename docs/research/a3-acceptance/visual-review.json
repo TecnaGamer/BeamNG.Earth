@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "date": "2026-10-20",
+  "scope": "Visual comparison of all 27 saved final packaged-app screenshots at 13 fixed A3 places against ../packaged-cameras. Reviewer used local image files only; no game or MCP control. Final run metadata is in run.json.",
+  "compared_against": "../packaged-cameras/visual-review.json",
+  "run_metadata": "run.json",
+  "offline_surface_comparison": "../surface-metrics/comparison.json",
+  "summary": {
+    "places_reviewed": 13,
+    "images_reviewed": 27,
+    "targeted_mainline_surface_defects_no_longer_visible": [
+      "Reported Graßer Weg long tan strip and partly hidden lane markings.",
+      "View01 long tan stripe.",
+      "View03 Barbing dirt-track octagonal patches.",
+      "View06 ramp-merge patch.",
+      "Views08,09,11 large tan/green mainline merge patches."
+    ],
+    "new_obvious_raised_mainline_obstructions_visible": 0,
+    "mainline_markings_and_pavement_continuous_in_reviewed_frames": true,
+    "residual_off_mainline_or_edge_visual_issues": true,
+    "drivability_inferred_from_images": false
+  },
+  "limitations": [
+    "Screenshots do not establish collision clearance, drivability or streaming performance; separate live drive and timing evidence must be used for those claims.",
+    "The reviewed fixed frames cover 13 places, not every road or every part of the A3 corridor.",
+    "Coarse cut/fill embankments, sparse vegetation at shoulder lines, and small off-mainline ramp/junction infill remain visible.",
+    "The earlier packaged capture already contained the physical Graßer Weg obstruction fix. This comparison isolates the subsequent surface coverage and tessellation changes."
+  ],
+  "places": [
+    {
+      "place": "a3_grasser_weg",
+      "files": [
+        "a3_grasser_weg__east.jpg",
+        "a3_grasser_weg__west.jpg",
+        "a3_grasser_weg__overhead.jpg"
+      ],
+      "before": "Long tan strip within opposite carriageway; center lane markings partly hidden; original reported transverse obstructions already absent in earlier packaged drive-verified build.",
+      "after": "Tan strip no longer visible; both driver directions show continuous asphalt and clear lane dash markings; upper/lower roads visibly separated.",
+      "outstanding": [
+        "Coarse roadside embankment shapes remain outside the motorway.",
+        "A side-road surface patch remains at its junction to the right of the motorway in overhead; no claim about that side road's drivability."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_06b18695_8354_4c62_a131_c344c1f16ebd",
+      "files": [
+        "road_06b18695_8354_4c62_a131_c344c1f16ebd__driver.jpg",
+        "road_06b18695_8354_4c62_a131_c344c1f16ebd__overhead.jpg"
+      ],
+      "before": "Long irregular tan stripe inside opposite motorway carriageway.",
+      "after": "Stripe absent; asphalt and lane markings continuous in both carriageways. Driver corridor beneath the bridge remains visibly open.",
+      "outstanding": [
+        "Roadside cut/fill terrain remains coarse."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_9f48cb8e_a829_48fa_99e3_61abe452cf59",
+      "files": [
+        "road_9f48cb8e_a829_48fa_99e3_61abe452cf59__driver.jpg",
+        "road_9f48cb8e_a829_48fa_99e3_61abe452cf59__overhead.jpg"
+      ],
+      "before": "Two tan/octagonal patches inside motorway lanes at dirt-track connections.",
+      "after": "Both patches absent in overhead; driver and overhead pavement remains continuous.",
+      "outstanding": [],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_40135717_580f_4df9_9058_30e53ebaff3f",
+      "files": [
+        "road_40135717_580f_4df9_9058_30e53ebaff3f__driver.jpg",
+        "road_40135717_580f_4df9_9058_30e53ebaff3f__overhead.jpg"
+      ],
+      "before": "No obvious photographed mainline obstruction.",
+      "after": "Continuous carriageways and lane markings; no new obvious obstruction or exposed terrain patch.",
+      "outstanding": [],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_c6e11d7e_93fb_4835_a229_2450eebadced",
+      "files": [
+        "road_c6e11d7e_93fb_4835_a229_2450eebadced__driver.jpg",
+        "road_c6e11d7e_93fb_4835_a229_2450eebadced__overhead.jpg"
+      ],
+      "before": "No obvious photographed mainline obstruction.",
+      "after": "Continuous carriageways and lane markings; no new obvious obstruction or exposed terrain patch.",
+      "outstanding": [],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_1e5aaca4_cbb9_4cee_b74c_fcc594eea511",
+      "files": [
+        "road_1e5aaca4_cbb9_4cee_b74c_fcc594eea511__driver.jpg",
+        "road_1e5aaca4_cbb9_4cee_b74c_fcc594eea511__overhead.jpg"
+      ],
+      "before": "Mainline open beneath bridge; tan surface patches remained at some side-ramp junctions.",
+      "after": "Mainline remains continuous with visible markings below bridge; no new mainline obstacle.",
+      "outstanding": [
+        "Some small tan/green infill remains on side-road junction surfaces outside the motorway."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_239c44fd_297f_4224_aff9_b356834c551b",
+      "files": [
+        "road_239c44fd_297f_4224_aff9_b356834c551b__driver.jpg",
+        "road_239c44fd_297f_4224_aff9_b356834c551b__overhead.jpg"
+      ],
+      "before": "Small tan patch within selected carriageway near forward ramp merge.",
+      "after": "Previously visible merge patch is absent; motorway pavement and lane markings continuous.",
+      "outstanding": [
+        "Some patchy vegetation reaches outer shoulder lines."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_27d34b3a_6675_4ac2_91ac_5a2d3ae6d764",
+      "files": [
+        "road_27d34b3a_6675_4ac2_91ac_5a2d3ae6d764__driver.jpg",
+        "road_27d34b3a_6675_4ac2_91ac_5a2d3ae6d764__overhead.jpg"
+      ],
+      "before": "No obvious photographed mainline obstruction.",
+      "after": "Continuous carriageways and lane markings; no new obvious obstruction or exposed terrain patch.",
+      "outstanding": [
+        "Surrounding terrain/photo detail is coarse."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_31aee65d_28db_4943_bc84_d822cb31d823",
+      "files": [
+        "road_31aee65d_28db_4943_bc84_d822cb31d823__driver.jpg",
+        "road_31aee65d_28db_4943_bc84_d822cb31d823__overhead.jpg"
+      ],
+      "before": "Large tan/green patches within both carriageways around ramp merges; exposed pavement visible ahead in driver view.",
+      "after": "Large motorway merge patches no longer visible in driver or overhead; lane dashes continue through the formerly exposed sections.",
+      "outstanding": [
+        "A very small exposed-looking triangular sliver remains at a side-ramp fork, outside the motorway carriageway."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_4c4a0a7b_1962_4270_839d_cd4b9935bfff",
+      "files": [
+        "road_4c4a0a7b_1962_4270_839d_cd4b9935bfff__driver.jpg",
+        "road_4c4a0a7b_1962_4270_839d_cd4b9935bfff__overhead.jpg"
+      ],
+      "before": "Large tan/green patches in both motorway carriageways near ramp merges.",
+      "after": "Previously visible mainline merge patches no longer visible; both carriageways show continuous asphalt and lane markings.",
+      "outstanding": [
+        "Coarse terrain and some off-mainline junction infill remain."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_855a047c_857d_4dd2_8a5b_79a188d797a7",
+      "files": [
+        "road_855a047c_857d_4dd2_8a5b_79a188d797a7__driver.jpg",
+        "road_855a047c_857d_4dd2_8a5b_79a188d797a7__overhead.jpg"
+      ],
+      "before": "No obvious photographed mainline obstruction.",
+      "after": "Driver and overhead show continuous pavement and clear lane markings; no new obvious mainline obstruction.",
+      "outstanding": [
+        "Sparse grass reaches the median and outer shoulder lines in the driver view."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_9ca5df7b_0ab4_4a0a_ae51_9c30d536c727",
+      "files": [
+        "road_9ca5df7b_0ab4_4a0a_ae51_9c30d536c727__driver.jpg",
+        "road_9ca5df7b_0ab4_4a0a_ae51_9c30d536c727__overhead.jpg"
+      ],
+      "before": "Large tan/green patches within motorway lanes at the ramp merges.",
+      "after": "Former patches are absent in both driver and overhead views. Both carriageways and merging ramp surfaces show continuous asphalt and lane markings.",
+      "outstanding": [
+        "Sparse vegetation reaches outer shoulder lines; coarse terrain remains outside the roadway."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    },
+    {
+      "place": "road_9fcc2f29_2a8f_4f8e_bd7f_62da4f7fde57",
+      "files": [
+        "road_9fcc2f29_2a8f_4f8e_bd7f_62da4f7fde57__driver.jpg",
+        "road_9fcc2f29_2a8f_4f8e_bd7f_62da4f7fde57__overhead.jpg"
+      ],
+      "before": "No obvious photographed mainline obstruction; distant overhead bridge visible in driver view.",
+      "after": "Continuous pavement and lane markings. Distant bridge corridor remains visibly open in the driver view; overhead framing does not reach that bridge.",
+      "outstanding": [
+        "Sparse grass reaches portions of the outer shoulder line; roadside embankments remain coarse."
+      ],
+      "raised_lane_obstruction_visible": false,
+      "drivability_inferred": false
+    }
+  ]
+}

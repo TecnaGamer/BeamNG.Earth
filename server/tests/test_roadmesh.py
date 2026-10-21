@@ -39,7 +39,35 @@ class RoadMeshTest(unittest.TestCase):
         self.assertGreater((mark[:, 2] - (10.0 + 0.05 * mark[:, 0])).min(), roadmesh.LIFT["base"] + 0.005,
                            "markings above the asphalt")
         self.assertLessEqual(np.diff(np.unique(np.round(base[:, 0], 3))).max(), roadmesh.DRAPE_STEP + 1e-6)
-        self.assertTrue(set(np.unique(UV[:, 0])) <= {0.0, 1.0}, "u across the width")
+        self.assertTrue(((UV[:, 0] >= 0.0) & (UV[:, 0] <= 1.0)).all(), "u stays across the original width")
+        self.assertEqual((UV[:, 0].min(), UV[:, 0].max()), (0.0, 1.0))
+
+    def test_wide_asphalt_follows_the_graded_hump_between_its_edges(self):
+        def hump(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
+            return 10.0 + 0.6 * np.exp(-(n * n) / 9.0) * np.sin(np.pi * e / 60.0) ** 2
+
+        ch = chunk("road_asphalt_2lane", 13.0, [(0.0, 0.0, 0.0), (60.0, 0.0, 0.0)])
+        # The old 13 m cross-section only sampled both edges; its asphalt chord missed the
+        # graded hump and the ground poked over it by 55 cm. Check both the terrain-triangle
+        # path used by the server and the cross-width fallback against the emitted planes.
+        for follow in (False, True):
+            with self.subTest(follow=follow):
+                P, T, _uv, _mats, _materials = roadmesh.build(FRAME, [ch], hump, (0.0, 0.0, 0.0),
+                                                           lift=0.05, follow=follow)
+                for x in np.arange(20.0, 40.1, 2.0):
+                    for y in (-2.0, -1.0, 0.0, 1.0, 2.0):
+                        q = np.array([x, y])
+                        a, b, c = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
+                        ab, ac, ap = b - a, c - a, q - a[:, :2]
+                        den = ab[:, 0] * ac[:, 1] - ab[:, 1] * ac[:, 0]
+                        u = (ap[:, 0] * ac[:, 1] - ap[:, 1] * ac[:, 0]) / den
+                        v = (ab[:, 0] * ap[:, 1] - ab[:, 1] * ap[:, 0]) / den
+                        hit = (u >= -1e-8) & (v >= -1e-8) & (u + v <= 1.0 + 1e-8)
+                        self.assertTrue(hit.any())
+                        asphalt = np.max((a[:, 2] + u * ab[:, 2] + v * ac[:, 2])[hit])
+                        ground = 10.0 + 0.6 * np.exp(-(y * y) / 9.0) * np.sin(np.pi * x / 60.0) ** 2
+                        self.assertGreaterEqual(asphalt, ground - 0.01, "the drawn asphalt covers the graded road")
 
     def test_writes_one_primitive_per_material(self):
         chunks = [chunk("road_asphalt_2lane", 6.0, [(0, 0, 0), (30, 0, 0)]),
@@ -157,6 +185,24 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TunnelCapControlTest(unittest.TestCase):
+    def test_low_arch_caps_stop_before_crossing_roads_or_can_be_disabled(self):
+        ch = {"m": "road_asphalt_2lane", "w": 7.0, "fixed": True, "tunnel": True,
+              "n": [[0.0, 0.0, 10.0], [40.0, 0.0, 10.0]], "tunnel_h": 4.0,
+              "portal": [True, False]}
+        for enabled, depth, want in ((True, None, roadmesh.LOW_CAP_M), (True, 3.0, 3.0),
+                                     (True, 0.5, None), (False, 3.0, None)):
+            with self.subTest(enabled=enabled, depth=depth):
+                P, T, _uv, mats, M = roadmesh.tunnel([{**ch, "arch_cap": enabled, "cap_m": [depth, None]}],
+                                                    (0.0, 0.0, 0.0))
+                if want is None:
+                    self.assertNotIn(roadmesh.TUNNEL_SOIL, mats, "no cap can block the crossing road")
+                else:
+                    soil = P[np.unique(T[M == mats.index(roadmesh.TUNNEL_SOIL)])]
+                    self.assertAlmostEqual(soil[:, 0].min(), 0.0)
+                    self.assertAlmostEqual(soil[:, 0].max(), want, msg="the cap respects the road clearance")
+
+
 class BridgeTest(unittest.TestCase):
     def test_deck_heights_straight_between_abutments(self):
         import roads
@@ -228,6 +274,33 @@ class BridgeLookTest(unittest.TestCase):
 
 
 class PierSitesTest(unittest.TestCase):
+    def test_road_clearance_without_native_module(self):
+        import roads
+        from unittest.mock import patch
+        xy = np.c_[np.arange(0.0, 240.1, 4.0), np.zeros(61)]
+        z = np.full(len(xy), 20.0)
+        road = [np.array([[120.0, -50.0], [120.0, 50.0]])]
+        with patch("fast.AVAILABLE", False):
+            ps = roads.pier_sites(xy, z, 10.0, lambda q: np.zeros(len(q)), road)
+        self.assertGreater(len(ps), 0, "fallback places safe piers instead of failing the entire bridge")
+        self.assertTrue(all(abs(p[0] - 120.0) > roads.PIER_ROAD_M + roadmesh.PIER_T / 2 for p in ps))
+
+    def test_clearance_uses_the_crossing_motorway_width(self):
+        import roads
+        from unittest.mock import patch
+        xy = np.c_[np.arange(0.0, 240.1, 4.0), np.zeros(61)]
+        z = np.full(len(xy), 20.0)
+        road = [np.array([[120.0, -50.0], [120.0, 50.0]])]
+        for native in (False, True):
+            import fast
+            if native and not fast.AVAILABLE:
+                continue
+            with self.subTest(native=native), patch("fast.AVAILABLE", native):
+                ps = roads.pier_sites(xy, z, 10.0, lambda q: np.zeros(len(q)), road, road_widths=[40.0])
+                self.assertGreater(len(ps), 0)
+                self.assertTrue(all(abs(p[0] - 120.0) > 21.0 + roadmesh.PIER_T / 2 for p in ps),
+                                "the full roadway and pier thickness stay clear")
+
     def test_spacing_roads_and_low_decks(self):
         import roads
         xy = np.c_[np.arange(0.0, 200.1, 4.0), np.zeros(51)]
@@ -246,6 +319,15 @@ class PierSitesTest(unittest.TestCase):
         self.assertEqual(roads.pier_sites(xy, np.full(51, 1.0), 10.0, flat), [])
         # a short bridge: none
         self.assertEqual(roads.pier_sites(xy[:6], z[:6], 10.0, flat), [])
+
+    def test_pier_cannot_intrude_into_a_deck_in_the_neighboring_tile(self):
+        # The pier centre is in this tile; the lower deck is just over its boundary and supplied
+        # as context rather than emitted in this tile. Its cap/wall still must not block that road.
+        lower = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "fixed": True, "deck": True,
+                 "fid": "neighbor", "n": [[4.0, -40.0, 10.0], [4.0, 40.0, 10.0]]}
+        pier = (0.0, 0.0, 0.0, 1.0, 18.0, 0.0, 10.0)
+        self.assertIsNotNone(roadmesh.deck([], (0.0, 0.0, 0.0), [pier]))
+        self.assertIsNone(roadmesh.deck([], (0.0, 0.0, 0.0), [pier], context=[lower]))
 
 
 class DeckRulesTest(unittest.TestCase):

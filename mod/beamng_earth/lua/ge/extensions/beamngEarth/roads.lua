@@ -71,6 +71,7 @@ local parked = {}          -- walkQ entries of colliders whose tile is not near 
 local sinceCollideCheck = stopwatch.new()
 local held = {}            -- walkQ entries of colliding meshes held while the player is in their boxes
 local noteNewColliders, playerIn, releaseHeld
+local prewarmId, prewarmPath, prewarmWant, prewarmNow
 local tiles = {}            -- key "a:tx_ty" -> { anchor, objs = { DecalRoad ids }, queued = n, walk = TSStatic id,
                             --   road = TSStatic id }
 local walkQ = {}            -- { key, walk = {shape, pos}, what = 'walk' | 'road' } FIFO
@@ -205,7 +206,7 @@ function M.slotsHeld(sess)
   return out
 end
 
-local function now() return os.clock() * 1000 end
+local now = stopwatch.clock()
 
 -- Main-thread cost of each kind of unit (n, total ms, worst ms) since the level loaded: road chunks, deletes, each
 -- mesh kind of a road tile (road, walk, bld, bldcol, deck ...), far building tiles, collision reloads. status().units
@@ -628,6 +629,24 @@ local function releaseGhosts(player)
   if not left then ghostSince = nil end
 end
 
+-- Collision rebuilds are heavy operations, not shape imports: their global scene cost must neither
+-- share a frame with new meshes nor teach the roadWalk estimate that every mesh costs a rebuild.
+-- Ask before creations so an urgent rebuild can reserve this frame. New colliders made below ask
+-- non-urgently at the end: the next frame may override the wait if the player is reaching them.
+local function rebuildCollision(gov, allowUrgent)
+  local urgent = collisionDirty and (holdActive or M.urgentColliders()) and sinceReload() >= M.URGENT_GAP_S * 1000
+  if not swapQuiet and ((collisionDirty and sinceReload() >= M.RELOAD_EVERY_S * 1000) or urgent
+      or (deletesDirty and sinceReload() >= M.RELOAD_DELETES_S * 1000))
+      and gov:requestHeavy(allowUrgent and urgent or false) then
+    local t0 = now()
+    noteNewColliders()
+    be:reloadCollision()
+    lastReloadAt = now()
+    collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
+    noteUnit('reloadCollision', now() - t0)
+  end
+end
+
 -- Once per frame (core onUpdate): deletions, then creations, within the governor's budget.
 local viewAt = nil  -- core.viewAway(): the camera's { x, y } when it is away from the car, else nil (M.nextWalk)
 
@@ -639,6 +658,10 @@ function M.update(gov, currentAnchor, player, view)
   end
   if currentAnchor then switchAnchor(currentAnchor) end
   releaseGhosts(player)
+  if swapQuiet then
+    swapQuiet.frames = swapQuiet.frames - 1
+    if swapQuiet.frames <= 0 and swapQuiet.since() >= M.SWAP_QUIET_MS then swapQuiet = nil end
+  end
   while #deleteQ > 0 and gov:try('roadDelete') do
     local t0 = now()
     local did = table.remove(deleteQ)
@@ -655,6 +678,7 @@ function M.update(gov, currentAnchor, player, view)
     noteUnit('delete', ms)
     sinceChange = stopwatch.new()
   end
+  rebuildCollision(gov, true)
   while #createQ > 0 and gov:try('roadChunk') do
     local q = table.remove(createQ, 1)
     local t = tiles[q.key]
@@ -704,24 +728,7 @@ function M.update(gov, currentAnchor, player, view)
     end
   end
   updateFar(gov)                -- far buildings: only with the near meshes all made (they share the budget)
-  if swapQuiet then
-    swapQuiet.frames = swapQuiet.frames - 1
-    if swapQuiet.frames <= 0 and swapQuiet.since() >= M.SWAP_QUIET_MS then swapQuiet = nil end
-  end
-  local urgent = collisionDirty and (holdActive or M.urgentColliders()) and sinceReload() > M.URGENT_GAP_S * 1000
-  if not swapQuiet and ((collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000) or urgent
-      or (deletesDirty and sinceReload() > M.RELOAD_DELETES_S * 1000)) then
-    local t0 = now()
-    noteNewColliders()
-    be:reloadCollision()
-    lastReloadAt = now()
-    collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
-    local ms = now() - t0
-    -- out of the frame's budget, not into the meshes' cost estimate (from PR #41: a ~40 ms rebuild in the roadWalk
-    -- EMA held the next sidewalk and building meshes back as if each cost that much more)
-    gov:chargeMotion(ms)
-    noteUnit('reloadCollision', ms)
-  end
+  rebuildCollision(gov, false)
 end
 
 -- A colliding mesh (sidewalks, bridge decks) never turns solid around the player's car (2026-10-13: the
@@ -905,8 +912,7 @@ end
 -- Server hello.prewarm: a tiny shape listing every material the server's shapes use, loaded once when it connects
 -- (server/prewarm.py): a material's first shape in a session set it up (a tunnel's first tile 65 ms, later ones ~2 ms),
 -- now while the level starts. Kept far below the map (one per path; nil: an older server, nothing).
-local prewarmId, prewarmPath, prewarmWant = nil, nil, nil
-local function prewarmNow()
+prewarmNow = function()
   local path = prewarmWant
   -- (the hello comes at the main menu, before the level's objects and with the roads off outside our level)
   if not path or not M.enabled or not scenetree.MissionGroup then return end

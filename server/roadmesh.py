@@ -7,7 +7,7 @@ game stuttered on every block commit. The official maps never move their terrain
 
 Here every chunk of roads.build_tile (asphalt, cobble strips, lines, gutters, drains) becomes a
 ribbon (the DecalRoad's own layout: u 0..1 across, v = distance / texture length along) draped on the
-graded ground: the ribbon is cut every DRAPE_STEP m and both edges sampled from the same elevation
+graded ground: the ribbon is cut every DRAPE_STEP m along it and across wide ground surfaces, sampled from the same elevation
 function as the physics block (raised ROAD_LIFT under roads over the visible ground tiles, so the
 mesh lies on what the tyres touch and above what is drawn), in one call per tile, plus its layer's
 LIFT (markings over the asphalt). The stock decal
@@ -345,10 +345,23 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     polys = [c for c in chunks if c.get("poly")]
     if not rb and not polys:
         return None
-    draped = [r for r in rb if r[5] is None]
+    grids = []
+    for left, right, _v, _m, layer, fixed in rb:
+        across = 1
+        if not follow and fixed is None and layer == "base":
+            # follow_ground cuts against the terrain lattice itself; an additional cross-width
+            # grid there only multiplies the source triangles and elevation samples.
+            width = float(np.hypot(*(left - right).T).max())
+            across = max(1, int(math.ceil(width / DRAPE_STEP)))
+            if across > 1 and across % 2:
+                across += 1             # retain a sample on the centreline as well as both edges
+        u_ = np.linspace(0.0, 1.0, across + 1)
+        xy = ((1 - u_[:, None, None]) * left[None] + u_[:, None, None] * right[None]).reshape(-1, 2)
+        grids.append((xy, u_))
+    draped = [grid for r, grid in zip(rb, grids) if r[5] is None]
     pv = [np.asarray(c["poly"], np.float64)[:, :2] for c in polys]
     if draped or pv:
-        edges = np.concatenate([np.concatenate([l, r]) for l, r, _, _, _, _ in draped] + pv)
+        edges = np.concatenate([xy for xy, _u in draped] + pv)
         la, lo, _ = frame.enu_to_geodetic(edges[:, 0], edges[:, 1], 0.0)
         h = np.asarray(elev(la, lo), np.float64)
         _, _, u = frame.geodetic_to_enu(la, lo, h)
@@ -356,25 +369,25 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     P, UV, T, M = [], [], [], []
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
     k0 = nverts = 0
-    for left, right, v, m, layer, fz in rb:
+    for (left, right, v, m, layer, fz), (xy, across) in zip(rb, grids):
         k = len(left)
+        count = len(xy)
         if fz is None:
-            z = u[k0:k0 + 2 * k] + LIFT[layer] + lift
-            k0 += 2 * k
+            z = u[k0:k0 + count] + LIFT[layer] + lift
+            k0 += count
         else:                                   # on a deck: over its opaque concrete top
-            z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
+            z = np.tile(fz, len(across)) + LIFT[layer] + DECK_SKIN
         if m not in mats:
             mats.append(m)
         mi = mats.index(m)
-        P.append(np.c_[np.concatenate([left, right]), z])
-        UV.append(np.column_stack((np.concatenate((np.zeros(k), np.ones(k))), np.concatenate((v, v)))))
-        i = np.arange(k - 1)
+        P.append(np.c_[xy, z])
+        UV.append(np.c_[np.repeat(across, k), np.tile(v, len(across))])
+        i = (np.arange(len(across) - 1)[:, None] * k + np.arange(k - 1)[None]).ravel()
         A, A1, B, B1 = nverts + i, nverts + i + 1, nverts + k + i, nverts + k + i + 1
         # left edge to the left of the direction: (A, B, B1) is counter-clockwise seen from above
         tri = np.concatenate([np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)])
         # where a ribbon folds over itself (a mitred joint at a sharp merge pulls its edges across: the user saw
         # black triangles in President St, 2026-10-14) its triangles turn over: dropped, the neighbours cover it
-        xy = np.concatenate([left, right])[:, :2]
         loc = tri - nverts
         e1, e2 = xy[loc[:, 1]] - xy[loc[:, 0]], xy[loc[:, 2]] - xy[loc[:, 0]]
         cz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
@@ -382,7 +395,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         T.append(tri[keep])
         M.append(np.full(int(keep.sum()), mi))
         TL.append(np.full(int(keep.sum()), np.nan if fz is not None else LIFT[layer] + lift))
-        nverts += 2 * k
+        nverts += count
     for c in polys:                             # filled polygons (corner asphalt): a fan from vertex 0
         pq = np.asarray(c["poly"], np.float64)
         k = len(pq)
@@ -492,8 +505,8 @@ def deck(chunks, origin, piers=(), context=(), beams=()):
     if DECK_SIDE not in mats:
         mats.append(DECK_SIDE)
     side = mats.index(DECK_SIDE)                # opaque concrete; the asphalt is the road mesh's
-    cr = [r for r in ribbons(list(context)) if r[5] is not None]
-    covered = _parapet_cover([(r, c) for r, c in rb], [(r, c) for r, c in zip(cr, context)])
+    cr = [(r, c) for c in context for r in ribbons([c]) if r[5] is not None]
+    covered = _parapet_cover(rb, cr)
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         k = len(z)
         lat = left - right
@@ -542,7 +555,9 @@ def deck(chunks, origin, piers=(), context=(), beams=()):
                     quads(Ei, Ti, 0.0, 0.1, v[sl], v[sl], side, -o)         # road face
                     quads(Ti, To, 0.0, 0.05, v[sl], v[sl], side, np.array([0.0, 0.0, 1.0]))
                 i = j + 1
-    for p in _piers_clear(piers, rb):
+    # A pier belongs to the tile containing its centre, but its wall/cap can reach across the
+    # tile edge into a neighboring deck. Test the same surrounding decks used for parapets.
+    for p in _piers_clear(piers, rb + cr):
         _pier(p, origin, P, T, UV, M, side)
         nv = sum(len(a) for a in P)
     if len(beams):
@@ -928,7 +943,7 @@ def tunnel(chunks, origin, walls=()):
             T.append(np.concatenate([tri, tri[:, ::-1]]))   # seen from outside and from in the tube
             M.append(2 if low else 0)
             nv += 2 * m
-            if low and (cap_m is None or cap_m >= LOW_CAP_MIN):
+            if low and c.get("arch_cap", True) and (cap_m is None or cap_m >= LOW_CAP_MIN):
                 nv = _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, float(np.max(o[:, 0])), float(o[:, 1].max()), th, origin,
                                LOW_CAP_M if cap_m is None else min(LOW_CAP_M, float(cap_m)))
     allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER]

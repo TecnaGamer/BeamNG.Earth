@@ -1,0 +1,173 @@
+{
+ "label": "final-combined-c",
+ "visual": false,
+ "polls": 108,
+ "frames": 6772,
+ "harnessFrames": 108,
+ "droppedFrames": 0,
+ "km": 6.0,
+ "wallS": 108.0,
+ "nominalSpeed": 55.56,
+ "nominalKm": 6.0,
+ "nominalS": 108.0,
+ "effectiveSpeed": 55.57,
+ "effectiveRatio": 1.0,
+ "meanPoseSpeed": 54.76,
+ "physicsSpeedRatio": 1.0006,
+ "physicsSpeedMean": 55.59,
+ "reason": "end",
+ "error": null,
+ "falls": 0,
+ "resets": 0,
+ "rebases": 0,
+ "headingResyncs": 14,
+ "fpsMean": 63.1,
+ "p50": 13.56,
+ "p95": 28.69,
+ "p99": 37.26,
+ "maxMs": 85.23,
+ "over50": 14,
+ "over50Steady": 14,
+ "maxSteadyMs": 85.23,
+ "commitFrames": 34,
+ "commitFrameMs": [
+  23.7,
+  16.3,
+  31.3,
+  41.2,
+  27.9,
+  21.3,
+  21.2,
+  34.9,
+  24.1,
+  36.9,
+  33.7,
+  29.5,
+  20.2,
+  26.2,
+  16.5,
+  43.8,
+  19.7,
+  45.7,
+  18.4,
+  32.6,
+  17.7,
+  28.2,
+  44.9,
+  21.3,
+  28.7,
+  16.5,
+  27.9,
+  19.1,
+  25.2,
+  16.9,
+  34.4,
+  18.9,
+  25.8,
+  17.8
+ ],
+ "commitFrameMaxMs": 45.7,
+ "rebaseFrameMs": [],
+ "rebaseFrameMaxMs": null,
+ "followCommitMs": [
+  14.2,
+  12.5,
+  13.2,
+  12.9,
+  12.3,
+  12.1,
+  15.0,
+  13.7,
+  12.5,
+  12.2,
+  12.5,
+  12.5,
+  12.4,
+  13.8,
+  12.8
+ ],
+ "exactMissFrames": 0,
+ "exactMissPct": 0.0,
+ "exactMissFramesOutsideRebase": 0,
+ "underLevels": {
+  "-1": 790,
+  "0": 268,
+  "1": 1090,
+  "2": 2356,
+  "3": 2268
+ },
+ "queuedMax": 905,
+ "waitingGroupsMax": 453,
+ "liveMax": 485,
+ "objectsMax": 485,
+ "backlogMax": 65,
+ "backlogSamples": 108,
+ "backlogSlopePerMin": -2.36,
+ "cells": 64,
+ "estCdaeTexKind": "estCdaeTex256",
+ "estCdaeTexFirstQ": 13.32,
+ "estCdaeTexLastQ": 12.99,
+ "estCdaeTexRatio": 0.975,
+ "estTexByKind": {
+  "estCdaeTex": {
+   "firstQ": 3,
+   "lastQ": 3,
+   "ratio": 1.0
+  },
+  "estCdaeTex128": {
+   "firstQ": 3.9,
+   "lastQ": 3.9,
+   "ratio": 1.0
+  },
+  "estCdaeTex256": {
+   "firstQ": 13.32,
+   "lastQ": 12.99,
+   "ratio": 0.975
+  },
+  "estCdaeTex512": {
+   "firstQ": 10.4,
+   "lastQ": 11.92,
+   "ratio": 1.146
+  }
+ },
+ "govCapLast": null,
+ "govTargetMax": 2,
+ "govBaseELast": 11.506599999848,
+ "reloads": [],
+ "pops": 0,
+ "failed": 0,
+ "materials": 609,
+ "liveEnd": 483,
+ "fails": [],
+ "pass": true,
+ "hitch_causes": {
+  "engine.RenderShadows": [
+   15,
+   110
+  ],
+  "mod.parking": [
+   2,
+   53
+  ],
+  "engine.Lua": [
+   2,
+   81
+  ],
+  "mod.far": [
+   2,
+   79
+  ],
+  "engine.Ticking": [
+   1,
+   51
+  ],
+  "mod.sea+trees": [
+   1,
+   61
+  ]
+ },
+ "p0": {
+  "speedWithin2pct": true,
+  "noResets": true
+ }
+}

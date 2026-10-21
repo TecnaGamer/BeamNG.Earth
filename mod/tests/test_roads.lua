@@ -23,7 +23,7 @@ local roads = require('beamngEarth/roads')
 local gov = { tries = 0 }
 function gov:try() self.tries = self.tries + 1; return self.allow == nil or self.tries <= self.allow end
 function gov:charge() end
-function gov:chargeMotion() end
+function gov:requestHeavy() return true end
 
 local function chunk(x)
   return string.format('{ m = "road_asphalt_2lane", w = 6, tl = 11, p = 20, n = { {%d, 0, 10}, {%d, 10, 10}, {%d, 20, 10} } }', x, x, x)
@@ -363,6 +363,44 @@ do
   T.check(roads.radiusToward(p, -100, 50, 1400, east) == 1400, 'its own tile: the full reach')
   T.check(roads.radiusToward(p, -1500, 0, 1400, nil) == 1400, 'slow (no direction): all round')
   T.check(roads.collideRadius(100) == 1400 and roads.collideRadius(500) == roads.COLLIDE_M[2], 'reach: 14 s of driving, capped')
+end
+
+-- A distant free camera prioritizes render-only scenery, while collider imports still follow the car.
+do
+  local car = { getPosition = function() return vec3(128, 128, 0) end }
+  getPlayerVehicle = function() return car end
+  files['/t/empty.json'] = '{ chunks = {} }'
+  for _, k in ipairs({ '1_0', '10_0' }) do roads.onTile({ anchorId = 2, key = k, path = '/t/empty.json' }, 2) end
+  roads.update(gov, 2, nil, { x = 2688, y = 128 })
+  local q = { { key = '2:1_0', renderOnly = true }, { key = '2:10_0', renderOnly = true } }
+  T.check(roads.nextWalk(q) == 2, 'camera: scenery at the distant camera is prioritized')
+  q[1].renderOnly, q[2].renderOnly = false, false
+  T.check(roads.nextWalk(q) == 1, 'camera: collision imports still prioritize the car')
+  for _, k in ipairs({ '1_0', '10_0' }) do roads.onDrop({ anchorId = 2, key = k }) end
+  getPlayerVehicle = nil
+end
+
+-- A hello at the main menu defers prewarming until level objects exist, and a later level
+-- recreates the prewarm shape after the previous level took its objects away.
+do
+  local mission = scenetree.MissionGroup
+  scenetree.MissionGroup = nil
+  T.check(not roads.prewarm(nil), 'prewarm: an older server without a path is accepted')
+  T.check(roads.prewarm('/t/prewarm.cdae') and #statics() == 0, 'prewarm: a menu hello waits for the level')
+  scenetree.MissionGroup = mission
+  local reloads = S.calls.reloadCollision or 0
+  roads.update(gov, 2)
+  local warm = statics()[1]
+  T.check(#statics() == 1 and warm.fields.shapeName == '/t/prewarm.cdae'
+    and warm.fields.collisionType == 'None' and warm.pos.z == -5000 and (S.calls.reloadCollision or 0) == reloads,
+    'prewarm: first level update loads one render-only shape far below the map')
+  roads.prewarm('/t/prewarm.cdae')
+  T.check(#statics() == 1 and statics()[1].id == warm.id, 'prewarm: repeated hello reuses the loaded shape')
+  warm:delete()
+  roads.update(gov, 2)
+  roads.update(gov, 2)
+  T.check(#statics() == 1 and statics()[1].id ~= warm.id and statics()[1].fields.shapeName == '/t/prewarm.cdae',
+    'prewarm: a new level recreates the shape removed with the old level')
 end
 
 T.done('test_roads')

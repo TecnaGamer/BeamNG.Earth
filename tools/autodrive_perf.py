@@ -17,11 +17,19 @@ leaving the route by OFF_ROUTE_M are events: events.jsonl, a screenshot each (ev
 summary. A crash or a stop ends the run (--keep-going drives on).
 Writes <out>/samples.jsonl (one poll per line) and <out>/summary.json; prints the summary. The game's MCP server
 must be on (Options > Advanced) and the companion server running.
+Process CPU and memory use /proc on Linux and native Windows APIs on Windows. Windows discovers Python server
+command lines once before driving; restart this tool after restarting the server, or pass --server-pid. Explicit
+--server-pid and --game-pid also disambiguate multiple sessions. Missing telemetry is written as null.
+--target-kmh requests a test speed through the car's AI, including route replans, and restores its normal command
+generator afterward. The car still drives through physics and may brake or fail to reach the target; samples
+record its actual speed. Without this option it follows legal road speeds.
 """
 import argparse
+from contextlib import contextmanager
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -91,12 +99,8 @@ return jsonEncode({ roadsQ = rs.walksQueued, roadMeshes = rs.roadMeshes, t = os.
 '''
 
 
-CLK = os.sysconf("SC_CLK_TCK")
-PAGE = os.sysconf("SC_PAGE_SIZE")
-
-
 def _procs():
-    """{pid: (ppid, cmdline)} of every process."""
+    """Linux {pid: (ppid, cmdline)}. Processes may disappear during a snapshot."""
     out = {}
     for d in os.listdir("/proc"):
         if not d.isdigit():
@@ -114,18 +118,115 @@ def _procs():
 
 
 def _cpu_rss(pids):
-    """(cpu seconds, rss MB) summed over pids."""
+    """Linux (cpu seconds, rss MB) summed over pids; unavailable if any cannot be read."""
+    if not pids:
+        return None, None
+    clk = os.sysconf("SC_CLK_TCK")
+    page = os.sysconf("SC_PAGE_SIZE")
     cpu = rss = 0.0
     for pid in pids:
         try:
             with open(f"/proc/{pid}/stat") as f:
                 st = f.read()
         except OSError:
-            continue
+            return None, None
         v = st[st.rindex(")") + 2:].split()
-        cpu += (int(v[11]) + int(v[12])) / CLK
-        rss += int(v[21]) * PAGE / 1e6
+        cpu += (int(v[11]) + int(v[12])) / clk
+        rss += int(v[21]) * page / 1e6
     return cpu, rss
+
+
+class WindowsProcs:
+    """Standard-library Windows telemetry. CIM discovers Python command lines once; native APIs poll."""
+
+    def __init__(self, discover=True):
+        import ctypes
+        from ctypes import wintypes as w
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("pid", w.DWORD),
+                        ("heap", ctypes.c_size_t), ("module", w.DWORD), ("threads", w.DWORD),
+                        ("ppid", w.DWORD), ("priority", w.LONG), ("flags", w.DWORD), ("exe", w.WCHAR * 260)]
+
+        class MemoryCounters(ctypes.Structure):
+            _fields_ = [("cb", w.DWORD), ("faults", w.DWORD)] + [
+                (name, ctypes.c_size_t) for name in ("peakWorkingSet", "workingSet", "peakPagedPool", "pagedPool",
+                                                   "peakNonPagedPool", "nonPagedPool", "pagefile", "peakPagefile")]
+
+        self.ctypes, self.w, self.ProcessEntry, self.MemoryCounters = ctypes, w, ProcessEntry, MemoryCounters
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        for fn, args, ret in (
+            (self.kernel.CreateToolhelp32Snapshot, [w.DWORD, w.DWORD], w.HANDLE),
+            (self.kernel.Process32FirstW, [w.HANDLE, ctypes.POINTER(ProcessEntry)], w.BOOL),
+            (self.kernel.Process32NextW, [w.HANDLE, ctypes.POINTER(ProcessEntry)], w.BOOL),
+            (self.kernel.OpenProcess, [w.DWORD, w.BOOL, w.DWORD], w.HANDLE),
+            (self.kernel.CloseHandle, [w.HANDLE], w.BOOL),
+            (self.kernel.GetProcessTimes, [w.HANDLE] + [ctypes.POINTER(w.FILETIME)] * 4, w.BOOL),
+            (self.psapi.GetProcessMemoryInfo, [w.HANDLE, ctypes.POINTER(MemoryCounters), w.DWORD], w.BOOL),
+        ):
+            fn.argtypes, fn.restype = args, ret
+        self.commands = self._commands() if discover else {}
+
+    @staticmethod
+    def _commands():
+        # Only needed for Python servers; packaged servers and the game have distinctive executable names.
+        # Keep PowerShell outside the drive's measured polls: repeatedly starting it would disturb the run.
+        script = ("Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%.exe'\" | "
+                  "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress")
+        powershell = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                  "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+        try:
+            result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+                                    check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            rows = (json.loads(result.stdout) or []) if result.stdout.strip() else []
+            if isinstance(rows, dict):
+                rows = [rows]
+            return {int(r["ProcessId"]): r.get("CommandLine") or "" for r in rows}
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            print(f"Process command lines unavailable ({e}); use --server-pid for a Python server", file=sys.stderr)
+            return {}
+
+    def procs(self):
+        c, k = self.ctypes, self.kernel
+        handle = k.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+        if handle == c.c_void_p(-1).value:
+            return {}
+        out, entry = {}, self.ProcessEntry()
+        entry.dwSize = c.sizeof(entry)
+        try:
+            ok = k.Process32FirstW(handle, c.byref(entry))
+            while ok:
+                out[entry.pid] = (entry.ppid, self.commands.get(entry.pid) or entry.exe)
+                ok = k.Process32NextW(handle, c.byref(entry))
+        finally:
+            k.CloseHandle(handle)
+        # Do not apply an exited Python process's command line to a later process that reuses its PID.
+        self.commands = {p: cmd for p, cmd in self.commands.items() if p in out}
+        return out
+
+    def cpu_rss(self, pids):
+        if not pids:
+            return None, None
+        c, k, w = self.ctypes, self.kernel, self.w
+        cpu = rss = 0.0
+        for pid in pids:
+            handle = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return None, None
+            try:
+                created, exited, kernel, user = (w.FILETIME() for _ in range(4))
+                memory = self.MemoryCounters()
+                memory.cb = c.sizeof(memory)
+                if not (k.GetProcessTimes(handle, c.byref(created), c.byref(exited), c.byref(kernel), c.byref(user))
+                        and self.psapi.GetProcessMemoryInfo(handle, c.byref(memory), memory.cb)):
+                    return None, None
+                cpu += sum((t.dwHighDateTime << 32) | t.dwLowDateTime for t in (kernel, user)) / 1e7
+                rss += memory.workingSet / 1e6
+            finally:
+                k.CloseHandle(handle)
+        return cpu, rss
 
 
 def _is_server(cmd):
@@ -139,35 +240,50 @@ def _is_server(cmd):
 class ProcSampler:
     """CPU % (of one core) and memory of the world server (with its worker processes) and of the game, per poll."""
 
-    def __init__(self):
+    def __init__(self, server_pid=None, game_pid=None):
         self.last = {}
+        self.server_pid, self.game_pid = server_pid, game_pid
+        self.windows = WindowsProcs(discover=server_pid is None) if os.name == "nt" else None
 
     def groups(self):
-        ps = _procs()
-        server = [p for p, (_, c) in ps.items() if _is_server(c)]
-        kids = set(server)
-        changed = True
-        while changed:                  # the server's process pools (spawned workers) and their children
-            changed = False
-            for p, (pp, _) in ps.items():
-                if pp in kids and p not in kids:
-                    kids.add(p)
-                    changed = True
-        exe = os.path.expanduser("~/.local/share/Steam/steamapps/common/BeamNG.drive/BinLinux/BeamNG.drive.x64")
-        exe = os.path.realpath(exe)     # (Steam's runtime starts it as ~/.steam/steam/..., a link to the same)
-        game = [p for p, (_, c) in ps.items()
-                if c and "--type=" not in c and os.path.realpath(c.split(" ", 1)[0]) == exe]
-        return {"server": sorted(kids), "game": game}
+        ps = self.windows.procs() if self.windows else _procs()
+        server = ([self.server_pid] if self.server_pid in ps else []) if self.server_pid is not None else [
+            p for p, (_, c) in ps.items() if "grep" not in c and (
+                _is_server(c) or ("launcher.py" in c.lower() and "beamng.earth" in c.lower())
+                or re.search(r'(^|[/\\"])beamng\.earth[^/\\"]*\.exe(?:[" ]|$)', c, re.I))]
+        game_names = [p for p, (_, c) in ps.items() if
+                      re.search(r'(^|[/\\"])beamng\.drive(?:\.x64)?(?:\.exe)?(?:[" ]|$)', c, re.I)]
+        game = ([self.game_pid] if self.game_pid in ps else []) if self.game_pid is not None else [
+            p for p in game_names if "--type=" not in ps[p][1]]
+
+        def descendants(roots):
+            kids = set(roots)
+            changed = True
+            while changed:
+                changed = False
+                for p, (pp, _) in ps.items():
+                    if pp in kids and p not in kids:
+                        kids.add(p)
+                        changed = True
+            return kids
+
+        # Source and packaged launchers can start both the server and the game. Exclude the entire game
+        # branch even if --server-pid selects their common parent, or --game-pid selects another session.
+        server_tree = descendants(server) - descendants(game_names + game)
+        return {"server": sorted(server_tree), "game": sorted(game)}
 
     def sample(self):
-        now = time.time()
+        now = time.monotonic()
         out = {}
         for name, pids in self.groups().items():
-            cpu, rss = _cpu_rss(pids)
+            cpu, rss = self.windows.cpu_rss(pids) if self.windows else _cpu_rss(pids)
             prev = self.last.get(name)
-            pct = round(100 * (cpu - prev[1]) / (now - prev[0]), 1) if prev and now > prev[0] else None
-            self.last[name] = (now, cpu)
-            out[name] = {"cpu": pct, "rssMB": round(rss), "procs": len(pids)}
+            # Worker churn changes cumulative CPU totals: start a fresh interval instead of a false spike.
+            pct = (round(100 * (cpu - prev[1]) / (now - prev[0]), 1)
+                   if cpu is not None and prev and prev[1] is not None and tuple(pids) == prev[2]
+                   and now > prev[0] and cpu >= prev[1] else None)
+            self.last[name] = (now, cpu, tuple(pids))
+            out[name] = {"cpu": pct, "rssMB": round(rss) if rss is not None else None, "procs": len(pids)}
         return out
 
 
@@ -182,6 +298,61 @@ def lua_json(code):
 def latlon(text):
     a, b = (float(x) for x in text.split(","))
     return a, b
+
+
+def target_kmh(text):
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("target km/h must be finite and positive") from None
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("target km/h must be finite and positive")
+    return value
+
+
+RESTORE_SPEED_LUA = r'''
+local saved = rawget(_G, 'BNGE_AUTODRIVE_SPEED')
+if saved then
+  if saved.gps.aiCommand == saved.wrapper then saved.gps.aiCommand = saved.original end
+  _G.BNGE_AUTODRIVE_SPEED = nil
+end
+return 'speed override restored'
+'''
+
+TARGET_SPEED_LUA = r'''
+local gps = require('beamngEarth/gps')
+local previous = rawget(_G, 'BNGE_AUTODRIVE_SPEED')
+if previous and previous.gps.aiCommand == previous.wrapper then previous.gps.aiCommand = previous.original end
+local original = gps.aiCommand
+assert(type(original) == 'function', 'GPS aiCommand unavailable')
+local saved = { gps = gps, original = original }
+saved.wrapper = function(...)
+  local command = original(...)
+  -- Assign gsub's first result: returning gsub directly also returns its replacement count.
+  local changed = command:gsub('routeSpeedMode%s*=%s*"legal"',
+    'routeSpeedMode = "set", routeSpeed = __TARGET_MPS__', 1)
+  return changed
+end
+_G.BNGE_AUTODRIVE_SPEED = saved
+gps.aiCommand = saved.wrapper
+return 'speed override installed'
+'''
+
+
+@contextmanager
+def speed_override(kmh):
+    """Test-local GPS command override, including subsequent replans; restore after any exit path."""
+    if kmh is None:
+        yield
+        return
+    try:
+        lua(TARGET_SPEED_LUA.replace("__TARGET_MPS__", repr(kmh / 3.6)))
+        yield
+    finally:
+        try:
+            lua(RESTORE_SPEED_LUA)
+        except (Exception, SystemExit) as e:
+            print(f"GPS speed override could not be restored: {e}", file=sys.stderr)
 
 
 def obs_start():
@@ -327,8 +498,10 @@ def _cpu(rows):
     for name in ("server", "game"):
         v = [r["procs"][name]["cpu"] for r in rows if (r.get("procs") or {}).get(name, {}).get("cpu") is not None]
         if v:
+            rss = [r["procs"][name]["rssMB"] for r in rows
+                   if (r.get("procs") or {}).get(name, {}).get("rssMB") is not None]
             out[name] = {"avg": round(sum(v) / len(v) / 100, 2), "max": round(max(v) / 100, 2),
-                         "rssMB": max(r["procs"][name]["rssMB"] for r in rows if r.get("procs"))}
+                         "rssMB": max(rss, default=None)}
     return out
 
 
@@ -424,7 +597,8 @@ def main():
     ap.add_argument("--rec", action="store_true", help="record the game's own frames (tools/gamerec.py: no screen "
                     "capture, no permission dialog; ~15 ms a frame, so the frame times are not the game's then)")
     ap.add_argument("--rec-fps", type=float, default=15.0)
-    ap.add_argument("--ai-mph", type=float, default=0.0,
+    speeds = ap.add_mutually_exclusive_group()
+    speeds.add_argument("--ai-mph", type=float, default=0.0,
                     help="the car drives at this speed instead of the legal one (gps.speedOverride): the world keeping "
                     "up at speed; the summary's lead says how far ahead the road meshes were ready")
     ap.add_argument("--fast-after", type=float, default=0.0,
@@ -434,7 +608,16 @@ def main():
     ap.add_argument("--fast-kmh", type=float, default=80.0)
     ap.add_argument("--snap-kmh", type=float, default=0.0,
                     help="start on a road this fast at least (the nearest such graph node): a motorway test")
+    speeds.add_argument("--target-kmh", type=target_kmh,
+                    help="test-only AI target speed, including replans (default: legal road speeds)")
+    ap.add_argument("--server-pid", type=int, help="world server PID (includes its worker descendants)")
+    ap.add_argument("--game-pid", type=int, help="BeamNG game PID (overrides automatic process discovery)")
     a = ap.parse_args()
+    with speed_override(a.target_kmh):
+        run_drive(a)
+
+
+def run_drive(a):
     os.makedirs(a.out, exist_ok=True)
     mcp.quiet_ui()          # (the recording too: our welcome page closed and kept away this session)
     if a.start:
@@ -463,8 +646,12 @@ def main():
             time.sleep(2)
         print(r, flush=True)
         time.sleep(3)
+    sampler = ProcSampler(server_pid=a.server_pid, game_pid=a.game_pid)
+    sampler.sample()  # Windows command-line discovery and the first CPU baseline precede the drive.
+    obs = grec = evf = video = None
+    rows = []
+    autodrive_seen, end_reason = False, "duration"
     fast = repr(a.ai_mph * 0.44704) if a.ai_mph else "nil"
-    lua("require('beamngEarth/gps').speedOverride = %s return 1" % (fast if not a.fast_after else "nil"))
     fast_at = time.time() + a.fast_after if a.ai_mph and a.fast_after else None
 
     def road_limit():
@@ -473,31 +660,32 @@ def main():
             return float(lua(ROAD_LIMIT_LUA).strip() or 0)
         except (Exception, SystemExit, ValueError):
             return 0.0
-    lua("beamngEarth_settings.uiMapGps(%r, %r, 'autodrive_perf') return 'ok'" % a.to)
-    if a.start:                     # off the route (another carriageway): on it, then the autodrive from there
-        for _ in range(15):
-            time.sleep(2)
-            try:
-                g = lua_json("return jsonEncode(require('beamngEarth/gps').status())")
-            except (Exception, SystemExit):
-                g = None
-            if g and g.get("off") is not None and not g.get("planning"):
-                if g["off"] > ROUTE_SNAP_OFF_M:
-                    print(lua(ROUTE_SNAP_LUA), flush=True)
-                    time.sleep(3)
-                break
-    lua("return tostring(beamngEarth_settings.uiGpsAutodrive(true).autodrive)")
-    obs = obs_start() if a.obs else None
-    grec = None
-    if a.rec:                       # the game's own frames (no screen capture: works unattended on Wayland)
-        import gamerec
-        grec = gamerec.start(a.rec_fps)
-    sampler = ProcSampler()
-    sampler.sample()
-    rows, end = [], time.time() + a.minutes * 60
-    evf = open(os.path.join(a.out, "events.jsonl"), "w")
     checks = Checks(lambda n, ev: shot(a.out, f"event_{n}_{ev['kind']}.jpg"))
     try:
+        lua("require('beamngEarth/gps').speedOverride = %s return 1" % (fast if not a.fast_after else "nil"))
+        lua("beamngEarth_settings.uiMapGps(%r, %r, 'autodrive_perf') return 'ok'" % a.to)
+        if a.start:                 # the nearest road may be the route's other carriageway
+            for _ in range(15):
+                time.sleep(2)
+                try:
+                    g = lua_json("return jsonEncode(require('beamngEarth/gps').status())")
+                except (Exception, SystemExit):
+                    g = None
+                if g and g.get("off") is not None and not g.get("planning"):
+                    if g["off"] > ROUTE_SNAP_OFF_M:
+                        print(lua(ROUTE_SNAP_LUA), flush=True)
+                        time.sleep(3)
+                    break
+        # Setup and earlier drives leave both diagnostics buffered; reset them with activation.
+        lua("if beamngEarth_core and beamngEarth_core.hitches then beamngEarth_core.hitches() end "
+            "if beamngEarth_perfmon and beamngEarth_perfmon.snapshot then beamngEarth_perfmon.snapshot() end "
+            "return tostring(beamngEarth_settings.uiGpsAutodrive(true).autodrive)")
+        obs = obs_start() if a.obs else None
+        if a.rec:                   # the game's own frames (no screen capture: works unattended on Wayland)
+            import gamerec
+            grec = gamerec.start(a.rec_fps)
+        end = time.time() + a.minutes * 60
+        evf = open(os.path.join(a.out, "events.jsonl"), "w")
         with open(os.path.join(a.out, "samples.jsonl"), "w") as f:
             while time.time() < end:
                 t0 = time.time()
@@ -524,19 +712,33 @@ def main():
                         evf.write(json.dumps(ev) + "\n")
                         evf.flush()
                         if ev["kind"] in ("crash", "stop") and not a.keep_going:
+                            end_reason = ev["kind"]
                             break
-                    if r["gps"].get("autodrive") is False and rows[0]["gps"].get("autodrive"):
-                        break                   # arrived (the GPS clears itself) or stopped by hand
+                    if r["gps"].get("autodrive") is True:
+                        autodrive_seen = True
+                    elif autodrive_seen:
+                        end_reason = "autodrive_ended"
+                        break                   # arrival clears the GPS fields; stopping by hand also ends it
                 time.sleep(max(0.0, POLL_S - (time.time() - t0)))
     finally:
-        video = obs_stop(obs, os.path.join(a.out, "drive.mp4")) if obs is not None else None
-        if grec is not None:
-            video = grec.stop(os.path.join(a.out, "drive.mp4"))
-        lua("beamngEarth_settings.uiGpsAutodrive(false) beamngEarth_settings.uiMapGps(nil) "
-            "require('beamngEarth/gps').speedOverride = nil return 'ok'")
-    evf.close()
+        try:
+            try:
+                if obs is not None:
+                    video = obs_stop(obs, os.path.join(a.out, "drive.mp4"))
+            finally:
+                if grec is not None:
+                    video = grec.stop(os.path.join(a.out, "drive.mp4"))
+        finally:
+            try:
+                lua("beamngEarth_settings.uiGpsAutodrive(false) beamngEarth_settings.uiMapGps(nil) "
+                    "require('beamngEarth/gps').speedOverride = nil return 'ok'")
+            finally:
+                if evf is not None:
+                    evf.close()
     summary = summarize(rows[1:]) if len(rows) > 2 else {"polls": len(rows)}   # the first poll covers the setup
     summary["events"] = checks.events
+    summary["targetKmh"] = a.target_kmh
+    summary["endReason"] = end_reason
     leads = [r["lead"] for r in rows[1:] if isinstance(r.get("lead"), dict)]
     if leads:
         rl = sorted(x["road"] for x in leads)
