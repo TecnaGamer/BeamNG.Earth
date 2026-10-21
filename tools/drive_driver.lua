@@ -46,7 +46,7 @@ D.RAY_LEN = 3000         -- m of ray (a miss: castRayStatic returns >= the lengt
 D.MAX_VZ = 30            -- m/s; |vz| clamp of a ground profile (slope changes, rebase frames)
 D.JUMP_M = 500           -- m between the placed and the actual position that is not a rebase: stop
 D.REBASE_GRACE = 5       -- frames after a rebase in which the actual position may still be the old one
-D.RESYNC_DEG = 5         -- the measured heading this far from the commanded one (collision): resync
+D.RESYNC_DEG = 15        -- the measured heading this far from the commanded one (collision): resync
 D.RESYNC_EVERY = 30      -- frames between heading checks
 D.MAX_FRAMES = 20000     -- frame records kept between two polls (more: counted as dropped)
 D.WATCHDOG_MS = 60000    -- no poll for this long (the harness polls every second): stop and park
@@ -86,13 +86,13 @@ function D.yawQuat(dh)
   return 0, 0, sin(h), cos(h)
 end
 
--- A profile from the config: { key = 't'|'s', points = {{u, speed, heading, alt?, vz?}, ...},
--- flight = any point has alt, total = last u }. points: list of {t|s, speed, heading?, alt?, vz?};
+-- A profile from the config: { key = 't'|'s', points = {{u, speed, heading, alt?, vz?, x?, y?}, ...},
+-- flight = any point has alt, total = last u }. points: list of {t|s, speed, heading?, alt?, vz?, x?, y?};
 -- a missing heading is `heading0` (the vehicle's heading at install). Returns nil, error on bad input.
 function D.makeProfile(points, heading0)
   if type(points) ~= 'table' or #points == 0 then return nil, 'profile has no points' end
   local key = points[1].t ~= nil and 't' or 's'
-  local out, flight = {}, false
+  local out, flight, hasPos = {}, false, false
   for i, p in ipairs(points) do
     local u, v = tonumber(p[key]), tonumber(p.speed)
     if not u then return nil, 'point ' .. i .. ': every point needs ' .. key end
@@ -100,13 +100,16 @@ function D.makeProfile(points, heading0)
     if i > 1 and u <= out[i - 1].u then return nil, 'point ' .. i .. ': ' .. key .. ' must increase' end
     local alt = tonumber(p.alt)
     if alt then flight = true end
-    out[i] = { u = u, speed = v, heading = tonumber(p.heading) or heading0 or 0, alt = alt, vz = tonumber(p.vz) }
+    local px, py = tonumber(p.x), tonumber(p.y)
+    if px and py then hasPos = true end
+    out[i] = { u = u, speed = v, heading = tonumber(p.heading) or heading0 or 0, alt = alt, vz = tonumber(p.vz), x = px, y = py }
   end
-  return { key = key, points = out, flight = flight, total = out[#out].u, i = 1 }
+  return { key = key, points = out, flight = flight, hasPos = hasPos, total = out[#out].u, i = 1 }
 end
 
 -- Speed, heading, alt, vz of a profile at u (t or s), linear between points (heading along the
--- shorter arc), held after the last point. Keeps a cursor: u only grows during a drive.
+-- shorter arc, or along the segment if x,y are given), held after the last point. Keeps a cursor:
+-- u only grows during a drive.
 function D.profileAt(prof, u)
   local pts = prof.points
   local i = prof.i or 1
@@ -114,11 +117,22 @@ function D.profileAt(prof, u)
   while i < #pts and u >= pts[i + 1].u do i = i + 1 end
   prof.i = i
   local a, b = pts[i], pts[i + 1]
-  if not b or u <= a.u then return a.speed, a.heading, a.alt, a.vz end
+  if not b or u <= a.u then return a.speed, a.heading, a.alt, a.vz, a.x, a.y end
   local f = (u - a.u) / (b.u - a.u)
   local alt = (a.alt and b.alt) and (a.alt + f * (b.alt - a.alt)) or a.alt
   local vz = (a.vz and b.vz) and (a.vz + f * (b.vz - a.vz)) or a.vz
-  return a.speed + f * (b.speed - a.speed), (a.heading + f * D.angleDiff(b.heading, a.heading)) % 360, alt, vz
+  local x = (a.x and b.x) and (a.x + f * (b.x - a.x)) or a.x
+  local y = (a.y and b.y) and (a.y + f * (b.y - a.y)) or a.y
+  local h
+  if a.heading and b.heading then
+    h = (a.heading + f * D.angleDiff(b.heading, a.heading)) % 360
+  elseif a.x and b.x and a.y and b.y then
+    local dx, dy = b.x - a.x, b.y - a.y
+    if dx ~= 0 or dy ~= 0 then h = D.headingOf(dx, dy) else h = a.heading end
+  else
+    h = (a.heading + f * D.angleDiff(b.heading or a.heading, a.heading)) % 360
+  end
+  return a.speed + f * (b.speed - a.speed), h, alt, vz, x, y
 end
 
 -- Minimal JSON encoder (the GE has jsonEncode; this one is for plain luajit).
@@ -248,6 +262,10 @@ function D.onRebase(xf)
   local nx, ny = xf:apply(s.x + hx * 1000, s.y + hy * 1000, s.z)
   local dh = D.angleDiff(D.headingOf(nx - x, ny - y), s.cmd)
   local dz = z - s.z
+  if s.prof and s.prof.hasPos then
+    s.xOff = (s.xOff or 0) + (x - s.x)
+    s.yOff = (s.yOff or 0) + (y - s.y)
+  end
   s.x, s.y, s.z = x, y, z
   s.ground, s.base = s.ground + dz, s.base + dz
   s.hOff, s.cmd = s.hOff + dh, (s.cmd + dh) % 360
@@ -304,11 +322,15 @@ function D.tick(dtReal, dtSim)
 
   -- advance along the profile (also in a rebase frame: the car keeps moving at its velocity)
   local prof = s.prof
-  local speed, heading, alt, vz = D.profileAt(prof, prof.key == 't' and s.t or s.s)
+  local speed, heading, alt, vz, px, py = D.profileAt(prof, prof.key == 't' and s.t or s.s)
   local h = (heading + s.hOff) % 360
   local ds = speed * dtSim
   local hx, hy = sin(rad(h)), cos(rad(h))
-  s.x, s.y = s.x + hx * ds, s.y + hy * ds
+  if prof.hasPos and px and py then
+    s.x, s.y = px + (s.xOff or 0), py + (s.yOff or 0)
+  else
+    s.x, s.y = s.x + hx * ds, s.y + hy * ds
+  end
   s.s, s.t = s.s + ds, s.t + dtSim
 
   if place then
@@ -340,7 +362,7 @@ function D.tick(dtReal, dtSim)
     end
     -- the speed physics reports (the motion since the last placement) against the profile's
     s.placed = s.placed + 1
-    local v = s.placed > 1 and veh:getVelocity()
+    local v = s.placed > 3 and veh:getVelocity()
     -- a physics blow-up (in-game 2026-10-10: the user's lifted Hopper at 67 m/s went unstable and the
     -- engine removed it; velocity read inf and the old driver kept going): stop at once
     if v and not D.sane(v, speed) then
@@ -358,6 +380,11 @@ function D.tick(dtReal, dtSim)
     s.cmd = h
     veh:setClusterPosRelRot(-1, s.x, s.y, z, qx, qy, qz, qw)
     veh:applyClusterVelocityScaleAdd(-1, 0, hx * speed, hy * speed, vz)
+    if s.frame % 15 == 1 then
+      veh:queueLuaCommand(string.format(
+        "for _, wd in pairs(wheels.wheels or {}) do wd.tireSoundVolumeCoef = 0 if wd.radius and wd.radius > 0 then wd.angularVelocity = %f / wd.radius * (wd.wheelDir or 1) end end",
+        speed))
+    end
   else
     flags = flags + D.FLAG_SKIP
   end
@@ -398,9 +425,12 @@ function D.install(cfg)
   D.clock = D.clock or D.newClock()
   D.frames = newFrames()
   D.harnessTag = true -- the rest of this MCP call (encoding, the HTTP answer) lands in the first frame
+  local startX = (prof.hasPos and prof.points[1].x) or p.x
+  local startY = (prof.hasPos and prof.points[1].y) or p.y
   D.state = {
-    prof = prof, km = tonumber(cfg.km), x = p.x, y = p.y, z = p.z, s = 0, t = 0,
-    ground = g, base = g, clearance = tonumber(cfg.clearance) or max(0.05, min(5, p.z - g)),
+    prof = prof, km = tonumber(cfg.km), x = startX, y = startY, z = p.z, s = 0, t = 0,
+    xOff = 0, yOff = 0,
+    ground = g, base = g, clearance = tonumber(cfg.clearance) or max(0.05, min(5, p.z - g + 0.03)),
     cmd = h0, hOff = 0, frame = 0, lastTick = D.clock(), installMs = D.clock(), lastPoll = D.clock(),
     falls = 0, resets = 0, rebases = 0, resyncs = 0, vSum = 0, vProfSum = 0, vN = 0, placed = 0, lastSpeed = 0,
     vehId = veh:getID(), done = false, reason = nil, skip = false, rebaseFrame = nil,
@@ -408,7 +438,7 @@ function D.install(cfg)
   -- from here on uninstall() undoes every step, also when one of them fails
   D.installed = true
   local okI, errI = pcall(function()
-    veh:queueLuaCommand(D.ZERO_INPUTS)
+    veh:queueLuaCommand(D.ZERO_INPUTS .. "; for _, wd in pairs(wheels.wheels or {}) do wd.tireSoundVolumeCoef = 0 end")
 
     -- the mod's rebase moves the player: follow it (restored at uninstall)
     local rb = package.loaded['beamngEarth/rebase']

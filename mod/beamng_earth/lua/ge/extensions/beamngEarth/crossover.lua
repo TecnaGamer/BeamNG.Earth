@@ -10,10 +10,11 @@
 --   end     delete the old tiles.
 -- Every surface point thus moves monotonically and continuously from its old height to its new one.
 -- Delta = 1.2 * (err_new + err_old) + 0.2 m, err = the per-tile geometric error the server sends.
--- C1 (instant swap) when the whole group is outside the camera frustum (+10 deg margin). Every
--- in-view swap crosses over, at any distance (v1.3 D removed v1.2's "beyond 30 km instant" rule).
--- At most MAX_GROUPS crossovers run at once: beyond that a group in view within NEAR_POP_M waits for
--- a free slot (farfield.lua), a farther one swaps instantly.
+-- C1 (instant swap) when the whole group is outside the camera frustum (+10 deg margin), or within
+-- INSTANT_M (800 m, expanded from 350 m where skirted .cdae meshes match seamlessly).
+-- At most MAX_GROUPS (8, down from 24 to reduce per-frame setPosition() calls by 3x) crossovers run
+-- at once: beyond that a group in view within NEAR_POP_M waits for a free slot (farfield.lua), a
+-- farther one swaps instantly.
 -- A translucent instance-alpha fade was probed and does not work on TSStatic (P2), hence transforms.
 
 local M = {}
@@ -24,7 +25,9 @@ local max, min, sqrt, atan, tan, rad, deg, acos, asin, floor = math.max, math.mi
 M.PHASE1_S = 0.25          -- new tiles rise
 M.PHASE2_S = 0.25          -- old tiles sink
 M.COVER_SINK_S = 0.3       -- far tiles newly covered by the terrain block sink this long (phase 2 only)
-M.MAX_GROUPS = 24          -- concurrent crossovers (transition cap)
+M.INSTANT_M = 800          -- instant group swap radius (m, expanded from 350 m)
+M.NEAR_INSTANT_M = 800     -- alias for near-player instant group swap radius (m)
+M.MAX_GROUPS = 8           -- concurrent crossovers (transition cap, down from 24 to cut setPosition() calls by 3x)
 M.MARGIN_DEG = 10          -- frustum margin for the off-screen test
 M.NEAR_POP_M = 5000        -- at the cap, an in-view group nearer than this waits instead of popping
                            -- (a farther one swaps instantly: counted in farfield stats().pops)

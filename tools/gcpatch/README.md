@@ -12,9 +12,6 @@ floating-origin rebases.
   0.39.4 address. In another build (a game update) it searches the game's code for the same bytes, with
   the frame size and the two jump distances masked, and patches only a single match. If the handler
   changed, it does nothing (the status file says so).
-- Only on the BeamNG.Earth map. The mod creates `temp/beamngearth_gcpatch_on` in the game's user folder when its
-  level starts and removes it when the level ends; the library looks for that file every 250 ms and puts the byte
-  back to stock without it, so other maps (a terrain edited in the World Editor) keep the stock behaviour.
 - Nothing on disk changes. Without the launch option the game is stock.
 - It acts only in the main `BeamNG.drive.x64` process, not in the CEF helpers or Steam.
 - Unsupported by BeamNG. A wrong patch crashes the game, which a restart without the launch
@@ -36,8 +33,8 @@ Then restart the game.
 ## Check
 After the game starts, look at
 `~/.local/share/BeamNG/BeamNG.drive/current/temp/beamngEarth_gcpatch.txt`.
-It contains one line, such as `applied: grass kept across terrain block moves (BeamNG.Earth level)`,
-`stock: another level`, or the reason it did nothing.
+It contains one line, such as `applied: grass kept across terrain block moves`, or the reason
+it did nothing.
 
 ## Turn off
 Remove the launch option, or add `BNGEARTH_GCPATCH_OFF=1` in front of it.

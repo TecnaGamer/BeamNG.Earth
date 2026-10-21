@@ -130,6 +130,9 @@ class MirrorTest(unittest.TestCase):
             down._load_tile(k2)
             self.assertEqual(down.served[k2], demmod.AWS["name"])
             self.assertFalse(Path(down._mirror_path(k2)).exists(), "a failover tile is not kept")
+            del a, b, other, down
+            import gc
+            gc.collect()
 
 
 class DemPrefetchTest(unittest.TestCase):

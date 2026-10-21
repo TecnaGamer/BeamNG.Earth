@@ -348,33 +348,6 @@ def steam_running():
     return False
 
 
-def steam_runtime(exe):
-    """The Steam Linux Runtime ("sniper") container's entry point in the game's Steam library, or None. Steam runs the
-    native game inside it; started on the host instead, the game's UI (CEF) failed on SteamOS: "failed to initialize
-    application, shutting down" right after its window opened (a Steam Deck, 2026-10-20). LD_PRELOAD reaches the
-    game through it (pressure-vessel carries preloaded libraries into the container)."""
-    common = os.path.dirname(os.path.dirname(os.path.dirname(exe)))       # .../steamapps/common
-    entry = os.path.join(common, "SteamLinuxRuntime_sniper", "_v2-entry-point")
-    return entry if os.path.isfile(entry) and os.access(entry, os.X_OK) else None
-
-
-def under_gamescope():
-    """Linux: running in a Steam Deck's Game Mode (gamescope's session)."""
-    return bool(os.environ.get("GAMESCOPE_WAYLAND_DISPLAY")) or os.environ.get("XDG_CURRENT_DESKTOP") == "gamescope"
-
-
-def steam_overlay_lib():
-    """Steam's 64-bit overlay library (gameoverlayrenderer.so), or None. In Game Mode gamescope shows only the windows
-    it tags as the running Steam game, which this library does: the game started directly without it ran, but the
-    screen kept Steam's loading spinner (a Steam Deck, 2026-10-20)."""
-    import install
-    for root in install._steam_roots():
-        lib = os.path.join(root, "ubuntu12_64", "gameoverlayrenderer.so")
-        if os.path.isfile(lib):
-            return lib
-    return None
-
-
 def sandboxed_game(exe):
     """The game is installed by a Flatpak / snap Steam: it only runs inside that sandbox (through Steam)."""
     home = os.path.expanduser("~")
@@ -481,7 +454,7 @@ def windows_game_dir():
     return None
 
 
-def start_game(use_gcpatch, build="native", gfx="", user_dir=None):
+def start_game(use_gcpatch, build="native", gfx=""):
     """Start the game; returns a Popen when this process started it directly, else None (through Steam)."""
     win_args = ["-gfx", gfx] if gfx else []
     if IS_WIN:
@@ -505,22 +478,12 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None):
             exe = None
         if exe and steam_running():
             env = clean_env()
-            env["SteamAppId"] = APP_ID
-            # (Game Mode: started from a Steam shortcut, the shortcut's id is the game gamescope shows)
-            env["SteamGameId"] = os.environ.get("SteamGameId") if under_gamescope() and os.environ.get("SteamGameId") \
-                else APP_ID
-            overlay = steam_overlay_lib() if under_gamescope() else None
-            if overlay and overlay not in env.get("LD_PRELOAD", ""):
-                env["LD_PRELOAD"] = overlay + (":" + env["LD_PRELOAD"] if env.get("LD_PRELOAD") else "")
+            env["SteamAppId"] = env["SteamGameId"] = APP_ID
             lib = gcpatch_lib() if use_gcpatch else None
             if lib:
                 env["LD_PRELOAD"] = lib + (":" + env["LD_PRELOAD"] if env.get("LD_PRELOAD") else "")
-                if user_dir:        # where the mod raises the patch's level flag (tools/gcpatch)
-                    env["BNGEARTH_USER_DIR"] = user_dir
-            runtime = steam_runtime(exe)
             row("Game", "starting" + ("  (with the grass patch)" if lib else ""))
-            proc = subprocess.Popen(([runtime, "--verb=waitforexitandrun", "--"] if runtime else []) + [exe],
-                                    cwd=os.path.dirname(os.path.dirname(exe)), env=env,
+            proc = subprocess.Popen([exe], cwd=os.path.dirname(os.path.dirname(exe)), env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             t0 = time.time()
             while time.time() - t0 < DIRECT_FAIL_S:
@@ -685,9 +648,8 @@ def under_wine():
 
 
 def steam_compat_tool():
-    """Linux: the compatibility tool Steam is set to use for the game (its name: a Proton, or a Steam Linux Runtime
-    container that runs the native build), "" for none, None when Steam's config does not say (it writes the setting
-    when it exits)."""
+    """Linux: the compatibility tool Steam is set to use for the game (a Proton's name), "" for none, None when
+    Steam's config does not say (it writes the setting when it exits)."""
     import install
     import re
     for root in install._steam_roots():
@@ -702,13 +664,6 @@ def steam_compat_tool():
         e = re.search(r'"%s"\s*\{[^}]*?"name"\s*"([^"]*)"' % APP_ID, m.group(1))
         return e.group(1) if e else ""
     return None
-
-
-def is_proton(tool):
-    """Is the compatibility tool tool (steam_compat_tool) a Proton, the Windows build's? (Steam also offers the Steam
-    Linux Runtime containers, which run the native build: steamlinuxruntime_4 was taken for a Proton and a stale
-    2024 Proton prefix used, GitHub #56.)"""
-    return bool(tool) and "proton" in tool.lower()
 
 
 def last_written(user_dir):
@@ -744,10 +699,8 @@ def linux_build(force=None):
     mode = force
     if mode is None:
         tool = steam_compat_tool()
-        if is_proton(tool):
+        if tool:
             mode = "proton"
-        elif tool:                  # a Steam Linux Runtime container (steamlinuxruntime_4, _sniper): the native build
-            mode = "native"
         elif not proton_dirs:
             mode = "native"
         elif tool is None or not os.path.isdir(native):
@@ -848,9 +801,7 @@ def run(args):
         build, user_dir = linux_build(args.build)
     else:
         user_dir = user_folder()
-    tool = steam_compat_tool() if not IS_WIN and not args.user_dir else None
-    row("Game folder", user_dir + ("  (the Windows build, Proton)" if build == "proton" else "")
-        + (f"  (Steam compatibility tool: {tool})" if tool else ""))       # (which was read: GitHub #56)
+    row("Game folder", user_dir + ("  (the Windows build, Proton)" if build == "proton" else ""))
     running = game_alive()
     if not args.keep_mod:
         status = install.install_mod(user_dir, True, dry_run=False, quiet=True)
@@ -881,7 +832,7 @@ def run(args):
         else:
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
-            proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir)
+            proc = start_game(not args.no_gcpatch, build, args.gfx)
         say()
         say("In the game: Freeroam > BeamNG.Earth.  Closing the game stops the server.")
         say()

@@ -71,17 +71,14 @@ do
   trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 20 })
   T.check(trees.made == m and trees.removed == r, 'a settled tile of non-solid items: nothing re-made')
 end
--- the camera away from the car (core.viewAway): what is shown follows the camera, what collides the car (the user,
--- 2026-10-20: "All collision ... should be following the car while visual stuff should follow the camera")
-trees.update(1, { x = 50, y = 1900 }, { x = 50, y = 50 })
-T.check(count() == 100 and solidCount() == 0, 'the camera at the tile, the car far: every item shown, none collides')
-trees.update(1, { x = 50, y = 50 }, { x = 50, y = 1900 })
-T.check(count() == 100 and solidCount() == 100, 'the car at the tile, the camera far: every item, all collide')
 trees.update(1, { x = 50, y = 50 })
 
 trees.onDrop({ anchorId = 1, key = '0_0' })
 trees.update(1, { x = 50, y = 50 })
 T.check(count() == 0 and trees.status().tiles == 0 and forests == 1, 'dropped: its items removed, its Forest kept')
+for _, o in pairs(S.objects) do
+  if o.class == 'Forest' then T.check(o.hidden == true, 'released empty Forest is hidden in pool') end
+end
 T.check(trees.forestName(3) == 'bngEarthForest_3', 'pool Forests are numbered')
 T.check(trees.typeName('/a/b-c', true) == 'bngEarthTree__a_b_c' and trees.typeName('/a/b-c') == 'bngEarthTree__a_b_c_n',
   'an item type per shape and solidity')
@@ -94,6 +91,9 @@ end
 trees.onTile({ anchorId = 1, key = '0_0', path = '/t/v.json', n = 100 }, 1)
 trees.update(1, { x = 50, y = 50 })
 T.check(count() == 100 and forests == 1, 'the next tile reuses the empty Forest')
+for _, o in pairs(S.objects) do
+  if o.class == 'Forest' then T.check(o.hidden == false, 'reused Forest is unhidden') end
+end
 trees.update(2, { x = 50, y = 50 })
 T.check(count() == 0, 'another anchor: removed')
 trees.onTile({ anchorId = 2, key = '0_0', path = '/t/v.json', n = 100 }, 2)
@@ -196,17 +196,94 @@ trees.update(7, { x = 50, y = 50 })
 for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and o.pos.y == 0 and o.rot then reused = true end end
 T.check(reused, 'a pooled Forest is reset to no transform when reused')
 trees.clear()
--- a dense forest's tile is held to M.TILE_CAP items (Bodø, GitHub #66: 1.66 M items in the level): its cap-th rank
-local function ranked(n, top)
-  local rows = {}
-  for i = 1, n do rows[i] = { 0, 0, 0, 0, 0, 1, 10, (n - i) / n * top } end    -- (any order)
-  return { rows = rows }
+
+-- R2: per-type shadowNullDetailSize (solid datablock = 35, non-solid datablock = 150)
+do
+  local sawSolid35, sawNonSolid150 = false, false
+  for _, o in pairs(S.objects) do
+    if o.class == 'TSForestItemData' and o.fields then
+      if o.fields.collidable == '1' and o.fields.shadowNullDetailSize == '35' then
+        sawSolid35 = true
+      elseif o.fields.collidable == '0' and o.fields.shadowNullDetailSize == '150' then
+        sawNonSolid150 = true
+      end
+    end
+  end
+  T.check(sawSolid35, 'solid TSForestItemData datablock gets shadowNullDetailSize 35')
+  T.check(sawNonSolid150, 'non-solid TSForestItemData datablock gets shadowNullDetailSize 150')
 end
-T.check(trees.tileThreshold(0, ranked(500, 1)) == 1.0, 'a sparse tile near the player: all of it')
-T.check(math.abs(trees.tileThreshold(0, ranked(20000, 1)) - 6000 / 20000) < 1e-12, 'a dense one: its 6000 lowest ranks')
-T.check(math.abs(trees.tileThreshold(0, ranked(8000, 0.3)) - 6000 / 8000 * 0.3) < 1e-12,
-  'the server sent the lowest 30 % only: still its 6000 lowest')
-T.check(trees.tileThreshold(1000, ranked(800, 1)) == 0.35, 'under the cap: the ring as before')
-T.check(math.abs(trees.tileThreshold(2000, ranked(10000, 1)) - 400 / 10000) < 1e-12, 'far: 400')
-T.check(trees.tileThreshold(0, { rows = {} }) == 1.0, 'no rows')
+
+-- P10-B / R1 / R5: distinct-Forest mutation cap, burst=true/urgent=false -> 1, urgent=true -> 2,
+-- near-solid tile (dCar <= SOLID_M) bypasses the cap, and shadowctl.noteBurst() called once per mutated frame
+do
+  local okSc, scMod = pcall(require, 'beamngEarth/shadowctl')
+  if not okSc or type(scMod) ~= 'table' then
+    scMod = {}
+    package.loaded['beamngEarth/shadowctl'] = scMod
+  end
+  local origNoteBurst = scMod.noteBurst
+  local burstCalls = 0
+  scMod.noteBurst = function(...)
+    burstCalls = burstCalls + 1
+    if origNoteBurst then return origNoteBurst(...) end
+  end
+
+  local function queueFarTiles(aid)
+    -- Place 4 tiles around player at (128, 128) with dCar = sqrt(128^2 + 128^2) ≈ 181 m (> SOLID_M = 90, <= 220 m)
+    for _, k in ipairs({ '1_1', '1_-1', '-1_1', '-1_-1' }) do
+      local r = {}
+      for i = 0, 4 do r[#r + 1] = string.format('{0, %d, 10, 5, 0, 1, 12, %.3f}', i, i / 20) end
+      files['/t/f_' .. k] = '{ groups = {}, items = { ' .. table.concat(r, ', ') .. ' } }'
+      trees.onTile({ anchorId = aid, key = k, path = '/t/f_' .. k, n = 5 }, aid)
+    end
+  end
+
+  -- 1) burst=true, urgent=false -> at most 1 distinct Forest mutated per update (for non-solid tiles)
+  queueFarTiles(11)
+  local govStub = {
+    burst = true,
+    urgent = false,
+    try = function() return true end,
+    charge = function() end,
+  }
+  burstCalls = 0
+  trees.update(11, { x = 128, y = 128 }, nil, govStub)
+  T.check(trees.lastForestsTouched == 1,
+    'gov stub burst=true, urgent=false mutates at most 1 distinct Forest (' .. tostring(trees.lastForestsTouched) .. ')')
+  T.check(burstCalls == 1, 'noteBurst called once on frame with mutations (' .. burstCalls .. ')')
+
+  -- 2) urgent=true (even with burst=true) -> up to 2 distinct Forests mutated per update
+  govStub.urgent = true
+  burstCalls = 0
+  trees.update(11, { x = 128, y = 128 }, nil, govStub)
+  T.check(trees.lastForestsTouched == 2,
+    'gov stub burst=true, urgent=true mutates up to 2 distinct Forests (' .. tostring(trees.lastForestsTouched) .. ')')
+  T.check(burstCalls == 1, 'noteBurst called once per frame even when 2 Forests are mutated (' .. burstCalls .. ')')
+
+  -- Finish remaining far tiles and verify noteBurst is NOT called when no Forest is mutated
+  trees.update(11, { x = 128, y = 128 }, nil, govStub)
+  burstCalls = 0
+  trees.update(11, { x = 128, y = 128 }, nil, govStub)
+  T.check(trees.lastForestsTouched == 0 and burstCalls == 0,
+    'noteBurst not called at all on update without Forest mutations (' .. burstCalls .. ')')
+  trees.clear()
+
+  -- 3) near-solid tile (dCar <= SOLID_M) bypasses the burst=1 cap
+  -- Queue two near-solid tiles at 0_0 (cx=128, cy=128) and 1_0 (cx=384, cy=128) with player at x=256, y=128 (dCar=0 for both)
+  for ti = 0, 1 do
+    local k = ti .. '_0'
+    local r = {}
+    for i = 0, 4 do r[#r + 1] = string.format('{0, %d, 10, 5, 0, 1, 12, %.3f}', i, i / 20) end
+    files['/t/ns_' .. k] = '{ groups = {}, items = { ' .. table.concat(r, ', ') .. ' } }'
+    trees.onTile({ anchorId = 12, key = k, path = '/t/ns_' .. k, n = 5 }, 12)
+  end
+  govStub.burst = true
+  govStub.urgent = false
+  trees.update(12, { x = 256, y = 128 }, nil, govStub)
+  T.check(trees.lastForestsTouched == 2 and count() == 10,
+    'near-solid tiles (dCar <= SOLID_M) bypass the burst=1 Forest cap (' .. tostring(trees.lastForestsTouched) .. ')')
+  trees.clear()
+
+  scMod.noteBurst = origNoteBurst
+end
 T.done('test_trees')

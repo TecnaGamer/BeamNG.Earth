@@ -214,7 +214,7 @@ class ServerHarness(unittest.TestCase):
             self.assertEqual(m["state"], "group")
             own = f"far_{aid}_{m['key']}.{self.far_format}"        # a textured cdae tile: its pooled file (matslots.py)
             if "material" in m and self.far_format == "cdae":
-                own = f"slot_{m['material'].rsplit('_', 1)[1]}.cdae"
+                own = self.server.matslots.file(m["material"])
             self.assertEqual(m["shape"], f"/temp/beamngEarth/{self.server.sid}/{own}")
             self.assertGreaterEqual(m["err"], 0)
             self.assertGreaterEqual(m["skirt"], ff.skirt_depth(t.size, m["err"]) - 0.01)
@@ -1100,9 +1100,9 @@ class DeleteQueueTest(unittest.TestCase):
         asyncio.run(run())
         self.assertTrue(os.path.exists(kept))
         # ~40 files/s, evenly spaced (one per step): never more than a few in any 0.1 s
-        self.assertGreater(len(times), 1.5 * earthd.DELETE_MAX_RATE)
-        self.assertLess(len(times), 2.0 * earthd.DELETE_MAX_RATE + 5)
-        dt = np.diff(times)
+        self.assertGreater(len(times), 0.75 * earthd.DELETE_MAX_RATE * earthd.DELETE_BATCH)
+        self.assertLess(len(times), 2.0 * earthd.DELETE_MAX_RATE * earthd.DELETE_BATCH + 2 * earthd.DELETE_BATCH)
+        dt = np.diff(times[::earthd.DELETE_BATCH])
         self.assertGreater(float(np.median(dt)), 0.5 / earthd.DELETE_MAX_RATE)
 
 

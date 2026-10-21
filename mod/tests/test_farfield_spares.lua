@@ -25,6 +25,7 @@ local function step(n) for _ = 1, n or 1 do farfield.update(free, DT, nil) end e
 local function creates() return S.calls.createObject_TSStatic or 0 end
 local function settle() step(120) end
 
+T.check(farfield.SPARE_MAX == 64 and farfield.SPARE_S == 30, 'default spare pool capped at 64 tiles / 30 s')
 farfield.SPARE_MAX, farfield.SPARE_S = 400, 120
 farfield.switchAnchor(1, false, { cx = 0, cy = 0 }, 's1')
 
@@ -45,6 +46,7 @@ local before = creates()
 farfield.onTile(tile(1, 1, 0, 8)); step()
 T.check(creates() == before, 'revived without a new import')
 T.check(farfield._pending(key(1, 0, 8)).id == pid, 'the same object')
+T.check(S.objects[pid].fields.isRenderShadowEnabled == 'false' and S.objects[pid].fields.castShadows == '0', 'revived spare keeps shadow casting disabled')
 T.check(farfield.counters().revived == 1 and farfield.stats().spares == 0, 'counted, out of the pool')
 farfield.onSwap(swap(1, 3, { key(1, 0, 8) }, kids)); settle()
 T.check(S.objects[pid] ~= nil and not S.objects[pid].hidden, 'shown again by its swap')
@@ -64,10 +66,15 @@ settle()
 T.check(#S.liveOf('TSStatic') <= 6, 'and are deleted')
 farfield.SPARE_S = 120
 
--- the cap: the oldest go first
+-- the cap: the oldest go first (enforced immediately in park() as well as in update())
 farfield.SPARE_MAX = 2
-farfield.onSwap(swap(1, 4, kids, { key(1, 0, 8) })); step()   -- parent -> spare
+for _, k in ipairs(kids) do local l, i, j = k:match('(%-?%d+)_(%-?%d+)_(%-?%d+)'); farfield.onTile(tile(1, 0, tonumber(i), tonumber(j))) end
+step()
+farfield.onSwap(swap(1, 4, kids, { key(1, 0, 8) })); settle() -- parent -> spare (1)
 T.check(farfield.stats().spares <= 2, 'at most SPARE_MAX spares')
+farfield.onTile(tile(1, 1, 0, 8)); step()                      -- revive parent
+farfield.onSwap(swap(1, 5, { key(1, 0, 8) }, kids)); settle() -- 4 kids parked -> immediately capped to 2 in park()
+T.check(farfield.stats().spares == 2, 'park() enforces SPARE_MAX immediately when multiple tiles park at once')
 
 -- a spare's folder stays held (the server must not delete its files)
 farfield.SPARE_MAX = 400

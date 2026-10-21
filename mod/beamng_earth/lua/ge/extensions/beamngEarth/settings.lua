@@ -68,6 +68,9 @@ M.SCHEMA = {
   welcomeSeen = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Welcome page seen (version)' },
   -- not on the page: the newer version whose update notice the player dismissed (core.lua drawUpdateNotice)
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
+  -- not on the page: streaming-burst shadow distance tightening (shadowctl.lua)
+  shadowBurst = { kind = 'bool', default = true, label = 'Shadow burst tightening' },
+  shadowBurstScale = { kind = 'number', default = 0.22, min = 0.10, max = 0.45, label = 'Shadow burst scale' },
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible', 'statusBar',
@@ -75,7 +78,7 @@ M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrengt
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
 -- Stored but not on the settings page
-M.HIDDEN = { welcomeSeen = true, updateDismissed = true }
+M.HIDDEN = { welcomeSeen = true, updateDismissed = true, shadowBurst = true, shadowBurstScale = true }
 
 -- Old values that still load (and set) as their replacement, without a warning: 'auto' weather
 -- (real unless BWM_Weather was changing the weather) is Real now, which switches itself to Manual
@@ -264,6 +267,8 @@ M.APPLY = {
     local dev = ext('beamngEarth_dev')
     if dev and dev.setParam then dev.setParam('mapKm', v) end
   end,
+  shadowBurst = function(v) require('beamngEarth/shadowctl').BURST_ENABLED = (v ~= false) end,
+  shadowBurstScale = function(v) require('beamngEarth/shadowctl').BURST_SCALE = tonumber(v) or 0.22 end,
   -- hazeStrength: a placeholder until the haze exists (v1.4 M1h)
 }
 
@@ -276,6 +281,8 @@ end
 
 function M.applyAll()
   for _, k in ipairs(M.ORDER) do if k ~= 'hudVisible' then M.apply(k) end end
+  M.apply('shadowBurst')
+  M.apply('shadowBurstScale')
 end
 
 -- Validate, store, save and apply one value. Returns { ok, value, error }.
@@ -647,10 +654,32 @@ function M.mapOpened(on)
 end
 function M.isMapOpen() return mapOpen end
 
+local routesRegistered = false
+function M.ensureRoutes()
+  if routesRegistered then return end
+  local rm = rawget(_G, 'ui_router_routeManager')
+  if rm and rm.registerModRoutes then
+    local ok = pcall(rm.registerModRoutes, 'beamngEarth.routes', {
+      {
+        name = 'beamngEarthWelcome',
+        path = '/beamng-earth-welcome',
+        meta = { luaRoute = { title = 'Welcome to BeamNG.Earth', backTarget = 'play' } }
+      },
+      {
+        name = 'beamngEarthMap',
+        path = '/beamng-earth-map',
+        meta = { luaRoute = { title = 'BeamNG.Earth map', backTarget = 'play' } }
+      }
+    })
+    if ok then routesRegistered = true end
+  end
+end
+
 -- Go to a UI screen (route): extensions.ui_router.navigate, BeamNG 0.40's way (its patch notes: "Use
 -- extensions.ui_router.navigate(routeName, params) instead of guihooks.trigger('ChangeState', ...)"; it exists in 0.39.4
 -- too); the old ChangeState only without it.
 function M.navigate(state)
+  M.ensureRoutes()
   local r = rawget(_G, 'ui_router')
   if r and r.navigate then
     local ok = pcall(r.navigate, state)
@@ -663,6 +692,7 @@ end
 
 -- The key binding (actions/beamngEarth.json; M and the pause menu Map via redirectBigMap): open the map, or close it back to driving.
 function M.toggleMap()
+  M.ensureRoutes()
   if mapOpen then
     M.navigate('play')
     mapOpen = false
@@ -697,6 +727,7 @@ end
 function M.onExtensionLoaded()
   M.load()
   M.applyAll()
+  M.ensureRoutes()
 end
 
 -- The one-time welcome (the user, 2026-10-15: "add a 1 time popup with info about this project"): shown a moment after

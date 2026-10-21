@@ -341,9 +341,42 @@ SSE_HYSTERESIS = 0.5
 SSE_SPACING_CAP = 2.0
 
 
+def seg_distance(px, py, qx, qy, x0, y0, x1, y1):
+    """Horizontal distance from the line segment (px, py)-(qx, qy) to the rectangle [x0, x1] x [y0, y1]."""
+    dx, dy = qx - px, qy - py
+    l2 = dx * dx + dy * dy
+    if l2 <= 0.0:
+        return math.hypot(max(x0 - px, 0.0, px - x1), max(y0 - py, 0.0, py - y1))
+    ts = [0.0, 1.0]
+    if dx != 0.0:
+        for bx in (x0, x1):
+            t = (bx - px) / dx
+            if 0.0 < t < 1.0:
+                ts.append(t)
+    if dy != 0.0:
+        for by in (y0, y1):
+            t = (by - py) / dy
+            if 0.0 < t < 1.0:
+                ts.append(t)
+    for cx in (x0, x1):
+        for cy in (y0, y1):
+            tc = ((cx - px) * dx + (cy - py) * dy) / l2
+            if 0.0 < tc < 1.0:
+                ts.append(tc)
+    best = math.inf
+    for t in ts:
+        x, y = px + t * dx, py + t * dy
+        ox = max(x0 - x, 0.0, x - x1)
+        oy = max(y0 - y, 0.0, y - y1)
+        d2 = ox * ox + oy * oy
+        if d2 < best:
+            best = d2
+    return math.sqrt(best)
+
+
 def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
            radius=RADIUS, max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131,
-           disc=False, horizon=None, forced_level=0, view=None):
+           disc=False, horizon=None, forced_level=0, view=None, lead=None):
     """Desired tiles for a player at (px, py).
 
     forced: bboxes (terrain blocks) under which everything is refined to `forced_level` (terrain mode:
@@ -358,6 +391,8 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
     horizon, with its subtree (the server passes it with disc=True and max_level HORIZON_MAX_LEVEL).
     view: a View (screen-space LOD): nodes whose known geometric error would pop more than view.tau px on
     screen split too (within view.reach x the switch distance), distances from the camera.
+    lead: optional (qx, qy) forward velocity endpoint; when set, split thresholds are evaluated against
+    the velocity capsule segment (px, py)-(qx, qy).
     Returns ({key: Tile}, set of refined nodes)."""
     kfun = kfun or layout.k
     radii = NEAR_RADII[layout.cells] if radii is None else radii
@@ -387,8 +422,9 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
             else:
                 if d is None:
                     d = math.hypot(max(x0 - px, 0.0, px - x1), max(y0 - py, 0.0, py - y1))
+                d_split = seg_distance(px, py, lead[0], lead[1], x0, y0, x1, y1) if lead is not None else d
                 lim = switch_distance(lvl, kfun, radii, min_level)
-                split = d < lim or (node in prev_refined and d < (1.0 + h) * lim)
+                split = d_split < lim or (node in prev_refined and d_split < (1.0 + h) * lim)
                 if not split and view is not None and d < view.reach * lim:
                     px_ = view.pixels(node, x0, y0, x1, y1)
                     if px_ is not None:
@@ -720,8 +756,8 @@ def material_json(palette_vfs):
     return {MATERIAL: {
         "name": MATERIAL, "mapTo": MATERIAL, "class": "Material", "version": 1.5,
         "persistentId": "6f1c2a3e-4b5d-4e6f-8a9b-0c1d2e3f4a5b",
-        "Stages": [{"baseColorMap": palette_vfs, "metallicFactor": 0, "roughnessFactor": 1}, {}, {}, {}],
         "castShadows": False,       # (PR #41; the far tiles lie beyond the shadow distance: no change measured)
+        "Stages": [{"baseColorMap": palette_vfs, "metallicFactor": 0, "roughnessFactor": 1}, {}, {}, {}],
     }}
 
 

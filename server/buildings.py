@@ -24,7 +24,7 @@ import staging
 
 FLOOR_M = 3.0               # m per storey (residential)
 GROUND_FLOOR_SHOP_M = 4.2   # m, a shop's ground floor
-FOUNDATION_M = 0.6          # m the walls reach under the lowest ground of the footprint
+FOUNDATION_M = 3.0          # m the walls reach under the lowest ground of the footprint
 # The walls reach this far under the lowest ground of the footprint (a skirt): beyond the physics block (+-512 m) the
 # ground drawn is the far field's mesh, coarser with distance (tens of metres between vertices at 1-2 km), which on any
 # slope runs metres under the heights the buildings stand on: they floated (the user, 2026-10-18: "houses and
@@ -72,8 +72,10 @@ BARN_CLASSES = {"barn", "farm_auxiliary", "stable", "cowshed"}
 MARBLE = "bne_bld_marble"   # cut white marble (the stock m_marble_cut): Baltimore's row house steps
 BRICK_WALL = "bne_bld_brick"    # plain red brick (the stock brick_plain): a garage's skin
 CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a precast garage's skin
+GLASS = "bne_bld_glass"     # sash windows laid over plain walls (no shadow casting to avoid shadow acne)
+FAR_MAT = "bne_bld_far"     # distant horizon buildings (bldfar, 640-1600 m): single-primitive, castShadows=false
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
-             STONE, MARBLE, BRICK_WALL, CONCRETE)
+             STONE, MARBLE, BRICK_WALL, CONCRETE, GLASS)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -85,6 +87,7 @@ LOOKS = {
     "bne_bld_fac_brickdark": (FACADE, (0.78, 0.72, 0.70)), "bne_bld_fac_brickwarm": (FACADE, (1.0, 0.88, 0.80)),
     "bne_bld_fac_blue": (FACADE, (0.80, 0.87, 0.96)), "bne_bld_fac_green": (FACADE, (0.84, 0.92, 0.82)),
     "bne_bld_fac_rose": (FACADE, (0.99, 0.86, 0.82)), "bne_bld_fac_yellow": (FACADE, (1.0, 0.95, 0.72)),
+    "bne_bld_glass": (GLASS, (1.0, 1.0, 1.0)),
     SHOP: (SHOP, (1.0, 1.0, 1.0)), OFFICE: (OFFICE, (1.0, 1.0, 1.0)), SIDING: (SIDING, (0.93, 0.92, 0.88)),
 }
 ROOF_TINTS = {               # per roof material: the colours a building's roof takes (hashed)
@@ -517,17 +520,19 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             # Bishop's and Moab's photos (2026-10-14): one-storey shops with false fronts, ranch houses
             nf = 1 if seed < WEST_TOWN_ONE_STOREY else 2
         elif cls in HOUSE_CLASSES or (area < 220 and not shop):
-            nf = 1 if seed < 0.3 else 2
+            nf = 1 if (cls == "bungalow" or seed < 0.55) else 2
         elif industrial:
             nf = 2 if area > 6000 else 1
         elif cls == "apartments":
             nf = 3 + int(seed * 3)
+        elif cls in ("retail", "supermarket") or (shop and not dense and area >= 350):
+            nf = 1 if (area >= 600 or seed < 0.8) else 2
         elif town:
             nf = 1 if seed < 0.6 else 2                 # small towns: mostly single-storey shops and offices
         elif area < 900:
-            nf = 2 + int(seed * 2)
+            nf = 1 if (not dense and seed < 0.5) else (2 + int(seed * 2))
         else:
-            nf = 2 + int(seed * 3)
+            nf = 1 if (not dense and seed < 0.65) else (2 + int(seed * 3))
     roof_given = (attrs.get("roof_shape") or "").lower()
     if roof_given in ("gabled", "hipped", "flat"):
         roof = roof_given
@@ -557,8 +562,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             roof = "flat"
     # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
-    if roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
-                           or hw > (18.0 if barn else 20.0 if church else 14.0)):
+    if roof != "flat" and (box_fill < (0.6 if church else 0.90) or hw < 2.0
+                           or hw > (12.0 if barn else 20.0 if church else 8.5)):
         roof = "flat"
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
@@ -575,7 +580,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         if attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
         elif roof != "flat":
-            h = max(2.5, h - hw * math.tan(math.radians(style.pitch or PITCH[roof])))
+            h = max(2.5, h - min(hw * math.tan(math.radians(style.pitch or PITCH[roof])), 6.5 if church else 4.2))
         if nf is None:
             # a church: one tall storey (Cluj's St. Michael's, 25 m, came out as three 8 m floors)
             nf = 1 if church else max(1, int(round(h / floor_h)))
@@ -712,13 +717,17 @@ class Mesh:
     a road tile adds ~25k quads, and lists of tuples flattened at the end took ~2.5 s of a Steam Deck's 87 s."""
 
     def __init__(self):
-        self.P, self.UV, self.C, self.T, self.M = [], [], [], [], []
+        self._P, self.UV, self.C, self.T, self.M = [], [], [], [], []
         self.n = 0
+
+    @property
+    def P(self):
+        return np.array(self._P, np.float64).reshape(-1, 3)
 
     def quad(self, a, b, c, d, uva, uvb, uvc, uvd, mat):
         """Corners counter-clockwise seen from outside."""
         i = self.n
-        self.P += (*a, *b, *c, *d)
+        self._P += (*a, *b, *c, *d)
         self.UV += (*uva, *uvb, *uvc, *uvd)
         self.C += mat[1] * 4
         self.T += (i, i + 1, i + 2, i, i + 2, i + 3)
@@ -727,7 +736,7 @@ class Mesh:
 
     def tri(self, a, b, c, uva, uvb, uvc, mat):
         i = self.n
-        self.P += (*a, *b, *c)
+        self._P += (*a, *b, *c)
         self.UV += (*uva, *uvb, *uvc)
         self.C += mat[1] * 3
         self.T += (i, i + 1, i + 2)
@@ -746,7 +755,7 @@ class Mesh:
         else:
             tris = triangulate(xy)
         i = self.n
-        self.P += np.asarray(pts3, np.float64)[:, :3].ravel().tolist()
+        self._P += np.asarray(pts3, np.float64)[:, :3].ravel().tolist()
         self.UV += np.asarray(uv, np.float64)[:, :2].ravel().tolist()
         self.C += tuple(mat[1]) * len(pts3)
         self.T += (np.asarray(tris, np.int64).reshape(-1, 3) + i).ravel().tolist()
@@ -754,7 +763,7 @@ class Mesh:
         self.n += len(pts3)
 
     def arrays(self):
-        return (np.array(self.P, np.float64).reshape(-1, 3), np.array(self.UV, np.float64).reshape(-1, 2),
+        return (np.array(self._P, np.float64).reshape(-1, 3), np.array(self.UV, np.float64).reshape(-1, 2),
                 np.array(self.T, np.int64).reshape(-1, 3), np.array(self.M, np.int64),
                 np.array(self.C, np.uint8).reshape(-1, 4))
 
@@ -773,12 +782,14 @@ DOOR_GAP_M = 0.75           # m each side of a front door kept free of the groun
 WIN_OUT_M = 0.03            # m the window stands proud of its wall
 
 
-def _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, wallmat, mat_idx, edge=None):
+def _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, wallmat, mat_idx, edge=None, lite=False):
     """A wall of a plain tileable material (world-scaled UV) with sash windows laid over it, a whole
     number per floor centred in their bays."""
     su = SIDING_UV_M
     m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z_eave), (a[0], a[1], z_eave),
            (0, z0 / su), (L / su, z0 / su), (L / su, z_eave / su), (0, z_eave / su), wallmat)
+    if lite:
+        return
     if spec.windows is False:
         if spec.front is not None and spec.front == edge and L > 4.0:
             # a big box's storefront: the shopfront band over the wall, a whole number of its bays
@@ -797,7 +808,7 @@ def _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, wallmat, mat_idx, edg
         return
     d = (b - a) / L
     out = np.array([d[1], -d[0]]) * WIN_OUT_M
-    win = mat_idx["bne_bld_fac_white"]
+    win = mat_idx[GLASS]
     u0, u1, v0, v1 = WIN_UV
     base = z_eave - spec.floors * spec.floor_h
     for f in range(spec.floors):
@@ -824,7 +835,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         if L < 0.05:
             continue
         if spec.wall:
-            _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, fac, mat_idx, i)
+            _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, fac, mat_idx, i, lite)
             continue
         (ax, ay), (bx, by) = pts[i], pts[(i + 1) % n]
         if spec.plain:
@@ -1030,7 +1041,7 @@ def base_z(spec, gmin, gmax):
     """The ground a building's floors stand on: the footprint's highest, but the lowest for one over a tunnel's portal
     (the road at its mouth: from the hill over it, Wabash's portal house floated ~10 m over the portal and
     Eisenhower's portal building over its frames, 2026-10-17)."""
-    return gmin if spec.portal else gmax
+    return gmin if getattr(spec, "portal", False) else min(gmax, gmin + 1.5)
 
 
 def drawn_ring(spec):
@@ -1180,8 +1191,10 @@ def _roof(m, spec, ring, z_eave, mat_idx):
     c, u, hl, hw = oriented_box(ring)
     v = np.array([-u[1], u[0]])
     hl2, hw2 = hl + EAVE_M, hw + EAVE_M
-    rise = hw2 * math.tan(math.radians(roof_pitch(spec)))
-    ze = z_eave - EAVE_M * math.tan(math.radians(roof_pitch(spec)))
+    raw_rise = hw2 * math.tan(math.radians(roof_pitch(spec)))
+    max_rise = 6.5 if spec.cls in CHURCH_CLASSES else 4.2
+    rise = min(raw_rise, max_rise)
+    ze = z_eave - EAVE_M * (rise / hw2)
     zr = ze + rise
 
     def at(s, t, z):
@@ -1513,46 +1526,57 @@ GARAGE_DRIVE_W = 6.5        # m: a garage entrance's two lanes
 GARAGE_DRIVE_MAX_M = 25.0   # m from the outline to a road's edge at most
 
 
-def build(specs_and_ground, lite=False):
+def _build_one(m, spec, gmin, gmax, lite=False):
+    mat_idx = _Looks(spec.seed)
+    if spec.cls in BRIDGE_CLASSES:
+        _steel_frame(m, spec, gmin, mat_idx[spec.facade if spec.facade in LOOKS else STEEL], lite)
+        return
+    ring = drawn_ring(spec)
+    mh = spec.min_h or 0.0
+    if spec.deck and not lite and _parking_deck(m, spec, gmin, gmax, mat_idx):
+        return
+    g_base = base_z(spec, gmin, gmax)
+    z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else (gmin if getattr(spec, "portal", False) else gmax) + mh
+    z_eave = (g_base if mh <= 0.5 else (gmin if getattr(spec, "portal", False) else gmax)) + mh + spec.height
+    _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+    if mh > 0.5:                                  # a part standing on another / over a street: its underside
+        m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
+    _roof(m, spec, ring, z_eave, mat_idx)
+    if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
+        _cornice(m, spec, ring, z_eave, mat_idx)
+    if not lite:
+        _clutter(m, spec, ring, z_eave, mat_idx)
+    if spec.steeple:
+        _steeple(m, spec, z_eave, mat_idx)
+    if spec.stoop and not lite:
+        _stoop(m, spec, ring, gmin, g_base, mat_idx)
+    if spec.porch and spec.door and not lite:
+        _porch(m, spec, g_base, mat_idx)
+    if spec.sign is not None and spec.roof == "flat" and not lite:
+        if spec.windows is False:           # a big box: over its storefront band (_plain_wall_with_windows)
+            z_top = min(g_base + GROUND_FLOOR_SHOP_M + 1.15, z_eave)
+        else:
+            z_top = z_eave - (spec.floors - 1) * spec.floor_h if spec.floors > 1 else z_eave
+        _signs(m, spec, ring, z_top, mat_idx)
+
+
+def build(specs_and_ground, lite=False, far=False):
     """The tile's mesh from [(Spec, ground z min, ground z max)] with rings in the tile's local frame:
     (positions, uvs, tris, tri material indices, MATERIALS) or None if empty. lite (far tiles): no
-    cornices, whole walls instead of one quad per bay."""
+    cornices, whole walls instead of one quad per bay. far=True uses FAR_MAT (`bne_bld_far`,
+    castShadows=false) so horizon building tiles never cast shadows."""
     m = Mesh()
     for spec, gmin, gmax in specs_and_ground:
-        mat_idx = _Looks(spec.seed)
-        if spec.cls in BRIDGE_CLASSES:
-            _steel_frame(m, spec, gmin, mat_idx[spec.facade if spec.facade in LOOKS else STEEL], lite)
-            continue
-        ring = drawn_ring(spec)
-        mh = spec.min_h or 0.0
-        if spec.deck and not lite and _parking_deck(m, spec, gmin, gmax, mat_idx):
-            continue
-        z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
-        z_eave = base_z(spec, gmin, gmax) + mh + spec.height
-        _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
-        if mh > 0.5:                                  # a part standing on another / over a street: its underside
-            m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
-        _roof(m, spec, ring, z_eave, mat_idx)
-        if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
-            _cornice(m, spec, ring, z_eave, mat_idx)
-        if not lite:
-            _clutter(m, spec, ring, z_eave, mat_idx)
-        if spec.steeple:
-            _steeple(m, spec, z_eave, mat_idx)
-        if spec.stoop and not lite:
-            _stoop(m, spec, ring, gmin, gmax, mat_idx)
-        if spec.porch and spec.door and not lite:
-            _porch(m, spec, gmax, mat_idx)
-        if spec.sign is not None and spec.roof == "flat" and not lite:
-            if spec.windows is False:           # a big box: over its storefront band (_plain_wall_with_windows)
-                z_top = min(gmax + GROUND_FLOOR_SHOP_M + 1.15, z_eave)
-            else:
-                z_top = z_eave - (spec.floors - 1) * spec.floor_h if spec.floors > 1 else z_eave
-            _signs(m, spec, ring, z_top, mat_idx)
+        _build_one(m, spec, gmin, gmax, lite)
     if m.n == 0:
         return None
     P, UV, T, M, C = m.arrays()
-    return P, UV, T, M, MATERIALS, C
+    if lite:
+        # Collapse all coarse distant geometry into a single material primitive (`bne_bld_facade`)
+        # so the engine submits 1 drawcall per tile for detail50 / bldfar instead of up to 16.
+        M = np.zeros(len(T), dtype=np.int32)
+    mats = (FAR_MAT,) if (lite and far) else (MATERIALS[:1] if lite else MATERIALS)
+    return P, UV, T, M, mats, C
 
 
 def _steel_frame(m, spec, gmin, mat, lite=False, legs_only=False):
@@ -1614,8 +1638,9 @@ def collision_mesh(specs_and_ground):
         if _area2(ring) < 0:
             ring = ring[::-1]
         mh = spec.min_h or 0.0
-        z0 = gmin - FOUNDATION_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
-        z1 = base_z(spec, gmin, gmax) + mh + spec.height
+        g_base = base_z(spec, gmin, gmax)
+        z0 = gmin - FOUNDATION_M if mh <= 0.5 else (gmin if getattr(spec, "portal", False) else gmax) + mh
+        z1 = (g_base if mh <= 0.5 else (gmin if getattr(spec, "portal", False) else gmax)) + mh + spec.height
         for i in range(len(ring)):
             a, b = ring[i], ring[(i + 1) % len(ring)]
             m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), zero, zero, zero, zero, tok)
@@ -1841,10 +1866,13 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
         cls = f.attrs.get("class")
         if cls is None:
             continue
-        bb = f.boxes(frame)             # (only the roads near the tile: the test below, all at once)
-        near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
-                              & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
-        for i in near.tolist():
+        if hasattr(f, "boxes"):
+            bb = f.boxes(frame)             # (only the roads near the tile: the test below, all at once)
+            near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
+                                  & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin)).tolist()
+        else:
+            near = range(len(f.kind))
+        for i in near:
             if str(cls[i]) not in THROUGH_CLASSES or roadsmod.level_ranges(f, i):
                 continue
             a = f.coord_off[f.ring_off[f.part_off[i]]]
@@ -2282,8 +2310,10 @@ def write(path, mesh, collision_only=False):
         for m in matsl:
             if m not in mats:
                 mats.append(m)
-        remap = np.array([mats.index(m) for m in matsl], np.int64)
-        lods = [(BLD_LOD_PX, {"positions": Pl, "tris": Tl, "uvs": UVl, "tri_materials": remap[np.asarray(Ml)],
+        # Collapse the coarse LOD into a single primitive (material index 0 = bne_bld_facade)
+        # so distant tiles submit 1 drawcall instead of up to 16 per tile.
+        lm = np.zeros(len(Tl), dtype=np.int32)
+        lods = [(BLD_LOD_PX, {"positions": Pl, "tris": Tl, "uvs": UVl, "tri_materials": lm,
                               "colors": Cl})]
     return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="buildings", colors=C,
                       collision_only=collision_only, lods=lods)
@@ -2383,14 +2413,15 @@ def doors(items, lines, x0, y0, drives=None):
         if best is None:
             continue
         _, a, d, Le, out, edge, on_main, kseg = best
+        g_base = min(gmax, gmin + 1.5)
         if spec.windows is False:
             spec.front = edge                   # a big box: its storefront faces the road
             if storefront:
                 spec.sign = edge
-            rows.extend(_sign_in_open(_wall_sign(spec, a, d, Le, out, gmax), spec, d, out, others))
+            rows.extend(_sign_in_open(_wall_sign(spec, a, d, Le, out, g_base), spec, d, out, others))
             continue
         if spec.cls in RESTAURANT_CLASSES and spec.floors == 1:
-            rows.extend(_sign_in_open(_wall_sign(spec, a, d, Le, out, gmax), spec, d, out, others))
+            rows.extend(_sign_in_open(_wall_sign(spec, a, d, Le, out, g_base), spec, d, out, others))
         if spec.shop:
             if storefront and not spec.wall:
                 spec.sign = edge                # the sign band over the street wall's shopfront
@@ -2427,7 +2458,7 @@ def doors(items, lines, x0, y0, drives=None):
             rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
                                      drives is not None and spec.wall and Le >= 7.0))
         p = a + d * (Le * f) + out * DOOR_OUT_M
-        gd = door_ground(spec, edge, Le * f, gmax) if spec.stoop else gmax     # a stoop's door: over its own ground
+        gd = door_ground(spec, edge, Le * f, g_base) if spec.stoop else g_base     # a stoop's door: over its own ground
         base = gd + (STOOP_H if spec.stoop else 0.0) + (PORCH_DECK_M if spec.porch else 0.0)   # (the deck / stoop)
         rows.append([G_DOOR, round(float(p[0]), 2), round(float(p[1]), 2), round(base, 2),
                      round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1), 1.0, 2.2,
@@ -2600,7 +2631,7 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid):
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0))
-    mesh = build(items, lite=True)
+    mesh = build(items, lite=True, far=True)
     data = {"v": 1}
     if mesh is not None:
         shape = f"bldfar_{aid}_{tx}_{ty}.cdae"

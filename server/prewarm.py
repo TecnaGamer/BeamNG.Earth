@@ -37,7 +37,7 @@ def materials():
     import roadmesh
     import roads
     import sidewalks
-    out = set(buildings.MATERIALS) | set(sidewalks.MATERIALS) | set(EXTRA)
+    out = set(buildings.MATERIALS) | {buildings.FAR_MAT} | set(sidewalks.MATERIALS) | set(EXTRA)
     for mod in (roads, roadmesh, junctions, airportgrade):
         for name, v in vars(mod).items():
             if name.isupper():

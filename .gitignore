@@ -6,10 +6,15 @@ __pycache__/
 backups/
 *.log
 
-# in-game test runs and screenshots (hundreds of MB): keep the written reports (*.md, *.json),
-# not the per-run folders
+# in-game test runs, perf captures, and benchmark folders
 docs/research/*/
 docs/research/*.jsonl
+runs/
+perf_reports/
+cache/
+scratch/
+prof_*.txt
+tools/monitor.ps1
 
 # editor / OS
 .vscode/
@@ -17,8 +22,9 @@ docs/research/*.jsonl
 *.swp
 .DS_Store
 
-# agent worktrees
+# agent worktrees & skills
 .claude/
+.agents/
 tools/gcpatch/build/
 docs/research/streetview/
 docs/research/ortho/

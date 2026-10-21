@@ -25,6 +25,7 @@ import cdae
 
 CURB_H = 0.15           # m above the road (US curbs: 0.15)
 SINK = 0.10             # m the faces reach below the road / ground
+SKIRT = 1.2             # m vertical foundation skirt below -SINK into hillside cuts so the sidewalk never floats
 BACK_RUN = 2.0          # the slab's back falls to the ground at 1:2, not straight down: the ground behind a sidewalk is
                         # graded at road level (grading.SIDEWALK_MARGIN_M), so a vertical back was a ~20 cm ledge that
                         # caught a wheel leaving the sidewalk for the verge ("pulling the car down", user 2026-10-14)
@@ -83,23 +84,29 @@ TACTILE_REPEAT_M = 0.6  # m per tactile pad texture repeat
 PAD_W = 0.6             # m of a ramp's slope from the curb that is the tactile pad (US: 2 ft of domes)
 
 
-def profile(h=CURB_H, w=2.5, hr=None):
+def profile(h=CURB_H, w=2.5, hr=None, dz=0.0):
     """The cross-section points (offset from the curb line outwards, height above the road): face
-    bottom, face top, nose end, curb top end, ramp end, slab outer top, back bottom (BACK_RUN out). hr: the curb's
-    height (h, or lower at a curb ramp: the slab then climbs from hr at the curb top to h at
-    RAMP_RUN)."""
+    bottom, face top, nose end, curb top end, ramp end, slab outer top, back bottom (BACK_RUN out),
+    and skirt bottom (-SKIRT below -SINK). hr: the curb's height (h, or lower at a curb ramp: the slab
+    then climbs from hr at the curb top to h at RAMP_RUN). dz: ground height offset at the outer edge
+    relative to the curb line (when negative, the slab and back slope drop with the ground)."""
     hr = h if hr is None else hr
     f = hr / h if h > 0 else 0.0
     # a band narrower than RAMP_RUN (a median's 0.3-0.6 m, an island's 1.2 m) ends its ramp inside it: past its outer
     # edge the profile folded back over itself, and the folded collision caught wheels ("the median eats tires",
     # GitHub #55; a truck held on an island band in Bodø, 2026-10-20)
     rr = max(CURB_W + NARROW_EDGE_M, min(RAMP_RUN, w - NARROW_EDGE_M))
-    zr = h + rr * CROSS_SLOPE
     xp = CURB_W + min(PAD_W, (rr - CURB_W) / 2)
-    zp = hr + (zr - hr) * (xp - CURB_W) / (rr - CURB_W)    # on the ramp's slope, PAD_W past the curb top
-    top = h + w * CROSS_SLOPE
+    dz_slab = min(0.0, float(dz))
+    span = max(w - CURB_W, 1e-6)
+    zr = h + rr * CROSS_SLOPE + dz_slab * min(1.0, max(0.0, rr - CURB_W) / span)
+    zp = hr + (zr - hr) * (xp - CURB_W) / max(rr - CURB_W, 1e-6)    # on the ramp's slope, PAD_W past the curb top
+    top = h + w * CROSS_SLOPE + dz_slab
+    back_bot = dz_slab - SINK
+    w_back = w + BACK_RUN * max(0.0, top - back_bot)
     return np.array([[0.0, -SINK], [BATTER * f, hr - NOSE * f], [NOSE_W * f, hr], [CURB_W, hr],
-                     [xp, zp], [rr, zr], [w, top], [w + BACK_RUN * (top + SINK), -SINK]])
+                     [xp, zp], [rr, zr], [w, top], [w_back, back_bot],
+                     [w_back + BATTER, back_bot - SKIRT]])
 
 
 NARROW_EDGE_M = 0.05    # m a narrow band's ramp end stays inside its outer edge (profile)
@@ -113,16 +120,17 @@ V_SLAB_MID = V_SLAB_IN + _SL * (V_SLAB_OUT - V_SLAB_IN)
 V_SLAB_PAD = V_SLAB_IN + _SP * (V_SLAB_OUT - V_SLAB_IN)
 STRIPS = ((0, 1, 0, V_BAND_LOW, V_LIGHT_LOW), (1, 2, 0, V_LIGHT_LOW, V_BAND_TOP - 0.02),
           (2, 3, 0, V_BAND_TOP - 0.02, V_BAND_TOP), (3, 4, 1, V_SLAB_IN, V_SLAB_PAD),
-          (4, 5, 1, V_SLAB_PAD, V_SLAB_MID), (5, 6, 1, V_SLAB_MID, V_SLAB_OUT), (6, 7, 0, V_LIGHT_LOW, V_BAND_LOW))
+          (4, 5, 1, V_SLAB_PAD, V_SLAB_MID), (5, 6, 1, V_SLAB_MID, V_SLAB_OUT),
+          (6, 7, 0, V_LIGHT_LOW, V_BAND_LOW), (7, 8, 0, V_BAND_LOW, V_BAND_LOW))
 CURB_STRIPS = STRIPS[:3]
 
 
-# The lean collision mesh (Builder(collision=True), written as the tile's "walkcol"): the drawn mesh's 8-point profile
+# The lean collision mesh (Builder(collision=True), written as the tile's "walkcol"): the drawn mesh's profile
 # and 0.5 m ramp steps cost the game's collision rebuild ~7 ms of ~12 in Fells Point (2026-10-16: 31 tiles, 245k
-# triangles). Physics gets the face, the curb top to the ramp run, the slab and the back (profile points LEAN) at the
-# points that matter: a run's points within LEAN_TOL_M of the line between their neighbours kept (Douglas-Peucker,
-# the curb height counted too, so ramps keep their shape).
-LEAN = (0, 2, 5, 6, 7)
+# triangles). Physics gets the face, the curb top to the ramp run, the slab and the back foundation skirt
+# (profile points LEAN) at the points that matter: a run's points within LEAN_TOL_M of the line between their
+# neighbours kept (Douglas-Peucker, the curb height counted too, so ramps keep their shape).
+LEAN = (0, 2, 5, 6, 7, 8)
 LEAN_STRIPS = tuple((i, i + 1, 0, 0.0, 0.0) for i in range(len(LEAN) - 1))
 LEAN_TOL_M = 0.03
 
@@ -200,10 +208,11 @@ class Builder:
         self.n += len(P)
         return k
 
-    def _sections(self, curb, toward_out, w, h, hr):
-        """ring (k, 7, 3) of the cross-sections, and the per-point profiles (k, 7, 2)."""
+    def _sections(self, curb, toward_out, w, h, hr, dz=None):
+        """ring (k, 9, 3) of the cross-sections, and the per-point profiles (k, 9, 2)."""
         k = len(curb)
-        prof = np.stack([profile(h, w, float(x)) for x in hr])
+        dz = np.zeros(k) if dz is None else np.asarray(dz, np.float64)
+        prof = np.stack([profile(h, w, float(x), float(d)) for x, d in zip(hr, dz)])
         ring = np.empty((k, prof.shape[1], 3))
         ring[:, :, :2] = curb[:, None, :2] + toward_out[:, None, :] * prof[:, :, 0:1]
         ring[:, :, 2] = curb[:, None, 2] + prof[:, :, 1]
@@ -238,29 +247,33 @@ class Builder:
             self.T.append(base + _orient(tris - base, P, np.concatenate([want, want])))
             self.M.append(np.r_[mats, mats])
 
-    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1):
-        """One sidewalk run: curb (k, 3) the curb line (z = the road there), toward_out (k, 2) unit
+    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, back_z=None):
+        """One sidewalk run: curb (k, 3) the curb line (z = the road edge there), toward_out (k, 2) unit
         vectors from the curb outwards (scaled by the miter), w its width; caps: end caps at the
         (start, end) (not where the run goes on in the next tile or meets a corner piece); ramps:
-        curb ramps [(s0, s1)] in arc length along the curb."""
+        curb ramps [(s0, s1)] in arc length along the curb; back_z: optional ground z (k,) at the outer edge."""
         curb = np.asarray(curb, np.float64)
         toward_out = np.asarray(toward_out, np.float64)
         if len(curb) < 2:
             return
         if self.col is not None:
-            self.col.add_run(curb, toward_out, w, h, caps, ramps)
+            self.col.add_run(curb, toward_out, w, h, caps, ramps, back_z=back_z)
         s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(curb[:, :2], axis=0).T))))
+        bz = None if back_z is None else np.asarray(back_z, np.float64)
         if ramps:
             s2 = refine(s, ramps)
+            if bz is not None:
+                bz = np.interp(s2, s, bz)
             curb = np.stack([np.interp(s2, s, curb[:, c]) for c in range(3)], axis=1)
             toward_out = np.stack([np.interp(s2, s, toward_out[:, c]) for c in range(2)], axis=1)
             s = s2
+        dz = np.zeros(len(curb)) if bz is None else np.minimum(0.0, bz - curb[:, 2])
         hr = curb_heights(s, ramps, h)
         if self.lean:                           # the collision mesh: fewer points, the lean profile
-            keep = simplify(np.c_[curb, hr])
-            curb, toward_out, s, hr = curb[keep], toward_out[keep], s[keep], hr[keep]
+            keep = simplify(np.c_[curb, hr, dz])
+            curb, toward_out, s, hr, dz = curb[keep], toward_out[keep], s[keep], hr[keep], dz[keep]
         k = len(curb)
-        ring, prof = self._sections(curb, toward_out, w, h, hr)
+        ring, prof = self._sections(curb, toward_out, w, h, hr, dz)
         if self.lean:
             ring, prof = ring[:, LEAN], prof[:, LEAN]
             self._strips(ring, prof, toward_out, s, LEAN_STRIPS)
@@ -275,11 +288,19 @@ class Builder:
             pr = prof[end]
             UV = np.stack([pr[:, 0] / CURB_REPEAT_M, V_BAND_LOW + (pr[:, 1] + SINK) / (h + SINK + 0.05)
                            * (V_LIGHT_LOW - V_BAND_LOW)], 1)
-            base = self._add(P, UV)
-            fan = np.array([(base, base + j, base + j + 1) for j in range(1, len(pr) - 1)])
+            # Add bottom point under point 0 at -SINK - SKIRT to seal the end cap down to the foundation
+            p_bot0 = P[0].copy()
+            p_bot0[2] = min(P[0, 2] - SKIRT, P[-1, 2])
+            P_all = np.vstack([P, p_bot0[None, :]])
+            UV_all = np.vstack([UV, np.array([[0.0, V_BAND_LOW]])])
+            base = self._add(P_all, UV_all)
+            last_idx = len(pr) - 1
+            fan = [(base, base + j, base + j + 1) for j in range(1, last_idx)]
+            fan.append((base, base + last_idx, base + len(pr)))
+            fan = np.array(fan)
             t = curb[min(end + 1, k - 1), :2] - curb[max(end - 1, 0), :2]
             t = np.r_[t / max(np.hypot(*t), 1e-9), 0.0] * sgn
-            self.T.append(base + _orient(fan - base, P, t))
+            self.T.append(base + _orient(fan - base, P_all, t))
             self.M.append(np.full(len(fan), 0))
 
     def add_corner(self, arc, inward, outer, h=CURB_H, ramps=()):
@@ -342,6 +363,12 @@ class Builder:
             base = self._add(P, UV)
             quad = np.array([(0, 1, 2), (0, 2, 3)])
             self.T.append(base + _orient(quad, P, want))
+            self.M.append(np.zeros(2, int))
+            # vertical foundation skirt below the back slope into hillside cuts
+            skirt_v = np.array([0.0, 0.0, -SKIRT])
+            P_skirt = np.array([a + run, b + run, b + run + skirt_v, a + run + skirt_v])
+            base_s = self._add(P_skirt, UV)
+            self.T.append(base_s + _orient(quad, P_skirt, want))
             self.M.append(np.zeros(2, int))
 
     def empty(self):

@@ -98,20 +98,20 @@ class ServerTest(unittest.TestCase):
         info = self.s.reslot(ck, self.s.tiles[ck])
         self.assertTrue(self.s.matslots.owns(ck, info.material))
         self.assertNotEqual(info.material, old)
-        self.assertEqual(info.shape, f"slot_{info.material.rsplit('_', 1)[1]}.cdae")       # its pooled file
+        self.assertEqual(info.shape, f"slot_{info.material.rsplit('_', 1)[1]}_1.cdae")     # its rebound ping-pong file
         with open(os.path.join(self.s.out_dir, info.shape), "rb") as fh:
             self.assertEqual(fh.read(), b"head" + info.material.encode() + b"tail")
         self.assertIs(self.s.tiles[ck], info)
 
     def test_reslot_own_name_back_rewrites_its_file(self):
         ck, name = self.add("0_0_0")
-        slot = os.path.join(self.s.out_dir, matslots.MatSlots.file(name))
+        slot = os.path.join(self.s.out_dir, self.s.matslots.file(name))
         with open(slot, "wb") as fh:            # another tile had the slot meanwhile
             fh.write(b"other")
         self.s.matslots.release(ck)
         info = self.s.reslot(ck, self.s.tiles[ck])          # the stack hands its own name back
         self.assertEqual(info.material, name)
-        with open(slot, "rb") as fh:
+        with open(os.path.join(self.s.out_dir, info.shape), "rb") as fh:
             self.assertEqual(fh.read(), b"head" + name.encode() + b"tail")
 
     def test_place_is_a_link_or_copy(self):
@@ -150,8 +150,8 @@ class ServerTest(unittest.TestCase):
         slots = self.s.pool_shapes(c, {"road": "road_1_0_0.cdae", "deck": "deck_1_0_0.cdae"})   # no deck file
         self.assertEqual(list(slots), ["road"])
         path, serial = slots["road"]
-        n = int(path.rsplit("_", 1)[1].split(".")[0])
-        with open(os.path.join(self.s.out_dir, f"slot_{n:05d}.cdae"), "rb") as fh:
+        n = int(path.rsplit("/", 1)[1].split("_")[1])
+        with open(os.path.join(self.s.out_dir, f"slot_{n:05d}_0.cdae"), "rb") as fh:
             self.assertEqual(fh.read(), b"road")
         self.assertEqual(c.slot_holds, {n: serial})
         self.assertEqual(self.s.matslots.stats()["waiting"], 1)      # nobody owns it; the game holds it

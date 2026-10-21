@@ -141,6 +141,11 @@ class SeaCarveTest(unittest.TestCase):
         b = sc.water(lat, lon)
         mapped = next(r for r, _, _ in sc._mem.values() if r is not None)[0]
         self.assertFalse(mapped.flags.owndata or mapped.flags.writeable, "a view of the raw copy's mapping")
+        b = [x.copy() for x in b]
+        del mapped
+        sc._mem.clear()
+        import gc
+        gc.collect()
         for r in raws:
             os.remove(r)
         c = seacarve.SeaCarver(BathyMapData(), self.tmp.name).water(lat, lon)

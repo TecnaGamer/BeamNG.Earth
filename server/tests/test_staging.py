@@ -94,6 +94,15 @@ class StagingTest(unittest.TestCase):
             staging.os.replace = real
             staging.REPLACE_WAITS = old_waits
 
+    def test_master_for_stages_per_session_outside_user_folder(self):
+        with tempfile.TemporaryDirectory() as root:
+            user = os.path.join(root, "BeamNG.drive", "current")
+            target = os.path.join(user, "temp", "beamngEarth", "s1", "far_1_2.cdae")
+            os.makedirs(os.path.dirname(target))
+            master = staging.master_for(target)
+            self.assertEqual(master, os.path.join(root, "BeamNG.drive", staging.STAGING, "s1", "far_1_2.cdae"))
+            self.assertFalse(master.startswith(user))
+
 
 if __name__ == "__main__":
     unittest.main()

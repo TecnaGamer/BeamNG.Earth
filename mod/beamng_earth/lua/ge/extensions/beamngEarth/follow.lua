@@ -48,6 +48,17 @@ M.LOOKAHEAD_S_512 = 5                       -- (was 2: a hop of 128-256 m at roa
 M.RECHECK_S_512 = 2
 M.RECHECK_SAFE_512 = 510 - 150               -- the re-check waits only while the player stays this close
 M.FAST_V_512 = 150
+-- 256² physics micro-block (nearVisual == 'mesh': 512 m span at 2.0 m/px, P + v * 1.5 s)
+M.GRID_256 = 64
+M.PREPARE_DIST_256 = 64
+M.COMMIT_DIST_256 = 96
+M.HARD_COMMIT_DIST_256 = 160
+M.EDGE_MARGIN_256 = 110
+M.REACH_256 = 254 - M.EDGE_MARGIN_256        -- 144 m; the collidable east/north edge is at +254
+M.LOOKAHEAD_S_256 = 1.5
+M.RECHECK_S_256 = 0
+M.RECHECK_SAFE_256 = 254 - 75
+M.FAST_V_256 = 150
 -- 512² fast mode (|v| > FAST_V)
 M.FAST_V = 150
 M.EDGE_MARGIN_FAST = 90
@@ -77,12 +88,27 @@ M.RETRY_S = 5                  -- wait after a terrain_error before asking again
 -- the same value). The collidable east/north edge is at +1022, so this keeps >= 602 m there.
 M.REACH = M.REACH_1024
 local REACH = M.REACH
+local nearVisualMode = 'terrain'
+local baseBlockSize = 1024
+
+function M.setNearVisual(mode)
+  nearVisualMode = (mode == 'mesh' or mode == 'detail') and mode or 'terrain'
+  if nearVisualMode == 'mesh' then
+    return M.configure(256, 'mesh')
+  elseif M.SIZE == 256 then
+    return M.configure(baseBlockSize, nearVisualMode)
+  end
+  return M.SIZE
+end
 
 -- The session's block size (1024 or 512; anything else: 1024): the active table and every value
 -- derived from the lattice. Returns the size in use.
-function M.configure(size)
-  local n = (size == 512) and 512 or 1024
-  local t = n == 512 and '_512' or '_1024'
+function M.configure(size, nearVisual)
+  if nearVisual ~= nil then nearVisualMode = nearVisual end
+  if size == 1024 or size == 512 then baseBlockSize = size end
+  local n = ((size == 256 or nearVisual == 'mesh') and 256) or ((size == 512) and 512) or 1024
+  local t = (n == 256 and '_256') or (n == 512 and '_512') or '_1024'
+  M.RECHECK_SAFE = (n == 256) and M.RECHECK_SAFE_256 or M.RECHECK_SAFE_512
   M.SIZE, M.HALF = n, n * M.SQUARE_SIZE / 2
   M.GRID, M.PREPARE_DIST, M.COMMIT_DIST = M['GRID' .. t], M['PREPARE_DIST' .. t], M['COMMIT_DIST' .. t]
   M.HARD_COMMIT_DIST, M.EDGE_MARGIN, M.REACH = M['HARD_COMMIT_DIST' .. t], M['EDGE_MARGIN' .. t], M['REACH' .. t]
@@ -146,7 +172,10 @@ function M.timeTo(px, py, vx, vy, cx, cy, dist)
 end
 
 -- Block SW corner for a centre (the TerrainBlock position).
-function M.blockOrigin(cx, cy) return lattice.blockOrigin(cx, cy) end
+function M.blockOrigin(cx, cy)
+  if M.SIZE == 256 then return cx - M.HALF, cy - M.HALF end
+  return lattice.blockOrigin(cx, cy)
+end
 
 -- True when the target for this pose is not the pending block (a re-request would ask for another one).
 local function retargets(px, py, vx, vy, pending)

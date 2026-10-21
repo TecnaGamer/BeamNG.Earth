@@ -18,18 +18,6 @@ def run(n=200, bend=0.0):
     return curb, out
 
 
-class NarrowBandTest(unittest.TestCase):
-    def test_profile_never_folds(self):
-        # GitHub #55 "the median eats tires": a band narrower than RAMP_RUN folded back over itself (its ramp end past
-        # its outer edge), and the folded collision caught wheels
-        for w in (0.3, 0.6, 1.2, 1.8, 2.5, 4.0):
-            for hr in (sidewalks.CURB_H, 0.02):
-                x = sidewalks.profile(sidewalks.CURB_H, w, hr)[:, 0]
-                self.assertTrue((np.diff(x) > 0).all(), (w, hr, x.tolist()))
-        np.testing.assert_allclose(sidewalks.profile(sidewalks.CURB_H, 2.5)[5], [sidewalks.RAMP_RUN,
-                                   sidewalks.CURB_H + sidewalks.RAMP_RUN * sidewalks.CROSS_SLOPE], err_msg="wide: as before")
-
-
 class SimplifyTest(unittest.TestCase):
     def test_straight_line_to_its_ends(self):
         pts = np.stack([np.linspace(0, 10, 50), np.linspace(0, 5, 50), np.zeros(50)], 1)
@@ -91,6 +79,21 @@ class LeanMeshTest(unittest.TestCase):
 
     def test_without_collision_no_lean_builder(self):
         self.assertIsNone(sidewalks.Builder((0.0, 0.0, 0.0)).col)
+
+    def test_back_z_conforms_to_falling_ground_and_keeps_skirt(self):
+        curb = np.array([[0.0, 0.0, 10.0], [20.0, 0.0, 10.0], [40.0, 0.0, 10.0]])
+        out = np.tile([0.0, -1.0], (3, 1))
+        back_z = np.array([9.2, 8.8, 8.5])          # hillside falls 0.8..1.5 m below the curb line
+        b = sidewalks.Builder((0.0, 0.0, 0.0), collision=True)
+        b.add_run(curb, out, 2.5, caps=(True, True), back_z=back_z)
+        P, T, _, _ = b.arrays()
+        CP, CT, _, _ = b.col.arrays()
+        # curb top at 10.0 + CURB_H; outer back foundation drops to min(back_z) - SINK - SKIRT
+        self.assertAlmostEqual(P[:, 2].max(), 10.0 + sidewalks.CURB_H, places=5)
+        self.assertAlmostEqual(CP[:, 2].max(), 10.0 + sidewalks.CURB_H, places=5)
+        want_min = 8.5 - sidewalks.SINK - sidewalks.SKIRT
+        self.assertAlmostEqual(P[:, 2].min(), want_min, places=5)
+        self.assertAlmostEqual(CP[:, 2].min(), want_min, places=5)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,7 @@ local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 local seasonlook = require('beamngEarth/seasonlook')   -- the trees' leaves in the season (hello.season) -- the AI road graph for the stock traffic and AI (map.reset)
+local shadowctl = require('beamngEarth/shadowctl')
 
 local LEVEL_ID = 'beamng_earth'
 local MOD_VERSION = '0.4.0'
@@ -112,6 +113,8 @@ local farRadius = nil         -- status.radius: the server's far-field radius (m
 local cacheInfo = nil         -- the server's last 'cache' message (download cache usage); outlives levels
 local updateInfo = nil       -- a newer version on GitHub: { current, latest, url } (server updates.py)
 local cacheClears = 0         -- answers to a clear so far (the settings page waits for the next one)
+
+local clearDataQueue
 
 local function resetState()
   st = {
@@ -166,6 +169,7 @@ local function resetState()
     guard = edgeguard.new(), -- the edge guard's state (mode 'off' while the block can follow)
     guardBox = {},           -- the collidable area it guards (reused)
   }
+  if clearDataQueue then clearDataQueue() end
 end
 resetState()
 
@@ -293,18 +297,21 @@ local function loadBlock(tr)
   local base = nil
   if nearVisual == 'detail' then base = type(tr.base) == 'string' and tr.base or false end
   local ter = M.TER_SWAP and type(tr.ter) == 'string'
+  local movingOnSurface = st.block ~= nil and st.player ~= nil and (st.player.speed or 0) > 5
   if ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
-    roads.terrainSwapped()      -- its collision follows by itself next frame: no other rebuild meanwhile
-    groundcover.afterBlockChange()
+    if roads.terrainSwapped then roads.terrainSwapped() end
+    if nearVisual ~= 'mesh' then groundcover.afterBlockChange() end
     return true, nil, true
   end
   local ok, err = terrain.load(tr.heightmap, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize))
+  local swapped = false
   if ok and ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
-    roads.terrainSwapped()
+    if roads.terrainSwapped then roads.terrainSwapped() end
+    swapped = true
   end
   -- every block import / move drops all the grass on it; rebuild it before this frame is drawn
-  groundcover.afterBlockChange()
-  return ok, err
+  if nearVisual ~= 'mesh' then groundcover.afterBlockChange() end
+  return ok, err, swapped or movingOnSurface
 end
 
 -- M1h: in horizon mode LevelInfo.visibleDistance follows the server's radius (+10 %, with
@@ -528,7 +535,8 @@ local function commitTerrain(msg)
     return false
   end
   local tLoad = sw()
-  if not swapped then             -- a swapped .ter collides by the next frame by itself
+  local movingOnSurface = st.block ~= nil and st.player ~= nil and (st.player.speed or 0) > 5
+  if not swapped and not movingOnSurface then -- a swapped .ter or active drive (> 5 m/s) on an existing surface avoids synchronous reloadCollision
     be:reloadCollision()
     roads.collisionRebuilt()      -- the sidewalks made so far collide now too
   end
@@ -739,9 +747,11 @@ local function onMessage(msg)
     roads.onDrop(msg)
   elseif t == 'far_tile' then
     farfield.onTile(msg)
+  elseif t == 'far_batch' then
+    for _, tile in ipairs(msg.tiles or {}) do farfield.onTile(tile) end
   elseif t == 'far_swap' then
     farfield.onSwap(msg)
-  elseif t == 'far_remove' then
+  elseif t == 'far_remove' or t == 'far_drop' then
     farfield.onRemove(msg)
   elseif t == 'far_done' then
     farfield.onDone(msg)
@@ -1008,15 +1018,26 @@ local function updateWorld(dt)
     return -- no rebase decisions while the player is being placed
   end
   local pl = st.player
-  if not pl then return end
+  if not pl then
+    gov:setUrgent(false)
+    return
+  end
 
+  local underLevel = farfield.exactState and farfield.exactState() or nil
+  if (pl.speed and pl.speed > 25) or (underLevel and underLevel > -1) then
+    gov:setUrgent(true)
+  else
+    gov:setUrgent(false)
+  end
+
+  local poseInterval = (pl.speed > 25 and 0.20) or (pl.speed > 10 and 0.33) or POSE_INTERVAL
   st.poseTimer = st.poseTimer + dt
   -- no pose before the resync with a restarted server commits (anchorKnown; hello named the
   -- session folders meanwhile)
   -- nor between a rebase's two phases (st.rebasing): the car is already in the new frame while st.anchorId is still the
   -- old one, and the server, reading that position in the old frame, dropped every road tile around the car at each
   -- rebase (2026-10-17, 100 mph on the salt flats: 42 road tiles -> 0 at the rebase)
-  if st.poseTimer >= POSE_INTERVAL and net.isConnected() and anchorKnown() and not st.rebasing then
+  if st.poseTimer >= poseInterval and net.isConnected() and anchorKnown() and not st.rebasing then
     st.poseTimer = 0
     local c = st.cam
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
@@ -1346,13 +1367,60 @@ function M.hitches()
   return out
 end
 
--- The previous frame's engine tick (ms), 0 without the metrics.
+-- The previous frame's engine tick, shadow pass, and file watcher costs (ms), 0 without the metrics.
 local tickMetrics = {}
-local function engineTickMs()
+local function enginePerfMs()
   local dbg = Engine and Engine.Debug
-  if not (dbg and dbg.getLastPerformanceMetrics) then return 0 end
-  if not pcall(dbg.getLastPerformanceMetrics, tickMetrics) then return 0 end
-  return tonumber(tickMetrics.Ticking) or 0
+  if not (dbg and dbg.getLastPerformanceMetrics) then return 0, 0, 0 end
+  if not pcall(dbg.getLastPerformanceMetrics, tickMetrics) then return 0, 0, 0 end
+  return tonumber(tickMetrics.Ticking) or 0,
+         tonumber(tickMetrics.RenderShadows) or 0,
+         tonumber(tickMetrics.FileWatchers) or 0
+end
+
+
+-- Two-Lane IPC Priority Queue:
+-- Lane 0 (Immediate Control Messages - zero latency, bypass governor): dispatched immediately on the frame received.
+-- Lane 1 (Streaming Data Queue): pushed into FIFO ring/table queue dataQueue and drained up to IPC_BUDGET_MS per frame.
+M.IPC_BUDGET_MS = 0.5
+local LANE0_TYPES = {
+  hello = true, prepare_anchor_reply = true, anchor_ready = true, anchor_error = true,
+  terrain_ready = true, terrain_error = true, commit_anchor_reply = true,
+  ground_ahead = true, elev_probe_reply = true, status = true,
+  where_reply = true, where_result = true, geocode_reply = true, geocode_result = true,
+  route_reply = true, route_result = true, cache = true, open_page = true,
+  _connected = true, _disconnected = true, weather = true, gravity = true,
+  block_base = true, map_tiles_ready = true, sea = true, credits = true, update = true,
+  random_place_result = true, place_previews_ready = true,
+}
+local LANE1_TYPES = {
+  far_tile = true, far_batch = true, far_swap = true, far_drop = true,
+  far_remove = true, far_done = true, far_retex = true,
+  roads_tile = true, roads_drop = true,
+  bldfar_tile = true, bldfar_drop = true,
+  veg_tile = true, veg_drop = true,
+  navgraph = true,
+}
+local dataQueue = {}
+local dataHead, dataTail = 1, 0
+
+local function pushDataQueue(msg)
+  dataTail = dataTail + 1
+  dataQueue[dataTail] = msg
+end
+
+local function popDataQueue()
+  if dataHead > dataTail then return nil end
+  local msg = dataQueue[dataHead]
+  dataQueue[dataHead] = nil
+  dataHead = dataHead + 1
+  if dataHead > dataTail then dataHead, dataTail = 1, 0 end
+  return msg
+end
+
+clearDataQueue = function()
+  for i = dataHead, dataTail do dataQueue[i] = nil end
+  dataHead, dataTail = 1, 0
 end
 
 local function onUpdate(dtReal, dtSim)
@@ -1409,12 +1477,46 @@ local function onUpdate(dtReal, dtSim)
     if not st.anchor then defaultStart() end
   end
   -- the governor's frame opens first: its clock is the wall time since the last onUpdate (hptimer)
+  local pl = st.player
   gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
-  gov:beginFrame(farfield.hasWork() or roads.hasWork())
-  gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
+  gov:beginFrame(
+    farfield.hasWork() or roads.hasWork() or (trees.hasWork and trees.hasWork(st.anchorId, pl) or false) or (dataHead <= dataTail),
+    pl and pl.speed
+  )
+  gov:chargeEngine(enginePerfMs())     -- what the engine spent on last frame's new tiles & shadows (governor.lua)
   for _, msg in ipairs(net.update(dtReal)) do
-    local ok, err = pcall(onMessage, msg)
-    if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
+    local mtype = msg and msg.type
+    if LANE1_TYPES[mtype] and not LANE0_TYPES[mtype] then
+      pushDataQueue(msg)
+    else
+      if (mtype == 'hello' or mtype == 'anchor_ready' or mtype == 'terrain_ready') and dataHead <= dataTail then
+        while dataHead <= dataTail do
+          local qm = popDataQueue()
+          if not qm then break end
+          local okQ, errQ = pcall(onMessage, qm)
+          if not okQ then log('E', 'beamngEarth', 'message ' .. tostring(qm.type) .. ' failed: ' .. tostring(errQ)) end
+        end
+      end
+      local ok, err = pcall(onMessage, msg)
+      if not ok then log('E', 'beamngEarth', 'message ' .. tostring(mtype) .. ' failed: ' .. tostring(err)) end
+    end
+  end
+  if dataHead <= dataTail then
+    local ipcDeadline = hitchClock() + (M.IPC_BUDGET_MS or 0.5)
+    local drained = 0
+    repeat
+      local msg = popDataQueue()
+      if not msg then break end
+      drained = drained + 1
+      local ok, err = pcall(onMessage, msg)
+      if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
+    until dataHead > dataTail or (drained >= 64 and hitchClock() >= ipcDeadline)
+  end
+  if gov.noteQueue then
+    local fCnt = farfield.counters and farfield.counters()
+    local fq = (fCnt and fCnt.queued) or 0
+    local ipcQ = math.max(0, dataTail - dataHead + 1)
+    gov:noteQueue(fq + ipcQ)
   end
   t = mark('net', t)
   if not scenetree.MissionGroup then return end -- no level loaded
@@ -1453,37 +1555,52 @@ local function onUpdate(dtReal, dtSim)
     t = mark('player', t)
     updateWorld(dtReal)
     t = mark('world', t)
+    local heavyFrame = gov:isHeavyFrame()
+    local quietOrHeavy = heavyFrame or gov.blocked or gov.heavyPending
+    local view = M.viewAway()
     -- the roads before the far tiles: they share the governor's budget and the first to ask gets it; after a
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
-    roads.update(gov, st.anchorId, st.player, M.viewAway())
+    if not heavyFrame then
+      roads.update(gov, st.anchorId, st.player, view)
+    end
     t = mark('roads', t)
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
     t = mark('far', t)
     sea.update(st.anchorId, st.player)
-    trees.update(st.anchorId, st.player, M.viewAway())
-    t = mark('sea+trees', t)
-    local pb = nil
-    if st.block then
-      pb = st.parkBox or {}
-      st.parkBox = pb
-      pb[1], pb[2], pb[3], pb[4] = lattice.groundBox(st.block.cx, st.block.cy)
+    if not quietOrHeavy then
+      trees.update(st.anchorId, st.player, view, gov)
     end
-    parking.update(st.anchorId, st.player, pb)
-    t = mark('parking', t)
-    navgraph.update(st.anchorId, pb)
-    t = mark('navgraph', t)
+    t = mark('sea+trees', t)
+    if not heavyFrame then
+      local pb = nil
+      if st.block then
+        pb = st.parkBox or {}
+        st.parkBox = pb
+        pb[1], pb[2], pb[3], pb[4] = lattice.groundBox(st.block.cx, st.block.cy)
+      end
+      parking.update(st.anchorId, st.player, pb)
+      t = mark('parking', t)
+      navgraph.update(st.anchorId, pb)
+      t = mark('navgraph', t)
+    end
     updateSky(dtReal)
     updateGuard()
     t = mark('sky', t)
   end
   drawUi(dtReal)
-  mark('draw', t)
+  t = mark('draw', t)
+  if not gov:isHeavyFrame() and not gov.blocked then
+    collectgarbage('step', 30)
+    mark('gc', t)
+  end
 end
 
 -- After physics, before rendering (main.lua:819-824): measure when a rebase's vehicle move became
 -- visible. Hook order relative to core_camera does not matter here; this only measures.
 local function onPreRender(dtReal, dtSim)
+  local pl = st and st.player
+  shadowctl.applyGlobalProfile((pl and pl.speed) or 0, gov, dtReal)
   local probe = st.lagProbe
   if not probe then return end
   if moveVisible(probe) then
@@ -1548,6 +1665,9 @@ local function onLevelStart()
 end
 
 local function onClientStartMission()
+  if rawget(_G, 'core_levels') and core_levels.getLevelByName and not core_levels.getLevelByName(LEVEL_ID) then
+    pcall(extensions.reload, 'core_levels')
+  end
   onLevelStart()
 end
 
@@ -1592,15 +1712,7 @@ local function onClientEndMission()
   st.sessionId, st.nextRequestId, st.mapPort = sessionId, nextRequestId, mapPort   -- the connection's (hello)
 end
 
-local function onExtensionLoaded()
-  log('I', 'beamngEarth', 'beamngEarth_core loaded')
-  groundcover.enginePatch(false)    -- a flag a crashed game left: stock until our level starts
-  -- the level select's spawn points: the saved places (levelinfo.lua), from the main menu on
-  pcall(places.list)
-  pcall(places.syncLevel)
-  -- loaded while a level is already running (e.g. extensions.reload from the console)
-  if scenetree.MissionGroup and getCurrentLevelIdentifier() then onLevelStart() end
-end
+local origOnFileChanged = nil
 
 -- The places file changed on disk (the player edited it, or our own save): read it again, so the level select's spawn
 -- points follow (levelinfo.lua writes only when they changed).
@@ -1617,8 +1729,51 @@ local function onFilesChanged(files)
 end
 M.onFilesChanged = onFilesChanged
 
+local function hookFileWatchers()
+  if origOnFileChanged or not rawget(_G, 'onFileChanged') then return end
+  origOnFileChanged = _G.onFileChanged
+  _G.onFileChanged = function(files)
+    if not files then return end
+    local filtered = {}
+    for _, v in pairs(files) do
+      local fn = v.filename or ''
+      if fn:lower() == places.FILE:lower()
+          or (not fn:find('/beamngEarth/', 1, true) and not fn:find('\\beamngEarth\\', 1, true)) then
+        table.insert(filtered, v)
+      end
+    end
+    if #filtered > 0 then
+      return origOnFileChanged(filtered)
+    end
+  end
+end
+
+local function unhookFileWatchers()
+  if origOnFileChanged and rawget(_G, 'onFileChanged') then
+    _G.onFileChanged = origOnFileChanged
+    origOnFileChanged = nil
+  end
+end
+
+local function onExtensionLoaded()
+  log('I', 'beamngEarth', 'beamngEarth_core loaded')
+  groundcover.enginePatch(false)    -- a flag a crashed game left: stock until our level starts
+  -- the level select's spawn points: the saved places (levelinfo.lua), from the main menu on
+  pcall(places.list)
+  pcall(places.syncLevel)
+  collectgarbage('setpause', 110)
+  collectgarbage('setstepmul', 400)
+  hookFileWatchers()
+  if rawget(_G, 'core_levels') and core_levels.getLevelByName and not core_levels.getLevelByName(LEVEL_ID) then
+    pcall(extensions.reload, 'core_levels')
+  end
+  -- loaded while a level is already running (e.g. extensions.reload from the console)
+  if scenetree.MissionGroup and getCurrentLevelIdentifier() then onLevelStart() end
+end
+
 local function onExtensionUnloaded()
   groundcover.enginePatch(false)
+  unhookFileWatchers()
   net.close()
   farfield.clear()
   roads.clear()

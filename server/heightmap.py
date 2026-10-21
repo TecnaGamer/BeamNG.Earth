@@ -220,17 +220,18 @@ def block_params(u_min, u_max, q):
 
 
 def write_png(path, u, q=Q_DEFAULT):
-    """Quantise on the global Q lattice and write the PNG atomically.
+    """Quantise on the global Q lattice and write the PNG atomically (when path is not None).
     Returns (Q, zBase, maxHeight, qgrid)."""
     q, z_base, max_height = block_params(float(u.min()), float(u.max()), q)
     g = quantise(u, q) - round(z_base / q)          # integer arithmetic on exact floats
     qgrid = np.clip(g, 0, 65535).astype(np.uint16)
-    img = Image.fromarray(np.ascontiguousarray(qgrid[::-1]))   # flip: row 0 = north (max gy)
-    tmp = staging.tmp_for(path)
-    # Uncompressed: the game decodes it on the main thread during the terrain-follow commit,
-    # and level 0 imports ~7 ms faster than level 1 (43 vs 50 ms for 1024², measured in-game).
-    img.save(tmp, format="PNG", compress_level=0)
-    staging.replace(tmp, path)
+    if path is not None:
+        img = Image.fromarray(np.ascontiguousarray(qgrid[::-1]))   # flip: row 0 = north (max gy)
+        tmp = staging.tmp_for(path)
+        # Uncompressed: the game decodes it on the main thread during the terrain-follow commit,
+        # and level 0 imports ~7 ms faster than level 1 (43 vs 50 ms for 1024², measured in-game).
+        img.save(tmp, format="PNG", compress_level=0)
+        staging.replace(tmp, path)
     return q, z_base, max_height, qgrid
 
 

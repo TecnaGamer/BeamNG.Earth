@@ -9,12 +9,6 @@
 // anything. Its lightmap path (free everything) stays. The mod rebuilds the grass itself where the
 // world really moves (teleports, floating-origin rebases).
 //
-// Only while the BeamNG.Earth level runs (the user, 2026-10-20: the mod effectively off on other maps, where a terrain
-// edited in the World Editor needs its grass updated): the mod creates the flag file temp/beamngearth_gcpatch_on in
-// the game's user folder when its level starts and removes it when it ends (groundcover.lua; lower case: the game's
-// file system writes new names so); a thread here looks for it every FLAG_POLL_MS and writes the byte back and forth.
-// Stock until the flag shows up.
-//
 // Nothing on disk is changed. It acts only in the main BeamNG.drive.x64 process (not the CEF helpers,
 // not Steam), and only if the handler's first 0x36 bytes are those of the build it was written for (0.39.4
 // Linux, x86-64) at its address; in another build (a game update: BeamNG 0.40, 2026-10-19) the game's code
@@ -24,7 +18,6 @@
 #define _GNU_SOURCE
 #include <elf.h>
 #include <link.h>
-#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,8 +25,6 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
-
-#define FLAG_POLL_MS 250
 
 #define HANDLER 0x1540350UL /* GroundCover terrain-update handler (vaddr == file offset) */
 #define IMM 0x154037fUL     /* imm8 of `and esi, 0x0E` at 0x154037d (83 e6 0e) */
@@ -47,20 +38,15 @@ static const unsigned char SIGNATURE[0x36] = {
     0x0f, 0x84, 0x30, 0x01, 0x00, 0x00,
 };
 
-// The game's user folder's temp: BNGEARTH_USER_DIR (the launcher's --user-dir), else the native game's default.
-static void temp_path(char *out, size_t n, const char *name) {
-    const char *user = getenv("BNGEARTH_USER_DIR");
-    if (user && *user) snprintf(out, n, "%s/temp/%s", user, name);
-    else snprintf(out, n, "%s/.local/share/BeamNG/BeamNG.drive/current/temp/%s", getenv("HOME") ? getenv("HOME") : "", name);
-}
-
 // One line for the player / the mod's diagnostics: stderr and <user>/temp/beamngEarth_gcpatch.txt.
 static void report(const char *fmt, const char *detail) {
     char msg[256];
     snprintf(msg, sizeof msg, fmt, detail ? detail : "");
     fprintf(stderr, "[bngearth-gcpatch] %s\n", msg);
+    const char *home = getenv("HOME");
+    if (!home) return;
     char path[512];
-    temp_path(path, sizeof path, "beamngEarth_gcpatch.txt");
+    snprintf(path, sizeof path, "%s/.local/share/BeamNG/BeamNG.drive/current/temp/beamngEarth_gcpatch.txt", home);
     FILE *f = fopen(path, "w");
     if (!f) return;
     fprintf(f, "%ld pid %d: %s\n", (long)time(NULL), (int)getpid(), msg);
@@ -110,44 +96,6 @@ static int find_main(struct dl_phdr_info *info, size_t size, void *data) {
         }
     }
     return 1;
-}
-
-static unsigned char *g_imm = NULL;
-static const char *g_how = "";
-
-// The byte: PATCHED or STOCK. The page writable for that one byte, then read+exec again (the code keeps running: x86
-// sees the old or the new immediate, and the handler runs on the game's main thread at terrain updates only).
-static int set_byte(unsigned char v) {
-    long pagesz = sysconf(_SC_PAGESIZE);
-    uintptr_t page = (uintptr_t)g_imm & ~(uintptr_t)(pagesz - 1);
-    if (mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return 0;
-    *(volatile unsigned char *)g_imm = v;
-    __sync_synchronize();
-    mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_EXEC);
-    return 1;
-}
-
-// Applied while the mod's flag file exists (its level runs), stock otherwise.
-static void *watch_flag(void *arg) {
-    (void)arg;
-    char flag[512];
-    temp_path(flag, sizeof flag, "beamngearth_gcpatch_on");
-    int on = 0;
-    for (;;) {
-        int want = access(flag, F_OK) == 0;
-        if (want != on) {
-            if (!set_byte(want ? PATCHED : STOCK)) {
-                report("stopped: mprotect refused%s", NULL);
-                return NULL;
-            }
-            on = want;
-            report(on ? "applied: grass kept across terrain block moves (BeamNG.Earth level)%s"
-                      : "stock: another level (the grass follows terrain edits)%s", on ? g_how : NULL);
-        }
-        struct timespec ts = {0, FLAG_POLL_MS * 1000000L};
-        nanosleep(&ts, NULL);
-    }
-    return NULL;
 }
 
 __attribute__((constructor)) static void bngearth_gcpatch(void) {
@@ -200,13 +148,14 @@ __attribute__((constructor)) static void bngearth_gcpatch(void) {
     }
     if (*imm == PATCHED) { report("already applied%s", NULL); return; }
     if (*imm != STOCK) { report("not applied: unexpected byte (another build)%s", NULL); return; }
-    g_imm = imm;
-    g_how = how;
-    pthread_t t;
-    if (pthread_create(&t, NULL, watch_flag, NULL) != 0) {
-        report("not applied: no thread for the level flag%s", NULL);
+    long pagesz = sysconf(_SC_PAGESIZE);
+    uintptr_t page = (uintptr_t)imm & ~(uintptr_t)(pagesz - 1);
+    // writable for this one byte, before the game starts any thread; then read+exec again
+    if (mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        report("not applied: mprotect refused%s", NULL);
         return;
     }
-    pthread_detach(t);
-    report("ready: applied while the BeamNG.Earth level runs%s", how);
+    *imm = PATCHED;
+    mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_EXEC);
+    report("applied: grass kept across terrain block moves%s", how);
 }

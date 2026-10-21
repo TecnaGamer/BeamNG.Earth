@@ -20,6 +20,7 @@ import hashlib
 import logging
 import math
 import os
+import struct
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -720,6 +721,7 @@ def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False):
         out = JsonRows(fast._ef.veg_rows_json(np.ascontiguousarray(it.group, np.int64), f64(e), f64(n), f64(z),
                                                f64(it.yaw), f64(it.scale), f64(it.height), f64(it.rank)))
         out.n = len(it)
+        out.vbin = _pack_vbin_arrays(e, n, z, it.group, it.yaw, it.scale, it.rank)
         return out
     return [[int(g), round(float(a), 2), round(float(b), 2), round(float(c), 2), round(float(yw), 1),
              round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
@@ -757,6 +759,61 @@ def _concat_all(parts):
     return out
 
 
+VBIN_STRUCT = struct.Struct("<fffBBH")
+VBIN_STRIDE = 16
+
+
+def _pack_vbin_arrays(x, y, z, g, yaw, scale, rank=None):
+    """Vectorized 16-byte record packer from numpy arrays."""
+    n = len(x)
+    if n == 0:
+        return b""
+    if rank is not None and n > 1:
+        order = np.argsort(rank, kind="stable")
+        x, y, z = x[order], y[order], z[order]
+        g, yaw, scale = g[order], yaw[order], scale[order]
+    dt = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("g", "u1"), ("yaw", "u1"), ("scale", "<u2")])
+    arr = np.empty(n, dtype=dt)
+    arr["x"] = x
+    arr["y"] = y
+    arr["z"] = z
+    arr["g"] = np.clip(g, 0, 255).astype(np.uint8)
+    arr["yaw"] = (np.round((yaw % 360.0) * (256.0 / 360.0)).astype(np.int32) & 0xFF).astype(np.uint8)
+    arr["scale"] = np.clip(np.round(scale * 1000.0), 0, 65535).astype("<u2")
+    return arr.tobytes()
+
+
+def pack_vbin(rows):
+    """Pack vegetation rows into compact 16-byte binary records sorted by rank (7th element, index 7)."""
+    if not rows:
+        return b""
+    sorted_rows = sorted(rows, key=lambda r: r[7] if len(r) > 7 else 0.0)
+    buf = bytearray(len(sorted_rows) * VBIN_STRIDE)
+    pack_into = VBIN_STRUCT.pack_into
+    for i, r in enumerate(sorted_rows):
+        g = max(0, min(255, int(r[0])))
+        x = float(r[1])
+        y = float(r[2])
+        z = float(r[3])
+        yaw_deg = float(r[4]) % 360.0
+        yaw_u8 = int(round(yaw_deg * 256.0 / 360.0)) & 0xFF
+        sc = float(r[5])
+        sc_u16 = max(0, min(65535, int(round(sc * 1000.0))))
+        pack_into(buf, i * VBIN_STRIDE, x, y, z, g, yaw_u8, sc_u16)
+    return bytes(buf)
+
+
+def write_vbin(out_dir, vfs_dir, aid, tx, ty, rows_or_bytes):
+    name = f"veg_{aid}_{tx}_{ty}.vbin"
+    path = os.path.join(out_dir, name)
+    data = rows_or_bytes if isinstance(rows_or_bytes, (bytes, bytearray)) else pack_vbin(rows_or_bytes)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "wb") as f:
+        f.write(data)
+    staging.replace(tmp, path)
+    return f"{vfs_dir}/{name}", len(data) // VBIN_STRIDE
+
+
 def write_tile(out_dir, vfs_dir, aid, tx, ty, rows):
     import json
     name = f"veg_{aid}_{tx}_{ty}.json"
@@ -768,7 +825,19 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, rows):
         else:
             f.write(json.dumps({"groups": list(GROUPS), "items": rows}, separators=(",", ":")))  # the C encoder
     staging.replace(tmp, path)
+    if getattr(rows, "vbin", None) is not None:
+        write_vbin(out_dir, vfs_dir, aid, tx, ty, rows.vbin)
+    elif isinstance(rows, (list, tuple)):
+        write_vbin(out_dir, vfs_dir, aid, tx, ty, rows)
     return f"{vfs_dir}/{name}", rows.n if isinstance(rows, JsonRows) else len(rows)
+
+
+def send_tile(conn, aid, tx, ty, path, n, kind="veg"):
+    m = {"type": f"{kind}_tile", "anchorId": aid, "key": f"{tx}_{ty}", "path": path, "n": n}
+    if kind == "veg" and path.endswith(".json"):
+        m["vbin"] = path[:-5] + ".vbin"
+        m["groups"] = list(GROUPS)
+    conn.send(m)
 
 
 class Tracker:
@@ -839,6 +908,21 @@ class Tracker:
             return
         path, n = res
         self.sent.add(key)
+        self.send_tile(conn, aid, key, path, n)
+
+    def send_tile(self, conn, aid, key, path, n):
+        if self.kind == "veg":
+            send_tile(conn, aid, key[0], key[1], path, n, kind=self.kind)
+            return
+        m = {"type": f"{self.kind}_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
+        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
+        if self.kind == "bldfar" and pool is not None:      # its mesh at a pooled shape path (matslots.py)
+            slots = pool(conn, {"shape": f"bldfar_{aid}_{key[0]}_{key[1]}.cdae"})
+            if slots:
+                m["slots"] = slots
+        conn.send(m)
+
+    def _legacy_built(self, conn, aid, key, path, n):
         m = {"type": f"{self.kind}_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
         if self.kind == "bldfar" and pool is not None:      # its mesh at a pooled shape path (matslots.py)

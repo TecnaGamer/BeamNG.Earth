@@ -45,6 +45,7 @@ M.DETAIL_MAP = '/art/beamngEarth/detail_ground.dds'
 M.FIELDS = {
   { 'useAnisotropic', '1' },
   { 'roughnessFactor', '1' },
+  { 'castShadows', '0' },
 }
 M.DETAIL_FIELDS = {
   { 'detailMapUseUV', '1' },
@@ -111,11 +112,12 @@ function M.create(name, texture, detail)
   local m = scenetree.findObject(name)
   local fallback = false
   if m then
-    if texture and FS:fileExists(texture) then m:setField('colorMap', 0, texture) end
+    if texture then m:setField('colorMap', 0, texture) end
+    m:setField('castShadows', 0, '0')
   else
     m = createObject('Material')
     m:setField('mapTo', 0, name)
-    if texture and FS:fileExists(texture) then
+    if texture and (M.pooled(name) or FS:fileExists(texture)) then
       m:setField('colorMap', 0, texture)
     else
       warnOnce('tex:' .. tostring(texture), 'imagery texture missing: ' .. tostring(texture))
@@ -154,16 +156,15 @@ function M.ref(name, texture)
     e.refs = e.refs + 1
     return true
   end
-  if texture and e.texture and texture ~= e.texture and e.refs > 0 and M.isNewer(e.texture, texture)
-    and FS:fileExists(e.texture) then
+  if texture and e.texture and texture ~= e.texture and e.refs > 0 and M.isNewer(e.texture, texture) then
     M.requestRetex(name, texture)
     e.refs = e.refs + 1
     return true
   end
   if texture and e.texture and texture ~= e.texture then
-    local gone = not FS:fileExists(e.texture)
+    local gone = e.refs > 0 and not M.pooled(name) and not FS:fileExists(e.texture)
     local m = (e.refs == 0 or gone) and scenetree.findObject(name)
-    if m and FS:fileExists(texture) then
+    if m then
       m:setField('colorMap', 0, texture)
       if e.fallback then -- created without its file: the fallback colour would tint the imagery
         m:setField('diffuseColor', 0, '1 1 1 1')

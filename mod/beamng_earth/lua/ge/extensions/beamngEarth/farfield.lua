@@ -91,6 +91,7 @@ local crossover = require('beamngEarth/crossover')
 local lattice = require('beamngEarth/lattice')
 local satmat = require('beamngEarth/satmat')
 local governor = require('beamngEarth/governor')
+local shadowctl = require('beamngEarth/shadowctl')
 
 local floor, min, max, abs, huge, ln = math.floor, math.min, math.max, math.abs, math.huge, math.log
 local sqrt, deg, rad, atan, tan = math.sqrt, math.deg, math.rad, math.atan, math.tan
@@ -100,6 +101,9 @@ M.MATERIALS_FILE = '/levels/beamng_earth/art/shapes/beamngEarth/main.materials.j
 M.EDGE_BAND = 128       -- a covered tile nearer than this to the block boundary is in the edge ring
 M.HIDE_DEPTH = 2.0      -- covered tile without a server `sink`: how far it sinks before it hides
 M.DELETE_PRESSURE = 64  -- deletes wait for the import queue unless this many objects are doomed
+M.DELETES_WHILE_QUEUED = 4 -- deletes allowed in a frame while imports are still queued
+M.MIN_DELETES_PER_FRAME = 4 -- guaranteed minimum doomed tile deletions per frame even when importing
+M.DELETE_BUDGET_MS = 0.5 -- ms; per-frame time cap for guaranteed doomed tile deletions
 -- Lazy unloading (the user, 2026-10-12: "maybe a more lazy unloading system would be better"): a tile
 -- removed from the current anchor is kept hidden as a spare for SPARE_S, at most SPARE_MAX of them, and
 -- revived when the server sends the same tile (key and shape file) again instead of importing it again.
@@ -108,16 +112,18 @@ M.DELETE_PRESSURE = 64  -- deletes wait for the import queue unless this many ob
 M.VIEW_PENALTY = 3      -- import order: outside the camera's view cone a tile counts this many times as far
 M.VIEW_MARGIN_DEG = 15  -- the cone: half the horizontal field of view plus this ...
 M.VIEW_MAX_DEG = 80     -- ... at most this far off the camera's heading
-M.SPARE_MAX = 400
-M.SPARE_S = 120
+M.SPARE_MAX = 64
+M.SPARE_S = 30
 M.MAX_DT = 0.1          -- s; longest step of the transition clock per frame
 M.EXACT_LEVEL = -2      -- the exact (physics lattice) level of the 32-cell mesh layout (server MESH_MIN_LEVEL)
 M.MAX_LEVEL = 9         -- coarsest level (server farfield.MAX_LEVEL); the horizon mode's L10 tiles (M1h)
                         -- are never under the player (they split within 328 km), so shownAt stops here
 M.EXACT_OFF = 0.01      -- m; an exact tile further than this off its height (crossover) is a miss
 M.RETEX_PER_FRAME = 2   -- far_retex material switches per frame at most (each also a governor unit)
+M.REVEALS_PER_FRAME = 2 -- swap groups revealed per frame at most during governed streaming (1 in burst mode)
 
-local pending = {}      -- key -> instance received but not shown yet (current anchor)
+local pending = {}      -- key -> unclaimed instance received but not yet claimed by a far_swap (current anchor)
+local waitingInsts = {} -- inst -> inst for every unstarted instance (unclaimed in pending, or claimed by a waiting group)
 local live = {}         -- key -> shown instance (current anchor), covered or not
 local old = {}          -- 'anchorId/key' -> shown instance of a previous anchor
 local oldCount = 0
@@ -150,11 +156,12 @@ local spareQ, sH, sT = {}, 1, 0 -- spare keys, oldest first (entries already rev
 local nSpares = 0
 local switching = false -- inside switchAnchor: the old anchor's tiles are not parked
 local moving = {}       -- instance -> true while its z offset changes over time
-local lossy = {}        -- anchorId -> true: one of its adds was dropped, ignore its removes
+local lossy = {}        -- anchorId -> true: one of its adds was dropped, defer its removes until covered/done
 local block = nil       -- committed terrain block { cx, cy, x0, y0, x1, y1 } (cover box)
 local anchorId = nil    -- current (committed) anchor
 local session = nil     -- server session of the current anchor (switchAnchor; nil = not told)
 local doneReceived = false
+local doneSeq = nil     -- seqN when far_done arrived for the current anchor
 local seqN = 0          -- arrival counter of far_tile messages
 local serial = 0        -- object name counter
 local clock = 0         -- s, transition clock (advanced by update)
@@ -222,8 +229,8 @@ local function deleteById(id)
 end
 
 -- Is the shape path a pooled one (re-used by later tiles)? Its slot number.
-function M.pooledShape(path) return type(path) == 'string' and path:find('/slot_%d+%.cdae$') ~= nil end
-local function slotOf(path) return tonumber(type(path) == 'string' and path:match('/slot_(%d+)%.cdae$') or nil) end
+function M.pooledShape(path) return type(path) == 'string' and path:find('/slot_%d+[_%d]*%.cdae$') ~= nil end
+local function slotOf(path) return tonumber(type(path) == 'string' and path:match('/slot_(%d+)[_%d]*%.cdae$') or nil) end
 
 -- An instance that never got an object is gone: its far_tile's slot is reported as such.
 local function instGone(inst)
@@ -251,7 +258,7 @@ function M.slotsHeld(sess)
   for _, o in pairs(objSlot) do
     if o.session == sess then out[#out + 1] = { o.n, o.serial } end
   end
-  for _, set in ipairs({ pending, live, old }) do
+  for _, set in ipairs({ waitingInsts, live, old }) do
     for _, inst in pairs(set) do
       local n = not inst.id and inst.slotSerial and slotOf(inst.shape)
       if n and inst.session == sess then out[#out + 1] = { n, inst.slotSerial } end
@@ -345,6 +352,7 @@ local function revive(inst)
   local o = scenetree.findObjectById(sp.id)
   spares[k], nSpares = nil, nSpares - 1
   if not o then return false end
+  shadowctl.excludeObject(o, 'far')
   if sp.mat then satmat.unref(sp.mat) end      -- the new instance holds its own reference
   inst.id, inst.loaded, inst.off, inst.hidden = sp.id, true, 0, true
   if objSlot[sp.id] and inst.slotSerial then objSlot[sp.id].serial = inst.slotSerial end -- the newer send's
@@ -368,18 +376,21 @@ local freeSlot -- (path, id): the object still holding a pooled shape path let g
 local function spawn(inst)
   if revive(inst) then return end
   ensureMaterial()
-  if M.pooledShape(inst.shape) and slotHolder[inst.shape] then freeSlot(inst.shape, slotHolder[inst.shape], inst.key) end
-  if not FS:fileExists(inst.shape) then
+  local pooled = M.pooledShape(inst.shape)
+  if pooled and slotHolder[inst.shape] then freeSlot(inst.shape, slotHolder[inst.shape], inst.key) end
+  if not inst.shapeValidated and not FS:fileExists(inst.shape) then
     log('W', 'beamngEarth', 'far tile shape missing: ' .. inst.shape)
     inst.failed = true
     return
   end
+  inst.shapeValidated = true
   -- TSStatic setup as in probes/p5_tsstatic.lua / util/procTrack.lua:1278-1291. collisionType 'None'
   -- keeps it out of the static collision rebuild. Created hidden (P6), placed at its true height.
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, inst.shape)
   o:setField('collisionType', 0, 'None')
   o:setField('decalType', 0, 'None')
+  shadowctl.excludeObject(o, 'far')
   o.canSave = false
   o.hidden = true
   o:setPosition(vec3(inst.x, inst.y, inst.z))
@@ -387,7 +398,7 @@ local function spawn(inst)
   o:registerObject('bngEarthFar_' .. serial .. '_' .. (inst.key:gsub('[^%w_]', '_')))
   scenetree.MissionGroup:addObject(o)
   inst.id, inst.loaded, inst.off, inst.hidden = o:getID(), true, 0, true
-  if M.pooledShape(inst.shape) then
+  if pooled then
     slotHolder[inst.shape], holderPath[inst.id] = inst.id, inst.shape
     if inst.slotSerial then
       objSlot[inst.id] = { n = slotOf(inst.shape), serial = inst.slotSerial, session = inst.session, key = inst.key }
@@ -508,12 +519,18 @@ park = function(inst)
   if not inst.hidden then setHidden(o, true); inst.hidden = true end
   local k = inst.key .. '|' .. inst.shape
   if spares[k] then dropSpare(k) end           -- an older copy of the same tile
+  sT = sT + 1
   spares[k] = { id = inst.id, mat = inst.mat, anchor = inst.anchor, session = inst.session,
-    folder = M.folderOf(inst.shape), t = clock }
+    folder = M.folderOf(inst.shape), t = clock, q = sT }
   inst.mat = nil
   nSpares = nSpares + 1
-  sT = sT + 1; spareQ[sT] = k
+  spareQ[sT] = k
+  while nSpares > M.SPARE_MAX and sH <= sT do
+    local q = sH; local ok = spareQ[q]; spareQ[q] = nil; sH = q + 1
+    if spares[ok] and spares[ok].q == q then dropSpare(ok) end
+  end
   counters.parked = counters.parked + 1
+  if watcher then watcher.onRemove(inst.id) end
   return true
 end
 
@@ -525,6 +542,7 @@ local function doom(inst, hideNow)
     inst.hidden = true
   end
   inst.doomed, inst.grp, inst.coverAnim = true, nil, nil
+  waitingInsts[inst] = nil
   moving[inst] = nil
   if inst.queued then inst.queued = false; nQueued = nQueued - 1 end
   if inst.id and park(inst) then return end
@@ -564,7 +582,7 @@ end
 
 local function minPendingSeq()
   local m = huge
-  for _, inst in pairs(pending) do
+  for _, inst in pairs(waitingInsts) do
     if not inst.prefetch and inst.seq < m then m = inst.seq end
   end
   return m
@@ -574,10 +592,10 @@ end
 -- the server said far_done and nothing is loading does such a group run without it (server error).
 local function groupReady(g)
   for _, key in ipairs(g.add) do
-    local a = pending[key]
+    local a = (g.insts and g.insts[key]) or pending[key]
     if a then
       if not a.loaded and not a.failed then return false end
-    elseif not live[key] and not (doneReceived and nQueued == 0) then
+    elseif (not g.needs or g.needs[key]) and not live[key] and not (doneReceived and nQueued == 0) then
       return false
     end
   end
@@ -601,7 +619,7 @@ end
 -- and a far_remove waits until every tile received before it is shown - often the whole reload
 -- (~10 s). Near the player that is a second ground z-fighting with the new one (the old L-1 / L-2
 -- surfaces are not the new physics lattice). So a previous anchor's tile that settled
--- current-anchor tiles (shown at their true height, not failed, not in a crossover) cover
+-- current-anchor tiles (shown at their true height, not failed, not in a rise crossover) cover
 -- completely goes at once. Safe: the current anchor's covered area never shrinks (every swap group
 -- replaces its own footprint). Called with the tiles that just settled.
 local function dropCoveredOld(adds)
@@ -615,7 +633,7 @@ local function dropCoveredOld(adds)
     if hit and not o.doomed and o.grp == nil then
       local area = 0
       for _, l in pairs(live) do
-        if l.shown and not l.failed and l.grp == nil then
+        if l.shown and not l.failed and (l.grp == nil or (l.grp.g and l.grp.g.mode == 'cross')) then
           local w = min(l.x1, o.x1) - max(l.x0, o.x0)
           local h = min(l.y1, o.y1) - max(l.y0, o.y0)
           if w > 0 and h > 0 then area = area + w * h end
@@ -651,7 +669,7 @@ end
 -- Start a ready group. Returns false (nothing changed) when it must wait: it would cross over in
 -- view within NEAR_POP_M while MAX_GROUPS crossovers already run (v1.3 D: the cap stays, but a near
 -- in-view swap waits a few frames for a free slot instead of popping).
-local function startGroup(g, cam)
+local function startGroup(g, cam, player)
   -- 1. plan, without changing any state
   -- what goes: the live instances of the removed keys, and any live instance an add replaces
   local rems, seen = {}, {}
@@ -661,7 +679,7 @@ local function startGroup(g, cam)
   end
   local adds, unknown = {}, nil
   for _, key in ipairs(g.add) do
-    local a = pending[key]
+    local a = (g.insts and g.insts[key]) or pending[key]
     if a then
       local cur = live[key]
       if cur and not seen[cur] then rems[#rems + 1], seen[cur] = cur, true end
@@ -696,26 +714,45 @@ local function startGroup(g, cam)
     for _, a in ipairs(visAdds) do all[#all + 1] = a end
     for _, r in ipairs(visRems) do all[#all + 1] = r end
     local vis, nearest = inView(all, cam, max(dIn, dOut))
+    local spd = 0.0
+    if player then
+      local vx, vy = tonumber(player.vx) or 0.0, tonumber(player.vy) or 0.0
+      spd = tonumber(player.speed) or sqrt(vx * vx + vy * vy)
+    end
+    local alpha = min(1.0, max(0.0, (spd - 25.0) / 65.0))
+    local highSpeedBypass = (spd >= 50.0) or (alpha >= 0.4)
     if #visRems == 0 and oldCount == 0 then
       mode = 'instant' -- nothing visible to cross over with (first fill)
+    elseif highSpeedBypass and #visAdds > 0 then
+      -- Speed-Gated C1 Instant Swaps: bypass moving crossover list and execute an instant atomic C1 swap
+      mode = 'instant'
     elseif not vis then
       mode = 'instant' -- C1: off-screen
+    elseif nearest <= (crossover.INSTANT_M or 350) then
+      -- Within 350m of player: road driveability is critical. Instant swap eliminates coarse LOD overhang over road.
+      mode = 'instant'
     elseif activeGroups >= crossover.MAX_GROUPS then
       if nearest <= crossover.NEAR_POP_M then
         counters.capWaits = counters.capWaits + 1
         return false -- wait for a free slot (a crossover ends within 0.5 s)
+      else
+        mode = 'instant' -- over the cap and far: C1, a visible pop (stats; v1.3 D: every in-view swap should cross over)
+        counters.pops = counters.pops + 1
       end
-      mode = 'instant' -- over the cap and far: C1, a visible pop (stats; v1.3 D: every in-view swap should cross over)
-      counters.pops = counters.pops + 1
     else
       mode = (#visRems == 0) and 'rise' or 'cross' -- rise: over a previous anchor's tiles
     end
   end
 
   -- 2. apply
-  if unknown then log('W', 'beamngEarth', 'far_swap ' .. tostring(g.id) .. ': unknown tile ' .. unknown) end
+  if unknown then
+    counters.unknownSwapKeys = (counters.unknownSwapKeys or 0) + 1
+    log('W', 'beamngEarth', 'far_swap ' .. tostring(g.id) .. ': unknown tile ' .. unknown)
+  end
   for _, a in ipairs(adds) do
-    pending[a.key] = nil
+    waitingInsts[a] = nil
+    if g.insts then g.insts[a.key] = nil end
+    if pending[a.key] == a then pending[a.key] = nil end
     if a.queued then a.queued = false; nQueued = nQueued - 1 end -- failed before its import
     live[a.key] = a
     a.shown = true
@@ -775,13 +812,26 @@ function M.onTile(msg)
     return
   end
   local key = tostring(msg.key)
-  local prev = pending[key]
-  if prev then doom(prev, true) end -- re-sent before it was shown: the newer one wins
   seqN = seqN + 1
   local inst = newInst(msg, seqN)
   inst.session = session
   if inst.material then counters.textured = counters.textured + 1 end
-  pending[key] = inst
+  waitingInsts[inst] = inst
+  local claimed = false
+  if not inst.prefetch then
+    for _, g in ipairs(groups) do
+      if g.state == 'wait' and g.needs and g.needs[key] and not g.insts[key] then
+        g.insts[key], g.needs[key] = inst, nil
+        claimed = true
+        break
+      end
+    end
+  end
+  if not claimed then
+    local prev = pending[key]
+    if prev then doom(prev, true) end -- re-sent before it was claimed by a swap: the newer one wins
+    pending[key] = inst
+  end
   nQueued = nQueued + 1
   if inst.prefetch then
     pT = pT + 1; preQ[pT] = inst
@@ -790,20 +840,118 @@ function M.onTile(msg)
   end
 end
 
+local function filterKeys(list, drop)
+  local out = {}
+  for _, k in ipairs(list) do
+    if not drop[k] then out[#out + 1] = k end
+  end
+  return out
+end
+
 function M.onSwap(msg)
   if msg.anchorId ~= anchorId then return end
-  local g = { id = msg.id, add = {}, remove = {}, state = 'wait', msgIn = tonumber(msg.dIn), msgOut = tonumber(msg.dOut) }
+  local g = { id = msg.id, add = {}, remove = {}, insts = {}, needs = {}, seq = seqN, state = 'wait',
+    msgIn = tonumber(msg.dIn), msgOut = tonumber(msg.dOut) }
   for _, k in ipairs(type(msg.add) == 'table' and msg.add or {}) do
     k = tostring(k)
     g.add[#g.add + 1] = k
     local p = pending[k]
-    if p and p.prefetch then -- a prefetched tile is needed now: import it with the group's tiles
-      p.prefetch = false
-      if p.queued then mT = mT + 1; mainQ[mT] = p end
+    if p then
+      pending[k] = nil
+      g.insts[k] = p
+      if p.prefetch then -- a prefetched tile is needed now: import it with the group's tiles
+        p.prefetch = false
+        if p.queued then mT = mT + 1; mainQ[mT] = p end
+      end
+    else
+      g.needs[k] = true
     end
   end
   for _, k in ipairs(type(msg.remove) == 'table' and msg.remove or {}) do g.remove[#g.remove + 1] = tostring(k) end
-  groups[#groups + 1] = g
+
+  -- Algebraic swap cancellation against waiting groups (gOld.state == 'wait')
+  for i = #groups, 1, -1 do
+    local gOld = groups[i]
+    if gOld.state == 'wait' and #g.remove > 0 then
+      local newRem = {}
+      for _, k in ipairs(g.remove) do newRem[k] = true end
+      local cancelAdd = {}
+      local anyCancel = false
+      for _, k in ipairs(gOld.add) do
+        if newRem[k] and live[k] == nil then
+          cancelAdd[k] = true
+          anyCancel = true
+        end
+      end
+      if anyCancel then
+        for k in pairs(cancelAdd) do
+          local inst = gOld.insts and gOld.insts[k]
+          if inst then
+            gOld.insts[k] = nil
+            doom(inst, true)
+          end
+          if gOld.needs then gOld.needs[k] = nil end
+        end
+        gOld.add = filterKeys(gOld.add, cancelAdd)
+        g.remove = filterKeys(g.remove, cancelAdd)
+
+        local newAdd = {}
+        for _, k in ipairs(g.add) do newAdd[k] = true end
+        local cancelRem = {}
+        for _, p in ipairs(gOld.remove) do
+          if newAdd[p] then cancelRem[p] = true end
+        end
+        if next(cancelRem) then
+          for p in pairs(cancelRem) do
+            local instP = g.insts[p]
+            if instP then
+              g.insts[p] = nil
+              local lv = live[p]
+              if lv and lv.id and instP.slotSerial and objSlot[lv.id] and objSlot[lv.id].n == slotOf(instP.shape) then
+                objSlot[lv.id].serial = instP.slotSerial
+                instP.slotSerial = nil
+              end
+              doom(instP, true)
+            end
+            if g.needs then g.needs[p] = nil end
+          end
+          gOld.remove = filterKeys(gOld.remove, cancelRem)
+          g.add = filterKeys(g.add, cancelRem)
+        end
+
+        -- Merge any remaining keys of gOld into g so no partial group runs with a missing quadrant
+        local seenAdd = {}
+        for _, k in ipairs(g.add) do seenAdd[k] = true end
+        for _, k in ipairs(gOld.add) do
+          if not seenAdd[k] then
+            g.add[#g.add + 1] = k
+            seenAdd[k] = true
+          end
+          if gOld.insts and gOld.insts[k] then
+            g.insts[k] = gOld.insts[k]
+            gOld.insts[k] = nil
+          elseif gOld.needs and gOld.needs[k] then
+            g.needs[k] = true
+            gOld.needs[k] = nil
+          end
+        end
+        local seenRem = {}
+        for _, k in ipairs(g.remove) do seenRem[k] = true end
+        for _, k in ipairs(gOld.remove) do
+          if not seenRem[k] then
+            g.remove[#g.remove + 1] = k
+            seenRem[k] = true
+          end
+        end
+        if gOld.seq and gOld.seq < g.seq then g.seq = gOld.seq end
+        table.remove(groups, i)
+      end
+    end
+  end
+
+  if #g.add > 0 or #g.remove > 0 then
+    groups[#groups + 1] = g
+  end
 end
 
 function M.onRemove(msg)
@@ -824,6 +972,19 @@ function M.onRemove(msg)
     doom(p, true)
     return
   end
+  for _, g in ipairs(groups) do
+    if g.state == 'wait' then
+      if g.insts and g.insts[key] then
+        local inst = g.insts[key]
+        g.insts[key] = nil
+        doom(inst, true)
+        return
+      end
+      if g.needs and g.needs[key] then
+        g.needs[key] = nil
+      end
+    end
+  end
   local l = live[key]
   if l and not l.removing then
     l.removing = true
@@ -832,7 +993,12 @@ function M.onRemove(msg)
 end
 
 function M.onDone(msg)
-  if msg.anchorId == anchorId then doneReceived = true end
+  if msg.anchorId == anchorId then
+    if not doneReceived then
+      doneReceived = true
+      doneSeq = seqN
+    end
+  end
 end
 
 -- far_retex: point the tile's material at its re-rendered texture (time-sliced in update). The shown
@@ -845,12 +1011,17 @@ function M.onRetex(msg)
     return
   end
   local hit = false
-  for _, inst in ipairs({ live[key] or false, pending[key] or false }) do
+  local function retexInst(inst)
     if inst and not inst.doomed and inst.material then
       if not satmat.isNewer(tex, inst.texture) then inst.texture = tex end -- never back to an older revision
       satmat.requestRetex(inst.material, tex)
       hit = true
     end
+  end
+  retexInst(live[key])
+  retexInst(pending[key])
+  for _, inst in pairs(waitingInsts) do
+    if inst.key == key and inst ~= pending[key] then retexInst(inst) end
   end
   if not hit then counters.retexStale = counters.retexStale + 1 end
 end
@@ -893,6 +1064,7 @@ function M.rawView() return rawView end
 -- uncovers far tiles; about 48 setPosition/setHidden calls for a 256 m move. Returns the changes.
 function M.onBlockCommit(cx, cy)
   setBlock(cx, cy)
+  if not blockShown() then return 0 end
   local n = 0
   for _, inst in pairs(live) do if applyCover(inst, true) then n = n + 1 end end
   for _, inst in pairs(old) do if applyCover(inst, true) then n = n + 1 end end
@@ -1010,12 +1182,26 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession)
     -- removals whose adds are all shown stay valid in the new frame
     for i = rH, rT do
       local r = removals[i]
-      if r.seq < due and not r.inst.doomed then
+      if r and r.inst and not r.inst.doomed and r.seq < due then
         keep[#keep + 1] = { inst = r.inst, seq = 0, oldKey = r.oldKey or oldKey(session, anchorId, r.inst.key) }
       end
     end
+    -- cap retained old-anchor history to at most two rebases back so old tiles never accumulate unboundedly
+    if #oldFrames > 2 and oldCount > 0 then
+      local f1, f2 = oldFrames[1], oldFrames[2]
+      for ok, inst in pairs(old) do
+        local keep1 = f1 and inst.anchor == f1.anchor and inst.session == f1.session
+        local keep2 = f2 and inst.anchor == f2.anchor and inst.session == f2.session
+        if not keep1 and not keep2 then
+          doom(inst, false)
+          old[ok] = nil
+          oldCount = oldCount - 1
+        end
+      end
+      for i = 3, #oldFrames do oldFrames[i] = nil end
+    end
     local dropped = false
-    for _, inst in ipairs(bySeq(pending)) do
+    for _, inst in ipairs(bySeq(waitingInsts)) do
       if not inst.prefetch then dropped = true end
       doom(inst, true)
     end
@@ -1025,12 +1211,12 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession)
       oldCount = oldCount + 1
     end
   else
-    for _, set in ipairs({ live, old, pending }) do
+    for _, set in ipairs({ live, old, waitingInsts }) do
       for _, inst in ipairs(bySeq(set)) do doom(inst, true) end
     end
     old, oldCount, lossy, oldFrames = {}, 0, {}, {}
   end
-  pending, live = {}, {}
+  pending, waitingInsts, live = {}, {}, {}
   mainQ, mH, mT, preQ, pH, pT, nQueued = {}, 1, 0, {}, 1, 0, 0
   groups, activeGroups, moving = {}, 0, {}
   removals, rH, rT = keep, 1, #keep
@@ -1039,7 +1225,7 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession)
     lossy = {} -- anchor ids of the previous session mean nothing to the new server
     session = newSession
   end
-  doneReceived = false
+  doneReceived, doneSeq = false, nil
   if blk then
     setBlock(blk.cx, blk.cy)
     for _, inst in pairs(old) do applyCover(inst, false) end
@@ -1055,37 +1241,104 @@ end
 -- imports them (~0.7 textured tiles per frame): in server order the ground the car drives onto
 -- would wait behind distant tiles for seconds (the old anchor's or a coarser tile showing
 -- meanwhile). Terrain mode keeps the server's order (v1.2).
-local function peekImport(cam)
+local function peekImport(cam, player)
   while mH <= mT do
     local inst = mainQ[mH]
-    if pending[inst.key] == inst and inst.queued then break end
+    if waitingInsts[inst] and not inst.doomed and inst.queued then break end
     mainQ[mH] = nil
     mH = mH + 1
   end
   if mH <= mT then
-    if not meshLayout() or not cam then return mainQ[mH], true end
-    -- nearest the camera first; outside its view cone a tile counts VIEW_PENALTY times as far (squared here), so
-    -- what is on screen fills first (server/farfield.py view_distance, the same cone)
-    local fx, fy = cam.fx or 0, cam.fy or 0
-    local fn = sqrt(fx * fx + fy * fy)
-    local cosmax
-    if fn > 0.2 then
-      fx, fy = fx / fn, fy / fn
-      local half = deg(atan(tan(rad(cam.fovDeg or 60) / 2) * 16 / 9)) + M.VIEW_MARGIN_DEG
-      cosmax = math.cos(rad(min(half, M.VIEW_MAX_DEG)))
+    local px, py, lx, ly
+    if player then
+      px, py = tonumber(player.x), tonumber(player.y)
+      local vx, vy = tonumber(player.vx) or 0, tonumber(player.vy) or 0
+      local spd = tonumber(player.speed) or sqrt(vx * vx + vy * vy)
+      if px and py and spd > 15 then
+        lx, ly = px + vx * 3.0, py + vy * 3.0
+      end
+    end
+    if not meshLayout() or (not cam and not (px and py)) then return mainQ[mH], true end
+    -- Sibling completion boost: if a tile belongs to a waiting group that covers the player or lookahead
+    -- point, or already has >= 1 sibling loaded, boost its priority so all siblings import back-to-back.
+    local boostInst = {}
+    for _, g in ipairs(groups) do
+      if g.state == 'wait' and g.insts then
+        local boost = false
+        local gx0, gy0, gx1, gy1 = huge, huge, -huge, -huge
+        for _, sib in pairs(g.insts) do
+          if sib.loaded then boost = true end
+          if sib.x0 < gx0 then gx0 = sib.x0 end
+          if sib.y0 < gy0 then gy0 = sib.y0 end
+          if sib.x1 > gx1 then gx1 = sib.x1 end
+          if sib.y1 > gy1 then gy1 = sib.y1 end
+        end
+        if not boost and px and py and px >= gx0 and px <= gx1 and py >= gy0 and py <= gy1 then
+          boost = true
+        end
+        if not boost and lx and ly and lx >= gx0 and lx <= gx1 and ly >= gy0 and ly <= gy1 then
+          boost = true
+        end
+        if boost then
+          for _, sib in pairs(g.insts) do
+            if sib.queued and not sib.doomed then boostInst[sib] = true end
+          end
+        end
+      end
+    end
+    -- nearest the camera / player / velocity-lookahead first; outside its view cone a tile counts
+    -- VIEW_PENALTY times as far (squared here), except L-1 / L0 tiles within 450m.
+    local cosmax, fx, fy
+    if cam then
+      fx, fy = cam.fx or 0, cam.fy or 0
+      local fn = sqrt(fx * fx + fy * fy)
+      if fn > 0.2 then
+        fx, fy = fx / fn, fy / fn
+        local half = deg(atan(tan(rad(cam.fovDeg or 60) / 2) * 16 / 9)) + M.VIEW_MARGIN_DEG
+        cosmax = math.cos(rad(min(half, M.VIEW_MAX_DEG)))
+      end
     end
     local pen2 = M.VIEW_PENALTY * M.VIEW_PENALTY
     local best, bd = nil, huge
     for i = mH, mT do
       local inst = mainQ[i]
-      if pending[inst.key] == inst and inst.queued then
-        local dx = max(inst.x0 - cam.x, 0, cam.x - inst.x1)
-        local dy = max(inst.y0 - cam.y, 0, cam.y - inst.y1)
-        local d = dx * dx + dy * dy
+      if waitingInsts[inst] and not inst.doomed and inst.queued then
+        local d = huge
+        if cam and cam.x and cam.y then
+          local dx = max(inst.x0 - cam.x, 0, cam.x - inst.x1)
+          local dy = max(inst.y0 - cam.y, 0, cam.y - inst.y1)
+          d = dx * dx + dy * dy
+        end
+        if px and py then
+          local pdx = max(inst.x0 - px, 0, px - inst.x1)
+          local pdy = max(inst.y0 - py, 0, py - inst.y1)
+          local pd = pdx * pdx + pdy * pdy
+          if pd < d then d = pd end
+        end
+        if lx and ly then
+          local ldx = max(inst.x0 - lx, 0, lx - inst.x1)
+          local ldy = max(inst.y0 - ly, 0, ly - inst.y1)
+          local ld = ldx * ldx + ldy * ldy
+          if ld < d then d = ld end
+        end
+        local rawD = d
+        if inst.level and inst.level <= -1 and rawD <= 160000 then -- L-1 within 400m
+          d = d * 0.04
+        elseif inst.level and inst.level <= 0 and rawD <= 250000 then -- L0 within 500m
+          d = d * 0.25
+        end
+        if boostInst[inst] then
+          d = d * 0.05
+        end
         if cosmax and d > 0 then
           local cx, cy = (inst.x0 + inst.x1) / 2 - cam.x, (inst.y0 + inst.y1) / 2 - cam.y
-          local r = sqrt(cx * cx + cy * cy)
-          if r > inst.x1 - inst.x0 and (cx * fx + cy * fy) / r < cosmax then d = d * pen2 end
+          local r2 = cx * cx + cy * cy
+          -- NEVER apply the 9x view-cone penalty to L-1 or L0 tiles within 450m (r <= 450)
+          local nearFine = inst.level and inst.level <= 0 and (r2 <= 202500 or rawD <= 202500)
+          if not nearFine then
+            local r = sqrt(r2)
+            if r > 350.0 and r > inst.x1 - inst.x0 and (cx * fx + cy * fy) / r < cosmax then d = d * pen2 end
+          end
         end
         if d < bd then best, bd = inst, d end
       end
@@ -1094,7 +1347,7 @@ local function peekImport(cam)
   end
   while pH <= pT do
     local inst = preQ[pH]
-    if pending[inst.key] == inst and inst.queued then return inst, false end
+    if waitingInsts[inst] and not inst.doomed and inst.queued and inst.prefetch then return inst, false end
     preQ[pH] = nil
     pH = pH + 1
   end
@@ -1112,8 +1365,18 @@ end
 
 local function pendingMainCount()
   local n = 0
-  for _, inst in pairs(pending) do if not inst.prefetch then n = n + 1 end end
+  for _, inst in pairs(waitingInsts) do if not inst.prefetch then n = n + 1 end end
   return n
+end
+
+local function pendingBefore(seq)
+  for _, inst in pairs(waitingInsts) do
+    if not inst.prefetch and inst.seq <= seq then return true end
+  end
+  for _, g in ipairs(groups) do
+    if g.seq <= seq then return true end
+  end
+  return false
 end
 
 -- The shown tile containing (x, y) in `set` (live, or old with anchor a: keys 'a/L_i_j'), finest
@@ -1160,7 +1423,7 @@ function M.update(gov, dt, cam, player)
   local t0 = now()
   local nMoving = 0
   for _, g in ipairs(groups) do
-    if g.state == 'run' and clock - g.t0 >= g.dur then finishGroup(g) end
+    if g.state == 'run' and (clock - g.t0 >= g.dur or (player and ((tonumber(player.speed) or sqrt((tonumber(player.vx) or 0)^2 + (tonumber(player.vy) or 0)^2)) >= 50.0 or min(1.0, max(0.0, ((tonumber(player.speed) or sqrt((tonumber(player.vx) or 0)^2 + (tonumber(player.vy) or 0)^2)) - 25.0) / 65.0)) >= 0.4))) then finishGroup(g) end
   end
   for inst in pairs(moving) do
     refresh(inst)
@@ -1179,9 +1442,11 @@ function M.update(gov, dt, cam, player)
     end
   end
   local stop = false
+  local nRevealed = 0
+  local maxReveals = (gov.frame == nil or gov.loading) and huge or (((gov.burst and not gov.urgent) and 1) or M.REVEALS_PER_FRAME or 2)
   for _, g in ipairs(groups) do
     if g.state == 'wait' then
-      local blocked = stop or frozen
+      local blocked = stop or frozen or (nRevealed >= maxReveals)
       if not blocked then
         for _, k in ipairs(g.add) do if busy[k] then blocked = true; break end end
       end
@@ -1191,9 +1456,11 @@ function M.update(gov, dt, cam, player)
       if not blocked and groupReady(g) then
         if gov:try('reveal') then
           local t1 = now()
-          if startGroup(g, cam) then
+          if startGroup(g, cam, player) then
             gov:charge('reveal', now() - t1)
             units = units + 1
+            nRevealed = nRevealed + 1
+            if nRevealed >= maxReveals then stop = true end
           end -- else: waits for a crossover slot; its keys stay busy, other groups go on
         else
           stop = true -- out of budget: keep the order, try again next frame
@@ -1235,9 +1502,12 @@ function M.update(gov, dt, cam, player)
   -- 4. imports (hidden), group tiles first, prefetch only when nothing else waits. A tile with its
   --    own imagery material gets the Material first, as a separate unit (satmat.lua); a re-sent key
   --    or a sibling sharing the name re-uses it for free.
+  --    Yield imports on frames that already revealed a swap group (unless loading or free test gov) so
+  --    unhide + .cdae resource init never stack in the same frame's RenderShadows pass.
   local imported = false
-  while true do
-    local inst = peekImport(cam)
+  local allowImports = (gov.frame == nil or gov.loading or nRevealed == 0)
+  while allowImports do
+    local inst = peekImport(cam, player)
     if not inst then break end
     if inst.material and not inst.mat and not inst.matFailed then
       if not satmat.exists(inst.material) then
@@ -1277,9 +1547,9 @@ function M.update(gov, dt, cam, player)
   end
 
   -- 4b. far_retex: material texture switches, a few per frame within the budget (never thrown out of
-  --     the frame: a failing switch is counted and dropped)
+  --     the frame: a failing switch is counted and dropped). Yield when an import or reveal already ran.
   local nRetex = 0
-  while nRetex < M.RETEX_PER_FRAME and satmat.hasRetex() and gov:try('retex') do
+  while (not imported and nRevealed == 0) and nRetex < M.RETEX_PER_FRAME and satmat.hasRetex() and gov:try('retex') do
     local t1 = now()
     local ok, res = pcall(satmat.retexNext)
     if not ok then
@@ -1297,7 +1567,7 @@ function M.update(gov, dt, cam, player)
   --    tiles go (progressively, through the delete queue)
   if doneReceived and oldCount > 0 and #groups == 0 and pendingMainCount() == 0 then
     for _, inst in pairs(old) do doom(inst, false) end
-    old, oldCount, oldFrames = {}, 0, {}
+    old, oldCount, oldFrames, lossy = {}, 0, {}, {}
   end
 
   -- 6. deletes; then the materials no object uses any more (never before their last object).
@@ -1305,14 +1575,19 @@ function M.update(gov, dt, cam, player)
   --    its material and a few deletes would make a frame more than 4 ms long.
   -- spares past SPARE_S, or beyond SPARE_MAX, join the delete queue
   while sH <= sT do
-    local k = spareQ[sH]
+    local q = sH
+    local k = spareQ[q]
     local sp = spares[k]
-    if sp and nSpares <= M.SPARE_MAX and clock - sp.t < M.SPARE_S then break end
-    spareQ[sH] = nil; sH = sH + 1
-    if sp then dropSpare(k) end
+    if sp and sp.q == q and nSpares <= M.SPARE_MAX and clock - sp.t < M.SPARE_S then break end
+    spareQ[q] = nil; sH = q + 1
+    if sp and sp.q == q then dropSpare(k) end
   end
-  if (nQueued == 0 and not imported) or #doomed > M.DELETE_PRESSURE then
-    while #doomed > 0 and gov:try('delete') do
+  local pressure = #doomed > M.DELETE_PRESSURE
+  if (nQueued == 0 and not imported) or pressure or (player ~= nil and not imported) then
+    local maxDel = (player == nil or (nQueued == 0 and not imported)) and huge
+      or (pressure and (M.DELETES_WHILE_QUEUED * 2) or M.DELETES_WHILE_QUEUED)
+    local nDel = 0
+    while #doomed > 0 and nDel < maxDel and gov:try('delete') do
       local t1 = now()
       local id = table.remove(doomed)
       deleteById(id)
@@ -1324,12 +1599,14 @@ function M.update(gov, dt, cam, player)
       end
       gov:charge('delete', now() - t1)
       units = units + 1
+      nDel = nDel + 1
     end
-    while satmat.hasDeletes() and gov:try('matDelete') do
+    while satmat.hasDeletes() and (nQueued == 0 or nDel < maxDel) and gov:try('matDelete') do
       local t1 = now()
       satmat.deleteNext()
       gov:charge('matDelete', now() - t1)
       units = units + 1
+      nDel = nDel + 1
     end
   end
   lastFrame.units, lastFrame.moving = units, nMoving
@@ -1356,7 +1633,7 @@ end
 -- Delete everything right away (extension unload / level end).
 function M.clear()
   finishAll() -- tiles sinking in a crossover are in no set but the delete queue afterwards
-  for _, set in ipairs({ live, old, pending }) do
+  for _, set in ipairs({ live, old, waitingInsts }) do
     for _, inst in pairs(set) do if inst.id then deleteById(inst.id) end end
   end
   for _, id in ipairs(doomed) do deleteById(id) end
@@ -1371,15 +1648,15 @@ function M.forget()
     local o = objSlot[id]
     slotsGone[#slotsGone + 1] = { o.n, o.serial, o.session }
   end
-  for _, set in ipairs({ pending, live, old }) do
+  for _, set in ipairs({ waitingInsts, live, old }) do
     for _, inst in pairs(set) do if not inst.id then instGone(inst) end end
   end
   objSlot = {}
-  pending, live, old, oldCount, lossy, doomed, moving = {}, {}, {}, 0, {}, {}, {}
+  pending, waitingInsts, live, old, oldCount, lossy, doomed, moving = {}, {}, {}, {}, 0, {}, {}, {}
   oldFrames, under.level, under.old, under.miss = {}, nil, false, false
   mainQ, mH, mT, preQ, pH, pT, nQueued = {}, 1, 0, {}, 1, 0, 0
   groups, activeGroups, removals, rH, rT = {}, 0, {}, 1, 0
-  anchorId, doneReceived, block, session = nil, false, nil, nil
+  anchorId, doneReceived, doneSeq, block, session = nil, false, nil, nil, nil
   matOf, doomedAnchor, doomedSession, doomedFolder = {}, {}, {}, {}
   spares, spareQ, sH, sT, nSpares = {}, {}, 1, 0, 0
   slotHolder, holderPath = {}, {}
@@ -1414,7 +1691,7 @@ end
 -- restarted server keeps these folders, and deletes one once no pose names it any more.
 function M.heldSessions()
   local set = {}
-  for _, tbl in ipairs({ pending, live, old }) do
+  for _, tbl in ipairs({ waitingInsts, live, old }) do
     for _, inst in pairs(tbl) do
       local f = inst.id and inst.shape and folderOfMemo(inst.shape)
       if f then set[f] = true end
@@ -1441,7 +1718,7 @@ function M.stats()
     n = n + 1
     if inst.cover ~= 'none' then covered = covered + 1 end
   end
-  for _, inst in pairs(pending) do if inst.loaded then hiddenLoaded = hiddenLoaded + 1 end end
+  for _, inst in pairs(waitingInsts) do if inst.loaded then hiddenLoaded = hiddenLoaded + 1 end end
   local waiting = 0
   for _, g in ipairs(groups) do if g.state == 'wait' then waiting = waiting + 1 end end
   return { live = n, covered = covered, preloaded = hiddenLoaded, queued = nQueued, groups = waiting,
@@ -1466,7 +1743,7 @@ function M.counters() return counters end -- read-only
 
 -- Every tile instance with an object (pending, live and previous anchors'; not the delete queue).
 function M.eachTile(fn)
-  for _, set in ipairs({ pending, live, old }) do
+  for _, set in ipairs({ waitingInsts, live, old }) do
     for _, inst in pairs(set) do if inst.id and not inst.doomed then fn(inst) end end
   end
 end
@@ -1477,18 +1754,23 @@ function M.queuedTiles()
   local main, pre = {}, {}
   for i = mH, mT do
     local inst = mainQ[i]
-    if inst and pending[inst.key] == inst and inst.queued and not inst.prefetch then main[#main + 1] = inst end
+    if inst and waitingInsts[inst] and not inst.doomed and inst.queued and not inst.prefetch then main[#main + 1] = inst end
   end
   for i = pH, pT do
     local inst = preQ[i]
-    if inst and pending[inst.key] == inst and inst.queued and inst.prefetch then pre[#pre + 1] = inst end
+    if inst and waitingInsts[inst] and not inst.doomed and inst.queued and inst.prefetch then pre[#pre + 1] = inst end
   end
   return main, pre
 end
 
 -- for tests
 function M._tile(key) return live[key] end
-function M._pending(key) return pending[key] end
+function M._pending(key)
+  if pending[key] then return pending[key] end
+  for _, g in ipairs(groups) do
+    if g.state == 'wait' and g.insts and g.insts[key] then return g.insts[key] end
+  end
+end
 function M._oldId(a, key, s) local inst = old[oldKey(s or session, a, key)]; return inst and inst.id end
 function M._old(a, key, s) return old[oldKey(s or session, a, key)] end
 function M._clock() return clock end

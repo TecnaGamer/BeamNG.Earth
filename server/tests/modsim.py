@@ -578,7 +578,7 @@ def folder_of(path):
 
 def slot_of(path):
     """farfield.lua slotOf: the slot number of a pooled shape path (/slot_<n>.cdae), else None."""
-    m = re.search(r"/slot_(\d+)\.cdae$", path) if isinstance(path, str) else None
+    m = re.search(r"/slot_(\d+)(?:_[01])?\.cdae$", path) if isinstance(path, str) else None
     return int(m.group(1)) if m else None
 
 

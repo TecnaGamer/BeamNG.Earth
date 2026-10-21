@@ -45,7 +45,7 @@ SIMPLIFY_M = 0.25       # RDP tolerance (Road Spline's layerMgr)
 SIMPLIFY_Z_M = 0.05     # ... and the vertical one of lines drawn at their own heights (decks, tunnels: simplify ztol)
 MAX_NODES = 100         # nodes per DecalRoad (Road Spline's chunk size)
 MAX_SPACING = 12.0      # m between nodes at most (official maps: median 11-12 m)
-BUILD_PER_POSE = 4      # tiles started per pose at most
+BUILD_PER_POSE = 8      # tiles started per pose at most (Phase 8-10 high-speed streaming)
 # At speed the tiles reach along the car's path (the user, 2026-10-19: "Going high speeds the road texture can struggle
 # to keep up ... even if we have to sacrifice some things further away from the car"): above FAST_MS the tiles within
 # CORRIDOR_M of the path ahead are wanted too, up to LEAD_S of driving (LEAD_MAX_M at most), and every wanted tile is
@@ -130,7 +130,8 @@ SHOULDER_M = 2.2
 PARKING_CLASSES = {"residential", "tertiary", "secondary", "unclassified", "living_street"}
 EDGE_STRIP_M = 1.0
 URBAN_CLASS = 50                # ESA WorldCover "built-up"
-URBAN_SHARE = 0.5               # a road is urban when this share of its vertices is built-up
+URBAN_SHARE = 0.65              # a road is urban when this share of its vertices is built-up
+WALK_STEP = 4.0                 # m: sidewalk runs are densified to follow graded ground and vertical curves
 
 
 def _rule_value(table, i):
@@ -1408,8 +1409,8 @@ def has_sidewalks(spec):
     # a two-way urban trunk is a town's main street on a state highway (Bishop's US-395, Moab's US-191);
     # divided trunks are one-way per carriageway: expressways get none, slow ones (Ocean City's Coastal
     # Highway, 35 mph, 2026-10-14 street photos) one on their outer side (walk_sides)
-    return spec.kind in BUILT and spec.urban and (spec.cls in SIDEWALK_CLASSES
-                                                  or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
+    return spec.kind in BUILT and bool(spec.urban) and (spec.cls in SIDEWALK_CLASSES
+                                                        or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
 
 
 def _arterial(spec):
@@ -1460,8 +1461,11 @@ def sidewalk_stop(spec, fid, other, ofid):
     """How far from the centreline of a crossing road (other) the sidewalks of road spec stop. The corner
     square is one sidewalk's: when both roads have sidewalks the wider road's (then the smaller id) runs on
     to the other's curb and the other's stops against its outer edge; with none on the other road, they
-    run on to its curb. No gap and no overlap (two slabs at one height would z-fight). Pure."""
-    if has_sidewalks(other) and (-other.width, ofid) < (-spec.width, fid):
+    stop with their outer edge at its carriageway edge. No gap and no overlap (two slabs at one height would
+    z-fight). Pure."""
+    if not has_sidewalks(other):
+        return other.width / 2 + spec.walk / 2
+    if (-other.width, ofid) < (-spec.width, fid):
         return other.width / 2 + other.walk
     return other.width / 2
 
@@ -3074,6 +3078,64 @@ def drains(run, side, caps, walk_w=None):
     return res
 
 
+def _conform_walks(frame, walks, elev):
+    """Sample the graded ground elevation `elev` at every sidewalk run's curb line and outer edge (and every
+    corner's arc and outer vertices) in one batch call so sidewalks sit flush at the road edge (`pts[:, 2]`)
+    and drop their back slope to the actual ground (`back_z`)."""
+    if not walks or elev is None:
+        return
+    import sidewalks
+    xy_parts = []
+    meta = []
+    for wk in walks:
+        if "corner" in wk:
+            c = wk["corner"]
+            arc = np.asarray(c["arc"], np.float64)
+            outer = np.asarray(c["outer"], np.float64)
+            xy_parts.append(arc[:, :2])
+            xy_parts.append(outer[:, :2])
+            meta.append(("corner", c, len(arc), len(outer)))
+        else:
+            pts = np.asarray(wk["pts"], np.float64)
+            ww = wk.get("w", SIDEWALK["w"])
+            curb, out = sidewalks.run_geometry(pts, wk["side"], ww)
+            xy_parts.append(curb[:, :2])
+            xy_parts.append(curb[:, :2] + out * ww)
+            meta.append(("run", wk, len(pts)))
+    if not xy_parts:
+        return
+    all_xy = np.concatenate(xy_parts, axis=0)
+    la, lo, _ = frame.enu_to_geodetic(all_xy[:, 0], all_xy[:, 1], 0.0)
+    h = np.asarray(elev(la, lo), np.float64)
+    z = frame.geodetic_to_enu(la, lo, h)[2]
+    k = 0
+    for item in meta:
+        if item[0] == "corner":
+            _, c, na, no = item
+            z_arc = z[k:k + na]
+            k += na
+            z_out = z[k:k + no]
+            k += no
+            arc = np.array(c["arc"], np.float64, copy=True)
+            arc[:, 2] = z_arc
+            c["arc"] = arc
+            if no:
+                outer = np.array(c["outer"], np.float64, copy=True)
+                z_ref = np.interp(np.linspace(1.0, 0.0, no), [0.0, 1.0], [z_arc[0], z_arc[-1]])
+                outer[:, 2] = np.minimum(z_out, z_ref)
+                c["outer"] = outer
+        else:
+            _, wk, n = item
+            z_curb = z[k:k + n]
+            k += n
+            z_back = z[k:k + n]
+            k += n
+            pts = np.array(wk["pts"], np.float64, copy=True)
+            pts[:, 2] = z_curb
+            wk["pts"] = pts
+            wk["back_z"] = z_back
+
+
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                walls=None, deck_context=None):
@@ -3100,15 +3162,20 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if specs[i] is None or str(feats.ids[i]) in seen:
                 continue
             seen[str(feats.ids[i])] = (feats, i, specs[i])
+    cbox = (near[0] - 16.0, near[1] - 16.0, near[2] + 16.0, near[3] + 16.0)
     rings = []                                  # (fid, spec, lon/lat ring) near the tile (xy at h = 0)
     for fid in sorted(seen):
         feats, i, spec = seen[fid]
-        fb = feats.boxes(frame)[i]          # (the whole feature far from the tile: none of its parts is near)
-        if fb[2] < near[0] or fb[0] > near[2] or fb[3] < near[1] or fb[1] > near[3]:
-            continue
+        if hasattr(feats, "boxes"):
+            fb = feats.boxes(frame)[i]          # (the whole feature far from the tile: none of its parts is near)
+            if fb[2] < near[0] or fb[0] > near[2] or fb[3] < near[1] or fb[1] > near[3]:
+                continue
         for ring in ground_parts(feats, i):
             e, n = mapgeom.enu_xy(feats, frame, ring)
             if (e.max() < near[0] or e.min() > near[2] or n.max() < near[1] or n.min() > near[3]):
+                continue
+            if (e.min() < cbox[0] or e.max() > cbox[2] or n.min() < cbox[1] or n.max() > cbox[3]) \
+                    and not clip_polyline(np.column_stack([e, n]), *cbox):
                 continue
             rings.append((fid, spec, ring))
     roads = []                                  # (fid, spec, centreline (k, 3), lon) near the tile
@@ -3232,6 +3299,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                             chunks.append(_chunk(look, w, c))
     if walks is not None:
         runs_near = join_walk_ends(runs_near, [(p2[:, :2], s2.width / 2) for _, s2, p2, _ in roads])
+        drain_runs = []
         for rn in runs_near:
             fid, side, w, run0 = rn["fid"], rn["side"], rn["w"], rn["pts"]
             for run in clip_polyline(run0, *exact):
@@ -3243,12 +3311,17 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 at_j1 = last and rn["j"][1]
                 caps = (first and not at_j0 and not _on_box(run[0], exact),
                         last and not at_j1 and not _on_box(run[-1], exact))
+                run = densify(run, WALK_STEP)
                 rl = [r for key in rn.get("ramp_keys", [(fid, side)]) for r in jramps.get(key, [])]
                 ramps = junctions.ramp_ranges(run, rl)
-                walks.append({"pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
-                              "median": rn.get("median", False)})
+                wk = {"pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
+                      "median": rn.get("median", False)}
+                walks.append(wk)
                 if not rn.get("median"):                # (a median: a bare curb, no storm drains)
-                    chunks.extend(drains(run, side, (caps[0] or at_j0, caps[1] or at_j1), w))
+                    drain_runs.append((wk, (caps[0] or at_j0, caps[1] or at_j1)))
+        _conform_walks(frame, walks, elev)
+        for wk, dcaps in drain_runs:
+            chunks.extend(drains(wk["pts"], wk["side"], dcaps, wk["w"]))
     if lines is not None:                           # the centrelines near the tile (buildings' front doors)
         lines.extend((pts[:, :2], spec.width / 2, spec.cls, spec.urban) for _, spec, pts, _ in roads)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
@@ -3318,8 +3391,13 @@ class Tracker:
                 and self.retry.get(k, 0.0) <= now]
         car_key = path_key(x, y, vx, vy) if fast else view_key(conn, aid, x, y)
         cam_key = view_key(conn, aid, *view) if seen else None
-        want.sort(key=lambda k: (1, cam_key(k)) if k in seen else (0, car_key(k)))
-        for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
+        car_want = [k for k in want if k not in seen]
+        seen_want = [k for k in want if k in seen]
+        car_want.sort(key=car_key)
+        if cam_key:
+            seen_want.sort(key=cam_key)
+        todo = car_want if car_want else seen_want
+        for tx, ty in todo[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
             self.building.add((tx, ty))
             fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
@@ -3423,7 +3501,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             ww = wk.get("w", SIDEWALK["w"])
             curb, out = sidewalks.run_geometry(wk["pts"], wk["side"], ww)
             b.add_run(curb, out, ww, caps=wk["caps"], ramps=wk.get("ramps", ()),
-                      slab=sidewalks.BRICK if wk.get("brick") else 1)
+                      slab=sidewalks.BRICK if wk.get("brick") else 1, back_z=wk.get("back_z"))
         if not b.empty():
             shape = f"walks_{aid}_{tx}_{ty}.cdae"
             b.write(os.path.join(out_dir, shape))

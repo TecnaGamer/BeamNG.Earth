@@ -3,7 +3,7 @@
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$HERE/build"
-${CC:-gcc} -shared -fPIC -O2 -Wall -Wextra -pthread -o "$HERE/build/libbngearth_gcpatch.so" "$HERE/bngearth_gcpatch.c"
+${CC:-gcc} -shared -fPIC -O2 -Wall -Wextra -o "$HERE/build/libbngearth_gcpatch.so" "$HERE/bngearth_gcpatch.c"
 echo "built $HERE/build/libbngearth_gcpatch.so"
 echo "Steam > BeamNG.drive > Properties > Launch options:"
 echo "  LD_PRELOAD=\"$HERE/build/libbngearth_gcpatch.so:\$LD_PRELOAD\" %command%"

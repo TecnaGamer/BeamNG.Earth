@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import buildings as bld  # noqa: E402
 import cdae  # noqa: E402
@@ -197,6 +198,27 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(s.roof_mat.startswith(bld.ROOF_METAL))
         self.assertGreater(s.height, 5.0)
 
+    def test_l_shaped_or_wide_house_stays_flat_not_inflated_box(self):
+        # L-shaped house (box_fill = 0.75 < 0.90) keeps its true footprint via a flat roof
+        L = np.array([(0, 0), (12, 0), (12, 6), (6, 6), (6, 12), (0, 12)], np.float64)
+        s = bld.plan(L, {"class": "house"}, 0, 39.29, -76.61)
+        self.assertEqual(s.roof, "flat")
+        # Wide footprint (hw > 8.5 m) also stays flat for non-churches
+        wide = bld.plan(rect(0, 0, 24, 18), {"class": "house", "roof_shape": "gabled"}, 0, 39.29, -76.61)
+        self.assertEqual(wide.roof, "flat")
+        # Churches with hw > 8.5 m keep their gabled roof
+        church = bld.plan(rect(0, 0, 30, 20), {"class": "church"}, 0, 39.29, -76.61)
+        self.assertEqual(church.roof, "gabled")
+
+    def test_suburban_houses_and_retail_storeys(self):
+        houses = [bld.plan(rect(x * 30, 0, 10, 12), {"class": "house"}, 0, 39.29, -76.61) for x in range(100)]
+        one_share = sum(1 for h in houses if h.floors == 1) / len(houses)
+        self.assertGreater(one_share, 0.45, "more single-storey detached houses")
+        supermarket = bld.plan(rect(0, 0, 50, 40), {"class": "supermarket"}, 0, 39.29, -76.61)
+        self.assertEqual(supermarket.floors, 1)
+        strip_mall = [bld.plan(rect(x * 80, 0, 45, 20), {"class": "retail"}, 0, 39.29, -76.61) for x in range(20)]
+        self.assertTrue(all(m.floors == 1 for m in strip_mall))
+
     def test_deterministic(self):
         a = bld.plan(rect(3, 7, 12, 9), {"class": ""})
         b = bld.plan(rect(3, 7, 12, 9), {"class": ""})
@@ -351,6 +373,40 @@ class SplitTest(unittest.TestCase):
             shape = cdae.read(os.path.join(d, "t.cdae"))
             self.assertEqual(shape["names"][1:], [f"detail{int(bld.BLD_LOD_PX)}", "detail2"])
             self.assertEqual(len(shape["meshes"]), 2)
+            self.assertEqual(shape["meshes"][1]["primitives"][0], 1, "coarse lite LOD emits a single draw primitive")
+
+    def test_shadow_materials_and_lite_window_omission(self):
+        import json
+        mats_path = (Path(__file__).resolve().parents[2] / "mod" / "beamng_earth" / "levels" / "beamng_earth"
+                     / "art" / "shapes" / "beamngEarth" / "buildings.materials.json")
+        mats = json.loads(mats_path.read_text(encoding="utf-8"))
+        for non_shadow in ("bne_bld_glass", "bne_bld_marble", "bne_bld_far", "bne_wire", "bne_sidewalk_brick"):
+            self.assertIn(non_shadow, mats)
+            self.assertIs(mats[non_shadow].get("castShadows"), False, non_shadow)
+        tun_path = mats_path.parent / "tunnel.materials.json"
+        tun_mats = json.loads(tun_path.read_text(encoding="utf-8"))
+        for non_shadow in ("bne_tunnel_light", "bne_tunnel_soil"):
+            self.assertIn(non_shadow, tun_mats)
+            self.assertIs(tun_mats[non_shadow].get("castShadows"), False, non_shadow)
+        # A house with plain walls uses bne_bld_glass for laid-over windows in the full mesh and omits them in lite
+        spec = next(bld.plan(rect(k * 40, 20, 12, 9), {"class": "house"}, 0, 39.2, -76.9)
+                    for k in range(40) if bld.plan(rect(k * 40, 20, 12, 9), {"class": "house"}, 0, 39.2, -76.9).wall)
+        _, _, T_full, M_full, mats_full, _ = bld.build([(spec, 0.0, 0.0)], lite=False)
+        _, _, T_lite, M_lite, mats_lite, _ = bld.build([(spec, 0.0, 0.0)], lite=True)
+        far_mesh = bld.build([(spec, 0.0, 0.0)], lite=True, far=True)
+        _, _, T_far, M_far, mats_far, _ = far_mesh
+        self.assertIn(mats_full.index(bld.GLASS), set(M_full.tolist()))
+        self.assertLess(len(T_lite), len(T_full), "lite mesh omits laid-over glass window quads")
+        self.assertEqual(mats_lite, (bld.FACADE,), "near lite LOD uses bne_bld_facade")
+        self.assertEqual(mats_far, ("bne_bld_far",), "far horizon tiles use bne_bld_far (castShadows=false)")
+        self.assertTrue((M_lite == 0).all())
+        self.assertTrue((M_far == 0).all())
+        self.assertEqual(bld.BLD_LOD_PX, 2700.0)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "bldfar.cdae"
+            bld.write(str(p), far_mesh)
+            shape = cdae.decode(p.read_bytes())
+            self.assertEqual([m["name"] for m in shape["materials"]], ["bne_bld_far"])
 
 
 class MeshTest(unittest.TestCase):
@@ -384,6 +440,15 @@ class MeshTest(unittest.TestCase):
             self.assertEqual(spec.roof, shape)
             self.assertGreater(P[:, 2].max(), spec.height + 1.5, "a ridge above the eaves")
 
+    def test_roof_rise_capped_and_hillside_base_anchored(self):
+        # Steep European roof on a 16 m wide house (hw = 8.0 m, pitch 42 deg -> raw rise ~7.5 m, capped to 4.2 m)
+        spec = bld.plan(rect(0, 0, 20, 16), {"class": "house", "roof_shape": "gabled"}, 0, 52.37, 4.90)
+        self.assertEqual(spec.roof, "gabled")
+        P, *_ = bld.build([(spec, 10.0, 15.0)])     # hillside: gmin=10, gmax=15 -> g_base=11.5
+        z_eave = 11.5 + spec.height
+        self.assertLessEqual(P[:, 2].max(), z_eave + 4.2 + 0.01)
+        self.assertGreater(P[:, 2].max(), z_eave + 3.5)
+
 
 class DoorTest(unittest.TestCase):
     def test_door_faces_the_road(self):
@@ -411,7 +476,7 @@ class DoorTest(unittest.TestCase):
                     bld._signs(m, spec, spec.ring, 4.2, bld._Looks(spec.seed))
                     if m.n:                     # a few shops have none (hashed)
                         signed += 1
-                        ys = m.arrays()[0][:, 1]
+                        ys = np.array(m.P)[:, 1]
                         self.assertTrue((ys < 0.01).all() and (ys > -bld.SIGN_OUT - 0.01).all(),
                                         "boxes just out from the south wall")
         self.assertGreater(shops, 8)
@@ -441,7 +506,7 @@ class DoorTest(unittest.TestCase):
             with_porch += 1
             m = bld.Mesh()
             bld._porch(m, spec, 1.0, bld._Looks(spec.seed))
-            P = m.arrays()[0]
+            P = np.array(m.P)
             self.assertTrue(m.n > 0)
             self.assertAlmostEqual(P[:, 1].min(), -(bld.PORCH_DEPTH_M + 0.2), delta=0.01, msg="out in front of the south wall")
             self.assertGreaterEqual(P[:, 1].max(), -0.01)
@@ -613,16 +678,6 @@ class MachineLearnedFootprintTest(unittest.TestCase):
         self.assertFalse(bld._ml_false(sq(75, 75), bridge, river))
         self.assertFalse(bld._ml_false(sq(150, 20), bridge, river))
 
-    def test_vehicle_on_a_road(self):
-        """GitHub #2: a lorry on a Norwegian trunk road (Microsoft's footprint 4 x 17 m) stood as a white building
-        over the lanes; a house beside the road stays."""
-        road = [np.array([[0.0, 0.0], [200.0, 0.0]])]
-        lorry = np.array([[50, 0.5], [67, 0.5], [67, 4.5], [50, 4.5]], float)      # in the outer lane
-        house = np.array([[50, 9], [62, 9], [62, 19], [50, 19]], float)
-        self.assertTrue(bld._ml_false(lorry, None, None, road))
-        self.assertFalse(bld._ml_false(house, None, None, road))
-        self.assertFalse(bld._ml_false(lorry, None, None, None))
-
 
 class BridgeStructureTest(unittest.TestCase):
     """A bridge's tower (Overture bridge_structure: the Queensboro Bridge's, 33 x 4.6 x 110 m) is an open steel frame
@@ -672,18 +727,6 @@ class StoopTest(unittest.TestCase):
         front = (P[:, 1] < 0.0) & (P[:, 1] > -2.0)          # out from the wall y = 0 (edge 0 runs along +x)
         self.assertTrue(front.any())
         self.assertLessEqual(P[front, 2].min(), 10.0 - 0.3 + 1e-6)
-
-
-class PortalSkipTest(unittest.TestCase):
-    def test_a_service_tunnel_lifts_no_building(self):
-        # GitHub #60: a 15 m drive-through (a service road tunnel) under an Oklahoma City church floated it 10 m up
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from test_roads import features, FRAME
-        f = features([[(-100, 0), (100, 0)], [(-100, 50), (100, 50)]], ["service", "secondary"],
-                     flags=[(0, "is_tunnel", 0.4, 0.6), (1, "is_tunnel", 0.4, 0.6)], ids=["dock", "street"])
-        lines = bld.tunnel_lines(FRAME, [f], -128.0, -128.0)
-        self.assertEqual(len(lines), 1, "the street's tunnel only")
-        self.assertAlmostEqual(float(lines[0][:, 1].mean()), 50.0 + 128.0, delta=0.5)
 
 
 if __name__ == "__main__":

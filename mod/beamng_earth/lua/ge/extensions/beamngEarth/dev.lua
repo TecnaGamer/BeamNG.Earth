@@ -74,9 +74,9 @@ M.STATS_WINDOW_S = 5
 M.MAX_OUTLINES = 150
 M.MAX_LOADING = 100
 M.NEXT_IMPORTS = 10
-M.MAX_MAP_TILES = 800
+M.MAX_MAP_TILES = 1600
 M.MAP_PX = 320
-M.MAP_MIN_PX = 1.5       -- tiles smaller than this on the mini-map are left out
+M.MAP_MIN_PX = 1.5       -- minimum pixel size on the mini-map
 M.MAX_LINES = 1200       -- debug lines per frame
 M.LOG_N = 50
 M.PROBE_TOL = 0.05       -- m (V1_4_SPEC exactMiss: > 5 cm off is a miss)
@@ -255,7 +255,11 @@ end
 ------------------------------------------------------------------------------------------
 -- the spatial index, kept by farfield while the dev tools are on
 
+local lastAnchor = nil
+local lastRebaseCount = nil
+
 local function addTile(inst)
+  if not inst or not inst.id or inst.doomed or inst.failed then return end
   idx:insert(inst.id, inst)
   if inst.mat then
     matLevel[inst.mat] = inst.level
@@ -263,22 +267,52 @@ local function addTile(inst)
   end
 end
 
+local function removeTile(id)
+  if not idx or idx:remove(id) then counts.removes = counts.removes + 1 end
+  if selected and (selected.id == id or selected.doomed or selected.failed) then selected = nil end
+end
+
+local function pruneIndex()
+  if not idx then return end
+  local rm = nil
+  for _, lv in pairs(idx.levels) do
+    for _, c in pairs(lv.cells) do
+      for id, inst in pairs(c) do
+        if inst.doomed or inst.failed then
+          if not rm then rm = {} end
+          rm[#rm + 1] = id
+        end
+      end
+    end
+  end
+  if rm then
+    for i = 1, #rm do removeTile(rm[i]) end
+    if selected and (selected.doomed or selected.failed) then selected = nil end
+  end
+end
+
 local function rebuild()
   if not idx then return end
   idx:clear()
   farfield.eachTile(addTile)
+  lastAnchor = farfield.anchorId()
+  refreshT = huge
+  if selected and (selected.doomed or selected.failed) then selected = nil end
 end
 
 local watcher = {
   onAdd = function(inst)
     counts.adds = counts.adds + 1
-    if idx and inst.id then addTile(inst) end
+    if idx and inst.id and not inst.doomed and not inst.failed then addTile(inst) end
   end,
   onRemove = function(id)
-    counts.removes = counts.removes + 1
-    if idx then idx:remove(id) end
+    removeTile(id)
   end,
-  onReset = function() rebuild() end,
+  onReset = function()
+    rebuild()
+    lists.map, lists.outlines, lists.loading, lists.labels, lists.queued = {}, {}, {}, {}, {}
+    refreshT, physT, ringKey = huge, huge, nil
+  end,
 }
 
 ------------------------------------------------------------------------------------------
@@ -303,10 +337,11 @@ local function updateActive()
     idx = tileindex.new()
     farfield.setWatcher(watcher)
     rebuild()
-    lastFrameT, evPrev = nil, nil
+    lastFrameT, evPrev, lastRebaseCount = nil, nil, nil
   elseif was and not active then
     farfield.setWatcher(nil)
     idx = nil
+    lastAnchor, lastRebaseCount = nil, nil
     restoreControls()
     for k in pairs(lists) do lists[k] = {} end
     selected = nil
@@ -472,15 +507,19 @@ end
 
 local function refreshTiles(px, py, st)
   local anchor = farfield.anchorId()
+  if anchor ~= lastAnchor then rebuild() end
+  pruneIndex()
   local exact = exactLevel()
   if on.outlines then
     local list = {}
     local res = tileindex.nearest(idx:query(px, py, params.outlineKm * 1000), M.MAX_OUTLINES)
     for _, r in ipairs(res) do
       local inst = r.item
-      local s = M.tileState(inst, anchor)
-      local rgb = s == 'shown' and levelRgb(inst.level, exact) or M.STATE_RGB[s] or M.STATE_RGB.hidden
-      addBox(list, inst.x0, inst.y0, inst.x1, inst.y1, inst.z + (inst.off or 0) + M.LIFT, colorF(rgb))
+      if not inst.doomed and not inst.failed then
+        local s = M.tileState(inst, anchor)
+        local rgb = s == 'shown' and levelRgb(inst.level, exact) or M.STATE_RGB[s] or M.STATE_RGB.hidden
+        addBox(list, inst.x0, inst.y0, inst.x1, inst.y1, inst.z + (inst.off or 0) + M.LIFT, colorF(rgb))
+      end
     end
     lists.outlines = list
   end
@@ -492,12 +531,14 @@ local function refreshTiles(px, py, st)
     local flashA, flashB = colorF(M.STATE_RGB.queued), colorF(M.STATE_RGB.queued2)
     for _, set in ipairs({ main, pre }) do
       for _, inst in ipairs(set) do
-        lists.queued[#lists.queued + 1] = inst
-        if on.loading and #box < 4 * M.MAX_LOADING and tileindex.dist2(inst, px, py) <= r2 then
-          local z = inst.z + M.LIFT
-          local p1, p2, p3, p4 = vec3(inst.x0, inst.y0, z), vec3(inst.x1, inst.y0, z), vec3(inst.x1, inst.y1, z), vec3(inst.x0, inst.y1, z)
-          box[#box + 1] = { p1, p2, flashA, flashB }; box[#box + 1] = { p2, p3, flashA, flashB }
-          box[#box + 1] = { p3, p4, flashA, flashB }; box[#box + 1] = { p4, p1, flashA, flashB }
+        if not inst.doomed and not inst.failed then
+          lists.queued[#lists.queued + 1] = inst
+          if on.loading and #box < 4 * M.MAX_LOADING and tileindex.dist2(inst, px, py) <= r2 then
+            local z = inst.z + M.LIFT
+            local p1, p2, p3, p4 = vec3(inst.x0, inst.y0, z), vec3(inst.x1, inst.y0, z), vec3(inst.x1, inst.y1, z), vec3(inst.x0, inst.y1, z)
+            box[#box + 1] = { p1, p2, flashA, flashB }; box[#box + 1] = { p2, p3, flashA, flashB }
+            box[#box + 1] = { p3, p4, flashA, flashB }; box[#box + 1] = { p4, p1, flashA, flashB }
+          end
         end
       end
     end
@@ -512,16 +553,41 @@ local function refreshTiles(px, py, st)
   end
   if on.map then
     local R = params.mapKm * 1000
-    local pxPerM = (M.MAP_PX / 2) / R
-    local levelMin = floor(math.log(M.MAP_MIN_PX / (pxPerM * lattice.L0)) / math.log(2) + 0.999)
-    local res = tileindex.nearest(idx:query(px, py, R * 1.415, nil, levelMin), M.MAX_MAP_TILES)
+    local raw = idx:query(px, py, R * 1.415)
+    local activeTiles = {}
+    for _, r in ipairs(raw) do
+      local inst = r.item
+      if not inst.doomed and not inst.failed
+        and not (inst.grp and inst.grp.role == 'remove' and inst.grp.g and #(inst.grp.g.adds or {}) > 0) then
+        activeTiles[#activeTiles + 1] = r
+      end
+    end
+    table.sort(activeTiles, function(a, b)
+      local va = (a.item.shown or a.item.grp ~= nil) and 1 or 0
+      local vb = (b.item.shown or b.item.grp ~= nil) and 1 or 0
+      if va ~= vb then return va > vb end
+      if a.d2 ~= b.d2 then return a.d2 < b.d2 end
+      return a.id < b.id
+    end)
+    for i = #activeTiles, M.MAX_MAP_TILES + 1, -1 do activeTiles[i] = nil end
+    local layer = { hidden = 1, old = 2, crossover = 4, shown = 4 }
     local list = {}
-    for i, r in ipairs(res) do
+    for _, r in ipairs(activeTiles) do
       local inst = r.item
       local s = M.tileState(inst, anchor)
-      list[i] = { inst = inst, rgb = s == 'shown' and levelRgb(inst.level, exact) or M.STATE_RGB[s] or M.STATE_RGB.hidden }
+      if s ~= 'doomed' then
+        local rgb = (s == 'shown' or (s == 'crossover' and inst.shown)) and levelRgb(inst.level, exact)
+          or M.STATE_RGB[s] or M.STATE_RGB.hidden
+        list[#list + 1] = { inst = inst, state = s, rgb = rgb }
+      end
     end
-    lists.map, mapLevelMin = list, levelMin
+    table.sort(list, function(a, b)
+      local la, lb = layer[a.state] or 0, layer[b.state] or 0
+      if la ~= lb then return la < lb end
+      if a.inst.level ~= b.inst.level then return a.inst.level > b.inst.level end
+      return (a.inst.id or 0) < (b.inst.id or 0)
+    end)
+    lists.map, mapLevelMin = list, nil
   end
 end
 
@@ -644,6 +710,7 @@ end
 local function fmt(v, f) return v ~= nil and string.format(f or '%.1f', v) or '-' end
 
 local function refreshStats(st, gov)
+  pruneIndex()
   local fs = farfield.stats()
   local c = farfield.counters()
   local dt = max(1e-3, now - stats.t)
@@ -774,13 +841,19 @@ local function drawMap(st)
   im.ImDrawList_AddRectFilled(dl, im.ImVec2(x0, y0), im.ImVec2(x0 + size, y0 + size), u32({ 0.05, 0.05, 0.06 }, 0.9))
   for _, e in ipairs(lists.map) do
     local inst = e.inst
-    local a, b = im.ImVec2(sx(inst.x0), sy(inst.y1)), im.ImVec2(sx(inst.x1), sy(inst.y0))
-    im.ImDrawList_AddRectFilled(dl, a, b, u32(e.rgb, 0.45))
-    im.ImDrawList_AddRect(dl, a, b, u32(e.rgb, 0.9))
+    if not inst.doomed and not inst.failed then
+      local ax, ay = sx(inst.x0), sy(inst.y1)
+      local bx, by = max(ax + 1, sx(inst.x1)), max(ay + 1, sy(inst.y0))
+      local a, b = im.ImVec2(ax, ay), im.ImVec2(bx, by)
+      im.ImDrawList_AddRectFilled(dl, a, b, u32(e.rgb, 0.45))
+      im.ImDrawList_AddRect(dl, a, b, u32(e.rgb, 0.9))
+    end
   end
   for _, inst in ipairs(lists.queued) do
-    im.ImDrawList_AddRect(dl, im.ImVec2(sx(inst.x0), sy(inst.y1)), im.ImVec2(sx(inst.x1), sy(inst.y0)),
-      u32(M.STATE_RGB.queued, 1), 0, 0, 2)
+    if not inst.doomed then
+      im.ImDrawList_AddRect(dl, im.ImVec2(sx(inst.x0), sy(inst.y1)), im.ImVec2(sx(inst.x1), sy(inst.y0)),
+        u32(M.STATE_RGB.queued, 1), 0, 0, 2)
+    end
   end
   local b = st and st.block
   if b then
@@ -801,10 +874,10 @@ local function drawMap(st)
   if clicked then
     local m = im.GetMousePos()
     local wx, wy = px + (m.x - cx) / s, py - (m.y - cy) / s
-    selected = idx and idx:at(wx, wy) or nil
+    selected = idx and idx:at(wx, wy, function(i) return not i.doomed and not i.failed end) or nil
     if not selected then
       for _, inst in ipairs(lists.queued) do
-        if wx >= inst.x0 and wx < inst.x1 and wy >= inst.y0 and wy < inst.y1 then selected = inst; break end
+        if not inst.doomed and wx >= inst.x0 and wx < inst.x1 and wy >= inst.y0 and wy < inst.y1 then selected = inst; break end
       end
     end
   end
@@ -963,6 +1036,16 @@ function M.frame(dtReal, dtSim, st, gov)
   if forced and ((st and (st.rebaseCount or 0) > forced.count) or now - forced.t > M.FORCE_TIMEOUT_S) then
     rebase.distance = forced.prev
     forced = nil
+  end
+
+  local curAnchor = farfield.anchorId()
+  local curRebase = st and st.rebaseCount or nil
+  if lastRebaseCount == nil then lastRebaseCount = curRebase end
+  if curAnchor ~= lastAnchor or (curRebase ~= nil and curRebase ~= lastRebaseCount) then
+    lastRebaseCount = curRebase
+    rebuild()
+    lists.map, lists.outlines, lists.loading, lists.labels, lists.queued = {}, {}, {}, {}, {}
+    refreshT, physT, ringKey = huge, huge, nil
   end
 
   refreshT = refreshT + dtReal

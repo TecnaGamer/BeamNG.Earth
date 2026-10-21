@@ -313,11 +313,15 @@ class ServerSurfaceTest(unittest.TestCase):
         info = s.make_heightmap(a, 0.0, 0.0, None)
         self.assertEqual(info["layers"], sf.mask_names(s.hm_name((a.id, 0.0, 0.0))[:-4]))
         self.assertTrue(info["surfaceComplete"])
-        grass = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.GRASS])))
-        dirt = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.DIRT])))
-        self.assertEqual(grass.shape, (512, 512))
-        self.assertTrue((grass[:200] == 255).all() and (grass[-200:] == 0).all(), "row 0 is north (grass)")
-        self.assertTrue((dirt[-200:] == 255).all())
+        self.assertTrue(os.path.exists(os.path.join(s.out_dir, info["ter"])))
+        self.assertTrue(os.path.exists(os.path.join(s.out_dir, s.hm_name((a.id, 0.0, 0.0)))))
+        for mask_file in info["layers"]:
+            self.assertTrue(os.path.exists(os.path.join(s.out_dir, mask_file)))
+        # Follow blocks suppress hm PNG and mask writes
+        info_follow = s.make_heightmap(a, 128.0, 0.0, None)
+        self.assertFalse(os.path.exists(os.path.join(s.out_dir, s.hm_name((a.id, 128.0, 0.0)))))
+        for mask_file in info_follow["layers"]:
+            self.assertFalse(os.path.exists(os.path.join(s.out_dir, mask_file)))
         conn = earthd.Connection.__new__(earthd.Connection)
         conn.s = s
         msg = conn.terrain_msg((a.id, 0.0, 0.0), info)

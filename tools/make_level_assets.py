@@ -20,32 +20,17 @@ def pretty(path, obj):
         json.dump(obj, f, indent=2)
         f.write("\n")
 
-# The level select's card: the whole Earth's details as the stock levels have theirs (the same as the mod's
-# levelinfo.lua BASE, which writes this file over again in the user folder with a spawn point per saved place). size:
-# the equator's 40,075 km by 12,728 km, whose product is the Earth's surface (510,072,000 km2).
 pretty(os.path.join(L, "info.json"), {
     "title": "BeamNG.Earth",
-    "description": "The whole Earth, streamed around you by the BeamNG.Earth companion server. Start the server, then "
-                   "pick a place below or teleport from the BeamNG.Earth window. Preview: Sentinel-2 cloudless 2016 by "
-                   "EOX IT Services GmbH (CC BY 4.0).",
+    "description": "The whole Earth, streamed around you by the BeamNG.Earth companion server. Start the server, then teleport from the BeamNG.Earth window.",
     "previews": ["beamng_earth_preview.jpg"],
-    "size": [40075017, 12727986],
-    "biome": "Every biome on Earth: oceans, deserts, rainforests, forests, grasslands, tundra, mountains and ice",
-    "roads": "About 64 million km of roads in every country: motorways, highways, city streets, rural and dirt roads",
-    "suitablefor": "Freeroam, road trips, exploring, off-roading",
-    "features": "The real planet from open data: terrain, roads, bridges, tunnels, buildings, forests, lakes, seas, "
-                "airports and live weather",
-    "country": "Every country",
+    "size": [-1, -1],
+    "biome": "Earth",
+    "roads": "None (v1)",
     "authors": "BeamNG.Earth",
     "defaultSpawnPointName": "spawn_default",
     "supportsTraffic": True,      # the stock traffic / parked-car choice at the level start (2026-10-14)
     "supportsTimeOfDay": True,
-    "spawnPoints": [
-        {"objectname": "spawn_default", "translationId": "Where you left off", "preview": "beamng_earth_preview.jpg",
-         "description": "The last place you teleported to."},
-        {"objectname": "bne_random", "translationId": "Random location", "preview": "beamng_earth_preview.jpg",
-         "description": "A road somewhere in the world, picked at random each time."},
-    ],
 })
 
 lines(os.path.join(L, "main/items.level.json"), [
@@ -218,5 +203,12 @@ for old in ("beamngEarth_layer_2048.png", "beamngEarth_flat_2048.png"):
     if os.path.exists(os.path.join(T, old)):
         os.remove(os.path.join(T, old))
 
-# (the preview, the whole Earth as the world map shows it: tools/make_level_preview.py)
+prev = Image.new("RGB", (512, 288))
+d = ImageDraw.Draw(prev)
+for y in range(288):
+    t = y / 287
+    d.line([(0, y), (511, y)], fill=(int(70 + 90 * t), int(120 + 60 * t), int(200 - 60 * t)))
+d.ellipse([156, 44, 356, 244], fill=(40, 90, 160), outline=(230, 230, 230), width=3)
+d.text((200, 250), "BeamNG.Earth", fill=(255, 255, 255))
+prev.save(os.path.join(L, "beamng_earth_preview.jpg"), quality=85)
 print("ok")

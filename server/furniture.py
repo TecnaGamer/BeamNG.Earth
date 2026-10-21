@@ -292,7 +292,17 @@ SIGN_IN_M = 30.0            # m past the junction
 SIGN_OFF_M = 1.5            # m beyond the carriageway's edge
 
 
-def speed_signs(roads, speeds, box, left_hand=False, mph_signs=True):
+def _sample_z(elev, x, y, fallback):
+    if elev is None:
+        return float(fallback)
+    try:
+        z = float(np.asarray(elev(float(x), float(y)), dtype=np.float64).flat[0])
+        return z if math.isfinite(z) else float(fallback)
+    except Exception:
+        return float(fallback)
+
+
+def speed_signs(roads, speeds, box, left_hand=False, mph_signs=True, elev=None):
     """mph: the country posts mph (else the km/h models). Prop rows of speed-limit signs: on two-way roads of SIGN_CLASSES whose limit (speeds: fid -> mph, the
     road graph's) has a sign model, SIGN_IN_M after each end of a segment of at least SIGN_MIN_M, on the kerb
     side of the traffic leaving that end, facing it."""
@@ -319,7 +329,8 @@ def speed_signs(roads, speeds, box, left_hand=False, mph_signs=True):
             side = np.array([f[1], -f[0]]) * (-1 if left_hand else 1)
             q = p[0][:2] + side * (spec.width / 2 + SIGN_OFF_M)
             if x0 <= q[0] < x1 and y0 <= q[1] < y1:
-                rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[0][2]), 2),
+                z = _sample_z(elev, q[0], q[1], p[0][2])
+                rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(z, 2),
                              round(_yaw(side[0], side[1]), 1), 1.0, 2.6, 0.0])
     return rows
 
@@ -414,7 +425,8 @@ def under_decks(rows, decks, wires=None):
     return out
 
 
-def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, speeds=None, mph=True, decks=()):
+def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, speeds=None, mph=True, decks=(),
+          elev=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -455,14 +467,15 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
                     yaw = _yaw(out[0], out[1])
-                    run_poles.append((float(q[0]), float(q[1]), float(p[2]), yaw))
+                    z = float(p[2] + curb_h)
+                    run_poles.append((float(q[0]), float(q[1]), z, yaw))
                     if x0 <= q[0] < x1 and y0 <= q[1] < y1:
-                        rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                        rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(z, 2),
                                      round(yaw, 1), 1.0, 9.2, 0.0])
                         k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
                         if k % 2 == 0:
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                         round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                                         round(z + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
                 if wires is not None and len(run_poles) > 1:
                     wires.extend(_own_spans(run_poles, box))
             rule = None
@@ -495,7 +508,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1, lambda out: _yaw(-out[0], -out[1]))
     rows.extend(junction_props(roads, box, curb_h, left_hand))
     if speeds:
-        rows.extend(speed_signs(roads, speeds, box, left_hand, mph))
+        rows.extend(speed_signs(roads, speeds, box, left_hand, mph, elev=elev))
     for fid, spec, line, _ in roads:
         if spec.urban or fid in lit or spec.cls not in POLE_CLASSES or len(line) < 2:
             continue
@@ -511,16 +524,17 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             n = np.array([-d[1], d[0]]) * side
             q = p[:2] + n * (spec.width / 2 + POLE_OFF_M)
             inside = x0 <= q[0] < x1 and y0 <= q[1] < y1
-            if not _clear(np.array([q[0], q[1], p[2]]), others, fid):
+            z = _sample_z(elev, q[0], q[1], p[2])
+            if not _clear(np.array([q[0], q[1], z]), others, fid):
                 if len(run) > 1 and wires is not None:
                     wires.extend(_own_spans(run, box))
                 run = []
                 continue
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
-            run.append((float(q[0]), float(q[1]), float(p[2]), yaw))
+            run.append((float(q[0]), float(q[1]), z, yaw))
             if inside:
-                rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(z, 2),
                              round(yaw, 1), 1.0, 9.2, 0.0])
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))

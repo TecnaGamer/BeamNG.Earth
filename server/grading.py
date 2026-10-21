@@ -911,12 +911,22 @@ def _is_link(spec):
 class GradedDem:
     """dem.Dem with sample() graded under the roads; everything else passes through."""
 
-    def __init__(self, dem, grader):
-        self._dem, self._grader = dem, grader
+    def __init__(self, dem, grader, lift=0.0):
+        self._dem = dem
+        self._grader = grader
+        self._lift = float(lift)
 
-    def sample(self, lat, lon, zoom, progress=None):
-        base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
-        return self._grader.apply(lat, lon, base)
+    def sample(self, lat, lon, zoom=None, progress=None):
+        if zoom is None:
+            base = self._dem.sample(lat, lon)
+        elif progress is not None:
+            base = self._dem.sample(lat, lon, zoom, progress)
+        else:
+            base = self._dem.sample(lat, lon, zoom)
+        return self._grader.apply(lat, lon, base, lift=self._lift)
+
+    def pinned(self, zoom):
+        return GradedDem(self._dem.pinned(zoom), self._grader, lift=self._lift)
 
     def __getattr__(self, name):
         return getattr(self._dem, name)

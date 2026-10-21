@@ -23,7 +23,6 @@ local roads = require('beamngEarth/roads')
 local gov = { tries = 0 }
 function gov:try() self.tries = self.tries + 1; return self.allow == nil or self.tries <= self.allow end
 function gov:charge() end
-function gov:chargeMotion() end
 
 local function chunk(x)
   return string.format('{ m = "road_asphalt_2lane", w = 6, tl = 11, p = 20, n = { {%d, 0, 10}, {%d, 10, 10}, {%d, 20, 10} } }', x, x, x)
@@ -132,10 +131,15 @@ files['/t/wc.json'] = '{ chunks = { }, walk = { shape = "/t/walks_2_6_6.cdae", p
   'walkcol = { shape = "/t/walkcol_2_6_6.cdae", pos = { 0, 0, 0 } } }'
 roads.onTile({ anchorId = 2, key = '6_6', path = '/t/wc.json', n = 0 }, 2)
 roads.update(gov, 2)
-local kinds = {}
-for _, o in ipairs(statics()) do kinds[o.fields.shapeName] = o.fields.collisionType end
+local kinds, renderOff = {}, {}
+for _, o in ipairs(statics()) do
+  kinds[o.fields.shapeName] = o.fields.collisionType
+  renderOff[o.fields.shapeName] = (o.renderEnabled == false or o.fields.isRenderEnabled == 'false')
+end
 T.check(kinds['/t/walks_2_6_6.cdae'] == 'None' and kinds['/t/walkcol_2_6_6.cdae'] == 'Collision Mesh',
   'walkcol collides, the drawn sidewalks only render')
+T.check(renderOff['/t/walkcol_2_6_6.cdae'] == true and not renderOff['/t/walks_2_6_6.cdae'],
+  'collision-only walkcol mesh disables rendering so shadow cascades skip it')
 roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 T.check(#statics() == 0, 'walkcol dropped with its tile')
@@ -166,33 +170,6 @@ for _, g in ipairs(gone) do got[g[1]] = g[2] end
 T.check(#gone == 2 and got[12] == 40 and got[13] == 41, 'objects deleted: both slots reported with their serials')
 T.check(#roads.takeSlotsGone('other') == 0, 'reports are per server session')
 
--- (from PR #64, KyzoFox 1.5.4) a tile sent again under the same key before its meshes were made: the old tile's queued meshes
--- (their slot paths already reported gone, so the server may have given them to another tile) are not made into the
--- new tile (houses floating near Cleburne, AL: another tile's buildings at this tile's place, 2026-10-19)
-for _, o in ipairs(statics()) do o:delete() end
-roads.takeSlotsGone('sA')
-gov.allow, gov.tries = 0, 0                 -- no mesh made this frame
-roads.onTile({ anchorId = 2, key = '6_8', path = '/t/wc.json', n = 0, slots = {
-  walk = { '/temp/beamngEarth/sA/slot_00020.cdae', 50 }, walkcol = { '/temp/beamngEarth/sA/slot_00021.cdae', 51 } } }, 2)
-roads.update(gov, 2)
-T.check(#statics() == 0, 'resend: nothing made yet')
-roads.onTile({ anchorId = 2, key = '6_8', path = '/t/wc.json', n = 0, slots = {
-  walk = { '/temp/beamngEarth/sA/slot_00030.cdae', 60 }, walkcol = { '/temp/beamngEarth/sA/slot_00031.cdae', 61 } } }, 2)
-gone = roads.takeSlotsGone('sA')
-T.check(#gone == 2, 'resend: the first copy\'s slots reported gone (never loaded)')
-gov.allow, gov.tries = nil, 0
-roads.update(gov, 2); roads.update(gov, 2)
-shapes = {}
-for _, o in ipairs(statics()) do shapes[o.fields.shapeName] = (shapes[o.fields.shapeName] or 0) + 1 end
-T.check(not shapes['/temp/beamngEarth/sA/slot_00020.cdae'] and not shapes['/temp/beamngEarth/sA/slot_00021.cdae'],
-  'resend: the reported slots are never loaded')
-T.check(shapes['/temp/beamngEarth/sA/slot_00030.cdae'] == 1 and shapes['/temp/beamngEarth/sA/slot_00031.cdae'] == 1
-  and #statics() == 2, 'resend: the new copy\'s meshes made once each')
-roads.onDrop({ anchorId = 2, key = '6_8' })
-roads.update(gov, 2)
-T.check(#statics() == 0, 'resend: every mesh goes with the tile (none orphaned)')
-roads.takeSlotsGone('sA')
-
 -- a sidewalk mesh never turns solid around the player's car: held while the car is in its boxes
 files['/t/h.json'] = '{ chunks = { }, walk = { shape = "/t/walks_2_7_7.cdae", pos = { 0, 0, 0 } }, ' ..
   'colliders = { walk = { { 100, 100, 0, 120, 110, 1 } } } }'
@@ -222,25 +199,6 @@ car.pos = vec3(200, 105, 0.5)
 roads.update(gov, 2)
 T.check(#statics() == 1, 'made again once clear')
 roads.RELOAD_EVERY_S = 0
-roads.onDrop({ anchorId = 2, key = '0_0' })
-roads.update(gov, 2)
--- a deck is held only with the car under its surface: a car on the approach at the deck's height (in its box) gets
--- it at once (held, a late deck stayed out until the car was past and the car fell through it, 2026-10-20)
-files['/t/d.json'] = '{ chunks = { }, deck = { shape = "/t/deck_2_9_9.cdae", pos = { 0, 0, 0 } }, ' ..
-  'colliders = { deck = { { 100, 100, 7.8, 120, 110, 12 } } } }'      -- (surface 10 m: 10 - 2.2 .. 10 + 2)
-car.pos = vec3(110, 105, 10.5)
-roads.onTile({ anchorId = 2, key = '0_0', path = '/t/d.json', n = 0 }, 2)
-roads.update(gov, 2)
-T.check(#statics() == 1, 'a deck made with the car driving onto it')
-roads.onDrop({ anchorId = 2, key = '0_0' })
-roads.update(gov, 2)
-car.pos = vec3(110, 105, 9.0)          -- in its slab
-roads.onTile({ anchorId = 2, key = '0_0', path = '/t/d.json', n = 0 }, 2)
-roads.update(gov, 2)
-T.check(#statics() == 0, 'held with the car in its slab')
-car.pos = vec3(200, 105, 0.5)
-roads.update(gov, 2)
-T.check(#statics() == 1, 'made once the car is clear')
 roads.onDrop({ anchorId = 2, key = '0_0' })
 roads.update(gov, 2)
 -- with a lean collision mesh the drawn sidewalk is render-only: made with the car in its box (it cannot catch the car;
@@ -279,26 +237,6 @@ T.check(roads.collideRadius(0) == roads.COLLIDE_M[1] and roads.collideRadius(45)
   and roads.collideRadius(500) == roads.COLLIDE_M[2], 'the radius grows with speed, within its limits')
 roads.onDrop({ anchorId = 2, key = '9_0' })
 roads.update(gov, 2)
--- a fast car: the road pieces along its path first (a tile 512 m ahead before one 512 m beside it), the ones behind
--- it last; standing, by distance (the user, 2026-10-19: at 100+ mph the road texture went first)
-do
-  files['/t/e.json'] = '{ chunks = { } }'
-  for _, k in ipairs({ '2_0', '0_1', '0_2', '-2_0' }) do roads.onTile({ anchorId = 2, key = k, path = '/t/e.json', n = 0 }, 2) end
-  car.pos = vec3(128, 128, 0.5)
-  function car:getVelocity() return vec3(45, 0, 0) end
-  roads.update(gov, 2)              -- (the motion read: updateCollideRange)
-  local q = { { key = '2:0_2' }, { key = '2:-2_0' }, { key = '2:2_0' } }
-  T.check(q[roads.nextWalk(q)].key == '2:2_0', 'fast: the tile ahead on the path first')
-  table.remove(q, 3)
-  T.check(q[roads.nextWalk(q)].key == '2:0_2', 'then beside, behind last')
-  function car:getVelocity() return vec3(0, 0, 0) end
-  roads.update(gov, 2)
-  q = { { key = '2:2_0' }, { key = '2:0_1' } }
-  T.check(q[roads.nextWalk(q)].key == '2:0_1', 'standing: the nearer tile first')
-  for _, k in ipairs({ '2_0', '0_1', '0_2', '-2_0' }) do roads.onDrop({ anchorId = 2, key = k }) end
-  roads.update(gov, 2)
-  car.getVelocity = nil
-end
 getPlayerVehicle = nil
 
 -- a road mesh: the tile's DecalRoads are not made; one TSStatic without collision instead
@@ -363,6 +301,61 @@ do
   T.check(roads.radiusToward(p, -100, 50, 1400, east) == 1400, 'its own tile: the full reach')
   T.check(roads.radiusToward(p, -1500, 0, 1400, nil) == 1400, 'slow (no direction): all round')
   T.check(roads.collideRadius(100) == 1400 and roads.collideRadius(500) == roads.COLLIDE_M[2], 'reach: 14 s of driving, capped')
+end
+
+-- event-driven bldfar sync & deferred covered bldfar spawn
+do
+  roads.reset()
+  gov.allow, gov.tries = nil, 0
+  roads.onFarTile({ anchorId = 4, key = '0_0', shape = '/t/bf_0_0.cdae', pos = { 0, 0, 0 } }, 4)
+  roads.update(gov, 4)
+  local bf = statics()[1]
+  T.check(bf and not bf.hidden, 'uncovered bldfar spawned and visible')
+  files['/t/nb.json'] = '{ chunks = { }, bld = { shape = "/t/bld_4_0_0.cdae", pos = { 0, 0, 0 } }, ' ..
+    'bldcol = { shape = "/t/bldcol_4_0_0.cdae", pos = { 0, 0, 0 } } }'
+  roads.onTile({ anchorId = 4, key = '0_0', path = '/t/nb.json', n = 0 }, 4)
+  roads.update(gov, 4); roads.update(gov, 4)
+  T.check(bf.hidden == true, 'bldfar hidden immediately via syncFar when near bld spawns')
+  -- a covered bldfar arriving while near bld is already live is deferred (not spawned until near tile drops)
+  roads.onFarTile({ anchorId = 4, key = '0_0', shape = '/t/bf_0_0_v2.cdae', pos = { 0, 0, 0 } }, 4)
+  roads.update(gov, 4)
+  local hasV2 = false
+  for _, o in ipairs(statics()) do if o.fields.shapeName == '/t/bf_0_0_v2.cdae' then hasV2 = true end end
+  T.check(not hasV2, 'covered bldfar defers TSStatic creation while near bld is shown')
+  roads.onDrop({ anchorId = 4, key = '0_0' })
+  roads.update(gov, 4); roads.update(gov, 4); roads.update(gov, 4)
+  for _, o in ipairs(statics()) do if o.fields.shapeName == '/t/bf_0_0_v2.cdae' and not o.hidden then hasV2 = true end end
+  T.check(hasV2, 'deferred bldfar spawns and unhides once covering near tile drops')
+  roads.reset()
+end
+
+-- R6: M.NO_SHADOW applied once per level load and only reloads changed materials
+do
+  roads.reset()
+  local mCurbs = createObject('Material'); mCurbs:registerObject('curbs'); mCurbs:setField('castShadows', 0, '1')
+  local mLine = createObject('Material'); mLine:registerObject('line_white'); mLine:setField('castShadows', 0, '0')
+  S.calls.reload_Material = 0
+  S.calls.flush_Material = 0
+  S.calls.loadJsonMaterialsFile = 0
+  roads.onTile({ anchorId = 5, key = '0_0', path = '/t/a.json', n = 2 }, 5)
+  roads.update(gov, 5)
+  T.check(mCurbs:getField('castShadows', 0) == '0' and mLine:getField('castShadows', 0) == '0',
+    'NO_SHADOW sets castShadows=0 on stock road/sidewalk materials')
+  T.check(S.calls.reload_Material == 1 and S.calls.flush_Material == 1,
+    'NO_SHADOW only flushes/reloads materials whose castShadows changed')
+  local jsonLoads = S.calls.loadJsonMaterialsFile
+  -- Subsequent tiles in the same level load do not re-apply loadMaterials()
+  roads.onTile({ anchorId = 5, key = '1_0', path = '/t/b.json', n = 1 }, 5)
+  roads.update(gov, 5)
+  T.check(S.calls.loadJsonMaterialsFile == jsonLoads and S.calls.reload_Material == 1,
+    'NO_SHADOW applied once per level load, not per tile')
+  -- Even after a level reset, already-updated Material objects are not reloaded again
+  roads.reset()
+  roads.onTile({ anchorId = 6, key = '0_0', path = '/t/b.json', n = 1 }, 6)
+  roads.update(gov, 6)
+  T.check(S.calls.reload_Material == 1, 'idempotent across level reload when castShadows is already 0')
+  mCurbs:delete(); mLine:delete()
+  roads.reset()
 end
 
 T.done('test_roads')

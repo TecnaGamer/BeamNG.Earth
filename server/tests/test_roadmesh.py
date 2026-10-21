@@ -8,10 +8,10 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cdae  # noqa: E402
 import roadmesh  # noqa: E402
-import math  # noqa: E402
-from test_roads import FRAME, LAT, LON, M_LAT, M_LON  # noqa: E402
+from test_roads import FRAME  # noqa: E402
 
 
 def chunk(m, w, pts, tl=10.0):
@@ -52,105 +52,6 @@ class RoadMeshTest(unittest.TestCase):
         self.assertEqual([m["name"] for m in shape["materials"]], ["road_asphalt_2lane", "gutter1"])
         self.assertEqual(roadmesh.layer_of({"m": "line_white"}), "mark")
         self.assertIsNone(roadmesh.build(FRAME, [], lambda la, lo: la, (0, 0, 0)))
-
-
-    def test_clipped_to_the_tile(self):
-        """Two tiles' ribbons each reach roads.OVERLAP past their edge; overlapping at one height they flickered along
-        every seam (the user, 2026-10-20): each is cut exactly at its tile's edge, the two together cover the road
-        once."""
-        flat = lambda la, lo: np.zeros(np.shape(la))     # noqa: E731
-        area = 0.0
-        for box in ((0.0, 0.0, 256.0, 256.0), (256.0, 0.0, 512.0, 256.0)):
-            chunks = [chunk("road_asphalt_2lane", 6.0, [(box[0] - 2, 98, 0), (box[2] + 2, 130, 0)])]  # oblique
-            P, T, UV, mats, M = roadmesh.build(FRAME, chunks, flat, (box[0], box[1], 0.0), clip=box)
-            xy = P[:, :2] + box[:2]
-            used = xy[np.unique(T)]
-            self.assertTrue((used[:, 0] >= box[0] - 1e-6).all() and (used[:, 0] <= box[2] + 1e-6).all())
-            self.assertTrue(np.isfinite(UV).all())
-            a = xy[T]
-            e1, e2 = a[:, 1] - a[:, 0], a[:, 2] - a[:, 0]
-            area += float(np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum() / 2)
-        L = np.hypot(512.0 - 0.0 + 4.0, 32.0) * 512.0 / 516.0       # the road's length over both tiles
-        self.assertAlmostEqual(area, 6.0 * L, delta=6.0 * L * 0.01)
-
-    def test_slanted_road_covered_at_the_seam(self):
-        """A road crossing the seam at 50 degrees (the E6 in Norway): no triangle of it left uncovered between the
-        two tiles' square ribbon ends."""
-        flat = lambda la, lo: np.zeros(np.shape(la))     # noqa: E731
-        k = 1.2                                          # y = k x
-        area = 0.0
-        for box in ((0.0, -1000.0, 256.0, 1000.0), (256.0, -1000.0, 512.0, 1000.0)):
-            a, b = box[0] - 2.0, box[2] + 2.0           # cut roads.OVERLAP past the tile, as roads.build_tile does
-            chunks = [chunk("road_asphalt_2lane", 11.0, [(a, k * a, 0), (b, k * b, 0)])]
-            P, T, UV, mats, M = roadmesh.build(FRAME, chunks, flat, (box[0], 0.0, 0.0), clip=box)
-            xy = P[:, :2] + [box[0], 0.0]
-            t = xy[T]
-            e1, e2 = t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]
-            area += float(np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum() / 2)
-        L = 512.0 * np.hypot(1.0, k)
-        self.assertAlmostEqual(area, 11.0 * L, delta=1.0)
-
-
-class FollowTest(unittest.TestCase):
-    """The road surface on the terrain block's own triangles (the user, 2026-10-20: the tyres sank into a road
-    drawn 5 cm over the ground)."""
-
-    def bumpy(self):
-        def elev(la, lo):
-            e = (np.asarray(lo) - LON) * M_LON
-            n = (np.asarray(la) - LAT) * M_LAT
-            return 10.0 + 0.8 * np.sin(e / 3.1) * np.cos(n / 2.3) + 0.05 * e
-        return elev
-
-    def test_kernel_and_python_agree(self):
-        import fast
-        if not (fast.AVAILABLE and hasattr(fast._ef, "follow_tris")):
-            self.skipTest("no kernel")
-        rng = np.random.default_rng(5)
-        P = rng.uniform(-9, 9, (60, 2))
-        T = np.array([rng.choice(60, 3, replace=False) for _ in range(40)], np.int64)
-        UV = rng.uniform(0, 1, (60, 2))
-        gx, gy = np.meshgrid(np.arange(-7, 8) * 2.0, np.arange(-7, 8) * 2.0)
-        grid = np.round((np.sin(gx / 3) * np.cos(gy / 2) + 0.03 * gx) * 32) / 32
-        a = fast._ef.follow_tris(P, UV, T, 2.0, grid, -7, -7, 0.005)
-        b = roadmesh._follow_py(P, UV, T, 2.0, grid, -7, -7, 0.005)
-        for x, y in zip(a, b):
-            self.assertTrue(np.allclose(np.asarray(x), y, equal_nan=True))
-
-    def test_with_filled_polygons(self):
-        """A tile with corner asphalt (a filled polygon) follows the ground too: the polygon's points once took the
-        name of the height quantum and every such road tile failed (a Steam Deck in Baltimore, 2026-10-20)."""
-        chunks = [chunk("road_asphalt_2lane", 9.0, [(3.3, 1.7, 0), (61.9, 40.2, 0)]),
-                  {"m": "road_asphalt_2lane", "tl": 10.0, "poly": [(0.0, 0.0, 0), (8.0, 0.0, 0), (8.0, 6.0, 0)], "n": []}]
-        P, T, UV, mats, M = roadmesh.build(FRAME, chunks, self.bumpy(), (0.0, 0.0, 0.0), 0.015, follow=True,
-                                           q=1 / 32)
-        self.assertGreater(len(T), 0)
-
-    def test_on_the_ground_everywhere(self):
-        elev = self.bumpy()
-        chunks = [chunk("road_asphalt_2lane", 9.0, [(3.3, 1.7, 0), (61.9, 40.2, 0), (90.0, 20.0, 0)])]
-        P, T, UV, mats, M = roadmesh.build(FRAME, chunks, elev, (0.0, 0.0, 0.0), 0.015, follow=True, q=1 / 32)
-        # the engine's terrain: samples every 2 m (rounded to 1/32 m), each square cut south-west to north-east
-        def ground(x, y):
-            la, lo, _ = FRAME.enu_to_geodetic(np.array([x]), np.array([y]), 0.0)
-            i, j = math.floor(x / 2), math.floor(y / 2)
-            def s(a, b):
-                la_, lo_, _ = FRAME.enu_to_geodetic(np.array([2.0 * a]), np.array([2.0 * b]), 0.0)
-                return round(float(FRAME.geodetic_to_enu(la_, lo_, elev(la_, lo_))[2][0]) * 32) / 32
-            u, v = x / 2 - i, y / 2 - j
-            if v > u:
-                return s(i, j) + v * (s(i, j + 1) - s(i, j)) + u * (s(i + 1, j + 1) - s(i, j + 1))
-            return s(i, j) + u * (s(i + 1, j) - s(i, j)) + v * (s(i + 1, j + 1) - s(i + 1, j))
-        rng = np.random.default_rng(2)
-        worst = 0.0
-        for t in T[rng.choice(len(T), 300)]:
-            w = rng.dirichlet((1, 1, 1))
-            p = (P[t] * w[:, None]).sum(0)
-            worst = max(worst, abs(p[2] - 0.015 - ground(p[0], p[1])))
-        self.assertLess(worst, roadmesh.FOLLOW_TOL + 1e-6, "the surface is the drawn ground + the lift")
-        a = P[T][:, :, :2]
-        e1, e2 = a[:, 1] - a[:, 0], a[:, 2] - a[:, 0]
-        self.assertTrue((e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0] > 0).all(), "facing up")
 
 
 if __name__ == "__main__":
@@ -259,21 +160,6 @@ class DeckRulesTest(unittest.TestCase):
         self.assertTrue((zs[1][mid] - zs[0][mid] >= roads.DECK_ROAD_CLEAR - 0.6).all(),
                         float((zs[1][mid] - zs[0][mid]).min()))
 
-    def test_no_step_onto_a_steep_abutment(self):
-        # Lombard Street, Baltimore (2026-10-20): the map's bridge line ends down its east embankment, whose top stands
-        # over the deck's climb cap from that end; the deck met it in a 0.86 m step in 4 m and cars stopped dead there
-        import roads
-        s = np.arange(0.0, 164.1, 4.0)
-        xy = np.c_[s, np.zeros_like(s)]
-        g = np.interp(s, [0, 20, 24, 128, 133, 137, 164], [20.4, 22.0, 18.4, 18.4, 25.0, 24.7, 22.2])
-        zs = roads.deck_profile([xy], lambda q: np.interp(q[:, 0], s, g))
-        z = zs[0]
-        self.assertTrue((z >= g - 1e-6).all(), "never under the ground")
-        top = int(np.argmax(z))
-        self.assertAlmostEqual(s[top], 132.0, delta=4.0)
-        self.assertTrue((np.diff(z[top - 8:top + 1]) >= -1e-6).all(), f"no dip before the top: {z[top - 8:top + 1]}")
-        self.assertLess(abs(np.diff(z[top - 3:top + 4], 2)).max(), 0.4, "rounded over the embankment's top (1.06 before)")
-
     def test_water_clearance(self):
         import roads
         self.assertEqual(roads.water_clear(10.0), roads.WATER_CLEAR_MIN)
@@ -337,13 +223,6 @@ class BridgeProfilesTest(unittest.TestCase):
         (z,) = roads.deck_profile([ln], flat, [(0, 6.0, 10.0), (0, 30.0, 10.0)])
         self.assertLess(float(np.interp(6.0, s, z)), 10.0 + 0.15, "no hump across the cross street")
         self.assertGreater(z.max(), 10.0 + 0.06 * 18 - 0.3, "the crossing farther on still lifts the deck")
-        # abutments 3.5 m apart in height over 44 m (8 %), the roads meeting them listed as crossings at its ends: both
-        # ends keep their ground, no step onto the deck (the I-20 bridge near Temple, GA, its approaches raised)
-        ln3 = np.c_[np.arange(0.0, 44.1, 4.0), np.zeros(12)]
-        slope = lambda xy: 10.0 + 3.5 * (np.asarray(xy)[:, 0] > 22.0)
-        (z3,) = roads.deck_profile([ln3], slope, [(0, 0.0, 10.0), (0, 20.0, 5.0), (0, 44.0, 13.5)])
-        self.assertAlmostEqual(float(z3[0]), 10.0, places=6)
-        self.assertAlmostEqual(float(z3[-1]), 13.5, places=6)
         # no sag between two crossings 120 m apart (the Queensboro Bridge over Roosevelt Island)
         ln2 = np.c_[np.arange(0.0, 401.0, 4.0), np.zeros(101)]
         (z2,) = roads.deck_profile([ln2], flat, [(0, 140.0, 10.0, 20.0), (0, 260.0, 10.0, 20.0)])

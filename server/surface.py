@@ -370,14 +370,19 @@ def _paint(idx, lat, lon, feats_list, select, material):
     return out
 
 
+TER_SWAP = True
+
+
 def mask_names(stem):
     return [f"{stem}_m{i}.png" for i in range(len(MATERIALS))]
 
 
-def write_masks(idx, out_dir, stem):
+def write_masks(idx, out_dir, stem, ter_swap=False, write_masks=True):
     """One 0/255 greyscale PNG per material (rows as the heightmap's: row 0 = north), written
-    atomically. Returns the file names (in out_dir), in MATERIALS order."""
+    atomically. When ter_swap is True (or write_masks is False), skips writing the 10 mask PNGs and returns their names."""
     names = mask_names(stem)
+    if ter_swap or not write_masks:
+        return names
     for i, name in enumerate(names):
         path = os.path.join(out_dir, name)
         tmp = staging.tmp_for(path)
@@ -391,13 +396,43 @@ SNOW_GREY = 40              # ... with at most this spread between its channels 
 LAWN_GREEN = 10             # 2g - r - b of the ground photo above which a lawn candidate stays a lawn
 
 
-def photo_lawns(out_dir, ter_name, mask_names_, rgb):
+def photo_lawns_array(idx, rgb, allow_dirt=True, allow_loose=True):
+    """Compute photo_lawns in-memory on a NumPy material index grid idx (row 0 = south) and rgb (row 0 = north).
+    Mutates idx in place (if writeable) and returns (idx, changed_count)."""
+    n = idx.shape[0]
+    lawn = idx == LAWN
+    snow = idx == SNOW
+    if not lawn.any() and not snow.any():
+        return idx, 0
+    px = rgb.shape[0]
+    rows = np.clip(((n - 1 - np.arange(n)) + 0.5) * px / n, 0, px - 1).astype(np.int64)
+    cols = np.clip((np.arange(n) + 0.5) * px / n, 0, px - 1).astype(np.int64)
+    c = rgb.astype(np.int32)[rows[:, None], cols[None, :]]
+    exg = 2 * c[:, :, 1] - c[:, :, 0] - c[:, :, 2]
+    green = exg > LAWN_GREEN
+    white = (c.mean(2) >= SNOW_BRIGHT) & (c.max(2) - c.min(2) <= SNOW_GREY)
+    bare = (lawn & ~green) if allow_dirt else np.zeros_like(lawn)
+    scree = (snow & ~white) if allow_loose else np.zeros_like(snow)
+    k = int(bare.sum() + scree.sum())
+    if not k:
+        return idx, 0
+    if not idx.flags.writeable:
+        idx = idx.copy()
+    idx[bare] = DIRT
+    idx[scree] = LOOSE
+    return idx, k
+
+
+def photo_lawns(out_dir, ter_name=None, mask_names_=None, rgb=None):
     """Detail mode: the block's LAWN samples where the ground photo (rgb (px, px, 3), row 0 = north, the
     block's footprint) is not green turn DIRT (paved yards, lots and driveways: the grass layer's blades
-    over a pale photo looked like snow, Lancaster 2026-10-14). Patches the .ter's layer map and the two
-    masks in place, atomically. Returns the number of samples changed. Likewise SNOW (WorldCover "snow and ice")
+    over a pale photo looked like snow, Lancaster 2026-10-14). Likewise SNOW (WorldCover "snow and ice")
     where the photo is not snow-white turns LOOSE scree (the Stelvio Pass's summit in late summer: the snow layer's
-    white blur where the orthophoto has grey-brown gravel, the user's reports #40 / #44, 2026-10-17)."""
+    white blur where the orthophoto has grey-brown gravel, the user's reports #40 / #44, 2026-10-17).
+    When out_dir is a NumPy array (idx), operates in-memory on NumPy arrays before writing .ter once."""
+    if isinstance(out_dir, np.ndarray):
+        _, k = photo_lawns_array(out_dir, ter_name if rgb is None else rgb)
+        return k
     path = os.path.join(out_dir, ter_name)
     with open(path, "rb") as f:
         data = bytearray(f.read())
@@ -417,41 +452,24 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
     to_local = np.full(256, heightmap.TER_HOLE, np.uint8)
     for li, gi in enumerate(glob):
         to_local[gi] = li
-    lay = to_glob[lay]
-    lawn = lay == LAWN
-    snow = lay == SNOW
-    if not lawn.any() and not snow.any():
-        return 0
-    px = rgb.shape[0]
-    rows = np.clip(((n - 1 - np.arange(n)) + 0.5) * px / n, 0, px - 1).astype(np.int64)
-    cols = np.clip((np.arange(n) + 0.5) * px / n, 0, px - 1).astype(np.int64)
-    c = rgb.astype(np.int32)[rows[:, None], cols[None, :]]
-    exg = 2 * c[:, :, 1] - c[:, :, 0] - c[:, :, 2]
-    green = exg > LAWN_GREEN
-    white = (c.mean(2) >= SNOW_BRIGHT) & (c.max(2) - c.min(2) <= SNOW_GREY)
-    bare = lawn & ~green
-    scree = snow & ~white
-    if to_local[DIRT] == heightmap.TER_HOLE:
-        bare[:] = False
-    if to_local[LOOSE] == heightmap.TER_HOLE:
-        scree[:] = False
-    k = int(bare.sum() + scree.sum())
+    lay = to_glob[lay].copy()
+    lay, k = photo_lawns_array(lay, rgb,
+                               allow_dirt=to_local[DIRT] != heightmap.TER_HOLE,
+                               allow_loose=to_local[LOOSE] != heightmap.TER_HOLE)
     if not k:
         return 0
-    lay = lay.copy()
-    lay[bare] = DIRT
-    lay[scree] = LOOSE
     data[off:off + n * n] = to_local[lay].tobytes()
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
         f.write(data)
     staging.replace(tmp, path)
-    north = lay[::-1]
-    for i in (LAWN, DIRT, SNOW, LOOSE):
-        p = os.path.join(out_dir, mask_names_[i])
-        tmp = staging.tmp_for(p)
-        Image.fromarray(np.where(north == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
-        staging.replace(tmp, p)
+    if mask_names_:
+        north = lay[::-1]
+        for i in (LAWN, DIRT, SNOW, LOOSE):
+            p = os.path.join(out_dir, mask_names_[i])
+            tmp = staging.tmp_for(p)
+            Image.fromarray(np.where(north == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
+            staging.replace(tmp, p)
     return k
 
 
@@ -469,13 +487,15 @@ def used_materials(idx):
     return sorted(u) or [DIRT]
 
 
-def write_ter(out_dir, name, qgrid, idx):
+def write_ter(out_dir, name, qgrid, idx, rgb=None):
     """The block's .ter (heightmap.write_ter) with the materials its samples use (idx: MATERIALS indices, row
     0 = south; used_materials) or, idx None, the level's single dirt layer (the mod's terrain.MATERIAL).
     Returns (name, the MATERIALS indices listed in order, None for the single dirt layer)."""
     if idx is None:
         heightmap.write_ter(os.path.join(out_dir, name), qgrid, None, [MATERIALS[DIRT][0]])
         return name, None
+    if rgb is not None:
+        idx, _ = photo_lawns_array(np.array(idx, np.uint8), rgb)
     used = used_materials(idx)
     lut = np.full(256, heightmap.TER_HOLE, np.uint8)
     lut[used] = np.arange(len(used), dtype=np.uint8)

@@ -34,6 +34,18 @@ LOW = 32            # reclaim when fewer free names than this ...
 TARGET = 128        # ... until this many are free (or nothing idle is left)
 
 
+class _SlotFileMethod:
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self._static_file
+        return instance.slot_file
+
+    @staticmethod
+    def _static_file(name, ext=".cdae", gen=0):
+        """The generational ping-pong pooled shape file of a slot name: slot_<n>_<gen><ext>."""
+        return f"slot_{name.rsplit('_', 1)[1]}_{gen}{ext}"
+
+
 class MatSlots:
     def __init__(self, session, held=lambda n: False):
         self.prefix = f"{PREFIX}_{session}_"
@@ -44,6 +56,7 @@ class MatSlots:
         self.slot = {}          # ck -> number
         self.owner = {}         # number -> ck
         self.waiting = set()    # numbers no tile owns that a game still holds (free once it lets go)
+        self.gen = {}           # number -> generation bit (0 or 1; alternates when rebound)
 
     def name(self, n):
         return f"{self.prefix}{n:0{DIGITS}d}"
@@ -52,10 +65,21 @@ class MatSlots:
     def number(name):
         return int(name.rsplit("_", 1)[1])
 
-    @staticmethod
-    def file(name, ext=".cdae"):
-        """The pooled shape file of a slot name: slot_<n><ext>."""
-        return f"slot_{name.rsplit('_', 1)[1]}{ext}"
+    def generation(self, name_or_n):
+        """Current generation bit (0 or 1) of slot `name_or_n`."""
+        n = name_or_n if isinstance(name_or_n, int) else self.number(name_or_n)
+        with self.lock:
+            return self.gen.get(n, 0)
+
+    def slot_file(self, name, ext=".cdae", gen=None):
+        """The generational ping-pong pooled shape file of a slot name: slot_<n>_<gen><ext>."""
+        n = self.number(name)
+        if gen is None:
+            with self.lock:
+                gen = self.gen.get(n, 0)
+        return f"slot_{n:0{DIGITS}d}_{gen}{ext}"
+
+    file = _SlotFileMethod()
 
     def take(self, ck):
         """The tile's name: the one it holds, else a free one, else a new one."""
@@ -64,9 +88,11 @@ class MatSlots:
             if n is None:
                 if self.free:
                     n = self.free.pop()
+                    self.gen[n] = 1 - self.gen.get(n, 0)
                 else:
                     n = self.made
                     self.made += 1
+                    self.gen[n] = 0
                 self.slot[ck] = n
                 self.owner[n] = ck
             return self.name(n)
@@ -134,9 +160,25 @@ def restamp(data, old, new):
     return data.replace(old_b, new_b)
 
 
-def place(src, dst):
-    """dst becomes a file with src's content, atomically (a hard link; a copy where links fail): a game loading
-    dst sees either the old file or the new one, never a partial one."""
+def place(src, dst, move=False):
+    """dst becomes a file with src's content, atomically (hardlinked or moved from staging to slot_<n>.cdae in the
+    game directory; a copy where links fail): a game loading dst sees either the old file or the new one, never a
+    partial one."""
+    staged = staging.master_for(src)
+    if staged != src and os.path.exists(staged):
+        src = staged
+    elif staged != src and os.path.exists(src) and not move:
+        try:
+            staging.replace(src, staged)
+            src = staged
+        except OSError:
+            pass
+    if move:
+        try:
+            staging.replace(src, dst)
+            return
+        except OSError:
+            pass
     tmp = staging.tmp_for(dst)
     try:
         os.remove(tmp)

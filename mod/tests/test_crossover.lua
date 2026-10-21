@@ -18,7 +18,7 @@ T.check(X.smootherstep(0.01) < 1e-4 and 1 - X.smootherstep(0.99) < 1e-4, 'smooth
 T.near(X.delta(1.0, 0.5), 1.2 * 1.5 + 0.2, 1e-12, 'Delta = 1.2 (err_new + err_old) + 0.2')
 T.check(X.PHASE1_S == 0.25 and X.PHASE2_S == 0.25 and X.COVER_SINK_S == 0.3, 'durations 0.25 + 0.25 s, cover sink 0.3 s')
 T.check(X.duration(true) == 0.5 and X.duration(false) == 0.25, 'crossover 0.5 s, rise-only 0.25 s')
-T.check(X.MAX_GROUPS == 24 and X.MARGIN_DEG == 10 and X.NEAR_POP_M == 5000, 'cap 24, 10 deg margin, near 5 km')
+T.check(X.MAX_GROUPS == 8 and X.INSTANT_M == 800 and X.MARGIN_DEG == 10 and X.NEAR_POP_M == 5000, 'cap 8, 800 m instant radius, 10 deg margin, near 5 km')
 T.check(X.FAR_INSTANT_M == nil, 'no distance beyond which in-view swaps are instant (v1.3 D)')
 T.near(X.defaultErr(0), 2, 1e-12, 'fallback err L0 = cell / 4')
 -- M1 (docs/V1_4_SPEC.md 3.1): the server's cells per tile edge (hello.cells, core.lua) set it

@@ -11,12 +11,41 @@ import time
 import sys
 import urllib.request
 
-URL = "http://127.0.0.1:29292/mcp"
+import os
+
+URL = os.environ.get("BEAMNG_MCP_URL")
+
+
+def get_mcp_url(timeout=0.6):
+    global URL
+    if URL:
+        return URL
+    candidates = [29292, 29293, 29294]
+    env_port = os.environ.get("BEAMNG_MCP_PORT")
+    if env_port:
+        try:
+            candidates.insert(0, int(env_port))
+        except ValueError:
+            pass
+    for port in candidates:
+        candidate_url = f"http://127.0.0.1:{port}/mcp"
+        try:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+            req = urllib.request.Request(candidate_url, body, {"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                if r.status == 200:
+                    URL = candidate_url
+                    return URL
+        except Exception:
+            continue
+    URL = "http://127.0.0.1:29292/mcp"
+    return URL
 
 
 def rpc(method, params=None, timeout=120):
+    url = get_mcp_url()
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
-    req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
+    req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         d = json.loads(r.read().decode("utf-8", "replace"), strict=False)
     if "error" in d:

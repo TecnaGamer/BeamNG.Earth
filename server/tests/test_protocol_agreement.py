@@ -196,7 +196,7 @@ SERVER_TO_MOD = {
                    "slots": F(dict, OPT)},     # {what: [pooled shape path, serial]} (matslots.py; pose.slotsGone)
     "roads_drop": {"anchorId": F(int), "key": F(str)},
     # trees, bushes and rocks of a tile (vegetation.py, --trees on): a JSON file of items
-    "veg_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int)},
+    "veg_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "vbin_path": F(str, OPT), "bin": F((str, bytes), OPT)},
     "veg_drop": {"anchorId": F(int), "key": F(str)},
     # far buildings (buildings.far_tile, --buildings on): a JSON file naming a render-only mesh
     "bldfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
@@ -223,14 +223,14 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "navgraph",                                   # --traffic on: needs map data
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
-                       "geocode_result", "route_result"}             # only when the map / GPS asks                            # only when the world map asks (map_tiles)
+                       "geocode_result", "route_result"}             # only when the map / GPS asks
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}
 
 LUA = modsim.MOD_DIR
 GRAVITY_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "egm2008_n36.npz"     # degree 36 (test_gravity)
 # levels down to -2 (mesh mode); a textured tile's shape is its material name's pooled file (matslots.py)
-SHAPE_RE = r"^/temp/beamngEarth/[^/]+/(far_\d+_-?\d+_-?\d+_-?\d+|slot_\d{5})\.cdae$"
+SHAPE_RE = r"^/temp/beamngEarth/[^/]+/(far_\d+_-?\d+_-?\d+_-?\d+|slot_\d{5}(?:_[01])?)\.cdae$"
 HM_RE = r"^/temp/beamngEarth/[^/]+/hm_\d+_-?\d+_-?\d+\.png$"
 
 
@@ -242,8 +242,8 @@ def lua_tables(text, start):
             depth += 1
         elif text[i] == "}":
             depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
+        if depth == 0:
+            return text[start:i + 1]
     raise ValueError("unbalanced table")
 
 
@@ -267,7 +267,7 @@ def top_keys(table):
 
 def mod_sends():
     """{type: (keys, nested)} of every net.send({...}) in core.lua and places.lua (the level select's pictures)."""
-    text = (LUA / "core.lua").read_text() + "\n" + (LUA / "places.lua").read_text()
+    text = (LUA / "core.lua").read_text(encoding="utf-8") + "\n" + (LUA / "places.lua").read_text(encoding="utf-8")
     out = {}
     for m in re.finditer(r"net\.send\(\{", text):
         t = lua_tables(text, m.end() - 1)
@@ -787,7 +787,7 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertRegex(m["material"], r"^bngEarthFar_[0-9a-f]{4}_\d{5}$")
             # in the shape's folder; the shape is the name's pooled file (slot_<n>.cdae, matslots.py)
             self.assertEqual(m["texture"].rsplit("/", 1)[0], m["shape"].rsplit("/", 1)[0])
-            self.assertEqual(m["shape"].rsplit("/", 1)[1], f"slot_{m['material'].rsplit('_', 1)[1]}.cdae")
+            self.assertEqual(m["shape"].rsplit("/", 1)[1], self.server.matslots.file(m["material"]))
             self.assertIs(m["detail"], True)
         if kind == "hello":
             self.assertIn(m["nearVisual"], ("mesh", "terrain"))
@@ -850,7 +850,7 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.check(m)
         old_removes = [m for m in seen if m["type"] == "far_remove" and m["anchorId"] == aid]
         self.assertTrue(old_removes)
-        textured = [m for m in seen if m["type"] == "far_tile" and "material" in m]
+        textured = [m for m in seen if m["type"] == "far_tile" and "material" in m and m.get("anchorId") == b["anchorId"]]
         self.assertEqual(bool(textured), self.with_imagery)
         for m in textured[::max(1, len(textured) // 12)]:
             self.check_textured(m)
