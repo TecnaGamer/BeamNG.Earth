@@ -33,6 +33,7 @@ M.dependencies = { 'ui_imgui' }
 -- Helper modules live next to this file. 'lua/ge/extensions/?.lua' is on package.path
 -- (main.lua:58 extensions.addModulePath), so they resolve as 'beamngEarth/<name>'.
 local geodesy = require('beamngEarth/geodesy')
+local mpanchor = require('beamngEarth/mpanchor') -- BeamMP co-op: cross-anchor position fixups (docs/ROADMAP.md)
 local net = require('beamngEarth/net')
 local terrain = require('beamngEarth/terrain')
 local farfield = require('beamngEarth/farfield')
@@ -401,6 +402,7 @@ local function commitTeleport(msg)
 
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
   st.anchorSession, st.resync = st.sessionId, false
+  mpanchor.announceOwn(msg.lat, msg.lon)
   st.block, st.terrainPending, st.terrainErrorAt = { cx = tr.cx, cy = tr.cy }, nil, nil
   edgeguard.newFrame(st.guard)
   sendCommits(msg.anchorId, tr.cx, tr.cy)
@@ -436,6 +438,7 @@ local function finishRebase()
 
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
   st.anchorSession, st.resync = st.sessionId, false
+  mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
   st.block, st.terrainPending, st.terrainErrorAt = { cx = tr.cx, cy = tr.cy }, nil, nil
   edgeguard.newFrame(st.guard)
   sendCommits(msg.anchorId, tr.cx, tr.cy)
@@ -1139,6 +1142,7 @@ local function serverHealthy()
 end
 
 M.serverHealthy = function() return serverHealthy() end
+M.mpStatus = function() return mpanchor.status() end -- console: beamngEarth_core.mpStatus()
 
 -- The collidable area of the block in use (the anchor's, else the level-start flat block), or nil.
 local function guardBox()
@@ -1357,6 +1361,7 @@ end
 
 local function onUpdate(dtReal, dtSim)
   dtReal = dtReal or 0
+  mpanchor.install() -- a no-op once installed, and until BeamMP's own extensions have loaded
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
   if not st.inOurLevel and not st.active then
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
