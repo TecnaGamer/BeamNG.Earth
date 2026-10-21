@@ -187,6 +187,7 @@ local types = {}        -- "shape" / "shape#n" (not solid) -> TSForestItemData
 local pop = {}          -- shape -> its items in the level
 local ready = false
 M.made, M.removed, M.errors = 0, 0, 0
+M.unknownGroups = {}      -- groups seen without a CATALOG entry (logged once each)
 
 local pool = {}          -- ids of empty Forests to reuse
 local forestCount = 0
@@ -565,6 +566,11 @@ function M.update(anchorId, player, view)
         local g = (t.groups or GROUPS)[(row[1] or 0) + 1]
         local cap = g and M.GROUP_MAX_M[g]
         if cap and o[2] > cap then r = 2 end     -- this group is not shown this far out
+        -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
+        if g and not M.CATALOG[g] then
+          r = 2
+          if not M.unknownGroups[g] then M.unknownGroups[g] = true; log('W', 'beamngEarth.trees', 'no shapes for group ' .. g) end
+        end
         -- an item something else stands in for (navgraph.lua's switchable signal heads)
         if g and M.suppress and M.suppress(g, row[2], row[3]) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']

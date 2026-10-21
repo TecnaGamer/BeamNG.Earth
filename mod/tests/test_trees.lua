@@ -209,4 +209,13 @@ T.check(math.abs(trees.tileThreshold(0, ranked(8000, 0.3)) - 6000 / 8000 * 0.3) 
 T.check(trees.tileThreshold(1000, ranked(800, 1)) == 0.35, 'under the cap: the ring as before')
 T.check(math.abs(trees.tileThreshold(2000, ranked(10000, 1)) - 400 / 10000) < 1e-12, 'far: 400')
 T.check(trees.tileThreshold(0, { rows = {} }) == 1.0, 'no rows')
+
+-- a group the catalog has no shapes for (a newer server's sign, say): left out and logged, never a tree
+trees.clear()
+files['/t/u'] = '{ groups = { "bench", "nl_unknown_sign" }, items = { {0, 1, 10, 0, 0, 1, 1, 0.0}, {1, 2, 10, 0, 0, 1, 3, 0.0} } }'
+trees.onTile({ anchorId = 4, key = 'u', path = '/t/u', n = 2 }, 4)
+trees.update(4, { x = 2, y = 10 })
+T.check(count() == 1, 'unknown group: only the bench is made')
+T.check(trees.unknownGroups.nl_unknown_sign == true, 'unknown group: noted')
+trees.clear()
 T.done('test_trees')
