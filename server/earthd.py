@@ -524,6 +524,11 @@ class Server:
         self.tile_cache = TILE_CACHE[cells]
         self.net = net if net is not None else netfetch.Fetcher()
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=self.net)
+        import bgt as bgtmod        # the Netherlands' underpasses dug out of the terrain (--nl-bgt on; bgt.cut)
+        import ahn as ahnmod        # ... and its ground at 0.5 m (ahn.AhnDem; the worker processes the same)
+        if bgtmod.enabled():
+            self.dem = ahnmod.AhnDem(self.dem, ahnmod.Ahn(cache_dir, self.net))
+        self.bgt = bgtmod.Bgt(cache_dir, self.net) if (bgtmod.enabled() and mapdata is not None) else None
         # runways graded in (--airports on: main() loads the OurAirports copy before the worker processes)
         self.airports = airportgrademod.AirportGrader(airports_db, self.dem) if airports_db is not None else None
         self.airports_db = airports_db  # (also the road rules' country: navgraph.country_near)
@@ -1054,6 +1059,10 @@ class Server:
                     elev)
                 anchor.tunnels.wet = self.sea.depth if self.sea is not None else None
                 self._tunnel_ground(anchor, g)
+                if self.bgt is not None:        # the BGT's underpasses instead of the map's tunnels there
+                    import bgt as bgtmod
+                    anchor.tunnels.skip = bgtmod.skips_tunnel(self.bgt, anchor.frame, lambda la, lo: self.ground(
+                        anchor.frame, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)))
         props = [] if self.buildings else None
         lines = [] if self.buildings else None
         wires = [] if self.buildings else None
@@ -1291,6 +1300,20 @@ class Server:
             def gen(la, lo):        # the ground over the low arches raised over their vaults (roads.arch_raise)
                 return roadsmod.block_arch_raise(tun, cell_fn, anchor.frame, la, lo, elev(la, lo),
                                                  (cx - half, cy - half, cx + half, cy + half))
+        if self.bgt is not None:            # the ground under a junction's deck dug out (as blockworker.build)
+            import bgt as bgtmod
+            half = self.layout.block * heightmap.SQUARE / 2
+            try:
+                bb = (cx - half, cy - half, cx + half, cy + half)
+                passes = self.bgt.passages(anchor.frame, bb)
+                gen = bgtmod.cut(anchor.frame, passes, gen)
+                if self.bgt.tiles_box(anchor.frame, bb):    # (the Netherlands: the lidar's banks kept, bgt.banks)
+                    gen = bgtmod.banks(anchor.frame, passes, gen, lambda la, lo: self.ground(
+                        anchor.frame, la, lo, self.dem.sample(la, lo, anchor.hm_zoom)))
+                import kunstwerken as kwmod     # (under the hand-built structures' streets)
+                gen = kwmod.cap(gen)
+            except Exception as e:
+                log.warning("bgt passages of block %s,%s: %s: %s", cx, cy, type(e).__name__, e)
         info = heightmap.generate(anchor.frame, gen,
                                   os.path.join(self.out_dir, self.hm_name((anchor.id, cx, cy))), cx, cy, q=q,
                                   size=self.layout.block, keep=keep, chunks=anchor.chunks)
@@ -1333,6 +1356,10 @@ class Server:
                 anchor.tunnels = roadsmod.TunnelProfiles(anchor.frame, cell_fn, elev)
                 anchor.tunnels.wet = self.sea.depth if self.sea is not None else None
                 self._tunnel_ground(anchor, g)
+                if self.bgt is not None:        # the BGT's underpasses instead of the map's tunnels there
+                    import bgt as bgtmod
+                    anchor.tunnels.skip = bgtmod.skips_tunnel(self.bgt, anchor.frame, lambda la, lo: self.ground(
+                        anchor.frame, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)))
             return anchor.tunnels
 
     def tunnel_floor(self, anchor):
@@ -3071,11 +3098,10 @@ class Connection:
                     z = dem.sample(la, lo, seatilesmod.LAKE_DEM_ZOOM)
                     return grader.apply(la, lo, z) if grader is not None else z
 
-                def sea_ground(la, lo, size):
+                def sea_ground(la, lo, spacing):
                     # the ground under a sea tile at about its samples' spacing (seatiles.plan: land under the sea,
-                    # the polders, splits it)
-                    n = min(max(size / 32.0, seatilesmod.SEA_SPLIT_SAMPLES[0]), seatilesmod.SEA_SPLIT_SAMPLES[1])
-                    z = demmod.zoom_for(float(np.mean(la)), size / n)
+                    # the polders and a sunken road near the player, splits it)
+                    z = demmod.zoom_for(float(np.mean(la)), spacing)
                     z = min(max(z, getattr(demmod, "MIN_ZOOM", 0)), demmod.MAX_ZOOM)
                     return dem.sample(la, lo, z)
 
@@ -3838,6 +3864,9 @@ def main():
     ap.add_argument("--buildings", choices=("on", "off"), default="off",
                     help="3D buildings from the Overture footprints with the road tiles (buildings.py; needs --roads "
                          "on): heights and roofs predicted where the data has none")
+    ap.add_argument("--nl-bgt", choices=("on", "off"), default="off",
+                    help="the Netherlands: road surfaces (carriageways, parking bays, cycle paths, footways, traffic "
+                         "islands) as the BGT maps them instead of widened from centre lines (bgt.py; PDOK)")
     ap.add_argument("--traffic", choices=("on", "off"), default="on",
                     help="the AI road graph around the player for BeamNG's own traffic and AI (navgraph.py; needs "
                          "--roads on): the mod hands it to map.reset. On by default since 2026-10-14: whether cars "
@@ -3871,6 +3900,9 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    if args.nl_bgt == "on":         # read by bgt.enabled() here and in the worker processes (spawned after this)
+        import bgt as bgtmod
+        os.environ[bgtmod.ENV] = "1"
     args.cells = resolve_cells(args.cells, args.near_visual)
     args.block = resolve_block(args.block, args.near_visual)
     args.horizon = resolve_horizon(args.horizon, args.near_visual)
@@ -3895,12 +3927,10 @@ def main():
     import budget
     if args.nice:
         try:
-            if hasattr(os, "nice"):
-                os.nice(args.nice)      # all threads: below the game's main and physics threads
-            elif sys.platform == "win32":   # Windows: the "below normal" priority class
-                import ctypes
-                k32 = ctypes.windll.kernel32
-                k32.SetPriorityClass(k32.GetCurrentProcess(), 0x4000)
+            # all threads: below the game's main and physics threads (Windows: the "below normal" class)
+            how = budget.lower_priority(args.nice)
+            if how:
+                log.info("server priority: %s", how)
         except (OSError, AttributeError) as e:
             log.warning("could not lower the process priority: %s", e)
     if args.sched == "auto":

@@ -50,5 +50,31 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(d.mem_tiles, budget.SMALL_DEM_TILES, "read when the cache is made")
 
 
+class PriorityTest(unittest.TestCase):
+    """lower_priority in a child process: Windows' classes (below normal for the server, idle for a far-field
+    worker, a road worker keeps its parent's), elsewhere niceness."""
+
+    def run_child(self, code):
+        import subprocess
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        r = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {here!r}); import budget\n" + code],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_lowered(self):
+        self.assertIsNone(budget.lower_priority(0))
+        if sys.platform == "win32":
+            get = ("import ctypes; from ctypes import wintypes; k=ctypes.WinDLL('kernel32'); "
+                   "k.GetCurrentProcess.restype=wintypes.HANDLE; k.GetPriorityClass.argtypes=(wintypes.HANDLE,); "
+                   "print(budget.lower_priority({n}, {w}), hex(k.GetPriorityClass(k.GetCurrentProcess())))")
+            self.assertEqual(self.run_child(get.format(n=10, w=False)), "below normal 0x4000")
+            self.assertEqual(self.run_child(get.format(n=6, w=True)), "idle 0x40")
+            self.assertTrue(self.run_child(get.format(n=3, w=True)).startswith("None "), "a road worker: as inherited")
+        elif hasattr(os, "nice"):
+            self.assertEqual(self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b)"),
+                             "3")
+
+
 if __name__ == "__main__":
     unittest.main()

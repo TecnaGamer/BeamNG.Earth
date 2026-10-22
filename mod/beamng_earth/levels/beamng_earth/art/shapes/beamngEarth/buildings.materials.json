@@ -419,5 +419,154 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_cycle_red": {
+    "name": "bne_cycle_red",
+    "mapTo": "bne_cycle_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "17395391-033c-54d7-bae4-6ba1b86fa9e8",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/road/m_asphalt/t_asphalt_b.color.dds",
+        "normalMap": "/assets/materials/tileable/road/m_asphalt/t_asphalt_nm.normal.dds",
+        "roughnessFactor": 0.85,
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.72,
+          0.3,
+          0.24,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ASPHALT",
+    "translucent": false
+  },
+  "bne_paint_white": {
+    "name": "bne_paint_white",
+    "mapTo": "bne_paint_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "73ed6ef2-3055-5ace-b785-4291f1bb2605",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/road/m_asphalt/t_asphalt_b.color.dds",
+        "normalMap": "/assets/materials/tileable/road/m_asphalt/t_asphalt_nm.normal.dds",
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          2.2,
+          2.2,
+          2.15,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ASPHALT",
+    "translucent": false
+  },
+  "bne_rail_steel": {
+    "name": "bne_rail_steel",
+    "mapTo": "bne_rail_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d1722cf8-417a-5204-9c2f-cf323171b656",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/metal/metal_paint/metal_paint_d.color.dds",
+        "roughnessFactor": 0.45,
+        "metallicFactor": 0.3,
+        "baseColorFactor": [
+          0.42,
+          0.4,
+          0.38,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_signs": {
+    "name": "bne_signs",
+    "mapTo": "bne_signs",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a582303d-6958-56f2-b807-966c2b045091",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs3.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs3_r.png",
+        "metallicMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs3_m.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_concrete_dark": {
+    "name": "bne_concrete_dark",
+    "mapTo": "bne_concrete_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ff49d8f7-bb36-5998-b963-1d16cf32c2e9",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.4,
+          0.38,
+          0.35,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "translucent": false
+  },
+  "bne_grass": {
+    "name": "bne_grass",
+    "mapTo": "bne_grass",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "862e78a0-4836-5226-a0f4-e67ae388d4eb",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_b.png",
+        "normalMap": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_nm.png",
+        "roughnessMap": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.55,
+          0.68,
+          0.36,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRASS",
+    "translucent": false
   }
 }

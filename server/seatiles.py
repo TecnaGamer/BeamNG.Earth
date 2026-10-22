@@ -32,6 +32,13 @@ SEA_TILE_FLOOR = 64.0
 SEA_FLOOR_K = 0.0625            # ... farther away, down to this share of the distance (a 16 km straight shore split to
                                 # 128 m all along was 146 tiles; the far shore's strip of sea goes without)
 SEA_FLOOD_SHARE = 0.05
+# ... and near the player, any patch of it: a sunken road or a tunnel's ramp (Rotterdam's 's-Gravendijkwal, 30 m wide and
+# 1-4 m under the sea; the Maastunnel's ramps) is a thousandth of a 2048 m tile and fell between its 32 m samples, so the
+# tile's WaterBlock filled it (2026-10-21). A tile within SEA_NEAR_M is checked every SEA_NEAR_STEP_M as well and split
+# when more than SEA_NEAR_LOW_M2 of it is land under the sea.
+SEA_NEAR_M = 1024.0
+SEA_NEAR_STEP_M = 8.0
+SEA_NEAR_LOW_M2 = 300.0
 SEA_SPLIT_SAMPLES = (16, 64)    # samples per edge of a tile checked for low land: size / 32, within these
 SEA_MAX_TILES = 200             # nearest first
 SEA_E = 0.0                     # m: the sea surface (seacarve.SEA_E)
@@ -106,8 +113,21 @@ def _grid(frame, corners, s, n):
 
 def plan(frame, x, y, sea_at, radius=None, ground_at=None):
     """The sea tiles around (x, y) in `frame` (a geodesy.EnuFrame). sea_at(lat, lon, size) -> bool array:
-    which sample points of a tile of that size are sea. ground_at(lat, lon, size) -> the ground's heights there
-    (None: not checked): a tile with land under the sea in it is split (SEA_FLOOD_M)."""
+    which sample points of a tile of that size are sea. ground_at(lat, lon, spacing) -> the ground's heights there,
+    at about the samples' spacing in m (None: not checked): a tile with land under the sea in it is split
+    (SEA_FLOOD_M; near the player SEA_NEAR_LOW_M2)."""
+
+    def near_low(x0, y0, s, flood):
+        """Is more than SEA_NEAR_LOW_M2 of the tile land more than `flood` under the sea (SEA_NEAR_STEP_M samples)?"""
+        n = int(s / SEA_NEAR_STEP_M)
+        lat, lon = _grid(frame, [(x0, y0)], s, n)
+        g = np.asarray(ground_at(lat, lon, SEA_NEAR_STEP_M), np.float64)
+        k = np.flatnonzero(g < SEA_E - flood)
+        if len(k) * SEA_NEAR_STEP_M ** 2 <= SEA_NEAR_LOW_M2:
+            return False
+        dry = ~np.asarray(sea_at(lat[k], lon[k], s), bool)
+        return int(dry.sum()) * SEA_NEAR_STEP_M ** 2 > SEA_NEAR_LOW_M2
+
     leaves = squares(x, y, radius)
     if not leaves:
         return []
@@ -131,12 +151,14 @@ def plan(frame, x, y, sea_at, radius=None, ground_at=None):
             n = int(min(max(s / 32.0, SEA_SPLIT_SAMPLES[0]), SEA_SPLIT_SAMPLES[1]))
             lat, lon = _grid(frame, corners, s, n)
             wet = np.asarray(sea_at(lat, lon, s), bool).reshape(len(corners), -1)
-            g = np.asarray(ground_at(lat, lon, s), np.float64).reshape(len(corners), -1)
-            low = ~wet & (g < SEA_E - (SEA_FLOOD_M if s <= POLY_TILE_MAX else SEA_FLOOD_FAR_M))   # land under the sea
+            g = np.asarray(ground_at(lat, lon, s / n), np.float64).reshape(len(corners), -1)
+            flood = SEA_FLOOD_M if s <= POLY_TILE_MAX else SEA_FLOOD_FAR_M
+            low = ~wet & (g < SEA_E - flood)        # land under the sea
             for (x0, y0), w, lo in zip(corners, wet, low):
                 # (a share, not any: the DEM's water under the piers the map has as land, Manhattan's waterfront,
-                # split every tile on to 200)
-                if lo.mean() <= SEA_FLOOD_SHARE:
+                # split every tile on to 200; near the player only)
+                if lo.mean() <= SEA_FLOOD_SHARE and not (_dist(x, y, x0, y0, s) < SEA_NEAR_M
+                                                         and near_low(x0, y0, s, flood)):
                     keep.append((x0, y0, s))
                 elif s / 2 >= max(SEA_TILE_FLOOR, SEA_FLOOR_K * _dist(x, y, x0, y0, s)):
                     h = s / 2

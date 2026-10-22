@@ -2492,11 +2492,16 @@ class TunnelProfiles(BridgeProfiles):
         # was drawn as a road across the harbour, 2026-10-18)
         return self._dry([p for p in self._split(whole) if p[0] in opened])
 
+    skip = None     # xy (k, 2) -> True: a part not drawn as a tunnel (the BGT's underpass there: bgt.skips_tunnel)
+
     def parts(self, cells_feats, box):
         out = self._split(super().parts(cells_feats, box))
         with self.lock:
             opened = set(self.open)
-        return self._dry([p for p in out if p[0] not in opened])
+        out = [p for p in out if p[0] not in opened]
+        if self.skip is not None:
+            out = [p for p in out if not self.skip(np.asarray(p[2], np.float64))]
+        return self._dry(out)
 
     def _dry(self, out):
         """The parts not under water for more than TUNNEL_WET_SHARE of their points."""
@@ -3688,7 +3693,38 @@ def shape_files(aid, tx, ty):
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
+    for k in range(2, TUNNEL_PARTS_MAX + 1):
+        out[f"tunnel{k}"] = f"tunnel_{aid}_{tx}_{ty}_{k}.cdae"
     return out
+
+
+TUNNEL_PART_VERTS = 60000   # a tunnel mesh's part's vertices at most (the engine draws 65535 of an object)
+TUNNEL_PARTS_MAX = 6        # (the mod's slots: tunnel, tunnel2 ... tunnel6)
+
+
+def split_mesh(mesh, max_verts):
+    """A mesh (P, T, UV, mats, M) as parts of at most max_verts vertices each, its triangles in order, each part's
+    vertices its own (re-indexed). Pure."""
+    P, T, UV, mats, M = mesh
+    T = np.asarray(T, np.int64)
+    if len(P) <= max_verts:
+        return [mesh]
+    P, UV, M = np.asarray(P), (None if UV is None else np.asarray(UV)), np.asarray(M)
+    parts, start = [], 0
+    while start < len(T):
+        seen, end = {}, start
+        while end < len(T):
+            new = [v for v in T[end] if v not in seen]
+            if len(seen) + len(new) > max_verts:
+                break
+            for v in new:
+                seen[v] = len(seen)
+            end += 1
+        idx = np.fromiter(seen.keys(), np.int64, len(seen))
+        remap = np.vectorize(seen.get, otypes=[np.int64])
+        parts.append((P[idx], remap(T[start:end]), None if UV is None else UV[idx], mats, M[start:end]))
+        start = end
+    return parts
 
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
@@ -3717,9 +3753,13 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         data["deck"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if tunnel_mesh is not None:     # roadmesh.tunnel: the tubes and portals (colliding)
         x0, y0, _, _ = tile_bbox(tx, ty)
-        shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh)
-        data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        # in parts under the engine's 65535 vertices an object draws (a kunstwerk's mesh is far more: drawn broken,
+        # its triangles across the tile, 2026-10-21): tunnel, tunnel2 ... tunnel<TUNNEL_PARTS_MAX>
+        for k, part in enumerate(split_mesh(tunnel_mesh, TUNNEL_PART_VERTS)[:TUNNEL_PARTS_MAX]):
+            what = "tunnel" if k == 0 else f"tunnel{k + 1}"
+            shape = f"tunnel_{aid}_{tx}_{ty}.cdae" if k == 0 else f"tunnel_{aid}_{tx}_{ty}_{k + 1}.cdae"
+            roadmesh.write(os.path.join(out_dir, shape), part)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if walks:
         x0, y0, _, _ = tile_bbox(tx, ty)
         b = sidewalks.Builder((x0, y0, 0.0), collision=True)

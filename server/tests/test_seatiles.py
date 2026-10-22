@@ -76,6 +76,26 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(sorted(t.key for t in seatiles.plan(f, 0.0, 0.0, east, ground_at=dry)),
                          sorted(t.key for t in seatiles.plan(f, 0.0, 0.0, east)), "land above the sea: as before")
 
+    def test_sunken_road_near_the_player_is_not_flooded(self):
+        # 2026-10-21: Rotterdam's 's-Gravendijkwal, a 30 m wide road 1 m under the sea, filled by a 2048 m tile
+        f = geodesy.EnuFrame(51.9, 4.47)
+        edge = 4.47 + 0.02                                          # the river ~1.4 km east of the player
+        east = lambda la, lo, s: np.asarray(lo) > edge              # noqa: E731
+        trench_e = f.geodetic_to_enu(51.9, 4.47 + 0.002, 0.0)[0]    # a N-S trench 140 m east, 30 m wide
+
+        def ground(la, lo, spacing):
+            e = np.asarray(f.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)[0])
+            return np.where(np.asarray(lo) > edge, -10.0,
+                            np.where((np.abs(e - trench_e) < 15.0) & (np.abs(np.asarray(la) - 51.9) < 0.002),
+                                     -1.0, 3.0))
+        tiles = seatiles.plan(f, 0.0, 0.0, east, ground_at=ground)
+        self.assertTrue(tiles)
+        for t in tiles:
+            inside = abs(t.x - trench_e) < t.size / 2 + 15.0 and abs(t.y) < t.size / 2 + 150.0
+            self.assertFalse(inside, t)
+        dry = lambda la, lo, s: np.where(np.asarray(lo) > edge, -10.0, 3.0)    # noqa: E731
+        self.assertLess(len(tiles), 2 * len(seatiles.plan(f, 0.0, 0.0, east, ground_at=dry)) + 20)
+
     def test_no_sea_no_tiles(self):
         f = geodesy.EnuFrame(36.9, -110.1)
         self.assertEqual(seatiles.plan(f, 0.0, 0.0, lambda la, lo, s: np.zeros(np.shape(la), bool)), [])

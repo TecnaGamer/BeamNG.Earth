@@ -677,7 +677,8 @@ WALL_THICK_M = 2.4         # a retaining wall's top: over the grading's flat str
 
 
 def _retaining_walls(walls, origin, P, T, UV, M, nv):
-    """roads.retaining_walls' walls as stone (material index 2): the face toward the road, the top, the ends;
+    """roads.retaining_walls' walls as stone (material index 2; concrete, 0, those marked "concrete"): the face toward
+    the road, the top, the ends;
     appended to P, T, UV, M. Returns the new vertex count."""
     for w in walls:
         b = np.asarray(w["base"], np.float64)

@@ -1,0 +1,10 @@
+{
+  "_doc": "Truth points for tools/road_check.py --truth: the road surface a driver meets there (m, NAP). Heights from the AHN's surface (dsm_05m) and checked against Google Earth 3D's elevation readout and Street View (reference only, 2026-10-21).",
+  "points": [
+    {"name": "'s-Gravendijkwal north: the middle road on its bridge over the trench", "lat": 51.908761, "lon": 4.465622, "top": 3.65},
+    {"name": "'s-Gravendijkwal north: the carriageway beside it, in the trench", "lat": 51.908767, "lon": 4.465792, "top": -0.96},
+    {"name": "trench inside the oval", "lat": 51.908122, "lon": 4.465764, "top": -1.22},
+    {"name": "north ring road (S100) on its deck over the trench", "lat": 51.908494, "lon": 4.465994, "top": 3.60},
+    {"name": "Westzeedijk crossing: the deck over the east carriageway", "lat": 51.90770, "lon": 4.46634, "top": 3.34}
+  ]
+}
