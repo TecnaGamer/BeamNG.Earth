@@ -137,6 +137,17 @@
         "width": "560px",
         "height": "64px"
       }
+    },
+    {
+      "appName": "beamngEarthMiniMap",
+      "appVersion": 2,
+      "placement": {
+        "bottom": "116px",
+        "left": "10px",
+        "position": "absolute",
+        "width": "250px",
+        "height": "274px"
+      }
     }
   ],
   "removedApps": {

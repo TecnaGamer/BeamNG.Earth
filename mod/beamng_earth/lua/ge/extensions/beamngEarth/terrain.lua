@@ -78,16 +78,26 @@ local function look(detail, dsize, macro, msize, strength)
   l.baseColorMacroStrength, l.normalMacroStrength, l.roughnessMacroStrength = '0.12 0.08', '0.5 0.3', '0 0.8'
   return l
 end
+local function grassLook(lawn)
+  -- Dense blades and restrained shading keep grass natural instead of bright and pebble-like.
+  local l = look('grass/ind_grass_2/t_ind_grass_2', 2, 'grass/t_macro_grass/t_macro_grass', 64)
+  l.baseColorDetailStrength = lawn and '0.46 0.10' or '0.52 0.12'
+  l.normalDetailStrength = lawn and '0.25 0.04' or '0.35 0.05'
+  l.normalMacroStrength = lawn and '0.02 0' or '0.05 0'
+  l.baseColorMacroStrength = '0.20 0.08'
+  l.roughnessDetailStrength, l.aoDetailStrength = '0.9 0.2', '0.35 0.05'
+  return l
+end
 M.LOOKS = {
   bngEarthGroundAsphalt = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
-  bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
+  bngEarthGroundGrass = grassLook(false),
   bngEarthGroundDusty = look('soil/dirt_loose_dusty/t_dirt_loose_dusty', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
   bngEarthGroundLoose = look('soil/t_gravel/t_gravel', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
   bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
   bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 64, 0.12),
   bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
   bngEarthGroundCobble = look('asphalt/t_asphalt_02/t_asphalt_02', 2, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
-  bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
+  bngEarthGroundLawn = grassLook(true),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, size = '256' }

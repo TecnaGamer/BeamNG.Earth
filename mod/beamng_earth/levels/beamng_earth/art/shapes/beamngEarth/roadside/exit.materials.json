@@ -1,0 +1,117 @@
+{
+  "bne_exit_green": {
+    "name": "bne_exit_green",
+    "mapTo": "bne_exit_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.015,
+          0.235,
+          0.115,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_exit_white": {
+    "name": "bne_exit_white",
+    "mapTo": "bne_exit_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.93,
+          0.95,
+          0.89,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_exit_metal": {
+    "name": "bne_exit_metal",
+    "mapTo": "bne_exit_metal",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.42,
+          0.45,
+          0.46,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_exit_letters": {
+    "name": "bne_exit_letters",
+    "mapTo": "bne_exit_letters",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.97,
+          0.98,
+          0.94,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit_letters_o.data.png",
+        "opacityFactor": 1.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "alphaTest": true,
+    "alphaRef": 64,
+    "translucent": false
+  },
+  "bne_exit_blue": {
+    "name": "bne_exit_blue",
+    "mapTo": "bne_exit_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.012,
+          0.065,
+          0.34,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  }
+}

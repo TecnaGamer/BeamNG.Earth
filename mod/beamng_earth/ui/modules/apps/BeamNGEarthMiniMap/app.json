@@ -1,0 +1,19 @@
+{
+  "domElement": "<beamng-earth-mini-map></beamng-earth-mini-map>",
+  "name": "BeamNG.Earth: Mini-map",
+  "types": [
+    "ui.apps.categories.utility"
+  ],
+  "description": "A live, configurable map centered on the car, with heading and the planned GPS route. M opens the full world map.",
+  "css": {
+    "width": "250px",
+    "height": "274px"
+  },
+  "author": "BeamNG.Earth",
+  "version": "2.0",
+  "directive": "beamngEarthMiniMap",
+  "appName": "beamngEarthMiniMap",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "no"
+}

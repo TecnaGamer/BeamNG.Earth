@@ -167,28 +167,28 @@
       1500
     ],
     "baseColorDetailStrength": [
-      0.25,
-      0.08
+      0.45,
+      0.1
     ],
     "normalDetailStrength": [
-      1,
-      0.3
+      0.35,
+      0.05
     ],
     "roughnessDetailStrength": [
-      1,
-      0.4
+      0.9,
+      0.2
     ],
     "aoDetailStrength": [
-      0.8,
-      0.2
+      0.35,
+      0.05
     ],
     "baseColorMacroStrength": [
       0.12,
-      0.08
+      0.06
     ],
     "normalMacroStrength": [
-      0.5,
-      0.3
+      0.05,
+      0
     ],
     "roughnessMacroStrength": [
       0,
@@ -196,25 +196,25 @@
     ],
     "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
     "baseColorBaseTexSize": 128,
-    "baseColorDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_b.png",
+    "baseColorDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_b.png",
     "baseColorDetailTexSize": 1,
     "baseColorMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_b.png",
     "baseColorMacroTexSize": 32,
     "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
     "normalBaseTexSize": 128,
-    "normalDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_nm.png",
+    "normalDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_nm.png",
     "normalDetailTexSize": 1,
     "normalMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_nm.png",
     "normalMacroTexSize": 32,
     "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
     "roughnessBaseTexSize": 128,
-    "roughnessDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_r.png",
+    "roughnessDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_r.png",
     "roughnessDetailTexSize": 1,
     "roughnessMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_r.png",
     "roughnessMacroTexSize": 32,
     "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
     "aoBaseTexSize": 128,
-    "aoDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_ao.png",
+    "aoDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_ao.png",
     "aoDetailTexSize": 1,
     "aoMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_ao.png",
     "aoMacroTexSize": 32,
@@ -706,28 +706,28 @@
       1500
     ],
     "baseColorDetailStrength": [
-      0.2,
+      0.42,
       0.08
     ],
     "normalDetailStrength": [
-      1,
-      0.3
+      0.25,
+      0.04
     ],
     "roughnessDetailStrength": [
-      1,
-      0.4
+      0.9,
+      0.2
     ],
     "aoDetailStrength": [
-      0.8,
-      0.2
+      0.35,
+      0.05
     ],
     "baseColorMacroStrength": [
       0.12,
-      0.08
+      0.06
     ],
     "normalMacroStrength": [
-      0.5,
-      0.3
+      0.02,
+      0
     ],
     "roughnessMacroStrength": [
       0,
@@ -735,25 +735,25 @@
     ],
     "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
     "baseColorBaseTexSize": 128,
-    "baseColorDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_b.png",
+    "baseColorDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_b.png",
     "baseColorDetailTexSize": 1,
     "baseColorMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_b.png",
     "baseColorMacroTexSize": 32,
     "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
     "normalBaseTexSize": 128,
-    "normalDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_nm.png",
+    "normalDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_nm.png",
     "normalDetailTexSize": 1,
     "normalMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_nm.png",
     "normalMacroTexSize": 32,
     "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
     "roughnessBaseTexSize": 128,
-    "roughnessDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_r.png",
+    "roughnessDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_r.png",
     "roughnessDetailTexSize": 1,
     "roughnessMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_r.png",
     "roughnessMacroTexSize": 32,
     "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
     "aoBaseTexSize": 128,
-    "aoDetailTex": "/assets/materials/terrain/grass/t_grass_01/t_grass_01_ao.png",
+    "aoDetailTex": "/assets/materials/terrain/grass/ind_grass_2/t_ind_grass_2_ao.png",
     "aoDetailTexSize": 1,
     "aoMacroTex": "/assets/materials/terrain/grass/t_macro_grass/t_macro_grass_ao.png",
     "aoMacroTexSize": 32,

@@ -263,6 +263,12 @@ const settingsSchema = [
     name: "Interface",
     items: [
       { id: "hudVisible", type: "bool", default: false, name: "Status HUD", desc: "Show the compact BeamNG.Earth status window (connection, anchor, far field, quick buttons). Also whether it opens at level start." },
+      { id: "miniMapVisible", type: "bool", default: true, name: "Driving mini-map", desc: "Show the live road mini-map in the driving HUD. It follows the car and draws the planned GPS route to the waypoint when one is available. Changes apply immediately and are saved." },
+      { id: "miniMapPosition", type: "select", default: "bottom-left", name: "Mini-map position", desc: "Choose which screen corner holds the driving mini-map. The lower-left preset sits just above the data credits; upper presets sit below the BeamNG.Earth status bar.",
+        options: [ { label: "Bottom left", value: "bottom-left" }, { label: "Bottom right", value: "bottom-right" }, { label: "Top left", value: "top-left" }, { label: "Top right", value: "top-right" } ] },
+      { id: "miniMapZoom", type: "float", min: 12, max: 18, step: 1, default: 16, name: "Mini-map zoom", desc: "Set the road-map scale. Higher values zoom in; lower values show more area. Changes apply immediately and are saved." },
+      { id: "miniMapLayer", type: "select", default: "map", name: "Mini-map map style", desc: "Choose the EOX street map or the imagery layer. Road labels remain overlaid in either style.",
+        options: [ { label: "Street map", value: "map" }, { label: "Satellite", value: "satellite" } ] },
       { id: "creditsVisible", type: "bool", default: true, name: "Data credits on screen", desc: "Small text in a screen corner naming the sources of the imagery, elevation and weather around you right now (the far field's own sources on a second line). On by default: CC BY and similar licences ask for visible attribution. Hidden in the pause menu and the big map." },
       { id: "creditsCorner", type: "select", default: "bottom-left", name: "Data credits corner", desc: "The screen corner of the data credits.",
         options: [ { label: "Bottom left", value: "bottom-left" }, { label: "Bottom right", value: "bottom-right" }, { label: "Top left", value: "top-left" }, { label: "Top right", value: "top-right" } ] },

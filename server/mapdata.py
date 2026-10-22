@@ -65,6 +65,8 @@ import mapcells
 import mapgeom
 import maprasters
 import netfetch
+import osmlanes
+import osmobjects
 import overture
 import rangeread
 import staging
@@ -75,7 +77,7 @@ LAYER_THREADS = 4               # layers of a cell built at once (each fetches t
 VERSION = 2                     # pipeline version: bump when what a cell's layers contain changes
 # per layer, on top of VERSION (a layer's own change without re-fetching the others): roads 2 adds
 # the "oneway" rule (Overture access_restrictions by heading)
-LAYER_VERSIONS = {"roads": 2}
+LAYER_VERSIONS = {"roads": 3}
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts")
@@ -221,6 +223,10 @@ class MapData:
         self.raw_dir = os.path.join(cache_dir, "mapdata", "raw")
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher)
+        # OSM roadside features use a separate regional extract/index cache. Road geometry and
+        # terrain data remain sourced from the current Overture pipeline.
+        self.osm_lanes = osmlanes.LaneSource(self.raw_dir, self.fetcher)
+        self.osm_objects = osmobjects.ObjectSource(self.osm_lanes)
         self._locks = {}
         self._lock = threading.Lock()
         self.pool = ThreadPoolExecutor(LAYER_THREADS, thread_name_prefix="mapdata-layer")
@@ -229,6 +235,8 @@ class MapData:
         self._mem_lock = threading.Lock()
 
     def close(self):
+        self.osm_objects.close()
+        self.osm_lanes.close()
         self.pool.shutdown(wait=False)
         self.overture.close()
 
@@ -240,6 +248,10 @@ class MapData:
         source, release = _source(layer, self.release)
         lv = LAYER_VERSIONS.get(layer)
         name = layer if lv is None else f"{layer}.{lv}"
+        # OSM lane enrichments are an immutable per-run snapshot. Keep them in a
+        # separate cache namespace so later regional imports cannot reuse defaults.
+        if layer == "roads" and self.osm_lanes.snapshot_key:
+            name += ".osm-" + self.osm_lanes.snapshot_key
         return os.path.join(self.cache_dir, "mapdata", f"v{VERSION}", source, release, name,
                             str(key.z), str(key.x), f"{key.y}.npz")
 
@@ -315,6 +327,13 @@ class MapData:
         """(content arrays, provenance record or None) of one layer, from the sources."""
         if layer in VECTOR_LAYERS:
             feats, sources = self.overture.query(layer, key, kind)
+            lanes_ready = True
+            if layer == "roads":
+                try:
+                    lanes_ready = self.osm_lanes.enrich(feats, *key.center())
+                except Exception as e:
+                    lanes_ready = False
+                    log.warning("OSM lanes unavailable for %s: %s; using inferred road widths", key, e)
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -322,6 +341,8 @@ class MapData:
                 # lies (the pieces of all cells make the whole polygon), not only in the bbox-centre cell
                 feats.own |= feats.clipped
             arrays = _layer_arrays(feats)
+            if layer == "roads" and not lanes_ready:
+                arrays["osm_lanes_pending"] = np.array(True)
             prov = overture.sources_provenance(THEME_OF[layer], self.release, sources) if len(feats) else None
         elif layer == "landcover":
             r = self.rasters.worldcover(key, kind)
@@ -342,9 +363,13 @@ class MapData:
         path = self.path(key, layer)
         arrays = self._mirror_load(path)
         if arrays is not None:
+            if layer == "roads" and "osm_lanes_pending" in arrays:
+                self.osm_lanes.request_background(*key.center())
             return arrays, True
         arrays = self._load(path)
         if arrays is not None:
+            if layer == "roads" and "osm_lanes_pending" in arrays:
+                self.osm_lanes.request_background(*key.center())
             return self._mirrored(key, layer, path, arrays), True
         with self._key_lock(key, layer):
             arrays = self._load(path)           # another thread built it meanwhile

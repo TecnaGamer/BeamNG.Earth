@@ -67,6 +67,7 @@ import math  # noqa: E402
 import secrets  # noqa: E402
 import sys  # noqa: E402
 import shutil  # noqa: E402
+import struct  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 from collections import OrderedDict, deque  # noqa: E402
@@ -84,6 +85,7 @@ import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
 import credits as creditsmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
+import terrainblend  # noqa: E402
 import navgraph as navgraphmod  # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
@@ -1067,11 +1069,15 @@ class Server:
             town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
         rwalls = []
         ctx = []
+        import osmobjects
+        exit_signs = []
+        roadside = osmobjects.tile_exit_objects(self.mapdata, anchor.frame, tx, ty)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor),
                                      structures=buildingsmod.centres(items, tx, ty) if items else (),
-                                     tunnels=anchor.tunnels, walls=rwalls)
+                                     tunnels=anchor.tunnels, walls=rwalls,
+                                     osm_objects=roadside, exit_signs=exit_signs)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
@@ -1104,8 +1110,10 @@ class Server:
             bld = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata,
                                          lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                          None, None, items)
+        import exitsigns
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
-                                   mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh)
+                                   mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh,
+                                   exit_mesh=exitsigns.build(exit_signs, (x0, y0, 0.)))
 
     def ground(self, frame, la, lo, z):
         """blockworker.ground here: runways graded in, the sea floor carved."""
@@ -1448,6 +1456,23 @@ class Server:
                     surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])
                 except Exception as e:
                     log.info("photo lawns %s: %s", (anchor.id, cx, cy), e)
+            if photo and info.get("base"):
+                # The first aerial render can run beside terrain classification. Recolour it here,
+                # once this block's material map is ready, then replace both the PNG and its BC7 cache.
+                try:
+                    rgb = terrainblend.blend(photo[0], self.out_dir, info.get("ter"))
+                except (OSError, ValueError, struct.error) as e:
+                    log.info("terrain colour %s: %s; using the dirt material colour", (anchor.id, cx, cy), e)
+                    rgb = terrainblend.blend(photo[0], self.out_dir)
+                path = os.path.join(self.out_dir, info["base"])
+                tmp = staging.tmp_for(path)
+                Image.fromarray(rgb, "RGB").save(tmp, format="PNG", compress_level=1)
+                staging.replace(tmp, path)
+                try:
+                    terraincache.base_entry(self.user_dir, f"{self.vfs_dir}/{info['base']}", BASE_AO_VFS,
+                                            rgb, BASE_AO)
+                except OSError as e:
+                    log.info("terrain cache for %s: %s", info["base"], e)
         info["seconds"] = time.perf_counter() - t0
         info["zoom"] = anchor.hm_zoom
         return info
@@ -1455,7 +1480,7 @@ class Server:
     def base_name(self, key, rev=0):
         return self.hm_name(key)[:-4] + ("_base.png" if not rev else f"_base_r{rev}.png")
 
-    def write_base(self, anchor, cx, cy, pool=None, rev=0, photo=None):
+    def write_base(self, anchor, cx, cy, pool=None, rev=0, photo=None, surface_info=None):
         """Detail mode: the block footprint's aerial photo (BASE_PX² PNG, row 0 = north, the same imagery
         chain and corrections as the far tiles), the drawn block's base colour. The game would pack it into
         BC7 on its main thread (1.5 s for a new 1024² photo); terraincache writes that packed texture into
@@ -1498,6 +1523,17 @@ class Server:
         self._base_kept(anchor, cx, cy, pending)
         if photo is not None:
             photo.append(rgb)
+        surfaces = surface_info if surface_info is not None else self.hm.get(key, {})
+        if surfaces.get("layers") and surfaces.get("ter"):
+            try:                # retain the photo-based lawn mask before material colour replaces the aerial image
+                surfacemod.photo_lawns(self.out_dir, surfaces["ter"], surfaces["layers"], rgb)
+            except Exception as e:
+                log.info("photo lawns %s: %s", key, e)
+        try:
+            rgb = terrainblend.blend(rgb, self.out_dir, surfaces.get("ter"))
+        except (OSError, ValueError, struct.error) as e:
+            log.info("terrain colour %s: %s; using the dirt material colour", key, e)
+            rgb = terrainblend.blend(rgb, self.out_dir)
         t1 = time.perf_counter()
         tmp = staging.tmp_for(path)
         Image.fromarray(rgb, "RGB").save(tmp, format="PNG", compress_level=1)

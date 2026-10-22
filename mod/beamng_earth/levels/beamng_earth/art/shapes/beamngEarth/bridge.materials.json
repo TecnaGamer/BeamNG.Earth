@@ -1,0 +1,28 @@
+{
+  "bne_bridge_pavement": {
+    "name": "bne_bridge_pavement",
+    "mapTo": "bne_bridge_pavement",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "277bdc68-1e47-5fcb-b30c-4a1e9fc1d76e",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_b.color.png",
+        "normalMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_ao.data.png",
+        "baseColorFactor": [1.35, 1.35, 1.32, 1],
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "translucent": false,
+    "alphaTest": false,
+    "castShadows": false,
+    "materialTag0": "RoadAndPath"
+  }
+}

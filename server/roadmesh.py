@@ -65,7 +65,15 @@ def _normals(xy):
     return n
 
 
-def ribbons(chunks):
+def _bridge_concrete_uv(u, v):
+    """Mirror concrete texture repeats across the deck and undo their diagonal half-joint shear."""
+    band = np.floor(u)
+    across = u - band
+    across = np.where(band % 2.0, 1.0 - across, across)
+    return across, v - 0.5 * across
+
+
+def ribbons(chunks, with_source=False):
     """Per chunk: (left (k, 2), right (k, 2), v (k,), material, layer, z (k,) or None) in the anchor
     frame; z: the chunk's own heights where it is "fixed" (bridge decks), else None (draped). Pure."""
     out = []
@@ -77,8 +85,11 @@ def ribbons(chunks):
         if len(xy) < 2:
             continue
         n = _normals(xy) * (float(c["w"]) / 2)
-        out.append((xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
-                    z if c.get("fixed") else None))
+        scale = c.get("uv_scale")
+        along = float(scale[1]) if scale else float(c.get("tl") or 10.0)
+        v = (s + float(c.get("uv_start", 0.0))) / along
+        ribbon = (xy + n, xy - n, v, c["m"], layer_of(c), z if c.get("fixed") else None)
+        out.append((ribbon, c) if with_source else ribbon)
     return out
 
 
@@ -220,11 +231,11 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
     if clip is not None:
         chunks = [_reach_past(c, clip) for c in chunks]
-    rb = ribbons(chunks)                        # deck surfaces too: their asphalt over deck()'s concrete
+    rb = ribbons(chunks, with_source=True)      # keep bridge deck material and UV settings with its curved ribbon
     polys = [c for c in chunks if c.get("poly")]
     if not rb and not polys:
         return None
-    draped = [r for r in rb if r[5] is None]
+    draped = [r for r, _ in rb if r[5] is None]
     pv = [np.asarray(c["poly"], np.float64)[:, :2] for c in polys]
     if draped or pv:
         edges = np.concatenate([np.concatenate([l, r]) for l, r, _, _, _, _ in draped] + pv)
@@ -235,7 +246,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     P, UV, T, M = [], [], [], []
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
     k0 = nverts = 0
-    for left, right, v, m, layer, fz in rb:
+    for (left, right, v, m, layer, fz), c in rb:
         k = len(left)
         if fz is None:
             z = u[k0:k0 + 2 * k] + LIFT[layer] + lift
@@ -246,7 +257,20 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             mats.append(m)
         mi = mats.index(m)
         P.append(np.c_[np.concatenate([left, right]), z])
-        UV.append(np.column_stack((np.concatenate((np.zeros(k), np.ones(k))), np.concatenate((v, v)))))
+        scale = c.get("uv_scale")
+        if scale:
+            # Bridge concrete is a lane-scale slab texture: use metres across the curved deck and
+            # accumulated centreline metres along it. The same arc phase survives tile/chunk cuts.
+            cross_scale = max(float(scale[0]), 1e-6)
+            shift = float(c.get("uv_shift", 0.0)) / cross_scale
+            half = float(c["w"]) / (2.0 * cross_scale)
+            u = np.concatenate((np.full(k, 0.5 - half + shift), np.full(k, 0.5 + half + shift)))
+        else:
+            u = np.concatenate((np.zeros(k), np.ones(k)))
+        v = np.concatenate((v, v))
+        if m == "bne_bridge_pavement" and scale:
+            u, v = _bridge_concrete_uv(u, v)
+        UV.append(np.column_stack((u, v)))
         i = np.arange(k - 1)
         A, A1, B, B1 = nverts + i, nverts + i + 1, nverts + k + i, nverts + k + i + 1
         # left edge to the left of the direction: (A, B, B1) is counter-clockwise seen from above

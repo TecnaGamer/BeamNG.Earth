@@ -51,6 +51,12 @@ M.SCHEMA = {
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
+  -- the live driving map (BeamNGEarthMiniMap HUD app); the full map remains on M.
+  miniMapVisible = { kind = 'bool', default = true, label = 'Driving mini-map' },
+  miniMapPosition = { kind = 'enum', default = 'bottom-left',
+    values = { 'bottom-left', 'bottom-right', 'top-left', 'top-right' }, label = 'Mini-map position' },
+  miniMapZoom = { kind = 'number', default = 16, min = 12, max = 18, label = 'Mini-map zoom' },
+  miniMapLayer = { kind = 'enum', default = 'map', values = { 'map', 'satellite' }, label = 'Mini-map map style' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
@@ -70,7 +76,8 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible', 'statusBar',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible',
+  'miniMapVisible', 'miniMapPosition', 'miniMapZoom', 'miniMapLayer', 'statusBar',
   'placeNamesOnline', 'creditsVisible',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -494,6 +501,27 @@ function M.uiMapState()
     attribution = core and core.attribution and core.attribution() or '',
     creditsByArea = core and core.creditsByArea and core.creditsByArea() or nil,
     gps = require('beamngEarth/gps').status(),
+  }
+end
+
+-- Small live state for the driving HUD map. Keep the frequent poll limited to the player, GPS
+-- destination, display settings and server port; the mini-map reuses the map page's tile queue.
+function M.uiMiniMapState()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  local gps = require('beamngEarth/gps').status()
+  return {
+    visible = values.miniMapVisible and st and st.inOurLevel and st.active or false,
+    connected = net.isConnected(),
+    mapPort = net.isConnected() and st and st.mapPort or nil,
+    mapOpen = mapOpen,
+    player = (pl and pl.lat) and { lat = pl.lat, lon = pl.lon, heading = playerHeading() } or nil,
+    gps = gps and { lat = gps.lat, lon = gps.lon, name = gps.name, remaining = gps.remaining,
+      routeVersion = gps.routeVersion, progress = gps.progress, planning = gps.planning } or nil,
+    position = values.miniMapPosition,
+    zoom = values.miniMapZoom,
+    layer = values.miniMapLayer,
   }
 end
 

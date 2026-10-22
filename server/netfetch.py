@@ -105,6 +105,10 @@ class HostPolicy:
 TILE_HOST = dict(redirect_limited=True, binary=True)
 # docs/research/2026-10-10-rate-limits.md §5.2, the hosts the server contacts today (rates per player).
 POLICIES = {
+    # OSM roadside data: bounded, resumable regional PBF extracts; never query Overpass per tile.
+    "download.geofabrik.de": HostPolicy(rate=1.0, burst=2.0, max_conc=1, daily_budget=1000,
+                                        daily_hard=2000, offline_ok=True, binary=True, timeout=90.0,
+                                        max_attempts=2, base_delay=3.0),
     # (2026-10-16, the user: raise them, lower again on trouble; a first visit's far field waited ~100 s on 15/s)
     "basemap.nationalmap.gov": HostPolicy(rate=50.0, burst=150.0, max_conc=12, daily_budget=150000,
                                           allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
