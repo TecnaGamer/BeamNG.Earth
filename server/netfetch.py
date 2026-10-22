@@ -171,6 +171,13 @@ POLICIES = {
     "raw.githubusercontent.com": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=24, daily_hard=48,
                                             cache_ttl=6 * 3600, miss_ttl=None, max_wait=5.0, timeout=8.0,
                                             max_attempts=1, optional=True),
+    # PDOK's OGC API Features (bgt.py, --nl-bgt on): the Dutch base map's road polygons, a few pages per map-data
+    # cell once, kept on disk
+    "api.pdok.nl": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=5000, allow_prefetch=True,
+                              offline_ok=True, miss_ttl=None, timeout=30.0, max_attempts=3),
+    # PDOK's AHN at 0.5 m (ahn.py, --nl-bgt on): two ~0.5 MB GeoTIFFs per 250 m tile near the player, kept on disk
+    "service.pdok.nl": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=5000, allow_prefetch=True,
+                                  offline_ok=True, miss_ttl=None, timeout=60.0, max_attempts=3),
     # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
     "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),

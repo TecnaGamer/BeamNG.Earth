@@ -43,12 +43,22 @@ class _State:
         self.imagery = None         # (its settings, imagery.Imagery from the disk alone): far_tile's textures
         net = netfetch.Fetcher(offline=offline)
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
+        # the Netherlands at 0.5 m: the AHN's ground for the terrain near the player, its surface for the decks
+        # (ahn.py, earthd --nl-bgt on)
+        import bgt as bgtmod
+        import ahn as ahnmod
+        self.ahn = ahnmod.Ahn(cache_dir, net) if bgtmod.enabled() else None
+        if self.ahn is not None:
+            self.dem = ahnmod.AhnDem(self.dem, self.ahn)
         # runways graded in (--airports on): the copy the server loaded, never refreshed here
         self.airports = load_airports(cache_dir, self.dem) if airports else None
         md = mapdatamod.MapData(cache_dir, fetcher=net) if (roads or surface or sea) else None
         # the sea's and the lakes' floors carved in (--sea on)
         self.sea = seacarvemod.SeaCarver(md, cache_dir, dem=self.dem) if sea else None
         self.md = md if roads else None
+        # the Netherlands' road surfaces as mapped (bgt.py, earthd --nl-bgt on)
+        import bgt as bgtmod
+        self.bgt = bgtmod.Bgt(cache_dir, net) if (bgtmod.enabled() and self.md is not None) else None
         self.grading = bool(grading) and self.md is not None
         self.widths = (roadwidthmod.RoadWidths(
             lambda key: md.cell(key, layers=("buildings",), kind="demand").layers.get("buildings"),
@@ -232,6 +242,19 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None)
         def gen(la, lo):        # the ground over the low arches raised over their vaults (roads.arch_raise)
             return roadsmod.block_arch_raise(tun, cell_fn, frame, la, lo, elev(la, lo),
                                              (cx - half, cy - half, cx + half, cy + half))
+    if getattr(_s, "bgt", None) is not None:     # the ground under a junction's deck dug out (bgt.cut)
+        import bgt as bgtmod
+        half = size * heightmap.SQUARE / 2
+        try:
+            bb = (cx - half, cy - half, cx + half, cy + half)
+            passes = _s.bgt.passages(frame, bb)
+            gen = bgtmod.cut(frame, passes, gen)
+            if _s.bgt.tiles_box(frame, bb):     # (the Netherlands: the lidar's banks kept, bgt.banks)
+                gen = bgtmod.banks(frame, passes, gen, raw)
+            import kunstwerken as kwmod     # (under the hand-built structures' streets)
+            gen = kwmod.cap(gen)
+        except Exception as e:
+            log.warning("bgt passages of block %s,%s: %s: %s", cx, cy, type(e).__name__, e)
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
                               chunks=chunks)
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0]}
@@ -367,19 +390,146 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     def drawn(la, lo):          # the block's ground: raised over the low arches as the terrain is (_make_heightmap)
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo),
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
-    mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift, clip=box, follow=True, q=q, drawn=drawn)
-    mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
+    polys = _bgt_polygons(frame, tx, ty, chunks)
+    bgt_solid, bgt_decks = [], []
+    if polys:       # the Netherlands: the mapped surfaces instead of the guessed ones; the markings stay over them
+        import bgt as bgtmod
+        import plazas
+        raw = lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom))     # noqa: E731
+        try:                        # the underpasses: the ground dug out under a junction's deck as the terrain is
+            passes = _s.bgt.passages(frame, (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
+        except Exception as e:
+            log.warning("bgt passages of tile %s_%s: %s: %s", tx, ty, type(e).__name__, e)
+            passes = []
+        dug = bgtmod.banks(frame, passes, bgtmod.cut(frame, passes, elev), raw)
+        import kunstwerken as kwmod     # the hand-built structures here (data/kunstwerken): their decks' planes
+        kws = kwmod.near(frame, box)
+        if kws:                         # their streets are theirs: the terrain under their floors, the markings left out
+            dug = kwmod.cap(dug)
+            drawn = kwmod.cap(drawn)
+
+            def kw_marks(chs):
+                out = []
+                for ch in chs:
+                    pts = np.asarray(ch.get("n") or (), np.float64)
+                    if len(pts) >= 2:
+                        cla, clo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+                        if kwmod.covered(np.asarray(cla), np.asarray(clo)).mean() > 0.5:
+                            continue
+                    out.append(ch)
+                return out
+        else:
+            kw_marks = lambda chs: chs      # noqa: E731
+        ahn_top = _s.ahn.deck_top if getattr(_s, "ahn", None) else None
+        deck_top = (lambda la, lo: kwmod.deck_top(la, lo, ahn_top)) if kws else ahn_top    # noqa: E731
+        _s.last_ground = (tx, ty, dug, raw, passes)     # (tools/road_check.py: the ground this tile was built on)
+        blift = lift + bgtmod.SURFACE_LIFT_M     # (over the terrain between their 2 m vertices, markings with them)
+        marks = roadmeshmod.build(frame, kw_marks(bgtmod.keep_markings(chunks)), dug, (x0, y0, 0.0), blift, clip=box,
+                                  follow=True, q=q, drawn=bgtmod.cut(frame, passes, drawn))
+        # (its kerbed footways and islands, its streets over a trench into bgt_solid: the colliding tunnel mesh; its
+        # surfaces subdivided more coarsely where a tile's mesh would pass the 65535 vertices the engine draws)
+        for step in (bgtmod.STEP_M, 2 * bgtmod.STEP_M, 4 * bgtmod.STEP_M, 8 * bgtmod.STEP_M):
+            bgt_solid[:], bgt_decks[:] = [], []
+            mesh = plazas.merge(marks, bgtmod.mesh(frame, box, polys, dug, raw, (x0, y0, 0.0), blift, solid=bgt_solid,
+                                                   passes=passes, decks=bgt_decks, step=step,
+                                                   deck_top=deck_top, skip=kwmod.covered if kws else None))
+            if (mesh is None or len(mesh[0]) <= MESH_VERTS_MAX) and sum(len(m[0]) for m in bgt_solid) <= MESH_VERTS_MAX / 2:
+                break
+        sidewalks = False           # (the BGT's footways)
+        try:                        # its tram tracks, its walls for the guessed ones, its street lights for the spaced
+            mesh = plazas.merge(mesh, bgtmod.rails_mesh(frame, box, _s.bgt.features(frame, tx, ty, (bgtmod.RAILS,)),
+                                                        elev, (x0, y0, 0.0), lift))
+            bw = bgtmod.walls(frame, box, _s.bgt.features(frame, tx, ty, (bgtmod.WALLS,)), dug, raw,
+                              passes=passes)
+            if bw and kws:              # (a kunstwerk's own walls stand there)
+                def kw_free(w):
+                    b = np.asarray(w["base"], np.float64)
+                    bla, blo, _ = frame.enu_to_geodetic(b[:, 0], b[:, 1], np.zeros(len(b)))
+                    return not any(k.in_box(np.asarray(bla), np.asarray(blo)).any() for k in kws)
+                bw = [w for w in bw if kw_free(w)]
+            if bw:
+                rwalls[:] = bw
+            if props is not None:
+                lamps = bgtmod.lamps(frame, box, _s.bgt.features(frame, tx, ty, (bgtmod.POLES,)), polys, elev)
+                if lamps:
+                    props[:] = [r for r in props if r[0] != "streetlight"] + lamps
+                if kws and props:       # (a kunstwerk's own furniture stands there: none of ours in its box)
+                    xy = np.asarray([[r[1], r[2]] for r in props], np.float64)
+                    pla, plo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+                    inb = np.zeros(len(xy), bool)
+                    for k in kws:
+                        inb |= k.in_box(np.asarray(pla), np.asarray(plo))
+                    props[:] = [r for r, b in zip(props, inb) if not b]
+        except Exception as e:
+            log.warning("bgt walls / lamps of tile %s_%s: %s: %s", tx, ty, type(e).__name__, e)
+        if kws:                     # where a kunstwerk draws its streets, nothing of ours over them (its rails, paint)
+            mesh = _kw_cut(mesh, frame, (x0, y0), kwmod)
+    else:
+        mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift, clip=box, follow=True, q=q, drawn=drawn)
+        mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
     dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(roadsmod.tile_bbox(tx, ty)), ctx,
                               bridges.beams_in(roadsmod.tile_bbox(tx, ty)))
+    if bgt_decks:                   # (the streets over a trench: the deck mesh collides too)
+        import plazas
+        for m in bgt_decks:
+            dmesh = plazas.merge(dmesh, m)
     tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
+    if polys:
+        for k in kws:                   # the kunstwerken's walls and decks: colliding, in the tunnel mesh
+            km = k.tile_mesh(frame, box, (x0, y0, 0.0))
+            if km is not None:
+                bgt_solid.append(km)
+    if bgt_solid:                   # (the tunnel mesh collides and renders: kerbs and decks the car meets)
+        import plazas
+        for m in bgt_solid:
+            tmesh = plazas.merge(tmesh, m)
     bld = None
     if buildings:
         import buildings as buildingsmod
         bld = buildingsmod.road_tile(frame, tx, ty, _s.md,
                                      lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), None, None,
                                      items)
+    for what, m in (("road", mesh), ("deck", dmesh)):     # (the tunnel mesh is written in parts: roads.split_mesh)
+        if m is not None and len(m[0]) > 65535:     # (the engine draws the first 65535 vertices of an object only)
+            log.warning("road tile %s_%s: %s mesh of %d vertices (> 65535: drawn broken)", tx, ty, what, len(m[0]))
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
                                bld, props, wires, park, tunnel_mesh=tmesh)
+
+
+def _kw_cut(mesh, frame, origin, kwmod):
+    """The mesh (P relative to origin, T, UV, mats, M) without its triangles over a kunstwerk's floor
+    (kunstwerken.covered at their centres): the generated surface, rails and paint left out where the kunstwerk has
+    its own (in the game they showed through it, 2026-10-21)."""
+    if mesh is None or not len(mesh[1]):
+        return mesh
+    P, T, UV, mats, M = mesh
+    P, T = np.asarray(P, np.float64), np.asarray(T, np.int64)
+    c = P[T].mean(1)
+    la, lo, _ = frame.enu_to_geodetic(c[:, 0] + origin[0], c[:, 1] + origin[1], np.zeros(len(c)))
+    keep = ~kwmod.covered(np.asarray(la), np.asarray(lo))
+    if keep.all():
+        return mesh
+    T, M = T[keep], np.asarray(M)[keep]
+    used = np.unique(T)
+    remap = -np.ones(len(P), np.int64)
+    remap[used] = np.arange(len(used))
+    return P[used], remap[T], None if UV is None else np.asarray(UV)[used], mats, M
+
+
+MESH_VERTS_MAX = 60000      # a road tile's meshes under the 65535 vertices the engine draws of an object (with room)
+
+
+def _bgt_polygons(frame, tx, ty, chunks):
+    """The BGT road polygons of road tile (tx, ty) not on a deck or in a tunnel (bgt.py), [] where there are none
+    (--nl-bgt off, outside the Netherlands, PDOK not to be had: the guessed surfaces as before)."""
+    if getattr(_s, "bgt", None) is None:
+        return []
+    import bgt as bgtmod
+    try:
+        return bgtmod.off_structures(frame, _s.bgt.polygons(frame, tx, ty), chunks)
+    except Exception as e:          # the guessed surfaces rather than no road tile
+        log.warning("bgt of tile %s_%s: %s: %s", tx, ty, type(e).__name__, e)
+        return []
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):
@@ -462,6 +612,9 @@ def tunnel_profiles(aid, frame, elev, g=None):
             t.raw = lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))  # noqa: E731
             if g is not None:
                 t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
+            if getattr(_s, "bgt", None) is not None:      # the BGT's underpasses instead of the map's tunnels there
+                import bgt as bgtmod
+                t.skip = bgtmod.skips_tunnel(_s.bgt, frame, t.raw)
             for old in sorted(_s.tunnels)[:-ANCHORS_KEPT]:
                 del _s.tunnels[old]
         return t

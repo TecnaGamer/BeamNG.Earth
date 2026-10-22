@@ -146,6 +146,9 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 - Z. Wang, A. C. Bovik, H. R. Sheikh, E. P. Simoncelli, "Image quality assessment: from error
   visibility to structural similarity", IEEE Trans. Image Processing 13(4), 2004: the SSIM measure
   `tools/benchmark.py compare` uses (own NumPy implementation).
+- Wikimedia Commons, "Nederlands verkeersbord B6 / D2 / G11 / L2" (SVGs of the RVV 1990 signs, public domain):
+  rendered by Commons into the sign atlas `bne_signs3.png` (`tools/sign_atlas.py`). The traffic lights' faces,
+  the poles' bands and the direction signs there are drawn by the tool.
 
 ## User mods mentioned in the docs (not part of BeamNG.Earth)
 
