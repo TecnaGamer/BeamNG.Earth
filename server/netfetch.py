@@ -257,6 +257,7 @@ class Response:
     body: bytes
     headers: dict = field(default_factory=dict)     # lower-case names
     elapsed: float = 0.0                            # s, the successful attempt alone
+    url: str = ""                                    # final URL (for pinned, resumable downloads)
 
 
 def host_of(url):
@@ -680,7 +681,7 @@ class Fetcher:
         with self._rng_lock:
             return self.rng.uniform(0.0, min(p.max_delay, p.base_delay * 2 ** attempt))
 
-    def get(self, url, *, kind="demand", headers=None):
+    def get(self, url, *, kind="demand", headers=None, redirect_hosts=(), _redirects=0):
         """GET url under its host's policy: a Response with status 2xx, or one of the errors above."""
         h, probe = self._admit(url, kind)
         p = h.policy
@@ -713,7 +714,21 @@ class Fetcher:
                     elapsed = self.clock() - t0
                 finally:
                     h.sem.release()
-                res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
+                rh = {k.lower(): v for k, v in (rh or {}).items()}
+                # Only callers that name an exact HTTPS host may follow redirects (currently
+                # Geofabrik's versioned OSM extracts). Tile hosts intentionally never follow
+                # redirects: they use 3xx as a rate-limit response.
+                if status in (301, 302, 303, 307, 308) and redirect_hosts and _redirects < 3:
+                    from urllib.parse import urljoin
+                    target = urljoin(url, rh.get("location", ""))
+                    allowed = {str(host).lower() for host in redirect_hosts}
+                    if urlsplit(target).scheme == "https" and host_of(target).lower() in allowed:
+                        self._count(h, "bytes", len(body or b""))
+                        self._succeeded(h)
+                        probe = False
+                        return self.get(target, kind=kind, headers=headers, redirect_hosts=redirect_hosts,
+                                        _redirects=_redirects + 1)
+                res = self._classify(h, url, status, rh, body, elapsed)
                 probe = False               # the breaker has its verdict
                 if isinstance(res, Response):
                     return res
@@ -743,7 +758,7 @@ class Fetcher:
                 self._failed(h)
             else:
                 self._succeeded(h)
-            return Response(status, body, rh, elapsed)
+            return Response(status, body, rh, elapsed, url)
         if status in (404, 410):
             self._count(h, "s404")
             self._succeeded(h)              # the host answered: it is healthy

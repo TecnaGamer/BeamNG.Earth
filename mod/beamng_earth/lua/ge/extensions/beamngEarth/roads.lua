@@ -33,6 +33,9 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/bridge.materials.json' } -- grooved concrete bridge pavement
 M.FADE = '450 150'          -- distanceFade: start, range (m)
 M.enabled = true
+M.bridgesEnabled = true
+M.sidewalksEnabled = true
+M.exitSignsEnabled = true
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -386,7 +389,6 @@ end
 
 -- Server message `roads_tile` {anchorId, key, path, n}.
 function M.onTile(msg, currentAnchor)
-  if not M.enabled then return false end
   switchAnchor(currentAnchor)
   if msg.anchorId ~= currentAnchor then return false end
   local key = tileKey(msg.anchorId, msg.key)
@@ -410,24 +412,26 @@ function M.onTile(msg, currentAnchor)
       end
     end
   end
-  local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
-  tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
+  local road = M.enabled and type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
+  tiles[key] = { anchor = msg.anchorId, objs = {}, queued = (M.enabled and not road) and #data.chunks or 0,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
   sinceChange = stopwatch.new()
-  if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
-    walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
-  else
-    for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
+  if M.enabled then
+    if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
+      walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
+    else
+      for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
+    end
   end
-  if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
+  if M.enabled and type(data.props) == 'table' and type(data.props.items) == 'table' then   -- roadside objects (trees.lua)
     require('beamngEarth/trees').onRows(msg.anchorId, 'p' .. tostring(msg.key), data.props.items, data.props.groups)
     tiles[key].props = true
   end
-  if type(data.park) == 'table' and data.park[1] then      -- curbside parking spots (parking.lua)
+  if M.enabled and type(data.park) == 'table' and data.park[1] then      -- curbside parking spots (parking.lua)
     require('beamngEarth/parking').onRows(msg.anchorId, key, data.park)
     tiles[key].park = true
   end
-  if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
+  if M.enabled and type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
     walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
   end
   -- sidewalks, bridge decks, buildings (split in parts under the engine's 16-bit index limit), the buildings'
@@ -441,7 +445,12 @@ function M.onTile(msg, currentAnchor)
   -- tunnels (server roadmesh.tunnel: tubes and portals) collide like the decks
   for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'exits' }) do
     local w = data[what]
-    if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
+    local enabled
+    if what == 'deck' then enabled = M.bridgesEnabled
+    elseif what == 'walk' or what == 'walkcol' then enabled = M.enabled and M.sidewalksEnabled
+    elseif what == 'exits' then enabled = M.enabled and M.exitSignsEnabled
+    else enabled = M.enabled end
+    if enabled and type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
         renderOnly = what == 'exits' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk') }
       if not q.renderOnly then tiles[key].colWant[what] = true end
@@ -996,6 +1005,24 @@ function M.clear()
   if collisionDirty then be:reloadCollision(); collisionDirty = false end
 end
 
+-- Drop only road-tile objects before asking the server to replay its cached tiles. Far buildings
+-- arrive on a separate tracker and stay visible across a World setting change.
+local function clearRoadTiles()
+  for key in pairs(tiles) do dropTile(key) end
+  createQ, held, newColliders = {}, {}, {}
+  for _, id in ipairs(deleteQ) do
+    local o = scenetree.findObjectById(id)
+    if o then
+      if isCollider(o) then collisionDirty = true end
+      o:delete()
+    end
+    slotObjGone(id)
+  end
+  deleteQ = {}
+  walkQ, parked = {}, {}
+  if collisionDirty then be:reloadCollision(); collisionDirty = false end
+end
+
 -- The level ended: its objects are gone with it.
 function M.reset()
   -- (the level took the objects: every slot goes)
@@ -1008,14 +1035,18 @@ function M.reset()
   collisionDirty, deletesDirty = false, false
 end
 
--- On / off (the settings page, through core.setRoadsEnabled, which asks the server for the tiles
--- again when switched back on). Returns true if it was off and is on now.
-function M.setEnabled(on)
-  local was = M.enabled
-  M.enabled = on and true or false
-  if not M.enabled then M.clear() end
-  return M.enabled and not was
+local function setTileFeature(field, on)
+  on = on and true or false
+  if M[field] == on then return false end
+  M[field] = on
+  clearRoadTiles()
+  return true
 end
+
+function M.setEnabled(on) return setTileFeature('enabled', on) end
+function M.setBridgesEnabled(on) return setTileFeature('bridgesEnabled', on) end
+function M.setSidewalksEnabled(on) return setTileFeature('sidewalksEnabled', on) end
+function M.setExitSignsEnabled(on) return setTileFeature('exitSignsEnabled', on) end
 
 -- The state of the road tiles along a line (tools: how far ahead of a fast car its tiles are ready). From (x, y)
 -- along the unit direction (hx, hy) to dist m, every 32 m: { d, key, arrived (ms ago or false), road (its road mesh

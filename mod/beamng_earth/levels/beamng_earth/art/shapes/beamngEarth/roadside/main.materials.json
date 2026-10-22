@@ -1,0 +1,97 @@
+{
+  "bne_osm_metal": {
+    "name": "bne_osm_metal",
+    "mapTo": "bne_osm_metal",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.48,
+          0.5,
+          0.51,
+          1
+        ],
+        "roughnessFactor": 0.55,
+        "metallicFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_osm_sign_atlas": {
+    "name": "bne_osm_sign_atlas",
+    "mapTo": "bne_osm_sign_atlas",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.7,
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/speed_signs.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_osm_lamp_glass": {
+    "name": "bne_osm_lamp_glass",
+    "mapTo": "bne_osm_lamp_glass",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          0.94,
+          0.78,
+          1
+        ],
+        "roughnessFactor": 0.35,
+        "metallicFactor": 0.0,
+        "emissive": true,
+        "emissiveFactor": [
+          2.0,
+          1.8,
+          1.3
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_osm_footing": {
+    "name": "bne_osm_footing",
+    "mapTo": "bne_osm_footing",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.47,
+          0.47,
+          0.44,
+          1
+        ],
+        "roughnessFactor": 1.0,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  }
+}

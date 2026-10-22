@@ -241,7 +241,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         edges = np.concatenate([np.concatenate([l, r]) for l, r, _, _, _, _ in draped] + pv)
         la, lo, _ = frame.enu_to_geodetic(edges[:, 0], edges[:, 1], 0.0)
         h = np.asarray(elev(la, lo), np.float64)
-        _, _, u = frame.geodetic_to_enu(la, lo, h)
+        # Keep the ground-height samples separate from the per-ribbon texture U below.
+        # Reusing `u` here let the first ribbon overwrite the elevation array, so every
+        # subsequent road segment sliced an empty height range and failed to mesh.
+        _, _, ground_z = frame.geodetic_to_enu(la, lo, h)
     mats = []
     P, UV, T, M = [], [], [], []
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
@@ -249,7 +252,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     for (left, right, v, m, layer, fz), c in rb:
         k = len(left)
         if fz is None:
-            z = u[k0:k0 + 2 * k] + LIFT[layer] + lift
+            z = ground_z[k0:k0 + 2 * k] + LIFT[layer] + lift
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
             z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
@@ -264,13 +267,13 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             cross_scale = max(float(scale[0]), 1e-6)
             shift = float(c.get("uv_shift", 0.0)) / cross_scale
             half = float(c["w"]) / (2.0 * cross_scale)
-            u = np.concatenate((np.full(k, 0.5 - half + shift), np.full(k, 0.5 + half + shift)))
+            uv_u = np.concatenate((np.full(k, 0.5 - half + shift), np.full(k, 0.5 + half + shift)))
         else:
-            u = np.concatenate((np.zeros(k), np.ones(k)))
+            uv_u = np.concatenate((np.zeros(k), np.ones(k)))
         v = np.concatenate((v, v))
         if m == "bne_bridge_pavement" and scale:
-            u, v = _bridge_concrete_uv(u, v)
-        UV.append(np.column_stack((u, v)))
+            uv_u, v = _bridge_concrete_uv(uv_u, v)
+        UV.append(np.column_stack((uv_u, v)))
         i = np.arange(k - 1)
         A, A1, B, B1 = nverts + i, nverts + i + 1, nverts + k + i, nverts + k + i + 1
         # left edge to the left of the direction: (A, B, B1) is counter-clockwise seen from above
@@ -289,7 +292,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     for c in polys:                             # filled polygons (corner asphalt): a fan from vertex 0
         pq = np.asarray(c["poly"], np.float64)
         k = len(pq)
-        z = u[k0:k0 + k] + LIFT[layer_of(c)] + lift
+        z = ground_z[k0:k0 + k] + LIFT[layer_of(c)] + lift
         k0 += k
         if c["m"] not in mats:
             mats.append(c["m"])

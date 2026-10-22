@@ -1855,9 +1855,23 @@ function M._state() return st end -- read-only: the dev tools and the settings p
 function M._rebaseLag() return rebaseLag end -- for tests
 function M._governor() return gov end
 
--- The Roads setting: off removes them; on again asks the server to send the tiles once more.
+-- World feature switches rebuild the nearby road tiles from the server's cached payload. Keeping
+-- the far-building stream alive avoids making it wait for its separate tracker after a toggle.
+local function refreshRoadTiles()
+  if net.isConnected() and (roads.enabled or roads.bridgesEnabled) then net.send({ type = 'roads_reset' }) end
+end
+
 function M.setRoadsEnabled(on)
-  if roads.setEnabled(on) then net.send({ type = 'roads_reset' }) end
+  if roads.setEnabled(on) then refreshRoadTiles() end
+end
+function M.setBridgesEnabled(on)
+  if roads.setBridgesEnabled(on) then refreshRoadTiles() end
+end
+function M.setSidewalksEnabled(on)
+  if roads.setSidewalksEnabled(on) then refreshRoadTiles() end
+end
+function M.setExitSignsEnabled(on)
+  if roads.setExitSignsEnabled(on) then refreshRoadTiles() end
 end
 
 M.onUpdate = onUpdate

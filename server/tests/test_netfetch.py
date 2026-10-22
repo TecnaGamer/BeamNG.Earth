@@ -574,6 +574,27 @@ class DemFailoverTest(unittest.TestCase):
 
 
 class ClassifyTest(unittest.TestCase):
+    def test_explicit_geofabrik_redirect_returns_the_final_url(self):
+        source = "https://download.geofabrik.de/north-america/us/michigan-latest.osm.pbf"
+        snapshot = "https://download.geofabrik.de/north-america/us/michigan-260101.osm.pbf"
+        f, clock, sleep, tr = fetcher({
+            "michigan-latest": [(302, {"location": snapshot}, b"", 0)],
+            "michigan-260101": [(206, {"content-range": "bytes 0-2/3"}, b"pbf", 0)],
+        })
+        res = f.get(source, headers={"Range": "bytes=0-2"}, redirect_hosts=("download.geofabrik.de",))
+        self.assertEqual((res.status, res.body, res.url), (206, b"pbf", snapshot))
+        self.assertEqual([c[1] for c in tr.calls], [source, snapshot])
+
+    def test_redirect_does_not_escape_the_explicit_host_allowlist(self):
+        source = "https://download.geofabrik.de/michigan-latest.osm.pbf"
+        f, clock, sleep, tr = fetcher({
+            "michigan-latest": [(302, {"location": "https://attacker.example/data"}, b"", 0)],
+        })
+        with self.assertRaises(nf.FetchFailed) as cm:
+            f.get(source, redirect_hosts=("download.geofabrik.de",))
+        self.assertEqual(cm.exception.status, 302)
+        self.assertEqual([c[1] for c in tr.calls], [source])
+
     def test_classes(self):
         f, clock, sleep, tr = fetcher({
             "/404/": [(404, {}, b"", 0)], "/410/": [(410, {}, b"", 0)],

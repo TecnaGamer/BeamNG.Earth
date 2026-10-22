@@ -36,6 +36,7 @@ M.LEVEL_ID = 'beamng_earth'
 
 -- key -> { kind = 'number'|'bool'|'enum', default, min, max, values, label }. Order = ORDER.
 M.SCHEMA = {
+  resumePosition = { kind = 'bool', default = true, label = 'Resume last position' },
   rebaseDistance = { kind = 'number', default = rebase.DEFAULT_DISTANCE, min = rebase.MIN_DISTANCE,
     max = rebase.MAX_DISTANCE, label = 'Rebase distance (m)' },
   viewDistanceMode = { kind = 'enum', default = 'horizon', values = { 'fixed', 'horizon' }, label = 'View distance' },
@@ -50,6 +51,11 @@ M.SCHEMA = {
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
+  sidewalks = { kind = 'bool', default = true, label = 'Sidewalks' },
+  bridges = { kind = 'bool', default = true, label = 'Bridges' },
+  osmStreetLights = { kind = 'bool', default = true, label = 'OSM street lamps' },
+  osmSpeedSigns = { kind = 'bool', default = true, label = 'OSM speed limit signs' },
+  osmExitSigns = { kind = 'bool', default = true, label = 'OSM highway exit signs' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the live driving map (BeamNGEarthMiniMap HUD app); the full map remains on M.
   miniMapVisible = { kind = 'bool', default = true, label = 'Driving mini-map' },
@@ -75,8 +81,9 @@ M.SCHEMA = {
   -- not on the page: the newer version whose update notice the player dismissed (core.lua drawUpdateNotice)
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
-M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible',
+M.ORDER = { 'resumePosition', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'sidewalks', 'bridges',
+  'osmStreetLights', 'osmSpeedSigns', 'osmExitSigns', 'hudVisible',
   'miniMapVisible', 'miniMapPosition', 'miniMapZoom', 'miniMapLayer', 'statusBar',
   'placeNamesOnline', 'creditsVisible',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
@@ -251,6 +258,20 @@ M.APPLY = {
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
+  end,
+  sidewalks = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setSidewalksEnabled then core.setSidewalksEnabled(v) else require('beamngEarth/roads').setSidewalksEnabled(v) end
+  end,
+  bridges = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setBridgesEnabled then core.setBridgesEnabled(v) else require('beamngEarth/roads').setBridgesEnabled(v) end
+  end,
+  osmStreetLights = function(v) require('beamngEarth/trees').setRoadside('lamps', v) end,
+  osmSpeedSigns = function(v) require('beamngEarth/trees').setRoadside('signs', v) end,
+  osmExitSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setExitSignsEnabled then core.setExitSignsEnabled(v) else require('beamngEarth/roads').setExitSignsEnabled(v) end
   end,
   hudVisible = function(v)
     if M.pageExists() then ui.visible = v end

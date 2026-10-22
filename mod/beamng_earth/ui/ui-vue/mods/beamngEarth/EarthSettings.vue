@@ -240,6 +240,7 @@ const settingsSchema = [
   {
     name: "World",
     items: [
+      { id: "resumePosition", type: "bool", default: true, name: "Resume last position", desc: "Automatically save your vehicle's location and heading while driving and when leaving the level. The next time you enter BeamNG.Earth freeroam, return to that location after nearby roads load. Turn off to use the usual starting location. Applies on the next level load." },
       { id: "rebaseDistance", type: "float", min: 2000, max: 16000, step: 100, default: 15000, name: "Rebase distance (m)", desc: "How far from the anchor origin the world moves under the player (origin rebase). 15 km keeps float precision at ~1 mm; beyond 16 km precision halves." },
       { id: "viewDistanceMode", type: "select", default: "horizon", name: "View distance", desc: "Real horizon (the default): the far field reaches the true line-of-sight horizon and the view distance follows it (the server's --horizon, on by default in mesh mode). Fixed: the renderer's view distance below.",
         options: [ { label: "Fixed distance", value: "fixed" }, { label: "Real horizon (v1.4 M1h)", value: "horizon" } ] },
@@ -256,7 +257,12 @@ const settingsSchema = [
       { id: "groundCover", type: "bool", default: true, name: "Grass and shrubs", desc: "3D grass where the land cover is grassland or forest floor, and scrub with sparse grass on shrubland, near the car (the game's own Hirochi Raceway and West Coast USA plants). Needs ground surfaces from the world server (on by default)." },
       { id: "groundCoverDensity", type: "select", default: "normal", name: "Grass density", desc: "How dense the grass and shrubs are. Without the optional grass patch (tools/gcpatch, Linux) the game regrows the grass in one slower frame each time the ground under the car moves (every ~130-190 m); higher density makes that frame longer.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" } ] },
-      { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads from OpenStreetMap / Overture within about 600 m of the car: paved roads as asphalt, gravel and dirt roads and tracks as worn dirt tracks, and the same surfaces under the tyres. Bridges, tunnels, markings and junction shapes come later." },
+      { id: "roads", type: "bool", default: true, name: "Roads", desc: "Show generated roads and their markings. Bridges and sidewalks have separate switches below. Changes apply immediately and are saved." },
+      { id: "sidewalks", type: "bool", default: true, name: "Sidewalks", desc: "Show or hide generated sidewalks and their collision independently of roads. Sidewalks are generated mainly where land cover shows a clear built-up area; rural roads and settlement edges are filtered out. Changes apply immediately and are saved." },
+      { id: "bridges", type: "bool", default: true, name: "Bridges", desc: "Show generated bridge decks independently of ground roads, including their pavement and collision. Changes apply immediately and are saved." },
+      { id: "osmStreetLights", type: "bool", default: true, name: "OSM street lamps", desc: "Show mapped OpenStreetMap street lamps, including high-mast floodlight towers. Changes apply immediately and are saved." },
+      { id: "osmSpeedSigns", type: "bool", default: true, name: "OSM speed limit signs", desc: "Show mapped OpenStreetMap speed limit signs with their mapped numbers and units. Changes apply immediately and are saved." },
+      { id: "osmExitSigns", type: "bool", default: true, name: "OSM highway exit signs", desc: "Generate highway exit and advance signs from OpenStreetMap exit and destination data. Changes apply immediately and are saved." },
     ],
   },
   {

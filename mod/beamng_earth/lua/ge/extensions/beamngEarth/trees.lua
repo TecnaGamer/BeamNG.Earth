@@ -24,7 +24,8 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300,
-  speedk40 = 300, speedk60 = 300, speedk80 = 300, speedk100 = 300 }
+  speedk40 = 300, speedk60 = 300, speedk80 = 300, speedk100 = 300,
+  osm_lamp = 700, osm_lamp_double = 700, osm_lamp_straight = 700, osm_highmast = 1400 }
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -57,8 +58,13 @@ local UT = '/levels/Utah/art/shapes/'
 local JV = '/levels/johnson_valley/art/shapes/'
 local JRI = '/levels/jungle_rock_island/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
+local ROADSIDE = '/levels/beamng_earth/art/shapes/beamngEarth/roadside/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
+  osm_lamp = { { ROADSIDE .. 'lamp.cdae', 10.0 } },
+  osm_lamp_double = { { ROADSIDE .. 'lamp_double.cdae', 10.0 } },
+  osm_lamp_straight = { { ROADSIDE .. 'lamp_straight.cdae', 10.0 } },
+  osm_highmast = { { ROADSIDE .. 'highmast.cdae', 32.0 } },
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
   cliff = {
     { IT .. 'rocks/italy_rockface_short_wide', 2.9 }, { IT .. 'rocks/italy_rockface_tall_wide', 13.2 },
@@ -175,6 +181,7 @@ local MATERIALS = {
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', '/levels/driver_training/art/shapes/race',
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadside',
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
   '/art/shapes/objects/windows_doors_reflective',
@@ -259,6 +266,10 @@ end
 -- The variant of a group for an item of height h: those within 0.8 .. 1.25 of it (else 0.6 .. 1.6), picked by the
 -- item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
+  local unit, value = tostring(group):match('^osm_speed_(%a+)_(%d+)$')
+  if (unit == 'mph' or unit == 'kmh') and tonumber(value) >= 1 and tonumber(value) <= 160 then
+    return ROADSIDE .. 'speed_' .. unit .. '_' .. tostring(tonumber(value)) .. '.cdae', h / 3.2
+  end
   local list = M.CATALOG[group] or M.CATALOG.deciduous
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
@@ -407,6 +418,17 @@ M.tileThreshold = tileThreshold
 -- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh() re-runs every tile's rows
 -- after it changes.
 M.suppress = nil
+local roadside = { lamps = true, signs = true }
+function M.roadsideEnabled(group)
+  if group == 'osm_highmast' or tostring(group):match('^osm_lamp') then return roadside.lamps end
+  if tostring(group):match('^osm_speed_') then return roadside.signs end
+  return true
+end
+function M.setRoadside(kind, enabled)
+  if roadside[kind] == nil then return end
+  roadside[kind] = enabled ~= false
+  M.refresh()
+end
 function M.refresh()
   for _, t in pairs(tiles) do t.pending = true end
 end
@@ -564,7 +586,9 @@ function M.update(anchorId, player, view)
         local r = row[8] or 0
         local g = (t.groups or GROUPS)[(row[1] or 0) + 1]
         local cap = g and M.GROUP_MAX_M[g]
+        if g and g:match('^osm_speed_') then cap = 500 end
         if cap and o[2] > cap then r = 2 end     -- this group is not shown this far out
+        if not M.roadsideEnabled(g) then r = 2 end
         -- an item something else stands in for (navgraph.lua's switchable signal heads)
         if g and M.suppress and M.suppress(g, row[2], row[3]) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
