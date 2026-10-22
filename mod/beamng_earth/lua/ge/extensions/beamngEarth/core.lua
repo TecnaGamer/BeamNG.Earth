@@ -83,6 +83,7 @@ local FLOOR_HIT_M = 0.8        -- m the static collision found under floorZ + 2 
 local PRE_LIFT = 5             -- m above groundZ + 1 to hold the vehicle until it is placed
 local LOADING_AFTER_TELEPORT_S = 3 -- governor loading mode (8 ms budget) this long after a teleport
 local SLOW_SPEED, SLOW_S = 1, 3    -- ... and while the player is below 1 m/s for over 3 s
+local FAST_STREAM_MS = 20           -- m/s (45 mph): above, the governor's fast budget while work is queued (KyzoFox 1.5.5)
 local DEFAULT_LAT, DEFAULT_LON = 36.596718, -118.169991 -- Whitney Portal Road under Mt Whitney (the summit, 36.5785,
                                                          -- -118.2923, was a start on a 20 % slope 3 km from any road)
 -- The server cannot move the block when it is not connected, has not said hello, or does not answer
@@ -1410,7 +1411,10 @@ local function onUpdate(dtReal, dtSim)
   end
   -- the governor's frame opens first: its clock is the wall time since the last onUpdate (hptimer)
   gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
-  gov:beginFrame(farfield.hasWork() or roads.hasWork())
+  local work = farfield.hasWork() or roads.hasWork()
+  -- (KyzoFox 1.5.5) at highway speed with work queued: a larger budget (governor FAST_TARGET_MS)
+  gov:setFast(work and st.player ~= nil and (st.player.speed or 0) > FAST_STREAM_MS)
+  gov:beginFrame(work)
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
   for _, msg in ipairs(net.update(dtReal)) do
     local ok, err = pcall(onMessage, msg)

@@ -367,8 +367,11 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift, clip=box, follow=True, q=q, drawn=drawn)
     mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
+    def road_z(xy):                 # the ground roads' height (roadmesh.deck: no parapet across a road it starts on)
+        la_, lo_, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        return frame.geodetic_to_enu(la_, lo_, np.asarray(elev(la_, lo_), np.float64))[2]
     dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(roadsmod.tile_bbox(tx, ty)), ctx,
-                              bridges.beams_in(roadsmod.tile_bbox(tx, ty)))
+                              bridges.beams_in(roadsmod.tile_bbox(tx, ty)), ground=road_z)
     tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
     bld = None
     if buildings:

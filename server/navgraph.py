@@ -311,7 +311,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         X = np.array([pending[nm][0] for nm in used])
         Y = np.array([pending[nm][1] for nm in used])
         la, lo, _ = frame.enu_to_geodetic(X, Y, 0.0)
-        Z = np.asarray(elev(la, lo), np.float64).copy()
+        # (KyzoFox 1.5.5) heights above the ellipsoid -> the anchor frame's up, as the terrain and the road tiles have
+        # them (the Earth's curvature): taken as they were, the AI's nodes and the signal heads stood higher the
+        # further from the anchor's origin, ~10 m at 11 km (stoplights floating over Ruston, LA, 2026-10-21)
+        Z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64).copy()
         if decks:
             for k, nm in enumerate(used):
                 dz = _deck_z(decks, node_fid.get(nm), X[k], Y[k])

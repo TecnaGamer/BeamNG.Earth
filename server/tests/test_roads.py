@@ -772,6 +772,20 @@ class PaintRoadsTest(unittest.TestCase):
         self.assertEqual(int(out[64, 10]), sf.ASPHALT)
 
 
+class GroundPropsTest(unittest.TestCase):
+    """KyzoFox 1.5.5: traffic signals hanging in the air (Pecanland Mall Drive, Monroe, LA)."""
+
+    def test_props_set_on_the_ground_at_their_foot(self):
+        rows = [["signal", 10.0, 0.0, 14.0, 0.0, 1.0, 9.4, 0.0],     # 4 m over the ground: set on it
+                ["lamp", 20.0, 0.0, 10.3, 0.0, 1.0, 9.0, 0.0],       # 0.3 m (the curb): as placed
+                ["lamp", 50.0, 0.0, 18.0, 0.0, 1.0, 9.0, 0.0]]       # on a deck: as placed
+        deck = [(np.array([[45.0, -20.0, 18.0], [55.0, 20.0, 18.0]]), 4.0)]
+        out = roads.ground_props(rows, FRAME, flat, deck)
+        self.assertAlmostEqual(out[0][3], 10.0, delta=0.05)
+        self.assertEqual(out[1][3], 10.3)
+        self.assertEqual(out[2][3], 18.0)
+
+
 if __name__ == "__main__":
     unittest.main()
 

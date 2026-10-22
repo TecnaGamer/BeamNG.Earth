@@ -137,5 +137,19 @@ class RulesTest(unittest.TestCase):
         self.assertFalse(navgraph.road_rules(None)["rightHandDrive"], "unknown: US rules")
 
 
+class CurvatureTest(unittest.TestCase):
+    def test_nodes_in_the_frames_up_far_from_its_origin(self):
+        # (KyzoFox 1.5.5) 11 km from the anchor's origin the ground is ~9.5 m under the tangent plane: the AI's nodes
+        # and the signal heads took the DEM's height as it was and stood that far over the ground (Ruston, LA)
+        f = features([[(11000.0, -200.0), (11000.0, 200.0)]], ["residential"])
+        g = navgraph.build(FRAME, [f], flat, (11000.0, 0.0))
+        self.assertTrue(g["nodes"])
+        for x, y, z, _r in g["nodes"].values():
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([x]), np.array([y]), 0.0)
+            want = float(FRAME.geodetic_to_enu(la, lo, flat(la, lo))[2][0])
+            self.assertAlmostEqual(z, want, delta=0.05)
+            self.assertLess(z, 10.0 - 8.0, "under the ground's 10 m by the Earth's curvature")
+
+
 if __name__ == "__main__":
     unittest.main()

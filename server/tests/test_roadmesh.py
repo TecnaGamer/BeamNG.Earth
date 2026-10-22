@@ -196,6 +196,18 @@ class BridgeLookTest(unittest.TestCase):
     def parapet_tops(self, P):
         return P[np.abs(P[:, 2] - (20.0 + roadmesh.PARAPET_H)) < 1e-6]
 
+    def test_no_parapet_across_a_road_it_starts_on(self):
+        # (KyzoFox 1.5.5) a ramp leaving a road side by side: the deck's first metres lie on that road's lanes, at its
+        # height; its parapet stood across them (Natchitoches Street, West Monroe, LA)
+        road = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "n": [[-50, 5.0, 20.0], [100, 5.0, 20.0]]}
+        d = self.deck(0.0, "a")
+        P = roadmesh.deck([d, road], (0.0, 0.0, 0.0), ground=lambda xy: np.full(len(xy), 20.0))[0]
+        tops = self.parapet_tops(P)
+        self.assertFalse((tops[:, 1] > 2.0).any(), "no parapet on the edge over the road")
+        self.assertTrue((tops[:, 1] < -2.0).any(), "the free edge keeps its parapet")
+        low = roadmesh.deck([d, road], (0.0, 0.0, 0.0), ground=lambda xy: np.full(len(xy), 14.0))[0]
+        self.assertTrue((self.parapet_tops(low)[:, 1] > 2.0).any(), "a road well under the deck: parapet as before")
+
     def test_no_parapet_between_decks_side_by_side(self):
         P = roadmesh.deck([self.deck(0.0, "a"), self.deck(8.0, "b")], (0.0, 0.0, 0.0))[0]
         ys = np.unique(np.round(self.parapet_tops(P)[:, 1], 2))
@@ -327,12 +339,19 @@ class BridgeProfilesTest(unittest.TestCase):
     def test_short_bridge_no_wall_and_splits_merge(self):
         import roads
         flat = lambda xy: np.full(len(xy), 10.0)
-        # a 60 m bridge over a road at its middle: capped at 6 % from each abutment, not 6.5 m high
+        # a 60 m bridge over a road at its middle, its abutments not raised: capped at 6 % from each abutment, but
+        # never under the hard floor over the road (KyzoFox 1.5.5: DECK_HARD_CLEAR, 5 m under the girders, trucks hit
+        # the low decks) and no higher than that floor: the steeper climb only as far as the road needs
         ln = np.c_[np.arange(0.0, 61.0, 4.0), np.zeros(16)]
         (z,) = roads.deck_profile([ln], flat, [(0, 30.0, 10.0)])
         s = ln[:, 0]
-        self.assertLessEqual(np.abs(np.diff(z) / np.diff(s)).max(), roads.DECK_MAX_GRADE + 0.02)
-        self.assertLess(z.max(), 10.0 + 0.06 * 30 + 0.1)
+        self.assertGreaterEqual(float(np.interp(30.0, s, z)), 10.0 + roads.DECK_HARD_CLEAR - 0.01)
+        self.assertLess(z.max(), 10.0 + roads.DECK_HARD_CLEAR + 0.1)
+        self.assertAlmostEqual(float(z[0]), 10.0, places=6)
+        self.assertAlmostEqual(float(z[-1]), 10.0, places=6)
+        # over no road (a stream bed: no crossing), the 6 % cap still holds: no wedge
+        (zn,) = roads.deck_profile([ln], lambda xy: 10.0 - 4.0 * (np.abs(np.asarray(xy)[:, 0] - 30.0) < 8.0))
+        self.assertLessEqual(np.abs(np.diff(zn) / np.diff(s)).max(), roads.DECK_MAX_GRADE + 0.02)
         # a ramp starting in the intersection it climbs from (Queens Plaza, report #55): flush with the cross street
         (z,) = roads.deck_profile([ln], flat, [(0, 6.0, 10.0), (0, 30.0, 10.0)])
         self.assertLess(float(np.interp(6.0, s, z)), 10.0 + 0.15, "no hump across the cross street")

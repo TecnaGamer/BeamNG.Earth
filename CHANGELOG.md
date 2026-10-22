@@ -2,6 +2,91 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.5.56 (KyzoFox build, on top of 1.5.5): speed
+
+- **Windows: the game and the world server on separate cores.** On Linux the server already ran on its own
+  cores (the last quarter) and the game on the rest; on Windows it only lowered its priority, and its five worker
+  processes shared every core with the game (a 6-core laptop at 100 % CPU, the game at 17-20 fps). Now Windows
+  splits them the same way: on a 6-core / 12-thread CPU the game gets 4 cores (8 threads) and the server 2 (4
+  threads); after a teleport, while you wait for the world, the server also borrows half of the game's cores.
+  `BNGE_SERVER_CORES=<n>` sets the server's cores (at most half); `--pin off` turns it off.
+
+## 1.5.5 (KyzoFox build, on top of 1.5.4 beta)
+
+Fixes for problems found driving I-20 through Louisiana and Mississippi on 1.5.4 beta.
+
+### Overpasses
+- **Overpasses over highways clear trucks.** Several bridges over I-20 had as little as 2-3 m under their beams. At
+  the bridges reported (the clearance under the beams over the lowest lane, before → after): Thomas Road, West Monroe,
+  LA 3.0 → 6.1 m; Stella Street, West Monroe 3.5 → 5.7 m; Nutland Road, Monroe, LA 2.1 → 5.0 m; US 65, Tallulah,
+  LA 5.1 → 6.1 m; 31st Avenue South, Meridian, MS 5.0 → 6.0 m. What held them down:
+  - On a divided road with twin bridges, each carriageway's ramp was capped by the other carriageway, as if it were
+    a road beside it.
+  - The ramp was measured from the ground, while the road's own smoothed height at the bridge end could be metres
+    lower (the bridge cut out of the elevation data leaves a dip there).
+  - Frontage roads joining by a bridge end, as high as it, held its ramp down as if they were low.
+  - At the bridge end the ground was averaged with the highway and frontage roads around it and sagged under the
+    raised road. A raised road now always stands on its fill.
+- **Where the ground cannot be raised** (a frontage road right by the bridge end), a deck over a motorway or trunk
+  road may climb up to 12 % instead of 6 %, only as far as the clearance needs. Bridges over streets are unchanged.
+- **A hard minimum under every overpass: 5.0 m (16.4 ft) under the beams**, over every road a bridge crosses,
+  anywhere in the world (20 ft stays the aim). Where the ramps cannot lift a bridge enough, its deck now climbs
+  steeper to make it: up to 25 % on a street's bridge, 8 % on an interstate's (driven fast; there the road under
+  dips instead). Checked on every bridge in the map data of the reported areas (Ruston, Monroe, West Monroe,
+  Tallulah, Meridian, Newton, Tuscaloosa, Greene County AL: 94 map cells, 302 crossings): under 5 m, 138 on
+  1.5.4 beta, 0 now but four in Monroe's I-20 / US 165 interchange, where ramps pass under I-20 right by its
+  bridge's end (3.4-4.9 m).
+- **Ramps no longer go missing when a map cell fails to load.** Building a bridge's ramps looks at the map cells
+  around it; one that could not be fetched (offline, a network hiccup) threw away every ramp of the area, for
+  the whole session: overpasses flat on the ground (Greene County, AL: 1.6 m under the beams, now 5.8 m). Now
+  only that cell is skipped, and the area is planned again a minute later.
+- **A short overpass is no longer taken for a junction.** A road under the middle of a 24 m bridge, within 12 m
+  of both ends, counted as an intersection the bridge starts from, and the deck came down onto it.
+- **Fell through a bridge after a rebase in West Monroe:** the ground around the player took 19-47 s to build
+  there (1-3 s elsewhere), most of it the new underpass check testing every road against every interstate bridge
+  in the I-20 / US 165 interchange. It now tests only the roads near each bridge: that area plans in 7.7 s here
+  (22 s before the fix, 10 s on 1.5.4 beta), its interchange cell 10.9 → 2.4 s.
+- **Roads under short interstate bridges dip under them.** Where I-20 crosses a local road on short bridges whose
+  ends sit on the ground, the deck lay about 1.3 m over that road (Lincoln Parish / Ruston, LA). Interstates are never
+  raised, so the road underneath now dips, as at real interchanges: up to 6 m, flat under the bridge and on smooth
+  6 % slopes either side, along the same road only (not into side roads), and never cutting into a road beside it. The
+  interstate keeps its own height at the bridge. At the reported spot: 1.3 → 5.6 m under the beams.
+- **Higher clearance target:** 7.8 m to the road surface on the deck, 6.2 m (20 ft) under the beams, was 5.3 m.
+- **Thinner decks.** The slab under the road is 0.6 m (was 1.2 m): with the beams 1.6 m deep, as on real overpasses.
+  The old slab hung over the lanes like a wall.
+- **No more ribbons of ground over the lanes.** A ramp leaving a bridge that curved back over the frontage road under
+  that bridge built its fill straight across that road. Roads passing under a bridge now keep a ramp's fill off them
+  beyond 30 m from the bridge end (by the bridge end the abutment stands between).
+- **No bridge wall across a road beside it.** Where a ramp leaves a road side by side, the deck starts on that road's
+  lanes; its side wall stood across them (Natchitoches Street, West Monroe). No wall is drawn over another road less
+  than 1.5 m under the deck.
+
+### Floating things (the Earth's curvature)
+- **Traffic lights, AI traffic and parked cars no longer float.** The world is a flat map around a centre point that
+  moves every ~15 km, and the ground curves away from it: about 10 m lower at 11 km. The terrain, roads and buildings
+  allow for that, but the AI road graph (traffic and its switchable traffic lights) and the cars parked in lots took
+  the ground's height as it is, so the further you were from the centre, the higher they floated (signals 10-11 m up
+  in Ruston, LA). Now they use the same curved ground as everything else, anywhere in the world.
+
+### Retaining walls
+- **No more stone-and-soil strips standing between roads.** A stone retaining wall is built where a road is cut more
+  than 2 m into the ground. Beside a road at another height (I-20's other carriageway, a ramp, a service road) the
+  ground is shaped by both roads, not cut, but walls were still built there and stood free between the roads, strips
+  that could burst tyres (Ruston, LA). Walls are now only built against natural ground: about 870 m of stray wall
+  gone around one Ruston interchange, the real retaining walls kept.
+
+### Street furniture
+- **Fewer floating traffic lights and signs.** Signals and signs are placed up to 10 m past a junction, at the
+  junction road's height; on a sloping or raised road, or beside a ramp, they hung in the air (Pecanland Mall Drive,
+  Monroe, LA, and reports on the Discord). A prop more than 0.6 m off the ground at its own foot is now set on it
+  (not on or by a bridge deck).
+
+### Loading at speed
+- **The ground's photos keep up better at highway speed.** The server had the ground ready in time, but the game
+  loaded it at a 2 ms per frame budget and fell behind, so the ground ahead showed bare and beige. Above 45 mph,
+  with work waiting, the budget may now grow to 3.5 ms. The engine-load check still holds it back when frames get
+  heavy.
+
 ## 1.5.4 beta (2026-10-21)
 
 Works with BeamNG.drive 0.40.

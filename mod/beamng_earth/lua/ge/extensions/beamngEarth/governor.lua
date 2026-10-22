@@ -33,6 +33,11 @@ local max, min, huge = math.max, math.min, math.huge
 M.DEFAULT_TARGET_MS = 2.0
 M.MIN_TARGET_MS, M.MAX_TARGET_MS = 1.0, 4.0
 M.LOADING_TARGET_MS = 8.0
+-- KyzoFox 1.5.5: driving fast with work queued (core: setFast), the budget may grow to FAST_TARGET_MS: at highway speed
+-- the new ground's photos and tiles came in behind the truck at the 2 ms target (the server had them ready, its
+-- terrain_ready "after 0 ms": bare beige ground ahead, Ouachita Parish, LA, 2026-10-21). The engine-tick debt below
+-- still holds it back whenever the frames get heavy.
+M.FAST_TARGET_MS = 3.5
 M.RAMP_UP = 0.05           -- ms per frame while there is work
 M.RAMP_UP_LOADING = 0.25   -- ms per frame in loading mode
 M.RAMP_DOWN_IDLE = 0.05    -- ms per frame without work
@@ -121,7 +126,13 @@ end
 
 function Gov:setLoading(on) self.loading = on and true or false end
 
-function Gov:targetNow() return self.loading and M.LOADING_TARGET_MS or self.target end
+function Gov:setFast(on) self.fast = on and true or false end
+
+function Gov:targetNow()
+  if self.loading then return M.LOADING_TARGET_MS end
+  if self.fast then return max(self.target, M.FAST_TARGET_MS) end
+  return self.target
+end
 
 -- Largest estimated unit cost among the kinds in use.
 function Gov:maxUnit()

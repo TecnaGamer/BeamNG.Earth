@@ -216,4 +216,15 @@ do
   T.check(g.tokens >= -governor.ENGINE_MAX_DEBT_MS, "the debt is capped")
   T.check(g:chargeEngine(1.5) == 0, 'a normal tick is free')
 end
+-- KyzoFox 1.5.5: driving fast with work queued, the budget's target grows to FAST_TARGET_MS (not past loading mode)
+do
+  local g = governor.new({ clock = clock })
+  T.check(g:targetNow() == governor.DEFAULT_TARGET_MS, 'fast: off by default')
+  g:setFast(true)
+  T.check(g:targetNow() == governor.FAST_TARGET_MS, 'fast: the larger target')
+  g:setLoading(true)
+  T.check(g:targetNow() == governor.LOADING_TARGET_MS, 'fast: loading mode still wins')
+  g:setLoading(false); g:setFast(false)
+  T.check(g:targetNow() == governor.DEFAULT_TARGET_MS, 'fast: back to the target')
+end
 T.done('test_governor')

@@ -208,9 +208,9 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None):
     if not rings:
         return existing
 
-    def z_at(x, y):
+    def z_at(x, y):             # (KyzoFox 1.5.5: in the frame's up, the Earth's curvature in, as the road tiles)
         la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)
-        return elev(la, lo)
+        return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
     return existing + lot_spots(rings, box, z_at, blockers)
 
 

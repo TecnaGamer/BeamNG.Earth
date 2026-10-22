@@ -2562,7 +2562,8 @@ class Connection:
                 self.spawn(self.check_update())     # a newer version on GitHub: the mod says so (updates.py)
             if getattr(self.s, "game_cpus", None):  # the game off the server's cores (cpupin.py)
                 n = cpupin.pin_game(self.s.game_cpus)
-                log.info("the game's %d threads on CPUs %s", n, ",".join(map(str, sorted(self.s.game_cpus))))
+                log.info("the game's %d %s on CPUs %s", n, "processes" if sys.platform == "win32" else "threads",
+                         ",".join(map(str, sorted(self.s.game_cpus))))
         elif kind == "prepare_anchor":
             self.spawn(self.prepare_anchor(msg))
         elif kind == "prepare_terrain":
@@ -3698,10 +3699,10 @@ def main():
     ap.add_argument("--far-radius", type=float, default=farfield.RADIUS, help="far-field radius (m)")
     ap.add_argument("--nice", type=int, default=NICE, help="process niceness increment (0 = leave as is)")
     ap.add_argument("--pin", choices=("on", "off"), default="on",
-                    help="Linux: the server on the last quarter of the physical cores and the game on the rest "
-                         "(cpupin.py; default on)")
+                    help="Linux and Windows: the server on the last quarter of the physical cores and the game on "
+                         "the rest (cpupin.py; default on; BNGE_SERVER_CORES=<n> for n cores)")
     ap.add_argument("--load-boost", choices=("on", "off"), default="on",
-                    help="Linux with --pin on: after a teleport, while the player waits for the world, the server may "
+                    help="Linux or Windows with --pin on: after a teleport, while the player waits for the world, the server may "
                          "also use half of the game's cores (at idle priority) until the far field is done or the "
                          "player moves (cpupin.boosted; default on)")
     ap.add_argument("--sched", choices=("auto", "idle", "normal"), default="auto",
@@ -3867,7 +3868,7 @@ def main():
         # first, NICE_ROADS / NICE_FAR) counts for nothing between idle-class tasks, and on a Steam Deck a teleport's
         # block took 105-170 s behind the far field and the road tiles (2026-10-20; 1.6 s on a desktop)
         split = cpupin.split(budget.SMALL_SERVER_SHARE if budget.small() else cpupin.SERVER_SHARE) \
-            if args.pin == "on" and sys.platform.startswith("linux") else (None, None)
+            if args.pin == "on" and (sys.platform.startswith("linux") or sys.platform == "win32") else (None, None)
         args.sched = "normal" if split[0] else "idle"
     if args.sched == "idle" and hasattr(os, "sched_setscheduler") and hasattr(os, "SCHED_IDLE"):
         # Linux: CPU time only when a core would idle otherwise (the worker processes and threads made after this
@@ -3895,7 +3896,7 @@ def main():
         log.info("small machine (%.1f GB): %d far-tile and %d road-tile processes, smaller caches, imagery analyses "
                  "off (budget.py; BNGE_BUDGET=desktop for the desktop sizes)", budget.total_gb() or 0, args.workers,
                  args.road_processes)
-    if args.pin == "on" and sys.platform.startswith("linux"):
+    if args.pin == "on" and (sys.platform.startswith("linux") or sys.platform == "win32"):   # (Windows: KyzoFox 1.5.56)
         try:
             server_cpus, game_cpus = cpupin.split(budget.SMALL_SERVER_SHARE if small else cpupin.SERVER_SHARE)
             cpupin.pin_self(server_cpus)

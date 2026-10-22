@@ -433,7 +433,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     return P - np.asarray(origin, np.float64), T, UV, mats, M
 
 
-DECK_DEPTH = 1.2        # m of deck slab under the surface
+DECK_DEPTH = 0.6        # m of deck slab under the surface (KyzoFox 1.5.5: was 1.2; with the girders 1.6 m, a real
+                        # overpass's depth: the old slab stood as a thick wall over the lanes)
 DECK_SKIN = 0.01        # m the road mesh lies over a deck's top (the decal materials are translucent:
                         # 2026-10-11 a deck topped with road_asphalt_2lane was see-through)
 DECK_SIDE = "bne_bridge_concrete"  # the slab, girders, parapets, piers and tunnel tubes: plain concrete (the stock
@@ -458,7 +459,45 @@ PIER_BENT_W = 16.0      # a deck wider than this stands on columns (a bent) rath
 PIER_COLUMN = 1.6       # m square columns of a bent
 
 
-def deck(chunks, origin, piers=(), context=(), beams=()):
+PARAPET_ROAD_M = 1.5        # m: no parapet where a deck's edge lies over another road's surface no further above it
+                            # than this (KyzoFox 1.5.5: where a ramp leaves a road side by side, the deck starting on
+                            # it, its parapet stood across that road's lanes, Natchitoches Street, West Monroe, LA)
+
+
+def _over_roads(chunks, rb, ground):
+    """Per deck ribbon (left, right) whether each edge point lies on another road's drawn surface (not a deck, a tunnel
+    or a line) less than PARAPET_ROAD_M under the deck: ground(xy (n, 2)) -> that road's height. Pure given ground."""
+    roads_ = [c for c in chunks if not c.get("deck") and not c.get("tunnel") and not c.get("ctx")
+              and str(c.get("m", "")).startswith(("road_", "m_dirt_road", "italy_")) and float(c.get("w") or 0) >= 3.0]
+    out = []
+    rr = ribbons(roads_) if roads_ else []
+    for (left, right, v, m, layer, z), c in rb:
+        res = []
+        for edge in (left, right):
+            hit = np.zeros(len(edge), bool)
+            for (rl, rrt, *_r) in rr:
+                mid = (rl + rrt) / 2
+                hw = np.hypot(*(rl - rrt).T) / 2
+                lo_, hi_ = mid.min(0) - hw.max(), mid.max(0) + hw.max()
+                if (edge.max(0) < lo_).any() or (edge.min(0) > hi_).any():
+                    continue
+                a, b = mid[:-1], mid[1:]
+                ab = b - a
+                L2 = np.maximum((ab * ab).sum(1), 1e-12)
+                t = np.clip(((edge[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
+                d = np.hypot(*(edge[:, None, :] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
+                j = d.argmin(1)
+                hit |= d[np.arange(len(edge)), j] <= hw[j]
+            if hit.any() and ground is not None:
+                zg = np.asarray(ground(edge[hit]), np.float64)
+                h = np.flatnonzero(hit)
+                hit[h] = (z[h] - zg) < PARAPET_ROAD_M
+            res.append(hit)
+        out.append(tuple(res))
+    return out
+
+
+def deck(chunks, origin, piers=(), context=(), beams=(), ground=None):
     """The bridge decks of a tile as one colliding mesh: per "deck" chunk a slab of opaque concrete
     (DECK_SIDE) whose top is at the chunk's fixed heights (the road surface, drawn DECK_SKIN above it
     by build()), with sides and underside DECK_DEPTH below; the piers, and the truss beams (p, q, width, height:
@@ -494,6 +533,12 @@ def deck(chunks, origin, piers=(), context=(), beams=()):
     side = mats.index(DECK_SIDE)                # opaque concrete; the asphalt is the road mesh's
     cr = [r for r in ribbons(list(context)) if r[5] is not None]
     covered = _parapet_cover([(r, c) for r, c in rb], [(r, c) for r, c in zip(cr, context)])
+    if ground is not None:          # (KyzoFox 1.5.5) nor over another road the deck starts on
+        try:
+            ov = _over_roads(chunks, rb, ground)
+            covered = [(np.asarray(a, bool) | o[0], np.asarray(b, bool) | o[1]) for (a, b), o in zip(covered, ov)]
+        except Exception:           # (the parapets as before rather than no deck)
+            pass
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         k = len(z)
         lat = left - right

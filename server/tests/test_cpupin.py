@@ -44,3 +44,41 @@ class BoostTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsSplitTest(unittest.TestCase):
+    """KyzoFox 1.5.56: the split on Windows, from the cores' processor masks (an i5-11400H: 6 cores, 12 threads)."""
+
+    def setUp(self):
+        self.masks = [0b11 << (2 * i) for i in range(6)]
+        self.old = cpupin._siblings
+        cores = cpupin.cores_from_masks(self.masks, list(range(12)))
+        cpupin._siblings = lambda usable=None: (cores if usable is None else
+                                                cpupin.cores_from_masks(self.masks, usable))
+
+    def tearDown(self):
+        cpupin._siblings = self.old
+        os.environ.pop("BNGE_SERVER_CORES", None)
+
+    def test_cores_from_masks(self):
+        cores = cpupin.cores_from_masks(self.masks, list(range(12)))
+        self.assertEqual([c for _k, c in cores], [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11]])
+        # a process limited to some CPUs sees only those
+        self.assertEqual([c for _k, c in cpupin.cores_from_masks(self.masks, [0, 1, 2])], [[0, 1], [2]])
+
+    def test_two_cores_for_the_server_four_for_the_game(self):
+        server, game = cpupin.split()
+        self.assertEqual(server, {8, 9, 10, 11})
+        self.assertEqual(game, set(range(8)))
+
+    def test_server_cores_setting(self):
+        os.environ["BNGE_SERVER_CORES"] = "1"
+        self.assertEqual(cpupin.split()[0], {10, 11})
+        os.environ["BNGE_SERVER_CORES"] = "5"           # never more than half
+        self.assertEqual(len(cpupin.split()[0]), 6)
+        os.environ["BNGE_SERVER_CORES"] = "x"
+        self.assertEqual(cpupin.split()[0], {8, 9, 10, 11})
+
+    def test_mask(self):
+        self.assertEqual(cpupin._mask({8, 9, 10, 11}), 0xF00)
+        self.assertEqual(cpupin._bits(0xF00), [8, 9, 10, 11])
