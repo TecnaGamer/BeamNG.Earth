@@ -217,6 +217,22 @@ class BridgeLookTest(unittest.TestCase):
         self.assertTrue(ys.min() < -4.0 and ys.max() > 12.0, "the outer edges have one")
         self.assertFalse(((ys > 0.5) & (ys < 7.5)).any(), "none between them: %s" % ys)
 
+    def test_no_parapets_across_a_median(self):
+        """A divided road's two decks a narrow median apart (3 m): no parapets facing each other across it (two walls and
+        a dark gap stood in the median), the slabs meet in its middle; the outer edges keep theirs."""
+        P = roadmesh.deck([self.deck(0.0, "a"), self.deck(11.0, "b")], (0.0, 0.0, 0.0))[0]
+        ys = np.unique(np.round(self.parapet_tops(P)[:, 1], 2))
+        self.assertTrue(ys.min() < -4.0 and ys.max() > 15.0, "the outer edges have one")
+        self.assertFalse(((ys > 0.5) & (ys < 10.5)).any(), "none in the median: %s" % ys)
+        top = P[np.abs(P[:, 2] - 20.0) < 1e-6]
+        self.assertTrue(((top[:, 1] > 5.3) & (top[:, 1] < 5.7)).any(), "the slabs reach the median's middle")
+
+    def test_parapets_beside_a_deck_well_apart(self):
+        P = roadmesh.deck([self.deck(0.0, "a"), self.deck(20.0, "b")], (0.0, 0.0, 0.0))[0]
+        ys = np.unique(np.round(self.parapet_tops(P)[:, 1], 2))
+        self.assertTrue(((ys > 4.0) & (ys < 5.0)).any() and ((ys > 15.0) & (ys < 16.0)).any(),
+                        "12 m apart: each keeps its own: %s" % ys)
+
     def test_parapet_where_a_deck_runs_under(self):
         P = roadmesh.deck([self.deck(0.0, "a"), self.deck(8.0, "b", z=12.0)], (0.0, 0.0, 0.0))[0]
         ys = np.unique(np.round(self.parapet_tops(P)[:, 1], 2))
