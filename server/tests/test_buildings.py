@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import buildings as bld  # noqa: E402
 import cdae  # noqa: E402
 
@@ -832,3 +833,116 @@ class CurvatureTest(unittest.TestCase):
         b = Feats(["P", "K"], [ll(10, 10, 30, 30), ll(100, 100, 10, 10)], **{"class": ["", ""], "height": [0.01, 0.2]})
         items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la, lo: np.full(np.shape(la), 5.0))
         self.assertEqual([round(bld._area2(s.ring) / 2) for s, _, _ in items], [100], "the plaza left out, the 0.2 m one kept")
+
+
+class RealTagsTest(unittest.TestCase):
+    def test_parse_color(self):
+        self.assertEqual(bld.parse_color("#fff"), (1.0, 1.0, 1.0))
+        self.assertEqual(bld.parse_color("#00ff00"), (0.0, 1.0, 0.0))
+        self.assertEqual(bld.parse_color("red"), (0.75, 0.15, 0.15))
+        self.assertEqual(bld.parse_color("terracotta"), (0.78, 0.40, 0.26))
+        self.assertEqual(bld.parse_color("copper"), (0.55, 0.75, 0.65))
+        self.assertEqual(bld.parse_color("steel-blue"), (0.28, 0.45, 0.60))
+        self.assertEqual(bld.parse_color("Dark Green"), (0.10, 0.35, 0.12))
+        self.assertIsNone(bld.parse_color("invalid_color_xyz"))
+        self.assertIsNone(bld.parse_color(None))
+        self.assertIsNone(bld.parse_color(""))
+
+    def test_facade_materials(self):
+        # wood
+        sw = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_material": "wood"}, 0, 39.2, -76.6)
+        self.assertTrue(str(sw.wall).startswith(f"{bld.SIDING}|w"), "wood facade maps to stained siding boards")
+        # concrete
+        sc = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_material": "concrete"}, 0, 39.2, -76.6)
+        self.assertTrue(str(sc.wall).startswith(bld.CONCRETE), "concrete facade maps to concrete")
+        # plaster
+        sp = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_material": "plaster"}, 0, 39.2, -76.6)
+        self.assertTrue(str(sp.wall).startswith(bld.STUCCO), "plaster facade maps to stucco")
+        # metal
+        sm = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_material": "metal"}, 0, 39.2, -76.6)
+        self.assertTrue(str(sm.wall).startswith(bld.METALWALL), "metal facade maps to metalwall")
+        # stone
+        ss = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_material": "stone"}, 0, 39.2, -76.6)
+        self.assertTrue(str(ss.wall).startswith(bld.STONE), "stone facade maps to stone")
+        # glass
+        sg = bld.plan(rect(0, 0, 20, 20), {"class": "office", "facade_material": "glass"}, 0, 39.2, -76.6)
+        self.assertTrue(str(sg.facade).startswith(bld.OFFICE), "glass facade maps to office curtain wall")
+
+    def test_facade_color(self):
+        s = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_color": "red"}, 0, 39.2, -76.6)
+        mat_idx = bld._Looks(s.seed)
+        _, rgba = mat_idx[s.facade]
+        # Red component should be significantly higher than green or blue
+        self.assertGreater(rgba[0], 150)
+        self.assertLess(rgba[1], 80)
+        self.assertLess(rgba[2], 80)
+
+        # Hex color
+        s2 = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_color": "#00ff00"}, 0, 39.2, -76.6)
+        mat_idx2 = bld._Looks(s2.seed)
+        _, rgba2 = mat_idx2[s2.facade]
+        self.assertLess(rgba2[0], 50)
+        self.assertGreater(rgba2[1], 200)
+        self.assertLess(rgba2[2], 50)
+
+    def test_roof_material_and_color(self):
+        # Metal roof
+        sm = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "metal"}, 0, 39.2, -76.6)
+        self.assertTrue(str(sm.roof_mat).startswith(bld.ROOF_METAL))
+
+        # Copper roof has copper patina tint
+        sc = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "copper"}, 0, 39.2, -76.6)
+        self.assertTrue(str(sc.roof_mat).startswith(bld.ROOF_METAL))
+        mat_idx = bld._Looks(sc.seed)
+        _, rgba = mat_idx[sc.roof_mat]
+        self.assertGreater(rgba[1], rgba[0])  # green tint from copper patina
+
+        # Tile roof
+        st = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "tile"}, 0, 39.2, -76.6)
+        self.assertTrue(str(st.roof_mat).startswith(bld.ROOF_SLATE))
+        k = int(st.roof_mat.split("|")[1])
+        self.assertGreaterEqual(k, 4)
+
+        # Slate roof
+        ss = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "slate"}, 0, 39.2, -76.6)
+        self.assertTrue(str(ss.roof_mat).startswith(bld.ROOF_SLATE))
+
+        # Shingle roof
+        ssh = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "shingle"}, 0, 39.2, -76.6)
+        self.assertTrue(str(ssh.roof_mat).startswith(bld.ROOF_SHINGLE))
+
+        # Roof color hex
+        s_rc = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "metal", "roof_color": "#1a2b3c"}, 0, 39.2, -76.6)
+        mat_idx = bld._Looks(s_rc.seed)
+        _, rgba = mat_idx[s_rc.roof_mat]
+        self.assertAlmostEqual(rgba[0] / 255.0, 0x1a / 255.0, delta=0.08)
+        self.assertAlmostEqual(rgba[1] / 255.0, 0x2b / 255.0, delta=0.08)
+        self.assertAlmostEqual(rgba[2] / 255.0, 0x3c / 255.0, delta=0.08)
+
+    def test_building_part_color_and_roof(self):
+        import geodesy
+        f = geodesy.EnuFrame(37.8, -122.4)
+        def ll(x, y, w, d):
+            e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+            la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+            return np.stack([lo, la], 1)
+        # Parent building with two parts
+        b = Feats(["B1"], [ll(10, 10, 20, 20)], **{"class": ["commercial"], "height": [30.0],
+                                                    "facade_color": ["#ff0000"], "roof_color": ["#0000ff"]})
+        parts = Feats(["P1", "P2"], [ll(10, 10, 20, 20), ll(12, 12, 16, 16)],
+                      **{"building_id": ["B1", "B1"], "height": [10.0, 30.0], "min_height": [0.0, 10.0],
+                         "roof_shape": ["flat", "hipped"], "facade_color": ["#ff0000", "#00ff00"],
+                         "roof_color": ["#0000ff", "#ffff00"]})
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la, lo: np.zeros(np.shape(la)),
+                                   part_layers=[parts])
+        self.assertEqual(len(items), 2)
+        p1_spec, p2_spec = items[0][0], items[1][0]
+        # P1 has red facade and blue roof
+        _, p1_rgba = bld._Looks(p1_spec.seed)[p1_spec.facade]
+        self.assertGreater(p1_rgba[0], 200)
+        self.assertLess(p1_rgba[1], 50)
+        # P2 has green facade (overridden on the part) and yellow roof
+        _, p2_rgba = bld._Looks(p2_spec.seed)[p2_spec.facade]
+        self.assertLess(p2_rgba[0], 50)
+        self.assertGreater(p2_rgba[1], 200)
+        self.assertEqual(p2_spec.roof, "hipped")
