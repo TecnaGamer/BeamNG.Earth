@@ -994,11 +994,28 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3):
 DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one deck's carriageways (_merge_overlaps)
 
 
-def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None):
+def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, steep=(),
+                 fast=None, joins=()):
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). Pure given ground_fn."""
-    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift)
+    floors = []
+    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, steep=steep, floors=floors, fast=fast,
+                           joins=joins)
+    return _hard_floor(_deck_profile_rest(lines, ground_fn, crossings, clear, grade, lift, levels, widths, steep, zs,
+                                          floors, fast, joins), floors)
+
+
+def _hard_floor(zs, floors):
+    """(KyzoFox 1.5.5) zs, each part at least its DECK_HARD_CLEAR floor (deck_profile_once's): _merge_overlaps,
+    matching a ramp to the mainline it leaves, pulled the I-20 deck at Monroe, LA's US 165 interchange 1.3 m back
+    under it. Pure."""
+    if not floors:
+        return zs
+    return [z if f is None or not np.isfinite(np.asarray(z)).all() else np.maximum(z, f) for z, f in zip(zs, floors)]
+
+
+def _deck_profile_rest(lines, ground_fn, crossings, clear, grade, lift, levels, widths, steep, zs, floors, fast, joins):
     n_road = len(crossings)
     if levels is None or len(lines) < 2:
         return zs
@@ -1018,8 +1035,9 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
             extra.append((hi, sh, float(np.interp(sl, arcs[lo], zs[lo])), None, levels[hi]))
         if not extra:
             break
+        floors.clear()
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
-                                levels=levels)
+                                levels=levels, steep=steep, floors=floors, fast=fast, joins=joins)
         if all(np.allclose(a, b, atol=0.02, equal_nan=True) for a, b in zip(new, zs)):
             zs = new
             break
@@ -1120,13 +1138,15 @@ WATER_STEP_M = 16.0         # m between a wet run's clearance points
 NAV_RUN_M = 100.0           # a wet run this long takes the bridge's navigation clearance (NBI item 39)
 
 
-def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, n_road=None, levels=None):
+def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, n_road=None, levels=None,
+                      steep=(), floors=None, fast=None, joins=()):
     """Deck heights (one array per part) of a bridge chain: deck_heights between the abutments, at
     least `lift` over the ground under it, and at least `clear` over each crossing road below
     ((part index, arc m, road height)), the requirement falling at `grade` along the chain; then
     smoothed per part with its end heights kept. A road crossing (the first n_road crossings, default all, without
     their own clearance) by an abutment the deck cannot get AT_GRADE_M over is a junction at grade: the deck
-    meets the road's height there. Pure given ground_fn(xy (m, 2)) -> heights."""
+    meets the road's height there. steep: the indices of the crossings (major roads: motorways, trunk roads) whose
+    clearance the deck may climb up to DECK_STEEP_GRADE for. Pure given ground_fn(xy (m, 2)) -> heights."""
     clear = DECK_ROAD_CLEAR if clear is None else clear
     grade = DECK_GRADE if grade is None else grade
     lift = DECK_CLEAR if lift is None else lift
@@ -1143,7 +1163,12 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     # no steeper than DECK_MAX_GRADE from an abutment: a short bridge over a road cannot reach full
     # headroom (2026-10-11: such decks became steep wedges, "walls" in the user's screenshot)
     cap = [np.full(len(ln), np.inf) for ln in lines]
+    cap2 = [np.full(len(ln), np.inf) for ln in lines]     # (the same at DECK_STEEP_GRADE: where a road needs it)
     dab = [np.full(len(ln), np.inf) for ln in lines]      # m to the nearest abutment
+    # (the hard floor climbs off an abutment no steeper than DECK_HARD_MAX_GRADE, DECK_HARD_FAST_GRADE on a fast road's
+    # deck (fast: per part): a motorway deck bucked 38 % in 4 m onto a road 17 m from its end)
+    hg = [DECK_HARD_FAST_GRADE if fast is not None and fast[k] else DECK_HARD_MAX_GRADE for k in range(len(lines))]
+    capH = [np.full(len(ln), np.inf) for ln in lines]
     for k, (a, b, s) in enumerate(edges):
         for node, zend in ((a, zs[k][0]), (b, zs[k][-1])):
             if deg[node] != 1 or not np.isfinite(zend):
@@ -1152,9 +1177,16 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             for k2, (ea, eb, es) in enumerate(edges):
                 dk = np.minimum(d[ea] + es, d[eb] + (es[-1] - es))
                 cap[k2] = np.minimum(cap[k2], zend + DECK_MAX_GRADE * dk)
+                cap2[k2] = np.minimum(cap2[k2], zend + DECK_STEEP_GRADE * dk)
+                capH[k2] = np.minimum(capH[k2], zend + hg[k2] * dk)
                 dab[k2] = np.minimum(dab[k2], dk)
     n_road = len(crossings) if n_road is None else n_road
     req = [np.full(len(ln), -np.inf) for ln in lines]
+    req2 = [np.full(len(ln), -np.inf) for ln in lines]      # (the steep ones' alone)
+    req3 = [np.full(len(ln), -np.inf) for ln in lines]      # (DECK_HARD_CLEAR over every road under it)
+    capj = [np.full(len(ln), np.inf) for ln in lines]       # (... but off a junction at grade at DECK_HARD_GRADE)
+    forkc = [np.full(len(ln), np.inf) for ln in lines]      # (a fork's road: the line between the abutments yields)
+    steep = set(steep or ())
     for ci, cr in enumerate(crossings):     # (part, arc, height under it[, its own clearance: over water])
         pi, sc, zc = cr[:3]
         cl = cr[3] if len(cr) > 3 and cr[3] is not None else clear
@@ -1166,26 +1198,66 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
         d = _dijkstra(adj, {a: sc, b: s[-1] - sc})
         # a junction at grade (Queens Plaza, the user's report #55, 2026-10-17: a ramp's map line starts in the
         # intersection it climbs from; its deck rose 0.8 m over the cross street there, a hump across it)
-        flat = (ci < n_road and len(cr) == 3 and float(np.interp(sc, s, dab[pi])) <= AT_GRADE_REACH_M
+        # (KyzoFox 1.5.5) by one abutment, not midway between two: a short overpass's road under its middle, 12 m from
+        # either end of a 24 m bridge, was taken for a junction, its deck down on that road
+        dab_c = float(np.interp(sc, s, dab[pi]))
+        mid = max(float(np.max(np.where(np.isfinite(x), x, 0.0))) for x in dab)
+        flat = (ci < n_road and len(cr) == 3 and dab_c <= AT_GRADE_REACH_M and dab_c < AT_GRADE_END_SHARE * mid
                 and float(np.interp(sc, s, cap[pi])) < zc + AT_GRADE_M)
+        # (KyzoFox 1.5.56) a road ending (joins: its own end there) where two decks fork (the node joins two parts, so
+        # not an abutment; a road passing under the node, where the map split a viaduct over it, is not one): it is the
+        # road the decks go on from, met at its height, not a road under them; taken for one, the decks stood 6-8 m
+        # over it, ending in the air (I-635's ramps at I-20, Dallas, the user's report 2026-10-22)
+        if ci < n_road and len(cr) == 3 and not flat and ci in joins:
+            node = a if sc <= FORK_JOIN_M else (b if sc >= s[-1] - FORK_JOIN_M else None)
+            if node is not None and deg[node] >= 2:
+                flat = True
+                dn = _dijkstra(adj, {node: 0.0})
+                for k2, (ea2, eb2, es2) in enumerate(edges):
+                    forkc[k2] = np.minimum(forkc[k2], zc + DECK_MAX_GRADE * np.minimum(dn[ea2] + es2,
+                                                                                      dn[eb2] + (es2[-1] - es2)))
         for k, (ea, eb, es) in enumerate(edges):
             dk = np.minimum(d[ea] + es, d[eb] + (es[-1] - es))
             if k == pi:
                 dk = np.minimum(dk, np.abs(es - sc))
             if flat:
                 cap[k] = np.minimum(cap[k], zc + DECK_MAX_GRADE * dk)
+                if dab_c > 2.0:     # (not the road the deck itself continues: its abutment)
+                    capj[k] = np.minimum(capj[k], zc + DECK_MAX_GRADE * np.minimum(dk, AT_GRADE_FLUSH_M)
+                                         + DECK_HARD_GRADE * np.maximum(dk - AT_GRADE_FLUSH_M, 0.0))
+                if float(np.interp(sc, s, dab[pi])) > 2.0:     # (not the road the deck itself continues: its abutment)
+                    cap2[k] = np.minimum(cap2[k], zc + DECK_MAX_GRADE * dk)
             elif min_lv is None or levels[k] >= min_lv:
                 req[k] = np.maximum(req[k], zc + cl - grade * dk)
+                if ci in steep:
+                    req2[k] = np.maximum(req2[k], zc + cl - grade * dk)
+                if ci < n_road and len(cr) == 3 and dab_c > 2.0:    # (not the road the deck continues at its end)
+                    # flat across the road's lanes, then falling as steeply as it may climb (hg): the floor shapes the
+                    # deck by that road only; never steeper off an abutment than capH allows (uncapped, the floor held
+                    # a deck up to its ends, onto them in a step: 80 % in 3 m)
+                    # (no higher than its climb reaches over the road: a plateau higher on the far side was a step)
+                    top = min(zc + min(cl, DECK_HARD_CLEAR), float(np.interp(sc, s, capH[pi])))
+                    req3[k] = np.maximum(req3[k], top - hg[k] * np.maximum(dk - DECK_HARD_FLAT_M, 0.0))
     # the caps (from an abutment, from a junction at grade) never under the straight line between the abutments: two
     # abutments further apart in height than DECK_MAX_GRADE allows had the higher one pulled under its own road, a
     # step onto the deck (0.9 m up onto the I-20 bridge near Temple, GA, once its approaches were raised, 2026-10-20)
-    cap = [np.where(np.isfinite(z), np.maximum(c, z), c) for c, z in zip(cap, zs)]
+    cap = [np.where(np.isfinite(z), np.maximum(c, np.minimum(z, f)), c) for c, z, f in zip(cap, zs, forkc)]
+    # (KyzoFox 1.5.5) where a major road under the deck (steep) needs more than DECK_MAX_GRADE from an abutment allows,
+    # the deck climbs steeper, up to DECK_STEEP_GRADE, as far as that road needs (a short bridge over a street keeps
+    # DECK_MAX_GRADE: no wedge): the map's Nutland Road bridge in Monroe, LA ends
+    # 10 m short of the frontage road it really spans, so its ground cannot be raised, and the deck stayed 2.1 m over
+    # the girders' bottom over I-20's lanes (a truck crashed into it, 2026-10-21)
+    cap = [np.maximum(c, np.minimum(c2, r)) for c, c2, r in zip(cap, cap2, req2)]
+    req3 = [np.minimum(np.minimum(r, c), h) for r, c, h in zip(req3, capj, capH)]
+    cap = [np.maximum(c, r) for c, r in zip(cap, req3)]          # (the hard floor: no cap under it)
     out, k0 = [], 0
     for k, (z, (a, b, s)) in enumerate(zip(zs, edges)):
         g = gz[k0:k0 + len(z)] + lift
         k0 += len(z)
         if not np.isfinite(z).all():
             out.append(z)
+            if floors is not None:
+                floors.append(None)
             continue
         # ground standing over a cap raises it, falling at DECK_MAX_GRADE either way: capped from its abutment, a deck
         # met a steep embankment's ground in a step where the ground took over (0.86 m in 4 m onto Lombard Street's
@@ -1208,6 +1280,17 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             sm = np.minimum(_smooth_pinned(zz, step, sigma), cap[k])         # (no hump back over a
             zz = np.maximum(sm, g)                                                          # junction at grade)
             zz[0], zz[-1] = sm[0], sm[-1]
+        # the hard floor after the smoothing too (a short steep hump smoothed down under it), the abutments kept
+        hard = np.maximum(zz, req3[k])
+        if deg[a] == 1:
+            hard[0] = zz[0]
+        if deg[b] == 1:
+            hard[-1] = zz[-1]
+        zz = hard
+        if floors is not None:          # (deck_profile keeps it over its later steps)
+            fl = req3[k].copy()
+            fl[0], fl[-1] = min(fl[0], zz[0]), min(fl[-1], zz[-1])
+            floors.append(fl)
         out.append(zz)
     return out
 
@@ -1976,12 +2059,27 @@ def _chunk(look, w, c):
 DECK = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}      # bridge decks (roadmesh.deck)
 DECK_STEP = 4.0         # m between deck profile points
 DECK_CLEAR = 0.05       # m a deck stays above the ground under it (no z-fighting where it rests on it)
-# m a deck's top stays over a road crossing under it: 5.3 m under the slab and girders (roadmesh DECK_DEPTH 1.2 +
-# GIRDER_D 1.0), over the 4.9 m (16 ft) of US interstates. It was 6.5 (5 m + the slab, before the girders): 4.3 m under
+# m a deck's top stays over a road crossing under it, over the 4.9 m (16 ft) of US interstates. It was 6.5 (5 m + the slab, before the girders): 4.3 m under
 # the girders, a truck's height (trucks hit a deck over I-20 near Temple, GA; from KyzoFox's 1.5.4, PR #64)
-DECK_ROAD_CLEAR = 7.5
+# KyzoFox 1.5.5: 7.8 over a slab of 0.6 + 1.0 m of girders: 6.2 m (20 ft) under them, room for a truck on uneven ground
+# (trucks still hit decks over I-20 in Louisiana at 5.3 m with the old 1.2 m slab, 2026-10-21)
+DECK_ROAD_CLEAR = 7.8
 DECK_GRADE = 0.05       # that requirement falls 5 % along the deck from the crossing
-DECK_MAX_GRADE = 0.06   # a deck climbs no steeper than this from an abutment
+DECK_MAX_GRADE = 0.06   # a deck climbs no steeper than this from an abutment ...
+DECK_STEEP_GRADE = 0.12  # ... unless a major road under it needs more (deck_profile_once), then up to this
+STEEP_UNDER = ("motorway", "trunk")     # those major roads (their links too: the class is the road's)
+# (KyzoFox 1.5.5) the hard floor: over every road it crosses (but a junction at grade) a deck's surface stands at least
+# this high, whatever grade it takes from its abutments: 5.0 m (16.4 ft, the US interstate minimum) under 1.6 m of slab
+# and girders (roadmesh.DECK_DEPTH + GIRDER_D). DECK_ROAD_CLEAR stays the aim; where the abutments cannot be raised
+# enough and the grade caps held the deck down, trucks still hit overpasses (the user's report, 2026-10-21)
+DECK_HARD_CLEAR = 6.6
+DECK_HARD_MAX_GRADE = 0.25     # the floor's climb off an abutment at most (deck_profile_once) ...
+DECK_HARD_FAST_GRADE = 0.08    # ... on a motorway's or trunk road's deck (driven fast): the road under is lowered instead
+DECK_HARD_GRADE = 0.25     # the floor climbs no steeper than this off a junction at grade (the deck meets that road)
+AT_GRADE_FLUSH_M = 4.0     # m across that junction the deck stays flush with it (DECK_MAX_GRADE)
+DECK_HARD_FLAT_M = 8.0      # m either side of the crossing that floor holds before falling at DECK_GRADE (the lanes)
+FORK_JOIN_M = 1.5          # m from a deck part's end node a road's crossing meets it there (a fork's road, deck_profile_once)
+AT_GRADE_END_SHARE = 0.7    # a junction at grade lies nearer one abutment than this share of the half-length
 CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fills its corner in concrete too
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
@@ -2179,6 +2277,9 @@ class BridgeProfiles:
                 for ring in ground_parts(feats, i):
                     e, n = mapgeom.enu_xy(feats, self.frame, ring)
                     ground[(fid, "g")].append(np.stack([e, n], axis=1))
+                if rs[i].cls in STEEP_UNDER:
+                    self.major = getattr(self, "major", set())
+                    self.major.add(fid)
 
     def _resolve(self, start, pool, ground, loaded):
         """The chain of part `start` (keys), loading the cell at each loose end until closed."""
@@ -2233,7 +2334,19 @@ class BridgeProfiles:
         """Deck heights of the chain comp (keys of pool)."""
         lines = [pool[k][1] for k in comp]
         gl = [g for v in ground.values() for g in v]
-        cr = _crossings(lines, gl)
+        major = getattr(self, "major", set())
+        gmaj = [k[0] in major for k, v in ground.items() for _g in v]
+        cr, steep = [], []          # (the crossings of the major roads: steep)
+        joins = set()               # (KyzoFox 1.5.56: the crossings at the ground road's own end: deck_profile_once)
+        for j in sorted(range(len(gl)), key=lambda j: gmaj[j]):     # (the minor roads' first: _crossings' order)
+            got = _crossings(lines, [gl[j]])
+            if gmaj[j]:
+                steep += range(len(cr), len(cr) + len(got))
+            g_ = np.asarray(gl[j], np.float64)[:, :2]
+            for n_, c in enumerate(got):
+                if min(np.hypot(*(g_[0] - c[2][:2])), np.hypot(*(g_[-1] - c[2][:2]))) < FORK_JOIN_M:
+                    joins.add(len(cr) + n_)
+            cr += got
         road_z = self._ground(np.array([c[2] for c in cr])) if cr else []
         import bridgetypes
         try:
@@ -2242,7 +2355,8 @@ class BridgeProfiles:
             log.debug("nav clearance: %s: %s", type(ex).__name__, ex)
             nav = 0.0
         return deck_profile(lines, self._ground, [(c[0], c[1], z) for c, z in zip(cr, road_z)] + self._water(lines, nav),
-                            levels=[pool[k][3] for k in comp], widths=[pool[k][0].width for k in comp])
+                            levels=[pool[k][3] for k in comp], widths=[pool[k][0].width for k in comp], steep=steep,
+                            fast=[pool[k][0].cls in STEEP_UNDER for k in comp], joins=joins)
 
     def parts(self, cells_feats, box):
         """[(fid, spec, xy, z, lon)] of the bridge parts in these cells that come near box."""

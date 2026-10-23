@@ -108,6 +108,25 @@ APPROACH_MARGIN_M = 0.3     # m over the clearance (the deck profile's smoothing
 APPROACH_SKIP = ("motorway", "trunk")   # never raised (nor their links): the overpasses over them are what is
 APPROACH_GAP_M = 1.0        # m of flat ground kept between a ramp's fill slope and the road beside it
 APPROACH_CELL_M = 450.0     # m: a plan's end this far from a cell cannot raise what that cell's queries see
+APPROACH_UNDER_FREE_M = 30.0   # m from an abutment along its ramp where a road passing under the bridge does not cap
+                            # the ramp (the abutment stands between); beyond, it does: a ramp curving back over the frontage
+                            # road under its bridge built its fill across that road, a ribbon of ground over the lanes
+                            # (KyzoFox 1.5.5: West Monroe, LA; Meridian and Newton, MS, 2026-10-20)
+APPROACH_CAP_RUN = 1.0      # a ramp's fill falls 1:1 to a road beside it (its edge stands on the ramp's core: Grader.apply)
+APPROACH_FLOOR_M = 0.25     # m: where a ramp raises its road more than this, the ground under the road's core is never
+                            # lower than the road (Grader.apply: blended with the roads around, the ground at Nutland
+                            # Road's abutment in Monroe, LA sat 3.5 m under its raised road, KyzoFox 1.5.5)
+UNDERPASS_MAX_M = 6.0       # m a road passing under a major road's bridge is lowered at most (_lower_underpasses) ...
+UNDERPASS_GRADE = 0.06      # ... on cosine ramps no steeper than this
+UNDERPASS_FLAT_M = 8.0      # ... at its full depth this far either side of the bridge's edges
+UNDERPASS_HOPS = 3
+UNDERPASS_ON_COS = 0.82     # a piece goes on as the same road within ~35 degrees (not a road met at a junction)
+UNDERPASS_JOIN_M = 3.0      # m: a bridge part's end this near another's goes on into it (not an abutment)
+UNDERPASS_MAJOR_MAX_M = 4.0  # m a motorway under a street's bridge dips at most (_lower_underpasses, major_under) ...
+UNDERPASS_MAJOR_GRADE = 0.03  # ... on ramps this gentle (driven fast)
+UNDERPASS_KEEP_M = 40.0     # m from the bridge the major road over it keeps its own height (Grader._floor_ramps)
+APPROACH_TWIN_M = 40.0      # m: a road onto another bridge's end this close to an abutment (a divided road's twin
+                            # bridge) is raised with it and does not cap its ramp (KyzoFox 1.5.5)
 APPROACH_CAP_GRADE = 0.10   # steepest grade a ramp falls at where a road beside it caps it (a cap alone dropped 3 m
                             # in 8 m by a side road north of the I-20 bridge near Temple, GA, 2026-10-20)
 
@@ -129,6 +148,7 @@ UNGRADED_MARGIN_M = 2.0     # ... and nothing else grades their carriageway (+ t
 UNDER_CLEAR_M = 6.7         # deck surface to the road under: slab + girders (roadmesh DECK_DEPTH + GIRDER_D) + 4.5 m
 UNDER_GRADE = 0.06          # the dip's ramps
 UNDER_MAX_BRIDGE_M = 120.0  # only single short spans (both ends on the ground): a chain's inner ends are no abutments
+UNDER_FLAT_M = 10.0         # m either side of the crossing at the dip's full depth (KyzoFox: the bridge's width)
 UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a low bridge than a pit)
 ABUT_NEAR_M = 14.0          # m from the bridge end the road is checked ...
 ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
@@ -389,6 +409,11 @@ class Grader:
         self.frame, self.md, self.elev, self.widths = frame, mapdata, elev, widths
         self.cells = {}
         self.failed = {}        # cell key -> monotonic time of the last failed fetch
+        # (KyzoFox 1.5.5) cell key -> monotonic time its plans were made while a neighbouring cell's roads could not be
+        # fetched (_cell_enu): kept for now, made again after RETRY_S. Before, one failed neighbour threw away every
+        # ramp of the cell for the session: overpasses flat on the ground over I-20 near Eutaw, AL
+        self.partial = {}
+        self._tl = threading.local()    # (per thread: how many neighbour fetches failed, _cell_enu)
         self.lock = threading.Lock()
         self.key_locks = {}     # cell key -> Lock: one thread plans a cell, the others wait for it
         self.covers = {}        # cell key -> [(xy (k, 2), half width)]: the tunnels whose ground over them stays
@@ -398,9 +423,19 @@ class Grader:
                                 # roads.TunnelProfiles leaves them (their "open" sections graded a dam across the river:
                                 # the Maastunnel's bed raised from -6 m to -0.4 m, storm-ace's GitHub #85)
 
+    def _misses(self):
+        return getattr(self._tl, "misses", 0)
+
     def _cell_plans(self, key):
         with self.lock:
             got = self.cells.get(key)
+            t = self.partial.get(key)
+            if got is not None and t is not None and time.monotonic() - t >= RETRY_S:
+                del self.cells[key]         # (made without a neighbour's roads: again, now)
+                self.partial.pop(key, None)
+                self.covers.pop(key, None)
+                self.opens.pop(key, None)
+                got = None
             kl = self.key_locks.setdefault(key, threading.Lock())
         if got is not None:
             return got
@@ -415,6 +450,7 @@ class Grader:
             return got
         if failed is not None and time.monotonic() - failed < RETRY_S:
             return []               # offline: no block waits on the same failing fetch again
+        miss0 = self._misses()
         try:
             feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
         except Exception as e:      # no road data: ungraded (asked again after RETRY_S)
@@ -469,6 +505,14 @@ class Grader:
                     self._lower_underpasses(key, plans)
                 except Exception as e:      # as the data has it rather than no grading
                     log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
+                try:
+                    # (KyzoFox) after 1.6.0's own dip: where a road under a motorway bridge it leaves alone (a long or
+                    # joined bridge, its ends near the crossing) still lacks the clearance, the rest of the dip
+                    if UNDER_ON:
+                        self._lower_major_underpasses(key, plans, pspecs, major_under=False)
+                    self._lower_major_underpasses(key, plans, pspecs)
+                except Exception as e:      # (as planned rather than no grading)
+                    log.debug("grading: major underpasses of %s: %s: %s", key, type(e).__name__, e)
             # a long road's piece (planned with CLIP_MARGIN_M of the road either side for its profile) kept only within
             # the cell's own box: every stretch of road in one cell's plans, once (overlapping pieces from neighbouring
             # cells counted a road up to 9 times, and every batch of points graded differently: patches of ground
@@ -488,6 +532,8 @@ class Grader:
         else:
             covers, opens, keeps = [], [], []
         with self.lock:
+            if self._misses() > miss0 and key not in self.cells:
+                self.partial[key] = time.monotonic()
             self.cells.setdefault(key, plans)
             self.keeps.setdefault(key, keeps)
             self.covers.setdefault(key, covers)
@@ -534,6 +580,7 @@ class Grader:
         pe = np.array([[p.xy[0][:2], p.xy[-1][:2]] for _f, p in plans], np.float64).reshape(-1, 2)
         ok = np.repeat([s is not None and s.cls not in APPROACH_SKIP and not _is_link(s) for s in specs], 2)
         touch = self._abut_ends(key, pe, ok).reshape(-1, 2)
+        ramps = []
         for i, (fid, p) in enumerate(plans):
             if not touch[i].any():
                 continue
@@ -545,14 +592,27 @@ class Grader:
                 got = self._end_lift(e)
                 if got is None:
                     continue
-                lift, others = got
-                a = approach_add(p.xy, at_end, lift, p.half, others)
+                need, others = got
+                # (KyzoFox 1.5.5) over the road's own planned height there, not the raw ground: the plan's smoothing
+                # had cut Nutland Road's embankment in Monroe, LA 3.8 m down, so a ramp measured on the ground fell
+                # that much short (2.1 m under the girders over I-20, a truck crashed into it)
+                zend = float(p.z[-1] if at_end else p.z[0])
+                lift = min(need - zend, APPROACH_MAX_LIFT)
+                if lift < APPROACH_MIN_LIFT:
+                    continue
+                a = approach_add(p.xy, at_end, lift, p.half, others, p.z)
                 if a is not None:
                     add = a if add is None else np.maximum(add, a)
             if add is not None:
                 np_ = Plan(p.xy, p.z + add, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall = p.rid, p.max_wall
                 plans[i] = (fid, np_)
+                if add.max() > APPROACH_FLOOR_M:
+                    ramps.append((p.xy[:, :2].copy(), p.z + add, p.half, add > APPROACH_FLOOR_M))
+        with self.lock:
+            if not hasattr(self, "ramps"):
+                self.ramps = {}
+            self.ramps[str(key)] = ramps
 
     def _lower_underpasses(self, key, plans):
         """Lower, in place, the plans that cross under a short never-raised overpass (UNDER_*). The bridges are cell
@@ -601,6 +661,7 @@ class Grader:
                 continue
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             z = np.asarray(p.z, np.float64).copy()
+            z0 = z.copy()
             changed = False
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], np.float64)
@@ -615,7 +676,13 @@ class Grader:
                 target = max(deck - UNDER_CLEAR_M, zc - UNDER_MAX_DROP_M)
                 if target >= zc - 0.1:
                     continue
-                z = np.minimum(z, target + UNDER_GRADE * np.abs(s - sc))
+                # (KyzoFox) flat under the bridge, then cosine ramps of at most UNDER_GRADE: the straight V (6 % down
+                # and at once 6 % up at the crossing) threw cars into the air at speed (Southwest Boulevard and Hulen
+                # Street under I-20, Fort Worth, 2026-10-23)
+                need = zc - target
+                run = need * math.pi / (2.0 * UNDER_GRADE)
+                u = np.clip((np.abs(s - sc) - UNDER_FLAT_M) / run, 0.0, 1.0)
+                z = np.minimum(z, z0 - need * 0.5 * (1.0 + np.cos(math.pi * u)))
                 changed = True
             if changed:
                 np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
@@ -646,9 +713,324 @@ class Grader:
             touch[js] = (d <= APPROACH_TOUCH_M).any(axis=1)
         return touch
 
+    def _lower_major_underpasses(self, key, plans, specs, major_under=True):
+        """(KyzoFox; on 1.6.0 beta only major_under is used: _lower_underpasses, 1.6.0's own, dips a road under a short
+        motorway bridge.) Lower, in place, the plans of roads passing under a bridge of a major road (APPROACH_SKIP:
+        never raised onto it) whose deck cannot clear them: a short motorway bridge has its ends on the ground either
+        side, so its deck lies there too; I-20's bridges over a local road in Ruston, LA stood 1.3 m over it (the
+        user's truck hit them, 2026-10-21). As real interchanges are built, the road dips under: down to the deck line
+        (the straight line between the bridge's ends) less roads.DECK_ROAD_CLEAR, flat across the bridge and
+        UNDERPASS_FLAT_M either side, then up on a cosine ramp of UNDERPASS_GRADE (along the road and the pieces it
+        goes on as, the map splitting it at the bridge); never cut into a road beside it (approach_add's cap). Like
+        the ramps, a pure function of the road and the map around it.
+
+        major_under (KyzoFox 1.5.56): the other way round, a motorway or trunk road (and its links) under a street's
+        bridge whose ramps could not be raised enough (downtown, the cross streets meet the frontage roads right by the
+        bridge: Shreveport's streets over I-49 got 2 of 7 m and decks climbing 25 %): the major road dips, as real
+        downtown interstates run in cuts, by what the deck still lacks from its ends' raised heights at DECK_MAX_GRADE,
+        at most UNDERPASS_MAJOR_MAX_M, on UNDERPASS_MAJOR_GRADE ramps, carried into the links it meets."""
+        max_m = UNDERPASS_MAJOR_MAX_M if major_under else UNDERPASS_MAX_M
+        grade_m = UNDERPASS_MAJOR_GRADE if major_under else UNDERPASS_GRADE
+        dips = []               # (plan index, distance along it from the crossing per vertex, depth, flat)
+        cand = []
+        for i, (fid, p) in enumerate(plans):
+            sp = specs[i]
+            if sp is None or len(p.xy) < 2:
+                continue
+            if major_under != (sp.cls in APPROACH_SKIP) or (not major_under and _is_link(sp)):
+                continue
+            cand.append(i)
+        if not cand:
+            return
+        bl, seen_c = [], set()
+        for i in cand:
+            xy = np.asarray(plans[i][1].xy, np.float64)[:, :2]
+            la, lo, _ = self.frame.enu_to_geodetic(xy[[0, -1], 0], xy[[0, -1], 1], 0.0)
+            for a_, b_ in zip(np.asarray(la), np.asarray(lo)):
+                h = mapcells.cell_of(float(a_), float(b_))
+                if str(h) in seen_c:
+                    continue
+                seen_c.add(str(h))
+                c = self._cell_enu(h, ground=False)
+                for line, (cls, w) in zip(c["bridges"], c.get("bcls", ())):
+                    if (cls in APPROACH_SKIP) != major_under and not any(np.array_equal(line, x) for x, _w in bl):
+                        bl.append((line, w))
+        if not bl:
+            return
+        # which bridge ends are abutments (on the ground): a long viaduct is mapped as many bridge parts end to end, and
+        # where one goes on into another (of any class: a ramp's deck too) the deck is up in the air, not on the ground
+        # under it (Shreveport's I-20 / I-49 viaducts: the roads under them dug down as if the deck lay there)
+        bends, b_cells = [], set()
+        for line, _w in bl:
+            for q in (line[0], line[-1]):
+                la, lo, _ = self.frame.enu_to_geodetic(np.array([q[0]]), np.array([q[1]]), 0.0)
+                h = mapcells.cell_of(float(np.asarray(la)[0]), float(np.asarray(lo)[0]))
+                if str(h) not in seen_c:
+                    seen_c.add(str(h))
+                if str(h) in b_cells:           # (each cell's bridges once: every end of every line added them all)
+                    continue
+                b_cells.add(str(h))
+                bends.extend(np.asarray(o, np.float64) for o in self._cell_enu(h, ground=False)["bridges"])
+        # their ends at once (abutment: a lookup, not a pass over every bridge per end; 7 s of a Dallas cell's 15)
+        b_end = (np.array([[o[0, :2], o[-1, :2]] for o in bends], np.float64).reshape(-1, 2) if bends
+                 else np.zeros((0, 2)))
+
+        def abutment(line, q):
+            # another part's end within UNDERPASS_JOIN_M continues this one (its own copies, from other cells, not)
+            if not len(b_end):
+                return True
+            near = np.flatnonzero(np.hypot(b_end[:, 0] - q[0], b_end[:, 1] - q[1]) < UNDERPASS_JOIN_M) // 2
+            for j in np.unique(near):
+                o = bends[j]
+                if len(o) == len(line) and np.allclose(o, line, atol=0.05):
+                    continue
+                return False
+            return True
+
+        def raised(q):
+            # (major_under) a street bridge's end height as its ramp left it: the highest plan end on it (None: no
+            # plan of this cell ends there, unknown)
+            best = None
+            for _f, pp in plans:
+                for e_ in (0, -1):
+                    if np.hypot(*(np.asarray(pp.xy[e_][:2], np.float64) - q)) < APPROACH_TOUCH_M:
+                        best = float(pp.z[e_]) if best is None else max(best, float(pp.z[e_]))
+            return best
+        arcs, xys, lo_b, hi_b = {}, {}, {}, {}
+        ends_at = {}            # (rounded end point) -> [(plan index, 0 | 1 its end)]: the pieces meeting there
+        for i in cand:
+            xy = np.asarray(plans[i][1].xy, np.float64)[:, :2]
+            xys[i] = xy
+            arcs[i] = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            lo_b[i], hi_b[i] = xy.min(0), xy.max(0)
+            for e_, q in ((0, xy[0]), (1, xy[-1])):
+                ends_at.setdefault((int(round(q[0])), int(round(q[1]))), []).append((i, e_))
+
+        def meeting(q):
+            # the pieces with an end within 1 m of q (the 3 x 3 rounded neighbourhood)
+            kx, ky = int(round(q[0])), int(round(q[1]))
+            out = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for m, m_end in ends_at.get((kx + dx, ky + dy), ()):
+                        if np.hypot(*(xys[m][-1 if m_end else 0] - q)) < 1.0:
+                            out.append((m, m_end))
+            return out
+        # (KyzoFox 1.5.5: every candidate against every bridge, and every piece searched at each hop, took 9.4 s of the
+        # grading of Monroe's I-20 / US 165 interchange cell, and the terrain under the player 19-47 s in game: only the
+        # pieces whose box reaches the bridge's, and the ends looked up)
+        for line, w in bl:
+            bs = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+            ze = None
+            ab0, ab1 = abutment(line, line[0]), abutment(line, line[-1])
+            if not (ab0 or ab1):
+                continue                # (a part of a viaduct up in the air at both ends: its deck clears)
+            blo, bhi = line.min(0), line.max(0)
+            for i in cand:
+                if (hi_b[i] < blo).any() or (lo_b[i] > bhi).any():
+                    continue
+                p = plans[i][1]
+                xy = xys[i]
+                cr = roadsmod._crossings([line], [xy])
+                if not cr:
+                    continue
+                s = arcs[i]
+                seg = np.diff(s)
+                if ze is None:
+                    if major_under:
+                        r0, r1 = raised(line[0]), raised(line[-1])
+                        ze = np.array([np.inf if r0 is None else r0, np.inf if r1 is None else r1])
+                    else:
+                        ze = self._z_at(line[[0, -1]])
+                for _pi, sb, pt in cr:
+                    # the deck as high as it can climb from its ends (roads.deck_profile_once: DECK_MAX_GRADE off an
+                    # abutment), never under the line between them. The line alone (KyzoFox 1.5.5's first take) is a
+                    # short bridge's deck, but downtown Shreveport's I-20 / I-49 viaducts climb high over the streets:
+                    # some sixty roads under them were dug up to 6 m down, pits with sand walls (the user, 2026-10-22)
+                    reach = min(float(ze[0]) + roadsmod.DECK_MAX_GRADE * sb if ab0 else np.inf,
+                                float(ze[1]) + roadsmod.DECK_MAX_GRADE * (bs[-1] - sb) if ab1 else np.inf)
+                    line_z = (float(ze[0] + (ze[1] - ze[0]) * sb / max(bs[-1], 1e-9))
+                              if ab0 and ab1 and np.isfinite(ze).all() else -np.inf)
+                    a, b = xy[:-1], xy[1:]
+                    ab = b - a
+                    L2 = np.maximum((ab * ab).sum(1), 1e-12)
+                    t = np.clip(((pt - a) * ab).sum(1) / L2, 0.0, 1.0)
+                    j = int(np.argmin(np.hypot(*(a + t[:, None] * ab - pt).T)))
+                    sc = s[j] + t[j] * seg[j]
+                    zr = float(np.interp(sc, s, p.z))
+                    deck = max(line_z, min(reach, zr + roadsmod.DECK_ROAD_CLEAR + APPROACH_MARGIN_M))
+                    need = zr - (deck - roadsmod.DECK_ROAD_CLEAR - APPROACH_MARGIN_M)
+                    if need < APPROACH_MIN_LIFT:
+                        continue
+                    need = min(need, max_m)
+                    flat = w / 2 + UNDERPASS_FLAT_M
+                    dips.append((i, np.abs(s - sc), need, flat))
+                    # the pieces it goes on as (sharing an end), up to UNDERPASS_HOPS pieces on
+                    front = [(i, 0, sc), (i, 1, s[-1] - sc)]
+                    done = {i}
+                    for _hop in range(UNDERPASS_HOPS):
+                        nxt = []
+                        for k, at_end, off in front:
+                            xk = xys[k]
+                            e = xk[-1 if at_end else 0]
+                            dk = (xk[-1] - xk[-2]) if at_end else (xk[0] - xk[1])     # out of piece k
+                            for m, m_end in meeting(e):
+                                if m in done:
+                                    continue
+                                xm = xys[m]
+                                dm = (xm[1] - xm[0]) if m_end == 0 else (xm[-2] - xm[-1])   # into piece m
+                                straight = float(dk @ dm) > UNDERPASS_ON_COS * float(np.hypot(*dk) * np.hypot(*dm))
+                                # (a dipped motorway's links go down with it where they meet it: no step at the gore)
+                                if (straight and specs[m].cls == specs[k].cls) or major_under:
+                                    sm = arcs[m]
+                                    dd = off + (sm if m_end == 0 else sm[-1] - sm)
+                                    dips.append((m, dd, need, flat))
+                                    done.add(m)
+                                    nxt.append((m, 1 - m_end, off + sm[-1]))
+                        front = nxt
+        if not dips:
+            return
+        if major_under:
+            before = {i: plans[i][1].z for i, *_r in dips}
+            self._dip(key, plans, dips, arcs, bl, grade_m)
+            # the motorway cores kept up by an earlier pass (its own bridges' ends: _floor_ramps) follow the dip, or
+            # the ground stood over the lowered road
+            with self.lock:
+                kept = getattr(self, "ramps", {}).get(str(key) + "#u", [])
+                for n_, (kxy, kz, kh, kon) in enumerate(kept):
+                    for i in before:
+                        pxy = np.asarray(plans[i][1].xy, np.float64)[:, :2]
+                        if len(pxy) == len(kxy) and np.allclose(pxy, kxy, atol=0.01):
+                            kept[n_] = (kxy, np.minimum(kz, np.asarray(plans[i][1].z, np.float64)), kh, kon)
+            return
+        # the major road over the cut stays at its height near it (its abutments): blended with the dipped road, I-20's
+        # ends sank 0.9 m and its deck with them
+        keep_pts = np.array([np.asarray(l, np.float64)[[0, -1]].mean(0) for l, _w in bl], np.float64)
+        with self.lock:
+            if not hasattr(self, "ramps"):
+                self.ramps = {}
+            kept = self.ramps.setdefault(str(key) + "#u", [])
+        for i, (fid, p) in enumerate(plans):
+            sp = specs[i]
+            if sp is None or sp.cls not in APPROACH_SKIP or len(p.xy) < 2:
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            near = np.hypot(*(xy[:, None, :] - keep_pts[None]).transpose(2, 0, 1)).min(1) <= UNDERPASS_KEEP_M
+            if near.any():
+                kept.append((xy.copy(), np.asarray(p.z, np.float64).copy(), p.half, near))
+        self._dip(key, plans, dips, arcs, bl, grade_m)
+
+    def _dip(self, key, plans, dips, arcs, bl, grade_m):
+        """_lower_underpasses' dips applied: cosine ramps of grade_m, capped by the roads beside (_underpass_others)."""
+        drop = {}
+        for i, dist, need, flat in dips:
+            run = need * math.pi / (2 * grade_m)
+            u = np.clip((dist - flat) / run, 0.0, 1.0)
+            d = need * 0.5 * (1.0 + np.cos(math.pi * u))
+            drop[i] = d if i not in drop else np.maximum(drop[i], d)
+        dpts = np.array([np.asarray(plans[k][1].xy, np.float64)[[0, -1], :2] for k in drop]).reshape(-1, 2)
+        memo = {}               # (cell -> its ground roads with their boxes: _underpass_others, once per cell)
+        for i, d in drop.items():
+            fid, p = plans[i]
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            seg = np.diff(arcs[i])
+            for o_line, oh in self._underpass_others(xy, p.half, fid, bl, dpts, memo):
+                aa, bb = o_line[:-1], o_line[1:]
+                dd = bb - aa
+                LL = np.maximum((dd * dd).sum(1), 1e-12)
+                tt = np.clip(((xy[:, None, :] - aa[None]) * dd[None]).sum(2) / LL[None], 0.0, 1.0)
+                dist = np.hypot(*(xy[:, None, :] - (aa[None] + tt[..., None] * dd[None])).transpose(2, 0, 1)).min(1)
+                d = np.minimum(d, np.maximum(0.0, (dist - p.half - oh - APPROACH_GAP_M) / APPROACH_CAP_RUN))
+            cg = min(APPROACH_CAP_GRADE, 2.0 * grade_m)      # (a motorway's: gentle there too)
+            for k in range(1, len(d)):           # (a cap eases the dip in, not a step)
+                d[k] = min(d[k], d[k - 1] + cg * seg[k - 1])
+            for k in range(len(d) - 2, -1, -1):
+                d[k] = min(d[k], d[k + 1] + cg * seg[k])
+            if d.max() >= APPROACH_MIN_LIFT:
+                np_ = Plan(p.xy, p.z - d, p.half, p.abut, p.cut, p.road_half)
+                np_.rid, np_.max_wall = p.rid, p.max_wall
+                plans[i] = (fid, np_)
+
+    def _z_at(self, xy):
+        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        return np.asarray(self.elev(la, lo), np.float64)
+
+    def _underpass_others(self, xy, half, fid, bridges, dipped=None, memo=None):
+        """The ground roads near xy that an underpass's dip must not cut into: not the road itself, nor the major road
+        whose bridge it passes under (its ground parts end at the bridge's ends, over the cut). dipped: the end points
+        (n, 2) of the pieces dipped with it. [(line, half width)]."""
+        dipped = np.zeros((0, 2)) if dipped is None else np.asarray(dipped, np.float64).reshape(-1, 2)
+        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        keys = set()
+        for a, b in zip(np.asarray(la)[::4], np.asarray(lo)[::4]):
+            keys.add(mapcells.cell_of(float(a), float(b)))
+        ends = np.concatenate([np.asarray(b[[0, -1]]) for b, _w in bridges]) if bridges else np.zeros((0, 2))
+        out, seen = [], set()
+        lo_q, hi_q = xy.min(0) - 60.0, xy.max(0) + 60.0
+        for k in sorted(keys, key=str):
+            got = memo.get(str(k)) if memo is not None else None
+            if got is None:
+                gl = self._cell_enu(k)["ground"]
+                got = (gl, np.array([l.min(0) for l, _o, _c in gl]).reshape(-1, 2),
+                       np.array([l.max(0) for l, _o, _c in gl]).reshape(-1, 2))
+                if memo is not None:
+                    memo[str(k)] = got
+            gl, glo, ghi = got
+            near = np.flatnonzero(~((ghi < lo_q).any(1) | (glo > hi_q).any(1))) if len(gl) else ()
+            for j in near:
+                line, oh, cls = gl[j]
+                kk = (round(float(line[0, 0]), 1), round(float(line[0, 1]), 1), len(line))
+                if kk in seen:
+                    continue
+                seen.add(kk)
+                if cls in APPROACH_SKIP:
+                    continue                    # (the major road over it, and its carriageways: above the cut)
+                if len(ends) and min(np.hypot(*(ends - line[0]).T).min(), np.hypot(*(ends - line[-1]).T).min()) < 2.5:
+                    continue
+                if len(dipped) and np.hypot(*(line[[0, -1]][:, None, :] - dipped[None]).transpose(2, 0, 1)).min() < 1.0:
+                    continue                    # (the road's own pieces, dipped with it)
+                out.append((line, oh))
+        return out
+
+    def _floor_ramps(self, e, n, out, lift):
+        """out raised to the raised approach roads' surfaces (+ lift) on their cores (APPROACH_FLOOR_M): a ramp's road
+        stands on its fill, whatever the roads around pull the blended ground to. In place."""
+        with self.lock:
+            ramps = [r for v in getattr(self, "ramps", {}).values() for r in v]
+        if not ramps or not len(e):
+            return
+        x0, y0, x1, y1 = e.min(), n.min(), e.max(), n.max()
+        for xy, z, half, on in ramps:
+            if xy[:, 0].max() + half < x0 or xy[:, 0].min() - half > x1 or xy[:, 1].max() + half < y0 or \
+                    xy[:, 1].min() - half > y1:
+                continue
+            for j in np.flatnonzero(on[:-1] | on[1:]):
+                a, b = xy[j], xy[j + 1]
+                lo_x, hi_x = min(a[0], b[0]) - half, max(a[0], b[0]) + half
+                lo_y, hi_y = min(a[1], b[1]) - half, max(a[1], b[1]) + half
+                m = (e >= lo_x) & (e <= hi_x) & (n >= lo_y) & (n <= hi_y)
+                if not m.any():
+                    continue
+                idx = np.flatnonzero(m)
+                ab = b - a
+                L2 = max(float(ab @ ab), 1e-12)
+                t0 = ((e[idx] - a[0]) * ab[0] + (n[idx] - a[1]) * ab[1]) / L2
+                t = np.clip(t0, 0.0, 1.0)
+                d = np.hypot(e[idx] - a[0] - t * ab[0], n[idx] - a[1] - t * ab[1])
+                k = d <= half
+                # square at the line's own ends, not round: an end is a bridge's abutment, and a round end reached
+                # half a road's width out under the deck, over the road dipped beneath it (I-20, Ruston, LA)
+                if j == 0:
+                    k &= t0 >= 0.0
+                if j == len(xy) - 2:
+                    k &= t0 <= 1.0
+                if k.any():
+                    zz = z[j] + (z[j + 1] - z[j]) * t[k] + lift
+                    out[idx[k]] = np.maximum(out[idx[k]], zz)
+
     def _end_lift(self, xy):
-        """(lift m, other road lines [(xy (k, 2), half width)]) when the road end xy is a bridge abutment to raise, else
-        None. A pure function of the map around the bridge (its cells, fetched as needed), cached per point."""
+        """(height m the ground there must reach, other road lines [(xy (k, 2), half width)]) when the road end xy is a
+        bridge abutment, else None. A pure function of the map around the bridge (its cells, fetched as needed), cached per point."""
         k = (round(float(xy[0]) * 2), round(float(xy[1]) * 2))
         with self.lock:
             if not hasattr(self, "end_cache"):
@@ -656,10 +1038,14 @@ class Grader:
             if k in self.end_cache:
                 return self.end_cache[k]
         res = None
+        miss0 = self._misses()
         try:
             res = self._end_lift_calc(np.asarray(xy, np.float64))
         except Exception as e:      # no ramp rather than no grading
             log.debug("grading: approach at %s: %s: %s", k, type(e).__name__, e)
+            self._tl.misses = self._misses() + 1        # (not kept: asked again)
+        if self._misses() > miss0:
+            return res              # (made without a cell's roads: not cached, asked again)
         with self.lock:
             return self.end_cache.setdefault(k, res)
 
@@ -674,7 +1060,15 @@ class Grader:
         if got is not None:
             return got
         parts = {}
-        f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        try:
+            f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        except Exception as e:
+            # (KyzoFox 1.5.5) a neighbouring cell that cannot be fetched now: none of its roads, not cached, and the
+            # caller's results not kept either (_misses); raised, it threw away every ramp of the cell planned
+            log.debug("grading: roads of %s for a neighbour: %s: %s", k, type(e).__name__, e)
+            self._tl.misses = self._misses() + 1
+            return {"bridges": [], "bridge_cls": [], "ground": [], "end_of": [], "bcls": [],
+                    "ends": np.zeros((0, 2), np.float64)}
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths) if ground else [None] * len(f)
@@ -689,7 +1083,7 @@ class Grader:
                         kk = (fid, kind, j)
                         if len(ring) >= 2 and (kk not in parts or len(ring) > len(parts[kk][0])):
                             parts[kk] = (ring, sp)
-        bridges, ground_l, ends, end_of, bcls = [], [], [], [], []
+        bridges, ground_l, ends, end_of, bcls, bclsw = [], [], [], [], [], []
         for (fid, kind, j), (ring, sp) in sorted(parts.items()):
             e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
             line = np.stack([np.asarray(e), np.asarray(n)], axis=1)
@@ -698,9 +1092,10 @@ class Grader:
                 ends += [line[0], line[-1]]
                 bridges.append(line)
                 bcls.append(getattr(sp, "cls", None))
+                bclsw.append((sp.cls, sp.width))
             else:
                 ground_l.append((line, sp.width / 2 + shoulder(sp), sp.cls))
-        out = {"bridges": bridges, "bridge_cls": bcls, "ground": ground_l, "end_of": end_of,
+        out = {"bridges": bridges, "bridge_cls": bcls, "ground": ground_l, "end_of": end_of, "bcls": bclsw,
                "ends": np.asarray(ends, np.float64).reshape(-1, 2)}
         with self.lock:
             if len(self.enu_cache) > 128:
@@ -727,6 +1122,12 @@ class Grader:
         cs = [self._cell_enu(k) for k in keys]
         bridges = [b for c in cs for b in c["bridges"]]
         lo_b, hi_b = bridge.min(0) - APPROACH_MAX_RUN - 50.0, bridge.max(0) + APPROACH_MAX_RUN + 50.0
+        # (KyzoFox 1.5.5) every abutment around: a road leading onto any bridge is raised with it, so it is no "road
+        # beside" whose fill slope caps this ramp (a divided road's other carriageway onto its twin bridge kept Thomas
+        # Road's ramp in West Monroe, LA to 1.8 m of its 5.7 m: 3 m under the girders over I-20, a truck hit it)
+        all_ends = np.concatenate([c["ends"] for c in cs if len(c["ends"])]) if any(len(c["ends"]) for c in cs) \
+            else np.zeros((0, 2))
+        all_ends = all_ends[np.hypot(*(all_ends - xy).T) <= APPROACH_TWIN_M]     # (a twin's, beside this one)
         ground, others, seen = [], [], set()
         chain = bridge_chain(bridge, bridges)
         spans = [bridge] + chain        # (a road under any part of the chain is spanned, not beside the ramp: #138)
@@ -742,19 +1143,34 @@ class Grader:
                     continue                # nowhere near the bridge or its ramps
                 ground.append(line)
                 touches = min(np.hypot(*(line[0] - xy)), np.hypot(*(line[-1] - xy))) <= APPROACH_TOUCH_M
+                leads = len(all_ends) and min(np.hypot(*(all_ends - line[0]).T).min(),
+                                              np.hypot(*(all_ends - line[-1]).T).min()) <= APPROACH_TOUCH_M
                 under = not ((line.max(0) < blo).any() or (line.min(0) > bhi).any()) and \
                     bool(roadsmod._crossings(spans, [line]))
-                # the roads beside the ramp, which its fill slope must not reach (not the ones the bridge spans: its
-                # abutment stands between)
-                if not touches and not under:
-                    others.append((line, half))
+                # the roads beside the ramp, which its fill slope must not reach (the ones the bridge's chain spans
+                # only beyond APPROACH_UNDER_FREE_M of the abutment: by the abutment, it stands between; KyzoFox: a
+                # ramp curving back over a frontage road under the bridge built its fill across it, West Monroe, LA)
+                if not touches and not leads:
+                    others.append((line, half, APPROACH_UNDER_FREE_M) if under else (line, half))
 
         def z_at(p):
             la_, lo_, _ = self.frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)
             return np.asarray(self.elev(la_, lo_), np.float64)
-        for end, lift in bridge_lifts(bridge, bridges, ground, z_at, chain):
+        near = [o for o in others if not ((o[0].max(0) < xy - APPROACH_MAX_RUN - 50.0).any()
+                                          or (o[0].min(0) > xy + APPROACH_MAX_RUN + 50.0).any())]
+        if near:                    # their heights (one sample of all their vertices)
+            zs_ = z_at(np.concatenate([o[0][:, :2] for o in near]))
+            k0, out_ = 0, []
+            for o in near:
+                n_ = len(o[0])
+                out_.append((o[0], o[1], o[2] if len(o) > 2 else 0.0, zs_[k0:k0 + n_]))
+                k0 += n_
+            others = out_
+        else:
+            others = []
+        for end, need in bridge_needs(bridge, bridges, ground, z_at, chain):
             if np.hypot(*(end - xy)) <= APPROACH_TOUCH_M:
-                return lift, others
+                return need, others
         return None
 
     def _longest(self, fid, j, ring, key):
@@ -951,6 +1367,8 @@ class Grader:
         race = self._on_kept(e, n)
         if race is not None:                # (the terrain is a racetrack's surface: GitHub #143)
             out[race] = base.ravel()[race]
+        if APPROACH_ON:
+            self._floor_ramps(e, n, out, lift)
         keep = self._over_tunnels(e, n)
         if keep is not None:
             # (a small change stays: a road over the tunnel lies on its own graded profile, the ground over the tunnel
@@ -1130,11 +1548,23 @@ def bridge_chain(line, all_bridges):
 
 
 def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None):
-    """[(end xy (2,), lift m)] of a bridge part (line (k, 2) ENU m): at each of its ends that no other bridge part
-    continues from (an abutment), how far the ground there must be raised for the deck to clear every road crossing
-    under it (roads.DECK_ROAD_CLEAR + APPROACH_MARGIN_M over the road, full height within APPROACH_FLAT_M of the end,
-    then falling at roads.DECK_GRADE), within [APPROACH_MIN_LIFT, APPROACH_MAX_LIFT]. Roads crossing within
-    APPROACH_MIN_CROSS_M of either end meet it at grade and do not count. z_at(xy (n, 2)) -> ground m. Pure given
+    """[(end xy (2,), lift m)]: bridge_needs as lifts over the ground at each end, within [APPROACH_MIN_LIFT,
+    APPROACH_MAX_LIFT]. Pure given z_at."""
+    out = []
+    for end, need in bridge_needs(line, all_bridges, ground_lines, z_at, chain):
+        lift = float(need - z_at(end[None])[0])
+        if lift >= APPROACH_MIN_LIFT:
+            out.append((end, min(lift, APPROACH_MAX_LIFT)))
+    return out
+
+
+def bridge_needs(line, all_bridges, ground_lines, z_at, chain=None):
+    """[(end xy (2,), height m)] of a bridge part (line (k, 2) ENU m): at each of its ends that no other bridge part
+    continues from (an abutment), how high the ground there must be for the deck to clear every road crossing under it
+    or under the rest of its chain (roads.DECK_ROAD_CLEAR + APPROACH_MARGIN_M over the road, full height within
+    APPROACH_FLAT_M of the end, then falling at roads.DECK_GRADE). Roads crossing within APPROACH_MIN_CROSS_M of an
+    abutment meet it at grade and do not count. (KyzoFox: a height, not a lift over the ground: the caller measures
+    it over the road's own planned height, which the plan's smoothing had cut metres under the ground.) Pure given
     z_at."""
     line = np.asarray(line, np.float64)[:, :2]
     if len(line) < 2:
@@ -1185,9 +1615,7 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None):
         d, zu_e = d[far], zu[far]
         need = zu_e + roadsmod.DECK_ROAD_CLEAR + APPROACH_MARGIN_M \
             - roadsmod.DECK_GRADE * np.maximum(d - APPROACH_FLAT_M, 0.0)
-        lift = float(need.max() - z_at(end[None])[0])
-        if lift >= APPROACH_MIN_LIFT:
-            out.append((np.asarray(end, np.float64), min(lift, APPROACH_MAX_LIFT)))
+        out.append((np.asarray(end, np.float64), float(need.max())))
     return out
 
 
@@ -1212,7 +1640,7 @@ def fill_abutment(z, at_end, step=PROFILE_STEP):
     return q[::-1] if at_end else q
 
 
-def approach_add(xy, at_end, lift, half, others=()):
+def approach_add(xy, at_end, lift, half, others=(), z=None):
     """m to add to a road plan's vertices (xy (n, 2)) rising to `lift` at its first (at_end False) or last vertex (a
     bridge's abutment), falling off along the road (arc length) on a cosine ramp whose steepest grade is APPROACH_GRADE;
     at most what keeps the fill slope (SLOPE_RUN) clear of the other roads [(line (k, 2), half width)] beside it, with
@@ -1230,11 +1658,14 @@ def approach_add(xy, at_end, lift, half, others=()):
         return None
     q0 = xy[on]
     lo_q, hi_q = q0.min(0), q0.max(0)
-    for line, oh in others:
+    for other in others:
+        line, oh = other[0], other[1]
+        free = other[2] if len(other) > 2 else 0.0      # m from the abutment this road does not cap
+        zl = other[3] if len(other) > 3 else None       # its heights at its vertices (with z: the ramp's own)
         line = np.asarray(line, np.float64)[:, :2]
         if len(line) < 2:
             continue
-        reach = half + oh + APPROACH_GAP_M + SLOPE_RUN * lift
+        reach = half + oh + APPROACH_GAP_M + APPROACH_CAP_RUN * lift
         if (line.max(0) < lo_q - reach).any() or (line.min(0) > hi_q + reach).any():
             continue                    # too far to matter
         q = xy[on]
@@ -1242,8 +1673,17 @@ def approach_add(xy, at_end, lift, half, others=()):
         ab = b - a
         L2 = np.maximum((ab * ab).sum(1), 1e-12)
         t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
-        dist = np.hypot(*(q[:, None, :] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1)).min(1)
-        cap = np.maximum(0.0, (dist - half - oh - APPROACH_GAP_M) / SLOPE_RUN)
+        dd = np.hypot(*(q[:, None, :] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
+        jn = dd.argmin(1)
+        dist = dd[np.arange(len(q)), jn]
+        cap = np.maximum(0.0, (dist - half - oh - APPROACH_GAP_M) / APPROACH_CAP_RUN)
+        if z is not None and zl is not None:
+            # (KyzoFox 1.5.5) over that road's own height, not the ramp's: frontage roads meeting Nutland Road at grade
+            # by its abutment in Monroe, LA (as high as it) held its ramp down to nothing
+            zl = np.asarray(zl, np.float64)
+            zo = zl[jn] + (zl[jn + 1] - zl[jn]) * t[np.arange(len(q)), jn]
+            cap = np.maximum(0.0, cap + zo - np.asarray(z, np.float64)[on])
+        cap = np.where(d[on] < free, np.inf, cap)
         add[on] = np.minimum(add[on], cap)
     # a cap lowers the ramp before it at APPROACH_CAP_GRADE at most, instead of a step at the cap
     for i in range(1, len(add)):

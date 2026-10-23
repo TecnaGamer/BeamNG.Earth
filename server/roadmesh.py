@@ -343,7 +343,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     return P - np.asarray(origin, np.float64), T, UV, mats, M
 
 
-DECK_DEPTH = 1.2        # m of deck slab under the surface
+DECK_DEPTH = 0.6        # m of deck slab under the surface (KyzoFox 1.5.5: was 1.2; with the girders 1.6 m, a real
+                        # overpass's depth: the old slab stood as a thick wall over the lanes)
 DECK_SKIN = 0.01        # m the road mesh lies over a deck's top (the decal materials are translucent:
                         # 2026-10-11 a deck topped with road_asphalt_2lane was see-through)
 DECK_SIDE = "bne_bridge_concrete"  # the slab, girders, parapets, piers and tunnel tubes: plain concrete (the stock
