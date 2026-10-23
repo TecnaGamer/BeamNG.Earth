@@ -5,3 +5,4 @@ Pillow>=11          # with WebP support; its DXT1 encoder writes the tile textur
 duckdb>=1.5         # GEOMETRY and ST_AsWKB in core: no extension is installed or loaded
 fsspec              # DuckDB reads the remote files through rangeread.NetfetchFS
 certifi             # the packaged app's CA certificates where the system has none it finds (launcher.py)
+osmium>=4          # background OSM exit destinations and highway milestones

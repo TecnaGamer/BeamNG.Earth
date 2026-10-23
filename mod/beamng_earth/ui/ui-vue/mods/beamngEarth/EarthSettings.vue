@@ -257,6 +257,8 @@ const settingsSchema = [
       { id: "groundCoverDensity", type: "select", default: "normal", name: "Grass density", desc: "How dense the grass and shrubs are. Without the optional grass patch (tools/gcpatch, Linux) the game regrows the grass in one slower frame each time the ground under the car moves (every ~130-190 m); higher density makes that frame longer.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" } ] },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads from OpenStreetMap / Overture within about 600 m of the car: paved roads as asphalt, gravel and dirt roads and tracks as worn dirt tracks, and the same surfaces under the tyres. Bridges, tunnels, markings and junction shapes come later." },
+      { id: "osmExitSigns", type: "bool", default: true, name: "Highway exit signs", desc: "Exit numbers and destinations from OpenStreetMap, advance signs, and blue rest-area signs. Available where the map has destination data." },
+      { id: "mileMarkers", type: "bool", default: true, name: "Interstate mile markers", desc: "Whole-mile reference signs with direction, Interstate shield and mileage. Michigan and Kentucky references are included; elsewhere coverage depends on mapped milestones." },
     ],
   },
   {
