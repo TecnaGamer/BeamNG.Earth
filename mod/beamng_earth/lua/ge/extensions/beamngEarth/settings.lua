@@ -50,6 +50,8 @@ M.SCHEMA = {
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
+  osmExitSigns = { kind = 'bool', default = true, label = 'Highway exit signs' },
+  mileMarkers = { kind = 'bool', default = true, label = 'Interstate mile markers' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
@@ -70,7 +72,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible', 'statusBar',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'osmExitSigns', 'mileMarkers', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -241,6 +243,8 @@ M.APPLY = {
   end,
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
+  osmExitSigns = function(v) require('beamngEarth/roads').setExitSignsEnabled(v) end,
+  mileMarkers = function(v) require('beamngEarth/roads').setMileMarkersEnabled(v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end

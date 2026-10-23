@@ -230,8 +230,11 @@ class MapData:
         self._mem = OrderedDict()           # (cell, layer) -> (decoded layer, provenance, bytes): cell()'s LRU
         self._mem_bytes = 0
         self._mem_lock = threading.Lock()
+        import highwaysigns
+        self.highway_signs = highwaysigns.Source(self)
 
     def close(self):
+        self.highway_signs.close()
         self.pool.shutdown(wait=False)
         self.overture.close()
 

@@ -1168,8 +1168,11 @@ class Server:
             bld = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata,
                                          lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                          None, None, items)
+        import highwaysigns
+        exits, miles = highwaysigns.build_tile(self.mapdata, anchor.frame, tx, ty, elev, chunks,
+                                                self.left_hand(anchor), self.mph(anchor), urban, self.road_widths)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
-                                   mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh)
+                                   mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, exit_mesh=exits, mile_mesh=miles)
 
     def ground_z_at(self, anchor, e, n):
         """The ground's height (the frame's up) at (e, n) of anchor's frame, from the elevation data (not graded: the
@@ -3208,6 +3211,9 @@ class Connection:
             self.s.download_ahead(self.s.anchors[aid], *self.focus, *self.vel)
             self.base_refresh(aid)
         if self.s.mapdata is not None and aid == self.active:
+            signs = getattr(self.s.mapdata, 'highway_signs', None)
+            if signs is not None and aid in self.s.anchors:
+                signs.refresh(self.roads, self.s.anchors[aid].frame, *self.focus)
             self.roads.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_roads_tile,
                                vel=self.vel, ground_busy=self.terrain_wait > 0, view=self.view_at,
                                foci=self.foci)

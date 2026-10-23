@@ -3841,6 +3841,12 @@ class Tracker:
         self.empty = set()
         self.retry = {}         # tile -> monotonic time it may be built again
         self.fails = {}         # tile -> builds failed in a row (TILE_FAILS_WARN)
+        self.stale = set()      # optional sign data became available after these tiles were built
+
+    def refresh(self):
+        """Rebuild at normal priority, retaining visible tiles until replacements arrive."""
+        self.stale.update(self.sent | self.empty | self.building)
+        self.empty.clear()
 
     def close(self):
         if self.pool is not None:
@@ -3859,6 +3865,7 @@ class Tracker:
                 f.cancel()
             self.aid, self.sent, self.building, self.futs = aid, set(), set(), {}
             self.empty, self.retry, self.fails = set(), {}, {}
+            self.stale.clear()
         if self.pool is None:
             from concurrent.futures import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-tile")
@@ -3873,7 +3880,7 @@ class Tracker:
         wanted = car | seen | others
         start = set(tiles_near(x, y, SEND_M)) if ground_busy else wanted
         now = time.monotonic()
-        want = [k for k in start if k not in self.sent and k not in self.building and k not in self.empty
+        want = [k for k in start if (k in self.stale or (k not in self.sent and k not in self.empty)) and k not in self.building
                 and self.retry.get(k, 0.0) <= now]
         car_key = path_key(x, y, vx, vy) if fast else view_key(conn, aid, x, y)
         cam_key = view_key(conn, aid, *view) if seen else None
@@ -3881,6 +3888,7 @@ class Tracker:
             return min(tile_distance(k[0], k[1], f[0], f[1]) for f in foci)
         want.sort(key=lambda k: (2, focus_d(k)) if k in others else (1, cam_key(k)) if k in seen else (0, car_key(k)))
         for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
+            self.stale.discard((tx, ty))
             self.building.add((tx, ty))
             fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
@@ -3890,6 +3898,7 @@ class Tracker:
         drop = [k for k in self.sent if k not in wanted and far(k)]
         for k in drop:
             self.sent.discard(k)
+            self.stale.discard(k)
             conn.send({"type": "roads_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
         if self.empty:
             self.empty = {k for k in self.empty if k in wanted or not far(k)}
@@ -3906,6 +3915,8 @@ class Tracker:
         try:
             res = fut.result()
         except Exception as e:      # network trouble: the next pose asks again
+            if key in self.sent:           # a refresh failed: keep the visible tile and retry its replacement
+                self.stale.add(key)
             # (a bug failed every tile on a Steam Deck with nothing in the log, 2026-10-20: each kind once, in full)
             kind = f"{type(e).__name__}: {e}"[:200]
             fails = self.fails[key] = self.fails.get(key, 0) + 1
@@ -3944,14 +3955,15 @@ def shape_files(aid, tx, ty):
     out = {"road": f"road_{aid}_{tx}_{ty}.cdae", "deck": f"deck_{aid}_{tx}_{ty}.cdae",
            "walk": f"walks_{aid}_{tx}_{ty}.cdae", "walkcol": f"walkcol_{aid}_{tx}_{ty}.cdae",
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
-           "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae"}
+           "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
+           "exits": f"exits_{aid}_{tx}_{ty}.cdae", "mileposts": f"mileposts_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
 
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
-               props=None, wires=None, park=None, tunnel_mesh=None):
+               props=None, wires=None, park=None, tunnel_mesh=None, exit_mesh=None, mile_mesh=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -3979,6 +3991,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
         roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh)
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    for kind, sign_mesh in (("exits", exit_mesh), ("mileposts", mile_mesh)):
+        if sign_mesh is not None:
+            x0, y0, _, _ = tile_bbox(tx, ty)
+            shape = f"{kind}_{aid}_{tx}_{ty}.cdae"
+            roadmesh.write(os.path.join(out_dir, shape), sign_mesh)
+            data[kind] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if walks:
         x0, y0, _, _ = tile_bbox(tx, ty)
         b = sidewalks.Builder((x0, y0, 0.0), collision=True)
