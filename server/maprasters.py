@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import cog as cogmod
+import lidarbc
 import rangeread
 
 WORLDCOVER_RELEASE = "v200-2021"
@@ -45,6 +46,11 @@ CHM_FILE_Z = 10                     # files are quadkey level 10 tiles
 CHM_NODATA = 255
 MERC_HALF = 20037508.342789244      # m, half the Web-Mercator world width
 COG_CACHE = 16                      # parsed COG headers kept in memory
+# British Columbia (Vancouver Island, 2026-10-23): where LidarBC flew both a surface (DSM) and a terrain
+# (DEM) model, the canopy height is measured (DSM - DEM) instead of the Meta / WRI model's estimate (it saturates in
+# tall coastal forest). Same grid, same uint8 metres; the Meta raster stays where lidar has nothing.
+BC_CANOPY = os.environ.get("BNE_BC_CANOPY", "1") != "0"
+BC_BAND = 512               # rows of the cell's canopy grid built at once
 
 
 @dataclass
@@ -71,6 +77,14 @@ class Raster:
         return out
 
 
+def cell_center(cell):
+    """WGS84 lat / lon of a Web-Mercator cell's centre."""
+    nz = 1 << cell.z
+    lon = (cell.x + 0.5) / nz * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (cell.y + 0.5) / nz))))
+    return lat, lon
+
+
 def worldcover_tile_name(lat_sw, lon_sw):
     return f"{'N' if lat_sw >= 0 else 'S'}{abs(lat_sw):02d}{'E' if lon_sw >= 0 else 'W'}{abs(lon_sw):03d}"
 
@@ -88,8 +102,15 @@ class Rasters:
     """Reads the per-cell rasters. raw_dir: the block cache root (<cache>/mapdata/raw); fetcher:
     the server's netfetch.Fetcher."""
 
-    def __init__(self, raw_dir, fetcher):
+    def __init__(self, raw_dir, fetcher, lidar_dir=None):
+        """lidar_dir: the LidarBC block cache (the terrain's: <cache>/dem/lidarbc, so both read the same files once);
+        None: no BC lidar canopy."""
         self.raw_dir, self.fetcher = raw_dir, fetcher
+        self._bc = None
+        if lidar_dir is not None and BC_CANOPY:
+            mb = 48 * 1024 * 1024           # (a cell's band of strips: ~15 MB a product)
+            self._bc = (lidarbc.LidarBC(lidar_dir, fetcher, tile_cache_bytes=mb),
+                        lidarbc.LidarBC(lidar_dir, fetcher, index_path=lidarbc.DSM_INDEX_PATH, tile_cache_bytes=mb))
         self._cogs = OrderedDict()
         self._lock = threading.Lock()
 
@@ -155,3 +176,43 @@ class Rasters:
             raise cogmod.CogError(f"CHM {qk}: cell not aligned to the file's pixels")
         data = c.read_window(col0, row0, w, w)
         return Raster(data, "EPSG:3857", mx0, my0, c.sx, c.sy, CHM_NODATA, [qk])
+
+    def bc_canopy(self, cell, base):
+        """base (the Meta / WRI canopy Raster of the cell, or None) with LidarBC's measured canopy heights put in
+        where lidar covers it; (raster, lidar files used). Network failures raise netfetch.FetchError."""
+        if self._bc is None:
+            return base, []
+        dem, dsm = self._bc
+        s, w, n, e = dsm._index()[4]
+        clat, clon = cell_center(cell)
+        if not (s <= clat <= n and w <= clon <= e):
+            return base, []
+        nz = 1 << cell.z
+        size = 2 * MERC_HALF / nz
+        px = 2 * MERC_HALF / (1 << (CHM_FILE_Z + 15))       # the CHM files' pixel (z17 Web Mercator, 1.194 m)
+        npx = int(round(size / px))
+        mx0, my0 = cell.x * size - MERC_HALF, MERC_HALF - cell.y * size
+        i = (np.arange(npx) + 0.5) * px
+        lon1 = np.degrees((mx0 + i) / 6378137.0)
+        lat1 = np.degrees(np.arctan(np.sinh((my0 - i) / 6378137.0)))
+        files = []
+        data = None
+        for r0 in range(0, npx, BC_BAND):            # in bands: a whole cell's 4 million points peaked at ~1 GB
+            rows = slice(r0, min(npx, r0 + BC_BAND))
+            n_r = rows.stop - rows.start
+            lat = np.broadcast_to(lat1[rows, None], (n_r, npx))
+            lon = np.broadcast_to(lon1[None, :], (n_r, npx))
+            got = lidarbc.canopy(dem, dsm, lat, lon, files)
+            if got is None:
+                continue
+            h, ok = got
+            if data is None:
+                data = (base.data.copy() if base is not None and base.data.shape == (npx, npx)
+                        else np.full((npx, npx), CHM_NODATA, np.uint8))
+            band = data[rows]
+            band[ok] = np.rint(h[ok]).astype(np.uint8)
+        if data is None:
+            return base, []
+        prev = list(base.files) if base is not None and base.data.shape == (npx, npx) else []
+        files = sorted(set(files))
+        return Raster(data, "EPSG:3857", mx0, my0, px, px, CHM_NODATA, prev + ["lidarbc:" + f for f in files]), files

@@ -155,6 +155,13 @@ POLICIES = {
                  "esa-worldcover.s3.eu-central-1.amazonaws.com",
                  "dataforgood-fb-data.s3.amazonaws.com",
                  "copernicus-dem-30m.s3.amazonaws.com")},      # the polar caps' DEM (polardem.py)
+    # British Columbia's lidar DEMs (lidarbc.py): range reads of the Province's open bucket; optional
+    "nrs.objectstore.gov.bc.ca": HostPolicy(rate=20.0, burst=40.0, max_conc=6, daily_budget=None, allow_prefetch=True,
+                                            offline_ok=True, miss_ttl=None, binary=True, timeout=30.0, optional=True),
+    # Canada's lidar terrain model (hrdem.py): range reads of NRCan's COG mosaic; optional (Mapterhorn stands in)
+    "canelevation-dem.s3.ca-central-1.amazonaws.com": HostPolicy(rate=20.0, burst=40.0, max_conc=6, daily_budget=None,
+                                                                 allow_prefetch=True, offline_ok=True, miss_ttl=None,
+                                                                 binary=True, timeout=30.0, optional=True),
     # OurAirports' nightly CSV dump on GitHub Pages (airports.py): two files (~3 MB gzipped) once a week,
     # one request at a time, a hard cap well above a week's need; the copy on disk serves offline
     "davidmegginson.github.io": HostPolicy(rate=0.2, burst=2.0, max_conc=1, daily_budget=20, daily_hard=40,

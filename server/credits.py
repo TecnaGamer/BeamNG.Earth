@@ -63,9 +63,13 @@ IMAGERY = {
                "(Contains modified Copernicus Sentinel data 2016 & 2017)",
 }
 IMAGERY.update({n: v[1] for n, v in __import__("imagery_regional").REGIONAL.items()})   # their own wording
+IMAGERY["bcortho"] = __import__("bcortho").ATTRIBUTION
 ELEVATION = {
     demmod.MAPTERHORN["name"]: "Mapterhorn (see mapterhorn.com/attribution)",
     demmod.AWS["name"]: "AWS Terrain Tiles / Mapzen",
+    "lidarbc": "Contains information licensed under the Open Government Licence - British Columbia (LidarBC)",
+    "hrdem": "Contains information licensed under the Open Government Licence - Canada "
+             "(Natural Resources Canada, HRDEM - CanElevation Series)",
     polardem.SOURCE: "Produced using Copernicus WorldDEM-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH "
                      "2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
 }
@@ -86,9 +90,10 @@ SHORT = {
     "img:flanders": "Digitaal Vlaanderen", "img:de_bayern": "LDBV Bayern", "img:de_nrw": "Geobasis NRW",
     "img:de_bw": "LGL BW", "img:de_nds": "LGLN", "img:de_berlin": "Geoportal Berlin", "img:de_hessen": "HVBG Hessen",
     "img:japan": "GSI Japan", "img:au_nsw": "Spatial Services NSW", "img:au_tas": "theLIST Tasmania",
-    "img:ontario": "Ontario GEO",
+    "img:ontario": "Ontario GEO", "img:bcortho": "LidarBC photos (OGL-BC)",
     f"dem:{demmod.MAPTERHORN['name']}": "Mapterhorn", f"dem:{demmod.AWS['name']}": "AWS Terrain Tiles / Mapzen",
     f"dem:{polardem.SOURCE}": "Copernicus DEM (DLR, Airbus)",
+    "dem:hrdem": "NRCan HRDEM (OGL-Canada)", "dem:lidarbc": "LidarBC (OGL-BC)",
     WEATHER_ID: "Open-Meteo",
 }
 # Every other source that built what is near the player (the user, 2026-10-18: "show all sources", not only those
@@ -99,6 +104,7 @@ FEATURES = {
     "map:TomTom": "TomTom", "map:Esri Community Maps": "Esri", "map:Google Open Buildings": "Google",
     "map:USGS Lidar": "USGS Lidar", "map:doi:10.5281/zenodo.8174931": "Shi et al. (East Asia buildings)",
     "land:esa-worldcover": "ESA WorldCover", "canopy:meta-wri-chm": "Meta & WRI",
+    "canopy:lidarbc-chm": "LidarBC (OGL-BC)",
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008",
 }
@@ -205,6 +211,9 @@ def feature_ids(conn):
                     ids.add("land:esa-worldcover")
                 elif pid == "meta-wri-chm":
                     ids.add("canopy:meta-wri-chm")
+                elif pid == "lidarbc-chm":
+                    ids.add("canopy:lidarbc-chm")
+                    ids.add("canopy:meta-wri-chm")
     sea = getattr(conn, "sea_sent", None)
     if sea and sea[0] == conn.active and sea[1] and sea[1][0]:
         ids.add("sea:noaa")
@@ -267,6 +276,10 @@ def tile_sources(frame, bbox, dem, zoom, used):
             p = served.get(k)
             if p:
                 ids.add(f"dem:{p}")
+            if k in getattr(dem, "hrdem_served", ()):
+                ids.add("dem:hrdem")
+            if k in getattr(dem, "lidarbc_served", ()):
+                ids.add("dem:lidarbc")
     if callable(getattr(dem, "polar", None)) and polar_covered(frame, bbox, dem.polar()):
         ids.add(f"dem:{polardem.SOURCE}")
     return frozenset(ids)

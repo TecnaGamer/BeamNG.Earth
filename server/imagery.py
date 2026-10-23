@@ -149,6 +149,7 @@ SOURCES["md6in"] = Source(
     bounds=(37.88, -79.49, 39.73, -75.04), nodata="white", leaf_off=True)
 BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2023", "eox2016")     # the chain before the regional sources
 # Regional aerial imagery (imagery_regional.py: state and national orthophoto services, each within its box)
+import bcortho as bcorthomod  # noqa: E402
 import imagery_regional  # noqa: E402
 # A state's tile cache serves the far rings from this zoom on; coarser rings (texels of ~15 m and more, kilometres
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
@@ -161,7 +162,11 @@ for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items(
     else:                       # a WMS / ArcGIS export: one 1024 px image per z15 parent, ahead of the player
         SOURCES[_n] = Source(_n, _url, 17, _attr, min_zoom=17, export=2, lazy=True, bounds=_bounds, nodata="white",
                              leaf_off=_leaf)
-DEFAULT_CHAIN = ("md6in", *imagery_regional.REGIONAL, "naipusda", "naip", "usgs", "eox2023", "eox2016")
+# British Columbia's lidar-programme orthophotos (bcortho.py: 10-15 cm, rendered from the Province's GeoTIFFs, not
+# fetched as images): after the regional services, like an export source
+SOURCES["bcortho"] = Source("bcortho", bcorthomod.URL, 17, bcorthomod.ATTRIBUTION, min_zoom=17, export=2, lazy=True,
+                            bounds=(47.9, -130.1, 51.1, -121.9), nodata="black")
+DEFAULT_CHAIN = ("md6in", *imagery_regional.REGIONAL, "bcortho", "naipusda", "naip", "usgs", "eox2023", "eox2016")
 # The line the mod shows (V1_3_SPEC §C), for the default chain: every source's own credit, EOX's in
 # its June 2026 wording (docs/research/2026-10-10-rate-limits.md: "EOxCloudless https://cloudless.eox.at
 # by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023)", 2016: "... 2016 & 2017").
@@ -481,6 +486,8 @@ class Imagery:
                 self._count(src.name + ":disk")
                 return data
             mb = mercator_bbox(z - k, x >> k, y >> k)
+            if src.url == bcorthomod.URL:
+                return self._render_bcortho(src, z, x, y, mb)
             url = src.url.format(bbox=",".join(f"{v:.3f}" for v in mb), bbox4326=lat_lon_bbox(mb), size=TILE << k)
             if self.fetcher.miss_alive(miss, url):
                 return None
@@ -507,33 +514,69 @@ class Imagery:
                 raise ImageryError(f"undecodable {src.name} image {parent}: {e}") from None
             if im.size != (TILE << k, TILE << k):
                 im = im.resize((TILE << k, TILE << k), Image.BILINEAR)
-            out = None
-            a = np.asarray(im)
-            for j in range(1 << k):
-                for i in range(1 << k):
-                    cx, cy = ((x >> k) << k) + i, ((y >> k) << k) + j
-                    cpath, cmiss = self._paths(src, z, cx, cy)
-                    child = a[j * TILE:(j + 1) * TILE, i * TILE:(i + 1) * TILE]
-                    if (child.max(axis=2) <= NODATA_MAX).mean() > NODATA_SHARE or (
-                            src.nodata == "white" and (child.min(axis=2) >= NODATA_WHITE_MIN).mean() > NODATA_WHITE_SHARE):
-                        # outside the flights (the image is black there): missing, the next source fills it
-                        os.makedirs(os.path.dirname(cmiss), exist_ok=True)
-                        open(cmiss, "wb").close()
-                        self.disk.wrote(cmiss, 0)
-                        continue
-                    buf = io.BytesIO()
-                    Image.fromarray(child).save(buf, "JPEG", quality=92)
-                    b = buf.getvalue()
-                    os.makedirs(os.path.dirname(cpath), exist_ok=True)
-                    tmp = f"{cpath}.{threading.get_ident()}.tmp"
-                    with open(tmp, "wb") as f:
-                        f.write(b)
-                    staging.replace_cached(tmp, cpath)
-                    self.disk.wrote(cpath, len(b))
-                    if (cx, cy) == (x, y):
-                        out = b
+            out = self._split_export(src, z, x, y, np.asarray(im))
             self._count(src.name + ":net")
             return out
+
+    def _render_bcortho(self, src, z, x, y, mb):
+        """The bcortho source's export parent rendered from the LidarBC orthophotos (bcortho.py) instead of fetched,
+        split like an export's (texels it has no photo for are black: the next source fills those tiles)."""
+        k = src.export
+        bo = getattr(self, "_bcortho", None)
+        if bo is None:
+            with self._lock:
+                bo = getattr(self, "_bcortho", None)
+                if bo is None:
+                    root = os.path.dirname(os.path.abspath(self.cache_dir))     # <cache>/imagery -> <cache>
+                    bo = self._bcortho = bcorthomod.BCOrtho(os.path.join(root, "imagery", "bcortho-src"), self.fetcher)
+        path, miss = self._paths(src, z, x, y)
+        try:
+            rgb, ok = bo.render(mb, TILE << k)
+        except netfetch.FetchError as e:
+            kind = getattr(self._local, "kind", "demand")
+            deferred = kind != "demand" and isinstance(e, _DEFERRED)
+            self._count(src.name + (":deferred" if deferred else ":error"))
+            raise ImageryError(f"imagery render failed: {src.name} {z}/{x}/{y}: {e}", deferred) from None
+        if rgb is None:
+            os.makedirs(os.path.dirname(miss), exist_ok=True)
+            open(miss, "wb").close()
+            self.disk.wrote(miss, 0)
+            self._count(src.name + ":404")
+            return None
+        rgb = np.where(ok[..., None], rgb, 0).astype(np.uint8)          # (the export's black: outside the photos)
+        out = self._split_export(src, z, x, y, rgb)
+        self._count(src.name + ":net")
+        return out
+
+    def _split_export(self, src, z, x, y, a):
+        """An export parent's image a ((TILE << export)² RGB) written as its children's tiles; tile (x, y)'s bytes, or
+        None when it is outside the data (a miss marker written)."""
+        k = src.export
+        out = None
+        for j in range(1 << k):
+            for i in range(1 << k):
+                cx, cy = ((x >> k) << k) + i, ((y >> k) << k) + j
+                cpath, cmiss = self._paths(src, z, cx, cy)
+                child = a[j * TILE:(j + 1) * TILE, i * TILE:(i + 1) * TILE]
+                if (child.max(axis=2) <= NODATA_MAX).mean() > NODATA_SHARE or (
+                        src.nodata == "white" and (child.min(axis=2) >= NODATA_WHITE_MIN).mean() > NODATA_WHITE_SHARE):
+                    # outside the flights (the image is black there): missing, the next source fills it
+                    os.makedirs(os.path.dirname(cmiss), exist_ok=True)
+                    open(cmiss, "wb").close()
+                    self.disk.wrote(cmiss, 0)
+                    continue
+                buf = io.BytesIO()
+                Image.fromarray(child).save(buf, "JPEG", quality=92)
+                b = buf.getvalue()
+                os.makedirs(os.path.dirname(cpath), exist_ok=True)
+                tmp = f"{cpath}.{threading.get_ident()}.tmp"
+                with open(tmp, "wb") as f:
+                    f.write(b)
+                staging.replace_cached(tmp, cpath)
+                self.disk.wrote(cpath, len(b))
+                if (cx, cy) == (x, y):
+                    out = b
+        return out
 
     def raw(self, src, z, x, y, kind="demand"):
         """A source tile's bytes as served (disk cache, else the network; in the calling thread), None where the
