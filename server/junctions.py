@@ -259,9 +259,11 @@ def _across(roads, bi, bj, cr, X, walk_w, debug=None):
     return {"arc": curb, "inward": nrm, "outer": outer, "fill": None, "fills": fills, "ramps": []}, ti, tj
 
 
-def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None):
+def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None, paved=None,
+         edge_half=None, join_filter=None):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
-    has_walk(spec) -> bool; walk_w: sidewalk width. Returns
+    has_walk(spec) -> bool; walk_w: sidewalk width. Optional edge_half(spec, side) gives
+    asymmetric pavement reach; join_filter(fid, fid) selects road pairs. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
                        outer [(x, y, z) ...] the slab's outer corner points, fill (m, 3) asphalt polygon)]
         cuts: {(fid, side): [(node xy, branch u, t)]}: that sidewalk starts t m from the node
@@ -302,7 +304,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
     connector = {}                              # {node a, node b} -> the road joining them (merged)
     for ri, (fid, spec, pts, lon) in enumerate(roads):
         seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
-        s_at = np.concatenate(([0.0], np.cumsum(seg)))
+        s_at = np.r_[0.0, np.cumsum(seg)]
         on = [(vi, node_of[(ri, vi)]) for vi in range(len(pts)) if (ri, vi) in node_of]
         for (v0, a), (v1, b) in zip(on[:-1], on[1:]):
             L = s_at[v1] - s_at[v0]
@@ -363,6 +365,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if ri == rj and n == 2:
                 continue
             spi, spj = roads[ri][1], roads[rj][1]
+            if join_filter is not None and not join_filter(roads[ri][0], roads[rj][0]):
+                continue
             na, nb = node_of[(ri, vi)], node_of[(rj, vj)]
             cr = connector.get(frozenset((na, nb))) if na != nb else None
             if cr is not None and has_walk(spi) and has_walk(spj):
@@ -371,6 +375,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 got = _across(roads, branches[i], branches[j], cr, X, walk_w, debug)
                 if got is not None:
                     corner, ci, cj = got
+                    corner['surface'] = getattr(spi if spi.width >= spj.width else spj, 'surface', '')
+                    corner['uv_fid']=roads[ri if spi.width>=spj.width else rj][0]
                     corners.append(corner)
                     cuts.setdefault((roads[ri][0], li), []).append((Pi.copy(), ui, ci))
                     cuts.setdefault((roads[rj][0], -lj), []).append((Pj.copy(), uj, cj))
@@ -385,24 +391,29 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                     cuts.setdefault((roads[cr][0], -1 if kj > ki else 1), []).append(
                         (Pi.copy(), uc, float(math.hypot(*(Pj - Pi)))))
                     continue
-            if not (has_walk(spi) and has_walk(spj)) or not (CORNER_ANGLES[0] < theta < CORNER_ANGLES[1]):
+            walk_pair = has_walk(spi) and has_walk(spj)
+            paved_pair = paved is not None and paved(roads[ri][0],spi) and paved(roads[rj][0],spj)
+            if not (walk_pair or paved_pair) or not (CORNER_ANGLES[0] < theta < CORNER_ANGLES[1]):
                 if debug is not None:
                     debug.append(('walk/angle', round(theta), has_walk(spi), has_walk(spj), X.round(1).tolist()))
                 continue
             ni, nj = _left(ui), _left(uj)
-            wi, wj = spi.width / 2, spj.width / 2
+            wi = edge_half(spi, li) if edge_half else spi.width / 2
+            wj = edge_half(spj, -lj) if edge_half else spj.width / 2
             # curb extensions: on a two-way street with parking the corner's curb is the driving
             # lanes' edge, BULB_M along the street, then back to the parking curb over TAPER_M
             # (Fells Point aerials, 2026-10-11: bulb-outs at most corners)
             acute = theta < ACUTE_DEG
-            pi_ = parking_m if has_parking(spi) and not acute else 0.0
-            pj_ = parking_m if has_parking(spj) and not acute else 0.0
+            pi_ = parking_m if walk_pair and has_parking(spi) and not acute else 0.0
+            pj_ = parking_m if walk_pair and has_parking(spj) and not acute else 0.0
             di, dj = wi - pi_, wj - pj_
             bi, bj = (BULB_M if pi_ else 0.0), (BULB_M if pj_ else 0.0)
             # a smaller radius where the corner does not fit (its street bending on past it put the curb on
             # its own carriageway: no corner, bare ground in the angle, the user's report #46, 2026-10-17)
             for rscale in RADIUS_TRIES:
                 radius = max(RADII.get(spi.cls, RADIUS), RADII.get(spj.cls, RADIUS)) * rscale
+                if paved_pair and not walk_pair and "motorway" in {spi.cls,spj.cls}:
+                    radius = max(radius,10.*rscale)
                 if acute:
                     radius = min(radius, max(ACUTE_R_MIN, ACUTE_T_M * math.tan(math.radians(theta / 2))))
                 Z = _line_x(Pi + ni * (di + radius), ui, Pj - nj * (dj + radius), uj)
@@ -422,8 +433,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                     if debug is not None:
                         debug.append(('short branch', round(_branch_len(roads[ri][2], vi, si), 1), round(ci, 1), round(_branch_len(roads[rj][2], vj, sj), 1), round(cj, 1), X.round(1).tolist()))
                     continue
-                wki = spi.walk if walk_w is None else walk_w
-                wkj = spj.walk if walk_w is None else walk_w
+                wki = (spi.walk if walk_w is None else walk_w) if has_walk(spi) else .6
+                wkj = (spj.walk if walk_w is None else walk_w) if has_walk(spj) else .6
                 O = _line_x(Pi + ni * (wi + wki), ui, Pj - nj * (wj + wkj), uj)
                 if O is None:
                     continue
@@ -473,11 +484,15 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                     if debug is not None:
                         debug.append(('on carriageway', hit[:8], hit in internal, roads[ri][0][:8], roads[rj][0][:8], round(theta), X.round(1).tolist()))
                     continue
-                corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": fill, "ramps": []}
+                corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": fill, "ramps": [],
+                          'uv_fid': roads[ri if spi.width>=spj.width else rj][0],
+                          "surface": getattr(spi if spi.width >= spj.width else spj, 'surface', '')}
+                if not (has_walk(spi) or has_walk(spj)):
+                    corner["paved_only"] = True
                 corners.append(corner)
                 cuts.setdefault((roads[ri][0], li), []).append((Pi.copy(), ui, ci))
                 cuts.setdefault((roads[rj][0], -lj), []).append((Pj.copy(), uj, cj))
-                seg = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(curb2, axis=0).T))))
+                seg = np.r_[0.0, np.cumsum(np.hypot(*np.diff(curb2, axis=0).T))]
                 # arc length along the curb of a point t m along each branch (for the crosswalk's ramp)
                 side_t[(i, "L")] = (ti, corner, ("dec", seg[len(pre) - 1] if pi_ else None, ti + bi), bi)
                 side_t[(j, "R")] = (tj, corner, ("inc", seg[len(pre) + k - 1] if pj_ else None, tj), bj)
@@ -488,6 +503,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if (i, "L") in side_t and (i, "R") in side_t:
                 ai, ri, vi, si, ui, li, Pi = branches[i]
                 spec = roads[ri][1]
+                if not has_walk(spec):
+                    continue                   # rural corners and ramps do not acquire pedestrian crossings
                 w = spec.width / 2
                 dw = w - (parking_m if has_parking(spec) else 0.0)     # curb to curb at the bulbs
                 t = max(side_t[(i, "L")][0], side_t[(i, "R")][0]) + CW_GAP + CROSSWALK["w"] / 2

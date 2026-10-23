@@ -4,6 +4,15 @@ local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
 
+-- A deterministic monotonic clock avoids zero elapsed CPU milliseconds on Windows.
+local stopwatch = require('beamngEarth/stopwatch')
+local ticks = 0
+stopwatch.clock = function()
+  local start = ticks
+  return function() ticks = ticks + 0.1; return ticks - start end
+end
+stopwatch.new = stopwatch.clock
+
 -- DecalRoad methods roads.lua calls (not in the generic stub object)
 local realCreate = createObject
 createObject = function(class)
@@ -80,13 +89,14 @@ T.check(decalRoads() == 0 and roads.status().tiles == 0, 'new anchor: old roads 
 T.check(roads.onTile({ anchorId = 2, key = '0_0', path = '/t/missing.json', n = 1 }, 2) == false and roads.status().error ~= nil,
   'unreadable tile reported')
 
--- off: everything removed at once, new tiles ignored
+-- Ground roads off: still consume tile messages for independent bridges/signs and slot release.
 roads.onTile({ anchorId = 2, key = '0_0', path = '/t/a.json', n = 2 }, 2)
 roads.update(gov, 2)
 T.check(decalRoads() == 2, 'made again')
 roads.setEnabled(false)
 T.check(decalRoads() == 0 and roads.status().roads == 0, 'off: removed at once')
-T.check(roads.onTile({ anchorId = 2, key = '1_1', path = '/t/a.json', n = 2 }, 2) == false, 'off: tiles ignored')
+T.check(roads.onTile({ anchorId = 2, key = '1_1', path = '/t/a.json', n = 2 }, 2) == true, 'off: tiles still consumed for independent features')
+roads.onDrop({ anchorId = 2, key = '1_1' })
 T.check(roads.setEnabled(true) == true, 'on again: reported (core then asks the server for the tiles)')
 T.check(roads.setEnabled(true) == false, 'already on: nothing to ask')
 

@@ -306,16 +306,19 @@ def _add_cuts(frame, plans, elev):
 
 
 def _plan(xy, z, spec, abut=(False, False)):
+    import roadlanes
+    spec = roadlanes.grading_spec(spec)
     built = spec.kind in roadsmod.BUILT
     zs = smooth_profile(z, PROFILE_STEP, SIGMA_M if built else DIRT_SIGMA_M)
     # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass)
     every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
     # the carriageway as a city street would have it (never from the land cover), or the measured one
-    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) if built else spec.width
+    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) if built and not spec.link else spec.width
     if spec.median:             # a divided road's carriageway: never over the other one
         width = max(spec.width, roadsmod.dual_cap(spec.median, width))
-    return Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=width / 2)
+    road_half = width / 2 + abs(spec.bias)
+    return Plan(xy[keep], zs[keep], road_half + shoulder(spec), abut, road_half=road_half)
 
 
 def shoulder(spec):
@@ -408,6 +411,12 @@ class Grader:
                         parts.append((r, specs[i]))
                         ids.append(str(feats.ids[i]))
                         clipped.append(len(pieces) > 1 or r is not ring)
+                for j, (ring, spec) in enumerate(roadsmod.auxiliary_parts(feats, i)):
+                    pieces = self._near_cell(np.asarray(ring, np.float64), box)
+                    for r in pieces:
+                        parts.append((r, spec))
+                        ids.append(str(feats.ids[i])+f":aux{j}")
+                        clipped.append(True)
             pspecs = []
             abut = None
             if (ABUT_FILL_ON or APPROACH_ON) and parts:

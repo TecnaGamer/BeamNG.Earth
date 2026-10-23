@@ -153,3 +153,7 @@ BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic 
 Dynamic Damage Particles, Dynamic Scratches, SparkMod: other authors' mods the project owner uses;
 BeamNG.Earth only coexists with them (e.g. the weather module backs off when BWM_Weather drives the
 weather). The pause-menu integration follows the pattern of the TAA Standalone mod.
+
+## Highway marking regions
+
+The offline state outlines used by `server/highway_markings.py` come from the U.S. Census Bureau TIGERweb Generalized ACS 2024, States 500K dataset. The original query URL is recorded in `server/highway_marking_states.geojson`. The included outlines cover California, Idaho, Michigan, Minnesota and Wisconsin.

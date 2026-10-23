@@ -100,6 +100,10 @@ DRAIN_IN, DRAIN_EVERY = 2.5, 90.0
 GUTTER = {"m": "gutter1", "tl": 8.0, "p": 14, "w": 0.5}                  # at the curb line
 CENTRE = {"tl": 12.0, "p": 6, "w": 0.12, "gap": 0.12}                    # a double line: two lines this far from the centre
 EDGE_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.45, "inset": 0.3}
+RAMP_DOT_W = .25
+RAMP_DOT_M, RAMP_DOT_GAP_M = 1.8, 5.5
+CURVE_SIMPLIFY_M = .005
+AUX_LANE_M, AUX_TAPER_M = 200., 70.
 MEASURE_SKIP = {"service"}      # classes not measured between buildings (lots, alleys: far walls)
 MEASURE_MAX = 3.0               # a measured carriageway at most this times the class default
 SIDEWALK_CLASSES = {"residential", "tertiary", "secondary", "primary", "unclassified", "living_street"}
@@ -287,13 +291,23 @@ def _parts_by_level_new(feats, i, want):
             pieces.append((at, 1.0))
     else:
         pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
+    if not pieces:
+        return []
     out = []
-    for part in feats.parts(i):
-        for ring in part:
+    for pi, part in enumerate(geometry_parts(feats, i) if want == "ground" else feats.parts(i)):
+        for ri, ring in enumerate(part):
             if len(ring) < 2:
                 continue
             for a, b in pieces:
-                r = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
+                param = feats.__dict__.get("_geometry_params", {}).get((i, pi, ri))
+                if param is None:
+                    r = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
+                else:
+                    # Map rules refer to distance on the original line. A fitted curve has a
+                    # different length; retain those exact source positions at bridge portals.
+                    r = np.vstack([[np.interp(a, param, ring[:, d]) for d in range(ring.shape[1])],
+                                   ring[(param > a+1e-10) & (param < b-1e-10)],
+                                   [np.interp(b, param, ring[:, d]) for d in range(ring.shape[1])]])
                 if len(r) >= 2:
                     out.append(r)
     return out
@@ -507,6 +521,11 @@ def shoulder_bias(cls, rule_width=None, oneway=False):
         cls == "motorway" and rule_width is None and oneway) else 0.0
 
 
+def pavement_half(spec):
+    """Conservative reach either side of the driving centreline, for grading and keep-out tests."""
+    return spec.width / 2 + abs(spec.bias)
+
+
 def pavement_offset(spec, left_hand=False):
     """Signed offset from the driving centreline to the full pavement centre."""
     if spec.kind not in BUILT:
@@ -538,7 +557,8 @@ def lane_counts(spec):
     if spec.lanes is not None:
         f, b, _ = spec.lanes
         return (f + b, 0) if spec.oneway else (f, b)
-    count = max(1, int(round(driving_width(spec) / LANE_M)))
+    count = max(1, int(math.floor(driving_width(spec) / LANE_M + 1e-9)) if spec.oneway
+                else int(round(driving_width(spec) / LANE_M)))
     return (count, 0) if spec.oneway else (max(1, count // 2), max(1, count // 2))
 
 
@@ -835,8 +855,1237 @@ def _bridge_specs(feats, want="bridge"):
         ow = _rule_value(rules.get("oneway"), i) is not None
         if rule_w is None and _rule_value(rules.get("subclass"), i) == "link":
             rule_w = LINK_M[1] if ow else LINK_M[2]
-        out.append(Spec(bridge_carriageway(cls, kind, rule_w, ow), kind, False, cls, ow))
+        spec = Spec(bridge_carriageway(cls, kind, rule_w, ow), kind, False, cls, ow)
+        if want == 'bridge':
+            # Paint uses the same travel direction/counts as the approaches. Keep the
+            # upstream deck profile; enlarge a deck only when its tagged lanes need it.
+            direction, kmh, gap = _dir_kmh(feats, i, None)
+            shoulder = (spec.width-MOTORWAY_RURAL_M)/2 if (
+                cls == 'motorway' and ow and rule_w is None) else EDGE_STRIP_M
+            spec = spec._replace(dir=direction, kmh=kmh, gap=gap, shoulder=shoulder,
+                                 link=is_link(feats, i))
+            import roadlanes
+            paint = roadlanes.apply_spec(spec, feats, i, allow_bridge=True)
+            spec = paint._replace(width=max(spec.width, paint.width))
+        out.append(spec)
     return out
+
+
+def is_link(feats, i):
+    return _rule_value(feats.rules.get("subclass"), i) == "link"
+
+
+def _interpolate_road(xy, boundaries=(), end_dirs=None, source_arc=None, bend_m=12.):
+    """Interpolating, tangent-continuous cubic road curves, sampled at two metre intervals.
+
+    Mapped vertices (junctions included) stay in place. Rule boundaries are sampled at their
+    original distance parameter, so the bridge and both approaches use exactly the same cut.
+    """
+    delta = np.diff(xy, axis=0)
+    lengths = np.linalg.norm(delta, axis=1)
+    if len(xy) < 2 or lengths.sum() < 1e-6:
+        return xy, np.linspace(0., 1., len(xy))
+    if (lengths < 1e-6).any():
+        keep = np.r_[True, lengths >= 1e-6]
+        xy = xy[keep]
+        source_arc = source_arc[keep] if source_arc is not None else None
+        delta = np.diff(xy, axis=0)
+        lengths = np.linalg.norm(delta, axis=1)
+    unit = delta / lengths[:, None]
+    tangent = np.vstack([unit[0], unit[:-1]+unit[1:], unit[-1]])
+    tangent /= np.maximum(np.linalg.norm(tangent, axis=1), 1e-9)[:, None]
+    if np.linalg.norm(xy[0]-xy[-1]) < .01:
+        joint = unit[0]+unit[-1]
+        tangent[0] = tangent[-1] = joint/max(np.linalg.norm(joint), 1e-9)
+    elif end_dirs is not None:
+        for k, direction in ((0, end_dirs[0]), (-1, end_dirs[1])):
+            if direction is not None:
+                tangent[k] = direction
+    arc = (np.r_[0., np.cumsum(lengths)] / lengths.sum() if source_arc is None else source_arc.copy())
+    for boundary in boundaries:
+        k = int(np.argmin(np.abs(arc-boundary)))
+        if 0 < k < len(arc)-1 and abs(arc[k]-boundary)*lengths.sum() < .01:
+            arc[k] = boundary       # float32 range fractions can differ by micrometres from a mapped vertex
+    out, params = [xy[0]], [float(arc[0])]
+    for k, length in enumerate(lengths):
+        a, b = xy[k:k+2]
+        ta, tb = tangent[k:k+2]
+        # Do not overshoot a hairpin or tiny mapped stub. Ordinary road curves retain their
+        # shared tangent; a reversed segment is intentionally kept as a hard turn.
+        if min(ta @ unit[k], tb @ unit[k]) < .2:
+            ta = tb = unit[k]
+        curved = max(abs(unit[k, 0]*ta[1]-unit[k, 1]*ta[0]),
+                     abs(unit[k, 0]*tb[1]-unit[k, 1]*tb[0])) > 1e-6
+        t = np.linspace(0., 1., max(2, int(math.ceil(length/2.))+1)) if curved else np.array([0., 1.])
+        ha = min(length/3., bend_m/max(abs(unit[k, 0]*ta[1]-unit[k, 1]*ta[0]), 1e-9))
+        hb = min(length/3., bend_m/max(abs(unit[k, 0]*tb[1]-unit[k, 1]*tb[0]), 1e-9))
+        t = t[:, None]
+        curve = (1-t)**3*a + 3*(1-t)**2*t*(a+ta*ha) + 3*(1-t)*t*t*(b-tb*hb) + t**3*b
+        distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(curve, axis=0), axis=1))]
+        param = arc[k]+distance/max(distance[-1], 1e-9)*(arc[k+1]-arc[k])
+        at = np.unique(np.r_[param, [v for v in boundaries if arc[k]+1e-10 < v < arc[k+1]-1e-10]])
+        curve = np.c_[np.interp(at, param, curve[:, 0]), np.interp(at, param, curve[:, 1])]
+        out.extend(curve[1:])
+        params.extend(at[1:])
+    return np.asarray(out), np.asarray(params)
+
+
+def _smooth_road(xy, boundaries=(), end_dirs=None, source_arc=None, bend_m=12., fixed=(), _closed_context=False):
+    """Fair ordinary map bends without forcing an S-curve through every survey vertex.
+
+    Quintic corner arcs have zero curvature where they meet the straight approaches. Their
+    control polygon turns in one direction, so a single mapped bend cannot develop a reverse
+    turn. Junctions are fixed; all other points may move by at most half bend_m. The original
+    distance parameter still locates rule cuts identically in every consumer of the curve.
+    """
+    xy = np.asarray(xy, float)
+    lengths = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+    if len(xy) < 2 or lengths.sum() < 1e-6:
+        return xy, np.linspace(0., 1., len(xy))
+    keep = np.r_[True, lengths >= 1e-6]
+    xy = xy[keep]
+    lengths = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+    arc = (np.r_[0., np.cumsum(lengths)]/lengths.sum() if source_arc is None else np.asarray(source_arc)[keep])
+    protected = {int(np.argmin(abs(arc-v))) for v in fixed}
+    unit = np.diff(xy, axis=0)/lengths[:, None]
+    if len(xy) == 2:
+        return _interpolate_road(xy, boundaries, end_dirs, arc, bend_m)
+    closed = np.linalg.norm(xy[0]-xy[-1]) < .01
+    if closed and not _closed_context:
+        # Include the two neighbouring corners on either side of the seam, then slice it.
+        padded = np.vstack([xy[-3:-1], xy, xy[1:3]])
+        ap = np.r_[arc[-3:-1]-1., arc, 1.+arc[1:3]]
+        fit, param = _smooth_road(padded, source_arc=ap, bend_m=bend_m,
+                                  fixed=np.r_[fixed, np.asarray(fixed)-1., np.asarray(fixed)+1.],
+                                  _closed_context=True)
+        at = np.unique(np.r_[0., param[(param > 0.) & (param < 1.)], 1., boundaries])
+        return np.c_[np.interp(at, param, fit[:, 0]), np.interp(at, param, fit[:, 1])], at
+    out, params = [xy[0]], [float(arc[0])]
+    for k in range(1, len(xy)-1):
+        u, v = unit[k-1:k+1]
+        cosine = float(np.clip(u @ v, -1., 1.))
+        if cosine > 1.-1e-10 or cosine < -.9:
+            out.append(xy[k]); params.append(float(arc[k]))
+            continue
+        half_sine = math.sqrt((1.-cosine)*.5)
+        # Narrow streets retain more of small mapped S-bends beside building fronts.
+        share = .48 if bend_m >= 8. else .32
+        handle = .32 if bend_m >= 8. else .4
+        reach = min(share*lengths[k-1], share*lengths[k], bend_m/((2.-3.125*handle)*half_sine))
+        a, b = xy[k]-u*reach, xy[k]+v*reach
+        controls = np.array([a, a+u*handle*reach, a+u*2.*handle*reach,
+                             b-v*2.*handle*reach, b-v*handle*reach, b])
+        t = np.linspace(0., 1., max(8, int(math.ceil(2.*reach/1.5)))+1)
+        weights = np.array([math.comb(5,j)*(1.-t)**(5-j)*t**j for j in range(6)]).T
+        curve = weights @ controls
+        pa = arc[k]-(arc[k]-arc[k-1])*reach/lengths[k-1]
+        pb = arc[k]+(arc[k+1]-arc[k])*reach/lengths[k]
+        if k in protected:
+            # Keep an actual crossing/AI connector exact, without forcing all the other
+            # shape vertices on this road back into an interpolating spline.
+            curve, at = _interpolate_road(np.array([a, xy[k], b]), end_dirs=(u, v),
+                                          source_arc=np.array([pa, arc[k], pb]), bend_m=bend_m)
+        else:
+            at = pa+(pb-pa)*t
+        out.extend(curve); params.extend(at)
+    out.append(xy[-1]); params.append(float(arc[-1]))
+    out, params = np.asarray(out), np.asarray(params)
+    # Spread a connected endpoint's tangent over its approach, rather than forcing the
+    # change into the first 1-2 m sample. Real interior connectors remain pinned.
+    if end_dirs is not None and len(out) >= 2:
+        for reverse, direction in ((False, end_dirs[0]), (True, end_dirs[1])):
+            if direction is None:
+                continue
+            p = out[::-1] if reverse else out
+            ps = params[::-1] if reverse else params
+            tangent = -np.asarray(direction) if reverse else np.asarray(direction)
+            chord = p[1]-p[0]
+            chord /= max(np.linalg.norm(chord), 1e-9)
+            if tangent @ chord > 1.-1e-9:
+                continue
+            distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
+            reach = min(90. if bend_m >= 8. else 25., .4*distance[-1])
+            for value in fixed:
+                increasing = ps[::-1] if reverse else ps
+                along = np.interp(value, increasing, distance[::-1]) if reverse else np.interp(value, ps, distance)
+                if along > 1e-5:
+                    reach = min(reach, .8*along)
+            if reach <= 1e-4:
+                continue
+            q = np.array([np.interp(reach, distance, p[:, d]) for d in (0, 1)])
+            j = min(max(1, int(np.searchsorted(distance, reach))), len(p)-1)
+            final = p[j]-p[j-1]
+            final /= max(np.linalg.norm(final), 1e-9)
+            handle = reach/5.
+            controls = np.array([p[0], p[0]+tangent*handle, p[0]+tangent*2.*handle,
+                                 q-final*2.*handle, q-final*handle, q])
+            t = np.linspace(0., 1., max(8, int(math.ceil(reach/1.5)))+1)
+            weights = np.array([math.comb(5, j)*(1.-t)**(5-j)*t**j for j in range(6)]).T
+            segment = weights @ controls
+            travelled = np.r_[0., np.cumsum(np.linalg.norm(np.diff(segment, axis=0), axis=1))]
+            target = np.interp(reach, distance, ps)
+            at = ps[0]+travelled/travelled[-1]*(target-ps[0])
+            keep = distance > reach+1e-8
+            p, ps = np.vstack([segment, p[keep]]), np.r_[at, ps[keep]]
+            out, params = (p[::-1], ps[::-1]) if reverse else (p, ps)
+    # Float32 rule fractions occasionally differ from an original vertex by micrometres.
+    for boundary in boundaries:
+        k = int(np.argmin(np.abs(params-boundary)))
+        if abs(params[k]-boundary)*lengths.sum() < .01:
+            params[k] = boundary
+    at = np.unique(np.r_[params, boundaries])
+    return np.c_[np.interp(at, params, out[:, 0]), np.interp(at, params, out[:, 1])], at
+
+
+def _fair_highway_shape(xy, fixed, sigma=35., max_shift=3.):
+    """Remove small sideways jogs before rounding, within a three metre map corridor.
+
+    Smooth by distance, so densely surveyed points do not receive extra weight. Real junctions
+    and endpoints stay exact; the correction fades near them to retain the approach direction.
+    """
+    lengths = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+    arc = np.r_[0., np.cumsum(lengths)]
+    if len(xy) < 3 or arc[-1] < 4.:
+        return xy.copy()
+    count = int(math.ceil(arc[-1]/2.))
+    step = arc[-1]/count
+    radius = int(math.ceil(3.*sigma/step))
+    at = np.arange(-radius, count+radius+1)*step
+    closed = np.linalg.norm(xy[0]-xy[-1]) < .01
+    probe = np.mod(at, arc[-1]) if closed else at
+    samples = np.c_[np.interp(probe, arc, xy[:, 0]), np.interp(probe, arc, xy[:, 1])]
+    if not closed:
+        first = next((k for k, length in enumerate(lengths) if length > 1e-6), None)
+        last = next((k for k in range(len(lengths)-1, -1, -1) if lengths[k] > 1e-6), None)
+        if first is None or last is None:
+            return xy.copy()
+        samples[at < 0.] = xy[0]+at[at < 0., None]*(xy[first+1]-xy[first])/lengths[first]
+        samples[at > arc[-1]] = xy[-1]+(at[at > arc[-1]]-arc[-1])[:, None]*(xy[last+1]-xy[last])/lengths[last]
+    kernel = np.exp(-.5*(np.arange(-radius, radius+1)*step/sigma)**2)
+    kernel /= kernel.sum()
+    filtered = np.column_stack([np.convolve(samples[:, d], kernel, mode='valid') for d in (0, 1)])
+    fitted = np.column_stack([np.interp(arc, at[radius:-radius], filtered[:, d]) for d in (0, 1)])
+    delta = fitted-xy
+    delta *= np.minimum(1., max_shift/np.maximum(np.linalg.norm(delta, axis=1), 1e-9))[:, None]
+    locks = np.unique(np.r_[0, np.asarray(fixed, dtype=np.intp), len(xy)-1]).astype(np.intp)
+    distance = np.min(abs(arc[:, None]-arc[locks][None, :]), axis=1)
+    t = np.clip(distance/30., 0., 1.)
+    weight = t**3*(10.-15.*t+6.*t*t)
+    out = xy+delta*weight[:, None]
+    out[locks] = xy[locks]
+    return out
+
+
+def _geometry_nodes(feats):
+    """Raw, shared endpoint headings, without recursing through fitted geometry."""
+    got = feats.__dict__.get("_geometry_nodes")
+    if got is not None:
+        return got
+    got = {}
+    fixed = set()
+    for j in range(len(feats)):
+        if is_link(feats, j):
+            for part in feats.parts(j):
+                for ring in part:
+                    if len(ring):
+                        fixed.update(tuple(np.round(p[:2]*1e7).astype(np.int64)) for p in ring[[0, -1]])
+            continue
+        for part in feats.parts(j):
+            for ring in part:
+                for k, p in enumerate(ring):
+                    key = tuple(np.round(p[:2]*1e7).astype(np.int64))
+                    for other in (k-1, k+1):
+                        if 0 <= other < len(ring):
+                            got.setdefault(key, []).append((j, ring[other, :2]-p[:2]))
+    # Keep the topology keyed by the original map coordinates, but use the same faired
+    # neighbours for both halves of every shared endpoint curve.
+    shapes = {}
+    for j in range(len(feats)):
+        if is_link(feats, j):
+            continue
+        for pi, part in enumerate(feats.parts(j)):
+            for ri, ring in enumerate(part):
+                if level_ranges(feats, j):
+                    continue
+                if len(ring) < 3 or str(feats.attrs.get('class', ['unknown']*len(feats))[j]) not in {'motorway', 'trunk'}:
+                    continue
+                ref = ring[0, :2]
+                scale = np.array([111320.*math.cos(math.radians(float(ref[1]))), 110540.])
+                xy = (ring[:, :2]-ref)*scale
+                locks = {0, len(ring)-1}
+                for k, p in enumerate(ring):
+                    key = tuple(np.round(p[:2]*1e7).astype(np.int64))
+                    if len(got.get(key, [])) != 2 or key in fixed:
+                        locks.add(k)
+                connectors = feats.rules.get('connectors')
+                if connectors is not None:
+                    seg = np.hypot(np.diff(ring[:, 0])*math.cos(math.radians(float(ring[:, 1].mean()))), np.diff(ring[:, 1]))
+                    arc = np.r_[0., np.cumsum(seg)]/max(seg.sum(), 1e-15)
+                    locks.update(int(np.argmin(abs(arc-float(connectors.start[k])))) for k in connectors.rows(j))
+                lock = sorted(locks)
+                shape = _fair_highway_shape(xy, lock)/scale+ref
+                shape[lock] = ring[lock, :2]
+                shapes[(j, pi, ri)] = shape
+    if shapes:
+        got = {}
+        for j in range(len(feats)):
+            if is_link(feats, j):
+                continue
+            for pi, part in enumerate(feats.parts(j)):
+                for ri, ring in enumerate(part):
+                    shape = shapes.get((j, pi, ri), ring[:, :2])
+                    for k, p in enumerate(ring):
+                        key = tuple(np.round(p[:2]*1e7).astype(np.int64))
+                        for other in (k-1, k+1):
+                            if 0 <= other < len(ring):
+                                got.setdefault(key, []).append((j, shape[other]-shape[k]))
+    feats.__dict__["_road_shapes"] = shapes
+    feats.__dict__["_geometry_nodes"] = got
+    feats.__dict__["_geometry_fixed"] = fixed
+    return got
+
+
+def _ramp_tangent(xy, main, direction):
+    """A ramp leaves/joins the through carriageway tangentially, without moving its shared node."""
+    out = xy.copy()
+    for reverse in (False, True):
+        p = out[::-1] if reverse else out
+        delta = np.diff(p, axis=0)
+        arc = np.r_[0., np.cumsum(np.linalg.norm(delta, axis=1))]
+        if arc[-1] < 12.:
+            continue
+        inward = p[1]-p[0]
+        inward /= max(np.linalg.norm(inward), 1e-9)
+        best = None
+        for fid, line, spec in main:
+            ab = np.diff(line, axis=0)
+            lengths = np.linalg.norm(ab, axis=1)
+            t = np.clip(((p[0]-line[:-1])*ab).sum(1)/np.maximum(lengths**2, 1e-12), 0., 1.)
+            dist = np.linalg.norm(line[:-1]+t[:, None]*ab-p[0], axis=1)
+            k = int(np.argmin(dist))
+            if dist[k] > 1.:
+                continue
+            heading = ab[k]/max(lengths[k], 1e-9)
+            if spec.dir < 0:
+                heading = -heading
+            away = (direction >= 0) != reverse
+            tangent = heading if away else -heading
+            if not spec.oneway and tangent @ inward < 0:
+                tangent = -tangent
+            alignment = float(tangent @ inward)
+            if alignment < math.cos(math.radians(65.)):
+                continue                       # a ramp's terminal T-junction, not a freeway merge
+            score = (-driving_width(spec), -alignment, fid)
+            if best is None or score < best[0]:
+                best = (score, tangent)
+        if best is None:
+            continue
+        reach = min(90., .45*arc[-1])
+        j = min(int(np.searchsorted(arc, reach)), len(p)-1)
+        q = np.array([np.interp(reach, arc, p[:, d]) for d in (0, 1)])
+        end = p[j]-p[j-1]
+        end /= max(np.linalg.norm(end), 1e-9)
+        # Balanced handles spread the turn along the whole approach. The old long first
+        # handle delayed all lateral movement, then forced a short, sharp turn at its end.
+        # Keep their projections ordered so a tight ramp cannot fold backwards.
+        advance = max(1.,float((q-p[0]) @ best[1]))
+        first = min(reach/5., .225*advance)
+        final = reach/5.
+        along = float(end @ best[1])
+        if along > .05:
+            final = min(final,max(.5,advance-2.*first)/(2.*along))
+        t = np.linspace(0., 1., max(8, int(math.ceil(reach/2.))+1))[:, None]
+        controls = np.array([p[0], p[0]+best[1]*first, p[0]+best[1]*2.*first,
+                             q-end*2.*final, q-end*final, q])
+        curve = sum(math.comb(5, k)*(1.-t)**(5-k)*t**k*control for k, control in enumerate(controls))
+        p = np.vstack([curve, p[arc > reach]])
+        out = p[::-1] if reverse else p
+    return out
+
+
+def _joined_end_curve(feats, i, ring, end, nodes, bend):
+    """Half of one rounded corner shared by two ordinary source features.
+
+    Fit in the shared node's own coordinate frame: either source order and either cell then
+    compute the same join. A ramp or crossing fixes the node and uses the junction tangent
+    instead. Moving an ordinary degree-two shape node avoids the S-curve that would otherwise
+    be needed to interpolate it from a straight approach on each side.
+    """
+    node = ring[end, :2]
+    key = tuple(np.round(node*1e7).astype(np.int64))
+    neighbours = nodes.get(key, [])
+    if len(neighbours) != 2 or key in feats.__dict__.get('_geometry_fixed', set()):
+        return None
+    if any(level_ranges(feats, j) for j, _ in neighbours):
+        return None
+    others = [(j, v) for j, v in neighbours if j != i]
+    if len(others) != 1:
+        return None
+    j, other = others[0]
+    if feats.attrs.get('class', ['unknown']*len(feats))[j] != feats.attrs.get('class', ['unknown']*len(feats))[i]:
+        return None
+    scale = np.array([111320.*math.cos(math.radians(float(node[1]))), 110540.])
+    own = (ring[1 if end == 0 else -2, :2]-node)*scale
+    other = other*scale
+    la, lb = np.linalg.norm(other), np.linalg.norm(own)
+    if min(la, lb) < 1e-5:
+        return None
+    cosine = float(np.clip((-other/la) @ (own/lb), -1., 1.))
+    if cosine < math.cos(math.radians(35.)) or cosine > 1.-1e-10:
+        return None
+    factor = 1. if bend >= 8. else .75
+    reach = min(.48*la, .48*lb, bend/(factor*math.sqrt((1.-cosine)*.5)))
+    fit, at = _smooth_road(np.array([other, [0., 0.], own]), boundaries=(0.,),
+                           source_arc=np.array([-la, 0., lb])/(la+lb), bend_m=bend)
+    keep = (at >= -1e-10) & (at <= reach/(la+lb)+1e-10)
+    return fit[keep]/scale+node, at[keep]*(la+lb)/lb
+
+
+def geometry_parts(feats, i):
+    """Shared road geometry for rendering, grading, materials, bridges and the AI graph.
+
+    Fit once per decoded cell, before clipping: road skins, paint, terrain and AI all use the
+    same curves. Shared feature endpoints and bridge/tunnel rule boundaries remain connected.
+    """
+    if level_ranges(feats, i):
+        return feats.parts(i)
+    memo = feats.__dict__.setdefault("_road_geometry", {})
+    if i in memo:
+        return memo[i]
+    specs = road_specs(feats)
+    bs = bridge_specs(feats)
+    link = is_link(feats, i)
+    mains = [(str(feats.ids[j]), geometry_parts(feats, j), sp or bs[j]) for j, sp in enumerate(specs)
+             if not is_link(feats, j) and (sp or bs[j]) is not None
+             and (sp or bs[j]).cls in {"motorway", "trunk"}] if link else []
+    if link:
+        # Raw neighbour geometry avoids recursive ramp fitting while giving
+        # interstate connector chains the same shared endpoint tangent.
+        mains += [(str(feats.ids[j]),feats.parts(j),sp or bs[j]) for j,sp in enumerate(specs)
+                  if j!=i and is_link(feats,j) and (sp or bs[j]) is not None
+                  and (sp or bs[j]).cls in {'motorway','trunk'}]
+    direction, _, _ = _dir_kmh(feats, i, None)
+    result = []
+    nodes = _geometry_nodes(feats) if not link else {}
+    for pi, part in enumerate(feats.parts(i)):
+        rings = []
+        for ri, ring in enumerate(part):
+            if len(ring) < 2:
+                rings.append(ring)
+                continue
+            ref = np.asarray(ring[0, :2])
+            scale = np.array([111320.*math.cos(math.radians(float(ref[1]))), 110540.])
+            xy = (np.asarray(ring[:, :2])-ref)*scale
+            main = [(fid, (r[:, :2]-ref)*scale, sp) for fid, parts, sp in mains
+                    for pp in parts for r in pp if len(r) >= 2]
+            if link:
+                xy = _ramp_tangent(_smooth_road(xy, bend_m=8.)[0], main, direction)
+            else:
+                shape = feats.__dict__.get('_road_shapes', {}).get((i, pi, ri), ring[:, :2])
+                xy = (shape-ref)*scale
+                sp = specs[i] or bs[i]
+                bend = 12. if sp is not None and sp.cls in {'motorway', 'trunk'} else 4.
+                joined = [_joined_end_curve(feats, i, shape, k, nodes, bend) for k in (0, -1)]
+                ends = []
+                for k, other in ((0, 1), (-1, -2)):
+                    u = xy[other]-xy[k]
+                    u /= max(np.linalg.norm(u), 1e-9)
+                    candidates = []
+                    key = tuple(np.round(ring[k, :2]*1e7).astype(np.int64))
+                    neighbours = nodes.get(key, [])
+                    for j, v in neighbours if len(neighbours) == 2 else ():
+                        if j == i:
+                            continue
+                        v = v*scale
+                        v /= max(np.linalg.norm(v), 1e-9)
+                        if u @ v < -math.cos(math.radians(35.)):
+                            candidates.append(v)
+                    v = min(candidates, key=lambda v: u @ v) if candidates else -u
+                    t = u-v
+                    t /= max(np.linalg.norm(t), 1e-9)
+                    ends.append(t if k == 0 else -t)
+                ends = [None if join is not None else end for join, end in zip(joined, ends)]
+                boundaries = [v for a, b, _ in level_ranges(feats, i) for v in (a, b)]
+                seg = np.hypot(np.diff(ring[:, 0])*math.cos(math.radians(float(ring[:, 1].mean()))), np.diff(ring[:, 1]))
+                source_arc = np.r_[0., np.cumsum(seg)]/max(seg.sum(), 1e-15)
+                connectors = feats.rules.get('connectors')
+                fixed = [float(connectors.start[j]) for j in connectors.rows(i)] if connectors is not None else []
+                junctions = feats.__dict__.get('_geometry_fixed', set())
+                for k in range(1, len(ring)-1):
+                    key = tuple(np.round(ring[k, :2]*1e7).astype(np.int64))
+                    if len(nodes.get(key, [])) != 2 or key in junctions:
+                        fixed.append(float(source_arc[k]))
+                xy, param = _smooth_road(xy, boundaries, ends, source_arc, bend, fixed)
+                for reverse, join in zip((False, True), joined):
+                    if join is None:
+                        continue
+                    ll, fraction = join
+                    head = (ll-ref)*scale
+                    at = 1.-fraction*(1.-source_arc[-2]) if reverse else fraction*source_arc[1]
+                    if reverse:
+                        keep = param < at[-1]-1e-10
+                        xy, param = np.vstack([xy[keep], head[::-1]]), np.r_[param[keep], at[::-1]]
+                    else:
+                        keep = param > at[-1]+1e-10
+                        xy, param = np.vstack([head, xy[keep]]), np.r_[at, param[keep]]
+                if any(j is not None for j in joined):
+                    at = np.unique(np.r_[param, boundaries])
+                    xy = np.c_[np.interp(at, param, xy[:, 0]), np.interp(at, param, xy[:, 1])]
+                    param = at
+                feats.__dict__.setdefault("_geometry_params", {})[(i, pi, ri)] = param
+            rings.append(xy/scale+ref)
+        result.append(rings)
+    memo[i] = result
+    return result
+
+
+def _road_connections(roads, links):
+    """Pairs whose paint must continue across a segment boundary, and freeway ramp merges."""
+    nodes = {}
+    for fid, sp, pts, _ in roads:
+        for k, p in enumerate(pts):
+            key = (round(float(p[0])*2), round(float(p[1])*2))
+            nodes.setdefault(key, []).append((fid, sp, pts, k))
+    continuous, merges = set(), {}
+    for entries in nodes.values():
+        if len(entries) < 2:
+            continue
+        arms=sum(1 if k in (0,len(p)-1) else 2 for _,_,p,k in entries)
+        if arms==2:
+            a,b=entries
+            if a[1].cls==b[1].cls and a[1].oneway==b[1].oneway:
+                continuous.add(frozenset((a[0],b[0])))
+            continue
+        # A connector can itself be the through route at a freeway fork.
+        # Select its best aligned incoming/outgoing pair, then attach only the
+        # remaining branch. Never treat two ends of one link chain as a ramp.
+        main_links=set()
+        if all(fid in links for fid,_,_,_ in entries):
+            choices=[]
+            for ai,a in enumerate(entries):
+                fid,sp,p,k=a
+                u=p[1,:2]-p[0,:2] if k==0 else p[-2,:2]-p[-1,:2]
+                u/=max(np.linalg.norm(u),1e-9)
+                for b in entries[ai+1:]:
+                    oid,osp,op,ok=b
+                    if fid==oid or sp.cls!=osp.cls:continue
+                    v=op[1,:2]-op[0,:2] if ok==0 else op[-2,:2]-op[-1,:2]
+                    v/=max(np.linalg.norm(v),1e-9)
+                    dot=float(-u@v)
+                    if dot>.8:choices.append((dot,min(driving_width(sp),driving_width(osp)),sorted((fid,oid))))
+            if choices:
+                main_links=set(max(choices,key=lambda r:(round(r[0],2),r[1],r[2]))[2])
+                continuous.add(frozenset(main_links))
+        for fid, sp, pts, k in entries:
+            if fid in links and fid not in main_links:
+                continue
+            a, b = max(0,k-1), min(len(pts)-1,k+1)
+            u = pts[b,:2]-pts[a,:2]
+            u /= max(np.linalg.norm(u),1e-9)
+            for other, osp, op, ok in entries:
+                if other == fid:
+                    continue
+                a2, b2 = max(0,ok-1), min(len(op)-1,ok+1)
+                v = op[b2,:2]-op[a2,:2]
+                v /= max(np.linalg.norm(v),1e-9)
+                if abs(u @ v) < math.cos(math.radians(35.)):
+                    continue
+                if other in links and other not in main_links and sp.cls in {"motorway", "trunk"}:
+                    merges.setdefault(fid,{})[other] = (op[:,:2], osp.width/2)
+                elif sp.cls == osp.cls:
+                    continuous.add(frozenset((fid,other)))
+    return continuous, merges
+
+
+def _nearest_road(points, lines, with_owner=False):
+    """Nearest source cross-section and driving half-width on a connected through road."""
+    best = np.full(len(points), np.inf)
+    q = np.zeros((len(points), 5))
+    half = np.zeros(len(points))
+    owners = np.zeros(len(points),int)
+    for index,(line, width) in enumerate(lines):
+        a, ab = line[:-1], np.diff(line, axis=0)
+        t = np.clip(((points[:, None, :2]-a[None, :, :2])*ab[None, :, :2]).sum(2)
+                    / np.maximum((ab[:, :2]**2).sum(1), 1e-12), 0., 1.)
+        d = ((points[:, None, :2]-a[None, :, :2]-t[:, :, None]*ab[None, :, :2])**2).sum(2)
+        k = d.argmin(1)
+        dist = d[np.arange(len(points)), k]
+        use = dist < best
+        q[use] = a[k[use]]+t[use, k[use], None]*ab[k[use]]
+        if np.ndim(width):
+            half[use] = np.interp(k[use]+t[use,k[use]], np.arange(len(line)), width)
+        else:
+            half[use] = width
+        best[use] = dist[use]
+        owners[use]=index
+    return (q,half,owners) if with_owner else (q,half)
+
+
+def _auxiliary_lane(node, away, mains, side, lane, stops=()):
+    """Follow the through road back from the ramp, across source-feature boundaries.
+
+    The returned order points toward the ramp node. For an entrance this is opposite traffic,
+    so the same geometry produces a downstream acceleration lane and closing taper.
+    Ground parts only: a bridge/tunnel gap ends the available extension.
+    """
+    choices = []
+    for index, (line, _) in enumerate(mains):
+        ab = np.diff(line[:, :2], axis=0)
+        lengths = np.linalg.norm(ab, axis=1)
+        t = np.clip(((node[:2]-line[:-1, :2])*ab).sum(1)/np.maximum(lengths**2, 1e-12), 0., 1.)
+        dist = np.linalg.norm(line[:-1, :2]+t[:, None]*ab-node[:2], axis=1)
+        k = int(dist.argmin())
+        if dist[k] > 1.:
+            continue
+        p = np.vstack([node[:3], line[:k+1, :3][::-1]])
+        p = p[np.r_[True, np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]]
+        if len(p) > 1 and (p[1, :2]-p[0, :2]) @ away < 0:
+            choices.append((np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum(), index, p))
+    if not choices:
+        return None
+    _, current, p = max(choices, key=lambda v: (v[0], -v[1]))
+    used = {current}
+    target = AUX_LANE_M+AUX_TAPER_M
+    for _ in range(len(mains)):
+        arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1))]
+        if arc[-1] >= target:
+            break
+        heading = p[-1, :2]-p[-2, :2]
+        heading /= max(np.linalg.norm(heading), 1e-9)
+        options = []
+        for index, (line, _) in enumerate(mains):
+            if index in used or np.linalg.norm(line[-1, :2]-p[-1, :2]) > .5:
+                continue
+            v = line[-2, :2]-line[-1, :2]
+            alignment = v @ heading/max(np.linalg.norm(v), 1e-9)
+            if alignment > .8:
+                options.append((alignment, index, line))
+        if not options:
+            break
+        _, current, line = max(options, key=lambda v: (v[0], -v[1]))
+        used.add(current)
+        p = np.vstack([p, line[-2::-1, :3]])
+    arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1))]
+    length = min(target, float(arc[-1]))
+    for stop in stops:
+        ab = np.diff(p[:, :2], axis=0)
+        t = np.clip(((stop[:2]-p[:-1, :2])*ab).sum(1)/np.maximum((ab*ab).sum(1), 1e-12), 0., 1.)
+        dist = np.linalg.norm(p[:-1, :2]+t[:, None]*ab-stop[:2], axis=1)
+        k = int(dist.argmin())
+        at = arc[k]+t[k]*(arc[k+1]-arc[k])
+        if dist[k] < 1. and at > 25.:
+            length = min(length, max(0., at-20.))
+    if length < 35.:
+        return None
+    # The first point is exactly where the taper reaches the existing highway shoulder.
+    at = np.linspace(length, 0., max(3, int(math.ceil(length/2.))+1))
+    path = np.column_stack([np.interp(at, arc, p[:, d]) for d in range(3)])
+    q, half = _nearest_road(path, mains)
+    # A mapped additional lane may already occupy part/all of the approach. Use its
+    # existing width instead of either adding a duplicate lane or omitting the whole join.
+    _, ahead = _nearest_road(np.asarray([node[:3]+np.r_[away*180.,0.]]),mains)
+    base_half = float(min(half.min(),ahead[0]))
+    allocated = np.clip(2.*(half-base_half),0.,lane)
+    normal = q[:, 3:5]
+    outward = normal*side/np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
+    taper = min(AUX_TAPER_M, .3*length)
+    distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(path[:, :2], axis=0), axis=1))]
+    t = np.clip(distance/taper, 0., 1.)
+    opening = t*t*(3.-2.*t)
+    boundary = q[:, :3].copy()
+    boundary[:, :2] += normal*side*half[:, None]
+    guide = boundary.copy()
+    guide[:,:2] -= normal*side*allocated[:,None]
+    extra = np.maximum(0.,lane*opening-allocated)
+    outer = boundary.copy()
+    outer[:, :2] += outward*extra[:, None]
+    # Paved outer shoulder remains 3 m wide. The inner edge overlaps existing pavement by
+    # 0.2 m; the cross-section width grows with the taper, rather than making a square stub.
+    widths = 3.2+extra
+    centre = boundary.copy()
+    centre[:, :2] += outward*(1.4+.5*extra)[:, None]
+    return {'pts': centre, 'widths': widths, 'outer': outer, 'guide': guide,
+            'base_half':base_half,'taper': int(np.searchsorted(distance, taper)), 'lane': lane}
+
+
+def _fair_edge_offset(delta, arc, minimum, end):
+    """A rounded outside envelope, measured in metres along the ramp, not vertex indices.
+
+    Filtering a positive offset anticipates the turn instead of holding the line flat until
+    the ramp has already turned away. Fade the correction with zero first/second derivatives
+    at both ends, so the shared highway node and the untouched ramp paint still meet exactly.
+    """
+    step, sigma = 1., 12.
+    radius = int(3*sigma/step)
+    at = np.arange(-radius, int(math.ceil(arc[-1]/step))+radius+1)*step
+    values = np.interp(at, arc, delta-minimum)
+    slope = (delta[-1]-delta[-2])/max(arc[-1]-arc[-2], 1e-9)
+    values[at > arc[-1]] = delta[-1]-minimum+(at[at > arc[-1]]-arc[-1])*slope
+    values = np.maximum(values, 0.)
+    kernel = np.exp(-.5*(np.arange(-radius, radius+1)*step/sigma)**2)
+    kernel /= kernel.sum()
+    filtered = np.convolve(values, kernel, mode='valid')
+    smooth = np.interp(arc[:end], at[radius:-radius], filtered)
+    raw = np.maximum(delta[:end]-minimum, 0.)
+    t = np.minimum(np.clip(arc[:end]/20., 0., 1.),
+                   np.clip((arc[end-1]-arc[:end])/40., 0., 1.))
+    weight = t**3*(10.-15.*t+6.*t*t)
+    return minimum+raw+(smooth-raw)*weight
+
+
+def _ramp_markings(roads, continuous, merges, sections, left_hand, frame=None, allow_aux=True):
+    """Coordinate the mainline and ramp edges as a single painted junction.
+
+    Dotted guidance divides the extra lane, including its taper, from the through lanes. A continuous outer white edge
+    curves onto the ramp; the two solid gore edges share the through edge until they diverge.
+    Clamping to the outside of the through lanes prevents paint from cutting across them.
+    """
+    by_id = {}
+    for fid, sp, p, lon in roads:
+        by_id.setdefault(fid, []).append((sp, p, lon))
+    connected = {}
+    for main, ramps in merges.items():
+        for ramp in ramps:
+            connected.setdefault(ramp, set()).add(main)
+    overrides, zones, exclusions, bands = {}, {}, {}, []
+    for fid, main_ids in connected.items():
+        for spec, original, lon in by_id[fid]:
+            pts = densify(_with_cross(original, sections), 1.)
+            paints=extras(spec,pts,lon,left_hand,frame)
+            edges = {look['edge_side']: (look, line[:, :3].copy())
+                     for look, _, line in paints if 'edge_side' in look}
+            native_edges={s:line.copy() for s,(_,line) in edges.items()}
+            if not edges:
+                continue
+            keep = {side: np.ones(len(pts), bool) for side in edges}
+            white = {side: np.zeros(len(pts), bool) for side in edges}
+            changed = False
+            for reverse in (False, True):
+                order = np.arange(len(pts))[::-1] if reverse else np.arange(len(pts))
+                p = pts[order]
+                away = p[1, :2]-p[0, :2]
+                away /= max(np.linalg.norm(away), 1e-9)
+                ids = {mid for mid in main_ids if any(
+                    _seg_dist(p[:1, :2], mp[:-1, :2], mp[1:, :2]).min() < 1.
+                    for _, mp, _ in by_id[mid])}
+                if not ids:
+                    continue
+                # Include successive map features of the same carriageway, including reversed
+                # source order. The paint layout must not stop at an arbitrary feature boundary.
+                for _ in range(len(roads)):
+                    more = set().union(*(pair for pair in continuous if pair & ids)) if continuous else set()
+                    if more <= ids:
+                        break
+                    ids |= more
+                mains = []
+                for mid in sorted(ids):
+                    for msp, mp, _ in by_id[mid]:
+                        mp = _with_cross(mp, sections)
+                        k = int(np.argmin(_seg_dist(p[:1, :2], mp[:-1, :2], mp[1:, :2])[0]))
+                        heading = mp[k+1, :2]-mp[k, :2]
+                        if abs(heading @ away)/max(np.linalg.norm(heading), 1e-9) < .7:
+                            continue
+                        if heading @ away < 0:
+                            mp = mp[::-1].copy()
+                            mp[:, 3:5] *= -1
+                        if msp.lanes is not None:
+                            import roadlanes
+                            section_counts = roadlanes.counts(msp, mp, frame).sum(1)
+                            mains.append((mp, section_counts*msp.lane_w/2))
+                        else:
+                            mains.append((mp, driving_width(msp)/2 if msp.cls == 'motorway' else msp.width/2-EDGE_LINE['inset']))
+                if not mains:
+                    continue
+                arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1))]
+                n = min(len(p), int(np.searchsorted(arc, min(400., .8*arc[-1])))+2)
+                q, half = _nearest_road(p[:n], mains)
+                normal = q[:, 3:5].copy()
+                normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
+                lateral = ((p[:n, :2]-q[:, :2])*normal).sum(1)
+                side = 1 if lateral[np.argmax(np.abs(lateral))] > 0 else -1
+                outward = normal*side
+                boundary = q[:, :3].copy()
+                boundary[:, :2] += q[:, 3:5]*side*half[:, None]
+                deltas = {s: ((line[order[:n], :2]-boundary[:, :2])*outward).sum(1)
+                          for s, (_, line) in edges.items()}
+                outer = max(deltas, key=lambda s: np.mean(deltas[s]))
+                inner = -outer
+                if inner not in deltas:
+                    continue
+                lane = min(driving_width(spec),max(1,sum(lane_counts(spec)))*MOTORWAY_LANE_M)
+                stops = [point for other in connected if other != fid
+                         for _, op, _ in by_id[other] for point in op[[0, -1]]]
+                # A mapped lane addition/drop near this branch already provides the auxiliary
+                # pavement. Do not append another generated lane beyond that counted lane.
+                auxiliary = _auxiliary_lane(p[0], away, mains, side, lane, stops) if allow_aux else None
+                if auxiliary is not None:
+                    allocated = np.clip(2.*(half-auxiliary['base_half']),0.,lane)
+                    boundary[:,:2] -= q[:,3:5]*side*allocated[:,None]
+                    deltas = {s: ((line[order[:n],:2]-boundary[:,:2])*outward).sum(1)
+                              for s,(_,line) in edges.items()}
+                opens = np.flatnonzero(deltas[outer] >= (lane if auxiliary is None else 0.))
+                gore = np.flatnonzero(deltas[inner] >= .25)
+                clears = np.flatnonzero(deltas[inner] >= 3.)
+                if not len(opens) or not len(clears) or not len(gore):
+                    continue
+                end = min(n, int(np.searchsorted(arc, arc[int(clears[0])]+80.))+1)
+                fair = {s: _fair_edge_offset(delta, arc[:n],
+                                            lane if auxiliary is not None and s == outer else 0., end)
+                        for s, delta in deltas.items()}
+                gore = np.flatnonzero(fair[inner] >= .025)
+                if not len(gore):
+                    continue
+                start = max(0, int(gore[0])-1)
+                if end <= start+1:
+                    continue
+                for s, (_, line) in edges.items():
+                    delta = deltas[s][:end]
+                    line[order[:end], :2] += outward[:end]*(fair[s]-delta)[:, None]
+                    begin = start if s == inner else (0 if auxiliary is not None else max(0, int(opens[0])-1))
+                    keep[s][order[:begin]] = False
+                    white[s][order[:end]] = True
+                dotted = boundary[:start+1, :2]
+                dotted_outer = edges[outer][1][order[:start+1],:2]
+                if auxiliary is not None:
+                    # Fill under the new outer edge beyond the shared map node as well.
+                    # Blend back into the ramp's own pavement before this added band ends.
+                    tail = edges[outer][1][order[:end]].copy()
+                    normals = offset_polyline(tail, 1.)[:, :2]-tail[:, :2]
+                    normals /= np.maximum(np.linalg.norm(normals, axis=1), 1e-9)[:, None]
+                    tail[:, :2] += normals*side*(1.4-lane/2)
+                    u = np.clip((arc[:end]-(arc[end-1]-60.))/60., 0., 1.)
+                    u = u**3*(10.-15.*u+6.*u*u)
+                    tail = tail*(1-u[:, None])+p[:end, :3]*u[:, None]
+                    auxiliary['approach_n'] = len(auxiliary['pts'])
+                    auxiliary['pts'] = np.vstack([auxiliary['pts'], tail[1:]])
+                    auxiliary['widths'] = np.r_[auxiliary['widths'], ((3.2+lane)*(1-u)+spec.width*u)[1:]]
+                    auxiliary['fid'] = fid
+                    auxiliary['surface'] = spec.surface
+                    auxiliary['kind'] = spec.kind
+                    main_fid,main_item = min(((mid,item) for mid in ids for item in by_id[mid]),
+                                    key=lambda pair: _seg_dist(p[:1,:2],pair[1][1][:-1,:2],pair[1][1][1:,:2]).min())
+                    main_spec=main_item[0]
+                    auxiliary['main_fid']=main_fid
+                    auxiliary['approach_surface'] = main_spec.surface
+                    auxiliary['approach_kind'] = main_spec.kind
+                    bands.append(auxiliary)
+                    # Start at the opening/closing taper, rather than leaving its entire
+                    # divider blank until the added lane reaches full width.
+                    dotted = np.vstack([auxiliary['guide'][:, :2], dotted])
+                    dotted_outer = np.vstack([auxiliary['outer'][:, :2], dotted_outer])
+                keep_points=np.r_[True,np.linalg.norm(np.diff(dotted,axis=0),axis=1)>1e-6]
+                dotted,dotted_outer=dotted[keep_points],dotted_outer[keep_points]
+                for mid in ids:
+                    zones.setdefault(mid, []).append({'line': dotted, 'outer': dotted_outer,
+                                                      'mode': 'dotted', 'ramp': fid,'mains':sorted(ids)})
+                exclusions.setdefault(fid, set()).update(ids)
+                changed = True
+            if not changed:
+                continue
+            for look,_,line in paints:
+                if 'lane_index' not in look or len(line)!=len(pts):continue
+                old=native_edges[1][:,:2]-native_edges[-1][:,:2]
+                fraction=((line[:,:2]-native_edges[-1][:,:2])*old).sum(1)/np.maximum((old*old).sum(1),1e-9)
+                fitted=edges[-1][1][:,:2]*(1-fraction[:,None])+edges[1][1][:,:2]*fraction[:,None]
+                run=line[:,:3].copy();use=white[-1]|white[1];run[use,:2]=fitted[use]
+                style={**look,'ramp_part':(tuple(original[0,:2]),tuple(original[-1,:2]))}
+                overrides.setdefault((fid,('lane',look['lane_index'])),[]).append((style,run))
+            for s, (look, line) in edges.items():
+                tags = np.where(keep[s][:-1] & keep[s][1:], (white[s][:-1] | white[s][1:]).astype(int), -1)
+                cuts = np.r_[0, np.flatnonzero(tags[1:] != tags[:-1])+1, len(tags)]
+                runs = []
+                for a, b in zip(cuts[:-1], cuts[1:]):
+                    if tags[a] >= 0:
+                        style = {**look, 'ramp_part': (tuple(original[0, :2]), tuple(original[-1, :2]))}
+                        if tags[a]:
+                            style['m'] = 'line_white'
+                        runs.append((style, line[a:b+1]))
+                overrides.setdefault((fid, s), []).extend(runs)
+    return overrides, zones, exclusions, bands
+
+
+def _ramp_paint_key(look):
+    return ('lane',look['lane_index']) if 'lane_index' in look else look.get('edge_side')
+
+
+def cached_ramp_layout(feats, left_hand=False):
+    """One full-cell layout shared by tiles, terrain grading and surface materials.
+
+    Solve before tile filtering: a ramp node outside a tile can have a 270 m auxiliary lane
+    inside it. Fitting independently from each tile's nearby roads made the paint drift.
+    """
+    memo = feats.__dict__.setdefault('_ramp_layouts', {})
+    if bool(left_hand) in memo:
+        return memo[bool(left_hand)]
+    links = {str(feats.ids[i]) for i in range(len(feats)) if is_link(feats, i)}
+    if not links:
+        memo[bool(left_hand)] = None
+        return None
+    import geodesy
+    ref = feats.lonlat[0]
+    frame = geodesy.EnuFrame(float(ref[1]), float(ref[0]), 0.)
+    rows = []
+    for i, sp in enumerate(road_specs(feats, left_hand=left_hand)):
+        if sp is None:
+            continue
+        for ring in ground_parts(feats, i):
+            e, n, u = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.)
+            rows.append((str(feats.ids[i]), sp, np.c_[e, n, u], float(ring[:, 0].mean())))
+    continuous, merges = _road_connections(rows, links)
+    result = _ramp_markings(rows, continuous, merges, _join_sections(frame, [feats]), left_hand, frame)
+    memo[bool(left_hand)] = (frame, result)
+    return memo[bool(left_hand)]
+
+
+def auxiliary_parts(feats, i, left_hand=False):
+    """(lon/lat, Spec) of extra paved lanes owned by this ramp, for physics and road materials."""
+    if not is_link(feats, i):
+        return []
+    got = cached_ramp_layout(feats, left_hand)
+    if got is None:
+        return []
+    frame, (_, _, _, bands) = got
+    out = []
+    for band in bands:
+        if band['fid'] != str(feats.ids[i]):
+            continue
+        p = band['pts']
+        la, lo, _ = frame.enu_to_geodetic(p[:, 0], p[:, 1], p[:, 2])
+        sp = Spec(float(max(band['widths'])), 'paved', False, 'motorway', True, shoulder=0., link=True)
+        out.append((np.c_[lo, la], sp))
+    return out
+
+
+def auxiliary_sections(band):
+    """Use the highway material on the approach, then the ramp material after its node."""
+    n=band.get('approach_n',len(band['pts']))
+    out=[(slice(0,n),band.get('approach_surface',band.get('surface','')),
+          band.get('approach_kind',band.get('kind','paved')))]
+    if n<len(band['pts']):
+        out.append((slice(n-1,None),band.get('surface',''),band.get('kind','paved')))
+    return out
+
+
+def _outside_mainline(line, width, mains, fixed=False):
+    """Trim an added ribbon to the actual edge of the connected highway pavement.
+
+    Main lanes own their surface through a split. Rendering a full ramp/auxiliary ribbon
+    underneath them left contrasting triangular strips and coplanar texture fighting.
+    Keep cross-sections (including zero-width tips) so clipping cannot shift driving lanes.
+    """
+    if not mains:return line
+    import roadlanes
+    line=densify(line,2.)
+    cross=roadlanes.cross(line)
+    left,right=line[:,:2]+cross*width/2,line[:,:2]-cross*width/2
+    q,half,owners=_nearest_road(line,mains,with_owner=True)
+    normal=q[:,3:5]
+    norm=np.maximum(np.linalg.norm(normal,axis=1),1e-9)
+    unit=normal/norm[:,None]
+    delta=((line[:,:2]-q[:,:2])*unit).sum(1)
+    # A connector may leave one interstate on the right and meet another on
+    # the left. One global side clipped the wrong half of its far-end lanes.
+    side=np.ones(len(line))
+    for owner in np.unique(owners):
+        ids=np.flatnonzero(owners==owner)
+        chosen=ids[int(np.argmax(np.abs(delta[ids])))]
+        side[ids]=1. if delta[chosen]>=0. else -1.
+    boundary=q[:,:2]+normal*(side*half)[:,None]
+    da=((left-boundary)*unit).sum(1)*side
+    db=((right-boundary)*unit).sum(1)*side
+    near=np.linalg.norm(line[:,:2]-q[:,:2],axis=1)<=half*norm+width*2+3.
+    if fixed:
+        residual=line[:,:2]-q[:,:2]-delta[:,None]*unit
+        near&=np.linalg.norm(residual,axis=1)<.5
+        near&=np.abs(line[:,2]-q[:,2])<.5  # retain flyovers above a connected highway
+    crossing=near&((da<0)!=(db<0))
+    t=np.clip(da/np.where(np.abs(da-db)>1e-9,da-db,1.),0.,1.)
+    hit=left+(right-left)*t[:,None]
+    left[crossing&(da<0)]=hit[crossing&(da<0)]
+    right[crossing&(db<0)]=hit[crossing&(db<0)]
+    inside=near&(da<0)&(db<0)
+    left[inside]=right[inside]=boundary[inside]
+    centre=(left+right)/2
+    return np.c_[centre,line[:,2],(left-right)/width]
+
+
+def projected_ramp_layout(frame, cells, left_hand=False):
+    """Cached full source layouts projected into this tile's anchor frame, with duplicate cells removed."""
+    edges, zones, exclusions, bands = {}, {}, {}, []
+    def transform(p, source):
+        p = np.asarray(p)
+        la, lo, _ = source.enu_to_geodetic(p[:, 0], p[:, 1], p[:, 2] if p.shape[1] >= 3 else 0.)
+        return np.column_stack(frame.geodetic_to_enu(la, lo, 0.))
+    best = {}
+    for feats in cells:
+        if feats is None:
+            continue
+        got = cached_ramp_layout(feats, left_hand)
+        if got is None:
+            continue
+        source, (paint, guides, cuts, pavement) = got
+        for fid in {band['fid'] for band in pavement} | {fid for fid, _ in paint}:
+            length = max((np.linalg.norm(np.diff(b['guide'][:, :2], axis=0), axis=1).sum()
+                          for b in pavement if b['fid'] == fid), default=0.)
+            score = (round(float(length), 3), -source.lat0, -source.lon0)
+            if fid not in best or score > best[fid][0]:
+                best[fid] = (score, got)
+    # Prefer the complete approach when a neighbouring source cell has less context.
+    # Sorting by id and using a deterministic tie-break also removes cell-order dependence.
+    for owner in sorted(best):
+        source, (paint, guides, cuts, pavement) = best[owner][1]
+        fresh = {owner}
+        for key, runs in paint.items():
+            if key[0] not in fresh:
+                continue
+            for look, line in runs:
+                part = transform(np.asarray(look['ramp_part']), source)
+                style = {**look, 'ramp_part': (tuple(part[0, :2]), tuple(part[-1, :2]))}
+                edges.setdefault(key, []).append((style, transform(line, source)))
+        # Guide ownership is per ramp, not per through feature; remember that in the cache.
+        for fid, runs in guides.items():
+            for zone in runs:
+                if zone.get('ramp') in fresh:
+                    projected={**zone,'line':transform(zone['line'],source)[:,:2]}
+                    if 'outer' in zone:projected['outer']=transform(zone['outer'],source)[:,:2]
+                    zones.setdefault(fid, []).append(projected)
+        for fid in fresh:
+            exclusions.setdefault(fid, set()).update(cuts.get(fid, ()))
+        for band in pavement:
+            if band['fid'] in fresh:
+                bands.append({**band, 'pts': transform(band['pts'], source), 'outer': transform(band['outer'], source),
+                              'guide': transform(band['guide'], source)})
+    return edges, zones, exclusions, bands
+
+
+def _merge_edge_runs(line, look, zones):
+    """Dotted auxiliary-lane divider and solid gore, independent of the pavement overlap."""
+    if not zones or not ((look.get("edge_side") is not None and look['m']=='line_white') or look.get('highway_lane')):
+        return [(look,line)]
+    line = densify(line,1.)
+    mid = (line[:-1,:2]+line[1:,:2])/2
+    tags = np.zeros(len(mid), int)
+    for index, zone in enumerate(zones):
+        guide = zone['line']
+        if len(guide) > 1:
+            if 'outer' in zone:
+                # Remove the native shoulder AND any counted lane divider inside
+                # the auxiliary lane. One dedicated guide replaces them below.
+                # Matching only within 55 cm left the shoulder stripe running
+                # diagonally across the ramp whenever OSM counts varied.
+                near=_ramp_corridor(mid,guide,zone['outer'])
+                tags[near]=-1
+            else:
+                near = _seg_dist(mid,guide[:-1],guide[1:]).min(1) < .55
+                tags[near] = -1 if zone['mode'] == 'erase' else index+1
+    starts = np.r_[0, np.flatnonzero(tags[1:] != tags[:-1])+1, len(tags)]
+    out = []
+    for a,b in zip(starts[:-1],starts[1:]):
+        if tags[a] < 0:
+            continue
+        if tags[a]:
+            # Retain each ramp's guide so the phase remains stable across clipped tiles
+            # and across adjacent acceleration/deceleration lanes.
+            guidance = zones[tags[a]-1]
+            style = {**look, 'm': LANE_LINE['m'], 'w': RAMP_DOT_W,
+                     'tl': RAMP_DOT_M+RAMP_DOT_GAP_M, 'dash': RAMP_DOT_M, 'gap': RAMP_DOT_GAP_M,
+                     'uv_reference': guidance['line'], 'ramp_guidance': True}
+        else:
+            style = look
+        out.append((style,line[a:b+1]))
+    return out
+
+
+def _ramp_corridor(points, guide, outer):
+    """Points in the auxiliary lane's swept cross-sections, with square end cuts."""
+    a,ab=guide[:-1],np.diff(guide,axis=0)
+    l2=np.maximum((ab*ab).sum(1),1e-12)
+    t=np.clip(((points[:,None]-a)*ab).sum(2)/l2,0.,1.)
+    near=a+t[...,None]*ab
+    k=np.linalg.norm(points[:,None]-near,axis=2).argmin(1)
+    at=t[np.arange(len(points)),k]
+    q=near[np.arange(len(points)),k]
+    edge=outer[k]+at[:,None]*(outer[k+1]-outer[k])
+    tangent=ab[k]/np.sqrt(l2[k,None])
+    side=edge-q
+    normal=np.c_[-tangent[:,1],tangent[:,0]]
+    normal*=np.where((normal*side).sum(1)<0.,-1.,1.)[:,None]
+    across=((points-q)*normal).sum(1)
+    width=np.abs((side*normal).sum(1))
+    along=np.abs(((points-q)*tangent).sum(1))
+    return (across>=-.28)&(across<=width+.28)&(along<.55)
+
+
+def _ramp_guides(frame,zones,box,elev,fixed_height=None):
+    """Paint each shared ramp divider once, independent of native lane/edge runs."""
+    seen=set()
+    for fid in sorted(zones):
+        for zone in zones[fid]:
+            if 'outer' not in zone or len(zone['line'])<2:continue
+            p=zone['line']
+            key=(zone.get('ramp'),tuple(np.round(p[[0,-1]].ravel(),3)))
+            if key in seen:continue
+            seen.add(key)
+            if p[:,0].max()<box[0] or p[:,0].min()>box[2] or p[:,1].max()<box[1] or p[:,1].min()>box[3]:continue
+            if fixed_height is not None:
+                z=fixed_height(p,zone)
+            else:
+                la,lo,_=frame.enu_to_geodetic(p[:,0],p[:,1],0.)
+                z=frame.geodetic_to_enu(la,lo,np.asarray(elev(la,lo),float))[2]
+            reference=np.c_[p,z]
+            look={**LANE_LINE,'w':RAMP_DOT_W,'tl':RAMP_DOT_M+RAMP_DOT_GAP_M,
+                  'dash':RAMP_DOT_M,'gap':RAMP_DOT_GAP_M,'ramp_guidance':True,'uv_reference':reference}
+            for piece in clip_polyline(reference,*box):
+                for c in split(densify(simplify(piece,CURVE_SIMPLIFY_M,ztol=.005 if fixed_height is not None else None))):
+                    chunk=_chunk(look,RAMP_DOT_W,c,reference)
+                    if fixed_height is not None:chunk.update(fixed=True,structure='bridge')
+                    yield chunk
+
+
+def _join_sections(frame, cells):
+    """Cross-sections at map vertices, before level/tile/chunk splits, shared by road and deck.
+
+    A normal fitted separately on each clipped part leaves wedges at bends. Joined vertices,
+    including adjacent features with opposite vertex order, instead use one mitred section.
+    """
+    features = {}
+    for feats in cells or ():
+        if feats is None:
+            continue
+        for i in range(len(feats)):
+            if str(feats.attrs.get("class", ["unknown"] * len(feats))[i]) not in STYLE:
+                continue
+            if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road":
+                continue
+            fid = str(feats.ids[i])
+            rings = [r for part in geometry_parts(feats, i) for r in part if len(r) >= 2]
+            if fid not in features or sum(map(len, rings)) > sum(map(len, features[fid][1])):
+                features[fid] = (feats, rings, is_link(feats, i))
+    import roadmesh
+    out = {'_uv':{}}
+    for fid in sorted(features):
+        feats, rings, link = features[fid]
+        out['_uv'][fid]=[]
+        for ring in rings:
+            e, n = mapgeom.enu_xy(feats, frame, ring)
+            pts = np.c_[e, n, np.zeros(len(e))]
+            out['_uv'][fid].append(roadmesh.PavementReference(pts,ring))
+            cross = offset_polyline(pts, 1.)[:, :2] - pts[:, :2]
+            for p, v in zip(pts, cross):
+                key = (round(float(p[0]) * 2), round(float(p[1]) * 2))
+                out.setdefault(key, []).append((p[:2], v, link))
+    return out
+
+
+def source_id(fid):
+    """Native OSM feature of a generated fixed approach (other feature IDs unchanged)."""
+    return str(fid).split('::approach:',1)[0]
+
+
+def _uv_reference(sections,fid,points):
+    """The complete source curve, before tile, level, lane-width or shoulder clipping."""
+    refs=(sections or {}).get('_uv',{}).get(source_id(fid),())
+    if not refs:return points
+    if len(refs)==1:return refs[0]
+    return min(refs,key=lambda ref: _seg_dist(np.asarray(points)[:1,:2],ref.points[:-1,:2],ref.points[1:,:2]).min())
+
+
+def _with_cross(pts, sections):
+    pts = np.asarray(pts, np.float64)
+    cross = offset_polyline(pts[:, :3], 1.)[:, :2] - pts[:, :2]
+    out = pts[:, :3].copy()
+    for i, (p, own) in enumerate(zip(pts, cross)):
+        key = (round(float(p[0]) * 2), round(float(p[1]) * 2))
+        # The coarse key is an index, not a snapping tolerance. A rule cut can sit only
+        # centimetres from another sample on the same curve. Averaging those positions
+        # collapses a segment and introduces a little twist into pavement and paint.
+        neighbours = [v for v in (sections or {}).get(key, ()) if np.linalg.norm(v[0]-p[:2]) < .002]
+        # A branch must not turn the through lanes toward itself. Through-road normals win;
+        # ramp-only vertices retain the ramp's own smooth cross-section.
+        through = [v for v in neighbours if len(v) < 3 or not v[2]]
+        if through:
+            neighbours = through
+        own_unit = own / max(np.linalg.norm(own), 1e-9)
+        near = [(item[0], item[1] * (1 if item[1] @ own_unit >= 0 else -1)) for item in neighbours
+                for v in [item[1]]
+                if abs(v @ own_unit) / max(np.linalg.norm(v), 1e-9) >= .5]
+        if near:
+            units = np.array([v / max(np.linalg.norm(v), 1e-9) for _, v in near])
+            normal = units.mean(0)
+            normal /= max(np.linalg.norm(normal), 1e-9)
+            scale = max(max(np.linalg.norm(v) for _, v in near),
+                        1. / max(.5, float((units @ normal).min())))
+            cross[i] = normal * scale
+            out[i, :2] = np.mean([q for q, _ in near], axis=0)
+    return np.c_[out, cross]
+
+
+def _median_links(rows):
+    """Identify actual short crossovers with opposing carriageways at their two ends."""
+    nodes = {}
+    for fid, sp, p, lon in rows:
+        if not sp.oneway or sp.link or sp.cls not in {'motorway', 'trunk'} or sp.kind not in BUILT:
+            continue
+        for k, q in enumerate(p):
+            tangent = p[min(k+1, len(p)-1), :2]-p[max(k-1, 0), :2]
+            tangent /= max(np.linalg.norm(tangent), 1e-9)
+            heading = tangent * (1 if sp.dir >= 0 else -1)
+            key = tuple(np.rint(q[:2]*2).astype(np.int64))
+            nodes.setdefault(key, []).append((fid, heading))
+    selected, pairs, crossovers = set(), set(), set()
+    for fid, sp, p, lon in rows:
+        length = np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum()
+        if sp.kind not in BUILT or not 14. < length < 180.:
+            continue
+        ends = []
+        for k, step in ((0, 1), (len(p)-1, -1)):
+            direction = junctions._branch_dir(p, k, step)
+            key = tuple(np.rint(p[k, :2]*2).astype(np.int64))
+            ends.append([(main, heading) for main, heading in nodes.get(key, ())
+                         if main != fid and abs(direction @ heading) < .65])
+        if not any(a != b and ha @ hb < -.7 for a, ha in ends[0] for b, hb in ends[1]):
+            continue
+        selected.add(fid)
+        crossovers.add(fid)
+        for main, _ in ends[0]+ends[1]:
+            selected.add(main)
+            pairs.add(frozenset((fid, main)))
+    return selected, pairs, crossovers
+
+
+def median_connections(rows, left_hand=False):
+    """Rounded returns meet the actual widened crossover and asymmetric highway pavement."""
+    selected, pairs, _ = _median_links(rows)
+    if not pairs:
+        return [], {}, set()
+    subset = [r for r in rows if r[0] in selected]
+    corners, cuts, *_ = junctions.find(subset, lambda sp: False, None, paved=lambda fid, sp: True,
+                                     edge_half=lambda sp, side: sp.width/2+side*pavement_offset(sp, left_hand),
+                                     join_filter=lambda a, b: frozenset((a, b)) in pairs)
+    for corner in corners:
+        corner['median_crossover'] = True
+    return corners, cuts, pairs
+
+
+def median_layout(frame, cells, left_hand=False, urban_fn=None, widths=None):
+    """The same crossover returns for ground materials as for the visible road mesh."""
+    seen = {}
+    for feats in cells:
+        if feats is None:
+            continue
+        for i, sp in enumerate(road_specs(feats, urban_fn, widths, left_hand)):
+            if sp is None:
+                continue
+            fid = str(feats.ids[i])
+            parts = ground_parts(feats, i)
+            if fid not in seen or sum(map(len, parts)) > sum(map(len, seen[fid][1])):
+                seen[fid] = (sp, parts)
+    rows = []
+    for fid, (sp, parts) in sorted(seen.items()):
+        for ring in parts:
+            p = np.column_stack(frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.))
+            rows.append((fid, sp, p, float(ring[:, 0].mean())))
+    return median_connections(rows, left_hand)
 
 
 def _chain_graph(lines):
@@ -1396,6 +2645,10 @@ def offset_polyline(pts, d):
     pts = np.asarray(pts, np.float64)
     if len(pts) < 2:
         return pts.copy()
+    if pts.shape[1] == 5:
+        out = pts.copy()
+        out[:, :2] += pts[:, 3:5] * d
+        return out
     t = np.diff(pts[:, :2], axis=0)
     L = np.hypot(t[:, 0], t[:, 1])
     L[L < 1e-9] = 1e-9
@@ -1554,7 +2807,7 @@ def sidewalk_stop(spec, fid, other, ofid):
     return other.width / 2
 
 
-def extras(spec, pts, lon, left_hand=False, frame=None, bridge=False):
+def _bridge_extras(spec, pts, lon, left_hand=False, frame=None, bridge=False):
     """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
     pts: its centreline (k, 3) in the anchor frame; lon: its longitude (centre line colour). Pure."""
     out = []
@@ -1618,12 +2871,79 @@ def extras(spec, pts, lon, left_hand=False, frame=None, bridge=False):
     return out
 
 
+def extras(spec, pts, lon, left_hand=False, frame=None, bridge=False):
+    """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
+    pts: its centreline (k, 3) in the anchor frame; lon: its longitude (centre line colour). Pure."""
+    out = []
+    w, kind, urban, cls = spec[:4]
+    if kind not in BUILT:
+        return out
+    if has_sidewalks(spec):
+        for side in walk_sides(spec, left_hand):
+            out.append(({**SIDEWALK, "side": side}, spec.walk,
+                        offset_polyline(pts, side * (w / 2 + spec.walk / 2))))
+            out.append(({**GUTTER, "side": side}, GUTTER["w"], offset_polyline(pts, side * (w / 2 - GUTTER["w"] / 2))))
+        ms = median_side(spec, left_hand)
+        if ms is not None:
+            # the median: a curbed band, lawn beyond it (two sidewalks back to back made a concrete strip, the user's
+            # report #48 on Boston Street, 2026-10-17: "Improve how medians are made")
+            mw = median_width(spec)
+            # (each carriageway's half, a hair short of the middle: touching the other's carriageway where the gap
+            # narrows, the band was cut away)
+            band = max(0.3, mw / 2 - 0.15) if mw <= MEDIAN_SLAB_M else MEDIAN_CURB_W
+            out.append(({**SIDEWALK, "side": ms, "median": True}, band, offset_polyline(pts, ms * (w / 2 + band / 2))))
+            if kind == "paved":     # a double yellow line along it (Boston Street, Mapillary 2026-10-17)
+                look = {"m": centre_colour(lon), "tl": CENTRE["tl"], "p": CENTRE["p"]}
+                for k in (0, 1):
+                    out.append((look, CENTRE["w"], offset_polyline(
+                        pts, ms * (w / 2 - EDGE_LINE["inset"] - 2 * k * CENTRE["gap"]))))
+            out.append(({**GUTTER, "side": ms}, GUTTER["w"], offset_polyline(pts, ms * (w / 2 - GUTTER["w"] / 2))))
+    if kind == "paved" and spec.lanes is not None:
+        import roadlanes
+        return roadlanes.move_roadside(spec, pts, out, frame) + roadlanes.markings(spec, pts, lon, left_hand, frame)
+    if kind == "paved" and cls in CENTRE_CLASSES and w >= 6.0 and not spec.oneway:   # no paint on cobbles
+        if centre_colour(lon) == "line_white":
+            # outside the Americas one broken white line (the Gotthard road on Mapillary, 2026-10-18: ours had the
+            # Americas' double line in white)
+            out.append((LANE_LINE, LANE_LINE["w"], pts.copy()))
+        else:
+            look = {"m": centre_colour(lon), "tl": CENTRE["tl"], "p": CENTRE["p"]}
+            for side in (1, -1):
+                out.append((look, CENTRE["w"], offset_polyline(pts, side * CENTRE["gap"])))
+    if kind == "paved" and cls in LANE_CLASSES:
+        # lane lines (white dashes) where the driving width holds two or more lanes a direction
+        drive = driving_width(spec)
+        along, _ = lane_counts(spec)
+        lane_look = {**LANE_LINE, 'highway_lane': True} if cls in {'motorway', 'trunk'} and not spec.link else LANE_LINE
+        if spec.oneway and along >= 2:
+            lw = drive / along
+            for k in range(1, along):
+                out.append(({**lane_look,'lane_index':k}, LANE_LINE["w"], offset_polyline(pts, -drive / 2 + k * lw)))
+        elif not spec.oneway and along >= 2:
+            n = along
+            lw = drive / 2 / n
+            for side in (1, -1):
+                for k in range(1, n):
+                    out.append((lane_look, LANE_LINE["w"], offset_polyline(pts, side * k * lw)))
+    if kind == "paved" and (not urban or not has_sidewalks(spec)) and cls in EDGE_LINE_CLASSES:   # no curb: edge lines
+        # Highway edge lines delimit the travel lanes, leaving paved shoulders beyond them. Other
+        # classes keep their curb/edge treatment. The inside line follows traffic, not vertex order,
+        # and does not depend on detecting a nearby carriageway across a wide rural median.
+        edge = driving_width(spec) / 2 if cls == "motorway" else w / 2 - EDGE_LINE["inset"]
+        yellow_side = (1 if spec.dir >= 0 else -1) if (
+            spec.oneway and cls in {"motorway", "trunk"} and not left_hand
+            and not spec.link and centre_colour(lon) == "line_yellow") else None
+        for side in (1, -1):
+            look = {**EDGE_LINE, "edge_side": side}
+            if side == yellow_side:
+                look["m"] = "line_yellow"
+            out.append((look, EDGE_LINE["w"], offset_polyline(pts, side * edge)))
+    return out
+
+
 def lane_marking_width(pts, frame=None):
-    """The Michigan travel-lane paint is 0.30 m wide; keep the standard width elsewhere."""
-    if frame is None or len(pts) == 0:
-        return LANE_LINE["w"]
-    lat, lon, _ = frame.enu_to_geodetic(float(np.mean(pts[:, 0])), float(np.mean(pts[:, 1])), 0.0)
-    return 0.30 if 41.6 <= float(lat) <= 48.3 and -90.5 <= float(lon) <= -82.1 else LANE_LINE["w"]
+    """Base width; highway_markings applies exact state polygons after tile clipping."""
+    return LANE_LINE["w"]
 
 
 JOIN_GAP_M = 14.0       # sidewalk ends this close (and facing each other) are joined: a sharp corner / road merge
@@ -1770,6 +3090,8 @@ def simplify(pts, tol=SIMPLIFY_M, ztol=None):
     ground, Baltimore's Lombard Street 2026-10-20). Pure."""
     if len(pts) < 3:
         return pts
+    widths = np.linalg.norm(pts[:, 3:5], axis=1) if pts.shape[1] == 5 else None
+    varying = widths is not None and np.ptp(widths) > .001
     keep = np.zeros(len(pts), bool)
     keep[0] = keep[-1] = True
     stack = [(0, len(pts) - 1)]
@@ -1790,6 +3112,10 @@ def simplify(pts, tol=SIMPLIFY_M, ztol=None):
                  if L >= 1e-9 else np.zeros(len(seg)))
             dz = np.abs(pts[i + 1:j, 2] - (pts[i, 2] + t * (pts[j, 2] - pts[i, 2])))
             d = np.maximum(d, dz * (tol / ztol))
+        if varying:
+            t = np.clip(((seg-a)*ab).sum(1)/max(L*L, 1e-12), 0., 1.)
+            expected = widths[i]+t*(widths[j]-widths[i])
+            d = np.maximum(d, 20.*np.abs(widths[i+1:j]-expected))
         k = int(np.argmax(d))
         if d[k] > tol:
             m = i + 1 + k
@@ -1902,9 +3228,22 @@ def cells_of_tile(frame, tx, ty, margin=OVERLAP):
     return mapcells.cells_for_bbox(float(np.min(lat)), float(np.min(lon)), float(np.max(lat)), float(np.max(lon)))
 
 
-def _chunk(look, w, c, node_widths=None):
+def _chunk(look, w, c, node_widths=None, reference=None):
+    if node_widths is not None and np.ndim(node_widths) == 2:
+        reference, node_widths = node_widths, None
+    reference = look.get("uv_reference", reference)
+    reference = getattr(reference, "points", reference)
+    if look.get("ramp_guidance") and reference is not None:
+        ab = np.diff(reference[:, :2], axis=0)
+        t = np.clip(((c[0, :2]-reference[:-1, :2])*ab).sum(1)/np.maximum((ab*ab).sum(1), 1e-12), 0., 1.)
+        k = int(np.argmin(np.linalg.norm(reference[:-1, :2]+t[:, None]*ab-c[0, :2], axis=1)))
+        steps = np.diff(c[:, :2], axis=0)
+        moving = np.flatnonzero(np.linalg.norm(steps, axis=1) > 1e-9)
+        if len(moving) and steps[moving[0]] @ ab[k] < 0.:
+            c = c[::-1].copy()
+            if c.shape[1] == 5: c[:, 3:5] *= -1.
     chunk = {"m": look["m"], "w": round(float(w), 2), "tl": look["tl"], "p": look["p"],
-             "n": [[round(float(v), 3) for v in p] for p in c]}
+             "n": [[round(float(v), 3) for v in p[:3]] for p in c]}
     if look.get("uv_scale"):
         chunk["uv_scale"] = list(look["uv_scale"])
     for key in ("uv_shift", "uv_start"):
@@ -1914,6 +3253,19 @@ def _chunk(look, w, c, node_widths=None):
         widths = np.asarray(node_widths, np.float64)
         if len(widths) == len(c) and np.isfinite(widths).all():
             chunk["wn"] = [round(float(v), 3) for v in widths]
+    if c.shape[1] == 5:
+        chunk["cross"] = np.round(c[:, 3:5], 7).tolist()
+    for key in ("highway_lane", "ramp_guidance", "terminal_solid"):
+        if look.get(key): chunk[key] = True
+    if look.get("dash") and look.get("gap"):
+        chunk.update(dash=float(look["dash"]), gap=float(look["gap"]))
+    if reference is not None and (look["m"].startswith("line_dashed") or look.get("continuous_uv")):
+        ab = np.diff(reference[:, :2], axis=0)
+        lengths = np.linalg.norm(ab, axis=1)
+        t = np.clip(((c[0, :2]-reference[:-1, :2])*ab).sum(1)/np.maximum(lengths**2, 1e-12), 0., 1.)
+        k = int(np.argmin(np.linalg.norm(reference[:-1, :2]+t[:, None]*ab-c[0, :2], axis=1)))
+        heading = ab[0]/max(lengths[0], 1e-9)
+        chunk["uv_start"] = float(reference[0, :2] @ heading + lengths[:k].sum()+t[k]*lengths[k])
     return chunk
 
 
@@ -3355,14 +4707,14 @@ def _tunnel_chunks(tunnels, cells, exact):
     return out
 
 
-def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None):
+def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, left_hand=False):
     """The chunks of the bridges crossing the tile box `exact` (deck surfaces flagged "deck", their
     centre / edge lines; every bridge chunk "fixed": its z is the deck's, not the ground's). Deck
     heights: from `bridges` (BridgeProfiles: whole chains, shared by every tile), else from the
     chains found among the given cells (deck_heights; tests)."""
     if bridges is not None:
         return _deck_chunks([(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, exact)
-                             if np.isfinite(z).all()], exact)
+                             if np.isfinite(z).all()], exact, frame, left_hand)
     if not bseen:
         return []
     parts = []                                  # (fid, spec, xy (k, 2), lon)
@@ -3397,7 +4749,7 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None):
             import grading
             z = np.maximum(_smooth_pinned(z, DECK_STEP, grading.SIGMA_M), g)
         decks.append((fid, spec, np.c_[xy, z], lon))
-    return _deck_chunks(decks, exact)
+    return _deck_chunks(decks, exact, frame, left_hand)
 
 
 DECK_CONTEXT_M = 24.0   # m around a tile its bridges' decks are passed as context (roadmesh.deck: whether an edge has
@@ -3423,7 +4775,7 @@ def _distance_along(line, point):
     return float(lengths[:i].sum() + t[i] * lengths[i])
 
 
-def _deck_chunks(decks, exact):
+def _deck_chunks(decks, exact, frame=None, left_hand=False):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within DECK_CONTEXT_M of it as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck)."""
     out = []
@@ -3439,14 +4791,14 @@ def _deck_chunks(decks, exact):
     for fid, spec, pts, lon in decks:
         deck_look = {**DECK, "deck": True, "uv_shift": -0.35 * (spec.dir or 1)}
         lines = [(deck_look, spec.width, pts)]
-        for look, w, line in extras(spec, pts, lon):
+        for look, w, line in extras(spec, pts, lon, left_hand, frame, bridge=True):
             if look["m"] != SIDEWALK["m"] and look["m"] != GUTTER["m"]:
                 lines.append((look, w, line))
         for look, w, line in lines:
             for piece in clip_polyline(line, *exact):
                 for c in split(densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
                     if len(c) >= 2:
-                        ch = _chunk(look, w, c)
+                        ch = _chunk(look, w, c, reference=line)
                         ch["fixed"] = True
                         if look.get("deck"):
                             ch["uv_start"] = _distance_along(pts, c[0, :2])
@@ -3531,34 +4883,59 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         lon = np.concatenate([r[:, 0] for _, _, r in rings])     # is per call: 2026-10-11 profile,
         lat = np.concatenate([r[:, 1] for _, _, r in rings])     # 1,240 calls took 7 of a tile's 8 s)
         h = np.asarray(elev(lat, lon), np.float64)
-        e, n, u = frame.geodetic_to_enu(lat, lon, h)
+        # Horizontal geometry must use the same zero-height projection as the shared
+        # cross-sections and cached ramp layout. Projecting XY at the sampled elevation
+        # moved distant nodes away from their paint overrides and shared join normals.
+        e, n, _ = frame.geodetic_to_enu(lat, lon, 0.)
+        u = frame.geodetic_to_enu(lat, lon, h)[2]
         k = 0
         for fid, spec, ring in rings:
             m = len(ring)
             roads.append((fid, spec, np.stack([e[k:k + m], n[k:k + m], u[k:k + m]], axis=1),
                           float(np.mean(ring[:, 0]))))
             k += m
+    sections = _join_sections(frame, cells)
+    ramp_edges, merge_zones, ramp_mains, auxiliary = projected_ramp_layout(frame, cells, left_hand)
+    import roadterminals
+    terminal_rows=roadterminals.context(frame,cells,roads,(x0,y0,x1,y1),urban_fn,widths,left_hand)
+    terminals=roadterminals.find(frame,terminal_rows,roadterminals.tags_from_cells(cells))
+    import roadlanes
+    main_context = {}
+    def main_pavements(fid):
+        if fid not in main_context:
+            main_context[fid] = [
+                (line, width/2) for key in sorted(ramp_mains.get(fid, ())) if key in seen
+                for ref in sections['_uv'].get(key, ())
+                for line, width in [roadlanes.pavement(
+                    seen[key][2], _with_cross(ref.points, sections), frame, left_hand)]]
+        return main_context[fid]
     chunks = []
     for fid, spec, pts, _ in roads:
+        pts = _with_cross(pts, sections)
         look = LOOK[spec.kind]
+        if (spec.lanes is not None or spec.link) and not look.get("strip"):
+            import roadlanes
+            line, width = roadlanes.pavement(spec, pts, frame, left_hand)
+            if spec.link:
+                line=_outside_mainline(line,width,main_pavements(fid))
+            for piece in clip_polyline(line, *box):
+                for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
+                    if len(c) >= 2:
+                        chunks.append(_chunk(look, width, c, reference=_uv_reference(sections,fid,pts)))
+            continue
         lanes = [(0.0, spec.width)]
         if look.get("strip"):                   # parallel strips across the width (see LOOK)
             n = max(1, int(round(spec.width / look["strip"])))
             sw = spec.width / n
             lanes = [((k + 0.5) * sw - spec.width / 2, sw) for k in range(n)]
         for off, lw in lanes:
-            line = pavement_line(spec, pts, left_hand) if off == 0.0 else offset_polyline(pts, off)
+            line = offset_polyline(pts, off + pavement_offset(spec, left_hand))
             for piece in clip_polyline(line, *box):
-                for c in split(densify(simplify(piece))):
+                for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
                     if len(c) >= 2:
-                        if spec.lanes is not None and off == 0.0 and not look.get("strip"):
-                            import roadlanes
-                            node_widths = roadlanes.pavement_widths(spec, c, frame)
-                            chunks.append(_chunk(look, float(node_widths.max()), c, node_widths))
-                        else:
-                            chunks.append(_chunk(look, lw, c))
+                        chunks.append(_chunk(look, lw, c, reference=_uv_reference(sections,fid,pts)))
     decks_near = []                             # (retaining_walls: none under a bridge)
-    for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells):
+    for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, left_hand):
         if ch.get("deck"):
             decks_near.append(ch)
         if not ch.get("ctx"):
@@ -3586,10 +4963,66 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if props is not None:                   # a rural cut: rock-face pieces instead (cliff_rows)
             props.extend(cliff_rows([w for w in tile_walls if w["rock"]], roads))
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
-    corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
+    link_ids = {fid for fid,(feats,i,_) in seen.items() if is_link(feats,i)}
+    continuous, merges = _road_connections(roads,link_ids)
+    for band in auxiliary:
+        p, outer = band['pts'].copy(), band['outer'].copy()
+        if p[:, 0].max() < box[0] or p[:, 0].min() > box[2] or p[:, 1].max() < box[1] or p[:, 1].min() > box[3]:
+            continue
+        both = np.vstack([p, outer])
+        la, lo, _ = frame.enu_to_geodetic(both[:, 0], both[:, 1], both[:, 2])
+        u = frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
+        p[:, 2], outer[:, 2] = u[:len(p)], u[len(p):]
+        cross = offset_polyline(p, 1.)[:, :2]-p[:, :2]
+        width = float(max(band['widths']))
+        cross *= (band['widths']/width)[:, None]
+        for sl,surface,kind in auxiliary_sections(band):
+            source=np.c_[p,cross][sl]
+            ownership=[(band['fid'],surface,kind,source)]
+            if sl.start==0:
+                # The approach can cross several source features. Use each underlying
+                # mainline's own curve/material, rather than extending one short tangent
+                # across the entire acceleration/deceleration lane.
+                candidates=[(key,sp,ref) for key in sorted(ramp_mains.get(band['fid'],()))
+                            if key in seen for sp in [seen[key][2]]
+                            for ref in sections.get('_uv',{}).get(key,())]
+                if candidates and len(source)>1:
+                    mid=(source[:-1,:2]+source[1:,:2])/2
+                    distance=np.array([_seg_dist(mid,ref.points[:-1,:2],ref.points[1:,:2]).min(1)
+                                       for _,_,ref in candidates])
+                    owners=distance.argmin(0)
+                    cuts=np.r_[0,np.flatnonzero(owners[1:]!=owners[:-1])+1,len(owners)]
+                    ownership=[(candidates[owners[a]][0],candidates[owners[a]][1].surface,
+                                candidates[owners[a]][1].kind,source[a:b+1]) for a,b in zip(cuts[:-1],cuts[1:])]
+            for owner,appearance,road_kind,run in ownership:
+                line=_outside_mainline(run,width,main_pavements(band['fid']))
+                for piece in clip_polyline(line, *box):
+                    for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
+                        chunks.append(_chunk(LOOK[road_kind], width, c,
+                                             reference=_uv_reference(sections,owner,run)))
+        for piece in clip_polyline(outer, *box):
+            for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
+                chunks.append(_chunk(EDGE_LINE, EDGE_LINE['w'], c))
+        # Continue the dividers between a connector's own lanes across its full
+        # auxiliary approach; the mainline/ramp separator keeps its short dots.
+        for lane_offset in np.arange(MOTORWAY_LANE_M,band['lane']-.1,MOTORWAY_LANE_M):
+            guide,outside=band['guide'],band['outer']
+            divider=guide+(outside-guide)*(lane_offset/band['lane'])
+            available=np.linalg.norm(outside[:,:2]-guide[:,:2],axis=1)-lane_offset-.1
+            for run in roadlanes._runs(divider,available):
+                for piece in clip_polyline(run,*box):
+                    chunks.append(_chunk({**LANE_LINE,'aux_divider':True},LANE_LINE['w'],piece))
+    # Both carriageways must remain in the context even when only one is near this tile.
+    median_corners, median_cuts, median_pairs = median_layout(frame, cells, left_hand, urban_fn, widths)
+    corners, jcuts, crosswalks, jramps, jlines, jinternal = \
         junctions.find(roads, has_sidewalks, None, PARKING_M,
                        lambda sp: sp.urban and sp.cls in PARKING_CLASSES and sp.kind in BUILT and not sp.oneway
-                       and sp.width >= STYLE.get(sp.cls, STYLE["unknown"])[0] + 2 * PARKING_M - 0.1)
+                       and sp.width >= STYLE.get(sp.cls, STYLE["unknown"])[0] + 2 * PARKING_M - 0.1,
+                       paved=lambda fid,sp: sp.kind in BUILT and (sp.cls != "motorway" or fid in link_ids),
+                       join_filter=lambda a, b: frozenset((a, b)) not in median_pairs)
+    corners.extend(median_corners)
+    for key, cuts in median_cuts.items():
+        jcuts.setdefault(key, []).extend(cuts)
     # small road loops (roundabouts, turnaround loops): no sidewalks facing their inside, a curbed island instead
     import islands
     isl = islands.find(roads, structures=structures) if walks is not None else []
@@ -3606,7 +5039,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     walks.append({"pts": run, "side": 1, "caps": (False, False), "ramps": [],
                                   "w": islands.ISLAND_BAND_M, "fid": "island"})
     cornered = set()                            # road pairs whose sidewalks meet at a curb return
-    if walks is not None:
+    if corners:
         for (fid, side), cl in jcuts.items():
             for X, u, t in cl:
                 for f2, s2, p2, _ in roads:
@@ -3617,10 +5050,19 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if isl and islands.in_island(isl, p[:2]):
                 continue                        # a curb return inside a loop: its island has its own curb
             if x0 <= p[0] < x1 and y0 <= p[1] < y1:
-                walks.append({"corner": c})
+                if walks is not None and not c.get("paved_only"):
+                    walks.append({"corner": c})
                 for fill in ([c["fill"]] if c["fill"] is not None else []) + c.get("fills", []):
-                    chunks.append({"m": LOOK["paved"]["m"], "w": 0.0, "tl": LOOK["paved"]["tl"], "p": LOOK["paved"]["p"],
+                    look = LOOK['paved']
+                    import roadmesh
+                    ref=_uv_reference(sections,c.get('uv_fid'),c['arc'])
+                    chunks.append({"m": look['m'], "w": 0.0, "tl": look['tl'], "p": look['p'],
+                                   'uv_shift': look.get('uv_shift',0.),
                                    "poly": [[round(float(v), 3) for v in q] for q in fill], "n": []})
+                if c.get("paved_only") and not c.get('median_crossover'):
+                    edge = c["arc"].copy()
+                    edge[:,:2] -= c["inward"]*EDGE_LINE["inset"]
+                    chunks.append(_chunk(EDGE_LINE,EDGE_LINE["w"],edge))
         for cw in crosswalks:                   # crosswalks and stop lines
             mid = 0.5 * (cw["a"] + cw["b"])
             if x0 <= mid[0] < x1 and y0 <= mid[1] < y1:
@@ -3628,17 +5070,35 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 chunks.append(_chunk(look, cw["w"], np.array([cw["a"], cw["b"]])))
     runs_near = []                              # sidewalk runs near the tile, before clipping (walks: below)
     for fid, spec, pts, lon in roads:
-        ex = extras(spec, pts, lon, left_hand, frame) if fid not in jinternal else []    # inside a junction: none
+        ex = extras(spec, _with_cross(pts, sections), lon, left_hand, frame) if fid not in jinternal else []
+        # A bridge range can split one feature into several ground pieces. A fitted ramp
+        # edge belongs only to its source piece; applying it to every piece duplicates paint.
+        part_key = (tuple(pts[0, :2]), tuple(pts[-1, :2]))
+        painted = []
+        for look, w, line in ex:
+            runs = [(style, run) for style, run in ramp_edges.get((fid, _ramp_paint_key(look)), ())
+                    if np.max(np.abs(np.asarray(style['ramp_part'])-part_key)) < .02]
+            painted.extend((style, w, run) for style, run in (runs or [(look, line)]))
+        ex = [(style,w,run) for look,w,line in painted
+              for style,run in roadterminals.solid_runs(fid,look,line,terminals)]
         if not ex:
             continue
-        blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid]
-        walk_blockers = [(p2[:, :2], s2.width / 2 if (fid, f2) in cornered else sidewalk_stop(spec, fid, s2, f2))
+        blockers = [(pavement_line(s2,p2,left_hand)[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid
+                    and frozenset((fid,f2)) not in continuous and f2 not in merges.get(fid,{})]
+        lane_blockers = [(pavement_line(s2,p2,left_hand)[:, :2], s2.width/2+CUT_MARGIN)
+                         for f2,s2,p2,_ in roads if f2 != fid and frozenset((fid,f2)) not in continuous
+                         and f2 not in merges.get(fid,{}) and frozenset((fid,f2)) not in median_pairs]
+        ramp_blockers = [(pavement_line(s2,p2,left_hand)[:, :2], s2.width/2+CUT_MARGIN)
+                         for f2, s2, p2, _ in roads if f2 != fid and f2 not in ramp_mains.get(fid, ())]
+        walk_blockers = [(pavement_line(s2,p2,left_hand)[:, :2], s2.width / 2 if (fid, f2) in cornered else sidewalk_stop(spec, fid, s2, f2))
                          for f2, s2, p2, _ in roads if f2 != fid]
         # a median's band stops at the other carriageways' curbs only (their sidewalk is on their far side: it cut
         # one carriageway's half of Boston Street's median away)
-        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid]
+        curb_blockers = [(pavement_line(s2,p2,left_hand)[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid]
         for look, w, line in ex:
             walk = look["m"] == SIDEWALK["m"]
+            if walk or look["m"] == GUTTER["m"]:
+                line = line[:, :3]              # sidewalk builders retain their own curb cross-sections
             side = look.get("side")
             wb = curb_blockers if look.get("median") else walk_blockers
             if (walk or look["m"] == GUTTER["m"]) and (fid, side) in inner:
@@ -3647,8 +5107,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 # whole runs near the tile first (joined across tile borders below), clipped to the tile after
                 for piece in clip_polyline(line, *near):
                     for cpiece, (j0, j1) in junctions.apply_cuts(piece, jcuts.get((fid, side), [])):
-                        for run in [r for r0 in cut_outside(cpiece, wb, 0.5)
-                                    for r in _on_level(frame, elev, densify(simplify(r0)))]:
+                        for run in cut_outside(cpiece, wb, 0.5):
+                            run = densify(simplify(run))
                             if len(run) < 2:
                                 continue
                             at_j0 = j0 and np.hypot(*(run[0, :2] - cpiece[0, :2])) < 0.6
@@ -3657,7 +5117,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                               "median": bool(look.get("median")),
                                               "open": (not _on_box(run[0], near), not _on_box(run[-1], near))})
                 continue
-            if walks is not None and look["m"] == GUTTER["m"]:     # gutters end where their curb turns
+            edge_cuts = jcuts.get((fid,look.get("edge_side")),[])
+            if look.get("edge_side") is not None and edge_cuts:
+                pieces = [cp for p in clip_polyline(line,*box) for cp,_ in junctions.apply_cuts(p,edge_cuts)]
+            elif walks is not None and look["m"] == GUTTER["m"]:     # gutters end where their curb turns
                 gcuts = jcuts.get((fid, side), [])
                 pieces = [cp for p in clip_polyline(line, *box) for cp, _ in junctions.apply_cuts(p, gcuts)]
             elif walks is not None and jlines.get(fid):             # markings stop at the crosswalks
@@ -3665,10 +5128,17 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             else:
                 pieces = clip_polyline(line, *box)
             for piece in pieces:
-                for run in cut_outside(piece, wb if walk else blockers, 0.5 if walk else 2.0):
-                    for c in split(densify(simplify(run))):
-                        if len(c) >= 2:
-                            chunks.append(_chunk(look, w, c))
+                cuts = ramp_blockers if look.get('ramp_part') is not None else blockers
+                if look.get('highway_lane'):
+                    cuts = lane_blockers
+                for run in cut_outside(piece, wb if walk else cuts, 0.5 if walk else 2.0):
+                    for style,paint in _merge_edge_runs(run,look,merge_zones.get(fid, ())):
+                        paint_width = style.get('w', w) if style.get('edge_side') is not None or style.get('ramp_guidance') else w
+                        for c in split(densify(simplify(paint, CURVE_SIMPLIFY_M))):
+                            if len(c) >= 2:
+                                chunks.append(_chunk(style, paint_width, c, reference=line))
+    chunks.extend(_ramp_guides(frame,merge_zones,box,elev))
+    chunks.extend(roadterminals.arrows(frame,terminal_rows,terminals,exact))
     if walks is not None:
         runs_near = join_walk_ends(runs_near, [(p2[:, :2], s2.width / 2) for _, s2, p2, _ in roads])
         for rn in runs_near:
@@ -3716,7 +5186,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     if str(_rule_value(feats.rules.get("subclass"), i) or "") == "link"}
         exit_signs.extend(exitsigns.place(frame, osm_objects, roads, (x0, y0, x1, y1), elev,
                                           chunks, left_hand, mph, link_ids))
-    return chunks
+    import highway_markings
+    return highway_markings.apply(chunks, frame)
 
 
 class Tracker:

@@ -151,7 +151,7 @@ def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
 SURFACES = {}
 for i, args in enumerate((
         ("bngEarthGroundAsphalt", "ASPHALT_OLD", "asphalt/asphalt/t_asphalt", 2, "asphalt/macro_asphalt/t_macro_asphalt", 16, 0.3),
-        ("bngEarthGroundGrass", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32),
+        ("bngEarthGroundGrass", "GRASS", "grass/ind_grass_2/t_ind_grass_2", 1, "grass/t_macro_grass/t_macro_grass", 32),
         ("bngEarthGroundDusty", "DIRT_DUSTY", "soil/dirt_loose_dusty/t_dirt_loose_dusty", 1, "soil/macro_clumply/t_macro_clumpy", 32),
         ("bngEarthGroundLoose", "DIRT_DUSTY_LOOSE", "soil/t_gravel/t_gravel", 1, "soil/macro_clumply/t_macro_clumpy", 32),
         ("bngEarthGroundRock", "ROCK", "rock/t_dirt_rocky/t_dirt_rocky", 2, "rock/macro_rocky/t_macro_rocky", 32),
@@ -159,9 +159,18 @@ for i, args in enumerate((
         ("bngEarthGroundMud", "MUD", "mud/mud/t_mud", 1, "soil/macro_clumply/t_macro_clumpy", 32),
         ("bngEarthGroundCobble", "COBBLESTONE", "asphalt/t_asphalt_02/t_asphalt_02", 1, "asphalt/macro_asphalt/t_macro_asphalt", 16, 0.3),
         # mown town yards (server/surface.py LAWN): the grass detail, finer grain
-        ("bngEarthGroundLawn", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):
+        ("bngEarthGroundLawn", "GRASS", "grass/ind_grass_2/t_ind_grass_2", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):
     name, gm, detail, dsize, macro, msize, *st = args
     SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{30 + i}", detail, dsize, macro, msize, *st))
+
+# Keep regeneration consistent with the darker grass already shipped in the mod.
+# A restrained normal/macro response avoids the lumpy, bright grass appearance.
+for name, colour, normal, macro_normal in (
+        ("bngEarthGroundGrass", [0.45, 0.1], [0.35, 0.05], [0.05, 0]),
+        ("bngEarthGroundLawn", [0.42, 0.08], [0.25, 0.04], [0.02, 0])):
+    SURFACES[name].update(baseColorDetailStrength=colour, normalDetailStrength=normal,
+                          roughnessDetailStrength=[0.9, 0.2], aoDetailStrength=[0.35, 0.05],
+                          baseColorMacroStrength=[0.12, 0.06], normalMacroStrength=macro_normal)
 
 pretty(os.path.join(T, "main.materials.json"), {
     "beamngEarthDirt": {

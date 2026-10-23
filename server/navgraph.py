@@ -180,7 +180,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if spec is None or fid in seen:
                 continue
             seen.add(fid)
-            parts = feats.parts(i)
+            parts = roads.geometry_parts(feats, i)
             if not parts or not parts[0]:
                 continue
             ll = np.asarray(parts[0][0], np.float64)
@@ -199,6 +199,11 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if L < 1.0:
                 continue
             carriage.append((spec.width / 2, p))     # (the signal heads keep off every carriageway, decks too)
+            source = feats.__dict__.get("_geometry_params", {}).get((i, 0, 0))
+            def distance_at(at):
+                return float(np.interp(at, source, s)) if source is not None else at*L
+            def source_at(distance):
+                return float(np.interp(distance, s, source)) if source is not None else distance/L
             # the junction arms as the road tiles' props see them (every road they draw: service roads, driveways
             # and tracks too, no bridge-only roads), so furniture.junction_controls decides the same there and here
             if rspecs[i] is not None and con is not None:
@@ -220,7 +225,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             marks = {}
             if con is not None:
                 for r in con.rows(i):
-                    marks[round(float(con.start[r]) * L, 2)] = "c" + str(con.value[r])
+                    marks[round(distance_at(float(con.start[r])), 2)] = "c" + str(con.value[r])
             w = driving_width(spec)
             # A narrow street gets the stock game's ~20 cm precision instead of a 60 cm corner cut.
             tolerance = min(SIMPLIFY_M, max(0.1, w * 0.035))
@@ -236,7 +241,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if speed is not None:
                 for r in speed.rows(i):
                     for at in (float(speed.start[r]), float(speed.end[r])):
-                        sk = round(at * L, 2)
+                        sk = round(distance_at(at), 2)
                         if 0 < at < 1 and not any(abs(sk - m) < 0.01 for m in marks):
                             marks[sk] = f"s{fid}_v{int(round(at * 1e6))}"
             order = sorted(marks)
@@ -264,7 +269,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         direction = int(ow.value[r])
             if direction == 0 and spec.oneway and spec.dir:     # a divided road's carriageway (roads.dual_carriageways)
                 direction = int(spec.dir)
-            lo, li = _lanes(w, direction != 0)
+            lo, li = roads.lane_counts(spec)
             profile = _speed_profile(xy, w, direction != 0)
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
@@ -277,7 +282,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 a, b = names[j], names[j + 1]
                 if a == b:
                     continue
-                if tunnels and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnels):
+                at = source_at((full[j]+full[j+1])/2)
+                if tunnels and any(t0 <= at <= t1 for t0, t1 in tunnels):
                     continue                # no ground over a tunnel: its stretch is left out
                 if direction < 0:
                     a, b = b, a
@@ -286,7 +292,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     if nm not in nodes and nm not in pending:
                         pending[nm] = (float(q[0]), float(q[1]))
                         node_fid[nm] = fid
-                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) * MPH
+                legal = road_mph(feats, i, spec, mph, at=at) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
                 edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(w / 2, 2)])
                 edge_fids.append(fid)

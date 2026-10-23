@@ -22,10 +22,10 @@ def _bridge_way(feats, i):
     return any(kind == "bridge" for _, _, kind in roads.level_ranges(feats, i))
 
 
-def apply_spec(spec, feats, i):
+def apply_spec(spec, feats, i, allow_bridge=False):
     import roads
-    # The selected port batch keeps the newer branch's bridge geometry untouched.
-    if _bridge_way(feats, i):
+    # Ground callers leave bridge profiles alone; the bridge paint builder opts in.
+    if not allow_bridge and _bridge_way(feats, i):
         return spec
     values = [roads._rule_value(feats.rules.get(k), i) for k in
               ("lanes_forward", "lanes_backward", "lanes_both_ways")]
@@ -458,7 +458,7 @@ def markings(spec, pts, lon, left_hand=False, frame=None):
                 for k in range(1, int(np.ceil(ns.max()))):
                     line = offset(pts, centre+side*(c/2+k)*spec.lane_w)
                     for run in _runs(line, ns-k-.015):
-                        out.append((look, lane_line_w, run))
+                        out.append(({**look, 'lane_index': k}, lane_line_w, run))
     if (not spec.urban or not roads.has_sidewalks(spec)) and spec.cls in roads.EDGE_LINE_CLASSES:
         yellow = (1 if spec.dir >= 0 else -1) if spec.oneway and spec.cls in ("motorway", "trunk") and not spec.link and not left_hand and roads.centre_colour(lon) == "line_yellow" else None
         for side in (-1, 1):

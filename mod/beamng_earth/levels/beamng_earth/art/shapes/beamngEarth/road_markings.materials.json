@@ -1,0 +1,27 @@
+{
+  "line_turn_arrow": {
+    "name": "line_turn_arrow",
+    "mapTo": "line_turn_arrow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.87,
+          0.82,
+          1
+        ],
+        "roughnessFactor": 0.82,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "alphaTest": false,
+    "castShadows": false,
+    "materialTag0": "RoadAndPath"
+  }
+}

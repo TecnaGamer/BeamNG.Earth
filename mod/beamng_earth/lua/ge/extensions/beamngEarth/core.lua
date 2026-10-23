@@ -48,6 +48,7 @@ local ui = require('beamngEarth/ui')
 local settings = require('beamngEarth/settings') -- the pause-menu page's values (docs/DEVTOOLS.md)
 local credits = require('beamngEarth/credits') -- the on-screen data credits (docs/DEVTOOLS.md)
 local statusbar = require('beamngEarth/statusbar') -- the slim bar at the top: street, place, loading, fps
+local resume = require('beamngEarth/resume') -- last driven location and verified heading
 local places = require('beamngEarth/places') -- saved and recent places (the settings page)
 local levelinfo = require('beamngEarth/levelinfo') -- the level select's spawn points: the places, Random
 local banner = require('beamngEarth/banner') -- the connection banner (docs/DEVTOOLS.md)
@@ -197,8 +198,14 @@ local teleportTo -- defined with M.teleport (the level start's own teleport is o
 -- road from the server), else to the window's lat/lon (the default start until it is changed)
 local RANDOM_WAIT_S = 15 -- s for the server's random place (an older server never answers: the default start)
 local function defaultStart()
-  local lat, lon = ui.getLatLon(DEFAULT_LAT, DEFAULT_LON)
-  return teleportTo(lat, lon, nil, 'start')
+  local target = settings.get('resumePosition') ~= false and resume.load() or nil
+  local lat, lon
+  if target then lat, lon = target.lat, target.lon
+  elseif settings.get('resumePosition') == false then lat, lon = DEFAULT_LAT, DEFAULT_LON
+  else lat, lon = ui.getLatLon(DEFAULT_LAT, DEFAULT_LON) end
+  local ok = teleportTo(lat, lon, nil, 'start')
+  if ok then st.resumeTarget = target end
+  return ok
 end
 local function startTeleport()
   local choice = levelinfo.chosen()
@@ -384,6 +391,16 @@ local function commitTeleport(msg)
   st.loadingUntil = st.clock + LOADING_AFTER_TELEPORT_S
   st.placeFrames = PLACE_DELAY_FRAMES
   st.placeZ = (msg.groundZ or 0) + 1.0
+  if st.resumeTarget then
+    -- Height keeps a saved bridge position above its deck until collision is ready. Tunnels
+    -- retain the existing floor-placement path below.
+    st.placeZ = math.max(st.placeZ, (st.resumeTarget.h or msg.groundZ or 0) + 1.0)
+    st.placeHeading = st.resumeTarget.heading
+    st.resumeUntil = st.clock + 30
+    -- Consume this only when the saved anchor commits. The temporary flat-terrain spawn
+    -- can finish many frames before the server answers and must not discard the saved pose.
+    st.resumeTarget = nil
+  end
   -- in a tunnel: set down on the ground over it first (placed in the tube before its road tile came, the car fell
   -- through the world under the one-sided terrain), moved down onto the floor once that collides (2026-10-17)
   st.floorZ = msg.floorZ
@@ -557,10 +574,51 @@ end
 local function placePlayer(z)
   local veh = getPlayerVehicle(0)
   if not veh then return end
-  local dir = veh:getDirectionVector()
+  local dir = st.placeHeading and vec3(math.sin(st.placeHeading), math.cos(st.placeHeading), 0)
+    or veh:getDirectionVector()
   dir = vec3(dir.x, dir.y, 0)
   if dir:length() < 1e-3 then dir = vec3(0, 1, 0) end
   spawn.safeTeleport(veh, vec3(0, 0, z), quatFromDir(dir:normalized(), vec3(0, 0, 1)), nil, nil, false, nil, true)
+  -- safeTeleport resets and then moves physics clusters. Its GE-side rotation can still be
+  -- from before the reset in this frame. Check the actual forward vector after physics has
+  -- consumed both requests, rather than assuming that the requested quaternion won.
+  st.headingRestore = st.placeHeading and { heading = st.placeHeading, veh = veh,
+    id = veh.getID and veh:getID(), wait = 2 } or nil
+  st.placeHeading = nil
+  st.resumeCaptureAt = st.clock + .5 -- let the placement reach physics before recording its position
+end
+
+local function restoreHeading()
+  local r = st.headingRestore
+  if not r then return false end
+  if st.paused then return true end -- a queued cluster rotation has not reached physics yet
+  r.wait = r.wait - 1
+  if r.wait > 0 then return true end
+  local veh = getPlayerVehicle(0)
+  if not veh or (r.id and veh:getID() ~= r.id) or (not r.id and veh ~= r.veh) then
+    st.headingRestore = nil; return false
+  end
+  local dir = veh:getDirectionVector()
+  if dir.x*dir.x + dir.y*dir.y < 1e-8 then return true end
+  local delta = r.heading - math.atan2(dir.x, dir.y)
+  delta = math.atan2(math.sin(delta), math.cos(delta))
+  if math.abs(delta) < .002 then
+    -- Keep vehicle reset consistent with the verified placement too.
+    if veh.setOriginalTransform and veh.getRotation then
+      local p, q = veh:getPosition(), quat(veh:getRotation())
+      veh:setOriginalTransform(p.x, p.y, p.z, q.x, q.y, q.z, q.w)
+    end
+    st.headingRestore = nil
+    st.resumeCaptureAt = st.clock + .5
+    return false
+  end
+  -- Relative world yaw, measured from the settled vehicle, preserves safeTeleport's ground
+  -- position and slope alignment. BeamNG's quaternion-vector convention is clockwise here.
+  local p = veh:getPosition()
+  veh:setClusterPosRelRot(-1, p.x, p.y, p.z, 0, 0, math.sin(delta*.5), math.cos(delta*.5))
+  veh:applyClusterVelocityScaleAdd(-1, 0, 0, 0, 0)
+  r.wait = 2
+  return true
 end
 
 -- A teleport into a tunnel: once a ray down from just over its floor (floorZ) meets collision at the floor (the tube's
@@ -885,6 +943,30 @@ end
 -- Drop hold (drophold.lua): a car dropped far off the block (the game's drop-at-camera) is held at rest where it was
 -- dropped until the block that follows it is committed and has ground under it.
 local dropHold = drophold.new()
+local function savePosition(force)
+  if settings.get('resumePosition') == false or not st.inOurLevel or not st.active or not st.anchor
+      or st.placeFrames or st.headingRestore or st.floorZ or st.rebasing or st.resync or dropHold.active
+      or st.clock < (st.resumeCaptureAt or 0)
+      or (st.pending and st.pending.purpose == 'teleport') then return false end
+  if not force and st.clock < (st.resumeSaveAt or 0) then return false end
+  st.resumeSaveAt = st.clock + resume.INTERVAL
+  local veh = getPlayerVehicle(0)
+  if not veh then return false end
+  local ok, p = pcall(veh.getPosition, veh)
+  if not ok or not p then return false end
+  local lat, lon, h = st.anchor:enuToGeodetic(p.x, p.y, p.z)
+  local heading
+  if veh.getDirectionVector then
+    local got, dir = pcall(veh.getDirectionVector, veh)
+    if got and dir then
+      -- Store the heading in the saved location's local frame, so an origin rebase does not
+      -- change the direction restored on the next session.
+      local x,y = st.anchor:transformTo(geodesy.newAnchor(lat,lon)):rotate(dir.x,dir.y,dir.z)
+      if x*x+y*y > 1e-6 then heading = math.atan2(x,y) end
+    end
+  end
+  return resume.update({ lat=lat, lon=lon, h=h, heading=heading }, st.clock, force)
+end
 local dropHoldFailed = false
 M.dropHoldState = function() return dropHold end      -- (tests, tools)
 
@@ -1001,8 +1083,18 @@ local function anchorKnown()
 end
 
 local function updateWorld(dt)
+  if restoreHeading() then return end
   if st.floorZ and not st.placeFrames then M.floorCheck() end
   if st.placeFrames then
+    if st.resumeUntil and st.clock < st.resumeUntil and not roads.readyAround(st.anchorId,0,0,12) then
+      local veh = getPlayerVehicle(0)
+      if veh then
+        veh:setClusterPosRelRot(-1,0,0,st.placeZ+PRE_LIFT,0,0,0,1)
+        veh:applyClusterVelocityScaleAdd(-1,0,0,0,0)
+      end
+      return
+    end
+    st.resumeUntil = nil
     st.placeFrames = st.placeFrames - 1
     if st.placeFrames <= 0 then
       st.placeFrames = nil
@@ -1423,7 +1515,7 @@ local function onUpdate(dtReal, dtSim)
     if not st.anchor then defaultStart() end
   end
   -- the governor's frame opens first: its clock is the wall time since the last onUpdate (hptimer)
-  gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
+  gov:setLoading(st.placeFrames ~= nil or st.headingRestore ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
   gov:beginFrame(farfield.hasWork() or roads.hasWork())
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
   for _, msg in ipairs(net.update(dtReal)) do
@@ -1464,6 +1556,7 @@ local function onUpdate(dtReal, dtSim)
         log('E', 'beamngEarth', 'drop hold turned off: ' .. tostring(err))
       end
     end
+    savePosition(false)
     t = mark('player', t)
     updateWorld(dtReal)
     t = mark('world', t)
@@ -1580,12 +1673,14 @@ function M.hudApp(name, on) return hudapps.setMounted(name, on) end
 -- Before the level loads (freeroam spawns its traffic at camera-ready, which can come before our
 -- onClientStartMission): the player's traffic choice, for our level only.
 local function onClientPreStartMission(levelPath)
+  savePosition(true)
   if type(levelPath) == 'string' and levelPath:find('/' .. LEVEL_ID .. '/', 1, true) then
     navgraph.takeChoice(rawget(_G, 'freeroam_freeroam') and freeroam_freeroam.spawningOptionsHelper)
   end
 end
 
 local function onClientEndMission()
+  savePosition(true)
   postfx.restore()
   gps.reset()
   do local stg = rawget(_G, 'beamngEarth_settings') if stg and stg.redirectBigMap then stg.redirectBigMap(false) end end
@@ -1632,6 +1727,7 @@ end
 M.onFilesChanged = onFilesChanged
 
 local function onExtensionUnloaded()
+  savePosition(true)
   groundcover.enginePatch(false)
   net.close()
   farfield.clear()
@@ -1656,6 +1752,7 @@ teleportTo = function(lat, lon, name, kind)
     return false
   end
   ui.setLatLon(lat, lon)
+  st.resumeTarget, st.resumeUntil, st.placeHeading, st.headingRestore = nil, nil, nil, nil
   if requestAnchor(lat, lon, 'teleport') then
     setStatus(string.format('Preparing terrain at %.5f, %.5f ...', lat, lon))
     parking.onTeleport()

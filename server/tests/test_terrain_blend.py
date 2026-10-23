@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -25,14 +26,18 @@ class TerrainBlendTest(unittest.TestCase):
     def test_each_terrain_material_gets_its_own_base_colour(self):
         with tempfile.TemporaryDirectory() as tmp:
             ids = np.array([[surface.GRASS, surface.SNOW], [surface.ROCK, surface.DIRT]], np.uint8)
-            surface.write_ter(tmp, "test.ter", np.zeros((2, 2), np.uint16), ids)
-            before = open(os.path.join(tmp, "test.ter"), "rb").read()
-            photo = np.full((2, 2, 3), 128, np.uint8)
+            # The engine's outer sample ring is deliberately holes. Keep the four
+            # material samples inside that ring instead of testing an all-hole 2x2 block.
+            ids = np.pad(ids, 1, constant_values=surface.DIRT)
+            surface.write_ter(tmp, "test.ter", np.zeros(ids.shape, np.uint16), ids)
+            ter = Path(tmp) / "test.ter"
+            before = ter.read_bytes()
+            photo = np.full((*ids.shape, 3), 128, np.uint8)
             shown = terrainblend.blend(photo, tmp, "test.ter")
             # The material map and aerial image use opposite row origins.
             self.assertEqual(terrainblend.material_grid(tmp, "test.ter").tolist(), ids[::-1].tolist())
             self.assertEqual(len(np.unique(shown.reshape(-1, 3), axis=0)), 4)
-            self.assertEqual(open(os.path.join(tmp, "test.ter"), "rb").read(), before)
+            self.assertEqual(ter.read_bytes(), before)
 
     def test_palette_covers_current_generated_materials(self):
         self.assertEqual(set(terrainblend.MATERIAL_COLOURS), {name for name, _ in surface.MATERIALS})

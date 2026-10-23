@@ -42,7 +42,9 @@ def _resample(pts, step):
     if s[-1] <= 1e-6:
         return pts[:1, :2], s[:1], pts[:1, 2]
     n = max(1, int(np.ceil(s[-1] / step)))
-    t = np.linspace(0.0, s[-1], n + 1)
+    # Keep the fitted source vertices as well as the drape samples. Replacing them
+    # with a new uniform grid cuts across short bends and changes tile-join tangents.
+    t = np.unique(np.r_[s, np.linspace(0.0, s[-1], n + 1)])
     return (np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], axis=1), t,
             np.interp(t, s, pts[:, 2]))
 
@@ -73,6 +75,18 @@ def _bridge_concrete_uv(u, v):
     return across, v - 0.5 * across
 
 
+class PavementReference:
+    """Shared build-only centerline; equality keeps deterministic chunk comparisons useful."""
+    def __init__(self,points,lonlat=None):
+        self.points=np.asarray(points,float)
+        self.lonlat=None if lonlat is None else np.asarray(lonlat,float)
+
+    def __eq__(self,other):
+        return isinstance(other,PavementReference) and np.array_equal(self.points,other.points) and (
+            (self.lonlat is None and other.lonlat is None) or
+            (self.lonlat is not None and other.lonlat is not None and np.array_equal(self.lonlat,other.lonlat)))
+
+
 def ribbons(chunks, with_source=False):
     """Per chunk: (left (k, 2), right (k, 2), v (k,), material, layer, z (k,) or None) in the anchor
     frame; z: the chunk's own heights where it is "fixed" (bridge decks), else None (draped). Pure."""
@@ -84,12 +98,35 @@ def ribbons(chunks, with_source=False):
         xy, s, z = _resample(pts, DRAPE_STEP)
         if len(xy) < 2:
             continue
-        n = _normals(xy) * (float(c["w"]) / 2)
-        scale = c.get("uv_scale")
-        along = float(scale[1]) if scale else float(c.get("tl") or 10.0)
-        v = (s + float(c.get("uv_start", 0.0))) / along
-        ribbon = (xy + n, xy - n, v, c["m"], layer_of(c), z if c.get("fixed") else None)
-        out.append((ribbon, c) if with_source else ribbon)
+        if c.get("cross") or c.get("wn"):
+            arc = np.r_[0., np.cumsum(np.hypot(*np.diff(pts[:, :2], axis=0).T))]
+        if c.get("cross"):
+            cross = np.asarray(c["cross"], np.float64)
+            n = np.c_[np.interp(s, arc, cross[:, 0]), np.interp(s, arc, cross[:, 1])]
+        else:
+            n = _normals(xy)
+        widths = np.interp(s, arc, c["wn"]) if c.get("wn") else float(c["w"])
+        n = n * (np.asarray(widths)[..., None] / 2)
+        phase = float(c.get('uv_start', 0.))
+        intervals = [(0., float(s[-1]))]
+        material = c['m']
+        if c.get('dash') and c.get('gap'):
+            # Explicit white strokes give independent stripe/gap lengths for regional lane
+            # paint and exit guidance; stretching the quarter-filled texture changes both.
+            dash, period = float(c['dash']), float(c['dash']+c['gap'])
+            intervals = [(max(0., k*period-phase), min(float(s[-1]), k*period+dash-phase))
+                         for k in range(math.floor(phase/period), math.ceil((phase+s[-1])/period)+1)
+                         if min(float(s[-1]), k*period+dash-phase)-max(0., k*period-phase) > 1e-6]
+            material = 'line_white'
+        for a, b in intervals:
+            at = np.r_[a, s[(s > a) & (s < b)], b]
+            left = np.column_stack([np.interp(at, s, (xy+n)[:, d]) for d in (0, 1)])
+            right = np.column_stack([np.interp(at, s, (xy-n)[:, d]) for d in (0, 1)])
+            scale = c.get('uv_scale')
+            along = float(scale[1]) if scale else float(c.get('tl') or 10.)
+            ribbon=(left, right, (at+phase)/along, material, layer_of(c),
+                    np.interp(at, s, z) if c.get('fixed') else None)
+            out.append((ribbon,c) if with_source else ribbon)
     return out
 
 
@@ -166,7 +203,15 @@ def _reach_past(c, box):
         n.insert(0, ends[0][None])
     if ends[1] is not None:
         n.append(ends[1][None])
-    return {**c, "n": np.concatenate(n).tolist()}
+    result = {**c, "n": np.concatenate(n).tolist()}
+    for key in ("cross", "wn"):
+        if c.get(key):
+            values = np.asarray(c[key])
+            result[key] = np.concatenate(([values[:1]] if ends[0] is not None else []) + [values] +
+                                         ([values[-1:]] if ends[1] is not None else [])).tolist()
+    if ends[0] is not None and "uv_start" in c:
+        result["uv_start"] = float(c["uv_start"]) - reach
+    return result
 
 
 GRID_M = 2.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
