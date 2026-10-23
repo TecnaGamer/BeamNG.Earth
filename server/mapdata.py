@@ -69,6 +69,7 @@ import osmlanes
 import osmobjects
 import overture
 import rangeread
+import roadcontext
 import staging
 
 log = logging.getLogger("earthd.mapdata")
@@ -233,6 +234,7 @@ class MapData:
         self._mem = OrderedDict()           # (cell, layer) -> (decoded layer, provenance, bytes): cell()'s LRU
         self._mem_bytes = 0
         self._mem_lock = threading.Lock()
+        self.road_context = roadcontext.Context(lambda key: self.cell(key, layers=('roads',)).layers['roads'])
 
     def close(self):
         self.osm_objects.close()
@@ -521,6 +523,8 @@ class MapData:
                 en = arrays.pop("en.local", None)     # (the mirror's: this frame's, Features.localize)
                 if layer in VECTOR_LAYERS:
                     f = mapgeom.Features.from_arrays(layer, arrays, "")
+                    if layer == 'roads':
+                        f._road_context = self.road_context
                     if en is not None and len(en) == len(f.lonlat):
                         f.en = en
                         cd.layers[layer] = f

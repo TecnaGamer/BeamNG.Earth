@@ -1244,14 +1244,26 @@ def _joined_end_curve(feats, i, ring, end, nodes, bend):
 def geometry_parts(feats, i):
     """Shared road geometry for rendering, grading, materials, bridges and the AI graph.
 
-    Fit once per decoded cell, before clipping: road skins, paint, terrain and AI all use the
-    same curves. Shared feature endpoints and bridge/tunnel rule boundaries remain connected.
+    Fit against the whole source feature's neighbourhood, before clipping: road skins,
+    paint, terrain and AI use identical curves on either side of a source-cell boundary.
     """
     if level_ranges(feats, i):
         return feats.parts(i)
     memo = feats.__dict__.setdefault("_road_geometry", {})
     if i in memo:
         return memo[i]
+    context = feats.__dict__.get('_road_context')
+    if context is not None:
+        source, j = context.feature(feats, i)
+        result = geometry_parts(source, j)
+        params = source.__dict__.get('_geometry_params', {})
+        for part, rings in enumerate(result):
+            for ring in range(len(rings)):
+                param = params.get((j, part, ring))
+                if param is not None:
+                    feats.__dict__.setdefault('_geometry_params', {})[(i, part, ring)] = param
+        memo[i] = result
+        return result
     specs = road_specs(feats)
     bs = bridge_specs(feats)
     link = is_link(feats, i)
@@ -1724,6 +1736,12 @@ def cached_ramp_layout(feats, left_hand=False):
     import geodesy
     ref = feats.lonlat[0]
     frame = geodesy.EnuFrame(float(ref[1]), float(ref[0]), 0.)
+    if feats.__dict__.get('_road_context') is not None:
+        # projected_ramp_layout selects each ramp's source neighbourhood independently.
+        # A neighbouring cell cannot restart or shorten its auxiliary lane.
+        result = projected_ramp_layout(frame, [feats], left_hand)
+        memo[bool(left_hand)] = frame, result
+        return memo[bool(left_hand)]
     rows = []
     for i, sp in enumerate(road_specs(feats, left_hand=left_hand)):
         if sp is None:
@@ -1817,14 +1835,25 @@ def projected_ramp_layout(frame, cells, left_hand=False):
         la, lo, _ = source.enu_to_geodetic(p[:, 0], p[:, 1], p[:, 2] if p.shape[1] >= 3 else 0.)
         return np.column_stack(frame.geodetic_to_enu(la, lo, 0.))
     best = {}
+    layouts = []
     for feats in cells:
         if feats is None:
             continue
-        got = cached_ramp_layout(feats, left_hand)
+        context = feats.__dict__.get('_road_context')
+        if context is None:
+            layouts.append((cached_ramp_layout(feats, left_hand), None))
+        else:
+            for i in range(len(feats)):
+                if is_link(feats, i):
+                    source, _ = context.feature(feats, i)
+                    layouts.append((cached_ramp_layout(source, left_hand), {str(feats.ids[i])}))
+    for got, owners in layouts:
         if got is None:
             continue
         source, (paint, guides, cuts, pavement) = got
         for fid in {band['fid'] for band in pavement} | {fid for fid, _ in paint}:
+            if owners is not None and fid not in owners:
+                continue
             length = max((np.linalg.norm(np.diff(b['guide'][:, :2], axis=0), axis=1).sum()
                           for b in pavement if b['fid'] == fid), default=0.)
             score = (round(float(length), 3), -source.lat0, -source.lon0)
@@ -5182,10 +5211,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             park.extend(parking.aisle_spots(roads, aisles, (x0, y0, x1, y1)))
     if osm_objects and exit_signs is not None:
         import exitsigns
-        link_ids = {fid for fid, (feats, i, _) in seen.items()
-                    if str(_rule_value(feats.rules.get("subclass"), i) or "") == "link"}
+        pavements = exitsigns.gore_pavements(frame, osm_objects, {fid: sp for fid, (_, _, sp) in seen.items()},
+                                            sections, ramp_mains, auxiliary, left_hand)
         exit_signs.extend(exitsigns.place(frame, osm_objects, roads, (x0, y0, x1, y1), elev,
-                                          chunks, left_hand, mph, link_ids))
+                                          chunks, left_hand, mph, pavements=pavements, ramp_mains=ramp_mains))
     import highway_markings
     return highway_markings.apply(chunks, frame)
 

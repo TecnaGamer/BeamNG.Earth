@@ -243,7 +243,6 @@ def _spans(poly, at, travel, outward):
 
 def _gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
     import roadlanes
-    import roadobjects
     ramp_rows = [r for r in pavements if r[1].link and _way_id(r[0]) == extra['ramp_id']]
     if not ramp_rows:
         # The optional Overture provider has no OSM way IDs. Retain the existing spatial
@@ -253,7 +252,7 @@ def _gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
         for fid, sp, line, _ in pavements:
             if not sp.link or sp.cls not in MAIN_CLASSES or _way_id(fid) is not None:
                 continue
-            near = roadobjects._nearest(q, [(fid, sp, line, 0.)])
+            near = _nearest(q, [(fid, sp, line, 0.)])
             if near[0] <= 35. and near[7]*(sp.dir or 1)@direction >= .5:
                 choices.append((near[0], fid))
         if choices:
@@ -274,7 +273,7 @@ def _gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
         q = _station(ramp, distance)[0]
         choices = []
         for fid, sp, line, width in main_rows:
-            near = roadobjects._nearest(q, [(fid, sp, line, 0.)])
+            near = _nearest(q, [(fid, sp, line, 0.)])
             travel = near[7]*(sp.dir or (1 if near[7]@direction >= 0. else -1))
             if travel@direction < .5 or abs((q-near[6])@travel) > 2.:
                 continue                 # no extrapolation beyond a missing through-road segment
@@ -358,16 +357,26 @@ def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, 
                 distance=distance_text, advance_m=distance_m)
 
 
-def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True, link_ids=()):
+def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True, link_ids=(),
+          pavements=None, ramp_mains=None):
     """Place OSM destination signs along the generated mainline and in clear exit gores.
 
-    The 1.5.5 road Spec does not carry the older port's lane cross-section fields, so this
-    projection uses its current centreline and carriageway width directly.
+    Choose one clear gore on the full generated pavement, then test tile ownership.
+    Searching farther along the ramp for each tile produces duplicate small panels.
     """
+    import roadlanes
     x0, y0, x1, y1 = box
     links = set(link_ids)
-    main = [r for r in roads if r[1].cls in MAIN_CLASSES and r[0] not in links]
-    ramps = [r for r in roads if r[0] in links or r[1].cls in LINK_CLASSES]
+    if pavements is None:
+        import roads as roadsmod
+        pavements = []
+        for fid, sp, line, _ in roads:
+            sp = sp._replace(link=sp.link or fid in links or sp.cls in LINK_CLASSES)
+            p, width = roadlanes.pavement(sp, roadsmod._with_cross(line, None), frame, left_hand)
+            pavements.append((fid, sp, p, width))
+    main = [(fid, sp, line, width) for fid, sp, line, width in pavements
+            if sp.cls in MAIN_CLASSES and not sp.link]
+    ramp_mains = ramp_mains or {}
     out, seen = [], set()
 
     def nearest(rows, q, direction, limit):
@@ -380,8 +389,8 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
             travel = near[7] * (spec.dir or 1) if spec.oneway else _travel(near, direction)
             if float(travel @ direction) < .45:
                 continue
-            found.append((near[0], near, travel))
-        return min(found, key=lambda x: x[0]) if found else None
+            found.append((near[0], near, travel, row[3]))
+        return min(found, key=lambda x: (x[0], x[1][1])) if found else None
 
     for obj in objects:
         extra = obj.get('exit')
@@ -400,52 +409,29 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
             candidate = nearest(main, q, direction, 40.)
             if candidate is None:
                 continue
-            _, near, travel = candidate
+            _, near, travel, paved_width = candidate
             _, _, spec, line, k, t, at_xy, _ = near
             at = line[k] * (1. - t) + line[k + 1] * t
             width, height = dimensions(label, 'advance')
             right = np.array([travel[1], -travel[0]])
-            centre = at[:2] + right * side * (float(spec.width) / 2. + 2. + width / 2.)
+            cross = roadlanes.cross(line)
+            # The fourth row value is its generated ribbon width. Its cross-section can
+            # vary through lane-count changes, rather than being the native Spec width.
+            edge = abs((cross[k]*(1.-t)+cross[k+1]*t)@right)*paved_width/2.
+            centre = at[:2] + right * side * (edge + 2. + width / 2.)
             if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1) or _on_deck(at[:2], chunks, 2.):
                 continue
             out.append(_make_sign(obj, 'advance', centre, travel, at, frame, elev, side, width, height, text, distance))
 
-        # The small EXIT panel belongs in the paved gore: wait until the split is wide enough
-        # for the panel, rather than putting its posts in either carriageway.
-        if not ramps or not main:
+        width, height = dimensions(label, 'ramp')
+        candidate = _gore(extra, approach, ramp, pavements, ramp_mains, width)
+        if candidate is None:
             continue
-        ramp_len = ramp_end[2]
-        for station_m in np.arange(8., min(GORE_SEARCH_M, ramp_len) + .01, 4.):
-            q, direction, _ = _station(ramp, station_m)
-            rc = nearest(ramps, q, direction, 45.)
-            mc = nearest(main, q, _station(approach, full[2])[1], 75.)
-            if rc is None or mc is None:
-                continue
-            _, rn, ramp_travel = rc
-            _, mn, _ = mc
-            _, _, ramp_spec, ramp_line, rk, rt, ramp_xy, _ = rn
-            _, _, main_spec, main_line, mk, mt, main_xy, _ = mn
-            ramp_at = ramp_line[rk] * (1. - rt) + ramp_line[rk + 1] * rt
-            main_at = main_line[mk] * (1. - mt) + main_line[mk + 1] * mt
-            separation = ramp_at[:2] - main_at[:2]
-            gap_centres = float(np.linalg.norm(separation))
-            if gap_centres < 1e-3:
-                continue
-            outward = separation / gap_centres
-            right = np.array([ramp_travel[1], -ramp_travel[0]])
-            if float(outward @ right) * side < .15:
-                continue
-            width, height = dimensions(label, 'ramp')
-            gap = gap_centres - (float(main_spec.width) + float(ramp_spec.width)) / 2.
-            if gap < width + 1.5:
-                continue
-            centre = main_at[:2] + outward * (float(main_spec.width) / 2. + gap / 2.)
-            if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1):
-                continue
-            if _on_deck(ramp_at[:2], chunks, width / 2. + 2.):
-                continue
-            out.append(_make_sign(obj, 'ramp', centre, ramp_travel, ramp_at, frame, elev, side, width, height))
-            break
+        _, at, travel, centre = candidate
+        if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1):
+            continue
+        if not _on_deck(centre, chunks, width/2.+2.):
+            out.append(_make_sign(obj, 'ramp', centre, travel, at, frame, elev, side, width, height))
     return out
 
 
