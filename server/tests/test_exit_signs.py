@@ -1,5 +1,7 @@
 """OSM exit-sign placement against the current 1.5.5 road geometry."""
 import sys
+import copy
+import unittest
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +12,8 @@ sys.path.insert(0, str(ROOT))
 import exitsigns
 import geodesy
 import roads
+import roadcontext
+import roadlanes
 
 
 FRAME = geodesy.EnuFrame(41.7, -85.0)
@@ -73,3 +77,101 @@ def test_index_records_uses_real_destination_tags_and_skips_entries():
     rows = exitsigns.index_records(main, ramps, coords, tags)
     assert len(rows) == 1
     assert rows[0]["ways"][0]["label"] == {"ref": "36", "names": ["Auburn", "Angola"], "routes": []}
+
+
+class ExitSignsTest(unittest.TestCase):
+    def test_existing_sign_mesh_and_advance_distances(self):
+        test_advance_and_gore_signs_follow_existing_road_geometry()
+
+    def test_existing_osm_index_labels_and_entries(self):
+        test_index_records_uses_real_destination_tags_and_skips_entries()
+
+    def test_one_small_panel_across_all_tiles_of_the_same_gore(self):
+        rows, obj = fixture()
+        flat = lambda la, lo: np.zeros_like(np.asarray(la, float))
+        boxes = [(-1800., -300., 0., 100.), (0., -300., 64., 100.),
+                 (64., -300., 128., 100.), (128., -300., 256., 100.)]
+        signs = [s for box in boxes for s in exitsigns.place(FRAME, [obj, obj], rows, box, flat,
+                                                            link_ids={'ramp'})]
+        self.assertEqual(len([s for s in signs if s['kind'] == 'ramp']), 1,
+                         'later tiles must not search for another place down the same ramp')
+        self.assertEqual(sorted(s['distance'] for s in signs if s['kind'] == 'advance'),
+                         ['1 MILE', '1/2 MILE', '1/4 MILE'])
+        whole = exitsigns.place(FRAME, [obj], rows, (-1800., -300., 256., 100.), flat, link_ids={'ramp'})
+        self.assertEqual(sorted((s['kind'], s['centre']) for s in signs),
+                         sorted((s['kind'], s['centre']) for s in whole))
+
+    def test_entire_panel_clears_the_actual_generated_pavement_on_left_and_right_exits(self):
+        for side in (1, -1):
+            rows, obj = fixture()
+            obj = copy.deepcopy(obj)
+            if side < 0:
+                rows = [(fid, sp, line*np.array([1., -1., 1.]), lon) for fid, sp, line, lon in rows]
+                ramp = rows[1][2]
+                obj['exit']['ramp'] = [ll(x, y) for x, y, _ in ramp]
+                obj['exit']['side'] = side
+            pavements = []
+            for fid, sp, line, _ in rows:
+                sp = sp._replace(link=fid == 'ramp')
+                p, width = roadlanes.pavement(sp, roads._with_cross(line, None), FRAME)
+                pavements.append((fid, sp, p, width))
+            signs = exitsigns.place(FRAME, [obj], (), (-1800., -300., 256., 300.),
+                                   lambda la, lo: np.zeros_like(la), pavements=pavements)
+            gore, = [s for s in signs if s['kind'] == 'ramp']
+            polygons = [exitsigns._outline(line, width) for _, _, line, width in pavements]
+            self.assertTrue(exitsigns._clear(np.array(gore['centre'][:2]),
+                                            gore['width']/2+exitsigns.GORE_CLEAR_M, polygons))
+            self.assertGreater(gore['travel'][0], .99, 'panel faces the approaching highway traffic')
+
+    def test_real_tile_builder_claims_one_welcome_center_sign_with_full_source_context(self):
+        from test_auxiliary_markings import interchange
+        from test_roads import FRAME as frame, flat
+        f = interchange()
+        f.ids = np.array(['osm:w10:a', 'osm:w11:b', 'osm:w12:c', 'osm:w20:r'])
+        ramp = f.parts(3)[0][0]
+        approach = np.vstack([f.parts(0)[0][0], f.parts(1)[0][0][1:]])
+        obj = dict(id=-20, exit=dict(label=dict(ref='', names=['Welcome Center'], routes=[]),
+                    approach=approach.tolist(), ramp=ramp.tolist(), main_ids=[10, 11, 12], ramp_id=20, side=1))
+        f._road_context = roadcontext.Context(lambda key: f)
+        signs = []
+        for tx in range(-1, 4):
+            for ty in (-1, 0):
+                roads.build_tile(frame, tx, ty, [f], flat, osm_objects=[obj], exit_signs=signs)
+        gore, = [s for s in signs if s['kind'] == 'ramp']
+        self.assertEqual(gore['style'], 'rest_area')
+        self.assertEqual(gore['label']['names'], ['Welcome Center'])
+        ribbons, mains = exitsigns.source_pavements(frame, obj, f._road_context)
+        source = exitsigns.source_pavements(frame, obj, f._road_context)
+        self.assertIs(source[0], ribbons, 'source ribbons are reused across tiles')
+        self.assertIs(source[1], mains)
+
+    def test_distinct_osm_exits_keep_their_own_small_panels(self):
+        rows, first = fixture()
+        first = copy.deepcopy(first)
+        second = copy.deepcopy(first)
+        second['id'], second['exit']['ramp_id'] = -202, 202
+        second['exit']['main_ids'] = [101]
+        for key in ('approach', 'ramp'):
+            xy = exitsigns._xy(FRAME, second['exit'][key])+[600., 0.]
+            second['exit'][key] = [ll(x, y) for x, y in xy]
+        pavements = []
+        for obj, offset, mid, rid in ((first, 0., 100, 201), (second, 600., 101, 202)):
+            for k, (_, sp, line, _) in enumerate(rows):
+                sp = sp._replace(link=k == 1)
+                p, width = roadlanes.pavement(sp, roads._with_cross(line+[offset, 0., 0.], None), FRAME)
+                pavements.append((f'osm:w{rid if k else mid}:segment', sp, p, width))
+        signs = exitsigns.place(FRAME, [first, second], (), (-1800., -300., 900., 100.),
+                               lambda la, lo: np.zeros_like(la), pavements=pavements)
+        self.assertEqual({s['id'] for s in signs if s['kind'] == 'ramp'}, {-201, -202})
+
+    def test_narrow_split_does_not_fall_back_to_a_second_shoulder_panel(self):
+        rows, obj = fixture()
+        rows[1][2][:, 1] *= .025
+        obj['exit']['ramp'] = [ll(x, y) for x, y, _ in rows[1][2]]
+        signs = exitsigns.place(FRAME, [obj], rows, (-1800., -300., 256., 100.),
+                               lambda la, lo: np.zeros_like(la), link_ids={'ramp'})
+        self.assertFalse(any(s['kind'] == 'ramp' for s in signs))
+
+
+if __name__ == '__main__':
+    unittest.main()

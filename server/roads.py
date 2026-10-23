@@ -747,7 +747,14 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     k = (urban_fn, widths, bool(left_hand))     # a bound method equals another of the same object and function
     got = memo.get(k)
     if got is None:
-        got = memo[k] = _road_specs(feats, urban_fn, widths, left_hand)
+        got = _road_specs(feats, urban_fn, widths, left_hand)
+        context = feats.__dict__.get('_road_context')
+        if context is not None:
+            for i, spec in enumerate(got):
+                if spec is not None and (spec.cls in {'motorway', 'trunk'} or spec.link):
+                    source, j = context.feature(feats, i)
+                    got[i] = road_specs(source, urban_fn, widths, left_hand)[j]
+        memo[k] = got
     return list(got)
 
 
@@ -1253,7 +1260,8 @@ def geometry_parts(feats, i):
     if i in memo:
         return memo[i]
     context = feats.__dict__.get('_road_context')
-    if context is not None:
+    cls = str(feats.attrs.get('class', ['unknown'] * len(feats))[i])
+    if context is not None and (cls in {'motorway', 'trunk'} or is_link(feats, i)):
         source, j = context.feature(feats, i)
         result = geometry_parts(source, j)
         params = source.__dict__.get('_geometry_params', {})
@@ -5211,10 +5219,18 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             park.extend(parking.aisle_spots(roads, aisles, (x0, y0, x1, y1)))
     if osm_objects and exit_signs is not None:
         import exitsigns
-        pavements = exitsigns.gore_pavements(frame, osm_objects, {fid: sp for fid, (_, _, sp) in seen.items()},
-                                            sections, ramp_mains, auxiliary, left_hand)
-        exit_signs.extend(exitsigns.place(frame, osm_objects, roads, (x0, y0, x1, y1), elev,
-                                          chunks, left_hand, mph, pavements=pavements, ramp_mains=ramp_mains))
+        context = next((f.__dict__['_road_context'] for f in cells
+                        if f is not None and f.__dict__.get('_road_context') is not None), None)
+        if context is None:
+            pavements = exitsigns.gore_pavements(frame, osm_objects, {fid: sp for fid, (_, _, sp) in seen.items()},
+                                                sections, ramp_mains, auxiliary, left_hand)
+            exit_signs.extend(exitsigns.place(frame, osm_objects, roads, exact, elev, chunks, left_hand, mph,
+                                              pavements=pavements, ramp_mains=ramp_mains))
+        else:
+            for obj in {o['id']: o for o in osm_objects if o.get('exit')}.values():
+                pavements, mains = exitsigns.source_pavements(frame, obj, context, left_hand)
+                exit_signs.extend(exitsigns.place(frame, [obj], (), exact, elev, chunks, left_hand, mph,
+                                                  pavements=pavements, ramp_mains=mains))
     import highway_markings
     return highway_markings.apply(chunks, frame)
 

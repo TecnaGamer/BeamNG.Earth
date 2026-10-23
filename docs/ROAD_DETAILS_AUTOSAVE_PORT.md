@@ -28,8 +28,20 @@ The newer upstream bridge/tunnel profiles and approach solver are retained. This
 
 These corrections were reproduced against cached I-69 data from the user's session. The sharpest sampled direction change on the affected through-road approach fell from about 0.72 degrees to 0.14 degrees. Offline renders no longer show the collapsed join.
 
+## Duplicate signs and highway cell seams
+
+- Choose one suitable small exit/rest-area sign position on the complete generated pavement, then let its single owning tile draw it. Neighboring tiles cannot search farther down the same ramp and create another panel.
+- Check clearance against the actual lane widths, shoulders and auxiliary pavement. Keep distinct OSM exits and all three advance-sign distances.
+- Use a consistent source neighbourhood for highway curves, lane-count profiles and ramp tapers. Rendering, grading, surface materials and navigation share it, so a cell boundary cannot select a different fit or restart a taper.
+- Cache the source neighbourhoods and sign ribbons. Neighbourhoods use road-only cells around source vertices, including a 320 m approach margin; the cache keeps at most 12 entries with a 64 MiB estimated budget. A cold cache can fetch adjacent road cells; failed reads are retried instead of keeping an incomplete fit.
+- Put this and subsequent test EXEs in `BeamNG.Earth-main/builds`.
+
+The current Overture I-69 cache audit covered 220 source cells and 65 motorway features. It reproduced four cell-boundary disagreements larger than 1 cm, the largest about 0.97 m, and found none with the corrected fitting. A separate audit of the older OSM cache covered 160 cells and 123 motorway features, reducing six disagreements (up to 0.98 m) to none. With each provider's cached geometry, the welcome-center test generated one small panel and the three advance signs across 39 rendering tiles. The Overture sign test had complete cached coverage; missing neighbouring cells in the older OSM audit were reported by the scripts. In normal operation MapData fetches or retries missing cells.
+
 ## Validation
 
+- Latest sign/seam correction: 242 focused Python tests passed, including road contexts, actual tile sign ownership, left/right gore clearance, distinct nearby exits, narrow splits, map-data resolver integration and deterministic cache content.
+- The sign/seam EXE passed 19 regression tests against its embedded modules, generated 16,576 road triangles, retained its lettering/state assets and passed the packaged server command-line smoke check. The final EXE copy matched the staging build's SHA-256 hash.
 - 219 focused Python tests passed across road geometry, paint, ramps, terminals, OSM lanes, grading, mesh generation, AI graph, bridges, tunnels and EXE packaging.
 - All 47 Lua test suites passed, including autosave and startup selection.
 - Terrain blend and generated-level consistency: four tests passed after correcting the stale test fixture and grass generator.
@@ -39,7 +51,9 @@ These corrections were reproduced against cached I-69 data from the user's sessi
 
 ## In-game checklist
 
-- [ ] Close the current game and companion, then launch `BeamNG.Earth-1.5.5-beta-ramp-bridge-markings.exe` beside the repository.
+- [ ] Close the current game and companion, then launch `BeamNG.Earth-main/builds/BeamNG.Earth-1.5.5-beta-signs-road-seams.exe`.
+- [ ] Drive past the I-69 Michigan welcome center: one small blue sign in the gore, with the 1-mile, 1/2-mile and 1/4-mile advance signs retained.
+- [ ] Recheck the sideways jump between the welcome center and the later I-69 position. The reproduced source-cell seams include approximately `42.081913, -84.995605` and `42.295677, -84.968264`.
 - [ ] Check a road in each selected state and a neighboring state; verify the wide dashes stay continuous across streamed tile boundaries.
 - [ ] Check one-way roads in both geometry directions, two-way roads and OSM lane-count changes.
 - [ ] Drive entrance and exit ramps, interstate connectors and ramp terminals; inspect the tapers, white terminal dividers and individual lane arrows.

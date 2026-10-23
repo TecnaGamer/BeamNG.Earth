@@ -214,6 +214,30 @@ def _outline(line, width):
     return np.vstack([a, b[::-1], a[:1]])
 
 
+def source_pavements(frame, obj, context, left_hand=False):
+    """The same complete exit pavement in every rendering tile, including its through road.
+
+    An exit's source path fixes the queried cells. Other exits returned by a tile's wider
+    query cannot change this exit's first clear gore. Cache the flat ribbons per anchor;
+    elevation is only sampled after a sign has been claimed by its owning tile.
+    """
+    import roads
+    extra = obj['exit']
+    feats = context.around(np.vstack([extra['approach'], extra['ramp']]))
+    memo = feats.__dict__.setdefault('_exit_pavements', {})
+    key = (frame.lat0, frame.lon0, frame.h0, bool(left_hand), obj['id'])
+    if key not in memo:
+        specs = {str(feats.ids[i]): sp for i, sp in enumerate(roads.road_specs(feats, left_hand=left_hand))
+                 if sp is not None}
+        sections = roads._join_sections(frame, [feats])
+        _, _, mains, auxiliary = roads.projected_ramp_layout(frame, [feats], left_hand)
+        ribbons = gore_pavements(frame, [obj], specs, sections, mains, auxiliary, left_hand)
+        if len(memo) >= 16:
+            memo.pop(next(iter(memo)))
+        memo[key] = ribbons, mains
+    return memo[key]
+
+
 def _clear(centre, radius, polygons):
     """A conservative disc keeps the entire panel and both posts clear of pavement."""
     for poly in polygons:

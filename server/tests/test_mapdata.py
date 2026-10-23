@@ -493,6 +493,18 @@ class StacTest(Sources, SmallBlocks, unittest.TestCase):
 
 @needs_duckdb
 class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
+    def test_decoded_and_cached_roads_share_the_source_neighbourhood_resolver(self):
+        md, _ = self.mapdata()
+        cd = md.cell(mf.CELL, ('roads',))
+        feats = cd.layers['roads']
+        self.assertIs(feats._road_context, md.road_context)
+        digest = cd.digest()
+        source, row = md.road_context.feature(feats, 1)
+        self.assertEqual(source.ids[row], feats.ids[1])
+        self.assertNotIn('_road_context', source.__dict__, 'merged source context must not recurse')
+        self.assertIs(md.cell(mf.CELL, ('roads',)).layers['roads']._road_context, md.road_context)
+        self.assertEqual(cd.digest(), digest, 'derived fitting context does not change cached source data')
+
     def test_roads(self):
         md, t = self.mapdata()
         cd = md.cell(mf.CELL, ("roads",))

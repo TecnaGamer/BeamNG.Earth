@@ -69,7 +69,17 @@ class Context:
         if not rings:
             source = merge([feats])
             return source, source.index(str(feats.ids[i]))
-        points = np.concatenate(rings)
+        source = self.around(np.concatenate(rings))
+        row = source.index(str(feats.ids[i]))
+        if row < 0:
+            raise ValueError(f'road context is missing source feature {feats.ids[i]}')
+        return source, row
+
+    def around(self, points):
+        """One stable neighbourhood for a whole source line or an OSM exit approach."""
+        points = np.asarray(points, float)
+        if not len(points):
+            return mapgeom.empty('roads')
         pad = MARGIN_M / 110540.
         lon_pad = pad / max(.01, float(np.cos(np.radians(points[:, 1])).min()))
         keys = tuple(mapcells.cells_near_points(points[:, 1], points[:, 0], pad, lon_pad))
@@ -77,8 +87,6 @@ class Context:
             got = self.cache.get(keys)
             if got is None:
                 context = merge([self.cell(key) for key in keys])
-                if context.index(str(feats.ids[i])) < 0:
-                    raise ValueError(f'road context is missing source feature {feats.ids[i]}')
                 # Reserve space for fitted curves and derived layouts as well as source arrays.
                 size = 3 * sum(a.nbytes for a in context.to_arrays('').values())
                 got = context, size
@@ -89,4 +97,4 @@ class Context:
                     self.bytes -= old_size
             else:
                 self.cache.move_to_end(keys)
-            return got[0], got[0].index(str(feats.ids[i]))
+            return got[0]
