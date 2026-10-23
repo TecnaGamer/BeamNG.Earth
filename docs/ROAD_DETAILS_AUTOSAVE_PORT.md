@@ -38,8 +38,19 @@ These corrections were reproduced against cached I-69 data from the user's sessi
 
 The current Overture I-69 cache audit covered 220 source cells and 65 motorway features. It reproduced four cell-boundary disagreements larger than 1 cm, the largest about 0.97 m, and found none with the corrected fitting. A separate audit of the older OSM cache covered 160 cells and 123 motorway features, reducing six disagreements (up to 0.98 m) to none. With each provider's cached geometry, the welcome-center test generated one small panel and the three advance signs across 39 rendering tiles. The Overture sign test had complete cached coverage; missing neighbouring cells in the older OSM audit were reported by the scripts. In normal operation MapData fetches or retries missing cells.
 
+## Remaining angular road curves
+
+- Smooth the ground intervals of long road features containing short bridge/tunnel ranges. Previously any off-ground range bypassed smoothing for the whole feature.
+- Keep the span coordinates and boundary points exact, and match each ground approach to the span's direction. Ground curve parameters are used only when cutting fitted ground geometry; bridge/tunnel extraction continues to use its raw source parameter.
+- Preserve mapped approach samples around pinned junctions so fairing cannot introduce a small artificial bend there.
+- Limit mesh simplification by both distance and tangent error (0.1 degrees). Pavement, shoulders and markings retain their fitted directions through streamed tile boundaries.
+
+The cached I-69 audit around the user's later position (`42.8230, -84.2666`) reproduced angular ground sections on features containing bridge flags. The largest sampled ground-vertex heading step fell from about 6.05 degrees to 0.67 degrees. An offline comparison of the generated pavement/marking triangles shows the rounded curves. The previous 220-cell corridor audit still reports no disagreement between repeated copies of a motorway feature. These are offline generation checks; in-game driving remains on the checklist below.
+
 ## Validation
 
+- Latest curve correction: 250 focused Python tests passed. New cases cover smoothing on mixed ground/bridge/tunnel features, unchanged span coordinates, matching portal directions, reversed sources, pinned junctions, final tile-mesh continuity and angular mesh simplification.
+- The smooth-curves EXE passed 27 regression tests against its embedded modules, generated 17,948 road triangles, retained its bundled assets and passed the packaged server command-line smoke check. The delivered copy matched the staging build's SHA-256 hash.
 - Latest sign/seam correction: 242 focused Python tests passed, including road contexts, actual tile sign ownership, left/right gore clearance, distinct nearby exits, narrow splits, map-data resolver integration and deterministic cache content.
 - The sign/seam EXE passed 19 regression tests against its embedded modules, generated 16,576 road triangles, retained its lettering/state assets and passed the packaged server command-line smoke check. The final EXE copy matched the staging build's SHA-256 hash.
 - 219 focused Python tests passed across road geometry, paint, ramps, terminals, OSM lanes, grading, mesh generation, AI graph, bridges, tunnels and EXE packaging.
@@ -51,7 +62,8 @@ The current Overture I-69 cache audit covered 220 source cells and 65 motorway f
 
 ## In-game checklist
 
-- [ ] Close the current game and companion, then launch `BeamNG.Earth-main/builds/BeamNG.Earth-1.5.5-beta-signs-road-seams.exe`.
+- [ ] Close the current game and companion, then launch `BeamNG.Earth-main/builds/BeamNG.Earth-1.5.5-beta-smooth-curves.exe`.
+- [ ] Drive the reported I-69 curves near `42.8230, -84.2666`. Check that the pavement, yellow inside edge and white markings bend together without returning to long straight segments as tiles stream in.
 - [ ] Drive past the I-69 Michigan welcome center: one small blue sign in the gore, with the 1-mile, 1/2-mile and 1/4-mile advance signs retained.
 - [ ] Recheck the sideways jump between the welcome center and the later I-69 position. The reproduced source-cell seams include approximately `42.081913, -84.995605` and `42.295677, -84.968264`.
 - [ ] Check a road in each selected state and a neighboring state; verify the wide dashes stay continuous across streamed tile boundaries.

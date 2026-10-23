@@ -103,6 +103,7 @@ EDGE_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.45, "inset": 0.3}
 RAMP_DOT_W = .25
 RAMP_DOT_M, RAMP_DOT_GAP_M = 1.8, 5.5
 CURVE_SIMPLIFY_M = .005
+CURVE_HEADING_DEG = .1  # chord error against the fitted tangent; distance alone permits visible knees
 AUX_LANE_M, AUX_TAPER_M = 200., 70.
 MEASURE_SKIP = {"service"}      # classes not measured between buildings (lots, alleys: far walls)
 MEASURE_MAX = 3.0               # a measured carriageway at most this times the class default
@@ -299,7 +300,7 @@ def _parts_by_level_new(feats, i, want):
             if len(ring) < 2:
                 continue
             for a, b in pieces:
-                param = feats.__dict__.get("_geometry_params", {}).get((i, pi, ri))
+                param = feats.__dict__.get("_geometry_params", {}).get((i, pi, ri)) if want == 'ground' else None
                 if param is None:
                     r = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
                 else:
@@ -1248,13 +1249,108 @@ def _joined_end_curve(feats, i, ring, end, nodes, bend):
     return fit[keep]/scale+node, at[keep]*(la+lb)/lb
 
 
+def _endpoint_tangents(feats, i, ring, xy, nodes, scale):
+    """Shared inward/outward directions at pinned source-feature endpoints."""
+    ends = []
+    for k, other in ((0, 1), (-1, -2)):
+        u = xy[other]-xy[k]
+        u /= max(np.linalg.norm(u), 1e-9)
+        candidates = []
+        key = tuple(np.round(ring[k, :2]*1e7).astype(np.int64))
+        neighbours = nodes.get(key, [])
+        for j, v in neighbours if len(neighbours) == 2 else ():
+            if j == i:
+                continue
+            v = v*scale
+            v /= max(np.linalg.norm(v), 1e-9)
+            if u @ v < -math.cos(math.radians(35.)):
+                candidates.append(v)
+        v = min(candidates, key=lambda v: u @ v) if candidates else -u
+        t = u-v
+        t /= max(np.linalg.norm(t), 1e-9)
+        ends.append(t if k == 0 else -t)
+    return ends
+
+
+def _ground_level_geometry(feats, i, spec):
+    """Smooth ground sections of a mixed-level feature, with exact, tangent-matched portals.
+
+    A small bridge flag on a many-kilometre highway must not disable all its ground curves.
+    Keep off-ground geometry raw and fit each ground interval in the original source-distance
+    parameter. Bridge/tunnel callers continue to use the original source coordinates.
+    """
+    ranges = level_ranges(feats, i)
+    nodes = _geometry_nodes(feats)
+    fixed_nodes = feats.__dict__.get('_geometry_fixed', set())
+    connectors = feats.rules.get('connectors')
+    cuts = sorted({0., 1., *(v for a, b, _ in ranges for v in (a, b))})
+    bend = 12. if spec is not None and spec.cls in {'motorway', 'trunk'} else 4.
+    result = []
+    for pi, part in enumerate(feats.parts(i)):
+        rings = []
+        for ri, ring in enumerate(part):
+            if len(ring) < 2:
+                rings.append(ring)
+                continue
+            ref = ring[0, :2]
+            scale = np.array([111320.*math.cos(math.radians(float(ref[1]))), 110540.])
+            raw_xy = (ring[:, :2]-ref)*scale
+            seg = np.hypot(np.diff(ring[:, 0])*math.cos(math.radians(float(ring[:, 1].mean()))), np.diff(ring[:, 1]))
+            length_m = float(seg.sum())*111320.
+            arc = np.r_[0., np.cumsum(seg)]/max(seg.sum(), 1e-15)
+            ends = _endpoint_tangents(feats, i, ring, raw_xy, nodes, scale)
+            fixed = [float(connectors.start[j]) for j in connectors.rows(i)] if connectors is not None else []
+            for k, p in enumerate(ring):
+                key = tuple(np.round(p[:2]*1e7).astype(np.int64))
+                if len(nodes.get(key, ())) != 2 or key in fixed_nodes:
+                    fixed.append(float(arc[k]))
+            lines, params = [], []
+            for a, b in zip(cuts[:-1], cuts[1:]):
+                off_ground = any(start <= (a+b)/2 <= end for start, end, _ in ranges)
+                # A float32 rule cut can be a fraction of a millimetre from a raw vertex.
+                # Keep its exact portal, without a duplicate ground sample next to it.
+                margin = 0. if off_ground else .01/max(length_m, 1e-9)
+                at = np.unique(np.r_[a, arc[(arc > a+margin) & (arc < b-margin)], b])
+                ll = np.c_[np.interp(at, arc, ring[:, 0]), np.interp(at, arc, ring[:, 1])]
+                if not off_ground and b-a > MIN_PART:
+                    xy = (ll-ref)*scale
+                    local = (at-a)/(b-a)
+                    pinned = [(v-a)/(b-a) for v in fixed if a < v < b]
+                    pinned = [v for v in pinned if 0 < int(np.argmin(abs(local-v))) < len(local)-1]
+                    locks = {0, len(xy)-1, *(int(np.argmin(abs(local-v))) for v in pinned)}
+                    if spec is not None and spec.cls in {'motorway', 'trunk'} and not spec.link:
+                        # Retain the mapped approach directions at an exact junction.
+                        # Moving its nearest shape samples while pinning only the node
+                        # introduces a small S-bend on an otherwise straight approach.
+                        shape_locks = {j for k in locks for j in (k-1, k, k+1) if 0 <= j < len(xy)}
+                        xy = _fair_highway_shape(xy, sorted(shape_locks))
+                    directions = list(ends)
+                    for end, cut, side in ((0, a, 'left'), (1, b, 'right')):
+                        if (end == 0 and a > 0.) or (end == 1 and b < 1.):
+                            k = int(np.clip(np.searchsorted(arc, cut, side=side)-1, 0, len(ring)-2))
+                            d = raw_xy[k+1]-raw_xy[k]
+                            directions[end] = d/max(np.linalg.norm(d), 1e-9)
+                    smooth, param = _smooth_road(xy, end_dirs=directions, source_arc=local,
+                                                 bend_m=bend, fixed=pinned)
+                    fitted = smooth/scale+ref
+                    fitted[[0, -1]] = ll[[0, -1]]
+                    ll, at = fitted, a+param*(b-a)
+                lines.append(ll if not lines else ll[1:])
+                params.append(at if not params else at[1:])
+            rings.append(np.concatenate(lines))
+            feats.__dict__.setdefault('_geometry_params', {})[(i, pi, ri)] = np.concatenate(params)
+        result.append(rings)
+    return result
+
+
 def geometry_parts(feats, i):
     """Shared road geometry for rendering, grading, materials, bridges and the AI graph.
 
     Fit against the whole source feature's neighbourhood, before clipping: road skins,
     paint, terrain and AI use identical curves on either side of a source-cell boundary.
     """
-    if level_ranges(feats, i):
+    ranges = level_ranges(feats, i)
+    if ranges and sum(b-a for a, b, _ in ranges) >= 1.-MIN_PART:
         return feats.parts(i)
     memo = feats.__dict__.setdefault("_road_geometry", {})
     if i in memo:
@@ -1274,6 +1370,9 @@ def geometry_parts(feats, i):
         return result
     specs = road_specs(feats)
     bs = bridge_specs(feats)
+    if ranges:
+        result = memo[i] = _ground_level_geometry(feats, i, specs[i] or bs[i])
+        return result
     link = is_link(feats, i)
     mains = [(str(feats.ids[j]), geometry_parts(feats, j), sp or bs[j]) for j, sp in enumerate(specs)
              if not is_link(feats, j) and (sp or bs[j]) is not None
@@ -1306,24 +1405,7 @@ def geometry_parts(feats, i):
                 sp = specs[i] or bs[i]
                 bend = 12. if sp is not None and sp.cls in {'motorway', 'trunk'} else 4.
                 joined = [_joined_end_curve(feats, i, shape, k, nodes, bend) for k in (0, -1)]
-                ends = []
-                for k, other in ((0, 1), (-1, -2)):
-                    u = xy[other]-xy[k]
-                    u /= max(np.linalg.norm(u), 1e-9)
-                    candidates = []
-                    key = tuple(np.round(ring[k, :2]*1e7).astype(np.int64))
-                    neighbours = nodes.get(key, [])
-                    for j, v in neighbours if len(neighbours) == 2 else ():
-                        if j == i:
-                            continue
-                        v = v*scale
-                        v /= max(np.linalg.norm(v), 1e-9)
-                        if u @ v < -math.cos(math.radians(35.)):
-                            candidates.append(v)
-                    v = min(candidates, key=lambda v: u @ v) if candidates else -u
-                    t = u-v
-                    t /= max(np.linalg.norm(t), 1e-9)
-                    ends.append(t if k == 0 else -t)
+                ends = _endpoint_tangents(feats, i, ring, xy, nodes, scale)
                 ends = [None if join is not None else end for join, end in zip(joined, ends)]
                 boundaries = [v for a, b, _ in level_ranges(feats, i) for v in (a, b)]
                 seg = np.hypot(np.diff(ring[:, 0])*math.cos(math.radians(float(ring[:, 1].mean()))), np.diff(ring[:, 1]))
@@ -1973,7 +2055,8 @@ def _ramp_guides(frame,zones,box,elev,fixed_height=None):
             look={**LANE_LINE,'w':RAMP_DOT_W,'tl':RAMP_DOT_M+RAMP_DOT_GAP_M,
                   'dash':RAMP_DOT_M,'gap':RAMP_DOT_GAP_M,'ramp_guidance':True,'uv_reference':reference}
             for piece in clip_polyline(reference,*box):
-                for c in split(densify(simplify(piece,CURVE_SIMPLIFY_M,ztol=.005 if fixed_height is not None else None))):
+                for c in split(densify(simplify(piece,CURVE_SIMPLIFY_M,ztol=.005 if fixed_height is not None else None,
+                                                heading=CURVE_HEADING_DEG))):
                     chunk=_chunk(look,RAMP_DOT_W,c,reference)
                     if fixed_height is not None:chunk.update(fixed=True,structure='bridge')
                     yield chunk
@@ -3120,15 +3203,24 @@ def clip_polyline(pts, x0, y0, x1, y1):
     return pieces
 
 
-def simplify(pts, tol=SIMPLIFY_M, ztol=None):
+def simplify(pts, tol=SIMPLIFY_M, ztol=None, heading=None):
     """Ramer-Douglas-Peucker on the xy of a polyline (k, D). ztol (D >= 3): a point is also kept where its height is
     more than this off the line between the kept ones (a deck drawn at its own heights: on xy alone a straight bridge
     kept its two ends in a tile and lost its rise between, 2.5 m below the abutment it met; a car drove into the
-    ground, Baltimore's Lombard Street 2026-10-20). Pure."""
+    ground, Baltimore's Lombard Street 2026-10-20). heading: maximum chord/tangent error in degrees;
+    retaining curve directions prevents long straight chords from putting knees back into fitted roads. Pure."""
     if len(pts) < 3:
         return pts
     widths = np.linalg.norm(pts[:, 3:5], axis=1) if pts.shape[1] == 5 else None
     varying = widths is not None and np.ptp(widths) > .001
+    if heading is not None:
+        delta = np.diff(pts[:, :2], axis=0)
+        length = np.linalg.norm(delta, axis=1)
+        unit = delta/np.maximum(length[:, None], 1e-9)
+        tangents = np.vstack([unit[0], unit[:-1]+unit[1:], unit[-1]])
+        tangents /= np.maximum(np.linalg.norm(tangents, axis=1)[:, None], 1e-9)
+        arc = np.r_[0., np.cumsum(length)]
+        cosine = math.cos(math.radians(heading))
     keep = np.zeros(len(pts), bool)
     keep[0] = keep[-1] = True
     stack = [(0, len(pts) - 1)]
@@ -3156,6 +3248,11 @@ def simplify(pts, tol=SIMPLIFY_M, ztol=None):
         k = int(np.argmax(d))
         if d[k] > tol:
             m = i + 1 + k
+            keep[m] = True
+            stack.append((i, m))
+            stack.append((m, j))
+        elif heading is not None and L > 1e-9 and np.min(tangents[[i, j]] @ (ab/L)) < cosine:
+            m = int(np.clip(np.searchsorted(arc, (arc[i]+arc[j])/2), i+1, j-1))
             keep[m] = True
             stack.append((i, m))
             stack.append((m, j))
@@ -4956,7 +5053,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if spec.link:
                 line=_outside_mainline(line,width,main_pavements(fid))
             for piece in clip_polyline(line, *box):
-                for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
+                for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M, heading=CURVE_HEADING_DEG))):
                     if len(c) >= 2:
                         chunks.append(_chunk(look, width, c, reference=_uv_reference(sections,fid,pts)))
             continue
@@ -4968,7 +5065,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         for off, lw in lanes:
             line = offset_polyline(pts, off + pavement_offset(spec, left_hand))
             for piece in clip_polyline(line, *box):
-                for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
+                for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M, heading=CURVE_HEADING_DEG))):
                     if len(c) >= 2:
                         chunks.append(_chunk(look, lw, c, reference=_uv_reference(sections,fid,pts)))
     decks_near = []                             # (retaining_walls: none under a bridge)
@@ -5034,11 +5131,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             for owner,appearance,road_kind,run in ownership:
                 line=_outside_mainline(run,width,main_pavements(band['fid']))
                 for piece in clip_polyline(line, *box):
-                    for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
+                    for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M, heading=CURVE_HEADING_DEG))):
                         chunks.append(_chunk(LOOK[road_kind], width, c,
                                              reference=_uv_reference(sections,owner,run)))
         for piece in clip_polyline(outer, *box):
-            for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M))):
+            for c in split(densify(simplify(piece, CURVE_SIMPLIFY_M, heading=CURVE_HEADING_DEG))):
                 chunks.append(_chunk(EDGE_LINE, EDGE_LINE['w'], c))
         # Continue the dividers between a connector's own lanes across its full
         # auxiliary approach; the mainline/ramp separator keeps its short dots.
@@ -5171,7 +5268,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for run in cut_outside(piece, wb if walk else cuts, 0.5 if walk else 2.0):
                     for style,paint in _merge_edge_runs(run,look,merge_zones.get(fid, ())):
                         paint_width = style.get('w', w) if style.get('edge_side') is not None or style.get('ramp_guidance') else w
-                        for c in split(densify(simplify(paint, CURVE_SIMPLIFY_M))):
+                        for c in split(densify(simplify(paint, CURVE_SIMPLIFY_M, heading=CURVE_HEADING_DEG))):
                             if len(c) >= 2:
                                 chunks.append(_chunk(style, paint_width, c, reference=line))
     chunks.extend(_ramp_guides(frame,merge_zones,box,elev))

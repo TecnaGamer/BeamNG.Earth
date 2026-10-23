@@ -59,8 +59,10 @@ class RoadCurvesTest(unittest.TestCase):
         f.rules['flags'] = rules([(0, 'is_bridge', .32, .57)])
         full = roads.geometry_parts(f, 0)[0][0]
         x, y, _ = FRAME.geodetic_to_enu(full[:, 1], full[:, 0], 0.)
-        np.testing.assert_allclose(full, f.parts(0)[0][0], err_msg='bridge-tagged features keep the upstream profile')
+        self.assertGreater(len(full), len(f.parts(0)[0][0]), 'ground sections still receive fitted curves')
         bridge = roads.bridge_parts(f, 0)[0]
+        a, b, _ = roads.level_ranges(f, 0)[0]
+        np.testing.assert_array_equal(bridge, roads.sub_polyline(f.parts(0)[0][0], a, b))
         ground = roads.ground_parts(f, 0)
         np.testing.assert_allclose(ground[0][-1], bridge[0], atol=1e-12)
         np.testing.assert_allclose(ground[-1][0], bridge[-1], atol=1e-12)
@@ -126,11 +128,11 @@ class RoadCurvesTest(unittest.TestCase):
         f.rules['flags'] = rules([(0, 'is_bridge', .2, .8)])
         f.rules['oneway'] = rules([(0, 1.)], 'float')
         full = roads.geometry_parts(f, 0)[0][0]
-        np.testing.assert_allclose(full, f.parts(0)[0][0])
         ground, bridge = roads.ground_parts(f, 0), roads.bridge_parts(f, 0)[0]
         np.testing.assert_allclose(ground[0][-1], bridge[0], atol=1e-12)
         np.testing.assert_allclose(ground[-1][0], bridge[-1], atol=1e-12)
-        np.testing.assert_allclose(bridge, roads.sub_polyline(full, .2, .8))
+        a, b, _ = roads.level_ranges(f, 0)[0]
+        np.testing.assert_array_equal(bridge, roads.sub_polyline(f.parts(0)[0][0], a, b))
 
     def test_curves_join_across_reversed_feature_endpoints(self):
         f = features([[(10, 80), (130, 80)], [(260, 115), (130, 80)]], ['motorway']*2)
