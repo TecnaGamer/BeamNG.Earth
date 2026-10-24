@@ -122,8 +122,10 @@ def look_of(spec):
     if spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
     return LOOK[spec.kind]
-Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf",
-                  defaults=(False, 2.5, 0, None, None, None, None, None))   # median: m to the other carriageway's centre line
+Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf sides",
+                  defaults=(False, 2.5, 0, None, None, None, None, None, None))   # median: m to the other carriageway's centre line
+# (sides: the Finnish fork's sidewalk sides from OpenStreetMap's sidewalk tag, walk_sides' +1 left / -1 right; () none;
+# None: the class and land-cover rule, has_sidewalks)
 # (lanes: OpenStreetMap's lane count, both directions on a two-way road, None unknown: osmtags.py; surf: the surface
 # rule value's base token, e.g. "concrete": the look's concrete, roads.py look_of)
 # road_specs' result per feature (walk: the sidewalk width, measured from the buildings where known: roadwidth.py;
@@ -776,6 +778,32 @@ def _urban_beside(urban_fn, lines):
     return np.concatenate(u)
 
 
+# The Finnish fork: sidewalks from OpenStreetMap's sidewalk tag (a separate foot and cycle path beside the road, the
+# common Finnish layout, is "separate": none on the road); with no tag only these classes keep the town rule
+FI_SIDEWALK_TAG = {"both": (1, -1), "left": (1,), "right": (-1,), "no": (), "none": (), "separate": ()}
+FI_UNTAGGED_SIDEWALK_CLASSES = {"residential", "living_street"}
+
+
+def _finnish_sidewalks(feats, specs):
+    """specs with sides set on the roads in Finland (grading.in_finland at each road's first point). Pure."""
+    import grading
+    tags = feats.attrs.get("osm_sidewalk")
+    out = list(specs)
+    for i, sp in enumerate(out):
+        if sp is None:
+            continue
+        a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
+        lon, lat = (float(v) for v in feats.lonlat[a])
+        if not grading.in_finland(lat, lon):
+            continue
+        tag = str(tags[i]).strip().lower() if tags is not None else ""
+        if tag in FI_SIDEWALK_TAG:
+            out[i] = sp._replace(sides=FI_SIDEWALK_TAG[tag])
+        elif sp.cls not in FI_UNTAGGED_SIDEWALK_CLASSES:
+            out[i] = sp._replace(sides=())
+    return out
+
+
 def _road_specs(feats, urban_fn, widths, left_hand):
     out = []
     rules = feats.rules
@@ -830,6 +858,7 @@ def _road_specs(feats, urban_fn, widths, left_hand):
             out[j] = Spec(carriageway(cls, kind, urban, None, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token)
     out = dual_carriageways(feats, out, left_hand)
+    out = _finnish_sidewalks(feats, out)
     if widths is not None:                      # measured between the buildings (roadwidth.py)
         for j, sp in enumerate(out):
             if sp is None or sp.kind not in BUILT or sp.cls not in SIDEWALK_CLASSES or sp.cls in MEASURE_SKIP:
@@ -1543,6 +1572,8 @@ def has_sidewalks(spec):
     # a two-way urban trunk is a town's main street on a state highway (Bishop's US-395, Moab's US-191);
     # divided trunks are one-way per carriageway: expressways get none, slow ones (Ocean City's Coastal
     # Highway, 35 mph, 2026-10-14 street photos) one on their outer side (walk_sides)
+    if getattr(spec, "sides", None) is not None:      # the Finnish fork: the map's tag (_finnish_sidewalks)
+        return spec.kind in BUILT and bool(spec.sides)
     return spec.kind in BUILT and spec.urban and (spec.cls in SIDEWALK_CLASSES
                                                   or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
 
@@ -1559,6 +1590,8 @@ def walk_sides(spec, left_hand=False):
     """The sides (+1 left of the geometry, -1 right) of a road with sidewalks that get one: both, or a
     divided trunk carriageway's outer side only (the curb on the driver's right, left where they drive on
     the left; the other side is the median)."""
+    if getattr(spec, "sides", None):                # the Finnish fork: the map's tag (_finnish_sidewalks)
+        return tuple(spec.sides)
     if (spec.cls == "trunk" or has_median(spec)) and spec.oneway:     # (a divided road's median: its curbed band)
         right = -1 if spec.dir >= 0 else 1
         return (-right,) if left_hand else (right,)

@@ -93,7 +93,8 @@ class PlanCache:
             plans.append((m["fid"], pl))
         keeps = list(zip(lists["k"], meta["keeps"]))
         covers = list(zip(lists["v"], meta["covers"]))
-        opens = [(xy, Spec(**sp)) for xy, sp in zip(lists["o"], meta["opens"])]
+        opens = [(xy, Spec(**{**sp, "sides": tuple(sp["sides"]) if sp.get("sides") is not None else None}))
+                 for xy, sp in zip(lists["o"], meta["opens"])]
         with self._lock:
             self.stats["read"] += 1
         return plans, keeps, covers, opens
