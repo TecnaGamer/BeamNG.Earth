@@ -588,9 +588,7 @@ class Grader:
                         keeps.append((np.stack([np.asarray(e), np.asarray(n)], axis=1),
                                       specs[i].width / 2 + UNGRADED_MARGIN_M))
                     continue
-                if specs[i] is None or specs[i].cls in roadsmod.PATH_STYLE:
-                    # (the Finnish fork's paths lie on the ground as it is: graded, a cycleway in a dip by a road pulled
-                    # the road's edge down into it, its edge line bent in, 2026-10-24)
+                if specs[i] is None:
                     continue
                 for ring in roadsmod.ground_parts(feats, i):     # not bridges / tunnels
                     pieces = self._near_cell(np.asarray(ring, np.float64), box)
@@ -607,6 +605,14 @@ class Grader:
                     abut = self._abut_ends(key, np.stack([np.asarray(e), np.asarray(n)], axis=1)).reshape(-1, 2)
                 except Exception as e:      # no fills rather than no grading
                     log.debug("grading: abutments of %s: %s: %s", key, type(e).__name__, e)
+            # the Finnish fork's paths lie on the ground as it is (graded, a cycleway in a dip by a road pulled the
+            # road's edge down into it, its edge line bent in), but for those leading onto a bridge: their approach ramp
+            # (ungraded, a footbridge's deck stood a step over the path, 2026-10-24)
+            keep = [j for j, (_r, sp) in enumerate(parts) if sp.cls not in roadsmod.PATH_STYLE
+                    or (abut is not None and bool(np.asarray(abut[j]).any()))]
+            if len(keep) < len(parts):
+                parts, ids, clipped = [parts[j] for j in keep], [ids[j] for j in keep], [clipped[j] for j in keep]
+                abut = np.asarray(abut)[keep] if abut is not None else None
             pclip = []
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut,
                                                                          CUT_VERGE_M if self.finnish else 0.0)):
