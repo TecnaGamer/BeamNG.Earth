@@ -6,7 +6,7 @@
                                     from this folder's, an older version, is replaced: one zip, one version)
     python start.py -- --verbose    anything after -- goes to server/earthd.py as is
 
-It uses the Python in .venv (made by install.py) and the BeamNG.drive user folder install.py found.
+On Windows it uses the fixed Python set in install.py (PY_DIR); elsewhere the Python in .venv (made by install.py) and the BeamNG.drive user folder install.py found.
 """
 
 import argparse
@@ -65,6 +65,7 @@ def main():
     if not args.keep_mod:
         install.install_mod(user_dir, True, dry_run=False)
 
+    install.check_python()
     py = install.venv_python()
     if not os.path.isfile(py):
         install.fail("the server's Python environment (.venv) is missing. Run the installer first: python install.py")
@@ -85,6 +86,8 @@ def main():
             cmd += [flag, value]
         else:
             skipped.append(flag)
+    if install.IS_WIN and has_flag(help_text, "--nice"):
+        cmd += ["--nice", "0"]          # os.nice does not exist on Windows
     extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
     cmd += extra
 

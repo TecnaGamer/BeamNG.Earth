@@ -1,4 +1,22 @@
-# BeamNG.Earth
+# BeamNG.Earth-NT6
+
+A port of BeamNG.Earth for the NT 6 kernel (Windows Vista/Server 2008/7/8.x), using a custom python version (which is included) patched by adang1345 [https://github.com/adang1345/PythonVista].
+<img width="720" height="450" alt="BNGEOnNT6" src="https://github.com/user-attachments/assets/5f620920-e6b8-4439-bf81-3b4b7c1fe758" />
+
+## How to use on an NT6-based OS?
+1. Clone the repo using:
+```
+git clone https://github.com/Roti-Poulet/BeamNG.Earth-NT6
+```
+Or download the ZIP file if Git isn't installed
+
+2. Run install.bat
+3. Run launcher.bat
+4. In BeamNG, select the map named "BeamNG.Earth"
+
+No additionnal dependencies are required to run it.
+
+## What is BeamNG.Earth
 
 A 1:1 scale, streamed Earth for [BeamNG.drive](https://www.beamng.com/): drive anywhere on the
 planet on real elevation data and satellite imagery, with distance-based level of detail and the
@@ -54,7 +72,7 @@ the mod, report problems, and get an IP to join a BeamMP.Earth server (see [Mult
   gravity really is weaker on a mountain or at the equator.
 
 **Driving and traffic**
-- Drive anywhere: the physics ground follows the car at 100+ mph, the world origin moves with you
+- Drive anywhere: the physics ground follows the car at 200+ kmh, the world origin moves with you
   (floating origin), and the world streams ahead of you; you never fall out of the world.
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
@@ -116,42 +134,6 @@ the mod, report problems, and get an IP to join a BeamMP.Earth server (see [Mult
   [docs/V1_4_SPEC.md](docs/V1_4_SPEC.md), research notes in [docs/research/](docs/research/).
 
 ## Install and play
-**You need:** BeamNG.drive (tested with 0.40.x) on Steam, free disk space for the map download cache (it grows
-as you visit places, up to 20 GB by default; settings page > "Download cache size" sets 5-50 GB), and an internet
-connection (the map is downloaded while you play).
-
-1. **Download** the file for your system from the [Releases](https://github.com/TecnaGamer/BeamNG.Earth/releases)
-   page:
-   - **Windows:** `BeamNG.Earth-<version>.exe`. Windows may warn about an unknown app: **More info > Run anyway**.
-   - **Linux:** `BeamNG.Earth-<version>-x86_64.AppImage`. Make it executable (right-click > Properties >
-     "Allow executing", or `chmod +x`).
-2. **Run it** (with Steam running). A console window opens (like BeamMP's launcher); it copies the mod into the
-   game, starts the world server and starts BeamNG.drive. Closing the game stops the server.
-   - **Linux, native game:** started with the grass patch (`tools/gcpatch`) already applied, no Steam launch
-     options needed.
-   - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
-     Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
-     protontricks' launcher).
-   - **Linux, Steam as a Flatpak (or snap):** the mod goes into the game's folder inside the Flatpak
-     (`~/.var/app/com.valvesoftware.Steam/...`) and the game starts through Steam (without the grass patch).
-   - The Windows build shows BeamNG's launch options dialog (renderer, safe mode) as usual; `--gfx dx11` /
-     `--gfx vk` / `--gfx dx12` skip it with that renderer.
-3. **Play:** in the game, go to **Freeroam** and pick the **BeamNG.Earth** level. A welcome page explains the
-   basics the first time. Press **M** for the world map: search a place or an address, right-click to teleport,
-   left-click to set a GPS route, and **Autodrive** to let the car drive it.
-
-**From the source instead** (any system with [Python 3.10+](https://www.python.org/downloads/)): download this
-project (the green **Code** button > **Download ZIP**) and unzip it. Install once (and after each update):
-double-click `run_server.bat` (Windows) or run `python3 install.py` (Linux). Then start the server with
-`run_server.bat` / `./run_server.sh`, keep its window open, and start the game yourself. Or run
-`python3 launcher.py`, which also starts the game like the downloads do.
-
-**Updating:** the mod tells you in game when a newer version is on GitHub. Download the new file and run it (from
-the source: unzip it over the old folder and run the installer again).
-
-**Uninstalling:** delete the `beamng_earth` folder in `<BeamNG user folder>/current/mods/unpacked/` and the
-downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your home folder (`~/.cache/beamng-earth` on Linux,
-`C:\Users\<you>\.cache\beamng-earth` on Windows).
 
 More detail (traffic, the status bar, reporting problems, troubleshooting): [docs/QUICKSTART.md](docs/QUICKSTART.md).
 

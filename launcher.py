@@ -168,7 +168,12 @@ def run_server(argv):
 
 
 def start_server(user_dir, extra, log_path):
-    cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
+    if IS_WIN and not FROZEN:
+        import install
+        install.check_python()
+        cmd = [install.PYTHON_EXE, os.path.abspath(__file__)]
+    else:
+        cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)

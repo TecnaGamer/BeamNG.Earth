@@ -4,7 +4,7 @@
 What it does:
   1. finds your BeamNG.drive user folder (or takes --user-dir),
   2. copies the mod (mod/beamng_earth/) to <user folder>/mods/unpacked/beamng_earth,
-  3. makes a Python virtual environment in .venv and installs the server's packages into it,
+  3. installs the server's packages into the bundled Python on Windows, or a .venv on Linux,
   4. remembers the user folder in .beamng_earth.json for start.py and the run_server launchers.
 
 Run it again at any time: it only changes what is out of date.
@@ -31,10 +31,17 @@ MOD_NAME = "beamng_earth"
 VENV = os.path.join(ROOT, ".venv")
 REQUIREMENTS = os.path.join(ROOT, "server", "requirements.txt")
 CONFIG = os.path.join(ROOT, ".beamng_earth.json")
-REQ_STAMP = os.path.join(VENV, ".requirements.sha256")
+REQ_STAMP = os.path.join(ROOT, ".requirements.sha256")  # start.py uses this stamp on Windows and Linux
 STEAM_APP_ID = "284160"
 MIN_PY = (3, 10)
 IS_WIN = os.name == "nt"
+
+# --- Windows 7 standalone build: the embedded Python lives in the "python" folder next to this file ---
+# (override with the BNGE_PYTHON_DIR environment variable). pip is run as "python.exe -m pip": the
+# Scripts\\pip.exe launcher has the original install path written into it, so it is not relocatable.
+PY_DIR = os.environ.get("BNGE_PYTHON_DIR") or os.path.join(ROOT, "python")
+PYTHON_EXE = os.path.join(PY_DIR, "python.exe")
+PYTHONW_EXE = os.path.join(PY_DIR, "pythonw.exe")
 
 
 def say(msg=""):
@@ -418,17 +425,37 @@ def reload_running_game(user_dir):
 
 # --- the server's Python environment ------------------------------------------------------------
 
+def check_python():
+    """The embedded Python (python.exe, pythonw.exe) must exist; says which one is missing."""
+    if not IS_WIN:
+        return
+    missing = [p for p in (PYTHON_EXE, PYTHONW_EXE) if not os.path.isfile(p)]
+    if missing:
+        fail("Python not found where expected:\n  " + "\n  ".join(missing) +
+             "\n  Edit PY_DIR in install.py, or set the BNGE_PYTHON_DIR environment variable.")
+
+
 def venv_python():
-    return os.path.join(VENV, "Scripts", "python.exe") if IS_WIN else os.path.join(VENV, "bin", "python")
+    """The interpreter the server runs with: the fixed Python on Windows (no virtual environment)."""
+    return PYTHON_EXE if IS_WIN else os.path.join(VENV, "bin", "python")
+
+
+def venv_pythonw():
+    """Same, without a console window (pythonw.exe); python.exe elsewhere."""
+    return PYTHONW_EXE if IS_WIN else venv_python()
+
+
+def pip_cmd():
+    return [venv_python(), "-m", "pip"]
 
 
 def setup_venv(dry_run):
     py = venv_python()
     if dry_run:
-        say(f"(dry run) would {'reuse' if os.path.isfile(py) else 'create'} the virtual environment {VENV} "
-            f"and pip-install {os.path.relpath(REQUIREMENTS, ROOT)}")
+        say(f"(dry run) would pip-install {os.path.relpath(REQUIREMENTS, ROOT)} with {py} -m pip")
         return
-    if not os.path.isfile(py):
+    check_python()
+    if not IS_WIN and not os.path.isfile(py):
         say(f"Python packages: creating a virtual environment in {VENV} ...")
         r = subprocess.run([sys.executable, "-m", "venv", VENV])
         if r.returncode != 0 or not os.path.isfile(py):
@@ -436,7 +463,7 @@ def setup_venv(dry_run):
                     "Reinstall Python from python.org (keep the default options, tick 'Add python.exe to PATH').")
             fail("could not create the virtual environment. " + hint)
     say("Python packages: installing the server's requirements (numpy, Pillow, duckdb, fsspec) ...")
-    cmd = [py, "-m", "pip", "install", "--disable-pip-version-check"]
+    cmd = pip_cmd() + ["install", "--disable-pip-version-check"]
     if IS_WIN:
         # Without a matching wheel (e.g. a newer Python), pip tries to compile DuckDB and fails without MSVC.
         cmd.append("--only-binary=duckdb")
@@ -445,12 +472,10 @@ def setup_venv(dry_run):
         hint = "  Check your internet connection (and proxy/firewall), then run install.py again."
         if IS_WIN:
             hint = ("  For connection errors, check your internet connection (and proxy/firewall), then retry."
-                    "\n  If pip reports 'No matching distribution found' for duckdb, no prebuilt package is available"
-                    "\n  for this Python/platform. Try 64-bit Python 3.12 (used by the packaged release builds)."
-                    "\n  Close the server, rename this folder's .venv to an unused backup name, then run:"
-                    "\n    py -3.12 install.py"
-                    "\n  Installing another Python alone does not replace an existing .venv."
-                    "\n  Or use the standalone Windows .exe from the GitHub Releases page.")
+                    "\n  If pip reports 'No matching distribution found' for duckdb, the bundled Python version"
+                    "\n  may not have a compatible prebuilt package for this Windows version/architecture."
+                    "\n  Check the embedded Python in the 'python' folder and use a compatible package/Python build."
+                    "\n  The mod is installed already; only the server's packages are missing.")
         fail("pip could not install the packages (see the messages above).\n"
              + hint + "\n"
              "  The mod is installed already; only the server's packages are missing.")
@@ -487,17 +512,19 @@ def load_config():
 
 def main():
     ap = argparse.ArgumentParser(description=f"Install BeamNG.Earth {version()}: the mod into BeamNG.drive and "
-                                             "the companion server's Python packages into .venv.")
+                                             "the companion server's packages into bundled Python (Windows) or .venv (Linux).")
     ap.add_argument("--user-dir", help="BeamNG.drive user folder (default: found automatically)")
     ap.add_argument("--yes", "-y", action="store_true", help="answer yes to every question (replace an older mod copy, "
                                                              "pick the first user folder found)")
-    ap.add_argument("--no-venv", action="store_true", help="only install the mod; skip the Python environment")
+    ap.add_argument("--no-venv", action="store_true", help="only install the mod; skip Python package installation")
     ap.add_argument("--dry-run", action="store_true", help="show what would be done without changing anything")
     args = ap.parse_args()
 
     if sys.version_info < MIN_PY:
         fail(f"Python {MIN_PY[0]}.{MIN_PY[1]} or newer is needed (this is {sys.version.split()[0]}). "
              "Get it from https://www.python.org/downloads/")
+    if not args.no_venv:
+        check_python()
     say(f"BeamNG.Earth {version()} installer")
     say("")
     user_dir = choose_user_dir(args)
