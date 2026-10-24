@@ -200,6 +200,10 @@ BLD_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, nam
 BASE_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, names STRUCT("primary" VARCHAR),
     sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[], level INTEGER,
     source_tags MAP(VARCHAR, VARCHAR)"""
+PLACE_SCHEMA = """id VARCHAR, version INTEGER, names STRUCT("primary" VARCHAR), basic_category VARCHAR,
+    taxonomy STRUCT("primary" VARCHAR), brand STRUCT(wikidata VARCHAR, names STRUCT("primary" VARCHAR)),
+    sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[], operating_status VARCHAR,
+    confidence DOUBLE"""
 SCHEMAS = {
     ("transportation", "segment"): SEG_SCHEMA,
     ("transportation", "connector"): CON_SCHEMA,
@@ -207,6 +211,7 @@ SCHEMAS = {
     ("base", "water"): BASE_SCHEMA + ", is_salt BOOLEAN, is_intermittent BOOLEAN",
     ("base", "land_use"): BASE_SCHEMA + ", surface VARCHAR, elevation INTEGER",
     ("base", "infrastructure"): BASE_SCHEMA + ", height DOUBLE, surface VARCHAR",
+    ("places", "place"): PLACE_SCHEMA,
 }
 OSM = {"property": "", "dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "w1@1"}
 MSFT_H = {"property": "/properties/height", "dataset": "Microsoft ML Buildings", "license": "ODbL-1.0",
@@ -288,9 +293,14 @@ def features():
                 wkt="POINT({!r} {!r})".format(*_cell_xy(0.5, 0.5))),
            dict(id="inf-line", version=1, subtype="power", **{"class": "power_line"}, sources=[OSM],
                 height=20.0, wkt=_wkt_line([_cell_xy(0.0, 0.1), _cell_xy(1.0, 0.1)]))]
+    # a Sheetz (a convenience store by its category, a fuel seller by its brand: the gas stations, 2026-10-23)
+    pla = [dict(id="pla-sheetz", version=1, names={"primary": "Sheetz"}, basic_category="convenience_store",
+                taxonomy={"primary": "convenience_store"}, brand={"wikidata": "Q7492551", "names": {"primary": "Sheetz"}},
+                sources=[dict(OSM, dataset="meta", record_id="m1")], operating_status="open", confidence=0.92,
+                wkt="POINT({!r} {!r})".format(*_cell_xy(0.6, 0.3)))]
     return {("transportation", "segment"): seg, ("transportation", "connector"): con,
             ("buildings", "building"): bld, ("base", "water"): wat, ("base", "land_use"): lu,
-            ("base", "infrastructure"): inf}
+            ("base", "infrastructure"): inf, ("places", "place"): pla}
 
 
 def _coords(wkt):

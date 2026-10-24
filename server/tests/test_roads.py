@@ -354,6 +354,30 @@ class BuildTileTest(unittest.TestCase):
         self.assertTrue(any(abs(y - (yc + roads.CENTRE["gap"])) < 0.01 for y in ys) and
                         any(abs(y - (yc - roads.CENTRE["gap"])) < 0.01 for y in ys), (yc, ys))
 
+    def test_walk_cuts_open_the_sidewalk(self):
+        # a gas station's made-up driveway (gasstations.tile_sites cuts): the sidewalk it crosses is cut, not the one
+        # across the street (the user, 2026-10-23: "the drive you added sidewalk blocks it")
+        f = features([[(-300, 100), (300, 100)]], ["secondary"])
+        urban = lambda la, lo: np.ones(np.shape(la), bool)      # noqa: E731
+
+        def spans(walks, south):            # a run of that side past x = 50 (a straight run: its ends only)
+            return [w for w in walks if (w["pts"][:, 1].mean() < 100) == south
+                    and w["pts"][:, 0].min() < 47.0 and w["pts"][:, 0].max() > 53.0]
+
+        def south_near(walks):
+            return spans(walks, True)
+
+        def north_near(walks):
+            return spans(walks, False)
+        plain, cut = [], []
+        roads.build_tile(FRAME, 0, 0, [f], flat, urban, walks=plain)
+        roads.build_tile(FRAME, 0, 0, [f], flat, urban, walks=cut, walk_cuts=[(np.array([(50.0, 70.0), (50.0, 95.5)]), 4.0)])
+        self.assertTrue(south_near(plain))
+        self.assertFalse(south_near(cut), "a gap where the driveway crosses")
+        self.assertTrue(north_near(cut), "the far sidewalk kept")
+        self.assertTrue(all(c for w in cut for c, end in zip(w["caps"], (w["pts"][0], w["pts"][-1]))
+                            if abs(end[0] - 50) < 6 and end[1] < 100), "the cut ends capped")
+
     def test_sidewalk_mesh_runs_and_drains(self):
         import tempfile
         import cdae

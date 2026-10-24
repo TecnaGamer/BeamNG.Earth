@@ -141,6 +141,7 @@ M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
 local function loadMaterials()
   if loadedMaterials then return end
   for _, f in ipairs(M.MATERIAL_FILES) do loadJsonMaterialsFile(f) end
+  for _, f in ipairs(require('beamngEarth/gasstations').MATERIAL_FILES) do loadJsonMaterialsFile(f) end   -- (pumps)
   for _, name in ipairs(M.OPAQUE) do
     local m = scenetree.findObject(name)
     if m then
@@ -259,6 +260,7 @@ local function dropTile(key)
   parked, walkQ, held, createQ = purge(parked), purge(walkQ), purge(held), purge(createQ)
   if t.props then require('beamngEarth/trees').dropKey((key:gsub(':', ':p', 1))) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
+  if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   tiles[key] = nil
 end
 
@@ -435,6 +437,10 @@ function M.onTile(msg, currentAnchor)
     require('beamngEarth/parking').onRows(msg.anchorId, key, data.park)
     tiles[key].park = true
   end
+  if type(data.fuel) == 'table' and data.fuel[1] then      -- gas stations: pumps, refuel areas (gasstations.lua)
+    require('beamngEarth/gasstations').onRows(msg.anchorId, key, data.fuel)
+    tiles[key].fuel = true
+  end
   if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
     walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
   end
@@ -526,6 +532,9 @@ function M.onDrop(msg)
   dropTile(tileKey(msg.anchorId, msg.key))
   sinceChange = stopwatch.new()
 end
+
+-- A gas station's colliding props were made (gasstations.lua): rebuilt with the roads' next collision rebuild.
+function M.markCollisionDirty() collisionDirty = true end
 
 -- Origin rebase (core.lua finishRebase): the shown tiles move into the new frame (p_new = R*p + t: their TSStatics
 -- turned by R, as farfield.transform) and stay as "ghosts" until the new anchor's tiles over them are made

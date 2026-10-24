@@ -40,7 +40,8 @@ _s = None       # this process's state (init)
 
 
 class _State:
-    def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False):
+    def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False,
+                 gas_stations=False):
         self.cache_dir = cache_dir
         self.imagery = None         # (its settings, imagery.Imagery from the disk alone): far_tile's textures
         net = netfetch.Fetcher(offline=offline)
@@ -57,6 +58,8 @@ class _State:
             roadwidthmod.store_dir(cache_dir, md)).get
             if road_widths and self.md is not None else None)
         self.surface = surfacemod.Surface(md) if surface else None
+        if self.surface is not None:    # gas station forecourts painted asphalt (--gas-stations on)
+            self.surface.gas_pads = bool(gas_stations)
         self.graders = {}           # anchor id -> grading.Grader
         self.chunks = {}            # anchor id -> heightmap.ChunkCache
         self.bridges = {}           # anchor id -> roads.BridgeProfiles (roads_tile)
@@ -128,7 +131,7 @@ def _trace_memory(every_s=60.0, top=10):
 
 
 def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_level=logging.INFO, airports=False,
-         sea=False, nice=0, roads_in_ground=None):
+         sea=False, nice=0, roads_in_ground=None, gas_stations=False):
     """nice: this worker's niceness on top of the server's (earthd NICE_*): the terrain blocks' workers keep the
     server's own, the road tiles' and the far field's run below them, so the ground under the car wins the server's
     few cores (2026-10-19: at 180 mph the next block waited 6 s behind the road tiles ahead and a ball fell off the
@@ -151,7 +154,7 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     import sampler
     sampler.maybe_start(f".{os.getpid()}")      # BNGE_SAMPLE: this worker's own sampling profile (debugging)
     xproc.PRIORITY = nice
-    _s = _State(cache_dir, offline, roads, grading, road_widths, surface, airports, sea)
+    _s = _State(cache_dir, offline, roads, grading, road_widths, surface, airports, sea, gas_stations)
     threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True, name="parent-watch").start()
     threading.Thread(target=_read_warm, args=(warm_q,), daemon=True, name="warm-read").start()
     threading.Thread(target=_warm_loop, daemon=True, name="roads-ahead").start()
@@ -214,10 +217,19 @@ def ground(frame, la, lo, z):
     return z
 
 
-def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None):
+def _take_pads(fuel_pads):
+    """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
+    only these (none when the server's gas stations are switched off)."""
+    if getattr(_s, "surface", None) is not None and hasattr(_s.surface, "clear_fuel_pads"):
+        _s.surface.clear_fuel_pads()
+        _s.surface.add_fuel_pads(fuel_pads or ())
+
+
+def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
-    .ter ter_name if given). Returns the info dict of earthd's make_heightmap (without seconds / zoom /
-    base)."""
+    .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
+    dict of earthd's make_heightmap (without seconds / zoom / base)."""
+    _take_pads(fuel_pads)
     t0 = time.perf_counter()
     g, chunks = _s.anchor(aid, lat, lon)
     frame = geodesy.EnuFrame(lat, lon)
@@ -261,6 +273,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None)
                                          _s.surface.urban, _s.widths, _open_tunnels(g, keep))
         idx = (surfacemod.paint_lots(idx, keep["lat"], keep["lon"], _s.surface.lots(keep["lat"], keep["lon"]))
             if hasattr(_s.surface, "lots") else idx)
+        if hasattr(_s.surface, "fuel_pads"):    # gas station forecourts (--gas-stations on)
+            idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"], _s.surface.fuel_pads(keep["lat"], keep["lon"]))
         stages["roadPaint"] = time.perf_counter() - t1
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
         info["surfaceComplete"] = complete and roads_complete
@@ -336,9 +350,10 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
 
 
 def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings=False, left_hand=False,
-               mph=True, q=None):
+               mph=True, q=None, gas_stations=False):
     """earthd.Server.build_roads_tile here (road-tile pool): the anchor's road tile (tx, ty) built and
-    written; returns roads.write_tile's (vfs path, chunks). In the server's process its Python made up
+    written; returns roads.write_tile's (vfs path, chunks) and its stations' pads (gasstations.tile_sites pads: the
+    server keeps them for the ground's painters). In the server's process its Python made up
     ~80 % of the main process's busy threads (in-game profile 2026-10-13): the block photos and far
     textures waited for the GIL."""
     import parking as parkingmod
@@ -356,6 +371,10 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     tunnels = tunnel_profiles(aid, frame, elev, g)
     walks = []
     urban = _s.surface.urban if _s.surface is not None else None
+    fuel, skip, fuel_cuts, fuel_pads = [], frozenset(), [], []
+    if gas_stations:                    # pumps and refuel areas; their canopy outlines left out of the buildings
+        import gasstations
+        fuel, skip = gasstations.tile_sites(frame, tx, ty, _s.md, elev, cuts=fuel_cuts, pads=fuel_pads)
     props = [] if buildings else None
     lines = [] if buildings else None
     wires = [] if buildings else None
@@ -365,7 +384,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
         import buildings as buildingsmod
         items = buildingsmod.road_tile_items(frame, tx, ty, _s.md,
                                              lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                             decks=_tile_decks(bridges, cells, tx, ty))
+                                             decks=_tile_decks(bridges, cells, tx, ty), skip=skip)
         town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
     rwalls = []
     ctx = []
@@ -376,6 +395,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo),
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
+                                 walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, structures=buildingsmod.centres(items, tx, ty) if items else (),
                                  tunnels=tunnels, walls=rwalls,
@@ -392,6 +412,9 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
         chunks += drives
         park = parkingmod.clear_of(park, props, drives)
         park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park)
+        if fuel:
+            import gasstations
+            park = gasstations.clear_park(park, fuel)
         buildingsmod.brick_walks(walks, items, lat, lon)
     mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift, clip=box, follow=True, q=q, drawn=drawn)
     mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
@@ -405,7 +428,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
                                      lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), None, None,
                                      items)
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
-                               bld, props, wires, park, tunnel_mesh=tmesh)
+                               bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel) + (fuel_pads,)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):
@@ -545,13 +568,15 @@ def _imagery(tex):
     return _s.imagery[1]
 
 
-def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache):
+def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
     Returns (rgb, sources used, lazy tiles still to come), or None when an imagery tile it needs is not on disk (the
     server renders it, fetching what is missing). In the server process it ran 2 s alone but 8-11 s next to the
-    rest of the world's threads on a Steam Deck (one interpreter lock), and the next block waited for it."""
+    rest of the world's threads on a Steam Deck (one interpreter lock), and the next block waited for it. fuel_pads:
+    the gas station pads around it (_take_pads)."""
+    _take_pads(fuel_pads)
     import imagery as imagerymod
     import roads as roadsmod
     import rockface as rockfacemod

@@ -2127,7 +2127,7 @@ CENTRE_PREFILTER_M = 1.0       # m of slack for Features.outer_centres (cumulati
 
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None):
+                   ml_roads_xy=None, skip=frozenset()):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
     building in two cells is taken once, by id); elev(lat, lon) the physics ground. part_layers: the
@@ -2136,7 +2136,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     covering one's centre, is a parking structure). supports: support_rings (a building or part on one is the
     bridge's painted steel). bridges_xy / water_xy (bridge_lines, water_rings): a machine-learned footprint (not
     OSM) on a road bridge, over water or on a public road (roads_xy, or ml_roads_xy for that test alone: the far
-    buildings) is a deck, a boat or a vehicle, left out (_ml_false)."""
+    buildings) is a deck, a boat or a vehicle, left out (_ml_false). skip: ids of buildings left out (a gas station's
+    canopy, drawn by the mod from West Coast USA's props: gasstations.tile_sites)."""
     parts_of = {}                       # building id -> [(ring in the anchor frame, own height, bottom)]
     pseen = set()
     for f in part_layers:
@@ -2178,7 +2179,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             if lv is not None and np.isfinite(lv) and lv < 0:
                 continue                # below ground (Shot Tower Metro, level -2, stood across a Baltimore street)
             key = ids[i] if ids is not None else None
-            if key is not None and key in seen:
+            if key is not None and (key in seen or key in skip):
                 continue
             parts = f.parts(i)
             if not parts or not parts[0]:
@@ -2722,9 +2723,10 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
     return rows
 
 
-def road_tile_items(frame, tx, ty, md, ground, decks=None):
+def road_tile_items(frame, tx, ty, md, ground, decks=None, skip=frozenset()):
     """tile_buildings of road tile (tx, ty), from the map cells under it. decks: the bridge decks near it
-    [(xy (k, 2), z (k,))] in the anchor frame (roads.BridgeProfiles.parts): buildings they run through get a way."""
+    [(xy (k, 2), z (k,))] in the anchor frame (roads.BridgeProfiles.parts): buildings they run through get a way.
+    skip: building ids left out (gas station canopies)."""
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     cds = [md.cell(k, layers=("buildings", "building_parts", "roads", "infrastructure", "water"), kind="demand")
@@ -2739,7 +2741,7 @@ def road_tile_items(frame, tx, ty, md, ground, decks=None):
                           bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                           water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                           decks=[(np.asarray(xy, np.float64)[:, :2] - [x0, y0], np.asarray(z, np.float64))
-                                 for xy, z in decks] if decks else None)
+                                 for xy, z in decks] if decks else None, skip=skip)
 
 
 TOWN_COVERAGE = 0.16        # a tile whose footprints cover less than this share is a town / suburb (heights)

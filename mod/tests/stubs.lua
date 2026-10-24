@@ -34,6 +34,7 @@ function S.newObject(class)
   function o:flush() S.count('flush_' .. class) end
   function o:reload() S.count('reload_' .. class) end
   function o:setPosition(p) self.pos = vec3(p.x, p.y, p.z) end
+  function o:setScale(v) self.scale = vec3(v.x, v.y, v.z) end
   function o:setPosRot(x, y, z, qx, qy, qz, qw) S.count('setPosRot'); self.pos = vec3(x, y, z); self.rot = quat(qx, qy, qz, qw) end
   function o:getPosition() return vec3(self.pos.x, self.pos.y, self.pos.z) end
   function o:delete() S.objects[self.id] = nil; S.count('delete_' .. class) end

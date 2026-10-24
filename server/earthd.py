@@ -88,6 +88,7 @@ import surface as surfacemod  # noqa: E402
 import navgraph as navgraphmod  # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
+import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
@@ -517,7 +518,7 @@ class Server:
                  colormatch="off", credits=None, cache=None, retex_rate=RETEX_RATE, surface=None,
                  mapdata=None, grading=False, road_widths=False, block_pools=(), sidewalks=True, buildings=False, traffic=False, far_pool=None,
                  road_pool=None, airports_db=None, sea=None, vegetation=None, leaf_on=True, season_mode="off",
-                 far_bld_pool=None):
+                 far_bld_pool=None, gas_stations=False):
         """kfun: K(L) for every level (default: the layout's K table); near_radii: the min-level
         radii (default: the layout's); cells: 32 (v1.3.1) or 64 (M1, mesh mode only); tex: texture
         px per level from the finest (default: tex_near, tex_near, tex_far with 32 cells,
@@ -686,6 +687,8 @@ class Server:
         self.hm_inflight = {}
         self.ter_serial = itertools.count()
         self.base_stale = set()         # blocks whose base photo lacks lazy imagery (NAIP) still to come
+        self.pads_rebuild = set()       # blocks built without gas station pads that lie on them (pads_stale)
+        self.pads_changed_at = 0.0      # (time.monotonic) the last new pad: Connection.pads_refresh waits a little
         self.fast = False               # the player faster than FAST_BASE_V (the latest pose): photos follow blocks
         self.base_pending = {}          # block -> the analysis regions its base photo was rendered without
         self.base_rev = itertools.count(1)
@@ -716,6 +719,12 @@ class Server:
         # street widths measured between the buildings (roadwidth.py), decided once per road per run
         self.sidewalks = sidewalks  # raised sidewalk meshes with the road tiles (sidewalks.py)
         self.buildings = buildings  # building meshes with the road tiles (buildings.py)
+        # gas stations with refuelling with the road tiles (gasstations.py; the user, 2026-10-23)
+        # (the settings page's switch turns them off and on again: set_gas_stations; never on without the flag)
+        self.gas_allowed = bool(gas_stations) and mapdata is not None
+        self.gas_stations = self.gas_allowed
+        if self.gas_stations and surface is not None and hasattr(surface, "gas_pads"):
+            surface.gas_pads = True     # their forecourts painted asphalt (surface.Surface.fuel_pads)
         self.traffic = bool(traffic) and mapdata is not None   # the AI road graph around the player (navgraph.py)
         self.road_widths = (roadwidthmod.RoadWidths(
             lambda key: mapdata.cell(key, layers=("buildings",), kind="demand").layers.get("buildings"),
@@ -1116,9 +1125,11 @@ class Server:
             res = self.road_pool.submit(
                 blockworker.roads_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
-                self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor)).result()
+                self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
+                self.gas_stations).result()
             log.debug("road tile %d_%d: %.2f s (queue + build)", tx, ty, time.perf_counter() - t0)
-            return res
+            self.keep_fuel_pads(res[2])
+            return res[:2]
         cells = [self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads")
                  for k in roadsmod.cells_of_tile(anchor.frame, tx, ty)]
         zoom = anchor.zooms[0]
@@ -1143,6 +1154,11 @@ class Server:
                     elev)
                 anchor.tunnels.wet = self.sea.depth if self.sea is not None else None
                 self._tunnel_ground(anchor, g)
+        fuel, skip, fuel_cuts, fuel_pads = [], frozenset(), [], []
+        if self.gas_stations:       # pumps and refuel areas; their canopy outlines left out of the buildings
+            fuel, skip = gasstationsmod.tile_sites(anchor.frame, tx, ty, self.mapdata, elev, cuts=fuel_cuts,
+                                                   pads=fuel_pads)
+            self.keep_fuel_pads(fuel_pads)
         props = [] if self.buildings else None
         lines = [] if self.buildings else None
         wires = [] if self.buildings else None
@@ -1152,7 +1168,7 @@ class Server:
             items = buildingsmod.road_tile_items(
                 anchor.frame, tx, ty, self.mapdata,
                 lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty))
+                decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip)
             town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
         rwalls = []
         ctx = []
@@ -1163,6 +1179,7 @@ class Server:
             return roadsmod.block_arch_raise(anchor.tunnels, cell_fn, anchor.frame, la, lo, elev(la, lo),
                                              (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor),
                                      structures=buildingsmod.centres(items, tx, ty) if items else (),
@@ -1181,6 +1198,7 @@ class Server:
             chunks += drives
             park = parkingmod.clear_of(park, props, drives)
             park = parkingmod.tile_lot_spots(anchor.frame, tx, ty, self.mapdata, elev, items, park)
+            park = gasstationsmod.clear_park(park, fuel)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
@@ -1197,7 +1215,65 @@ class Server:
                                          lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                          None, None, items)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
-                                   mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh)
+                                   mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel)
+
+    def set_gas_stations(self, on):
+        """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
+        cost on a small machine): stations laid out, pads painted and the region's shapes named only while on, never
+        on without --gas-stations on. Returns whether it changed (the road tiles are then sent again)."""
+        on = bool(on) and self.gas_allowed
+        if on == self.gas_stations:
+            return False
+        self.gas_stations = on
+        if self.surface is not None and hasattr(self.surface, "gas_pads"):
+            self.surface.gas_pads = on
+            self.surface.clear_fuel_pads()
+        self.pads_stale()               # (the blocks' photos again: with or without their forecourts)
+        log.info("gas stations %s (settings)", "on" if on else "off")
+        return True
+
+    def keep_fuel_pads(self, pads):
+        """A road tile's gas station pads kept for the ground's painters (surface.Surface.add_fuel_pads); the blocks
+        a new station's pad lies on get their photo rendered again (pads_stale)."""
+        if pads and self.surface is not None and hasattr(self.surface, "add_fuel_pads"):
+            new = self.surface.add_fuel_pads(pads)
+            if new:
+                self.pads_stale(new)
+
+    def pads_stale(self, items=None):
+        """The built blocks whose photo was painted without these pads [(id, rings)] (every built block: None)
+        marked stale, so base_refresh renders it again and sends it (block_base): the ground under the car is built
+        before its road tiles bring their stations' pads (a teleport to a station showed its forecourt bare: the
+        user, 2026-10-24, "No asphalt at the station"); in detail mode (the block photo) only. The same blocks are
+        marked for building again (pads_rebuild: their surface layers, the asphalt and no grass, come with the block;
+        Connection.pads_refresh)."""
+        self.pads_changed_at = time.monotonic()
+        h = self.layout.block * heightmap.SQUARE / 2
+        for key in list(self.hm):
+            anchor = self.anchors.get(key[0])
+            if anchor is None:
+                continue
+            _, cx, cy = key
+            if items is None or any(self._ring_meets(anchor, ring, cx - h, cy - h, cx + h, cy + h)
+                                    for _, rings in items for ring in rings):
+                self.pads_rebuild.add(key)
+                if self.near_visual == "detail":
+                    self.base_stale.add(key)
+
+    @staticmethod
+    def _ring_meets(anchor, ring, x0, y0, x1, y1):
+        la, lo = ring
+        e, n, _ = anchor.frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(len(la)))
+        e, n = np.asarray(e), np.asarray(n)
+        return bool(e.max() >= x0 and e.min() <= x1 and n.max() >= y0 and n.min() <= y1)
+
+    def block_fuel_pads(self, anchor, cx, cy, size):
+        """The kept gas station pads around a block (its square and a margin) for its process's job: [(id, rings)]."""
+        if self.surface is None or not getattr(self.surface, "gas_pads", False):
+            return []
+        h = size / 2 + 64.0
+        la, lo, _ = anchor.frame.enu_to_geodetic(np.array([cx - h, cx + h]), np.array([cy - h, cy + h]), np.zeros(2))
+        return self.surface.fuel_pad_items(np.asarray(la), np.asarray(lo))
 
     def ground_z_at(self, anchor, e, n):
         """The ground's height (the frame's up) at (e, n) of anchor's frame, from the elevation data (not graded: the
@@ -1355,7 +1431,8 @@ class Server:
             info = pool.submit(
                 blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                 self.layout.block, self.out_dir, self.hm_name((anchor.id, cx, cy)),
-                self.ter_name((anchor.id, cx, cy))).result()
+                self.ter_name((anchor.id, cx, cy)),
+                fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block)).result()
             return self._finish_heightmap(anchor, cx, cy, info, t0, base)
         urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
         with urgent() if urgent is not None else contextlib.nullcontext():     # the player waits for it (teleport,
@@ -1445,6 +1522,9 @@ class Server:
                                              blockworker._open_tunnels(g, keep))
             idx = (surfacemod.paint_lots(idx, keep["lat"], keep["lon"], self.surface.lots(keep["lat"], keep["lon"]))
                 if hasattr(self.surface, "lots") else idx)
+            if hasattr(self.surface, "fuel_pads"):      # gas station forecourts (--gas-stations on)
+                idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"],
+                                            self.surface.fuel_pads(keep["lat"], keep["lon"]))
             stages["roadPaint"] = time.perf_counter() - t1
             complete = complete and roads_complete
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
@@ -1550,7 +1630,8 @@ class Server:
             got = pool.submit(blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2, cy - size / 2, size,
                               BASE_PX, tex, bool(self.buildings and self.mapdata is not None), anchor.zooms[0],
                               os.path.join(self.out_dir, name),
-                              (self.user_dir, f"{self.vfs_dir}/{name}", BASE_AO_VFS, BASE_AO)).result()
+                              (self.user_dir, f"{self.vfs_dir}/{name}", BASE_AO_VFS, BASE_AO),
+                              fuel_pads=self.block_fuel_pads(anchor, cx, cy, size)).result()
         except Exception as e:
             log.info("base photo %s in the block process: %s", key, e)
             return None
@@ -2477,6 +2558,8 @@ class Server:
 # instead of 15-60 s on a fresh place) and replaced by the graded one when that is built (terrain_refresh)
 PROVISIONAL_FIRST = os.environ.get("BNGE_PROVISIONAL", "1") != "0"
 PROVISIONAL_KEEP_S = 60.0   # the provisional .ter is deleted this long after its replacement was sent
+PADS_REFRESH_MS = 5.0       # the block in use built again with its gas station pads only below this speed (m/s) ...
+PADS_SETTLE_S = 3.0         # ... and this long after the last new pad (Connection.pads_refresh)
 TELEPORT_PAUSE_M = 20000.0  # an anchor asked this far from the player is a teleport: the old place's work pauses
 TELEPORT_PAUSE_MAX_S = 120.0  # ... at most this long (the mod may never commit it)
 BOOST_MOVE_MS = 3.0         # the loading boost ends when the player moves faster than this (m/s) ...
@@ -2589,6 +2672,7 @@ class Connection:
         self.sea_checked = None                 # (anchor id, 512 m square, monotonic, complete) of the last plan
         self.sea_sent = None                    # (anchor id, tiles) of the last "sea" message
         self.base_busy = False                  # a base photo refresh is running (base_refresh)
+        self.pads_busy = False                  # a block is being built again with its new pads (pads_refresh)
         self.ground_sent = None                 # (anchor id, z, monotonic) of the last ground_ahead sent
         self.following = True                   # the mod moves its block (pose "follow"; false high up)
 
@@ -2972,6 +3056,10 @@ class Connection:
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = roadsmod.Tracker()
+        elif kind == "gas_stations":            # the settings page's switch: the road tiles again, with or without
+            if self.s.set_gas_stations(msg.get("on")):
+                self.roads.close()
+                self.roads = roadsmod.Tracker()
         else:
             log.debug("ignoring message type %r", kind)
 
@@ -3127,6 +3215,8 @@ class Connection:
                  "groundZ": gz, "floorZ": floor_z, "terrain": self.terrain_msg(key, info), "provisional": provisional}
         if place is not None:           # (the player's spot off the origin, echoed: core places the car there)
             ready["px"], ready["py"] = place
+        if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
+            ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")
         if provisional:
@@ -3356,6 +3446,7 @@ class Connection:
             self.s.warm_imagery(self.s.anchors[aid], *self.focus, *self.vel)
             self.s.download_ahead(self.s.anchors[aid], *self.focus, *self.vel)
             self.base_refresh(aid)
+            self.pads_refresh(aid)
         if self.s.mapdata is not None and aid == self.active:
             self.roads.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_roads_tile,
                                vel=self.vel, ground_busy=self.terrain_wait > 0, view=self.view_at,
@@ -3431,6 +3522,45 @@ class Connection:
                 s.base_stale.discard(key)
             finally:
                 self.base_busy = False
+        self.spawn(run())
+
+    def pads_refresh(self, aid, now=None):
+        """The block in use built again (terrain_refresh, as refine_first) when gas station pads came in after it was
+        built (Server.pads_rebuild: its surface layers then have the forecourt's asphalt, no grass on it; the user,
+        2026-10-24: "looks like we painted it but it is still dirt"). Only with the car slower than PADS_REFRESH_MS
+        (driving on, the next blocks are built with them) and PADS_SETTLE_S after the last new pad (a tile burst
+        brings several); one at a time."""
+        s = self.s
+        now = time.monotonic() if now is None else now
+        if (self.pads_busy or not s.pads_rebuild or math.hypot(*self.vel) > PADS_REFRESH_MS
+                or now - s.pads_changed_at < PADS_SETTLE_S):
+            return
+        key = next((k for k in list(s.hm_committed)[-1:] if k in s.pads_rebuild and k[0] == aid), None)
+        anchor = s.anchors.get(aid)
+        if key is None or anchor is None:
+            return
+        self.pads_busy = True
+        s.pads_rebuild.discard(key)
+
+        async def run():
+            old = s.hm.pop(key, None)
+            try:
+                info = await s.terrain(anchor, key[1], key[2])
+            except Exception:
+                log.exception("block %s again with its gas station pads (the old one stays)", key)
+                if old is not None:
+                    s.hm[key] = old
+                return
+            finally:
+                self.pads_busy = False
+            s.base_stale.discard(key)           # (its photo built with them too)
+            s.hm_sent.append(key)
+            log.info("block %s built again with its gas station pads", key)
+            self.send({"type": "terrain_refresh", "anchorId": key[0], **self.terrain_msg(key, info)})
+            old_ter = (old or {}).get("ter")
+            if old_ter and old_ter != info.get("ter"):
+                await asyncio.sleep(PROVISIONAL_KEEP_S)
+                s._remove(os.path.join(s.out_dir, old_ter))
         self.spawn(run())
 
     def ground_ahead(self, aid, x, y, vx, vy):
@@ -3959,7 +4089,7 @@ async def main_async(args):
                           args.grading == "on" and args.roads == "on",
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
-                          roadsmod.ROADS_IN_GROUND)), warm_q))
+                          roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on")), warm_q))
         far_pool = poolsmod.RespawningPool(
             "far tile", args.workers, mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, args.roads == "on",
@@ -4015,6 +4145,7 @@ async def main_async(args):
                     road_widths=args.road_widths == "on" and args.roads == "on",
                     sidewalks=args.sidewalks == "on",
                     buildings=args.buildings == "on" and args.roads == "on",
+                    gas_stations=args.gas_stations == "on" and args.roads == "on",
                     traffic=args.traffic == "on" and args.roads == "on",
                     block_pools=block_pools, far_pool=far_pool, road_pool=road_pool, airports_db=airports_db,
                     far_bld_pool=far_bld_pool,
@@ -4342,6 +4473,9 @@ def main():
     ap.add_argument("--buildings", choices=("on", "off"), default="off",
                     help="3D buildings from the Overture footprints with the road tiles (buildings.py; needs --roads "
                          "on): heights and roofs predicted where the data has none")
+    ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
+                    help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
+                         "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")
     ap.add_argument("--traffic", choices=("on", "off"), default="on",
                     help="the AI road graph around the player for BeamNG's own traffic and AI (navgraph.py; needs "
                          "--roads on): the mod hands it to map.reset. On by default since 2026-10-14: whether cars "

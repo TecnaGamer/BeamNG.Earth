@@ -28,6 +28,7 @@ RECOMMENDED = [
     ("--sea", "on"),
     ("--trees", "on"),
     ("--buildings", "on"),
+    ("--gas-stations", "on"),
 ]
 
 

@@ -75,6 +75,16 @@ THEME_LICENCES = {
             "Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY "
             "4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication "
             "and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+    # (read 2026-10-23)
+    "places": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA "
+              "Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available "
+              "under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. "
+              "Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data "
+              "from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive "
+              "2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. "
+              "Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data "
+              "was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. "
+              "Available under CC0 1.0.",
 }
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
@@ -125,6 +135,15 @@ LAYERS = {
                            cols=f"subtype, class, {_NAME}, {_SRC}, level, height, surface, {_TAGS}",
                            text=("subtype", "class", "name", "src_dataset", "src_record", "surface", "tags"),
                            float=("level", "height")),
+    # points of interest; read for the gas stations (gasstations.py, the user 2026-10-23: "we can already refuel in
+    # beam so I want to include it on this impressive map mod"). Schema of 2026-09-23.1: basic_category and
+    # taxonomy.primary (the old categories column is gone), brand.wikidata / brand.names.primary
+    "places": dict(theme="places", type="place", clip=False,
+                   cols=f"basic_category, taxonomy.\"primary\" AS taxonomy, brand.wikidata AS brand_wikidata, "
+                        f"brand.names.\"primary\" AS brand_name, {_NAME}, {_SRC}, operating_status, confidence",
+                   text=("basic_category", "taxonomy", "brand_wikidata", "brand_name", "name", "src_dataset",
+                         "src_record", "operating_status"),
+                   float=("confidence",)),
 }
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range

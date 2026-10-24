@@ -625,6 +625,19 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(inf.kind.tolist(), [mg.LINE, mg.POINT])
         self.assertEqual(list(cd.layers["connectors"].ids), ["con-a", "con-b"])
 
+    def test_places_layer_reads_station_columns(self):
+        """Overture places (an optional layer: the gas stations, 2026-10-23): category, brand, status."""
+        self.assertNotIn("places", mapdata.LAYERS)
+        md, t = self.mapdata()
+        p = md.cell(mf.CELL, ("places",)).layers["places"]
+        self.assertEqual(list(p.ids), ["pla-sheetz"])
+        self.assertEqual(p.kind.tolist(), [mg.POINT])
+        self.assertEqual((p.attrs["basic_category"][0], p.attrs["taxonomy"][0], p.attrs["brand_wikidata"][0],
+                          p.attrs["brand_name"][0], p.attrs["name"][0], p.attrs["operating_status"][0],
+                          p.attrs["src_dataset"][0]),
+                         ("convenience_store", "convenience_store", "Q7492551", "Sheetz", "Sheetz", "open", "meta"))
+        self.assertAlmostEqual(float(p.attrs["confidence"][0]), 0.92, places=5)
+
     def test_build_owned_covers_every_feature_once(self):
         """'Build the owned features of every cell' builds each whole feature once and every piece
         of a clipped polygon once: the park (3 x 3 cells) and the harbour (2 x 2) come out whole,

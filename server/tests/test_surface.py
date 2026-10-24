@@ -316,6 +316,39 @@ class ServerSurfaceTest(unittest.TestCase):
         s.dem = self.Dem()
         return s
 
+    def test_gas_stations_paint_pads(self):
+        # --gas-stations on: the ground's painters get the forecourts (Surface.gas_pads); off: they do not
+        import types
+        sur = sf.Surface(None)
+        self.addCleanup(sur.close)
+        s = self.make(surface=sur, mapdata=types.SimpleNamespace(), gas_stations=True)
+        self.assertTrue(sur.gas_pads)
+        s.keep_fuel_pads([("a", [FuelPadTest.ring(None, LAT, LON)])])      # (a road tile's, earthd.build_roads_tile)
+        self.assertEqual(len(s.block_fuel_pads(s.new_anchor(LAT, LON), 0.0, 0.0, 512.0)), 1, "handed to a block")
+        off = sf.Surface(None)
+        self.addCleanup(off.close)
+        self.make(surface=off, mapdata=types.SimpleNamespace())
+        self.assertFalse(off.gas_pads)
+
+    def test_block_worker_paints_pads(self):
+        import blockworker
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        st = blockworker._State(tmp.name, True, False, False, False, True, gas_stations=True)
+        self.assertTrue(st.surface.gas_pads)
+        old, blockworker._s = getattr(blockworker, "_s", None), st
+        try:                            # (the server's pads for the block, taken in: build / base_photo fuel_pads)
+            blockworker._take_pads([("a", [FuelPadTest.ring(None, LAT, LON)])])
+            self.assertEqual(len(st.surface.fuel_pads(np.array([LAT]), np.array([LON]))), 1)
+            blockworker._take_pads([])          # (the server's switch off: nothing handed over, nothing painted)
+            self.assertEqual(st.surface.fuel_pads(np.array([LAT]), np.array([LON])), [])
+        finally:
+            blockworker._s = old
+        st.surface.close()
+        st = blockworker._State(tmp.name, True, False, False, False, True)
+        self.assertFalse(st.surface.gas_pads)
+        st.surface.close()
+
     def test_masks_and_message(self):
         s = self.make(surface=self.NorthGrass())
         a = s.new_anchor(LAT, LON)
@@ -433,6 +466,70 @@ class PhotoRoadsTest(unittest.TestCase):
         self.assertLessEqual(abs(painted - width), 2, f"{painted} px painted across a {width:.1f} m road")
         self.assertEqual(int(out[10, 64, 0]), 30, "the photo kept off the road")
         self.assertTrue(np.array_equal(sf.photo_roads(rgb, frame, -64.0, -64.0, 128.0, []), rgb))
+
+
+class FuelPadTest(unittest.TestCase):
+    """Gas station forecourts painted asphalt (the user, 2026-10-23: "some stations spawn on dirt because we do not
+    paint ashpat there"): Surface's store of the road tiles' pads (gasstations.tile_sites pads) and the three painters."""
+
+    def ring(self, lat, lon, d=1e-4):
+        return np.array([lat - d, lat - d, lat + d, lat + d]), np.array([lon - d, lon + d, lon + d, lon - d])
+
+    def test_off_by_default(self):
+        sur = sf.Surface(None)
+        self.addCleanup(sur.close)
+        sur.add_fuel_pads([("a", [self.ring(40.0, -80.0)])])
+        self.assertEqual(sur.fuel_pads(np.array([40.0]), np.array([-80.0])), [])
+
+    def test_store_by_area(self):
+        # the road tiles hand their pads over (earthd); the painters ask for those around them, no map data read
+        sur = sf.Surface(None)
+        self.addCleanup(sur.close)
+        sur.gas_pads = True
+        sur.add_fuel_pads([("a", [self.ring(40.0, -80.0)]), ("b", [self.ring(41.0, -80.0)])])
+        sur.add_fuel_pads([("a", [self.ring(40.0, -80.0)])])            # (again from a re-sent tile: once)
+        near = sur.fuel_pads(np.array([39.999, 40.001]), np.array([-80.001, -79.999]))
+        self.assertEqual(len(near), 1)
+        self.assertEqual(len(sur.fuel_pad_items(np.array([39.0, 42.0]), np.array([-81.0, -79.0]))), 2)
+        self.assertEqual(sur.fuel_pads(np.array([10.0]), np.array([10.0])), [])
+
+    def test_store_bounded(self):
+        sur = sf.Surface(None)
+        self.addCleanup(sur.close)
+        sur.gas_pads = True
+        sur.add_fuel_pads([(str(k), [self.ring(40.0 + k * 1e-3, -80.0)]) for k in range(sf.FUEL_PAD_STATIONS + 10)])
+        self.assertEqual(len(sur.fuel_pad_items(np.array([0.0, 90.0]), np.array([-180.0, 180.0]))),
+                         sf.FUEL_PAD_STATIONS)
+
+    def grid(self):
+        lat0, lon0 = 40.0, -76.0
+        lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
+        lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
+        a, b = lon0 + 10 * 2.6e-5, lon0 + 20 * 2.6e-5
+        c, d = lat0 + 10 * 2e-5, lat0 + 20 * 2e-5
+        return lat, lon, [(np.array([c, c, d, d]), np.array([a, b, b, a]))]
+
+    def test_paint_pads_asphalt(self):
+        lat, lon, pads = self.grid()
+        idx = np.full((50, 50), sf.DIRT, np.uint8)
+        out = sf.paint_pads(idx, lat, lon, pads)
+        self.assertEqual(out[15, 15], sf.ASPHALT)
+        self.assertEqual(out[40, 40], sf.DIRT)
+        self.assertTrue(np.array_equal(sf.paint_pads(idx, lat, lon, []), idx))
+
+    def test_photo_and_mask_pads(self):
+        import geodesy
+        frame = geodesy.EnuFrame(40.0, -76.0)
+        la, lo, _ = frame.enu_to_geodetic(np.array([-20.0, 20.0, 20.0, -20.0]), np.array([-10.0, -10.0, 10.0, 10.0]),
+                                          np.zeros(4))
+        pads = [(np.asarray(la), np.asarray(lo))]
+        rgb = np.full((128, 128, 3), 30, np.uint8)
+        out = sf.photo_pads(rgb, frame, -64.0, -64.0, 128.0, pads)
+        self.assertGreater(int(out[64, 64, 0]), 60, "the pad painted")
+        self.assertEqual(int(out[10, 10, 0]), 30, "the photo kept off it")
+        m = sf.pads_mask(frame, -64.0, -64.0, 128.0, 128, pads)
+        self.assertEqual(int(m[64, 64]), 255)
+        self.assertEqual(int(m[10, 10]), 0)
 
 
 if __name__ == "__main__":

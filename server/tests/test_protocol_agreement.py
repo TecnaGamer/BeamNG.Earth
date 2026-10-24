@@ -122,6 +122,8 @@ MOD_TO_SERVER = {
     "peers": {"me": F(str), "members": F(list)},
     # roads (roads.py; additive): the mod removed its roads (switched off and on again): send them again
     "roads_reset": {},
+    # gas stations (gasstations.py; additive): the settings page's switch, sent after every hello and on change
+    "gas_stations": {"on": F(bool)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},   # the map's search box
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
@@ -174,7 +176,8 @@ SERVER_TO_MOD = {
                      "floorZ": F(NUM, NULL, OPT),          # 2026-10-17: in a tunnel, its floor (core.floorCheck)
                      "anchorKey": F(str, OPT),             # phase 5 (lattice anchors): not sent yet
                      "provisional": F(bool, OPT),          # 2026-10-22: a teleport's ungraded first block
-                     "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT)},    # the prepare_anchor's spot, echoed
+                     "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
+                     "fuelShapes": F(list, OPT)},          # 2026-10-23: the region's gas station shapes (--gas-stations)
     "anchor_error": {"requestId": F(int, NULL), "error": F(str)},
     "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (mpsession.onShare)
     "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},

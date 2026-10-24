@@ -52,7 +52,8 @@ class RoadsTileTest(unittest.TestCase):
                                     roadmesh.build(FRAME, chunks, elev, (x0, y0, 0.0), 0.05, clip=roads.tile_bbox(0, 0),
                                                    follow=True),
                                     roadmesh.deck(chunks, (x0, y0, 0.0)))
-            self.assertEqual(got, want)
+            self.assertEqual(got[:2], want)
+            self.assertEqual(got[2], [], "no gas stations' pads (gas_stations off)")
             self.assertGreater(got[1], 0)
             self.assertEqual(sorted(os.listdir(a)), sorted(os.listdir(b)))
             for name in os.listdir(a):
