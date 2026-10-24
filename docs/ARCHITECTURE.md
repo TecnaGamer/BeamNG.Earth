@@ -1114,7 +1114,10 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
       tapers back to the parking curb over 3 m; the sidewalks resume beyond the tapers. Crosswalks
       span the driving lanes only, and their curb ramps are on the corner piece
       (`Builder.add_corner(ramps=...)`). The junction checks treat the corner's own roads at their
-      driving width.
+      driving width. **Off since GitHub #208** (2026-10-23): the rule put bulb-outs on every town
+      street with parking, and most streets have none (Tustin's suburban corners stuck out into the
+      road). `roads.build_tile` passes no `has_parking`; the code stays in `junctions.find` for a
+      later opt-in from map data (OSM `traffic_calming=choker`, `kerb=extended`).
 - Street widths from the buildings (`server/roadwidth.py`, `earthd --road-widths on`): Overture
   has a width on ~2 % of segments, so every street of a class used to get the same default (Thames
   St's 25-30 m square was drawn 10.6 m wide). In a built-up street the buildings stand at the back of

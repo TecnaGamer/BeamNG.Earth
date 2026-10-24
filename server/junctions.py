@@ -393,7 +393,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             wi, wj = spi.width / 2, spj.width / 2
             # curb extensions: on a two-way street with parking the corner's curb is the driving
             # lanes' edge, BULB_M along the street, then back to the parking curb over TAPER_M
-            # (Fells Point aerials, 2026-10-11: bulb-outs at most corners)
+            # (Fells Point aerials, 2026-10-11: bulb-outs at most corners; off since GitHub #208, as most streets
+            # have none: roads.build_tile passes no has_parking)
             acute = theta < ACUTE_DEG
             pi_ = parking_m if has_parking(spi) and not acute else 0.0
             pj_ = parking_m if has_parking(spj) and not acute else 0.0
