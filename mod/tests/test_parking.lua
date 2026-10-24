@@ -117,6 +117,35 @@ T.check(maxX <= 200.01 and #given.parkingSpots.sorted == 30, 'spots near the blo
 
 P.reset()
 T.check(P.status().spots == 0 and not P.status().started, 'reset')
+
+-- at most MAX_SPOTS, the nearest
+P.MAX_SPOTS = 10
+active = true
+P.onRows(3, '3:0_0', rows(30, 0, 10))
+clock = clock + 3
+P.update(3, player)
+local far = 0
+for _, ps in pairs(given.parkingSpots.objects) do far = math.max(far, ps.pos.x) end
+T.check(#given.parkingSpots.sorted == 10 and far <= 10 * 6.5 + 0.01, 'the MAX_SPOTS nearest spots only')
+P.MAX_SPOTS = 800
+P.reset()
+
+-- parked cars off: the sites are not kept up; turning them on (the stock setupVehicles: the radial menu) builds them
+-- first
+NG.takeChoice({ trafficMode = 'disabled', trafficParked = 'disabled' })
+active, given = false, nil
+local calls0 = setupCalls
+P.onRows(4, '4:0_0', rows(30, 0, 10))
+clock = clock + 3
+P.update(4, player)
+T.check(given and #given.parkingSpots.sorted == 30, 'parked cars off: the sites built once')
+P.onRows(4, '4:1_0', rows(3, 300, 10))
+clock = clock + 3
+P.update(4, player)
+T.check(#given.parkingSpots.sorted == 30, 'parked cars off: not rebuilt every REBUILD_S')
+gameplay_parking.setupVehicles(8)
+T.check(#given.parkingSpots.sorted == 33 and setupCalls == calls0 + 1, 'turned on: the sites rebuilt first, then the cars')
+P.reset()
 local P0 = { x = 0, y = 0 }
 T.check(not P.offSpot({ x = 10, y = 0 }, nil, P0), 'near the player: never moved (one it pushed stays in view)')
 T.check(P.offSpot({ x = 100, y = 0 }, nil, P0) and P.offSpot({ x = 100, y = 0 }, { missing = true }, P0),

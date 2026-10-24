@@ -27,6 +27,22 @@ local layoutDue = false     -- BeamMP joined: our layout at the next update
 -- BeamMP's onBeamMPPostJoin (through core.lua)
 function M.onPostJoin() layoutDue = true end
 
+-- The player's own BeamNG.Earth back on when they leave a server (the user, 2026-10-24: "I think the earth mod gets
+-- disabled when you leave the server"). Joining, BeamMP switches off every mod the server didn't send, ours too (the
+-- server's copy, "multiplayerbeamng_earth", runs in the session); leaving, it deletes the server's copy and leaves ours
+-- off, so the BeamNG.Earth level and the servers tab were gone until the game restarted. Called from the server's copy
+-- in BeamMP's onBeamMPServerLeave, before BeamMP's cleanup removes it. A player without our app has no such mod:
+-- nothing happens (core_modmanager.activateMod logs "mod not existing").
+M.LOCAL_MOD = 'beamng_earth'
+function M.onServerLeave()
+  local mm = rawget(_G, 'core_modmanager')
+  if type(mm) ~= 'table' or type(mm.getModDB) ~= 'function' or type(mm.activateMod) ~= 'function' then return false end
+  local ok, entry = pcall(mm.getModDB, M.LOCAL_MOD)
+  if not ok or type(entry) ~= 'table' or entry.active then return false end
+  log('I', 'beamngEarth', 'BeamMP: left the server: BeamNG.Earth (' .. M.LOCAL_MOD .. ') switched back on')
+  return pcall(mm.activateMod, M.LOCAL_MOD)
+end
+
 -- Is the game in a BeamMP session? (BeamMP's own extension MPCoreNetwork; nil outside BeamMP.)
 function M.inSession()
   local mp = rawget(_G, 'MPCoreNetwork')

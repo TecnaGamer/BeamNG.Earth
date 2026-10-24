@@ -96,9 +96,12 @@ function M.vehicles()
     local ok, d = pcall(pk.getParkedCarsList)
     if ok and type(d) == 'table' then for _, id in pairs(d) do parked[id] = true end end
   end
+  -- (other BeamMP players' cars floating off our block, mpsession.lua: nothing is made solid round them)
+  local ms = package.loaded['beamngEarth/mpsession']
+  local floats = ms and ms.isFloating
   for i = 0, be:getObjectCount() - 1 do
     local o = be:getObject(i)
-    if o and o.getPosition then
+    if o and o.getPosition and not (floats and floats(o:getId())) then
       local id = o:getId()
       local p = o:getPosition()
       out[#out + 1] = { id = id, x = p.x, y = p.y, kind = traffic[id] and 'traffic' or parked[id] and 'parked' or 'player' }

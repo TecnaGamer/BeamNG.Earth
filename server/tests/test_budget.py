@@ -51,8 +51,8 @@ class BudgetTest(unittest.TestCase):
 
 
 class PriorityTest(unittest.TestCase):
-    """lower_priority in a child process: Windows' classes (below normal for the server, idle for a far-field
-    worker, a road worker keeps its parent's), elsewhere niceness."""
+    """lower_priority in a child process: Windows' classes (below normal for the server; a worker keeps its
+    parent's, never idle: starved on the server's few cores), elsewhere niceness."""
 
     def run_child(self, code):
         import subprocess
@@ -69,8 +69,8 @@ class PriorityTest(unittest.TestCase):
                    "k.GetCurrentProcess.restype=wintypes.HANDLE; k.GetPriorityClass.argtypes=(wintypes.HANDLE,); "
                    "print(budget.lower_priority({n}, {w}), hex(k.GetPriorityClass(k.GetCurrentProcess())))")
             self.assertEqual(self.run_child(get.format(n=10, w=False)), "below normal 0x4000")
-            self.assertEqual(self.run_child(get.format(n=6, w=True)), "idle 0x40")
-            self.assertTrue(self.run_child(get.format(n=3, w=True)).startswith("None "), "a road worker: as inherited")
+            for n in (3, 6, 9):
+                self.assertTrue(self.run_child(get.format(n=n, w=True)).startswith("None "), "a worker: as inherited")
         elif hasattr(os, "nice"):
             self.assertEqual(self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b)"),
                              "3")

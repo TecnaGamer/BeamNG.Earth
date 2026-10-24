@@ -62,6 +62,7 @@ import asyncio  # noqa: E402
 import contextlib  # noqa: E402
 import glob  # noqa: E402
 import itertools  # noqa: E402
+import json  # noqa: E402
 import logging  # noqa: E402
 import math  # noqa: E402
 import re  # noqa: E402
@@ -130,6 +131,8 @@ import protocol  # noqa: E402
 import weather as weathermod  # noqa: E402
 
 PROTOCOL = 4
+# The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
+SERVER_LIST_URL = "https://earth.tgforever.net/servers"
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
 # 32-cell tiles), 4 = 64-cell tiles down to L-1 (farfield.CONTENT_FORMAT). A mod's hello.format is
 # the newest format it reads (it reads every older one from 3: core.lua FORMATS), so a mod older
@@ -1093,25 +1096,24 @@ class Server:
 
     def build_terrain_patch(self, aid, key, box):
         """terrainpatch.py: the collision patch of the ground under a collision island off the terrain block (the
-        mod's terrainpatch.lua), written to the session folder. (vfs path, (cx, cy), triangles) or None if the anchor
-        is gone. Worker threads."""
+        mod's terrainpatch.lua), written to the session folder in pieces. ([(vfs path, (cx, cy))], triangles) or None
+        if the anchor is gone. Worker threads."""
         anchor = self.anchors.get(aid)
         if anchor is None:
             return None
         box = terrainpatchmod.snap_box(*box)
-        name = f"patch_{aid}_{key}.cdae"
-        path = os.path.join(self.out_dir, name)
+        path = os.path.join(self.out_dir, f"patch_{aid}")      # (+ _<cell>.cdae a piece: shared by patches)
         if self.road_pool is not None:
-            _, centre, n = self.road_pool.submit(blockworker.terrain_patch, aid, anchor.lat, anchor.lon,
-                                                 anchor.zooms[0], box, path).result()
+            parts, n = self.road_pool.submit(blockworker.terrain_patch, aid, anchor.lat, anchor.lon,
+                                             anchor.zooms[0], box, path).result()
         else:
             zoom, g = anchor.zooms[0], self.grader_for(anchor)
 
             def elev(la, lo):
                 z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom))
                 return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
-            _, centre, n = terrainpatchmod.build(anchor.frame, elev, box, path)
-        return f"{self.vfs_dir}/{name}", centre, n
+            parts, n = terrainpatchmod.build(anchor.frame, elev, box, path)
+        return [(f"{self.vfs_dir}/{os.path.basename(p)}", c) for p, c in parts], n
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -2656,6 +2658,20 @@ class Connection:
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 
+    async def server_list(self):
+        """The BeamNG.Earth server list (native/serverlist, SERVER_LIST_URL) for the mod's tab in BeamMP's server browser
+        (serverlist.lua): fetched here, as the game's Lua may only open connections to local addresses ("connect
+        restricted"). A 'server_list' message with the servers, or with an error."""
+        def get():
+            return json.loads(self.s.net.get(SERVER_LIST_URL, kind="demand").body.decode("utf-8", "replace"))
+        try:
+            servers = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, get)
+        except Exception as e:          # offline, the list down: said in the tab
+            log.info("server list: %s: %s", type(e).__name__, e)
+            self.send({"type": "server_list", "error": "the server list did not answer"})
+            return
+        self.send({"type": "server_list", "servers": servers if isinstance(servers, list) else []})
+
     async def check_update(self):
         """The update check after a hello: an 'update' message when GitHub has a newer version (updates.py); offline or
         up to date: nothing."""
@@ -2945,6 +2961,8 @@ class Connection:
                          ",".join(map(str, sorted(self.s.game_cpus))))
         elif kind == "prepare_anchor":
             self.spawn(self.prepare_anchor(msg))
+        elif kind == "server_list":             # the BeamNG.Earth servers for the tab in BeamMP's browser
+            self.spawn(self.server_list())
         elif kind == "share":                   # a BeamMP session: serve our group (peerwork.GroupHelper)
             self.send(dict(self.s.share_start(msg.get("port")), type="share"))
         elif kind == "peers":                   # the players on our anchor (the BeamMP plugin, through mpsession)
@@ -3010,8 +3028,9 @@ class Connection:
             self.send({"type": "terrain_patch", "anchorId": aid, "key": key, "error": f"{type(e).__name__}: {e}"[:200]})
             return
         if res is not None:
-            vfs, (cx, cy), n = res
-            self.send({"type": "terrain_patch", "anchorId": aid, "key": key, "path": vfs, "x": cx, "y": cy, "tris": n})
+            parts, n = res
+            self.send({"type": "terrain_patch", "anchorId": aid, "key": key, "tris": n,
+                       "parts": [{"path": p, "x": c[0], "y": c[1]} for p, c in parts]})
 
     def on_cache(self, msg):
         """The settings page: capGb sets the cap (0 = unlimited), clear: true empties the cache (but this

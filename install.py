@@ -309,7 +309,9 @@ RELOADED_FILES = {
     "scripts/beamng_earth_reload/modScript.lua": """\
 -- Written by the BeamNG.Earth app, which asked the running game to reload its Lua (to mount the mod): loads
 -- beamngEarthReloaded once after that reload (it removes both files).
-setExtensionUnloadMode('beamngEarthReloaded', 'manual')
+if FS:fileExists('/lua/ge/extensions/beamngEarthReloaded.lua') then
+  setExtensionUnloadMode('beamngEarthReloaded', 'manual')
+end
 """,
     "lua/ge/extensions/beamngEarthReloaded.lua": """\
 -- Written by the BeamNG.Earth app; runs once after the Lua reload it asked for (the game was already running when the
@@ -320,9 +322,11 @@ local frames, since, missionId, nudged, inAt, hides = 0, nil, nil, false, nil, 0
 local HIDE_AT = { 3, 8, 15, 25, 40 }      -- s after the level is in
 
 local function done()
-  FS:removeFile('/lua/ge/extensions/beamngEarthReloaded.lua')
+  -- (the modScript first: left alone it asks for this extension at every mod-list read, "extension unavailable" in a
+  -- Windows player's log)
   FS:removeFile('/scripts/beamng_earth_reload/modScript.lua')
   FS:directoryRemove('/scripts/beamng_earth_reload')
+  FS:removeFile('/lua/ge/extensions/beamngEarthReloaded.lua')
   extensions.unload('beamngEarthReloaded')
 end
 

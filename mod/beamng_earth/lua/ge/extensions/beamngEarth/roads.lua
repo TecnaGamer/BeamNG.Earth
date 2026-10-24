@@ -100,6 +100,7 @@ local sinceChange = stopwatch.new()  -- ms since a tile arrived / went or a road
 local sinceReload = stopwatch.new()
 local collisionDirty = false
 local lastReloadAt = -math.huge   -- now() of the last be:reloadCollision (ours or another's): M.ahead
+local reloads = 0                 -- be:reloadCollision runs so far (ours or another's): M.reloads
 local sinceUrgent = math.huge     -- frames since the last urgent walk import (M.urgentWalk)
 local deletesDirty = false  -- only far colliders deleted since the last rebuild (RELOAD_DELETES_S)
 
@@ -392,15 +393,17 @@ local function createChunk(chunk)
   return r:getId()
 end
 
--- Server message `roads_tile` {anchorId, key, path, n}.
+-- Server message `roads_tile` {anchorId, key, path, n, data (the file's JSON, optional), slots}.
 function M.onTile(msg, currentAnchor)
   if not M.enabled then return false end
   switchAnchor(currentAnchor)
   if msg.anchorId ~= currentAnchor then return false end
   local key = tileKey(msg.anchorId, msg.key)
   if tiles[key] then dropTile(key) end
-  local text = readFile(msg.path)
-  local ok, data = pcall(jsonDecode, text or '')
+  -- the file's JSON in the message (server staging.inline_json: Windows' first read of a file the server just wrote took
+  -- up to 0.5 s in the frame), else the file
+  local ok, data = true, msg.data
+  if type(data) ~= 'table' then ok, data = pcall(jsonDecode, readFile(msg.path) or '') end
   if not ok or type(data) ~= 'table' or type(data.chunks) ~= 'table' then
     lastError = 'unreadable road tile ' .. tostring(msg.path)
     return false
@@ -465,7 +468,8 @@ function M.onFarTile(msg, currentAnchor)
   if not M.enabled then return false end
   switchAnchor(currentAnchor)
   if msg.anchorId ~= currentAnchor then return false end
-  local ok, data = pcall(jsonDecode, readFile(msg.path) or '')
+  local ok, data = true, msg.data              -- (in the message, else the file: as onTile)
+  if type(data) ~= 'table' then ok, data = pcall(jsonDecode, readFile(msg.path) or '') end
   if not ok or type(data) ~= 'table' then lastError = 'unreadable far building tile ' .. tostring(msg.path); return false end
   local key = tileKey(msg.anchorId, msg.key)
   local old = far[key]
@@ -752,7 +756,7 @@ function M.update(gov, currentAnchor, player, view)
     local t0 = now()
     noteNewColliders()
     be:reloadCollision()
-    lastReloadAt = now()
+    lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
     local ms = now() - t0
     -- out of the frame's budget, not into the meshes' cost estimate (from PR #41: a ~40 ms rebuild in the roadWalk
@@ -949,6 +953,10 @@ end
 -- next throttled slot.
 function M.requestCollision() collisionDirty = true end
 
+-- Collision rebuilds so far (be:reloadCollision, ours or the terrain commit's): what was made before one collides from
+-- the frame after it (terrainpatch.groundReady).
+function M.reloads() return reloads end
+
 function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ > 0 or collisionDirty end
 
 
@@ -956,7 +964,7 @@ function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ 
 function M.collisionRebuilt()
   -- that rebuild already made them solid: one held now leaves the physics at the next one
   local removed = noteNewColliders()
-  lastReloadAt = now()
+  lastReloadAt, reloads = now(), reloads + 1
   collisionDirty, deletesDirty, sinceReload = removed > 0, false, stopwatch.new()
 end
 

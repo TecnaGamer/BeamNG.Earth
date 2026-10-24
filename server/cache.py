@@ -65,6 +65,7 @@ SAVE_S = 600.0              # index saved at most every 10 minutes (and on close
 TICK_S = 30.0               # the background thread's check interval
 LIFETIMES = {}              # path prefix ("imagery/xyz/") -> max age after download (s); none today
 MSG_VERSION = 1
+READ_WAITS = (0.02, 0.05, 0.1, 0.25)   # s between the tries of a read held up on Windows (NoCache.read)
 
 
 def cap_bytes(gb):
@@ -80,12 +81,21 @@ class NoCache:
     without a Cache, the tools, the tests)."""
 
     def read(self, path):
-        """The file's bytes, or None if it is not there (also when it was evicted a moment ago)."""
-        try:
-            with open(path, "rb") as f:
-                return f.read()
-        except FileNotFoundError:
-            return None
+        """The file's bytes, or None if it is not there (also when it was evicted a moment ago). On Windows a file
+        another process is replacing or deleting cannot be opened for a moment (PermissionError: a far tile of a
+        first visit to Chicago failed on a Windows test PC, 2026-10-24): tried again READ_WAITS, then a miss (the
+        caller fetches it again and staging.replace_cached keeps whichever copy goes in)."""
+        for wait in READ_WAITS + (None,):
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            except FileNotFoundError:
+                return None
+            except PermissionError:
+                if wait is None:
+                    log.debug("cache: %s held by another process: a miss", path)
+                    return None
+                time.sleep(wait)
 
     def used(self, path, size=None):
         pass

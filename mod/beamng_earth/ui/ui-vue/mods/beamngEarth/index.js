@@ -71,9 +71,12 @@ export async function onLoad() {
   // an older version's map button, if this UI session still has one
   try { await lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-map") } catch (e) { /* none */ }
   await registerMapRoute()
+  // the BeamNG.Earth servers tab in BeamMP's server browser (earthServers.js); its failure costs nothing else
+  try { (await import("./earthServers.js")).start() } catch (e) { console.error("BeamNG.Earth: servers tab failed", e) }
 }
 
 export async function onUnload() {
+  try { (await import("./earthServers.js")).stop() } catch (e) { /* never started */ }
   await lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-settings")
   try {
     if (window.bngRoutes) window.bngRoutes.remove([MAP_SOURCE])

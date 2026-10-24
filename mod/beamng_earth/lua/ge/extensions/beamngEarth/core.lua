@@ -660,6 +660,7 @@ local function onMessage(msg)
     setStatus('Disconnected from companion server: ' .. tostring(msg.error))
   elseif t == 'hello' then
     st.sessionId = msg.sessionId
+    st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
     lastHello = {}           -- the server's version and options, for the reports' hardware.json
     for k, v in pairs(msg) do if k ~= 'attribution' and type(v) ~= 'table' then lastHello[k] = v end end
@@ -775,8 +776,12 @@ local function onMessage(msg)
     -- the graded block in place of a teleport's provisional one (server make_provisional; the user, 2026-10-22:
     -- "place the car as soon as possible"): swapped in while that block is still ours, else dropped (the block
     -- moved on: its replacements are built graded anyway)
-    if msg.anchorId == st.anchorId and st.block and msg.cx == st.block.cx and msg.cy == st.block.cy
-        and msg.size == terrain.SIZE then
+    -- A refresh for an anchor not committed yet is kept for the commit: a cached place's graded block came 1 s after
+    -- the provisional one while the teleport's commit waited out a 1.9 s level-load frame, and the provisional block
+    -- (no road grading, ground through the roads) stayed until the car drove off (BeamMP join, 2026-10-24)
+    if msg.anchorId ~= st.anchorId then
+      st.refreshLater = msg
+    elseif st.block and msg.cx == st.block.cx and msg.cy == st.block.cy and msg.size == terrain.SIZE then
       commitTerrain(msg)
     end
   elseif t == 'terrain_error' then
@@ -807,6 +812,10 @@ local function onMessage(msg)
     -- real gravity at the player (server gravity.py): applied by beamngEarth_weather's setGravity path
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.onGravity then w.onGravity(msg) end
+  elseif t == 'server_list' then
+    -- the BeamNG.Earth servers for the tab in BeamMP's server browser (serverlist.lua)
+    local sl = rawget(_G, 'beamngEarth_serverlist')
+    if sl and sl.onList then sl.onList(msg) end
   elseif t == 'block_base' then
     -- detail mode: a block's base photo rendered again with its NAIP tiles (server base_refresh): the block
     -- in use takes it now, a ready one not committed yet takes it at its commit
@@ -1404,6 +1413,15 @@ end
 
 local beammpBroken = false   -- an error in the BeamMP window turns it off for the session
 local mpsessionBroken = false -- the same for the BeamMP session by area (mpsession.lua)
+-- Collision foci besides the vehicles' (collisionfoci.update's extra): the stored far cars about to come back
+-- (farcars.lua) and, in BeamMP, where other players' cars switched off here are coming back on (mpsession.groundFoci)
+local function extraFoci()
+  local out = farcars.foci()
+  if beammp.inSession() then
+    for _, f in ipairs(mpsession.groundFoci()) do out[#out + 1] = f end
+  end
+  return out
+end
 -- the minimap's label (hudapps.hookCityZone)
 -- (the car's coordinates, formatted again only when they change at the label's 5 decimals)
 local coordsKey, coordsText = nil, nil
@@ -1440,6 +1458,11 @@ local function drawUi(dt)
     local ok, err = pcall(drawUpdateNotice)
     if not ok then updateInfo = nil; log('E', 'beamngEarth', 'update notice: ' .. tostring(err)) end
   end
+end
+
+-- BeamMP: its window and the session (other players' anchors, cars, damage). Timed as its own part ('beammp'): inside
+-- drawUi a BeamMP car's spawn was logged as a 1.1 s "draw" hitch (2026-10-24, a three-player test).
+local function updateBeamMP(dt)
   if not beammpBroken then
     local ok, err = pcall(beammp.update, dt, st.inOurLevel, net.isConnected(), settings)
     if not ok then beammpBroken = true; log('E', 'beamngEarth', 'BeamMP window: ' .. tostring(err)) end
@@ -1682,6 +1705,11 @@ local function onUpdate(dtReal, dtSim)
       return -- positions are in neither frame for decisions this frame
     end
   end
+  local rl = st.refreshLater
+  if rl and rl.anchorId == st.anchorId then     -- (its anchor committed: see 'terrain_refresh')
+    st.refreshLater = nil
+    if st.block and rl.cx == st.block.cx and rl.cy == st.block.cy and rl.size == terrain.SIZE then commitTerrain(rl) end
+  end
   if st.recouple then                   -- a rebase's trailers hitched again over a few seconds (rebase.lua)
     local okR, plan = pcall(rebase.recoupleTick, st.recouple, st.clock)
     st.recouple = okR and plan or nil
@@ -1718,7 +1746,7 @@ local function onUpdate(dtReal, dtSim)
       pb[1], pb[2], pb[3], pb[4] = lattice.groundBox(st.block.cx, st.block.cy)
     end
     if not fociBroken then
-      local ok, err = pcall(collisionfoci.update, dtReal, { roads.setFoci, trees.setFoci }, farcars.foci)
+      local ok, err = pcall(collisionfoci.update, dtReal, { roads.setFoci, trees.setFoci }, extraFoci)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'collision foci: ' .. tostring(err)) end
       t = mark('foci', t)
       ok, err = pcall(terrainpatch.update, dtReal, st.anchorId, collisionfoci.last, st.player, pb, net.send)
@@ -1736,7 +1764,9 @@ local function onUpdate(dtReal, dtSim)
     t = mark('sky', t)
   end
   drawUi(dtReal)
-  mark('draw', t)
+  t = mark('draw', t)
+  updateBeamMP(dtReal)
+  mark('beammp', t)
 end
 
 -- After physics, before rendering (main.lua:819-824): measure when a rebase's vehicle move became
@@ -1823,7 +1853,7 @@ end
 function M.onBeamMPPostJoin() beammp.onPostJoin(); mpsession.onPostJoin() end
 
 -- BeamMP left the server (its own hook): the other players' cars we deactivated back on.
-function M.onBeamMPServerLeave() pcall(mpsession.reset) end
+function M.onBeamMPServerLeave() pcall(beammp.onServerLeave); pcall(mpsession.reset) end
 
 -- The UI apps (ui/modules/apps/BeamNGEarth*) say when they are on screen: hudapps.lua.
 function M.hudApp(name, on) return hudapps.setMounted(name, on) end

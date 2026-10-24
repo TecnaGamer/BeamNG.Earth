@@ -50,6 +50,12 @@ M.PAUSE_LEAD_S = 0.5    -- s: pause when the car would reach the stop line this 
 M.PAUSE_MIN_SPEED = 0.3 -- m/s towards the edge below which it is not moving there
 M.RESUME_INSIDE_M = 60  -- m past the stop line before a guard pause resumes by itself
 M.RESUME_GRACE_S = 5    -- s: the player resumed by hand: no new pause meanwhile
+-- The speed acted on is the vehicle's velocity, but no faster than it moved since the last frame plus SPEED_SLACK: a car
+-- just spawned (or made active again) can read a velocity it does not have. A BeamMP spawn read 2346 mph at rest: held
+-- (in BeamMP the hold hides the car, simhold.lua), let go the next frame (well inside), held again, every frame: the car
+-- vanished (the user, 2026-10-23: "when i try to spawn a car it instantly gets despawned on BeamMP").
+M.SPEED_SLACK = 5       -- m/s
+M.SAMPLE_MAX_S = 0.5    -- s: an older position sample (the guard was off meanwhile) measures nothing
 
 local sqrt, max, min, abs = math.sqrt, math.max, math.min, math.abs
 
@@ -59,7 +65,7 @@ end
 
 -- The world frame changed (an anchor committed: teleport, rebase, resync): the ground height it
 -- remembers for the rescue is in the old frame's coordinates.
-function M.newFrame(g) g.lastGroundZ, g.lastGroundT = nil, nil end
+function M.newFrame(g) g.lastGroundZ, g.lastGroundT, g.lastT = nil, nil, nil end
 
 -- The highest speed towards an edge at distance d that can still stop STOP_M inside it; negative
 -- (a pull back inwards) inside the stop line.
@@ -101,13 +107,32 @@ function M.step(g, inp)
     return s > M.PAUSE_MIN_SPEED and dEdge - M.STOP_M <= s * M.PAUSE_LEAD_S + 1
   end
   local d = min(x - x0, x1 - x, y - y0, y1 - y)
-  if soon(x1 - x, vx) or soon(x - x0, -vx) or soon(y1 - y, vy) or soon(y - y0, -vy) then
+  -- (never farther in than a hold resumes by itself (update): such a hold ended the next frame and started again, every
+  -- frame: in BeamMP the car hidden for good after a teleport, the user 2026-10-23 "the car disappears when i teleport";
+  -- a car that fast is still caught: the pause line is RESUME_INSIDE_M deep, a frame moves it far less)
+  if d <= M.STOP_M + M.RESUME_INSIDE_M
+      and (soon(x1 - x, vx) or soon(x - x0, -vx) or soon(y1 - y, vy) or soon(y - y0, -vy)) then
     g.holds = g.holds + 1
     return 'hold', nil, nil, true
   end
   if d <= M.STOP_M + 1 then return 'hold' end -- resting at the line
   if d < M.warnDistance(sqrt(vx * vx + vy * vy)) then return 'warn' end
   return 'clear'
+end
+
+-- Pure: the velocity (vx, vy) scaled down to what the car really moved since the last sample (g.lastX/Y/T, updated):
+-- at most the moved distance / dt + SPEED_SLACK. No usable sample (the first, an old one): SPEED_SLACK at most.
+function M.plausible(g, clock, x, y, vx, vy)
+  local moved = 0
+  if g.lastT and clock > g.lastT and clock - g.lastT <= M.SAMPLE_MAX_S then
+    local dx, dy = x - g.lastX, y - g.lastY
+    moved = sqrt(dx * dx + dy * dy) / (clock - g.lastT)
+  end
+  if not (g.lastT and clock == g.lastT) then g.lastX, g.lastY, g.lastT = x, y, clock end
+  local v = sqrt(vx * vx + vy * vy)
+  local cap = moved + M.SPEED_SLACK
+  if v <= cap or v ~= v then return (v == v) and vx or 0, (v == v) and vy or 0 end
+  return vx * cap / v, vy * cap / v
 end
 
 -- The reference node's height above static collision (castRayStatic; a miss returns >= the length),
@@ -136,7 +161,9 @@ function M.release(g)
 end
 
 function M.update(g, veh, box, clock)
-  local p, v = veh:getPosition(), veh:getVelocity()
+  local p, vel = veh:getPosition(), veh:getVelocity()
+  local vx, vy = M.plausible(g, clock, p.x, p.y, vel.x, vel.y)
+  local v = { x = vx, y = vy }
   local d = min(p.x - box[1], box[3] - p.x, p.y - box[2], box[4] - p.y)
   if g.pausedByUs then
     if not simPaused() then                       -- the player resumed: let them drive back inwards

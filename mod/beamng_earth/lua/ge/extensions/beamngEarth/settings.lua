@@ -55,6 +55,9 @@ M.SCHEMA = {
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
   placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar (online)' },
+  -- BeamMP started by the BeamNG.Earth app with the game (launcher.py reads this file: bmplaunch.on_launch; its
+  -- "don't ask again" writes it off)
+  beammpOnLaunch = { kind = 'bool', default = true, label = 'Start BeamMP with BeamNG.Earth' },
   -- the on-screen data credits (credits.lua): on by default, CC BY licences ask for visible attribution
   creditsVisible = { kind = 'bool', default = true, label = 'Data credits on screen' },
   creditsCorner = { kind = 'enum', default = 'bottom-left', values = credits.CORNERS, label = 'Data credits corner' },
@@ -71,7 +74,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible', 'statusBar',
-  'placeNamesOnline', 'creditsVisible',
+  'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
 -- Stored but not on the settings page

@@ -1451,13 +1451,20 @@ end
 -- The server session of the current anchor (switchAnchor's newSession), or nil.
 function M.session() return session end
 
+-- The committed block's cover box { cx, cy, x0, y0, x1, y1 } (nil: none; mpsession's test status)
+function M.coverBlock() return block end
+
 function M.stats()
-  local n, covered, hiddenLoaded, over, overLevel, partial = 0, 0, 0, 0, nil, 0
+  local n, covered, hiddenLoaded, over, overLevel, partial, partialSink, partialLevel = 0, 0, 0, 0, nil, 0, 0, nil
   local b, e = blockShown() and block or nil, 0.01
   for _, inst in pairs(live) do
     n = n + 1
     if not visibleCover(inst.cover) then covered = covered + 1 end
-    if inst.cover == 'partial' then partial = partial + 1 end
+    if inst.cover == 'partial' then
+      partial = partial + 1
+      partialSink = math.max(partialSink, M.PARTIAL_SINK_K * (inst.err or 0) + M.PARTIAL_SINK_M)
+      partialLevel = math.max(partialLevel or inst.level, inst.level)
+    end
     -- shown at its own height across the block's ground (GitHub #46: coarse ground drawn over the near terrain)
     if b and inst.cover == 'none' and not inst.hidden and inst.x0 < b.x1 - e and b.x0 + e < inst.x1
         and inst.y0 < b.y1 - e and b.y0 + e < inst.y1 then
@@ -1476,7 +1483,8 @@ function M.stats()
     textured = counters.textured, oldCovered = counters.oldCovered, nearVisual = nearVisual, rawView = rawView,
     waitingGroups = waiting, exactLevel = exactLevel, underLevel = under.level, underOld = under.old,
     exactMiss = counters.exactMiss, exactFrames = counters.exactFrames, retex = counters.retex,
-    retexStale = counters.retexStale, retexFailed = counters.retexFailed, overBlock = over, overBlockLevel = overLevel, partial = partial }
+    retexStale = counters.retexStale, retexFailed = counters.retexFailed, overBlock = over, overBlockLevel = overLevel, partial = partial,
+    partialSink = partialSink, partialLevel = partialLevel }
 end
 
 ------------------------------------------------------------------------------------------

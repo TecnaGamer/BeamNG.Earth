@@ -30,3 +30,4 @@ dist/
 native/earthfast/target/
 build/
 nls_api_key.txt
+native/serverlist/target/

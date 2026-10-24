@@ -100,4 +100,17 @@ beammp.openInstallPage()
 T.check(opened == 'game ' .. beammp.INSTALL_URL, 'opened by the game: ' .. tostring(opened))
 _G.openWebBrowser = nil
 
+-- leaving a server: the player's own BeamNG.Earth (switched off by BeamMP at the join) back on
+do
+  local activated, db = {}, { beamng_earth = { active = false } }
+  core_modmanager = { getModDB = function(n) return db[n] end, activateMod = function(n) activated[#activated + 1] = n end }
+  T.check(beammp.onServerLeave() and activated[1] == 'beamng_earth', 'left: our own mod switched back on')
+  db.beamng_earth.active = true
+  T.check(not beammp.onServerLeave() and #activated == 1, 'already on: left alone')
+  db.beamng_earth = nil
+  T.check(not beammp.onServerLeave() and #activated == 1, 'no local copy (no app): nothing')
+  core_modmanager = nil
+  T.check(not beammp.onServerLeave(), 'no mod manager: nothing')
+end
+
 T.done('test_beammp')

@@ -9,3 +9,5 @@ setExtensionUnloadMode('beamngEarth_settings', 'manual')
 setExtensionUnloadMode('beamngEarth_dev', 'manual')
 -- The in-game reports (report.lua: Ctrl+Shift+E a report / GitHub issue, Ctrl+Shift+Y the 30 s performance profiler).
 setExtensionUnloadMode('beamngEarth_report', 'manual')
+-- The BeamNG.Earth servers list for the tab in BeamMP's server browser (serverlist.lua; fetches only when asked).
+setExtensionUnloadMode('beamngEarth_serverlist', 'manual')

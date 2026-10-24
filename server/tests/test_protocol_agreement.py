@@ -118,7 +118,7 @@ MOD_TO_SERVER = {
     "perf_log": {"lines": F((list, dict))},
     # BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our
     # anchor ({id, host, port, code, weight} each)
-    "share": {},
+    "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)
     "peers": {"me": F(str), "members": F(list)},
     # roads (roads.py; additive): the mod removed its roads (switched off and on again): send them again
     "roads_reset": {},
@@ -127,6 +127,7 @@ MOD_TO_SERVER = {
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
               "bearing": F(NUM, OPT)},   # the GPS (routing.py); bearing: the car's heading, the route starts that way
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
+    "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # the update notice's button: the server opens the releases page (updates.open_page; additive)
     "open_page": {"url": F(str)},
     "update_now": {},                   # the update notice's "Update now" (selfupdate.py)
@@ -142,6 +143,7 @@ TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squ
            "base": F(str, OPT), "baseSize": F(NUM, OPT),           # --near-visual detail: the block's photo
            "ter": F(str, OPT)}                                     # the block as a .ter (swapped in, no import)
 SERVER_TO_MOD = {
+    "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT)},   # geocode.py (Photon)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT)},  # OSRM
     "update": {"current": F(str), "latest": F(str), "url": F(str)},   # a newer version on GitHub (updates.py)
@@ -214,13 +216,14 @@ SERVER_TO_MOD = {
     "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list)},
     # road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks
     "roads_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
+                   "data": F(dict, OPT),       # the file's JSON, so the game need not open it (staging.inline_json)
                    "slots": F(dict, OPT)},     # {what: [pooled shape path, serial]} (matslots.py; pose.slotsGone)
     "roads_drop": {"anchorId": F(int), "key": F(str)},
     # trees, bushes and rocks of a tile (vegetation.py, --trees on): a JSON file of items
-    "veg_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int)},
+    "veg_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT)},
     "veg_drop": {"anchorId": F(int), "key": F(str)},
     # far buildings (buildings.far_tile, --buildings on): a JSON file naming a render-only mesh
-    "bldfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
+    "bldfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
                     "slots": F(dict, OPT)},    # {"shape": [pooled shape path, serial]}
     "bldfar_drop": {"anchorId": F(int), "key": F(str)},
     # the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges
@@ -228,7 +231,7 @@ SERVER_TO_MOD = {
                  "serial": F(int)},
     # the download cache's usage (cache.py; additive, with a Cache only): after hello and every mod 'cache'
     # ... its answer: the patch's shape and centre, or an error (the mod asks again later)
-    "terrain_patch": {"anchorId": F(int), "key": F(str), "path": F(str, OPT), "x": F(NUM, OPT), "y": F(NUM, OPT),
+    "terrain_patch": {"anchorId": F(int), "key": F(str), "parts": F(list, OPT),     # [{path, x, y}]: small meshes
                       "tris": F(int, OPT), "error": F(str, OPT)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT)},
@@ -249,7 +252,8 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "navgraph",                                   # --traffic on: needs map data
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
-                       "geocode_result", "route_result"}             # only when the map / GPS asks                            # only when the world map asks (map_tiles)
+                       "geocode_result", "route_result",
+                       "server_list"}                                # only when the BeamMP tab asks (online)             # only when the map / GPS asks                            # only when the world map asks (map_tiles)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}
 
@@ -296,7 +300,7 @@ def mod_sends():
     mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua (core hands it
     net.send)."""
     out = {}
-    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua"), r"net(?:'\))?\.send\(\{"),
+    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua",), r"\bsend\(\{")):
         text = "\n".join((LUA / n).read_text(encoding="utf-8") for n in names)
         for m in re.finditer(pattern, text):
@@ -871,7 +875,8 @@ class ServerMessagesTest(test_server.ServerHarness):
         # the ground's collision patch under another vehicle's island off the block (terrainpatch.lua / .py)
         c.send({"type": "terrain_patch", "anchorId": aid, "key": "t1", "x0": 900, "y0": -100, "x1": 1100, "y1": 100})
         patch = until(lambda m: m["type"] == "terrain_patch")
-        self.assertTrue(patch.get("path") and os.path.exists(self.fs(patch["path"])) and patch["tris"] > 0, patch)
+        self.assertTrue(patch.get("parts") and patch["tris"] > 0, patch)
+        self.assertTrue(all(os.path.exists(self.fs(p["path"])) for p in patch["parts"]), patch)
         c.send({"type": "prepare_anchor", "requestId": 4, "lat": 123.0, "lon": 0})
         until(lambda m: m["type"] == "anchor_error")
         # a second anchor 2 km east (a rebase): the previous anchor's tiles get far_removes

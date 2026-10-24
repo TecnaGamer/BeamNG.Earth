@@ -70,9 +70,33 @@ def tmp_for(path):
     return os.path.join(d, f"{os.getpid()}_{threading.get_ident()}_{next(_serial)}_{os.path.basename(path)}.tmp")
 
 
+WARM_READ = os.environ.get("BNGE_WARM_READ", "1" if os.name == "nt" else "0") != "0"   # (=1 elsewhere: tests)
+WARM_CHUNK = 1 << 20
+
+
+def warm(path):
+    """Read a file just written into the game's folder once, here (Windows): the first open of a new file is scanned
+    by the antivirus, and the game paid it in the frame (a far tile's shape and texture 20-184 ms per tile on a
+    Windows test PC, 2026-10-24, 0.4 ms on Linux; a second open of the same file 0.15 ms). Read in this process, a
+    server worker, the scan is done before the game opens it. Errors ignored (the game reads it anyway)."""
+    try:
+        with open(path, "rb") as f:
+            while f.read(WARM_CHUNK):
+                pass
+    except OSError:
+        pass
+
+
 def replace(tmp, path):
     """os.replace(tmp, path), making path's folder again if it was deleted under us (the game or the player
-    clearing its temp folder) instead of failing every write after it."""
+    clearing its temp folder) instead of failing every write after it. On Windows a file going into the game's folder
+    is read once at once (warm)."""
+    _replace(tmp, path)
+    if WARM_READ and staging_dir(path) is not None:
+        warm(path)
+
+
+def _replace(tmp, path):
     try:
         os.replace(tmp, path)
     except FileNotFoundError:
@@ -111,3 +135,22 @@ def replace_cached(tmp, path):
                     pass
                 return False
             time.sleep(wait)
+
+
+INLINE_MAX = 1 << 20        # bytes: a session file this small or smaller goes inside its message (inline_json)
+
+
+def inline_json(out_dir, vfs_path, max_bytes=INLINE_MAX):
+    """The parsed JSON of a session file (vfs_path's name in out_dir), to send inside its message (its "data") so the
+    game does not open the file: on Windows the game's first read of a file the server just wrote took 6.8 ms on
+    average and up to 552 ms, in the frame (a 4-minute highway drive on a Windows test PC, 2026-10-24: 1,176 tile files
+    read; 0.03 ms on Linux). None when it cannot be read or is larger than max_bytes (the mod reads the file then)."""
+    import json
+    try:
+        path = os.path.join(out_dir, os.path.basename(vfs_path))
+        if os.path.getsize(path) > max_bytes:
+            return None
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None

@@ -481,11 +481,25 @@ def windows_game_dir():
     return None
 
 
+# --gfx -> the game's -gfx value. The game knows "dx11" and "vk" but not "dx12" (2026-10-24, a Windows 10 / RTX 3060
+# test PC: "-gfx dx12" listed no adapter at all, "There is no valid rendering device available."): DirectX 12 is
+# "d3d12" (its log then: "NVIDIA GeForce RTX 3060 (D3D12)").
+GFX_ARG = {"dx11": "dx11", "dx12": "d3d12", "vk": "vk"}
+
+
 def start_game(use_gcpatch, build="native", gfx="", user_dir=None):
     """Start the game; returns a Popen when this process started it directly, else None (through Steam)."""
-    win_args = ["-gfx", gfx] if gfx else []
+    win_args = ["-gfx", GFX_ARG.get(gfx, gfx)] if gfx else []
     extra = os.environ.get("BNGE_GAME_ARGS", "").split()     # (tests: e.g. "-bngetest car,damage")
     win_args += extra
+    if IS_WIN and not win_args and not under_wine():
+        # through Steam on Windows itself: Steam Input (a Steam Controller), the overlay and Steam's play time reach
+        # only a game Steam started (GitHub #218, 1.6.1 on Windows: "Steam doesn't pass input from the Steam
+        # Controller into the game"). Not with start options (--gfx, tests): Steam asks the player whether to allow
+        # them; not under Wine / Proton, where Steam's links do not reach Steam
+        row("Game", "starting through Steam")
+        os.startfile(f"steam://rungameid/{APP_ID}")
+        return None
     if IS_WIN:
         # as BeamMP's launcher: the game's own launcher (BeamNG.drive.exe) in its folder, waited on. Works under
         # Wine / Proton too (the .exe started with protontricks), where Steam's links do not reach Steam
@@ -574,6 +588,18 @@ def watch_game_log(user_dir, since):
     threading.Thread(target=run, name="watch-game-log", daemon=True).start()
 
 
+def game_launcher_running():
+    """Windows: BeamNG's own launcher (BeamNG.drive.exe, its renderer / launch options window) is open: the game is
+    starting, however long the player takes there."""
+    if not IS_WIN:
+        return False
+    try:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq BeamNG.drive.exe", "/FO", "CSV", "/NH"], capture_output=True)
+    except OSError:
+        return False
+    return '"BeamNG.drive.exe"' in (r.stdout or b"").decode("utf-8", errors="replace")
+
+
 def wait_for_game(proc):
     """Until the game closes."""
     if proc is not None:
@@ -581,12 +607,15 @@ def wait_for_game(proc):
         while game_pids():          # the Windows build's launcher may end before the game
             time.sleep(3)
         return
-    t0 = time.time()
+    # (started through Steam: the game may take a while, BeamNG's launch options window open for as long as the player
+    # likes; the server keeps waiting for it, and once it has gone, stops with it. It waited 180 s and then never looked
+    # again, the server left running after the game closed, 2026-10-24.)
+    t0, said = time.time(), False
     while not game_pids():
-        if time.time() - t0 > GAME_START_S:
-            say("the game did not start (no BeamNG.drive process); the server keeps running, Ctrl+C stops it")
-            while True:
-                time.sleep(3600)
+        if not said and time.time() - t0 > GAME_START_S and not game_launcher_running():
+            say("the game has not started yet (no BeamNG.drive process): start it from Steam; the server keeps "
+                "running for it, Ctrl+C stops it")
+            said = True
         time.sleep(2)
     gone_since = None
     while True:
@@ -821,6 +850,8 @@ def main():
     ap.add_argument("--no-game", action="store_true", help="only the server (start the game yourself)")
     ap.add_argument("--no-gcpatch", action="store_true", help="Linux: start the game without the grass patch")
     ap.add_argument("--keep-mod", action="store_true", help="leave the game's copy of the mod as it is")
+    ap.add_argument("--no-beammp", action="store_true",
+                    help="do not start BeamMP (multiplayer) with the game (bmplaunch.py)")
     ap.add_argument("--user-dir", help="BeamNG.drive user folder (default: found)")
     ap.add_argument("--proton", dest="build", action="store_const", const="proton",
                     help="Linux: the game is the Windows build under Proton")
@@ -864,6 +895,101 @@ def main():
         sys.exit(1)
 
 
+def beammp_install(user_dir, dd, ask=None):
+    """BeamMP isn't installed: the player is asked (the user, 2026-10-24: "Yes/No/No and dont ask again", on both
+    systems). Yes: the official launcher downloaded (bmplaunch.download). No: not this time. Don't ask again: the
+    setting "Start BeamMP with BeamNG.Earth" turned off (turning it on again in the game asks again). Returns the
+    launcher's path, or None."""
+    import bmplaunch
+    ask = ask or input
+    say("BeamMP (multiplayer: play on BeamNG.Earth servers with other players) is not installed.")
+    question = ("  Install the official BeamMP launcher now (a few MB from GitHub)?" if IS_WIN else
+                "  Build BeamMP's launcher from its source now (a few minutes, once)?")
+    try:
+        answer = ask(question + " [Y]es / [N]o / [D]on't ask again: ")
+    except (EOFError, OSError):
+        return None                         # (no console to ask in: asked next time)
+    answer = (answer or "").strip().lower()
+    if answer in ("d", "don't", "dont", "never"):
+        bmplaunch.set_on_launch(user_dir, False)
+        say("  Not installed, and not asked again. To use multiplayer later, turn on \"Start BeamMP with BeamNG.Earth\"")
+        say("  in the game: Pause menu, Mods, BeamNG.Earth.")
+        return None
+    if answer in ("n", "no"):
+        say("  Not installed this time.")
+        return None
+    import install
+    ua = f"BeamNG.Earth/{install.version()}"
+    if not IS_WIN:
+        return bmplaunch.build_linux(dd, ua, say=lambda m: say("  " + m))
+    exe = bmplaunch.download(dd, ua, say=lambda m: say("  " + m))
+    if exe:          # (BeamMP's own installer sets the firewall up; started from here Windows asks once)
+        say("  Windows Firewall may ask whether the BeamMP launcher may use the network: allow it, or multiplayer "
+            "cannot connect.")
+    return exe
+
+
+def beammp_up(user_dir, build, args):
+    """BeamMP for multiplayer (bmplaunch.py): the official BeamMP launcher started before the game (it updates BeamMP's
+    mod in the game, which then connects to it). Returns its process (stopped with the server), or None."""
+    import bmplaunch
+    if getattr(args, "no_beammp", False):
+        return None
+    if under_wine() or (not IS_WIN and build == "proton"):
+        row("Multiplayer", "BeamMP not started with the Windows build under Proton / Wine (start it yourself)")
+        return None
+    if bmplaunch.running():
+        row("Multiplayer", "BeamMP is already running")
+        return None
+    dd = data_dir()
+    if not bmplaunch.on_launch(user_dir, dd):
+        row("Multiplayer", "BeamMP not started (turned off: BeamNG.Earth settings, \"Start BeamMP with BeamNG.Earth\")")
+        return None
+    exe = bmplaunch.find(dd)
+    if exe and not IS_WIN and bmplaunch.rebuild_due(dd) and exe == os.path.join(dd, "beammp", bmplaunch.EXE):
+        import install          # (the one built here was too old for BeamMP's mod: built again from BeamMP's source)
+        exe = bmplaunch.build_linux(dd, f"BeamNG.Earth/{install.version()}", say=lambda m: say("  " + m)) or exe
+    if not exe:
+        exe = beammp_install(user_dir, dd)
+    if exe and not IS_WIN:
+        too_old = bmplaunch.system_too_old(exe)
+        if too_old:
+            row("Multiplayer", f"BeamMP cannot start: {too_old}")
+            return None
+    if not exe:
+        row("Multiplayer", "BeamMP not installed")
+        return None
+    log_path = os.path.join(dd, "logs", "beammp-launcher.log")
+    proc = bmplaunch.start(exe, user_dir, log_path)
+    row("Multiplayer", "starting BeamMP ...")
+    if not bmplaunch.wait_ready(proc):
+        bmplaunch.stop(proc)
+        row("Multiplayer", f"BeamMP did not start (its log: {log_path})")
+        return None
+    version = bmplaunch.log_version(bmplaunch.read_log(log_path))
+    row("Multiplayer", f"BeamMP{' v' + version if version else ''} ready: in the game, Multiplayer, then a server "
+        "running BeamNG.Earth")
+
+    def watch():                            # (a launcher too old for BeamMP's current mod: said once, plainly)
+        for _ in range(60):
+            time.sleep(5)
+            if proc.poll() is not None:
+                return
+            if bmplaunch.log_too_old(bmplaunch.read_log(log_path)):
+                if not IS_WIN and exe == os.path.join(dd, "beammp", bmplaunch.EXE):
+                    bmplaunch.save_settings(dd, rebuild=True)
+                    problem("BeamMP's launcher built here is older than BeamMP's mod (\"Invalid lua communication\").",
+                            "It is built again from BeamMP's newest source at the next start of BeamNG.Earth.")
+                    return
+                problem(f"BeamMP's launcher{' v' + version if version else ''} ({exe}) cannot talk to BeamMP's mod in "
+                        "the game (\"Invalid lua communication\" in its log): it is older than the mod it downloaded.",
+                        "Update BeamMP's launcher (on Linux: build the latest from github.com/BeamMP/BeamMP-Launcher)."
+                        " Multiplayer will not work until then; single player is not affected.")
+                return
+    threading.Thread(target=watch, daemon=True, name="beammp-watch").start()
+    return proc
+
+
 def run(args):
     import install
     title(f"BeamNG.Earth {install.version()}")
@@ -899,7 +1025,9 @@ def run(args):
     server = start_server(user_dir, extra, log_path)
     row("World server", "running")
     row("Server log", log_path)
+    beammp = None
     try:
+        beammp = None if args.no_game else beammp_up(user_dir, build, args)
         if args.no_game:
             say()
             say("Start BeamNG.drive and pick 'BeamNG.Earth' in Freeroam. Ctrl+C stops the server.")
@@ -924,6 +1052,9 @@ def run(args):
         wait_for_game(proc)
         row("Game", "closed")
     finally:
+        if beammp is not None:
+            import bmplaunch
+            bmplaunch.stop(beammp)
         stop_server(server)
 
 

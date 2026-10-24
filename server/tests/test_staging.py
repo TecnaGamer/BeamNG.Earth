@@ -95,5 +95,29 @@ class StagingTest(unittest.TestCase):
             staging.REPLACE_WAITS = old_waits
 
 
+
+class WarmTest(unittest.TestCase):
+    """Windows: a file replaced into the game's folder is read once at once (staging.warm); cache files are not."""
+
+    def test_game_folder_files_only(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            game = os.path.join(d, "BeamNG.drive", "current", "temp", "beamngEarth", "s")
+            cache = os.path.join(d, "cache")
+            os.makedirs(game)
+            os.makedirs(cache)
+            read = []
+            with mock.patch.object(staging, "WARM_READ", True), \
+                    mock.patch.object(staging, "warm", lambda p: read.append(p)):
+                for folder in (game, cache):
+                    path = os.path.join(folder, "t.cdae")
+                    tmp = staging.tmp_for(path)
+                    Path(tmp).write_bytes(b"x")
+                    staging.replace(tmp, path)
+            self.assertEqual(read, [os.path.join(game, "t.cdae")])
+            staging.warm(os.path.join(game, "t.cdae"))          # (reads it; a missing file is no error)
+            staging.warm(os.path.join(game, "missing.cdae"))
+
+
 if __name__ == "__main__":
     unittest.main()

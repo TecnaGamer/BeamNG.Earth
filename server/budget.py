@@ -131,28 +131,26 @@ def trim():
         libc.malloc_trim(0)
 
 
-# Windows has no niceness: priority classes. The server's own (earthd --nice, default 10) is "below normal"; a
-# worker's niceness on top of it (earthd NICE_ROADS 3, NICE_FAR 6, NICE_FAR_BUILDINGS 9) of WIN_IDLE_ABOVE or more is
-# "idle": the far field and the far buildings only get the cores the game and the ground under the car leave over.
-# Without it all nine server processes ran at the game's own priority (start.py passed --nice 0 on Windows, the
-# lowering never ran; 2026-10-21).
+# Windows has no niceness: priority classes. The server's own (earthd --nice, default 10) is "below normal"; its workers
+# keep it. Without it all nine server processes ran at the game's own priority (start.py passed --nice 0 on Windows,
+# the lowering never ran; 2026-10-21). Not "idle" for the far field's and far buildings' workers (1.6.0 to 1.6.1):
+# Windows runs a lower class only when no thread of a higher one is ready, and the server has its own few cores
+# (cpupin.split: 2 of a 6-core CPU), which the road and block workers can fill for minutes on a first visit; then the
+# far workers got nothing at all (a Windows player, i5-9400F, 1.6.1: "distant land 5/514", only the land near the car
+# loading). os.nice elsewhere only weights the share.
 WIN_BELOW_NORMAL = 0x4000
-WIN_IDLE = 0x40
-WIN_IDLE_ABOVE = 5
 
 
 def lower_priority(nice, worker=False):
     """This process below the game: os.nice(nice) where it exists; on Windows the "below normal" class for the
-    server (worker False, nice > 0), "idle" for a worker nice >= WIN_IDLE_ABOVE above it (a worker otherwise keeps the
-    class it inherited). Returns the change made, for the log ("nice +n", "below normal", "idle", None)."""
+    server (worker False, nice > 0); a worker keeps the class it inherited. Returns the change made, for the log
+    ("nice +n", "below normal", None)."""
     if not nice or nice <= 0:
         return None
     if hasattr(os, "nice"):
         os.nice(int(nice))
         return f"nice +{int(nice)}"
-    if sys.platform != "win32":
-        return None
-    if worker and nice < WIN_IDLE_ABOVE:
+    if sys.platform != "win32" or worker:
         return None
     import ctypes
     from ctypes import wintypes
@@ -161,7 +159,6 @@ def lower_priority(nice, worker=False):
     k32.GetCurrentProcess.restype = wintypes.HANDLE
     k32.SetPriorityClass.argtypes = (wintypes.HANDLE, wintypes.DWORD)
     k32.SetPriorityClass.restype = wintypes.BOOL
-    cls, name = (WIN_IDLE, "idle") if worker else (WIN_BELOW_NORMAL, "below normal")
-    if not k32.SetPriorityClass(k32.GetCurrentProcess(), cls):
-        raise OSError(f"SetPriorityClass({name}) failed")
-    return name
+    if not k32.SetPriorityClass(k32.GetCurrentProcess(), WIN_BELOW_NORMAL):
+        raise OSError("SetPriorityClass(below normal) failed")
+    return "below normal"

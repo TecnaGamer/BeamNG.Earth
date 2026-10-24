@@ -1083,3 +1083,29 @@ class ViewOrderTest(unittest.TestCase):
         self.assertEqual(sorted(want, key=plain), [(0, 0), (-2, 0), (3, 0)])
         other = r.view_key(conn, 2, 128.0, 128.0)            # (the camera of another anchor's frame: ignored)
         self.assertEqual(sorted(want, key=other), [(0, 0), (-2, 0), (3, 0)])
+
+
+class ChainResolveTest(unittest.TestCase):
+    """BridgeProfiles._resolve: a cell loaded at a loose end can put a longer copy of a part already in the chain into
+    the pool (its ends then new); the chain is followed on instead of failing (KeyError, a Chicago road tile,
+    2026-10-24), whatever order the set of keys comes in."""
+
+    def test_part_grown_by_a_loaded_cell(self):
+        spec = type("Spec", (), {"width": 8.0})()
+
+        def part(x0, x1):
+            xy = np.array([[x0, 0.0], [x1, 0.0]])
+            return (spec, xy, LAT, 1.0, 2)
+
+        class Grown(roads.BridgeProfiles):
+            def _load(self, key, pool, ground):
+                if pool[("b", 0)][1][-1][0] < 300:
+                    pool[("b", 0)] = (spec, np.array([[100.0, 0.0], [300.0, 0.0]]), LAT, 1.0, 9)
+
+        for first in (("a", 0), ("b", 0)):
+            res = Grown(FRAME, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
+            pool = {("a", 0): part(0.0, 100.0), ("b", 0): part(100.0, 200.0)}
+            if first == ("b", 0):
+                pool = {("b", 0): pool[("b", 0)], ("a", 0): pool[("a", 0)]}
+            self.assertEqual(res._resolve(("a", 0), pool, {}, set()), [("a", 0), ("b", 0)])
+            self.assertEqual(float(pool[("b", 0)][1][-1][0]), 300.0)

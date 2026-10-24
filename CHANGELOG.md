@@ -2,6 +2,97 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.6.2 beta (2026-10-24)
+
+Works with BeamNG.drive 0.40.3.
+
+### Multiplayer
+- **Find BeamNG.Earth servers in BeamMP's server browser.** Main menu > More > BeamMP has a new **BeamNG.Earth** tab:
+  the servers running BeamNG.Earth, with their players and a Join button. They only show there, for players who have
+  BeamNG.Earth: they no longer appear in BeamMP's normal list.
+- **The app starts BeamMP for you.** No more "start the BeamMP launcher first": the BeamNG.Earth app starts BeamMP's
+  official launcher (unchanged) with the game. If BeamMP isn't installed, the app asks: **Yes / No / Don't ask again**.
+  - **Windows:** Yes downloads BeamMP's official launcher from BeamMP's GitHub, checked against the checksum BeamMP
+    publishes.
+  - **Linux and Steam Deck:** Yes builds BeamMP's launcher on your computer from BeamMP's own source, from the newest
+    version that passed BeamMP's own tests (about a minute on a Steam Deck; it needs podman or docker, which SteamOS
+    already has).
+  - A new setting, **Start BeamMP with BeamNG.Earth** (Pause menu > Mods > BeamNG.Earth, Multiplayer), turns this off
+    or back on.
+- **BeamNG.Earth stays on after you leave a server.** Joining a BeamMP server switches your other mods off, and leaving
+  left BeamNG.Earth switched off until the game was restarted.
+- **Crash damage shows on the other players' screens, dents included.** With BeamNG 0.40, BeamMP's full damage
+  message failed before it was sent, so other players only saw the parts that broke off. Now a crash you watch keeps
+  the damage your own game worked out, and a car that crashed out of your sight takes on its owner's damage once, as it
+  comes within about 0.6 miles: the broken parts at once, the dents growing in over a second. The damage message is
+  about 6 times smaller than BeamMP's own. In testing with three players, copies of crashed cars ended within 0-24
+  broken beams of the owner's car (they had been 16-120 off, or showed no damage). A car repaired or reset while far
+  from you no longer comes back as a wreck.
+- **Reduced the chance of your car vanishing in multiplayer.** Right after a spawn or a teleport, the guard that stops
+  you driving off the edge of the ground could hold the car and let it go every frame, and BeamMP hides a held car.
+  The mod now also holds your car without switching it off, so it stays visible.
+- **Reduced the chance of other players' cars glitching or being removed** after one of you teleports across the world
+  and back: position updates with broken numbers, and the last updates from where they were, are now ignored, and
+  their car shows again only once there is ground under it.
+- **Reduced the chance of other players' cars looking like they float, and of bumpy ground under them,** when they are
+  far from you: cars beyond your drivable ground now hover where their owner says they are instead of falling.
+- **Reduced the chance of long freezes on Windows when other cars are far away** (multiplayer, and AI traffic). The
+  ground built under far cars is now many small pieces: Windows took 4-26 seconds to take in one big piece, and takes a
+  fraction of a second for the same ground in pieces.
+- **Shared world building is turned off for now:** each player builds their own world again. Cars still show in the
+  right place.
+
+### Smoother driving
+- **Fewer stutters while driving** (all systems, most on Windows and the Steam Deck). Each time the drivable ground
+  moved along with you, the game redrew all of the sun's shadows, which took up to 1/6 s on a Steam Deck; the ground
+  no longer triggers that. In testing, shadow stutters on a Windows PC highway drive went from 14 to none, and on a
+  Steam Deck city drive from 34 to 18.
+- **Fewer stutters while driving on Windows.** The game's first look at each new file the world server writes (a piece
+  of road, trees, distant land) could hold a frame, up to half a second. In testing on a 6-minute highway drive with
+  DirectX 11, frames slower than 1/10 s went from 15 to 6 and frames slower than 1/30 s from 192 to 126.
+- **Fewer stutters from parked cars.** The parking spot list was rebuilt every couple of seconds from every spot within
+  about half a mile, up to 1/10 s near big parking lots; it now keeps only the nearest spots. In testing on a highway
+  past Phoenix, frames held up by it went from about 25 to 1 in 4 minutes.
+- **Reduced the chance of the distant land stopping to load on Windows** ("distant land 5/514"): its workers ran at
+  Windows' lowest priority and got no CPU time while the other workers were busy.
+- **Reduced the chance of the ground at your start point staying unfinished** (no aerial photo, sand showing through
+  the road) until you drove off.
+
+### Windows
+- **Fixed starting the game with DirectX 12 from the app** (`--gfx dx12`: "There is no valid rendering device
+  available").
+- **Steam Controller works on Windows** (GitHub #218): the app starts the game through Steam, so Steam Input and the
+  overlay reach it.
+- **Reduced the chance of the world server staying open after the game closed** when the game took long to start.
+- **Reduced the chance of a piece of distant land failing** when two of the world server's processes used the same
+  downloaded photo at once.
+
+### Roads
+- **Reduced the chance of missing road pieces near long bridges and tunnels** (all systems): in testing, a downtown
+  Chicago piece failed in 7 of 10 tries; now in none.
+
+### Hosting a BeamMP server
+- **Which list your server is on** is set in `ServerConfig.toml`: `Private = false` with your AuthKey puts it on the
+  BeamNG.Earth list only (the plugin keeps it off BeamMP's own list); `Private = true`, or no AuthKey, keeps it off
+  both, and players join with Direct Connect. See the server zip's README. Update the server zip with each release:
+  it carries the mod your server sends to players.
+
+### Which file do I need?
+- **`BeamNG.Earth-1.6.2-beta.exe`: Windows players.** The whole app in one file: run it and it installs the mod into
+  BeamNG.drive, starts the world server, BeamMP and the game (Windows may warn about an unknown app: More info > Run
+  anyway). Steam must be running.
+- **`BeamNG.Earth-1.6.2-beta-x86_64.AppImage`: Linux and Steam Deck players** (on the Deck, in Desktop Mode). The same
+  app for Linux: make it executable (right-click > Properties, or `chmod +x`) and run it.
+- **Joining a BeamMP server with BeamNG.Earth?** Run the app above, then in the game: More > BeamMP, the
+  **BeamNG.Earth** tab.
+- **`BeamNG.Earth-BeamMP-Server-1.6.2-beta.zip`: only for people hosting a BeamMP server** (unzip it into the server's
+  folder; see its README). Players don't need it.
+- **`Source code (zip)` and `Source code (tar.gz)`: for developers.** Added by GitHub to every release; not needed to
+  play.
+
+If you want to talk about this mod with me or other people, join my Discord server at
+[discord.gg/tgf](https://discord.gg/tgf) and head to the #beamng-earth channel.
+
 ## 1.6.1 beta (2026-10-23)
 
 Works with BeamNG.drive 0.40.3.

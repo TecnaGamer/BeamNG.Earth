@@ -734,5 +734,33 @@ class PruneDirTest(unittest.TestCase):
         cachemod.touch_once(path)
         self.assertEqual(os.path.getmtime(path), 1, "once per process")
 
+
+class HeldReadTest(unittest.TestCase):
+    """A file another process is replacing on Windows (PermissionError for a moment): read again, then a miss."""
+
+    def test_held_then_free_and_held_for_good(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.jpg")
+            Path(path).write_bytes(b"jpg")
+            real = open
+            calls = []
+
+            def held(n):
+                def fake(p, *a, **k):
+                    calls.append(p)
+                    if p == path and len(calls) <= n:
+                        raise PermissionError(13, "Permission denied")
+                    return real(p, *a, **k)
+                return fake
+            with mock.patch.object(cachemod, "READ_WAITS", (0, 0, 0)), \
+                    mock.patch("builtins.open", held(2)):
+                self.assertEqual(cachemod.NONE.read(path), b"jpg")
+            calls.clear()
+            with mock.patch.object(cachemod, "READ_WAITS", (0, 0, 0)), \
+                    mock.patch("builtins.open", held(99)):
+                self.assertIsNone(cachemod.NONE.read(path))
+            self.assertEqual(len(calls), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

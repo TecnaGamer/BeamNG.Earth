@@ -67,6 +67,53 @@ T.check(got[#got] == 'p:5-0:{"pos":[1,2,3]}', 'an unknown player\'s position: un
 positionGE.handle('Xn:4-0:{}')
 T.check(got[#got] == 'Xn:4-0:{}', 'another kind of packet: untouched')
 
+-- sanitize: a non-finite number anywhere drops the packet; a teleport-fast speed is zeroed (the position kept)
+T.check(ma.sanitize({ pos = { 1, 2, 3 }, vel = { 1, 0, 0 }, rot = { 0, 0, 0, 1 } }), 'sanitize: a sane packet')
+T.check(not ma.sanitize({ pos = { 1, 0 / 0, 3 } }), 'sanitize: NaN position dropped')
+T.check(not ma.sanitize({ pos = { 1, 2, 3 }, rvel = { math.huge, 0, 0 } }), 'sanitize: infinite angular velocity dropped')
+T.check(not ma.sanitize({ pos = { 1, 2, 3 }, rot = { 0, 0, 0 / 0, 1 } }), 'sanitize: NaN rotation dropped')
+local fast = { pos = { 1, 2, 3 }, vel = { 3000, 0, 0 }, rvel = { 5, 5, 5 } }
+T.check(ma.sanitize(fast) and fast.vel[1] == 0 and fast.rvel[1] == 0 and fast.pos[1] == 1,
+  'sanitize: a 3000 m/s teleport artefact: velocities zeroed, position kept')
+local before = #got
+local saved = jsonDecode
+jsonDecode = function() return { pos = { 0 / 0, 0, 0 } } end
+positionGE.handle('p:4-0:{"pos":[1,2,3]}')
+positionGE.handle('p:9-0:{"pos":[1,2,3]}')      -- (a player with no anchor known: no conversion, still checked)
+jsonDecode = saved
+T.check(#got == before, 'a NaN packet never reaches BeamMP, converted or not')
+
+-- a player's anchor changes: its packets are dropped for SETTLE_S (packets from its old place can still come, and
+-- converted with the new anchor they would put the car under the ground), then pass again
+local tnow = 1000
+ma.clock = function() return tnow end
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+local n1 = #got
+ma.setRemote(4, 36.53, -118.07)
+positionGE.handle('p:4-0:{"pos":[2,-6,-80]}')
+T.check(#got == n1, 'the anchor just changed: the packet dropped')
+tnow = tnow + ma.SETTLE_S + 0.1
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == n1 + 1, 'after SETTLE_S: through again')
+-- the other order: a car jumping more than JUMP_M between packets (new-place packets with the old anchor): dropped
+-- for SETTLE_S, then the next one is its place
+tnow = tnow + 0.5
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+local n2 = #got
+tnow = tnow + 0.2
+positionGE.handle('p:4-0:{"pos":[8100,200,30]}')
+T.check(#got == n2, 'a jump of 8 km between packets: dropped')
+tnow = tnow + 0.5
+positionGE.handle('p:4-0:{"pos":[8110,200,30]}')
+T.check(#got == n2, '... and the next ones within SETTLE_S')
+tnow = tnow + ma.SETTLE_S
+positionGE.handle('p:4-0:{"pos":[8120,200,30]}')
+T.check(#got == n2 + 1, 'after SETTLE_S: taken as the car\'s place')
+tnow = tnow + 0.1
+positionGE.handle('p:4-0:{"pos":[8125,200,30]}')
+T.check(#got == n2 + 2, '... and it moves on from there')
+ma.clock = os.clock
+
 ma.reset()
 T.check(not ma.knows(4), 'reset: the anchors forgotten')
 T.done('test_mpanchor')

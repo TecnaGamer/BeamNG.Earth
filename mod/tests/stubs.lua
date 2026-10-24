@@ -14,6 +14,13 @@ vecmt.__add = function(a, b) return vec3(a.x + b.x, a.y + b.y, a.z + b.z) end
 vecmt.__sub = function(a, b) return vec3(a.x - b.x, a.y - b.y, a.z - b.z) end
 function vecmt:length() return math.sqrt(self.x ^ 2 + self.y ^ 2 + self.z ^ 2) end
 function vecmt:normalized() local l = self:length(); return vec3(self.x / l, self.y / l, self.z / l) end
+vecmt.__mul = function(a, b)
+  if type(a) == 'number' then a, b = b, a end
+  return vec3(a.x * b, a.y * b, a.z * b)
+end
+function vecmt:dot(b) return self.x * b.x + self.y * b.y + self.z * b.z end
+function vecmt:cross(b) return vec3(self.y * b.z - self.z * b.y, self.z * b.x - self.x * b.z, self.x * b.y - self.y * b.x) end
+function vecmt:toFloat3() return self end
 function quat(x, y, z, w)
   if type(x) == 'table' then x, y, z, w = x.x, x.y, x.z, x.w end
   return { x = x or 0, y = y or 0, z = z or 0, w = w or 1 }

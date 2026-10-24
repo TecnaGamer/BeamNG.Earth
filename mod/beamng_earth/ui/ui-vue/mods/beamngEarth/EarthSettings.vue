@@ -271,6 +271,12 @@ const settingsSchema = [
     ],
   },
   {
+    name: "Multiplayer",
+    items: [
+      { id: "beammpOnLaunch", type: "bool", default: true, name: "Start BeamMP with BeamNG.Earth", desc: "The BeamNG.Earth app starts BeamMP (multiplayer) with the game, so BeamNG.Earth servers show in BeamMP's server browser (main menu, More, BeamMP, the BeamNG.Earth tab). Off: BeamMP isn't started or offered. Takes effect at the next start of the app." },
+    ],
+  },
+  {
     name: "Download cache",
     items: [
       { id: "cacheUsage", type: "info", name: "Download cache", desc: "Elevation and imagery the server downloaded and keeps on disk (~/.cache/beamng-earth), so revisited places load without downloading again: the space in use, the size limit and the number of files." },

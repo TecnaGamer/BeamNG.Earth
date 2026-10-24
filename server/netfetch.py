@@ -193,6 +193,11 @@ POLICIES = {
     # ~1 request a second at most, no bulk
     "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=2.0, max_conc=1, daily_budget=300, daily_hard=500,
                                            cache_ttl=DAY, miss_ttl=None, max_wait=10.0, timeout=20.0, max_attempts=1, optional=True),
+    # the BeamNG.Earth server list (native/serverlist on the project's mini PC): the tab in BeamMP's server browser,
+    # fetched when the player opens it or presses Refresh
+    "earth.tgforever.net": HostPolicy(rate=0.2, burst=3.0, max_conc=1, daily_budget=3000, daily_hard=6000,
+                                      cache_ttl=0, miss_ttl=None, max_wait=5.0, timeout=8.0, max_attempts=1,
+                                      optional=True),
     # the update check (updates.py): the project's VERSION file on GitHub, a few times a day at most
     "raw.githubusercontent.com": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=24, daily_hard=48,
                                             cache_ttl=6 * 3600, miss_ttl=None, max_wait=5.0, timeout=8.0,

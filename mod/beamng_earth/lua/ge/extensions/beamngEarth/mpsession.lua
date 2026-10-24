@@ -8,9 +8,10 @@
 --     the wrong place;
 --   - bngeGoTo { lat, lon }: on joining, a teleport to where the others are.
 -- Damage: BeamMP sends parts that break off (break groups) but not dents; its own full-damage message (nodesVE.getNodes:
--- every node and beam, applied on the other players' copies by its nodesGE) is never sent. This sends it for our own
--- cars when another player comes within DAMAGE_NEAR_M (they see the car as it is) and DAMAGE_SETTLE_S after our car's
--- damage changed by DAMAGE_STEP while one is near.
+-- every node and beam, applied on the other players' copies by its nodesGE) is never sent. This sends our own cars'
+-- damage on BeamMP's full-damage path (nodesGE.sendNodes), as only the beams broken or bent (DAMAGE_VE: tens of KB for
+-- a wreck instead of ~200 KB), when another player comes within DAMAGE_NEAR_M (they see the car as it is) and
+-- DAMAGE_SETTLE_S after our car's damage changed by DAMAGE_STEP while one is near.
 -- Shared generation (the user, 2026-10-22: "3 players in Utah and 1 in Italy ... the Utah players split generation
 -- between each other"): players near each other converge onto one anchor (pickAnchor: within ADOPT_M, the one most of
 -- them use; a teleport next to them lands on it, core.teleportTo / adoptAnchor; otherwise a smooth rebaseTo), and
@@ -22,8 +23,26 @@
 local M = {}
 
 M.PROTO = 2                 -- as the plugin's G.PROTO
+-- Shared generation (below) on? Off for now (the user, 2026-10-23: "disable the shared gen. think is causing problems"):
+-- no group service (no "share", so no port in our poses and no bngePeers for us), no converging onto the others'
+-- anchor, no landing on it after a teleport. Each player builds their own world; the cars still show in the right
+-- place (mpanchor converts positions between anchors).
+M.SHARE_GEN = false
 M.POSE_S = 2
 M.HIDE_S = 0.5
+-- A car switched off here (far, or its owner's anchor unknown) comes back on only over ground (terrainpatch.groundReady
+-- at its latest position): switched on over none, it fell, the ground came in around it and its physics blew up
+-- (instabilities, which BeamMP turns into the car switched off or deleted; a Windows test PC, 2026-10-24, the other
+-- player back from a teleport across the world while this one had driven 3 km off). Its spot is a collision focus
+-- meanwhile (groundFoci), so the ground gets made; on after GROUND_WAIT_S whatever.
+M.GROUND_WAIT_S = 20
+-- Other players' cars off our terrain block float: gravity off, and no collision made round them (collisionfoci skips
+-- them: no solid roads, trees or terrain patches). Each player drives their own car; a copy off our block only has to
+-- follow it, and on terrain patches it could not keep up: in a three-player test (2026-10-24) a car driven at 104-120
+-- mph 3 miles from the others outran its patches on their screens and broke, 187-234 broken beams there against 46 on
+-- its own. Off the block when FLOAT_OUT_M from its edge or beyond, on it again FLOAT_IN_M inside (gravity back).
+M.FLOAT_OUT_M = 32
+M.FLOAT_IN_M = 96
 M.GOTO_OFFSET_M = 12        -- a joining player lands this far from the one it goes to (not on top of it)
 M.DAMAGE_STEP = 50          -- (the game's damage figure, map.objects[id].damage)
 M.DAMAGE_SETTLE_S = 2
@@ -39,6 +58,8 @@ M.SETTLE_S = 10             -- ... and not within this of our own anchor's last 
 local handlers = false
 local anchors = {}          -- tostring(server player id) -> { aLat, aLon, lat, lon } (bngeAnchors)
 local deactivated = {}      -- game vehicle id -> true: deactivated here
+local waitGround = {}       -- game vehicle id -> { x, y, since }: to come back on, waiting for its ground
+local floating = {}         -- game vehicle id -> true: floating here (off our block, gravity off)
 local poseIn, hideIn = 0, 0
 local joined = false        -- BeamMP joined and no pose sent yet: the first pose asks for the meeting place
 local wentTo = false        -- the session's one bngeGoTo done
@@ -103,7 +124,11 @@ function M.damageDue(newcomer, damage, sent, settled, dt)
   -- (a newcomer gets our car's full state only when it has damage to show: an undamaged car is the one BeamMP spawned
   -- there already, and every join sent every nearby player's every car to every client, 2026-10-23: "the game freezes
   -- when players join")
-  if newcomer then return (damage or 0) >= M.DAMAGE_STEP, 0 end
+  -- (... or it changed since our last send: a car reset while no one was near would otherwise stay wrecked on the
+  -- copies of the players who saw it last, 2026-10-24)
+  if newcomer then
+    return (damage or 0) >= M.DAMAGE_STEP or (sent ~= nil and math.abs((damage or 0) - sent) >= M.DAMAGE_STEP), 0
+  end
   if not damage or math.abs(damage - (sent or 0)) < M.DAMAGE_STEP then return false, 0 end
   settled = (settled or 0) + dt
   return settled >= M.DAMAGE_SETTLE_S, settled
@@ -165,6 +190,7 @@ local lateGoTo = nil         -- (test 'late': the go-to held until TEST_LATE_S)
 M.TEST_LATE_S = 45
 M.TEST_DELREMOTE_S = 40
 M.TEST_DROP_S, M.TEST_DROP_M = 40, 2500
+M.TEST_LEAVE_S = 40         -- ('leave') after the car, the server left as with BeamMP's Leave button
 local brokenOf = {}         -- (test) remote game vehicle id -> broken beams
 
 -- (test) a remote car's broken beams, from its vehicle Lua
@@ -266,6 +292,13 @@ local function testStep(dt)
         log('I', 'beamngEarth', 'BeamMP test: removed the other player\'s car ' .. tostring(gid))
       end
     end
+  end
+  -- 'leave': TEST_LEAVE_S after the car, the server left (BeamMP's Leave button; MCP is off in a session)
+  if test.leave and testCarAt and not test.left and testClock - testCarAt > M.TEST_LEAVE_S then
+    test.left = true
+    log('I', 'beamngEarth', 'BeamMP test: leaving the server')
+    local mp = rawget(_G, 'MPCoreNetwork')
+    if mp and mp.leaveServer then pcall(mp.leaveServer, true) end
   end
   -- 'drop': TEST_DROP_S after the car, our car moved TEST_DROP_M east (BeamMP's teleport to a player far off our block)
   if test.drop and testCarAt and not test.dropped and veh and testClock - testCarAt > M.TEST_DROP_S then
@@ -381,7 +414,7 @@ end
 
 -- core.teleportTo: the anchor of other players near (lat, lon) to teleport onto (aLat, aLon), nil if none.
 function M.adoptAnchor(lat, lon)
-  if not next(anchors) then return nil end         -- (outside a session: empty)
+  if not M.SHARE_GEN or not next(anchors) then return nil end         -- (outside a session: empty)
   return M.pickAnchor(anchors, lat, lon, myPid())
 end
 
@@ -400,14 +433,15 @@ local function onConfig(data)
   log('I', 'beamngEarth', 'BeamMP: the server\'s sharing port ' .. tostring(d.sharePort))
 end
 
--- Pure: the "share" request for our world server: the server's port when it is a usable one.
-function M.shareRequest(cfg)
+-- Pure: the port our world server shares on: the BeamMP server's (bngeConfig) when it is a usable one, else nil.
+function M.sharePort(cfg)
   local port = cfg and tonumber(cfg.sharePort)
   if port and (port ~= math.floor(port) or port < 1024 or port > 65535) then port = nil end
-  return { type = 'share', port = port }
+  return port
 end
 
 local function onPeers(data)
+  if not M.SHARE_GEN then return end
   local ok, d = pcall(jsonDecode, data)
   if not ok or type(d) ~= 'table' or type(d.members) ~= 'table' then return end
   stats.peers = #d.members
@@ -419,6 +453,7 @@ end
 -- rebase (core.rebaseTo). Every player applies the same rule, so a group ends on one anchor; a car ahead that
 -- rebased takes the ones following onto its new anchor.
 local function converge(dt, anchor, lat, lon)
+  if not M.SHARE_GEN then return end
   local k = M.key(anchor.lat, anchor.lon)
   if k ~= lastAnchorKey then lastAnchorKey, anchorSince = k, 0 end
   anchorSince = anchorSince + (dt or 0)
@@ -480,6 +515,240 @@ function M.onPostJoin()
   anchors = {}
 end
 
+-- Is (x, y) m or more inside our terrain block (nil: no block known)?
+-- Copies repaired by the owner's full damage (the user, 2026-10-24: "do the fixes"). Two cars that hit each other are
+-- each worked out by every game on its own, so a copy breaks other beams than its owner's car: in a three-player test a
+-- car with 9 broken beams showed 72 and 30 on the others, and BeamMP's full-damage message (nodesVE.applyNodes) breaks
+-- and dents but never mends. BeamMP's nodesGE.handle is wrapped (as mpanchor wraps positionGE.handle; BeamMP's files
+-- are not changed): another player's car keeps the owner's state, and once it is far from our camera (checkCopies)
+-- its vehicle Lua counts the beams broken here but not in the owner's state; none: the state is put on (APPLY_VE);
+-- some: the car is reset (RESET_PHYSICS: BeamMP's positionVE puts it back on its next packet) and the state put on
+-- REPAIR_FRAMES frames later.
+M.REPAIR_FRAMES = 3
+local nodesWrapped = nil   -- the nodesGE table wrapped (BeamMP reloading it makes a new one)
+local pendingNodes = {}     -- game vehicle id -> { raw, frames } (the owner's state, applied after the reset)
+-- Copies checked again after damage of their own (2026-10-24, three players: a copy took 24 broken beams after its
+-- owner's full damage had come, the two cars still pushing into each other; the owner's damage barely moved, so it sent
+-- nothing more and the copy stayed broken). A copy whose damage figure moved DAMAGE_STEP from where it had settled,
+-- for COPY_SETTLE_S, is stale again: checked against the owner's last state once far. No state yet: the owner's car had
+-- less than DAMAGE_STEP damage while we were near, so beams broken here mean a reset to new.
+M.COPY_SETTLE_S = 4
+M.SYNC_FAR_M = 150          -- a copy takes its owner's damage only this far from our camera (m) ...
+M.SYNC_RANGE_M = 1000       -- ... and this near: once, as it comes in range (the user, 2026-10-24: "we really need to
+                            -- only update the damage once the car is in range"); a farther copy only keeps the state
+local lastNodes = {}        -- game vehicle id -> its owner's last full damage (its JSON as it came)
+local stale = {}            -- game vehicle id -> true: may differ from its owner (a new state, or damage of its own)
+local morphs = {}           -- game vehicle id -> steps done: a copy's dents growing in (APPLY_VE's bngeMorph)
+local applied = {}          -- game vehicle id -> the owner's state last put on it: put on once
+local witnessed = {}        -- game vehicle id -> true: its stale damage came while it was near our camera (we saw it)
+local copyBase = {}         -- game vehicle id -> the copy's damage figure once settled (nil: to be taken)
+local copySince = {}        -- game vehicle id -> seconds it has differed from copyBase
+local copyQuiet = {}        -- game vehicle id -> seconds before copyBase is taken (after a state, a check, a reset)
+local PRISTINE_VE = [[local n = 0 for _, b in pairs(v.data.beams) do if obj:beamIsBroken(b.cid) then n = n + 1 end end ]]
+  .. [[if n > 0 then obj:requestReset(RESET_PHYSICS) ]]
+  .. [[obj:queueGameEngineLua("local m = package.loaded['beamngEarth/mpsession'] if m then m.afterRepairReset(%d, " .. n .. ") end") end]]
+-- The owner's damage put on a copy (vehicle Lua; d: the decoded state): its broken beams and node masses at once,
+-- its dents (beam rest lengths) grown in over MORPH_STEPS frames (bngeMorph, stepped by M.update). Measured on a
+-- test bench (a pickup wrecked by a 30 m drop, 156-225 broken beams, its state put on a fresh one, 2026-10-24): the
+-- broken beams alone came out exact; BeamMP's nodesVE.applyNodes way (every node set where it stood, then the rest
+-- lengths) broke 84-97 more (loose parts torn off, and on a car that had turned since, twisted apart: 49 beams on
+-- copies of a car with none, an instability); the rest lengths in one step 159 more; grown in over 60 steps 39 more
+-- (the user chose this: "Breaks + morphed dents"). BeamNG 0.40 renamed beamstate.beamDeformed to onBeamDeformed.
+M.MORPH_STEPS = 60
+local APPLY_VE = [[local function applyDamage(d) if type(d) ~= 'table' then return end ]]
+  .. [[for cid, n in pairs(d.nodes or {}) do if type(n) == 'table' and #n > 1 then obj:setNodeMass(tonumber(cid) - 1, n[2]) end end ]]
+  .. [[local l0 = {} for cid, b in pairs(d.beams or {}) do local c = tonumber(cid) - 1 ]]
+  .. [[if b[2] == true then if not obj:beamIsBroken(c) then obj:breakBeam(c) beamstate.beamBroken(c, 1) end ]]
+  .. [[elseif not obj:beamIsBroken(c) then l0[c] = obj:getBeamRestLength(c) end end ]]
+  .. [[bngeDmg = { beams = d.beams or {}, l0 = l0 } ]]
+  .. [[obj:queueGameEngineLua("local m = package.loaded['beamngEarth/mpsession'] if m then m.startMorph(" .. obj:getID() .. ") end") end ]]
+  .. [[function bngeMorph(f) local s = bngeDmg if not s then return end ]]
+  .. [[local deformed = beamstate.onBeamDeformed or beamstate.beamDeformed ]]
+  .. [[for cid, b in pairs(s.beams) do local c = tonumber(cid) - 1 local l0 = s.l0[c] ]]
+  .. [[if l0 and not obj:beamIsBroken(c) then obj:setBeamLength(c, l0 + (b[1] - l0) * f) ]]
+  .. [[if f >= 1 and b[3] > 0 and deformed then deformed(c, b[3]) end end end ]]
+  .. [[if f >= 1 then bngeDmg = nil end end ]]
+M.APPLY_VE = APPLY_VE        -- (tests)
+local REPAIR_VE = APPLY_VE .. [[local raw, apply = %s, %s local ok, d = pcall(jsonDecode, raw) local extra = 0 ]]
+  .. [[if ok and type(d) == 'table' and type(d.beams) == 'table' then for _, b in pairs(v.data.beams) do ]]
+  .. [[if obj:beamIsBroken(b.cid) then local s = d.beams[tostring(b.cid + 1)] or d.beams[b.cid + 1] ]]
+  .. [[if not (type(s) == 'table' and s[2] == true) then extra = extra + 1 end end end end ]]
+  .. [[if extra > 0 then obj:requestReset(RESET_PHYSICS) ]]
+  .. [[obj:queueGameEngineLua("local m = package.loaded['beamngEarth/mpsession'] if m then m.afterRepairReset(%d, " .. extra .. ") end") ]]
+  .. [[elseif apply and ok then applyDamage(d) end]]
+
+local function camPos()
+  local cam = rawget(_G, 'core_camera')
+  return cam and cam.getPosition and cam.getPosition() or nil
+end
+
+-- Is game vehicle gid within m of our camera (cam: its position; false when either is unknown)?
+local function within(gid, m, cam)
+  local veh = cam and vehicle(gid)
+  local q = veh and veh:getPosition()
+  return q ~= nil and (q.x - cam.x) ^ 2 + (q.y - cam.y) ^ 2 + (q.z - cam.z) ^ 2 < m ^ 2
+end
+
+function M.wrapNodes()
+  local ng = rawget(_G, 'nodesGE')
+  if not ng or type(ng.handle) ~= 'function' then return false end
+  if nodesWrapped == ng then return true end
+  local orig = ng.handle
+  ng.handle = function(rawData)
+    local code, sid, data = string.match(rawData or '', '^(%a)%:(%d+%-%d+)%:(.*)')
+    if code ~= 'n' then return orig(rawData) end
+    local mp = rawget(_G, 'MPVehicleGE')
+    local v = mp and mp.getVehicles and mp.getVehicles()[sid]
+    if not v or v.isLocal then return orig(rawData) end
+    local gid = mp.getGameVehicleID(sid) or -1
+    local veh = vehicle(gid)
+    if not veh then return orig(rawData) end
+    lastNodes[gid], stale[gid] = data, true   -- (put on once it is in range: checkCopies; nothing done with it till then)
+    witnessed[gid] = within(gid, M.SYNC_FAR_M, camPos()) or nil
+  end
+  nodesWrapped = ng
+  return true
+end
+
+-- (the copy's vehicle Lua) gid was reset for a repair: its owner's state goes on REPAIR_FRAMES frames later
+function M.afterRepairReset(gid, extra)
+  local p = pendingNodes[tonumber(gid)]
+  if p then p.frames = M.REPAIR_FRAMES end
+  log('I', 'beamngEarth', string.format('BeamMP: car %s repaired (%s beams broken here only): its owner\'s damage again',
+    tostring(gid), tostring(extra)))
+end
+
+-- Pure: is a copy's own damage due a check? damage now, base: where it settled, since: seconds it has differed.
+-- -> due, since (updated)
+function M.copyDue(damage, base, since, dt)
+  if not damage or not base or math.abs(damage - base) < M.DAMAGE_STEP then return false, 0 end
+  since = (since or 0) + dt
+  return since >= M.COPY_SETTLE_S, since
+end
+
+-- (every HIDE_S) owners: the other players' cars here; cam: our camera's position (nil: unknown, nothing is far).
+-- Near us a copy keeps what our game worked out (the user, 2026-10-24: "we should really only sync damage for cars far
+-- away": a crash we watched is the one our game simulated, and putting the owner's damage on there reset the car in
+-- front of us); a stale copy takes its owner's last state once it is SYNC_FAR_M from the camera.
+local function checkCopies(owners, dt, cam)
+  local objs = rawget(_G, 'map') and map.objects or {}
+  for gid in pairs(owners) do
+    local o = objs[gid]
+    local dmg = o and tonumber(o.damage)
+    local p = pendingNodes[gid]
+    if not dmg or deactivated[gid] or (p and p.frames) or morphs[gid] then
+      copyBase[gid] = nil
+    elseif (copyQuiet[gid] or 0) > 0 then
+      copyQuiet[gid] = copyQuiet[gid] - dt
+    elseif not copyBase[gid] then
+      copyBase[gid], copySince[gid] = dmg, 0
+    else
+      if dmg < M.DAMAGE_STEP and copyBase[gid] >= M.DAMAGE_STEP then lastNodes[gid], applied[gid] = nil, nil end   -- (reset)
+      local due
+      due, copySince[gid] = M.copyDue(dmg, copyBase[gid], copySince[gid], dt)
+      -- (its damage moved after the owner's state went on: checked again once far, but not against the same state: the
+      -- dents growing in tear a loose part or two off, and a Windows test copy was repaired 7 times in 90 s for it)
+      if due then
+        stale[gid], copyBase[gid] = applied[gid] == nil or applied[gid] ~= lastNodes[gid], nil
+        witnessed[gid] = within(gid, M.SYNC_FAR_M, cam) or nil
+      end
+    end
+    local veh = stale[gid] and cam and not deactivated[gid] and vehicle(gid)
+    local q = veh and veh:getPosition()
+    local d2 = q and (q.x - cam.x) ^ 2 + (q.y - cam.y) ^ 2 + (q.z - cam.z) ^ 2
+    -- (nearer than SYNC_FAR_M too when the damage came while it was away: a car teleported up to us, or one that
+    -- jumped from out of range to near within a check, was never seen crashing here)
+    if d2 and d2 <= M.SYNC_RANGE_M ^ 2 and (d2 >= M.SYNC_FAR_M ^ 2 or not witnessed[gid]) then
+      if lastNodes[gid] then
+        pendingNodes[gid], applied[gid] = { raw = lastNodes[gid] }, lastNodes[gid]
+        veh:queueLuaCommand(string.format(REPAIR_VE, string.format('%q', lastNodes[gid]), 'true', gid))
+      else
+        pendingNodes[gid] = nil
+        veh:queueLuaCommand(string.format(PRISTINE_VE, gid))
+      end
+      stale[gid], witnessed[gid], copyBase[gid], copyQuiet[gid] = nil, nil, nil, M.COPY_SETTLE_S
+    end
+  end
+  for gid in pairs(lastNodes) do
+    if not owners[gid] then lastNodes[gid], copyBase[gid], copySince[gid], copyQuiet[gid], applied[gid] = nil, nil, nil, nil, nil end
+  end
+  for gid in pairs(stale) do if not owners[gid] then stale[gid], witnessed[gid] = nil, nil end end
+end
+
+-- (the copy's vehicle Lua) gid's broken beams are on: its dents grow in from the next frame
+function M.startMorph(gid) morphs[tonumber(gid)] = 0 end
+
+local function stepMorphs()
+  for gid, k in pairs(morphs) do
+    k = k + 1
+    local veh = vehicle(gid)
+    if veh then veh:queueLuaCommand(string.format('if bngeMorph then bngeMorph(%.4f) end', k / M.MORPH_STEPS)) end
+    if not veh or k >= M.MORPH_STEPS then
+      morphs[gid] = nil
+      copyBase[gid], copyQuiet[gid] = nil, M.COPY_SETTLE_S     -- (its damage figure moved with the dents: settles anew)
+    else
+      morphs[gid] = k
+    end
+  end
+end
+
+local function applyPendingNodes()
+  for gid, p in pairs(pendingNodes) do
+    if p.frames then
+      p.frames = p.frames - 1
+      if p.frames <= 0 then
+        pendingNodes[gid] = nil
+        local veh = vehicle(gid)
+        if veh then
+          veh:queueLuaCommand(APPLY_VE .. 'local ok, d = pcall(jsonDecode, ' .. string.format('%q', p.raw) .. ') if ok then applyDamage(d) end')
+        end
+      end
+    end
+  end
+end
+
+local function onBlock(x, y, m)
+  local b = require('beamngEarth/terrainpatch').block()
+  if not b then return nil end
+  return x >= b[1] + m and y >= b[2] + m and x <= b[3] - m and y <= b[4] - m
+end
+
+-- Is this other player's car floating here (collisionfoci leaves it out)?
+function M.isFloating(gid) return floating[tonumber(gid)] == true end
+
+local function gravityNow()
+  local ce = rawget(_G, 'core_environment')
+  local g = ce and ce.getGravity and ce.getGravity()
+  return tonumber(g) or -9.81
+end
+
+-- The other players' cars on (not switched off): float off our block, land on it. Gravity sent again each time to the
+-- floating ones (the real gravity, weather.lua, sets every vehicle's when it changes).
+local function updateFloating(owners)
+  for gid in pairs(owners) do
+    local veh = not deactivated[gid] and vehicle(gid)
+    if veh then
+      local p = veh:getPosition()
+      if floating[gid] then
+        if onBlock(p.x, p.y, M.FLOAT_IN_M) then
+          floating[gid] = nil
+          veh:queueLuaCommand('obj:setGravity(' .. gravityNow() .. ')')
+          log('I', 'beamngEarth', string.format('BeamMP: car %s on our block again: gravity back', tostring(gid)))
+        else
+          veh:queueLuaCommand('obj:setGravity(0)')
+        end
+      elseif onBlock(p.x, p.y, M.FLOAT_OUT_M) == false then
+        floating[gid] = true
+        veh:queueLuaCommand('obj:setGravity(0)')
+        log('I', 'beamngEarth', string.format('BeamMP: car %s off our block: floats', tostring(gid)))
+      end
+    end
+  end
+  for gid in pairs(floating) do
+    if not owners[gid] then floating[gid] = nil end       -- (gone)
+  end
+end
+
 -- Each frame (core.lua) in a BeamMP session in our level: anchor (core's st.anchor), player { x, y, z } in its frame
 -- (the car; the camera when there is none).
 function M.update(dt, anchor, player)
@@ -492,6 +761,9 @@ function M.update(dt, anchor, player)
   end
   local mpanchor = require('beamngEarth/mpanchor')
   mpanchor.install()            -- (a no-op once installed, and until BeamMP's positionGE has loaded)
+  M.wrapNodes()
+  applyPendingNodes()
+  stepMorphs()
   clock = clock + (dt or 0)
   statusIn = statusIn - (dt or 0)
   if statusIn <= 0 then
@@ -526,6 +798,10 @@ function M.update(dt, anchor, player)
         if o and anchor then        -- (where it stands here, as latitude / longitude: the conversion's check)
           local q = o:getPosition()
           r.lat, r.lon = anchor:enuToGeodetic(q.x, q.y, q.z)
+          -- (its height over our ground: a car that looks to float; floating: off our block on purpose)
+          r.z = q.z
+          r.gz = be and be.getSurfaceHeightBelow and be:getSurfaceHeightBelow(vec3(q.x, q.y, q.z + 2)) or nil
+          r.float = floating[gid] == true
         end
         remote[tostring(gid)] = r
       end
@@ -543,15 +819,29 @@ function M.update(dt, anchor, player)
         if next(gov.slow) then perf.slow, gov.slow = gov.slow, {} end     -- (the slow frames since the last)
       end
     end
-    pcall(jsonWriteFile, M.STATUS_FILE, { t = os.time(), anchor = anchor and M.key(anchor.lat, anchor.lon) or nil,
+    -- (the terrain block where it stands and the far field's box for it: the two should agree)
+    local blk = nil
+    local tb = scenetree and scenetree.findObject and scenetree.findObject('bngEarthTerrain')
+    local ff = package.loaded['beamngEarth/farfield']
+    local cb = ff and ff.coverBlock and ff.coverBlock()
+    if tb or cb then
+      local tp = tb and tb:getPosition()
+      blk = { tx = tp and tp.x, ty = tp and tp.y, tz = tp and tp.z, cx0 = cb and cb.x0, cy0 = cb and cb.y0,
+        cx1 = cb and cb.x1, cy1 = cb and cb.y1, near = ff and ff.nearVisual and ff.nearVisual() }
+      local ok, fs = pcall(function() return ff and ff.stats() end)
+      if ok and type(fs) == 'table' then
+        blk.partial, blk.partialSink, blk.partialLevel, blk.over = fs.partial, fs.partialSink, fs.partialLevel, fs.overBlock
+      end
+    end
+    pcall(jsonWriteFile, M.STATUS_FILE, { t = os.time(), block = blk, anchor = anchor and M.key(anchor.lat, anchor.lon) or nil,
       perf = perf, switch = next(switchLog) and switchLog or nil, away = next(awayLog) and awayLog or nil,
       anchors = anchors, stats = stats, hidden = hidden, remote = remote, own = own, player = player and { x = player.x,
       y = player.y, z = player.z, camera = player.camera } or nil }, true)
   end
   configWait = configWait + (dt or 0)
-  if share == nil and (config or configWait >= M.CONFIG_WAIT_S) then
+  if share == nil and M.SHARE_GEN and (config or configWait >= M.CONFIG_WAIT_S) then
     share = false               -- our world server's group service, asked once a session (its answer: onShare), on
-    require('beamngEarth/net').send(M.shareRequest(config))     -- the server's port
+    require('beamngEarth/net').send({ type = 'share', port = M.sharePort(config) })     -- the server's port
   end
   if not anchor then return end
   placeCamera(player)
@@ -585,24 +875,96 @@ function M.update(dt, anchor, player)
     if mpanchor.isFar(sid) then hide[gid] = true end     -- (not placed: beyond our world)
   end
   M.sendDamage(lat, lon, M.HIDE_S)
+  local cam = rawget(_G, 'core_camera') and core_camera.getPosition and core_camera.getPosition() or player
+  checkCopies(owners, M.HIDE_S, cam)
   M.restoreDeleted(lat, lon)
   for gid in pairs(hide) do
     if not deactivated[gid] then
       local veh = vehicle(gid)
-      if veh then veh:setActive(0); deactivated[gid] = true end
+      if veh then
+        veh:setActive(0)
+        deactivated[gid] = true
+        log('I', 'beamngEarth', string.format('BeamMP: car %s (%s) switched off here (%s)', tostring(gid),
+          tostring(sids[gid]), mpanchor.isFar(sids[gid]) and 'far' or 'its owner\'s anchor not known'))
+      end
     end
   end
+  local tp = require('beamngEarth/terrainpatch')
+  local now = clock
   for gid in pairs(deactivated) do
-    if not hide[gid] then
+    if hide[gid] then
+      waitGround[gid] = nil
+    else
       local veh = vehicle(gid)
-      if veh then veh:setActive(1) end
-      deactivated[gid] = nil
+      local x, y = mpanchor.lastPos(sids[gid])
+      if not x and veh then local p = veh:getPosition(); x, y = p.x, p.y end
+      local w = waitGround[gid]
+      local floats = x and onBlock(x, y, M.FLOAT_OUT_M) == false      -- (it floats there: no ground needed)
+      if not x or floats or tp.groundReady(x, y) or (w and now - w.since > M.GROUND_WAIT_S) then
+        if w and x and not tp.groundReady(x, y) then
+          log('W', 'beamngEarth', 'BeamMP: car ' .. tostring(gid) .. ' back on without ground under it (waited too long)')
+        elseif w then
+          log('I', 'beamngEarth', string.format('BeamMP: car %s back on, its ground in after %.1f s', tostring(gid),
+            now - w.since))
+        else
+          -- (its packet's height against our ground there: a remote car came back on two instabilities later in a
+          -- three-player test, cause not pinned down, 2026-10-24)
+          local _, _, pz = mpanchor.lastPos(sids[gid])
+          local gz = x and be and be.getSurfaceHeightBelow and be:getSurfaceHeightBelow(vec3(x, y, (pz or 0) + 50))
+          log('I', 'beamngEarth', string.format('BeamMP: car %s back on at %.0f, %.0f, z %.2f (our ground %.2f)',
+            tostring(gid), x or 0, y or 0, pz or -1, gz or -1))
+        end
+        if veh then
+          veh:setActive(1)
+          -- BeamMP's own reset of its position sync (smoothers, the remote clock, a clean teleport onto the next
+          -- packet): switched off a minute while its player teleported away and back (their car reset, its clock
+          -- restarted), the car came back on with that state stale and two instabilities followed within 0.2 s, on the
+          -- right spot and height (a three-player test, 2026-10-24)
+          veh:queueLuaCommand('if positionVE and positionVE.onReset then positionVE.onReset() end')
+        end
+        deactivated[gid], waitGround[gid] = nil, nil
+      else
+        if not w then
+          w = { since = now }
+          waitGround[gid] = w
+          log('I', 'beamngEarth', string.format('BeamMP: car %s waits for its ground at %.0f, %.0f', tostring(gid), x, y))
+        end
+        w.x, w.y = x, y
+      end
     end
   end
+  updateFloating(owners)
 end
 
--- Our own cars' full damage to the players near (see the top), with BeamMP's own nodesVE.getNodes. (lat, lon): our
--- place.
+-- Collision foci (collisionfoci.lua) where cars switched off here are coming back on (waitGround): their ground made
+-- before they are. [{ x, y, r, trees, id, kind }]
+function M.groundFoci()
+  local out = {}
+  local cf = require('beamngEarth/collisionfoci')
+  for gid, w in pairs(waitGround) do
+    out[#out + 1] = { x = w.x, y = w.y, r = cf.PLAYER_R, trees = true, id = gid, kind = 'player' }
+  end
+  return out
+end
+
+-- Our own car's damage as BeamMP's full-damage message (nodesGE.sendNodes, as its nodesVE.getNodes sends it) with only
+-- the beams broken or bent: { nodes = {}, beams = { ["cid+1"] = { rest length, broken, deformation } } }. (BeamMP's
+-- getNodes also lists every node's position and every beam: ~200 KB for a pickup, decoded on every other player's
+-- game; it also called a global Round that BeamNG 0.40's vehicle Lua lacks, so it was never sent.) A copy without
+-- our mod applies the same message with BeamMP's applyNodes: the listed beams only. (Vehicle Lua)
+-- A beam is bent when its rest length is 2 mm or more off its length in the car's jbeam (node positions): BeamNG's
+-- getBeamDeformation flags few of them (17 beams on a copy with 134 broken), and its dents were lost.
+local DAMAGE_VE = [[local s = { nodes = {}, beams = {} } local nodes = v.data.nodes or {} ]]
+  .. [[for _, b in pairs(v.data.beams) do local c = b.cid local br, df = obj:beamIsBroken(c), obj:getBeamDeformation(c) ]]
+  .. [[local bent = df > 0.001 if not br and not bent then local n1, n2 = nodes[b.id1], nodes[b.id2] ]]
+  .. [[if n1 and n2 and n1.pos and n2.pos then bent = math.abs(obj:getBeamRestLength(c) - (n1.pos - n2.pos):length()) > 0.002 end end ]]
+  .. [[if br or bent then ]]
+  .. [[s.beams[tostring(c + 1)] = { math.floor(obj:getBeamRestLength(c) * 1000 + 0.5) / 1000, br, math.floor(df * 1000 + 0.5) / 1000 } end end ]]
+  .. [[obj:queueGameEngineLua("nodesGE.sendNodes('" .. jsonEncode(s) .. "', " .. obj:getID() .. ")")]]
+
+M.DAMAGE_VE = DAMAGE_VE      -- (tests)
+
+-- Our own cars' damage to the players near (see the top). (lat, lon): our place.
 function M.sendDamage(lat, lon, dt)
   local now, newcomer, any = {}, false, false
   local mine = myPid()
@@ -629,7 +991,7 @@ function M.sendDamage(lat, lon, dt)
       send, damageSince[gid] = M.damageDue(newcomer, dmg, sentDamage[gid], damageSince[gid], dt)
       local obj = send and vehicle(gid)
       if obj then
-        obj:queueLuaCommand('if nodesVE and nodesVE.getNodes then nodesVE.getNodes() end')
+        obj:queueLuaCommand(DAMAGE_VE)
         sentDamage[gid] = dmg or 0
       end
     end
@@ -642,7 +1004,14 @@ function M.reset()
     local veh = vehicle(gid)
     if veh then veh:setActive(1) end
   end
+  for gid in pairs(floating) do
+    local veh = vehicle(gid)
+    if veh then veh:queueLuaCommand('obj:setGravity(' .. gravityNow() .. ')') end
+  end
+  floating = {}
+  pendingNodes, lastNodes, copyBase, copySince, copyQuiet, stale, morphs, applied, witnessed = {}, {}, {}, {}, {}, {}, {}, {}, {}
   deactivated, anchors, poseIn, hideIn, joined, wentTo, camPlaced, lastPlayers = {}, {}, 0, 0, false, false, false, -1
+  waitGround = {}
   members, sentDamage, damageSince, restoredAt, restores = {}, {}, {}, {}, {}
   share, config, configWait, convergeIn, anchorSince, lastAnchorKey = nil, nil, 0, 0, 0, nil
   stats, statusIn = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }, M.STATUS_S

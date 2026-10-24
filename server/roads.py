@@ -2335,18 +2335,18 @@ class BridgeProfiles:
                 xy = pool[k][1]
                 for p in (xy[0], xy[-1]):
                     deg[nk(p)] = deg.get(nk(p), 0) + 1
+            # the loose ends first, in key order: a cell loaded can put a longer copy of a part in the pool (_load), whose
+            # ends deg never saw (KeyError: a Chicago road tile on a Windows test PC, 2026-10-24), and the set's order
+            # changes with each process's string hashing (which cells CHAIN_CELLS let in)
+            ends = [p for k in sorted(comp) for p in (pool[k][1][0], pool[k][1][-1]) if deg[nk(p)] == 1]
             grew = False
-            for k in comp:
-                xy = pool[k][1]
-                for p in (xy[0], xy[-1]):
-                    if deg[nk(p)] != 1:
-                        continue
-                    la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
-                    key = mapcells.cell_of(float(la[0]), float(lo[0]))
-                    if str(key) not in loaded and len(loaded) < CHAIN_CELLS:
-                        loaded.add(str(key))
-                        self._load(key, pool, ground)
-                        grew = True
+            for p in ends:
+                la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
+                key = mapcells.cell_of(float(la[0]), float(lo[0]))
+                if str(key) not in loaded and len(loaded) < CHAIN_CELLS:
+                    loaded.add(str(key))
+                    self._load(key, pool, ground)
+                    grew = True
             if not grew:
                 return sorted(comp)
 
@@ -4080,6 +4080,10 @@ class Tracker:
         path, n = res
         self.sent.add(key)
         m = {"type": "roads_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
+        out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
+        data = staging.inline_json(out_dir, path) if out_dir else None
+        if data is not None:                # (the game need not open the file: staging.inline_json)
+            m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
         if pool is not None:                # its meshes at pooled shape paths (matslots.py)
             slots = pool(conn, shape_files(aid, *key))

@@ -360,8 +360,10 @@ end
 -- A 'veg_tile' message: { anchorId, key, path, n }.
 function M.onTile(msg, currentAnchor)
   if msg.anchorId ~= currentAnchor or type(msg.path) ~= 'string' then return end
-  local text = readFile(msg.path)
-  local ok, data = pcall(jsonDecode, text or '')
+  -- the file's JSON in the message (server staging.inline_json: Windows' first read of a file the server just wrote took
+  -- up to 0.5 s in the frame), else the file
+  local ok, data = true, msg.data
+  if type(data) ~= 'table' then ok, data = pcall(jsonDecode, readFile(msg.path) or '') end
   if not ok or type(data) ~= 'table' or type(data.items) ~= 'table' then
     M.errors = M.errors + 1
     return

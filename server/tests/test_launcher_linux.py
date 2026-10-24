@@ -277,3 +277,55 @@ class ModsOffAfterUpdateTest(unittest.TestCase):
             launcher.watch_game_log(d, time.time())
             time.sleep(3)
         self.assertEqual(got, [])
+
+
+class GfxArgTest(unittest.TestCase):
+    def test_dx12_is_d3d12(self):
+        """The game knows -gfx dx11 / vk but not dx12 ("no valid rendering device"): DirectX 12 is d3d12."""
+        self.assertEqual(launcher.GFX_ARG, {"dx11": "dx11", "dx12": "d3d12", "vk": "vk"})
+
+
+class WindowsStartTest(unittest.TestCase):
+    """On Windows the game starts through Steam (Steam Input, GitHub #218) unless start options are needed or the app
+    runs under Wine; then BeamNG.drive.exe directly."""
+
+    def test_through_steam_without_options(self):
+        with mock.patch.object(launcher, "IS_WIN", True), mock.patch.object(launcher, "under_wine", return_value=False), \
+                mock.patch.object(launcher.os, "startfile", create=True) as sf, \
+                mock.patch.object(launcher.subprocess, "Popen") as po, mock.patch.dict(os.environ, {"BNGE_GAME_ARGS": ""}):
+            self.assertIsNone(launcher.start_game(False))
+            sf.assert_called_once_with("steam://rungameid/284160")
+            po.assert_not_called()
+
+    def test_direct_with_options_or_wine(self):
+        for gfx, wine in (("dx12", False), ("", True)):
+            with mock.patch.object(launcher, "IS_WIN", True), mock.patch.object(launcher, "under_wine", return_value=wine), \
+                    mock.patch.object(launcher, "windows_game_dir", return_value="C:/BeamNG"), \
+                    mock.patch.object(launcher.os, "startfile", create=True) as sf, \
+                    mock.patch.object(launcher.subprocess, "Popen") as po, \
+                    mock.patch.dict(os.environ, {"BNGE_GAME_ARGS": ""}):
+                launcher.start_game(False, gfx=gfx)
+                sf.assert_not_called()
+                args = po.call_args[0][0]
+                self.assertTrue(args[0].endswith("BeamNG.drive.exe"))
+                self.assertEqual(args[1:], ["-gfx", "d3d12"] if gfx else [])
+
+
+class WaitForGameTest(unittest.TestCase):
+    def test_a_late_game_is_still_followed(self):
+        """Started through Steam: no game for longer than GAME_START_S (the launch options window open), then the game
+        runs and closes: wait_for_game returns once it is gone (it used to wait for good)."""
+        clock = [0.0]
+        seen = iter([False] * 5 + [True] * 3)        # game_pids: none for a while, then the game
+
+        def fake_sleep(s):
+            clock[0] += max(s, 100)
+        alive = iter([True, True, False, False, False, False, False, False, False, False, False, False])
+        with mock.patch.object(launcher.time, "time", side_effect=lambda: clock[0]), \
+                mock.patch.object(launcher.time, "sleep", side_effect=fake_sleep), \
+                mock.patch.object(launcher, "game_pids", side_effect=lambda: [1] if next(seen, True) else []), \
+                mock.patch.object(launcher, "game_alive", side_effect=lambda: next(alive, False)), \
+                mock.patch.object(launcher, "game_launcher_running", return_value=False), \
+                mock.patch.object(launcher, "say") as say:
+            launcher.wait_for_game(None)
+            self.assertEqual(say.call_count, 1, "told once that the game has not started yet")

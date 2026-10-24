@@ -141,7 +141,7 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
         roadsmod.ROADS_IN_GROUND = roads_in_ground
     import budget
     try:
-        budget.lower_priority(nice, worker=True)    # (Windows: the far field's workers idle, budget.WIN_IDLE_ABOVE)
+        budget.lower_priority(nice, worker=True)    # (Windows: the server's class, as inherited)
     except (OSError, AttributeError):
         pass
     logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

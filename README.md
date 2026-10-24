@@ -68,9 +68,10 @@ the mod, report problems, and get an IP to join a BeamMP.Earth server (see [Mult
   parking lots (stock BeamNG parking).
 
 **Multiplayer (BeamMP, in testing)**
-- Play the real world together on a BeamMP server (every player runs the BeamNG.Earth app): players who join are
-  sent to the others, cars show in the right place and with their dents in everyone's world, other players show on
-  the world map, and players near each other split the work of building the world (see "Multiplayer" below).
+- Play the real world together on a BeamMP server (every player runs the BeamNG.Earth app, which starts BeamMP with
+  the game): BeamNG.Earth servers have their own **BeamNG.Earth** tab in BeamMP's server browser, players who join are
+  sent to the others, cars show in the right place and with their crash damage in everyone's world, and other players
+  show on the world map (see "Multiplayer" below).
 
 **Map and navigation**
 - A level select with famous places and a **Random location** button (it starts you on a road).
@@ -188,21 +189,33 @@ Tests: `cd server && python3 -m unittest discover -s tests -t tests` and
 BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive the real world together.
 
 **Joining a server**
-1. Install BeamMP (its launcher) and the BeamNG.Earth app (see Install and play above), the same version as the
-   server's. Every player needs the BeamNG.Earth app running: each builds the world on their own computer.
-2. Get an IP: join the [Discord server](https://discord.gg/tgf) for the address of a BeamMP.Earth server.
-3. Start the **BeamMP launcher first** and wait until the game has fully started (the main menu).
-4. **Then** start the BeamNG.Earth app: it sees the running game and starts just the world server (on Linux the game
-   then runs without the grass patch). If the mod was just installed, updated or turned back on (joining a BeamMP
-   server turns other mods off), the app has the game reload its Lua so it loads the mod without a restart (Linux
-   native game and Windows; not the Windows build under Proton).
-5. In the game: Multiplayer, then join a server running the BeamMP.Earth plugin (Direct Connect with its IP and port).
+1. Start the BeamNG.Earth app (the same version as the server's). It starts BeamMP with the game: the official BeamMP
+   launcher, unchanged (BeamMP's code is AGPL-3.0, [github.com/BeamMP](https://github.com/BeamMP)). If BeamMP isn't
+   installed, the app asks once: **Yes / No / Don't ask again**.
+   - **Windows:** Yes downloads BeamMP's official launcher from BeamMP's GitHub releases (checked against the checksum
+     BeamMP publishes; Windows Firewall then asks once whether it may use the network: allow it).
+   - **Linux and Steam Deck:** BeamMP publishes no Linux download, so Yes builds its launcher on your computer from
+     BeamMP's source, the newest version that passed BeamMP's own tests, in an Ubuntu container (podman or docker:
+     SteamOS has podman; about a minute on a Steam Deck). A launcher you built yourself is used when found
+     (`~/BeamMP-Launcher`, or set `BEAMMP_LAUNCHER`).
+   - The setting **Start BeamMP with BeamNG.Earth** (Pause menu > Mods > BeamNG.Earth, Multiplayer) turns this off or
+     back on; `--no-beammp` starts the game without BeamMP once.
+2. In the game: main menu > More > BeamMP, log in (an account or a guest).
+3. Open the **BeamNG.Earth** tab in BeamMP's sidebar: the servers running BeamNG.Earth, with a Join button. They are
+   listed only there, for players who have BeamNG.Earth. A private server: Direct Connect with its address (the
+   [Discord server](https://discord.gg/tgf) has some). Every player needs the BeamNG.Earth app running: each builds the
+   world on their own computer.
+   (Starting the BeamMP launcher yourself first still works: the app then starts just the world server.)
 
-You are sent to where the others are. Cars show in the right place, with their dents, in everyone's world; other
-players show on the world map (**M**) as green arrows; players far away (another country) are hidden until you meet.
+Leaving a server turns BeamNG.Earth back on (joining one switches your other mods off).
 
-**Sharing the work:** players near each other share one world origin and split the building of the distant
-landscape (each piece is built once and sent to the others; faster computers take more), while a player far from
+You are sent to where the others are. Cars show in the right place in everyone's world; other players show on the
+world map (**M**) as green arrows; players far away (another country) are hidden until you meet. Crash damage: a crash
+you watch keeps the damage your own game worked out; a car that crashed out of your sight takes on its owner's damage
+(broken parts and dents) once it comes within about 0.6 miles.
+
+**Sharing the work** (turned off for now: each player builds their own world)**:** players near each other share one
+world origin and split the building of the distant landscape (each piece is built once and sent to the others; faster computers take more), while a player far from
 everyone builds their own. For that the other players must reach your computer on a TCP port, 47621 unless the server
 picks another (the server tells your app which): on the same network it just works; over the internet, forward that
 port in your router, or you simply build everything yourself. A port of your own: set the environment variable
@@ -212,7 +225,11 @@ port in your router, or you simply build everything yourself. A port of your own
 [Releases](https://github.com/TecnaGamer/BeamNG.Earth/releases) page and follow the guide inside
 (`BeamNG.Earth-README.md`). In short: unzip it into a BeamMP server's folder, set
 `Map = "/levels/beamng_earth/info.json"` in `ServerConfig.toml`, forward the server's port (TCP and UDP) for players
-over the internet, and start it (its log shows `[BeamNG.Earth] plugin loaded`). The players' sharing port (47621) is
+over the internet, and start it (its log shows `[BeamNG.Earth] plugin loaded`). Which list it is on:
+`Private = false` with your AuthKey puts it on the BeamNG.Earth list (the in-game tab) and the plugin keeps it off
+BeamMP's own public list, so players without BeamNG.Earth never see it; `Private = true`, or no AuthKey: on no list,
+players use Direct Connect. The plugin lists the server once a minute with `curl` (Linux, and Windows 10 and later).
+Update the server zip with every release: it carries the mod the server sends to players. The players' sharing port (47621) is
 `G.SHARE_PORT` near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
 little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip.
 
