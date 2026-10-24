@@ -47,8 +47,9 @@ CROSSING_PAD_M = 1.5        # m past a crossing road's edge the track stops
 CROSSING_DZ = 1.5           # m: a road this far under the bed passes beneath (no level crossing)
 VERTS_MAX = 60000           # under the engine's 16-bit indices (sleepers are dropped first past it)
 BALLAST = "bne_rail_ballast"
-CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the sleepers and the decks, concrete as on most lines)
-STEEL = "bne_truss_steel"
+CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the decks and piers)
+SLEEPER = "bne_rail_sleeper"        # weathered concrete sleepers (bne_bridge_concrete stood out near-white, 2026-10-25)
+STEEL = "bne_rail_steel"            # rust-brown rails
 
 
 def point_ground(frame, elev):
@@ -446,7 +447,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None):
                 _deck(mesh, p, uu, t, v, ballast, concrete)
                 pr = _piers(s, xy, u, top, zg, i, j)
                 if pr is not None:
-                    small.append((pr, PIER_T / 2, PIER_W / 2))
+                    small.append((pr, PIER_T / 2, PIER_W / 2, concrete))
             st = t - SLEEPER_SINK + SLEEPER_H           # the sleepers' top: the rails' foot
             out_l = np.c_[uu, np.zeros(len(p))]
             for sg in (1, -1):
@@ -457,14 +458,14 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None):
                 mesh.strip(np.c_[b, st], np.c_[b, st + RAIL_H], 0.0, 0.05, v, steel, -out_l)
             sp = _sleepers(s, xy, u, top, i, j)
             if sp is not None:
-                small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2))
+                small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER)))
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
-    for (c, along, across, z0, z1), hx, hy in small:
+    for (c, along, across, z0, z1), hx, hy, mi in small:
         room = (VERTS_MAX - mesh.nv) // 8
         if room <= 0:
             break
         n = min(room, len(c))
-        mesh.boxes(c[:n], along[:n], across[:n], hx, hy, z0[:n], z1[:n], concrete)
+        mesh.boxes(c[:n], along[:n], across[:n], hx, hy, z0[:n], z1[:n], mi)
     out = mesh.result()
     if out is not None and len(out[0]) > VERTS_MAX:     # (the ballast and rails alone past it: a rail yard)
         return None

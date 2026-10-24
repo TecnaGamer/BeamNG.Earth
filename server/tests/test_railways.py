@@ -23,7 +23,7 @@ class RailwayTest(unittest.TestCase):
         mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat, "fi")
         self.assertIsNotNone(mesh)
         P, T, UV, mats, M = mesh
-        self.assertEqual(mats, [railways.BALLAST, railways.CONCRETE, railways.STEEL])
+        self.assertEqual(mats, [railways.BALLAST, railways.CONCRETE, railways.STEEL, railways.SLEEPER])
         self.assertLess(len(P), railways.VERTS_MAX)
         self.assertEqual(int(T.max()) + 1, len(P))
         steel = P[np.unique(T[M == 2])]
@@ -32,7 +32,7 @@ class RailwayTest(unittest.TestCase):
         heads = np.unique(np.round(steel[:, 1] + 0.0, 2))      # (the tile's origin at y 0)
         gap = heads.max() - heads.min() - 2 * railways.RAIL_HEAD    # between the rails' inner faces
         self.assertAlmostEqual(gap, railways.FI_GAUGE_M, delta=0.011, msg="Finnish broad gauge")
-        n_sleepers = (M == 1).sum() // 10
+        n_sleepers = (M == 3).sum() // 10
         self.assertGreater(n_sleepers, 256 / railways.SLEEPER_EVERY * 0.95)
         self.assertGreaterEqual(P[:, 0].min(), -roads.OVERLAP - railways.STEP_M - 3.0)
 
