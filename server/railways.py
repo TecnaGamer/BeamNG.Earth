@@ -22,7 +22,7 @@ GAUGE_M = 1.435             # standard gauge between the rails' inner faces ...
 FI_GAUGE_M = 1.524          # ... the Finnish (Russian) broad gauge in the Finnish fork
 NARROW_GAUGE_M = 1.0
 STEP_M = 2.0                # m between cross-sections, from each part's start (the same at every tile)
-SMOOTH_M = 20.0             # m either side the bed's height is averaged over
+SMOOTH_M = 50.0             # m either side the bed's height is averaged over (a line's long vertical curves)
 GRADE = 0.02                # the steepest a deck or an approach ramp climbs (2 %: a main line's)
 BRIDGE_CLEAR_M = 6.0        # m from the ground under a bridge to its rails' bed (a road's clearance and the deck)
 REACH_M = BRIDGE_CLEAR_M / GRADE + 50.0     # m around a tile the lines are taken: a ramp's reach and the smoothing
@@ -30,7 +30,7 @@ BALLAST_H = 0.3             # m of ballast over the bed line
 BALLAST_TOP_M = 1.8         # m: half the ballast's top width
 BALLAST_SLOPE = 1.5         # m out per m down on its sides
 BALLAST_FOOT_M = 0.4        # m its sides reach under the ground at their foot
-FOOT_MAX_M = 15.0           # m out at most (a tall ramp's foot)
+FOOT_MAX_M = 6.0            # m out at most (the grading fills a tall ramp's embankment; 15 fanned out, 2026-10-25)
 SLEEPER_EVERY = 0.6         # m between sleepers
 SLEEPER_L, SLEEPER_W, SLEEPER_H = 2.6, 0.26, 0.2
 SLEEPER_SINK = 0.08         # m of sleeper in the ballast
@@ -63,6 +63,39 @@ def point_ground(frame, elev):
         la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
     return ground
+
+
+GRADE_HALF_M = BALLAST_TOP_M + 1.2     # m: the ground graded flat to the bed line either side of a track (grade_plans)
+
+
+def cells_near(frame, box, reach=REACH_M):
+    """The map cells within reach of box (x0, y0, x1, y1) in frame."""
+    import mapcells
+    x0, y0, x1, y1 = box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach
+    lat, lon, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
+    return mapcells.cells_for_bbox(float(np.min(lat)), float(np.min(lon)), float(np.max(lat)), float(np.max(lon)))
+
+
+def grade_plans(frame, cells, box, elev):
+    """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
+    the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
+    embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
+    rails = parts(frame, cells, box)
+    if not rails:
+        return []
+
+    def ground(xy):
+        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        return np.asarray(elev(la, lo), np.float64)
+    pad = GRADE_HALF_M + 15.0
+    out = []
+    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, profile(rails, ground)):
+        if kind != "ground":
+            continue
+        if _box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
+                    (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad)):
+            out.append((fid, xy, zb))
+    return out
 
 
 def gauge(cls, sign_style=None):
@@ -145,19 +178,24 @@ def _left(xy):
 
 
 def _avg(v, r):
-    pad = np.r_[np.full(r, v[0]), v, np.full(r, v[-1])]
+    """Running mean over 2r + 1 values, the ends extended along their grade (odd reflection: a straight grade stays
+    straight to its end, and two parts meeting at a joint meet at its height)."""
+    r = min(r, len(v) - 1)
+    if r < 1:
+        return np.asarray(v, np.float64)
+    pad = np.r_[2 * v[0] - v[r:0:-1], v, 2 * v[-1] - v[-2:-r - 2:-1]]
     c = np.r_[0.0, np.cumsum(pad)]
     return (c[2 * r + 1:] - c[:-2 * r - 1]) / (2 * r + 1)
 
 
 def bed_heights(z):
-    """The bed line over ground heights z (every STEP_M): averaged over SMOOTH_M either side, never far under the
-    ground (a cutting's floor stays in the ballast), then once more smoothed lightly."""
+    """The bed line over ground heights z (every STEP_M): averaged over SMOOTH_M either side, twice (a smooth
+    vertical curve), through a ridge and over a dip alike: the grader (grade_plans) cuts and fills the ground to it."""
     z = np.asarray(z, np.float64)
     if len(z) < 3:
         return z
-    zb = np.maximum(_avg(z, max(1, int(round(SMOOTH_M / STEP_M)))), z - 0.15)
-    return _avg(zb, 2)
+    r = max(1, int(round(SMOOTH_M / STEP_M)))
+    return _avg(_avg(z, r), r // 2)
 
 
 def _envelope(s, req, grade=GRADE):

@@ -54,8 +54,8 @@ class RailwayTest(unittest.TestCase):
         z = 0.05 * s + 0.4 * np.sin(s / 3.0)
         zb = railways.bed_heights(z)
         mid = slice(20, -20)
-        self.assertLess(np.abs(zb[mid] - 0.05 * s[mid]).max(), 0.25)
-        self.assertTrue((zb >= z - 0.15 - 1e-9).all() or np.abs(zb - z).max() < 0.6)
+        self.assertLess(np.abs(zb - 0.05 * s)[20:-20].max(), 0.1, "the bumps gone")
+        self.assertLess(np.abs(zb - 0.05 * s).max(), 0.3, "the grade kept to the ends")
 
     def _bed(self, f, ground):
         rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
@@ -111,6 +111,29 @@ class RailwayTest(unittest.TestCase):
         rails, prof = self._bed(f, hill)
         zb, zg = prof[0]
         self.assertLess(np.abs(zb - zg)[10:-10].max(), 0.05)
+
+    def test_ground_graded_to_the_bed(self):
+        """A line through a 6 m ridge (a rock cutting the DEM half shows): the grader lays the ground to the track's
+        bed, the walls back from it, so the track is not buried (2026-10-25: half a track under the rock)."""
+        import grading
+        from test_grading import FakeMD
+        f = features([[(-400.0, 0.0), (400.0, 0.0)]], ["standard_gauge"], subtypes=["rail"])
+
+        def ridge(la, lo):
+            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return 10.0 + 6.0 * np.exp(-(np.asarray(e) / 40.0) ** 2)
+        g = grading.Grader(FRAME, FakeMD(f), ridge)
+        e = np.linspace(-60.0, 60.0, 25)
+        for off in (0.0, 1.5, -1.5):
+            la, lo, _ = FRAME.enu_to_geodetic(e, np.full(len(e), off), 0.0)
+            raw = ridge(la, lo)
+            got = g.apply(la, lo, raw)
+            rails = railways.parts(FRAME, [f], (-60, -10, 60, 10))
+            (zb, _), = railways.profile(rails, lambda xy: ridge(*FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)[:2]))
+            want = np.interp(e, rails[0][3][:, 0], zb)
+            self.assertLess(np.abs(got - want).max(), 0.1, f"the ground at {off} m off the line is at its bed")
+            self.assertLess(float(got[12]), float(raw[12]) - 1.0, "cut into the ridge")
+        self.assertLess(railways.FOOT_MAX_M, 10.0)
 
     def test_written_with_the_tile(self):
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])

@@ -45,6 +45,8 @@ DIRT_MEDIAN_M = 10.0
 # the Finnish fork: side roads meet the road they join at its height (snap_junctions)
 CUT_VERGE_M = 3.0           # m of level verge between a Finnish road's edge and the rock of its cutting (in_finland)
 JUNCTION_SNAP_ON = os.environ.get("BNE_JUNCTION_SNAP", "1") != "0"
+RAIL_GRADE_ON = os.environ.get("BNE_RAIL_GRADE", "1") != "0"    # the ground laid to the railways' bed (railways.py)
+RAIL_TAG = "rail:"
 JUNCTION_RANK = {"motorway": 9, "trunk": 8, "primary": 7, "secondary": 6, "tertiary": 5, "unclassified": 4,
                  "residential": 3, "living_street": 2, "service": 1}
 JUNCTION_REACH_M = 3.0      # m beyond the joined road's carriageway edge a side road's end still counts as joining it
@@ -641,6 +643,19 @@ class Grader:
             # cells counted a road up to 9 times, and every batch of points graded differently: patches of ground
             # through the Stelvio's asphalt, GitHub #108's 2.5 m step at a bridge end in Meppen, 2026-10-21)
             own = self._clip_box(key, 0.0)
+            sub = feats.attrs.get("subtype")
+            if RAIL_GRADE_ON and own is not None and sub is not None and (np.asarray(sub).astype(str) == "rail").any():
+                try:            # the railways' bed lines (railways.grade_plans): cuttings and embankments for the track
+                    import railways     # (the cells around only where this one has a line: their fetches cost)
+                    rcells = [self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+                              for k in railways.cells_near(self.frame, own)]
+                    for fid, xy, z in railways.grade_plans(self.frame, rcells, own, self.elev):
+                        p = Plan(xy, z, railways.GRADE_HALF_M)
+                        p.rid = road_id(RAIL_TAG + fid)
+                        plans.append((RAIL_TAG + fid, p))
+                        pclip.append(True)
+                except Exception as e:      # no rail grading rather than no grading
+                    log.debug("grading: railways of %s: %s: %s", key, type(e).__name__, e)
             if own is not None:
                 kept = []
                 for (fid, p), cl in zip(plans, pclip):
