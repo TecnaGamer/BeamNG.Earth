@@ -812,6 +812,10 @@ def _urban_beside(urban_fn, lines):
 # common Finnish layout, is "separate": none on the road); with no tag only these classes keep the town rule
 FI_SIDEWALK_TAG = {"both": (1, -1), "left": (1,), "right": (-1,), "no": (), "none": (), "separate": ()}
 FI_UNTAGGED_SIDEWALK_CLASSES = {"residential", "living_street"}
+# ... and Finnish street widths where the map gives none (asphalt edge to edge; the generic 6 m + 1 m edge strips each
+# side made Lieksa's Huuhdintie 8 m, ~5 m in the street photos, 2026-10-24)
+FI_STREET_WIDTH_M = {"residential": 5.0, "unclassified": 5.0, "living_street": 4.5, "service": 3.5}
+FI_STREET_LANE_M = 2.5      # m per lane of those streets where the map counts them (lanes=2: 5 m, not 6 + strips)
 
 
 def _finnish_sidewalks(feats, specs):
@@ -826,6 +830,11 @@ def _finnish_sidewalks(feats, specs):
         lon, lat = (float(v) for v in feats.lonlat[a])
         if not grading.in_finland(lat, lon):
             continue
+        if sp.cls in FI_STREET_WIDTH_M and sp.kind in BUILT and not sp.median \
+                and _rule_value(feats.rules.get("width"), i) is None and _osm(feats, "width", i, *OSM_WIDTH_M) is None:
+            # (the map's lane count at Finnish street lanes, else the class's width; no edge strips: grass to the asphalt)
+            w = sp.lanes * FI_STREET_LANE_M if sp.lanes else FI_STREET_WIDTH_M[sp.cls]
+            sp = out[i] = sp._replace(width=w)
         tag = str(tags[i]).strip().lower() if tags is not None else ""
         if tag in FI_SIDEWALK_TAG:
             out[i] = sp._replace(sides=FI_SIDEWALK_TAG[tag])
