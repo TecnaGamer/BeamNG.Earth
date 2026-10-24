@@ -27,6 +27,8 @@ LIFT = {"base": 0.0, "gutter": 0.005, "mark": 0.01}   # m above the physics grou
 
 
 def layer_of(chunk):
+    if chunk.get("layer") in LIFT:             # a chunk naming its own (rails.py: sleepers over ballast, rails over both)
+        return chunk["layer"]
     m = chunk["m"]
     if m.startswith("line_") or m.startswith("crossing") or m == "m_metal_grid_drain":
         return "mark"
