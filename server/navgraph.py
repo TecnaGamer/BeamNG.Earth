@@ -149,14 +149,15 @@ def _deck_z(decks, fid, x, y):
 
 
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, widths=None, left_hand=False,
-          mph=True):
+          mph=True, signals=None):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
     are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z)] of the bridge parts (roads.BridgeProfiles):
     nodes on a bridge take its deck height (else traffic would spawn on the ground under it), and roads that are
     bridge all along are in the graph (road_specs leaves them to the bridge builder). widths: the road tiles'
-    measured street widths (roadwidth.py), so the AI's lanes are on the carriageway the road mesh draws."""
+    measured street widths (roadwidth.py), so the AI's lanes are on the carriageway the road mesh draws. signals:
+    the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them."""
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
     carriage = []           # (half width, centreline (k, 2)) of every road and bridge here (the signal heads keep off them)
@@ -326,7 +327,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 radius[nm] = max(radius.get(nm, 0.0), e[7])
         for nm, x, y, z in zip(used, X, Y, Z):
             nodes[nm] = [round(float(x), 2), round(float(y), 2), round(float(z), 2), radius[nm]]
-    signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage)
+    signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals)
     # one edge per node pair (two segments joining the same connectors: keep the first)
     uniq, pairs = [], set()
     for e in edges:
@@ -344,7 +345,7 @@ STOP_BACK_M = 2.0           # the stop point: this far before the junction's wid
 SHORT_APPROACH_M = 15.0
 
 
-def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=()):
+def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None):
     """[{"j": junction node, "kind": "signal" | "stop", "app": [[approach node, x, y, z, dir x, dir y, phase, prop x,
     prop y, prop z, prop yaw]]}] of the urban junctions furniture.junction_controls controls, decided on the arms
     the road tiles' props see (arms) and built for the graph's approaches into them (approaches): per incoming
@@ -355,11 +356,12 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=()):
     # furniture's arm tuples (fid, spec, u, point, at its start, length): the same decision as the road tiles' props
     farms = {name: [(x[0], x[1], x[2], x[3], x[4] == 0, x[5] if len(x) > 5 else math.inf) for x in a]
              for name, a in arms.items()}
-    link_ok = furniture._link_check(farms)
+    link_ok = furniture._link_check(farms, signals)
     for name, a in arms.items():
-        if name not in nodes or len(a) < 3 or not all(x[1].urban for x in a):
+        if name not in nodes or len(a) < 3 or not furniture._controlled_here(farms[name], signals):
             continue
-        put = [(arm, what) for arm, what in furniture.junction_controls(farms[name], None, link_ok, ring=ring)
+        put = [(arm, what) for arm, what in furniture.junction_controls(farms[name], None, link_ok, ring=ring,
+                                                                         signals=signals)
                if what != furniture.G_YIELD]    # give-way uses edge priority; a stop controller would force a stop
         if not put:
             continue

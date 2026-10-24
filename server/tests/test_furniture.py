@@ -105,6 +105,36 @@ class JunctionTest(unittest.TestCase):
         for r in rows:              # on the approach's right, outside the carriageways
             self.assertGreater(max(abs(r[1] - 100), abs(r[2] - 100)), 5.0)
 
+    def test_signals_only_where_the_map_has_them(self):
+        """With OpenStreetMap's signals (mapped_signals' points): lights at a junction with one near it, none at a
+        major crossing without (stop signs there are left to the minor arms: none here), and lights at a mapped rural
+        junction too (the user, 2026-10-25: lights where there are none)."""
+        rs = [self.arm(f"a{i}", "tertiary", dx, dy) for i, (dx, dy) in enumerate([(1, 0), (-1, 0), (0, 1), (0, -1)])]
+        none = furniture.junction_props(rs, (0, 0, 256, 256), signals=np.zeros((0, 2)))
+        self.assertNotIn(furniture.G_SIGNAL, [r[0] for r in none], "no mapped signal: no lights")
+        far = furniture.junction_props(rs, (0, 0, 256, 256), signals=np.array([[200.0, 200.0]]))
+        self.assertNotIn(furniture.G_SIGNAL, [r[0] for r in far], "a signal at the next junction is not this one's")
+        at = furniture.junction_props(rs, (0, 0, 256, 256), signals=np.array([[112.0, 96.0]]))
+        self.assertEqual(sorted(r[0] for r in at), [furniture.G_SIGNAL] * 4, "mapped at its stop line: lights")
+        rural = [(f, s._replace(urban=False), p, l) for f, s, p, l in rs]
+        self.assertEqual(furniture.junction_props(rural, (0, 0, 256, 256), signals=np.zeros((0, 2))), [])
+        self.assertEqual(len(furniture.junction_props(rural, (0, 0, 256, 256), signals=np.array([[100.0, 100.0]]))), 4,
+                         "a mapped signal at a rural junction")
+
+    def test_mapped_signals_from_the_infrastructure_layer(self):
+        import geodesy
+        import mapgeom
+        frame = geodesy.EnuFrame(62.6, 29.76, 0.0)
+        ll = np.array([[29.7601, 62.6001], [29.7602, 62.6002], [29.7603, 62.6003]])
+        f = mapgeom.Features(layer="infrastructure", ids=np.array(["s1", "b1", "s2"]),
+                             kind=np.full(3, mapgeom.POINT, np.uint8), part_off=np.arange(4, dtype=np.int64),
+                             ring_off=np.arange(4, dtype=np.int64), coord_off=np.arange(4, dtype=np.int64), lonlat=ll,
+                             attrs={"subtype": np.array(["transportation", "pedestrian", "transportation"]),
+                                    "class": np.array(["traffic_signals", "bench", "traffic_signals"])}, rules={})
+        got = furniture.mapped_signals(frame, [f, f])
+        self.assertEqual(len(got), 2, "the two signals, once each, not the bench")
+        self.assertIsNone(furniture.mapped_signals(frame, [None]), "no layer read: guessed")
+
     def test_divided_road_crossing_one_signal_per_way_in(self):
         # Boston St: a divided road (two one-way carriageways 20 m apart) crossing a street is two junctions; the
         # user saw ten heads there (2026-10-14). One per way in: none on the arms leaving, none across the median.

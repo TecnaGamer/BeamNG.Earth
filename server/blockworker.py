@@ -22,6 +22,7 @@ import numpy as np
 
 import dem as demmod
 import farfield
+import furniture
 import geodesy
 import grading as gradingmod
 import heightmap
@@ -85,6 +86,7 @@ class _State:
 
 
 ANCHORS_KEPT = 2
+SIGNALS_MARGIN_M = 60.0         # m around a road tile its junctions' mapped traffic signals are taken from
 WATER_BED_M = 0.05           # ground carved deeper than this under the water gets the bed layer (MUD)
 
 
@@ -316,7 +318,7 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, widths=_s.widths, left_hand=left_hand,
-                              mph=mph)
+                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys))
     graph["rules"] = rules
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])
@@ -380,7 +382,9 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
                                  left_hand=left_hand, mph=mph, structures=buildingsmod.centres(items, tx, ty) if items else (),
                                  tunnels=tunnels, walls=rwalls,
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
-                                 terrain_paint=getattr(_s, "surface", None) is not None)
+                                 terrain_paint=getattr(_s, "surface", None) is not None,
+                                 signals=furniture.signals_for(_s.md, frame,
+                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
     x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
