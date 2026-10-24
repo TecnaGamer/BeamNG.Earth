@@ -34,6 +34,23 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(str(f.attrs["osm_sidewalk"][0]), "both")
         self.assertEqual(str(f.attrs["osm_sidewalk"][2]), "")
 
+    def test_relation_segment_takes_the_same_named_way_around_it(self):
+        """Samara's Novo-Sadovaya: Overture's segments from a relation ("r3851280@53") had no way id, so no lane count,
+        and were drawn 10 m wide instead of 6 lanes. Such a segment takes the tags of the way of its name whose bbox
+        (grown by NAME_MATCH_M) holds its middle, not that way's oneway (one carriageway of the road, maybe)."""
+        from test_roads import LAT, LON, M_LAT, M_LON, features
+        f = features([[(0, 0), (100, 0)], [(0, 500), (100, 500)], [(0, 10), (100, 10)]], ["primary"] * 3)
+        f.attrs["src_record"] = np.array(["r7@1", "r7@1", "r8@1"])
+        f.attrs["name"] = np.array(["Main", "Main", "Side"])
+        bbox = {"bx0": LON - 10 / M_LON, "by0": LAT - 5 / M_LAT, "bx1": LON + 110 / M_LON, "by1": LAT + 5 / M_LAT}
+        osmtags.join(f, {9: dict(bbox, name="Main", lanes=6, osm_oneway="yes", sidewalk="separate")})
+        self.assertEqual(f.attrs["osm_lanes"][0], 6)
+        self.assertEqual(str(f.attrs["osm_sidewalk"][0]), "separate")
+        self.assertEqual(str(f.attrs["osm_oneway"][0]), "", "oneway is not inherited")
+        self.assertTrue(np.isnan(f.attrs["osm_lanes"][1]), "the same name 500 m away")
+        self.assertTrue(np.isnan(f.attrs["osm_lanes"][2]), "another name inside the bbox")
+        self.assertGreater(roads.road_specs(f)[0].width, roads.road_specs(f)[2].width)
+
 
 class SpecTest(unittest.TestCase):
     def test_lanes_set_the_width_and_the_markings(self):

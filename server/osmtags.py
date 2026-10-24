@@ -19,6 +19,7 @@ read the same cell file, so a road's lanes and width agree everywhere). Unreacha
 roads use their width guesses (roads.carriageway), as before.
 """
 import logging
+import math
 import os
 import re
 import threading
@@ -52,10 +53,15 @@ COLUMNS = {
     "osm_surface": "surface",
     "osm_oneway": "oneway",
     "osm_layer": "TRY_CAST(layer AS INTEGER)",
+    # for the segments Overture took from a relation (no way id: Samara's Novo-Sadovaya, "r3851280@53", drawn 10 m wide
+    # instead of its 6 lanes, the user 2026-10-24): the way of the same name around them (join)
+    "name": "name",
+    "bx0": "bbox.xmin", "by0": "bbox.ymin", "bx1": "bbox.xmax", "by1": "bbox.ymax",
 }
-USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer"}
+USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name"}
 FLOATS = ("lanes", "width", "maxspeed", "osm_layer")
 TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway")
+NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the same-named way it takes the tags of
 
 
 # Racetracks (GitHub #143): Overture's transportation theme has no highway=raceway (Daytona's oval and road course, the
@@ -312,17 +318,48 @@ def _linestring(wkb):
     return np.frombuffer(wkb, dtype=end + "f8", count=2 * n, offset=9).reshape(n, 2).astype(np.float64)
 
 
+def _named_way(feats, i, by_name):
+    """The OSM way id of the same-named way (by_name: name -> [(way id, lon0, lat0, lon1, lat1)]) whose bbox, grown by
+    NAME_MATCH_M, holds feature i's middle vertex: the smallest such, else None."""
+    names = feats.attrs.get("name")
+    cands = by_name.get(str(names[i])) if names is not None else None
+    if not cands:
+        return None
+    a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
+    b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
+    if b <= a:
+        return None
+    lon, lat = (float(v) for v in feats.lonlat[(a + b - 1) // 2][:2])
+    my = NAME_MATCH_M / 111320.0
+    mx = my / max(math.cos(math.radians(lat)), 0.1)
+    best = None
+    for w, x0, y0, x1, y1 in cands:
+        if x0 - mx <= lon <= x1 + mx and y0 - my <= lat <= y1 + my:
+            area = (x1 - x0) * (y1 - y0)
+            if best is None or area < best[0]:
+                best = (area, w)
+    return best[1] if best else None
+
+
 def join(feats, tags):
     """The tags of each road feature (its source record's way id) as attrs columns: floats (NaN where unknown) for
-    FLOATS, text ('' where unknown) for TEXTS. feats: an Overture roads Features (attrs src_record)."""
+    FLOATS, text ('' where unknown) for TEXTS. feats: an Overture roads Features (attrs src_record). A segment without a
+    known way (from a relation) takes the tags of the same-named way around it (_named_way), but its oneway: that way may
+    be one carriageway of the road the segment draws."""
     import mapgeom as mg
     recs = feats.attrs.get("src_record")
     n = len(feats)
     ids = [way_id(str(recs[i])) if recs is not None else None for i in range(n)]
+    by_name = {}
+    for w, t in tags.items():
+        if t.get("name") and all(k in t for k in ("bx0", "by0", "bx1", "by1")):
+            by_name.setdefault(str(t["name"]), []).append((w, t["bx0"], t["by0"], t["bx1"], t["by1"]))
+    named = [w if w in tags else _named_way(feats, i, by_name) for i, w in enumerate(ids)]
     for c in FLOATS:
         feats.attrs["osm_" + c if not c.startswith("osm_") else c] = np.array(
-            [float(tags.get(w, {}).get(c, np.nan)) if w is not None else np.nan for w in ids], np.float64)
+            [float(tags.get(w, {}).get(c, np.nan)) if w is not None else np.nan for w in named], np.float64)
     for c in TEXTS:
+        src = ids if c == "osm_oneway" else named
         feats.attrs[c if c.startswith("osm_") else "osm_" + c] = mg.text_column(
-            [str(tags.get(w, {}).get(c, "")) if w is not None else "" for w in ids])
+            [str(tags.get(w, {}).get(c, "")) if w is not None else "" for w in src])
     return feats

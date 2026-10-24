@@ -28,6 +28,18 @@
 local M = {}
 -- terrain-follow moves swap in the server's .ter when it sends one (terrain.swap); false: always importMaps
 M.TER_SWAP = true
+
+-- No terrain change while the window is minimized (canvas client size 0): on 0.40.3 every crash of 2026-10-24
+-- whose log shows the window state (access violation reading 0x48 at exe+0x143296, main thread) came 20-60 ms
+-- after a block move or anchor resync with the window minimized (minimap's "Canvas size is invalid: 0, 0" not
+-- yet followed by "valid again"); the moves wait until it is restored.
+local canvasObj = nil
+local function windowMinimized()
+  canvasObj = canvasObj or scenetree.findObject('Canvas')
+  if not canvasObj or not canvasObj.getWindowClientSizeXY then return false end
+  local w, h = canvasObj:getWindowClientSizeXY()
+  return w ~= nil and h ~= nil and (w <= 0 or h <= 0)
+end
 M.dependencies = { 'ui_imgui' }
 
 -- Helper modules live next to this file. 'lua/ge/extensions/?.lua' is on package.path
@@ -772,7 +784,7 @@ local function onMessage(msg)
     -- moved on: its replacements are built graded anyway)
     if msg.anchorId == st.anchorId and st.block and msg.cx == st.block.cx and msg.cy == st.block.cy
         and msg.size == terrain.SIZE then
-      commitTerrain(msg)
+      if windowMinimized() then st.deferredRefresh = msg else commitTerrain(msg) end
     end
   elseif t == 'terrain_error' then
     local p = st.terrainPending
@@ -1126,6 +1138,19 @@ local function updateWorld(dt)
       end
     else
       action = 'resync'
+    end
+  end
+  local minimized = windowMinimized()
+  if minimized ~= (st.wasMinimized or false) then
+    st.wasMinimized = minimized
+    log('I', 'beamngEarth', minimized and 'window minimized: terrain moves wait' or 'window restored: terrain moves resume')
+  end
+  if minimized then return end
+  local dr = st.deferredRefresh
+  if dr then
+    st.deferredRefresh = nil
+    if dr.anchorId == st.anchorId and st.block and dr.cx == st.block.cx and dr.cy == st.block.cy then
+      commitTerrain(dr)
     end
   end
   if (action == 'commit' or action == 'resync') and st.paused then action = nil end -- vehicles move only with physics running
