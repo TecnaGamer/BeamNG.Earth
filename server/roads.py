@@ -3837,7 +3837,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             for piece in clip_polyline(band, *exact):
                 run = densify(simplify(piece))
                 if len(run) >= 2:
-                    walks.append({"pts": run, "side": 1, "caps": (False, False), "ramps": [],
+                    walks.append({"fi": sign_style == "fi", "pts": run, "side": 1, "caps": (False, False), "ramps": [],
                                   "w": islands.ISLAND_BAND_M, "fid": "island"})
     cornered = set()                            # road pairs whose sidewalks meet at a curb return
     if walks is not None:
@@ -3851,7 +3851,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if isl and islands.in_island(isl, p[:2]):
                 continue                        # a curb return inside a loop: its island has its own curb
             if x0 <= p[0] < x1 and y0 <= p[1] < y1:
-                walks.append({"corner": c})
+                walks.append({"fi": sign_style == "fi", "corner": c})
                 fill_look = _corner_look(p, roads)
                 for fill in ([] if ROADS_IN_GROUND else ([c["fill"]] if c["fill"] is not None else []) + c.get("fills", [])):
                     chunks.append({"m": fill_look["m"], "w": 0.0, "tl": fill_look["tl"], "p": fill_look["p"],
@@ -3920,7 +3920,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                         last and not at_j1 and not _on_box(run[-1], exact))
                 rl = [r for key in rn.get("ramp_keys", [(fid, side)]) for r in jramps.get(key, [])]
                 ramps = junctions.ramp_ranges(run, rl)
-                walks.append({"pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
+                walks.append({"fi": sign_style == "fi", "pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
                               "median": rn.get("median", False)})
                 if not rn.get("median"):                # (a median: a bare curb, no storm drains)
                     drain_runs.append((walks[-1], side, (caps[0] or at_j0, caps[1] or at_j1), w))
@@ -4119,12 +4119,16 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         for wk in walks:
             if "corner" in wk:
                 c = wk["corner"]
-                b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()))
+                fi = c.get("fi") or wk.get("fi")
+                b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()),
+                             h=sidewalks.FI_CURB_H if fi else sidewalks.CURB_H, slab=sidewalks.FI_SLAB if fi else 1)
                 continue
             ww = wk.get("w", SIDEWALK["w"])
             curb, out = sidewalks.run_geometry(wk["pts"], wk["side"], ww)
+            fi = wk.get("fi")           # (the Finnish fork: asphalt, a low grey curb; build_tile marks them)
             b.add_run(curb, out, ww, caps=wk["caps"], ramps=wk.get("ramps", ()),
-                      slab=sidewalks.BRICK if wk.get("brick") else 1)
+                      h=sidewalks.FI_CURB_H if fi else sidewalks.CURB_H,
+                      slab=sidewalks.FI_SLAB if fi else sidewalks.BRICK if wk.get("brick") else 1)
         if not b.empty():
             shape = f"walks_{aid}_{tx}_{ty}.cdae"
             b.write(os.path.join(out_dir, shape))

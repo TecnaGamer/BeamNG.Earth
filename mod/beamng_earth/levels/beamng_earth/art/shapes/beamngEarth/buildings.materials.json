@@ -419,5 +419,55 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_sidewalk_asphalt": {
+    "name": "bne_sidewalk_asphalt",
+    "mapTo": "bne_sidewalk_asphalt",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "628617d2-4873-5723-b701-cb4b56fe9a23",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/road/eca_asphalt/t_asphalt_b.color.png",
+        "roughnessFactor": 0.85,
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.85,
+          0.85,
+          0.85,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
+  },
+  "bne_curb_granite": {
+    "name": "bne_curb_granite",
+    "mapTo": "bne_curb_granite",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "739c5e4b-4a76-5665-8e52-2e9a86418115",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/concrete/curbs/t_curbs_b.color.png",
+        "roughnessFactor": 0.8,
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.62,
+          0.62,
+          0.64,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
   }
 }

@@ -387,7 +387,8 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
         drives = []
-        props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
+        # (the Finnish fork: Finland's driveways are the map's own service roads, none made up)
+        props.extend(buildingsmod.doors(items, lines, x0, y0, None if sign_style == "fi" else drives))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives

@@ -36,9 +36,16 @@ CROSS_SLOPE = 0.015     # sidewalk cross slope, rising away from the road
 CURB_REPEAT_M = 9.0     # m of curb per texture width (3 joints of 3 m)
 SLAB_REPEAT_M = 45.0    # m of sidewalk per texture width (4096 px, a 205 px strip ~ 2.25 m)
 MATERIALS = ("curbs", "sidewalk1", "tactile_indicator",  # West Coast USA (art/shapes/roads), loaded by the mod
-             "bne_sidewalk_brick")                       # red brick pavers (buildings.materials.json)
+             "bne_sidewalk_brick",                       # red brick pavers (buildings.materials.json)
+             "bne_sidewalk_asphalt", "bne_curb_granite")  # the Finnish fork's (buildings.materials.json)
 BRICK = 3
 BRICK_REPEAT_M = 1.2        # m per repeat of the brick paver texture
+# The Finnish fork: Finland's sidewalks (roads.build_tile marks them "fi"): asphalt in world metres, a grey granite-toned
+# curb, lower than the US 15 cm
+FI_SLAB = 4
+FI_CURB = 5
+FI_ASPHALT_REPEAT_M = 4.0
+FI_CURB_H = 0.10
 
 # curbs sheet (1024 x 512, 8 bands of 64 px; Collada v up, so band 0 is v in [7/8, 1]):
 # rows 0-40 of a band are the light curb top, 40-64 the darker face
@@ -215,10 +222,13 @@ class Builder:
             rep = CURB_REPEAT_M if mat == 0 else SLAB_REPEAT_M
             P = np.concatenate([ring[:, a], ring[:, b]])
             UV = np.concatenate([np.stack([s / rep, np.full(k, va)], 1), np.stack([s / rep, np.full(k, vb)], 1)])
-            if mat == 1 and slab == BRICK:      # brick pavers: a tileable texture in world metres
-                UV = np.concatenate([np.stack([s / BRICK_REPEAT_M, prof[:, a, 0] / BRICK_REPEAT_M], 1),
-                                     np.stack([s / BRICK_REPEAT_M, prof[:, b, 0] / BRICK_REPEAT_M], 1)])
-                mat = BRICK
+            if mat == 1 and slab in (BRICK, FI_SLAB):  # pavers / asphalt: a tileable texture in world metres
+                r = BRICK_REPEAT_M if slab == BRICK else FI_ASPHALT_REPEAT_M
+                UV = np.concatenate([np.stack([s / r, prof[:, a, 0] / r], 1),
+                                     np.stack([s / r, prof[:, b, 0] / r], 1)])
+                mat = slab
+            elif mat == 0 and slab == FI_SLAB:  # the curb's own sheet, tinted grey
+                mat = FI_CURB
             mats = np.full(k - 1, mat)
             if tactile is not None and a == 3:  # the ramp's slope: a tactile pad where lowered
                 mats[tactile] = 2
@@ -282,7 +292,7 @@ class Builder:
             self.T.append(base + _orient(fan - base, P, t))
             self.M.append(np.full(len(fan), 0))
 
-    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=()):
+    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), slab=1):
         """A corner piece: the curb along the polyline arc (k, 3) (a curb return, with the straight
         runs and tapers of curb extensions; inward: unit vectors toward the sidewalk), the slab from
         the curb top to the outer corner points [(x, y, z) ...] (from the second sidewalk's end round
@@ -305,7 +315,7 @@ class Builder:
             arc, inward, s, hr = arc[keep], inward[keep], s[keep], hr[keep]
         k = len(arc)
         ring, prof = self._sections(arc, inward, 2.5, h, hr)
-        self._strips(ring, prof, inward, s, ((0, 3, 0, 0.0, 0.0),) if self.lean else CURB_STRIPS)
+        self._strips(ring, prof, inward, s, ((0, 3, 0, 0.0, 0.0),) if self.lean else CURB_STRIPS, slab=slab)
         inner = ring[:, 3]                                  # the curb top's inner edge, at h
         out = np.asarray(outer, np.float64) - self.origin
         out[:, 2] = out[:, 2] + h + 2.5 * CROSS_SLOPE
@@ -313,6 +323,8 @@ class Builder:
         # planar, at the runs' texel density (the sheet is 4096 x 1024: SLAB_REPEAT_M wide, a quarter
         # of that high); a constant v stretched one texel row over the corner (the user, 2026-10-11)
         UV = np.c_[poly[:, 0] / SLAB_REPEAT_M, poly[:, 1] / (SLAB_REPEAT_M / 4.0)]
+        if slab == FI_SLAB:                                 # (the Finnish fork's asphalt: world metres)
+            UV = poly[:, :2] / FI_ASPHALT_REPEAT_M
         base = self._add(poly, UV)
         m = len(poly)
         if len(out) == 3:                                   # a fan from O
@@ -325,7 +337,7 @@ class Builder:
             order = np.arange(m) if area > 0 else np.arange(m)[::-1]
             fan = order[buildings.triangulate(xy[order])]
         self.T.append(base + _orient(fan, poly, np.array([0.0, 0.0, 1.0])))
-        self.M.append(np.full(len(fan), 1))
+        self.M.append(np.full(len(fan), FI_SLAB if slab == FI_SLAB else 1))
         c = poly[:, :2].mean(axis=0)
         drop = h + SINK + 2.5 * CROSS_SLOPE
         for a, b in zip(out[:-1], out[1:]):                 # back faces down to the ground, sloping out (BACK_RUN)
