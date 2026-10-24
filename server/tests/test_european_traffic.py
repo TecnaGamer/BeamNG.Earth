@@ -166,5 +166,13 @@ class NarrowAndCurvedStreets(unittest.TestCase):
         self.assertAlmostEqual(navgraph.road_mph(f, 0, sp, mph=False) * 1.609344, 80)
 
 
+    def test_indian_coordinates_default_to_left_hand_and_kmh(self):
+        c = navgraph.country_near(None, 28.6139, 77.2090)
+        self.assertEqual(c, "IN")
+        rules = navgraph.road_rules(c)
+        self.assertTrue(rules["rightHandDrive"], "India drives on the left")
+        self.assertFalse(rules["mph"], "India speed limits in km/h")
+
+
 if __name__ == "__main__":
     unittest.main()

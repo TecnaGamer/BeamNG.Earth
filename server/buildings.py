@@ -385,7 +385,11 @@ STYLES = {
                        wall_tints=(0, 1, 6, 5), attached=0.3),
     "oceania": Style("oceania", 0.55, ((STUCCO, 0.5), (SIDING, 0.3)), 0.25, 0.05, 0.7, (_CLAY, (ROOF_METAL, (0, 1, 4))),
                      pitch=24.0, paint=0.1),
-    # elsewhere (South Asia, Africa, the Middle East, ...): concrete and plaster, mostly flat roofs
+    # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal): concrete frame & brick, flat terrace roofs (94%),
+    # pastel stucco/whitewash/exposed concrete, metal roofs for sheds, minimal pitched roofs
+    "south_asia": Style("south_asia", 0.08, ((STUCCO, 0.92),), 0.0, 0.94, 0.2, (_CLAY, (ROOF_METAL, (0, 1, 3))),
+                        pitch=18.0, paint=0.15, wall_tints=(0, 1, 2, 3, 5, 6, 8, 10), attached=0.90),
+    # elsewhere (Africa, the Middle East, ...): concrete and plaster, mostly flat roofs
     "warm": Style("warm", 0.15, ((STUCCO, 0.85),), 0.0, 0.75, 0.4, (_CLAY, (ROOF_METAL, (0, 1, 3))), pitch=20.0,
                   paint=0.0, wall_tints=(0, 1, 2, 3, 4, 5, 6, 8)),
     "cool": Style("cool", 0.3, ((SIDING, 0.4),), 0.05, 0.1, 0.3, (_DARK, (ROOF_METAL, (0, 1, 2, 3))), pitch=30.0,
@@ -417,6 +421,8 @@ def region_style(lat, lon):
         return STYLES["east_asia"]
     if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia, New Zealand
         return STYLES["oceania"]
+    if 6.0 <= lat <= 37.5 and 68.0 <= lon <= 97.5:              # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal)
+        return STYLES["south_asia"]
     if abs(lat) >= 50.0:
         return STYLES["cool"]
     return STYLES["warm"]

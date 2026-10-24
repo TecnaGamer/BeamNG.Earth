@@ -96,6 +96,10 @@ class RulesTest(unittest.TestCase):
         # a value not understood at all is the class's own surface, not the dirt road
         self.assertEqual(roads.surface_kind("residential", "whatever"), "paved")
         self.assertEqual(roads.surface_kind("track", "whatever"), "dirt")
+        self.assertEqual(roads.surface_kind("unclassified", "wbm"), "gravel")
+        self.assertEqual(roads.surface_kind("unclassified", "laterite"), "gravel")
+        self.assertEqual(roads.surface_kind("residential", "interlocking"), "cobble")
+        self.assertEqual(roads.surface_kind("primary", "bitumen"), "paved")
 
     def test_surface_token(self):
         self.assertEqual(roads.surface_token("sett:pattern"), "sett")
@@ -183,6 +187,9 @@ class DualCarriagewayTest(unittest.TestCase):
         ex = roads.extras(sp[0], np.array([[0, 0, 0], [300, 0, 0.0]]), LON)
         self.assertFalse(any(abs(abs(float(pts[0][1])) - roads.CENTRE["gap"]) < 1e-6 for _, _, pts in ex),
                          "no double centre line (a lane line instead)")
+        ex_in = roads.extras(lh[0], np.array([[0, 0, 0], [300, 0, 0.0]]), 77.2, left_hand=True)
+        med_lines = [pts for look, _, pts in ex_in if look.get("m") == "line_white"]
+        self.assertTrue(med_lines, "divided road gets single white median line in India")
 
     def test_carriageways_never_overlap(self):
         """Two one-way trunk carriageways 9.6 m apart (Munich's McGraw-Graben): each narrower than the gap, not the

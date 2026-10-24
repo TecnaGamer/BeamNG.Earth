@@ -85,7 +85,7 @@ SHORT = {
     "img:it_pcn": "Geoportale Nazionale", "img:czechia": "CUZK", "img:estonia": "Maa-amet",
     "img:flanders": "Digitaal Vlaanderen", "img:de_bayern": "LDBV Bayern", "img:de_nrw": "Geobasis NRW",
     "img:de_bw": "LGL BW", "img:de_nds": "LGLN", "img:de_berlin": "Geoportal Berlin", "img:de_hessen": "HVBG Hessen",
-    "img:japan": "GSI Japan", "img:au_nsw": "Spatial Services NSW", "img:au_tas": "theLIST Tasmania",
+    "img:japan": "GSI Japan", "img:india": "Esri / Maxar", "img:au_nsw": "Spatial Services NSW", "img:au_tas": "theLIST Tasmania",
     "img:ontario": "Ontario GEO",
     f"dem:{demmod.MAPTERHORN['name']}": "Mapterhorn", f"dem:{demmod.AWS['name']}": "AWS Terrain Tiles / Mapzen",
     f"dem:{polardem.SOURCE}": "Copernicus DEM (DLR, Airbus)",

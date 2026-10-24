@@ -92,6 +92,8 @@ REGIONAL = {
     # --- Asia / Oceania / Americas -------------------------------------------------------------------------------
     "japan": ("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", "GSI Japan (Geospatial Information Authority of Japan) seamless photo",
               (24.0, 122.9, 45.6, 146.0), "xyz", False),
+    "india": ("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+              "Esri, Maxar, Earthstar Geographics", (8.0, 68.0, 37.5, 97.5), "xyz", False),
     "au_nsw": ("https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Imagery/MapServer/tile/{z}/{y}/{x}",
                "(c) Spatial Services NSW (CC BY 4.0)", (-37.6, 140.9, -28.1, 153.7), "xyz", False),
     "au_tas": ("https://services.thelist.tas.gov.au/arcgis/rest/services/Basemaps/Orthophoto/MapServer/tile/{z}/{y}/{x}",

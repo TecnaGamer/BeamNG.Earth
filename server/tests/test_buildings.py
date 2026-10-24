@@ -54,10 +54,18 @@ class RegionStyleTest(unittest.TestCase):
         self.assertEqual(bld.region_style(19.43, -99.13).name, "latin_america")
         self.assertEqual(bld.region_style(35.66, 139.70).name, "east_asia")
         self.assertEqual(bld.region_style(-33.87, 151.21).name, "oceania")
-        self.assertEqual(bld.region_style(30.9, 75.8).name, "warm")
+        self.assertEqual(bld.region_style(30.9, 75.8).name, "south_asia")
+        self.assertEqual(bld.region_style(0.0, 25.0).name, "warm")
         self.assertEqual(bld.brick_share(39.29, -76.61), 0.75)      # the US as before
         self.assertEqual(bld.brick_share(30.0, -90.0), 0.35)
         self.assertEqual(bld.brick_share(40.0, -110.0), 0.15)
+
+    def test_south_asia_houses(self):
+        hs = self.houses(28.61, 77.21)                  # Delhi, India
+        self.assertFalse(any(h.porch for h in hs), "no American porches in South Asia")
+        flat = [h for h in hs if h.roof == "flat"]
+        self.assertGreater(len(flat), 0.85 * len(hs), "overwhelmingly flat terrace roofs")
+        self.assertTrue(all(not str(h.wall).startswith(bld.SIDING) for h in hs), "no wooden clapboard siding")
 
     def test_alpine_houses(self):
         hs = self.houses(46.59, 7.91)

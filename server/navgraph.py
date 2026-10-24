@@ -416,13 +416,18 @@ def road_rules(country):
 
 def country_near(db, lat, lon):
     """The country of the airport nearest (lat, lon) in airports.AirportDB db, or None."""
-    if db is None or not getattr(db, "runways", None):
-        return None
-    import airports
-    d = airports._hav(lat, lon, db._mid[:, 0], db._mid[:, 1])
-    rw = db.runways[int(np.argmin(d))]
-    ap = db.airports.get(rw.airport_ident)
-    return getattr(ap, "country", None) or getattr(rw, "country", None) or None
+    if db is not None and getattr(db, "runways", None):
+        import airports
+        d = airports._hav(lat, lon, db._mid[:, 0], db._mid[:, 1])
+        rw = db.runways[int(np.argmin(d))]
+        ap = db.airports.get(rw.airport_ident)
+        c = getattr(ap, "country", None) or getattr(rw, "country", None) or None
+        if c:
+            return c
+    if lat is not None and lon is not None:
+        if 6.0 <= float(lat) <= 37.5 and 68.0 <= float(lon) <= 97.5:
+            return "IN"
+    return None
 
 
 REBUILD_M = 400.0           # a new graph once the player is this far from the last one's centre
