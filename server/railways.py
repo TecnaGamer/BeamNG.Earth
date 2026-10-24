@@ -4,10 +4,10 @@ road tile (write_tile's "rail").
 
 The heights are one profile along the connected track. On the ground the bed follows the drawn ground, smoothed
 along its length (a railway does not ride every bump of the lattice). A bridge (the segment's is_bridge flag or level
-above 0) is a deck straight between its ends, at least BRIDGE_CLEAR_M over the ground under it (it crosses a road or
-a stream there), never steeper than GRADE. Its height then reaches out along the track it joins, falling GRADE per
-metre: the approach embankments up to a raised deck, across segment ends and tile edges alike (the lines are taken
-from REACH_M around the tile, the farthest a ramp reaches). The ballast's sides go down past the ground, a low
+above 0) is a deck straight between the bed at its ends (deck_heights), raised only where the ground under it would
+come through, never steeper than GRADE. Where it is raised, its height reaches out along the track it joins, falling
+GRADE per metre: the approach embankments, across segment ends and tile edges alike (the lines are taken from REACH_M
+around the tile). The ballast's sides go down past the ground, a low
 embankment on the flat and a tall one on a ramp. Where a road crosses at grade, the track stops either side of the
 carriageway (a level crossing: the road's own surface across it). Tunnels are left out. Pure given its inputs."""
 import numpy as np
@@ -22,10 +22,10 @@ GAUGE_M = 1.435             # standard gauge between the rails' inner faces ...
 FI_GAUGE_M = 1.524          # ... the Finnish (Russian) broad gauge in the Finnish fork
 NARROW_GAUGE_M = 1.0
 STEP_M = 2.0                # m between cross-sections, from each part's start (the same at every tile)
-SMOOTH_M = 50.0             # m either side the bed's height is averaged over (a line's long vertical curves)
+SMOOTH_M = 10.0             # m either side the bed's height is averaged over: the real elevation, its DEM bumps out
+                            # (50 lifted the bed off the ground, the user, 2026-10-25: "follow the real elevation")
 GRADE = 0.02                # the steepest a deck or an approach ramp climbs (2 %: a main line's)
-BRIDGE_CLEAR_M = 6.0        # m from the ground under a bridge to its rails' bed (a road's clearance and the deck)
-REACH_M = BRIDGE_CLEAR_M / GRADE + 50.0     # m around a tile the lines are taken: a ramp's reach and the smoothing
+REACH_M = 200.0             # m around a tile the lines are taken: the smoothing's reach and a raised deck's ramps
 BALLAST_H = 0.3             # m of ballast over the bed line
 BALLAST_TOP_M = 1.8         # m: half the ballast's top width
 BALLAST_SLOPE = 1.5         # m out per m down on its sides
@@ -276,21 +276,14 @@ def _envelope(s, req, grade=GRADE):
 
 
 def deck_heights(s, z_ground, z_start, z_end):
-    """A bridge's bed line: straight from z_start to z_end (the bed at its ends), at least BRIDGE_CLEAR_M over the
-    ground it spans (its CLEAR_QUANTILE: what it crosses, not the banks its abutments stand on) and DECK_D +
-    BALLAST_H over any of it ABUTMENT_M or more from its ends, climbing at most GRADE. Pure."""
+    """A bridge's bed line: straight from z_start to z_end (the bed at its ends: a line keeps its grade over what it
+    crosses, the stream or road under it goes down, and the bare-earth DEM has that dip), raised only where the ground
+    under it stands higher than the track itself (bad data, a ridge), climbing at most GRADE. Pure. (A required 6 m
+    clearance stood an 8 m culvert's track 6.8 m up on 4.5 m ramps, 2026-10-25.)"""
     s = np.asarray(s, np.float64)
-    g = np.asarray(z_ground, np.float64)
     L = max(float(s[-1]), 1e-9)
-    line = z_start + (z_end - z_start) * s / L
-    req = np.maximum(line, float(np.quantile(g, CLEAR_QUANTILE)) + BRIDGE_CLEAR_M)
-    mid = (s >= ABUTMENT_M) & (s <= L - ABUTMENT_M)
-    req[mid] = np.maximum(req[mid], g[mid] + DECK_D + BALLAST_H)
+    req = np.maximum(z_start + (z_end - z_start) * s / L, np.asarray(z_ground, np.float64))
     return _envelope(s, req)
-
-
-CLEAR_QUANTILE = 0.3        # deck_heights: the ground a bridge spans, its lower part
-ABUTMENT_M = 15.0           # m at each end of a bridge on its bank
 
 
 def profile(rails, ground):

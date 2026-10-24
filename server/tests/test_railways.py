@@ -90,28 +90,39 @@ class RailwayTest(unittest.TestCase):
         prof = railways.profile(rails, ground)
         return rails, prof
 
-    def test_bridge_over_flat_ground_rises_on_ramps(self):
-        """A bridge segment between two ground segments on the flat (it crosses a road): its deck BRIDGE_CLEAR_M up,
-        the track either side climbing to it at GRADE at most, across the segments' joins."""
-        f = features([[(-400.0, 100.0), (100.0, 100.0)], [(100.0, 100.0), (140.0, 100.0)],
-                      [(140.0, 100.0), (640.0, 100.0)]], ["standard_gauge"] * 3, subtypes=["rail"] * 3,
+    def _line(self, ground):
+        f = features([[(-400.0, 100.0), (100.0, 100.0)], [(100.0, 100.0), (150.0, 100.0)],
+                      [(150.0, 100.0), (640.0, 100.0)]], ["standard_gauge"] * 3, subtypes=["rail"] * 3,
                      flags=[(1, "is_bridge")])
-        rails, prof = self._bed(f, flat)
-        kinds = [k for _, _, k, _ in rails]
-        self.assertEqual(sorted(kinds), ["bridge", "ground", "ground"])
+        rails, prof = self._bed(f, ground)
         pts = np.concatenate([xy for *_, xy in rails])
         z = np.concatenate([zb for zb, _ in prof])
         o = np.argsort(pts[:, 0])
-        x, z = pts[o, 0], z[o]
-        deck = (x > 100) & (x < 140)
-        self.assertGreaterEqual(z[deck].min(), 10.0 + railways.BRIDGE_CLEAR_M - 1e-6)
+        return f, pts[o, 0], z[o]
+
+    def test_bridge_over_a_dip_keeps_the_line_level(self):
+        """A short bridge over a stream or an underpass road (the ground 3 m down under it): the deck straight at the
+        line's height, no ramps (a 6 m clearance stood an 8 m culvert's track 6.8 m up on 4.5 m ramps, 2026-10-25)."""
+        def dip(xy):
+            return np.where((xy[:, 0] > 112) & (xy[:, 0] < 138), 7.0, 10.0)
+        f, x, z = self._line(dip)
+        self.assertLess(np.abs(z - 10.0).max(), 0.05, "on the ground's level everywhere, the bridge too")
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], dip)
+        piers = P[np.unique(T[M == 1])]
+        self.assertTrue(((piers[:, 2] < 7.0) & (piers[:, 0] > 100) & (piers[:, 0] < 150)).any(),
+                        "a pier down to the stream bed")
+
+    def test_ground_through_a_deck_raises_it_on_gentle_ramps(self):
+        """Ground under a bridge's middle higher than its ends (bad data, or a ridge): the deck over it, the line
+        climbing to it at GRADE at most and back down to the ground past the ramps."""
+        def hump(xy):
+            return np.where((xy[:, 0] > 120) & (xy[:, 0] < 130), 11.0, 10.0)
+        f, x, z = self._line(hump)
+        deck = (x > 120) & (x < 130)
+        self.assertGreaterEqual(z[deck].min(), 11.0 - 1e-6)
         dz = np.abs(np.diff(z)) / np.maximum(np.diff(x), 1e-9)
         self.assertLessEqual(dz[np.diff(x) > 0.5].max(), railways.GRADE + 1e-6)
         self.assertAlmostEqual(float(z[x < -300].max()), 10.0, 1, "back on the ground past the ramp")
-        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
-        piers = P[np.unique(T[M == 1])]
-        self.assertTrue(((piers[:, 2] < 10.0 - 1.0) & (piers[:, 0] > 100) & (piers[:, 0] < 140)).any(),
-                        "a pier into the ground under the deck")
 
     def test_bridge_over_a_valley_runs_straight(self):
         """A bridge over a 30 m deep valley between its banks: straight between them, piers down to the floor."""
@@ -160,7 +171,7 @@ class RailwayTest(unittest.TestCase):
             (zb, _), = railways.profile(rails, lambda xy: ridge(*FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)[:2]))
             want = np.interp(e, rails[0][3][:, 0], zb)
             self.assertLess(np.abs(got - want).max(), 0.1, f"the ground at {off} m off the line is at its bed")
-            self.assertLess(float(got[12]), float(raw[12]) - 1.0, "cut into the ridge")
+            self.assertLess(abs(float(got[12]) - float(raw[12])), 0.3, "over the ridge as it is (the real elevation)")
         self.assertLess(railways.FOOT_MAX_M, 10.0)
 
     def test_written_with_the_tile(self):
