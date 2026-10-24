@@ -106,7 +106,7 @@ class SignalsTest(unittest.TestCase):
                       ("cJ", "e", 0): ("cE", True)}
         import furniture
         orig = furniture.junction_controls
-        furniture.junction_controls = lambda a, k, link_ok=None, ring=None: [(x, furniture.G_STOP) for x in a]     # an all-way stop
+        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None: [(x, furniture.G_STOP) for x in a]     # an all-way stop
         try:
             out = navgraph._signals(arms, approaches, nodes)
         finally:
