@@ -34,6 +34,7 @@ import staging
 log = logging.getLogger("earthd.vegetation")
 
 VERSION = 14          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110)
+FORK_CACHE = "-fi1"       # the Finnish fork's cells (no plants on its drawn paths): apart from upstream's, never mixed
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -172,7 +173,7 @@ class Vegetation:
     def __init__(self, md, cache_dir=None):
         self.md = md
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
-        self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
+        self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}{FORK_CACHE}") if cache_dir else None
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
