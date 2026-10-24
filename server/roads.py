@@ -3102,6 +3102,10 @@ CLIFF_SPACING = 0.55    # pieces along the face a share of their width apart (ov
 CLIFF_REACH_M = 8.0     # m behind the face a piece may reach at most (less where another road is)
 CLIFF_EDGE_M = 0.5      # m off the carriageway's edge the pieces' fronts stand
 CLIFF_ROAD_GAP_M = 0.3  # m a piece's footprint keeps from any carriageway
+# the Finnish fork's rock cuts (build_tile, walls' "vary"): heights +-30 %, turned +-25 degrees, up to 1.2 m back
+CLIFF_VARY_H = 0.3
+CLIFF_VARY_YAW = 50.0
+CLIFF_VARY_BACK_M = 1.2
 
 
 # Parapets (the Stelvio Pass, Mapillary 2026-10-21: a low dry-stone wall along the outside of every bend and drop): a
@@ -3195,7 +3199,8 @@ def cliff_rows(walls, roads=()):
             i = min(int(np.searchsorted(s, at)), len(b) - 1)
             hh = float(np.interp(at, s, top) - np.interp(at, s, road_z)) + CLIFF_SINK_M + CLIFF_OVER_M
             jit = _hash01(round(float(b[i, 0]), 1), round(float(b[i, 1]), 1))
-            hh *= 0.9 + 0.2 * jit
+            vary = w.get("vary", False)
+            hh *= (1.0 - CLIFF_VARY_H + 2 * CLIFF_VARY_H * jit) if vary else 0.9 + 0.2 * jit
             sh, frac, front, width, depth = CLIFF_SHAPES[1 if hh >= CLIFF_TALL_M else 0]
             sc = hh / sh
             sc = min(sc, float(clear[i]) / depth)          # (not over another road)
@@ -3205,7 +3210,10 @@ def cliff_rows(walls, roads=()):
             t = tw[i]
             x, y = float(np.interp(at, s, b[:, 0])), float(np.interp(at, s, b[:, 1]))
             jit2 = _hash01(round(float(b[i, 0]), 1), round(float(b[i, 1]), 1), "z")
-            yaw = math.degrees(math.atan2(t[0], -t[1])) + (jit - 0.5) * 30.0
+            yaw = math.degrees(math.atan2(t[0], -t[1])) + (jit - 0.5) * (CLIFF_VARY_YAW if vary else 30.0)
+            if vary:                    # some pieces stand further back into the cut
+                back = CLIFF_VARY_BACK_M * _hash01(round(float(b[i, 0]), 1), round(float(b[i, 1]), 1), "b")
+                x, y = x - t[0] * back, y - t[1] * back
             while sc >= 0.2:            # (shrunk until its footprint is off every carriageway, this road's included)
                 px, py = x - t[0] * front * sc, y - t[1] * front * sc   # its front (-y, toward the road) on the face
                 if not on_road(px, py, yaw, sc, width, front, depth):
@@ -3711,6 +3719,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     exact = (x0, y0, x1, y1)
     if walls is not None:                       # retaining walls where a road is cut into the ground (roadmesh.tunnel)
         tile_walls = retaining_walls(frame, roads, elev, exact, decks=decks_near)
+        if sign_style == "fi":                  # the Finnish fork: road cuts there are blasted bedrock, rock faces
+            for w in tile_walls:                # at any depth, in towns too (concrete walls stood in the forest)
+                w["rock"] = True
+                w["edge"] = w["base"]           # at the face, behind the grading's verge (grading.CUT_VERGE_M)
+                w["vary"] = True                # a broken face, not a row of even boulders (CLIFF_VARY_*)
         if props is None:                       # (no props here: stone)
             for w in tile_walls:
                 w["rock"] = False

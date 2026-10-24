@@ -43,6 +43,7 @@ CLASS_SIGMA_M = {"motorway": 45.0, "trunk": 40.0, "primary": 30.0, "secondary": 
 MEDIAN_M = 20.0             # m, running median before the smoothing (median_profile): spikes out, not spread
 DIRT_MEDIAN_M = 10.0
 # the Finnish fork: side roads meet the road they join at its height (snap_junctions)
+CUT_VERGE_M = 3.0           # m of level verge between a Finnish road's edge and the rock of its cutting (in_finland)
 JUNCTION_SNAP_ON = os.environ.get("BNE_JUNCTION_SNAP", "1") != "0"
 JUNCTION_RANK = {"motorway": 9, "trunk": 8, "primary": 7, "secondary": 6, "tertiary": 5, "unclassified": 4,
                  "residential": 3, "living_street": 2, "service": 1}
@@ -235,7 +236,7 @@ def plan_road(frame, lonlat, spec, elev):
     return plan_roads(frame, [(lonlat, spec)], elev)[0]
 
 
-def plan_roads(frame, parts, elev, abut=None):
+def plan_roads(frame, parts, elev, abut=None, verge=0.0):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment). Pure given elev."""
     if not parts:
@@ -270,7 +271,7 @@ def plan_roads(frame, parts, elev, abut=None):
         out.append(_plan(xy, z, spec, ab))
     if SHARP_ON:
         _add_cuts(frame, [p if p is not None and sp.kind in roadsmod.BUILT else None
-                          for p, (_ll, sp) in zip(out, parts)], elev)
+                          for p, (_ll, sp) in zip(out, parts)], elev, verge)
     return out
 
 
@@ -302,7 +303,24 @@ def bend_zone(xy):
     return np.abs(s[:, None] - sb[None, :]).min(axis=1) <= HAIRPIN_PAD_M
 
 
-def _add_cuts(frame, plans, elev):
+def in_finland(lat, lon):
+    """The Finnish fork: is (lat, lon) in mainland Finland (a box with Sweden's Tornio valley side and Estonia out;
+    the eastern border's Russian side is in it: an anchor there is rare)?"""
+    return 59.75 <= lat <= 70.1 and 20.5 <= lon <= 31.6 and not (lat > 65.8 and lon < 23.9)
+
+
+def _verge(cut, road_half, verge):
+    """cut (n - 1, 6) with each side's wall set back to road_half + verge at least, its top with it (_add_cuts). Pure."""
+    cut = cut.copy()
+    for c in (0, 3):
+        shift = np.clip(road_half + verge - cut[:, c], 0.0, None)
+        shift = np.where(np.isfinite(shift), shift, 0.0)
+        cut[:, c] += shift
+        cut[:, c + 2] += shift
+    return cut
+
+
+def _add_cuts(frame, plans, elev, verge=0.0):
     """Sets Plan.cut on the plans (None entries skipped): per segment and side a cutting's wall (SHARP_*), from the raw
     ground elev(lat, lon) sampled outward from the carriageway's edge: the ground rising SHARP_MIN_M or more at
     SHARP_GRADE or steeper on average. The data spreads a vertical wall evenly round where it stands: its wall is put
@@ -339,6 +357,8 @@ def _add_cuts(frame, plans, elev):
             zmin = np.minimum(p.z[:-1], p.z[1:])
             for c in (1, 4):
                 cut[:, c] = np.minimum(cut[:, c], zmin + getattr(p, "max_wall", WALL_MAX_H_M))
+            if verge > 0:           # the Finnish fork: a grass verge between the road and the rock (CUT_VERGE_M)
+                cut = _verge(cut, p.road_half, verge)
             if np.isfinite(cut[:, 0]).any() or np.isfinite(cut[:, 3]).any():
                 p.cut = cut
 
@@ -498,6 +518,7 @@ class Grader:
 
     def __init__(self, frame, mapdata, elev, widths=None):
         self.frame, self.md, self.elev, self.widths = frame, mapdata, elev, widths
+        self.finnish = in_finland(frame.lat0, frame.lon0)     # the Finnish fork's verges in cuttings
         self.cells = {}
         self.failed = {}        # cell key -> monotonic time of the last failed fetch
         self.lock = threading.Lock()
@@ -585,7 +606,8 @@ class Grader:
                 except Exception as e:      # no fills rather than no grading
                     log.debug("grading: abutments of %s: %s: %s", key, type(e).__name__, e)
             pclip = []
-            for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut)):
+            for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut,
+                                                                         CUT_VERGE_M if self.finnish else 0.0)):
                 if p is not None:
                     p.rid = road_id(fid)
                     plans.append((fid, p))
