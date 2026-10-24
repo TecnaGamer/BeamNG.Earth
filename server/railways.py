@@ -441,6 +441,35 @@ def _sleepers(s, xy, u, top, i, j):
     return np.c_[cx, cy], np.c_[un[:, 1], -un[:, 0]], un, zt, zt + SLEEPER_H
 
 
+PIER_ROAD_M = 1.5           # m a pier keeps off a road's carriageway under the bridge
+
+
+def _sited(pr, crossers, ground):
+    """The piers pr (_piers') clear of the roads under the deck (crossers: [(centreline, half width, z)]; a pier stood
+    in the lanes of a road under a rail bridge, 2026-10-25), each reaching PIER_FOOT_M under the lowest ground at its
+    four corners (from the ground at the line's centre one hung in the air where the ground fell away to the road)."""
+    if pr is None:
+        return None
+    c, along, across, z0, z1 = pr
+    keep = np.ones(len(c), bool)
+    for line, hw, _z in crossers:
+        if len(line) < 2:
+            continue
+        a, b = line[:-1], line[1:]
+        d = b - a
+        L2 = np.maximum((d * d).sum(1), 1e-12)
+        t = np.clip(((c[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
+        dist = np.hypot(*(c[:, None, :] - (a[None] + t[..., None] * d[None])).transpose(2, 0, 1)).min(1)
+        keep &= dist > hw + PIER_ROAD_M + max(PIER_W, PIER_T) / 2
+    if not keep.any():
+        return None
+    c, along, across, z0, z1 = c[keep], along[keep], across[keep], z0[keep], z1[keep]
+    corners = np.concatenate([c + sa * along * PIER_T / 2 + sc * across * PIER_W / 2
+                              for sa in (-1, 1) for sc in (-1, 1)])
+    zg = np.asarray(ground(corners), np.float64).reshape(4, len(c)).min(axis=0)
+    return c, along, across, np.minimum(z0, zg - PIER_FOOT_M), z1
+
+
 def _ballast_bed(mesh, p, uu, t, v, foot_l, foot_r, zl, zr, mat):
     up = np.array([0.0, 0.0, 1.0])
     out_l = np.c_[uu, np.zeros(len(p))]
@@ -545,7 +574,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None):
                 _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], ballast)
             else:
                 _deck(mesh, p, uu, t, v, ballast, concrete)
-                pr = _piers(s, xy, u, top, zg, i, j)
+                pr = _sited(_piers(s, xy, u, top, zg, i, j), crossers, ground)
                 if pr is not None:
                     small.append((pr, PIER_T / 2, PIER_W / 2, concrete))
             st = t - SLEEPER_SINK + SLEEPER_H           # the sleepers' top: the rails' foot

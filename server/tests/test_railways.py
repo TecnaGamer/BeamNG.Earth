@@ -112,6 +112,23 @@ class RailwayTest(unittest.TestCase):
         self.assertTrue(((piers[:, 2] < 7.0) & (piers[:, 0] > 100) & (piers[:, 0] < 150)).any(),
                         "a pier down to the stream bed")
 
+    def test_piers_stand_beside_a_road_under_the_bridge_on_the_ground(self):
+        """A rail bridge over a road in a 5 m dip: no pier in the road's lanes, every pier's foot under the ground at
+        all its corners (one stood in the lanes, one hung in the air, 2026-10-25)."""
+        f = features([[(-300.0, 100.0), (60.0, 100.0)], [(60.0, 100.0), (190.0, 100.0)],
+                      [(190.0, 100.0), (500.0, 100.0)], [(125.0, -100.0), (125.0, 300.0)]],
+                     ["standard_gauge"] * 3 + ["secondary"], subtypes=["rail"] * 3 + ["road"], flags=[(1, "is_bridge")])
+
+        def dip(xy):                # the ground falling 5 m to the road over 40 m either side of it
+            return 10.0 - 5.0 * np.clip(1.0 - np.abs(xy[:, 0] - 125.0) / 40.0, 0.0, 1.0)
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], dip)
+        con = P[np.unique(T[M == 1])]
+        low = con[con[:, 2] < 8.5]          # the piers' feet (the deck's underside: 10 + BALLAST_H - DECK_D = 8.9)
+        self.assertTrue(len(low), "piers there")
+        hw = roads.road_specs(f)[3].width / 2
+        self.assertFalse((np.abs(low[:, 0] - 125.0) < hw + 0.5).any(), "none in the road")
+        self.assertTrue((low[:, 2] <= dip(low[:, :2]) - railways.PIER_FOOT_M + 1e-6).all(), "all in the ground")
+
     def test_ground_through_a_deck_raises_it_on_gentle_ramps(self):
         """Ground under a bridge's middle higher than its ends (bad data, or a ridge): the deck over it, the line
         climbing to it at GRADE at most and back down to the ground past the ramps."""
