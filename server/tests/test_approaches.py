@@ -45,10 +45,11 @@ class BridgeLiftsTest(unittest.TestCase):
         self.assertEqual(grading.bridge_lifts(line, [line], [], lambda xy: np.full(len(xy), FLAT)), [])
 
     def test_ground_already_high_enough(self):
-        # (lidar with the real embankments: the ends already 8 m up)
+        # Lidar already contains embankments above the current structural clearance.
         line = np.c_[np.linspace(-35, 35, 36), np.zeros(36)]
         ground = [np.array([[-12.0, -500], [-12, 500]])]
-        z = lambda xy: np.where(np.abs(xy[:, 0]) > 30, FLAT + 8.0, FLAT)     # noqa: E731
+        high = roads.DECK_ROAD_CLEAR + grading.APPROACH_MARGIN_M + 0.2
+        z = lambda xy: np.where(np.abs(xy[:, 0]) > 30, FLAT + high, FLAT)     # noqa: E731
         self.assertEqual(grading.bridge_lifts(line, [line], ground, z), [])
 
     def test_junction_at_grade_and_chained_ends_left(self):

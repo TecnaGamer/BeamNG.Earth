@@ -1,0 +1,33 @@
+name: Bridge clearance regressions
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clearance:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest -r server/requirements.txt
+      - name: Bridge geometry, grading, navigation and worker compatibility
+        run: >-
+          python -m pytest -q
+          server/tests/test_bridge_clearance.py
+          server/tests/test_approaches.py
+          server/tests/test_grading.py
+          server/tests/test_roads.py
+          server/tests/test_roadmesh.py
+          server/tests/test_bridgetypes.py
+          server/tests/test_tunnels.py
+          server/tests/test_navgraph.py
+          server/tests/test_blockworker.py

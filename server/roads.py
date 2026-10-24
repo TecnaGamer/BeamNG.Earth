@@ -32,6 +32,7 @@ import numpy as np
 import junctions
 import mapcells
 import mapgeom
+import roadmesh
 import staging
 
 log = logging.getLogger("earthd.roads")
@@ -940,7 +941,8 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3):
             pairs.extend((i, int(j)) for j in np.flatnonzero(ok))
     if not pairs:
         return zs
-    zs = [np.array(z, np.float64) for z in zs]
+    floors = [np.array(z, np.float64) for z in zs]
+    zs = [z.copy() for z in floors]
     for _ in range(rounds):
         new = [z.copy() for z in zs]
         acc = [np.zeros(len(z)) for z in zs]
@@ -987,7 +989,8 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3):
     out = []
     for i, z in enumerate(zs):                  # re-smoothed, ends kept
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(lines[i][:, :2], axis=0).T))]
-        out.append(_smooth_pinned(z, s[-1] / max(len(s) - 1, 1), DECK_SIGMA) if len(z) > 3 else z)
+        sm = _smooth_pinned(z, s[-1] / max(len(s) - 1, 1), DECK_SIGMA) if len(z) > 3 else z
+        out.append(np.maximum(sm, floors[i]))
     return out
 
 
@@ -1175,7 +1178,21 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             if flat:
                 cap[k] = np.minimum(cap[k], zc + DECK_MAX_GRADE * dk)
             elif min_lv is None or levels[k] >= min_lv:
-                req[k] = np.maximum(req[k], zc + cl - grade * dk)
+                # A lower road has width: keep a level clearance corridor around its
+                # centreline instead of reaching the target at just one point.
+                reach = DECK_CLEAR_REACH_M if len(cr) == 3 or cr[3] is None else 0.0
+                req[k] = np.maximum(req[k], zc + cl - grade * np.maximum(dk - reach, 0.0))
+                if k == pi:
+                    # A crossing can lie between mesh vertices. Both bracketing vertices
+                    # need full height, otherwise linear interpolation loses headroom.
+                    for point in (sc - reach, sc, sc + reach):
+                        if not 0 <= point <= es[-1]:
+                            continue
+                        j = int(np.searchsorted(es, point, side="left"))
+                        near = [j] if j < len(es) and abs(es[j] - point) < 1e-8 else [j - 1, j]
+                        for at in near:
+                            if 0 <= at < len(es):
+                                req[k][at] = max(req[k][at], zc + cl)
     # the caps (from an abutment, from a junction at grade) never under the straight line between the abutments: two
     # abutments further apart in height than DECK_MAX_GRADE allows had the higher one pulled under its own road, a
     # step onto the deck (0.9 m up onto the I-20 bridge near Temple, GA, once its approaches were raised, 2026-10-20)
@@ -1205,8 +1222,11 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             zz = np.maximum(np.minimum(_no_sag(s, zz), np.maximum(cap[k], zz)), zz)
             step = s[-1] / (len(s) - 1)
             sigma = float(np.clip(s[-1] / DECK_SIGMA_SHARE, DECK_SIGMA, DECK_SIGMA_MAX))   # a long deck: a long curve
-            sm = np.minimum(_smooth_pinned(zz, step, sigma), cap[k])         # (no hump back over a
-            zz = np.maximum(sm, g)                                                          # junction at grade)
+            sm = np.minimum(_smooth_pinned(zz, step, sigma), cap[k])   # no hump over an at-grade junction
+            # Smoothing is aesthetic: it must not remove feasible structural headroom.
+            # Keep the abutment/grade cap, rather than turning a short bridge into a wall.
+            floor = np.maximum(np.minimum(req[k], cap[k]), g)
+            zz = np.maximum(sm, floor)
             zz[0], zz[-1] = sm[0], sm[-1]
         out.append(zz)
     return out
@@ -1969,16 +1989,38 @@ def _chunk(look, w, c):
 DECK = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}      # bridge decks (roadmesh.deck)
 DECK_STEP = 4.0         # m between deck profile points
 DECK_CLEAR = 0.05       # m a deck stays above the ground under it (no z-fighting where it rests on it)
-# m a deck's top stays over a road crossing under it: 5.3 m under the slab and girders (roadmesh DECK_DEPTH 1.2 +
-# GIRDER_D 1.0), over the 4.9 m (16 ft) of US interstates. It was 6.5 (5 m + the slab, before the girders): 4.3 m under
-# the girders, a truck's height (trucks hit a deck over I-20 near Temple, GA; from KyzoFox's 1.5.4, PR #64)
-DECK_ROAD_CLEAR = 7.5
+# Usable space below the lowest structural girder, not merely to the road surface.
+# Six metres accommodates tall road vehicles such as semi-trucks; unlimited-height
+# modded vehicles and raised equipment cannot have a finite universal guarantee.
+MIN_BRIDGE_HEADROOM_M = 6.0
+BRIDGE_HEADROOM_MARGIN_M = 0.15   # mesh simplification/float and vehicle clearance tolerance
+DECK_ROAD_CLEAR = MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
+DECK_CLEAR_REACH_M = 20.0   # full headroom either side of a road crossing (matches approach fills' flat reach)
 DECK_GRADE = 0.05       # that requirement falls 5 % along the deck from the crossing
 DECK_MAX_GRADE = 0.06   # a deck climbs no steeper than this from an abutment
 CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fills its corner in concrete too
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
+
+
+def _clearance_deficits(lines, zs, crossings):
+    """(part, usable m) below the road target in a modelled crossing corridor.
+
+    Road heights are the graded lower road's height at the crossing. Keep true
+    abutment junctions at grade; data/grade constraints cannot promise global clearance.
+    """
+    out = []
+    for pi, sc, zc in crossings:
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(lines[pi][:, :2], axis=0).T))]
+        if min(sc, s[-1] - sc) <= AT_GRADE_REACH_M:
+            continue
+        lo, hi = max(0.0, sc - DECK_CLEAR_REACH_M), min(s[-1], sc + DECK_CLEAR_REACH_M)
+        at = np.r_[lo, s[(s > lo) & (s < hi)], hi]
+        headroom = float(np.min(np.interp(at, s, zs[pi]))) - zc - roadmesh.DECK_DEPTH - roadmesh.GIRDER_D
+        if not np.isfinite(headroom) or headroom < MIN_BRIDGE_HEADROOM_M - 1e-6:
+            out.append((pi, headroom))
+    return out
 
 
 def _crossings(lines, ground_lines):
@@ -2234,8 +2276,14 @@ class BridgeProfiles:
         except Exception as ex:             # the share-of-span rule alone
             log.debug("nav clearance: %s: %s", type(ex).__name__, ex)
             nav = 0.0
-        return deck_profile(lines, self._ground, [(c[0], c[1], z) for c, z in zip(cr, road_z)] + self._water(lines, nav),
-                            levels=[pool[k][3] for k in comp], widths=[pool[k][0].width for k in comp])
+        required = [(c[0], c[1], z) for c, z in zip(cr, road_z)]
+        zs = deck_profile(lines, self._ground, required + self._water(lines, nav),
+                          levels=[pool[k][3] for k in comp], widths=[pool[k][0].width for k in comp])
+        deficits = _clearance_deficits(lines, zs, required)
+        if deficits:
+            log.warning("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
+                        MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
+        return zs
 
     def parts(self, cells_feats, box):
         """[(fid, spec, xy, z, lon)] of the bridge parts in these cells that come near box."""
