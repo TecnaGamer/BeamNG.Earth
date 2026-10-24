@@ -6,7 +6,7 @@ name: release
 
 on:
   push:
-    branches: [main]
+    branches: [finland]     # the Finnish fork's builds (sync-upstream.yml also starts it)
   workflow_dispatch:
     inputs:
       release:
@@ -126,7 +126,8 @@ jobs:
           pre=""
           case "$v" in *preview*|*alpha*|*rc*) pre="--prerelease";; esac     # betas are full releases (the user, 2026-10-22)
           cat > notes.md <<EOF
-          **Download** the file for your system, run it, and it does the rest: it installs the mod into BeamNG.drive,
+          **The Finnish fork** of TecnaGamer's BeamNG.Earth $v: smoother roads, Finnish rural roads, bridges and
+          speed-limit signs. **Download** the file for your system, run it, and it does the rest: it installs the mod into BeamNG.drive,
           starts the world server and starts the game. Then pick **Freeroam > BeamNG.Earth**.
 
           - **Windows:** \`BeamNG.Earth-$v.exe\` (Windows may warn about an unknown app: More info > Run anyway)

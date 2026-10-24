@@ -1,0 +1,80 @@
+# The Finnish fork: every few hours, TecnaGamer's main merged into finland (the fork's changes on top), the tests that
+# cover the fork's changes run, and finland pushed; a version with no Finnish release yet is then built and released
+# (release.yml, run here: a push made with this job's token starts no workflow). A merge conflict or a failing test
+# opens an issue instead and changes nothing. tools/sync_upstream.py does the same on a PC.
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: finland
+          fetch-depth: 0
+      - name: Merge upstream main
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/TecnaGamer/BeamNG.Earth.git
+          git fetch --quiet upstream main
+          behind=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "$behind upstream commit(s) to merge"
+          [ "$behind" = 0 ] && exit 0
+          if ! git merge --no-edit upstream/main; then
+            files=$(git diff --name-only --diff-filter=U)
+            git merge --abort
+            title="Upstream merge conflict"
+            body=$(printf 'Merging TecnaGamer/BeamNG.Earth main (%s) into finland conflicts in:\n\n%s\n\nMerge by hand: `python tools/sync_upstream.py` shows the same, or `git merge upstream/main`.' \
+              "$(git rev-parse --short upstream/main)" "$(echo "$files" | sed 's/^/- /')")
+            n=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number')
+            if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.merge.outputs.behind != '0'
+        with:
+          python-version: "3.12"
+      - name: Tests
+        if: steps.merge.outputs.behind != '0'
+        id: tests
+        run: |
+          python -m pip install -q -r server/requirements.txt
+          python tools/run_tests.py test_grading test_roads test_roadmesh test_approaches test_tunnels test_furniture \
+            test_sidewalk_collision test_bridgetypes
+      - name: Report failing tests
+        if: failure() && steps.tests.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --title "Upstream merge: tests fail" \
+            --body "After merging TecnaGamer/BeamNG.Earth main ($(git rev-parse --short upstream/main)) the tests fail: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. finland was not changed."
+      - name: Push finland
+        if: steps.merge.outputs.behind != '0'
+        run: git push origin finland
+      - name: Release a version with no Finnish build yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          if gh release view "v$v" >/dev/null 2>&1; then echo "v$v is released already"; exit 0; fi
+          gh workflow run release.yml --ref finland -f release=true
+          echo "building and releasing v$v"
