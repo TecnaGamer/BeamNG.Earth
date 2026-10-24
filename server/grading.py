@@ -588,7 +588,9 @@ class Grader:
                         keeps.append((np.stack([np.asarray(e), np.asarray(n)], axis=1),
                                       specs[i].width / 2 + UNGRADED_MARGIN_M))
                     continue
-                if specs[i] is None:
+                if specs[i] is None or specs[i].cls in roadsmod.PATH_STYLE:
+                    # (the Finnish fork's paths lie on the ground as it is: graded, a cycleway in a dip by a road pulled
+                    # the road's edge down into it, its edge line bent in, 2026-10-24)
                     continue
                 for ring in roadsmod.ground_parts(feats, i):     # not bridges / tunnels
                     pieces = self._near_cell(np.asarray(ring, np.float64), box)
