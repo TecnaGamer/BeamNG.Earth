@@ -1,0 +1,449 @@
+{
+  "sign_metal": {
+    "name": "sign_metal",
+    "mapTo": "sign_metal",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_metal_basecolor.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_metal_normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_metal_roughness.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 1.0,
+        "normalMapStrength": 0.8,
+        "useAnisotropic": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "sign_speed100kph": {
+    "name": "sign_speed100kph",
+    "mapTo": "sign_speed100kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed100kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed110kph": {
+    "name": "sign_speed110kph",
+    "mapTo": "sign_speed110kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed110kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed120kph": {
+    "name": "sign_speed120kph",
+    "mapTo": "sign_speed120kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed120kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed130kph": {
+    "name": "sign_speed130kph",
+    "mapTo": "sign_speed130kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed130kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed140kph": {
+    "name": "sign_speed140kph",
+    "mapTo": "sign_speed140kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed140kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed150kph": {
+    "name": "sign_speed150kph",
+    "mapTo": "sign_speed150kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed150kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed30kph": {
+    "name": "sign_speed30kph",
+    "mapTo": "sign_speed30kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed30kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed40kph": {
+    "name": "sign_speed40kph",
+    "mapTo": "sign_speed40kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed40kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed50kph": {
+    "name": "sign_speed50kph",
+    "mapTo": "sign_speed50kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed50kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed60kph": {
+    "name": "sign_speed60kph",
+    "mapTo": "sign_speed60kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed60kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed70kph": {
+    "name": "sign_speed70kph",
+    "mapTo": "sign_speed70kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed70kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed80kph": {
+    "name": "sign_speed80kph",
+    "mapTo": "sign_speed80kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed80kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed90kph": {
+    "name": "sign_speed90kph",
+    "mapTo": "sign_speed90kph",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed90kph.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "sign_speed_none": {
+    "name": "sign_speed_none",
+    "mapTo": "sign_speed_none",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/sign_speed_none.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  }
+}

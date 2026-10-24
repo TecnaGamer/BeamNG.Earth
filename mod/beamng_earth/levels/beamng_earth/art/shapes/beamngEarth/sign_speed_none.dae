@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor>
+      <author>BeamNG Earth</author>
+      <authoring_tool>Python generator</authoring_tool>
+    </contributor>
+    <created>2026-10-23T00:00:00</created>
+    <modified>2026-10-23T00:00:00</modified>
+    <unit meter="1" name="meter"/>
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_images>
+    <image id="sign_speed_none_image">
+      <init_from>sign_speed_none.png</init_from>
+    </image>
+  </library_images>
+  <library_effects>
+    <effect id="sign_speed_none_effect">
+      <profile_COMMON>
+        <newparam sid="sign_speed_none_surface">
+          <surface type="2D">
+            <init_from>sign_speed_none_image</init_from>
+          </surface>
+        </newparam>
+        <newparam sid="sign_speed_none_sampler">
+          <sampler2D>
+            <source>sign_speed_none_surface</source>
+          </sampler2D>
+        </newparam>
+        <technique sid="common">
+          <lambert>
+            <diffuse>
+              <texture texture="sign_speed_none_sampler" texcoord="UVMap"/>
+            </diffuse>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_materials>
+    <material id="sign_speed_none_material" name="sign_speed_none">
+      <instance_effect url="#sign_speed_none_effect"/>
+    </material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="sign_speed_none_4_geom">
+      <mesh>
+        <source id="sign_speed_none_4_positions">
+          <float_array id="sign_speed_none_4_positions_array" count="12">-0.45 -0.005 1.5691 0.45 -0.005 1.5691 0.45 -0.005 2.4691 -0.45 -0.005 2.4691</float_array>
+          <technique_common>
+            <accessor source="#sign_speed_none_4_positions_array" count="4" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="sign_speed_none_4_normals">
+          <float_array id="sign_speed_none_4_normals_array" count="12">0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0</float_array>
+          <technique_common>
+            <accessor source="#sign_speed_none_4_normals_array" count="4" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="sign_speed_none_4_uv">
+          <float_array id="sign_speed_none_4_uv_array" count="8">0.0 0.0 1.0 0.0 1.0 1.0 0.0 1.0</float_array>
+          <technique_common>
+            <accessor source="#sign_speed_none_4_uv_array" count="4" stride="2">
+              <param name="S" type="float"/>
+              <param name="T" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="sign_speed_none_4_vertices">
+          <input semantic="POSITION" source="#sign_speed_none_4_positions"/>
+        </vertices>
+        <triangles count="2" material="sign_speed_none_material">
+          <input semantic="VERTEX" source="#sign_speed_none_4_vertices" offset="0"/>
+          <input semantic="NORMAL" source="#sign_speed_none_4_normals" offset="0"/>
+          <input semantic="TEXCOORD" source="#sign_speed_none_4_uv" offset="0" set="0"/>
+          <p>0 1 2 0 2 3</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="sign_speed_none_scene" name="sign_speed_none_scene">
+      <node id="sign_speed_none_node4" name="face4" type="NODE">
+        <instance_geometry url="#sign_speed_none_4_geom">
+          <bind_material>
+            <technique_common>
+              <instance_material symbol="sign_speed_none_material" target="#sign_speed_none_material">
+                <bind_vertex_input semantic="UVMap" input_semantic="TEXCOORD" input_set="0"/>
+              </instance_material>
+            </technique_common>
+          </bind_material>
+        </instance_geometry>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene>
+    <instance_visual_scene url="#sign_speed_none_scene"/>
+  </scene>
+</COLLADA>

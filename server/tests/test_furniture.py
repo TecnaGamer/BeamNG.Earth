@@ -1,5 +1,7 @@
 """furniture: street lights along sidewalk runs at fixed stations of their road, utility poles and their
 wires along country roads; the same stations whichever tile draws them."""
+import ast
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -152,11 +154,54 @@ class SpeedSignTest(unittest.TestCase):
 
 
     def test_km_h_signs_where_limits_are_in_km_h(self):
-        """Switzerland: an 80 km/h road gets the round 80 sign, a 50 km/h one none (no model), never mph signs."""
+        """Europe: round km/h signs are used there, including higher motorway limits and no-limit signs."""
         r = road("t", "tertiary", True, x0=0.0, x1=400.0)
         rows = furniture.speed_signs([r], {"t": 80 / 1.609344}, (-50, -50, 450, 150), mph_signs=False)
         self.assertEqual(sorted(x[0] for x in rows), ["speedk80", "speedk80"])
-        self.assertEqual(furniture.speed_signs([r], {"t": 50 / 1.609344}, (-50, -50, 450, 150), mph_signs=False), [])
+        rows = furniture.speed_signs([r], {"t": 50 / 1.609344}, (-50, -50, 450, 150), mph_signs=False)
+        self.assertEqual(sorted(x[0] for x in rows), ["speedk50", "speedk50"])
+        rows = furniture.speed_signs([r], {"t": 130 / 1.609344}, (-50, -50, 450, 150), mph_signs=False)
+        self.assertEqual(sorted(x[0] for x in rows), ["speedk130", "speedk130"])
+        rows = furniture.speed_signs([r], {"t": 150 / 1.609344}, (-50, -50, 450, 150), mph_signs=False)
+        self.assertEqual(sorted(x[0] for x in rows), ["speedk150", "speedk150"])
+        rows = furniture.speed_signs([r], {"t": float("inf")}, (-50, -50, 450, 150), mph_signs=False)
+        self.assertEqual(sorted(x[0] for x in rows), ["speedknone", "speedknone"])
+
+    def test_km_h_sign_for_every_ten_and_the_limits_around_them(self):
+        """Every posted tens value from 30 to 150 has a sign (90 is rural France and Romania, 70 an unmapped secondary
+        road), a limit between two rounds to the nearer (half up: 45 is 50, 35 is 40), 20 has none and 160+ gets the 150."""
+        r = road("t", "tertiary", True, x0=0.0, x1=400.0)
+
+        def groups(kmh):
+            rows = furniture.speed_signs([r], {"t": kmh / 1.609344}, (-50, -50, 450, 150), mph_signs=False)
+            return sorted({x[0] for x in rows})
+
+        for n in range(30, 151, 10):
+            self.assertEqual(groups(n), [f"speedk{n}"], n)
+        self.assertEqual(groups(44), ["speedk40"])
+        self.assertEqual(groups(45), ["speedk50"])
+        self.assertEqual(groups(35), ["speedk40"])
+        self.assertEqual(groups(20), [])
+        self.assertEqual(groups(200), ["speedk150"])
+
+
+class SignAssetsTest(unittest.TestCase):
+    """The km/h sign set is written in three places (furniture.SIGN_KMH, trees.lua's catalog, the generator's
+    defaults); a number in one and not another is a sign that is never placed or a model that is missing."""
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_server_catalog_and_generator_agree(self):
+        lua = (self.ROOT / "mod/beamng_earth/lua/ge/extensions/beamngEarth/trees.lua").read_text(encoding="utf-8")
+        catalog = {int(n) for n in re.findall(r"^\s*speedk(\d+) = \{ \{ '", lua, re.M)}
+        capped = {int(n) for n in re.findall(r"\bspeedk(\d+) = 300\b", lua)}
+        tree = ast.parse((self.ROOT / "tools/generate_kmh_speed_signs.py").read_text(encoding="utf-8"))
+        defaults = next(ast.literal_eval(s.value) for s in tree.body
+                        if isinstance(s, ast.Assign) and any(getattr(t, "id", "") == "DEFAULT_SPEEDS" for t in s.targets))
+        generated = {s for s in defaults if isinstance(s, int)}
+        self.assertEqual(set(furniture.SIGN_KMH), catalog)
+        self.assertEqual(set(furniture.SIGN_KMH), capped)
+        self.assertEqual(set(furniture.SIGN_KMH), generated)
+        self.assertIn("none", defaults)
 
 
 class RoundaboutTest(unittest.TestCase):

@@ -6,6 +6,7 @@
 -- (ROADMAP "deterministic generation": a level shows the same trees, thinned), made and removed a few
 -- hundred per frame (~19 us each, 2026-10-13 probe).
 local M = {}
+local vienna = require('beamngEarth/vienna_convention_speed_signs')
 
 M.PER_FRAME = 250       -- items made or removed per frame at most
 M.ROWS_PER_FRAME = 12000 -- rows of changing tiles looked at per frame at most (Lua time: 30000 averaged 2.5 ms)
@@ -23,8 +24,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
 M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
-  speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300,
-  speedk40 = 300, speedk60 = 300, speedk80 = 300, speedk100 = 300 }
+  speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300 }
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -143,11 +143,7 @@ M.CATALOG = {
   speed30 = { { UT .. 'ut_roadsigns/ut_30_speed_limit', 2.6 } }, speed40 = { { UT .. 'ut_roadsigns/ut_40_speed_limit', 2.6 } },
   speed50 = { { UT .. 'ut_roadsigns/ut_50_speed_limit', 2.6 } }, speed60 = { { UT .. 'ut_roadsigns/ut_60_speed_limit', 2.6 } },
   speed70 = { { UT .. 'ut_roadsigns/ut_70_speed_limit', 2.6 } },
-  -- ... and the round km/h signs (furniture.SIGN_KMH, outside the mph countries: Driver Training's)
-  speedk40 = { { '/levels/driver_training/art/shapes/race/sign_speed40kph', 2.47 } },
-  speedk60 = { { '/levels/driver_training/art/shapes/race/sign_speed60kph', 2.47 } },
-  speedk80 = { { '/levels/driver_training/art/shapes/race/sign_speed80kph', 2.47 } },
-  speedk100 = { { '/levels/driver_training/art/shapes/race/sign_speed100kph', 2.47 } },
+  -- (the round km/h signs, speedk30 .. speedknone: vienna_convention_speed_signs.lua, installed below)
   hydrant = { { '/levels/west_coast_usa/art/shapes/objects/hydrant1', 1.5 } },
   -- a toll plaza's island with its booth (server buildings.toll_booth_rows; the user, 2026-10-21: "west coast has one,
   -- reference that"): 22 m along its local y, 1.6 m wide
@@ -163,6 +159,8 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
 }
+-- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
+vienna.install(M)
 local MATERIALS = {
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
@@ -312,8 +310,11 @@ local function shapeOf(t, i, row)
   return s, sc
 end
 
-local function makeItem(fd, row, shape, sc, solid)
-  local d = itemType(shape, solid)
+-- group: a sign's group (vienna_convention_speed_signs.lua) also makes a second item at the same spot and scale, its
+-- body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is shared by every
+-- sign, spelled in the tile's variant like the rest, so its population is split.
+local function makeItem(fd, row, shape, sc, solid, group, variant)
+  local d = itemType(shape, vienna.faceSolid(group, solid))
   if not d then M.errors = M.errors + 1; return nil end
   local m = MatrixF(true)
   -- setFromEuler turns clockwise (the engine's headings): a row's yaw (counter-clockwise from +x, the server's) is
@@ -323,13 +324,18 @@ local function makeItem(fd, row, shape, sc, solid)
   m:setPosition(vec3(row[2], row[3], row[4]))
   local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
   if not ok then M.errors = M.errors + 1; return nil end
+  local body = vienna.body(group)
+  if body then
+    local pair = vienna.addBody(fd, it, M.variant(body, variant), m, sc, solid, itemType)
+    if pair then it = pair else M.errors = M.errors + 1 end
+  end
   M.made = M.made + 1
   pop[shape] = (pop[shape] or 0) + 1
   return it
 end
 
 local function removeItem(fd, it, shape)
-  pcall(function() fd:removeItem(it) end)
+  if not vienna.remove(fd, it) then pcall(function() fd:removeItem(it) end) end
   M.removed = M.removed + 1
   if shape then pop[shape] = math.max((pop[shape] or 1) - 1, 0) end
 end
@@ -592,7 +598,7 @@ function M.update(anchorId, player, view)
           if budget <= 0 then t.pending = true; finish(); return end
           if allow(sh) then
             if t.made[i] then removeItem(data(), t.made[i], t.madeShape[i]); budget = budget - 1 end  -- solid <-> not
-            t.made[i] = makeItem(data(), row, sh, sc, solid)
+            t.made[i] = makeItem(data(), row, sh, sc, solid, g, t.variant)
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
             if solid then nearMade = true end
