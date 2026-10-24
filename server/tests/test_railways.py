@@ -61,6 +61,12 @@ class RailwayTest(unittest.TestCase):
         self.assertAlmostEqual([g[2] for g in got if g[0] == "id000"][0], 250.0, 0, "track through the short tunnel")
         self.assertLess(max(g[2] for g in got if g[0] == "id002"), 60.0, "a long tunnel left out")
 
+    def test_short_piece_on_its_own_is_left_out(self):
+        f = features([[(0.0, 100.0), (120.0, 100.0)], [(120.0, 100.0), (250.0, 100.0)], [(50.0, 130.0), (62.0, 130.0)]],
+                     ["standard_gauge"] * 3, subtypes=["rail"] * 3)
+        got = sorted(fid for fid, *_ in railways.parts(FRAME, [f], roads.tile_bbox(0, 0)))
+        self.assertEqual(got, ["id000", "id001"], "the 12 m stub goes, two short joined pieces of a line stay")
+
     def test_road_high_over_the_track_does_not_cut_it(self):
         f = features([[(0.0, 100.0), (250.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
                      subtypes=["rail", "road"])

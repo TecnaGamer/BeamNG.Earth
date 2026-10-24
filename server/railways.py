@@ -134,7 +134,31 @@ def parts(frame, cells, box, reach=REACH_M):
                     if len(xy) >= 2:
                         out.append((fid, c, kind, xy))
     out.sort(key=lambda p: (p[0], p[2], float(p[3][0, 0]), float(p[3][0, 1])))
-    return out
+    return _drop_stubs(out)
+
+
+MIN_LINE_M = 50.0           # m: connected track shorter than this is left out (a siding's piece cut off by its
+                            # abandoned rest, 12 m under a bridge on its own, 2026-10-25)
+
+
+def _drop_stubs(rails):
+    """rails without the connected groups of parts (ends joined within 0.5 m) shorter than MIN_LINE_M in all."""
+    if not rails:
+        return rails
+    nodes, edges, _ = roads._chain_graph([xy for *_, xy in rails])
+    parent = list(range(len(nodes)))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    for a, b, _s in edges:
+        parent[find(a)] = find(b)
+    total = {}
+    for a, _b, s in edges:
+        total[find(a)] = total.get(find(a), 0.0) + float(s[-1])
+    return [r for r, (a, _b, _s) in zip(rails, edges) if total[find(a)] >= MIN_LINE_M]
 
 
 GONE_FLAGS = ("is_abandoned", "is_disused")    # lines with no track left (or none in use): not drawn
