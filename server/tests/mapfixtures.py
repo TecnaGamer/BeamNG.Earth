@@ -182,7 +182,8 @@ def chm_tiff(parent, cells, predictor=1):
 SEG_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, subclass VARCHAR,
     names STRUCT("primary" VARCHAR), sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR,
     record_id VARCHAR)[], road_surface STRUCT("value" VARCHAR, "between" DOUBLE[])[],
-    road_flags STRUCT("values" VARCHAR[], "between" DOUBLE[])[], width_rules STRUCT("value" DOUBLE,
+    road_flags STRUCT("values" VARCHAR[], "between" DOUBLE[])[],
+    rail_flags STRUCT("values" VARCHAR[], "between" DOUBLE[])[], width_rules STRUCT("value" DOUBLE,
     "between" DOUBLE[])[], level_rules STRUCT("value" INTEGER, "between" DOUBLE[])[],
     subclass_rules STRUCT("value" VARCHAR, "between" DOUBLE[])[], speed_limits STRUCT(max_speed
     STRUCT("value" INTEGER, unit VARCHAR), "between" DOUBLE[], "when" STRUCT(heading VARCHAR))[],

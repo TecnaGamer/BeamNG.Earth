@@ -1,4 +1,82 @@
 {
+  "bne_rail_ballast": {
+    "name": "bne_rail_ballast",
+    "mapTo": "bne_rail_ballast",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8f0c6a51-3d2e-5b7a-9c41-2e6d8b1f7a93",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_b.png",
+        "normalMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_nm.png",
+        "roughnessMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.55,
+          0.53,
+          0.5,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRAVEL",
+    "translucent": false
+  },
+  "bne_rail_sleeper": {
+    "name": "bne_rail_sleeper",
+    "mapTo": "bne_rail_sleeper",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2b7e4c90-6a1d-5f38-8e52-9d4a0c3b6f17",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.42,
+          0.4,
+          0.37,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "translucent": false
+  },
+  "bne_rail_steel": {
+    "name": "bne_rail_steel",
+    "mapTo": "bne_rail_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c41f8a27-0e9b-5d63-a7c8-5b1e2f9d4a08",
+    "Stages": [
+      {
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.55,
+        "baseColorFactor": [
+          0.27,
+          0.19,
+          0.14,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
   "bne_tunnel_light": {
     "name": "bne_tunnel_light",
     "mapTo": "bne_tunnel_light",
