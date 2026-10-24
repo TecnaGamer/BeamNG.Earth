@@ -3800,13 +3800,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if props is not None:                   # a rural cut: rock-face pieces instead (cliff_rows)
             props.extend(cliff_rows([w for w in tile_walls if w["rock"]], roads))
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
+    # (the Finnish fork's paths make no junctions, islands or cuts in the roads' lines: a cycleway along a road bent
+    # its edge line round curb returns, 2026-10-24)
+    veh = [r for r in roads if r[1].cls not in PATH_STYLE]
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
-        junctions.find(roads, has_sidewalks, None, PARKING_M,
+        junctions.find(veh, has_sidewalks, None, PARKING_M,
                        lambda sp: sp.urban and sp.cls in PARKING_CLASSES and sp.kind in BUILT and not sp.oneway
                        and sp.width >= STYLE.get(sp.cls, STYLE["unknown"])[0] + 2 * PARKING_M - 0.1)
     # small road loops (roundabouts, turnaround loops): no sidewalks facing their inside, a curbed island instead
     import islands
-    isl = islands.find(roads, structures=structures) if walks is not None else []
+    isl = islands.find(veh, structures=structures) if walks is not None else []
     inner = islands.inner_sides(isl)
     if walks is not None:
         for f in isl:
@@ -3846,12 +3849,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         ex = extras(spec, pts, lon, left_hand) if fid not in jinternal else []    # inside a junction: none
         if not ex:
             continue
-        blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid]
+        blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in veh if f2 != fid]
         walk_blockers = [(p2[:, :2], s2.width / 2 if (fid, f2) in cornered else sidewalk_stop(spec, fid, s2, f2))
-                         for f2, s2, p2, _ in roads if f2 != fid]
+                         for f2, s2, p2, _ in veh if f2 != fid]
         # a median's band stops at the other carriageways' curbs only (their sidewalk is on their far side: it cut
         # one carriageway's half of Boston Street's median away)
-        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid]
+        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in veh if f2 != fid]
         for look, w, line in ex:
             walk = look["m"] == SIDEWALK["m"]
             side = look.get("side")
