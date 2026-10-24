@@ -168,6 +168,24 @@ class FollowTest(unittest.TestCase):
         flat = Q[:, 0] < 7.9
         self.assertGreater(Q[flat, 2].max(), 0.25, "the slope before it followed")
 
+
+
+class BridgeCurbSelectionTest(unittest.TestCase):
+    def test_low_curb_is_limited_to_decks_with_mapped_support(self):
+        chunks = [
+            {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20,
+             "deck": True, "fixed": True, "fid": "supported",
+             "n": [[0.0, 0.0, 20.0], [50.0, 0.0, 20.0]]},
+            {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 30,
+             "deck": True, "fixed": True, "fid": "unsupported",
+             "n": [[100.0, 0.0, 30.0], [150.0, 0.0, 30.0]]},
+        ]
+        P, T, UV, mats, M = roadmesh.deck(chunks, (0.0, 0.0, 0.0), low_parapet_decks={0})
+        low = P[(P[:, 0] >= 0.0) & (P[:, 0] <= 50.0)]
+        high = P[(P[:, 0] >= 100.0) & (P[:, 0] <= 150.0)]
+        self.assertAlmostEqual(float(low[:, 2].max() - 20.0), roadmesh.BRIDGE_CURB_H, places=6)
+        self.assertAlmostEqual(float(high[:, 2].max() - 30.0), roadmesh.PARAPET_H, places=6)
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -210,6 +228,29 @@ class BridgeLookTest(unittest.TestCase):
 
     def parapet_tops(self, P):
         return P[np.abs(P[:, 2] - (20.0 + roadmesh.PARAPET_H)) < 1e-6]
+
+    def test_parapet_runs_are_the_drawn_concrete_wall_lines(self):
+        runs = roadmesh.parapet_runs([self.deck(0.0, "a")])
+        self.assertEqual(len(runs), 2)
+        ys = sorted(float(np.mean(run["line"][:, 1])) for run in runs)
+        offset = 4.0 + roadmesh.PARAPET_W / 2
+        np.testing.assert_allclose(ys, [-offset, offset], atol=0.02)
+
+    def test_deck_accepts_xy_outward_normals_for_generated_parapets(self):
+        deck = self.deck(0.0, "a")
+        runs = roadmesh.parapet_runs([deck])
+        self.assertTrue(runs)
+        self.assertEqual(runs[0]["out"].shape[1], 2, "parapet runs store horizontal normals")
+        P, T, UV, mats, M = roadmesh.deck([deck], (0.0, 0.0, 0.0), parapets=runs)
+        self.assertEqual(P.shape[1], 3)
+        self.assertGreater(len(T), 0)
+
+    def test_parapet_runs_exclude_the_centre_between_adjacent_decks(self):
+        runs = roadmesh.parapet_runs([self.deck(0.0, "a"), self.deck(8.0, "b")])
+        self.assertEqual(len(runs), 2)
+        ys = sorted(float(np.mean(run["line"][:, 1])) for run in runs)
+        self.assertLess(ys[0], -4.0)
+        self.assertGreater(ys[1], 12.0)
 
     def test_no_parapet_between_decks_side_by_side(self):
         P = roadmesh.deck([self.deck(0.0, "a"), self.deck(8.0, "b")], (0.0, 0.0, 0.0))[0]

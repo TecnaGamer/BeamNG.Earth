@@ -393,10 +393,31 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
         park = parkingmod.clear_of(park, props, drives)
         park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park)
         buildingsmod.brick_walks(walks, items, lat, lon)
+
+    # Share the bridge mesh's exact parapet geometry with the tile builder.
+    # Mapped rails on a deck are replaced by guardrails.bridge_rows(); the parapet runs also feed the fallback matching.
+    parapets = roadmeshmod.parapet_runs(chunks, ctx)
+    import guardrails as guardrailsmod
+    infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+    low_parapet_decks = set()
+    try:
+        guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
+                           for _fid, spec, xy, z, _lon in bridges.parts(
+                               cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10))]
+        guardrail_rows = guardrailsmod.forest_rows(frame, infra_fn, box, elev,
+                                                   decks=guardrail_decks, parapets=parapets,
+                                                   bridge_rails=roadmeshmod.BRIDGE_RAILS,
+                                                   supported_decks_out=low_parapet_decks)
+    except Exception as ex:
+        log.warning("mapped guardrails: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        # A failed mapped-data pass cannot establish that a bridge needs rails.
+        low_parapet_decks.clear()
+        guardrail_rows = []
     mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift, clip=box, follow=True, q=q, drawn=drawn)
     mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
     dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(roadsmod.tile_bbox(tx, ty)), ctx,
-                              bridges.beams_in(roadsmod.tile_bbox(tx, ty)))
+                              bridges.beams_in(roadsmod.tile_bbox(tx, ty)), parapets=parapets,
+                              low_parapet_decks=low_parapet_decks)
     tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
     bld = None
     if buildings:
@@ -405,7 +426,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
                                      lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), None, None,
                                      items)
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
-                               bld, props, wires, park, tunnel_mesh=tmesh)
+                               bld, props, wires, park, tunnel_mesh=tmesh, guardrail_rows=guardrail_rows)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):

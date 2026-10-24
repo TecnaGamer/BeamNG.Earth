@@ -163,6 +163,22 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
 }
+-- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
+-- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.
+M.CATALOG.guardrail = { { '/art/shapes/objects/italy_guardrails_basic', 0.9 } }
+M.CATALOG.guardrail_start = { { '/art/shapes/objects/italy_guardrails_basic_end_cw', 0.9 } }
+M.CATALOG.guardrail_end = { { '/art/shapes/objects/italy_guardrails_basic_end_ccw', 0.9 } }
+M.CATALOG.guardrail_back = { { '/art/shapes/objects/italy_guardrails_basic', 0.9 } }
+M.CATALOG.guardrail_back_start = { { '/art/shapes/objects/italy_guardrails_basic_end_ccw', 0.9 } }
+M.CATALOG.guardrail_back_end = { { '/art/shapes/objects/italy_guardrails_basic_end_cw', 0.9 } }
+-- Collision is enabled only inside M.SOLID_M by the common Forest-item path; farther rails stay render-only.
+M.GROUP_MAX_M.guardrail = 4000
+M.GROUP_MAX_M.guardrail_start = 4000
+M.GROUP_MAX_M.guardrail_end = 4000
+M.GROUP_MAX_M.guardrail_back = 4000
+M.GROUP_MAX_M.guardrail_back_start = 4000
+M.GROUP_MAX_M.guardrail_back_end = 4000
+
 local MATERIALS = {
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
@@ -316,11 +332,19 @@ local function makeItem(fd, row, shape, sc, solid)
   local d = itemType(shape, solid)
   if not d then M.errors = M.errors + 1; return nil end
   local m = MatrixF(true)
-  -- setFromEuler turns clockwise (the engine's headings): a row's yaw (counter-clockwise from +x, the server's) is
-  -- given negated. Positive, every prop was mirrored about the x axis: doors on north-south walls backwards, on
-  -- diagonal walls askew, benches and lamps turned (read back in-game 2026-10-17: rows at 141.6 rendered at -141.6)
-  m:setFromEuler(vec3(0, 0, -math.rad(row[5] or 0)))
-  m:setPosition(vec3(row[2], row[3], row[4]))
+  if type(row[17]) == 'number' then
+    -- Guardrails carry their full orthonormal basis from the server: local X follows the 3D road chord,
+    -- local Y faces away from the OSM way's right/traffic side, and local Z remains upright.
+    -- MatrixF columns are the world-space images of the shape's local axes.
+    m:setColumn(0, vec3(row[9], row[10], row[11]))
+    m:setColumn(1, vec3(row[12], row[13], row[14]))
+    m:setColumn(2, vec3(row[15], row[16], row[17]))
+    m:setPosition(vec3(row[2], row[3], row[4]))
+  else
+    -- Existing props use a flat yaw (counter-clockwise in server coordinates).
+    m:setFromEuler(vec3(0, 0, -math.rad(row[5] or 0)))
+    m:setPosition(vec3(row[2], row[3], row[4]))
+  end
   local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
   if not ok then M.errors = M.errors + 1; return nil end
   M.made = M.made + 1
@@ -578,7 +602,23 @@ function M.update(anchorId, player, view)
         local r = row[8] or 0
         local g = (t.groups or GROUPS)[(row[1] or 0) + 1]
         local cap = g and M.GROUP_MAX_M[g]
-        if cap and o[2] > cap then r = 2 end     -- this group is not shown this far out
+        local isGuardrail = g and g:sub(1, 9) == 'guardrail'
+        if isGuardrail then
+          -- Keep ordinary guardrail runs continuous while there is room for the tile's rows.
+          -- Only use per-row ranks when the tile cap is actually exceeded; otherwise the generic
+          -- distance thinning would leave visible gaps between neighbouring 3 m rail sections.
+          local rowCap
+          for _, limit in ipairs(M.TILE_CAP) do
+            if o[2] <= limit[1] then rowCap = limit[2]; break end
+          end
+          if cap and o[2] > cap then
+            r = 2
+          elseif not rowCap or #t.rows <= rowCap then
+            r = 0
+          end
+        elseif cap and o[2] > cap then
+          r = 2                 -- this group is not shown this far out
+        end
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
         if g and not M.CATALOG[g] then
           r = 2

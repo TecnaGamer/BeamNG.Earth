@@ -29,7 +29,7 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/italy/art/shapes/buildings/main.materials.json',        -- italy_cobblestone (paving stones)
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
-  '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json' }  -- buildings (server/buildings.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json' } -- buildings (server/buildings.py)
 M.FADE = '450 150'          -- distanceFade: start, range (m)
 M.enabled = true
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
@@ -259,6 +259,7 @@ local function dropTile(key)
   end
   parked, walkQ, held, createQ = purge(parked), purge(walkQ), purge(held), purge(createQ)
   if t.props then require('beamngEarth/trees').dropKey((key:gsub(':', ':p', 1))) end
+  if t.guardrails then require('beamngEarth/trees').dropKey((key:gsub(':', ':g', 1))) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
   tiles[key] = nil
 end
@@ -433,6 +434,12 @@ function M.onTile(msg, currentAnchor)
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     require('beamngEarth/trees').onRows(msg.anchorId, 'p' .. tostring(msg.key), data.props.items, data.props.groups)
     tiles[key].props = true
+  end
+  if type(data.guardrails) == 'table' and type(data.guardrails.items) == 'table' and #data.guardrails.items > 0 then
+    require('beamngEarth/trees').onRows(msg.anchorId, 'g' .. tostring(msg.key),
+      data.guardrails.items, data.guardrails.groups)
+    tiles[key].guardrails = true
+    tiles[key].guardrailRows = #data.guardrails.items
   end
   if type(data.park) == 'table' and data.park[1] then      -- curbside parking spots (parking.lua)
     require('beamngEarth/parking').onRows(msg.anchorId, key, data.park)
@@ -711,7 +718,8 @@ function M.update(gov, currentAnchor, player, view)
     local q = table.remove(walkQ, forced or M.nextWalk(walkQ))
     if forced then forced, sinceUrgent, M.urgentWalks = nil, 0, (M.urgentWalks or 0) + 1 end
     local t = tiles[q.key]
-    if t and q.tile and q.tile ~= t then t = nil end   -- (an entry of an earlier tile under this key: not made)
+    if t and q.tile and q.tile ~= t then t = nil end
+    -- (an entry of an earlier tile under this key: not made)
     -- (only a colliding mesh waits: a render-only one (q.renderOnly: the drawn sidewalks and buildings beside their lean
     -- collision meshes) cannot catch the car, and holding it hid a whole tile's sidewalks while the car stood in their
     -- box: a roundabout's island band was never drawn, 2026-10-17 Harbor Point)
@@ -1084,19 +1092,21 @@ function M.ahead(x, y, hx, hy, dist)
 end
 
 function M.status()
-  local nt, no, nw, nr, nd, nb = 0, 0, 0, 0, 0, 0
+  local nt, no, nw, nr, nd, nb, ngForest, ngRows = 0, 0, 0, 0, 0, 0, 0, 0
   for _, t in pairs(tiles) do
     nt = nt + 1; no = no + #t.objs
     if t.walk then nw = nw + 1 end
     if t.road then nr = nr + 1 end
-    if t.deck then nd = (nd or 0) + 1 end
+    if t.deck then nd = nd + 1 end
     if t.bld then nb = nb + 1 end
+    if t.guardrails then ngForest = ngForest + 1; ngRows = ngRows + (t.guardrailRows or 0) end
   end
   local nf = 0
   for _, f in pairs(far) do if f.id and not f.hidden then nf = nf + 1 end end
   return { enabled = M.enabled, tiles = nt, roads = no, queued = #createQ, deleting = #deleteQ, anchor = anchorId,
-    walks = nw, roadMeshes = nr, decks = nd, buildings = nb, farBuildings = nf, walksQueued = #walkQ, solidAround = M.solidAround or 0, urgentWalks = M.urgentWalks or 0,
-    quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog }
+    walks = nw, roadMeshes = nr, decks = nd, buildings = nb, guardrailForestTiles = ngForest,
+    guardrailForestRows = ngRows, farBuildings = nf, walksQueued = #walkQ, solidAround = M.solidAround or 0,
+    urgentWalks = M.urgentWalks or 0, quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog }
 end
 
 local okSweep, swept = pcall(M.sweep)
