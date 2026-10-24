@@ -3,8 +3,9 @@ the physics block and the near mesh tiles sample one graded elevation, so tyres,
 visible ground agree.
 
 Per road (roads.road_specs; bridges, tunnels and off-ground segments are left out by it):
-- along: the centreline height is the DEM sampled every PROFILE_STEP m and smoothed (Gaussian,
-  SIGMA_M m; dirt roads DIRT_SIGMA_M), so grades stay real and small bumps go (the official maps:
+- along: the centreline height is the DEM sampled every PROFILE_STEP m, its spikes taken out (a running median over
+  MEDIAN_M) and smoothed (Gaussian, by class: CLASS_SIGMA_M, else SIGMA_M; dirt roads DIRT_SIGMA_M; the ends extended
+  along their grade), so grades stay real and small bumps go (the official maps:
   |2nd difference| per 10 m 0.02-0.1 m);
 - across: flat over the core (the carriageway as a city street would have it, parking included, plus
   SHOULDER_M, or the sidewalk plus SIDEWALK_MARGIN_M on the classes that get sidewalks in towns, so a
@@ -36,7 +37,12 @@ log = logging.getLogger("earthd.grading")
 VERSION = 2
 PROFILE_STEP = 2.0          # m between profile samples
 SIGMA_M = 12.0              # m, profile smoothing of built roads
-DIRT_SIGMA_M = 5.0          # m, profile smoothing of gravel / dirt roads
+DIRT_SIGMA_M = 8.0          # m, profile smoothing of gravel / dirt roads
+# longer smoothing for the larger classes (profile_sigma; others SIGMA_M)
+CLASS_SIGMA_M = {"motorway": 45.0, "trunk": 40.0, "primary": 30.0, "secondary": 25.0, "tertiary": 20.0,
+                 "unclassified": 16.0, "residential": 14.0}
+MEDIAN_M = 20.0             # m, running median before the smoothing (median_profile): spikes out, not spread
+DIRT_MEDIAN_M = 10.0
 SHOULDER_M = 1.0            # m of flat shoulder beyond the carriageway, each side
 SIDEWALK_MARGIN_M = 0.5     # m of flat ground beyond a sidewalk (roads.SIDEWALK_CLASSES)
 LONG_PART_M = 3000.0        # a road part longer than this is planned per cell, only within CLIP_MARGIN_M of the cell
@@ -330,9 +336,40 @@ def _add_cuts(frame, plans, elev):
                 p.cut = cut
 
 
+def median_profile(z, step, window_m):
+    """Running median over window_m m (edges padded with their end values): takes out the DEM's short spikes and pits
+    (a tree, a car, a culvert, a building edge in the surface model) that a Gaussian only spreads into a bump. Pure."""
+    h = int(window_m / step) // 2
+    if h < 1 or len(z) < 3:
+        return z
+    zp = np.pad(np.asarray(z, np.float64), h, mode="edge")
+    return np.median(np.lib.stride_tricks.sliding_window_view(zp, 2 * h + 1), axis=1)
+
+
+def profile_sigma(spec):
+    """m of profile smoothing for the road's class (real roads are engineered with long vertical
+    curves, the larger the road the longer; 12 m everywhere left bumps the roads do not have)."""
+    if spec.kind not in roadsmod.BUILT:
+        return DIRT_SIGMA_M
+    return CLASS_SIGMA_M.get(spec.cls.removesuffix("_link"), SIGMA_M)
+
+
+def smooth_profile_ends(z, step, sigma):
+    """smooth_profile with the ends extended along their grade (odd reflection about the end points) rather than
+    mirrored: a mirrored end flattens a sloped road towards its end, 2 m off at a junction with 30 m+ smoothing. Pure."""
+    n = len(z)
+    k = min(n - 1, int(3 * sigma / step))
+    if k < 1:
+        return smooth_profile(z, step, sigma)
+    z = np.asarray(z, np.float64)
+    a, b = 2 * z[0] - z[k:0:-1], 2 * z[-1] - z[-2:-k - 2:-1]
+    return smooth_profile(np.concatenate([a, z, b]), step, sigma)[k:k + n]
+
+
 def _plan(xy, z, spec, abut=(False, False)):
     built = spec.kind in roadsmod.BUILT
-    zs = smooth_profile(z, PROFILE_STEP, SIGMA_M if built else DIRT_SIGMA_M)
+    zs = smooth_profile_ends(median_profile(z, PROFILE_STEP, MEDIAN_M if built else DIRT_MEDIAN_M), PROFILE_STEP,
+                             profile_sigma(spec))
     # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass)
     every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
