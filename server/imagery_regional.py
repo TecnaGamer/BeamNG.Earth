@@ -73,6 +73,7 @@ REGIONAL = {
                "Ortofotomapa (c) GUGiK, geoportal.gov.pl", (49.00, 14.12, 54.84, 24.15), "export", False),
     "czechia": ("https://ags.cuzk.gov.cz/arcgis1/rest/services/ORTOFOTO_WM/MapServer/tile/{z}/{y}/{x}",
                 "(c) CUZK ortofoto (CC BY 4.0)", (48.55, 12.09, 51.06, 18.86), "xyz", False),
+    # Finland: added below by _add_finland() when the player has an NLS API key
     "estonia": ("https://tiles.maaamet.ee/tm/tms/1.0.0/foto@GMC/{z}/{x}/{ty}.jpg", "Ortofoto: Maa-amet",
                 (57.50, 21.70, 59.70, 28.30), "xyz", False),
     "flanders": ("https://geo.api.vlaanderen.be/omw/wms?LAYERS=OMWRGB25VL&" + WMS, "Digitaal Vlaanderen orthophoto",
@@ -100,3 +101,36 @@ REGIONAL = {
                 "GEO_Imagery_Data_Service_2018to2022/ImageServer/exportImage?" + ARCGIS_EXPORT,
                 "Ontario GEO imagery (Open Government Licence - Ontario)", (41.7, -95.2, 56.9, -74.3), "export", False),
 }
+
+
+# Finland (the Finnish fork): the National Land Survey's (Maanmittauslaitos, NLS) open orthophoto WMTS, CC BY 4.0,
+# ~0.5 m. It needs a free personal API key (https://www.maanmittauslaitos.fi/en/rajapinnat/api-avaimen-ohje), which
+# must not be shipped with the mod: each player sets their own, in the NLS_API_KEY environment variable or in a file
+# nls_api_key.txt at the repository root. No key: Finland keeps Sentinel-2, as upstream.
+NLS_KEY_FILE = __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "nls_api_key.txt")
+
+
+def nls_api_key():
+    import os
+    key = os.environ.get("NLS_API_KEY", "").strip()
+    if not key:
+        try:
+            with open(NLS_KEY_FILE, encoding="utf-8") as f:
+                key = f.read().strip()
+        except OSError:
+            pass
+    return key
+
+
+def _add_finland():
+    key = nls_api_key()
+    if not key:
+        return
+    import urllib.parse
+    url = ("https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/ortokuva/default/WGS84_Pseudo-Mercator/"
+           "{z}/{y}/{x}.jpg?api-key=" + urllib.parse.quote(key, safe=""))
+    # Mainland Finland and Aland; the box overlaps Estonia's south of the Gulf, where NLS answers blank tiles
+    REGIONAL["finland"] = (url, "Ortokuva (c) Maanmittauslaitos (CC BY 4.0)", (59.45, 19.0, 70.1, 31.6), "xyz", False)
+
+
+_add_finland()

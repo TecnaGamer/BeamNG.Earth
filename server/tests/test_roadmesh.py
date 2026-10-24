@@ -173,6 +173,13 @@ if __name__ == "__main__":
 
 
 class BridgeTest(unittest.TestCase):
+    def setUp(self):            # the concrete parapets (the Finnish fork draws guardrails: GuardrailTest)
+        self._rail = roadmesh.DECK_GUARDRAIL
+        roadmesh.DECK_GUARDRAIL = False
+
+    def tearDown(self):
+        roadmesh.DECK_GUARDRAIL = self._rail
+
     def test_deck_heights_straight_between_abutments(self):
         import roads
         parts = [np.array([[0.0, 0], [60, 0], [100, 0]]), np.array([[100.0, 0], [200, 0]])]
@@ -202,6 +209,13 @@ class BridgeTest(unittest.TestCase):
 
 
 class BridgeLookTest(unittest.TestCase):
+    def setUp(self):            # the concrete parapets (the Finnish fork draws guardrails: GuardrailTest)
+        self._rail = roadmesh.DECK_GUARDRAIL
+        roadmesh.DECK_GUARDRAIL = False
+
+    def tearDown(self):
+        roadmesh.DECK_GUARDRAIL = self._rail
+
     """Girders, parapets and piers (2026-10-17, the user: "Bridges need a lot of work in general")."""
 
     def deck(self, y, fid, z=20.0):
@@ -318,8 +332,19 @@ class DeckRulesTest(unittest.TestCase):
     def test_water_clearance(self):
         import roads
         self.assertEqual(roads.water_clear(10.0), roads.WATER_CLEAR_MIN)
-        self.assertAlmostEqual(roads.water_clear(250.0), 37.5)
+        self.assertAlmostEqual(roads.water_clear(250.0), 12.5)     # the Finnish fork: 5 % of the span
         self.assertEqual(roads.water_clear(5000.0), roads.WATER_CAUSEWAY_CLEAR, "a causeway")
+
+
+class GuardrailTest(unittest.TestCase):
+    def test_guardrail_beam_and_posts(self):
+        x = np.linspace(0.0, 60.0, 16)
+        strips = []
+        roadmesh._guardrail(lambda a, b, *r: strips.append((a, b)), np.stack([x, 0 * x], 1), np.full(16, 3.0),
+                            np.c_[np.zeros(16), np.ones(16), np.zeros(16)], np.zeros(16), np.zeros(3), 1)
+        self.assertEqual(len(strips), 4 + 31, "the beam's four faces and a post every 2 m")
+        top = max(float(b[:, 2].max()) for _a, b in strips)
+        self.assertAlmostEqual(top, 3.0 + roadmesh.RAIL_TOP)
 
 
 class BridgeProfilesTest(unittest.TestCase):

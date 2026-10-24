@@ -24,7 +24,9 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300,
-  speedk40 = 300, speedk60 = 300, speedk80 = 300, speedk100 = 300 }
+  speedk40 = 300, speedk60 = 300, speedk80 = 300, speedk100 = 300,
+  speedfi20 = 300, speedfi30 = 300, speedfi40 = 300, speedfi50 = 300, speedfi60 = 300, speedfi70 = 300, speedfi80 = 300,
+  speedfi90 = 300, speedfi100 = 300, speedfi120 = 300 }
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -148,6 +150,17 @@ M.CATALOG = {
   speedk60 = { { '/levels/driver_training/art/shapes/race/sign_speed60kph', 2.47 } },
   speedk80 = { { '/levels/driver_training/art/shapes/race/sign_speed80kph', 2.47 } },
   speedk100 = { { '/levels/driver_training/art/shapes/race/sign_speed100kph', 2.47 } },
+  -- ... and Finland's round yellow ones (the Finnish fork: tools/make_fi_signs.py; furniture sign_style "fi")
+  speedfi20 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed20', 2.62 } },
+  speedfi30 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed30', 2.62 } },
+  speedfi40 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed40', 2.62 } },
+  speedfi50 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed50', 2.62 } },
+  speedfi60 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed60', 2.62 } },
+  speedfi70 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed70', 2.62 } },
+  speedfi80 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed80', 2.62 } },
+  speedfi90 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed90', 2.62 } },
+  speedfi100 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed100', 2.62 } },
+  speedfi120 = { { '/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/fi_speed120', 2.62 } },
   hydrant = { { '/levels/west_coast_usa/art/shapes/objects/hydrant1', 1.5 } },
   -- a toll plaza's island with its booth (server buildings.toll_booth_rows; the user, 2026-10-21: "west coast has one,
   -- reference that"): 22 m along its local y, 1.6 m wide

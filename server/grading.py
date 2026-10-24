@@ -36,7 +36,20 @@ log = logging.getLogger("earthd.grading")
 VERSION = 2
 PROFILE_STEP = 2.0          # m between profile samples
 SIGMA_M = 12.0              # m, profile smoothing of built roads
-DIRT_SIGMA_M = 5.0          # m, profile smoothing of gravel / dirt roads
+DIRT_SIGMA_M = 8.0          # m, profile smoothing of gravel / dirt roads (fork: 5)
+# the Finnish fork: longer smoothing for the larger classes (profile_sigma; others SIGMA_M)
+CLASS_SIGMA_M = {"motorway": 45.0, "trunk": 40.0, "primary": 30.0, "secondary": 25.0, "tertiary": 20.0,
+                 "unclassified": 16.0, "residential": 14.0}
+MEDIAN_M = 20.0             # m, running median before the smoothing (median_profile): spikes out, not spread
+DIRT_MEDIAN_M = 10.0
+# the Finnish fork: side roads meet the road they join at its height (snap_junctions)
+JUNCTION_SNAP_ON = os.environ.get("BNE_JUNCTION_SNAP", "1") != "0"
+JUNCTION_RANK = {"motorway": 9, "trunk": 8, "primary": 7, "secondary": 6, "tertiary": 5, "unclassified": 4,
+                 "residential": 3, "living_street": 2, "service": 1}
+JUNCTION_REACH_M = 3.0      # m beyond the joined road's carriageway edge a side road's end still counts as joining it
+JUNCTION_END_M = 10.0       # m: a same-class road ending this close to the other's end continues it (no snap)
+JUNCTION_TAPER_M = 40.0     # m along the side road the height change is eased in over (half the road when shorter)
+JUNCTION_MAX_M = 3.0        # m: a bigger difference is left as it was (an overpass ramp, bad data)
 SHOULDER_M = 1.0            # m of flat shoulder beyond the carriageway, each side
 SIDEWALK_MARGIN_M = 0.5     # m of flat ground beyond a sidewalk (roads.SIDEWALK_CLASSES)
 LONG_PART_M = 3000.0        # a road part longer than this is planned per cell, only within CLIP_MARGIN_M of the cell
@@ -330,9 +343,40 @@ def _add_cuts(frame, plans, elev):
                 p.cut = cut
 
 
+def median_profile(z, step, window_m):
+    """Running median over window_m m (edges padded with their end values): takes out the DEM's short spikes and pits
+    (a tree, a car, a culvert, a building edge in the surface model) that a Gaussian only spreads into a bump. Pure."""
+    h = int(window_m / step) // 2
+    if h < 1 or len(z) < 3:
+        return z
+    zp = np.pad(np.asarray(z, np.float64), h, mode="edge")
+    return np.median(np.lib.stride_tricks.sliding_window_view(zp, 2 * h + 1), axis=1)
+
+
+def profile_sigma(spec):
+    """m of profile smoothing for the road's class (the Finnish fork: real roads are engineered with long vertical
+    curves, the larger the road the longer; 12 m everywhere left bumps the roads do not have)."""
+    if spec.kind not in roadsmod.BUILT:
+        return DIRT_SIGMA_M
+    return CLASS_SIGMA_M.get(spec.cls.removesuffix("_link"), SIGMA_M)
+
+
+def smooth_profile_ends(z, step, sigma):
+    """smooth_profile with the ends extended along their grade (odd reflection about the end points) rather than
+    mirrored: a mirrored end flattens a sloped road towards its end, 2 m off at a junction with 30 m+ smoothing. Pure."""
+    n = len(z)
+    k = min(n - 1, int(3 * sigma / step))
+    if k < 1:
+        return smooth_profile(z, step, sigma)
+    z = np.asarray(z, np.float64)
+    a, b = 2 * z[0] - z[k:0:-1], 2 * z[-1] - z[-2:-k - 2:-1]
+    return smooth_profile(np.concatenate([a, z, b]), step, sigma)[k:k + n]
+
+
 def _plan(xy, z, spec, abut=(False, False)):
     built = spec.kind in roadsmod.BUILT
-    zs = smooth_profile(z, PROFILE_STEP, SIGMA_M if built else DIRT_SIGMA_M)
+    zs = smooth_profile_ends(median_profile(z, PROFILE_STEP, MEDIAN_M if built else DIRT_MEDIAN_M), PROFILE_STEP,
+                             profile_sigma(spec))
     # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass)
     every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
@@ -343,6 +387,73 @@ def _plan(xy, z, spec, abut=(False, False)):
     plan = Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=width / 2)
     plan.max_wall = wall_max_h(spec)
     return plan
+
+
+def road_rank(spec):
+    """Higher: the road that keeps its profile at a junction (snap_junctions); a link ranks just under its class."""
+    cls = spec.cls or ""
+    base = cls.removesuffix("_link")
+    r = JUNCTION_RANK.get(base, 0) * 2
+    return r - 1 if cls != base else r
+
+
+def _nearest_on(p, x, y):
+    """(distance, height, arc position from p's nearer end) of the point of Plan p's centreline nearest (x, y)."""
+    a, b = p.xy[:-1, :2], p.xy[1:, :2]
+    d = b - a
+    ll = np.maximum((d * d).sum(1), 1e-12)
+    t = np.clip(((x - a[:, 0]) * d[:, 0] + (y - a[:, 1]) * d[:, 1]) / ll, 0.0, 1.0)
+    q = a + d * t[:, None]
+    dist = np.hypot(q[:, 0] - x, q[:, 1] - y)
+    i = int(dist.argmin())
+    seg = np.sqrt(ll)
+    s = float(seg[:i].sum() + seg[i] * t[i])
+    return float(dist[i]), float(p.z[i] + (p.z[i + 1] - p.z[i]) * t[i]), min(s, float(seg.sum()) - s)
+
+
+def snap_junctions(plans, specs):
+    """The Finnish fork: a side road's end at a junction takes the height of the road it joins, eased in over
+    JUNCTION_TAPER_M along the side road (each road is smoothed on its own: a side road met the main road up to a metre
+    off, blended over BLEND_R only: a bump at every turn-off). Plans are changed in place, the higher ranks first, so
+    a residential street joining a tertiary road meets it at its already adjusted height. plans: [Plan], specs:
+    their Specs."""
+    order = sorted(range(len(plans)), key=lambda j: -road_rank(specs[j]))
+    rank = np.array([road_rank(sp) for sp in specs])
+    boxes = np.array([q.bbox for q in plans], np.float64).reshape(-1, 4)
+    for j in order:
+        p = plans[j]
+        if len(p.xy) < 2:
+            continue
+        seg = np.hypot(*np.diff(p.xy[:, :2], axis=0).T)
+        s = np.r_[0.0, np.cumsum(seg)]
+        length = s[-1]
+        dz = np.zeros(len(p.z))
+        for end in (0, -1):
+            x, y = float(p.xy[end, 0]), float(p.xy[end, 1])
+            best = None
+            near = np.flatnonzero((rank >= rank[j]) & (boxes[:, 0] <= x) & (x <= boxes[:, 2]) & (boxes[:, 1] <= y)
+                                  & (y <= boxes[:, 3]))
+            for k in near:
+                if k == j:
+                    continue
+                q = plans[k]
+                dist, zq, from_end = _nearest_on(q, x, y)
+                if dist > q.road_half + JUNCTION_REACH_M:
+                    continue
+                if rank[k] == rank[j] and from_end < JUNCTION_END_M:
+                    continue        # the same class end to end: a road's continuation, not a junction
+                if best is None or dist < best[0]:
+                    best = (dist, zq)
+            if best is None:
+                continue
+            delta = best[1] - p.z[end]
+            if abs(delta) > JUNCTION_MAX_M:
+                continue            # a ramp up to an overpass, or bad data: as it was
+            taper = min(JUNCTION_TAPER_M, 0.5 * length)
+            u = (s if end == 0 else length - s) / max(taper, 1e-6)
+            dz += delta * np.where(u < 1.0, 0.5 * (1.0 + np.cos(np.pi * np.clip(u, 0.0, 1.0))), 0.0)
+        if dz.any():
+            p.z = p.z + dz
 
 
 def shoulder(spec):
@@ -480,6 +591,11 @@ class Grader:
                     plans.append((fid, p))
                     pspecs.append(part[1])
                     pclip.append(cl)
+            if JUNCTION_SNAP_ON and plans:
+                try:
+                    snap_junctions([p for _f, p in plans], pspecs)
+                except Exception as e:      # blended as upstream rather than no grading
+                    log.debug("grading: junctions of %s: %s: %s", key, type(e).__name__, e)
             if APPROACH_ON and plans:
                 try:
                     self._lift_approaches(key, plans, pspecs)

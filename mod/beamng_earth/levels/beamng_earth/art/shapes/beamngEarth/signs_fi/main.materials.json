@@ -1,0 +1,172 @@
+{
+  "bne_fi_speed20": {
+    "name": "bne_fi_speed20",
+    "mapTo": "bne_fi_speed20",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed20.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed30": {
+    "name": "bne_fi_speed30",
+    "mapTo": "bne_fi_speed30",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed30.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed40": {
+    "name": "bne_fi_speed40",
+    "mapTo": "bne_fi_speed40",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed40.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed50": {
+    "name": "bne_fi_speed50",
+    "mapTo": "bne_fi_speed50",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed50.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed60": {
+    "name": "bne_fi_speed60",
+    "mapTo": "bne_fi_speed60",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed60.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed70": {
+    "name": "bne_fi_speed70",
+    "mapTo": "bne_fi_speed70",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed70.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed80": {
+    "name": "bne_fi_speed80",
+    "mapTo": "bne_fi_speed80",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed80.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed90": {
+    "name": "bne_fi_speed90",
+    "mapTo": "bne_fi_speed90",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed90.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed100": {
+    "name": "bne_fi_speed100",
+    "mapTo": "bne_fi_speed100",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed100.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_fi_speed120": {
+    "name": "bne_fi_speed120",
+    "mapTo": "bne_fi_speed120",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/signs_fi/bne_fi_speed120.color.png",
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  }
+}

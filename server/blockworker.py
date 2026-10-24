@@ -336,7 +336,7 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
 
 
 def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings=False, left_hand=False,
-               mph=True, q=None):
+               mph=True, q=None, sign_style=None):
     """earthd.Server.build_roads_tile here (road-tile pool): the anchor's road tile (tx, ty) built and
     written; returns roads.write_tile's (vfs path, chunks). In the server's process its Python made up
     ~80 % of the main process's busy threads (in-game profile 2026-10-13): the block photos and far
@@ -377,7 +377,8 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  props=props, lines=lines, wires=wires, town=town, park=park,
-                                 left_hand=left_hand, mph=mph, structures=buildingsmod.centres(items, tx, ty) if items else (),
+                                 left_hand=left_hand, mph=mph, sign_style=sign_style,
+                                 structures=buildingsmod.centres(items, tx, ty) if items else (),
                                  tunnels=tunnels, walls=rwalls,
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None)

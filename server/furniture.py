@@ -284,13 +284,14 @@ SIGN_MPH = (30, 40, 50, 60, 70)     # speed-limit sign models (trees.lua: Utah's
 # ... and the round km/h ones (trees.lua: Driver Training's sign_speed<n>kph) where limits are posted in km/h
 # (2026-10-15: Swiss valley roads had American "SPEED LIMIT 50" signs)
 SIGN_KMH = (40, 60, 80, 100)
+SIGN_KMH_FI = (20, 30, 40, 50, 60, 70, 80, 90, 100, 120)     # the Finnish fork: Finland's own (sign_style "fi")
 SIGN_CLASSES = {"tertiary", "secondary", "primary", "trunk", "unclassified"}
 SIGN_MIN_M = 150.0          # a road segment at least this long gets a sign after each of its ends
 SIGN_IN_M = 30.0            # m past the junction
 SIGN_OFF_M = 1.5            # m beyond the carriageway's edge
 
 
-def speed_signs(roads, speeds, box, left_hand=False, mph_signs=True):
+def speed_signs(roads, speeds, box, left_hand=False, mph_signs=True, sign_style=None):
     """mph: the country posts mph (else the km/h models). Prop rows of speed-limit signs: on two-way roads of SIGN_CLASSES whose limit (speeds: fid -> mph, the
     road graph's) has a sign model, SIGN_IN_M after each end of a segment of at least SIGN_MIN_M, on the kerb
     side of the traffic leaving that end, facing it."""
@@ -300,7 +301,10 @@ def speed_signs(roads, speeds, box, left_hand=False, mph_signs=True):
         mph_v = speeds.get(fid)
         if mph_v is None or spec.cls not in SIGN_CLASSES or spec.oneway or len(line) < 2:
             continue
-        if mph_signs:
+        if sign_style == "fi":       # the Finnish fork's round yellow signs (tools/make_fi_signs.py)
+            n = int(round(mph_v * 1.609344 / 10.0)) * 10
+            group = f"speedfi{n}" if n in SIGN_KMH_FI else None
+        elif mph_signs:
             n = int(round(mph_v / 5.0)) * 5
             group = f"speed{n}" if n in SIGN_MPH else None
         else:
@@ -412,7 +416,7 @@ def under_decks(rows, decks, wires=None):
     return out
 
 
-def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, speeds=None, mph=True, decks=()):
+def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, speeds=None, mph=True, decks=(), sign_style=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -493,7 +497,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1, lambda out: _yaw(-out[0], -out[1]))
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks))
     if speeds:
-        rows.extend(speed_signs(roads, speeds, box, left_hand, mph))
+        rows.extend(speed_signs(roads, speeds, box, left_hand, mph, sign_style))
     for fid, spec, line, _ in roads:
         if spec.urban or fid in lit or spec.cls not in POLE_CLASSES or len(line) < 2:
             continue

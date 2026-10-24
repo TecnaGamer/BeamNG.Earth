@@ -16,6 +16,7 @@ ribbons in one mesh draw in a fixed order and do not flicker). No collision: the
 terrain, whose surface masks carry the asphalt / dirt ground models. Pure given elev.
 """
 import math
+import os
 
 import numpy as np
 
@@ -405,6 +406,7 @@ def deck(chunks, origin, piers=(), context=(), beams=()):
     cr = [r for r in ribbons(list(context)) if r[5] is not None]
     cov_ctx = [(r, c) for r, c in zip(cr, context)] + _ground_carriageways(chunks)
     covered = _parapet_cover([(r, c) for r, c in rb], cov_ctx)
+    rail = None                                 # the guardrails' steel material index (DECK_GUARDRAIL)
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         k = len(z)
         lat = left - right
@@ -446,6 +448,13 @@ def deck(chunks, origin, piers=(), context=(), beams=()):
                 if j > i and (run_len >= PARAPET_MIN_M or i == 0 or j == k - 1):    # (a piece's ends: tile seams)
                     sl = slice(i, j + 1)
                     zz = z[sl]
+                    if DECK_GUARDRAIL:
+                        if rail is None:
+                            mats.append(steel("grey"))
+                            rail = len(mats) - 1
+                        _guardrail(quads, edge[sl], zz, out_l[sl] * sgn, v[sl], origin, rail)
+                        i = j + 1
+                        continue
                     Eo, Ei = np.c_[edge[sl], zz] - origin, np.c_[inner[sl], zz] - origin
                     To, Ti = Eo + [0, 0, PARAPET_H], Ei + [0, 0, PARAPET_H]
                     o = out_l[sl] * sgn
@@ -466,6 +475,46 @@ def deck(chunks, origin, piers=(), context=(), beams=()):
 
 
 TRUSS_STEEL = "bne_truss_steel"     # painted steel (the stock metal_paint, grey: tunnel.materials.json) ...
+
+
+def _guardrail(quads, edge, z, out, v, origin, mat):
+    """A steel W-beam guardrail along a deck edge (edge (k, 2), road heights z, outward unit normals out (k, 3)):
+    the beam RAIL_LOW..RAIL_TOP over the road RAIL_IN inside the edge, on posts every RAIL_POST_M. The Finnish fork:
+    road bridges there have guardrails, not concrete parapets."""
+    up = np.array([0.0, 0.0, 1.0])
+    o2 = out[:, :2]
+    face = edge - o2 * RAIL_IN
+    back = face + o2 * RAIL_T
+    Fb, Ft = np.c_[face, z + RAIL_LOW] - origin, np.c_[face, z + RAIL_TOP] - origin
+    Bb, Bt = np.c_[back, z + RAIL_LOW] - origin, np.c_[back, z + RAIL_TOP] - origin
+    quads(Fb, Ft, 0.0, 0.1, v, v, mat, -out)        # road face
+    quads(Bb, Bt, 0.0, 0.1, v, v, mat, out)         # outside face
+    quads(Ft, Bt, 0.0, 0.02, v, v, mat, up)
+    quads(Fb, Bb, 0.0, 0.02, v, v, mat, -up)
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(edge, axis=0).T))]
+    if s[-1] <= 0:
+        return
+    for sp in np.arange(0.0, s[-1] + 1e-6, RAIL_POST_M):
+        c = np.array([np.interp(sp, s, back[:, 0]), np.interp(sp, s, back[:, 1])])
+        zc = float(np.interp(sp, s, z))
+        i = min(int(np.searchsorted(s, sp, side="right")) - 1, len(s) - 2)
+        t = edge[i + 1] - edge[i]
+        t = t / max(float(np.hypot(*t)), 1e-9) * RAIL_POST_W / 2
+        n = o2[i] * RAIL_POST_W
+        a, b = c - t, c + t                         # the post's road side and its outside (n further)
+        lo = np.array([a, b, b + n, a + n, a])
+        P0 = np.c_[lo, np.full(5, zc)] - origin
+        P1 = np.c_[lo, np.full(5, zc + RAIL_LOW + 0.05)] - origin
+        mid = (lo[:-1] + lo[1:]) / 2 - lo[:4].mean(0)     # each side's outward direction
+        quads(P0, P1, 0.0, 0.05, np.zeros(5), np.zeros(5), mat, np.c_[np.r_[mid, mid[:1]], np.zeros(5)])
+
+
+RAIL_IN = 0.15          # m: the beam's road face inside the slab's edge
+RAIL_T = 0.12           # m: the beam's depth (a W-beam and its blockout)
+RAIL_LOW, RAIL_TOP = 0.45, 0.78     # m over the road
+RAIL_POST_M = 2.0       # m between posts
+RAIL_POST_W = 0.12      # m: a post's side
+DECK_GUARDRAIL = os.environ.get("BNE_DECK_GUARDRAIL", "1") != "0"
 
 
 def steel(paint):
