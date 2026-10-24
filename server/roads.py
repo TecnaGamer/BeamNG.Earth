@@ -933,7 +933,9 @@ def _bridge_specs(feats, want="bridge"):
     rules = feats.rules
     for i in range(len(feats)):
         cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or not _drawn_class(feats, i, cls):
+        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or not _drawn_class(feats, i, cls)                 or (want == "tunnel" and cls in PATH_STYLE):
+            # (the Finnish fork's paths have no tunnels yet: a cycle underpass under a road was cut as an open pit
+            # through the road, 2026-10-24; the path stops at its mouths, the ground over it stays)
             out.append(None)
             continue
         if not any(k == want for _, _, k in level_ranges(feats, i)):
