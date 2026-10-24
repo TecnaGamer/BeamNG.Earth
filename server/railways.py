@@ -44,7 +44,7 @@ PIER_W, PIER_T = 3.6, 1.4   # m across and along the deck
 PIER_MIN_H = 1.5            # m: a deck lower than this over the ground stands on its ends alone
 PIER_FOOT_M = 2.0           # m a pier reaches into the ground
 CROSSING_PAD_M = 1.5        # m past a crossing road's edge the track stops
-CROSSING_DZ = 1.5           # m: a road this far under the bed passes beneath (no level crossing)
+CROSSING_DZ = 1.5           # m: a road this far over or under the bed passes it by (no level crossing)
 VERTS_MAX = 60000           # under the engine's 16-bit indices (sleepers are dropped first past it)
 BALLAST = "bne_rail_ballast"
 CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the decks and piers)
@@ -282,7 +282,9 @@ def _blocked(xy, z, crossers):
         t = np.clip(((xy[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
         d = np.hypot(*(xy[:, None, :] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
         j = d.argmin(1)
-        out |= (d[np.arange(len(xy)), j] < hw + CROSSING_PAD_M) & (z - za[j] < CROSSING_DZ)
+        # (either way: a road over a cutting on a ground segment, its bridge range short of it, cut the track under it,
+        # 2026-10-25)
+        out |= (d[np.arange(len(xy)), j] < hw + CROSSING_PAD_M) & (np.abs(z - za[j]) < CROSSING_DZ)
     return out
 
 
