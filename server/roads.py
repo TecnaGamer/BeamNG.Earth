@@ -122,8 +122,10 @@ def look_of(spec):
     if spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
     return LOOK[spec.kind]
-Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf",
-                  defaults=(False, 2.5, 0, None, None, None, None, None))   # median: m to the other carriageway's centre line
+Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf sides",
+                  defaults=(False, 2.5, 0, None, None, None, None, None, None))   # median: m to the other carriageway's centre line
+# (sides: the sidewalk sides OpenStreetMap's sidewalk tag gives (_osm_sidewalks; walk_sides' +1 left / -1 right of the
+# geometry, () none), None where it has none: the class and land-cover rule, has_sidewalks)
 # (lanes: OpenStreetMap's lane count, both directions on a two-way road, None unknown: osmtags.py; surf: the surface
 # rule value's base token, e.g. "concrete": the look's concrete, roads.py look_of)
 # road_specs' result per feature (walk: the sidewalk width, measured from the buildings where known: roadwidth.py;
@@ -749,6 +751,26 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     return list(got)
 
 
+# OpenStreetMap's sidewalk tag (osmtags.py) -> walk_sides' sides; "separate" (a footway mapped on its own beside the
+# road) and "no" give none. Other values (or none) leave the class and land-cover rule.
+SIDEWALK_TAG = {"both": (1, -1), "left": (1,), "right": (-1,), "no": (), "none": (), "separate": ()}
+
+
+def _osm_sidewalks(feats, specs):
+    """specs with sides set where OpenStreetMap's sidewalk tag says which (SIDEWALK_TAG). Pure."""
+    tags = feats.attrs.get("osm_sidewalk")
+    if tags is None:
+        return specs
+    out = list(specs)
+    for i, sp in enumerate(out):
+        if sp is None or sp.kind not in BUILT:
+            continue
+        tag = str(tags[i]).strip().lower()
+        if tag in SIDEWALK_TAG:
+            out[i] = sp._replace(sides=SIDEWALK_TAG[tag])
+    return out
+
+
 def _road_specs(feats, urban_fn, widths, left_hand):
     out = []
     rules = feats.rules
@@ -800,6 +822,7 @@ def _road_specs(feats, urban_fn, widths, left_hand):
             out[j] = Spec(carriageway(cls, kind, urban, None, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token)
     out = dual_carriageways(feats, out, left_hand)
+    out = _osm_sidewalks(feats, out)
     if widths is not None:                      # measured between the buildings (roadwidth.py)
         for j, sp in enumerate(out):
             if sp is None or sp.kind not in BUILT or sp.cls not in SIDEWALK_CLASSES or sp.cls in MEASURE_SKIP:
@@ -1513,6 +1536,8 @@ def has_sidewalks(spec):
     # a two-way urban trunk is a town's main street on a state highway (Bishop's US-395, Moab's US-191);
     # divided trunks are one-way per carriageway: expressways get none, slow ones (Ocean City's Coastal
     # Highway, 35 mph, 2026-10-14 street photos) one on their outer side (walk_sides)
+    if getattr(spec, "sides", None) is not None:      # the map says (_osm_sidewalks)
+        return spec.kind in BUILT and bool(spec.sides)
     return spec.kind in BUILT and spec.urban and (spec.cls in SIDEWALK_CLASSES
                                                   or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
 
@@ -1528,7 +1553,9 @@ def _arterial(spec):
 def walk_sides(spec, left_hand=False):
     """The sides (+1 left of the geometry, -1 right) of a road with sidewalks that get one: both, or a
     divided trunk carriageway's outer side only (the curb on the driver's right, left where they drive on
-    the left; the other side is the median)."""
+    the left; the other side is the median). Where OpenStreetMap's sidewalk tag says which: those (_osm_sidewalks)."""
+    if getattr(spec, "sides", None):
+        return tuple(spec.sides)
     if (spec.cls == "trunk" or has_median(spec)) and spec.oneway:     # (a divided road's median: its curbed band)
         right = -1 if spec.dir >= 0 else 1
         return (-right,) if left_hand else (right,)
