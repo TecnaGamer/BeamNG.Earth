@@ -49,6 +49,16 @@ class RailwayTest(unittest.TestCase):
         hw = roads.road_specs(f)[1].width / 2
         self.assertFalse(((x > 120 - hw) & (x < 120 + hw)).any(), "nothing on the road")
 
+    def test_road_high_over_the_track_does_not_cut_it(self):
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"])
+
+        def cutting(xy):            # the track 7 m down a cutting, the road on its own level over it
+            return np.where(np.abs(xy[:, 1] - 100.0) < 12.0, 10.0, 17.0)
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], cutting)
+        x = P[np.unique(T[M == 2])][:, 0]
+        self.assertTrue(((x > 115) & (x < 125)).any(), "the rails go on under the road")
+
     def test_bed_smooths_bumps_but_follows_hills(self):
         s = np.arange(0.0, 400.0, railways.STEP_M)
         z = 0.05 * s + 0.4 * np.sin(s / 3.0)
