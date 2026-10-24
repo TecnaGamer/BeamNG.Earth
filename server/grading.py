@@ -270,7 +270,7 @@ def plan_roads(frame, parts, elev, abut=None, verge=0.0):
                     z = fill_abutment(z, at_end)
         out.append(_plan(xy, z, spec, ab))
     if SHARP_ON:
-        _add_cuts(frame, [p if p is not None and sp.kind in roadsmod.BUILT else None
+        _add_cuts(frame, [p if p is not None and sp.kind in roadsmod.BUILT and sp.cls not in roadsmod.PATH_STYLE else None
                           for p, (_ll, sp) in zip(out, parts)], elev, verge)
     return out
 

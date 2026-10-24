@@ -295,6 +295,8 @@ class Vegetation:
                 _mask_polys(c2.layers.get("water"), blocked, chm, 0.0, kind=3)
                 _mask_roads(c2.layers.get("roads"), road, chm)
                 _mask_roads(c2.layers.get("roads"), curb, chm, push, clear=TREE_PIT_M)
+                # (the Finnish fork's drawn paths: nothing on them, and no forest-edge band along them)
+                _mask_roads(c2.layers.get("roads"), blocked, chm, clear=PATH_CLEAR_M, paths=True)
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
@@ -548,7 +550,10 @@ def _mask_polys(f, mask, chm, grow_m, kind=3, select=None):
                         float(chm.dx), float(chm.dy), grow_m / chm.dx)
 
 
-def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M):
+PATH_CLEAR_M = 0.5          # the Finnish fork: m kept clear past a drawn path's edge (_mask_roads paths=True)
+
+
+def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, paths=False):
     """Mark road corridors (half width by class + clear) on the CHM-grid mask (footpaths left out). push (optional, (3, rows,
     cols) float32: dx, dy in px and the distance to the nearest road, inf where none) gets, per corridor
     pixel, the move that takes it just out of its nearest road's corridor (street trees: vegetation._build)."""
@@ -557,10 +562,16 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M):
     n_r, n_c = mask.shape
     cls = f.attrs.get("class", np.full(len(f.kind), "", object))
     fast.require(63, "road_segments")
-    sel = [i for i in np.flatnonzero(f.kind == 2) if str(cls[i]) not in PATH_CLASSES]
+    if paths:       # the Finnish fork: the paths roads.py draws there (roads._drawn_class), their own width
+        import roads as roadsmod
+        sel = [i for i in np.flatnonzero(f.kind == 2)
+               if str(cls[i]) in roadsmod.PATH_STYLE and roadsmod._drawn_class(f, i, str(cls[i]))]
+        hw_m = np.array([roadsmod.PATH_STYLE[str(cls[i])][0] / 2 + clear for i in sel], np.float64)
+    else:
+        sel = [i for i in np.flatnonzero(f.kind == 2) if str(cls[i]) not in PATH_CLASSES]
+        hw_m = np.array([ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M) + clear for i in sel], np.float64)
     if not sel:
         return
-    hw_m = np.array([ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M) + clear for i in sel], np.float64)
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL

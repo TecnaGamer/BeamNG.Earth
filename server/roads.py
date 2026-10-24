@@ -67,6 +67,36 @@ STYLE = {
     # and graded by the terrain alone (grading.UNGRADED: an oval's banking stays)
     "raceway": (12.0, True),
 }
+# The Finnish fork: the foot and cycle paths in Finland (the map's own lines; a separate path beside the road is the
+# usual Finnish layout, _finnish_sidewalks) as narrow plain carriageways: no markings, sidewalks, edge strips,
+# furniture, parking or traffic (none of those classes' sets, nor navgraph.DRIVE). path: a trail unless its surface
+# says paved. Crosswalks (the road's own asphalt) and steps are left out.
+PATH_STYLE = {"cycleway": (3.0, True), "footway": (2.5, True), "pedestrian": (4.0, True), "path": (1.8, False)}
+PATH_SKIP_SUBCLASSES = {"crosswalk", "cycle_crossing"}
+
+
+def _style(cls):
+    """(width, paved) of a class: STYLE's, the Finnish paths' (PATH_STYLE), else "unknown"'s."""
+    return STYLE.get(cls) or PATH_STYLE.get(cls) or STYLE["unknown"]
+
+
+def _drawn_class(feats, i, cls):
+    """Is feature i (class cls) a road this mod draws: a STYLE class anywhere, a PATH_STYLE one in Finland
+    (grading.in_finland at its first point), not a crosswalk."""
+    if cls in STYLE:
+        return True
+    if cls not in PATH_STYLE or not PATHS_ON:
+        return False
+    sub = feats.attrs.get("subclass")
+    if sub is not None and str(sub[i]) in PATH_SKIP_SUBCLASSES:
+        return False
+    import grading
+    a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
+    lon, lat = (float(v) for v in feats.lonlat[a])
+    return grading.in_finland(lat, lon)
+
+
+PATHS_ON = os.environ.get("BNE_FI_PATHS", "1") != "0"
 PAVED = {"paved", "asphalt", "concrete", "metal", "wood"}
 COBBLE = {"paving_stones", "sett", "cobblestone", "unhewn_cobblestone", "bricks"}   # Overture: "paving_stones"
 # interlocking concrete pavers under the names the map gives them (surface_kind: a street paved with them is a
@@ -540,7 +570,7 @@ def surface_kind(cls, surface):
             return "gravel"
         if s in UNPAVED:
             return "dirt"
-    return "paved" if STYLE.get(cls, STYLE["unknown"])[1] else "dirt"
+    return "paved" if _style(cls)[1] else "dirt"
 
 
 def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
@@ -550,7 +580,7 @@ def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
     already). Pure."""
     if rule_width is not None:
         return rule_width
-    w = STYLE.get(cls, STYLE["unknown"])[0]
+    w = _style(cls)[0]
     if oneway and cls in ONEWAY_STYLE:
         w = ONEWAY_STYLE[cls]
     if lanes:
@@ -563,7 +593,7 @@ def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
         return URBAN_ARTERIAL[cls]          # four lanes, no parking (a walled street is measured instead)
     if urban and cls in PARKING_CLASSES:
         return w + (1 if oneway else 2) * PARKING_M
-    if not urban and cls != "service":
+    if not urban and cls != "service" and cls not in PATH_STYLE:
         if oneway and cls == "motorway":
             return MOTORWAY_RURAL_M + 2 * SHOULDER_M
         return w + 2 * EDGE_STRIP_M
@@ -578,7 +608,7 @@ def rural_motorway(spec):
 def edge_margin(spec):
     """m of a drawn carriageway beside its driving lanes on each side, parking aside: a rural road's edge strip or
     a rural motorway's shoulder (carriageway), 0 in towns."""
-    if spec.urban or spec.kind not in BUILT or spec.cls == "service":
+    if spec.urban or spec.kind not in BUILT or spec.cls == "service" or spec.cls in PATH_STYLE:
         return 0.0
     return motorway_shoulder(spec) if rural_motorway(spec) else EDGE_STRIP_M
 
@@ -813,7 +843,7 @@ def _road_specs(feats, urban_fn, widths, left_hand):
     lens = _lengths(feats) if ncon is not None else None
     for i in range(len(feats)):
         cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE:
+        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or not _drawn_class(feats, i, cls):
             out.append(None)
             continue
         rngs = level_ranges(feats, i)
@@ -903,7 +933,7 @@ def _bridge_specs(feats, want="bridge"):
     rules = feats.rules
     for i in range(len(feats)):
         cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE:
+        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or not _drawn_class(feats, i, cls):
             out.append(None)
             continue
         if not any(k == want for _, _, k in level_ranges(feats, i)):
@@ -3150,7 +3180,7 @@ PARAPET_H = 0.6
 PARAPET_W = 0.45
 PARAPET_OFF_M = 0.2
 PARAPET_ROAD_GAP_M = 2.0
-NO_PARAPET_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "service", "track"}
+NO_PARAPET_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "service", "track", *PATH_STYLE}
 CLIFF_MIN_CUT_M = 6.0   # a rural cut this deep: rock faces (cliff_rows), when CLIFF_WALLS_ON; else a dry-stone wall
 CLIFF_WALLS_ON = os.environ.get("BNE_CLIFF_WALLS", "off") == "on"
 
@@ -3283,6 +3313,8 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     x0, y0, x1, y1 = exact
     pts_all, info = [], []
     for fid, spec, pts, _ in roads:
+        if spec.cls in PATH_STYLE:              # (the Finnish fork's paths: graded, never walled)
+            continue
         if spec.kind not in BUILT or len(pts) < 2:
             continue
         xy, s = grading.resample(np.asarray(pts[:, :2], np.float64), WALL_STEP)
@@ -3754,6 +3786,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         tile_walls = retaining_walls(frame, roads, elev, exact, decks=decks_near)
         if sign_style == "fi":                  # the Finnish fork: road cuts there are blasted bedrock, rock faces
             for w in tile_walls:                # at any depth, in towns too (concrete walls stood in the forest)
+                if "clear" not in w:            # (a parapet along a drop stays stone: no cut to stand rock in)
+                    continue
                 w["rock"] = True
                 w["edge"] = w["base"]           # at the face, behind the grading's verge (grading.CUT_VERGE_M)
                 w["vary"] = True                # a broken face, not a row of even boulders (CLIFF_VARY_*)
