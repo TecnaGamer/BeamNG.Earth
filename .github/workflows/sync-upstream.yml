@@ -21,6 +21,10 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      # every gh command acts on this fork: with an "upstream" remote, gh took TecnaGamer's repository for it (it read
+      # upstream's releases; its issues would have gone there)
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
         with:
