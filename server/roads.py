@@ -203,7 +203,8 @@ SHOULDER_M = 2.2
 PARKING_CLASSES = {"residential", "tertiary", "secondary", "unclassified", "living_street"}
 EDGE_STRIP_M = 1.0
 URBAN_CLASS = 50                # ESA WorldCover "built-up"
-URBAN_SHARE = 0.5               # a road is urban when this share of its vertices is built-up
+URBAN_SHARE = 0.5               # a road is urban when this share of its vertices is built-up ...
+URBAN_SIDE_M = float(os.environ.get("BNE_URBAN_SIDE_M", "35"))  # ... this far beside it (0: on its line, as before)
 
 
 def _rule_value(table, i):
@@ -749,6 +750,32 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     return list(got)
 
 
+def _urban_beside(urban_fn, lines):
+    """Per vertex of the lines (lon/lat (k, 2) each, concatenated): built-up land cover URBAN_SIDE_M out to its left or
+    right. On the road's own line the land cover reads the asphalt and its cleared strip as built-up: a rural trunk road
+    through forest was drawn as a four-lane town street with sidewalks (eastern Finland, 2026-10-24); beside it a town
+    has buildings and a forest road has trees. One urban_fn call for all (its cost is per call). Pure given urban_fn."""
+    pts = []
+    for ll in lines:
+        ll = np.asarray(ll, np.float64)
+        d = np.gradient(ll, axis=0) if len(ll) > 1 else np.zeros_like(ll)
+        kx = math.cos(math.radians(float(ll[:, 1].mean())))
+        dx, dy = d[:, 0] * kx, d[:, 1]              # proportional to metres east / north
+        n = np.hypot(dx, dy)
+        n[n == 0] = 1.0
+        off = URBAN_SIDE_M / 111320.0
+        nlon, nlat = -dy / n * off / kx, dx / n * off   # the left normal, in degrees
+        pts.append(np.stack([np.r_[ll[:, 0] + nlon, ll[:, 0] - nlon], np.r_[ll[:, 1] + nlat, ll[:, 1] - nlat]], 1))
+    allp = np.concatenate(pts)
+    got = np.asarray(urban_fn(allp[:, 1], allp[:, 0]), bool)
+    u, k = [], 0
+    for ll in lines:
+        m = len(ll)
+        u.append(got[k:k + m] | got[k + m:k + 2 * m])
+        k += 2 * m
+    return np.concatenate(u)
+
+
 def _road_specs(feats, urban_fn, widths, left_hand):
     out = []
     rules = feats.rules
@@ -791,8 +818,11 @@ def _road_specs(feats, urban_fn, widths, left_hand):
         out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes), kind, False, cls, ow, 2.5, *dk,
                         lanes=lanes, surf=surface_token(surf)))
     if ask:
-        ll = np.concatenate([feats.lonlat[a:b] for _, _, _, a, b, *_ in ask])
-        u = np.asarray(urban_fn(ll[:, 1], ll[:, 0]), bool)
+        if URBAN_SIDE_M > 0:
+            u = _urban_beside(urban_fn, [feats.lonlat[a:b] for _, _, _, a, b, *_ in ask])
+        else:
+            ll = np.concatenate([feats.lonlat[a:b] for _, _, _, a, b, *_ in ask])
+            u = np.asarray(urban_fn(ll[:, 1], ll[:, 0]), bool)
         k = 0
         for j, cls, kind, a, b, ow, dk, lanes, token in ask:
             urban = float(np.mean(u[k:k + (b - a)])) >= URBAN_SHARE

@@ -111,6 +111,15 @@ class RulesTest(unittest.TestCase):
         s = roads.road_specs(f, urban_fn=lambda lat, lon: np.ones(len(lat), bool))
         self.assertEqual([sp.surf for sp in s], ["concrete", "asphalt"])
 
+    def test_urban_is_read_beside_the_road(self):
+        # the land cover marks a road's own asphalt and cleared strip as built-up; a forest road is rural, a road with
+        # built-up land beside it urban
+        f = features([[(0, 0), (100, 0)]], ["residential"])
+        on_line = lambda lat, lon: np.abs((np.asarray(lat) - LAT) * M_LAT) < 10.0          # noqa: E731
+        beside = lambda lat, lon: np.abs((np.asarray(lat) - LAT) * M_LAT) < 60.0           # noqa: E731
+        self.assertFalse(roads.road_specs(f, urban_fn=on_line)[0].urban)
+        self.assertTrue(roads.road_specs(f, urban_fn=beside)[0].urban)
+
     def test_rock_and_grass_live_in_the_ground_layer(self):
         def spec(surf):
             return roads.Spec(6.0, "dirt", False, "residential", False, 2.5, 0, None, surf=surf)
