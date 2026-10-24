@@ -448,7 +448,7 @@ def deck(chunks, origin, piers=(), context=(), beams=()):
                 if j > i and (run_len >= PARAPET_MIN_M or i == 0 or j == k - 1):    # (a piece's ends: tile seams)
                     sl = slice(i, j + 1)
                     zz = z[sl]
-                    if DECK_GUARDRAIL:
+                    if DECK_GUARDRAIL and c.get("fi"):     # (Finland's decks: roads.build_tile marks them)
                         if rail is None:
                             mats.append(steel("grey"))
                             rail = len(mats) - 1
@@ -514,7 +514,7 @@ RAIL_T = 0.12           # m: the beam's depth (a W-beam and its blockout)
 RAIL_LOW, RAIL_TOP = 0.45, 0.78     # m over the road
 RAIL_POST_M = 2.0       # m between posts
 RAIL_POST_W = 0.12      # m: a post's side
-DECK_GUARDRAIL = os.environ.get("BNE_DECK_GUARDRAIL", "1") != "0"
+DECK_GUARDRAIL = os.environ.get("BNE_DECK_GUARDRAIL", "1") != "0"     # the Finnish fork: on Finland's decks ("fi")
 
 
 def steel(paint):

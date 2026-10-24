@@ -1218,17 +1218,23 @@ def _deck_beside(lines, widths, step=STACK_STEP_M):
     return out
 
 
-def water_clear(w):
+def water_clear(w, fi=False):
     """m a deck clears the water under it for a wet run w m long: a share of the span (a river's channel wants a
     ship's room: the Queensboro Bridge's ~40 m over 250 m channels), at least WATER_CLEAR_MIN; a run longer than
-    WATER_CAUSEWAY_M is a causeway, low over the water. Pure."""
+    WATER_CAUSEWAY_M is a causeway, low over the water. fi: a bridge in Finland (FI_WATER_CLEAR_*). Pure."""
     if w > WATER_CAUSEWAY_M:
         return WATER_CAUSEWAY_CLEAR
+    if fi:
+        return float(np.clip(FI_WATER_CLEAR_SHARE * w, FI_WATER_CLEAR_MIN, WATER_CLEAR_MAX))
     return float(np.clip(WATER_CLEAR_SHARE * w, WATER_CLEAR_MIN, WATER_CLEAR_MAX))
 
 
-WATER_CLEAR_SHARE = 0.05     # the Finnish fork (was 0.15: a 60 m lake strait's bridge stood 9 m up, a hump in the road;
-WATER_CLEAR_MIN = 3.0         # Finnish lake and strait bridges sit a few metres over the water; was 2.5)
+WATER_CLEAR_SHARE = 0.15
+WATER_CLEAR_MIN = 2.5
+# the Finnish fork: Finnish lake and strait bridges sit a few metres over the water (15 % stood a 60 m strait's bridge
+# 9 m up, a hump in the road)
+FI_WATER_CLEAR_SHARE = 0.05
+FI_WATER_CLEAR_MIN = 3.0
 WATER_CLEAR_MAX = 40.0
 WATER_CAUSEWAY_M = 1500.0
 WATER_CAUSEWAY_CLEAR = 5.0
@@ -2136,7 +2142,7 @@ PIER_CHANNEL_CLEAR = 15.0   # no pier in water whose run wants this much clearan
 PIER_IN_WATER_M = 8.0   # m a pier in water reaches under its surface
 
 
-def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None):
+def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None, fi=False):
     """The piers under a bridge deck (xy (k, 2), deck top z (k,), width m): [(x, y, ux, uy, z_top, z_bottom, width)],
     (ux, uy) along the deck, z_top under its girders (roadmesh.DECK_DEPTH + GIRDER_D), z_bottom in the ground (or
     PIER_IN_WATER_M under water); evenly spaced inside the part (its ends are abutments or joints) at PIER_SPAN_M,
@@ -2199,7 +2205,7 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None):
                     b = k
                     while b + 1 < len(w) and w[b + 1]:
                         b += 1
-                    if water_clear(ss[b] - ss[a]) >= PIER_CHANNEL_CLEAR and a < k < b:
+                    if water_clear(ss[b] - ss[a], fi) >= PIER_CHANNEL_CLEAR and a < k < b:
                         continue
                     zb = g - PIER_IN_WATER_M
             placed = (float(p[0]), float(p[1]), float(t[0]), float(t[1]), zt, zb, float(width))
@@ -2244,6 +2250,8 @@ class BridgeProfiles:
             w = np.asarray(self.wet(la, lo), np.float64) > 0.5
             if not w.any():
                 continue
+            import grading
+            fi = grading.in_finland(float(la[0]), float(lo[0]))
             g = self._ground(xy)
             i = 0
             while i < len(w):
@@ -2253,7 +2261,7 @@ class BridgeProfiles:
                 j = i
                 while j + 1 < len(w) and w[j + 1]:
                     j += 1
-                c = water_clear(s[j] - s[i] + (s[1] - s[0]))
+                c = water_clear(s[j] - s[i] + (s[1] - s[0]), fi)
                 if nav > 0 and s[j] - s[i] >= NAV_RUN_M:
                     c = max(c, nav + under)
                 for sc in np.arange(s[i], s[j] + 1e-6, WATER_STEP_M):
@@ -2422,8 +2430,11 @@ class BridgeProfiles:
         spec, xy, z, _lon = self.done[k]
         lines = [ln for v in (ground or {}).values() for ln in v]
         try:
-            self.piers[k] = pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
-                                       self._ground, lines, self._wet_at)
+            import grading
+            xy = np.asarray(xy, np.float64)
+            la, lo, _ = self.frame.enu_to_geodetic(xy[:1, 0], xy[:1, 1], 0.0)
+            self.piers[k] = pier_sites(xy, np.asarray(z, np.float64), spec.width,
+                                       self._ground, lines, self._wet_at, grading.in_finland(float(la[0]), float(lo[0])))
         except Exception as ex:             # no piers rather than no bridge
             log.debug("piers of %s: %s: %s", k, type(ex).__name__, ex)
             self.piers[k] = []
@@ -3791,6 +3802,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                         chunks.append(_chunk(look, lw, c))
     decks_near = []                             # (retaining_walls: none under a bridge)
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells):
+        if sign_style == "fi" and ch.get("deck"):       # the Finnish fork: steel guardrails (roadmesh.DECK_GUARDRAIL)
+            ch["fi"] = True
         if ch.get("deck"):
             decks_near.append(ch)
         if not ch.get("ctx"):
@@ -4086,14 +4099,15 @@ def shape_files(aid, tx, ty):
     out = {"road": f"road_{aid}_{tx}_{ty}.cdae", "deck": f"deck_{aid}_{tx}_{ty}.cdae",
            "walk": f"walks_{aid}_{tx}_{ty}.cdae", "walkcol": f"walkcol_{aid}_{tx}_{ty}.cdae",
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
-           "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae"}
+           "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
+           "rail": f"rail_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
 
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
-               props=None, wires=None, park=None, tunnel_mesh=None):
+               props=None, wires=None, park=None, tunnel_mesh=None, rail_mesh=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -4121,6 +4135,11 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
         roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh)
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    if rail_mesh is not None:       # railways.tile_mesh: ballast, sleepers and rails (colliding)
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        shape = f"rail_{aid}_{tx}_{ty}.cdae"
+        roadmesh.write(os.path.join(out_dir, shape), rail_mesh)
+        data["rail"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if walks:
         x0, y0, _, _ = tile_bbox(tx, ty)
         b = sidewalks.Builder((x0, y0, 0.0), collision=True)

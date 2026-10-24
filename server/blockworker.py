@@ -400,6 +400,10 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(roadsmod.tile_bbox(tx, ty)), ctx,
                               bridges.beams_in(roadsmod.tile_bbox(tx, ty)))
     tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
+    import railways
+    rmesh = railways.tile_mesh(frame, tx, ty,
+                               [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)],
+                               railways.point_ground(frame, elev), sign_style)
     bld = None
     if buildings:
         import buildings as buildingsmod
@@ -407,7 +411,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
                                      lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), None, None,
                                      items)
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
-                               bld, props, wires, park, tunnel_mesh=tmesh)
+                               bld, props, wires, park, tunnel_mesh=tmesh, rail_mesh=rmesh)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):

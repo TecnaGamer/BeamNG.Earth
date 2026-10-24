@@ -332,7 +332,9 @@ class DeckRulesTest(unittest.TestCase):
     def test_water_clearance(self):
         import roads
         self.assertEqual(roads.water_clear(10.0), roads.WATER_CLEAR_MIN)
-        self.assertAlmostEqual(roads.water_clear(250.0), 12.5)     # the Finnish fork: 5 % of the span
+        self.assertAlmostEqual(roads.water_clear(250.0), 37.5)
+        self.assertAlmostEqual(roads.water_clear(250.0, fi=True), 12.5)    # the Finnish fork: 5 % of the span in Finland
+        self.assertEqual(roads.water_clear(10.0, fi=True), roads.FI_WATER_CLEAR_MIN)
         self.assertEqual(roads.water_clear(5000.0), roads.WATER_CAUSEWAY_CLEAR, "a causeway")
 
 

@@ -84,7 +84,7 @@ LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
                   cols=f"subtype, class, subclass, {_NAME}, {_SRC}",
                   text=("subtype", "class", "subclass", "name", "src_dataset", "src_record"),
-                  extra="road_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
+                  extra="road_flags, rail_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
                         "subclass_rules, access_restrictions",
                   rules={"surface": ("road_surface", "value", "text"),
                          "width": ("width_rules", "value", "float"),
@@ -530,9 +530,12 @@ class Reader:
             return mg.rule_table([(int(fmap[fi]), v, b) for fi, v, b in rows if keep[fi]], kind)
         for name, (column, field_, kind) in LAYERS["roads"]["rules"].items():
             feats.rules[name] = ranged(column, field_, kind)
+        # (a rail segment's is_bridge / is_tunnel are in rail_flags: railways.py's bridges)
         rows = con.execute("""SELECT fi, f, r."between" FROM
             (SELECT fi, r, unnest(r."values") AS f, generate_subscripts(r."values", 1) AS j, k FROM
-              (SELECT fi, unnest(road_flags) AS r, generate_subscripts(road_flags, 1) AS k FROM t))
+              (SELECT fi, unnest(road_flags) AS r, generate_subscripts(road_flags, 1) AS k FROM t
+               UNION ALL
+               SELECT fi, unnest(rail_flags) AS r, 1000 + generate_subscripts(rail_flags, 1) AS k FROM t))
             ORDER BY fi, k, j""").fetchall()
         feats.rules["flags"] = mg.rule_table([(int(fmap[fi]), f, b) for fi, f, b in rows if keep[fi]], "text")
         rows = con.execute("""SELECT fi, r.max_speed."value", r.max_speed.unit, r."between", r."when" IS NULL FROM

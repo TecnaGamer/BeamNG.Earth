@@ -1,4 +1,31 @@
 {
+  "bne_rail_ballast": {
+    "name": "bne_rail_ballast",
+    "mapTo": "bne_rail_ballast",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8f0c6a51-3d2e-5b7a-9c41-2e6d8b1f7a93",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_b.png",
+        "normalMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_nm.png",
+        "roughnessMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.55,
+          0.53,
+          0.5,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRAVEL",
+    "translucent": false
+  },
   "bne_tunnel_light": {
     "name": "bne_tunnel_light",
     "mapTo": "bne_tunnel_light",
