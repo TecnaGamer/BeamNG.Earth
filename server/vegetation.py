@@ -34,7 +34,7 @@ import staging
 log = logging.getLogger("earthd.vegetation")
 
 VERSION = 14          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110)
-FORK_CACHE = "-fi1"       # the Finnish fork's cells (no plants on its drawn paths): apart from upstream's, never mixed
+FORK_CACHE = "-fi2"       # the Finnish fork's cells (no plants on its drawn paths): apart from upstream's, never mixed
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -551,7 +551,8 @@ def _mask_polys(f, mask, chm, grow_m, kind=3, select=None):
                         float(chm.dx), float(chm.dy), grow_m / chm.dx)
 
 
-PATH_CLEAR_M = 0.5          # the Finnish fork: m kept clear past a drawn path's edge (_mask_roads paths=True)
+PATH_CLEAR_M = 2.0          # the Finnish fork: m kept clear past a drawn path's edge (_mask_roads paths=True): a bush
+                            # is 2-3 m across, so one centred 0.5 m off the edge still covered the path (2026-10-24)
 
 
 def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, paths=False):
