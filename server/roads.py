@@ -818,6 +818,12 @@ FI_STREET_WIDTH_M = {"residential": 5.0, "unclassified": 5.0, "living_street": 4
 FI_STREET_LANE_M = 2.5      # m per lane of those streets where the map counts them (lanes=2: 5 m, not 6 + strips)
 
 
+def fi_street(spec):
+    """A Finnish residential / minor street (_finnish_sidewalks gave it its sides): grass to its asphalt, no bare
+    verge (surface.paint_roads) and no edge strips."""
+    return getattr(spec, "sides", None) is not None and spec.cls in FI_STREET_WIDTH_M
+
+
 def _finnish_sidewalks(feats, specs):
     """specs with sides set on the roads in Finland (grading.in_finland at each road's first point). Pure."""
     import grading
@@ -840,6 +846,8 @@ def _finnish_sidewalks(feats, specs):
             out[i] = sp._replace(sides=FI_SIDEWALK_TAG[tag])
         elif sp.cls not in FI_UNTAGGED_SIDEWALK_CLASSES:
             out[i] = sp._replace(sides=())
+        else:                   # the town rule, written out: every Finnish road carries its sides (fi_street)
+            out[i] = sp._replace(sides=(1, -1) if sp.urban and sp.kind in BUILT else ())
     return out
 
 

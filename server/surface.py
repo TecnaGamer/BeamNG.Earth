@@ -289,7 +289,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         # to a millionth of a sample: PIL floors, and a line on a sample row came out 63.99999999996 on Windows (its
         # libm, the affine fit), drawn a sample north of where it lands on Linux
         c, r = (np.round(v, 6) for v in to_px(x, y))
-        vx = 0 if walks or spec.cls in roadsmod.PATH_STYLE else 2 * int(math.ceil(VERGE_M / square))
+        vx = 0 if walks or spec.cls in roadsmod.PATH_STYLE or roadsmod.fi_street(spec) else \
+            2 * int(math.ceil(VERGE_M / square))
         # (even: the verge stays odd, centred; the Finnish fork's paths have none: a bare band each side of a 3 m path
         # drew it as a 7 m dirt strip, 2026-10-24)
         if c.max() < -px - vx or c.min() > w + px + vx or r.max() < -px - vx or r.min() > h + px + vx:
