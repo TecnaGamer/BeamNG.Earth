@@ -124,10 +124,10 @@ def parts(frame, cells, box, reach=REACH_M):
                 continue
             c = str(cls[i]) if cls is not None else "unknown"
             fid = str(feats.ids[i])
-            if c not in DRAWN or fid in seen or not _box_hit(fb[i], near):
+            if c not in DRAWN or fid in seen or not _box_hit(fb[i], near) or _gone(feats, i):
                 continue
             seen.add(fid)
-            for kind, rings in (("ground", roads.ground_parts(feats, i)), ("bridge", roads.bridge_parts(feats, i))):
+            for kind, rings in _pieces(feats, i):
                 for ring in rings:
                     e, n = mapgeom.enu_xy(feats, frame, ring)
                     xy = _resample(np.c_[e, n], STEP_M)
@@ -135,6 +135,49 @@ def parts(frame, cells, box, reach=REACH_M):
                         out.append((fid, c, kind, xy))
     out.sort(key=lambda p: (p[0], p[2], float(p[3][0, 0]), float(p[3][0, 1])))
     return out
+
+
+GONE_FLAGS = ("is_abandoned", "is_disused")    # lines with no track left (or none in use): not drawn
+SHORT_TUNNEL_M = 60.0       # m: a "tunnel" this short is the line passing under a road bridge (OSM tags those
+                            # tunnel too): track there (the track stopped either side of an overpass, 2026-10-25)
+
+
+def _gone(feats, i):
+    """Is feature i an abandoned or disused line over most of its length (its flags)?"""
+    t = feats.rules.get("flags")
+    if t is None or len(t.feature) == 0:
+        return False
+    return sum(float(t.end[j]) - float(t.start[j]) for j in t.rows(i)
+               if any(g in str(t.value[j]) for g in GONE_FLAGS)) > 0.5
+
+
+def _pieces(feats, i):
+    """[("ground" | "bridge", [lon/lat polylines])] of feature i: its level ranges with the short tunnels
+    (SHORT_TUNNEL_M) on the ground and the long ones left out."""
+    rngs = roads.level_ranges(feats, i)
+    if not rngs:
+        return [("ground", roads.ground_parts(feats, i))]
+    L = roads._feature_length_m(feats, i)
+    off = [(a, b, k) for a, b, k in rngs if not (k == "tunnel" and (b - a) * L < SHORT_TUNNEL_M)]
+    ground, at = [], 0.0
+    for a, b, _k in off:
+        if a - at > roads.MIN_PART:
+            ground.append((at, a))
+        at = max(at, b)
+    if 1.0 - at > roads.MIN_PART:
+        ground.append((at, 1.0))
+    out = {"ground": [], "bridge": []}
+    for part in feats.parts(i):
+        for ring in part:
+            if len(ring) < 2:
+                continue
+            for kind, spans in (("ground", ground), ("bridge", [(a, b) for a, b, k in off if k == "bridge"])):
+                for a, b in spans:
+                    if b - a > roads.MIN_PART:
+                        r = ring if (a, b) == (0.0, 1.0) else roads.sub_polyline(ring, a, b)
+                        if len(r) >= 2:
+                            out[kind].append(r)
+    return list(out.items())
 
 
 def crossings(frame, cells, box, reach=REACH_M):

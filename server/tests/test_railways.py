@@ -49,6 +49,18 @@ class RailwayTest(unittest.TestCase):
         hw = roads.road_specs(f)[1].width / 2
         self.assertFalse(((x > 120 - hw) & (x < 120 + hw)).any(), "nothing on the road")
 
+    def test_short_tunnel_under_a_road_is_track_and_abandoned_lines_are_not(self):
+        """The line under a road bridge tagged is_tunnel for 12 m (OSM's habit) is track; a long tunnel is left out;
+        an abandoned line beside it is not drawn (Joensuu, 2026-10-25)."""
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 110.0), (250.0, 110.0)], [(0.0, 150.0), (250.0, 150.0)]],
+                     ["standard_gauge", "unknown", "standard_gauge"], subtypes=["rail"] * 3,
+                     flags=[(0, "is_tunnel", 0.46, 0.51), (1, "is_abandoned"), (2, "is_tunnel", 0.2, 0.8)])
+        rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
+        got = [(fid, kind, float(np.ptp(xy[:, 0]))) for fid, _c, kind, xy in rails]
+        self.assertEqual(sorted(g[0] for g in got), ["id000", "id002", "id002"], "no abandoned line")
+        self.assertAlmostEqual([g[2] for g in got if g[0] == "id000"][0], 250.0, 0, "track through the short tunnel")
+        self.assertLess(max(g[2] for g in got if g[0] == "id002"), 60.0, "a long tunnel left out")
+
     def test_road_high_over_the_track_does_not_cut_it(self):
         f = features([[(0.0, 100.0), (250.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
                      subtypes=["rail", "road"])
