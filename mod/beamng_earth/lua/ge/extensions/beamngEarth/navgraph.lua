@@ -138,6 +138,36 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
       end
     end
   end
+  -- A node this table leaves a dead end that the server's graph did not (its only other link left out as too steep,
+  -- tooSteep: a bridge whose node heights came out wrong) is a cut too: to the AI it is a dead end like the clip's,
+  -- and a car driving into one stopped and turned round there (the user, 2026-10-25: traffic "wants to stop ... and
+  -- turn around"). A real dead end (a cul-de-sac: one neighbour in the server's graph too) is not.
+  local origDeg = {}
+  for _, e in ipairs(g.edges) do
+    step()
+    local a, bb = e[1], e[2]
+    if a ~= bb then
+      for _, pair in ipairs({ { a, bb }, { bb, a } }) do
+        local k = pair[1]
+        if keep[k] then
+          local t = origDeg[k] or {}
+          t[pair[2]] = true
+          origDeg[k] = t
+        end
+      end
+    end
+  end
+  for name, t in pairs(nodes) do
+    if not cut[name] then
+      local have, had = 0, 0
+      for _ in pairs(t.links) do have = have + 1 end
+      for _ in pairs(origDeg[name] or {}) do had = had + 1 end
+      if have <= 1 and had > have then
+        cut[name] = true
+        cutList[#cutList + 1] = { t.pos.x, t.pos.y }
+      end
+    end
+  end
   return nodes, nn, ne, cutList
 end
 

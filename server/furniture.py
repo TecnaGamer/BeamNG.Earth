@@ -11,6 +11,7 @@ generation"). Pure.
 """
 import hashlib
 import math
+import os
 
 import numpy as np
 
@@ -24,6 +25,9 @@ POLE_OFF_M = 2.4            # m beyond the carriageway's edge
 END_CLEAR_M = 4.0           # m kept clear of a run's ends (corners, crosswalk ramps)
 CLEAR_OTHER_M = 1.5         # m kept off another road's carriageway
 G_LAMP, G_POLE = "streetlight", "pole"
+# the sign set of 2026-10-25 (roadsigns.py: bend warnings, advisory plaques, chevrons). Off until the mod ships
+# their models: trees.lua draws a group it has no shapes for as a broadleaf tree.
+SIGNS2 = os.environ.get("BNE_SIGNS2", "off") == "on"
 
 
 def _h01(*vals):
@@ -568,6 +572,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals))
     if speeds:
         rows.extend(speed_signs(roads, speeds, box, left_hand, mph))
+        if SIGNS2:
+            import roadsigns
+            rows.extend(roadsigns.curve_signs(
+                roads, speeds, box, left_hand, mph,
+                clear=lambda x, y, z, fid: _clear(np.array([x, y, z]), others, fid)))
     for fid, spec, line, _ in roads:
         if spec.urban or fid in lit or spec.cls not in POLE_CLASSES or len(line) < 2:
             continue

@@ -19,6 +19,21 @@ local steep = { nodes = { j = { 0, 0, 22.7, 4 }, d = { 8, 0, 29.1, 3 }, h = { 0,
   edges = { { 'j', 'd', 0, 1, 1, 11.2, 1, 3 }, { 'j', 'h', 0, 1, 1, 11.2, 1, 3 } } }
 local sn, _, sne = N.toNodes(steep, { -500, -500, 500, 500 }, 60, false)
 T.check(sne == 1 and sn.j.links.h and not sn.j.links.d, 'a link steeper than MAX_GRADE left out; 37 % kept: ' .. sne)
+-- the steep link left out made j a dead end for cars coming from h: a cut there, so they are respawned before it
+-- (they stopped and turned round at it, 2026-10-25)
+do
+  local _, _, _, scuts = N.toNodes(steep, { -500, -500, 500, 500 }, 60, false)
+  T.check(#scuts == 1 and scuts[1][1] == 0 and scuts[1][2] == 0, 'a steep link left out: its kept end is a cut')
+  -- a cul-de-sac (one neighbour in the server's graph too) and a node whose other links remain are not
+  local cul = { nodes = { a = { 0, 0, 1, 4 }, b = { 50, 0, 1, 4 }, c = { 100, 0, 1, 4 }, d = { 50, 50, 1, 4 } },
+    edges = { { 'a', 'b', 0, 1, 1, 11.2, 1, 4 }, { 'b', 'c', 0, 1, 1, 11.2, 1, 4 }, { 'b', 'd', 0, 1, 1, 11.2, 1, 4 } } }
+  local _, _, _, ccuts = N.toNodes(cul, { -500, -500, 500, 500 }, 60, false)
+  T.check(#ccuts == 0, 'real dead ends are no cuts: ' .. #ccuts)
+  local junc = { nodes = { j = { 0, 0, 0, 4 }, s = { 8, 0, 6.4, 4 }, e = { 0, 50, 0, 4 }, w = { -50, 0, 0, 4 } },
+    edges = { { 'j', 's', 0, 1, 1, 11.2, 1, 4 }, { 'j', 'e', 0, 1, 1, 11.2, 1, 4 }, { 'j', 'w', 0, 1, 1, 11.2, 1, 4 } } }
+  local _, _, _, jcuts = N.toNodes(junc, { -500, -500, 500, 500 }, 60, false)
+  T.check(#jcuts == 0, 'a junction that keeps two roads after a steep one is left out: no cut: ' .. #jcuts)
+end
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')
