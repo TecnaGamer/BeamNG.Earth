@@ -146,7 +146,8 @@ angular.module('beamng.apps')
   'use strict'
   var GM = beamngEarthGpsMath
   var TILE_DIR = '/temp/beamngEarth/maptiles/'
-  var POLL_MS = 250, TILES_MS = 500, ASK_MAX = 24
+  var POLL_MS = 250, POSE_MS = 50, TILES_MS = 500, ASK_MAX = 24
+  var MAX_LEAD_S = 0.3                   // the map moves on from the last pose for at most this long
   var ROUTE = '#c43cff'                  // the canvas design's magenta (the user, 2026-10-25: "keep our design")
   var PLAYER_Y = 0.70                    // the car's spot, down the box (more road ahead than behind)
 
@@ -158,7 +159,7 @@ angular.module('beamng.apps')
       '.bne-gps { position:relative; width:100%; height:100%; overflow:hidden; border-radius:14px; box-sizing:border-box;',
       '  border:2px solid rgba(255,255,255,.22); background:#2c3527; box-shadow:0 8px 24px rgba(0,0,0,.5);',
       "  font-family:'Inter Tight','Segoe UI',system-ui,sans-serif; color:#f4f6f8; pointer-events:none; }",
-      '.bne-gps-rot { position:absolute; width:0; height:0; }',
+      '.bne-gps-rot { position:absolute; left:0; top:0; width:0; height:0; transform-origin:0 0; will-change:transform; }',
       '.bne-gps-tile { position:absolute; width:256px; height:256px; }',
       '.bne-gps-svg { position:absolute; overflow:visible; }',
       '.bne-gps-glass { position:absolute; background:rgba(12,14,18,.82); border-radius:12px; }',
@@ -187,14 +188,14 @@ angular.module('beamng.apps')
   return {
     template:
       '<div class="bngApp bne-gps" ng-show="hud.visible" style="background-color:#2c3527;">' +
-        '<div class="bne-gps-rot" ng-style="rotStyle">' +
+        '<div class="bne-gps-rot">' +
           '<img class="bne-gps-tile" ng-repeat="t in tiles track by t.key" ng-src="{{t.src}}" ng-style="{left: t.left + \'px\', top: t.top + \'px\'}" />' +
-          '<svg class="bne-gps-svg" ng-attr-style="left:{{-R}}px; top:{{-R}}px" ng-attr-width="{{2 * R}}" ng-attr-height="{{2 * R}}" ng-attr-view_box="{{-R}} {{-R}} {{2 * R}} {{2 * R}}" aria-hidden="true">' +
+          '<svg class="bne-gps-svg" ng-attr-style="left:{{S.x - R}}px; top:{{S.y - R}}px" ng-attr-width="{{2 * R}}" ng-attr-height="{{2 * R}}" ng-attr-view_box="{{S.x - R}} {{S.y - R}} {{2 * R}} {{2 * R}}" aria-hidden="true">' +
             '<path ng-if="routeD" ng-attr-d="{{routeD}}" fill="none" stroke="#120818" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" opacity="0.75" />' +
             '<path ng-if="routeD" ng-attr-d="{{routeD}}" fill="none" stroke="' + ROUTE + '" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />' +
             '<path ng-repeat="c in chev" ng-attr-transform="translate({{c.x}} {{c.y}}) rotate({{c.deg}})" d="M-4 -5 L2 0 L-4 5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" />' +
             '<g ng-if="turnAt" ng-attr-transform="translate({{turnAt.x}} {{turnAt.y}})"><circle r="10" fill="#fff" stroke="#120818" stroke-width="2" /><circle r="3.5" fill="' + ROUTE + '" /></g>' +
-            '<g ng-if="destAt" ng-attr-transform="translate({{destAt.x}} {{destAt.y}}) rotate({{heading}})"><path d="M0 -26 C-8 -26 -13 -20 -13 -13 C-13 -4 0 8 0 8 C0 8 13 -4 13 -13 C13 -20 8 -26 0 -26 Z" fill="' + ROUTE + '" stroke="#fff" stroke-width="2.5" /><circle cy="-13" r="4.5" fill="#fff" /></g>' +
+            '<g ng-if="destAt" class="bne-gps-pin" ng-attr-transform="translate({{destAt.x}} {{destAt.y}})"><path d="M0 -26 C-8 -26 -13 -20 -13 -13 C-13 -4 0 8 0 8 C0 8 13 -4 13 -13 C13 -20 8 -26 0 -26 Z" fill="' + ROUTE + '" stroke="#fff" stroke-width="2.5" /><circle cy="-13" r="4.5" fill="#fff" /></g>' +
           '</svg>' +
         '</div>' +
         '<svg class="bne-gps-svg" ng-attr-style="left:{{P.x - 16}}px; top:{{P.y - 20}}px" width="32" height="40" viewBox="-16 -20 32 40" aria-hidden="true">' +
@@ -205,7 +206,7 @@ angular.module('beamng.apps')
           '<div class="bne-gps-icon" style="background:' + ROUTE + '"><svg width="30" height="30" viewBox="0 0 34 34" aria-hidden="true"><path ng-attr-d="{{nextArrow}}" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" /></svg></div>' +
           '<div style="min-width:0"><div class="bne-gps-turnd">{{nextDist}}</div><div class="bne-gps-turnt">{{next.text}}</div></div>' +
         '</div>' +
-        '<div class="bne-gps-glass bne-gps-compass"><div class="bne-gps-ring" ng-style="{transform: \'rotate(\' + (-heading) + \'deg)\'}"><div class="bne-gps-n" ng-style="{transform: \'rotate(\' + heading + \'deg)\'}">N</div></div></div>' +
+        '<div class="bne-gps-glass bne-gps-compass"><div class="bne-gps-ring"><div class="bne-gps-n">N</div></div></div>' +
         '<div class="bne-gps-glass bne-gps-limit" ng-if="hud.limit || hud.street">' +
           '<div class="bne-gps-us" ng-if="hud.limit && hud.limit.unit === \'mph\'"><b>SPEED</b><b>LIMIT</b><i>{{hud.limit.value}}</i></div>' +
           '<div class="bne-gps-eu" ng-if="hud.limit && hud.limit.unit !== \'mph\'">{{hud.limit.value}}</div>' +
@@ -226,6 +227,12 @@ angular.module('beamng.apps')
       scope.R = 300
       scope.P = { x: 0, y: 0 }
       var zoom = null, routeVer = 0, routeAsked = 0, points = [], ready = {}, lastAsk = 0, alive = true
+      var origin = null                  // { x, y, z }: the fixed pixel the map layer is drawn from (re-set on a zoom change or far away)
+      var pose = null                    // { x, y (px at zoom), h, v (px/s east, north-down), t }: the last fast pose
+      var shown = null                   // { x, y, h }: where the map is drawn now (moved on every frame)
+      scope.S = { x: 0, y: 0 }
+      var rotEl = element[0].querySelector('.bne-gps-rot'), ringEl = element[0].querySelector('.bne-gps-ring'),
+        nEl = element[0].querySelector('.bne-gps-n')
 
       function engineLua(script, cb) { if (window.bngApi && window.bngApi.engineLua) window.bngApi.engineLua(script, cb) }
 
@@ -278,18 +285,29 @@ angular.module('beamng.apps')
         scope.P = { x: sz.w / 2, y: sz.h * PLAYER_Y }
         scope.R = Math.ceil(Math.sqrt(sz.w * sz.w + sz.h * sz.h))
         if (!pl) { scope.tiles = []; scope.routeD = ''; scope.chev = []; scope.turnAt = null; scope.destAt = null; return }
-        scope.heading = Number(pl.heading) || 0
-        scope.rotStyle = { left: scope.P.x + 'px', top: scope.P.y + 'px', transform: 'rotate(' + (-scope.heading) + 'deg)' }
         zoom = GM.zoomFor(pl.speed, zoom)
+        var pz0 = GM.project(pl.lat, pl.lon, zoom)
+        if (!origin || origin.z !== zoom || Math.abs(pz0.x - origin.x) > 4000 || Math.abs(pz0.y - origin.y) > 4000) {
+          origin = { x: Math.round(pz0.x), y: Math.round(pz0.y), z: zoom }
+          shown = null
+          pose = null                    // (in the old zoom's pixels)
+        }
+        var ox = pz0.x - origin.x, oy = pz0.y - origin.y
+        scope.S = { x: ox, y: oy }
+        if (!pose && rotEl) {            // until the first fast pose: placed here
+          var h0 = Number(pl.heading) || 0
+          rotEl.style.transform = 'translate(' + scope.P.x + 'px,' + scope.P.y + 'px) rotate(' + (-h0) + 'deg) translate(' + (-ox) + 'px,' + (-oy) + 'px)'
+        }
         var wanted = GM.tilesAround(pl.lat, pl.lon, zoom, scope.R)
         askTiles(wanted)
         scope.tiles = wanted.filter(function (t) { return ready[t.z + '/' + t.x + '/' + t.y] }).map(function (t) {
-          return { key: t.z + '/' + t.x + '/' + t.y, left: t.left, top: t.top, src: TILE_DIR + t.z + '/' + t.x + '/' + t.y + '.jpg' }
+          return { key: t.z + '/' + t.x + '/' + t.y, left: t.left + ox, top: t.top + oy, src: TILE_DIR + t.z + '/' + t.x + '/' + t.y + '.jpg' }
         })
         var pz = GM.project(pl.lat, pl.lon, zoom)
         var g = h.gps
         if (g && points.length > 1) {
           var runs = GM.routeRuns(points, Math.max(0, (Number(g.progress) || 1) - 1), pz, zoom, scope.R)
+            .map(function (rn) { return rn.map(function (q) { return { x: q.x + ox, y: q.y + oy } }) })
           scope.routeD = GM.pathOf(runs)
           scope.chev = GM.chevrons(runs, 70, 40)
         } else {
@@ -297,12 +315,15 @@ angular.module('beamng.apps')
           scope.chev = []
         }
         function rel(lat, lon) { var q = GM.project(lat, lon, zoom); return { x: q.x - pz.x, y: q.y - pz.y } }
+        function abs(q) { return q ? { x: q.x + ox, y: q.y + oy } : null }
         scope.turnAt = (g && g.next && isFinite(g.next.lat)) ? rel(g.next.lat, g.next.lon) : null
         scope.destAt = (g && isFinite(g.lat)) ? rel(g.lat, g.lon) : null
         if (scope.destAt) {      // off the box: kept at its edge, in its direction (a pin you can still follow)
           var d = Math.sqrt(scope.destAt.x * scope.destAt.x + scope.destAt.y * scope.destAt.y), lim = scope.R * 0.42
           if (d > lim) { scope.destAt = { x: scope.destAt.x * lim / d, y: scope.destAt.y * lim / d } }
         }
+        scope.turnAt = abs(scope.turnAt)
+        scope.destAt = abs(scope.destAt)
         scope.next = g && g.next ? g.next : null
         scope.nextArrow = scope.next ? GM.arrowPath(scope.next.arrow) : ''
         scope.nextDist = scope.next ? GM.fmtDist(scope.next.dist, h.mph) : ''
@@ -323,9 +344,38 @@ angular.module('beamng.apps')
           })
         })
       }
-      var timer = setInterval(poll, POLL_MS)
+      function pollPose() {
+        if (!alive || !scope.hud.visible) return
+        engineLua('beamngEarth_settings and beamngEarth_settings.uiGpsPose and beamngEarth_settings.uiGpsPose() or nil', function (q) {
+          if (!q || !origin || !isFinite(q.lat)) return
+          var p = GM.project(q.lat, q.lon, origin.z)
+          var h = Number(q.heading) || 0, mpp = 156543.03392 * Math.cos(q.lat * Math.PI / 180) / Math.pow(2, origin.z)
+          var v = (Number(q.speed) || 0) / mpp
+          pose = { x: p.x - origin.x, y: p.y - origin.y, h: h, vx: v * Math.sin(h * Math.PI / 180), vy: -v * Math.cos(h * Math.PI / 180), t: performance.now() }
+        })
+      }
+      function frame() {
+        if (!alive) return
+        requestAnimationFrame(frame)
+        if (!pose || !rotEl) return
+        var lead = Math.min(MAX_LEAD_S, (performance.now() - pose.t) / 1000)
+        var tx = pose.x + pose.vx * lead, ty = pose.y + pose.vy * lead
+        if (!shown) shown = { x: tx, y: ty, h: pose.h }
+        var dh = ((pose.h - shown.h + 540) % 360) - 180            // the short way round
+        shown = { x: shown.x + (tx - shown.x) * 0.5, y: shown.y + (ty - shown.y) * 0.5, h: shown.h + dh * 0.25 }
+        rotEl.style.transform = 'translate(' + scope.P.x + 'px,' + scope.P.y + 'px) rotate(' + (-shown.h) + 'deg) translate(' + (-shown.x) + 'px,' + (-shown.y) + 'px)'
+        if (ringEl) ringEl.style.transform = 'rotate(' + (-shown.h) + 'deg)'
+        if (nEl) nEl.style.transform = 'rotate(' + shown.h + 'deg)'
+        var pins = rotEl.querySelectorAll('.bne-gps-pin')
+        for (var i = 0; i < pins.length; i++) {
+          var base = pins[i].getAttribute('transform').replace(/ rotate\([^)]*\)/, '')
+          pins[i].setAttribute('transform', base + ' rotate(' + shown.h + ')')
+        }
+      }
+      var timer = setInterval(poll, POLL_MS), poseTimer = setInterval(pollPose, POSE_MS)
       poll()
-      scope.$on('$destroy', function () { alive = false; clearInterval(timer) })
+      requestAnimationFrame(frame)
+      scope.$on('$destroy', function () { alive = false; clearInterval(timer); clearInterval(poseTimer) })
     }
   }
 }]);

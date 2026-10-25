@@ -583,6 +583,16 @@ function M.uiGpsHud()
   }
 end
 
+-- The GPS app's fast pose (polled ~20 times a second; the app moves its map every frame between them): { lat, lon,
+-- heading (deg from true north), speed (m/s) } or nil.
+function M.uiGpsPose()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  if not (pl and pl.lat) then return nil end
+  return { lat = pl.lat, lon = pl.lon, heading = playerHeading(), speed = pl.speed }
+end
+
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.
 function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
