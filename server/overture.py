@@ -92,8 +92,10 @@ _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
-                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}",
-                  text=("subtype", "class", "subclass", "name", "src_dataset", "src_record"),
+                  # routes / dests: the guide signs' route numbers and exit destinations (guidesigns.py), as JSON
+                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}, CAST(to_json(routes) AS VARCHAR) AS routes, "
+                       "CAST(to_json(destinations) AS VARCHAR) AS dests",
+                  text=("subtype", "class", "subclass", "name", "src_dataset", "src_record", "routes", "dests"),
                   extra="road_flags, rail_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
                         "subclass_rules, access_restrictions",
                   rules={"surface": ("road_surface", "value", "text"),
