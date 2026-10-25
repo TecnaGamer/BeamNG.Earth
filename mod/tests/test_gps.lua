@@ -167,4 +167,37 @@ do -- the minimap's distance counts the whole planned route, not only the arrows
   G.addRest(rp, 0)
   T.check(rp.path[1].distToTarget == 482700, 'nothing left past the path: unchanged')
 end
+
+-- the GPS app's turn-by-turn (2026-10-25): turns placed on the route line, the next one ahead, sign-rounded limits
+do
+  T.check(G.lowerBound({ 0, 10, 20, 30 }, 15) == 3 and G.lowerBound({ 0, 10, 20 }, -1) == 1 and G.lowerBound({ 0, 10 }, 99) == 3,
+    'lowerBound')
+  -- an out-and-back route: east 1000 m along y = 0, then back west along y = 5 (the same spot passed twice)
+  local xs, ys, cum = {}, {}, {}
+  for i = 0, 10 do xs[#xs + 1], ys[#ys + 1] = i * 100, 0 end
+  for i = 10, 0, -1 do xs[#xs + 1], ys[#ys + 1] = i * 100, 5 end
+  cum[1] = 0
+  for i = 2, #xs do cum[i] = cum[i - 1] + math.sqrt((xs[i] - xs[i - 1]) ^ 2 + (ys[i] - ys[i - 1]) ^ 2) end
+  -- two turns at x = 300: one on the way out (OSRM: 300 m along), one on the way back (1705 m along)
+  local s = G.placeTurns(xs, ys, cum, { 300, 300 }, { 0, 5 }, { 300, 1705 }, 1.0)
+  T.near(s[1], 300, 1, 'the outbound turn on the outbound pass')
+  T.near(s[2], 1705, 1, 'the return turn on the return pass, not the outbound one')
+  -- OSRM's distances a little longer than the simplified line (scale < 1): still found
+  local s2 = G.placeTurns(xs, ys, cum, { 300, 300 }, { 0, 5 }, { 306, 1740 }, 0.98)
+  T.near(s2[1], 300, 1, 'scaled: outbound')
+  T.near(s2[2], 1705, 1, 'scaled: return')
+  -- the next turn
+  local turnS = { 300, 1705, 2005 }
+  T.check(G.nextTurn(turnS, 0) == 1 and G.nextTurn(turnS, 298) == 1, 'ahead of the first turn: the first')
+  T.check(G.nextTurn(turnS, 302) == 1, 'right at it (2 m on, under TURN_PASSED_M): still the first')
+  T.check(G.nextTurn(turnS, 304) == 2, 'past it (more than TURN_PASSED_M): the second')
+  T.check(G.nextTurn(turnS, 2010) == nil, 'past the last: none')
+  -- speed limits as signs post them
+  local l = G.signLimit(65 * 0.44704, true)
+  T.check(l and l.value == 65 and l.unit == 'mph', 'mph to 5: 65')
+  T.check(G.signLimit(24.2, true).value == 55, '24.2 m/s = 54.1 mph: 55')
+  local k = G.signLimit(100 / 3.6, false)
+  T.check(k and k.value == 100 and k.unit == 'km/h', 'km/h to 10: 100')
+  T.check(G.signLimit(0, true) == nil and G.signLimit(nil, false) == nil, 'no limit: nil')
+end
 T.done('test_gps')

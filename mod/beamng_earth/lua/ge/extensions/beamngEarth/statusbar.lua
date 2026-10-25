@@ -149,6 +149,9 @@ local function loadingPart(status, line)
   return line or nil
 end
 
+-- The street the car is on now ('' unknown): the GPS app's road name beside its speed limit box (settings.uiGpsHud).
+function M.street() return loc.street or '' end
+
 -- The bar's location line now (the UI app's too: hudapps.lua), '' when there is nothing to say.
 function M.text(status, line)
   return M.compose(loc, nil, M.SHOW_FPS and fps or nil)

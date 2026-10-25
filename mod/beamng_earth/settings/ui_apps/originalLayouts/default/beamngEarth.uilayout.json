@@ -39,13 +39,14 @@
       "appVersion": 2
     },
     {
-      "appName": "navigation",
-      "appVersion": 5,
+      "appName": "beamngEarthGps",
+      "appVersion": 1,
       "placement": {
-        "bottom": "90px",
-        "height": "350px",
-        "left": "5px",
-        "width": "300px"
+        "bottom": "70px",
+        "left": "10px",
+        "position": "absolute",
+        "width": "440px",
+        "height": "260px"
       }
     },
     {
@@ -157,5 +158,5 @@
   },
   "title": ".Earth",
   "type": "beamngEarth",
-  "version": 4
+  "version": 5
 }

@@ -558,6 +558,31 @@ function M.uiGpsAutodrive(on)
   return { ok = true, autodrive = require('beamngEarth/gps').setAutodrive(on) }
 end
 
+-- The GPS app (BeamNGEarthGps, the bottom-left minimap; the user, 2026-10-25): what it draws, polled a few times a
+-- second. visible: in our level with the world running; mapOpen: the world map is open (the app then asks for no tiles:
+-- mapTiles keeps one wanted list, the map's); player { lat, lon, heading (deg from true north), speed (m/s) };
+-- gps (a destination set): { name, lat, lon, routeVersion, progress, remaining (m), eta (s), next { arrow, text, dist },
+-- planning }; limit { value, unit } under the car; street: its name; mph: the country's distance units.
+function M.uiGpsHud()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  local gps = require('beamngEarth/gps')
+  local g = gps.status()
+  local okN, ng = pcall(require, 'beamngEarth/navgraph')
+  return {
+    visible = (st and st.inOurLevel and st.active) and true or false,
+    mapOpen = mapOpen,
+    mapPort = net.isConnected() and st and st.mapPort or nil,
+    player = (pl and pl.lat) and { lat = pl.lat, lon = pl.lon, heading = playerHeading(), speed = pl.speed } or nil,
+    gps = g and { name = g.name, lat = g.lat, lon = g.lon, routeVersion = g.routeVersion, progress = g.progress,
+      remaining = g.remaining, eta = g.eta, next = g.next, planning = g.planning } or nil,
+    limit = gps.speedLimit(),
+    street = (function() local okS, sb = pcall(require, 'beamngEarth/statusbar'); return okS and sb.street() or '' end)(),
+    mph = not okN or ng.mph ~= false,
+  }
+end
+
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.
 function M.uiGpsRoute()
   return require('beamngEarth/gps').route()

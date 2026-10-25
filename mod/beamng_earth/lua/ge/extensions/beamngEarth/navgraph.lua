@@ -23,6 +23,7 @@ M.RECLIP_M = 150
 M.UI_MAP = false        -- send our graph to the UI (the big map) on every apply
 M.RULES_FILE = '/temp/beamngEarth/roadRules.json'
 M.rules = { rightHandDrive = false, turnOnRed = true }    -- US; `rightHandDrive = true` means driving on the left
+M.mph = true            -- speed limits posted in mph (setRules: the country's)
 M.enabled = true
 -- Traffic (gameplay_traffic, the player's traffic amount): started once the first graph is in the map; a car
 -- within GUARD_M of the block's edge (or past it, where there is no ground) is respawned on the graph
@@ -131,7 +132,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
-          inRadius = e[8], outRadius = e[8] }
+          inRadius = e[8], outRadius = e[8], postedLimit = e[9] }   -- (posted: the GPS's speed limit box)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -293,6 +294,9 @@ local function setRules()
   if r then
     M.rules = { rightHandDrive = r.rightHandDrive and true or false, turnOnRed = r.turnOnRed and true or false }
     M.SIGNAL_TYPE = r.redYellow and 'lightsBasicEU' or 'lightsBasic'
+    -- (kept beside the rules, not in them: M.rules is written to the game's own road rules file) the GPS's speed
+    -- limit box shows mph or km/h as the country posts them
+    M.mph = r.mph ~= false
   end
 end
 
