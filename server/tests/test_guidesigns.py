@@ -155,5 +155,32 @@ class MeshTest(unittest.TestCase):
         self.assertIsNone(gs.mesh([], (0, 0, 0)))
 
 
+class TollTest(unittest.TestCase):
+    def test_named_toll_road_gets_a_gantry_and_its_advance_sign(self):
+        self.assertTrue(gs.is_toll("Pennsylvania Turnpike", None))
+        self.assertTrue(gs.is_toll("", '[{"network":"US:PA:Turnpike","ref":"76"}]'))
+        self.assertTrue(gs.is_toll("Jane Addams Memorial Tollway", None))
+        self.assertFalse(gs.is_toll("Schuylkill Expressway", '[{"network":"US:I","ref":"76"}]'))
+        rds = [("t1", spec("motorway"), np.array([(0.0, 0.0, 10.0), (4000.0, 0.0, 10.0)]), 0.0)]
+        got = gs.plan(rds, {"t1": {"name": "Pennsylvania Turnpike"}}, BIG)
+        kinds = {g["kind"]: g for g in got}
+        self.assertEqual(round(kinds["toll"]["x"]), 2000)
+        self.assertEqual(round(kinds["tolladv"]["x"]), round(2000 - gs.TOLL_ADV_M))
+        self.assertEqual(kinds["tolladv"]["rows"][0], [("text", "CASHLESS TOLL", gs.TEXT_M)])
+        self.assertEqual(gs.plan(rds, {"t1": {"name": "Schuylkill Expressway"}}, BIG), [])
+        P, T, UV, M = gs.mesh(got, (0, 0, 0))
+        self.assertTrue(T.max() < len(P))
+        over = P[np.abs(P[:, 0] - 2000) < 1.0]
+        self.assertGreaterEqual(float(over[:, 2].min()), 10.0 - 1e-6)
+        lanes_boxes = P[(np.abs(P[:, 0] - 2000) < 1.0) & (P[:, 2] > 10.0 + gs.CLEAR_M)]
+        self.assertGreater(len(lanes_boxes), 0)
+        low = P[(np.abs(P[:, 1]) < 5.5) & (np.abs(P[:, 0] - 2000) < 1.0)][:, 2]
+        self.assertGreaterEqual(float(low.min()), 10.0 + gs.CLEAR_M - 0.2 - 1e-6, "nothing low over the lanes")
+
+    def test_short_toll_segment_no_gantry(self):
+        rds = [("t1", spec("motorway"), np.array([(0.0, 0.0, 10.0), (2000.0, 0.0, 10.0)]), 0.0)]
+        self.assertEqual(gs.plan(rds, {"t1": {"name": "Ohio Turnpike"}}, BIG), [])
+
+
 if __name__ == "__main__":
     unittest.main()

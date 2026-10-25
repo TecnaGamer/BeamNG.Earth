@@ -4145,8 +4145,9 @@ def _guide_plan(frame, seen, roads, box, mph, left_hand):
     import randomplace
     attrs = {}
     for fid, (feats, i, _spec) in seen.items():
-        r, d = feats.attrs.get("routes"), feats.attrs.get("dests")
-        attrs[fid] = {"routes": r[i] if r is not None else None, "dests": d[i] if d is not None else None}
+        r, d, nm = feats.attrs.get("routes"), feats.attrs.get("dests"), feats.attrs.get("name")
+        attrs[fid] = {"routes": r[i] if r is not None else None, "dests": d[i] if d is not None else None,
+                      "name": nm[i] if nm is not None else None}
     if not any(sp.cls in guidesigns.MAIN for _f, sp, _l, _ in roads):
         return []
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2

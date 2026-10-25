@@ -45,6 +45,12 @@ TEXT_M, SMALL_M = 0.62, 0.46    # glyph cell heights (m): destinations, distance
 SHIELD_M = 1.05
 PAD_M, GAP_M = 0.30, 0.16
 MAX_VERTS = 60000           # one shape's vertices (the engine's 16-bit indices)
+# Toll gantries (the user, 2026-10-25: "on named toll roads"; Overture has toll booths but no gantries): on a toll
+# road (its name or route network says so), one open-road tolling gantry halfway along each segment of at least
+# TOLL_MIN_M (between interchanges), and a CASHLESS TOLL sign 1/2 mile (800 m) before it.
+TOLL_WORDS = ("turnpike", "tollway", "toll road", "toll highway", "thruway", "toll")
+TOLL_MIN_M = 2500.0
+TOLL_ADV_M = 804.672
 
 _atlas = None
 
@@ -187,6 +193,16 @@ def towns_ahead(xy, d, towns_xy, km):
     return out
 
 
+def is_toll(name, routes_json):
+    """Whether a road is a toll road by its name or its routes' networks / names (Pennsylvania Turnpike, I-90 Tollway)."""
+    words = [str(name or "")]
+    for r in _json(routes_json) or []:
+        if isinstance(r, dict):
+            words += [str(r.get("network") or ""), str(r.get("name") or "")]
+    t = " ".join(words).lower()
+    return any(w in t for w in TOLL_WORDS)
+
+
 def plan(roads, attrs, box, mph=True, left_hand=False, towns_xy=()):
     """The guide signs anchored in box (x0, y0, x1, y1): dicts {kind, x, y, z, d (travel unit vector), width (the
     carriageway), lanes, overhead, rows}. roads: build_tile's (fid, spec, centreline (k, 3), lon); attrs: fid ->
@@ -230,6 +246,10 @@ def plan(roads, attrs, box, mph=True, left_hand=False, towns_xy=()):
                         signs.append(("advance", L - dist, names, shields, label))
                 if L >= 2 * EXIT_BEFORE_M:
                     signs.append(("exit", L - EXIT_BEFORE_M, names, shields, "EXIT"))
+            if spec.cls == "motorway" and L >= TOLL_MIN_M and is_toll(a.get("name"), a.get("routes")):
+                signs.append(("toll", L / 2, [], [], None))
+                if L / 2 - TOLL_ADV_M >= END_CLEAR_M:
+                    signs.append(("tolladv", L / 2 - TOLL_ADV_M, [], [], "1/2 MILE" if mph else "800 m"))
             merged = any(math.hypot(*(en - p[0, :2])) <= LINK_TOUCH_M for _st, en in links.values())
             if rts and merged and L >= ROUTE_AT_M + 300.0:
                 signs.append(("route", ROUTE_AT_M, [], rts[:2], None))
@@ -274,6 +294,10 @@ def _rows(kind, names, shields, label, d):
             rows.append([("shield", k, n), ("text", _cardinal((k, n), d), SMALL_M)])
     elif kind == "mileage":
         rows = [[("pair", name, dist)] for name, dist in names]
+    elif kind == "tolladv":
+        rows = [[("text", "CASHLESS TOLL", TEXT_M)], [("text", "NO STOPPING", SMALL_M)], [("text", label, SMALL_M)]]
+    elif kind == "toll":
+        rows = [["gantry"]]        # (no panel: toll_gantry draws it)
     return rows
 
 
@@ -441,6 +465,34 @@ def _structure(m, g, w, h):
     return base, F, R
 
 
+def toll_gantry(m, g):
+    """An open-road tolling gantry over the carriageway: a truss on two posts, a reader and a camera over each lane."""
+    c = np.array([g["x"], g["y"], g["z"]])
+    d = np.array([g["d"][0], g["d"][1], 0.0])
+    R, F, U = np.array([d[1], -d[0], 0.0]), -d, np.array([0.0, 0.0, 1.0])
+    half = g["width"] / 2
+    span = half + GANTRY_POST_M
+    top = CLEAR_M + 1.4
+    for zz in (CLEAR_M + 0.5, top - 0.2):
+        for ff in (-0.5, 0.5):
+            m.box(c + U * zz + F * ff, R * span, F * 0.08, U * 0.08)
+    n = max(2, int(2 * span / 1.6))
+    for i in range(n + 1):
+        uu = -span + 2 * span * i / n
+        for ff in (-0.5, 0.5):
+            m.box(c + R * uu + U * ((CLEAR_M + 0.5 + top - 0.2) / 2) + F * ff, R * 0.04, F * 0.04,
+                  U * ((top - 0.2 - CLEAR_M - 0.5) / 2))
+    for uu in (-span, span):
+        for ff in (-0.5, 0.5):
+            m.box(c + R * uu + U * (top / 2) + F * ff, R * 0.16, F * 0.16, U * (top / 2))
+    black = _sprite_uv("black")
+    lanes = max(1, g["lanes"])
+    for k in range(lanes):
+        uu = -half + (k + 0.5) * g["width"] / lanes
+        m.box(c + R * uu + U * (CLEAR_M + 0.95) + F * 0.0, R * 0.35, F * 0.28, U * 0.22, ATLAS, black)   # reader
+        m.box(c + R * uu + U * (CLEAR_M + 0.25) + F * 0.35, R * 0.12, F * 0.18, U * 0.12, ATLAS, black)  # camera
+
+
 def mesh(signs, origin):
     """(positions (n, 3), tris (m, 3), uvs (n, 2), tri material indices (m,)) of the signs relative to origin, or
     None; materials: MATERIALS."""
@@ -449,6 +501,9 @@ def mesh(signs, origin):
     m = _Mesh(origin)
     for g in signs:
         n0 = len(m.P)
+        if g["kind"] == "toll":
+            toll_gantry(m, g)
+            continue
         w, h = panel_size(g["rows"])
         base, F, R = _structure(m, g, w, h)
         _panel(m, base, R, F, w, h, g["rows"])
