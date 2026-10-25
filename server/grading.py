@@ -37,6 +37,8 @@ VERSION = 2
 PROFILE_STEP = 2.0          # m between profile samples
 SIGMA_M = 12.0              # m, profile smoothing of built roads
 DIRT_SIGMA_M = 5.0          # m, profile smoothing of gravel / dirt roads
+RAIL_GRADE_ON = os.environ.get("BNE_RAIL_GRADE", "1") != "0"    # the ground laid to the railways' bed (railways.py)
+RAIL_TAG = "rail:"
 SHOULDER_M = 1.0            # m of flat shoulder beyond the carriageway, each side
 SIDEWALK_MARGIN_M = 0.5     # m of flat ground beyond a sidewalk (roads.SIDEWALK_CLASSES)
 LONG_PART_M = 3000.0        # a road part longer than this is planned per cell, only within CLIP_MARGIN_M of the cell
@@ -495,6 +497,19 @@ class Grader:
             # cells counted a road up to 9 times, and every batch of points graded differently: patches of ground
             # through the Stelvio's asphalt, GitHub #108's 2.5 m step at a bridge end in Meppen, 2026-10-21)
             own = self._clip_box(key, 0.0)
+            sub = feats.attrs.get("subtype")
+            if RAIL_GRADE_ON and own is not None and sub is not None and (np.asarray(sub).astype(str) == "rail").any():
+                try:            # the railways' bed lines (railways.grade_plans): cuttings and embankments for the track
+                    import railways     # (the cells around only where this one has a line: their fetches cost)
+                    rcells = [self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+                              for k in railways.cells_near(self.frame, own)]
+                    for fid, xy, z in railways.grade_plans(self.frame, rcells, own, self.elev):
+                        p = Plan(xy, z, railways.GRADE_HALF_M)
+                        p.rid = road_id(RAIL_TAG + fid)
+                        plans.append((RAIL_TAG + fid, p))
+                        pclip.append(True)
+                except Exception as e:      # no rail grading rather than no grading
+                    log.debug("grading: railways of %s: %s: %s", key, type(e).__name__, e)
             if own is not None:
                 kept = []
                 for (fid, p), cl in zip(plans, pclip):
