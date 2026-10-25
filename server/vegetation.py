@@ -35,8 +35,9 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 16          # (the cached cells hold their groups: 16 for rocks and thicket on steep ground; 15 for the
-                      # Central / Eastern European beech woods; 14 for the regional rules of GitHub #110)
+VERSION = 17          # (the cached cells hold their groups: 17 for the forest rocks' own slope baseline and no cell kept
+                      # from a build whose DEM failed; 16 for rocks and thicket on steep ground; 15 for the Central /
+                      # Eastern European beech woods; 14 for the regional rules of GitHub #110)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -78,7 +79,9 @@ EDGE_P = 0.4
 # low, the full rate at high. Without a DEM none of this applies.
 FOREST_ROCK_P = 0.07                # rocks under tree cover: chance per SCATTER_CELL_M cell
 FOREST_ROCK_SLOPE = (0.30, 0.70)
-EDGE_STEEP_M = 14.0                 # the roadside thicket's reach (EDGE_M on flat ground) ...
+FOREST_SLOPE_D = 20.0               # the slope of those rocks: DEM m either side, at this zoom (ROCK_SLOPE_D's 40 m made an
+FOREST_SLOPE_ZOOM = 13              # 80 m baseline that smoothed a hillside's slope well below the ramp; not tuned by eye yet)
+EDGE_STEEP_M = 14.0                # the roadside thicket's reach (EDGE_M on flat ground) ...
 EDGE_P_STEEP = 0.7                  # ... and its density (EDGE_P on flat ground)
 EDGE_SLOPE = (0.30, 0.70)
 BANK_M = 6.0                        # rocks on the bank beside a road: reach from the road corridor ...
@@ -191,11 +194,15 @@ def _conifer_share(lat, lon):
     return np.where(_north_america(lat, lon), share, other)
 
 
-# The Carpathians' temperate woods: beech-dominated below ~1000 m, spruce and fir above. The stock maps have no European beech wood or spruce,
+# Central and Eastern Europe's temperate woods (the Carpathians, the Alps, the Balkans' north, the Czech and Hungarian
+# uplands): beech-dominated below ~1000 m, spruce and fir above. The stock maps have no European beech wood or spruce,
 # so the broadleaves are the East Coast set's beeches and aspens (no oaks: the generic group's mid-size trees were
-# mostly oaks, big rust-orange crowns where a real beech wood goes yellow-bronze) and the conifers its Douglas firs, the
-# nearest silhouette. The box is a stand-in for a species map, as _conifer_share is: it spans the Carpathians and the
-# Central / Eastern Europe around them, and leaves the northern pine lowlands and the Mediterranean south to the rules above.
+# mostly oaks, big rust-orange crowns where a real beech wood goes yellow-bronze) and the conifers its Douglas firs,
+# the nearest silhouette. The box is a stand-in for a species map, as _conifer_share is: lat 43-50.5 leaves the
+# northern pine lowlands and the Mediterranean south to the rules above, but it still takes in lowland oak woods
+# (the Pannonian plain, Wallachia), which come out as beech here.
+# The shares below are for a 12 m tree; _build scales them by height (x0.5 at 6 m and under, x1.2 at 14.4 m and over),
+# so above EUROPE_HIGH_M a tree over ~14 m is always a conifer.
 EUROPE_BOX = (43.0, 50.5, 6.0, 31.0)        # lat0, lat1, lon0, lon1
 EUROPE_LOW_M, EUROPE_HIGH_M = 500.0, 1500.0 # the conifer share rises (smoothstep) between these elevations ...
 EUROPE_CONIFER_LOW, EUROPE_CONIFER_HIGH = 0.10, 0.85    # ... from this share (valley beech woods) to this (spruce)
@@ -231,6 +238,7 @@ class Vegetation:
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
+        self._tl = threading.local()    # per build thread: .dem_failed, set when the DEM could not answer (_dem_failed)
         self._warm, self._warm_thread = [], None
         self._warm_cv = threading.Condition()
 
@@ -303,14 +311,22 @@ class Vegetation:
         if p and os.path.exists(p):
             with np.load(p, allow_pickle=False) as f:
                 return Items(*(f[n] for n in fields))
+        self._tl.dem_failed = False
         items = self._build(x, y)
-        if p:
+        # A cell built while the DEM could not answer (offline, no tile) lacks everything the DEM drives: the elevation
+        # conifer mix, the rocks on slopes, the steep thicket. It serves this session but is not kept, so the next
+        # session builds it whole. (No DEM at all, self.dem None, is a setting, not a failure.)
+        if p and not self._tl.dem_failed:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
                 np.savez_compressed(fh, **{n: getattr(items, n) for n in fields})
             staging.replace_cached(tmp, p)
         return items
+
+    def _dem_failed(self):
+        """Note that the build in this thread went without the DEM when it was asked (_load keeps no such cell)."""
+        self._tl.dem_failed = True
 
     # --- the build ------------------------------------------------------------------------------
     def _build(self, x, y):
@@ -446,6 +462,7 @@ class Vegetation:
             z = np.asarray(self.dem.sample(lat[k], lon[k], ELEV_ZOOM), np.float64).reshape(len(k))
         except Exception as e:          # (offline, no tile): the regional rule
             log.debug("vegetation: no elevation: %s", e)
+            self._dem_failed()
             return share
         ok = np.isfinite(z)
         share[k[ok]] = _europe_conifer_share(z[ok])
@@ -565,6 +582,7 @@ class Vegetation:
             z = np.asarray(self.dem.sample(lat, lon, zoom), np.float64).reshape(4, len(px))
         except Exception as e:          # (offline, no tile): rocks as without a DEM
             log.debug("vegetation: no slope: %s", e)
+            self._dem_failed()
             return None
         return np.hypot(z[0] - z[1], z[2] - z[3]) / (2 * d_m)
 
@@ -620,9 +638,9 @@ class Vegetation:
         if self.dem is not None:
             cand = np.flatnonzero(free & ~rock & (cls == UNDERSTORY) & (_hash01(GI, GJ, 29) < FOREST_ROCK_P))
             if len(cand):
-                slope = self._slope(px[cand], py[cand])
+                slope = self._slope(px[cand], py[cand], FOREST_SLOPE_D, FOREST_SLOPE_ZOOM)
                 if slope is not None:
-                    steep = _hash01(GI[cand], GJ[cand], 30) < _steepness(slope, FOREST_ROCK_SLOPE)
+                    steep =_hash01(GI[cand], GJ[cand], 30) < _steepness(slope, FOREST_ROCK_SLOPE)
                     rock[cand[steep]] = True
         bush = free & ~rock & (u < pr + pb)
         sel = rock | bush

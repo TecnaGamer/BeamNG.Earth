@@ -1,6 +1,8 @@
 """vegetation: tree tops from a canopy height model (one per crown, the tallest), never on buildings or roads,
 deterministic; tiles of items in the anchor frame."""
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -284,6 +286,30 @@ class VegetationTest(unittest.TestCase):
         self.assertFalse(road[r, c].any(), "none on the road's corridor")
         self.assertTrue(veg._dilate(road, 3)[r, c].all(), "all beside it (BANK_M)")
         self.assertLess(len(bank(Slope(0.5))), len(steep), "fewer where the ground is less steep")
+
+    def test_a_cell_built_while_the_dem_failed_is_not_kept_on_disk(self):
+        """No tile for the elevation or the slope: the cell serves this session but the next one builds it whole."""
+        def kept(dem):
+            with tempfile.TemporaryDirectory() as d:
+                md = FakeMapData()
+                md.cd.layers["landcover"] = Cover(veg.WC["tree"], 0, 0, 1)
+                v = veg.Vegetation(md, d)
+                v.dem = dem
+                self.assertGreater(len(v.cell(KEY)), 0, "served either way")
+                return sum(f.endswith(".npz") for _, _, fs in os.walk(d) for f in fs)
+        self.assertEqual(kept(OfflineDem()), 0, "a failed slope: not kept")
+        self.assertEqual(kept(Slope(0.9)), 1, "a DEM that answers: kept")
+        self.assertEqual(kept(None), 1, "no DEM at all is a setting, not a failure: kept")
+
+    def test_a_failed_elevation_marks_the_build(self):
+        v = veg.Vegetation(FakeMapData(), None)
+        carpathians = (np.array([45.31]), np.array([25.57]), np.array([True]))
+        v.dem = Slope(0.0)
+        v._conifer_shares(*carpathians)
+        self.assertFalse(getattr(v._tl, "dem_failed", False), "answered")
+        v.dem = OfflineDem()
+        v._conifer_shares(*carpathians)
+        self.assertTrue(v._tl.dem_failed, "no tile")
 
     def test_no_canopy_trees_on_barren_ground(self):
         # the canopy map misread the Bonneville Salt Flats' bright salt as ~19k trees up to 21 m: on bare ground with no

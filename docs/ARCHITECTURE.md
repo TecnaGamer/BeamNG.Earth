@@ -1486,6 +1486,14 @@ The user asked for "trees, rocks and other decoration" (ROADMAP v1.9 "Cities & n
   coasts and in the tropics (60 % of town trees, 20 % elsewhere), tropical trees. Shapes from West Coast
   USA, Utah, Johnson Valley, Jungle Rock Island and Italy; heights measured in game. A tile lists its
   groups; the mod loads every shape folder's `main.materials.json`.
+- **Central / Eastern Europe (`EUROPE_BOX`, lat 43-50.5, lon 6-31, 2026-10-25):** broadleaf tree cover there
+  is `beech_eu` (East Coast beeches and aspens, no oaks), and the conifer share follows the ground's
+  elevation from the DEM (about 10 % under 500 m to 85 % over 1500 m for a 12 m tree) instead of the
+  latitude steps.
+- **Steep ground (DEM slope, 2026-10-25):** rocks under tree cover, rocks on the banks beside roads (not in
+  towns or fields), and a wider, denser roadside thicket. Without a DEM none of it applies. A cell built
+  while the DEM could not answer (offline, no tile) is not written to the cache, so the next session
+  builds it whole.
 - **Prefetch:** each pose of the active anchor queues the cells within 1200 m (`warm_around`, nearest
   first), so a teleport's trees are built before its tiles ask for them.
 - Tests: `server/tests/test_vegetation.py`, `mod/tests/test_trees.lua`.

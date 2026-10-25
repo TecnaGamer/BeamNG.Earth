@@ -584,7 +584,7 @@ class Server:
         if sea is not None and sea.dem is None:
             sea.dem = self.dem      # the lakes' levels
         if vegetation is not None and vegetation.dem is None:
-            vegetation.dem = self.dem   # rocks on bare ground by its slope (vegetation.ROCK_SLOPE)
+            vegetation.dem = self.dem   # rocks by slope, the conifer share by elevation (vegetation.py)
         # Satellite imagery (§A); None = --imagery off (v3-style palette tiles).
         # De-shadowing of the USGS tiles (--deshadow lambert|full; off = the imagery as served).
         self.deshadow = None
