@@ -111,6 +111,18 @@ class RulesTest(unittest.TestCase):
         s = roads.road_specs(f, urban_fn=lambda lat, lon: np.ones(len(lat), bool))
         self.assertEqual([sp.surf for sp in s], ["concrete", "asphalt"])
 
+    def test_sidewalks_follow_the_map_tag(self):
+        f = features([[(0, 0), (100, 0)]] * 5, ["residential"] * 5)
+        f.attrs["osm_sidewalk"] = np.array(["both", "left", "right", "separate", ""], object)
+        town = lambda lat, lon: np.ones(len(lat), bool)                                  # noqa: E731
+        s = roads.road_specs(f, urban_fn=town)
+        self.assertEqual([roads.has_sidewalks(sp) for sp in s], [True, True, True, False, True])
+        self.assertEqual(roads.walk_sides(s[1]), (1,))
+        self.assertEqual(roads.walk_sides(s[2]), (-1,))
+        self.assertEqual(roads.walk_sides(s[4]), (1, -1))                                # untagged: the town rule
+        rural = roads.road_specs(features([[(0, 0), (100, 0)]], ["residential"]))[0]
+        self.assertFalse(roads.has_sidewalks(rural))                                     # untagged, rural: none
+
     def test_rock_and_grass_live_in_the_ground_layer(self):
         def spec(surf):
             return roads.Spec(6.0, "dirt", False, "residential", False, 2.5, 0, None, surf=surf)
