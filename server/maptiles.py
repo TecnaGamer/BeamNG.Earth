@@ -19,6 +19,12 @@ native to z14 (checked 2026-10-16: terrain-light answers above but only scaled u
 are overzoomed above like the imagery. They are fetched like imagery tiles (Imagery.raw: the same netfetch host
 limits, disk cache and 404 markers), never prefetched. No Google / Esri / OSM tile servers.
 
+"apple": terrain-light restyled into the Apple Maps palette (apple_style: white roads on soft neutral blocks, pale
+green vegetation, light blue water) for the phone app (earthPhone.lua). Same source, same overzoom, so it costs one
+numpy pass per tile and nothing extra on the network. "appledark" is the same ramp in the phone's dark palette,
+"labelsdark" the label overlay with light names for it, and "sathd" the imagery of "sat" sharpened where it is
+overzoomed (the phone's terrain view: same source, one filter pass, no extra tiles).
+
 As files (TileFiles, the map_tiles message): the game's UI browser cancels every http request, so the server
 writes each tile into the game's temp folder (tile_path) and says so (map_tiles_ready) tile by tile, building
 FILE_WORKERS at a time; each request replaces the queue (the newest view first; tiles the map no longer asks
@@ -28,6 +34,7 @@ HTTP (GET only, one request per connection):
   /tiles/{z}/{x}/{y}.jpg   -> image/jpeg; 404 no imagery anywhere; 503 fetch failed (retry later)
   /attribution             -> application/json {"attribution": "..."}
   /health                  -> "ok"
+  /api/search, /api/route  -> the phone app's places and route (phoneapi.PhoneApi when the server passes one)
 No Google or Cesium tiles; every source is credited by imagery.attribution().
 """
 import asyncio
@@ -40,7 +47,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 import imagery as imagerymod
 import staging
@@ -111,7 +118,10 @@ LAYER_SOURCES = {
         "eoxlabels", "https://tiles.maps.eox.at/wmts/1.0.0/overlay_bright_3857/default/g/{z}/{y}/{x}.png", 14,
         "Overlay by " + EOX_MAP_CREDIT),
 }
-LAYERS = {"sat": "jpg", "map": "jpg", "labels": "png"}     # layer id -> file extension
+LAYERS = {"sat": "jpg", "map": "jpg", "labels": "png", "apple": "jpg", "appledark": "jpg", "labelsdark": "png",
+          "sathd": "jpg"}                                                   # layer id -> file extension
+APPLE_FROM = "map"          # "apple" and "appledark" are terrain-light restyled (one source, one overzoom rule)
+STYLED_FROM = {"apple": APPLE_FROM, "appledark": APPLE_FROM, "labelsdark": "labels"}   # layer -> its source layer
 
 
 def tile_path(root, layer, z, x, y):
@@ -151,7 +161,7 @@ def parse_path(path):
     return check_tile(parts[1], parts[2], y)
 
 
-def crop_up(rgb, dz, x, y):
+def crop_up(rgb, dz, x, y, resample=Image.BILINEAR):
     """The part of an ancestor tile (dz levels up) covering tile x, y, scaled back to 256 px."""
     if dz <= 0:
         return rgb
@@ -161,8 +171,27 @@ def crop_up(rgb, dz, x, y):
         span = 1
     ox, oy = (x % n) * rgb.shape[1] // n, (y % n) * rgb.shape[0] // n
     part = rgb[oy:oy + span, ox:ox + span]
-    im = Image.fromarray(np.ascontiguousarray(part)).resize((imagerymod.TILE, imagerymod.TILE), Image.BILINEAR)
+    im = Image.fromarray(np.ascontiguousarray(part)).resize((imagerymod.TILE, imagerymod.TILE), resample)
     return np.asarray(im)
+
+
+def _crop_part(rgb, dz, x, y):
+    """The part of an ancestor tile covering tile x, y, still at the ancestor's own resolution (no blur yet)."""
+    if dz <= 0:
+        return rgb
+    n = 1 << dz
+    span = max(1, rgb.shape[0] // n)
+    ox, oy = (x % n) * rgb.shape[1] // n, (y % n) * rgb.shape[0] // n
+    return rgb[oy:oy + span, ox:ox + span]
+
+
+def _up(a):
+    """A weight map scaled to a tile (0..1 float), with Lanczos: the overzoom keeps its edges instead of smearing."""
+    if a.shape[0] == imagerymod.TILE and a.shape[1] == imagerymod.TILE:
+        return a
+    q = np.clip(a * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    im = Image.fromarray(q).resize((imagerymod.TILE, imagerymod.TILE), Image.LANCZOS)
+    return np.clip(np.asarray(im).astype(np.float32) / 255.0, 0, 1)
 
 
 def encode_jpeg(rgb):
@@ -177,6 +206,17 @@ def encode_png(rgba):
     return buf.getvalue()
 
 
+def decode_tile(data, png=False):
+    """A source tile's image (RGBA for png layers), 256 px square. Raises imagery.ImageryError."""
+    try:
+        im = Image.open(io.BytesIO(data)).convert("RGBA" if png else "RGB")
+    except (OSError, ValueError) as e:
+        raise imagerymod.ImageryError(f"undecodable map layer tile: {e}") from None
+    if im.size != (imagerymod.TILE, imagerymod.TILE):
+        im = im.resize((imagerymod.TILE, imagerymod.TILE), Image.BILINEAR)
+    return im
+
+
 def layer_image(data, layer, dz, x, y):
     """A layer's file bytes from its source tile's bytes, dz levels up (cropped and scaled up): the source's own
     bytes when they are already the file's format at 256 px."""
@@ -185,22 +225,114 @@ def layer_image(data, layer, dz, x, y):
         im = Image.open(io.BytesIO(data))
         if dz <= 0 and im.size == (imagerymod.TILE, imagerymod.TILE) and im.format == ("PNG" if png else "JPEG"):
             return data
-        im = im.convert("RGBA" if png else "RGB")
     except (OSError, ValueError) as e:
         raise imagerymod.ImageryError(f"undecodable map layer tile: {e}") from None
-    if im.size != (imagerymod.TILE, imagerymod.TILE):
-        im = im.resize((imagerymod.TILE, imagerymod.TILE), Image.BILINEAR)
-    a = crop_up(np.asarray(im), dz, x, y)
+    a = crop_up(np.asarray(decode_tile(data, png)), dz, x, y)
     return encode_png(a) if png else encode_jpeg(a)
 
 
-class MapTiles:
-    """Map tiles from an imagery.Imagery (or anything with .chain, .tiles(keys, kind) and
-    .attribution())."""
+# The phone map's palette: land and blocks in warm near-white, roads white over them (terrain-light draws roads
+# dark on light ground, so its neutral ramp runs the other way), soft greens, light blue water, sand.
+APPLE_LAND = ((232, 231, 227), (255, 255, 255))      # (blocks, roads) by luminance: darker is road
+APPLE_VEG = ((233, 244, 222), (186, 221, 164))       # (light, dense)
+APPLE_WATER = ((201, 230, 249), (138, 189, 232))     # (shallow, deep)
+APPLE_GROUND = ((243, 237, 224), (229, 214, 186))    # (bare ground, sand)
+# The dark map is not a dimmed light one: the land goes dark and the roads go light, so they read like lit strips
+# (terrain-light's luminance also says how big a road is: the darkest are motorways).
+APPLE_DARK_LAND = ((34, 35, 39), (96, 98, 108))      # (blocks, minor roads)
+APPLE_DARK_MAJOR = (208, 210, 218)                   # motorways: the brightest thing on the dark map
+APPLE_DARK_VEG = ((27, 49, 35), (17, 34, 25))        # (light, dense)
+APPLE_DARK_WATER = ((24, 74, 124), (9, 34, 66))      # (shallow, deep): saturated, so the water pops
+APPLE_DARK_GROUND = ((56, 50, 40), (76, 68, 52))     # (bare ground, sand)
+APPLE_PALETTES = {False: (APPLE_VEG, APPLE_WATER, APPLE_GROUND),
+                  True: (APPLE_DARK_VEG, APPLE_DARK_WATER, APPLE_DARK_GROUND)}
+RESTYLE_SHARPEN = ImageFilter.UnsharpMask(radius=1.4, percent=150, threshold=1)   # the overzoom's soft edges
+TERRAIN_SHARPEN = ImageFilter.UnsharpMask(radius=1.2, percent=110, threshold=3)   # imagery overzoomed above z14
 
-    def __init__(self, imagery, kind=FETCH_KIND):
+
+def _ramp(pair, t):
+    (c0, c1), t = pair, t[..., None]
+    return np.array(c0, np.float32) + (np.array(c1, np.float32) - np.array(c0, np.float32)) * t
+
+
+def _land_color(lum, dark):
+    """The land's colour by luminance: on the light map blocks and white roads (2 stops), on the dark map dark
+    blocks, pale minor roads and bright major ones (terrain-light paints the bigger road darker)."""
+    if not dark:
+        return _ramp(APPLE_LAND, np.clip((0.96 - lum) / 0.22, 0, 1))
+    minor = _ramp(APPLE_DARK_LAND, np.clip((0.94 - lum) / 0.09, 0, 1))
+    major = np.clip((0.85 - lum) / 0.13, 0, 1)[..., None]
+    return minor * (1.0 - major) + np.array(APPLE_DARK_MAJOR, np.float32) * major
+
+
+def style_masks(rgb):
+    """(water, veg, ground, road, major, lum) coverage maps in 0..1 of a terrain-light tile: the roads get their
+    own map so their edges can be kept through the upscale. Pure."""
+    a = rgb.astype(np.float32)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+    water = np.clip((b - np.maximum(r, g) - 1.0) / 6.0, 0, 1)
+    veg = np.clip((g - np.maximum(r, b) - 0.5) / 3.0, 0, 1) * (1 - water)
+    ground = np.clip((r - np.minimum(g, b) - 9.0) / 14.0, 0, 1) * (1 - water) * (1 - veg)
+    road = np.clip((0.905 - lum) / 0.11, 0, 1) * (1 - water) * (1 - veg) * (1 - ground)
+    return water, veg, ground, road, np.clip((0.80 - lum) / 0.10, 0, 1), lum
+
+
+def _crisp(t):
+    """A weight with its transition band narrowed: an edge instead of a haze."""
+    return np.clip((t - 0.26) / 0.48, 0, 1)
+
+
+def colorize(masks, dark=False):
+    """A tile's RGB from its style weights. Pure; ~1 ms a 256 px tile."""
+    water_w, veg_w, ground_w, road, major, lum = masks
+    veg_pair, water_pair, ground_pair = APPLE_PALETTES[bool(dark)]
+    road = _crisp(road)
+    major_w = (road * _crisp(major))[..., None]
+    if dark:
+        minor = np.array(APPLE_DARK_LAND[1], np.float32)
+        blocks = np.array(APPLE_DARK_LAND[0], np.float32)
+        road_rgb = minor * (1 - major_w) + np.array(APPLE_DARK_MAJOR, np.float32) * major_w
+    else:
+        blocks = np.array(APPLE_LAND[0], np.float32)
+        road_rgb = np.array(APPLE_LAND[1], np.float32) * (1 - major_w) + 255.0 * major_w
+    land = road_rgb * road[..., None] + blocks * (1.0 - road)[..., None]
+    land_w = np.clip(1.0 - water_w - veg_w - ground_w, 0, 1)[..., None]     # (the roads live inside the land)
+    out = (_ramp(water_pair, np.clip((0.88 - lum) / 0.20, 0, 1)) * water_w[..., None]
+           + _ramp(veg_pair, np.clip((0.95 - lum) / 0.10, 0, 1)) * veg_w[..., None]
+           + _ramp(ground_pair, np.clip((0.94 - lum) / 0.12, 0, 1)) * ground_w[..., None]
+           + land * land_w)
+    return np.clip(out + 0.5, 0, 255).astype(np.uint8)
+
+
+def apple_style(rgb, dark=False):
+    """A terrain-light tile (HxWx3) in the phone's Apple Maps palette (light or dark). Pure."""
+    return colorize(style_masks(rgb), dark)
+
+
+def apple_tile(data, dz, x, y, dark=False):
+    """The "apple" / "appledark" layer's file bytes from a terrain-light source tile's bytes. The weights are taken
+    at the source's own resolution and scaled up with Lanczos, then the roads are crisped: the source stops at z14,
+    and an upscaled soft road is what a dark map shows worst."""
+    a = _crop_part(np.asarray(decode_tile(data)), dz, x, y)
+    return encode_jpeg(colorize([_up(m) for m in style_masks(a)], dark))
+
+
+def dark_labels_tile(data, dz, x, y):
+    """The label overlay's colours inverted (light names, dark casings) so it reads over the dark map."""
+    a = crop_up(np.asarray(decode_tile(data, True)), dz, x, y, Image.LANCZOS).copy()
+    a[..., :3] = 255 - a[..., :3]
+    return encode_png(a)
+
+
+class MapTiles:
+    """Map tiles from an imagery.Imagery (or anything with .chain, .tiles(keys) and .attribution()).
+    `api`: an object with respond(method, path) for the /api/ paths (phoneapi.PhoneApi), or None."""
+
+    def __init__(self, imagery, kind=FETCH_KIND, api=None):
         self.imagery = imagery
         self.kind = kind
+        self.api = api
         self.stats = {"served": 0, "missing": 0, "failed": 0, "bad": 0}
 
     def order(self, z):
@@ -209,8 +341,8 @@ class MapTiles:
             chain.sort(key=lambda s: 0 if s.name.startswith("eox") else 1)     # stable: chain order kept
         return chain
 
-    def tile(self, z, x, y):
-        """(jpeg bytes, source name), or None where no source has imagery. Raises
+    def tile_image(self, z, x, y):
+        """(rgb HxWx3, source name, dz levels overzoomed), or None where no source has imagery. Raises
         imagery.ImageryError when a fetch failed (and no later source had the tile)."""
         z, x, y = check_tile(z, x, y)
         err = None
@@ -229,24 +361,41 @@ class MapTiles:
                 continue
             if t is None or t.uniform:
                 continue
-            return encode_jpeg(crop_up(t.rgb, dz, x, y)), src.name
+            return crop_up(t.rgb, dz, x, y, Image.LANCZOS), src.name, dz
         if err is not None:
             raise err
         return None
 
+    def tile(self, z, x, y):
+        """(jpeg bytes, source name), or None where no source has imagery. Raises
+        imagery.ImageryError when a fetch failed (and no later source had the tile)."""
+        got = self.tile_image(z, x, y)
+        return None if got is None else (encode_jpeg(got[0]), got[1])
+
     def layer_tile(self, layer, z, x, y):
-        """A layer's tile as file bytes (JPEG; PNG for "labels"), or None where it has none. Raises
+        """A layer's tile as file bytes (JPEG; PNG for the label layers), or None where it has none. Raises
         imagery.ImageryError when a fetch failed."""
         z, x, y = check_tile(z, x, y)
-        if layer == "sat":
-            r = self.tile(z, x, y)
-            return r[0] if r is not None else None
-        src = LAYER_SOURCES[layer]
+        if layer in ("sat", "sathd"):
+            got = self.tile_image(z, x, y)
+            if got is None:
+                return None
+            if layer == "sat":
+                return encode_jpeg(got[0])
+            a = got[0]
+            if got[2] > 0:                  # "sathd": the phone's satellite view, sharpened above the source's zoom
+                a = np.asarray(Image.fromarray(np.ascontiguousarray(a)).filter(TERRAIN_SHARPEN))
+            return encode_jpeg(a)
+        src = LAYER_SOURCES[STYLED_FROM.get(layer, layer)]
         sz = min(z, src.max_zoom)
         dz = z - sz
         data = self.imagery.raw(src, sz, x >> dz, y >> dz, self.kind)
         if data is None:
             return None
+        if layer in ("apple", "appledark"):
+            return apple_tile(data, dz, x, y, dark=layer == "appledark")
+        if layer == "labelsdark":
+            return dark_labels_tile(data, dz, x, y)
         return layer_image(data, layer, dz, x, y)
 
     def attribution(self):
@@ -258,6 +407,10 @@ class MapTiles:
         if method not in ("GET", "HEAD"):
             return 405, "text/plain", b"GET only"
         p = path.split("?", 1)[0]
+        if self.api is not None and p.startswith("/api/"):
+            got = self.api.respond(method, path)
+            if got is not None:
+                return got
         if p == "/health":
             return 200, "text/plain", b"ok"
         if p == "/attribution":

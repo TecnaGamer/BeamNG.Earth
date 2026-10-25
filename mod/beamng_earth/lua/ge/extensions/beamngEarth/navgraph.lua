@@ -23,6 +23,7 @@ M.RECLIP_M = 150
 M.UI_MAP = false        -- send our graph to the UI (the big map) on every apply
 M.RULES_FILE = '/temp/beamngEarth/roadRules.json'
 M.rules = { rightHandDrive = false, turnOnRed = true }    -- US; `rightHandDrive = true` means driving on the left
+M.mph = false        -- speed limits posted in mph here (the phone's speed tile; server navgraph.road_rules)
 M.enabled = true
 -- Traffic (gameplay_traffic, the player's traffic amount): started once the first graph is in the map; a car
 -- within GUARD_M of the block's edge (or past it, where there is no ground) is respawned on the graph
@@ -262,6 +263,7 @@ local function setRules()
   local r = graph.rules
   if r then
     M.rules = { rightHandDrive = r.rightHandDrive and true or false, turnOnRed = r.turnOnRed and true or false }
+    M.mph = r.mph and true or false
     M.SIGNAL_TYPE = r.redYellow and 'lightsBasicEU' or 'lightsBasic'
   end
 end

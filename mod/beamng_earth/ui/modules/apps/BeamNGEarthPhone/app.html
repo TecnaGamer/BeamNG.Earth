@@ -1,0 +1,142 @@
+<div class="bngPhone">
+  <link type="text/css" rel="stylesheet" href="/ui/modules/apps/BeamNGEarthPhone/app.css" />
+  <div class="bp-fit">
+    <div class="bp-phone" ng-show="ui.visible">
+      <div class="bp-screen" ng-class="{'is-routing': !!ui.route, 'is-dark': layer === 'dark', 'has-pin': !!pinCard}">
+        <div class="bp-map" ng-mousedown="dragStart($event)"
+             ng-class="{'is-satellite': layer === 'satellite'}">
+          <div class="bp-zoomable">
+            <div class="bp-tiles">
+              <img class="bp-tile" ng-repeat="t in tiles track by t.key" ng-src="{{t.src}}"
+                   ng-style="{left: t.left + 'px', top: t.top + 'px'}" />
+            </div>
+            <canvas class="bp-overlay"></canvas>
+          </div>
+          <div class="bp-hint" ng-if="!ui.connected">No companion server: places and the route need it</div>
+        </div>
+
+        <div class="bp-island" ng-class="{'is-wide': glyph.show}">
+          <svg class="bp-glyph" viewBox="0 0 24 24" ng-if="glyph.show">
+            <g ng-style="glyph.style">
+              <path ng-repeat="d in glyph.paths" ng-attr-d="{{d}}" />
+            </g>
+          </svg>
+        </div>
+
+        <div class="bp-banner" ng-if="glyph.show" ng-class="{'is-now': captionNow}">
+          <svg class="bp-banner-glyph" viewBox="0 0 24 24">
+            <g ng-style="glyph.style">
+              <path ng-repeat="d in glyph.paths" ng-attr-d="{{d}}" />
+            </g>
+          </svg>
+          <div class="bp-banner-text">
+            <strong>{{distance}}</strong>
+            <span class="bp-caption">{{rerouting ? 'Recalculating route…' : caption}}</span>
+            <span class="bp-then" ng-if="thenSay">{{thenSay}}</span>
+          </div>
+        </div>
+
+        <div class="bp-search" ng-if="searchOpen">
+          <input class="bp-input" type="text" placeholder="Search places or lat, lon" autocomplete="off" spellcheck="false" />
+          <div class="bp-results" ng-if="ui.search || suggestions.length || coord">
+            <div class="bp-result bp-coord" ng-if="coord" ng-click="pick(coord)">
+              <span class="bp-row-main">
+                <span class="bp-name">{{coord.name}}</span>
+                <span class="bp-meta">Coordinates</span>
+              </span>
+            </div>
+            <div class="bp-result is-muted" ng-if="ui.search && ui.search.pending">
+              Searching {{ui.search.query}}&hellip;
+            </div>
+            <div class="bp-result" ng-repeat="r in (ui.search ? ui.search.results : [])" ng-click="pick(r)">
+              <span class="bp-row-main">
+                <span class="bp-name">{{r.name}}</span>
+                <span class="bp-meta">{{r.detail}}<span ng-if="r.distance_km !== null && r.distance_km !== undefined"> &middot; {{r.distance_km | number:1}} km</span></span>
+              </span>
+            </div>
+            <div class="bp-result is-muted" ng-if="ui.search && !ui.search.pending && !ui.search.results.length">
+              {{ui.search.error || 'No places found'}}
+            </div>
+            <div class="bp-group" ng-if="!ui.search && suggestions.length">
+              <div class="bp-group-label">Recent</div>
+              <div class="bp-recents">
+                <div class="bp-result" ng-repeat="r in suggestions" ng-click="pick(r)">
+                  <span class="bp-row-main">
+                    <span class="bp-name">{{r.name}}</span>
+                    <span class="bp-meta">{{r.detail}}</span>
+                  </span>
+                  <button class="bp-forget" ng-click="forget(r, $event)" title="Forget this place">
+                    <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="bp-credit">Places: Photon by komoot &middot; &copy; OpenStreetMap</div>
+          </div>
+        </div>
+
+        <button class="bp-round bp-recenter" ng-click="recenter()" title="Re-center on the car">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2.2" class="solid" /><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3" /></svg>
+        </button>
+        <button class="bp-round bp-layers" ng-click="toggleLayers()" title="{{layerName}} map">
+          <svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z" /><path d="M3 13l9 5 9-5" /></svg>
+        </button>
+        <button class="bp-round bp-search-button" ng-click="toggleSearch()" ng-if="!searchOpen" title="Search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="M16 16l5 5" /></svg>
+        </button>
+
+        <div class="bp-layer-sheet" ng-if="layersOpen">
+          <div class="bp-layer-opt" ng-repeat="o in layerOptions" ng-class="{'is-on': o.id === layer}"
+               ng-click="selectLayer(o)">
+            <span class="bp-swatch bp-swatch-{{o.id}}"></span>
+            <span class="bp-layer-name">{{o.name}}</span>
+            <svg class="bp-tick" viewBox="0 0 24 24" ng-if="o.id === layer"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+          </div>
+        </div>
+
+        <div class="bp-limit" ng-if="ui.limit">
+          <span class="bp-limit-value">{{ui.limit.value}}</span>
+          <span class="bp-limit-unit">{{ui.limit.unit}}</span>
+        </div>
+
+        <div class="bp-pin-card" ng-if="pinCard">
+          <div class="bp-pin-text">
+            <span class="bp-pin-name">{{pinCard.name}}</span>
+            <span class="bp-pin-detail" ng-if="pinCard.detail">{{pinCard.detail}}</span>
+          </div>
+          <button class="bp-go" ng-click="directions()" ng-class="{'is-busy': pinBusy}" ng-disabled="pinBusy">
+            <svg viewBox="0 0 24 24"><path d="M12 21V6" /><path d="M7 11l5-5 5 5" /></svg>
+            <span>{{pinBusy ? 'Planning&hellip;' : 'Directions'}}</span>
+          </button>
+          <button class="bp-pin-x" ng-click="closePin()" title="Remove the pin">
+            <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17" /></svg>
+          </button>
+        </div>
+
+        <div class="bp-sheet" ng-if="ui.route">
+          <div class="bp-sheet-row">
+            <div class="bp-eta">
+              <span class="bp-eta-time">{{eta.value}}</span>
+              <span class="bp-eta-unit">{{eta.unit}}</span>
+            </div>
+            <div class="bp-meta-col">
+              <span class="bp-remaining">{{remaining}}</span>
+              <span class="bp-recalc" ng-if="ui.route.rerouting">Recalculating route&hellip;</span>
+              <span class="bp-dest" ng-if="!ui.route.rerouting && ui.route.name">{{ui.route.name}}</span>
+              <span class="bp-error" ng-if="ui.route.error">{{ui.route.error}}</span>
+              <span class="bp-error" ng-if="!ui.route.error && ui.route.planning && !ui.route.rerouting">Planning&hellip;</span>
+            </div>
+            <button class="bp-end" ng-click="endRoute()">End Route</button>
+          </div>
+          <div class="bp-routes" ng-if="ui.route.options && ui.route.options.length > 1">
+            <button class="bp-route" ng-repeat="o in ui.route.options" ng-class="{'is-on': o.chosen}"
+                    ng-click="useOption($index)" title="{{optionTitle(o)}}">
+              <span class="bp-route-tag">{{o.tag}}</span>
+              <span class="bp-route-meta">{{optionMeta(o)}}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

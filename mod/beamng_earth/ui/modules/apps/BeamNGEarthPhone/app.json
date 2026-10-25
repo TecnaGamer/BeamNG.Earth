@@ -1,0 +1,21 @@
+{
+  "domElement": "<beamng-earth-phone></beamng-earth-phone>",
+  "name": "BeamNG.Earth: Phone",
+  "types": [
+    "ui.apps.categories.utility"
+  ],
+  "description": "Search a place, set a destination and follow the turn-by-turn card, with the speed limit and the route on an Apple Maps style map (Page Up shows and hides it).",
+  "css": {
+    "right": "5px",
+    "bottom": "310px",
+    "width": "340px",
+    "height": "737px"
+  },
+  "author": "BeamNG.Earth",
+  "version": "1.0",
+  "directive": "beamngEarthPhone",
+  "appName": "beamngEarthPhone",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "yes"
+}

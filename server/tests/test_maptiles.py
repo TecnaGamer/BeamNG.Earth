@@ -217,6 +217,69 @@ class LayersTest(unittest.TestCase):
             maptiles.MapTiles(FakeImagery(fail=("eoxlabels",))).layer_tile("labels", 5, 1, 1)
         self.assertEqual(maptiles.MapTiles(FakeImagery()).layer_tile("sat", 12, 1170, 1566)[:2], b"\xff\xd8")
 
+    def test_apple_layer_from_terrain_light(self):
+        img = FakeImagery()
+        t = maptiles.MapTiles(img)
+        jpeg = t.layer_tile("apple", 12, 1176, 1561)
+        self.assertEqual(img.calls[-1], ("eoxmap", 12, 1176, 1561, maptiles.FETCH_KIND), "the map layer's source")
+        self.assertEqual(jpeg[:2], b"\xff\xd8")
+        a = decode(t.layer_tile("apple", 16, (100 << 2) + 1, (200 << 2) + 3))
+        self.assertEqual(img.calls[-1][:4], ("eoxmap", 14, 100, 200), "overzoomed like the map layer")
+        self.assertGreater(a[:, :, 1].mean(), a[:, :, 0].mean(), "the source's green gradient stays green")
+        self.assertIsNone(maptiles.MapTiles(FakeImagery(missing=("eoxmap",))).layer_tile("apple", 5, 1, 1))
+
+    def test_apple_style_palette(self):
+        a = np.zeros((3, 1, 3), np.uint8)
+        a[0] = (100, 150, 210)          # water
+        a[1] = (120, 120, 120)          # a road (dark neutral in terrain-light)
+        a[2] = (250, 250, 250)          # a block
+        out = maptiles.apple_style(a).astype(int)
+        self.assertGreater(out[0, 0, 2], out[0, 0, 0] + 40, "water is blue")
+        self.assertTrue((out[1, 0] >= 248).all(), f"a road is white: {out[1, 0]}")
+        self.assertTrue(225 <= out[2, 0, 0] <= 245, f"a block is soft near-white: {out[2, 0]}")
+        self.assertGreater(out[1, 0].mean(), out[2, 0].mean(), "roads show over the blocks")
+        self.assertEqual(maptiles.apple_style(a).dtype, np.uint8)
+        self.assertEqual(maptiles.apple_style(np.full((2, 2, 3), 255, np.uint8)).shape, (2, 2, 3))
+
+    def test_apple_dark_palette_is_a_real_dark_mode(self):
+        a = np.zeros((4, 1, 3), np.uint8)
+        a[0] = (100, 150, 210)          # water
+        a[1] = (150, 150, 150)          # a motorway (the darkest roads in terrain-light)
+        a[2] = (215, 215, 215)          # a minor road
+        a[3] = (250, 250, 250)          # a block
+        out = maptiles.apple_style(a, dark=True).astype(int)
+        self.assertLess(out[3, 0].mean(), 60, f"the land goes dark, not dimmed: {out[3, 0]}")
+        self.assertGreater(int(out[0, 0, 2]), int(out[0, 0, 0]) + 30, "water stays a saturated blue")
+        self.assertGreater(out[2, 0].mean(), out[3, 0].mean() + 40, "minor roads are light on the dark land")
+        self.assertGreater(out[1, 0].mean(), out[2, 0].mean() + 40, "and motorways are the brightest")
+        self.assertEqual(maptiles.LAYERS["appledark"], "jpg")
+
+    def test_dark_layer_and_labels(self):
+        img = FakeImagery()
+        t = maptiles.MapTiles(img)
+        self.assertEqual(t.layer_tile("appledark", 12, 1176, 1561)[:2], b"\xff\xd8")
+        self.assertEqual(img.calls[-1], ("eoxmap", 12, 1176, 1561, maptiles.FETCH_KIND))
+        png = t.layer_tile("labelsdark", 12, 1176, 1561)
+        self.assertEqual(png[:4], b"\x89PNG", "still a png overlay")
+        self.assertEqual(img.calls[-1][0], "eoxlabels")
+
+    def test_sathd_layer_is_the_imagery(self):
+        img = FakeImagery()
+        t = maptiles.MapTiles(img)
+        self.assertEqual(t.layer_tile("sathd", 10, 100, 200), t.layer_tile("sat", 10, 100, 200),
+                         "the same imagery at the source's own zoom")
+        deep = t.layer_tile("sathd", 16, (100 << 2) + 1, (200 << 2) + 3)
+        self.assertEqual(deep[:2], b"\xff\xd8")
+        self.assertEqual(decode(deep).shape, decode(t.layer_tile("sat", 16, 0, 0)).shape)
+
+    def test_terrain_sharpen_crisps_an_edge(self):
+        a = np.full((64, 64, 3), 90, np.uint8)
+        a[:, 32:] = 150
+        sharp = np.asarray(Image.fromarray(a).filter(maptiles.TERRAIN_SHARPEN)).astype(int)
+        edge = np.abs(np.diff(a[32, :, 0].astype(int)))
+        self.assertGreater(np.abs(np.diff(sharp[32, :, 0])).max(), edge.max(),
+                           "the overzoom's soft edge gains contrast")
+
 
 class FakeLayers:
     """MapTiles.layer_tile with a delay per tile, a gate the first build waits on, and tiles with nothing."""

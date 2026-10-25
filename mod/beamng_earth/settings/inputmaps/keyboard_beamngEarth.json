@@ -3,6 +3,7 @@
   "bindings":[
     {"control":"ctrl shift e", "action":"beamngEarth_reportNote"},
     {"control":"ctrl shift y", "action":"beamngEarth_reportBench"},
-    {"control":"ctrl alt w", "action":"beamngEarth_wireframe"}
+    {"control":"ctrl alt w", "action":"beamngEarth_wireframe"},
+    {"control":"pageup", "action":"beamngEarth_phoneToggle"}
   ]
 }
