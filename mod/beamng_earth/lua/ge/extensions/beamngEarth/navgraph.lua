@@ -12,6 +12,9 @@ local M = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
 M.MIN_GAP_S = 1.0
+M.GRAPH_GAP_S = 6.0     -- a new server graph alone (the block not moved RECLIP_M) waits this long: each apply
+                        -- makes every car drop its route (the user, 2026-10-25: cars turned round while loading)
+M.LOG_S = 60            -- traffic diagnostics to the game log this often
 -- An apply (or its signals' second step) waits for a light frame (governor roomFor: at most APPLY_ROOM_MS of streaming
 -- and other work spent in it, not a terrain commit's), APPLY_WAIT_FRAMES at most
 M.APPLY_ROOM_MS = 4.0
@@ -43,8 +46,8 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 -- respawned too: to the AI the cut is a dead end, and a car spawned facing one made a three-point turn on the spot
 -- (GitHub #72, "spawns the wrong way and tries to turn around immediately"; Bathurst 2026-10-21: 20 m from a cut)
 -- A car that has just appeared (FRESH_S) turns round for a cut much farther ahead (Bathurst: 89 m): CUT_FRESH_M.
-M.CUT_M = 60
-M.CUT_S = 4
+M.CUT_M = 150         -- (2026-10-25: 60 / 4 s was inside the AI's 80-100 m planning: it turned round first)
+M.CUT_S = 8
 M.CUT_FRESH_M = 250
 M.FRESH_S = 5
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
@@ -55,6 +58,8 @@ M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
 local graph = nil       -- the server's last graph {anchor, nodes, edges}
 local applied = nil     -- {anchor, serial, box} of the graph in the game's map now
 local dirty = false
+local graphOnly = false   -- dirty only from a new server graph (GRAPH_GAP_S), not a block move
+local logAt, logApplies, logCuts = nil, 0, 0
 local lastApply = -math.huge
 local persistent = nil  -- the node table handed out once (research §2.7.2)
 local ours = false
@@ -188,7 +193,7 @@ function M.onMessage(msg, currentAnchor)
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil }
-  dirty = true
+  dirty, graphOnly = true, true
   return true
 end
 
@@ -445,7 +450,7 @@ local function guard(b, all)
         seenAt[id] = { p.x, p.y, s0[3] }
         local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
-        if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
+        if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1; logCuts = logCuts + 1 end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
@@ -588,6 +593,12 @@ end
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
   local t0 = os.clock()
+  logAt = logAt or t0
+  if t0 - logAt >= M.LOG_S then
+    if started then log('I', 'beamngEarth', string.format('navgraph: %d map applies, %d respawns before a cut in %d s',
+      logApplies, logCuts, math.floor(t0 - logAt))) end
+    logAt, logApplies, logCuts = t0, 0, 0
+  end
   if applied and t0 - lastGuard >= M.GUARD_S then
     lastGuard = t0
     local ok, err = pcall(guard, b, false)
@@ -610,15 +621,16 @@ function M.update(aid, b, gov)
     return
   end
   -- a small block move alone does not re-apply (each apply is a ~40 ms frame); one of RECLIP_M does
-  if not (dirty or foreign) and applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty = true end
+  if applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty, graphOnly = true, false end
   if not (dirty or foreign) then return end
   local t = os.clock()
-  if t - lastApply < M.MIN_GAP_S and not foreign then return end
+  if not foreign and t - lastApply < ((graphOnly and applied and applied.anchor == aid) and M.GRAPH_GAP_S or M.MIN_GAP_S) then return end
   local pre = buildNodes(b)
   if not pre or not room(gov) then return end
   prep = nil
   lastApply = t
-  dirty, foreign = false, false
+  dirty, foreign, graphOnly = false, false, false
+  logApplies = logApplies + 1
   local sw = stopwatch.new()
   local okA = apply(b, pre)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
