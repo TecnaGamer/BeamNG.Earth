@@ -56,5 +56,14 @@ class CatalogTest(unittest.TestCase):
                       (ROOT / "tools/generate_us_signs.py").read_text(encoding="utf-8"))
 
 
+class MaterialsLoadedTest(unittest.TestCase):
+    def test_every_sign_materials_file_is_loaded(self):
+        """The level loads none of these by itself: one the mod's Lua does not load leaves its shapes untextured (the
+        signs' faces drew as bare metal, 2026-10-25)."""
+        lua = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "mod/beamng_earth/lua").rglob("*.lua"))
+        for f in sorted(list(ART.glob("sign_*.materials.json")) + list(ART.glob("us_*.materials.json"))):
+            self.assertIn(f.name, lua, f"{f.name} is never loaded")
+
+
 if __name__ == "__main__":
     unittest.main()
