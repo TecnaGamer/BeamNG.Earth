@@ -14,7 +14,8 @@ cell's map data and VERSION; its random choices (species, yaw, size, thinning ra
 - Bushes: canopy maxima from BUSH_MIN_M to TREE_MIN_M, and a hashed scatter over shrubland.
 - Rocks: a hashed scatter over bare / sparse land (WorldCover 60), thinner over shrubs and grass.
 - Groups: deciduous / conifer by a regional mix and height, shrub, rock (the mod maps groups to its
-  stock shapes).
+  stock shapes). In Central / Eastern Europe's woods (EUROPE_BOX, tree cover) the broadleaves are beech_eu and the
+  conifer share follows the ground's elevation (the DEM) instead of the latitude steps.
 """
 import logging
 import math
@@ -33,15 +34,17 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 14          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110)
+VERSION = 15          # (the cached cells hold their groups: 15 for the Central / Eastern European beech woods and
+                      # the elevation-ramped conifer share there; 14 for the regional rules of GitHub #110)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
-          "oak_west", "tropical")
+          "oak_west", "tropical", "beech_eu")      # (new groups go last: the ids of the first eleven are the Rust
+                                                   # kernel earthfast.regional_groups's)
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
- G_OAK_WEST, G_TROPICAL) = range(len(GROUPS))
+ G_OAK_WEST, G_TROPICAL, G_BEECH_EU) = range(len(GROUPS))
 ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
@@ -166,6 +169,39 @@ def _conifer_share(lat, lon):
     mediterranean = (lat > 30.0) & (lat < 46.0) & (lon > -10.0) & (lon < 40.0)
     other = np.where(mediterranean, 0.3, other)
     return np.where(_north_america(lat, lon), share, other)
+
+
+# Central and Eastern Europe's temperate woods (the Alps, the Carpathians, the Balkans' north, the Czech and Hungarian
+# uplands): beech-dominated below ~1000 m, spruce and fir above. The stock maps have no European beech wood or spruce,
+# so the broadleaves are the East Coast set's beeches and aspens (no oaks: the generic group's mid-size trees were
+# mostly oaks, big rust-orange crowns where a real beech wood goes yellow-bronze, Sinaia 2026-10-25) and the conifers
+# its Douglas firs, the nearest silhouette. The box is a stand-in for a species map, as _conifer_share is: lat 43-50.5
+# leaves the pine lowlands of northern Germany and Poland and the Mediterranean south to the rules above.
+EUROPE_BOX = (43.0, 50.5, 6.0, 31.0)        # lat0, lat1, lon0, lon1
+EUROPE_LOW_M, EUROPE_HIGH_M = 500.0, 1500.0 # the conifer share rises (smoothstep) between these elevations ...
+EUROPE_CONIFER_LOW, EUROPE_CONIFER_HIGH = 0.10, 0.85    # ... from this share (valley beech woods) to this (spruce)
+ELEV_ZOOM = 12              # the DEM zoom of the elevation sampled at the tops (coarse tiles, as ROCK_SLOPE_ZOOM)
+
+
+def _in_europe(lat, lon):
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    la0, la1, lo0, lo1 = EUROPE_BOX
+    return (lat >= la0) & (lat <= la1) & (lon >= lo0) & (lon <= lo1)
+
+
+def _europe_conifer_share(elev_m):
+    """The conifer share of Central / Eastern Europe's woods at a ground elevation (m): a smooth ramp, not the
+    latitude steps of _conifer_share (which put a line of conifers at 46 deg N, across the Carpathians)."""
+    t = np.clip((np.asarray(elev_m, np.float64) - EUROPE_LOW_M) / (EUROPE_HIGH_M - EUROPE_LOW_M), 0.0, 1.0)
+    s = t * t * (3.0 - 2.0 * t)
+    return EUROPE_CONIFER_LOW + (EUROPE_CONIFER_HIGH - EUROPE_CONIFER_LOW) * s
+
+
+def _beech_woods(group, lat, lon, lcls):
+    """Broadleaf trees of Central / Eastern Europe's woods (land cover: tree cover) are beech woods; town trees,
+    fields' trees and the like keep the generic broadleaves (oaks included)."""
+    wood = _in_europe(lat, lon) & (np.asarray(lcls) == WC["tree"]) & (np.asarray(group) == G_DECIDUOUS)
+    return np.where(wood, G_BEECH_EU, group).astype(np.uint8)
 
 
 class Vegetation:
@@ -352,9 +388,10 @@ class Vegetation:
         gx = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
-        conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
+        conifer = u1 < self._conifer_shares(tlat, tlon, is_tree) * np.clip(th / 12.0, 0.5, 1.2)
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7))
+        group = _beech_woods(group, tlat, tlon, lcls)
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
@@ -375,6 +412,24 @@ class Vegetation:
         scatter = self._scatter(cd, lc, blocked | paved, chm, hs)
         edge = self._edge(cd, lc, blocked, road, chm, hs)
         return _concat(_concat(tree, scatter), edge)
+
+    def _conifer_shares(self, lat, lon, is_tree):
+        """The conifer share per top: _conifer_share's regional rule, except in EUROPE_BOX where a tree's share follows
+        its ground elevation (the DEM, when it can say: else the regional rule as before)."""
+        share = np.array(_conifer_share(lat, lon), np.float64)
+        if self.dem is None:
+            return share
+        k = np.flatnonzero(_in_europe(lat, lon) & is_tree)
+        if not len(k):
+            return share
+        try:
+            z = np.asarray(self.dem.sample(lat[k], lon[k], ELEV_ZOOM), np.float64).reshape(len(k))
+        except Exception as e:          # (offline, no tile): the regional rule
+            log.debug("vegetation: no elevation: %s", e)
+            return share
+        ok = np.isfinite(z)
+        share[k[ok]] = _europe_conifer_share(z[ok])
+        return share
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""

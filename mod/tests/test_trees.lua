@@ -38,6 +38,23 @@ T.check(shape:find('douglasfir_large') ~= nil and sc > 0.9 and sc < 1.1, 'a 20 m
 shape, sc = trees.pick('rock', 0.6, 0.1)
 T.check(shape:find('rock') ~= nil and math.abs(sc - 0.6 / select(2, unpack({ shape, 0.6 })) * 1) < 2, 'a rock')
 
+-- Central / Eastern Europe's beech woods: beeches and aspens only, never an oak, at any height or rank
+local onlyBeechAspen = true
+for _, v in ipairs(trees.CATALOG.beech_eu or {}) do
+  if not (v[1]:find('trees_beech', 1, true) or v[1]:find('trees_aspen', 1, true)) then onlyBeechAspen = false end
+end
+T.check(trees.CATALOG.beech_eu ~= nil and #trees.CATALOG.beech_eu > 0 and onlyBeechAspen, 'beech_eu: beech and aspen shapes only')
+local noOak = true
+for _, h in ipairs({ 3, 5, 9, 13, 18, 21, 30 }) do
+  for _, r in ipairs({ 0.05, 0.4, 0.8 }) do
+    local s = trees.pick('beech_eu', h, r)
+    if s:find('oak', 1, true) then noOak = false end
+  end
+end
+T.check(noOak, 'beech_eu: no oak at any height')
+shape, sc = trees.pick('beech_eu', 20.0, 0.3)
+T.check((shape:find('beech') or shape:find('aspen')) and sc > 0.8 and sc < 1.25, 'a 20 m beech wood tree: a beech or aspen near its size')
+
 -- a tile of 100 items with ranks 0 .. 0.99 at the player: all made; far away: a quarter
 local rows = {}
 for i = 0, 99 do rows[#rows + 1] = string.format('{0, %d, 10, 5, 0, 1, 12, %.2f}', i, i / 100) end

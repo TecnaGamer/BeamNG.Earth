@@ -40,9 +40,9 @@ class Feats:
         return [[np.asarray(self.rows[i], np.float64)]]
 
 
-def cell_data():
+def cell_data(key=KEY):
     """A cell whose canopy has three crowns: one free, one under a building, one on a road."""
-    lon0, lat0, lon1, lat1 = KEY.bounds()
+    lon0, lat0, lon1, lat1 = key.bounds()
     x0, y1 = veg._to3857(lon0, lat1)
     x1, y0 = veg._to3857(lon1, lat0)
     dx = (x1 - x0) / 512
@@ -65,17 +65,18 @@ def cell_data():
     road = Feats(2, [[(float(a[0]), float(a[1])), (float(b[0]), float(b[1]))]], ["residential"])
     layers = {"canopy": chm, "landcover": Raster(None, 0, 0, 1), "buildings": building, "roads": road,
               "water": Feats(3, [])}
-    return SimpleNamespace(bounds=KEY.bounds(), layers=layers), crowns, lonlat
+    return SimpleNamespace(bounds=key.bounds(), layers=layers), crowns, lonlat
 
 
 class FakeMapData:
     release = "t"
 
-    def __init__(self):
-        self.cd, self.crowns, self.lonlat = cell_data()
+    def __init__(self, key=KEY):
+        self.key = key
+        self.cd, self.crowns, self.lonlat = cell_data(key)
 
     def cell(self, key, layers=None, kind="demand"):
-        if tuple(key)[1:] == (KEY.x, KEY.y):
+        if tuple(key)[1:] == (self.key.x, self.key.y):
             return self.cd
         empty = SimpleNamespace(bounds=None, layers={"buildings": None, "roads": None, "water": None})
         return empty
@@ -229,6 +230,88 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_SHRUB, 1, 22.3, -4.6, 60), veg.G_DESERT_SHRUB, "the Sahara")
         self.assertEqual(self.g(veg.G_ROCK, 1, -25.0, 133.0, 20), veg.G_DESERT_ROCK, "inner Australia")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 52.0, 5.0, 20), veg.G_SHRUB, "Dutch shrubland: no desert")
+
+    def test_central_european_beech_woods(self):
+        """Sinaia 2026-10-25: the generic broadleaves were big rust-orange oaks over a Carpathian beech wood."""
+        def beech(group, lat, lon, lcls):
+            return int(veg._beech_woods(np.array([group], np.uint8), np.array([lat]), np.array([lon]),
+                                        np.array([lcls], np.uint8))[0])
+        self.assertEqual(beech(veg.G_DECIDUOUS, 45.31, 25.57, veg.WC["tree"]), veg.G_BEECH_EU, "Sinaia's wood")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 47.4, 10.3, veg.WC["tree"]), veg.G_BEECH_EU, "the Alps")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 45.31, 25.57, veg.WC["built"]), veg.G_DECIDUOUS, "a town's trees")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 45.31, 25.57, veg.WC["crop"]), veg.G_DECIDUOUS, "a field's trees")
+        self.assertEqual(beech(veg.G_CONIFER, 45.31, 25.57, veg.WC["tree"]), veg.G_CONIFER, "conifers stay")
+        self.assertEqual(beech(veg.G_SHRUB, 45.31, 25.57, veg.WC["tree"]), veg.G_SHRUB, "bushes stay")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 39.3, -76.6, veg.WC["tree"]), veg.G_DECIDUOUS, "Maryland as before")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 52.4, 17.0, veg.WC["tree"]), veg.G_DECIDUOUS, "Poland's lowlands")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 41.9, 12.5, veg.WC["tree"]), veg.G_DECIDUOUS, "Rome: Mediterranean")
+        self.assertEqual(veg.GROUPS[veg.G_BEECH_EU], "beech_eu")
+        self.assertEqual(veg.GROUPS[:11], ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper",
+                                           "desert_shrub", "desert_rock", "oak_west", "tropical"), "ids kept")
+
+    def test_europe_conifer_share_follows_elevation(self):
+        s = lambda m: float(veg._europe_conifer_share(m))                       # noqa: E731
+        self.assertAlmostEqual(s(0.0), veg.EUROPE_CONIFER_LOW)
+        self.assertAlmostEqual(s(veg.EUROPE_LOW_M), veg.EUROPE_CONIFER_LOW)
+        self.assertAlmostEqual(s(2400.0), veg.EUROPE_CONIFER_HIGH)
+        mid = (veg.EUROPE_LOW_M + veg.EUROPE_HIGH_M) / 2
+        self.assertAlmostEqual(s(mid), (veg.EUROPE_CONIFER_LOW + veg.EUROPE_CONIFER_HIGH) / 2)
+        ramp = veg._europe_conifer_share(np.linspace(0, 2500, 101))
+        self.assertTrue((np.diff(ramp) >= 0).all(), "never fewer conifers higher up")
+        self.assertLess(s(600.0), 0.2, "the valley: mostly beech")
+        self.assertGreater(s(1500.0), 0.8, "the spruce belt")
+
+    def test_conifer_shares_use_the_dem_only_in_europe(self):
+        class Flat:
+            def __init__(self, z):
+                self.z, self.calls = z, 0
+
+            def sample(self, lat, lon, zoom):
+                self.calls += 1
+                return np.full(np.shape(lat), self.z, np.float64)
+
+        class Offline:
+            def sample(self, lat, lon, zoom):
+                raise IOError("no tile")
+        sinaia = (np.array([45.31, 45.31]), np.array([25.57, 25.57]))
+        trees = np.array([True, False])
+        v = veg.Vegetation(SimpleNamespace(release="t"), None)
+        regional = float(veg._conifer_share(*sinaia)[0])
+        np.testing.assert_allclose(v._conifer_shares(*sinaia, trees), regional, err_msg="no DEM: as before")
+        v.dem = Flat(600.0)
+        low = v._conifer_shares(*sinaia, trees)
+        self.assertAlmostEqual(low[0], float(veg._europe_conifer_share(600.0)))
+        self.assertAlmostEqual(low[1], regional, msg="a bush's share is not the wood's")
+        v.dem = Flat(1700.0)
+        self.assertAlmostEqual(v._conifer_shares(*sinaia, trees)[0], veg.EUROPE_CONIFER_HIGH)
+        v.dem = Offline()
+        np.testing.assert_allclose(v._conifer_shares(*sinaia, trees), regional, err_msg="no tile: as before")
+        v.dem = Flat(600.0)
+        md = (np.array([39.3]), np.array([-76.6]))
+        self.assertEqual(float(v._conifer_shares(*md, np.array([True]))[0]), 0.2, "Maryland as before")
+        self.assertEqual(v.dem.calls, 0, "no elevation asked outside Europe's box")
+
+    def test_a_cell_in_the_carpathians(self):
+        """End to end: tree cover at Sinaia: beech woods and conifers, no generic broadleaves; on grass as before."""
+        class Cover(Raster):
+            def sample(self, lon, lat):
+                return np.full(np.shape(lon), self.data, np.uint8)
+
+        class Flat:
+            def sample(self, lat, lon, zoom):
+                return np.full(np.shape(lat), 900.0, np.float64)
+        key = mapcells.cell_of(45.315, 25.567)
+        ids = {}
+        for name, cover in (("wood", veg.WC["tree"]), ("grass", veg.WC["grass"])):
+            md = FakeMapData(key)
+            md.cd.layers["landcover"] = Cover(cover, 0, 0, 1)
+            v = veg.Vegetation(md, None)
+            v.dem = Flat()
+            it = v.cell(key)
+            ids[name] = set(it.group[it.kind == veg.KIND_TREE].tolist())
+            self.assertGreater(len(ids[name]), 0)
+        self.assertLessEqual(ids["wood"], {veg.G_BEECH_EU, veg.G_CONIFER})
+        self.assertLessEqual(ids["grass"], {veg.G_DECIDUOUS, veg.G_CONIFER})
 
 
 class DilateTest(unittest.TestCase):

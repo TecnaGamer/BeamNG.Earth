@@ -72,6 +72,17 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
   },
+  -- Central / Eastern Europe's woods (server vegetation.py G_BEECH_EU: broadleaf tree cover at lat 43-50.5, lon 6-31):
+  -- beeches and aspens only, no oaks (the generic group's mid-size trees were mostly oaks, with the oaks' rust-orange
+  -- fall tint where a real beech wood goes yellow-bronze; the season tints are by leaf material: seasonlook.lua).
+  -- The stock maps have no European beech wood or spruce. (Only the shapes measured so far: more of the East Coast
+  -- beech / aspen folders can be added here with their measured heights.)
+  beech_eu = {
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 }, { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 },
+    { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+  },
   conifer = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
