@@ -82,6 +82,28 @@ class FakeMapData:
         return empty
 
 
+class Cover(Raster):
+    """One landcover class everywhere."""
+
+    def sample(self, lon, lat):
+        return np.full(np.shape(lon), self.data, np.uint8)
+
+
+class Slope:
+    """A DEM whose ground climbs `grade` (rise over run) northwards."""
+
+    def __init__(self, grade):
+        self.grade = grade
+
+    def sample(self, lat, lon, zoom):
+        return np.asarray(lat, np.float64) * 111320.0 * self.grade
+
+
+class OfflineDem:
+    def sample(self, lat, lon, zoom):
+        raise IOError("no tile")
+
+
 class VegetationTest(unittest.TestCase):
     def test_one_tree_per_free_crown(self):
         md = FakeMapData()
@@ -188,6 +210,81 @@ class VegetationTest(unittest.TestCase):
         self.assertTrue(0 < some < none, "half way: some")
 
 
+    def test_rocks_among_trees_on_steep_ground(self):
+        """Steep tree-covered ground gets rocks; flat ground and a missing DEM get none."""
+        def rocks(dem):
+            md = FakeMapData()
+            md.cd.layers["landcover"] = Cover(veg.WC["tree"], 0, 0, 1)
+            v = veg.Vegetation(md, None)
+            v.dem = dem
+            it = v.cell(KEY)
+            return it, int((it.kind == veg.KIND_ROCK).sum())
+        base, none = rocks(None)
+        self.assertEqual(none, 0, "no DEM: no rocks under trees, as before")
+        flat, n_flat = rocks(Slope(0.0))
+        self.assertEqual(n_flat, 0, "flat ground: none")
+        self.assertEqual(rocks(OfflineDem())[1], 0, "no tile: none")
+        steep, n_steep = rocks(Slope(0.9))
+        self.assertGreater(n_steep, 100, "a steep hillside: rocks among the trees")
+        half, n_half = rocks(Slope(0.5))
+        self.assertTrue(0 < n_half < n_steep, "half way up the ramp: some")
+        self.assertTrue((steep.group[steep.kind == veg.KIND_ROCK] == veg.G_ROCK).all())
+        # the trees are the same ones (the rocks stand on understory cells, never over a crown)
+        np.testing.assert_array_equal(steep.take(steep.kind == veg.KIND_TREE).lon, base.take(base.kind == veg.KIND_TREE).lon)
+        # a rock fewer than ~1 in 400 m2 of this cell: the hillside is not paved with them (the tile caps of trees.lua)
+        per_m2 = n_steep / ((veg._to3857(*KEY.bounds()[2:])[0] - veg._to3857(*KEY.bounds()[:2])[0]) ** 2)
+        self.assertLess(per_m2, 1 / 400.0)
+
+    def test_thicket_widens_and_thickens_on_steep_ground(self):
+        md = FakeMapData()
+        cd = md.cd
+        chm = cd.layers["canopy"]
+        road = np.zeros((512, 512), bool)
+        road[250:253, :] = True
+        hs = np.full((512, 512), 10.0)                 # canopy all over
+        lc = Cover(veg.WC["tree"], 0, 0, 1)
+        y_road = chm.y0 - 251.5 * chm.dy
+
+        def edge(dem):
+            v = veg.Vegetation(md, None)
+            v.dem = dem
+            it = v._edge(cd, lc, road.copy(), road, chm, hs)
+            return it, abs(veg._to3857(it.lon, it.lat)[1] - y_road)
+        base, d_base = edge(None)
+        flat, d_flat = edge(Slope(0.0))
+        np.testing.assert_array_equal(flat.lon, base.lon)           # a DEM that says flat: the thicket as before
+        self.assertEqual(len(edge(OfflineDem())[0]), len(base), "no tile: as before")
+        steep, d_steep = edge(Slope(0.9))
+        self.assertGreater(len(steep), len(base) * 1.5, "denser")
+        self.assertGreater(d_steep.max(), d_base.max() + chm.dx, "and reaching further from the road")
+        self.assertTrue((steep.kind == veg.KIND_BUSH).all())
+
+    def test_rocks_on_the_bank_of_a_road_cut_into_steep_ground(self):
+        md = FakeMapData()
+        cd = md.cd
+        chm = cd.layers["canopy"]
+        road = np.zeros((512, 512), bool)
+        road[250:253, :] = True
+
+        def bank(dem, cover=veg.WC["grass"]):
+            v = veg.Vegetation(md, None)
+            v.dem = dem
+            return v._bank(cd, Cover(cover, 0, 0, 1), road.copy(), road, chm)
+        self.assertEqual(len(bank(None)), 0, "no DEM: none")
+        self.assertEqual(len(bank(Slope(0.0))), 0, "flat: none")
+        self.assertEqual(len(bank(OfflineDem())), 0, "no tile: none")
+        self.assertEqual(len(bank(Slope(0.9), veg.WC["built"])), 0, "a town's verge: none")
+        self.assertEqual(len(bank(Slope(0.9), veg.WC["crop"])), 0, "a field's: none")
+        steep = bank(Slope(0.9))
+        self.assertGreater(len(steep), 20)
+        self.assertTrue((steep.kind == veg.KIND_ROCK).all() and (steep.group == veg.G_ROCK).all())
+        mx, my = veg._to3857(steep.lon, steep.lat)
+        c = np.floor((mx - chm.x0) / chm.dx).astype(int)
+        r = np.floor((chm.y0 - my) / chm.dy).astype(int)
+        self.assertFalse(road[r, c].any(), "none on the road's corridor")
+        self.assertTrue(veg._dilate(road, 3)[r, c].all(), "all beside it (BANK_M)")
+        self.assertLess(len(bank(Slope(0.5))), len(steep), "fewer where the ground is less steep")
+
     def test_no_canopy_trees_on_barren_ground(self):
         # the canopy map misread the Bonneville Salt Flats' bright salt as ~19k trees up to 21 m: on bare ground with no
         # vegetated land within BARREN_NEAR_M, its tops are dropped
@@ -232,19 +329,19 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_SHRUB, 1, 52.0, 5.0, 20), veg.G_SHRUB, "Dutch shrubland: no desert")
 
     def test_central_european_beech_woods(self):
-        """Sinaia 2026-10-25: the generic broadleaves were big rust-orange oaks over a Carpathian beech wood."""
+        """The generic broadleaves were big rust-orange oaks over a Carpathian beech wood."""
         def beech(group, lat, lon, lcls):
             return int(veg._beech_woods(np.array([group], np.uint8), np.array([lat]), np.array([lon]),
                                         np.array([lcls], np.uint8))[0])
-        self.assertEqual(beech(veg.G_DECIDUOUS, 45.31, 25.57, veg.WC["tree"]), veg.G_BEECH_EU, "Sinaia's wood")
-        self.assertEqual(beech(veg.G_DECIDUOUS, 47.4, 10.3, veg.WC["tree"]), veg.G_BEECH_EU, "the Alps")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 45.31, 25.57, veg.WC["tree"]), veg.G_BEECH_EU, "a Carpathian wood")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 47.4, 10.3, veg.WC["tree"]), veg.G_BEECH_EU, "the box's west side")
         self.assertEqual(beech(veg.G_DECIDUOUS, 45.31, 25.57, veg.WC["built"]), veg.G_DECIDUOUS, "a town's trees")
         self.assertEqual(beech(veg.G_DECIDUOUS, 45.31, 25.57, veg.WC["crop"]), veg.G_DECIDUOUS, "a field's trees")
         self.assertEqual(beech(veg.G_CONIFER, 45.31, 25.57, veg.WC["tree"]), veg.G_CONIFER, "conifers stay")
         self.assertEqual(beech(veg.G_SHRUB, 45.31, 25.57, veg.WC["tree"]), veg.G_SHRUB, "bushes stay")
-        self.assertEqual(beech(veg.G_DECIDUOUS, 39.3, -76.6, veg.WC["tree"]), veg.G_DECIDUOUS, "Maryland as before")
-        self.assertEqual(beech(veg.G_DECIDUOUS, 52.4, 17.0, veg.WC["tree"]), veg.G_DECIDUOUS, "Poland's lowlands")
-        self.assertEqual(beech(veg.G_DECIDUOUS, 41.9, 12.5, veg.WC["tree"]), veg.G_DECIDUOUS, "Rome: Mediterranean")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 39.3, -76.6, veg.WC["tree"]), veg.G_DECIDUOUS, "outside the box: as before")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 52.4, 17.0, veg.WC["tree"]), veg.G_DECIDUOUS, "north of the box")
+        self.assertEqual(beech(veg.G_DECIDUOUS, 41.9, 12.5, veg.WC["tree"]), veg.G_DECIDUOUS, "south of the box")
         self.assertEqual(veg.GROUPS[veg.G_BEECH_EU], "beech_eu")
         self.assertEqual(veg.GROUPS[:11], ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper",
                                            "desert_shrub", "desert_rock", "oak_west", "tropical"), "ids kept")
@@ -288,11 +385,11 @@ class RegionalTest(unittest.TestCase):
         np.testing.assert_allclose(v._conifer_shares(*sinaia, trees), regional, err_msg="no tile: as before")
         v.dem = Flat(600.0)
         md = (np.array([39.3]), np.array([-76.6]))
-        self.assertEqual(float(v._conifer_shares(*md, np.array([True]))[0]), 0.2, "Maryland as before")
+        self.assertEqual(float(v._conifer_shares(*md, np.array([True]))[0]), 0.2, "outside the box: as before")
         self.assertEqual(v.dem.calls, 0, "no elevation asked outside Europe's box")
 
     def test_a_cell_in_the_carpathians(self):
-        """End to end: tree cover at Sinaia: beech woods and conifers, no generic broadleaves; on grass as before."""
+        """End to end: Carpathian tree cover: beech woods and conifers, no generic broadleaves; on grass as before."""
         class Cover(Raster):
             def sample(self, lon, lat):
                 return np.full(np.shape(lon), self.data, np.uint8)

@@ -12,7 +12,8 @@ cell's map data and VERSION; its random choices (species, yaw, size, thinning ra
   than TREE_MIN_M. Not on buildings (the CHM counts roofs, solar panels: Kayenta), roads (a trunk in
   the lane, under canopy that overhangs it) or water.
 - Bushes: canopy maxima from BUSH_MIN_M to TREE_MIN_M, and a hashed scatter over shrubland.
-- Rocks: a hashed scatter over bare / sparse land (WorldCover 60), thinner over shrubs and grass.
+- Rocks: a hashed scatter over bare / sparse land (WorldCover 60), thinner over shrubs and grass; on steep ground
+  (the DEM) also under tree cover and on road banks.
 - Groups: deciduous / conifer by a regional mix and height, shrub, rock (the mod maps groups to its
   stock shapes). In Central / Eastern Europe's woods (EUROPE_BOX, tree cover) the broadleaves are beech_eu and the
   conifer share follows the ground's elevation (the DEM) instead of the latitude steps.
@@ -34,8 +35,8 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 15          # (the cached cells hold their groups: 15 for the Central / Eastern European beech woods and
-                      # the elevation-ramped conifer share there; 14 for the regional rules of GitHub #110)
+VERSION = 16          # (the cached cells hold their groups: 16 for rocks and thicket on steep ground; 15 for the
+                      # Central / Eastern European beech woods; 14 for the regional rules of GitHub #110)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -73,6 +74,19 @@ ROCK_SLOPE_ZOOM = 12
 EDGE_M = 7.0
 EDGE_CELL_M = 3.0
 EDGE_P = 0.4
+# Steep ground, from the DEM's slope (rise over run; 0.3 = 17 deg, 0.7 = 35 deg). Each (low, high) pair is a ramp: none at
+# low, the full rate at high. Without a DEM none of this applies.
+FOREST_ROCK_P = 0.07                # rocks under tree cover: chance per SCATTER_CELL_M cell
+FOREST_ROCK_SLOPE = (0.30, 0.70)
+EDGE_STEEP_M = 14.0                 # the roadside thicket's reach (EDGE_M on flat ground) ...
+EDGE_P_STEEP = 0.7                  # ... and its density (EDGE_P on flat ground)
+EDGE_SLOPE = (0.30, 0.70)
+BANK_M = 6.0                        # rocks on the bank beside a road: reach from the road corridor ...
+BANK_CELL_M = 4.0                   # ... grid cell ...
+BANK_ROCK_P = 0.25                  # ... and chance per cell
+BANK_SLOPE = (0.35, 0.80)
+ROADSIDE_SLOPE_D = 12.0             # the roadside slope: DEM m either side, at this zoom (finer than ROCK_SLOPE_*)
+ROADSIDE_SLOPE_ZOOM = 14
 MEM_CELLS = 16
 WARM_M = 1200.0              # cells within this of the player are built ahead (warm_around)
 WC = {"tree": 10, "shrub": 20, "grass": 30, "crop": 40, "built": 50, "bare": 60, "snow": 70,
@@ -131,6 +145,12 @@ def _dilate(m, r):
     return out
 
 
+def _steepness(slope, ramp):
+    """The share (0-1) of a (low, high) slope ramp that a slope covers."""
+    lo, hi = ramp
+    return np.clip((np.asarray(slope, np.float64) - lo) / (hi - lo), 0.0, 1.0)
+
+
 def _dry_west(lat, lon):
     lat, lon = np.asarray(lat), np.asarray(lon)
     return (lon < -102.0) & (lat > 25.0) & (lat < 46.0) & ~((lon < -121.0) & (lat > 37.0))
@@ -171,12 +191,11 @@ def _conifer_share(lat, lon):
     return np.where(_north_america(lat, lon), share, other)
 
 
-# Central and Eastern Europe's temperate woods (the Alps, the Carpathians, the Balkans' north, the Czech and Hungarian
-# uplands): beech-dominated below ~1000 m, spruce and fir above. The stock maps have no European beech wood or spruce,
+# The Carpathians' temperate woods: beech-dominated below ~1000 m, spruce and fir above. The stock maps have no European beech wood or spruce,
 # so the broadleaves are the East Coast set's beeches and aspens (no oaks: the generic group's mid-size trees were
-# mostly oaks, big rust-orange crowns where a real beech wood goes yellow-bronze, Sinaia 2026-10-25) and the conifers
-# its Douglas firs, the nearest silhouette. The box is a stand-in for a species map, as _conifer_share is: lat 43-50.5
-# leaves the pine lowlands of northern Germany and Poland and the Mediterranean south to the rules above.
+# mostly oaks, big rust-orange crowns where a real beech wood goes yellow-bronze) and the conifers its Douglas firs, the
+# nearest silhouette. The box is a stand-in for a species map, as _conifer_share is: it spans the Carpathians and the
+# Central / Eastern Europe around them, and leaves the northern pine lowlands and the Mediterranean south to the rules above.
 EUROPE_BOX = (43.0, 50.5, 6.0, 31.0)        # lat0, lat1, lon0, lon1
 EUROPE_LOW_M, EUROPE_HIGH_M = 500.0, 1500.0 # the conifer share rises (smoothstep) between these elevations ...
 EUROPE_CONIFER_LOW, EUROPE_CONIFER_HIGH = 0.10, 0.85    # ... from this share (valley beech woods) to this (spruce)
@@ -207,7 +226,7 @@ def _beech_woods(group, lat, lon, lcls):
 class Vegetation:
     def __init__(self, md, cache_dir=None):
         self.md = md
-        self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
+        self.dem = None                 # (set by the server: rocks by slope, the conifer share by elevation)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
         self._mem = OrderedDict()
         self._lock = threading.Lock()
@@ -411,7 +430,8 @@ class Vegetation:
             log.debug("vegetation: land use of %s: %s", (x, y), e)
         scatter = self._scatter(cd, lc, blocked | paved, chm, hs)
         edge = self._edge(cd, lc, blocked, road, chm, hs)
-        return _concat(_concat(tree, scatter), edge)
+        bank = self._bank(cd, lc, blocked, road, chm)
+        return _concat(_concat(_concat(tree, scatter), edge), bank)
 
     def _conifer_shares(self, lat, lon, is_tree):
         """The conifer share per top: _conifer_share's regional rule, except in EUROPE_BOX where a tree's share follows
@@ -432,13 +452,15 @@ class Vegetation:
         return share
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
-        """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
+        """The thicket along forest edges beside roads (EDGE_*), outside the dry West; wider and denser on steep ground."""
         if lc is None or not road.any():
             return _empty()
         lon0, lat0, lon1, lat1 = cd.bounds
         if _dry_west(np.array([(lat0 + lat1) / 2]), np.array([(lon0 + lon1) / 2]))[0]:
             return _empty()
-        band = _dilate(road, max(1, int(round(EDGE_M / chm.dx)))) & ~blocked
+        near = _dilate(road, max(1, int(round(EDGE_M / chm.dx)))) & ~blocked
+        steep = self.dem is not None
+        band = _dilate(road, max(1, int(round(EDGE_STEEP_M / chm.dx)))) & ~blocked if steep else near
         if not band.any():
             return _empty()
         ex0, ey0 = _to3857(lon0, lat0)
@@ -454,16 +476,26 @@ class Vegetation:
         ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < hs.shape[1]) \
             & (r_ >= 0) & (r_ < hs.shape[0])
         ok[ok] &= band[r_[ok], c_[ok]] & (hs[r_[ok], c_[ok]] >= TREE_MIN_M)     # under the forest's canopy
-        ok &= _hash01(GI, GJ, 23) < EDGE_P
+        u = _hash01(GI, GJ, 23)
+        ok &= u < (EDGE_P_STEEP if steep else EDGE_P)
         if not ok.any():
             return _empty()
-        GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
+        GI, GJ, px, py, u, c_, r_ = GI[ok], GJ[ok], px[ok], py[ok], u[ok], c_[ok], r_[ok]
         lon, lat = _to4326(px, py)
         cls = lc.sample(lon, lat)
         forest = cls == WC["tree"]          # not under street trees in town
         if not forest.any():
             return _empty()
-        GI, GJ, lon, lat, cls = GI[forest], GJ[forest], lon[forest], lat[forest], cls[forest]
+        GI, GJ, px, py, u, c_, r_, lon, lat, cls = (a[forest] for a in (GI, GJ, px, py, u, c_, r_, lon, lat, cls))
+        if steep:
+            # EDGE_P near the road rising to EDGE_P_STEEP with the slope; beyond EDGE_M only on steep ground
+            slope = self._slope(px, py, ROADSIDE_SLOPE_D, ROADSIDE_SLOPE_ZOOM)
+            t = _steepness(slope, EDGE_SLOPE) if slope is not None else np.zeros(len(px))
+            p = np.where(near[r_, c_], EDGE_P + (EDGE_P_STEEP - EDGE_P) * t, EDGE_P_STEEP * t)
+            keep = u < p
+            if not keep.any():
+                return _empty()
+            GI, GJ, lon, lat, cls = GI[keep], GJ[keep], lon[keep], lat[keep], cls[keep]
         size = 1.2 + 1.8 * _hash01(GI, GJ, 24)
         n = len(lon)
         return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
@@ -472,20 +504,69 @@ class Vegetation:
                      _hash01(GI, GJ, 26).astype(np.float32), (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
                      (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32))
 
-    def _slope(self, px, py):
-        """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side
-        in x and y; None when the DEM cannot say."""
+    def _bank(self, cd, lc, blocked, road, chm):
+        """Rocks on the bank beside a road on steep ground (BANK_*), outside the dry West."""
+        if lc is None or self.dem is None or not road.any():
+            return _empty()
+        lon0, lat0, lon1, lat1 = cd.bounds
+        if _dry_west(np.array([(lat0 + lat1) / 2]), np.array([(lon0 + lon1) / 2]))[0]:
+            return _empty()
+        band = _dilate(road, max(1, int(round(BANK_M / chm.dx)))) & ~blocked
+        if not band.any():
+            return _empty()
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        s = BANK_CELL_M
+        GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
+                             np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
+        GI, GJ = GI.ravel(), GJ.ravel()
+        px = (GI + _hash01(GI, GJ, 31)) * s
+        py = (GJ + _hash01(GI, GJ, 32)) * s
+        c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < band.shape[1]) \
+            & (r_ >= 0) & (r_ < band.shape[0])
+        ok[ok] &= band[r_[ok], c_[ok]]
+        ok &= _hash01(GI, GJ, 33) < BANK_ROCK_P
+        if not ok.any():
+            return _empty()
+        GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
+        lon, lat = _to4326(px, py)
+        cls = lc.sample(lon, lat)
+        land = np.isin(cls, (WC["tree"], WC["shrub"], WC["grass"]))         # not a town's or a field's verge
+        if not land.any():
+            return _empty()
+        GI, GJ, px, py, lon, lat, cls = (a[land] for a in (GI, GJ, px, py, lon, lat, cls))
+        slope = self._slope(px, py, ROADSIDE_SLOPE_D, ROADSIDE_SLOPE_ZOOM)
+        if slope is None:
+            return _empty()
+        keep = _hash01(GI, GJ, 34) < _steepness(slope, BANK_SLOPE)
+        if not keep.any():
+            return _empty()
+        GI, GJ, lon, lat, cls = GI[keep], GJ[keep], lon[keep], lat[keep], cls[keep]
+        size = 0.4 + 1.6 * _hash01(GI, GJ, 35) ** 2
+        n = len(lon)
+        return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
+                     np.full(n, KIND_ROCK, np.uint8),
+                     regional(np.full(n, G_ROCK, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 36)),
+                     _hash01(GI, GJ, 37).astype(np.float32), (_hash01(GI, GJ, 38) * 360.0).astype(np.float32),
+                     (0.8 + 0.4 * _hash01(GI, GJ, 39)).astype(np.float32))
+
+    def _slope(self, px, py, d_m=ROCK_SLOPE_D, zoom=ROCK_SLOPE_ZOOM):
+        """The ground's slope at Web Mercator points (px, py), from the DEM d_m m either side at zoom; None if it fails."""
+        if not len(px):
+            return np.zeros(0)
         k = np.cos(np.radians(_to4326(px[:1], py[:1])[1][0]))       # Web Mercator m per ground m (one cell)
-        d = ROCK_SLOPE_D / max(k, 0.05)
+        d = d_m / max(k, 0.05)
         x = np.concatenate([px + d, px - d, px, px])
         y = np.concatenate([py, py, py + d, py - d])
         lon, lat = _to4326(x, y)
         try:
-            z = np.asarray(self.dem.sample(lat, lon, ROCK_SLOPE_ZOOM), np.float64).reshape(4, len(px))
+            z = np.asarray(self.dem.sample(lat, lon, zoom), np.float64).reshape(4, len(px))
         except Exception as e:          # (offline, no tile): rocks as without a DEM
             log.debug("vegetation: no slope: %s", e)
             return None
-        return np.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
+        return np.hypot(z[0] - z[1], z[2] - z[3]) / (2 * d_m)
 
     def _scatter(self, cd, lc, blocked, chm, hs):
         """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground."""
@@ -535,6 +616,14 @@ class Vegetation:
                 keep = _hash01(GI[bare_rock], GJ[bare_rock], 19) < np.clip((slope - lo_s) / (hi_s - lo_s), 0.0, 1.0)
                 rock[bare_rock[~keep]] = False
                 free[bare_rock[~keep]] = False     # (nor a bush there: bare ground stays bare)
+        # rocks under tree cover on steep ground (FOREST_ROCK_*)
+        if self.dem is not None:
+            cand = np.flatnonzero(free & ~rock & (cls == UNDERSTORY) & (_hash01(GI, GJ, 29) < FOREST_ROCK_P))
+            if len(cand):
+                slope = self._slope(px[cand], py[cand])
+                if slope is not None:
+                    steep = _hash01(GI[cand], GJ[cand], 30) < _steepness(slope, FOREST_ROCK_SLOPE)
+                    rock[cand[steep]] = True
         bush = free & ~rock & (u < pr + pb)
         sel = rock | bush
         n = int(sel.sum())
