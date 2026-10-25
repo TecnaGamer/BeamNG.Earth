@@ -178,7 +178,7 @@ class SpeedSignTest(unittest.TestCase):
         self.assertGreater(west[2], 50.0)
 
     def test_no_sign_without_a_model_or_on_short_roads(self):
-        self.assertEqual(furniture.speed_signs([road("t", "tertiary", True)], {"t": 35.0}, (-500, -50, 700, 150)), [])
+        self.assertEqual(furniture.speed_signs([road("t", "tertiary", True)], {"t": 95.0}, (-500, -50, 700, 150)), [])
         self.assertEqual(furniture.speed_signs([road("s", "tertiary", True, x0=0.0, x1=100.0)], {"s": 30.0},
                                                (-500, -50, 700, 150)), [])
 

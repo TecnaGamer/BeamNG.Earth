@@ -161,6 +161,8 @@ M.CATALOG = {
 }
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
+-- the US signs (speed limits 15-85 mph, warnings, plaques, chevrons): ours over the stock Utah speed signs
+require('beamngEarth/us_signs').install(M)
 local MATERIALS = {
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',

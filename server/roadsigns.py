@@ -39,8 +39,9 @@ ADVANCE_DECEL = 3.0         # m/s^2 of braking from the limit to the advisory be
 ADVANCE_MIN_M = 30.0        # m: the nearest a warning stands to its bend
 ROAD_END_M = 15.0           # m: no sign nearer a road's end than this (the junction it starts at)
 SIGN_OFF_M = 1.5            # m beyond the carriageway's edge (furniture.SIGN_OFF_M)
-SIGN_H = 2.6                # m: the warning sign's height (its post, MUTCD's 5 ft rural mounting + the sign)
-CHEVRON_H = 1.9
+SIGN_H = 3.05               # m: the warning sign model's height (us_signs.lua HEIGHTS: the row is drawn at scale 1)
+PLAQUE_H = 1.90             # ... its advisory plaque's (no post: on the sign's)
+CHEVRON_H = 2.2
 # Table 2C-6: chevron spacing (ft) by advisory speed (mph, up to)
 CHEVRON_SPACING_FT = ((15, 40), (30, 80), (45, 120), (60, 160), (999, 200))
 CURVE_CLASSES = {"motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "tertiary",
@@ -221,7 +222,7 @@ def curve_signs(roads, speeds, box, left_hand=False, mph=True, clear=None):
                     p, d = _pose(line, at)
                     dt = d * way
                     put((G_TURN if adv <= TURN_MAX_MPH else G_CURVE) + lr, p, dt, half, SIGN_H)
-                    put(_plaque(adv, mph), p, dt, half, SIGN_H - 0.75)
+                    put(_plaque(adv, mph), p, dt, half, PLAQUE_H)
                 if lim - adv >= CHEVRON_MPH:
                     # along the outside of the bend as this direction drives it, facing it: the driver's
                     # side when the road bends away from it (a left bend where traffic keeps right)
