@@ -10,6 +10,8 @@ Status: beta (see VERSION). Tested on BeamNG.drive 0.40.3 on Linux (Vulkan) and 
 **Community:** join the [Discord server](https://discord.gg/tgf) and head to the #beamng-earth channel to talk about
 the mod, report problems, and get an IP to join a BeamMP.Earth server (see [Multiplayer](#multiplayer-beammp)).
 
+You can help support development by reporting [issues](https://github.com/TecnaGamer/BeamNG.Earth/issues), contributing code and sending pull requests, or [donating](https://ko-fi.com//tecnagamer). Thank You!
+
 ## Features (working today)
 **The world**
 - The whole planet at 1:1 scale on real elevation: national lidar where it exists (Mapterhorn: much of
