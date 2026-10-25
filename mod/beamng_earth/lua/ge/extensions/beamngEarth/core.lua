@@ -692,6 +692,7 @@ local function formatKnown(f)
 end
 
 local geocodeResults = {}       -- the world map's address search answers: id -> { results, error }
+local fuelResults = {}          -- the world map's "Nearest gas station" answers: id -> the server's message
 local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, error }
 
 -- The pooled shape slots (far tiles, road / building tiles) let go since the last pose, for this server; nil if none.
@@ -936,6 +937,9 @@ local function onMessage(msg)
     gps.onRouteDownload(msg)
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+  elseif t == 'nearest_fuel_result' then
+    -- the gas station nearest the player (server fuelfind.py): settings.uiNearestFuelResult teleports there
+    if msg.id then fuelResults[msg.id] = msg end
   elseif t == 'map_tiles_ready' then
     -- a world map tile file is written (settings.mapTiles: the map polls every 250 ms while it misses tiles)
   elseif t == 'navgraph' then
@@ -2294,6 +2298,17 @@ function M.requestGeocode(id, q, lat, lon)
   if not net.isConnected() then return false end
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon })
   return true
+end
+-- The world map's "Nearest gas station": the answer is nearest_fuel_result (takeNearestFuel).
+function M.requestNearestFuel(id, lat, lon)
+  if not net.isConnected() then return false end
+  net.send({ type = 'nearest_fuel', id = id, lat = lat, lon = lon })
+  return true
+end
+function M.takeNearestFuel(id)
+  local r = fuelResults[id]
+  fuelResults[id] = nil
+  return r
 end
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
   if not net.isConnected() then return false end

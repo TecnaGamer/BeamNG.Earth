@@ -93,6 +93,7 @@ import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
+import fuelfind as fuelfindmod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
@@ -3013,6 +3014,33 @@ class Connection:
                 log.info("random place: %s (%.5f, %.5f)", got[2], got[0], got[1])
         self.send(out)
 
+    async def nearest_fuel(self, msg):
+        """{"id", "lat", "lon"} -> nearest_fuel_result {"id", "lat", "lon", "name", "dist"} on the road beside the gas
+        station nearest the point (fuelfind.nearest), or {"id", "error"} when none is near or the map data is missing."""
+        out = {"type": "nearest_fuel_result", "id": msg.get("id")}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+        except (KeyError, TypeError, ValueError):
+            out["error"] = "no position"
+            self.send(out)
+            return
+        got = None
+        if md is None:
+            out["error"] = "no map data"
+        else:
+            try:
+                got = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, fuelfindmod.nearest, md, lat, lon)
+            except Exception as e:
+                log.warning("nearest gas station: %s: %s", type(e).__name__, e)
+                out["error"] = "search failed"
+        if got is not None:
+            out.update(got)
+            log.info("nearest gas station: %s, %.0f m (%.5f, %.5f)", got["name"], got["dist"], got["lat"], got["lon"])
+        elif "error" not in out:
+            out["error"] = "no gas station within %d km" % int(fuelfindmod.RINGS_M[-1] / 1000)
+        self.send(out)
+
     async def where(self, msg):
         """The status bar's location {"id", "lat", "lon", "online"} -> where_result {"id", "street", "place", "region",
         "country"}: the street from the cached map cells (never waits for a download), the town, state and country from
@@ -3256,6 +3284,8 @@ class Connection:
             self.spawn(self.where(msg))
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
             self.spawn(self.random_place(msg))
+        elif kind == "nearest_fuel":            # the world map's "Nearest gas station" (fuelfind.py)
+            self.spawn(self.nearest_fuel(msg))
         elif kind == "place_previews":          # the level select's place pictures (placepreview.py)
             self.spawn(self.place_previews(msg))
         elif kind == "update_now":              # the update notice's "Update now" (selfupdate.py)

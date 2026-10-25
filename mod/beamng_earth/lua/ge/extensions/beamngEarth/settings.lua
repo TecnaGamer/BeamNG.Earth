@@ -563,6 +563,32 @@ function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
 end
 
+-- The map's "Nearest gas station" (the user, 2026-10-25: "a gas station spawn so i dont search forever"): send
+-- (-> { id } or { error }) and poll (id -> nil while the server searches, else { ok, name, dist } after teleporting
+-- beside the station, or { error }).
+local fuelId = 0
+function M.uiNearestFuel()
+  local core = ext('beamngEarth_core')
+  if not core or not core.requestNearestFuel then return { error = 'BeamNG.Earth is not loaded' } end
+  local st = core._state and core._state() or nil
+  local pl = st and st.player
+  if not (pl and pl.lat and pl.lon) then return { error = 'no position yet' } end
+  local why = places.cannotGo and places.cannotGo()
+  if why then return { error = why } end
+  fuelId = fuelId + 1
+  if not core.requestNearestFuel(fuelId, pl.lat, pl.lon) then return { error = 'not connected to the world server' } end
+  return { id = fuelId }
+end
+function M.uiNearestFuelResult(id)
+  local core = ext('beamngEarth_core')
+  local r = core and core.takeNearestFuel and core.takeNearestFuel(tonumber(id))
+  if not r then return nil end
+  if r.error or not (tonumber(r.lat) and tonumber(r.lon)) then return { error = r.error or 'no gas station found' } end
+  local ok, why = places.goTo(r.lat, r.lon, r.name)
+  if not ok then return { error = why or 'teleport refused' } end
+  return { ok = true, name = r.name, dist = r.dist }
+end
+
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else
 -- { results = {{name, detail, kind, lat, lon}...}, error }). Biased toward the player.
 local geocodeId = 0

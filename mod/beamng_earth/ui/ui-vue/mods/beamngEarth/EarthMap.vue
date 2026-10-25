@@ -118,6 +118,9 @@
       <button class="map-btn" @click="zoomBy(1)" title="Zoom in">+</button>
       <button class="map-btn" @click="zoomBy(-1)" title="Zoom out">-</button>
       <button class="map-btn" :class="{ on: follow }" @click="centreOnMe" title="Centre on the car and follow it">Me</button>
+      <button class="map-btn" :disabled="!!state.cannotGo || fuelBusy" @click="nearestFuel"
+        title="Teleport to the nearest gas station">{{ fuelBusy ? "Finding gas…" : "Gas" }}</button>
+      <span v-if="fuelMsg" class="fuel-msg">{{ fuelMsg }}</span>
       <div class="layers-wrap">
         <button class="map-btn" :class="{ on: layersPanel }" @click="layersPanel = !layersPanel" title="Base map and overlays">Layers</button>
         <div v-if="layersPanel" class="layers-panel" @mousedown.stop @wheel.stop @dblclick.stop>
@@ -1027,6 +1030,48 @@ function askTeleport(lat, lon, name) {
 
 // The GPS box's Teleport (a search result) and the right-click menu: straight away, no "Teleport here?" (the user
 // 2026-10-16: "we dont need the 2nd popup"); a failure shows in the confirmation box
+// "Gas": the nearest gas station (server fuelfind.py), the car put on the road beside it (settings.uiNearestFuel)
+const fuelBusy = ref(false)
+const fuelMsg = ref("")
+let fuelClear = null
+function fuelSay(text) {
+  fuelMsg.value = text
+  if (fuelClear) clearTimeout(fuelClear)
+  fuelClear = setTimeout(() => { fuelMsg.value = "" }, 8000)
+}
+function fuelDist(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`
+}
+function nearestFuel() {
+  if (fuelBusy.value || state.value.cannotGo) return
+  fuelBusy.value = true
+  fuelMsg.value = ""
+  engineLua("beamngEarth_settings and beamngEarth_settings.uiNearestFuel and beamngEarth_settings.uiNearestFuel() or nil", r => {
+    if (!r || r.error || !r.id) {
+      fuelBusy.value = false
+      fuelSay((r && r.error) || "BeamNG.Earth is not loaded")
+      return
+    }
+    const id = Number(r.id), t0 = Date.now()
+    const poll = () => engineLua(`beamngEarth_settings and beamngEarth_settings.uiNearestFuelResult(${id}) or nil`, a => {
+      if (!a) {
+        if (Date.now() - t0 < 60000) { setTimeout(poll, 300); return }
+        fuelBusy.value = false
+        fuelSay("No answer from the world server")
+        return
+      }
+      fuelBusy.value = false
+      if (a.ok) {
+        follow.value = true
+        fuelSay(`${a.name || "Gas station"}, ${fuelDist(Number(a.dist) || 0)} away`)
+      } else {
+        fuelSay(a.error || "No gas station found")
+      }
+    })
+    poll()
+  })
+}
+
 function teleportNow(lat, lon, name) {
   if (state.value.cannotGo) return
   askTeleport(lat, lon, name)
@@ -1293,6 +1338,8 @@ const fmtLatLon = mm.fmtLatLon
 .map-grid polyline { fill: none; stroke-linejoin: round; stroke-linecap: round; }
 .map-grid .route-line-casing { stroke: rgba(10, 40, 80, 0.85); stroke-width: 8; }
 .map-grid .route-line { stroke: #3aa0ff; stroke-width: 5; }
+.fuel-msg { align-self: center; padding: 4px 10px; border-radius: 4px; background: rgba(10, 12, 16, 0.78); color: #eef1f4;
+  font-size: 13px; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .map-grid .route-done { stroke: rgba(200, 200, 200, 0.6); stroke-width: 4; }
 .marker.gps { z-index: 3; }
 .marker.gps .flag {
