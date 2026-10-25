@@ -397,3 +397,32 @@ class RacewayKeepTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProfileTest(unittest.TestCase):
+    def setUp(self):
+        rng = np.random.default_rng(1)
+        self.s = np.arange(0, 2000, 2.0)
+        self.true = 20 * np.sin(self.s / 300) + 0.03 * self.s                  # a hilly road, 3 % over all
+        z = self.true + rng.normal(0, 0.25, len(self.s))                         # DEM noise ...
+        z[rng.choice(len(self.s), 40)] += rng.uniform(2, 8, 40)                  # ... and trees / cars in the surface
+        self.z = z
+
+    def test_spikes_go_and_the_road_is_smoother(self):
+        old = grading.smooth_profile(self.z, 2.0, 12.0)
+        new = grading.smooth_profile_ends(grading.median_profile(self.z, 2.0, grading.MEDIAN_M), 2.0, 30.0)
+        rms = lambda p: float(np.sqrt((np.diff(p, 2) ** 2).mean()))           # noqa: E731
+        self.assertLess(rms(new), rms(old) / 3)
+        self.assertLess(np.abs(new - self.true)[50:-50].max(), 0.4)            # closer to the real road, not further
+
+    def test_the_ends_keep_their_grade(self):
+        # a mirrored end flattens a sloped road: its end height off by metres where it meets the next road
+        new = grading.smooth_profile_ends(grading.median_profile(self.z, 2.0, grading.MEDIAN_M), 2.0, 30.0)
+        self.assertLess(max(abs(new[0] - self.true[0]), abs(new[-1] - self.true[-1])), 0.3)
+
+    def test_larger_roads_are_smoothed_longer(self):
+        import roads
+        sp = lambda cls, kind="paved": roads.Spec(7.0, kind, False, cls, False)  # noqa: E731
+        self.assertGreater(grading.profile_sigma(sp("primary")), grading.profile_sigma(sp("residential")))
+        self.assertEqual(grading.profile_sigma(sp("track", "dirt")), grading.DIRT_SIGMA_M)
+
