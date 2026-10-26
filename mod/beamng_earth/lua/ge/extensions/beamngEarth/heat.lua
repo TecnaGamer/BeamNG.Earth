@@ -24,6 +24,9 @@ M.KNOWN = 2                 -- a plate with this many stars is recognised on sig
 M.SEE_M = 60                -- ... by a cop this close who can see you
 M.FOOTAGE_BASE, M.FOOTAGE_PER_MIN = 150, 60
 M.FINES = { 100, 300, 750, 1500, 3000 }
+-- a 1-star stop (pulled over at once) is a ticket for what you did (the user: "pull over right away should be 30 to
+-- 150"): TICKET_BASE + TICKET_PER for each offense the police logged (speeding, reckless...), TICKET_MIN..TICKET_MAX
+M.TICKET_MIN, M.TICKET_MAX, M.TICKET_BASE, M.TICKET_PER = 30, 150, 30, 30
 M.IMPOUND, M.IMPOUND_FEE = 4, 750
 
 local wallet = require('beamngEarth/wallet')
@@ -96,9 +99,12 @@ function M.footage(t, level)
 end
 
 -- Pure: { fine, impound (fee or 0), total } when busted with heat h.
-function M.busted(h)
+function M.busted(h, offenses)
   local stars = math.max(1, math.min(M.MAX, math.floor((h or 0) + 0.5)))
   local fine = M.FINES[stars]
+  if stars == 1 then
+    fine = math.max(M.TICKET_MIN, math.min(M.TICKET_MAX, M.TICKET_BASE + M.TICKET_PER * math.max(0, offenses or 1)))
+  end
   local imp = stars >= M.IMPOUND and M.IMPOUND_FEE or 0
   return { fine = fine, impound = imp, total = fine + imp }
 end
@@ -137,7 +143,8 @@ function M.onPursuitAction(vid, action, data)
     chase = nil
   elseif action == 'arrest' then
     local h = chase and chase.heat or M.heatOf(id, s.plates, s.looks)
-    local b = M.busted(h)
+    local offs = data and type(data.offensesList) == 'table' and #data.offensesList or nil
+    local b = M.busted(h, offs)
     wallet.add(-b.fine, 'Police fine')
     if b.impound > 0 then
       wallet.add(-b.impound, 'Impound release fee')
