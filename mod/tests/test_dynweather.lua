@@ -49,4 +49,15 @@ T.check(D.onRealWeather({ slTempC = 3 }) == true, 'real: the feed drives')
 local n = #applied
 D.update(D.APPLY_S, 600)
 T.check(#applied == n, 'real mode: no dynamic messages')
+-- regions: the same area the same forecast, another area its own
+local a1 = D.regionSeed(42, 40.44, -80.0)
+T.check(a1 == D.regionSeed(42, 40.45, -79.99), 'the same area: the same weather')
+local diff = 0
+for i = 1, 10 do
+  local f1 = D.forecast(D.regionSeed(42, 40.44, -80.0), 12, 0)
+  local f2 = D.forecast(D.regionSeed(42, 40.44 + i * 0.5, -80.0), 12, 0)
+  for d = 1, 7 do if f1[d].cond ~= f2[d].cond then diff = diff + 1 end end
+end
+T.check(diff > 20, 'other areas: other weather (' .. diff .. ' of 70 days differ)')
+T.check(#D.uiState(600, 41, -78).days == 7, 'the phone: the area\'s week')
 T.done('test_dynweather')

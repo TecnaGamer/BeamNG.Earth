@@ -151,9 +151,19 @@ function M.onRealWeather(msg)
 end
 
 -- For the phone: { mode, today, period, days = forecast }.
-function M.uiState(mins)
+-- Regional weather (the user, 2026-10-26: "that sounds cool", to each area its own forecast): the map in cells of
+-- REGION_LAT x REGION_LON degrees (about 50 km), each with its own seed from the week's; driving into another cell
+-- eases the sky over to its weather (beamngEarth_weather's easing).
+M.REGION_LAT, M.REGION_LON = 0.45, 0.6
+function M.regionSeed(seed, lat, lon)
+  if not (lat and lon) then return seed end
+  local rx, ry = math.floor(lon / M.REGION_LON), math.floor(lat / M.REGION_LAT)
+  return (seed * 7919 + rx * 104729 + ry * 1299709) % 1000003
+end
+
+function M.uiState(mins, lat, lon)
   local s = load()
-  local week = M.forecast(s.seed, baseTempC, s.day)
+  local week = M.forecast(M.regionSeed(s.seed, lat, lon), baseTempC, s.day)
   return { mode = s.mode, days = week, period = M.periodOf(mins), now = week[1] and week[1].periods[M.periodOf(mins)] }
 end
 
@@ -172,7 +182,7 @@ function M.update(dt, mins, lat, lon)
   applyT = applyT + (dt or 0)
   if applyT < M.APPLY_S then return end
   applyT = 0
-  local week = M.forecast(s.seed, baseTempC, s.day)
+  local week = M.forecast(M.regionSeed(s.seed, lat, lon), baseTempC, s.day)
   local p = week[1].periods[M.periodOf(mins)]
   local w = rawget(_G, 'beamngEarth_weather')
   if w and w.onWeather then pcall(w.onWeather, M.message(p, lat or (lastReal and lastReal.lat), lon or (lastReal and lastReal.lon))) end

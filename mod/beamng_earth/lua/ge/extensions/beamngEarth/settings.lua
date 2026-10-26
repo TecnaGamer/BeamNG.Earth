@@ -677,7 +677,7 @@ function M.uiPhone()
     weekday = math.floor(((require('beamngEarth/dynweather')._state().day) or 0) % 7),
     prefs = prefs(), wallpapers = wallpapers(),
     bank = { balance = w.balance(), text = w.format(w.balance()), history = w.history() },
-    weather = require('beamngEarth/dynweather').uiState(mins),
+    weather = require('beamngEarth/dynweather').uiState(mins, pl and pl.lat, pl and pl.lon),
     jobs = require('beamngEarth/jobs').uiState(),
     media = core and core.mediaState and core.mediaState() or { ok = false },
     garage = require('beamngEarth/garage').uiState(st and st.anchor, pl),
