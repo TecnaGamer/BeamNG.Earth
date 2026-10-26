@@ -736,6 +736,12 @@ serverSend({ type = 'weather', v = 1, code = 3, tempC = 20.5 })
 frames(2)                                               -- no extension: ignored
 local gotWeather = nil
 beamngEarth_weather = { onWeather = function(m) gotWeather = m end }
+-- (dynamic weather, the default: the real message is kept as the climate, not applied)
+serverSend({ type = 'weather', v = 1, code = 3, tempC = 20.5 })
+frames(2)
+T.check(not (gotWeather and gotWeather.code == 3), 'dynamic weather: the real message is not applied')
+require('beamngEarth/dynweather').setMode('real')
+gotWeather = nil
 serverSend({ type = 'weather', v = 1, code = 3, tempC = 20.5 })
 frames(2)
 T.check(gotWeather and gotWeather.code == 3 and gotWeather.tempC == 20.5, 'weather message handed to beamngEarth_weather')

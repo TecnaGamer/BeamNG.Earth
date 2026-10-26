@@ -82,6 +82,7 @@ local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 local wallet = require('beamngEarth/wallet')         -- the player's money: fuel and tolls (wallet.lua)
 local jobs = require('beamngEarth/jobs')             -- garage-to-garage deliveries (jobs.lua)
+local dynweather = require('beamngEarth/dynweather')   -- the week's dynamic weather (dynweather.lua)
 local heat = require('beamngEarth/heat')             -- police heat: plates remembered, fines, footage (heat.lua)
 local roadweather = require('beamngEarth/roadweather') -- rain and snow on the roads: grip and look
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
@@ -696,6 +697,7 @@ local function formatKnown(f)
 end
 
 local geocodeResults = {}       -- the world map's address search answers: id -> { results, error }
+local mediaState = nil          -- the phone's Music app: the server's last media_state
 local jobResults = {}           -- the Jobs app's delivery offers: id -> the server's message
 local fuelResults = {}          -- the world map's "Nearest gas station" answers: id -> the server's message
 local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, error }
@@ -889,8 +891,14 @@ local function onMessage(msg)
     farfield.onRetex(msg) -- a shown tile's re-rendered texture (--colormatch / --deshadow)
   elseif t == 'weather' then
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
+    -- (dynamic weather, dynweather.lua: kept as the climate; the sky's clock still takes its UTC offset)
     local w = rawget(_G, 'beamngEarth_weather')
-    if w and w.onWeather then w.onWeather(msg) end
+    if dynweather.onRealWeather(msg) then
+      if w and w.onWeather then w.onWeather(msg) end
+    else
+      local sk, off = rawget(_G, 'beamngEarth_sky'), tonumber(msg.utcOffsetS)
+      if sk and sk.setRealUtcOffset and off then pcall(sk.setRealUtcOffset, off / 3600, tonumber(msg.lat), tonumber(msg.lon)) end
+    end
   elseif t == 'gravity' then
     -- real gravity at the player (server gravity.py): applied by beamngEarth_weather's setGravity path
     local w = rawget(_G, 'beamngEarth_weather')
@@ -942,6 +950,8 @@ local function onMessage(msg)
     gps.onRouteDownload(msg)
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+  elseif t == 'media_state' then
+    mediaState = msg
   elseif t == 'delivery_jobs_result' then
     if msg.id then jobResults[msg.id] = msg end         -- (jobs.lua polls it)
   elseif t == 'nearest_fuel_result' then
@@ -1772,6 +1782,9 @@ local function onUpdate(dtReal, dtSim)
   if st.inOurLevel then pcall(roadweather.update) end
   if st.inOurLevel then
     pcall(heat.update, dtSim)
+    local stg2 = rawget(_G, 'beamngEarth_settings')
+    local mins = stg2 and stg2.gameClock and stg2.gameClock() or nil
+    pcall(dynweather.update, dtSim, mins, st.player and st.player.lat, st.player and st.player.lon)
     local okJ, errJ = pcall(jobs.update, dtSim, st.anchor, st.player)
     if not okJ then log('W', 'beamngEarth', 'jobs: ' .. tostring(errJ)) end
   end
@@ -2317,6 +2330,12 @@ function M.requestGeocode(id, q, lat, lon)
   return true
 end
 -- The world map's "Nearest gas station": the answer is nearest_fuel_result (takeNearestFuel).
+function M.requestMedia(action)
+  if not net.isConnected() then return false end
+  net.send({ type = 'media', id = 1, action = action })
+  return true
+end
+function M.mediaState() return mediaState end
 function M.requestDeliveryJobs(id, lat, lon, seed, kind)
   if not net.isConnected() then return false end
   net.send({ type = 'delivery_jobs', id = id, lat = lat, lon = lon, seed = seed, kind = kind })

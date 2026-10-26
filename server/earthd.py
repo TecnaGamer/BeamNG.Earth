@@ -95,6 +95,7 @@ import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import fuelfind as fuelfindmod  # noqa: E402
 import jobfind as jobfindmod  # noqa: E402
+import media as mediamod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
@@ -3049,6 +3050,23 @@ class Connection:
         log.info("%s jobs near %.5f, %.5f: %d", msg.get("kind") or "delivery", lat, lon, len(out["jobs"]))
         self.send(out)
 
+    async def media(self, msg):
+        """{"id", "action"?} -> media_state {"id", "ok", "playing", "artist", "title"}: the phone's Music app (media.py:
+        presses the media key of action, if any, then reads desktop Spotify's song)."""
+        loop = asyncio.get_running_loop()
+
+        def run():
+            if msg.get("action"):
+                mediamod.press(str(msg.get("action")))
+                time.sleep(0.4)             # (Spotify retitles its window after the key)
+            return mediamod.state()
+        try:
+            st = await loop.run_in_executor(self.s.ui_pool, run)
+        except Exception as e:
+            st = {"ok": False, "playing": False, "artist": "", "title": ""}
+            log.debug("media: %s: %s", type(e).__name__, e)
+        self.send(dict(st, type="media_state", id=msg.get("id")))
+
     async def nearest_fuel(self, msg):
         """{"id", "lat", "lon"} -> nearest_fuel_result {"id", "lat", "lon", "name", "dist"} on the road beside the gas
         station nearest the point (fuelfind.nearest), or {"id", "error"} when none is near or the map data is missing."""
@@ -3321,6 +3339,8 @@ class Connection:
             self.spawn(self.random_place(msg))
         elif kind == "nearest_fuel":            # the world map's "Nearest gas station" (fuelfind.py)
             self.spawn(self.nearest_fuel(msg))
+        elif kind == "media":                   # the phone's Music app (media.py)
+            self.spawn(self.media(msg))
         elif kind == "delivery_jobs":           # the Jobs app's garage-to-garage deliveries (jobfind.py)
             self.spawn(self.delivery_jobs(msg))
         elif kind == "place_previews":          # the level select's place pictures (placepreview.py)

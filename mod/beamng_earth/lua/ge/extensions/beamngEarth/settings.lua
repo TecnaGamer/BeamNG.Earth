@@ -618,6 +618,90 @@ function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
 end
 
+-- The phone (BeamNGEarthPhone; the user, 2026-10-26): its state in one poll, its settings (saved in PHONE_FILE), the
+-- wallpapers (screenshots and WALLPAPER_DIR), the Music app (server media.py), the weather mode, the key's toggle.
+local PHONE_FILE = '/settings/beamngEarth_phone.json'
+local WALLPAPER_DIR = '/settings/beamngEarth_wallpapers/'
+local phonePrefs, phoneUp, mediaT = nil, false, -math.huge
+
+local function prefs()
+  if phonePrefs then return phonePrefs end
+  local ok, got = pcall(jsonReadFile, PHONE_FILE)
+  phonePrefs = (ok and type(got) == 'table') and got or { theme = 'dark', size = 1 }
+  return phonePrefs
+end
+
+function M.togglePhone()
+  phoneUp = not phoneUp
+  if guihooks then guihooks.trigger('BneEarthPhone', { up = phoneUp }) end
+end
+
+local function wallpapers()
+  local out = {}
+  local fs = rawget(_G, 'FS')
+  for _, dir in ipairs({ WALLPAPER_DIR, '/screenshots/' }) do
+    for _, pat in ipairs({ '*.jpg', '*.png', '*.jpeg' }) do
+      local ok, files = pcall(function() return fs:findFiles(dir, pat, 0, false, false) end)
+      if ok and type(files) == 'table' then
+        for _, f in ipairs(files) do if #out < 24 then out[#out + 1] = f end end
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a > b end)       -- (screenshots: newest first by their dated names)
+  return out
+end
+
+function M.uiPhone()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  local w = require('beamngEarth/wallet')
+  local mins = M.gameClock()
+  local okN, ng = pcall(require, 'beamngEarth/navgraph')
+  local mph = not okN or ng.mph ~= false
+  if os.clock() - mediaT > 3 and core and core.requestMedia then      -- the song, every few seconds while up
+    mediaT = os.clock()
+    core.requestMedia(nil)
+  end
+  local okL, sb = pcall(require, 'beamngEarth/statusbar')
+  local loc = okL and sb.location and sb.location() or {}
+  local clock = ''
+  if mins then
+    local h, m = math.floor(mins / 60), mins % 60
+    clock = mph and string.format('%d:%02d %s', (h % 12 == 0) and 12 or h % 12, m, h < 12 and 'AM' or 'PM')
+      or string.format('%02d:%02d', h, m)
+  end
+  return {
+    up = phoneUp, time = clock, mph = mph,
+    place = (loc and (loc.place or loc.street)) or nil,
+    weekday = math.floor(((require('beamngEarth/dynweather')._state().day) or 0) % 7),
+    prefs = prefs(), wallpapers = wallpapers(),
+    bank = { balance = w.balance(), text = w.format(w.balance()), history = w.history() },
+    weather = require('beamngEarth/dynweather').uiState(mins),
+    jobs = require('beamngEarth/jobs').uiState(),
+    media = core and core.mediaState and core.mediaState() or { ok = false },
+  }
+end
+
+function M.uiPhoneSet(k, v)
+  local p = prefs()
+  if k == 'theme' or k == 'accent' or k == 'wallpaper' then p[k] = tostring(v)
+  elseif k == 'size' then p.size = math.max(0.7, math.min(1.3, tonumber(v) or 1)) end
+  pcall(jsonWriteFile, PHONE_FILE, p, true)
+  return true
+end
+
+function M.uiPhoneMedia(action)
+  local core = ext('beamngEarth_core')
+  mediaT = os.clock()
+  return core and core.requestMedia and core.requestMedia(tostring(action)) or false
+end
+
+function M.uiPhoneWeatherMode(mode)
+  require('beamngEarth/dynweather').setMode(mode)
+  return true
+end
+
 -- The Jobs app (jobs.lua): its state; refresh the offers near the player; accept offer i; cancel.
 function M.uiJobs() return require('beamngEarth/jobs').uiState() end
 function M.uiJobsRefresh(kind)

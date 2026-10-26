@@ -170,6 +170,17 @@
         "width": "360px",
         "height": "430px"
       }
+    },
+    {
+      "appName": "beamngEarthPhone",
+      "appVersion": 1,
+      "placement": {
+        "bottom": "10px",
+        "right": "10px",
+        "position": "absolute",
+        "width": "330px",
+        "height": "650px"
+      }
     }
   ],
   "removedApps": {
