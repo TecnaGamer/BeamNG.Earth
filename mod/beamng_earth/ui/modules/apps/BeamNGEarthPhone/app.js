@@ -105,14 +105,15 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
         // jobs
         '<div class="bnp-view" ng-if="app == \'jobs\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Jobs</div>' +
           '<div class="bnp-dim" style="margin:-6px 2px 10px" ng-if="p.jobs.streak">Clean delivery streak: {{ p.jobs.streak }} (+{{ Math.min(25, p.jobs.streak * 5) }}% pay)</div>' +
-          '<div class="bnp-card" ng-if="p.jobs.active"><div class="bnp-dim">{{ p.jobs.active.stage == "pickup" ? "Go to the pickup" : "Delivering" }}</div><div style="font-weight:700;font-size:16px">{{ p.jobs.active.car }}</div>' +
+          '<div class="bnp-card" ng-if="p.jobs.active && !p.jobs.active.stops"><div class="bnp-dim">{{ p.jobs.active.stage == "pickup" ? "Go to the pickup" : "Delivering" }}</div><div style="font-weight:700;font-size:16px">{{ p.jobs.active.car }}</div>' +
             '<div class="bnp-row"><span class="bnp-dim">To</span><span>{{ p.jobs.active.stops ? "Stop " + p.jobs.active.stop + " of " + p.jobs.active.stops : p.jobs.active.dropoff }}</span></div>' +
             '<div class="bnp-row" ng-if="p.jobs.active.estimate"><span class="bnp-big" style="font-size:24px">{{ clock(p.jobs.active.t) }}</span><span class="bnp-pos">${{ p.jobs.active.estimate.total.toFixed(0) }}</span></div>' +
             '<div class="bnp-dim" ng-if="p.jobs.active.estimate">Bonuses: early +{{ p.jobs.active.estimate.bonus.toFixed(0) }}, spotless +{{ p.jobs.active.estimate.spotless.toFixed(0) }}, clean record +{{ p.jobs.active.estimate.record.toFixed(0) }}, streak +{{ p.jobs.active.estimate.streak.toFixed(0) }}</div>' +
             '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiJobCancel()\')">Cancel job</button></div>' +
-          '<div ng-if="!p.jobs.active"><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button class="bnp-btn" ng-click="lua(\'uiJobsRefresh()\')">Car jobs</button><button class="bnp-btn alt" ng-click="lua(\'uiJobsRefresh(\\\'truck\\\')\')">Truck jobs</button><button class="bnp-btn alt" style="background:#232f3e;color:#fff;display:flex;align-items:center;gap:5px" ng-click="lua(\'uiJobsRefresh(\\\'parcel\\\')\')"><span style="width:18px;height:18px;display:inline-block;background-size:contain" ng-style="{\'background-image\': icon(\'beamazon\')}"></span><span style="font-weight:800;letter-spacing:-.3px">beamazon</span></button></div>' +
+          '<div ng-if="p.jobs.active && p.jobs.active.stops" class="bnp-dim">You are on a Beamazon route: see the Beamazon app.</div>' +
+          '<div ng-if="!p.jobs.active"><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button class="bnp-btn" ng-click="lua(\'uiJobsRefresh()\')">Car jobs</button><button class="bnp-btn alt" ng-click="lua(\'uiJobsRefresh(\\\'truck\\\')\')">Truck jobs</button></div>' +
             '<div class="bnp-dim" ng-if="p.jobs.searching">Searching…</div><div class="bnp-dim" ng-if="p.jobs.error">{{ p.jobs.error }}</div>' +
-            '<div class="bnp-card" ng-repeat="j in p.jobs.offers"><div class="bnp-row" style="padding:0"><b>{{ j.cargo || j.car_name }}</b><span class="bnp-pos">${{ j.pay.toFixed(0) }}</span></div>' +
+            '<div class="bnp-card" ng-repeat="j in p.jobs.offers" ng-if="j.kind != \'parcel\'"><div class="bnp-row" style="padding:0"><b>{{ j.cargo || j.car_name }}</b><span class="bnp-pos">${{ j.pay.toFixed(0) }}</span></div>' +
               '<div class="bnp-dim">{{ j.pickup.name }} → {{ j.dropoff.name }}</div><div class="bnp-row"><span class="bnp-dim">{{ (j.dist / 1609.344).toFixed(1) }} mi<span ng-if="j.rent"> · -${{ j.rent }} rent</span></span><button class="bnp-btn" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Take</button></div></div></div>' +
         '</div>' +
         // music
@@ -146,6 +147,23 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
               '<button class="bnp-btn" ng-if="m.kind != \'own\'" ng-click="gdo(\'buyout\', m.id)">Buy{{ m.buy ? " $" + (m.buy | number:0) : "" }}</button>' +
               '<button class="bnp-btn" style="background:#ff453a" ng-click="gdo(\'sell\', m.id)">{{ m.kind == "own" ? "Sell" : "End lease" }}</button></div></div></div>' +
           '<div class="bnp-dim" ng-if="gmsg" style="margin-top:6px">{{ gmsg }}</div>' +
+        '</div>' +
+        // Beamazon (the user, 2026-10-26: "jobs and beamazon shouldn't be the same thing, make beamazon its own thing
+        // inside its own app"): its routes, the route you are on
+        '<div class="bnp-view" ng-if="app == \'beamazon\'" style="background:#131921;color:#fff"><span class="bnp-back" style="color:#ff9900" ng-click="home()">‹ Home</span>' +
+          '<div style="display:flex;align-items:center;gap:10px;margin:4px 0 14px"><div style="width:44px;height:44px;border-radius:11px;background-size:cover" ng-style="{\'background-image\': icon(\'beamazon\')}"></div>' +
+            '<div><div style="font-size:26px;font-weight:900;letter-spacing:-.5px">beamazon</div><div style="font-size:12px;color:#ff9900">Delivery partner</div></div></div>' +
+          '<div class="bnp-card" style="background:#232f3e" ng-if="p.jobs.active && p.jobs.active.stops">' +
+            '<div style="color:#ff9900;font-size:12px;font-weight:700">{{ p.jobs.active.stage == "pickup" ? "GO TO THE DEPOT" : "ON ROUTE" }}</div>' +
+            '<div style="font-size:20px;font-weight:800">{{ p.jobs.active.stage == "pickup" ? p.jobs.active.pickup : "Stop " + p.jobs.active.stop + " of " + p.jobs.active.stops }}</div>' +
+            '<div style="height:6px;border-radius:3px;background:#37475a;margin:8px 0"><div style="height:6px;border-radius:3px;background:#ff9900" ng-style="{width: ((p.jobs.active.stop - 1) / p.jobs.active.stops * 100) + \'%\'}"></div></div>' +
+            '<div class="bnp-row" ng-if="p.jobs.active.estimate"><span class="bnp-big" style="font-size:22px">{{ clock(p.jobs.active.t) }}</span><span class="bnp-pos">${{ p.jobs.active.estimate.total.toFixed(0) }}</span></div>' +
+            '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiJobCancel()\')">Cancel route</button></div>' +
+          '<div ng-if="!p.jobs.active"><button class="bnp-btn" style="background:#ff9900;color:#111;margin-bottom:10px" ng-click="lua(\'uiJobsRefresh(\\\'parcel\\\')\')">{{ p.jobs.searching ? "Finding routes…" : "Find routes" }}</button>' +
+            '<div class="bnp-card" style="background:#232f3e" ng-repeat="j in p.jobs.offers" ng-if="j.kind == \'parcel\'">' +
+              '<div class="bnp-row" style="padding:0"><b>{{ j.stops.length }} packages</b><span class="bnp-pos">${{ j.pay.toFixed(0) }}</span></div>' +
+              '<div style="font-size:12px;color:#c9ced6">From {{ j.pickup.name }} · {{ (j.dist / 1609.344).toFixed(1) }} mi · {{ clock(j.limit) }}</div>' +
+              '<div style="text-align:right;margin-top:4px"><button class="bnp-btn" style="background:#ff9900;color:#111" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Start route</button></div></div></div>' +
         '</div>' +
         // settings
         '<div class="bnp-view" ng-if="app == \'settings\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Settings</div>' +
@@ -203,7 +221,6 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       function lua(cmd, cb) { if (window.bngApi) bngApi.engineLua(S + ' and ' + S + '.' + cmd, cb || function () { poll() }) }
       scope.lua = function (cmd) { lua(cmd) }
       scope.open = function (id) {
-        if (id == 'beamazon') { scope.app = 'jobs'; lua('uiJobsRefresh(\'parcel\')'); return }   // (its routes)
         scope.app = id
         if (id == 'garage') scope.gtab = 'repair'
         else if (id == 'realestate' && scope.gtab == 'repair') scope.gtab = 'property'
