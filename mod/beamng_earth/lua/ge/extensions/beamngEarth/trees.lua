@@ -18,6 +18,12 @@ M.RINGS = { { 300, 1.0 }, { 700, 0.6 }, { 1500, 0.35 }, { 1e9, 0.2 } }   -- tile
 -- on the GPU, and the engine's tick hitched at every tile change while driving: 19.8 fps over a drive, 38.4 with trees
 -- off; 2026-10-20). Cities and farmland stay under it (Columbia: ~540 a tile).
 M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
+-- Cached positions/ranks are shared by all presets. High keeps the existing counts; higher
+-- presets retain more distant trees, up to the positions supplied by the server.
+M.DENSITIES = { veryLow = 0.1, low = 0.25, medium = 0.5, high = 1, veryHigh = 1.5, max = 2 }
+M.density = 'high'
+local TREE_GROUPS = { deciduous = true, conifer = true, pine_west = true, palm = true,
+  juniper = true, oak_west = true, tropical = true }
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
@@ -398,19 +404,21 @@ end
 
 -- The rank tile t shows below at distance d: threshold(d), lowered to keep it within M.TILE_CAP (the cap-th lowest
 -- of its rows' ranks: exact whatever share of the area's items the server sent, vegetation.TILE_ROWS_MAX).
-local function tileThreshold(d, t)
-  local want = threshold(d)
+local function tileThreshold(d, t, scale)
+  scale = scale or 1
+  local want = math.min(1, math.floor(threshold(d) * scale * 1e9 + 0.5) / 1e9)
   local rows = t.rows or {}
   for _, r in ipairs(M.TILE_CAP) do
     if d <= r[1] then
-      if #rows <= r[2] then return want end
+      local cap = math.floor(r[2] * scale)
+      if #rows <= cap then return want end
       if not t.ranks then
         local rk = {}
         for i, row in ipairs(rows) do rk[i] = row[8] or 0 end
         table.sort(rk)
         t.ranks = rk
       end
-      return math.min(want, t.ranks[r[2] + 1])
+      return math.min(want, t.ranks[cap + 1])
     end
   end
   return want
@@ -422,6 +430,15 @@ M.tileThreshold = tileThreshold
 M.suppress = nil
 function M.refresh()
   for _, t in pairs(tiles) do t.pending = true end
+end
+
+function M.setDensity(value)
+  if not M.DENSITIES[value] then return false end
+  if M.density ~= value then
+    M.density = value
+    M.refresh() -- reuses the normal per-frame work budget and existing collision handling
+  end
+  return true
 end
 
 -- Which of the capped groups a tile at distance d still shows (changes re-run its rows).
@@ -574,15 +591,17 @@ function M.update(anchorId, player, view)
     local fd = nil                          -- the tile's Forest data, made when it first needs an item
     local function data() fd = fd or forest(t):getData(); return fd end
     local want = tileThreshold(o[2], t)
+    local treeWant = tileThreshold(o[2], t, M.DENSITIES[M.density])
     local band = groupBand(t, o[2])
     local near = o[3] <= M.SOLID_M or (t.near and o[3] <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
-    if want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
+    if want ~= t.shown or treeWant ~= t.treeShown or band ~= t.band or near ~= t.near or t.pending then
       t.pending = false
       if rowsScanned > M.ROWS_PER_FRAME then finish(); return end
       rowsScanned = rowsScanned + #t.rows
       for i, row in ipairs(t.rows) do
         local r = row[8] or 0
         local g = (t.groups or GROUPS)[(row[1] or 0) + 1]
+        local rowWant = TREE_GROUPS[g or ''] and treeWant or want
         local cap = g and M.GROUP_MAX_M[g]
         if cap and o[2] > cap then r = 2 end     -- this group is not shown this far out
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
@@ -593,20 +612,24 @@ function M.update(anchorId, player, view)
         -- an item something else stands in for (navgraph.lua's switchable signal heads)
         if g and M.suppress and M.suppress(g, row[2], row[3]) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
-        if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
+        if r < rowWant and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i, row)
           if budget <= 0 then t.pending = true; finish(); return end
           if allow(sh) then
-            if t.made[i] then removeItem(data(), t.made[i], t.madeShape[i]); budget = budget - 1 end  -- solid <-> not
+            if t.made[i] then
+              if t.solid[i] then nearMade = true end
+              removeItem(data(), t.made[i], t.madeShape[i]); budget = budget - 1
+            end  -- solid <-> not
             t.made[i] = makeItem(data(), row, sh, sc, solid, g, t.variant)
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
             if solid then nearMade = true end
             budget = budget - 1
           else t.pending = true end                -- another frame (this one's shapes are full)
-        elseif r >= want and t.made[i] then
+        elseif r >= rowWant and t.made[i] then
           if budget <= 0 then t.pending = true; finish(); return end
           if allow(t.madeShape[i] or '') then
+            if t.solid[i] then nearMade = true end
             removeItem(data(), t.made[i], t.madeShape[i])
             t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
             budget = budget - 1
@@ -614,6 +637,7 @@ function M.update(anchorId, player, view)
         end
       end
       t.shown = want
+      t.treeShown = treeWant
       t.band = band
       t.near = near
     end
@@ -644,7 +668,8 @@ function M.status()
     if t.pending or t.shown == 0 then pending = pending + 1 end
     for _ in pairs(t.made) do items = items + 1 end
   end
-  return { tiles = n, items = items, pending = pending, made = M.made, removed = M.removed, errors = M.errors }
+  return { tiles = n, items = items, pending = pending, made = M.made, removed = M.removed, errors = M.errors,
+    density = M.density }
 end
 
 return M

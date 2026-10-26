@@ -48,8 +48,13 @@ M.SCHEMA = {
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
   -- grass and shrubs on the surface layers (groundcover.lua; needs the server's --surface on)
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
+  treeDensity = { kind = 'enum', default = 'high', values = { 'veryLow', 'low', 'medium', 'high', 'veryHigh', 'max' }, label = 'Tree density' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- roads near the player (roads.lua; the server's --roads on)
+  highwaySigns = { kind = 'bool', default = true, label = 'Highway Signs' },
+  osmExitSigns = { kind = 'bool', default = true, label = 'Highway exit signs' },
+  mergeSigns = { kind = 'bool', default = true, label = 'Highway merge signs' },
+  mileMarkers = { kind = 'bool', default = true, label = 'Interstate mile markers' },
   roads = { kind = 'bool', default = true, label = 'Roads' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
@@ -74,12 +79,12 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible', 'statusBar',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'treeDensity', 'roads', 'highwaySigns', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
 -- Stored but not on the settings page
-M.HIDDEN = { welcomeSeen = true, updateDismissed = true }
+M.HIDDEN = { welcomeSeen = true, updateDismissed = true, osmExitSigns = true, mergeSigns = true, mileMarkers = true }
 
 -- Old values that still load (and set) as their replacement, without a warning: 'auto' weather
 -- (real unless BWM_Weather was changing the weather) is Real now, which switches itself to Manual
@@ -136,6 +141,9 @@ function M.load(path)
   local ok, data = false, nil
   if read and (not FS or not FS.fileExists or FS:fileExists(path or M.FILE)) then ok, data = pcall(read, path or M.FILE) end
   if ok and type(data) == 'table' then
+    if data.highwaySigns == nil then
+      data.highwaySigns = not (data.osmExitSigns == false and data.mergeSigns == false and data.mileMarkers == false)
+    end
     for k, v in pairs(data) do
       if k ~= 'version' and not M.RETIRED[k] then
         local val, err = M.validate(k, v)
@@ -248,7 +256,17 @@ M.APPLY = {
     if w and w.setGravityEnabled and w.GRAVITY_ENABLED ~= v then w.setGravityEnabled(v) end
   end,
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
+  treeDensity = function(v) require('beamngEarth/trees').setDensity(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
+  osmExitSigns = function(v) require('beamngEarth/roads').setExitSignsEnabled(v) end,
+  mergeSigns = function(v) require('beamngEarth/roads').setMergeSignsEnabled(v) end,
+  mileMarkers = function(v) require('beamngEarth/roads').setMileMarkersEnabled(v) end,
+  highwaySigns = function(v)
+    local roads = require('beamngEarth/roads')
+    roads.setExitSignsEnabled(v)
+    roads.setMergeSignsEnabled(v)
+    roads.setMileMarkersEnabled(v)
+  end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end

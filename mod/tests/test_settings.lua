@@ -110,6 +110,18 @@ local saved = files[settings.FILE]
 vals = settings.load()
 T.check(vals.rebaseDistance == 9000 and vals.skyMode == 'manual' and vals.clouds == false, 'save -> load round trip')
 T.check(saved.hudVisible == false and saved.devOutlineKm == 3, 'every value is written')
+-- Tree density is a persisted World option, applied through the renderer.
+local trees = require('beamngEarth/trees')
+T.check(settings.defaults().treeDensity == 'high', 'tree density defaults to original density')
+for _, preset in ipairs({'veryLow','low','medium','high','veryHigh','max'}) do
+  T.check(settings.set('treeDensity', preset).ok and trees.density == preset,
+    'tree density applied: ' .. preset)
+end
+T.check(files[settings.FILE].treeDensity == 'max' and settings.load().treeDensity == 'max',
+  'tree density survives settings save and reload')
+T.check(not settings.set('treeDensity', 'invalid').ok and trees.density == 'max',
+  'invalid tree density cannot change renderer or saved preference')
+settings.set('treeDensity', 'high')
 -- real weather and gravity: through beamngEarth_weather (defaults = its own: real, gravity on)
 T.check(settings.get('weatherMode') == 'real' and settings.get('realGravity') == true, 'weather defaults: real, real gravity on')
 local wCalls, wMode = {}, 'real'

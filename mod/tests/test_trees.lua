@@ -218,4 +218,45 @@ trees.update(4, { x = 2, y = 10 })
 T.check(count() == 1, 'unknown group: only the bench is made')
 T.check(trees.unknownGroups.nl_unknown_sign == true, 'unknown group: noted')
 trees.clear()
+-- Density changes keep ranked positions; rocks, shrubs and road signs keep their counts.
+trees.EVERY_N, trees.PER_FRAME = 1, 250
+local densityRows = {}
+for i = 0, 99 do densityRows[#densityRows + 1] = { 0, i, 10, 5, 0, 1, 12, i / 100 } end
+for g = 1, 3 do densityRows[#densityRows + 1] = { g, g, 10, 5, 0, 1, 1, 0.9 } end
+trees.onRows(10, '0_0', densityRows, { 'deciduous', 'rock', 'shrub', 'stop' })
+trees.setDensity('high')
+trees.update(10, { x = 50, y = 50 })
+T.check(count() == 103, 'High preserves the original nearby trees and decoration')
+local roadModule = require('beamngEarth/roads')
+local originalCollision, collisionUpdates = roadModule.requestCollision, 0
+roadModule.requestCollision = function() collisionUpdates = collisionUpdates + 1 end
+local madeBefore = trees.made
+trees.setDensity('low')
+trees.update(10, { x = 50, y = 50 })
+T.check(count() == 28 and trees.made == madeBefore, 'Low keeps a stable subset of trees and all other groups')
+T.check(collisionUpdates > 0, 'removing solid trees requests a collision rebuild')
+roadModule.requestCollision = originalCollision
+trees.setDensity('veryLow')
+trees.update(10, { x = 50, y = 50 })
+T.check(count() == 13, 'Very Low keeps ten percent of trees and all non-tree groups')
+trees.setDensity('medium')
+trees.update(10, { x = 50, y = 50 })
+T.check(count() == 53, 'Medium restores half the nearby trees without a new tile')
+for _, entry in ipairs({ { 'veryLow', 2 }, { 'low', 5 }, { 'medium', 10 }, { 'high', 20 }, { 'veryHigh', 30 }, { 'max', 40 } }) do
+  trees.setDensity(entry[1])
+  trees.update(10, { x = 50, y = 2100 })
+  T.check(count() == entry[2], 'distant trees follow preset ' .. entry[1])
+end
+T.check(not trees.setDensity('broken') and trees.density == 'max', 'invalid renderer preset leaves density intact')
+for name, scale in pairs(trees.DENSITIES) do
+  T.near(trees.tileThreshold(2000, ranked(10000, 1), scale), 400 * scale / 10000, 1e-12,
+    'dense forest remains capped for ' .. name)
+end
+trees.clear()
+trees.setDensity('low')
+trees.onRows(11, '0_0', densityRows, { 'conifer', 'rock', 'shrub', 'stop' })
+trees.update(11, { x = 50, y = 50 })
+T.check(count() == 28, 'newly arriving tiles use the selected density too')
+trees.clear()
+trees.setDensity('high')
 T.done('test_trees')

@@ -541,6 +541,18 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel, rail_mesh=rmesh) + (fuel_pads,)
 
 
+def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True):
+    """Sign-only counterpart of Server.build_signs_tile, isolated from road workers."""
+    import signstream
+    g, _ = _s.anchor(aid, lat, lon)
+    frame = geodesy.EnuFrame(lat, lon)
+    def elev(la, lo):
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    return signstream.build_tile(_s.md, frame, aid, tx, ty, elev, out_dir, vfs_dir,
+                                 getattr(_s.surface, 'urban', None), _s.widths, left_hand, mph)
+
+
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):
     """The road mesh with the tile's squares and pedestrian areas paved (plazas.py), from the cached land use (none
     when it is not cached yet: surface.Surface.lots never waits)."""

@@ -18,10 +18,16 @@ T.check(place == nil and moved == false, 'the same anchor: not sent at once (the
 place, moved = G.onPose(1, { v = G.PROTO, aLat = 36.2, aLon = -118, lat = 36.2, lon = -118 }, 'a')
 T.check(moved == true, 'a rebase: the anchors go out at once')
 
--- a second player joining 80 miles away: sent to the first; near: not
+-- No automatic join teleport by default; hosts can explicitly enable the old behavior.
 G.tick(2)
 place = G.onPose(2, { v = G.PROTO, aLat = 35, aLon = -118.7, lat = 35, lon = -118.7, joined = true }, 'b')
+T.check(place == nil and G.config().joinNearPlayers == false,'joining far away stays in place by default')
+G.JOIN_NEAR_PLAYERS = true
+G.onLeave(2)
+place = G.onPose(2, { v = G.PROTO, aLat = 35, aLon = -118.7, lat = 35, lon = -118.7, joined = true }, 'b')
 T.check(place and place.lat == 36.2 and place.lon == -118, 'a joining player far away: sent to the first player')
+T.check(G.config().joinNearPlayers == true,'legacy join teleport setting is sent to clients')
+G.JOIN_NEAR_PLAYERS = false
 place = G.onPose(3, { v = G.PROTO, aLat = 36.2, aLon = -118, lat = 36.201, lon = -118, joined = true }, 'c')
 T.check(place == nil, 'a joining player already near them: stays')
 

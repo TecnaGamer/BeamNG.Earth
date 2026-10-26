@@ -244,8 +244,11 @@ class MapData:
         self._mem_lock = threading.Lock()
         self._warm_ex = None
         self._warming = set()               # (cell, layer)s queued or building in warm()
+        import highwaysigns
+        self.highway_signs = highwaysigns.Source(self)
 
     def close(self):
+        self.highway_signs.close()
         self.pool.shutdown(wait=False)
         if self._warm_ex is not None:
             self._warm_ex.shutdown(wait=False, cancel_futures=True)

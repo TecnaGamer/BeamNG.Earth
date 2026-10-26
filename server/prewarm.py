@@ -1,5 +1,5 @@
 """One small shape listing every material the server's own shapes use (buildings, road meshes, sidewalks, bridges,
-tunnels, wires, runway markings), loaded once by the mod when it connects (hello.prewarm).
+tunnels, wires, runway markings, highway signs), loaded once by the mod when it connects (hello.prewarm).
 
 The first shape in a game session that uses a material sets it up (its shaders): a tunnel's first tile took 65 ms
 to load, every later one ~2 ms; one shape with a triangle per material took 117 ms once, after which the tunnel's
@@ -33,11 +33,17 @@ def materials():
     """The sorted material names the server's shapes may use."""
     import airportgrade
     import buildings
+    import exitsigns
     import junctions
+    import mergesigns
+    import milemarkers
     import roadmesh
     import roads
     import sidewalks
     out = set(buildings.MATERIALS) | set(sidewalks.MATERIALS) | set(EXTRA)
+    out.update(exitsigns.GUIDE_MATERIALS)
+    out.update(milemarkers.MATERIALS)
+    out.update(mergesigns.MATERIALS)
     for mod in (roads, roadmesh, junctions, airportgrade):
         for name, v in vars(mod).items():
             if name.isupper():
