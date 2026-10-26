@@ -680,8 +680,41 @@ function M.uiPhone()
     weather = require('beamngEarth/dynweather').uiState(mins),
     jobs = require('beamngEarth/jobs').uiState(),
     media = core and core.mediaState and core.mediaState() or { ok = false },
+    garage = require('beamngEarth/garage').uiState(st and st.anchor, pl),
   }
 end
+
+-- The Garage app (garage.lua): its state; refresh; the actions where you stand.
+local function here()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  return st and st.anchor, st and st.player
+end
+function M.uiGarage() local a, p = here() return require('beamngEarth/garage').uiState(a, p) end
+function M.uiGarageRefresh(kind)
+  local _, p = here()
+  return require('beamngEarth/garage').refresh(kind, p and p.lat, p and p.lon)
+end
+function M.uiGarageDo(action, arg)
+  local g, a, p = require('beamngEarth/garage'), here()
+  local ok, why
+  if action == 'repair' then ok, why = g.repair(a, p)
+  elseif action == 'respray' then ok, why = g.respray(a, p, arg)
+  elseif action == 'plates' then ok, why = g.plates(a, p)
+  elseif action == 'parts' then ok, why = g.parts(a, p)
+  elseif action == 'buy' or action == 'rent' then ok, why = g.acquire(arg, action)
+  elseif action == 'store' then ok, why = g.store(a, p, arg)
+  end
+  return { ok = ok and true or false, error = why }
+end
+function M.uiGarageNav(list, i)        -- list: 'repair', 'property' or 'mine'; i from 1
+  local a, p = here()
+  local s = require('beamngEarth/garage').uiState(a, p)
+  local item = (s[list] or {})[tonumber(i) or 0]
+  return item and require('beamngEarth/gps').setDestination(item.lat, item.lon, item.name) or false
+end
+-- (testing, the user 2026-10-26: "I'll also need a temporary cash boost to see how these things work")
+function M.uiCashBoost() require('beamngEarth/wallet').add(10000, 'Test cash') return true end
 
 function M.uiPhoneSet(k, v)
   local p = prefs()

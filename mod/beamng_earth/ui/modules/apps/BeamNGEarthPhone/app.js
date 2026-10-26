@@ -13,6 +13,7 @@ angular.module('beamng.apps')
     weather: '<circle cx="12" cy="12" r="5" fill="#ffd34d"/><path d="M10 26 H25 A5 5 0 0 0 24 16 A7 7 0 0 0 11 18 A4 4 0 0 0 10 26 Z" fill="#fff"/>',
     jobs: '<rect x="5" y="10" width="22" height="15" rx="3" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M12 10 V7 H20 V10 M5 16 H27" fill="none" stroke="#fff" stroke-width="2.2"/>',
     music: '<path d="M12 22 V8 L25 5 V19" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><circle cx="9" cy="22" r="3.5" fill="#fff"/><circle cx="22" cy="19" r="3.5" fill="#fff"/>',
+    garage: '<path d="M4 14 L16 6 L28 14 V27 H4 Z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><path d="M9 27 V18 H23 V27 M9 21 H23 M9 24 H23" fill="none" stroke="#fff" stroke-width="2"/>',
     settings: '<circle cx="16" cy="16" r="4.5" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M16 4 V8 M16 24 V28 M4 16 H8 M24 16 H28 M7.5 7.5 L10.3 10.3 M21.7 21.7 L24.5 24.5 M7.5 24.5 L10.3 21.7 M21.7 10.3 L24.5 7.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>'
   }
   var APPS = [
@@ -20,6 +21,7 @@ angular.module('beamng.apps')
     { id: 'weather', name: 'Weather', bg: 'linear-gradient(160deg,#4aa3ff,#1c5fd6)' },
     { id: 'jobs', name: 'Jobs', bg: 'linear-gradient(160deg,#ff9f43,#e0601b)' },
     { id: 'music', name: 'Music', bg: 'linear-gradient(160deg,#1ed760,#118a3e)' },
+    { id: 'garage', name: 'Garage', bg: 'linear-gradient(160deg,#ff5e57,#b3261e)' },
     { id: 'settings', name: 'Settings', bg: 'linear-gradient(160deg,#8e8e93,#5a5a60)' }
   ]
   var WX = { clear: '☀', partly: '⛅', cloudy: '☁', fog: '🌫', rain: '🌧', storm: '⛈', snow: '❄' }
@@ -109,6 +111,29 @@ angular.module('beamng.apps')
           '<div class="bnp-art">♫</div><div style="font-size:19px;font-weight:800">{{ p.media.title || "Nothing playing" }}</div><div style="opacity:.7;font-size:14px">{{ p.media.artist || (p.media.ok === false ? "Open Spotify on your PC" : "Spotify") }}</div>' +
           '<div class="bnp-mctl"><span ng-click="media(\'prev\')">⏮</span><span ng-click="media(\'play\')">{{ p.media.playing ? "⏸" : "▶" }}</span><span ng-click="media(\'next\')">⏭</span></div>' +
         '</div>' +
+        // garage
+        '<div class="bnp-view" ng-if="app == \'garage\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Garage</div>' +
+          '<div class="bnp-seg" style="margin-bottom:10px"><span ng-class="{on: gtab == \'repair\'}" ng-click="gtab=\'repair\'">Repair shops</span><span ng-class="{on: gtab == \'property\'}" ng-click="gtab=\'property\'">Property</span><span ng-class="{on: gtab == \'mine\'}" ng-click="gtab=\'mine\'">Mine</span></div>' +
+          '<div class="bnp-card" ng-if="g.here"><div class="bnp-dim">{{ g.here.kind == "home" ? "At your property" : "At the shop" }}</div><div style="font-weight:700;margin-bottom:6px">{{ g.here.name }}</div>' +
+            '<div class="bnp-row"><span>Repair</span><button class="bnp-btn" ng-click="gdo(\'repair\')">{{ g.repairCost ? "$" + g.repairCost : "Free" }}</button></div>' +
+            '<div class="bnp-row"><span>Parts &amp; tuning</span><button class="bnp-btn" ng-click="gdo(\'parts\')">{{ g.here.kind == "home" ? "Free" : "$" + g.prices.labor }}</button></div>' +
+            '<div class="bnp-row"><span>New plates</span><button class="bnp-btn" ng-click="gdo(\'plates\')">${{ g.prices.plates }}</button></div>' +
+            '<div class="bnp-row"><span>Respray ${{ g.prices.respray }}</span><span><span class="bnp-sw" ng-repeat="c in g.colours track by $index" ng-style="{background: rgb(c)}" ng-click="gdo(\'respray\', $index + 1)"></span></span></div>' +
+            '<div ng-if="g.here.kind == \'home\'"><div class="bnp-dim" style="margin-top:6px">STORAGE</div>' +
+              '<div class="bnp-row" ng-repeat="c in homeCars() track by $index"><span>{{ c.model }} <span class="bnp-dim">{{ c.plate }}</span></span><button class="bnp-btn alt" ng-click="gdo(\'store\', $index + 1)">Swap</button></div>' +
+              '<button class="bnp-btn alt" style="margin-top:4px" ng-click="gdo(\'store\')">Store a copy of this car</button></div>' +
+          '</div>' +
+          '<div ng-if="gtab != \'mine\'"><button class="bnp-btn" style="margin-bottom:8px" ng-click="lua(\'uiGarageRefresh(\\\'\' + gtab + \'\\\')\')">{{ g.searching[gtab] ? "Searching…" : "Find near me" }}</button>' +
+            '<div class="bnp-dim" ng-if="g.errors[gtab]">{{ g.errors[gtab] }}</div>' +
+            '<div class="bnp-card" ng-repeat="s in g[gtab] track by $index"><div class="bnp-row" style="padding:0"><b>{{ s.name }}</b><span class="bnp-dim">{{ dist(s.dist) }}</span></div>' +
+              '<div class="bnp-row" ng-if="gtab == \'property\'"><span class="bnp-dim">Buy ${{ s.buy | number:0 }} · Rent ${{ s.rent }}/wk</span></div>' +
+              '<div style="display:flex;gap:6px;margin-top:4px"><button class="bnp-btn alt" ng-click="lua(\'uiGarageNav(\\\'\' + gtab + \'\\\', \' + ($index + 1) + \')\')">Navigate</button>' +
+              '<button class="bnp-btn" ng-if="gtab == \'property\'" ng-click="gdo(\'rent\', $index + 1)">Rent</button><button class="bnp-btn" ng-if="gtab == \'property\'" ng-click="gdo(\'buy\', $index + 1)">Buy</button></div></div></div>' +
+          '<div ng-if="gtab == \'mine\'"><div class="bnp-dim" ng-if="!g.mine.length">You have no property yet: find one under Property.</div>' +
+            '<div class="bnp-card" ng-repeat="m in g.mine track by $index"><div class="bnp-row" style="padding:0"><b>{{ m.name }}</b><span class="bnp-dim">{{ m.kind == "own" ? "Owned" : (m.held ? m.daysLeft + " days left" : "Rent due") }}</span></div>' +
+              '<div class="bnp-dim">{{ m.cars.length }} car(s) stored</div><button class="bnp-btn alt" style="margin-top:4px" ng-click="lua(\'uiGarageNav(\\\'mine\\\', \' + ($index + 1) + \')\')">Navigate</button></div></div>' +
+          '<div class="bnp-dim" ng-if="gmsg" style="margin-top:6px">{{ gmsg }}</div>' +
+        '</div>' +
         // settings
         '<div class="bnp-view" ng-if="app == \'settings\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Settings</div>' +
           '<div class="bnp-dim" style="margin:0 2px 6px">WALLPAPER</div><div class="bnp-card"><div class="bnp-thumbs"><div class="bnp-thumb" ng-repeat="w in p.wallpapers track by $index" ng-class="{on: w == p.prefs.wallpaper}" ng-style="{\'background-image\': \'url(\' + w + \')\'}" ng-click="set(\'wallpaper\', w)"></div></div>' +
@@ -118,6 +143,7 @@ angular.module('beamng.apps')
             '<div class="bnp-row"><span>Accent</span><span><span class="bnp-sw" ng-repeat="c in accents" ng-class="{on: c == accent()}" ng-style="{background: c}" ng-click="set(\'accent\', c)"></span></span></div>' +
             '<div class="bnp-row"><span>Size</span><input type="range" min="0.7" max="1.3" step="0.05" ng-model="size" ng-change="set(\'size\', size)" style="width:140px"></div></div>' +
           '<div class="bnp-dim" style="margin:10px 2px 6px">WEATHER</div><div class="bnp-card"><div class="bnp-seg"><span ng-class="{on: p.weather.mode != \'real\'}" ng-click="lua(\'uiPhoneWeatherMode(\\\'dynamic\\\')\')">Dynamic</span><span ng-class="{on: p.weather.mode == \'real\'}" ng-click="lua(\'uiPhoneWeatherMode(\\\'real\\\')\')">Live (real)</span></div></div>' +
+          '<div class="bnp-dim" style="margin:10px 2px 6px">TESTING</div><div class="bnp-card"><button class="bnp-btn" ng-click="lua(\'uiCashBoost()\')">+$10,000 test cash</button></div>' +
           '<div class="bnp-dim" style="margin:10px 2px">Phone key: Ctrl+O (Options > Controls to change)</div>' +
         '</div>' +
         '<div class="bnp-bar" ng-click="home()"></div>' +
@@ -129,7 +155,7 @@ angular.module('beamng.apps')
       scope.app = null
       scope.p = { prefs: {}, bank: {}, weather: { days: [{}], now: {} }, jobs: {}, media: {}, wallpapers: [] }
       scope.apps = APPS
-      scope.dock = [APPS[0], APPS[2], APPS[3], APPS[4]]
+      scope.dock = [APPS[0], APPS[2], APPS[4], APPS[5]]
       scope.accents = ACCENTS
       scope.icon = function (id) {
         return 'url("data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">' + ICONS[id] + '</svg>') + '")'
@@ -168,6 +194,21 @@ angular.module('beamng.apps')
         themeVars()
         lua('uiPhoneSet(' + JSON.stringify(k) + ', ' + JSON.stringify(v) + ')')
       }
+      scope.gtab = 'repair'
+      scope.g = { errors: {}, searching: {}, prices: {}, mine: [] }
+      scope.rgb = function (c) { return 'rgb(' + Math.round(c[0] * 255) + ',' + Math.round(c[1] * 255) + ',' + Math.round(c[2] * 255) + ')' }
+      scope.dist = function (m) { return scope.p.mph !== false ? (m / 1609.344).toFixed(1) + ' mi' : (m / 1000).toFixed(1) + ' km' }
+      scope.homeCars = function () {
+        var h = scope.g.here; if (!h) return []
+        for (var i = 0; i < (scope.g.mine || []).length; i++) if (scope.g.mine[i].id == h.id) return scope.g.mine[i].cars || []
+        return []
+      }
+      scope.gdo = function (a, arg) {
+        lua('uiGarageDo(' + JSON.stringify(a) + (arg != null ? ', ' + JSON.stringify(arg) : '') + ')', function (r) {
+          scope.$evalAsync(function () { scope.gmsg = r && r.error ? r.error : '' })
+          poll()
+        })
+      }
       scope.media = function (a) { lua('uiPhoneMedia(' + JSON.stringify(a) + ')') }
       function poll() {
         lua('uiPhone and ' + S + '.uiPhone() or nil', function (p) {
@@ -177,6 +218,8 @@ angular.module('beamng.apps')
               p.prefs = p.prefs || {}
               p.bank = p.bank || {}
               p.weather = p.weather || { days: [{}], now: {} }
+              scope.g = p.garage || scope.g
+              scope.g.errors = scope.g.errors || {}; scope.g.searching = scope.g.searching || {}
               if (p.up != null) scope.up = !!p.up
               themeVars()
             }

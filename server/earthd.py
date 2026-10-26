@@ -96,6 +96,7 @@ import randomplace as randomplacemod  # noqa: E402
 import fuelfind as fuelfindmod  # noqa: E402
 import jobfind as jobfindmod  # noqa: E402
 import media as mediamod  # noqa: E402
+import shops as shopsmod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
@@ -3050,6 +3051,25 @@ class Connection:
         log.info("%s jobs near %.5f, %.5f: %d", msg.get("kind") or "delivery", lat, lon, len(out["jobs"]))
         self.send(out)
 
+    async def places_near(self, msg):
+        """{"id", "lat", "lon", "kind": "repair" | "property"} -> places_near_result {"id", "kind", "places", "error"?}
+        (shops.py: real repair shops / property near the point, nearest first)."""
+        kind = "property" if msg.get("kind") == "property" else "repair"
+        out = {"type": "places_near_result", "id": msg.get("id"), "kind": kind, "places": []}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+            if md is None:
+                raise ValueError("no map data")
+            out["places"] = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, shopsmod.near, md, lat, lon, kind)
+        except Exception as e:
+            out["error"] = f"{type(e).__name__}: {e}"[:120]
+        if not out["places"] and "error" not in out:
+            out["error"] = "none near here"
+        log.info("%s places near %s, %s: %d", kind, msg.get("lat"), msg.get("lon"), len(out["places"]))
+        self.send(out)
+
     async def media(self, msg):
         """{"id", "action"?} -> media_state {"id", "ok", "playing", "artist", "title"}: the phone's Music app (media.py:
         presses the media key of action, if any, then reads desktop Spotify's song)."""
@@ -3339,6 +3359,8 @@ class Connection:
             self.spawn(self.random_place(msg))
         elif kind == "nearest_fuel":            # the world map's "Nearest gas station" (fuelfind.py)
             self.spawn(self.nearest_fuel(msg))
+        elif kind == "places_near":             # the phone's Garage app (shops.py)
+            self.spawn(self.places_near(msg))
         elif kind == "media":                   # the phone's Music app (media.py)
             self.spawn(self.media(msg))
         elif kind == "delivery_jobs":           # the Jobs app's garage-to-garage deliveries (jobfind.py)
