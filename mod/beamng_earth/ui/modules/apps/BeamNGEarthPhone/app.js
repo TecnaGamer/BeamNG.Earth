@@ -24,6 +24,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
     { id: 'jobs', name: 'Jobs', bg: 'linear-gradient(160deg,#ff9f43,#e0601b)' },
     { id: 'music', name: 'Music', bg: 'linear-gradient(160deg,#1ed760,#118a3e)' },
     { id: 'garage', name: 'Garage', bg: 'linear-gradient(160deg,#ff5e57,#b3261e)' },
+    { id: 'beamazon', name: 'Beamazon', bg: 'linear-gradient(160deg,#2b3a4e,#131921)' },
     { id: 'realestate', name: 'Real Estate', bg: 'linear-gradient(160deg,#5e5ce6,#2c2a9e)' },
     { id: 'settings', name: 'Settings', bg: 'linear-gradient(160deg,#8e8e93,#5a5a60)' }
   ]
@@ -163,7 +164,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       scope.app = null
       scope.p = { prefs: {}, bank: {}, weather: { days: [{}], now: {} }, jobs: {}, media: {}, wallpapers: [] }
       scope.apps = APPS
-      scope.dock = [APPS[0], APPS[2], APPS[4], APPS[6]]
+      scope.dock = [APPS[0], APPS[2], APPS[4], APPS[7]]
       scope.accents = ACCENTS
       scope.icon = function (id) {
         return 'url("data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">' + ICONS[id] + '</svg>') + '")'
@@ -196,6 +197,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       function lua(cmd, cb) { if (window.bngApi) bngApi.engineLua(S + ' and ' + S + '.' + cmd, cb || function () { poll() }) }
       scope.lua = function (cmd) { lua(cmd) }
       scope.open = function (id) {
+        if (id == 'beamazon') { scope.app = 'jobs'; lua('uiJobsRefresh(\'parcel\')'); return }   // (its routes)
         scope.app = id
         if (id == 'garage') scope.gtab = 'repair'
         else if (id == 'realestate' && scope.gtab == 'repair') scope.gtab = 'property'
