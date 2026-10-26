@@ -2315,9 +2315,9 @@ function M.requestGeocode(id, q, lat, lon)
   return true
 end
 -- The world map's "Nearest gas station": the answer is nearest_fuel_result (takeNearestFuel).
-function M.requestDeliveryJobs(id, lat, lon, seed)
+function M.requestDeliveryJobs(id, lat, lon, seed, kind)
   if not net.isConnected() then return false end
-  net.send({ type = 'delivery_jobs', id = id, lat = lat, lon = lon, seed = seed })
+  net.send({ type = 'delivery_jobs', id = id, lat = lat, lon = lon, seed = seed, kind = kind })
   return true
 end
 function M.takeDeliveryJobs(id)

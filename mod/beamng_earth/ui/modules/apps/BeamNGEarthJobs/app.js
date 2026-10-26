@@ -17,7 +17,8 @@ angular.module('beamng.apps')
   return {
     template:
       '<div class="bngApp bnej"><style>' + css + '</style>' +
-      '<h1><span>JOBS</span><button class="ghost" ng-hide="s.active" ng-click="refresh()">{{ s.searching ? "Searching..." : "Find jobs" }}</button></h1>' +
+      '<h1><span>JOBS</span><span ng-hide="s.active"><button class="ghost" ng-click="refresh()">{{ s.searching ? "Searching..." : "Car jobs" }}</button> ' +
+        '<button class="ghost" ng-click="refresh(\'truck\')">Truck jobs</button></span></h1>' +
       '<div ng-if="s.active" class="card">' +
         '<div class="dim">{{ s.active.stage == "pickup" ? "Drive to the pickup and stop there" : "Deliver the car and stop at the garage" }}</div>' +
         '<div class="car">{{ s.active.car }}</div>' +
@@ -29,18 +30,20 @@ angular.module('beamng.apps')
         '<div class="row" ng-if="s.active.estimate"><span class="dim">Early bonus / damage / late</span>' +
           '<span>+{{ s.active.estimate.bonus.toFixed(0) }} / <span class="bad">-{{ s.active.estimate.damage.toFixed(0) }}</span> / <span class="bad">-{{ s.active.estimate.late.toFixed(0) }}</span></span></div>' +
         '<div class="row"><span class="dim">Tolls and fuel paid back</span><span>${{ s.active.expenses.toFixed(2) }}</span></div>' +
+        '<div class="row" ng-if="s.active.rent"><span class="dim">Truck rental (off the pay)</span><span class="bad">-${{ s.active.rent.toFixed(0) }}</span></div>' +
         '<div class="row"><span></span><button class="stop" ng-click="cancel()">Cancel job</button></div>' +
       '</div>' +
       '<div ng-if="s.last && !s.active" class="card">' +
         '<div ng-if="s.last.cancelled" class="dim">Job cancelled: {{ s.last.job.car_name }}</div>' +
-        '<div ng-if="s.last.pay" class="row"><span>Delivered the {{ s.last.job.car_name }} in {{ clock(s.last.t) }}</span><span class="pay">+${{ s.last.pay.total.toFixed(2) }}</span></div>' +
-        '<div ng-if="s.last.pay" class="dim">pay ${{ s.last.pay.base.toFixed(0) }}, bonus +{{ s.last.pay.bonus.toFixed(0) }}, damage -{{ s.last.pay.damage.toFixed(0) }}, late -{{ s.last.pay.late.toFixed(0) }}, expenses +{{ s.last.pay.expenses.toFixed(2) }}</div>' +
+        '<div ng-if="s.last.pay" class="row"><span>Delivered the {{ s.last.job.cargo || s.last.job.car_name }} in {{ clock(s.last.t) }}</span><span class="pay">+${{ s.last.pay.total.toFixed(2) }}</span></div>' +
+        '<div ng-if="s.last.pay" class="dim">pay ${{ s.last.pay.base.toFixed(0) }}, bonus +{{ s.last.pay.bonus.toFixed(0) }}, damage -{{ s.last.pay.damage.toFixed(0) }}, late -{{ s.last.pay.late.toFixed(0) }}, expenses +{{ s.last.pay.expenses.toFixed(2) }}<span ng-if="s.last.pay.rent">, rental -{{ s.last.pay.rent.toFixed(0) }}</span></div>' +
       '</div>' +
       '<div class="list" ng-hide="s.active">' +
         '<div class="dim" ng-if="s.error">{{ s.error }}</div>' +
-        '<div class="dim" ng-if="!s.error && !s.searching && !(s.offers && s.offers.length)">Press Find jobs for car deliveries from garages near you.</div>' +
+        '<div class="dim" ng-if="!s.error && !s.searching && !(s.offers && s.offers.length)">Car jobs: deliver customers\' cars between garages. Truck jobs: haul freight between warehouses in a rented semi.</div>' +
         '<div class="card" ng-repeat="j in s.offers">' +
-          '<div class="row"><span class="car">{{ j.car_name }}</span><span class="pay">${{ j.pay.toFixed(0) }}</span></div>' +
+          '<div class="row"><span class="car">{{ j.cargo || j.car_name }}</span><span class="pay">${{ j.pay.toFixed(0) }}</span></div>' +
+          '<div class="dim" ng-if="j.rent">Rented semi, -${{ j.rent.toFixed(0) }} rental</div>' +
           '<div class="dim">{{ j.pickup.name }} → {{ j.dropoff.name }}</div>' +
           '<div class="row"><span class="dim">{{ (j.dist / 1609.344).toFixed(1) }} mi · {{ clock(j.limit) }} limit</span>' +
           '<button ng-click="take($index)">Take job</button></div>' +
@@ -62,7 +65,7 @@ angular.module('beamng.apps')
           scope.$evalAsync(function () { scope.s = s || {} })
         })
       }
-      scope.refresh = function () { lua(S + '.uiJobsRefresh()', poll) }
+      scope.refresh = function (kind) { lua(S + '.uiJobsRefresh(' + (kind ? '"' + kind + '"' : '') + ')', poll) }
       scope.take = function (i) { lua(S + '.uiJobAccept(' + (i + 1) + ')', poll) }
       scope.cancel = function () { lua(S + '.uiJobCancel()', poll) }
       var timer = setInterval(poll, 1000)

@@ -3038,7 +3038,8 @@ class Connection:
             return routingmod.plan(la0, lo0, la1, lo1, net)
         try:
             out["jobs"] = await asyncio.get_running_loop().run_in_executor(
-                self.s.ui_pool, jobfindmod.offers, md, lat, lon, seed, route)
+                self.s.ui_pool, jobfindmod.offers, md, lat, lon, seed, route, None,
+                "truck" if msg.get("kind") == "truck" else "car")
         except Exception as e:
             log.warning("delivery jobs: %s: %s", type(e).__name__, e)
             out["error"] = "search failed"

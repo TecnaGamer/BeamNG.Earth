@@ -140,7 +140,7 @@ MOD_TO_SERVER = {
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
     "nearest_fuel": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},
-    "delivery_jobs": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "seed": F(int)},   # the Jobs app (jobfind.py)     # the world map's "Nearest gas station" (fuelfind.py)
+    "delivery_jobs": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "seed": F(int), "kind": F(str, OPT)},   # the Jobs app (jobfind.py)     # the world map's "Nearest gas station" (fuelfind.py)
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
     "place_previews": {"places": F((list, dict))},
 }

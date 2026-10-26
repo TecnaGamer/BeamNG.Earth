@@ -50,11 +50,39 @@ CARS = (("covet", "Ibishu Covet", 0.85), ("pessima", "Ibishu Pessima", 0.9), ("v
         1.1), ("roamer", "Gavril Roamer", 1.0), ("pickup", "Gavril D-Series", 1.05), ("van", "Gavril H-Series", 1.0),
         ("bluebuck", "Bruckell Bluebuck", 1.1), ("scintilla", "Civetta Scintilla", 2.0), ("bolide", "Civetta Bolide",
         1.8), ("nine", "Autobello Nine", 1.25), ("miramar", "Ibishu Miramar", 0.95))
+# Trucking (the user, 2026-10-25: "truck driving (different kinds for different trucks)"; "just spawn me in the truck
+# and the trailer nearby"; "you can rent a truck and pay them a small fee each job"): freight between real warehouses,
+# factories, distribution centres and big stores, farther apart; a rented semi (RENT a job, off the pay) and the
+# trailer for the cargo.
+DEPOT_WORDS = ("warehouse", "distribution", "logistics", "freight", "factory", "manufactur", "wholesale", "industrial",
+               "lumber", "building_supply", "hardware_store", "home_improvement", "farm_supply", "agricultur", "grain",
+               "quarry", "mining", "concrete", "steel", "storage_facility", "trucking", "shipping", "supermarket",
+               "grocery", "department_store", "superstore")
+NOT_DEPOT = ("self_storage", "parking", "gas", "fuel")
+TRUCK_KM = (24.0, 35.0, 48.0, 65.0, 90.0)
+TRUCK = "us_semi"
+TRUCK_NAME = "Gavril T-Series semi"
+TRUCK_PER_MILE = 2.6        # $ a mile, a semi's freight rate
+TRUCK_BASE = 120.0
+RENT = 45.0                 # $ the rental company takes per job
+# cargo -> (trailer model, what the panel says, pay factor)
+CARGO = (("dryvan", "Dry van: general freight", 1.0), ("tanker", "Tanker: fuel", 1.3),
+         ("flatbed", "Flatbed: building materials", 1.1), ("log_trailer", "Log trailer: lumber", 1.15),
+         ("hopper", "Hopper: gravel", 1.05), ("containerTrailer", "Container: imports", 1.1))
 # (midsize is the Gavril Grand Marshal's smaller sibling in some versions; the name shown is only a label)
 
 
 def _h(*parts):
     return int(hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:12], 16)
+
+
+def is_depot(category, taxonomy, status=None):
+    if status and str(status) in ("closed", "permanently_closed", "temporarily_closed"):
+        return False
+    t = (str(category or "") + " " + str(taxonomy or "")).lower()
+    if not t.strip() or any(w in t for w in NOT_DEPOT):
+        return False
+    return any(w in t for w in DEPOT_WORDS)
 
 
 def is_garage(category, taxonomy, status=None):
@@ -76,8 +104,10 @@ def dist_m(lat0, lon0, lat1, lon1):
     return math.hypot((lat1 - lat0) * M_LAT, (lon1 - lon0) * M_LAT * k)
 
 
-def garages(layers):
-    """[(id, lat, lon, name)] of the garages among places layers (one per map cell), each once, by id."""
+def garages(layers, test=None):
+    """[(id, lat, lon, name)] of the garages (test: is_garage, or is_depot) among places layers (one per map cell),
+    each once, by id."""
+    test = test or is_garage
     out, seen = [], set()
     for f in layers:
         if f is None or not len(f):
@@ -89,7 +119,7 @@ def garages(layers):
             return "" if v is None else str(v)
         for i in range(len(f)):
             fid = str(f.ids[i])
-            if fid in seen or not is_garage(col("basic_category", i), col("taxonomy", i), col("operating_status", i)):
+            if fid in seen or not test(col("basic_category", i), col("taxonomy", i), col("operating_status", i)):
                 continue
             seen.add(fid)
             k = f.coord_off[f.ring_off[f.part_off[i]]]
@@ -119,24 +149,26 @@ def time_limit(dur):
     return float(round(dur * LIMIT_X + LIMIT_ADD_S))
 
 
-def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None):
+def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None, kind="car"):
     """Up to JOBS delivery offers from (lat, lon): [{"id", "car", "car_name", "pickup": {lat, lon, name}, "dropoff":
     {...}, "dist", "dur", "pay", "limit"}], nearest pickup first. route_fn(lat0, lon0, lat1, lon1) -> {dist, dur}
     (raises: the straight-line estimate); spot_fn(lat, lon) -> (lat, lon, ...) on the road beside, or None."""
     spot_fn = spot_fn or (lambda la, lo: randomplace.road_spot(md, la, lo, radius_m=SPOT_M))
-    near = [g for g in garages(_places(md, lat, lon, PICK_M)) if dist_m(lat, lon, g[1], g[2]) <= PICK_M]
+    truck = kind == "truck"
+    test, kms = (is_depot, TRUCK_KM) if truck else (is_garage, DROP_KM)
+    near = [g for g in garages(_places(md, lat, lon, PICK_M), test) if dist_m(lat, lon, g[1], g[2]) <= PICK_M]
     near.sort(key=lambda g: (round(dist_m(lat, lon, g[1], g[2]), 1), g[0]))
     out, used = [], set()
     for n, g in enumerate(near[:JOBS * 2]):
         if len(out) >= JOBS:
             break
         h = _h(seed, g[0])
-        km = DROP_KM[h % len(DROP_KM)]
+        km = kms[h % len(kms)]
         brg = math.radians((h >> 8) % 360)
         k = max(math.cos(math.radians(g[1])), 0.05)
         tl = g[1] + km * 1000.0 * math.cos(brg) / M_LAT
         tn = g[2] + km * 1000.0 * math.sin(brg) / (M_LAT * k)
-        far = [d for d in garages(_places(md, tl, tn, DROP_SEARCH_M))
+        far = [d for d in garages(_places(md, tl, tn, DROP_SEARCH_M), test)
                if d[0] != g[0] and dist_m(tl, tn, d[1], d[2]) <= DROP_SEARCH_M
                and dist_m(g[1], g[2], d[1], d[2]) >= 2000.0]
         if not far:
@@ -157,10 +189,19 @@ def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None):
                     dist, dur = float(r["dist"]), float(r.get("dur") or dist / AVG_MS)
             except Exception as e:  # offline, rate limited: the estimate
                 log.debug("jobs: route: %s: %s", type(e).__name__, e)
-        model, car_name, value = CARS[(h >> 20) % len(CARS)]
-        out.append({"id": "%016x" % _h(seed, g[0], d[0]), "car": model, "car_name": car_name,
+        job = {"id": "%016x" % _h(seed, g[0], d[0], kind)}
+        if truck:
+            trailer, cargo, value = CARGO[(h >> 20) % len(CARGO)]
+            job.update({"kind": "truck", "car": TRUCK, "car_name": TRUCK_NAME, "trailer": trailer, "cargo": cargo,
+                        "rent": RENT})
+            pay = float(5 * round((TRUCK_BASE + TRUCK_PER_MILE * dist / MI) * value / 5.0))
+        else:
+            model, car_name, value = CARS[(h >> 20) % len(CARS)]
+            job.update({"kind": "car", "car": model, "car_name": car_name})
+            pay = pay_for(dist, value)
+        out.append(dict(job, **{
                     "pickup": {"lat": round(ps[0], 6), "lon": round(ps[1], 6), "name": g[3]},
                     "dropoff": {"lat": round(ds[0], 6), "lon": round(ds[1], 6), "name": d[3]},
-                    "dist": round(dist, 1), "dur": round(dur, 1), "pay": pay_for(dist, value),
-                    "limit": time_limit(dur)})
+                    "dist": round(dist, 1), "dur": round(dur, 1), "pay": pay,
+                    "limit": time_limit(dur)}))
     return out

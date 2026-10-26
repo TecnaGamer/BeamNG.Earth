@@ -608,11 +608,11 @@ end
 
 -- The Jobs app (jobs.lua): its state; refresh the offers near the player; accept offer i; cancel.
 function M.uiJobs() return require('beamngEarth/jobs').uiState() end
-function M.uiJobsRefresh()
+function M.uiJobsRefresh(kind)
   local core = ext('beamngEarth_core')
   local st = core and core._state and core._state() or nil
   local pl = st and st.player
-  return require('beamngEarth/jobs').refresh(pl and pl.lat, pl and pl.lon)
+  return require('beamngEarth/jobs').refresh(pl and pl.lat, pl and pl.lon, kind == 'truck' and 'truck' or nil)
 end
 function M.uiJobAccept(i) local ok, why = require('beamngEarth/jobs').accept(i) return { ok = ok, error = why } end
 function M.uiJobCancel() return require('beamngEarth/jobs').cancel() end

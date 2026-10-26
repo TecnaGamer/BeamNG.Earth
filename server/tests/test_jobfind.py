@@ -94,5 +94,29 @@ class OfferTest(unittest.TestCase):
         self.assertEqual(jobfind.offers(md, LAT0, LON0, 0, spot_fn=spot), [])
 
 
+class TruckTest(unittest.TestCase):
+    def test_freight_between_depots_with_a_rented_semi(self):
+        import math
+        ps = [place("w1", 600.0, 0.0, cat="warehouse", name="Acme Warehouse"),
+              place("g1", 300.0, 0.0, name="Joe's Auto"), place("s1", 200.0, 0.0, cat="self_storage")]
+        k = 0
+        for km in range(20, 95, 3):
+            for b in range(0, 360, 10):
+                k += 1
+                ps.append(place(f"d{k:04d}", km * 1000 * math.cos(math.radians(b)), km * 1000 * math.sin(math.radians(b)),
+                                cat="distribution_center", name=f"DC {k}"))
+        md = FakeMD({"places": feats("places", ps, mg.POINT)})
+        jobs = jobfind.offers(md, LAT0, LON0, 0, spot_fn=spot, kind="truck")
+        self.assertTrue(jobs)
+        self.assertEqual(jobs[0]["pickup"]["name"], "Acme Warehouse", "depots only: not the garage or self storage")
+        cargo = {c[0] for c in jobfind.CARGO}
+        for j in jobs:
+            self.assertEqual((j["kind"], j["car"], j["rent"]), ("truck", "us_semi", jobfind.RENT))
+            self.assertIn(j["trailer"], cargo)
+            d = jobfind.dist_m(j["pickup"]["lat"], j["pickup"]["lon"], j["dropoff"]["lat"], j["dropoff"]["lon"])
+            self.assertGreater(d, 15000.0, "long hauls")
+            self.assertGreater(j["pay"], jobfind.RENT * 3, "worth the rent")
+
+
 if __name__ == "__main__":
     unittest.main()

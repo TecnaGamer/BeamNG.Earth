@@ -22,6 +22,11 @@ M.LATE_PER_MIN = 0.02
 M.LATE_MAX = 0.5
 M.DAMAGE_FULL = 15000.0     -- the vehicle's damage (beamstate, ~$) at which the whole pay is lost
 M.REQUEST_WAIT_S = 40
+-- trucking (the user: "just spawn me in the truck and the trailer nearby"; "rent a truck and pay them a small fee each
+-- job"): the rented semi replaces your car, the trailer stands TRAILER_BACK_M behind it to back up to and couple; the
+-- load counts as delivered when the trailer is within TRAILER_M of the drop-off; the job's rent comes off the pay
+M.TRAILER_BACK_M = 16.0
+M.TRAILER_M = 45.0
 
 local gps = require('beamngEarth/gps')
 local wallet = require('beamngEarth/wallet')
@@ -57,7 +62,9 @@ function M.payout(job, t, damage, expenses)
   local exp = math.max(0, tonumber(expenses) or 0)
   local r = function(v) return math.floor(v * 100 + 0.5) / 100 end
   local work = earned - dmg
-  return { base = r(base), bonus = r(bonus), late = r(late), damage = r(dmg), expenses = r(exp), total = r(work + exp) }
+  local rent = math.max(0, tonumber(job.rent) or 0)
+  return { base = r(base), bonus = r(bonus), late = r(late), damage = r(dmg), expenses = r(exp), rent = r(rent),
+           total = r(work + exp - rent) }
 end
 
 -- Pure: m:ss
@@ -67,13 +74,13 @@ function M.clock(s)
 end
 
 -- Offers ----------------------------------------------------------------------------------------------------------
-function M.refresh(lat, lon)
+function M.refresh(lat, lon, kind)
   local c = core()
   if not (c and c.requestDeliveryJobs) then offersError = 'BeamNG.Earth is not loaded' return false end
   if not (lat and lon) then offersError = 'no position yet' return false end
   seed = (seed or (os.time and os.time() or 0)) + 1
   reqId = reqId + 1
-  if not c.requestDeliveryJobs(reqId, lat, lon, seed) then offersError = 'not connected to the world server' return false end
+  if not c.requestDeliveryJobs(reqId, lat, lon, seed, kind) then offersError = 'not connected to the world server' return false end
   pending, pendingT, offersError = reqId, os.clock(), nil
   return true
 end
@@ -120,7 +127,38 @@ function M.accept(i)
   return true
 end
 
+local function removeTrailer()
+  local id = active and active.trailerId
+  local be_ = rawget(_G, 'be')
+  local o = id and be_ and be_.getObjectByID and be_:getObjectByID(id)
+  if o then pcall(function() o:delete() end) end
+  if active then active.trailerId = nil end
+end
+
+local function spawnTrailer(model)
+  local veh, cv = playerVeh(), rawget(_G, 'core_vehicles')
+  if not (veh and cv and cv.spawnNewVehicle) then return nil end
+  local ok, o = pcall(function()
+    local p, d = veh:getPosition(), veh:getDirectionVector()
+    local back = vec3(p.x - d.x * M.TRAILER_BACK_M, p.y - d.y * M.TRAILER_BACK_M, p.z + 0.5)
+    local rot = quatFromDir(vec3(d.x, d.y, 0), vec3(0, 0, 1))
+    return cv.spawnNewVehicle(model, { pos = back, rot = rot, autoEnterVehicle = false })
+  end)
+  return ok and o and o.getID and o:getID() or nil
+end
+
+-- The trailer's world position, or nil (none, or gone).
+local function trailerPos()
+  local id = active and active.trailerId
+  local be_ = rawget(_G, 'be')
+  local o = id and be_ and be_.getObjectByID and be_:getObjectByID(id)
+  if not o then return nil end
+  local ok, p = pcall(function() return o:getPosition() end)
+  return ok and p or nil
+end
+
 local function restoreOwn()
+  removeTrailer()
   if active and active.own and active.own.model then
     replaceWith(active.own.model, active.own.config)
   end
@@ -128,7 +166,10 @@ end
 
 function M.cancel()
   if not active then return false end
-  if active.stage == 'deliver' then restoreOwn() end
+  if active.stage == 'deliver' then
+    restoreOwn()
+    if active.job.rent then wallet.add(-active.job.rent, 'Truck rental') end
+  end
   msg('Job cancelled', 'warning')
   last = { cancelled = true, job = active.job }
   active = nil
@@ -164,6 +205,10 @@ function M.update(dt, anchor, player)
         gps.clear()
         return
       end
+      if job.trailer then
+        active.trailerId = spawnTrailer(job.trailer)
+        msg('Your ' .. tostring(job.cargo) .. ' trailer is behind you: back up and couple it', 'info')
+      end
       active.stage, active.t = 'deliver', 0
       gps.setDestination(job.dropoff.lat, job.dropoff.lon, job.dropoff.name)
       msg(string.format('Deliver the %s to %s: %s, %.1f mi', tostring(job.car_name), tostring(job.dropoff.name),
@@ -176,9 +221,17 @@ function M.update(dt, anchor, player)
   active.damage = damageOf(veh)
   local tx, ty = anchor:geodeticToEnu(job.dropoff.lat, job.dropoff.lon, 0)
   if M.arrived(player.x, player.y, speed, tx, ty) then
+    if job.trailer then
+      local tp = trailerPos()
+      if not tp or (tp.x - tx) ^ 2 + (tp.y - ty) ^ 2 > M.TRAILER_M ^ 2 then
+        if not active.warned then msg('Bring the trailer: the load is not delivered without it', 'warning') end
+        active.warned = true
+        return
+      end
+    end
     local p = M.payout(job, active.t, active.damage, active.expenses)
     restoreOwn()
-    wallet.add(p.total, 'Delivered the ' .. tostring(job.car_name))
+    wallet.add(p.total, 'Delivered the ' .. tostring(job.cargo or job.car_name))
     last = { job = job, pay = p, t = active.t }
     active = nil
     gps.clear()
@@ -196,7 +249,7 @@ function M.uiState()
   local s = { offers = offers, error = offersError, searching = pending ~= nil, last = last }
   if active then
     local j = active.job
-    s.active = { stage = active.stage, car = j.car_name, pickup = j.pickup.name, dropoff = j.dropoff.name,
+    s.active = { stage = active.stage, car = j.cargo or j.car_name, rent = j.rent, pickup = j.pickup.name, dropoff = j.dropoff.name,
                  t = active.t, limit = j.limit, pay = j.pay, dist = j.dist, expenses = active.expenses,
                  damage = active.damage or 0,
                  estimate = active.stage == 'deliver' and M.payout(j, active.t, active.damage, active.expenses) or nil }
