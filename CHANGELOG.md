@@ -140,6 +140,48 @@ The map's road data downloads again once after the update.
 If you want to talk about this mod with me or other people, join my Discord server at
 [discord.gg/tgf](https://discord.gg/tgf) and head to the #beamng-earth channel.
 
+## Unreleased
+
+Works with BeamNG.drive 0.40.3.
+
+### Map and navigation
+- **The phone (Page Up).** A small phone in the corner, in the `.Earth` app layout, with an Apple Maps style map:
+  the server's `apple` map layer (terrain-light restyled: white roads over soft near-white blocks, pale greens,
+  light blue water), the route in blue with white casing, the car and the destination pin on top of it.
+  - **Layers**: the stack button opens **Map / Dark / Satellite** (remembered). Dark is a real night map, not dimmed:
+    dark land with pale minor roads and bright motorways, saturated navy water (`appledark`, with light names:
+    `labelsdark`); **Satellite** is the Sentinel-2 imagery, restyled at the source's own resolution and sharpened
+    where it is overzoomed (`sathd`, no extra tiles), with the road labels over it.
+  - **Search as you type**: suggestions drop down while typing - your recent places at once (four shown, the rest
+    scroll, the **X** on a row forgets it for good), then your saved places and OpenStreetMap places (Photon, biased
+    to the car so nearby ones come first), each with its distance; a typed **latitude, longitude** is offered too,
+    parsed by `places.lua` exactly as the big map's search does. Picking a place sets the same destination as the map
+    (stock route arrows, Autodrive and all) - the stock minimap keeps showing what it always did. Typing takes the
+    keyboard (no accidental driving while you type).
+  - **Route choices**: with a phone destination OSRM's alternatives come with the same request, tagged **Fastest /
+    Main roads / Shortest** (`routing.tag_alternatives`: the share of distance on numbered roads), and a chip in the
+    ETA card switches the GPS to that one - arrows and Autodrive included.
+  - **Double tap the map** to drop a pin; the card names it (reverse geocoded) and its **Directions** button
+    starts the route there.
+  - **Turn-by-turn**: OSRM's steps come with the route the GPS already asks for (no second request), so the green
+    card says what a navigator would say - "Turn left onto Camino de las Viñas", "then turn right onto Calle Mayor"
+    for two turns close together, "Now, ..." as you reach it, roundabouts by their exit number - with the distance to
+    the maneuver; the dynamic island shows the maneuver too.
+  - **ETA card**: time left, distance left, the destination and **End Route**; the road's speed limit (the AI road
+    graph's own, mph or km/h by country) in the corner; **re-center** pins the map back on the car. The wheel zooms
+    smoothly (a notch is a quarter level, the tiles scale between levels). The phone sends where the car is and
+    which way it points, the limit and the route: never the car's speed.
+  - **The guided line**: eaten away behind you as you drive and grown back if you turn round (the car is projected
+    onto the route, and the head eases between updates instead of hopping). While the phone is open the GPS re-routes
+    on a wrong turn sooner - 40 m off route, at most every 2.5 s, instead of the map's 120 m / 20 s - with a clear
+    **Recalculating route...** state until the new direction arrives.
+  - The phone scales to whatever size the app layout gives it (drag its corner in the UI Apps editor) and stays
+    above the speedometer without running off the top of the screen.
+- **`/api/search`, `/api/reverse` and `/api/route`** on the companion server's `127.0.0.1` http endpoint (the same
+  port as the map tiles): a JSON array of `{name, lat, lon, distance_km, ...}`, a dropped pin's `{name, detail}` and
+  the road route with its steps, for tools and tests. The phone itself goes through the socket (the game's UI cannot
+  reach http).
+
 ## 1.6.2 beta (2026-10-24)
 
 Works with BeamNG.drive 0.40.3.

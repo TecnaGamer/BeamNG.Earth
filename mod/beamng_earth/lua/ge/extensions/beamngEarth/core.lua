@@ -692,7 +692,9 @@ local function formatKnown(f)
 end
 
 local geocodeResults = {}       -- the world map's address search answers: id -> { results, error }
-local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, error }
+local phoneSearchResults = {}   -- the phone's search answers (phoneapi.py): id -> { results, error }
+local phoneReverseResults = {}  -- a dropped pin's name (phoneapi.reverse): id -> { name, detail }
+local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, steps, error }
 
 -- The pooled shape slots (far tiles, road / building tiles) let go since the last pose, for this server; nil if none.
 local function slotsGoneNow()
@@ -931,11 +933,12 @@ local function onMessage(msg)
     end
   elseif t == 'route_result' then
     if msg.id then routeResults[msg.id] = { points = msg.points or {}, dist = msg.dist, dur = msg.dur, error = msg.error } end
-  elseif t == 'route_download' then
-    -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
-    gps.onRouteDownload(msg)
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+  elseif t == 'phone_search_result' then
+    if msg.id then phoneSearchResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+  elseif t == 'phone_reverse_result' then
+    if msg.id then phoneReverseResults[msg.id] = { name = msg.name, detail = msg.detail } end
   elseif t == 'map_tiles_ready' then
     -- a world map tile file is written (settings.mapTiles: the map polls every 250 ms while it misses tiles)
   elseif t == 'navgraph' then
@@ -2295,10 +2298,33 @@ function M.requestGeocode(id, q, lat, lon)
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, steps, alternatives)
   if not net.isConnected() then return false end
-  net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing })
+  net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
+    steps = steps or nil, alternatives = alternatives or nil })
   return true
+end
+-- The phone's search (earthPhone.lua): the saved places, then Photon (phoneapi.py); the answer is phone_search_result.
+function M.requestPhoneSearch(id, q, lat, lon)
+  if not net.isConnected() then return false end
+  net.send({ type = 'phone_search', id = id, q = q, lat = lat, lon = lon })
+  return true
+end
+function M.takePhoneSearch(id)
+  local r = phoneSearchResults[id]
+  phoneSearchResults[id] = nil
+  return r
+end
+-- A dropped pin's name (earthPhone.lua): the server's nearest place, reversed (phoneapi.reverse).
+function M.requestPhoneReverse(id, lat, lon)
+  if not net.isConnected() then return false end
+  net.send({ type = 'phone_reverse', id = id, lat = lat, lon = lon })
+  return true
+end
+function M.takePhoneReverse(id)
+  local r = phoneReverseResults[id]
+  phoneReverseResults[id] = nil
+  return r
 end
 function M.takeRoute(id)
   local r = routeResults[id]

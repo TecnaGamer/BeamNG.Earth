@@ -31,5 +31,6 @@
 "title": "BeamNG.Earth: performance profiler (30 s)",
 "desc": "Records 30 s of frame times while you drive, then opens the report window for a performance issue (Ctrl+Shift+Y)."
 },
-"beamngEarth_mapToggle": {"cat":"gameplay", "order": 99, "ctx": "tlua", "onDown": "if beamngEarth_settings then beamngEarth_settings.toggleMap() end", "title": "BeamNG.Earth: world map", "desc": "Opens the BeamNG.Earth world map (where you are, saved places, click to teleport), or closes it. In our level the game's map key (M) and the pause menu's Map open it; unbound by default (bind a key here if you like)."}
+"beamngEarth_mapToggle": {"cat":"gameplay", "order": 99, "ctx": "tlua", "onDown": "if beamngEarth_settings then beamngEarth_settings.toggleMap() end", "title": "BeamNG.Earth: world map", "desc": "Opens the BeamNG.Earth world map (where you are, saved places, click to teleport), or closes it. In our level the game's map key (M) and the pause menu's Map open it; unbound by default (bind a key here if you like)."},
+"beamngEarth_phoneToggle": {"cat":"gameplay", "order": 98, "ctx": "tlua", "onDown": "if beamngEarth_earthPhone then beamngEarth_earthPhone.toggle() end", "title": "BeamNG.Earth: phone", "desc": "Shows or hides the BeamNG.Earth phone (search a place, set a destination, the turn-by-turn card and the speed limit). Page Up."}
 }

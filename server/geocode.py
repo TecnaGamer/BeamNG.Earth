@@ -28,11 +28,16 @@ def lang_for(country):
     return LANG_OF_COUNTRY.get(str(country or "").upper(), "en")
 
 
-def url(q, lat=None, lon=None, limit=LIMIT, lang="en"):
-    """The Photon request for text q, biased toward (lat, lon) when given. Pure."""
+def url(q, lat=None, lon=None, limit=LIMIT, lang="en", zoom=None, bias=None):
+    """The Photon request for text q, biased toward (lat, lon) when given (zoom: how wide a bias area, bias: how
+    hard it pulls, 0..1). Pure."""
     params = [("q", q.strip()), ("limit", str(int(limit))), ("lang", lang)]
     if lat is not None and lon is not None:
         params += [("lat", f"{float(lat):.4f}"), ("lon", f"{float(lon):.4f}")]
+        if zoom is not None:
+            params.append(("zoom", str(int(zoom))))
+        if bias is not None:
+            params.append(("location_bias_scale", f"{float(bias):.2f}"))
     return PHOTON_URL + "?" + urllib.parse.urlencode(params)
 
 
@@ -71,14 +76,16 @@ def parse(data):
     return out
 
 
-def search(q, lat=None, lon=None, net=None, country=None):
-    """Results for q (blocking; [] for a short query), names in country's language (lang_for). Raises
-    netfetch.FetchError on network trouble."""
+def search(q, lat=None, lon=None, net=None, country=None, zoom=None, bias=None):
+    """Results for q (blocking; [] for a short query), names in country's language (lang_for), the search biased to
+    (lat, lon) when given (zoom: how wide a bias area, bias: how hard it pulls). Raises netfetch.FetchError on
+    network trouble."""
     q = (q or "").strip()
     if len(q) < MIN_CHARS:
         return []
     net = net if net is not None else netfetch.default_fetcher()
-    return parse(json.loads(net.get(url(q, lat, lon, lang=lang_for(country)), kind="demand").body.decode("utf-8")))
+    u = url(q, lat, lon, lang=lang_for(country), zoom=zoom, bias=bias)
+    return parse(json.loads(net.get(u, kind="demand").body.decode("utf-8")))
 
 
 # ------------------------------------------------------------------------------------------- where am I
@@ -113,6 +120,27 @@ def reverse(lat, lon, net=None, country=None):
     net = net if net is not None else netfetch.default_fetcher()
     return parse_place(json.loads(net.get(reverse_url(lat, lon, lang=lang_for(country)), kind="demand")
                                   .body.decode("utf-8")))
+
+
+def point_url(lat, lon, lang="en"):
+    """The Photon reverse request for the exact (lat, lon), to name a dropped pin. Pure."""
+    return REVERSE_URL + "?" + urllib.parse.urlencode(
+        [("lat", f"{float(lat):.6f}"), ("lon", f"{float(lon):.6f}"), ("lang", lang), ("limit", "1")])
+
+
+def point_name(lat, lon, net=None):
+    """(name, detail) of the place at (lat, lon): a street address, else the nearest named place (blocking)."""
+    net = net if net is not None else netfetch.default_fetcher()
+    data = json.loads(net.get(point_url(lat, lon), kind="demand").body.decode("utf-8"))
+    feats = (data or {}).get("features") or []
+    if not feats:
+        return "", ""
+    p = feats[0].get("properties") or {}
+    name, detail, _ = label(p)
+    num = p.get("housenumber")
+    if num and name and str(num) not in name:
+        name = f"{name} {num}"
+    return name, detail
 
 
 def nearest_street(roads_layers, lat, lon, max_m=STREET_M):
