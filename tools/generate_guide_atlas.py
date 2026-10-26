@@ -25,6 +25,7 @@ CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,-/&'()+
 GREEN = (0, 112, 60, 255)       # MUTCD guide green
 WHITE = (255, 255, 255, 255)
 BLACK = (17, 17, 17, 255)
+NAVY = (29, 59, 110, 255)    # the Welcome to ... County sign
 BLUE, RED = (31, 78, 163, 255), (200, 16, 46, 255)
 SPRITE = 192                    # px: a shield / arrow sprite's square
 
@@ -59,7 +60,7 @@ def main():
         meta["sprites"][name] = r
         return r
     # solid blocks (inset sampling keeps their edges clean)
-    for name, col in (("green", GREEN), ("white", WHITE), ("black", BLACK)):
+    for name, col in (("green", GREEN), ("white", WHITE), ("black", BLACK), ("navy", NAVY)):
         r = sprite(name)
         d.rectangle(r, fill=col)
     # Interstate shield (no number: the numbers are white glyphs over it)

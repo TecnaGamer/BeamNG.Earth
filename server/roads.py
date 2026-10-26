@@ -4139,7 +4139,35 @@ def drains(run, side, caps, walk_w=None):
     return res
 
 
-def _guide_plan(frame, seen, roads, box, mph, left_hand):
+def _counties(frame, divisions, box):
+    """guidesigns.county_index's counties from the "divisions" layer cells near box: [(name, region, [(outer Path,
+    [hole Path])])], the pieces of one county (clipped to their cells) one entry each."""
+    from polygon import Path
+    out = []
+    x0, y0, x1, y1 = box
+    for feats in divisions or ():
+        if feats is None or len(feats) == 0:
+            continue
+        xy = feats.xy_in(frame)
+        nm, rg, sub = (feats.attrs.get(c) for c in ("name", "region", "subtype"))
+        for i in range(len(feats)):
+            if sub is not None and str(sub[i]) != "county":
+                continue
+            polys = []
+            for part in feats.parts(i, xy):
+                if not part or len(part[0]) < 4:
+                    continue
+                o = part[0]
+                if o[:, 0].max() < x0 or o[:, 0].min() > x1 or o[:, 1].max() < y0 or o[:, 1].min() > y1:
+                    continue
+                polys.append((Path(o), [Path(h) for h in part[1:] if len(h) >= 4]))
+            if polys:
+                out.append((str(nm[i]) if nm is not None and nm[i] else "", str(rg[i]) if rg is not None else "",
+                            polys))
+    return out
+
+
+def _guide_plan(frame, seen, roads, box, mph, left_hand, divisions=None):
     """guidesigns.plan for a tile: the Overture routes / destinations of its roads, the towns within reach."""
     import guidesigns
     import randomplace
@@ -4157,13 +4185,21 @@ def _guide_plan(frame, seen, roads, box, mph, left_hand):
     if near:
         e, n, _ = frame.geodetic_to_enu(np.array([t[0] for t in near]), np.array([t[1] for t in near]), 0.0)
         towns_xy = [(float(a), float(b), t[2]) for a, b, t in zip(e, n, near)]
-    return guidesigns.plan(roads, attrs, box, mph=mph, left_hand=left_hand, towns_xy=towns_xy)
+    x0, y0, x1, y1 = box
+    m = guidesigns.REACH_M
+    counties = _counties(frame, divisions, (x0 - m, y0 - m, x1 + m, y1 + m))
+
+    def geo(x, y):
+        la, lo, _ = frame.enu_to_geodetic(np.asarray(x, np.float64), np.asarray(y, np.float64), 0.0)
+        return np.atleast_1d(la), np.atleast_1d(lo)
+    return guidesigns.plan(roads, attrs, box, mph=mph, left_hand=left_hand, towns_xy=towns_xy, geo=geo,
+                           counties=counties)
 
 
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None, guide=None):
+               signals=None, guide=None, divisions=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -4391,7 +4427,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      decks=decks, signals=signals))
     if guide is not None and walks is not None:     # green guide signs on motorways and trunk roads (guidesigns.py)
         try:
-            guide.extend(_guide_plan(frame, seen, roads, (x0, y0, x1, y1), mph, left_hand))
+            guide.extend(_guide_plan(frame, seen, roads, (x0, y0, x1, y1), mph, left_hand, divisions))
             import rumble
 
             def zfn(x, y):              # the drawn ground the road surfaces lie on (else the elevation)

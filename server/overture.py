@@ -75,6 +75,7 @@ THEME_LICENCES = {
             "Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY "
             "4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication "
             "and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+    "divisions": "ODbL. © OpenStreetMap contributors. Available under the Open Database License.",
     # (read 2026-10-23)
     "places": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA "
               "Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available "
@@ -146,6 +147,11 @@ LAYERS = {
                    text=("basic_category", "taxonomy", "brand_wikidata", "brand_name", "name", "src_dataset",
                          "src_record", "operating_status"),
                    float=("confidence",)),
+    # county outlines, for the county line signs (guidesigns.py; the user, 2026-10-25: "the location signs");
+    # region: the state ("US-PA") for the mileposts
+    "divisions": dict(theme="divisions", type="division_area", clip=True,
+                      cols=f"subtype, {_NAME}, region", text=("subtype", "name", "region"),
+                      where="subtype = 'county'"),
 }
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
@@ -493,6 +499,7 @@ class Reader:
         bbox = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND "
                 f"bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}")
         extra = f", {spec['extra']}" if spec.get("extra") else ""
+        where = f" AND ({spec['where']})" if spec.get("where") else ""
         # The scan first, the dedup (by id, highest version) and numbering from the copy: with the
         # window in the same statement DuckDB 1.5 stopped skipping row groups by their statistics and
         # read every row group of the file between the matches (12 MB more, 9 s, for a city cell).
@@ -500,7 +507,7 @@ class Reader:
               SELECT id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb,
                      (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
                      sources{extra}
-              FROM {src} WHERE ({only}) AND {bbox}""")
+              FROM {src} WHERE ({only}) AND {bbox}{where}""")
         con.execute("""CREATE TEMP TABLE t AS
             SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * FROM (
               SELECT * EXCLUDE (version) FROM s

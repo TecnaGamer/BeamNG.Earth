@@ -46,11 +46,37 @@ SHIELD_M = 1.05
 PAD_M, GAP_M = 0.30, 0.16
 MAX_VERTS = 60000           # one shape's vertices (the engine's 16-bit indices)
 # Toll gantries (the user, 2026-10-25: "on named toll roads"; Overture has toll booths but no gantries): on a toll
-# road (its name or route network says so), one open-road tolling gantry halfway along each segment of at least
-# TOLL_MIN_M (between interchanges), and a CASHLESS TOLL sign 1/2 mile (800 m) before it.
+# road (its name or route network says so), open-road tolling gantries far apart (TOLL_GRID_DEG: the user, 2026-10-25,
+# "the tolls were too frequent") and a CASHLESS TOLL sign 1/2 mile (800 m) before each.
 TOLL_WORDS = ("turnpike", "tollway", "toll road", "toll highway", "thruway", "toll")
-TOLL_MIN_M = 2500.0
+TOLL_GRID_DEG = 0.2         # a gantry where the road passes a multiple of this latitude / longitude
+TOLL_CLEAR_M = 800.0        # ... this far from an interchange's ramps (and the road's ends)
+TOLL_GAP_M = 5000.0         # ... and from another gantry (two grid lines close together)
 TOLL_ADV_M = 804.672
+JOIN_M = 6.0                # a ramp's end this far beyond the carriageway's edge joins it
+EXIT_GAP_M = 300.0          # ramp ends this close together: one junction
+REACH_M = 2000.0            # roads farther than this from the tile: none of their signs land in it
+# Location signs (the user, 2026-10-25: "the location signs and regular dot signs"): county lines from Overture's
+# county outlines (divisions), green ENTERING X COUNTY on the smaller roads, the blue Welcome sign on the main ones;
+# mileposts every mile on Interstates and US routes, numbered from the state's south / west edge (an estimate:
+# the real ones count along the route from where it enters the state)
+COUNTY_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
+WELCOME_CLASSES = ("motorway", "trunk", "primary")
+MILE_CLASSES = ("motorway", "trunk", "primary")
+SAMPLE_M = 20.0
+MILE_M = (0.16, 0.24)       # milepost glyphs: MILE, the number
+MILE_BOTTOM_M = 1.2
+STATE_EDGES = {     # (south latitude, west longitude) of each state (approximate)
+    "AL": (30.2, -88.5), "AZ": (31.3, -114.8), "AR": (33.0, -94.6), "CA": (32.5, -124.4), "CO": (37.0, -109.05),
+    "CT": (41.0, -73.7), "DE": (38.45, -75.8), "DC": (38.8, -77.12), "FL": (24.5, -87.6), "GA": (30.36, -85.6),
+    "ID": (42.0, -117.24), "IL": (36.97, -91.5), "IN": (37.77, -88.1), "IA": (40.37, -96.64), "KS": (37.0, -102.05),
+    "KY": (36.5, -89.57), "LA": (28.9, -94.04), "ME": (43.06, -71.08), "MD": (37.9, -79.49), "MA": (41.24, -73.5),
+    "MI": (41.7, -90.42), "MN": (43.5, -97.24), "MS": (30.17, -91.65), "MO": (35.99, -95.77), "MT": (44.36, -116.05),
+    "NE": (40.0, -104.05), "NV": (35.0, -120.0), "NH": (42.7, -72.56), "NJ": (38.93, -75.56), "NM": (31.33, -109.05),
+    "NY": (40.5, -79.76), "NC": (33.84, -84.32), "ND": (45.94, -104.05), "OH": (38.4, -84.82), "OK": (33.62, -103.0),
+    "OR": (41.99, -124.57), "PA": (39.72, -80.52), "RI": (41.15, -71.86), "SC": (32.03, -83.35), "SD": (42.48, -104.06),
+    "TN": (34.98, -90.31), "TX": (25.84, -106.65), "UT": (37.0, -114.05), "VT": (42.73, -73.44), "VA": (36.54, -83.68),
+    "WA": (45.54, -124.85), "WV": (37.2, -82.64), "WI": (42.49, -92.89), "WY": (41.0, -111.06)}
 
 _atlas = None
 
@@ -203,20 +229,92 @@ def is_toll(name, routes_json):
     return any(w in t for w in TOLL_WORDS)
 
 
-def plan(roads, attrs, box, mph=True, left_hand=False, towns_xy=()):
+def _project(p, arc, q):
+    """(arc position, distance, unit direction there) of the point of polyline p nearest q."""
+    a, b = p[:-1, :2], p[1:, :2]
+    ab = b - a
+    L2 = np.maximum((ab ** 2).sum(1), 1e-12)
+    t = np.clip(((q - a) * ab).sum(1) / L2, 0.0, 1.0)
+    dd = np.hypot(*(a + ab * t[:, None] - q).T)
+    k = int(np.argmin(dd))
+    Lk = math.sqrt(L2[k])
+    return float(arc[k] + t[k] * Lk), float(dd[k]), ab[k] / Lk
+
+
+def _cluster(ss, gap):
+    out = []
+    for s in sorted(ss):
+        if not out or s - out[-1] > gap:
+            out.append(s)
+    return out
+
+
+def _grid_crossings(ll, step):
+    """Indices k where the polyline's lat/lon (ll: (lat (n,), lon (n,))) passes a multiple of step between point k and
+    k + 1, with the fraction along that edge."""
+    out = []
+    for v in ll:
+        g = np.floor(np.asarray(v, np.float64) / step)
+        for k in np.nonzero(np.diff(g) != 0)[0]:
+            line = max(g[k], g[k + 1]) * step
+            den = v[k + 1] - v[k]
+            out.append((int(k), float((line - v[k]) / den) if den else 0.5))
+    return out
+
+
+def county_index(counties, pts):
+    """Per point (n, 2) the index of the county (counties: [(name, region, [(outer Path, [hole Path])])]) it lies in,
+    -1 for none."""
+    pts = np.asarray(pts, np.float64)
+    got = np.full(len(pts), -1, np.int64)
+    for ci, (_n, _r, polys) in enumerate(counties):
+        for outer, holes in polys:
+            ins = outer.contains_points(pts)
+            for h in holes:
+                ins &= ~h.contains_points(pts)
+            got[ins & (got < 0)] = ci
+    return got
+
+
+def mile_of(lat, lon, shield, region):
+    """The approximate milepost of a point on route shield (kind, number) in state region ("US-PA"): miles from the
+    state's south edge on an odd (north-south) route, from its west edge on an even one; None outside STATE_EDGES."""
+    st = str(region or "")[-2:].upper()
+    edge = STATE_EDGES.get(st)
+    if edge is None:
+        return None
+    try:
+        even = int("".join(c for c in shield[1] if c.isdigit()) or "0") % 2 == 0
+    except ValueError:
+        return None
+    if even:
+        return (lon - edge[1]) * 69.17 * math.cos(math.radians(lat))
+    return (lat - edge[0]) * 69.05
+
+
+def plan(roads, attrs, box, mph=True, left_hand=False, towns_xy=(), geo=None, counties=()):
     """The guide signs anchored in box (x0, y0, x1, y1): dicts {kind, x, y, z, d (travel unit vector), width (the
     carriageway), lanes, overhead, rows}. roads: build_tile's (fid, spec, centreline (k, 3), lon); attrs: fid ->
-    {"routes", "dests"} (Overture's JSON text); towns_xy: [(x, y, name)] of the towns in the frame."""
+    {"routes", "dests"} (Overture's JSON text); towns_xy: [(x, y, name)] of the towns in the frame; geo(x, y) ->
+    (lat, lon, ...) of frame points (the toll grid and mileposts; None: neither); counties: county_index's."""
     x0, y0, x1, y1 = box
-    links = {}                  # fid -> (travel start xy, travel end xy) of the link roads
+    links = {}                  # fid -> (start xy, start dir, end xy, end dir) in travel order
     for fid, spec, line, _ in roads:
         if spec.cls.endswith("_link") and len(line) >= 2:
-            p = np.asarray(line, np.float64)
-            ends = (p[0, :2], p[-1, :2]) if (spec.dir or 1) > 0 else (p[-1, :2], p[0, :2])
-            links[fid] = ends
+            p = _ordered(line, 1 if (spec.dir or 1) > 0 else -1)[:, :2]
+            d0, d1 = p[1] - p[0], p[-1] - p[-2]
+            links[fid] = (p[0], d0 / max(np.hypot(*d0), 1e-9), p[-1], d1 / max(np.hypot(*d1), 1e-9))
     out = []
     for fid, spec, line, _ in roads:
-        if spec.cls not in MAIN or len(line) < 2:
+        if len(line) < 2:
+            continue
+        pa = np.asarray(line, np.float64)
+        if (pa[:, 0].max() < x0 - REACH_M or pa[:, 0].min() > x1 + REACH_M or pa[:, 1].max() < y0 - REACH_M
+                or pa[:, 1].min() > y1 + REACH_M):
+            continue
+        main = spec.cls in MAIN
+        located = spec.cls in COUNTY_CLASSES
+        if not (main or located):
             continue
         a = attrs.get(fid) or {}
         ways = ((spec.dir if spec.dir in (1, -1) else 1),) if spec.oneway else (1, -1)
@@ -224,40 +322,66 @@ def plan(roads, attrs, box, mph=True, left_hand=False, towns_xy=()):
         lanes = spec.lanes if spec.lanes else max(1, int(round(spec.width / 3.6)))
         if not spec.oneway:
             lanes = max(1, lanes // 2)
+        reach = spec.width / 2 + JOIN_M
         for way in ways:
             p = _ordered(line, way)
             arc = _arc(p)
             L = float(arc[-1])
-            # an exit: a destination rule onto a link road, or a link leaving the segment's downstream end (its
-            # destinations then those of a rule onto a road out of sight, if any)
-            rules = exits(a.get("dests"), way)
-            found = next(((nm, sh) for to, nm, sh in rules if to in links), None)
-            if found is None:
-                touching = [lf for lf, (st, _en) in sorted(links.items()) if math.hypot(*(st - p[-1, :2])) <= LINK_TOUCH_M]
-                if touching:
-                    found = next(((nm, sh) for to, nm, sh in rules if to not in attrs), (["EXIT"], []))
+            if L < 1.0:
+                continue
             signs = []
-            if found is not None:
-                names, shields = found
-                if names == ["EXIT"] and not shields:
-                    names = []
-                for dist, label in (ADVANCE_MPH if mph else ADVANCE_KM):
-                    if L - dist >= END_CLEAR_M:
-                        signs.append(("advance", L - dist, names, shields, label))
-                if L >= 2 * EXIT_BEFORE_M:
-                    signs.append(("exit", L - EXIT_BEFORE_M, names, shields, "EXIT"))
-            if spec.cls == "motorway" and L >= TOLL_MIN_M and is_toll(a.get("name"), a.get("routes")):
-                signs.append(("toll", L / 2, [], [], None))
-                if L / 2 - TOLL_ADV_M >= END_CLEAR_M:
-                    signs.append(("tolladv", L / 2 - TOLL_ADV_M, [], [], "1/2 MILE" if mph else "800 m"))
-            merged = any(math.hypot(*(en - p[0, :2])) <= LINK_TOUCH_M for _st, en in links.values())
-            if rts and merged and L >= ROUTE_AT_M + 300.0:
-                signs.append(("route", ROUTE_AT_M, [], rts[:2], None))
-                if towns_xy and L >= MILEAGE_AT_M + 200.0:
-                    q, d = _at(p, MILEAGE_AT_M, arc)
-                    ahead = towns_ahead(q[:2], d, towns_xy, not mph)
-                    if len(ahead) >= 2:
-                        signs.append(("mileage", MILEAGE_AT_M, ahead, [], None))
+            if main:
+                # ramps leaving (a link starting beside the road, heading the same way) and joining it, anywhere
+                # along the road: Overture's segments run through interchanges
+                rules = exits(a.get("dests"), way)
+                outs, ins = {}, []
+                for lf, (st, sd, en, ed) in sorted(links.items()):
+                    s, dist, dr = _project(p, arc, st)
+                    if dist <= reach and float(np.dot(sd, dr)) >= 0.5 and s > 1.0:
+                        outs.setdefault(round(s, 1), []).append(lf)
+                    s, dist, dr = _project(p, arc, en)
+                    if dist <= reach and float(np.dot(ed, dr)) >= 0.5 and s < L - 1.0:
+                        ins.append(s)
+                kept = _cluster(outs, EXIT_GAP_M)
+                for sd_ in kept:
+                    lfs = [lf for s, v in outs.items() if sd_ <= s <= sd_ + EXIT_GAP_M for lf in v]
+                    found = next(((nm, sh) for to, nm, sh in rules if to in lfs), None)
+                    if found is None:
+                        found = next(((nm, sh) for to, nm, sh in rules if to not in attrs), ([], []))
+                    names, shields = found
+                    for dist, label in (ADVANCE_MPH if mph else ADVANCE_KM):
+                        if sd_ - dist >= END_CLEAR_M:
+                            signs.append(("advance", sd_ - dist, names, shields, label))
+                    if sd_ >= EXIT_BEFORE_M + 5.0:
+                        signs.append(("exit", sd_ - EXIT_BEFORE_M, names, shields, "EXIT"))
+                joins = _cluster(ins, EXIT_GAP_M)
+                for sm in joins:
+                    if rts and sm + ROUTE_AT_M <= L - 100.0:
+                        signs.append(("route", sm + ROUTE_AT_M, [], rts[:2], None))
+                        if towns_xy and sm + MILEAGE_AT_M <= L - 100.0:
+                            q, d = _at(p, sm + MILEAGE_AT_M, arc)
+                            ahead = towns_ahead(q[:2], d, towns_xy, not mph)
+                            if len(ahead) >= 2:
+                                signs.append(("mileage", sm + MILEAGE_AT_M, ahead, [], None))
+                if (geo is not None and spec.cls == "motorway" and L >= 2 * TOLL_CLEAR_M
+                        and is_toll(a.get("name"), a.get("routes"))):
+                    # open-road tolling: where the road passes a TOLL_GRID_DEG line of latitude or longitude (one
+                    # gantry every ~15-20 km, the same wherever the road is cut), clear of the interchanges
+                    ll = geo(p[:, 0], p[:, 1])
+                    busy = kept + joins
+                    done = []
+                    for k, f in _grid_crossings((ll[0], ll[1]), TOLL_GRID_DEG):
+                        s = float(arc[k] + (arc[k + 1] - arc[k]) * f)
+                        if s < TOLL_CLEAR_M or s > L - 200.0 or any(abs(s - b) < TOLL_CLEAR_M for b in busy):
+                            continue
+                        if any(abs(s - b) < TOLL_GAP_M for b in done):
+                            continue
+                        done.append(s)
+                        signs.append(("toll", s, [], [], None))
+                        if s - TOLL_ADV_M >= END_CLEAR_M:
+                            signs.append(("tolladv", s - TOLL_ADV_M, [], [], "1/2 MILE" if mph else "800 m"))
+            if located and (counties or geo is not None):
+                signs += _located(p, arc, L, spec, rts, mph, geo, counties)
             for kind, s, names, shields, label in signs:
                 q, d = _at(p, s, arc)
                 if not (x0 <= q[0] < x1 and y0 <= q[1] < y1):
@@ -272,6 +396,48 @@ def plan(roads, attrs, box, mph=True, left_hand=False, towns_xy=()):
                             "id": f"{fid}:{way}:{kind}:{int(s)}"})
     out.sort(key=lambda g: g["id"])
     return out
+
+
+def _located(p, arc, L, spec, rts, mph, geo, counties):
+    """The county line signs (where the road enters another county) and the mileposts (Interstates and US routes) of
+    one direction of a road: [(kind, s, names, shields, label)]."""
+    n = max(2, int(L / SAMPLE_M) + 1)
+    ss = np.linspace(0.0, L, n)
+    xs, ys = np.interp(ss, arc, p[:, 0]), np.interp(ss, arc, p[:, 1])
+    if not counties:
+        ci = np.full(n, -1)
+    elif len({c[0] for c in counties}) == 1:     # one county around: no line to sign (its state for the mileposts)
+        ci = np.zeros(n, np.int64)
+    else:
+        ci = county_index(counties, np.c_[xs, ys])
+    signs = []
+    for k in np.nonzero((ci[:-1] >= 0) & (ci[1:] >= 0))[0]:
+        a, b = counties[ci[k]], counties[ci[k + 1]]
+        if a[0] == b[0] or not b[0]:
+            continue
+        s = float(ss[k + 1]) + 15.0
+        if s > L - 5.0:
+            continue
+        kind = "welcome" if spec.cls in WELCOME_CLASSES else "county"
+        signs.append((kind, s, [b[0]], [], None))
+    if not mph or geo is None or spec.cls not in MILE_CLASSES:
+        return signs
+    sh = next((r for r in rts if r[0] == "interstate"), None) or next((r for r in rts if r[0] == "us"), None)
+    if sh is None:
+        return signs
+    lat, lon = (np.asarray(v, np.float64) for v in geo(xs, ys)[:2])
+    for k in range(n - 1):
+        c = ci[k] if ci[k] >= 0 else ci[k + 1]
+        if c < 0:
+            continue
+        m0 = mile_of(lat[k], lon[k], sh, counties[c][1])
+        m1 = mile_of(lat[k + 1], lon[k + 1], sh, counties[c][1])
+        if m0 is None or m1 is None or math.floor(m0) == math.floor(m1) or min(m0, m1) < 0:
+            continue
+        mile = int(max(math.floor(m0), math.floor(m1)))
+        f = (mile - m0) / (m1 - m0) if m1 != m0 else 0.5
+        signs.append(("mile", float(ss[k] + (ss[k + 1] - ss[k]) * f), [str(mile)], [sh], None))
+    return signs
 
 
 def _rows(kind, names, shields, label, d):
@@ -298,6 +464,16 @@ def _rows(kind, names, shields, label, d):
         rows = [[("text", "CASHLESS TOLL", TEXT_M)], [("text", "NO STOPPING", SMALL_M)], [("text", label, SMALL_M)]]
     elif kind == "toll":
         rows = [["gantry"]]        # (no panel: toll_gantry draws it)
+    elif kind == "county":
+        nm = str(names[0]).strip()
+        core = nm[:-len(" county")].strip() if nm.lower().endswith(" county") else ""
+        rows = [[("text", "ENTERING", SMALL_M)], [("text", (core or nm).upper(), TEXT_M)]]
+        if core:
+            rows.append([("text", "COUNTY", SMALL_M)])
+    elif kind == "welcome":
+        rows = [[("text", "Welcome to", SMALL_M)], [("text", str(names[0]).strip(), TEXT_M)]]
+    elif kind == "mile":
+        rows = [[("text", "MILE", MILE_M[0])], [("text", str(names[0]), MILE_M[1])]]
     return rows
 
 
@@ -329,10 +505,15 @@ def _item_height(it):
             "pair": TEXT_M}.get(it[0], 0.0)
 
 
-def panel_size(rows):
-    w = max(sum(_item_width(i) for i in r) + GAP_M * (len(r) - 1) for r in rows)
-    h = sum(max(_item_height(i) for i in r) for r in rows) + GAP_M * (len(rows) - 1)
-    return w + 2 * PAD_M, h + 2 * PAD_M
+def _pad(kind):
+    return (0.07, 0.05) if kind == "mile" else (PAD_M, GAP_M)
+
+
+def panel_size(rows, kind=None):
+    pad, gap = _pad(kind)
+    w = max(sum(_item_width(i) for i in r) + gap * (len(r) - 1) for r in rows)
+    h = sum(max(_item_height(i) for i in r) for r in rows) + gap * (len(rows) - 1)
+    return w + 2 * pad, h + 2 * pad
 
 
 class _Mesh:
@@ -374,27 +555,28 @@ def _sprite_uv(name):
     return _uv(atlas()["sprites"][name], 6)
 
 
-def _panel(m, base, R, F, w, h, rows):
+def _panel(m, base, R, F, w, h, rows, kind=None):
     """A panel w x h (m) whose front-bottom-centre is base, facing F (unit, toward the driver), R to the driver's
-    right; its rows of text over the green, a white border."""
+    right; its rows of text over the green (a welcome sign: the blue), a white border."""
     U = np.array([0.0, 0.0, 1.0])
+    pad, gap = _pad(kind)
 
     def pt(u, v, f=0.0):
         return base + R * u + U * v + F * f
-    green, white = _sprite_uv("green"), _sprite_uv("white")
+    green, white = _sprite_uv("navy" if kind == "welcome" else "green"), _sprite_uv("white")
     m.box(pt(0, h / 2, -0.05), R * (w / 2), F * 0.05, U * (h / 2), STEEL)
     m.quad([pt(-w / 2, 0, 0.002), pt(w / 2, 0, 0.002), pt(w / 2, h, 0.002), pt(-w / 2, h, 0.002)], green)
-    b, e = 0.05, 0.09
+    b, e = (0.015, 0.025) if kind == "mile" else (0.05, 0.09)
     for (u0, v0, u1, v1) in ((-w / 2 + e, e, w / 2 - e, e + b), (-w / 2 + e, h - e - b, w / 2 - e, h - e),
                              (-w / 2 + e, e, -w / 2 + e + b, h - e), (w / 2 - e - b, e, w / 2 - e, h - e)):
         m.quad([pt(u0, v0, 0.004), pt(u1, v0, 0.004), pt(u1, v1, 0.004), pt(u0, v1, 0.004)], white)
-    v = h - PAD_M
+    v = h - pad
     for r in rows:
         rh = max(_item_height(i) for i in r)
         if r[0][0] == "pair":
-            rw = w - 2 * PAD_M
+            rw = w - 2 * pad
         else:
-            rw = sum(_item_width(i) for i in r) + GAP_M * (len(r) - 1)
+            rw = sum(_item_width(i) for i in r) + gap * (len(r) - 1)
         u = -rw / 2
         for it in r:
             iw, ih = _item_width(it), _item_height(it)
@@ -415,8 +597,8 @@ def _panel(m, base, R, F, w, h, rows):
                 tw = text_width(num, size, "black" if kind != "interstate" else "white")
                 nv = vb + ih * (0.22 if kind == "interstate" else 0.3)
                 _text(m, pt, u + (iw - tw) / 2, nv, num, size, "black" if kind != "interstate" else "white", 0.008)
-            u += iw + GAP_M
-        v -= rh + GAP_M
+            u += iw + gap
+        v -= rh + gap
 
 
 def _text(m, pt, u, v, s, size, colour, f=0.006):
@@ -457,9 +639,12 @@ def _structure(m, g, w, h):
         for uu in (-span, span):                    # posts
             m.box(c + R * uu + U * ((top + 0.2) / 2) + F * back, R * 0.18, F * 0.18, U * ((top + 0.2) / 2))
         return lo + R * pu, F, R
-    bottom = GROUND_M
+    bottom = MILE_BOTTOM_M if g["kind"] == "mile" else GROUND_M
     pu = side * (half + SHOULDER_M + w / 2)
     base = c + R * pu + U * bottom
+    if g["kind"] == "mile":                         # one small post
+        m.box(c + R * pu + U * ((bottom + h) / 2) + F * -0.05, R * 0.03, F * 0.03, U * ((bottom + h) / 2))
+        return base, F, R
     for uu in (-w * 0.3, w * 0.3):                  # two I-beam posts behind the panel
         m.box(c + R * (pu + uu) + U * ((bottom + h) / 2) + F * -0.16, R * 0.08, F * 0.06, U * ((bottom + h) / 2))
     return base, F, R
@@ -535,9 +720,9 @@ def mesh(signs, origin):
         if g["kind"] == "toll":
             toll_gantry(m, g)
             continue
-        w, h = panel_size(g["rows"])
+        w, h = panel_size(g["rows"], g["kind"])
         base, F, R = _structure(m, g, w, h)
-        _panel(m, base, R, F, w, h, g["rows"])
+        _panel(m, base, R, F, w, h, g["rows"], g["kind"])
         if len(m.P) > MAX_VERTS:            # over the shape's index limit: this sign left out
             del m.P[n0:], m.UV[n0:]
             k = next(i for i, t in enumerate(m.T) if t[0] >= n0)
