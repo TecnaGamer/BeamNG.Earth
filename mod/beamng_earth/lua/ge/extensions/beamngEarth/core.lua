@@ -88,6 +88,7 @@ local X = { jobs = require('beamngEarth/jobs'),             -- garage-to-garage 
   worldtraffic = require('beamngEarth/worldtraffic'),       -- the phone's world traffic switch (worldtraffic.lua)
   wallet = require('beamngEarth/wallet'),                   -- the player's money: fuel and tolls (X.wallet.lua)
   roadweather = require('beamngEarth/roadweather'),         -- rain and snow on the roads: grip and look
+  rally = require('beamngEarth/rally'), rallyResults = {},  -- the Rally app's stages (rally.lua)
   placesResults = {}, jobResults = {}, mediaState = nil, fuelResults = {} }   -- the phone's / map's server answers
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
@@ -955,6 +956,8 @@ local function onMessage(msg)
     if msg.id then X.placesResults[msg.id] = msg end
   elseif t == 'media_state' then
     X.mediaState = msg
+  elseif t == 'rally_stage_result' then
+    if msg.id then X.rallyResults[msg.id] = msg end       -- (rally.lua polls it)
   elseif t == 'delivery_jobs_result' then
     if msg.id then X.jobResults[msg.id] = msg end         -- (X.jobs.lua polls it)
   elseif t == 'nearest_fuel_result' then
@@ -1793,6 +1796,8 @@ local function onUpdate(dtReal, dtSim)
     pcall(X.dynweather.update, dtSim, mins, st.player and st.player.lat, st.player and st.player.lon)
     local okJ, errJ = pcall(X.jobs.update, dtSim, st.anchor, st.player)
     if not okJ then log('W', 'beamngEarth', 'jobs: ' .. tostring(errJ)) end
+    local okR, errR = pcall(X.rally.update, dtSim, st.anchor, st.player)
+    if not okR then log('W', 'beamngEarth', 'rally: ' .. tostring(errR)) end
   end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
@@ -2356,6 +2361,16 @@ function M.requestDeliveryJobs(id, lat, lon, seed, kind)
   if not net.isConnected() then return false end
   net.send({ type = 'delivery_jobs', id = id, lat = lat, lon = lon, seed = seed, kind = kind })
   return true
+end
+function M.requestRallyStage(id, stage)
+  if not net.isConnected() then return false end
+  net.send({ type = 'rally_stage', id = id, stage = stage })
+  return true
+end
+function M.takeRallyStage(id)
+  local r = X.rallyResults[id]
+  X.rallyResults[id] = nil
+  return r
 end
 function M.takeDeliveryJobs(id)
   local r = X.jobResults[id]

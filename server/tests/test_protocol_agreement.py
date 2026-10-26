@@ -141,6 +141,7 @@ MOD_TO_SERVER = {
     "random_place": {"id": F(int)},
     "nearest_fuel": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},
     "media": {"id": F(int), "action": F(str, OPT)},
+    "rally_stage": {"id": F(int), "stage": F(str)},     # the phone's Rally app (rally.py)
     "places_near": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "kind": F(str)},    # the phone's Garage app (shops.py)     # the phone's Music app (media.py)
     "delivery_jobs": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "seed": F(int), "kind": F(str, OPT)},   # the Jobs app (jobfind.py)     # the world map's "Nearest gas station" (fuelfind.py)
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
@@ -169,6 +170,7 @@ SERVER_TO_MOD = {
     "places_near_result": {"id": F(int), "kind": F(str), "places": F(list), "error": F(str, OPT)},
     "media_state": {"id": F(int), "ok": F(bool), "playing": F(bool), "artist": F(str), "title": F(str)},
     "delivery_jobs_result": {"id": F(int), "jobs": F(list), "error": F(str, OPT)},
+    "rally_stage_result": {"id": F(int), "stage": F(dict, OPT), "error": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "hello": {"protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
@@ -265,6 +267,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                        "nearest_fuel_result",                          # the world map's button: map data (test_fuelfind)
                        "delivery_jobs_result",
+                       "rally_stage_result",                           # the Rally app: map data (test_rally)
                        "media_state",
                        "places_near_result",                           # the Garage app: map data (test_shops)                                  # the phone: desktop Spotify (test_media)                         # the Jobs app: map data (test_jobfind)
                                                                      # (test_randomplace)

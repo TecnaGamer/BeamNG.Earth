@@ -16,6 +16,7 @@ angular.module('beamng.apps')
     garage: '<path d="M4 14 L16 6 L28 14 V27 H4 Z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><path d="M9 27 V18 H23 V27 M9 21 H23 M9 24 H23" fill="none" stroke="#fff" stroke-width="2"/>',
     realestate: '<path d="M5 15 L16 6 L27 15" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><path d="M8 13 V26 H24 V13" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M14 26 V19 H18 V26" fill="#fff"/><circle cx="25" cy="7" r="3.5" fill="#ffd34d"/>',
 beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path d="M6 11 L16 16 L26 11 M16 16 V28" fill="none" stroke="#b36b00" stroke-width="1.4"/><text x="16" y="25" text-anchor="middle" font-family="Arial Black,Arial" font-weight="900" font-size="11" fill="#1a1a1a">B</text>',
+    rally: '<path d="M8 5 V28" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M9 6 H25 V18 H9 Z" fill="#fff"/><path d="M9 6 H13 V10 H9 Z M17 6 H21 V10 H17 Z M13 10 H17 V14 H13 Z M21 10 H25 V14 H21 Z M9 14 H13 V18 H9 Z M17 14 H21 V18 H17 Z" fill="#111"/>',
     settings: '<circle cx="16" cy="16" r="4.5" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M16 4 V8 M16 24 V28 M4 16 H8 M24 16 H28 M7.5 7.5 L10.3 10.3 M21.7 21.7 L24.5 24.5 M7.5 24.5 L10.3 21.7 M21.7 10.3 L24.5 7.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>'
   }
   var APPS = [
@@ -26,6 +27,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
     { id: 'garage', name: 'Garage', bg: 'linear-gradient(160deg,#ff5e57,#b3261e)' },
     { id: 'beamazon', name: 'Beamazon', bg: 'linear-gradient(160deg,#2b3a4e,#131921)' },
     { id: 'realestate', name: 'Real Estate', bg: 'linear-gradient(160deg,#5e5ce6,#2c2a9e)' },
+    { id: 'rally', name: 'Rally', bg: 'linear-gradient(160deg,#e10600,#5c0a0a)' },
     { id: 'settings', name: 'Settings', bg: 'linear-gradient(160deg,#8e8e93,#5a5a60)' }
   ]
   var WX = { clear: '☀', partly: '⛅', cloudy: '☁', fog: '🌫', rain: '🌧', storm: '⛈', snow: '❄' }
@@ -169,6 +171,28 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
               '<div style="font-size:12px;color:#c9ced6">From {{ j.pickup.name }} · {{ (j.dist / 1609.344).toFixed(1) }} mi · {{ clock(j.limit) }}</div>' +
               '<div style="text-align:right;margin-top:4px"><button class="bnp-btn" style="background:#ff9900;color:#111" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Start route</button></div></div></div>' +
         '</div>' +
+        // Rally (the user, 2026-10-26: a real US stage, timed with pacenotes, in a loaned rally car): the STPR's forest
+        // stages with your best times; the run you are on
+        '<div class="bnp-view" ng-if="app == \'rally\'" style="background:#0d0d0f;color:#fff"><span class="bnp-back" style="color:#ff3b30" ng-click="home()">‹ Home</span>' +
+          '<div style="font-size:26px;font-weight:900;font-style:italic;letter-spacing:-.5px;margin:4px 0 2px">RALLY</div><div style="font-size:12px;color:#ff3b30;margin-bottom:12px">Susquehannock Trail stages · Pennsylvania</div>' +
+          '<div class="bnp-card" style="background:#1d1d21" ng-if="p.rally.active">' +
+            '<div style="color:#ff3b30;font-size:12px;font-weight:700">{{ rphase(p.rally.active.phase) }}</div>' +
+            '<div style="font-size:20px;font-weight:800">{{ p.rally.active.name }}<span ng-if="p.rally.active.car" style="font-size:12px;color:#aaa;font-weight:400"> · {{ p.rally.active.car }}</span></div>' +
+            '<div ng-if="p.rally.active.phase == \'run\'"><div class="bnp-big" style="font-size:30px;font-variant-numeric:tabular-nums">{{ rtime(p.rally.active.t) }}</div>' +
+              '<div style="height:6px;border-radius:3px;background:#333;margin:8px 0"><div style="height:6px;border-radius:3px;background:#ff3b30" ng-style="{width: (p.rally.active.s / p.rally.active.total * 100) + \'%\'}"></div></div>' +
+              '<div style="font-size:12px;color:#aaa">{{ dist(p.rally.active.s) }} of {{ dist(p.rally.active.total) }}<span ng-if="p.rally.active.penalty"> · +{{ p.rally.active.penalty }}s penalty</span></div></div>' +
+            '<button class="bnp-btn" style="background:#ff453a;margin-top:8px" ng-click="lua(\'uiRallyQuit()\')">Quit stage</button></div>' +
+          '<div class="bnp-card" style="background:#1d1d21" ng-if="p.rally.last && !p.rally.active">' +
+            '<div style="font-size:12px;color:#aaa">LAST RUN · {{ p.rally.last.name }}</div>' +
+            '<div class="bnp-big" style="font-size:26px" ng-if="!p.rally.last.dnf">{{ rtime(p.rally.last.time) }}<span ng-if="p.rally.last.record" style="font-size:12px;color:#30d158"> BEST</span></div>' +
+            '<div class="bnp-big" style="font-size:26px;color:#ff453a" ng-if="p.rally.last.dnf">DNF</div></div>' +
+          '<div class="bnp-dim" ng-if="p.rally.error || rmsg" style="color:#ff9f0a;margin-bottom:6px">{{ rmsg || p.rally.error }}</div>' +
+          '<div class="bnp-card" style="background:#1d1d21" ng-repeat="s in p.rally.stages" ng-if="!p.rally.active">' +
+            '<div class="bnp-row" style="padding:0"><b style="font-size:17px">{{ s.name }}</b><span style="font-size:13px;color:#aaa">{{ s.miles.toFixed(2) }} mi</span></div>' +
+            '<div style="font-size:12px;color:#aaa">{{ s.area }} · gravel<span ng-if="s.best"> · Best {{ rtime(s.best) }}</span></div>' +
+            '<div style="text-align:right;margin-top:6px"><button class="bnp-btn" style="background:#e10600" ng-disabled="p.rally.active" ng-click="rstart(s.id)">Start stage</button></div></div>' +
+          '<div class="bnp-dim" style="font-size:11px">A rally car is loaned for the stage; your car is parked and given back at the finish. Pacenotes are called on screen.</div>' +
+        '</div>' +
         // settings
         '<div class="bnp-view" ng-if="app == \'settings\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Settings</div>' +
           '<div class="bnp-dim" style="margin:0 2px 6px">WALLPAPER</div><div class="bnp-card"><div class="bnp-thumbs"><div class="bnp-thumb" ng-repeat="w in p.wallpapers track by $index" ng-class="{on: w == p.prefs.wallpaper}" ng-style="{\'background-image\': \'url(\' + w + \')\'}" ng-click="set(\'wallpaper\', w)"></div></div>' +
@@ -192,7 +216,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       scope.app = null
       scope.p = { prefs: {}, bank: {}, weather: { days: [{}], now: {} }, jobs: {}, media: {}, wallpapers: [] }
       scope.apps = APPS
-      scope.dock = [APPS[0], APPS[2], APPS[4], APPS[7]]
+      scope.dock = [APPS[0], APPS[2], APPS[4], APPS[APPS.length - 1]]
       scope.accents = ACCENTS
       scope.icon = function (id) {
         return 'url("data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">' + ICONS[id] + '</svg>') + '")'
@@ -251,6 +275,14 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       scope.gdo = function (a, arg) {
         lua('uiGarageDo(' + JSON.stringify(a) + (arg != null ? ', ' + JSON.stringify(arg) : '') + ')', function (r) {
           scope.$evalAsync(function () { scope.gmsg = r && r.error ? r.error : '' })
+          poll()
+        })
+      }
+      scope.rtime = function (t) { t = Math.max(0, t || 0); var m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1) }
+      scope.rphase = function (ph) { return { loading: 'LOADING STAGE…', travel: 'GOING TO THE START…', countdown: 'STAND BY', run: 'STAGE', done: 'FINISHED' }[ph] || '' }
+      scope.rstart = function (id) {
+        lua('uiRallyStart(' + JSON.stringify(id) + ')', function (r) {
+          scope.$evalAsync(function () { scope.rmsg = r && r.error ? r.error : '' })
           poll()
         })
       }

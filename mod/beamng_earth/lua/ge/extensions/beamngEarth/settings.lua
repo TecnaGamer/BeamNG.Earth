@@ -679,6 +679,7 @@ function M.uiPhone()
     bank = { balance = w.balance(), text = w.format(w.balance()), history = w.history() },
     weather = require('beamngEarth/dynweather').uiState(mins, pl and pl.lat, pl and pl.lon),
     jobs = require('beamngEarth/jobs').uiState(),
+    rally = require('beamngEarth/rally').uiState(),
     media = core and core.mediaState and core.mediaState() or { ok = false },
     garage = require('beamngEarth/garage').uiState(st and st.anchor, pl),
   }
@@ -753,6 +754,11 @@ end
 function M.uiJobAccept(i) local ok, why = require('beamngEarth/jobs').accept(i) return { ok = ok, error = why } end
 function M.uiJobStart() local ok, why = require('beamngEarth/jobs').startWork() return { ok = ok, error = why } end
 function M.uiJobCancel() return require('beamngEarth/jobs').cancel() end
+
+-- The Rally app (rally.lua): its state; start stage id; quit the run.
+function M.uiRally() return require('beamngEarth/rally').uiState() end
+function M.uiRallyStart(id) local ok, why = require('beamngEarth/rally').start(id) return { ok = ok, error = why } end
+function M.uiRallyQuit() return require('beamngEarth/rally').quit() end
 
 -- The map's "Nearest gas station" (the user, 2026-10-25: "a gas station spawn so i dont search forever"): send
 -- (-> { id } or { error }) and poll (id -> nil while the server searches, else { ok, name, dist } after teleporting

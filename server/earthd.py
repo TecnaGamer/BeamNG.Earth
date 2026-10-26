@@ -97,6 +97,7 @@ import fuelfind as fuelfindmod  # noqa: E402
 import jobfind as jobfindmod  # noqa: E402
 import media as mediamod  # noqa: E402
 import shops as shopsmod  # noqa: E402
+import rally as rallymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
@@ -3053,6 +3054,23 @@ class Connection:
         log.info("%s jobs near %.5f, %.5f: %d", msg.get("kind") or "delivery", lat, lon, len(out["jobs"]))
         self.send(out)
 
+    async def rally_stage(self, msg):
+        """{"id", "stage"} -> rally_stage_result {"id", "stage": {id, name, area, event, points, dist, notes}?,
+        "error"?} (rally.py: a real stage road from the map data, with its pacenotes)."""
+        out = {"type": "rally_stage_result", "id": msg.get("id")}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            if md is None:
+                raise ValueError("no map data")
+            out["stage"] = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, rallymod.build, md, str(msg.get("stage") or ""))
+            log.info("rally stage %s: %.1f km, %d notes", out["stage"]["id"], out["stage"]["dist"] / 1000,
+                     len(out["stage"]["notes"]))
+        except Exception as e:
+            out["error"] = f"{e}"[:160] if isinstance(e, ValueError) else f"{type(e).__name__}: {e}"[:160]
+            log.warning("rally stage %s: %s", msg.get("stage"), out["error"])
+        self.send(out)
+
     async def places_near(self, msg):
         """{"id", "lat", "lon", "kind": "repair" | "property"} -> places_near_result {"id", "kind", "places", "error"?}
         (shops.py: real repair shops / property near the point, nearest first)."""
@@ -3363,6 +3381,8 @@ class Connection:
             self.spawn(self.nearest_fuel(msg))
         elif kind == "places_near":             # the phone's Garage app (shops.py)
             self.spawn(self.places_near(msg))
+        elif kind == "rally_stage":             # the phone's Rally app (rally.py)
+            self.spawn(self.rally_stage(msg))
         elif kind == "media":                   # the phone's Music app (media.py)
             self.spawn(self.media(msg))
         elif kind == "delivery_jobs":           # the Jobs app's garage-to-garage deliveries (jobfind.py)
