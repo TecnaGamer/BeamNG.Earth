@@ -96,6 +96,11 @@ class OfferTest(unittest.TestCase):
 
 
 class TruckTest(unittest.TestCase):
+    def test_cargo_models_are_trailers(self):
+        # the stock trailers (the game's content/vehicles); "hopper" is the Ibishu Hopper SUV, not a trailer
+        trailers = {"dryvan", "tanker", "flatbed", "log_trailer", "containerTrailer", "frameless_dump", "cargotrailer"}
+        self.assertTrue({c[0] for c in jobfind.CARGO} <= trailers)
+
     def test_realistic_pay(self):
         # $2.50 a mile, a $350 minimum, the cargo's premium, x1.3 (the user's boost)
         self.assertEqual(jobfind.truck_pay(15 * jobfind.MI, 1.0), 1500.0)       # the floor

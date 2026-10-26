@@ -73,7 +73,7 @@ RENT = 45.0                 # $ the rental company takes per job
 # cargo -> (trailer model, what the panel says, pay factor)
 CARGO = (("dryvan", "Dry van: general freight", 1.0), ("tanker", "Tanker: fuel", 1.25),
          ("flatbed", "Flatbed: building materials", 1.15), ("log_trailer", "Log trailer: lumber", 1.15),
-         ("hopper", "Hopper: gravel", 1.05), ("containerTrailer", "Container: imports", 1.1))
+         ("frameless_dump", "Dump trailer: gravel", 1.05), ("containerTrailer", "Container: imports", 1.1))
 # (midsize is the Gavril Grand Marshal's smaller sibling in some versions; the name shown is only a label)
 
 
