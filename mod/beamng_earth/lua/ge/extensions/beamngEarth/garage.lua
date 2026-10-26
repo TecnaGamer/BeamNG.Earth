@@ -80,6 +80,16 @@ local function poll()
       pending[kind] = nil
       lists[kind] = type(r.places) == 'table' and r.places or {}
       listErr[kind] = (#lists[kind] == 0) and (r.error or 'none near here') or nil
+      -- (your places take the newest spot: the bench against the wall, 2026-10-26)
+      local st, changed = load(), false
+      for _, q in ipairs(lists[kind]) do
+        local mine = st.owned[q.id]
+        if mine and q.mlat and (mine.mlat ~= q.mlat or mine.dlat ~= q.dlat) then
+          mine.mlat, mine.mlon, mine.dlat, mine.dlon, mine.dyaw = q.mlat, q.mlon, q.dlat, q.dlon, q.dyaw
+          changed = true
+        end
+      end
+      if changed then save() end
     end
   end
 end
@@ -254,7 +264,8 @@ function M.acquire(i, how)
   if how == 'buy' and have and have.kind == 'own' then return false, 'already yours' end
   pay(price, (how == 'buy' and 'Bought ' or 'Rent: ') .. tostring(p.name))
   local d = today()
-  have = have or { id = p.id, name = p.name, lat = p.lat, lon = p.lon, mlat = p.mlat, mlon = p.mlon, cars = {} }
+  have = have or { id = p.id, name = p.name, lat = p.lat, lon = p.lon, mlat = p.mlat, mlon = p.mlon, dlat = p.dlat,
+                   dlon = p.dlon, dyaw = p.dyaw, cars = {} }
   have.buy = p.buy or have.buy                  -- (its price: a rental can be bought later, M.buyout)
   if how == 'buy' then
     have.kind = 'own'
@@ -339,18 +350,26 @@ end
 -- that place's menu (Garage at a shop, Real Estate at yours).
 M.RING_M, M.PROPS_M, M.DRAW_M = 4.0, 150, 220
 M.BENCH = '/art/shapes/garage_and_dealership/garage/s_garage_workbench.dae'
-M.LAPTOP = '/art/shapes/garage_and_dealership/garage/s_laptop_ON.dae'
-M.BENCH_TOP = 0.9
+-- (the laptop is two shapes: s_laptop the body, s_laptop_ON only its lit screen; the user saw the screen alone
+-- floating: the body was missing and the top 0.9 m too high: the bench's top is 0.67 m, its shape measured)
+M.LAPTOP = '/art/shapes/garage_and_dealership/garage/s_laptop.dae'
+M.SCREEN = '/art/shapes/garage_and_dealership/garage/s_laptop_ON.dae'
+M.BENCH_TOP = 0.67
+M.LAPTOP_X = 0.9              -- along the bench from its middle
 local props, inRing = {}, nil
 
 local function spots()
   local out = {}
   for _, p in ipairs(lists.repair) do
-    if p.mlat then out[#out + 1] = { id = 'shop:' .. p.id, lat = p.mlat, lon = p.mlon, app = 'garage' } end
+    if p.mlat then out[#out + 1] = { id = 'shop:' .. p.id, lat = p.mlat, lon = p.mlon, app = 'garage', dlat = p.dlat,
+                                     dlon = p.dlon, dyaw = p.dyaw } end
   end
   local s, d = load(), today()
   for _, p in pairs(s.owned) do
-    if M.held(p, d) and p.mlat then out[#out + 1] = { id = 'home:' .. p.id, lat = p.mlat, lon = p.mlon, app = 'realestate' } end
+    if M.held(p, d) and p.mlat then
+      out[#out + 1] = { id = 'home:' .. p.id, lat = p.mlat, lon = p.mlon, app = 'realestate', dlat = p.dlat, dlon = p.dlon,
+                        dyaw = p.dyaw }
+    end
   end
   return out
 end
@@ -361,13 +380,24 @@ local function groundZ(x, y, z)
   return (ok and tonumber(h) and h > -1e6) and h or z
 end
 
-local function placeProps(id, x, y, z)
+-- Pure: where the bench's parts stand: { {shape, x, y, dz}... } for the bench's middle (x, y) turned yaw (radians,
+-- counter-clockwise; its back, local +y, toward the wall).
+function M.propLayout(x, y, yaw)
+  local c, s = math.cos(yaw or 0), math.sin(yaw or 0)
+  local lx, ly = M.LAPTOP_X, -0.02
+  local px, py = x + lx * c - ly * s, y + lx * s + ly * c
+  return { { M.BENCH, x, y, 0 }, { M.LAPTOP, px, py, M.BENCH_TOP }, { M.SCREEN, px, py, M.BENCH_TOP } }
+end
+
+local function placeProps(id, x, y, z, yaw, key)
   local ok = pcall(function()
-    local objs = {}
-    for i, shape in ipairs({ M.BENCH, M.LAPTOP }) do
+    local objs = { key = key }
+    -- (the game's own turn: the shape's +y toward its back, the wall)
+    local q = quatFromDir(vec3(-math.sin(yaw or 0), math.cos(yaw or 0), 0), vec3(0, 0, 1))
+    for i, it in ipairs(M.propLayout(x, y, yaw)) do
       local o = createObject('TSStatic')
-      o.shapeName = shape
-      o:setPosRot(x, y, z + (i == 2 and M.BENCH_TOP or 0), 0, 0, 0, 1)
+      o.shapeName = it[1]
+      o:setPosRot(it[2], it[3], z + it[4], q.x, q.y, q.z, q.w)
       o:registerObject('bne_garage_' .. id:gsub('[^%w]', '_') .. '_' .. i)
       objs[#objs + 1] = o
     end
@@ -405,7 +435,17 @@ function M.update(dt, anchor, player)
     if dist < M.PROPS_M then
       seen[s.id] = true
       local z = groundZ(x, y, player.z or 0)
-      if props[s.id] == nil then placeProps(s.id, x + 2.5, y, z) end
+      -- the bench against the wall (server shops.wall_spot), else beside the ring as before
+      local key = tostring(s.dlat) .. ',' .. tostring(s.dlon)
+      if props[s.id] and props[s.id].key ~= key then removeProps(s.id) end
+      if props[s.id] == nil then
+        if s.dlat and s.dlon then
+          local bx, by = anchor:geodeticToEnu(s.dlat, s.dlon, 0)
+          placeProps(s.id, bx, by, groundZ(bx, by, player.z or 0), tonumber(s.dyaw) or 0, key)
+        else
+          placeProps(s.id, x + 2.5, y, z, 0, key)
+        end
+      end
       if dd and dist < M.DRAW_M then
         pcall(function()
           dd:drawCylinder(vec3(x, y, z), vec3(x, y, z + 0.08), M.RING_M, ColorF(0.1, 0.45, 1.0, 0.45))

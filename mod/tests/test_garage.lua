@@ -95,4 +95,33 @@ T.check(#opened == 1, 'once, not every frame')
 G.update(0.1, anchor, { x = 0, y = 60, vx = 0, vy = 0, z = 0 })
 G.update(0.1, anchor, { x = 0, y = 11.1, vx = 0, vy = 0, z = 0 })
 T.check(#opened == 2, 'again after driving off and back')
+
+-- the bench against the wall (server shops.wall_spot): turned, the laptop body and its screen on top at 0.67 m
+local L = G.propLayout(10, 20, 0)
+T.check(#L == 3 and L[2][1]:find('s_laptop%.dae$') and L[3][1]:find('s_laptop_ON%.dae$'), 'the laptop body and its screen')
+T.near(L[2][4], 0.67, 1e-9, 'on the bench top')
+T.near(L[2][2], 10 + G.LAPTOP_X, 1e-9, 'along the bench')
+L = G.propLayout(0, 0, math.pi / 2)
+T.near(L[2][2], 0.02, 1e-6, 'turned: along the bench x'); T.near(L[2][3], G.LAPTOP_X, 1e-6, 'turned: along the bench y')
+local made = {}
+createObject = function()
+  local o = { delete = function(self) self.deleted = true end, registerObject = function() end }
+  o.setPosRot = function(self, ...) self.pr = { ... } end
+  made[#made + 1] = o
+  return o
+end
+vec3 = vec3 or function(x, y, z) return { x = x, y = y, z = z } end
+quatFromDir = function(d) return { x = 0, y = 0, z = d.x, w = d.y } end
+be.getSurfaceHeightBelow = function() return 0 end
+G._reset()
+G._setList('repair', { { id = 'r7', name = 'Shop', lat = 40.0, lon = -80.0, mlat = 40.0001, mlon = -80.0,
+  dlat = 40.00015, dlon = -80.0, dyaw = math.pi / 2 } })
+G.update(0.1, anchor, { x = 0, y = 0, vx = 0, vy = 0, z = 0 })
+T.check(#made == 3, 'three props: ' .. #made)
+T.near(made[1].pr[2], 0.00015 * 111000, 1e-6, 'the bench at the wall spot, not beside the ring')
+T.near(made[1].pr[6], -1, 1e-9, 'turned to face the wall (its back, +y, toward -x at a quarter turn)')
+G._setList('repair', { { id = 'r7', name = 'Shop', lat = 40.0, lon = -80.0, mlat = 40.0001, mlon = -80.0,
+  dlat = 40.0002, dlon = -80.0, dyaw = 0 } })
+G.update(0.1, anchor, { x = 0, y = 0, vx = 0, vy = 0, z = 0 })
+T.check(made[1].deleted and #made == 6, 'a moved spot: the props put again')
 T.done('test_garage')
