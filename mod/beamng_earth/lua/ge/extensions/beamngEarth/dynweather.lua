@@ -25,7 +25,10 @@ M.LABELS = { clear = 'Clear', partly = 'Partly cloudy', cloudy = 'Cloudy', fog =
 -- weather fronts: a day's base pick, weighted (persistence makes the next day likely the same kind)
 M.WEIGHTS = { { 'clear', 30 }, { 'partly', 28 }, { 'cloudy', 18 }, { 'rain', 14 }, { 'fog', 4 }, { 'storm', 6 } }
 M.PERIODS = { 'Night', 'Morning', 'Afternoon', 'Evening' }
-M.SWING = { -4, -1, 4, 1 }  -- °C against the day's base, per period
+M.SWING = { -4, -1, 4, 1 }
+-- (the user, 2026-10-26: "allow the weather to switch up a little, don't follow irl so close")
+M.PERSIST = 0.25            -- the chance a day keeps the day before's weather
+M.TEMP_SPREAD = 14          -- °C: a day's temperature strays up to half this from the real one  -- °C against the day's base, per period
 
 local state = nil           -- { mode, seed, day (0..), lastMins }
 local baseTempC = 12        -- the real temperature where you are (the server's message), °C
@@ -57,19 +60,24 @@ function M.forecast(seed, base, firstDay)
   for d = 0, M.DAYS - 1 do
     local day = firstDay + d
     local cond = pick(rnd(seed, day, 1))
-    if prev and rnd(seed, day, 2) < 0.45 then cond = prev end          -- fronts last
+    if prev and rnd(seed, day, 2) < M.PERSIST then cond = prev end     -- fronts last a day or two
     prev = cond
-    local dayBase = (base or 12) + (rnd(seed, day, 3) - 0.5) * 8
+    -- the real temperature only as the season's middle: each day strays up to TEMP_SPREAD / 2 from it
+    local dayBase = (base or 12) + (rnd(seed, day, 3) - 0.5) * M.TEMP_SPREAD
     local periods, hi, lo = {}, -99, 99
     for p = 1, 4 do
       local c = cond
       local u = rnd(seed, day, 10 + p)
       if c == 'rain' or c == 'storm' then
-        if u < 0.35 then c = 'cloudy' end                  -- showers come and go
+        if u < 0.35 then c = 'cloudy' elseif u < 0.45 then c = 'partly' end      -- showers come and go
       elseif c == 'fog' then
         if p >= 3 then c = 'partly' end                    -- fog lifts by the afternoon
-      elseif c == 'partly' and u < 0.15 then
-        c = 'rain'
+      elseif c == 'partly' then
+        if u < 0.2 then c = 'rain' elseif u < 0.3 then c = 'cloudy' elseif u > 0.85 then c = 'clear' end
+      elseif c == 'clear' then
+        if u < 0.25 then c = 'partly' elseif u > 0.95 then c = 'storm' end      -- a pop-up storm now and then
+      elseif c == 'cloudy' then
+        if u < 0.25 then c = 'rain' elseif u > 0.75 then c = 'partly' end
       end
       local t = dayBase + M.SWING[p] + (u - 0.5) * 2
       if (c == 'rain' or c == 'storm') and t <= 1 then c = 'snow' end
