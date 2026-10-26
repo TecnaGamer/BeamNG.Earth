@@ -429,6 +429,8 @@ local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
+  -- better traffic and police driving (aitune.lua): each car's AI tuned once, police chases toned down
+  pcall(function() require('beamngEarth/aitune').tick(gt.getTrafficData(), getObjectByID) end)
   local me = playerId()
   local pv = me >= 0 and getObjectByID(me) or nil
   local pp = pv and pv:getPosition() or nil
