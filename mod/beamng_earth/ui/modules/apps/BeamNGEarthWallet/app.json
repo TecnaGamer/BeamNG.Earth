@@ -3,7 +3,7 @@
   "name": "BeamNG.Earth: Wallet",
   "types": ["ui.apps.categories.utility"],
   "description": "Your money (BeamNG.Earth): fuel and tolls cost it.",
-  "css": {"width": "200px", "height": "48px"},
+  "css": {"width": "300px", "height": "48px"},
   "author": "BeamNG.Earth",
   "version": "1.0",
   "directive": "beamngEarthWallet",

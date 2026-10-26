@@ -598,7 +598,8 @@ end
 function M.uiWallet()
   local w = require('beamngEarth/wallet')
   local h = w.history()
-  return { balance = w.balance(), text = w.format(w.balance()), last = h[1] }
+  local okH, hv = pcall(function() return require('beamngEarth/heat').current() end)
+  return { balance = w.balance(), text = w.format(w.balance()), last = h[1], heat = okH and hv or 0 }
 end
 function M.uiWalletReset() require('beamngEarth/wallet').reset() return M.uiWallet() end
 

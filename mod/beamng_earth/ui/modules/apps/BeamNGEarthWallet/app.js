@@ -6,6 +6,8 @@ angular.module('beamng.apps')
       '<div class="bngApp" style="width:100%;height:100%;background:transparent;box-shadow:none;display:flex;justify-content:flex-end;align-items:flex-start;">' +
         '<span ng-show="text" style="background:rgba(12,14,18,0.82);border-radius:10px;padding:6px 14px;font-size:20px;font-weight:800;' +
         'font-family:\'Inter Tight\',\'Segoe UI\',sans-serif;" ng-style="{color: neg ? \'#ff6b6b\' : \'#7ee08a\'}">{{ text }}</span>' +
+        '<span ng-show="heat >= 1" style="margin-left:6px;background:rgba(12,14,18,0.82);border-radius:10px;padding:6px 10px;font-size:14px;font-weight:800;' +
+        'font-family:\'Inter Tight\',\'Segoe UI\',sans-serif;" ng-style="{color: heat >= 60 ? \'#ff4d4d\' : (heat >= 15 ? \'#ffb84d\' : \'#c9ced6\')}">HEAT {{ heat.toFixed(0) }}</span>' +
       '</div>',
     replace: true,
     link: function (scope) {
@@ -18,6 +20,7 @@ angular.module('beamng.apps')
           scope.$evalAsync(function () {
             scope.text = w ? w.text : ''
             scope.neg = !!(w && w.balance < 0)
+            scope.heat = w && w.heat ? w.heat : 0
           })
         })
       }
