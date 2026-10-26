@@ -862,6 +862,14 @@ function M.statusLine()
     m.visM and string.format('%.0f km', m.visM / 1000) or '?')
 end
 
+-- The weather the roads feel (roadweather.lua): rain and snow (0..100, the drops on screen) and the air temperature (C),
+-- as shown now (real or the player's manual weather); nil before the first weather.
+function M.roadInputs()
+  local c = S and S.cur
+  if not c then return nil end
+  return tonumber(c.rainPct) or 0, tonumber(c.snowPct) or 0, tonumber(c.tempC) or (S.temp and S.temp.value) or 15
+end
+
 function M.status()
   return dumps({ mode = mode, pending = S.pending, switched = S.switched, bwmFighting = bwmNow(),
     gravityOverride = S.gravityOverride ~= nil, bigMap = bigMapBusy(), inOurLevel = S.inOurLevel, grace = math.max(0, S.graceUntil - S.clock), mission = S.mission,
