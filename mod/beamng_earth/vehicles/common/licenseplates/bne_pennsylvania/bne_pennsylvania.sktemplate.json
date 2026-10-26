@@ -1,0 +1,58 @@
+{
+  "name": "bne_pennsylvania",
+  "version": 3,
+  "type": "licenseplate",
+  "vars": {
+    "plate": {
+      "type": "string",
+      "default": "{L}{L}{L}-{d}{d}{d}{d}",
+      "charsets": {
+        "L": "ABCDEFGHJKLMNPRSTUVWXYZ",
+        "d": "0123456789"
+      },
+      "maxLength": 8
+    }
+  },
+  "format": {
+    "30-15": {
+      "size": [
+        512,
+        256
+      ],
+      "background": "vehicles/common/licenseplates/bne_pennsylvania/bne_pennsylvania_background_d.png",
+      "emboss": 3.0,
+      "finish": {
+        "roughness": 0.35,
+        "metallic": 0.1,
+        "fgRoughness": 0.3,
+        "fgMetallic": 0.2
+      },
+      "root": {
+        "style": {
+          "width": "100%",
+          "height": "100%",
+          "alignItems": "center",
+          "justifyContent": "center",
+          "paddingTop": 34,
+          "paddingBottom": 30
+        },
+        "children": [
+          {
+            "type": "text",
+            "name": "plate",
+            "text": "{plate}",
+            "font": "plate",
+            "fontSize": 92,
+            "fit": "shrink",
+            "color": "#162a68",
+            "letterSpacing": 2,
+            "style": {
+              "width": "92%",
+              "height": 120
+            }
+          }
+        ]
+      }
+    }
+  }
+}
