@@ -5,7 +5,7 @@
   "vars": {
     "plate": {
       "type": "string",
-      "default": "{L}{L}{L}-{d}{d}{d}{d}",
+      "default": "{L}{L}{L}{d}{d}{d}{d}",
       "charsets": {
         "L": "ABCDEFGHJKLMNPRSTUVWXYZ",
         "d": "0123456789"
@@ -20,36 +20,61 @@
         256
       ],
       "background": "vehicles/common/licenseplates/bne_pennsylvania/bne_pennsylvania_background_d.png",
-      "emboss": 3.0,
+      "emboss": 4.0,
+      "limit": 3,
+      "limit2": 5,
       "finish": {
-        "roughness": 0.35,
-        "metallic": 0.1,
-        "fgRoughness": 0.3,
-        "fgMetallic": 0.2
+        "roughness": 0.3,
+        "metallic": 0.15,
+        "fgRoughness": 0.25,
+        "fgMetallic": 0.25
       },
       "root": {
         "style": {
           "width": "100%",
           "height": "100%",
+          "flexDirection": "row",
           "alignItems": "center",
           "justifyContent": "center",
-          "paddingTop": 34,
-          "paddingBottom": 30
+          "paddingTop": 26,
+          "paddingBottom": 30,
+          "gap": 8
         },
         "children": [
           {
             "type": "text",
-            "name": "plate",
-            "text": "{plate}",
             "font": "plate",
-            "fontSize": 92,
+            "fontSize": 104,
             "fit": "shrink",
-            "color": "#162a68",
-            "letterSpacing": 2,
+            "color": "#16295f",
+            "letterSpacing": 3,
             "style": {
-              "width": "92%",
-              "height": 120
+              "height": 118
+            },
+            "name": "left",
+            "text": "{line1}"
+          },
+          {
+            "type": "image",
+            "name": "keystone",
+            "src": "vehicles/common/licenseplates/bne_pennsylvania/bne_pennsylvania_keystone.png",
+            "style": {
+              "width": 40,
+              "height": 48
             }
+          },
+          {
+            "type": "text",
+            "font": "plate",
+            "fontSize": 104,
+            "fit": "shrink",
+            "color": "#16295f",
+            "letterSpacing": 3,
+            "style": {
+              "height": 118
+            },
+            "name": "right",
+            "text": "{line2}"
           }
         ]
       }

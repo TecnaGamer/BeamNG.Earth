@@ -172,13 +172,13 @@ function M.respray(anchor, player, i)
   return true
 end
 
--- Pure: a new plate text (3 letters, 4 digits) from a number.
+-- Pure: a new plate text (3 letters, 4 digits; the PA plate puts its keystone between them) from a number.
 function M.plateText(n)
   local L = 'ABCDEFGHJKLMNPRSTUVWXYZ'
   n = math.floor(math.abs(n or 0))
   local s = ''
   for _ = 1, 3 do local k = n % #L; s = s .. L:sub(k + 1, k + 1); n = math.floor(n / #L) end
-  return s .. '-' .. string.format('%04d', n % 10000)
+  return s .. string.format('%04d', n % 10000)
 end
 
 function M.plates(anchor, player)

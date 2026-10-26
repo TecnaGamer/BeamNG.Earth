@@ -13,14 +13,18 @@
 local M = {}
 
 M.FILE = '/settings/beamngEarth_heat.json'
-M.MAX = 100
-M.RATE = 0.35               -- heat a second of chase, per pursuit level
-M.COOL = 0.5                -- heat lost a minute when nobody chases you
-M.KNOWN = 15                -- a plate with this much heat is recognised on sight
+-- Heat is stars, 1 to MAX (the user, 2026-10-26: "heat should go up every few minutes of chasing. I tried to pull over
+-- and got heat 5 and lost all my money"): a chase starts at 1 star (or the car's known heat), one more every STEP_S of
+-- chase; a star fades every 1 / COOL minutes without a chase. Busted: the fine of the stars (FINES), impounded too
+-- from IMPOUND stars. Pulling over at once costs a ticket.
+M.MAX = 5
+M.STEP_S = 180              -- s of chase per star
+M.COOL = 0.1                -- stars lost a minute when nobody chases you (one in 10 min)
+M.KNOWN = 2                 -- a plate with this many stars is recognised on sight
 M.SEE_M = 60                -- ... by a cop this close who can see you
 M.FOOTAGE_BASE, M.FOOTAGE_PER_MIN = 150, 60
-M.FINE_BASE, M.FINE_PER_HEAT = 150, 12
-M.IMPOUND, M.IMPOUND_FEE = 60, 750
+M.FINES = { 100, 300, 750, 1500, 3000 }
+M.IMPOUND, M.IMPOUND_FEE = 4, 750
 
 local wallet = require('beamngEarth/wallet')
 
@@ -35,6 +39,9 @@ local function load()
   if read then ok, got = pcall(read, M.FILE) end
   state = (ok and type(got) == 'table' and type(got.plates) == 'table') and got or { plates = {}, looks = {} }
   state.looks = state.looks or {}
+  for _, tbl in ipairs({ state.plates, state.looks }) do       -- (older files: heat 0..100)
+    for k, h in pairs(tbl) do tbl[k] = math.min(M.MAX, tonumber(h) or 0) end
+  end
   return state
 end
 
@@ -78,8 +85,9 @@ function M.heatOf(id, plates, looks)
 end
 
 -- Pure: heat after dt s of a chase at level, from h.
-function M.build(h, level, dt)
-  return math.min(M.MAX, (h or 0) + M.RATE * math.max(1, level or 1) * (dt or 0))
+-- Pure: the stars of a chase of t s that began at h0 stars.
+function M.build(h0, t)
+  return math.min(M.MAX, math.max(1, h0 or 0) + math.floor((t or 0) / M.STEP_S))
 end
 
 -- Pure: the footage's price for a chase of t s at its highest level.
@@ -89,9 +97,9 @@ end
 
 -- Pure: { fine, impound (fee or 0), total } when busted with heat h.
 function M.busted(h)
-  h = math.max(0, h or 0)
-  local fine = math.floor((M.FINE_BASE + M.FINE_PER_HEAT * h) / 5 + 0.5) * 5
-  local imp = h >= M.IMPOUND and M.IMPOUND_FEE or 0
+  local stars = math.max(1, math.min(M.MAX, math.floor((h or 0) + 0.5)))
+  local fine = M.FINES[stars]
+  local imp = stars >= M.IMPOUND and M.IMPOUND_FEE or 0
   return { fine = fine, impound = imp, total = fine + imp }
 end
 
@@ -116,7 +124,8 @@ function M.onPursuitAction(vid, action, data)
   local s = load()
   if action == 'start' then
     pcall(function() require('beamngEarth/jobs').onPolice() end)       -- (no clean record bonus on this job)
-    chase = { id = id, t = 0, level = (data and data.mode) or 1, heat = M.heatOf(id, s.plates, s.looks) }
+    local h0 = math.max(1, math.floor(M.heatOf(id, s.plates, s.looks) + 0.5))
+    chase = { id = id, t = 0, level = (data and data.mode) or 1, h0 = h0, heat = h0 }
   elseif action == 'evade' then
     local c = chase or { t = 0, level = 1, heat = M.heatOf(id, s.plates, s.looks) }
     setHeat(id, c.heat)
@@ -153,7 +162,9 @@ function M.update(dt)
     if level and level >= 1 then
       chase.t = chase.t + dt
       chase.level = math.max(chase.level or 1, level)
-      chase.heat = M.build(chase.heat, level, dt)
+      local before = chase.heat
+      chase.heat = M.build(chase.h0, chase.t)
+      if chase.heat > before then msg(string.rep('*', chase.heat) .. '  Heat ' .. chase.heat .. ': the police are calling in more units', 'warning') end
     end
     return
   end
@@ -163,7 +174,7 @@ function M.update(dt)
     for _, tbl in ipairs({ s.plates, s.looks }) do
       for k, h in pairs(tbl) do
         local n = (tonumber(h) or 0) - M.COOL * coolT / 60
-        tbl[k] = n > 0.5 and n or nil
+        tbl[k] = n > 0.05 and n or nil
       end
     end
     coolT = 0

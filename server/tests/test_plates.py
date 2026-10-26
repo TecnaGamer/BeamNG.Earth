@@ -19,7 +19,11 @@ class PlateTest(unittest.TestCase):
         bg = Path(__file__).resolve().parents[2] / "mod" / "beamng_earth" / fmt["background"]
         self.assertEqual(Image.open(bg).size, tuple(fmt["size"]))
         self.assertEqual(Image.open(bg).size, (512, 256))
-        self.assertIn("{plate}", json.dumps(fmt["root"]))
+        root = json.dumps(fmt["root"])
+        self.assertIn("{line1}", root)                  # letters | keystone | digits
+        self.assertIn("{line2}", root)
+        self.assertEqual((fmt["limit"], fmt["limit2"]), (3, 5))
+        self.assertTrue((D / "bne_pennsylvania_keystone.png").exists())
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ local D = require('beamngEarth/dynweather')
 
 T.check(G.repairCost(0) == 60 and G.repairCost(1000) == 660 and G.repairCost(5000, true) == 0, 'repair prices')
 T.check(G.held({ kind = 'own' }, 99) and G.held({ kind = 'rent', untilDay = 6 }, 6) and not G.held({ kind = 'rent', untilDay = 6 }, 7), 'held')
-T.check(G.plateText(0) == 'AAA-0000' and #G.plateText(123456789) == 8, 'plates: ' .. G.plateText(123456789))
+T.check(G.plateText(0) == 'AAA0000' and #G.plateText(123456789) == 7, 'plates: ' .. G.plateText(123456789))
 
 local anchor = { geodeticToEnu = function(_, lat, lon) return (lon + 80) * 85000, (lat - 40) * 111000, 0 end }
 local replaced, plates = {}, {}
@@ -37,7 +37,7 @@ G.respray(anchor, at, 4)
 T.check(replaced[2][2].paint.baseColor[3] == 0.5, 'new colour')
 T.near(W.balance(), -660 - 450, 1e-9, 'respray paid')
 G.plates(anchor, at)
-T.check(plates[#plates] ~= 'OLD-1' and plates[#plates]:find('%-'), 'new plates')
+T.check(plates[#plates] ~= 'OLD-1' and #plates[#plates] == 7, 'new plates')
 
 -- property: rent for a week, it runs out; buy; storage there; free repairs at home
 W.add(100000, 'test')
