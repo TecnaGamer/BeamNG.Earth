@@ -267,14 +267,14 @@ HM_KEEP_SENT = 2            # terrains handed to the mod but maybe not committed
 # Generated far-tile files kept per server, by layout: a 64-cell tile is ~3.7x the bytes (348 KB)
 # and a pose needs ~300 tiles instead of ~811 (docs/V1_4_SPEC.md §3.1).
 TILE_CACHE = {32: 6000, 64: 2500}
-HM_THREADS = 4
+HM_THREADS = 8
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
-ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
-WORKERS = 3                     # far-tile workers (--workers)
+ROAD_PROCESSES = 8              # road-tile processes (--block-process on, --roads on)
+WORKERS = 16                     # far-tile workers (--workers)
 TRACE_S = 60.0                  # BNGE_TRACEMALLOC: seconds between the memory reports ...
 TRACE_TOP = 15                  # ... and the allocation sites in each
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
-HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an
+HM_BUSY_TILE_WORKERS = 3    # far tiles built at once while a physics block is building in the server process (an
                             # anchor's first, or every one with --block-process off; the block processes' blocks do
                             # not share its interpreter: far tiles one at a time behind them were most of a Steam
                             # Deck's far field time, blocks building nearly all the time while driving, 2026-10-20)
@@ -373,10 +373,10 @@ SURVEY_WINDOW = 1.5                 # blocks: the windows survey_q takes the rel
 BLOCK_SURVEY_M = 2048.0             # m: the largest block (1024² at 2 m); Server passes its own
 SURVEY_ZOOM = 10
 DELTA_MARGIN = 0.1          # m added to measured swap-group deltas (crossings between vertices)
-NICE = 10                   # default niceness of the server process (§4.5)
-NICE_ROADS = 3              # the road tile workers' niceness on top of it (blockworker.init: the terrain blocks first)
-NICE_FAR = 6                # the far field's (the scenery far away last)
-NICE_FAR_BUILDINGS = 9      # the far buildings': after the far field (on a Steam Deck's four cores a teleport's far
+NICE = 15                   # default niceness of the server process (§4.5)
+NICE_ROADS = 6              # the road tile workers' niceness on top of it (blockworker.init: the terrain blocks first)
+NICE_FAR = 12                # the far field's (the scenery far away last)
+NICE_FAR_BUILDINGS = 18      # the far buildings': after the far field (on a Steam Deck's four cores a teleport's far
                             # buildings took ~23 s of CPU, next to the road tiles and the far field)
 IMAGERY_PREFETCH = 40       # queued tiles whose imagery is fetched ahead of their build (only spare request tokens)
 PREFETCH_AGAIN_S = 2.0      # s before a queued tile's imagery prefetch is asked for again
@@ -2145,7 +2145,7 @@ class Server:
         q = self.anchor_q(anchor) if lvl <= 0 else None
         ref_zoom = anchor.zooms[lvl - 1] if lvl > 0 else None
         path = os.path.join(self.out_dir, self.tile_name(anchor.id, tile.key))
-        g = self.grader_for(anchor) if lvl <= 0 and self.far_pool is None else None   # graded like the block
+        g = self.grader_for(anchor) if lvl <= farfield.ROAD_GRADE_MAX_LEVEL and self.far_pool is None else None
         base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
         if self.sea is not None:
             base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)

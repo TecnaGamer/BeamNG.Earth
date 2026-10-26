@@ -101,7 +101,15 @@ LOOK = {
 # a `surface=concrete` street is still a paved one (markings, widths, the tyres' asphalt feel) but is drawn with
 # gridmap v2's plain concrete instead of asphalt (the user, 2026-10-22: "for concrete road surfaces")
 CONCRETE = {"m": "m_gm_concrete_plain", "tl": 11.0, "p": 20}
-GRAVEL_ROAD = {"m": "bne_road_gravel", "tl": 2.0, "p": 21, "strip": 2.0}
+# A full-width gravel road texture, with a separate pair of pale compacted tracks.
+# Both use the game's irregular opacity maps, not painted lane markings.
+GRAVEL_ROAD = {"m": "bne_road_gravel", "tl": 12.0, "p": 21}
+GRAVEL_TRACKS = {"m": "bne_road_gravel_tracks", "tl": 40.0, "p": 22}
+
+
+def gravel_track_width(width):
+    """Width of the two-track decal together, leaving loose stone at both edges."""
+    return min(4.8, width * 0.86)
 
 
 def terrain_surface(spec):
@@ -1809,10 +1817,24 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     cap = [np.where(np.isfinite(z), np.maximum(c, z), c) for c, z in zip(cap, zs)]
     out, k0 = [], 0
     for k, (z, (a, b, s)) in enumerate(zip(zs, edges)):
-        g = gz[k0:k0 + len(z)] + lift
+        raw_ground = gz[k0:k0 + len(z)]
+        g = raw_ground + lift
         k0 += len(z)
         if not np.isfinite(z).all():
             out.append(z)
+            continue
+        # Short overpasses whose approaches already supply the clearance should
+        # remain a flat/steady-grade slab. The general solver adds ground lift,
+        # rounds it into a crest, then pins only the end vertices: even a flat
+        # road acquired a bump at each abutment. Allow centimetre-scale grading
+        # variation, but never bypass an actual crossing/water/deck requirement
+        # or bury the slab in a higher embankment.
+        support = _no_sag(s, np.maximum(z, raw_ground))
+        if (s[-1] <= LEVEL_DECK_MAX_M and lift == DECK_CLEAR
+                and np.max(support - z) <= LEVEL_DECK_GROUND_TOL
+                and np.all(z >= req[k] - 1e-6)):
+            support[0], support[-1] = z[0], z[-1]
+            out.append(support)
             continue
         # ground standing over a cap raises it, falling at DECK_MAX_GRADE either way: capped from its abutment, a deck
         # met a steep embankment's ground in a step where the ground took over (0.86 m in 4 m onto Lombard Street's
@@ -1842,6 +1864,8 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     return out
 
 
+LEVEL_DECK_MAX_M = 200.0      # ordinary short overpasses: keep the approach-to-approach grade when feasible
+LEVEL_DECK_GROUND_TOL = 0.10  # m of small grading variation accommodated without adding a synthetic arch
 DECK_CREST_R = 60.0     # m: the ground under a deck is its floor rounded to vertical curves this wide (deck_profile_once)
 DECK_SIGMA = 12.0       # m, deck profile smoothing (at least) ...
 DECK_SIGMA_SHARE = 25.0  # ... a 25th of the part's length ...
@@ -3751,7 +3775,11 @@ def _off_wall_tops(chunks, walls):
             out.append(c)
             continue
         for piece in pieces:
-            out.append(dict(c, n=[[round(float(v), 3) for v in q] for q in simplify(piece)]))
+            clipped = dict(c, n=[[round(float(v), 3) for v in q] for q in simplify(piece)])
+            if c.get('uv_s') is not None:
+                stations = [roadmarkings.phase(pts, np.asarray(p)) for p in clipped['n']]
+                clipped['uv_s'] = np.interp(stations, roadmarkings.arc(pts), c['uv_s']).tolist()
+            out.append(clipped)
     return out
 
 
@@ -4477,7 +4505,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             for piece in clip_polyline(line, *box):
                 for c in split(densify(simplify(piece))):
                     if len(c) >= 2:
-                        chunks.append(_chunk(look, lw, c))
+                        chunk = _chunk(look, lw, c)
+                        if spec.material == 'gravel_road':
+                            # Source distances survive tile clipping and chunk splitting, so
+                            # the gravel/track pattern does not restart at every render seam.
+                            chunk['uv_s'] = [roadmarkings.phase(pts, np.asarray(p)) for p in chunk['n']]
+                        chunks.append(chunk)
+                        if spec.material == 'gravel_road':
+                            tracks = _chunk(GRAVEL_TRACKS, gravel_track_width(lw), c)
+                            tracks.update(uv_s=chunk['uv_s'], layer='gutter')
+                            chunks.append(tracks)
     decks_near = []                             # (retaining_walls: none under a bridge)
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, left_hand, lane_layouts):
         if ch.get("deck"):

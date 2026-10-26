@@ -57,6 +57,14 @@ State-specific solid widths also apply to generated stop lines. Unlisted regions
 - Share corner pavement between the in-ground photo, tire-material masks, near road masks and optional road meshes. Curve edge lines into the corners, grade the additional pavement to the approach heights, and clear vegetation and generated props from it. Pavement-only corners do not add sidewalks or crosswalks.
 - Offline inspection of the cached junction near **41.52718, -85.05454** confirms four rounded pavement returns in the generated preview (`build/bridge-corners-preview.png`). This is an offline geometry check, not an in-game driving result.
 
+## Smooth overpass decks and approach terrain
+
+- Keep short overpasses (up to 200 m) on their approach-to-approach grade when that profile already satisfies crossing clearance and the ground varies by at most 10 cm above it. Avoid the former unconditional ground lift and crest smoothing in this case; retain the general solver for real terrain obstructions and required road, rail, water and stacked-deck clearance.
+- Preserve road/abutment grading through terrain level L1 in both worker and in-process generation. Previously the bridge could remain visible above an ungraded approach.
+- Give L0/L1 ground tiles containing bridge ends an adaptive 2 m sampling grid in Mesh, Detail and Terrain modes, matching the physics terrain lattice. This prevents coarse 4/8 m triangles from cutting through narrow approach embankments. Retain the existing mesh vertex budget and terrain-block sink behavior; leave other tiles at their normal detail.
+- Reproduce the reported **I-165 South, Exit 3, Bowling Green, Kentucky** location from cached map/elevation data near **36.9447, -86.4872**, checking both carriageways. At sampled abutment center/inside-edge points, the coarse graded surface differed from the deck by up to 0.34 m at L0 and 1.24 m at L1; the revised surface stays within 0.025–0.049 m, including the normal road-surface lift. These are offline measurements, not an in-game driving result.
+- Retain the user's current performance settings: 8 heightmap threads, 8 configured road workers, 16 far workers, 3 busy-terrain tile workers, and the updated priorities. Retain the resource-budget overrides, including 4 small-profile road/far workers and desktop road-worker tiers of 3/4/5/6. Actual worker counts depend on the selected budget and command-line options; this change includes no performance benchmark claim.
+
 ## Rural lane continuity
 
 - Keep a narrow rural section at two lanes when uniquely aligned two-lane through-road continuations connect to **both ends**. This also handles several consecutive narrow segments, reversed source geometry, missing counts and bridge/tunnel intervals. The repaired profile keeps the 11 m pavement minimum, two travel lanes and the region's center/edge markings through paint, grading and AI.
@@ -68,6 +76,8 @@ State-specific solid widths also apply to generated stop lines. Unlisted regions
 
 - Apply the requested correction to **A Collins Road near 36.93660, -86.80461**, including its full mapped length and future source splits. Match the road name within a small geographic envelope; similarly named roads elsewhere and neighboring roads are unchanged.
 - Use gravel color, stock gravel stone textures, a dedicated terrain material with **GRAVEL** tire physics and gravel mesh material. Keep a draped gravel texture in near mesh mode and the gravel terrain detail in terrain mode. Remove pavement markings/sidewalks from the corrected road.
+- Match the supplied real-life reference with neutral gray loose gravel and two pale cream compacted wheel tracks. Use the game's gravel-road and worn-track opacity/normal maps for irregular wear and feathered edges, replacing the uniform brown tint and repeated cross-road strips. The tire-track overlay sits 5 mm above the gravel surface and uses GRAVEL material settings.
+- Keep a single pair of tracks across the road, with matching pale wheel paths in distant road imagery. Carry texture distance through render-tile clipping, end extensions and retaining-wall cuts so the pattern does not restart at tile seams. Retain the existing 5.7 m road width and geographically scoped utility suppression.
 - Suppress that road's generated utility poles, pole-mounted lamps and wire spans at their source. Neighboring utilities remain eligible.
 - Cached OSM way **16282294** already carries `surface=gravel`, while the existing generator had used the absent Overture surface rule and defaulted to pavement. The local override applies the requested appearance/material without changing surface precedence on other roads.
 
@@ -96,14 +106,16 @@ Retains the native road/deck/grading implementation, railway source flags, bridg
 
 ## Validation
 
-- **43 Python test modules: 686 tests, 683 passed, 3 skipped.** The skipped tests are gas-station checks requiring live data.
+- **49 Python test modules: 784 tests, 780 passed, 4 skipped.** Three skipped gas-station checks require live data; one protocol constant check is skipped by the existing suite.
 - Covers lane enrichment, markings and mesh dimensions, ramps, zipper transitions, roundabout clearance, road generation, AI, grading, bridges, tunnels, sidewalks, vegetation, parking, railways, gas stations, caching and the previously migrated signs.
-- Final suite logs: `build/road-connections-final-tests/`.
-- Five Lua test files passed, with 203 assertions: surface layers (including the new gravel layer), terrain swaps/patches, road loading and near-tile materials. Log: `build/road-connections-lua-tests.log`.
+- Final suite logs: `build/smooth-overpasses-final-tests/`.
+- Five Lua test files passed, with 203 assertions: surface layers (including the new gravel layer), terrain swaps/patches, road loading and near-tile materials. Log: `build/smooth-overpasses-lua-tests.log`.
+- Nine new overpass regressions cover level/sloping decks, required crossing clearance, the two cached Exit 3 profiles, real terrain obstructions, selective approach detail, unavailable metadata, L1 worker grading, fine-ground agreement with the physics lattice and Detail/Terrain mode support with the terrain-block sink retained. Existing bridge clearance, approach, grading, farfield and protocol checks also pass. Worker-budget expectations match the user-approved current settings. Cached Exit 3 measurement report: `build/smooth-overpasses/exit3-terrain-verification.json`.
 - Rural-road regressions cover northern/southern hemispheres and left/right-hand traffic, mapped/inferred lane counts, mapped/building width overrides, urban and non-target exceptions, bridge/tunnel clearance, actual mesh/material/photo painting, edge lines, grading and AI lane widths. Existing width expectations were updated for the intentional rural minimum.
 - Added an offline regression from cached Overture/OSM geometry at **41.63481, -84.99966**, the user's Public Square screenshot. It checks all eight circulating arcs, all eight approaches, shared AI/grading widths, a monument in the island, full sidewalk clearance, crosswalks, props and suppression of untagged sidewalks. The AI test verifies one directed ring and all eight entry/exit connections.
 - Test sparse farm development, roads developed on one side, mapped rural sidewalks and mapped versus inferred roundabout sidewalks. Simulate bytecode-only builds with different `CODE_ID` values and verify old roads, plans and cell facts are missed without deleting them. The EXE smoke check repeats cache invalidation using its actual archived `peerwork` and `revisit` bytecode.
 - Added bridge width/taper, rural corner pavement/grade/paint, two-ended lane-continuity and A Collins Road material/utility regressions, including cached real-road fixtures.
+- The A Collins Road follow-up checks gray gravel/pale tracks, both near rendering modes, full-road texture width, unchanged neighboring gravel roads, source UV continuity across a render-tile seam and retaining-wall cuts. Verified the referenced stock decal textures against the installed BeamNG assets and inspected an offline material composite (`build/collins-gravel/material-preview.png`); this is not an in-game lighting/rendering check.
 - `git diff --check` passed.
 - EXE built successfully; launcher and bundled-server `--help` smoke tests exited 0. No standalone server ZIP was built.
 - BeamNG visual/driving validation remains to be performed, especially real-world tight interchanges and roundabouts. Geometric fallback requires curved arcs when OSM roundabout tags are absent. Unknown odd two-way counts use a balanced split with the extra lane along source geometry; directional lane tags are not supplied by the current source.
@@ -113,13 +125,13 @@ The branch-specific PR template is [`.github/PULL_REQUEST_TEMPLATE/road-infrastr
 ## Built EXE
 
 - File: [`dist/BeamNG.Earth-1.6.3-beta.exe`](dist/BeamNG.Earth-1.6.3-beta.exe)
-- Size: 73,991,258 bytes (approximately 74 MB), rebuilt with matching bridge approaches, rounded junctions, rural lane continuity, A Collins Road gravel/utility corrections and all earlier branch changes.
-- SHA-256: `7d0cf07c9142d8ffc4b0a6f7d0d4670e81aaff350e570c0e1dda14343abb8280`
-- Bundled source fingerprint: `ebd51a72311b2896`, verified against the finished server sources.
-- Frozen revisit identity: `ac67359648b92e08`; verified to differ from the old custom builds and to change when the bundled source fingerprint changes.
+- Size: 73,995,042 bytes (approximately 74 MB), rebuilt with smooth overpass profiles, detailed approach terrain in all rendering modes, the user's current performance settings and all earlier branch changes, including reference-based A Collins Road gravel.
+- SHA-256: `65ce91d76e8d3183955241238b88737a92da909c002da2bdb29cf79052a805d0`
+- Bundled source fingerprint: `bf845526656f5a37`, verified against the finished server sources.
+- Frozen revisit identity: `e67ff569cad7e2f7`; verified to differ from the old custom builds and to change when the bundled source fingerprint changes.
 - Verified the finished source fingerprint against the EXE and checked that its archived terrain/mesh gravel materials and Lua terrain configuration exactly match the tested files.
 - Verified the archive contains the new road modules, native extension, state boundaries and highway-sign assets.
-- Build log: `build/road-connections-build.log`; smoke results: `build/road-port/exe-verification.json`, `launcher-help.log`, `server-help.log`.
+- Build log: `build/smooth-overpasses-build.log`; smoke results: `build/smooth-overpasses/exe-verification.json`, `launcher-help.log`, `server-help.log`.
 
 ## Follow-up: custom EXE HTTPS failure
 
@@ -129,4 +141,4 @@ The custom builds reported multiple map-data hosts as unreachable while the orig
 
 Validation: 65 focused tests passed; 11 Linux-only tests skipped on Windows. The fixed frozen diagnostic received HTTPS responses from all five hosts in the report (USDA, USGS, Meta's S3 bucket, S3 and Mapterhorn). The full EXE's archived SSL bytecode successfully creates a verified context using its archived policy file, and both launcher/server CLI smoke tests passed.
 
-Previous copies were delivered as `BeamNG.Earth-1.6.3-beta-roads-network-fix.exe`, `BeamNG.Earth-1.6.3-beta-roundabouts.exe`, `BeamNG.Earth-1.6.3-beta-wide-roundabouts.exe` and `BeamNG.Earth-1.6.3-beta-wide-rural-roads.exe`. The new [`../builds/BeamNG.Earth-1.6.3-beta-road-connections.exe`](../builds/BeamNG.Earth-1.6.3-beta-road-connections.exe) includes the bridge, junction, lane-continuity and A Collins Road fixes together with those earlier improvements; its checksum matches the EXE above. The original release was not replaced. Existing older custom EXEs require rebuilding with the corrected packaging tool.
+Previous copies were delivered as `BeamNG.Earth-1.6.3-beta-roads-network-fix.exe`, `BeamNG.Earth-1.6.3-beta-roundabouts.exe`, `BeamNG.Earth-1.6.3-beta-wide-roundabouts.exe`, `BeamNG.Earth-1.6.3-beta-wide-rural-roads.exe`, `BeamNG.Earth-1.6.3-beta-road-connections.exe` and `BeamNG.Earth-1.6.3-beta-collins-gravel.exe`. The new [`../builds/BeamNG.Earth-1.6.3-beta-smooth-overpasses.exe`](../builds/BeamNG.Earth-1.6.3-beta-smooth-overpasses.exe) adds the overpass/approach fixes and current performance settings; its checksum matches the EXE above. The original release and previous delivered builds were not replaced. Existing older custom EXEs require rebuilding with the corrected packaging tool.

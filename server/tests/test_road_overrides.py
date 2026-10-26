@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import numpy as np
-from test_roads import features, LAT, LON, flat
-import roads, roadoverrides, furniture, surface, geodesy, mapgeom
+from test_roads import features, rules, LAT, LON, flat
+import roads, roadoverrides, furniture, surface, geodesy, mapgeom, roadmesh
 
 ROOT = Path(__file__).resolve().parents[2]
 FRAME = geodesy.EnuFrame(36.93660, -86.80461, 0.)
@@ -56,15 +56,60 @@ class RoadOverrideTest(unittest.TestCase):
         self.assertIsNone(surface.road_mask(FRAME, 32., 4., 32., 128, fake))
         image = np.full((128, 128, 3), 200, np.uint8)
         photo = surface.photo_roads(image, FRAME, 32., 4., 32., [f])
-        self.assertGreater(int(photo[64, 64, 0]), int(photo[64, 64, 2]) + 15)
+        # Loose gravel is neutral/cool gray; two separate wheel paths are pale cream.
+        center = photo[64, 64].astype(int)
+        self.assertLessEqual(center[0], center[2])
+        for rows in (slice(57, 63), slice(66, 72)):
+            track = photo[rows, 64].astype(int).max(axis=0)
+            self.assertGreater(track[0], center[0] + 25)
+            self.assertGreater(track[0], track[2] + 8)
         for in_ground in (False, True):
             with patch.object(roads, 'ROADS_IN_GROUND', in_ground):
                 chunks = roads.build_tile(FRAME, 0, 0, [f], flat)
             self.assertTrue(any(c['m'] == 'bne_road_gravel' for c in chunks))
+            self.assertTrue(any(c['m'] == 'bne_road_gravel_tracks' for c in chunks))
             self.assertFalse(any(c['m'].startswith('line_') or c['m'] == roads.LOOK['paved']['m'] for c in chunks))
             for c in chunks:
                 if c['m'] == 'bne_road_gravel':
-                    self.assertLessEqual(c['w'], 2.1, 'stone grain is not stretched across the whole road')
+                    self.assertEqual(c['w'], 5.7, 'the full-road texture is applied once, not repeated per strip')
+                if c['m'] == 'bne_road_gravel_tracks':
+                    self.assertAlmostEqual(c['w'], 4.8)
+                    self.assertGreater(roadmesh.LIFT[c['layer']], roadmesh.LIFT['base'])
+                self.assertEqual(len(c['uv_s']), len(c['n']))
+
+    def test_gravel_and_wheel_track_uvs_continue_across_render_tile_seam(self):
+        meshes = []
+        for tx in (0, 1):
+            chunks = roads.build_tile(FRAME, tx, 0, [target()], flat)
+            # build() also extends clipped ends before draping: this must not reset UVs.
+            meshes.append(roadmesh.build(FRAME, chunks, flat, (0, 0, 0), clip=(256*tx, 0, 256*(tx+1), 256)))
+        for name in ('bne_road_gravel', 'bne_road_gravel_tracks'):
+            seam_v = []
+            for p, tri, uv, mats, mi in meshes:
+                used = np.unique(tri[mi == mats.index(name)])
+                seam = used[np.isclose(p[used, 0], 256, atol=1e-6)]
+                self.assertGreaterEqual(len(seam), 2)
+                seam_v.append(uv[seam, 1])
+            self.assertLess(np.ptp(np.concatenate(seam_v)), 2e-4, name)
+
+    def test_neighbouring_gravel_roads_do_not_gain_collins_wheel_tracks(self):
+        f = target('Unrelated Road')
+        f.rules['surface'] = rules([(0, 'gravel')])
+        self.assertEqual(roads.road_specs(f)[0].kind, 'gravel')
+        with patch.object(roads, 'ROADS_IN_GROUND', False):
+            chunks = roads.build_tile(FRAME, 0, 0, [f], flat)
+        self.assertTrue(any(c['m'] == roads.LOOK['gravel']['m'] for c in chunks))
+        self.assertFalse(any(c['m'].startswith('bne_road_gravel') for c in chunks))
+
+    def test_track_texture_stations_survive_retaining_wall_clipping(self):
+        chunk = dict(m='bne_road_gravel_tracks', w=4.8, tl=40, layer='gutter',
+                     n=[[0, 0, 0], [50, 0, 0], [100, 0, 0]], uv_s=[100, 150, 200])
+        wall = dict(base=[[50, -10], [50, 10]], toward=[[1, 0], [1, 0]], thick=[4, 4])
+        pieces = roads._off_wall_tops([chunk], [wall])
+        self.assertEqual(len(pieces), 2)
+        for c in pieces:
+            np.testing.assert_allclose(c['uv_s'], 100 + np.asarray(c['n'])[:, 0])
+            self.assertEqual(len(roadmesh.ribbons([c])), 1)
 
     def test_poles_and_wires_are_omitted_without_removing_neighbouring_utilities(self):
         f = target()
@@ -93,7 +138,14 @@ class RoadOverrideTest(unittest.TestCase):
         self.assertEqual(len({m['persistentId'] for m in mats.values()}), len(mats))
         mats = json.loads((base / 'shapes/beamngEarth/tunnel.materials.json').read_text())
         self.assertEqual(mats['bne_road_gravel']['groundType'], 'GRAVEL')
-        self.assertIn('t_gravel_b.png', mats['bne_road_gravel']['Stages'][0]['baseColorMap'])
+        self.assertIn('/road_gravel/', mats['bne_road_gravel']['Stages'][0]['baseColorMap'])
+        for name in ('bne_road_gravel', 'bne_road_gravel_tracks'):
+            material = mats[name]
+            self.assertEqual(material['groundType'], 'GRAVEL')
+            self.assertTrue(material['translucent'])
+            self.assertTrue(material['translucentZWrite'])
+            self.assertIn('opacityMap', material['Stages'][0], 'soft worn edges, not opaque stripes')
+            self.assertIn('t_gravel_nm.png', material['Stages'][0]['detailNormalMap'])
 
 
 if __name__ == '__main__':

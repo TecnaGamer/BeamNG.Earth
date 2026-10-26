@@ -10,7 +10,11 @@ Widen paved two-way, two-lane rural roads globally to at least 4.25 m per travel
 
 Match bridge width and edge margins to the actual approaches, with smooth width transitions where needed. Add rounded intersection pavement and curved edge lines without requiring sidewalks; share the new pavement with grading, material/photo masks and vegetation/prop clearance.
 
-Give A Collins Road in Logan County, Kentucky its requested gravel textures and GRAVEL tire physics. Remove its generated utility poles and wires using a road-name/location override; preserve neighboring roads.
+Keep short overpass decks on their approach grade when existing clearance permits, without adding a synthetic crest. Extend visible approach grading through L1 and use adaptive 2 m ground sampling around bridge ends to prevent coarse terrain triangles from leaving a step below the deck. Preserve required crossing clearance and real terrain obstructions. Regressions include both carriageways at I-165 Exit 3 in Bowling Green, Kentucky.
+
+Include the user's current worker-count, budget and priority settings; actual concurrency remains subject to resource-budget and command-line overrides.
+
+Give A Collins Road in Logan County, Kentucky gray loose gravel with two pale cream compacted wheel tracks, matching the supplied real-life reference. Use stock gravel/worn-track textures with feathered edges and continuous texture placement through render seams and wall cuts. Keep GRAVEL tire physics, the existing road width and matching distant imagery. Remove its generated utility poles and wires using a road-name/location override; preserve neighboring roads.
 
 Include the packaged source fingerprint in generated-world cache keys. Previously, different custom EXEs reused the same cache identity and could display old road meshes and grading plans. Changed builds now regenerate derived geometry automatically, preserving raw downloads and saved positions.
 
@@ -26,7 +30,8 @@ Fix custom EXE HTTPS initialization by bundling the build runtime's required SSL
 
 ## Validation
 
-- [x] 43 Python test modules: 683 passed, 3 live-data tests skipped.
+- [x] 49 Python test modules: 780 passed, 4 skipped (three live-data checks and one existing protocol constant check).
+- [x] Check flat/sloping overpasses, cached Exit 3 profiles, clearance/terrain exceptions, L1 grading and fine approach meshes. Offline Exit 3 deck-to-ground separation is 0.025–0.049 m at sampled abutment points; in-game verification remains pending.
 - [x] Test global rural widening, left/right-hand traffic, width overrides and non-target exceptions; check mesh/photo/material pavement, paint, grading, AI and bridge/tunnel profiles. Cached West Maumee Street's mapped two-lane profile grows from 9.5 m to 11 m pavement.
 - [x] Verify actual dash lengths/gaps/widths, reversed road directions, bridge/tunnel paint and adjacent merge clearance.
 - [x] Verify mapped lanes, relation-derived roads, fallback retry, roundabout sidewalk/prop/vegetation clearance and ordinary city-block preservation.
@@ -36,6 +41,7 @@ Fix custom EXE HTTPS initialization by bundling the build runtime's required SSL
 - [x] Check approach/deck widths, parapets/girders, paint and AI across tile seams; verify rural corner material/photo/mesh/grade and clearance.
 - [x] Test two-ended rural continuity and the cached Chandlers Road inference regression; preserve explicit tags and unrelated branches.
 - [x] Test the complete cached A Collins Road, source splits, geographic scoping, gravel physics/textures and utility suppression.
+- [x] Check gray stone and two pale tracks in near/far appearance, texture UV continuity through render seams and wall cuts, and unchanged neighboring gravel roads. Inspect an offline stock-material composite and verify texture references against installed game assets.
 - [x] Five Lua test files passed (203 assertions), including gravel terrain-layer loading and existing terrain/road rendering contracts.
 - [x] `git diff --check`.
 - [x] Built the 74 MB EXE; launcher/server CLI smoke tests exited 0. Verified bundled modules/assets and the source fingerprint; checksum is in the changelog.

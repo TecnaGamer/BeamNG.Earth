@@ -1815,5 +1815,28 @@ class GradedDem:
         base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
         return self._grader.apply(lat, lon, base)
 
+    def bridge_approaches(self, frame, box):
+        """Whether this tile contains bridge ends needing the physics lattice's detail.
+
+        Coarse 4/8 m triangles can cut through the narrow approach fill even when
+        their sampled heights were graded correctly. Only those tiles need the
+        finer adaptive ground mesh; ordinary distant terrain stays inexpensive.
+        """
+        x0, y0, x1, y1 = box
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1]), np.array([y0, y1]), 0.0)
+        for key in mapcells.cells_for_bbox(float(min(la)), float(min(lo)), float(max(la)), float(max(lo))):
+            try:
+                cell = self._grader._cell_enu(key, ground=False)
+            except Exception as e:  # missing map data must not prevent the terrain tile from loading
+                log.debug("bridge approach detail: %s: %s", key, e)
+                continue
+            if cell is None:
+                continue
+            ends = np.asarray(cell['ends'])
+            if len(ends) and np.any((ends[:, 0] >= x0 - 10) & (ends[:, 0] <= x1 + 10)
+                                    & (ends[:, 1] >= y0 - 10) & (ends[:, 1] <= y1 + 10)):
+                return True
+        return False
+
     def __getattr__(self, name):
         return getattr(self._dem, name)

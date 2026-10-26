@@ -668,7 +668,7 @@ def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
 
 
 def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
-    """farfield.build_tile here (far-tile workers: the geometry, graded at levels <= 0 like the block, is
+    """farfield.build_tile here (far-tile workers: geometry graded through ROAD_GRADE_MAX_LEVEL is
     most of a far tile's cost; its texture is rendered in the server, where the imagery corrections live).
     Returns the Built; one built in this anchor's place before comes from the revisit cache."""
     import revisit
@@ -720,7 +720,7 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
     if _s.sea is not None:
         base = seacarvemod.SeaDem(base, _s.sea if tile.level <= seacarvemod.CARVE_MAX_LEVEL else None)
-    src = gradingmod.GradedDem(base, g) if (g is not None and tile.level <= 0) else base
+    src = gradingmod.GradedDem(base, g) if (g is not None and tile.level <= farfield.ROAD_GRADE_MAX_LEVEL) else base
     return farfield.build_tile(frame, src, tile, zoom, q, ref_zoom, with_sink=with_sink,
                                layout=layout)
 

@@ -83,7 +83,11 @@ def ribbons(chunks):
             source_s = np.r_[0., np.cumsum(np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1))]
             width = np.interp(s, source_s, np.asarray(c['w_nodes'], float))[:, None]
         n = _normals(xy) * (width / 2)
-        out.append((xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
+        texture_s = s
+        if c.get('uv_s') is not None:
+            source_s = np.r_[0., np.cumsum(np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1))]
+            texture_s = np.interp(s, source_s, np.asarray(c['uv_s'], float))
+        out.append((xy + n, xy - n, texture_s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
                     z if c.get("fixed") else None))
     return out
 
@@ -169,6 +173,13 @@ def _reach_past(c, box):
         if ends[1] is not None:
             widths.append(widths[-1])
         result['w_nodes'] = widths
+    if c.get('uv_s') is not None:
+        stations = list(c['uv_s'])
+        if ends[0] is not None:
+            stations.insert(0, stations[0] - reach)
+        if ends[1] is not None:
+            stations.append(stations[-1] + reach)
+        result['uv_s'] = stations
     return result
 
 

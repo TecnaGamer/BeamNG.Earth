@@ -354,7 +354,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
 # colour and opacity by surface, blended in this order (paved last: it wins at junctions); a trace of the photo is kept
 # (stains, patches), and most of it on unpaved tracks, which the photo shows well and a flat colour drew as stripes
 PHOTO_ROAD_RGBA = {"dirt": (122, 104, 82, 0.45), "gravel": (128, 118, 102, 0.6), "cobble": (112, 104, 96, 0.85),
-                   "paved": (95, 95, 94, 0.92), "gravel_road": (128, 118, 102, 0.92)}
+                   "paved": (95, 95, 94, 0.92), "gravel_road": (126, 128, 132, 0.85),
+                   "gravel_tracks": (216, 209, 190, 0.7)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 
 
@@ -390,6 +391,18 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
                 segs.append(np.stack([c[:-1], r[:-1], c[1:], r[1:]], axis=1))
                 hws.append(np.full(len(c) - 1, hw))
                 kind.append(np.full(len(c) - 1, kinds.index(sp.material if sp.material in PHOTO_ROAD_RGBA else sp.kind), np.uint8))
+                if sp.material == 'gravel_road':
+                    # The distant photo keeps the same two pale wheel paths as the near
+                    # draped material. These are colour only: the entire road stays GRAVEL.
+                    track_w = roadsmod.gravel_track_width(sp.width)
+                    line = np.c_[e, n, np.zeros(len(e))]
+                    for side in (-1, 1):
+                        track = roadsmod.offset_polyline(line, side * track_w * 0.24)
+                        tc = (track[:, 0] - x0) * px_m
+                        tr = (y0 + size - track[:, 1]) * px_m
+                        segs.append(np.stack([tc[:-1], tr[:-1], tc[1:], tr[1:]], axis=1))
+                        hws.append(np.full(len(tc) - 1, track_w * 0.11 * px_m))
+                        kind.append(np.full(len(tc) - 1, kinds.index('gravel_tracks'), np.uint8))
     if not segs:
         return None
     return np.concatenate(segs), np.concatenate(hws), np.concatenate(kind)
