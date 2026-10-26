@@ -33,6 +33,11 @@ const at = new Date(2026, 9, 25, 1, 56, 0).getTime()
 assert.equal(GM.fmtArrive(18 * 60, at, true), "Arrive 2:14 AM · 18 min")
 assert.equal(GM.fmtArrive(18 * 60, at, false), "Arrive 02:14 · 18 min")
 assert.equal(GM.fmtArrive(95 * 60, at, true), "Arrive 3:31 AM · 1 h 35 min")
+// the game's clock (minutes after midnight): the GPS clock and the arrival on it
+assert.equal(GM.fmtClock(14 * 60 + 5, true), "2:05 PM")
+assert.equal(GM.fmtClock(0, true), "12:00 AM")
+assert.equal(GM.fmtClock(9 * 60, false), "09:00")
+assert.equal(GM.fmtArrive(30 * 60, at, true, 23 * 60 + 45), "Arrive 12:15 AM · 30 min")
 // every arrow routing.py names has a drawing; an unknown one falls back to straight
 for (const a of ["straight", "slight-left", "left", "sharp-left", "uturn", "slight-right", "right", "sharp-right", "roundabout", "arrive"])
   assert.ok(GM.arrowPath(a).startsWith("M"), a)

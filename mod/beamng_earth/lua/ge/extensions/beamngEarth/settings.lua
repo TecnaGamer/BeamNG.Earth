@@ -580,7 +580,18 @@ function M.uiGpsHud()
     limit = gps.speedLimit(),
     street = (function() local okS, sb = pcall(require, 'beamngEarth/statusbar'); return okS and sb.street() or '' end)(),
     mph = not okN or ng.mph ~= false,
+    clock = M.gameClock(),
   }
+end
+
+-- The game's time of day as minutes after midnight (the GPS clock; the user, 2026-10-26: "add time display on the gps
+-- hud"), or nil. core_environment's time: 0 is noon, 0.5 midnight.
+function M.gameClock()
+  local env = rawget(_G, 'core_environment')
+  local ok, tod = pcall(function() return env and env.getTimeOfDay and env.getTimeOfDay() end)
+  local t = ok and type(tod) == 'table' and tonumber(tod.time) or nil
+  if not t then return nil end
+  return math.floor(((t * 24 + 12) % 24) * 60) % 1440
 end
 
 -- The wallet app (BeamNGEarthWallet): { balance, text, last = { amount, reason } }.

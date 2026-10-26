@@ -110,13 +110,25 @@ var beamngEarthGpsMath = (function () {
     return (km < 100 ? km.toFixed(1) : String(Math.round(km))) + ' km'
   }
 
-  // "Arrive 2:14 AM · 18 min" (12-hour clock where mph is posted, else 24-hour), from eta seconds and now (ms).
-  function fmtArrive(eta, nowMs, mph) {
-    eta = Math.max(0, Number(eta) || 0)
-    var d = new Date((Number(nowMs) || 0) + eta * 1000)
-    var h = d.getHours(), mm = d.getMinutes()
-    var clock = mph ? ((h % 12) || 12) + ':' + (mm < 10 ? '0' : '') + mm + (h < 12 ? ' AM' : ' PM')
+  // "2:14 PM" (12-hour where mph is posted, else "14:14") of minutes after midnight.
+  function fmtClock(mins, mph) {
+    mins = ((Math.floor(Number(mins) || 0) % 1440) + 1440) % 1440
+    var h = Math.floor(mins / 60), mm = mins % 60
+    return mph ? ((h % 12) || 12) + ':' + (mm < 10 ? '0' : '') + mm + (h < 12 ? ' AM' : ' PM')
       : (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm
+  }
+
+  // "Arrive 2:14 AM · 18 min" (12-hour clock where mph is posted, else 24-hour), from eta seconds and now (ms).
+  // gameMins: the game's clock (minutes after midnight): the arrival on it; without it, the PC's clock.
+  function fmtArrive(eta, nowMs, mph, gameMins) {
+    eta = Math.max(0, Number(eta) || 0)
+    var clock
+    if (gameMins != null && isFinite(gameMins)) {
+      clock = fmtClock(Number(gameMins) + eta / 60, mph)
+    } else {
+      var d = new Date((Number(nowMs) || 0) + eta * 1000)
+      clock = fmtClock(d.getHours() * 60 + d.getMinutes(), mph)
+    }
     var mins = Math.round(eta / 60)
     var left = mins < 60 ? mins + ' min' : Math.floor(mins / 60) + ' h ' + (mins % 60 < 10 ? '0' : '') + (mins % 60) + ' min'
     return 'Arrive ' + clock + ' · ' + left
@@ -138,7 +150,7 @@ var beamngEarthGpsMath = (function () {
   function arrowPath(name) { return ARROWS[name] || ARROWS.straight }
 
   return { TILE: TILE, project: project, zoomFor: zoomFor, tilesAround: tilesAround, routeRuns: routeRuns, pathOf: pathOf,
-           chevrons: chevrons, fmtDist: fmtDist, fmtArrive: fmtArrive, arrowPath: arrowPath }
+           chevrons: chevrons, fmtDist: fmtDist, fmtArrive: fmtArrive, fmtClock: fmtClock, arrowPath: arrowPath }
 })()
 
 angular.module('beamng.apps')
@@ -168,6 +180,7 @@ angular.module('beamng.apps')
       '.bne-gps-turnd { font-size:24px; font-weight:800; line-height:1; letter-spacing:-.4px; }',
       '.bne-gps-turnt { font-size:12px; font-weight:600; color:#c9ced6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px; }',
       '.bne-gps-compass { right:10px; top:10px; width:36px; height:36px; border-radius:18px; }',
+      '.bne-gps-clock { right:10px; top:52px; padding:4px 9px; font-size:14px; font-weight:800; letter-spacing:.2px; border-radius:9px; }',
       '.bne-gps-ring { position:absolute; inset:0; }',
       '.bne-gps-n { position:absolute; left:50%; top:1px; width:14px; margin-left:-7px; text-align:center; font-size:12px; font-weight:800; }',
       '.bne-gps-limit { left:10px; bottom:10px; display:flex; align-items:center; gap:8px; padding:6px 10px 6px 6px; max-width:55%; }',
@@ -207,6 +220,7 @@ angular.module('beamng.apps')
           '<div style="min-width:0"><div class="bne-gps-turnd">{{nextDist}}</div><div class="bne-gps-turnt">{{next.text}}</div></div>' +
         '</div>' +
         '<div class="bne-gps-glass bne-gps-compass"><div class="bne-gps-ring"><div class="bne-gps-n">N</div></div></div>' +
+        '<div class="bne-gps-glass bne-gps-clock" ng-if="hud.clock != null">{{clockText}}</div>' +
         '<div class="bne-gps-glass bne-gps-limit" ng-if="hud.limit || hud.street">' +
           '<div class="bne-gps-us" ng-if="hud.limit && hud.limit.unit === \'mph\'"><b>SPEED</b><b>LIMIT</b><i>{{hud.limit.value}}</i></div>' +
           '<div class="bne-gps-eu" ng-if="hud.limit && hud.limit.unit !== \'mph\'">{{hud.limit.value}}</div>' +
@@ -330,7 +344,7 @@ angular.module('beamng.apps')
         if (g) {
           scope.destDist = g.remaining != null ? GM.fmtDist(g.remaining, h.mph) : ''
           scope.destLine = g.planning && !g.routeVersion ? 'Planning route…'
-            : (g.eta != null ? GM.fmtArrive(g.eta, Date.now(), h.mph) : (g.name || ''))
+            : (g.eta != null ? GM.fmtArrive(g.eta, Date.now(), h.mph, h.clock) : (g.name || ''))
         }
       }
 
@@ -339,6 +353,7 @@ angular.module('beamng.apps')
         engineLua('beamngEarth_settings and beamngEarth_settings.uiGpsHud and beamngEarth_settings.uiGpsHud() or nil', function (s) {
           scope.$evalAsync(function () {
             scope.hud = s || { visible: false }
+            scope.clockText = s && s.clock != null ? GM.fmtClock(s.clock, s.mph !== false) : ''
             fetchRoute(s && s.gps ? Number(s.gps.routeVersion) || 0 : 0)
             draw()
           })
