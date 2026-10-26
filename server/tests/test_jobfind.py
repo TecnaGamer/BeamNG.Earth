@@ -98,9 +98,9 @@ class OfferTest(unittest.TestCase):
 class TruckTest(unittest.TestCase):
     def test_realistic_pay(self):
         # $2.50 a mile, a $350 minimum, the cargo's premium, x1.3 (the user's boost)
-        self.assertEqual(jobfind.truck_pay(15 * jobfind.MI, 1.0), 750.0)       # the floor
-        self.assertEqual(jobfind.truck_pay(40 * jobfind.MI, 1.25), 1220.0)      # + $9 a mile past 15, tanker
-        self.assertEqual(jobfind.truck_pay(55 * jobfind.MI, 1.0), 1110.0)
+        self.assertEqual(jobfind.truck_pay(15 * jobfind.MI, 1.0), 1500.0)       # the floor
+        self.assertEqual(jobfind.truck_pay(40 * jobfind.MI, 1.25), 2440.0)      # + $9 a mile past 15, tanker
+        self.assertEqual(jobfind.truck_pay(55 * jobfind.MI, 1.0), 2220.0)
 
     def test_freight_between_depots_with_a_rented_semi(self):
         import math

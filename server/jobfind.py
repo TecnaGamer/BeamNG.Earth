@@ -149,6 +149,7 @@ def _places(md, lat, lon, half):
 # the lowest ones can stay how they are"): the shortest jobs pay as before, every mile past TRUCK_FREE_MI / CAR_FREE_MI
 # adds TRUCK_MILE_BONUS / CAR_MILE_BONUS (times the cargo / car factor)
 TRUCK_FREE_MI, TRUCK_MILE_BONUS = 15.0, 9.0
+TRUCK_PAY_X = 2.0           # all of it doubled (the user: "we need trucking to be a cash cow")
 TRUCK_FLOOR = 750.0         # no haul pays less (the user, 2026-10-26: "there should actually be no trip below 750")
 CAR_FREE_MI, CAR_MILE_BONUS = 4.0, 6.0
 
@@ -158,7 +159,7 @@ def truck_pay(dist, value):
     mi = dist / MI
     base = max(TRUCK_FLOOR, TRUCK_MIN * TRUCK_BOOST, TRUCK_PER_MILE * mi * TRUCK_BOOST)
     bonus = TRUCK_MILE_BONUS * max(0.0, mi - TRUCK_FREE_MI)
-    return float(5 * round((base + bonus) * value / 5.0))
+    return float(5 * round((base + bonus) * value * TRUCK_PAY_X / 5.0))
 
 
 def pay_for(dist, value):
