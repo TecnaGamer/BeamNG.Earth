@@ -68,4 +68,24 @@ G.acquire(1, 'rent')
 b1 = W.balance()
 T.check(G.sell('p1') and W.balance() == b1, 'a lease ends with no refund')
 T.check(not G.sell('nope'), 'nothing to sell')
+-- the parts shop's bill: new parts at their price, removed ones bought back at half
+local price = { turbo = 2500, stock_intake = 300, rims_a = 800, rims_b = 1200 }
+local c, r = G.partsBill({ engine = 'v8', intake = 'stock_intake', wheels = 'rims_a' },
+                         { engine = 'v8', intake = 'turbo', wheels = 'rims_b' }, function(n) return price[n] or 0 end)
+T.check(c == 3700 and r == 550, 'bill: +' .. c .. ' -' .. r)
+T.check(select(1, G.partsBill({ a = 'x' }, { a = 'x' }, function() return 99 end)) == 0, 'no change: nothing')
+
+-- the garage spot: stopping in the ring opens the phone on the place's menu
+local opened = {}
+guihooks = { trigger = function(n, d) if n == 'BneEarthPhone' then opened[#opened + 1] = d end end }
+debugDrawer = nil
+G._reset()
+G._setList('repair', { { id = 'r9', name = 'Shop', lat = 40.0, lon = -80.0, mlat = 40.0001, mlon = -80.0 } })
+G.update(0.1, anchor, { x = 0, y = 11.1, vx = 0, vy = 0, z = 0 })
+T.check(opened[1] and opened[1].app == 'garage' and opened[1].up, 'in the ring: the phone on the Garage')
+G.update(0.1, anchor, { x = 0, y = 11.1, vx = 0, vy = 0, z = 0 })
+T.check(#opened == 1, 'once, not every frame')
+G.update(0.1, anchor, { x = 0, y = 60, vx = 0, vy = 0, z = 0 })
+G.update(0.1, anchor, { x = 0, y = 11.1, vx = 0, vy = 0, z = 0 })
+T.check(#opened == 2, 'again after driving off and back')
 T.done('test_garage')

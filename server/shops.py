@@ -5,6 +5,7 @@ parking buildings (PROPERTY_WORDS). Each with the spot on the road beside it, it
 price and a weekly rent (deterministic: from its id). Nearest first, at most MAX within REACH_M.
 """
 import hashlib
+import math
 
 import jobfind
 import randomplace
@@ -19,6 +20,22 @@ def is_property(category, taxonomy, status=None):
         return False
     t = (str(category or "") + " " + str(taxonomy or "")).lower()
     return any(w in t for w in PROPERTY_WORDS)
+
+
+MARK_MIN_M, MARK_MAX_M = 9.0, 25.0
+
+
+def marker(rlat, rlon, plat, plon):
+    """The garage spot (the blue ring, the workbench and laptop; the user, 2026-10-26: "some properties locations are off
+    slightly and would likely place the desk and computer in the road"): from the road spot toward the business's pin,
+    MARK_MIN_M to MARK_MAX_M off the road, so it stands beside the building, not on the street."""
+    k = math.cos(math.radians(rlat))
+    dn, de = (plat - rlat) * jobfind.M_LAT, (plon - rlon) * jobfind.M_LAT * k
+    d = math.hypot(dn, de)
+    if d < 1.0:
+        dn, de, d = 0.0, 1.0, 1.0          # (a pin on the road: a side of it)
+    r = min(max(d * 0.6, MARK_MIN_M), MARK_MAX_M)
+    return rlat + dn / d * r / jobfind.M_LAT, rlon + de / d * r / (jobfind.M_LAT * k)
 
 
 def prices(pid):
@@ -40,7 +57,9 @@ def near(md, lat, lon, kind="repair", spot_fn=None):
         s = spot_fn(g[1], g[2])
         if s is None:
             continue
+        mlat, mlon = marker(s[0], s[1], g[1], g[2])
         item = {"id": g[0], "name": g[3], "lat": round(s[0], 6), "lon": round(s[1], 6),
+                "mlat": round(mlat, 7), "mlon": round(mlon, 7),
                 "dist": round(jobfind.dist_m(lat, lon, s[0], s[1]), 1)}
         if kind == "property":
             item["buy"], item["rent"] = prices(g[0])

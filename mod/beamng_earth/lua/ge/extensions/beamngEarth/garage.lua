@@ -24,6 +24,7 @@ local state = nil           -- { owned = { [id] = { id, name, lat, lon, kind = '
 local lists = { repair = {}, property = {} }
 local listErr, pending = {}, {}
 local reqId = 0
+local shop = nil            -- the open parts shop: { parts, t } (M.parts)
 local last = nil            -- the last action's message
 
 local function load()
@@ -200,7 +201,47 @@ function M.parts(anchor, player)
   local gh = rawget(_G, 'guihooks')
   if gh and gh.trigger then gh.trigger('ChangeState', { state = 'menu.vehicleconfig.parts' }) end
   if here.kind ~= 'home' then pay(M.LABOR, 'Labor at ' .. tostring(here.place.name)) end
+  shop = { parts = M.partsNow(), t = 0 }          -- (the parts shop: each change paid for, update())
   return true
+end
+
+-- The parts shop (the user, 2026-10-26: "shops offer new parts, which is just part customization that takes from the
+-- money we have"): while it is open, every part fitted is paid at its jbeam value (information.value, the game's own
+-- price), every part taken off sold back at SELL_PARTS of it. Closed after SHOP_S without a change, or by leaving.
+M.SELL_PARTS, M.SHOP_S = 0.5, 600
+
+-- The player car's parts: { [slot] = part name } (core_vehicle_manager's config), or nil.
+function M.partsNow()
+  local vm = rawget(_G, 'core_vehicle_manager')
+  local ok, d = pcall(function() return vm and vm.getPlayerVehicleData and vm.getPlayerVehicleData() end)
+  local cfg = ok and type(d) == 'table' and d.config
+  if type(cfg) ~= 'table' or type(cfg.parts) ~= 'table' then return nil end
+  local out = {}
+  for slot, part in pairs(cfg.parts) do if part and part ~= '' then out[slot] = part end end
+  return out
+end
+
+-- A part's price (its jbeam information.value), 0 when unknown.
+function M.partValue(name)
+  local vm = rawget(_G, 'core_vehicle_manager')
+  local ok, v = pcall(function()
+    local d = vm.getPlayerVehicleData()
+    local io = require('jbeam/io')
+    local part = io.getPart(d.ioCtx, name)
+    return part and part.information and tonumber(part.information.value)
+  end)
+  return ok and v or 0
+end
+
+-- Pure: (cost, refund) of going from parts a to parts b with prices value(name).
+function M.partsBill(a, b, value)
+  local cost, refund = 0, 0
+  local had, has = {}, {}
+  for _, n in pairs(a or {}) do had[n] = (had[n] or 0) + 1 end
+  for _, n in pairs(b or {}) do has[n] = (has[n] or 0) + 1 end
+  for n, c in pairs(has) do if c > (had[n] or 0) then cost = cost + (c - (had[n] or 0)) * value(n) end end
+  for n, c in pairs(had) do if c > (has[n] or 0) then refund = refund + (c - (has[n] or 0)) * value(n) * M.SELL_PARTS end end
+  return math.floor(cost + 0.5), math.floor(refund + 0.5)
 end
 
 -- Property --------------------------------------------------------------------------------------------------------
@@ -213,7 +254,7 @@ function M.acquire(i, how)
   if how == 'buy' and have and have.kind == 'own' then return false, 'already yours' end
   pay(price, (how == 'buy' and 'Bought ' or 'Rent: ') .. tostring(p.name))
   local d = today()
-  have = have or { id = p.id, name = p.name, lat = p.lat, lon = p.lon, cars = {} }
+  have = have or { id = p.id, name = p.name, lat = p.lat, lon = p.lon, mlat = p.mlat, mlon = p.mlon, cars = {} }
   if how == 'buy' then
     have.kind = 'own'
     have.paid = price
@@ -273,8 +314,97 @@ function M.store(anchor, player, k)
   return true
 end
 
-function M.update()
+-- The garage spots (the user: "a blue circle or some form of option menu ... they use a desk and a laptop ... make sure
+-- it's out of the way or beside a house"): at each repair shop near you and each place of yours, the spot off the road
+-- (server shops.marker): a blue ring, the stock workbench with a laptop on it; stopping in the ring opens the phone on
+-- that place's menu (Garage at a shop, Real Estate at yours).
+M.RING_M, M.PROPS_M, M.DRAW_M = 4.0, 150, 220
+M.BENCH = '/art/shapes/garage_and_dealership/garage/s_garage_workbench.dae'
+M.LAPTOP = '/art/shapes/garage_and_dealership/garage/s_laptop_ON.dae'
+M.BENCH_TOP = 0.9
+local props, inRing = {}, nil
+
+local function spots()
+  local out = {}
+  for _, p in ipairs(lists.repair) do
+    if p.mlat then out[#out + 1] = { id = 'shop:' .. p.id, lat = p.mlat, lon = p.mlon, app = 'garage' } end
+  end
+  local s, d = load(), today()
+  for _, p in pairs(s.owned) do
+    if M.held(p, d) and p.mlat then out[#out + 1] = { id = 'home:' .. p.id, lat = p.mlat, lon = p.mlon, app = 'realestate' } end
+  end
+  return out
+end
+
+local function groundZ(x, y, z)
+  local be_ = rawget(_G, 'be')
+  local ok, h = pcall(function() return be_:getSurfaceHeightBelow(vec3(x, y, z + 20)) end)
+  return (ok and tonumber(h) and h > -1e6) and h or z
+end
+
+local function placeProps(id, x, y, z)
+  local ok = pcall(function()
+    local objs = {}
+    for i, shape in ipairs({ M.BENCH, M.LAPTOP }) do
+      local o = createObject('TSStatic')
+      o.shapeName = shape
+      o:setPosRot(x, y, z + (i == 2 and M.BENCH_TOP or 0), 0, 0, 0, 1)
+      o:registerObject('bne_garage_' .. id:gsub('[^%w]', '_') .. '_' .. i)
+      objs[#objs + 1] = o
+    end
+    props[id] = objs
+  end)
+  if not ok then props[id] = false end          -- (no stock props: the ring alone)
+end
+
+local function removeProps(id)
+  for _, o in ipairs(props[id] or {}) do pcall(function() o:delete() end) end
+  props[id] = nil
+end
+
+function M.update(dt, anchor, player)
   poll()
+  if shop then                                   -- the parts shop: bill each change
+    shop.t = shop.t + (dt or 0)
+    local now = M.partsNow()
+    if now and shop.parts then
+      local cost, refund = M.partsBill(shop.parts, now, M.partValue)
+      if cost > 0 or refund > 0 then
+        if cost > 0 then wallet.add(-cost, 'Parts') end
+        if refund > 0 then wallet.add(refund, 'Parts sold back') end
+        shop.parts, shop.t = now, 0
+      end
+    end
+    if shop.t > M.SHOP_S then shop = nil end
+  end
+  if not (anchor and player) then return end
+  local dd = rawget(_G, 'debugDrawer')
+  local seen = {}
+  for _, s in ipairs(spots()) do
+    local x, y = anchor:geodeticToEnu(s.lat, s.lon, 0)
+    local dist = math.sqrt((x - player.x) ^ 2 + (y - player.y) ^ 2)
+    if dist < M.PROPS_M then
+      seen[s.id] = true
+      local z = groundZ(x, y, player.z or 0)
+      if props[s.id] == nil then placeProps(s.id, x + 2.5, y, z) end
+      if dd and dist < M.DRAW_M then
+        pcall(function()
+          dd:drawCylinder(vec3(x, y, z), vec3(x, y, z + 0.08), M.RING_M, ColorF(0.1, 0.45, 1.0, 0.45))
+        end)
+      end
+      local speed = math.sqrt((player.vx or 0) ^ 2 + (player.vy or 0) ^ 2)
+      if dist <= M.RING_M and speed < 1.5 then
+        if inRing ~= s.id then
+          inRing = s.id
+          local gh = rawget(_G, 'guihooks')
+          if gh and gh.trigger then gh.trigger('BneEarthPhone', { up = true, app = s.app }) end
+        end
+      elseif inRing == s.id and dist > M.RING_M + 3 then
+        inRing = nil
+      end
+    end
+  end
+  for id in pairs(props) do if not seen[id] then removeProps(id) end end
 end
 
 -- For the phone (settings.uiGarage).
@@ -296,7 +426,8 @@ function M.uiState(anchor, player)
            prices = { respray = M.RESPRAY, plates = M.PLATES, labor = M.LABOR }, colours = M.COLOURS, last = last }
 end
 
-function M._reset() state, lists, listErr, pending, last = nil, { repair = {}, property = {} }, {}, {}, nil end
+function M._shop() return shop end
+function M._reset() shop = nil; state, lists, listErr, pending, last = nil, { repair = {}, property = {} }, {}, {}, nil end
 function M._setList(kind, l) lists[kind] = l end
 function M._state() return load() end
 

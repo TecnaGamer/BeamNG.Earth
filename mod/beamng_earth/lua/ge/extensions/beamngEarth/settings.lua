@@ -717,9 +717,14 @@ end
 -- (testing, the user 2026-10-26: "I'll also need a temporary cash boost to see how these things work")
 function M.uiCashBoost() require('beamngEarth/wallet').add(10000, 'Test cash') return true end
 
+function M.phonePref(k) return prefs()[k] end
+
 function M.uiPhoneSet(k, v)
   local p = prefs()
-  if k == 'theme' or k == 'accent' or k == 'wallpaper' then p[k] = tostring(v)
+  if k == 'traffic' then
+    p.traffic = v and true or false
+    require('beamngEarth/worldtraffic').set(p.traffic)
+  elseif k == 'theme' or k == 'accent' or k == 'wallpaper' then p[k] = tostring(v)
   elseif k == 'size' then p.size = math.max(0.7, math.min(1.3, tonumber(v) or 1)) end
   pcall(jsonWriteFile, PHONE_FILE, p, true)
   return true

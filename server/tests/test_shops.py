@@ -25,6 +25,10 @@ class ShopsTest(unittest.TestCase):
         self.assertEqual([g["name"] for g in got], ["Joe's Auto", "Body Pro"])
         self.assertLess(got[0]["dist"], got[1]["dist"])
         self.assertNotIn("buy", got[0])
+        import jobfind
+        for g in got:                       # the garage spot off the road, toward the business
+            off = jobfind.dist_m(g["lat"], g["lon"], g["mlat"], g["mlon"])
+            self.assertTrue(shops.MARK_MIN_M - 0.1 <= off <= shops.MARK_MAX_M + 0.1, off)
 
     def test_property_with_prices(self):
         got = shops.near(self.md, LAT0, LON0, "property", spot_fn=spot)

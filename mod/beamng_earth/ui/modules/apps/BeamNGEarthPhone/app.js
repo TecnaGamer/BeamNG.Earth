@@ -55,6 +55,9 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
     '.bnp-btn{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:7px 10px;white-space:nowrap;font-weight:700;font-size:13px;cursor:pointer}',
     '.bnp-btn.alt{background:var(--card2);color:var(--fg)}',
     '.bnp-bar{position:absolute;left:50%;bottom:7px;width:110px;height:5px;margin-left:-55px;border-radius:3px;background:var(--fg);opacity:.75;cursor:pointer;z-index:6}',
+    '.bnp-switch{width:51px;height:31px;border-radius:16px;background:var(--card2);position:relative;cursor:pointer;transition:background .2s;flex:none}',
+    '.bnp-switch span{position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:14px;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.3);transition:left .2s}',
+    '.bnp-switch.on{background:#30d158}.bnp-switch.on span{left:22px}',
     '.bnp-sw{display:inline-block;width:26px;height:26px;border-radius:13px;margin:0 5px 0 0;cursor:pointer;border:2px solid transparent}',
     '.bnp-sw.on{border-color:var(--fg)}',
     '.bnp-thumbs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}',
@@ -152,6 +155,8 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             '<div class="bnp-row"><span>Accent</span><span><span class="bnp-sw" ng-repeat="c in accents" ng-class="{on: c == accent()}" ng-style="{background: c}" ng-click="set(\'accent\', c)"></span></span></div>' +
             '<div class="bnp-row"><span>Size</span><input type="range" min="0.7" max="1.3" step="0.05" ng-model="size" ng-change="set(\'size\', size)" style="width:140px"></div></div>' +
           '<div class="bnp-dim" style="margin:10px 2px 6px">WEATHER</div><div class="bnp-card"><div class="bnp-seg"><span ng-class="{on: p.weather.mode != \'real\'}" ng-click="lua(\'uiPhoneWeatherMode(\\\'dynamic\\\')\')">Dynamic</span><span ng-class="{on: p.weather.mode == \'real\'}" ng-click="lua(\'uiPhoneWeatherMode(\\\'real\\\')\')">Live (real)</span></div></div>' +
+          '<div class="bnp-dim" style="margin:10px 2px 6px">WORLD</div><div class="bnp-card"><div class="bnp-row"><span>World traffic<br><span class="bnp-dim">15 cars, 2 of them police</span></span>' +
+            '<span class="bnp-switch" ng-class="{on: p.prefs.traffic}" ng-click="set(\'traffic\', !p.prefs.traffic)"><span></span></span></div></div>' +
           '<div class="bnp-dim" style="margin:10px 2px 6px">TESTING</div><div class="bnp-card"><button class="bnp-btn" ng-click="lua(\'uiCashBoost()\')">+$10,000 test cash</button></div>' +
           '<div class="bnp-dim" style="margin:10px 2px">Phone key: Ctrl+O (Options > Controls to change)</div>' +
         '</div>' +
@@ -243,7 +248,11 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       }
       var timer = setInterval(function () { if (scope.up) poll() }, 1000)
       scope.$on('BneEarthPhone', function (_, d) {
-        scope.$evalAsync(function () { scope.up = d && d.up != null ? !!d.up : !scope.up; if (scope.up) poll() })
+        scope.$evalAsync(function () {
+          scope.up = d && d.up != null ? !!d.up : !scope.up
+          if (d && d.app) scope.open(d.app)           // (a garage spot: straight to its menu)
+          if (scope.up) poll()
+        })
       })
       poll()
       scope.$on('$destroy', function () { clearInterval(timer) })
