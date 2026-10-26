@@ -145,14 +145,25 @@ def _places(md, lat, lon, half):
     return layers
 
 
+# mileage bonus (the user, 2026-10-26: "if it has more miles it needs to pay more, base pay plus a nice mileage bonus.
+# the lowest ones can stay how they are"): the shortest jobs pay as before, every mile past TRUCK_FREE_MI / CAR_FREE_MI
+# adds TRUCK_MILE_BONUS / CAR_MILE_BONUS (times the cargo / car factor)
+TRUCK_FREE_MI, TRUCK_MILE_BONUS = 15.0, 9.0
+CAR_FREE_MI, CAR_MILE_BONUS = 4.0, 6.0
+
+
 def truck_pay(dist, value):
     """$ for a load hauled dist m with cargo premium value (to the nearest $5)."""
-    return float(5 * round(max(TRUCK_MIN, TRUCK_PER_MILE * dist / MI) * value * TRUCK_BOOST / 5.0))
+    mi = dist / MI
+    base = max(TRUCK_MIN, TRUCK_PER_MILE * mi) * TRUCK_BOOST
+    bonus = TRUCK_MILE_BONUS * max(0.0, mi - TRUCK_FREE_MI)
+    return float(5 * round((base + bonus) * value / 5.0))
 
 
 def pay_for(dist, value):
     """$ for a delivery of dist m in a car of value factor value (to the nearest $5)."""
-    return float(5 * round((BASE_PAY + PER_MILE * dist / MI) * value / 5.0))
+    mi = dist / MI
+    return float(5 * round((BASE_PAY + PER_MILE * mi + CAR_MILE_BONUS * max(0.0, mi - CAR_FREE_MI)) * value / 5.0))
 
 
 def time_limit(dur):

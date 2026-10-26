@@ -84,8 +84,9 @@ class OfferTest(unittest.TestCase):
         self.assertEqual(self.offers(route=broken), self.offers())
 
     def test_pay_is_fair(self):
-        # 10 miles in an ordinary car: $60 + $70
-        self.assertEqual(jobfind.pay_for(10 * jobfind.MI, 1.0), 130.0)
+        # 10 miles in an ordinary car: $60 + $70, + $6 a mile past 4: $36
+        self.assertEqual(jobfind.pay_for(10 * jobfind.MI, 1.0), 165.0)
+        self.assertEqual(jobfind.pay_for(4 * jobfind.MI, 1.0), 90.0, "the shortest as before")
         self.assertGreater(jobfind.pay_for(10 * jobfind.MI, 2.0), jobfind.pay_for(10 * jobfind.MI, 1.0))
         self.assertEqual(jobfind.time_limit(600.0), 600 * 1.6 + 240)
 
@@ -98,8 +99,8 @@ class TruckTest(unittest.TestCase):
     def test_realistic_pay(self):
         # $2.50 a mile, a $350 minimum, the cargo's premium, x1.3 (the user's boost)
         self.assertEqual(jobfind.truck_pay(15 * jobfind.MI, 1.0), 455.0)
-        self.assertEqual(jobfind.truck_pay(40 * jobfind.MI, 1.25), 570.0)
-        self.assertEqual(jobfind.truck_pay(200 * jobfind.MI, 1.0), 650.0)
+        self.assertEqual(jobfind.truck_pay(40 * jobfind.MI, 1.25), 850.0)       # + $9 a mile past 15
+        self.assertEqual(jobfind.truck_pay(55 * jobfind.MI, 1.0), 815.0)
 
     def test_freight_between_depots_with_a_rented_semi(self):
         import math
