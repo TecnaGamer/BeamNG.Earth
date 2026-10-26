@@ -1057,7 +1057,8 @@ class Server:
                 if anchor.bridges is None:
                     anchor.bridges = roadsmod.BridgeProfiles(
                         anchor.frame,
-                        lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev)
+                        lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev,
+                        getattr(self.surface, 'urban', None), getattr(self, 'widths', None))
                     anchor.bridges.wet = self.sea.depth if self.sea is not None else None
                     anchor.bridges.infra_fn = lambda key: self.mapdata.cell(
                         key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
@@ -1197,7 +1198,7 @@ class Server:
             if anchor.bridges is None:
                 anchor.bridges = roadsmod.BridgeProfiles(
                     anchor.frame, lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads"),
-                    elev)
+                    elev, getattr(self.surface, 'urban', None), getattr(self, 'widths', None))
                 anchor.bridges.wet = self.sea.depth if self.sea is not None else None    # (decks clear the water)
                 anchor.bridges.infra_fn = lambda key: self.mapdata.cell(
                     key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")

@@ -561,6 +561,10 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M):
     if not sel:
         return
     hw_m = np.array([ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M) + clear for i in sel], np.float64)
+    if hasattr(f, 'rules'):
+        import roads
+        specs = roads.road_specs(f)
+        hw_m = np.maximum(hw_m, [specs[i].width / 2 + clear if specs[i] else 0. for i in sel])
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL
@@ -571,6 +575,13 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M):
                                        float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy), n_r, n_c)
     if len(hws):
         fast._ef.road_corridors(mask, push, np.ascontiguousarray(segs), np.ascontiguousarray(hws))
+    if hasattr(f, 'rules'):
+        import roadcorners, mapgeom
+        pads = roadcorners.pads([f])
+        if pads:
+            corners = mapgeom.build('roadcorners', np.array([str(i) for i in range(len(pads))]),
+                                    [(mapgeom.POLYGON, [[np.c_[lo, la]]]) for la, lo in pads])
+            _mask_polys(corners, mask, chm, clear)
 
 
 # --- tiles for the mod --------------------------------------------------------------------------------

@@ -475,5 +475,32 @@
     ],
     "groundType": "CONCRETE",
     "translucent": false
+  },
+  "bne_road_gravel": {
+    "name": "bne_road_gravel",
+    "mapTo": "bne_road_gravel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0ec687bb-0a90-4c48-a7a5-dc0234dc2153",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_b.png",
+        "normalMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_nm.png",
+        "roughnessMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.65,
+          0.6,
+          0.52,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRAVEL",
+    "translucent": false
   }
 }

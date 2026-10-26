@@ -41,7 +41,7 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
         if fid is None or "pts" not in wk or fid not in by_fid:
             continue
         spec, line = by_fid[fid]
-        if not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:
+        if spec.roundabout or spec.roundabout_entry or not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:
             continue
         if furniture._h01(fid, "park") >= STREET_SHARE:
             continue

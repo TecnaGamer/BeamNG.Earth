@@ -83,6 +83,7 @@ M.LOOKS = {
   bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
   bngEarthGroundDusty = look('soil/dirt_loose_dusty/t_dirt_loose_dusty', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
   bngEarthGroundLoose = look('soil/t_gravel/t_gravel', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
+  bngEarthGroundGravelRoad = look('soil/t_gravel/t_gravel', 2, 'soil/macro_clumply/t_macro_clumpy', 64, 0.5),
   bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
   bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 64, 0.12),
   bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),

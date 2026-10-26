@@ -156,7 +156,7 @@ class RulesTest(unittest.TestCase):
         f = features([[(0, 0), (10, 0)]] * 6, ["residential", "footway", "primary", "tertiary", "track", "secondary"],
                      surfaces=[(4, "gravel")], widths=[(2, 14.0)], levels=[(3, 1.0)], flags=[(5, "is_bridge")])
         s = roads.road_specs(f)
-        self.assertEqual(s[0][:2], (roads.STYLE["residential"][0] + 2 * roads.EDGE_STRIP_M, "paved"), "rural: edge strips")
+        self.assertEqual(s[0][:2], (11.0, "paved"), "rural: two 4.25 m lanes and 1.25 m edge strips")
         self.assertIsNone(s[1], "footways left out")
         self.assertEqual(s[2][:2], (14.0, "paved"), "width rule")
         self.assertIsNone(s[3], "off ground level (bridge / tunnel) left out")
@@ -294,26 +294,26 @@ class BuildTileTest(unittest.TestCase):
         self.assertEqual(s[2].width, roads.LINK_M[2], "a two-way slip road")
         self.assertEqual(roads.bridge_specs(features([[(0, 0), (100, 0)]], ["motorway"])), [None])
 
-    def test_motorway_lanes_rural_two_urban_three(self):
+    def test_unknown_motorway_lanes_stay_two_in_town_and_country(self):
         """GitHub #43: every US Interstate had three lanes a direction, rural ones mostly have two; a rural road's edge
         strips were counted as lanes (a rural divided trunk had three too)."""
         pts = np.array([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0)])
 
         def lanes(cls, urban):
             sp = roads.Spec(roads.carriageway(cls, "paved", urban, None, True), "paved", urban, cls, True, 2.5, 1)
-            n = sum(1 for look, w, line in roads.extras(sp, pts, -100.0) if look is roads.LANE_LINE)
+            n = sum(1 for look, w, line in roads.extras(sp, pts, -100.0) if "dash" in look)
             return n + 1, sp
         n, rural = lanes("motorway", False)
         self.assertEqual(n, 2, "rural motorway carriageway")
-        self.assertAlmostEqual(rural.width, roads.MOTORWAY_RURAL_M + 2 * roads.SHOULDER_M)
-        edges = [line[0][1] for look, w, line in roads.extras(rural, pts, -100.0) if look is roads.EDGE_LINE]
-        self.assertEqual(sorted(round(abs(y), 2) for y in edges), [round(roads.MOTORWAY_RURAL_M / 2, 2)] * 2,
+        self.assertAlmostEqual(rural.width, roads.MOTORWAY_RURAL_M + roads.SHOULDER_SCALE_SUM * roads.SHOULDER_M)
+        edges = [line[0][1] for look, w, line in roads.extras(rural, pts, -100.0) if look["p"] == roads.EDGE_LINE["p"]]
+        self.assertEqual(sorted(round(abs(y-roads.driving_offset(rural)), 2) for y in edges), [round(roads.MOTORWAY_RURAL_M / 2, 2)] * 2,
                          "edge lines between the lanes and the shoulders")
-        self.assertEqual(lanes("motorway", True)[0], 3, "urban motorway carriageway")
+        self.assertEqual(lanes("motorway", True)[0], 2, "urban land cover cannot invent a third lane")
         self.assertEqual(lanes("trunk", False)[0], 2, "rural divided trunk")
         # a ramp (one lane, LINK_M): its edge lines a lane apart, not inside the motorway's shoulders (GitHub #107)
         ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True, 2.5, 1)
-        edges = [line[0][1] for look, w, line in roads.extras(ramp, pts, -100.0) if look is roads.EDGE_LINE]
+        edges = [line[0][1] for look, w, line in roads.extras(ramp, pts, -100.0) if look["p"] == roads.EDGE_LINE["p"]]
         self.assertAlmostEqual(abs(edges[0] - edges[1]), roads.LINK_LANE_M, places=2)
 
     def test_divided_trunk_sidewalk_outer_side_only_when_slow(self):
@@ -367,8 +367,9 @@ class BuildTileTest(unittest.TestCase):
                 self.assertGreater(abs(y - 100), sec_w / 2 + sw - 0.6, (x, y))
         yc = next(c["n"][0][1] for c in by[roads.LOOK["paved"]["m"]] if abs(c["n"][0][1] - 100) < 1)
         ys = sorted({round(c["n"][0][1], 3) for c in by["line_yellow"]})
-        self.assertTrue(any(abs(y - (yc + roads.CENTRE["gap"])) < 0.01 for y in ys) and
-                        any(abs(y - (yc - roads.CENTRE["gap"])) < 0.01 for y in ys), (yc, ys))
+        offset = (roads.CENTRE["w"] + roads.CENTRE["gap"]) / 2
+        self.assertTrue(any(abs(y - (yc + offset)) < 0.01 for y in ys) and
+                        any(abs(y - (yc - offset)) < 0.01 for y in ys), (yc, ys))
 
     def test_walk_cuts_open_the_sidewalk(self):
         # a gas station's made-up driveway (gasstations.tile_sites cuts): the sidewalk it crosses is cut, not the one
@@ -716,8 +717,7 @@ class BuildTileTest(unittest.TestCase):
         sp = roads.Spec(7.0, "paved", False, "primary", False)
         line = np.array([[0.0, 0, 5], [100, 0, 5]])
         us = [lk for lk, w, ln in roads.extras(sp, line, -76.6) if lk["m"] == "line_yellow"]
-        eu = [lk for lk, w, ln in roads.extras(sp, line, 8.6) if lk["m"] in ("line_white", roads.LANE_LINE["m"])
-              and lk is not roads.EDGE_LINE]
+        eu = [lk for lk, w, ln in roads.extras(sp, line, 8.6) if "dash" in lk]
         self.assertEqual(len(us), 2)
         self.assertEqual([lk["m"] for lk in eu], [roads.LANE_LINE["m"]])
 
@@ -1023,7 +1023,7 @@ class PaintRoadsTest(unittest.TestCase):
         idx = np.full(lat.shape, sf.GRASS, np.uint8)
         out = sf.paint_roads(idx, lat, lon, [f], 2.0)
         self.assertEqual(int(out[64, 10]), sf.ASPHALT, "on the east-west street")
-        self.assertEqual(int(out[64 - 6, 10]), sf.GRASS, "12 m north of it: off the 8 m street (6 m + strips)")
+        self.assertEqual(int(out[64 - 6, 10]), sf.GRASS, "12 m north of it: off the 11 m street")
         self.assertEqual(int(out[30, 74]), sf.DIRT, "on the track (20 m east)")
         self.assertEqual(int(out[64, 74]), sf.ASPHALT, "paved wins at the crossing")
         self.assertEqual(int(idx[64, 10]), sf.GRASS, "input untouched")
@@ -1035,16 +1035,16 @@ class PaintRoadsTest(unittest.TestCase):
         f = features([[(-200, 0), (200, 0)]], ["residential"])
         out = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f], 2.0)
         col = [int(v) for v in out[:, 10]]
-        self.assertEqual(col[64 - 2], sf.ASPHALT, "4 m north: the 8 m road's edge, painted")
-        self.assertEqual(col[64 + 2], sf.ASPHALT, "4 m south: likewise (centred, not half a sample off)")
-        self.assertEqual((col[64 - 3], col[64 + 3]), (sf.VERGE, sf.VERGE), "6 m either side: the verge")
+        self.assertEqual(col[64 - 3], sf.ASPHALT, "6 m north: the 11 m road's edge, rounded out to a 2 m sample")
+        self.assertEqual(col[64 + 3], sf.ASPHALT, "6 m south: likewise (centred, not half a sample off)")
+        self.assertEqual((col[64 - 4], col[64 + 4]), (sf.VERGE, sf.VERGE), "8 m either side: the verge")
         self.assertEqual(col[64 - 6], sf.GRASS, "12 m north: grass again")
         rock = sf.paint_roads(np.full(lat.shape, sf.ROCK, np.uint8), lat, lon, [f], 2.0)
-        self.assertEqual(int(rock[64 - 3, 10]), sf.ROCK)
+        self.assertEqual(int(rock[64 - 4, 10]), sf.ROCK)
         f9 = features([[(-200, 0), (200, 0)]], ["residential"], widths=[(0, 9.0)])
         out9 = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f9], 2.0)
         n = int((out9[:, 10] == sf.ASPHALT).sum())
-        self.assertGreaterEqual(n * 2.0, 9.0, "a 9 m road painted at least 9 m wide (was 8)")
+        self.assertGreaterEqual(n * 2.0, 11.0, "a narrow mapped two-lane road receives the 11 m rural minimum")
 
     def test_cobbles_under_the_tyres(self):
         lat, lon = self.grid()

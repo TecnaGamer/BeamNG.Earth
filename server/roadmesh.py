@@ -78,7 +78,11 @@ def ribbons(chunks):
         xy, s, z = _resample(pts, DRAPE_STEP)
         if len(xy) < 2:
             continue
-        n = _normals(xy) * (float(c["w"]) / 2)
+        width = float(c['w'])
+        if c.get('w_nodes') is not None:
+            source_s = np.r_[0., np.cumsum(np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1))]
+            width = np.interp(s, source_s, np.asarray(c['w_nodes'], float))[:, None]
+        n = _normals(xy) * (width / 2)
         out.append((xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
                     z if c.get("fixed") else None))
     return out
@@ -157,7 +161,15 @@ def _reach_past(c, box):
         n.insert(0, ends[0][None])
     if ends[1] is not None:
         n.append(ends[1][None])
-    return {**c, "n": np.concatenate(n).tolist()}
+    result = {**c, "n": np.concatenate(n).tolist()}
+    if c.get('w_nodes') is not None:
+        widths = list(c['w_nodes'])
+        if ends[0] is not None:
+            widths.insert(0, widths[0])
+        if ends[1] is not None:
+            widths.append(widths[-1])
+        result['w_nodes'] = widths
+    return result
 
 
 GRID_M = 2.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
@@ -436,8 +448,9 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=()):
         # girders under the slab
         half = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2
         ng = max(2, int(round(2 * half / GIRDER_EVERY)))
-        for off in np.linspace(-(half - 0.6), half - 0.6, ng):
-            mid = (left + right) / 2 + u * off
+        half_at = np.hypot(lat[:, 0], lat[:, 1]) / 2
+        for fraction in np.linspace(-1., 1., ng):
+            mid = (left + right) / 2 + u * ((half_at - 0.6) * fraction)[:, None]
             gl, gr = mid + u * GIRDER_W / 2, mid - u * GIRDER_W / 2
             GL, GR = np.c_[gl, z - DECK_DEPTH] - origin, np.c_[gr, z - DECK_DEPTH] - origin
             GLb, GRb = GL - [0, 0, GIRDER_D], GR - [0, 0, GIRDER_D]
@@ -626,23 +639,23 @@ def _parapet_cover(rb, context=()):
         lat = left - right
         u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
         mid = (left + right) / 2
-        hw = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
+        hw = np.hypot(lat[:, 0], lat[:, 1]) / 2 + PARAPET_W
         oid = hash(c.get("fid", n)) & 0x3FFFFFFF
         for e in (left + u * PARAPET_W / 2, right - u * PARAPET_W / 2):
             pts.append(np.c_[e, z])
             own.append(np.full(len(z), oid))
         A.append(np.c_[mid[:-1], z[:-1]])
         B.append(np.c_[mid[1:], z[1:]])
-        HW.append(np.full(len(z) - 1, hw))
+        HW.append(np.minimum(hw[:-1], hw[1:]))
         OS.append(np.full(len(z) - 1, oid))
     for (left, right, v, m, layer, z), c in context:     # the decks around the tile: surfaces only
         lat = left - right
         mid = (left + right) / 2
-        hw = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
+        hw = np.hypot(lat[:, 0], lat[:, 1]) / 2 + PARAPET_W
         oid = hash(c.get("fid", "ctx")) & 0x3FFFFFFF
         A.append(np.c_[mid[:-1], z[:-1]])
         B.append(np.c_[mid[1:], z[1:]])
-        HW.append(np.full(len(z) - 1, hw))
+        HW.append(np.minimum(hw[:-1], hw[1:]))
         OS.append(np.full(len(z) - 1, oid))
     P_, O_ = np.concatenate(pts), np.concatenate(own).astype(np.int64)
     A_, B_, H_, S_ = np.concatenate(A), np.concatenate(B), np.concatenate(HW), np.concatenate(OS).astype(np.int64)

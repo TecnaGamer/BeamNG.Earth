@@ -14,26 +14,28 @@ local set = S.newObject('TerrainMaterialTextureSet'); set:registerObject(terrain
 
 local MATS = { { 'bngEarthGroundAsphalt', 'ASPHALT_OLD' }, { 'bngEarthGroundGrass', 'GRASS' }, { 'bngEarthGroundDusty', 'DIRT_DUSTY' },
   { 'bngEarthGroundLoose', 'DIRT_DUSTY_LOOSE' }, { 'bngEarthGroundRock', 'ROCK' }, { 'bngEarthGroundSnow', 'SNOW' },
-  { 'bngEarthGroundMud', 'MUD' }, { 'beamngEarthDirt', 'DIRT' } }
+  { 'bngEarthGroundMud', 'MUD' }, { 'bngEarthGroundGravelRoad', 'GRAVEL' }, { 'beamngEarthDirt', 'DIRT' } }
 local masks = {}
-for i = 1, 8 do masks[i] = '/temp/beamngEarth/s1/hm_1_0_0_m' .. (i - 1) .. '.png' end
+for i = 1, #MATS do masks[i] = '/temp/beamngEarth/s1/hm_1_0_0_m' .. (i - 1) .. '.png' end
 
 T.check(terrain.load('/temp/beamngEarth/s1/hm_1_0_0.png', 2, 4096, -512, -512, 1000, { masks = masks, materials = MATS }),
   'load with surface layers')
 local tb = terrain.get()
 local imp = tb.lastImport
-T.check(#imp.mats == 8 and #imp.maps == 8, '8 materials and 8 maps')
-for i = 1, 8 do
+T.check(#imp.mats == #MATS and #imp.maps == #MATS, 'one material and mask per surface')
+for i = 1, #MATS do
   T.check(imp.mats[i] == MATS[i][1] and imp.maps[i].path == masks[i] and imp.maps[i].material == MATS[i][1]
     and imp.maps[i].materialId == i - 1 and imp.maps[i].channel == 'R', 'map ' .. i .. ': mask, material, id')
 end
-for i = 1, 7 do
+for i = 1, #MATS - 1 do
   local m = scenetree.findObject(MATS[i][1])
   T.check(m and m.class == 'TerrainMaterial' and m.fields.groundmodelName == MATS[i][2]
     and m.fields.internalName == MATS[i][1] and m.fields.baseColorBaseTex == dirt.fields.baseColorBaseTex and m.canSave == false,
     'clone ' .. MATS[i][1] .. ': ground model, textures copied, not saved')
 end
 T.check(dirt.fields.groundmodelName == 'DIRT', 'the level dirt material untouched')
+T.check(terrain.LOOKS.bngEarthGroundGravelRoad.baseColorDetailTex:find('t_gravel_b.png', 1, true) ~= nil,
+  'gravel road uses the stock gravel stone texture')
 -- a second load reuses the clones
 local before = S.calls.createObject_TerrainMaterial or 0
 terrain.load('/temp/beamngEarth/s1/hm_1_128_0.png', 2, 4096, -384, -512, 1000, { masks = masks, materials = MATS })

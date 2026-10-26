@@ -301,7 +301,8 @@ def _bridges(aid, frame, elev):
         bridges = _s.bridges.get(aid)
         if bridges is None:
             bridges = _s.bridges[aid] = roadsmod.BridgeProfiles(
-                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev)
+                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev,
+                getattr(_s.surface, 'urban', None), _s.widths)
             sea = getattr(_s, "sea", None)
             bridges.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
@@ -324,7 +325,8 @@ def _nav_bridges(aid, frame, elev):
         bridges = nav.get(aid)
         if bridges is None:
             bridges = nav[aid] = roadsmod.BridgeProfiles(
-                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev)
+                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev,
+                getattr(_s.surface, 'urban', None), _s.widths)
             sea = getattr(_s, "sea", None)
             bridges.wet = sea.depth if sea is not None else None
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(

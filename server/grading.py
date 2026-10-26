@@ -433,7 +433,8 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP):
     every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
     # the carriageway as a city street would have it (never from the land cover), or the measured one
-    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) if built else spec.width
+    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway,
+                                               spec.lanes, spec.link)) if built and not (spec.roundabout or spec.roundabout_entry) else spec.width
     if spec.median:             # a divided road's carriageway: never over the other one
         width = max(spec.width, roadsmod.dual_cap(spec.median, width))
     plan = Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=width / 2)
@@ -596,6 +597,11 @@ class Grader:
                     self._lower_underpasses(key, plans)
                 except Exception as e:      # as the data has it rather than no grading
                     log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
+            if plans:
+                import roadcorners
+                corners = roadcorners.grade(plans, pspecs)
+                plans.extend(corners)
+                pclip.extend([True] * len(corners))
             # a long road's piece (planned with CLIP_MARGIN_M of the road either side for its profile) kept only within
             # the cell's own box: every stretch of road in one cell's plans, once (overlapping pieces from neighbouring
             # cells counted a road up to 9 times, and every batch of points graded differently: patches of ground
@@ -1087,7 +1093,7 @@ class Grader:
         parts = {}
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         if f is not None and len(f):
-            bs = roadsmod.bridge_specs(f)
+            bs = roadsmod.bridge_specs(f, None, self.widths)
             rs = roadsmod.road_specs(f, None, self.widths) if ground else [None] * len(f)
             for i in range(len(f)):
                 if bs[i] is None and rs[i] is None:

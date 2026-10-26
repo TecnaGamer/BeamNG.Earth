@@ -4,7 +4,10 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
+from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import netfetch  # noqa: E402
@@ -69,6 +72,36 @@ class RevisitTest(unittest.TestCase):
         self.assertEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 2))
         self.assertNotEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 3))
         self.assertEqual(len(revisit.code_key()), 16)
+
+    def test_frozen_build_fingerprint_invalidates_old_geometry(self):
+        import peerwork
+        source = compile(Path(revisit.__file__).read_text(encoding='utf-8'), 'revisit.py', 'exec')
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            # PyInstaller has bytecode in PYZ and a native module on disk, no .py files.
+            (folder / 'earthfast.pyd').write_bytes(b'unchanged-native-module')
+
+            def load(build_id, name):
+                (folder / 'CODE_ID').write_text(build_id, encoding='ascii')
+                module = types.ModuleType(name)
+                module.__file__ = str(folder / 'revisit.pyc')
+                exec(source, module.__dict__)
+                with mock.patch.object(peerwork, '_ROOT', temp), mock.patch.object(peerwork, '_CODE_ID', None):
+                    module.code_key()
+                return module
+
+            old = load('build-a', 'old')
+            same = load('build-a', 'same')
+            new = load('build-b', 'new')
+            self.assertEqual(old.code_key(), same.code_key())
+            self.assertNotEqual(old.code_key(), new.code_key())
+            for kind in ('roads', 'plans', 'cellfacts', 'far'):
+                key = old.key(kind, 'public-square')
+                self.assertTrue(old.store(temp, kind, key, {'geometry': b'old-layout'}))
+                self.assertIsNone(new.load(temp, kind, new.key(kind, 'public-square')))
+                self.assertIsNotNone(old.load(temp, kind, key), 'invalidation does not delete old data')
+            (folder / 'earthfast.pyd').write_bytes(b'changed-native-module')
+            self.assertNotEqual(new.code_key(), load('build-b', 'native_changed').code_key())
 
 
 if __name__ == "__main__":
