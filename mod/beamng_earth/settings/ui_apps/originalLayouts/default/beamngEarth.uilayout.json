@@ -159,6 +159,17 @@
         "width": "200px",
         "height": "48px"
       }
+    },
+    {
+      "appName": "beamngEarthJobs",
+      "appVersion": 1,
+      "placement": {
+        "top": "130px",
+        "right": "10px",
+        "position": "absolute",
+        "width": "360px",
+        "height": "430px"
+      }
     }
   ],
   "removedApps": {

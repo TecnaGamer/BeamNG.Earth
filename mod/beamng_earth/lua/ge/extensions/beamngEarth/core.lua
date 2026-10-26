@@ -81,6 +81,7 @@ local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 local wallet = require('beamngEarth/wallet')         -- the player's money: fuel and tolls (wallet.lua)
+local jobs = require('beamngEarth/jobs')             -- garage-to-garage deliveries (jobs.lua)
 local roadweather = require('beamngEarth/roadweather') -- rain and snow on the roads: grip and look
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
@@ -694,6 +695,7 @@ local function formatKnown(f)
 end
 
 local geocodeResults = {}       -- the world map's address search answers: id -> { results, error }
+local jobResults = {}           -- the Jobs app's delivery offers: id -> the server's message
 local fuelResults = {}          -- the world map's "Nearest gas station" answers: id -> the server's message
 local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, error }
 
@@ -939,6 +941,8 @@ local function onMessage(msg)
     gps.onRouteDownload(msg)
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+  elseif t == 'delivery_jobs_result' then
+    if msg.id then jobResults[msg.id] = msg end         -- (jobs.lua polls it)
   elseif t == 'nearest_fuel_result' then
     -- the gas station nearest the player (server fuelfind.py): settings.uiNearestFuelResult teleports there
     if msg.id then fuelResults[msg.id] = msg end
@@ -1765,6 +1769,10 @@ local function onUpdate(dtReal, dtSim)
   if st.inOurLevel then gps.update(st.anchor, st.player) end
   if st.inOurLevel then pcall(wallet.update, st.anchorId, st.player and st.player.x, st.player and st.player.y) end
   if st.inOurLevel then pcall(roadweather.update) end
+  if st.inOurLevel then
+    local okJ, errJ = pcall(jobs.update, dtSim, st.anchor, st.player)
+    if not okJ then log('W', 'beamngEarth', 'jobs: ' .. tostring(errJ)) end
+  end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -2307,6 +2315,16 @@ function M.requestGeocode(id, q, lat, lon)
   return true
 end
 -- The world map's "Nearest gas station": the answer is nearest_fuel_result (takeNearestFuel).
+function M.requestDeliveryJobs(id, lat, lon, seed)
+  if not net.isConnected() then return false end
+  net.send({ type = 'delivery_jobs', id = id, lat = lat, lon = lon, seed = seed })
+  return true
+end
+function M.takeDeliveryJobs(id)
+  local r = jobResults[id]
+  jobResults[id] = nil
+  return r
+end
 function M.requestNearestFuel(id, lat, lon)
   if not net.isConnected() then return false end
   net.send({ type = 'nearest_fuel', id = id, lat = lat, lon = lon })

@@ -139,7 +139,8 @@ MOD_TO_SERVER = {
     "update_now": {},                   # the update notice's "Update now" (selfupdate.py)
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
-    "nearest_fuel": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},     # the world map's "Nearest gas station" (fuelfind.py)
+    "nearest_fuel": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},
+    "delivery_jobs": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "seed": F(int)},   # the Jobs app (jobfind.py)     # the world map's "Nearest gas station" (fuelfind.py)
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
     "place_previews": {"places": F((list, dict))},
 }
@@ -163,6 +164,7 @@ SERVER_TO_MOD = {
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
     "nearest_fuel_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT),
                             "dist": F(NUM, OPT), "error": F(str, OPT)},
+    "delivery_jobs_result": {"id": F(int), "jobs": F(list), "error": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "hello": {"protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
@@ -258,6 +260,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "where_result",                               # the status bar: asked by the mod while driving
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                        "nearest_fuel_result",                          # the world map's button: map data (test_fuelfind)
+                       "delivery_jobs_result",                         # the Jobs app: map data (test_jobfind)
                                                                      # (test_randomplace)
                        "block_base",                                 # a lazy imagery source (test_detail)
                        "sea",                                        # --sea on: needs map data (test_seacarve)

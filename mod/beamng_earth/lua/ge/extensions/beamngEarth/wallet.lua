@@ -56,6 +56,7 @@ function M.add(amount, reason)
   if amount == 0 then return load().balance end
   local s = load()
   s.balance = math.floor((s.balance + amount) * 100 + 0.5) / 100
+  if amount < 0 and type(M.onSpend) == 'function' then pcall(M.onSpend, -amount, reason) end    -- (jobs.lua)
   table.insert(s.history, 1, { amount = amount, reason = tostring(reason or ''), t = os.time and os.time() or 0 })
   while #s.history > M.HISTORY do table.remove(s.history) end
   save()

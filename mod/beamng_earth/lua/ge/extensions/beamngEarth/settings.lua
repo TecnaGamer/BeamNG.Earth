@@ -606,6 +606,17 @@ function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
 end
 
+-- The Jobs app (jobs.lua): its state; refresh the offers near the player; accept offer i; cancel.
+function M.uiJobs() return require('beamngEarth/jobs').uiState() end
+function M.uiJobsRefresh()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  return require('beamngEarth/jobs').refresh(pl and pl.lat, pl and pl.lon)
+end
+function M.uiJobAccept(i) local ok, why = require('beamngEarth/jobs').accept(i) return { ok = ok, error = why } end
+function M.uiJobCancel() return require('beamngEarth/jobs').cancel() end
+
 -- The map's "Nearest gas station" (the user, 2026-10-25: "a gas station spawn so i dont search forever"): send
 -- (-> { id } or { error }) and poll (id -> nil while the server searches, else { ok, name, dist } after teleporting
 -- beside the station, or { error }).

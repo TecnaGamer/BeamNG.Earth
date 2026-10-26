@@ -94,6 +94,7 @@ import roads as roadsmod  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import fuelfind as fuelfindmod  # noqa: E402
+import jobfind as jobfindmod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
@@ -3016,6 +3017,36 @@ class Connection:
                 log.info("random place: %s (%.5f, %.5f)", got[2], got[0], got[1])
         self.send(out)
 
+    async def delivery_jobs(self, msg):
+        """{"id", "lat", "lon", "seed"} -> delivery_jobs_result {"id", "jobs": [...]} (jobfind.offers: garage-to-garage
+        deliveries from near the point), or {"id", "error"}."""
+        out = {"type": "delivery_jobs_result", "id": msg.get("id"), "jobs": []}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            lat, lon, seed = float(msg["lat"]), float(msg["lon"]), int(msg.get("seed") or 0)
+        except (KeyError, TypeError, ValueError):
+            out["error"] = "no position"
+            self.send(out)
+            return
+        if md is None:
+            out["error"] = "no map data"
+            self.send(out)
+            return
+        net = self.s.net
+
+        def route(la0, lo0, la1, lo1):
+            return routingmod.plan(la0, lo0, la1, lo1, net)
+        try:
+            out["jobs"] = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, jobfindmod.offers, md, lat, lon, seed, route)
+        except Exception as e:
+            log.warning("delivery jobs: %s: %s", type(e).__name__, e)
+            out["error"] = "search failed"
+        if not out["jobs"] and "error" not in out:
+            out["error"] = "no garages near here"
+        log.info("delivery jobs near %.5f, %.5f: %d", lat, lon, len(out["jobs"]))
+        self.send(out)
+
     async def nearest_fuel(self, msg):
         """{"id", "lat", "lon"} -> nearest_fuel_result {"id", "lat", "lon", "name", "dist"} on the road beside the gas
         station nearest the point (fuelfind.nearest), or {"id", "error"} when none is near or the map data is missing."""
@@ -3288,6 +3319,8 @@ class Connection:
             self.spawn(self.random_place(msg))
         elif kind == "nearest_fuel":            # the world map's "Nearest gas station" (fuelfind.py)
             self.spawn(self.nearest_fuel(msg))
+        elif kind == "delivery_jobs":           # the Jobs app's garage-to-garage deliveries (jobfind.py)
+            self.spawn(self.delivery_jobs(msg))
         elif kind == "place_previews":          # the level select's place pictures (placepreview.py)
             self.spawn(self.place_previews(msg))
         elif kind == "update_now":              # the update notice's "Update now" (selfupdate.py)
