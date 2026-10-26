@@ -115,6 +115,7 @@ function M.onPursuitAction(vid, action, data)
   if not id then return end
   local s = load()
   if action == 'start' then
+    pcall(function() require('beamngEarth/jobs').onPolice() end)       -- (no clean record bonus on this job)
     chase = { id = id, t = 0, level = (data and data.mode) or 1, heat = M.heatOf(id, s.plates, s.looks) }
   elseif action == 'evade' then
     local c = chase or { t = 0, level = 1, heat = M.heatOf(id, s.plates, s.looks) }

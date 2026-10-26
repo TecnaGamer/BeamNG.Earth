@@ -17,7 +17,7 @@ angular.module('beamng.apps')
   return {
     template:
       '<div class="bngApp bnej"><style>' + css + '</style>' +
-      '<h1><span>JOBS</span><span ng-hide="s.active"><button class="ghost" ng-click="refresh()">{{ s.searching ? "Searching..." : "Car jobs" }}</button> ' +
+      '<h1><span>JOBS <span class="dim" ng-if="s.streak">· streak {{ s.streak }}</span></span><span ng-hide="s.active"><button class="ghost" ng-click="refresh()">{{ s.searching ? "Searching..." : "Car jobs" }}</button> ' +
         '<button class="ghost" ng-click="refresh(\'truck\')">Truck jobs</button></span></h1>' +
       '<div ng-if="s.active" class="card">' +
         '<div class="dim">{{ s.active.stage == "pickup" ? "Drive to the pickup and stop there" : "Deliver the car and stop at the garage" }}</div>' +
@@ -36,7 +36,9 @@ angular.module('beamng.apps')
       '<div ng-if="s.last && !s.active" class="card">' +
         '<div ng-if="s.last.cancelled" class="dim">Job cancelled: {{ s.last.job.car_name }}</div>' +
         '<div ng-if="s.last.pay" class="row"><span>Delivered the {{ s.last.job.cargo || s.last.job.car_name }} in {{ clock(s.last.t) }}</span><span class="pay">+${{ s.last.pay.total.toFixed(2) }}</span></div>' +
-        '<div ng-if="s.last.pay" class="dim">pay ${{ s.last.pay.base.toFixed(0) }}, bonus +{{ s.last.pay.bonus.toFixed(0) }}, damage -{{ s.last.pay.damage.toFixed(0) }}, late -{{ s.last.pay.late.toFixed(0) }}, expenses +{{ s.last.pay.expenses.toFixed(2) }}<span ng-if="s.last.pay.rent">, rental -{{ s.last.pay.rent.toFixed(0) }}</span></div>' +
+        '<div ng-if="s.last.pay" class="dim">pay ${{ s.last.pay.base.toFixed(0) }}, bonus +{{ s.last.pay.bonus.toFixed(0) }}, damage -{{ s.last.pay.damage.toFixed(0) }}, late -{{ s.last.pay.late.toFixed(0) }}, expenses +{{ s.last.pay.expenses.toFixed(2) }}<span ng-if="s.last.pay.rent">, rental -{{ s.last.pay.rent.toFixed(0) }}</span>' +
+          '<span ng-if="s.last.pay.spotless">, spotless +{{ s.last.pay.spotless.toFixed(0) }}</span><span ng-if="s.last.pay.record">, clean record +{{ s.last.pay.record.toFixed(0) }}</span>' +
+          '<span ng-if="s.last.pay.streak">, streak +{{ s.last.pay.streak.toFixed(0) }}</span></div>' +
       '</div>' +
       '<div class="list" ng-hide="s.active">' +
         '<div class="dim" ng-if="s.error">{{ s.error }}</div>' +

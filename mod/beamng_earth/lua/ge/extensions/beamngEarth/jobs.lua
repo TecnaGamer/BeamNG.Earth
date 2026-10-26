@@ -27,6 +27,12 @@ M.TRUCK_WAIT_S = 150        -- (truck searches: far cells, a first download each
 -- job"): the rented semi replaces your car, the trailer stands TRAILER_BACK_M behind it to back up to and couple; the
 -- load counts as delivered when the trailer is within TRAILER_M of the drop-off; the job's rent comes off the pay
 M.TRAILER_BACK_M = 16.0
+-- bonuses on top of the pay (the user, 2026-10-26: "add bonuses for things, showing up early, good driver streak, no
+-- fines"): SPOTLESS for no damage (under CLEAN_DMG), RECORD for no police chase or fine during the job, and STREAK_STEP
+-- for each clean delivery before it in a row (no damage, no police; at most STREAK_MAX), kept in STREAK_FILE
+M.SPOTLESS, M.RECORD, M.STREAK_STEP, M.STREAK_MAX = 0.15, 0.10, 0.05, 0.25
+M.CLEAN_DMG = 150
+M.STREAK_FILE = '/settings/beamngEarth_jobs.json'
 M.TRAILER_M = 45.0
 
 local gps = require('beamngEarth/gps')
@@ -39,6 +45,22 @@ local reqId = 0
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 
+local streakN = nil
+function M.streak()
+  if streakN == nil then
+    local read = rawget(_G, 'jsonReadFile')
+    local ok, got = false, nil
+    if read then ok, got = pcall(read, M.STREAK_FILE) end
+    streakN = ok and type(got) == 'table' and tonumber(got.streak) or 0
+  end
+  return streakN
+end
+local function setStreak(n)
+  streakN = n
+  local write = rawget(_G, 'jsonWriteFile')
+  if write then pcall(write, M.STREAK_FILE, { streak = n }, true) end
+end
+
 local function msg(text, icon)
   local gh = rawget(_G, 'guihooks')
   if gh and gh.trigger then gh.trigger('Message', { msg = text, category = 'bneJobs', icon = icon or 'info', ttl = 8 }) end
@@ -46,7 +68,7 @@ end
 
 -- Pure: the payout of a delivery that took t s (the clock runs from the pickup) in a car that took damage, with
 -- expenses ($ of tolls and fuel) to pay back. { base, bonus, late, damage, expenses, total }.
-function M.payout(job, t, damage, expenses)
+function M.payout(job, t, damage, expenses, police, streak)
   local base = tonumber(job.pay) or 0
   local dur, limit = tonumber(job.dur) or 0, tonumber(job.limit) or 0
   local early = dur * M.EARLY_X
@@ -62,10 +84,14 @@ function M.payout(job, t, damage, expenses)
   local dmg = earned * math.min(1, math.max(0, tonumber(damage) or 0) / M.DAMAGE_FULL)
   local exp = math.max(0, tonumber(expenses) or 0)
   local r = function(v) return math.floor(v * 100 + 0.5) / 100 end
-  local work = earned - dmg
+  local spotless = (tonumber(damage) or 0) < M.CLEAN_DMG and base * M.SPOTLESS or 0
+  local whole = 1 - math.min(1, math.max(0, tonumber(damage) or 0) / M.DAMAGE_FULL)    -- (a wreck earns no bonuses)
+  local record = (not police) and base * M.RECORD * whole or 0
+  local sb = base * math.min(M.STREAK_MAX, M.STREAK_STEP * math.max(0, tonumber(streak) or 0)) * whole
+  local work = earned - dmg + spotless + record + sb
   local rent = math.max(0, tonumber(job.rent) or 0)
   return { base = r(base), bonus = r(bonus), late = r(late), damage = r(dmg), expenses = r(exp), rent = r(rent),
-           total = r(work + exp - rent) }
+           spotless = r(spotless), record = r(record), streak = r(sb), total = r(work + exp - rent) }
 end
 
 -- Pure: m:ss
@@ -123,7 +149,7 @@ function M.accept(i)
   if active then return false, 'finish or cancel the current job first' end
   local job = offers[tonumber(i) or 0]
   if not job then return false, 'no such job' end
-  active = { job = job, stage = 'pickup', t = 0, expenses = 0 }
+  active = { job = job, stage = 'pickup', t = 0, expenses = 0, police = false }
   gps.setDestination(job.pickup.lat, job.pickup.lon, job.pickup.name)
   msg('Job: pick up the ' .. tostring(job.car_name) .. ' at ' .. tostring(job.pickup.name))
   return true
@@ -173,6 +199,7 @@ function M.cancel()
     if active.job.rent then wallet.add(-active.job.rent, 'Truck rental') end
   end
   msg('Job cancelled', 'warning')
+  setStreak(0)
   last = { cancelled = true, job = active.job }
   active = nil
   gps.clear()
@@ -231,36 +258,51 @@ function M.update(dt, anchor, player)
         return
       end
     end
-    local p = M.payout(job, active.t, active.damage, active.expenses)
+    local n = M.streak()
+    local p = M.payout(job, active.t, active.damage, active.expenses, active.police, n)
+    local clean = (tonumber(active.damage) or 0) < M.CLEAN_DMG and not active.police
+    setStreak(clean and n + 1 or 0)
     restoreOwn()
     wallet.add(p.total, 'Delivered the ' .. tostring(job.cargo or job.car_name))
-    last = { job = job, pay = p, t = active.t }
+    last = { job = job, pay = p, t = active.t, streak = M.streak() }
     active = nil
     gps.clear()
   end
 end
 
 -- wallet.lua: a cost paid during a job (tolls, fuel) is the company's
-function M.onSpend(amount)
-  if active then active.expenses = active.expenses + (tonumber(amount) or 0) end
+function M.onSpend(amount, reason)
+  -- (tolls and fuel only: a police fine is yours, and it ends the clean record)
+  local why = tostring(reason or '')
+  if not active then return end
+  if why:find('^Toll') or why:find('^Fuel') then
+    active.expenses = active.expenses + (tonumber(amount) or 0)
+  elseif why:find('[Pp]olice') or why:find('[Ii]mpound') then
+    active.police = true
+  end
 end
+
+-- heat.lua: a chase started during the job (no clean record bonus, the streak ends)
+function M.onPolice() if active then active.police = true end end
 wallet.onSpend = M.onSpend
 
 -- For the Jobs app (settings.uiJobs).
 function M.uiState()
-  local s = { offers = offers, error = offersError, searching = pending ~= nil, last = last }
+  local s = { offers = offers, error = offersError, searching = pending ~= nil, last = last, streak = M.streak() }
   if active then
     local j = active.job
     s.active = { stage = active.stage, car = j.cargo or j.car_name, rent = j.rent, pickup = j.pickup.name, dropoff = j.dropoff.name,
                  t = active.t, limit = j.limit, pay = j.pay, dist = j.dist, expenses = active.expenses,
                  damage = active.damage or 0,
-                 estimate = active.stage == 'deliver' and M.payout(j, active.t, active.damage, active.expenses) or nil }
+                 police = active.police,
+                 estimate = active.stage == 'deliver' and M.payout(j, active.t, active.damage, active.expenses, active.police,
+                   M.streak()) or nil }
   end
   return s
 end
 
 function M.isActive() return active ~= nil end
-function M._reset() offers, offersError, pending, active, last, seed = {}, nil, nil, nil, nil, nil end   -- tests
+function M._reset() offers, offersError, pending, active, last, seed, streakN = {}, nil, nil, nil, nil, nil, nil end   -- tests
 function M._setOffers(o) offers = o end
 function M._active() return active end
 

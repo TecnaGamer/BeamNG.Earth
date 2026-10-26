@@ -97,9 +97,11 @@ angular.module('beamng.apps')
         '</div>' +
         // jobs
         '<div class="bnp-view" ng-if="app == \'jobs\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Jobs</div>' +
+          '<div class="bnp-dim" style="margin:-6px 2px 10px" ng-if="p.jobs.streak">Clean delivery streak: {{ p.jobs.streak }} (+{{ Math.min(25, p.jobs.streak * 5) }}% pay)</div>' +
           '<div class="bnp-card" ng-if="p.jobs.active"><div class="bnp-dim">{{ p.jobs.active.stage == "pickup" ? "Go to the pickup" : "Delivering" }}</div><div style="font-weight:700;font-size:16px">{{ p.jobs.active.car }}</div>' +
             '<div class="bnp-row"><span class="bnp-dim">To</span><span>{{ p.jobs.active.dropoff }}</span></div>' +
             '<div class="bnp-row" ng-if="p.jobs.active.estimate"><span class="bnp-big" style="font-size:24px">{{ clock(p.jobs.active.t) }}</span><span class="bnp-pos">${{ p.jobs.active.estimate.total.toFixed(0) }}</span></div>' +
+            '<div class="bnp-dim" ng-if="p.jobs.active.estimate">Bonuses: early +{{ p.jobs.active.estimate.bonus.toFixed(0) }}, spotless +{{ p.jobs.active.estimate.spotless.toFixed(0) }}, clean record +{{ p.jobs.active.estimate.record.toFixed(0) }}, streak +{{ p.jobs.active.estimate.streak.toFixed(0) }}</div>' +
             '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiJobCancel()\')">Cancel job</button></div>' +
           '<div ng-if="!p.jobs.active"><div style="display:flex;gap:8px;margin-bottom:10px"><button class="bnp-btn" ng-click="lua(\'uiJobsRefresh()\')">Car jobs</button><button class="bnp-btn alt" ng-click="lua(\'uiJobsRefresh(\\\'truck\\\')\')">Truck jobs</button></div>' +
             '<div class="bnp-dim" ng-if="p.jobs.searching">Searching…</div><div class="bnp-dim" ng-if="p.jobs.error">{{ p.jobs.error }}</div>' +
@@ -194,6 +196,7 @@ angular.module('beamng.apps')
         themeVars()
         lua('uiPhoneSet(' + JSON.stringify(k) + ', ' + JSON.stringify(v) + ')')
       }
+      scope.Math = Math
       scope.gtab = 'repair'
       scope.g = { errors: {}, searching: {}, prices: {}, mine: [] }
       scope.rgb = function (c) { return 'rgb(' + Math.round(c[0] * 255) + ',' + Math.round(c[1] * 255) + ',' + Math.round(c[2] * 255) + ')' }
