@@ -24,8 +24,8 @@ import numpy as np
 ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ATLAS_JSON = os.path.join(ROOT, "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth",
                           "guide_atlas.json")
-MATERIALS = ["bne_guide_atlas", "bne_guide_steel"]
-ATLAS, STEEL = 0, 1
+MATERIALS = ["bne_guide_atlas", "bne_guide_steel", "m_gm_concrete_plain"]   # (concrete: rumble.py's bars)
+ATLAS, STEEL, CONCRETE = 0, 1, 2
 
 MAIN = ("motorway", "trunk")
 LINK_TOUCH_M = 4.0          # a link's end this close to a segment's end joins it there
@@ -493,14 +493,45 @@ def toll_gantry(m, g):
         m.box(c + R * uu + U * (CLEAR_M + 0.25) + F * 0.35, R * 0.12, F * 0.18, U * 0.12, ATLAS, black)  # camera
 
 
+def _rumble(m, g):
+    """rumble.py's bars, all at once: each a box's top and its two faces across the road (the ones a tyre meets); no
+    bottom (on the ground) and no ends (along the strip: a tyre never meets them)."""
+    import rumble
+    c, d = np.asarray(g["c"], np.float64), np.asarray(g["d"], np.float64)
+    n = len(c)
+    if not n:
+        return
+    a = np.column_stack([d * (rumble.BAR_ALONG_M / 2), np.zeros(n)])
+    b = np.column_stack([np.stack([-d[:, 1], d[:, 0]], axis=1) * (rumble.BAR_ACROSS_M / 2), np.zeros(n)])
+    up = np.array([0.0, 0.0, rumble.BAR_H_M])
+    lo = np.stack([c - a - b, c + a - b, c + a + b, c - a + b], axis=1)          # (n, 4, 3)
+    pts = np.concatenate([lo, lo + up], axis=1) - m.o                             # (n, 8, 3)
+    base = len(m.P)
+    m.P.extend(pts.reshape(-1, 3))
+    m.UV.extend([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] * (2 * n))
+    # top (4 5 6 7), the face at -a (0 3 7 4) and at +a (1 5 6 2), counter-clockwise from outside
+    local = np.array([(4, 5, 6), (4, 6, 7), (0, 4, 7), (0, 7, 3), (1, 2, 6), (1, 6, 5)])
+    tris = (base + 8 * np.arange(n))[:, None, None] + local[None]
+    m.T.extend(map(tuple, tris.reshape(-1, 3)))
+    m.M.extend([CONCRETE] * (6 * n))
+
+
 def mesh(signs, origin):
     """(positions (n, 3), tris (m, 3), uvs (n, 2), tri material indices (m,)) of the signs relative to origin, or
     None; materials: MATERIALS."""
     if not signs:
         return None
     m = _Mesh(origin)
+    signs = [g for g in signs if g["kind"] != "rumble"] + [g for g in signs if g["kind"] == "rumble"]
     for g in signs:
         n0 = len(m.P)
+        if g["kind"] == "rumble":
+            _rumble(m, g)
+            if len(m.P) > MAX_VERTS:
+                del m.P[n0:], m.UV[n0:]
+                k = next(i for i, t in enumerate(m.T) if t[0] >= n0)
+                del m.T[k:], m.M[k:]
+            continue
         if g["kind"] == "toll":
             toll_gantry(m, g)
             continue

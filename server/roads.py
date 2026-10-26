@@ -4392,6 +4392,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if guide is not None and walks is not None:     # green guide signs on motorways and trunk roads (guidesigns.py)
         try:
             guide.extend(_guide_plan(frame, seen, roads, (x0, y0, x1, y1), mph, left_hand))
+            import rumble
+
+            def zfn(x, y):              # the drawn ground the road surfaces lie on (else the elevation)
+                if ground is not None:
+                    return ground(x, y)
+                la, lo, _ = frame.enu_to_geodetic(x, y, np.zeros(len(x)))
+                return np.asarray(elev(la, lo), np.float64)
+            bars = rumble.strips(roads, (x0, y0, x1, y1), zfn)
+            if bars is not None:
+                guide.append(bars)
         except Exception as e:      # no signs rather than no tile
             log.warning("guide signs %s,%s: %s: %s", tx, ty, type(e).__name__, e)
     if park is not None and walks is not None:      # curbside parking spots (parking.py)
