@@ -10,6 +10,7 @@ hangs on its warning sign's post, below the sign.
 Writes us_*.png / us_*.dae and us_signs.materials.json; the Lua catalog is us_signs.lua (CATALOG heights = HEIGHTS).
 """
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -242,6 +243,12 @@ def dae(name, png, lod, mesh, col=None):
     return face[:a] + nodes + face[b:]
 
 
+def pow2(n):
+    """The power of two nearest n (at least 64)."""
+    k = max(6, round(math.log2(max(n, 1))))
+    return 2 ** k
+
+
 def materials(names):
     mats = {}
     for n in names:
@@ -258,6 +265,10 @@ def main():
     sp = specs()
     for name, (im, w, h, zc, back, top) in sp.items():
         im = im.convert("RGBA")
+        # power-of-two sides: the engine does not load a texture of other sizes (checked in game 2026-10-25: the
+        # 512 x 640 faces drew as the bare metal behind them, and no compressed copy was made); the face's UVs span
+        # the whole image, so a stretch keeps the picture
+        im = im.resize((pow2(im.width), pow2(im.height)), Image.LANCZOS)
         im.putalpha(im.getchannel("A").point(lambda v: 255 if v >= 128 else 0))
         png = OUT / f"{name}.png"
         im.save(png)

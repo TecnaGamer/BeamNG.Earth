@@ -56,6 +56,20 @@ class CatalogTest(unittest.TestCase):
                       (ROOT / "tools/generate_us_signs.py").read_text(encoding="utf-8"))
 
 
+class TextureSizeTest(unittest.TestCase):
+    def test_every_sign_texture_is_a_power_of_two(self):
+        """The engine draws no texture of other sizes (2026-10-25: the 512 x 640 faces showed as bare metal)."""
+        import glob
+        import os
+        from PIL import Image
+        root = Path(__file__).resolve().parents[2] / "mod" / "beamng_earth" / "levels" / "beamng_earth" / "art"
+        files = glob.glob(str(root / "**" / "*.png"), recursive=True)
+        self.assertGreater(len(files), 36)
+        for f in files:
+            w, h = Image.open(f).size
+            self.assertTrue(w & (w - 1) == 0 and h & (h - 1) == 0, f"{os.path.basename(f)}: {w} x {h}")
+
+
 class MaterialsLoadedTest(unittest.TestCase):
     def test_every_sign_materials_file_is_loaded(self):
         """The level loads none of these by itself: one the mod's Lua does not load leaves its shapes untextured (the
