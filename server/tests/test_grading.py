@@ -555,5 +555,29 @@ class RacewayKeepTest(unittest.TestCase):
         self.assertAlmostEqual(float(out[0]), float(base[0]), places=6, msg="on the track: the terrain")
 
 
+class JunctionTest(unittest.TestCase):
+    def test_side_road_meets_the_road_it_joins(self):
+        import roads
+        x = np.arange(-200, 201, 4.0)
+        main = grading.Plan(np.stack([x, 0 * x], 1), 10 + 0.02 * x, 5, road_half=4)
+        y = np.arange(0, 201, 4.0)
+        side = grading.Plan(np.stack([0 * y + 50, y], 1), 11.8 + 0 * y, 3, road_half=3)   # 0.8 m over the main road
+        grading.snap_junctions([main, side], [roads.Spec(8.0, "paved", False, "primary", False),
+                                              roads.Spec(6.0, "paved", False, "residential", False)])
+        self.assertAlmostEqual(side.z[0], 11.0, places=6)                  # at the main road's height where it joins
+        self.assertAlmostEqual(side.z[-1], 11.8, places=6)                 # its own height past the taper
+        self.assertTrue(np.all(np.diff(side.z[:12]) >= -1e-9))             # eased in, no bump
+        np.testing.assert_allclose(main.z, 10 + 0.02 * x)                  # the main road keeps its profile
+
+    def test_a_continuation_is_not_a_junction(self):
+        import roads
+        x = np.arange(0, 201, 4.0)
+        a = grading.Plan(np.stack([x, 0 * x], 1), 10 + 0 * x, 4, road_half=3)
+        b = grading.Plan(np.stack([x + 200, 0 * x], 1), 11 + 0 * x, 4, road_half=3)
+        res = roads.Spec(6.0, "paved", False, "residential", False)
+        grading.snap_junctions([a, b], [res, res])
+        self.assertEqual((a.z[-1], b.z[0]), (10.0, 11.0))
+
+
 if __name__ == "__main__":
     unittest.main()
