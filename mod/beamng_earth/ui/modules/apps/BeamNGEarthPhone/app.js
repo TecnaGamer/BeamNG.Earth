@@ -191,7 +191,10 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             '<div class="bnp-row" style="padding:0"><b style="font-size:17px">{{ s.name }}</b><span style="font-size:13px;color:#aaa">{{ s.miles.toFixed(2) }} mi</span></div>' +
             '<div style="font-size:12px;color:#aaa">{{ s.area }} · gravel<span ng-if="s.best"> · Best {{ rtime(s.best) }}</span></div>' +
             '<div style="text-align:right;margin-top:6px"><button class="bnp-btn" style="background:#e10600" ng-disabled="p.rally.active" ng-click="rstart(s.id)">Start stage</button></div></div>' +
-          '<div class="bnp-dim" style="font-size:11px">A rally car is loaned for the stage; your car is parked and given back at the finish. Pacenotes are called on screen.</div>' +
+          '<div class="bnp-card" style="background:#1d1d21" ng-if="!p.rally.active"><div style="font-size:12px;color:#aaa;margin-bottom:6px">CO-DRIVER</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="bnp-btn" ng-repeat="v in p.rally.voices" ng-style="{background: p.rally.voice == v.id ? \'#e10600\' : \'#3a3a3e\'}" ng-click="rvoice(v.id)">{{ v.name }}</button>' +
+            '<button class="bnp-btn" ng-style="{background: p.rally.voice == \'off\' ? \'#e10600\' : \'#3a3a3e\'}" ng-click="rvoice(\'off\')">Off</button></div></div>' +
+          '<div class="bnp-dim" style="font-size:11px">A rally car is loaned for the stage; your car is parked and given back at the finish. The co-driver calls each corner (also shown on screen).</div>' +
         '</div>' +
         // settings
         '<div class="bnp-view" ng-if="app == \'settings\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Settings</div>' +
@@ -286,6 +289,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
           poll()
         })
       }
+      scope.rvoice = function (id) { lua('uiRallyVoice(' + JSON.stringify(id) + ')') }
       scope.media = function (a) { lua('uiPhoneMedia(' + JSON.stringify(a) + ')') }
       function poll() {
         lua('uiPhone and ' + S + '.uiPhone() or nil', function (p) {

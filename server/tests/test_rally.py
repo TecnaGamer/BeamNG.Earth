@@ -70,6 +70,9 @@ class PacenoteTest(unittest.TestCase):
         n = self.notes(("s", 100), ("t", 60, 50), ("s", 10), ("t", 60, -50), ("s", 150), ("t", 60, 50), ("s", 100))
         self.assertTrue(n[0]["text"].endswith("into"), n[0]["text"])
         self.assertTrue(n[1]["text"].endswith("150"), n[1]["text"])
+        self.assertEqual((n[0]["link"], n[1]["link"], n[2]["link"]), ("into", 150, None))
+        self.assertIn(n[0]["name"], ("2", "3"))
+        self.assertEqual((n[0]["dir"], n[0]["long"]), ("left", False))
 
     def test_straight_has_no_notes(self):
         self.assertEqual(rally.pacenotes(straight(0, 0, 0.3, 200)), [])

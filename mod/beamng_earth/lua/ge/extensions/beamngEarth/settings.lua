@@ -759,6 +759,7 @@ function M.uiJobCancel() return require('beamngEarth/jobs').cancel() end
 function M.uiRally() return require('beamngEarth/rally').uiState() end
 function M.uiRallyStart(id) local ok, why = require('beamngEarth/rally').start(id) return { ok = ok, error = why } end
 function M.uiRallyQuit() return require('beamngEarth/rally').quit() end
+function M.uiRallyVoice(id) return require('beamngEarth/rally').setVoice(id) end
 
 -- The map's "Nearest gas station" (the user, 2026-10-25: "a gas station spawn so i dont search forever"): send
 -- (-> { id } or { error }) and poll (id -> nil while the server searches, else { ok, name, dist } after teleporting

@@ -12,9 +12,29 @@ local R = require('beamngEarth/rally')
 -- pure
 T.check(R.fmt(65.25) == '1:05.2' or R.fmt(65.25) == '1:05.3', 'fmt ' .. R.fmt(65.25))
 T.check(R.fmt(5) == '0:05.0', 'fmt short')
-T.near(R.callLead(0), 60, 1e-9, 'call lead: never under 60 m')
-T.near(R.callLead(40), 120, 1e-9, 'call lead: 3 s')
-T.near(R.callLead(100), 200, 1e-9, 'call lead: at most 200 m')
+T.near(R.callLead(0), 70, 1e-9, 'call lead: never under 70 m')
+T.near(R.callLead(40), 160, 1e-9, 'call lead: 4 s')
+T.near(R.callLead(100), 250, 1e-9, 'call lead: at most 250 m')
+-- the co-driver's clips
+local function same(a, b) return table.concat(a, ',') == table.concat(b, ',') end
+T.check(same(R.clips({ dir = 'left', grade = 4, name = '4', long = true, mod = 'tightens', link = 150 }),
+  { 'long', 'four_left', 'tightens', '150' }), 'clips: long four left tightens 150')
+T.check(same(R.clips({ dir = 'right', grade = 0, name = 'hairpin', link = 'into' }), { 'hairpin_right', 'into' }), 'clips: hairpin')
+T.check(same(R.clips({ dir = 'left', grade = 1, name = 'square', link = 'and' }), { 'square_left', 'and' }), 'clips: square')
+T.check(same(R.clips({ dir = 'right', grade = 6, name = '6', link = 1234 }), { 'six_right', '950' }), 'clips: far gap capped')
+T.check(same(R.clips({ dir = 'right', grade = 5, name = '5', link = 170 }), { 'five_right', '150' }), 'clips: nearest distance')
+T.check(#R.clips({}) == 0, 'clips: nothing for a bad note')
+-- the pack's files (no metadata: FS), variants
+local have = { pacenote_four_left = true, pacenote_long_1 = true, pacenote_long_2 = true }
+FS = { fileExists = function(_, f) return have[f:match('([^/]+)%.ogg$')] or false end }
+local c = R.resolveClip('ak_2026-04-16', 'four_left')
+T.check(c and c.file == '/lua/ge/extensions/gameplay/rally/compositors/voicepacks/ak_2026-04-16/audio/pacenote_four_left.ogg', 'resolve: the file')
+c = R.resolveClip('x', 'long')
+T.check(c and c.file:find('pacenote_long_[12]%.ogg$'), 'resolve: a numbered variant')
+T.check(R.resolveClip('x', 'tightens') == nil, 'resolve: missing clip')
+FS = { fileExists = function() return true end }
+local played = {}
+Engine = { Audio = { intercomPlayPacenote = function(o) played[#played + 1] = o.filename:match('pacenote_(.-)%.ogg$') end } }
 local xs, ys, cum = { 0, 100, 100 }, { 0, 0, 100 }, { 0, 100, 200 }
 local s, i, off = R.progress(xs, ys, cum, 50, 3, 1)
 T.near(s, 50, 1e-9, 'progress on the first leg'); T.near(off, 3, 1e-9, 'off the road')
@@ -80,6 +100,8 @@ T.check(R._state().phase == 'run', 'GO')
 local found = false
 for _, mm in ipairs(msgs) do if mm == 'Left 4 100' then found = true end end
 T.check(found, 'the first call at GO')
+local spoken = table.concat(played, ' ')
+T.check(spoken:find('system_countdown5') and spoken:find('system_countdown1') and spoken:find('system_falseStart'), 'countdown and false start spoken: ' .. spoken)
 -- drive north at 20 m/s
 P.vy = 20
 local calls0 = #msgs
@@ -96,6 +118,9 @@ for k = calls0, #msgs do
   if tostring(msgs[k]):find('^Split 1') then hadSplit = true end
 end
 T.check(hadRight, 'the corner called on the way')
+spoken = table.concat(played, ' ')
+T.check(spoken:find('system_countdowngo'), 'go spoken')
+-- (the stage's notes carry no parts here, so no corner clips; clips() is tested above)
 T.check(hadSplit, 'the checkpoint split')
 T.check(saved and saved.best and saved.best.asaph and saved.best.asaph > 70, 'the best time saved (with the penalty)')
 for _ = 1, 70 do R.update(0.1, anchor, P) end
@@ -104,6 +129,14 @@ T.check(own.active == 1 and player == own and objs[60] == nil, 'your car back, t
 local ui = R.uiState()
 T.check(ui.last and ui.last.record and ui.stages[1].best, 'the app: last run and best')
 
+-- the voice choice
+T.check(R.setVoice('rh_2026-06-05') and R.uiState().voice == 'rh_2026-06-05' and saved.voice == 'rh_2026-06-05', 'voice chosen and saved')
+T.check(not R.setVoice('nope'), 'unknown voice')
+T.check(R.setVoice('off') and R.uiState().voice == 'off', 'voice off')
+local n0 = #R._voiceQ()
+R.setVoice('off')
+T.check(#R._voiceQ() == n0, 'off: nothing queued')
+R.setVoice('ak_2026-04-16')
 -- quit mid-run gives the car back
 R.start('asaph'); P.y = 0; P.vy = 0
 for _ = 1, 80 do R.update(0.1, anchor, P) end

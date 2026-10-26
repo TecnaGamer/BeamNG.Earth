@@ -175,19 +175,28 @@ def pacenotes(path):
         else:
             grade = _grade(r)
             name = str(grade)
-        words = (["long"] if ln > 80 and grade else []) + [dirn, name]
+        long_ = bool(ln > 80 and grade)
+        words = (["long"] if long_ else []) + [dirn, name]
+        mod = None
         if ln >= 30 and b - a >= 3:
             half = (a + b) // 2
             r1 = 1.0 / max(float(np.max(np.abs(k[a:half + 1]))), 1e-6)
             r2 = 1.0 / max(float(np.max(np.abs(k[half:b + 1]))), 1e-6)
             if r2 < 0.7 * r1:
-                words.append("tightens")
+                mod = "tightens"
             elif r1 < 0.7 * r2:
-                words.append("opens")
+                mod = "opens"
+        if mod:
+            words.append(mod)
+        # (the parts as data too, for the game's co-driver voice: mod/beamng_earth/.../rally.lua clips())
         notes.append({"at": round(float(s[a]), 1), "end": round(float(s[min(b + 1, len(s) - 1)]), 1), "dir": dirn,
-                      "grade": grade, "text": " ".join(words)})
+                      "grade": grade, "name": name, "long": long_, "mod": mod, "link": None,
+                      "text": " ".join(words)})
     for n, nx in zip(notes, notes[1:]):
-        n["text"] += " " + _gap_call(nx["at"] - n["end"])
+        gap = nx["at"] - n["end"]
+        call = _gap_call(gap)
+        n["text"] += " " + call
+        n["link"] = call if call in ("into", "and") else (int(call) if call.isdigit() else None)
     if notes:
         notes[-1]["text"] += ", to finish"
     for n in notes:

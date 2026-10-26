@@ -29,6 +29,91 @@ M.CARS = { 'sunburst2', 'sunburst', 'covet', 'pessima', 'etki', 'bx' }
 
 local state, last, err, reqId, bests = nil, nil, nil, 0, nil
 
+-- The co-driver's voice (the user, 2026-10-26: "the game does in fact have built in co driver voices"): the game's own
+-- rally voicepacks (lua/ge/extensions/gameplay/rally/compositors/voicepacks/<pack>/audio/pacenote_<phrase>.ogg, the
+-- phrase normalised: "four left", "hairpin right", "tightens", "into", "150"; a pack may hold numbered variants
+-- pacenote_<phrase>_<n>.ogg), played one clip after another on the game's pacenote channel
+-- (Engine.Audio.intercomPlayPacenote, as its rally mode does). clips() is pure.
+M.VOICE_DIR = '/lua/ge/extensions/gameplay/rally/compositors/voicepacks/'
+M.VOICES = { { id = 'ak_2026-04-16', name = 'AK' }, { id = 'rh_2026-06-05', name = 'RH' },
+             { id = 'dirtwheel_2026-07-19', name = 'Dirtwheel' } }
+M.NUMS = { 'one', 'two', 'three', 'four', 'five', 'six' }
+M.DISTS = { 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850,
+            900, 950 }
+M.CLIP_GAP_S = 0.05
+M.CLIP_LEN_S = 0.9            -- a clip's length when its pack does not say
+local voiceQ, voiceT, metaCache = {}, 0, {}
+local loadBests            -- (below)
+
+-- Pure: a note's clips (phrase stems) in calling order.
+function M.clips(note)
+  local out = {}
+  if type(note) ~= 'table' or (note.dir ~= 'left' and note.dir ~= 'right') then return out end
+  if note.long then out[#out + 1] = 'long' end
+  local g = tonumber(note.grade)
+  if note.name == 'hairpin' or g == 0 then out[#out + 1] = 'hairpin_' .. note.dir
+  elseif note.name == 'square' then out[#out + 1] = 'square_' .. note.dir
+  elseif g and M.NUMS[g] then out[#out + 1] = M.NUMS[g] .. '_' .. note.dir end
+  if note.mod == 'tightens' or note.mod == 'opens' then out[#out + 1] = note.mod end
+  if note.link == 'into' or note.link == 'and' then out[#out + 1] = note.link
+  elseif tonumber(note.link) then
+    local d, best = tonumber(note.link), nil
+    for _, v in ipairs(M.DISTS) do if not best or math.abs(v - d) < math.abs(best - d) then best = v end end
+    out[#out + 1] = tostring(best)
+  end
+  return out
+end
+
+local function voiceId()
+  return loadBests().voice or M.VOICES[1].id
+end
+
+local function meta(pack)
+  if metaCache[pack] == nil then
+    local read = rawget(_G, 'jsonReadFile')
+    local ok, got = false, nil
+    if read then ok, got = pcall(read, M.VOICE_DIR .. pack .. '/metadata.json') end
+    metaCache[pack] = ok and type(got) == 'table' and got or false
+  end
+  return metaCache[pack] or nil
+end
+
+-- a stem's clip in the pack: { file, len }, a random variant, or nil
+function M.resolveClip(pack, stem)
+  local md, fs = meta(pack), rawget(_G, 'FS')
+  local found = {}
+  local function try(base)
+    local e = md and md[base]
+    local file = M.VOICE_DIR .. pack .. '/audio/' .. base
+    if e or (not md and fs and fs.fileExists and fs:fileExists(file)) then
+      found[#found + 1] = { file = file, len = type(e) == 'table' and tonumber(e.audioLen) or M.CLIP_LEN_S }
+    end
+  end
+  try('pacenote_' .. stem .. '.ogg')
+  for i = 1, 9 do try('pacenote_' .. stem .. '_' .. i .. '.ogg') end
+  if #found == 0 then return nil end
+  return found[math.random(#found)]
+end
+
+local function say(stems, fresh)
+  if voiceId() == 'off' then return end
+  if fresh and #voiceQ > 3 then voiceQ = {} end         -- (behind: the stale calls dropped)
+  for _, st in ipairs(stems) do
+    local c = M.resolveClip(voiceId(), st)
+    if c then voiceQ[#voiceQ + 1] = c end
+  end
+end
+
+local function voiceUpdate(dt)
+  voiceT = voiceT - (dt or 0)
+  if voiceT > 0 or #voiceQ == 0 then return end
+  local c = table.remove(voiceQ, 1)
+  local au = rawget(_G, 'Engine') and Engine.Audio
+  if au and au.intercomPlayPacenote then pcall(au.intercomPlayPacenote, { filename = c.file }) end
+  voiceT = (c.len or M.CLIP_LEN_S) + M.CLIP_GAP_S
+end
+function M._voiceQ() return voiceQ end
+
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function msg(text, icon, ttl, cat)
   local gh = rawget(_G, 'guihooks')
@@ -44,8 +129,9 @@ function M.fmt(s)
   return string.format('%d:%04.1f', m, s - m * 60)
 end
 
--- Pure: how far ahead (m) a call is made at speed (m/s): about 3 s, never under 60 or over 200 m.
-function M.callLead(speed) return math.min(200, math.max(60, (speed or 0) * 3)) end
+-- Pure: how far ahead (m) a call is made at speed (m/s): about 4 s (the voice takes a second or two to say it), never
+-- under 70 or over 250 m.
+function M.callLead(speed) return math.min(250, math.max(70, (speed or 0) * 4)) end
 
 -- Pure: progress along xs, ys (with cumulative cum) of the point (px, py), searching from index i0 to i0 + window.
 -- Returns s (m along), the index of the segment, the distance off the road.
@@ -65,7 +151,7 @@ function M.progress(xs, ys, cum, px, py, i0, window)
   return bs, bi, math.sqrt(best)
 end
 
-local function loadBests()
+loadBests = function()
   if bests then return bests end
   local read = rawget(_G, 'jsonReadFile')
   local ok, got = false, nil
@@ -259,7 +345,8 @@ end
 
 -- Every frame (core): dt the simulation's; anchor, player as jobs.update's.
 function M.update(dt, anchor, player)
-  if not state then return end
+  voiceUpdate(dt)
+  if not state then voiceQ = {} return end
   dt = dt or 0
   if state.phase == 'loading' then
     state.wait = state.wait + dt
@@ -302,10 +389,15 @@ function M.update(dt, anchor, player)
   if state.phase == 'countdown' then
     state.cd = state.cd - dt
     local n = math.ceil(state.cd)
-    if n ~= state.lastCall and n > 0 then state.lastCall = n; msg(tostring(n), 'flag', 1) end
+    if n ~= state.lastCall and n > 0 then
+      state.lastCall = n
+      msg(tostring(n), 'flag', 1)
+      say({ 'system_countdown' .. n }, true)
+    end
     if not state.jumped and (player.x - state.sx) ^ 2 + (player.y - state.sy) ^ 2 > M.JUMP_M ^ 2 then
       state.jumped, state.penalty = true, M.JUMP_S
       msg('Jump start: +' .. M.JUMP_S .. ' s', 'warning', 3)
+      say({ 'system_falseStart' })
     end
     if state.cd <= 0 then
       state.phase, state.t, state.s, state.i, state.note, state.cp, state.splits, state.off =
@@ -313,7 +405,8 @@ function M.update(dt, anchor, player)
       state.penalty = state.penalty or 0
       local first = state.notes[1]
       msg('GO!', 'flag', 3)
-      if first then msg(first.text, 'flag', 4, 'bneRallyNote') end
+      say({ 'system_countdowngo' })
+      if first then msg(first.text, 'flag', 4, 'bneRallyNote'); say(M.clips(first)) end
       if first then state.note = 2 end
     end
     return
@@ -327,6 +420,7 @@ function M.update(dt, anchor, player)
     local nt = state.notes[state.note]
     if nt and state.s >= (tonumber(nt.at) or 0) - M.callLead(speed) then
       msg(nt.text, 'flag', 4, 'bneRallyNote')
+      say(M.clips(nt), true)
       state.note = state.note + 1
     end
     -- checkpoints (splits against your best run's)
@@ -371,10 +465,21 @@ function M.uiState()
     a = { phase = state.phase, name = state.name, t = state.t, s = state.s, total = state.total, car = state.carName,
           notes = state.notes and #state.notes or nil, penalty = state.penalty }
   end
-  return { stages = stages, active = a, last = last, error = err }
+  return { stages = stages, active = a, last = last, error = err, voices = M.VOICES, voice = voiceId() }
+end
+
+function M.setVoice(id)
+  local b = loadBests()
+  local ok = id == 'off'
+  for _, v in ipairs(M.VOICES) do if v.id == id then ok = true end end
+  if not ok then return false end
+  b.voice = id
+  saveBests()
+  if id ~= 'off' then say({ 'system_commsCheck' }, true) end     -- (a sample)
+  return true
 end
 
 function M.isActive() return state ~= nil end
-function M._reset() state, last, err, reqId, bests = nil, nil, nil, 0, nil end   -- tests
+function M._reset() state, last, err, reqId, bests, voiceQ, voiceT, metaCache = nil, nil, nil, 0, nil, {}, 0, {} end   -- tests
 function M._state() return state end
 return M
