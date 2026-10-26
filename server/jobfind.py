@@ -324,8 +324,10 @@ def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None, kind="car"):
 PARCEL_WORDS = ("distribution", "warehouse", "courier", "post_office", "shipping_center", "logistics", "parcel",
                 "delivery_service", "mail")
 PARCEL_KM = (2.5, 3.5, 5.0)
-PARCEL_STOPS = (6, 7, 8, 9)
-PARCEL_SPREAD_M = 600.0
+PARCEL_SIZES = (10, 20, 35, 60)    # the routes on offer at a depot (the user: "routes can range from 10-60 packages
+                                   # you get to pick")
+PARCEL_DEPOTS = 2                  # the nearest depots offering them
+PARCEL_SPREAD_M = 500.0            # the neighbourhood's radius for 10 stops (more stops: wider, with the square root)
 PARCEL_BASE, PARCEL_PER_STOP, PARCEL_PER_MILE = 60.0, 30.0, 6.0
 VAN, VAN_NAME = "van", "Beamazon van"   # (the user: "call it beamazon")
 
@@ -352,8 +354,8 @@ def parcel_offers(md, lat, lon, seed=0, spot_fn=None, house_fn=None):
     near = [g for g in garages(_places(md, lat, lon, PICK_M), is_parcel_depot) if dist_m(lat, lon, g[1], g[2]) <= PICK_M]
     near.sort(key=lambda g: (round(dist_m(lat, lon, g[1], g[2]), 1), g[0]))
     out = []
-    for g in near[:JOBS]:
-        h = _h(seed, g[0], "parcel")
+    for g, n in [(g, n) for g in near[:PARCEL_DEPOTS] for n in PARCEL_SIZES]:
+        h = _h(seed, g[0], "parcel", n)
         ps = spot_fn(g[1], g[2])
         if ps is None:
             continue
@@ -362,18 +364,18 @@ def parcel_offers(md, lat, lon, seed=0, spot_fn=None, house_fn=None):
         k = max(math.cos(math.radians(g[1])), 0.05)
         cl = g[1] + km * 1000.0 * math.cos(brg) / M_LAT
         cn = g[2] + km * 1000.0 * math.sin(brg) / (M_LAT * k)
-        n = PARCEL_STOPS[(h >> 16) % len(PARCEL_STOPS)]
+        spread = PARCEL_SPREAD_M * math.sqrt(n / 10.0)
         pts = []
-        for i in range(n * 3):                          # (some points find no street: three tries a stop)
+        for i in range(n * 2):                          # (some points find no street: two tries a stop)
             if len(pts) >= n:
                 break
-            hi = _h(seed, g[0], "stop", i)
-            r = PARCEL_SPREAD_M * ((hi % 1000) / 1000.0) ** 0.5
+            hi = _h(seed, g[0], n, "stop", i)
+            r = spread * ((hi % 1000) / 1000.0) ** 0.5
             a = math.radians((hi >> 10) % 360)
             s = house_fn(cl + r * math.cos(a) / M_LAT, cn + r * math.sin(a) / (M_LAT * k))
-            if s is not None and all(dist_m(s[0], s[1], q[0], q[1]) > 60.0 for q in pts):
+            if s is not None and all(dist_m(s[0], s[1], q[0], q[1]) > 35.0 for q in pts):
                 pts.append((float(s[0]), float(s[1])))
-        if len(pts) < 3:
+        if len(pts) < max(3, n * 2 // 3):              # (a neighbourhood with too few streets: no such route)
             continue
         route, here, dist = [], (ps[0], ps[1]), 0.0     # nearest-next order from the depot
         left = list(pts)
@@ -385,7 +387,7 @@ def parcel_offers(md, lat, lon, seed=0, spot_fn=None, house_fn=None):
             here = nxt
         stops = [{"lat": round(a, 6), "lon": round(b, 6), "name": "Stop %d" % (i + 1)} for i, (a, b) in enumerate(route)]
         dur = dist / AVG_MS + 45.0 * len(stops)
-        out.append({"id": "%016x" % _h(seed, g[0], "route"), "kind": "parcel", "car": VAN, "car_name": VAN_NAME,
+        out.append({"id": "%016x" % _h(seed, g[0], "route", n), "kind": "parcel", "car": VAN, "car_name": VAN_NAME,
                     "cargo": "Beamazon: %d parcels" % len(stops),
                     "pickup": {"lat": round(ps[0], 6), "lon": round(ps[1], 6), "name": g[3]},
                     "dropoff": stops[-1], "stops": stops, "dist": round(dist, 1), "dur": round(dur, 1),

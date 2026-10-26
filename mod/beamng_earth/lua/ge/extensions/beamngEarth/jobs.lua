@@ -109,7 +109,7 @@ function M.refresh(lat, lon, kind)
   reqId = reqId + 1
   if not c.requestDeliveryJobs(reqId, lat, lon, seed, kind) then offersError = 'not connected to the world server' return false end
   pending, pendingT, offersError = reqId, os.clock(), nil
-  pendingWait = kind == 'truck' and M.TRUCK_WAIT_S or M.REQUEST_WAIT_S
+  pendingWait = (kind == 'truck' or kind == 'parcel') and M.TRUCK_WAIT_S or M.REQUEST_WAIT_S
   return true
 end
 

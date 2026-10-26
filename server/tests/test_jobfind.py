@@ -180,10 +180,9 @@ class ParcelTest(unittest.TestCase):
         md = FakeMD({"places": feats("places", [place("dc", 400.0, 0.0, cat="distribution_center", name="DC"),
                                                 place("caf", 100.0, 0.0, cat="cafe")], mg.POINT)})
         jobs = jobfind.parcel_offers(md, LAT0, LON0, 1, spot_fn=spot, house_fn=spot)
-        self.assertEqual(len(jobs), 1)
+        self.assertEqual(sorted(len(x["stops"]) for x in jobs), list(jobfind.PARCEL_SIZES), "10 to 60 to pick from")
         j = jobs[0]
         self.assertEqual((j["kind"], j["car"], j["pickup"]["name"]), ("parcel", "van", "DC"))
-        self.assertIn(len(j["stops"]), jobfind.PARCEL_STOPS)
         self.assertEqual(j["dropoff"], j["stops"][-1])
         self.assertTrue(j["cargo"].startswith("Beamazon"))
         self.assertEqual(j["pay"], jobfind.parcel_pay(j["dist"], len(j["stops"])))
