@@ -411,6 +411,7 @@ def join(feats, tags):
     import roadlanes
     roadlanes.resolve(feats, tags, named)
     # A refresh must also invalidate derived road/deck specs on a reused object.
-    for key in ('_road_specs', '_bridge_specs', '_tunnel_specs', '_generated_lanes', '_bnge_cell'):
+    for key in ('_road_specs', '_bridge_specs', '_tunnel_specs', '_generated_lanes', '_bnge_cell',
+                '_cached_lane_counts', '_lane_context_pending'):
         feats.__dict__.pop(key, None)
     return feats

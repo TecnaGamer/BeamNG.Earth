@@ -65,6 +65,23 @@ State-specific solid widths also apply to generated stop lines. Unlisted regions
 - Reproduce the reported **I-165 South, Exit 3, Bowling Green, Kentucky** location from cached map/elevation data near **36.9447, -86.4872**, checking both carriageways. At sampled abutment center/inside-edge points, the coarse graded surface differed from the deck by up to 0.34 m at L0 and 1.24 m at L1; the revised surface stays within 0.025–0.049 m, including the normal road-surface lift. These are offline measurements, not an in-game driving result.
 - Retain the user's current performance settings: 8 heightmap threads, 8 configured road workers, 16 far workers, 3 busy-terrain tile workers, and the updated priorities. Retain the resource-budget overrides, including 4 small-profile road/far workers and desktop road-worker tiers of 3/4/5/6. Actual worker counts depend on the selected budget and command-line options; this change includes no performance benchmark claim.
 
+## Road loading performance
+
+- Reject distant roundabout corridors with conservative bounding-box checks before projecting corner/prop samples onto road segments. Prepare segment vectors and lengths once per corridor collection and evaluate nearby samples in bounded batches. Retain the same strict horizontal and vertical clearance rules, including negative margins and degenerate segments.
+- Reuse geographic corner polygons alongside the generated geometry. Keep the corner cache bounded to 16 entries with least-recently-used eviction; concurrent requests for the same inputs share one calculation. Failed calculations remain retryable and changed road-specification identities invalidate the cached result.
+- Benchmark the cached I-165 Exit 3 road-photo footprint (546 road features): median uncached calculation **6.64 s before / 0.78 s after**, approximately **8.5x faster**, across three comparisons. Every resulting image was pixel-identical; warm calls take about 0.09 s. This isolates road-photo generation without live urban/measured-width callbacks, so it is not an end-to-end driving or loading-time guarantee. Results: `build/road-loading/benchmark.json`.
+- Preserve the current compiled worker settings and support the user's diagnostic launch overrides: `-- --pin off --workers 3 --road-processes 4`. This update optimizes computation rather than increasing concurrency again.
+- Replace the quadratic junction-node merge search with a spatial bucket search. Preserve the original pair order, strict distance threshold and union order, so corner geometry remains unchanged.
+- Follow-up cached road-photo comparisons around the I-65/I-165 interchange and northbound Bowling Green: **0.89 s to 0.68 s** median for 776 features and **4.36 s to 2.19 s** for 1,917 features, relative to the first faster-loading implementation. All three comparisons per area produce identical pixels. These are isolated CPU benchmarks; live 91-second worker stalls have not been fully reproduced. Results: `build/highway-loading/benchmark.json`.
+- Log stage timings for road tiles taking at least 10 seconds: map/anchor preparation, profiles, sites/buildings, layout, props/parking, ground mesh, structures/rails and file writing. This identifies the expensive stage if long worker stalls recur. Preserve the current worker settings and scheduling.
+
+## Highway lane continuity
+
+- Fix inconsistent lane counts across cached copies of the same highway segment. At **I-65 North near Plum Springs**, GERS segment `5e940544-b910-4467-9607-3a646144162f` (OSM source `w699642850@5`) had three lanes in some cells and no count in others, producing a two-lane fallback and a 14 m/18 m pavement-width seam.
+- Recover missing counts and stale two-lane connected guesses using direct mapped evidence for the **exact same feature ID and source revision** in cached centre/endpoint cells. Read at most 16 small lane tables per decoded cell, without network requests or rewriting raw road data. Conflicting evidence is ignored. All six cached copies of the reported segment now produce three lanes and 18 m pavement; affected-cell lookups took approximately 2–2.4 ms locally. Report: `build/highway-loading/plum-springs-verification.json`.
+- Globally preserve three lanes through an untagged or previously inferred two-lane chain when unique, reciprocal, direction-compatible three-lane continuations bound both ends. Preserve explicit two-lane tags, open-ended transitions, ramps, forks, opposing traffic, mismatched connectors and roundabouts. Ground roads, decks, tunnels, paint, grading and AI consume the same corrected count.
+- Include recovered evidence in road-facts cache keys. If required cached context is absent, retry decoded context after 30 seconds and avoid persisting provisional generated geometry. Fresh OSM enrichment clears earlier recovery results. Existing downloads and saved player positions are retained.
+
 ## Rural lane continuity
 
 - Keep a narrow rural section at two lanes when uniquely aligned two-lane through-road continuations connect to **both ends**. This also handles several consecutive narrow segments, reversed source geometry, missing counts and bridge/tunnel intervals. The repaired profile keeps the 11 m pavement minimum, two travel lanes and the region's center/edge markings through paint, grading and AI.
@@ -106,10 +123,12 @@ Retains the native road/deck/grading implementation, railway source flags, bridg
 
 ## Validation
 
-- **49 Python test modules: 784 tests, 780 passed, 4 skipped.** Three skipped gas-station checks require live data; one protocol constant check is skipped by the existing suite.
+- **51 Python test modules: 802 tests, 798 passed, 4 skipped.** Three skipped gas-station checks require live data; one protocol constant check is skipped by the existing suite.
 - Covers lane enrichment, markings and mesh dimensions, ramps, zipper transitions, roundabout clearance, road generation, AI, grading, bridges, tunnels, sidewalks, vegetation, parking, railways, gas stations, caching and the previously migrated signs.
-- Final suite logs: `build/smooth-overpasses-final-tests/`.
-- Five Lua test files passed, with 203 assertions: surface layers (including the new gravel layer), terrain swaps/patches, road loading and near-tile materials. Log: `build/smooth-overpasses-lua-tests.log`.
+- Final suite logs: `build/highway-loading-final-tests/`.
+- Eight loading regressions verify original/optimized clearance equivalence, distant geometry rejection, boundary/vertical behavior, concurrent corner sharing, failure retry/spec invalidation, bounded LRU reuse and exact spatial-node pairing/order without distant pair checks.
+- Ten highway-continuity regressions cover cached Plum Springs geometry, paint/width/grading/AI/deck agreement, direction and topology exclusions, explicit counts, source refresh, exact identity/revision matching, conflicting/inferred/incomplete cache evidence, bounded reads and retry without network access or raw-cache rewrites.
+- Five Lua test files passed, with 203 assertions: surface layers (including the new gravel layer), terrain swaps/patches, road loading and near-tile materials. Log: `build/road-loading-lua-tests.log`.
 - Nine new overpass regressions cover level/sloping decks, required crossing clearance, the two cached Exit 3 profiles, real terrain obstructions, selective approach detail, unavailable metadata, L1 worker grading, fine-ground agreement with the physics lattice and Detail/Terrain mode support with the terrain-block sink retained. Existing bridge clearance, approach, grading, farfield and protocol checks also pass. Worker-budget expectations match the user-approved current settings. Cached Exit 3 measurement report: `build/smooth-overpasses/exit3-terrain-verification.json`.
 - Rural-road regressions cover northern/southern hemispheres and left/right-hand traffic, mapped/inferred lane counts, mapped/building width overrides, urban and non-target exceptions, bridge/tunnel clearance, actual mesh/material/photo painting, edge lines, grading and AI lane widths. Existing width expectations were updated for the intentional rural minimum.
 - Added an offline regression from cached Overture/OSM geometry at **41.63481, -84.99966**, the user's Public Square screenshot. It checks all eight circulating arcs, all eight approaches, shared AI/grading widths, a monument in the island, full sidewalk clearance, crosswalks, props and suppression of untagged sidewalks. The AI test verifies one directed ring and all eight entry/exit connections.
@@ -125,13 +144,13 @@ The branch-specific PR template is [`.github/PULL_REQUEST_TEMPLATE/road-infrastr
 ## Built EXE
 
 - File: [`dist/BeamNG.Earth-1.6.3-beta.exe`](dist/BeamNG.Earth-1.6.3-beta.exe)
-- Size: 73,995,042 bytes (approximately 74 MB), rebuilt with smooth overpass profiles, detailed approach terrain in all rendering modes, the user's current performance settings and all earlier branch changes, including reference-based A Collins Road gravel.
-- SHA-256: `65ce91d76e8d3183955241238b88737a92da909c002da2bdb29cf79052a805d0`
-- Bundled source fingerprint: `bf845526656f5a37`, verified against the finished server sources.
-- Frozen revisit identity: `e67ff569cad7e2f7`; verified to differ from the old custom builds and to change when the bundled source fingerprint changes.
+- Size: 74,002,202 bytes (approximately 74 MB), rebuilt with spatial junction searches, slow-road stage timings and highway lane continuity, plus the earlier roundabout/corner optimizations, overpass, road and A Collins Road improvements. The current compiled worker settings remain available with launcher overrides.
+- SHA-256: `c288b71838f9f9cd47c8023e090c177d37f6d77d4d7b45b4fb3fc4015cb0245e`
+- Bundled source fingerprint: `2f9ddfaf248e25ce`, verified against the finished server sources.
+- Frozen revisit identity: `4c5787a03146a95e`; verified to differ from the old custom builds and to change when the bundled source fingerprint changes.
 - Verified the finished source fingerprint against the EXE and checked that its archived terrain/mesh gravel materials and Lua terrain configuration exactly match the tested files.
 - Verified the archive contains the new road modules, native extension, state boundaries and highway-sign assets.
-- Build log: `build/smooth-overpasses-build.log`; smoke results: `build/smooth-overpasses/exe-verification.json`, `launcher-help.log`, `server-help.log`.
+- Build log: `build/highway-loading-build.log`; smoke results: `build/highway-loading/exe-verification.json`, `launcher-help.log`, `server-help.log`.
 
 ## Follow-up: custom EXE HTTPS failure
 
@@ -141,4 +160,4 @@ The custom builds reported multiple map-data hosts as unreachable while the orig
 
 Validation: 65 focused tests passed; 11 Linux-only tests skipped on Windows. The fixed frozen diagnostic received HTTPS responses from all five hosts in the report (USDA, USGS, Meta's S3 bucket, S3 and Mapterhorn). The full EXE's archived SSL bytecode successfully creates a verified context using its archived policy file, and both launcher/server CLI smoke tests passed.
 
-Previous copies were delivered as `BeamNG.Earth-1.6.3-beta-roads-network-fix.exe`, `BeamNG.Earth-1.6.3-beta-roundabouts.exe`, `BeamNG.Earth-1.6.3-beta-wide-roundabouts.exe`, `BeamNG.Earth-1.6.3-beta-wide-rural-roads.exe`, `BeamNG.Earth-1.6.3-beta-road-connections.exe` and `BeamNG.Earth-1.6.3-beta-collins-gravel.exe`. The new [`../builds/BeamNG.Earth-1.6.3-beta-smooth-overpasses.exe`](../builds/BeamNG.Earth-1.6.3-beta-smooth-overpasses.exe) adds the overpass/approach fixes and current performance settings; its checksum matches the EXE above. The original release and previous delivered builds were not replaced. Existing older custom EXEs require rebuilding with the corrected packaging tool.
+Previous copies were delivered as `BeamNG.Earth-1.6.3-beta-roads-network-fix.exe`, `BeamNG.Earth-1.6.3-beta-roundabouts.exe`, `BeamNG.Earth-1.6.3-beta-wide-roundabouts.exe`, `BeamNG.Earth-1.6.3-beta-wide-rural-roads.exe`, `BeamNG.Earth-1.6.3-beta-road-connections.exe`, `BeamNG.Earth-1.6.3-beta-collins-gravel.exe`, `BeamNG.Earth-1.6.3-beta-smooth-overpasses.exe` and `BeamNG.Earth-1.6.3-beta-faster-loading.exe`. The new [`../builds/BeamNG.Earth-1.6.3-beta-highway-loading.exe`](../builds/BeamNG.Earth-1.6.3-beta-highway-loading.exe) adds the follow-up loading and highway-lane corrections; its checksum matches the EXE above. The original release and previous delivered builds were not replaced. Existing older custom EXEs require rebuilding with the corrected packaging tool.

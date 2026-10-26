@@ -70,7 +70,25 @@ def specs(feats, source, left_hand=False):
 
 
 def corridors(rows):
-    return [(pts, sp.width / 2) for _, sp, pts, _ in rows if sp.roundabout]
+    return _Corridors((pts, sp.width / 2) for _, sp, pts, _ in rows if sp.roundabout)
+
+
+class _Corridors(tuple):
+    """Immutable geometry snapshot with segment data reused by all clearance queries."""
+    def __new__(cls, rings):
+        items, prepared = [], []
+        for points, half in rings:
+            p = np.array(points, dtype=np.float64, copy=True)
+            p.setflags(write=False)
+            items.append((p, half))
+            if len(p) < 2:
+                continue
+            a, d = p[:-1], np.diff(p, axis=0)
+            length2 = np.maximum(np.sum(d[:, :2] ** 2, axis=1), 1e-12)
+            prepared.append((a, d, length2, half, p[:, :2].min(0), p[:, :2].max(0)))
+        obj = super().__new__(cls, items)
+        obj.prepared = tuple(prepared)
+        return obj
 
 
 def approaches(feats, source):
@@ -103,15 +121,27 @@ def approaches(feats, source):
 def overlaps(points, rings, margin=0., vertical=None):
     """Whether sampled geometry intrudes into circulating pavement (optionally at its height)."""
     q = np.asarray(points, np.float64)
-    for p, half in rings:
-        a, d = p[:-1], np.diff(p, axis=0)
-        length2 = np.maximum(np.sum(d[:, :2] ** 2, axis=1), 1e-12)
-        for point in q:
-            t = np.clip(np.sum((point[:2] - a[:, :2]) * d[:, :2], axis=1) / length2, 0., 1.)
-            nearest = a + t[:, None] * d
-            inside = np.linalg.norm(nearest[:, :2] - point[:2], axis=1) < half + margin
+    if not len(q):
+        return False
+    rings = rings if isinstance(rings, _Corridors) else _Corridors(rings)
+    qlo, qhi = q[:, :2].min(0), q[:, :2].max(0)
+    for a, d, length2, half, lo, hi in rings.prepared:
+        reach = half + margin
+        # A conservative broad phase: remote corners must never pay for every
+        # point/segment projection of a roundabout elsewhere in the map cell.
+        if reach <= 0 or np.any(qhi < lo - reach) or np.any(qlo > hi + reach):
+            continue
+        near = q[np.all(q[:, :2] >= lo - reach, axis=1) & np.all(q[:, :2] <= hi + reach, axis=1)]
+        # Bound temporary arrays even for unusually long mapped polylines.
+        batch = max(1, 65536 // len(a))
+        for start in range(0, len(near), batch):
+            points = near[start:start + batch]
+            t = np.clip(np.sum((points[:, None, :2] - a[None, :, :2]) * d[None, :, :2], axis=2)
+                        / length2, 0., 1.)
+            nearest = a[None] + t[:, :, None] * d[None]
+            inside = np.linalg.norm(nearest[:, :, :2] - points[:, None, :2], axis=2) < reach
             if vertical is not None:
-                inside &= np.abs(nearest[:, 2] - point[2]) < vertical
+                inside &= np.abs(nearest[:, :, 2] - points[:, None, 2]) < vertical
             if inside.any():
                 return True
     return False
@@ -119,6 +149,7 @@ def overlaps(points, rings, margin=0., vertical=None):
 
 def clear_props(rows, rings):
     # Keep objects on grade-separated roads and in the central island.
+    rings = rings if isinstance(rings, _Corridors) else _Corridors(rings)
     return [r for r in rows if not overlaps([r[1:4]], rings, PROP_CLEAR_M, vertical=3.)]
 
 

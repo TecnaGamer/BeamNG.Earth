@@ -14,6 +14,12 @@ Keep short overpass decks on their approach grade when existing clearance permit
 
 Include the user's current worker-count, budget and priority settings; actual concurrency remains subject to resource-budget and command-line overrides.
 
+Reduce the road-loading stalls caused by repeated roundabout clearance checks during intersection construction. Skip distant corridors, reuse prepared segments, batch nearby projections, and share cached corner geometry/geographic polygons between concurrent requests. The cached Exit 3 road-photo benchmark improves from 6.64 s to 0.78 s median with pixel-identical output in three comparisons; live driving verification remains pending.
+
+Replace quadratic junction-node comparisons with a spatial search that preserves pairing and merge order. Against the first faster-loading implementation, cached road-photo generation improves from 0.89 s to 0.68 s near the interchange and from 4.36 s to 2.19 s in the denser northbound area, with identical pixels. Add stage timings for road tiles exceeding 10 seconds; the reported 91-second worker stalls still need live verification.
+
+Fix three-to-two-to-three lane gaps caused by inconsistent cached copies of the same highway segment. Recover exact-feature/source-revision lane evidence using bounded local reads, and bridge missing/inferred gaps only with matching three-lane continuations at both ends. All six cached copies of the reported I-65 North segment near Plum Springs now retain three lanes and 18 m pavement. Preserve explicit lane drops, ramps and ambiguous topology; share corrected counts across rendering, grading and AI.
+
 Give A Collins Road in Logan County, Kentucky gray loose gravel with two pale cream compacted wheel tracks, matching the supplied real-life reference. Use stock gravel/worn-track textures with feathered edges and continuous texture placement through render seams and wall cuts. Keep GRAVEL tire physics, the existing road width and matching distant imagery. Remove its generated utility poles and wires using a road-name/location override; preserve neighboring roads.
 
 Include the packaged source fingerprint in generated-world cache keys. Previously, different custom EXEs reused the same cache identity and could display old road meshes and grading plans. Changed builds now regenerate derived geometry automatically, preserving raw downloads and saved positions.
@@ -30,7 +36,11 @@ Fix custom EXE HTTPS initialization by bundling the build runtime's required SSL
 
 ## Validation
 
-- [x] 49 Python test modules: 780 passed, 4 skipped (three live-data checks and one existing protocol constant check).
+- [x] Verify optimized clearance against the previous calculation, including strict edges, vertical separation, negative margins and degenerate segments. Check shared concurrent corner builds, retry after failure, invalidation and bounded LRU reuse.
+
+- [x] 51 Python test modules: 798 passed, 4 skipped (three live-data checks and one existing protocol constant check).
+- [x] Verify spatial junction pairs/order against the original calculation and distant-node rejection; run both cached interchange/northbound comparisons with pixel-identical output.
+- [x] Verify all six cached Plum Springs copies and ten highway-continuity regressions, including source refresh, cache-context retry, bounded reads, paint/AI/deck agreement and intentional lane-drop preservation.
 - [x] Check flat/sloping overpasses, cached Exit 3 profiles, clearance/terrain exceptions, L1 grading and fine approach meshes. Offline Exit 3 deck-to-ground separation is 0.025–0.049 m at sampled abutment points; in-game verification remains pending.
 - [x] Test global rural widening, left/right-hand traffic, width overrides and non-target exceptions; check mesh/photo/material pavement, paint, grading, AI and bridge/tunnel profiles. Cached West Maumee Street's mapped two-lane profile grows from 9.5 m to 11 m pavement.
 - [x] Verify actual dash lengths/gaps/widths, reversed road directions, bridge/tunnel paint and adjacent merge clearance.

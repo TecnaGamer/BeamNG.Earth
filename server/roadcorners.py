@@ -1,9 +1,13 @@
 """Rounded intersection pavement, shared by terrain, paint and road tiles."""
 from collections import OrderedDict
+from concurrent.futures import Future
+from threading import Lock
 import numpy as np
 import junctions
 
 _CACHE = OrderedDict()
+_PENDING = {}
+_LOCK = Lock()
 
 
 def find(rows):
@@ -13,10 +17,14 @@ def find(rows):
 
 
 def source(cells, urban=None, widths=None, frame=None, left_hand=False):
+    return tuple(_entry(cells, urban, widths, frame, left_hand)[:3])
+
+
+def _entry(cells, urban=None, widths=None, frame=None, left_hand=False):
     import roads, geodesy
     cells = tuple(f for f in cells if f is not None and len(f))
     if not cells:
-        return None, [], []
+        return [None, [], [], []]
     if frame is None:
         lon, lat = cells[0].lonlat[0]
         frame = geodesy.EnuFrame(float(lat), float(lon), 0.)
@@ -24,9 +32,41 @@ def source(cells, urban=None, widths=None, frame=None, left_hand=False):
     memos = tuple(f.__dict__['_road_specs'] for f in cells)
     key = (tuple((id(f), id(memo)) for f, memo in zip(cells, memos)),
            frame.lat0, frame.lon0, frame.h0, urban, widths, bool(left_hand))
-    saved = _CACHE.get(key)
-    if saved is not None:
-        return saved[1:]
+    with _LOCK:
+        saved = _CACHE.get(key)
+        if saved is not None:
+            _CACHE.move_to_end(key)
+            return saved[1]
+        pending = _PENDING.get(key)
+        owner = pending is None
+        if owner:
+            pending = _PENDING[key] = Future()
+    if not owner:
+        return pending.result()  # texture and material requests share the same build
+    try:
+        rows, corners = _build(cells, specs, frame)
+        pads = []
+        for c in corners:
+            for poly in ([c['fill']] if c['fill'] is not None else []) + c.get('fills', []):
+                la, lo, _ = frame.enu_to_geodetic(poly[:, 0], poly[:, 1], 0.)
+                pads.append((la, lo))
+        entry = [frame, rows, corners, pads]
+        with _LOCK:
+            if len(_CACHE) >= 16:
+                _CACHE.popitem(last=False)
+            _CACHE[key] = ((cells, memos), entry)  # retain identities for enrichment invalidation
+            _PENDING.pop(key)
+        pending.set_result(entry)
+        return entry
+    except BaseException as exc:
+        with _LOCK:
+            _PENDING.pop(key, None)
+        pending.set_exception(exc)
+        raise
+
+
+def _build(cells, specs, frame):
+    import roads
     rows, seen = [], set()
     for f, fspecs in zip(cells, specs):
         for i, sp in enumerate(fspecs):
@@ -38,21 +78,11 @@ def source(cells, urban=None, widths=None, frame=None, left_hand=False):
                 e, n, _ = frame.geodetic_to_enu(p[:, 1], p[:, 0], 0.)
                 rows.append((fid, sp, np.c_[e, n, np.zeros(len(p))], float(p[:, 0].mean())))
     rows.sort(key=lambda row: (row[0], tuple(row[2][0])))
-    corners = find(rows)
-    if len(_CACHE) >= 16:
-        _CACHE.popitem(last=False)
-    _CACHE[key] = ((cells, memos), frame, rows, corners)  # retain identities, including enrichment invalidation
-    return frame, rows, corners
+    return rows, find(rows)
 
 
 def pads(cells, urban=None, widths=None, frame=None):
-    frame, rows, corners = source(cells, urban, widths, frame)
-    out = []
-    for c in corners:
-        for poly in ([c['fill']] if c['fill'] is not None else []) + c.get('fills', []):
-            la, lo, _ = frame.enu_to_geodetic(poly[:, 0], poly[:, 1], 0.)
-            out.append((la, lo))
-    return out
+    return _entry(cells, urban, widths, frame)[3]
 
 
 def tile(rows, box, draw_pavement):

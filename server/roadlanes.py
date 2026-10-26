@@ -7,6 +7,58 @@ opposing carriageway or crossing bridge. lane_source records the evidence.
 import numpy as np
 
 
+def cached_counts(feats, key, read):
+    """Recover missing highway tags from other cached copies of the SAME feature.
+
+    Source geometry extends beyond its cell, but OSM enrichment is per cell.
+    An old/moved OSM way can therefore be tagged in one copy and absent in the
+    next. Read at most 16 cached cells around feature centres/ends; never fetch.
+    Only direct evidence for the exact GERS id and source revision is accepted.
+    Return overrides plus whether absent context warrants a later retry.
+    """
+    import mapcells
+    counts = feats.attrs.get('lane_count', feats.attrs.get('osm_lanes', [None] * len(feats)))
+    sources = feats.attrs.get('lane_source', [''] * len(feats))
+    records = feats.attrs.get('src_record', [''] * len(feats))
+    classes = feats.attrs.get('class', [''] * len(feats))
+    candidates = [i for i in range(len(feats)) if classes[i] in ('motorway', 'trunk')
+                  and records[i] and (count(counts[i]) is None or
+                                      (count(counts[i]) == 2 and sources[i] == 'connected'))
+                  and _rule(feats, 'oneway', i) is not None
+                  and _rule(feats, 'subclass', i) != 'link'
+                  and str(feats.attrs.get('subclass', [''] * len(feats))[i]) != 'link']
+    if not candidates:
+        return {}, False
+    wanted = {}
+    for i in candidates:
+        parts = feats.parts(i)
+        if len(parts) != 1 or len(parts[0]) != 1 or len(parts[0][0]) < 2:
+            continue
+        line = parts[0][0]
+        # The bbox centre is the source owner cell; endpoints supply the two
+        # adjoining contexts without scanning the entire region on each tile.
+        for lon, lat in (0.5 * (line.min(0) + line.max(0)), line[0], line[-1]):
+            other = mapcells.cell_of(float(lat), float(lon), key.z)
+            if other != key:
+                wanted.setdefault(other, set()).add(i)
+    evidence = {i: set() for i in candidates}
+    pending = set()
+    for n, (other, indices) in enumerate(wanted.items()):
+        if n >= 16:
+            pending.update(candidates)
+            break
+        rows = read(other)
+        if rows is None:
+            pending.update(indices)
+            continue
+        for i in indices:
+            row = rows.get(str(feats.ids[i]))
+            if row is not None and row[0] == str(records[i]) and row[1] is not None:
+                evidence[i].add(row[1])
+    overrides = {i: next(iter(values)) for i, values in evidence.items() if len(values) == 1}
+    return overrides, bool(pending.difference(overrides))
+
+
 def count(value):
     try:
         n = float(value)
@@ -56,17 +108,20 @@ def continuations(feats, eligible):
             tangent /= np.linalg.norm(tangent)
             ids = frozenset(str(connectors.value[r]) for r in connectors.rows(i)
                             if abs(float(connectors.start[r]) - end) < .001) if connectors else frozenset()
-            ends[i, end] = (line[at], tangent, ids)
+            direction = _rule(feats, 'oneway', i)
+            flow = (0 if direction is None else -1 if float(direction) < 0 else 1) * (1 if end else -1)
+            ends[i, end] = (line[at], tangent, ids, flow)
             buckets.setdefault(tuple(np.floor(line[at]).astype(int)), []).append((i, end))
     choices = {}
-    for a, (p, tangent, ids) in ends.items():
+    for a, (p, tangent, ids, flow) in ends.items():
         key = np.floor(p).astype(int)
         near = []
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for b in buckets.get((key[0] + dx, key[1] + dy), ()):
-                    q, heading, other_ids = ends[b]
+                    q, heading, other_ids, other_flow = ends[b]
                     if (a[0] != b[0] and classes[a[0]] == classes[b[0]]
+                            and flow == -other_flow
                             and not (ids and other_ids and ids.isdisjoint(other_ids))
                             and np.linalg.norm(p - q) <= .75 and tangent @ heading < -.9):
                         near.append(b)
@@ -110,6 +165,8 @@ def generated_counts(feats):
         return saved
     values = feats.attrs.get('lane_count', feats.attrs.get('osm_lanes', [None] * len(feats)))
     counts = [count(v) for v in values]
+    for i, value in feats.__dict__.get('_cached_lane_counts', {}).items():
+        counts[i] = value
     sources = feats.attrs.get('lane_source', [''] * len(feats))
     classes = feats.attrs.get('class', [''] * len(feats))
     eligible = {i for i in range(len(feats)) if classes[i] in
@@ -124,6 +181,19 @@ def generated_counts(feats):
             if all(counts[i] == 1 for i in outside):
                 for i in component:
                     counts[i] = 1
+    # Recheck missing/cached guesses in the full source context. Explicit
+    # two-lane sections and real 3 -> 2 transitions remain authoritative.
+    highway = {i for i in range(len(feats)) if classes[i] in ('motorway', 'trunk')
+               and _rule(feats, 'oneway', i) is not None
+               and _rule(feats, 'subclass', i) != 'link'
+               and str(feats.attrs.get('subclass', [''] * len(feats))[i]) != 'link'
+               and str(feats.attrs.get('osm_junction', [''] * len(feats))[i]) not in ('roundabout', 'circular')}
+    gaps = {i for i in highway if counts[i] is None or (counts[i] == 2 and sources[i] == 'connected')}
+    if gaps:
+        for component, outside in bounded_components(gaps, continuations(feats, highway)):
+            if all(counts[i] == 3 for i in outside):
+                for i in component:
+                    counts[i] = 3
     feats._generated_lanes = counts
     return counts
 

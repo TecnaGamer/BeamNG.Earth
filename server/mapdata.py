@@ -536,6 +536,28 @@ class MapData:
         prune_mirror(self.cache_dir)
 
     # --- cells -----------------------------------------------------------------------------------
+    def _cached_road_lanes(self, key):
+        """Small read-only lane table; no cell recursion, source request or cache write."""
+        import roadlanes
+        path = self.path(key, "roads")
+        try:
+            def read():
+                with np.load(path, allow_pickle=False) as z:
+                    if '_osm_retry_at' in z:
+                        return None
+                    names = ('ids', 'attr.src_record', 'attr.lane_count', 'attr.lane_source')
+                    if not all(name in z for name in names):
+                        return {}
+                    return {str(fid): (str(record), roadlanes.count(value))
+                            for fid, record, value, source in zip(*(z[name] for name in names))
+                            if source in ('osm-way', 'osm-geometry')}
+            return staging.read_held(read)
+        except FileNotFoundError:
+            return None
+        except Exception as e:
+            log.debug("lane context %s: %s", key, e)
+            return None
+
     def cell(self, key, layers=LAYERS, kind="demand"):
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""
         key = _key(key)
@@ -582,19 +604,30 @@ class MapData:
                         cd.layers[layer] = f
                     else:
                         cd.layers[layer] = f.localize(frame)
+                    if layer == "roads":
+                        import roadlanes
+                        f._cached_lane_counts, f._lane_context_pending = roadlanes.cached_counts(
+                            f, key, self._cached_road_lanes)
                     # (which cell's layer: the per-cell facts the server's processes share, roads.cell_facts)
                     if '_osm_retry_at' in arrays:
                         cd.layers[layer]._osm_incomplete = True
                     else:
                         cd.layers[layer].__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(),
                                                                                                sort_keys=True))
+                        if layer == "roads":
+                            f._bnge_cell += (tuple(sorted(f._cached_lane_counts.items())),)
+                            if f._lane_context_pending:
+                                f.__dict__.pop('_bnge_cell', None)
                 elif "missing" in arrays:
                     cd.layers[layer] = None
                 else:
                     cd.layers[layer] = _raster_from(arrays)
                 self._remember((str(key), layer), (cd.layers[layer], prov, _nbytes(arrays)),
-                               float(arrays.get('_osm_retry_at', float('inf'))))
-            if getattr(cd.layers.get(layer), '_osm_incomplete', False):
+                               min(float(arrays.get('_osm_retry_at', float('inf'))),
+                                   time.time() + 30. if getattr(cd.layers[layer], '_lane_context_pending', False)
+                                   else float('inf')))
+            if (getattr(cd.layers.get(layer), '_osm_incomplete', False)
+                    or getattr(cd.layers.get(layer), '_lane_context_pending', False)):
                 # A fallback lane layout must not survive the enrichment retry
                 # in 1.6.3's derived tile/facts cache (including decoded mem hits).
                 revisit.fault()
