@@ -18,7 +18,7 @@ angular.module('beamng.apps')
     template:
       '<div class="bngApp bnej"><style>' + css + '</style>' +
       '<h1><span>JOBS <span class="dim" ng-if="s.streak">· streak {{ s.streak }}</span></span><span ng-hide="s.active"><button class="ghost" ng-click="refresh()">{{ s.searching ? "Searching..." : "Car jobs" }}</button> ' +
-        '<button class="ghost" ng-click="refresh(\'truck\')">Truck jobs</button></span></h1>' +
+        '<button class="ghost" ng-click="refresh(\'truck\')">Truck jobs</button> <button class="ghost" ng-click="refresh(\'parcel\')">Beamazon</button></span></h1>' +
       '<div ng-if="s.active" class="card">' +
         '<div class="dim">{{ s.active.stage == "pickup" ? "Drive to the pickup and stop there" : "Deliver the car and stop at the garage" }}</div>' +
         '<div class="car">{{ s.active.car }}</div>' +

@@ -240,7 +240,9 @@ function M.update(dt, anchor, player)
         msg('Your ' .. tostring(job.cargo) .. ' trailer is behind you: back up and couple it', 'info')
       end
       active.stage, active.t = 'deliver', 0
-      gps.setDestination(job.dropoff.lat, job.dropoff.lon, job.dropoff.name)
+      active.stop = 1
+      local first = job.stops and job.stops[1] or job.dropoff
+      gps.setDestination(first.lat, first.lon, first.name)
       msg(string.format('Deliver the %s to %s: %s, %.1f mi', tostring(job.car_name), tostring(job.dropoff.name),
         M.clock(job.limit), (tonumber(job.dist) or 0) / 1609.344), 'check')
     end
@@ -249,7 +251,16 @@ function M.update(dt, anchor, player)
   active.t = active.t + (dt or 0)
   local veh = playerVeh()
   active.damage = damageOf(veh)
-  local tx, ty = anchor:geodeticToEnu(job.dropoff.lat, job.dropoff.lon, 0)
+  -- (a Beamazon route: its stops one after the other, the last the drop-off)
+  local target = job.stops and job.stops[active.stop or 1] or job.dropoff
+  local tx, ty = anchor:geodeticToEnu(target.lat, target.lon, 0)
+  if M.arrived(player.x, player.y, speed, tx, ty) and job.stops and (active.stop or 1) < #job.stops then
+    active.stop = (active.stop or 1) + 1
+    local nx = job.stops[active.stop]
+    gps.setDestination(nx.lat, nx.lon, nx.name)
+    msg(string.format('Parcel delivered (%d/%d)', active.stop - 1, #job.stops), 'check')
+    return
+  end
   if M.arrived(player.x, player.y, speed, tx, ty) then
     if job.trailer then
       local tp = trailerPos()
@@ -292,7 +303,7 @@ function M.uiState()
   local s = { offers = offers, error = offersError, searching = pending ~= nil, last = last, streak = M.streak() }
   if active then
     local j = active.job
-    s.active = { stage = active.stage, car = j.cargo or j.car_name, rent = j.rent, pickup = j.pickup.name, dropoff = j.dropoff.name,
+    s.active = { stop = active.stop, stops = j.stops and #j.stops or nil, stage = active.stage, car = j.cargo or j.car_name, rent = j.rent, pickup = j.pickup.name, dropoff = j.dropoff.name,
                  t = active.t, limit = j.limit, pay = j.pay, dist = j.dist, expenses = active.expenses,
                  damage = active.damage or 0,
                  police = active.police,

@@ -316,3 +316,78 @@ def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None, kind="car"):
                     "dist": round(dist, 1), "dur": round(dur, 1), "pay": pay,
                     "limit": time_limit(dur)}))
     return out
+
+
+# --- parcel delivery (the user, 2026-10-26: "add amazon jobs"; last night's list: "amazon delivery") ---------------------
+# A van route: at a real parcel depot (PARCEL_WORDS) your car becomes a delivery van; PARCEL_STOPS drop-offs on the
+# residential streets of one neighbourhood PARCEL_KM away, in nearest-next order; paid per stop and per mile.
+PARCEL_WORDS = ("distribution", "warehouse", "courier", "post_office", "shipping_center", "logistics", "parcel",
+                "delivery_service", "mail")
+PARCEL_KM = (2.5, 3.5, 5.0)
+PARCEL_STOPS = (6, 7, 8, 9)
+PARCEL_SPREAD_M = 600.0
+PARCEL_BASE, PARCEL_PER_STOP, PARCEL_PER_MILE = 60.0, 30.0, 6.0
+VAN, VAN_NAME = "van", "Beamazon van"   # (the user: "call it beamazon")
+
+
+def is_parcel_depot(category, taxonomy, status=None):
+    if status and str(status) in ("closed", "permanently_closed", "temporarily_closed"):
+        return False
+    t = _cat(category, taxonomy)
+    return any(w in t for w in PARCEL_WORDS) and "self_storage" not in t
+
+
+def parcel_pay(dist, stops):
+    """$ for a route of dist m with stops drop-offs (to the nearest $5)."""
+    return float(5 * round((PARCEL_BASE + PARCEL_PER_STOP * stops + PARCEL_PER_MILE * dist / MI) / 5.0))
+
+
+def parcel_offers(md, lat, lon, seed=0, spot_fn=None, house_fn=None):
+    """Up to JOBS van routes from the parcel depots near (lat, lon): the delivery job shape plus "stops": [{lat, lon,
+    name}...] (the last also the "dropoff"). house_fn(lat, lon) -> (lat, lon, ...) a spot on a residential street near
+    the point, or None."""
+    spot_fn = spot_fn or (lambda la, lo: randomplace.road_spot(md, la, lo, radius_m=SPOT_M))
+    house_fn = house_fn or (lambda la, lo: randomplace.road_spot(md, la, lo, radius_m=250.0,
+                                                                  classes=("residential", "living_street")))
+    near = [g for g in garages(_places(md, lat, lon, PICK_M), is_parcel_depot) if dist_m(lat, lon, g[1], g[2]) <= PICK_M]
+    near.sort(key=lambda g: (round(dist_m(lat, lon, g[1], g[2]), 1), g[0]))
+    out = []
+    for g in near[:JOBS]:
+        h = _h(seed, g[0], "parcel")
+        ps = spot_fn(g[1], g[2])
+        if ps is None:
+            continue
+        km = PARCEL_KM[h % len(PARCEL_KM)]
+        brg = math.radians((h >> 8) % 360)
+        k = max(math.cos(math.radians(g[1])), 0.05)
+        cl = g[1] + km * 1000.0 * math.cos(brg) / M_LAT
+        cn = g[2] + km * 1000.0 * math.sin(brg) / (M_LAT * k)
+        n = PARCEL_STOPS[(h >> 16) % len(PARCEL_STOPS)]
+        pts = []
+        for i in range(n * 3):                          # (some points find no street: three tries a stop)
+            if len(pts) >= n:
+                break
+            hi = _h(seed, g[0], "stop", i)
+            r = PARCEL_SPREAD_M * ((hi % 1000) / 1000.0) ** 0.5
+            a = math.radians((hi >> 10) % 360)
+            s = house_fn(cl + r * math.cos(a) / M_LAT, cn + r * math.sin(a) / (M_LAT * k))
+            if s is not None and all(dist_m(s[0], s[1], q[0], q[1]) > 60.0 for q in pts):
+                pts.append((float(s[0]), float(s[1])))
+        if len(pts) < 3:
+            continue
+        route, here, dist = [], (ps[0], ps[1]), 0.0     # nearest-next order from the depot
+        left = list(pts)
+        while left:
+            nxt = min(left, key=lambda q: dist_m(here[0], here[1], q[0], q[1]))
+            dist += dist_m(here[0], here[1], nxt[0], nxt[1]) * DETOUR
+            route.append(nxt)
+            left.remove(nxt)
+            here = nxt
+        stops = [{"lat": round(a, 6), "lon": round(b, 6), "name": "Stop %d" % (i + 1)} for i, (a, b) in enumerate(route)]
+        dur = dist / AVG_MS + 45.0 * len(stops)
+        out.append({"id": "%016x" % _h(seed, g[0], "route"), "kind": "parcel", "car": VAN, "car_name": VAN_NAME,
+                    "cargo": "Beamazon: %d parcels" % len(stops),
+                    "pickup": {"lat": round(ps[0], 6), "lon": round(ps[1], 6), "name": g[3]},
+                    "dropoff": stops[-1], "stops": stops, "dist": round(dist, 1), "dur": round(dur, 1),
+                    "pay": parcel_pay(dist, len(stops)), "limit": time_limit(dur)})
+    return out

@@ -125,4 +125,22 @@ J.onSpend(3.25, 'Toll')
 T.check(J._active().police and J._active().expenses == 3.25, 'a fine: no clean record, and not paid back')
 J.cancel()
 T.check(J.streak() == 0, 'a cancelled job ends the streak')
+-- a Beamazon route: the stops one after the other, paid at the last
+local route = { id = 'b', kind = 'parcel', car = 'van', car_name = 'Beamazon van', cargo = 'Beamazon: 3 parcels', pay = 200,
+  dist = 5000, dur = 900, limit = 1700, pickup = { lat = 40.0, lon = -80.0, name = 'DC' },
+  stops = { { lat = 40.01, lon = -80.0, name = 'Stop 1' }, { lat = 40.02, lon = -80.0, name = 'Stop 2' },
+            { lat = 40.03, lon = -80.0, name = 'Stop 3' } } }
+route.dropoff = route.stops[3]
+J._setOffers({ route })
+J.accept(1)
+J.update(0.1, anchor, { x = 0, y = 0, vx = 0, vy = 0 })
+T.check(replaced[#replaced][1] == 'van' and dests[#dests] == 'Stop 1', 'the van, then to stop 1')
+local b2 = W.balance()
+J.update(10, anchor, { x = 0, y = 2220, vx = 0, vy = 0 })          -- (lat 40.03: the last stop first: not yet)
+T.check(J._active().stop == 1, 'the stops in order')
+J.update(10, anchor, { x = 0, y = 1110, vx = 0, vy = 0 })
+T.check(J._active().stop == 2 and dests[#dests] == 'Stop 2', 'stop 1 done: to stop 2')
+J.update(10, anchor, { x = 0, y = 2220, vx = 0, vy = 0 })
+J.update(10, anchor, { x = 0, y = 3330, vx = 0, vy = 0 })
+T.check(J._active() == nil and W.balance() > b2, 'the last stop: paid')
 T.done('test_jobs')

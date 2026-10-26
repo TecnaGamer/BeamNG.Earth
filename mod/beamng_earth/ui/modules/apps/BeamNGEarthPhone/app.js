@@ -15,6 +15,7 @@ angular.module('beamng.apps')
     music: '<path d="M12 22 V8 L25 5 V19" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><circle cx="9" cy="22" r="3.5" fill="#fff"/><circle cx="22" cy="19" r="3.5" fill="#fff"/>',
     garage: '<path d="M4 14 L16 6 L28 14 V27 H4 Z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><path d="M9 27 V18 H23 V27 M9 21 H23 M9 24 H23" fill="none" stroke="#fff" stroke-width="2"/>',
     realestate: '<path d="M5 15 L16 6 L27 15" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><path d="M8 13 V26 H24 V13" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M14 26 V19 H18 V26" fill="#fff"/><circle cx="25" cy="7" r="3.5" fill="#ffd34d"/>',
+beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path d="M6 11 L16 16 L26 11 M16 16 V28" fill="none" stroke="#b36b00" stroke-width="1.4"/><text x="16" y="25" text-anchor="middle" font-family="Arial Black,Arial" font-weight="900" font-size="11" fill="#1a1a1a">B</text>',
     settings: '<circle cx="16" cy="16" r="4.5" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M16 4 V8 M16 24 V28 M4 16 H8 M24 16 H28 M7.5 7.5 L10.3 10.3 M21.7 21.7 L24.5 24.5 M7.5 24.5 L10.3 21.7 M21.7 10.3 L24.5 7.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>'
   }
   var APPS = [
@@ -50,7 +51,7 @@ angular.module('beamng.apps')
     '.bnp-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:14px;padding:5px 0}',
     '.bnp-dim{color:var(--dim);font-size:12px}',
     '.bnp-pos{color:#30d158;font-weight:700}.bnp-neg{color:#ff453a;font-weight:700}',
-    '.bnp-btn{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:7px 12px;font-weight:700;font-size:13px;cursor:pointer}',
+    '.bnp-btn{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:7px 10px;white-space:nowrap;font-weight:700;font-size:13px;cursor:pointer}',
     '.bnp-btn.alt{background:var(--card2);color:var(--fg)}',
     '.bnp-bar{position:absolute;left:50%;bottom:7px;width:110px;height:5px;margin-left:-55px;border-radius:3px;background:var(--fg);opacity:.75;cursor:pointer;z-index:6}',
     '.bnp-sw{display:inline-block;width:26px;height:26px;border-radius:13px;margin:0 5px 0 0;cursor:pointer;border:2px solid transparent}',
@@ -101,11 +102,11 @@ angular.module('beamng.apps')
         '<div class="bnp-view" ng-if="app == \'jobs\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Jobs</div>' +
           '<div class="bnp-dim" style="margin:-6px 2px 10px" ng-if="p.jobs.streak">Clean delivery streak: {{ p.jobs.streak }} (+{{ Math.min(25, p.jobs.streak * 5) }}% pay)</div>' +
           '<div class="bnp-card" ng-if="p.jobs.active"><div class="bnp-dim">{{ p.jobs.active.stage == "pickup" ? "Go to the pickup" : "Delivering" }}</div><div style="font-weight:700;font-size:16px">{{ p.jobs.active.car }}</div>' +
-            '<div class="bnp-row"><span class="bnp-dim">To</span><span>{{ p.jobs.active.dropoff }}</span></div>' +
+            '<div class="bnp-row"><span class="bnp-dim">To</span><span>{{ p.jobs.active.stops ? "Stop " + p.jobs.active.stop + " of " + p.jobs.active.stops : p.jobs.active.dropoff }}</span></div>' +
             '<div class="bnp-row" ng-if="p.jobs.active.estimate"><span class="bnp-big" style="font-size:24px">{{ clock(p.jobs.active.t) }}</span><span class="bnp-pos">${{ p.jobs.active.estimate.total.toFixed(0) }}</span></div>' +
             '<div class="bnp-dim" ng-if="p.jobs.active.estimate">Bonuses: early +{{ p.jobs.active.estimate.bonus.toFixed(0) }}, spotless +{{ p.jobs.active.estimate.spotless.toFixed(0) }}, clean record +{{ p.jobs.active.estimate.record.toFixed(0) }}, streak +{{ p.jobs.active.estimate.streak.toFixed(0) }}</div>' +
             '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiJobCancel()\')">Cancel job</button></div>' +
-          '<div ng-if="!p.jobs.active"><div style="display:flex;gap:8px;margin-bottom:10px"><button class="bnp-btn" ng-click="lua(\'uiJobsRefresh()\')">Car jobs</button><button class="bnp-btn alt" ng-click="lua(\'uiJobsRefresh(\\\'truck\\\')\')">Truck jobs</button></div>' +
+          '<div ng-if="!p.jobs.active"><div style="display:flex;gap:8px;margin-bottom:10px"><button class="bnp-btn" ng-click="lua(\'uiJobsRefresh()\')">Car jobs</button><button class="bnp-btn alt" ng-click="lua(\'uiJobsRefresh(\\\'truck\\\')\')">Truck jobs</button><button class="bnp-btn alt" style="background:#232f3e;color:#fff;display:flex;align-items:center;gap:5px" ng-click="lua(\'uiJobsRefresh(\\\'parcel\\\')\')"><span style="width:18px;height:18px;display:inline-block;background-size:contain" ng-style="{\'background-image\': icon(\'beamazon\')}"></span><span style="font-weight:800;letter-spacing:-.3px">beamazon</span></button></div>' +
             '<div class="bnp-dim" ng-if="p.jobs.searching">Searching…</div><div class="bnp-dim" ng-if="p.jobs.error">{{ p.jobs.error }}</div>' +
             '<div class="bnp-card" ng-repeat="j in p.jobs.offers"><div class="bnp-row" style="padding:0"><b>{{ j.cargo || j.car_name }}</b><span class="bnp-pos">${{ j.pay.toFixed(0) }}</span></div>' +
               '<div class="bnp-dim">{{ j.pickup.name }} → {{ j.dropoff.name }}</div><div class="bnp-row"><span class="bnp-dim">{{ (j.dist / 1609.344).toFixed(1) }} mi<span ng-if="j.rent"> · -${{ j.rent }} rent</span></span><button class="bnp-btn" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Take</button></div></div></div>' +

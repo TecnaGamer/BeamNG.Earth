@@ -3041,7 +3041,9 @@ class Connection:
         try:
             out["jobs"] = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, jobfindmod.offers, md, lat, lon, seed, route, None,
-                "truck" if msg.get("kind") == "truck" else "car")
+                "truck" if msg.get("kind") == "truck" else "car") if msg.get("kind") != "parcel" else \
+                await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, jobfindmod.parcel_offers, md, lat, lon,
+                                                                 seed)
         except Exception as e:
             log.warning("delivery jobs: %s: %s", type(e).__name__, e)
             out["error"] = "search failed"
