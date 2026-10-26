@@ -441,6 +441,9 @@ function M.onTile(msg, currentAnchor)
     require('beamngEarth/parking').onRows(msg.anchorId, key, data.park)
     tiles[key].park = true
   end
+  if type(data.tolls) == 'table' then                       -- toll gantries (wallet.lua charges for passing under)
+    require('beamngEarth/wallet').onTolls(msg.anchorId, key, data.tolls)
+  end
   if type(data.fuel) == 'table' and data.fuel[1] then      -- gas stations: pumps, refuel areas (gasstations.lua)
     require('beamngEarth/gasstations').onRows(msg.anchorId, key, data.fuel)
     tiles[key].fuel = true

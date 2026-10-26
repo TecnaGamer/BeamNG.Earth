@@ -80,6 +80,7 @@ gasstations.onCollide = roads.markCollisionDirty
 local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
+local wallet = require('beamngEarth/wallet')         -- the player's money: fuel and tolls (wallet.lua)
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
 local farcars = require('beamngEarth/farcars')             -- far player cars saved, taken out and put back
@@ -1761,6 +1762,7 @@ local function onUpdate(dtReal, dtSim)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
+  if st.inOurLevel then pcall(wallet.update, st.anchorId, st.player and st.player.x, st.player and st.player.y) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -1999,6 +2001,7 @@ local function onClientEndMission()
   postfx.restore()
   pcall(terrainpatch.clear)
   pcall(gasstations.reset)
+  pcall(wallet.resetTolls)
   pcall(farcars.reset)
   pcall(mpsession.reset)
   gps.reset()

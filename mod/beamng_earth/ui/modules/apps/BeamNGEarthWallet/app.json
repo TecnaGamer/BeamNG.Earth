@@ -1,0 +1,14 @@
+{
+  "domElement": "<beamng-earth-wallet></beamng-earth-wallet>",
+  "name": "BeamNG.Earth: Wallet",
+  "types": ["ui.apps.categories.utility"],
+  "description": "Your money (BeamNG.Earth): fuel and tolls cost it.",
+  "css": {"width": "200px", "height": "48px"},
+  "author": "BeamNG.Earth",
+  "version": "1.0",
+  "directive": "beamngEarthWallet",
+  "appName": "beamngEarthWallet",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "no"
+}

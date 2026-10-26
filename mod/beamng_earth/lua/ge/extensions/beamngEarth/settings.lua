@@ -583,6 +583,14 @@ function M.uiGpsHud()
   }
 end
 
+-- The wallet app (BeamNGEarthWallet): { balance, text, last = { amount, reason } }.
+function M.uiWallet()
+  local w = require('beamngEarth/wallet')
+  local h = w.history()
+  return { balance = w.balance(), text = w.format(w.balance()), last = h[1] }
+end
+function M.uiWalletReset() require('beamngEarth/wallet').reset() return M.uiWallet() end
+
 -- The GPS app's fast pose (polled ~20 times a second; the app moves its map every frame between them): { lat, lon,
 -- heading (deg from true north), speed (m/s) } or nil.
 function M.uiGpsPose()

@@ -4662,6 +4662,11 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             cdae.write(os.path.join(out_dir, shape), gm[0], gm[1], uvs=gm[2], material=guidesigns.MATERIALS,
                        tri_materials=gm[3], object_name="guide")
             data["guide"] = {"shape": f"{vfs_dir}/{shape}", "pos": [gx0, gy0, 0.0]}
+        # the toll gantries for the mod's wallet: [x, y, travel dx, dy, half span] in the anchor's frame
+        tl = [[g["x"], g["y"], g["d"][0], g["d"][1], round(g["width"] / 2 + guidesigns.GANTRY_POST_M, 2)]
+              for g in guide if g.get("kind") == "toll"]
+        if tl:
+            data["tolls"] = tl
     if props:                       # furniture.place's rows: Forest items (trees.lua), groups by index
         groups = sorted({r[0] for r in props})
         data["props"] = {"groups": groups, "items": [[groups.index(r[0])] + r[1:] for r in props]}
