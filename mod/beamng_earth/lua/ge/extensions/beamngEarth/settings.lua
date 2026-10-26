@@ -751,6 +751,7 @@ function M.uiJobsRefresh(kind)
   return require('beamngEarth/jobs').refresh(pl and pl.lat, pl and pl.lon, (kind == 'truck' or kind == 'parcel') and kind or nil)
 end
 function M.uiJobAccept(i) local ok, why = require('beamngEarth/jobs').accept(i) return { ok = ok, error = why } end
+function M.uiJobStart() local ok, why = require('beamngEarth/jobs').startWork() return { ok = ok, error = why } end
 function M.uiJobCancel() return require('beamngEarth/jobs').cancel() end
 
 -- The map's "Nearest gas station" (the user, 2026-10-25: "a gas station spawn so i dont search forever"): send

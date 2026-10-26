@@ -31,7 +31,7 @@ angular.module('beamng.apps')
           '<span>+{{ s.active.estimate.bonus.toFixed(0) }} / <span class="bad">-{{ s.active.estimate.damage.toFixed(0) }}</span> / <span class="bad">-{{ s.active.estimate.late.toFixed(0) }}</span></span></div>' +
         '<div class="row"><span class="dim">Tolls and fuel paid back</span><span>${{ s.active.expenses.toFixed(2) }}</span></div>' +
         '<div class="row" ng-if="s.active.rent"><span class="dim">Truck rental (off the pay)</span><span class="bad">-${{ s.active.rent.toFixed(0) }}</span></div>' +
-        '<div class="row"><span></span><button class="stop" ng-click="cancel()">Cancel job</button></div>' +
+        '<div class="row"><button ng-if="s.active.ready" style="background:#30d158" ng-click="start()">Start work</button><span ng-if="!s.active.ready"></span><button class="stop" ng-click="cancel()">Cancel job</button></div>' +
       '</div>' +
       '<div ng-if="s.last && !s.active" class="card">' +
         '<div ng-if="s.last.cancelled" class="dim">Job cancelled: {{ s.last.job.car_name }}</div>' +
@@ -70,6 +70,7 @@ angular.module('beamng.apps')
       scope.refresh = function (kind) { lua(S + '.uiJobsRefresh(' + (kind ? '"' + kind + '"' : '') + ')', poll) }
       scope.take = function (i) { lua(S + '.uiJobAccept(' + (i + 1) + ')', poll) }
       scope.cancel = function () { lua(S + '.uiJobCancel()', poll) }
+      scope.start = function () { lua(S + '.uiJobStart()', poll) }
       var timer = setInterval(poll, 1000)
       poll()
       scope.$on('$destroy', function () { clearInterval(timer) })

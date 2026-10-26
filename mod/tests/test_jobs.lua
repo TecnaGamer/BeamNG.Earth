@@ -32,14 +32,36 @@ T.near(p.total, 130 + 26 - 15.6 + 13 * 0.9 + 12.5, 1e-9, 'total: dented, no spot
 p = J.payout(job, 600, J.DAMAGE_FULL * 3, 4)
 T.near(p.total, 4, 1e-9, 'wrecked: no pay for the work, the expenses still paid back')
 T.check(J.clock(65) == '1:05' and J.clock(1680) == '28:00', 'clock')
-T.check(J.arrived(0, 0, 1, 20, 20) and not J.arrived(0, 0, 5, 20, 20) and not J.arrived(0, 0, 1, 40, 0), 'arrived')
+T.check(J.arrived(0, 0, 1, 3, 3) and not J.arrived(0, 0, 5, 3, 3) and not J.arrived(0, 0, 1, 8, 0), 'arrived: stopped inside the bay')
 
 -- the stages, with a flat anchor (1 degree of latitude = 111 km north) and stub vehicles
 local anchor = { geodeticToEnu = function(_, lat, lon) return (lon + 80) * 85000, (lat - 40) * 111000, 0 end }
 local veh = { JBeam = 'pickup', partConfig = 'vehicles/pickup/my.pc', getID = function() return 7 end }
-be = { getPlayerVehicle = function() return veh end }
-map = { objects = { [7] = { damage = 0 } } }
-core_vehicles = { replaceVehicle = function(model, opt) replaced[#replaced + 1] = { model, opt.config } end }
+-- a small world: your car parked (setActive) while the job's vehicle is out, the trailer, entering vehicles
+vec3 = function(x, y, z) return { x = x, y = y, z = z } end
+quatFromDir = function() return { x = 0, y = 0, z = 0, w = 1 } end
+local objs, player, nextId = { [7] = veh }, veh, 50
+veh.active = 1
+veh.setActive = function(self, v) self.active = v end
+veh.getPosition = function() return { x = 0, y = 0, z = 0 } end
+veh.getDirectionVector = function() return { x = 0, y = 1, z = 0 } end
+be = { getPlayerVehicle = function() return player end, getObjectByID = function(_, id) return objs[id] end,
+       enterVehicle = function(_, _, o) player = o end }
+DMG = 0
+map = { objects = setmetatable({}, { __index = function() return { damage = DMG } end }) }
+core_vehicles = { replaceVehicle = function(model, opt) replaced[#replaced + 1] = { model, opt.config } end,
+  spawnNewVehicle = function(model, opt)
+    nextId = nextId + 1
+    local id = nextId
+    local o = { JBeam = model, getID = function() return id end, getPosition = function() return { x = 0, y = 0, z = 0 } end,
+                getDirectionVector = function() return { x = 0, y = 1, z = 0 } end }
+    o.delete = function() objs[id] = nil end
+    objs[id] = o
+    replaced[#replaced + 1] = { model }
+    if opt.autoEnterVehicle then player = o end
+    return o
+  end }
+local function ownBack() return player == veh and veh.active == 1 end
 local dests = {}
 G.setDestination = function(lat, lon, name) dests[#dests + 1] = name return true end
 G.clear = function() dests[#dests + 1] = 'clear' end
@@ -52,16 +74,20 @@ T.check(not J.accept(1), 'one job at a time')
 T.check(dests[#dests] == 'Joe', 'GPS to the pickup')
 J.update(0.1, anchor, { x = 0, y = 0, vx = 10, vy = 0 })
 T.check(J._active().stage == 'pickup' and #replaced == 0, 'driving past: nothing yet')
-J.update(0.1, anchor, { x = 5, y = 5, vx = 0.5, vy = 0 })
+J.update(0.1, anchor, { x = 2, y = 2, vx = 0.5, vy = 0 })
+T.check(J._active().stage == 'pickup' and J._active().ready, 'in the bay: ready, nothing swapped yet')
+T.check(J.startWork(), 'Start work')
+T.check(veh.active == 0, 'your car parked and hidden, as it is')
 T.check(J._active().stage == 'deliver', 'stopped at the pickup: delivering')
-T.check(replaced[1][1] == 'etk800', 'your car swapped for the customer\'s')
+T.check(replaced[1][1] == 'etk800' and player ~= veh, 'you in the customer\'s car')
 T.check(dests[#dests] == 'Smith', 'GPS to the drop-off')
 W.add(-3.25, 'Toll')          -- a toll on the way: the company pays it back
 J.update(500, anchor, { x = 0, y = 5000, vx = 20, vy = 0 })
-map.objects[7].damage = 1500
+DMG = 1500
 J.update(100, anchor, { x = 0, y = 11100, vx = 0, vy = 0 })
 T.check(J._active() == nil, 'delivered')
-T.check(replaced[2][1] == 'pickup' and replaced[2][2] == 'vehicles/pickup/my.pc', 'your own car back, its config')
+T.check(ownBack(), 'your own car back, the same one (fuel, damage and all)')
+DMG = 0
 local st = J.uiState()
 T.near(st.last.pay.expenses, 3.25, 1e-9, 'the toll paid back')
 T.near(st.last.pay.damage, 15.6, 1e-9, 'the damage cut')
@@ -72,9 +98,10 @@ T.check(dests[#dests] == 'clear', 'GPS cleared')
 J._setOffers({ job })
 J.accept(1)
 J.update(0.1, anchor, { x = 0, y = 0, vx = 0, vy = 0 })
+J.startWork()
 local n = #replaced
 local bal = W.balance()
-T.check(J.cancel() and replaced[n + 1][1] == 'pickup' and W.balance() == bal and J._active() == nil, 'cancel')
+T.check(J.cancel() and ownBack() and W.balance() == bal and J._active() == nil, 'cancel: your car back')
 T.check(J.uiState().last.cancelled, 'shown as cancelled')
 
 -- trucking: the rented semi, the trailer behind, no delivery without it, the rent off the pay
@@ -87,8 +114,13 @@ trailer.delete = function() trailer.deleted = true end
 veh.getPosition = function() return { x = 0, y = 0, z = 0 } end
 veh.getDirectionVector = function() return { x = 0, y = 1, z = 0 } end
 local spawned = {}
-core_vehicles.spawnNewVehicle = function(model, opt) spawned[#spawned + 1] = { model, opt.pos, opt.config } return trailer end
-be.getObjectByID = function(_, id) return id == 99 and not trailer.deleted and trailer or nil end
+local workSpawn = core_vehicles.spawnNewVehicle
+core_vehicles.spawnNewVehicle = function(model, opt)
+  if opt.autoEnterVehicle then return workSpawn(model, opt) end
+  spawned[#spawned + 1] = { model, opt.pos, opt.config }
+  return trailer
+end
+be.getObjectByID = function(_, id) if id == 99 then return (not trailer.deleted) and trailer or nil end return objs[id] end
 local haul = { id = 't', kind = 'truck', car = 'us_semi', car_name = 'Gavril T-Series semi', trailer = 'tanker',
                trailer_config = 'vehicles/tanker/petroleum_3.pc',
                cargo = 'Tanker: fuel', rent = 45, pay = 300, dist = 60000, dur = 3000, limit = 5040,
@@ -97,6 +129,7 @@ map.objects[7].damage = 0
 J._setOffers({ haul })
 J.accept(1)
 J.update(0.1, anchor, { x = 0, y = 0, vx = 0, vy = 0 })
+J.startWork()
 T.check(replaced[#replaced][1] == 'us_semi', 'the rented semi')
 T.check(spawned[1][1] == 'tanker' and spawned[1][2].y == -16, 'its trailer 16 m behind')
 T.check(spawned[1][3] == 'vehicles/tanker/petroleum_3.pc', 'loaded with the job\'s cargo')
@@ -110,7 +143,7 @@ local lp = J.uiState().last.pay
 T.near(lp.rent, 45, 1e-9, 'the rent')
 T.near(lp.total, 300 * 1.2 + 45 + 30 - 45, 1e-9, 'early, spotless and clean pay less the rent')
 T.near(W.balance(), bal + lp.total, 1e-9, 'paid')
-T.check(replaced[#replaced][1] == 'pickup', 'your own car back')
+T.check(ownBack(), 'your own car back')
 
 -- the bonuses: police during the job, the streak
 J._reset()
@@ -134,6 +167,7 @@ route.dropoff = route.stops[3]
 J._setOffers({ route })
 J.accept(1)
 J.update(0.1, anchor, { x = 0, y = 0, vx = 0, vy = 0 })
+J.startWork()
 T.check(replaced[#replaced][1] == 'van' and dests[#dests] == 'Stop 1', 'the van, then to stop 1')
 local b2 = W.balance()
 J.update(10, anchor, { x = 0, y = 2220, vx = 0, vy = 0 })          -- (lat 40.03: the last stop first: not yet)

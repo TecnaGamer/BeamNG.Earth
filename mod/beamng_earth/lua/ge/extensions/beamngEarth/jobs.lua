@@ -186,11 +186,89 @@ local function trailerPos()
   return ok and p or nil
 end
 
+-- Your own car through a job (the user, 2026-10-26: "save my cars condition and hang on to it until the job is done
+-- then give it back. same fuel and all"): not re-made but parked and hidden (setActive(false): its damage, fuel and
+-- everything kept) while the job's vehicle stands in its place; at the end the job's vehicle goes and yours comes back
+-- where it finished, and you are put in it.
+local function workVehicle(model)
+  local be_, cv = rawget(_G, 'be'), rawget(_G, 'core_vehicles')
+  local own = playerVeh()
+  if not (be_ and cv and cv.spawnNewVehicle and own) then return false end
+  local ok = pcall(function()
+    local p, d = own:getPosition(), own:getDirectionVector()
+    local rot = quatFromDir(vec3(d.x, d.y, 0), vec3(0, 0, 1))
+    active.ownId = own:getID()
+    own:setActive(0)
+    local v = cv.spawnNewVehicle(model, { pos = vec3(p.x, p.y, p.z + 0.3), rot = rot, autoEnterVehicle = true })
+    active.workId = v and v.getID and v:getID() or nil
+  end)
+  if not ok or not active.workId then
+    local o = active.ownId and be_:getObjectByID(active.ownId)
+    if o then pcall(function() o:setActive(1) end) end
+    return false
+  end
+  return true
+end
+
 local function restoreOwn()
   removeTrailer()
-  if active and active.own and active.own.model then
+  local be_ = rawget(_G, 'be')
+  local own = active and active.ownId and be_ and be_:getObjectByID(active.ownId)
+  if own then
+    -- (each step on its own: one failing must not leave you without your car)
+    local w = active.workId and be_:getObjectByID(active.workId)
+    local okP, p, d = pcall(function() return (w or own):getPosition(), (w or own):getDirectionVector() end)
+    if w then pcall(function() w:delete() end) end
+    pcall(function() own:setActive(1) end)
+    if okP and p and d then
+      pcall(function()
+        local rot = quatFromDir(vec3(d.x, d.y, 0), vec3(0, 0, 1))
+        local sp = rawget(_G, 'spawn')
+        if sp and sp.safeTeleport then sp.safeTeleport(own, vec3(p.x, p.y, p.z + 0.3), rot)
+        else own:setPositionRotation(p.x, p.y, p.z + 0.3, rot.x, rot.y, rot.z, rot.w) end
+      end)
+    end
+    pcall(function() be_:enterVehicle(0, own) end)
+  elseif active and active.own and active.own.model then     -- (yours gone: a copy of it, as before)
     replaceWith(active.own.model, active.own.config)
   end
+end
+
+-- The phone's Start work (the user: "when we get there, add a start work button in the phone"): at the pickup's bay,
+-- your car parked, the job's vehicle (and trailer) out, the clock running.
+function M.startWork()
+  if not (active and active.stage == 'pickup') then return false, 'no job waiting to start' end
+  if not active.ready then return false, 'pull into the bay at the pickup first' end
+  local job = active.job
+  active.own = vehOf(playerVeh())
+  if not workVehicle(job.car) then return false, 'could not bring out the ' .. tostring(job.car_name) end
+  if job.trailer then
+    active.trailerId = spawnTrailer(job.trailer, job.trailer_config)
+    msg('Your ' .. tostring(job.cargo) .. ' trailer is behind you: back up and couple it', 'info')
+  end
+  active.stage, active.t, active.stop, active.ready = 'deliver', 0, 1, nil
+  local first = job.stops and job.stops[1] or job.dropoff
+  gps.setDestination(first.lat, first.lon, first.name)
+  msg(string.format('Deliver to %s: %s, %.1f mi', tostring(first.name), M.clock(job.limit),
+    (tonumber(job.dist) or 0) / 1609.344), 'check')
+  return true
+end
+
+-- The delivery bays (the user: "the same feature as career where you have a spot to pull into"): a green bay drawn at
+-- the pickup and at each drop-off; you are there when stopped inside it.
+M.BAY_M = 5.0
+local function drawBay(anchor, place, player)
+  local dd = rawget(_G, 'debugDrawer')
+  if not (dd and place and player) then return end
+  local x, y = anchor:geodeticToEnu(place.lat, place.lon, 0)
+  if (x - player.x) ^ 2 + (y - player.y) ^ 2 > 250 ^ 2 then return end
+  pcall(function()
+    local z = player.z or 0
+    local be_ = rawget(_G, 'be')
+    local okz, h = pcall(function() return be_:getSurfaceHeightBelow(vec3(x, y, z + 20)) end)
+    if okz and tonumber(h) and h > -1e6 then z = h end
+    dd:drawCylinder(vec3(x, y, z), vec3(x, y, z + 0.06), M.BAY_M, ColorF(0.2, 0.85, 0.35, 0.4))
+  end)
 end
 
 function M.cancel()
@@ -210,7 +288,8 @@ end
 -- Pure: has the player arrived (within ARRIVE_M, slower than STOP_MS) at (tx, ty) from (px, py, speed)?
 function M.arrived(px, py, speed, tx, ty)
   local dx, dy = tx - px, ty - py
-  return dx * dx + dy * dy <= M.ARRIVE_M * M.ARRIVE_M and (speed or 0) < M.STOP_MS
+  local r = M.BAY_M or M.ARRIVE_M                -- (inside the bay)
+  return dx * dx + dy * dy <= r * r and (speed or 0) < M.STOP_MS
 end
 
 local function damageOf(veh)
@@ -226,25 +305,14 @@ function M.update(dt, anchor, player)
   local job = active.job
   local speed = math.sqrt((player.vx or 0) ^ 2 + (player.vy or 0) ^ 2)
   if active.stage == 'pickup' then
+    drawBay(anchor, job.pickup, player)
     local tx, ty = anchor:geodeticToEnu(job.pickup.lat, job.pickup.lon, 0)
-    if M.arrived(player.x, player.y, speed, tx, ty) then
-      active.own = vehOf(playerVeh())
-      if not replaceWith(job.car, nil) then
-        msg('Could not bring out the ' .. tostring(job.car_name) .. ': job cancelled', 'error')
-        active = nil
-        gps.clear()
-        return
-      end
-      if job.trailer then
-        active.trailerId = spawnTrailer(job.trailer, job.trailer_config)
-        msg('Your ' .. tostring(job.cargo) .. ' trailer is behind you: back up and couple it', 'info')
-      end
-      active.stage, active.t = 'deliver', 0
-      active.stop = 1
-      local first = job.stops and job.stops[1] or job.dropoff
-      gps.setDestination(first.lat, first.lon, first.name)
-      msg(string.format('Deliver the %s to %s: %s, %.1f mi', tostring(job.car_name), tostring(job.dropoff.name),
-        M.clock(job.limit), (tonumber(job.dist) or 0) / 1609.344), 'check')
+    local was = active.ready
+    active.ready = M.arrived(player.x, player.y, speed, tx, ty) or nil
+    if active.ready and not was then
+      msg('At ' .. tostring(job.pickup.name) .. ': press Start work on your phone', 'check')
+      local gh = rawget(_G, 'guihooks')
+      if gh and gh.trigger then gh.trigger('BneEarthPhone', { up = true, app = job.stops and 'beamazon' or 'jobs' }) end
     end
     return
   end
@@ -253,6 +321,7 @@ function M.update(dt, anchor, player)
   active.damage = damageOf(veh)
   -- (a Beamazon route: its stops one after the other, the last the drop-off)
   local target = job.stops and job.stops[active.stop or 1] or job.dropoff
+  drawBay(anchor, target, player)
   local tx, ty = anchor:geodeticToEnu(target.lat, target.lon, 0)
   if M.arrived(player.x, player.y, speed, tx, ty) and job.stops and (active.stop or 1) < #job.stops then
     active.stop = (active.stop or 1) + 1
@@ -303,7 +372,7 @@ function M.uiState()
   local s = { offers = offers, error = offersError, searching = pending ~= nil, last = last, streak = M.streak() }
   if active then
     local j = active.job
-    s.active = { stop = active.stop, stops = j.stops and #j.stops or nil, stage = active.stage, car = j.cargo or j.car_name, rent = j.rent, pickup = j.pickup.name, dropoff = j.dropoff.name,
+    s.active = { ready = active.ready, stop = active.stop, stops = j.stops and #j.stops or nil, stage = active.stage, car = j.cargo or j.car_name, rent = j.rent, pickup = j.pickup.name, dropoff = j.dropoff.name,
                  t = active.t, limit = j.limit, pay = j.pay, dist = j.dist, expenses = active.expenses,
                  damage = active.damage or 0,
                  police = active.police,
