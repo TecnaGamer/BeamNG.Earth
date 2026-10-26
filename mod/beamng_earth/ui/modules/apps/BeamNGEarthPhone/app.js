@@ -123,7 +123,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
         // garage
         // (one view for both: Garage = repair shops; Real Estate = property to buy / rent, and yours)
         '<div class="bnp-view" ng-if="app == \'garage\' || app == \'realestate\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">{{ app == "garage" ? "Garage" : "Real Estate" }}</div>' +
-          '<div class="bnp-seg" style="margin-bottom:10px" ng-if="app == \'realestate\'"><span ng-class="{on: gtab == \'property\'}" ng-click="gtab=\'property\'">For sale &amp; rent</span><span ng-class="{on: gtab == \'mine\'}" ng-click="gtab=\'mine\'">My properties</span></div>' +
+          '<div class="bnp-seg" style="margin-bottom:10px" ng-if="app == \'realestate\'"><span ng-class="{on: gtab == \'property\'}" ng-click="setTab(\'property\')">For sale &amp; rent</span><span ng-class="{on: gtab == \'mine\'}" ng-click="setTab(\'mine\')">My properties</span></div>' +
           '<div class="bnp-card" ng-if="g.here && (app == \'garage\' || g.here.kind == \'home\')"><div class="bnp-dim">{{ g.here.kind == "home" ? "At your property" : "At the shop" }}</div><div style="font-weight:700;margin-bottom:6px">{{ g.here.name }}</div>' +
             '<div class="bnp-row" ng-if="app == \'garage\'"><span>Repair</span><button class="bnp-btn" ng-click="gdo(\'repair\')">{{ g.repairCost ? "$" + g.repairCost : "Free" }}</button></div>' +
             '<div class="bnp-row" ng-if="app == \'garage\'"><span>Parts &amp; tuning</span><button class="bnp-btn" ng-click="gdo(\'parts\')">{{ g.here.kind == "home" ? "Free" : "$" + g.prices.labor }}</button></div>' +
@@ -216,6 +216,9 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       }
       scope.Math = Math
       scope.gtab = 'repair'
+      // (a setter: ng-click="gtab=..." inside an ng-if wrote a child scope's copy, so the tab lit up but the list
+      // underneath kept the old tab: the user's "My properties" showed the listings, 2026-10-26)
+      scope.setTab = function (tab) { scope.gtab = tab }
       scope.g = { errors: {}, searching: {}, prices: {}, mine: [] }
       scope.rgb = function (c) { return 'rgb(' + Math.round(c[0] * 255) + ',' + Math.round(c[1] * 255) + ',' + Math.round(c[2] * 255) + ')' }
       scope.dist = function (m) { return scope.p.mph !== false ? (m / 1609.344).toFixed(1) + ' mi' : (m / 1000).toFixed(1) + ' km' }
