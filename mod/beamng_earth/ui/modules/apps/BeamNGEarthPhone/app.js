@@ -40,7 +40,7 @@ angular.module('beamng.apps')
     '.bnp-home{position:absolute;inset:56px 0 0 0;padding:14px 18px}',
     '.bnp-widget{background:var(--glass);backdrop-filter:blur(18px);border-radius:22px;padding:12px 14px;margin-bottom:18px;color:var(--fg)}',
     '.bnp-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px 10px}',
-    '.bnp-app{display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;font-size:11px;font-weight:600;text-shadow:0 1px 3px rgba(0,0,0,.6);color:#fff}',
+    '.bnp-app{display:flex;flex-direction:column;align-items:center;text-align:center;line-height:1.15;gap:5px;cursor:pointer;font-size:11px;font-weight:600;text-shadow:0 1px 3px rgba(0,0,0,.6);color:#fff}',
     '.bnp-ico{width:52px;height:52px;border-radius:14px;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,.35)}',
     '.bnp-dock{position:absolute;left:12px;right:12px;bottom:12px;height:76px;border-radius:28px;background:var(--glass);backdrop-filter:blur(18px);display:flex;justify-content:space-around;align-items:center}',
     '.bnp-view{position:absolute;inset:0;background:var(--bg);padding:50px 16px 30px;box-sizing:border-box;overflow-y:auto;color:var(--fg)}',
