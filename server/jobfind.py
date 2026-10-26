@@ -31,6 +31,7 @@ NOT_GARAGE = ("gas", "fuel", "parking", "car_wash", "charging", "rental", "insur
 PICK_M = 4000.0             # pickups: garages this close to the player
 DROP_KM = (5.0, 8.0, 12.0, 16.0, 22.0)     # drop-off targets this far from the pickup
 DROP_SEARCH_M = 3000.0      # the garage nearest the target within this
+TRUCK_SEARCH_M = 1500.0     # (trucks: far targets, each search a first download of its cells: kept small)
 SPOT_M = 250.0
 JOBS = 5
 DETOUR = 1.35               # road distance / straight line (no route)
@@ -168,8 +169,9 @@ def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None, kind="car"):
         k = max(math.cos(math.radians(g[1])), 0.05)
         tl = g[1] + km * 1000.0 * math.cos(brg) / M_LAT
         tn = g[2] + km * 1000.0 * math.sin(brg) / (M_LAT * k)
-        far = [d for d in garages(_places(md, tl, tn, DROP_SEARCH_M), test)
-               if d[0] != g[0] and dist_m(tl, tn, d[1], d[2]) <= DROP_SEARCH_M
+        reach = TRUCK_SEARCH_M if truck else DROP_SEARCH_M
+        far = [d for d in garages(_places(md, tl, tn, reach), test)
+               if d[0] != g[0] and dist_m(tl, tn, d[1], d[2]) <= reach
                and dist_m(g[1], g[2], d[1], d[2]) >= 2000.0]
         if not far:
             continue

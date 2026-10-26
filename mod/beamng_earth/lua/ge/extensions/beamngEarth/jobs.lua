@@ -22,6 +22,7 @@ M.LATE_PER_MIN = 0.02
 M.LATE_MAX = 0.5
 M.DAMAGE_FULL = 15000.0     -- the vehicle's damage (beamstate, ~$) at which the whole pay is lost
 M.REQUEST_WAIT_S = 40
+M.TRUCK_WAIT_S = 150        -- (truck searches: far cells, a first download each)
 -- trucking (the user: "just spawn me in the truck and the trailer nearby"; "rent a truck and pay them a small fee each
 -- job"): the rented semi replaces your car, the trailer stands TRAILER_BACK_M behind it to back up to and couple; the
 -- load counts as delivered when the trailer is within TRAILER_M of the drop-off; the job's rent comes off the pay
@@ -31,7 +32,7 @@ M.TRAILER_M = 45.0
 local gps = require('beamngEarth/gps')
 local wallet = require('beamngEarth/wallet')
 
-local offers, offersError, pending, pendingT, seed = {}, nil, nil, 0, nil
+local offers, offersError, pending, pendingT, seed, pendingWait = {}, nil, nil, 0, nil, nil
 local active = nil          -- { job, stage = 'pickup' | 'deliver', t, expenses, own = { model, config } }
 local last = nil            -- the last finished job's result (the app shows it)
 local reqId = 0
@@ -82,6 +83,7 @@ function M.refresh(lat, lon, kind)
   reqId = reqId + 1
   if not c.requestDeliveryJobs(reqId, lat, lon, seed, kind) then offersError = 'not connected to the world server' return false end
   pending, pendingT, offersError = reqId, os.clock(), nil
+  pendingWait = kind == 'truck' and M.TRUCK_WAIT_S or M.REQUEST_WAIT_S
   return true
 end
 
@@ -93,8 +95,8 @@ local function poll()
     pending = nil
     offers = type(r.jobs) == 'table' and r.jobs or {}
     offersError = (#offers == 0) and (r.error or 'no jobs here') or nil
-  elseif os.clock() - pendingT > M.REQUEST_WAIT_S then
-    pending, offersError = nil, 'the world server did not answer'
+  elseif os.clock() - pendingT > (pendingWait or M.REQUEST_WAIT_S) then
+    pending, offersError = nil, 'the world server did not answer in time: if you just updated, restart with Play BeamNG.Earth.bat'
   end
 end
 

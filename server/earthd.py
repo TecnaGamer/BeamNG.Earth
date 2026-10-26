@@ -3044,8 +3044,9 @@ class Connection:
             log.warning("delivery jobs: %s: %s", type(e).__name__, e)
             out["error"] = "search failed"
         if not out["jobs"] and "error" not in out:
-            out["error"] = "no garages near here"
-        log.info("delivery jobs near %.5f, %.5f: %d", lat, lon, len(out["jobs"]))
+            out["error"] = ("no warehouses or depots near here" if msg.get("kind") == "truck"
+                            else "no garages near here")
+        log.info("%s jobs near %.5f, %.5f: %d", msg.get("kind") or "delivery", lat, lon, len(out["jobs"]))
         self.send(out)
 
     async def nearest_fuel(self, msg):

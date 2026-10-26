@@ -106,7 +106,12 @@ class TruckTest(unittest.TestCase):
                 ps.append(place(f"d{k:04d}", km * 1000 * math.cos(math.radians(b)), km * 1000 * math.sin(math.radians(b)),
                                 cat="distribution_center", name=f"DC {k}"))
         md = FakeMD({"places": feats("places", ps, mg.POINT)})
-        jobs = jobfind.offers(md, LAT0, LON0, 0, spot_fn=spot, kind="truck")
+        keep = jobfind.TRUCK_SEARCH_M
+        jobfind.TRUCK_SEARCH_M = 6000.0         # (this ring of depots is sparser than a real map's)
+        try:
+            jobs = jobfind.offers(md, LAT0, LON0, 0, spot_fn=spot, kind="truck")
+        finally:
+            jobfind.TRUCK_SEARCH_M = keep
         self.assertTrue(jobs)
         self.assertEqual(jobs[0]["pickup"]["name"], "Acme Warehouse", "depots only: not the garage or self storage")
         cargo = {c[0] for c in jobfind.CARGO}
