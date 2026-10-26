@@ -421,8 +421,21 @@ M.tileThreshold = tileThreshold
 -- after it changes.
 M.suppress = nil
 function M.refresh()
-  for _, t in pairs(tiles) do t.pending = true end
+  for _, t in pairs(tiles) do
+    if t.ghost then t.visibilityPending = true else t.pending = true end
+  end
 end
+-- Per-group visibility (settings.lua): nil means the default enabled; changing it re-evaluates
+-- loaded tiles under update's existing work budget, removing and restoring items without a rebuild.
+M.groupEnabled = {}
+function M.setGroupEnabled(group, on)
+  if type(group) ~= 'string' or not M.CATALOG[group] or type(on) ~= 'boolean' then return false end
+  if (M.groupEnabled[group] ~= false) == on then return true end
+  if on then M.groupEnabled[group] = nil else M.groupEnabled[group] = false end
+  M.refresh()
+  return true
+end
+
 
 -- Which of the capped groups a tile at distance d still shows (changes re-run its rows).
 groupBand = function(t, d)
@@ -459,6 +472,7 @@ function M.transform(xf, geodesy)
       if f then f:setPosRot(ox, oy, oz, x, y, z, w) end
       t.cx, t.cy = xf:apply(t.cx, t.cy, 0)
       t.ghost = true
+      t.visibilityPending = true
       t.pending = false
       any = true
     end
@@ -518,6 +532,13 @@ function M.update(anchorId, player, view)
   local budget = M.PER_FRAME * M.EVERY_N
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems = {}, 0
+  local nearMade, nearRemoved = false, false
+  local function finish()
+    if nearMade or nearRemoved then
+      local ok, roads = pcall(require, 'beamngEarth/roads')
+      if ok and roads.requestCollision then roads.requestCollision() end
+    end
+  end
   releaseGhosts(anchorId, player)
   for key, t in pairs(tiles) do
     if (t.anchor ~= anchorId and not t.ghost) or t.drop then
@@ -525,9 +546,10 @@ function M.update(anchorId, player, view)
       local fd = f and f:getData()
       local left = false
       for i, it in pairs(t.made) do
-        if budget <= 0 then return end
+        if budget <= 0 then finish(); return end
         local sh = t.madeShape[i]
         if not sh or allow(sh) then
+          if t.solid[i] then nearRemoved = true end
           if fd then removeItem(fd, it, sh) end
           t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
           budget = budget - 1
@@ -537,9 +559,28 @@ function M.update(anchorId, player, view)
         releaseForest(t)
         tiles[key] = nil
       end
+    elseif t.ghost and t.visibilityPending then
+      local f = t.forestId and scenetree.findObjectById(t.forestId)
+      local fd = f and f:getData()
+      local left = false
+      for i, it in pairs(t.made) do
+        local row = t.rows[i]
+        local g = row and (t.groups or GROUPS)[(row[1] or 0) + 1]
+        if g and M.groupEnabled[g] == false then
+          if budget <= 0 then t.visibilityPending = true; finish(); return end
+          local sh = t.madeShape[i]
+          if not sh or allow(sh) then
+            if t.solid[i] then nearRemoved = true end
+            if fd then removeItem(fd, it, sh) end
+            t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
+            budget = budget - 1
+          else left = true end
+        end
+      end
+      t.visibilityPending = left
     end
   end
-  if not player then return end
+  if not player then finish(); return end
   -- nearest tiles first (to the camera when it is away: view); [3] the distance to the car (the colliding items)
   local order = {}
   local function boxDist(p, t)
@@ -554,7 +595,6 @@ function M.update(anchorId, player, view)
     ::continue::
   end
   table.sort(order, function(a, b) return a[2] < b[2] end)
-  local nearMade = false
   local rowsScanned = 0
   -- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
   local function nearFocus(t)
@@ -562,12 +602,6 @@ function M.update(anchorId, player, view)
       if f.trees and boxDist(f, t) <= M.SOLID_M + (t.near and M.SOLID_HYST_M or 0) then return true end
     end
     return false
-  end
-  local function finish()
-    if nearMade then
-      local ok, roads = pcall(require, 'beamngEarth/roads')
-      if ok and roads.requestCollision then roads.requestCollision() end
-    end
   end
   for _, o in ipairs(order) do
     local t = tiles[o[1]]
@@ -585,6 +619,7 @@ function M.update(anchorId, player, view)
         local g = (t.groups or GROUPS)[(row[1] or 0) + 1]
         local cap = g and M.GROUP_MAX_M[g]
         if cap and o[2] > cap then r = 2 end     -- this group is not shown this far out
+        if g and M.groupEnabled[g] == false then r = 2 end
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
         if g and not M.CATALOG[g] then
           r = 2
@@ -597,7 +632,11 @@ function M.update(anchorId, player, view)
           local sh, sc = shapeOf(t, i, row)
           if budget <= 0 then t.pending = true; finish(); return end
           if allow(sh) then
-            if t.made[i] then removeItem(data(), t.made[i], t.madeShape[i]); budget = budget - 1 end  -- solid <-> not
+            if t.made[i] then
+              if t.solid[i] then nearRemoved = true end
+              removeItem(data(), t.made[i], t.madeShape[i])
+              budget = budget - 1
+            end -- solid <-> not
             t.made[i] = makeItem(data(), row, sh, sc, solid, g, t.variant)
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
@@ -607,6 +646,7 @@ function M.update(anchorId, player, view)
         elseif r >= want and t.made[i] then
           if budget <= 0 then t.pending = true; finish(); return end
           if allow(t.madeShape[i] or '') then
+            if t.solid[i] then nearRemoved = true end
             removeItem(data(), t.made[i], t.madeShape[i])
             t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
             budget = budget - 1

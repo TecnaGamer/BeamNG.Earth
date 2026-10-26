@@ -2,6 +2,13 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### New
+- **Rocks can be disabled independently** in the settings page (GitHub #5). The saved choice hides generated
+  rocks and desert rocks, including retained tiles after a rebase, without removing trees or terrain cliffs.
+  Their collision is updated through the existing throttled collision scheduler when rocks are removed or restored.
+
 ## 1.6.3 beta (2026-10-25)
 
 Works with BeamNG.drive 0.40.3.

@@ -51,6 +51,8 @@ M.SCHEMA = {
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
+  -- generated stone groups; the cliff group remains separate
+  rocks = { kind = 'bool', default = true, label = 'Rocks' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
@@ -74,7 +76,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
 M.ORDER = { 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'hudVisible', 'statusBar',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'roads', 'rocks', 'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
 
@@ -252,6 +254,11 @@ M.APPLY = {
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
+  end,
+  rocks = function(v)
+    local trees = require('beamngEarth/trees')
+    trees.setGroupEnabled('rock', v)
+    trees.setGroupEnabled('desert_rock', v)
   end,
   hudVisible = function(v)
     if M.pageExists() then ui.visible = v end
