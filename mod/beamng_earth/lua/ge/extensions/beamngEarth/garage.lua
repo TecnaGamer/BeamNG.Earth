@@ -255,6 +255,7 @@ function M.acquire(i, how)
   pay(price, (how == 'buy' and 'Bought ' or 'Rent: ') .. tostring(p.name))
   local d = today()
   have = have or { id = p.id, name = p.name, lat = p.lat, lon = p.lon, mlat = p.mlat, mlon = p.mlon, cars = {} }
+  have.buy = p.buy or have.buy                  -- (its price: a rental can be bought later, M.buyout)
   if how == 'buy' then
     have.kind = 'own'
     have.paid = price
@@ -288,6 +289,24 @@ function M.sell(id)
   end
   s.owned[id] = nil
   save()
+  return true
+end
+
+-- Buy a place you rent (the user: "there's no option to sell my property": his was rented): its price (kept when
+-- rented, else from the latest Property search), then it is yours to keep or sell.
+function M.buyout(id)
+  local s = load()
+  local p = s.owned[id]
+  if not p or p.kind == 'own' then return false, 'not a rental' end
+  local price = tonumber(p.buy)
+  if not price then
+    for _, q in ipairs(lists.property) do if q.id == id then price = tonumber(q.buy); p.mlat = p.mlat or q.mlat; p.mlon = p.mlon or q.mlon end end
+  end
+  if not price then return false, 'search Property near it first to see its price' end
+  pay(price, 'Bought ' .. tostring(p.name))
+  p.kind, p.paid, p.buy, p.untilDay = 'own', price, price, nil
+  save()
+  say('You own ' .. tostring(p.name))
   return true
 end
 
@@ -413,7 +432,7 @@ function M.uiState(anchor, player)
   local mine = {}
   for _, p in pairs(s.owned) do
     mine[#mine + 1] = { id = p.id, name = p.name, lat = p.lat, lon = p.lon, kind = p.kind, held = M.held(p, d),
-                        paid = p.paid, daysLeft = p.kind == 'rent' and math.max(0, (tonumber(p.untilDay) or 0) - d + 1) or nil,
+                        paid = p.paid, buy = p.buy, daysLeft = p.kind == 'rent' and math.max(0, (tonumber(p.untilDay) or 0) - d + 1) or nil,
                         cars = p.cars or {} }
   end
   table.sort(mine, function(a, b) return tostring(a.name) < tostring(b.name) end)

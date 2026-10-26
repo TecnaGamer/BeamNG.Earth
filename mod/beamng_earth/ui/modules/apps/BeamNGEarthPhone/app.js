@@ -143,6 +143,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             '<div class="bnp-card" ng-repeat="m in g.mine track by $index"><div class="bnp-row" style="padding:0"><b>{{ m.name }}</b><span class="bnp-dim">{{ m.kind == "own" ? "Owned" : (m.held ? m.daysLeft + " days left" : "Rent due") }}</span></div>' +
               '<div class="bnp-dim">{{ m.cars.length }} car(s) stored<span ng-if="m.kind == \'own\' && m.paid"> · sells for ${{ (m.paid * 0.7) | number:0 }}</span></div>' +
               '<div style="display:flex;gap:6px;margin-top:4px"><button class="bnp-btn alt" ng-click="lua(\'uiGarageNav(\\\'mine\\\', \' + ($index + 1) + \')\')">Navigate</button>' +
+              '<button class="bnp-btn" ng-if="m.kind != \'own\'" ng-click="gdo(\'buyout\', m.id)">Buy{{ m.buy ? " $" + (m.buy | number:0) : "" }}</button>' +
               '<button class="bnp-btn" style="background:#ff453a" ng-click="gdo(\'sell\', m.id)">{{ m.kind == "own" ? "Sell" : "End lease" }}</button></div></div></div>' +
           '<div class="bnp-dim" ng-if="gmsg" style="margin-top:6px">{{ gmsg }}</div>' +
         '</div>' +
