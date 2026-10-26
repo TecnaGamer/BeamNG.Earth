@@ -55,11 +55,51 @@ CARS = (("covet", "Ibishu Covet", 0.85), ("pessima", "Ibishu Pessima", 0.9), ("v
 # and the trailer nearby"; "you can rent a truck and pay them a small fee each job"): freight between real warehouses,
 # factories, distribution centres and big stores, farther apart; a rented semi (RENT a job, off the pay) and the
 # trailer for the cargo.
-DEPOT_WORDS = ("warehouse", "distribution", "logistics", "freight", "factory", "manufactur", "wholesale", "industrial",
-               "lumber", "building_supply", "hardware_store", "home_improvement", "farm_supply", "agricultur", "grain",
-               "quarry", "mining", "concrete", "steel", "storage_facility", "trucking", "shipping", "supermarket",
-               "grocery", "department_store", "superstore")
-NOT_DEPOT = ("self_storage", "parking", "gas", "fuel")
+# Loads (the user, 2026-10-26: "make jobs load the trailers with the listed material ... and make sure it makes sense for
+# the company asking you to do it. steelworks hauls steel, lumber yards haul lumber"): each load the stock trailer
+# config that carries it (the game's content/vehicles), the pickup businesses it comes from and the ones it goes to
+# (words in the Overture category / taxonomy), and its pay premium. A pickup's load is one whose pickup words its
+# category has; its destination a business with one of the load's drop words (else DROP_FALLBACK's).
+LOADS = (
+    # id, trailer, trailer config, label, premium, pickup words, drop words
+    ("coils", "flatbed", "vehicles/flatbed/48ft_coil.pc", "Steel coils", 1.2,
+     ("steel", "metal", "foundry", "metal_fabricat"), ("manufactur", "factory", "fabricat", "auto_manufactur", "industrial")),
+    ("pipes", "flatbed", "vehicles/flatbed/48ft_pipes.pc", "Steel pipes", 1.15,
+     ("steel", "pipe", "metal_supplier", "plumbing_supply"), ("construction", "contractor", "plumbing", "oil", "industrial")),
+    ("lumber", "flatbed", "vehicles/flatbed/48ft_wood.pc", "Lumber", 1.15,
+     ("lumber", "sawmill", "wood", "timber"), ("building_supply", "hardware", "home_improvement", "construction",
+                                               "contractor", "lumber")),
+    ("logs", "log_trailer", "vehicles/log_trailer/40ft_12logs.pc", "Logs", 1.15,
+     ("logging", "forestry", "timber", "tree_service"), ("sawmill", "lumber", "paper", "wood")),
+    ("stone", "flatbed", "vehicles/flatbed/32ft_marble.pc", "Stone blocks", 1.1,
+     ("quarry", "stone", "marble", "granite", "mining"), ("construction", "contractor", "landscap", "countertop",
+                                                          "monument", "building_supply")),
+    ("tires", "flatbed", "vehicles/flatbed/48ft_tires.pc", "Tires", 1.05,
+     ("tire_wholesale", "tire_distribut", "tire_dealer", "tire"), ("tire", "auto_repair", "car_dealer", "automotive")),
+    ("gasoline", "tanker", "vehicles/tanker/petroleum_3.pc", "Gasoline", 1.25,
+     ("fuel", "petroleum", "oil_and_gas", "refiner", "energy_company", "oil_company"), ("gas_station", "fueling_station")),
+    ("diesel", "tanker", "vehicles/tanker/diesel_3.pc", "Diesel", 1.25,
+     ("fuel", "petroleum", "oil_and_gas", "refiner", "oil_company"), ("truck_stop", "gas_station", "fueling_station",
+                                                                      "farm", "construction")),
+    ("milk", "tanker", "vehicles/tanker/milk_3.pc", "Milk", 1.15,
+     ("dairy", "farm", "creamery"), ("food_process", "dairy", "creamery", "grocery", "supermarket", "food_manufactur")),
+    ("water", "tanker", "vehicles/tanker/water_3.pc", "Water", 1.0,
+     ("water_utility", "water_supplier", "water_treatment", "bottled_water"), ("construction", "farm", "contractor")),
+    ("freight", "dryvan", "vehicles/dryvan/53ft_22400kg.pc", "Dry goods", 1.0,
+     ("warehouse", "distribution", "logistics", "wholesale", "manufactur", "factory"),
+     ("supermarket", "grocery", "department_store", "superstore", "retail", "home_improvement", "shopping", "store")),
+    ("groceries", "dryvan", "vehicles/dryvan/48ft_19200kg.pc", "Groceries", 1.05,
+     ("food_distribut", "grocery_wholesale", "food_wholesale", "food_process", "bakery", "food_manufactur"),
+     ("supermarket", "grocery", "convenience_store", "superstore")),
+    ("container", "containerTrailer", "vehicles/containerTrailer/40ft_3axle_40ft.pc", "Shipping container", 1.1,
+     ("seaport", "cargo", "freight", "intermodal", "container_terminal", "rail_yard"),
+     ("warehouse", "distribution", "logistics")),
+    ("chemicals", "containerTrailer", "vehicles/containerTrailer/40ft_3axle_tank.pc", "Chemicals", 1.3,
+     ("chemical",), ("manufactur", "factory", "water_treatment", "industrial", "plastic")),
+)
+DROP_FALLBACK = ("warehouse", "distribution", "logistics")
+DEPOT_WORDS = tuple(sorted({w for ld in LOADS for w in ld[5]}))
+NOT_DEPOT = ("self_storage", "parking", "car_wash", "gas_station", "fueling_station")
 TRUCK_KM = (24.0, 35.0, 48.0, 65.0, 90.0)
 TRUCK = "us_semi"
 TRUCK_NAME = "Gavril T-Series semi"
@@ -70,15 +110,26 @@ TRUCK_PER_MILE = 2.50
 TRUCK_MIN = 350.0
 TRUCK_BOOST = 1.3
 RENT = 45.0                 # $ the rental company takes per job
-# cargo -> (trailer model, what the panel says, pay factor)
-CARGO = (("dryvan", "Dry van: general freight", 1.0), ("tanker", "Tanker: fuel", 1.25),
-         ("flatbed", "Flatbed: building materials", 1.15), ("log_trailer", "Log trailer: lumber", 1.15),
-         ("frameless_dump", "Dump trailer: gravel", 1.05), ("containerTrailer", "Container: imports", 1.1))
+CARGO = tuple((ld[1], ld[3], ld[4]) for ld in LOADS)        # (trailer, label, premium): the tests' view
 # (midsize is the Gavril Grand Marshal's smaller sibling in some versions; the name shown is only a label)
 
 
 def _h(*parts):
     return int(hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:12], 16)
+
+
+def _cat(category, taxonomy):
+    return (str(category or "") + " " + str(taxonomy or "")).lower()
+
+
+def loads_for(cat):
+    """The loads a business of category text cat ships."""
+    return [ld for ld in LOADS if any(w in cat for w in ld[5])]
+
+
+def receives(ld, cat):
+    """Does a business of category text cat take load ld?"""
+    return any(w in cat for w in ld[6])
 
 
 def is_depot(category, taxonomy, status=None):
@@ -130,7 +181,7 @@ def garages(layers, test=None):
             k = f.coord_off[f.ring_off[f.part_off[i]]]
             lon, lat = f.lonlat[k]
             name = col("name", i).strip() or col("brand_name", i).strip() or "Garage"
-            out.append((fid, float(lat), float(lon), name))
+            out.append((fid, float(lat), float(lon), name, _cat(col("basic_category", i), col("taxonomy", i))))
     out.sort(key=lambda g: g[0])
     return out
 
@@ -186,15 +237,51 @@ def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None, kind="car"):
         if len(out) >= JOBS:
             break
         h = _h(seed, g[0])
-        km = kms[h % len(kms)]
-        brg = math.radians((h >> 8) % 360)
         k = max(math.cos(math.radians(g[1])), 0.05)
-        tl = g[1] + km * 1000.0 * math.cos(brg) / M_LAT
-        tn = g[2] + km * 1000.0 * math.sin(brg) / (M_LAT * k)
         reach = TRUCK_SEARCH_M if truck else DROP_SEARCH_M
-        far = [d for d in garages(_places(md, tl, tn, reach), test)
-               if d[0] != g[0] and dist_m(tl, tn, d[1], d[2]) <= reach
-               and dist_m(g[1], g[2], d[1], d[2]) >= 2000.0]
+        if truck:
+            mine = loads_for(g[4] if len(g) > 4 else "")
+            r0 = (h >> 4) % len(mine) if mine else 0
+            choices = mine[r0:] + mine[:r0]         # the business's loads, the hash's first: the next if nobody takes it
+        else:
+            choices = [None]
+        load, far = None, []
+        for cand in choices:
+            if truck:
+                def drop_test(category, taxonomy, status=None, ld=cand):
+                    if status and str(status) in ("closed", "permanently_closed", "temporarily_closed"):
+                        return False
+                    return receives(ld, _cat(category, taxonomy))
+            else:
+                drop_test = test
+            for tries in range(3 if truck else 1):      # (a load's customers are fewer: two more bearings)
+                hh = _h(seed, g[0], tries)
+                km = kms[hh % len(kms)]
+                brg = math.radians((hh >> 8) % 360)
+                tl = g[1] + km * 1000.0 * math.cos(brg) / M_LAT
+                tn = g[2] + km * 1000.0 * math.sin(brg) / (M_LAT * k)
+                cands = garages(_places(md, tl, tn, reach), drop_test)
+                far = [d for d in cands if d[0] != g[0] and dist_m(tl, tn, d[1], d[2]) <= reach
+                       and dist_m(g[1], g[2], d[1], d[2]) >= 2000.0]
+                if far:
+                    break
+            if far:
+                load = cand
+                break
+        if truck and not far and choices:               # nobody for any of its loads: a warehouse takes the first
+            load = choices[0]
+            for tries in range(3):
+                hh = _h(seed, g[0], tries)
+                km = kms[hh % len(kms)]
+                brg = math.radians((hh >> 8) % 360)
+                tl = g[1] + km * 1000.0 * math.cos(brg) / M_LAT
+                tn = g[2] + km * 1000.0 * math.sin(brg) / (M_LAT * k)
+                cands = garages(_places(md, tl, tn, reach),
+                                lambda c, x, s=None: any(w in _cat(c, x) for w in DROP_FALLBACK))
+                far = [d for d in cands if d[0] != g[0] and dist_m(tl, tn, d[1], d[2]) <= reach
+                       and dist_m(g[1], g[2], d[1], d[2]) >= 2000.0]
+                if far:
+                    break
         if not far:
             continue
         d = min(far, key=lambda x: (round(dist_m(tl, tn, x[1], x[2]), 1), x[0]))
@@ -215,9 +302,9 @@ def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None, kind="car"):
                 log.debug("jobs: route: %s: %s", type(e).__name__, e)
         job = {"id": "%016x" % _h(seed, g[0], d[0], kind)}
         if truck:
-            trailer, cargo, value = CARGO[(h >> 20) % len(CARGO)]
-            job.update({"kind": "truck", "car": TRUCK, "car_name": TRUCK_NAME, "trailer": trailer, "cargo": cargo,
-                        "rent": RENT})
+            _lid, trailer, config, cargo, value = load[:5]
+            job.update({"kind": "truck", "car": TRUCK, "car_name": TRUCK_NAME, "trailer": trailer,
+                        "trailer_config": config, "cargo": cargo, "rent": RENT})
             pay = truck_pay(dist, value)
         else:
             model, car_name, value = CARS[(h >> 20) % len(CARS)]

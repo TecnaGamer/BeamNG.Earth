@@ -100,6 +100,46 @@ class TruckTest(unittest.TestCase):
         # the stock trailers (the game's content/vehicles); "hopper" is the Ibishu Hopper SUV, not a trailer
         trailers = {"dryvan", "tanker", "flatbed", "log_trailer", "containerTrailer", "frameless_dump", "cargotrailer"}
         self.assertTrue({c[0] for c in jobfind.CARGO} <= trailers)
+        # each load's config is one the trailer ships (listed from the game's zips, 2026-10-26)
+        shipped = {"vehicles/flatbed/48ft_coil.pc", "vehicles/flatbed/48ft_pipes.pc", "vehicles/flatbed/48ft_wood.pc",
+                   "vehicles/flatbed/32ft_marble.pc", "vehicles/flatbed/48ft_tires.pc",
+                   "vehicles/log_trailer/40ft_12logs.pc", "vehicles/tanker/petroleum_3.pc", "vehicles/tanker/diesel_3.pc",
+                   "vehicles/tanker/milk_3.pc", "vehicles/tanker/water_3.pc", "vehicles/dryvan/53ft_22400kg.pc",
+                   "vehicles/dryvan/48ft_19200kg.pc", "vehicles/containerTrailer/40ft_3axle_40ft.pc",
+                   "vehicles/containerTrailer/40ft_3axle_tank.pc"}
+        for ld in jobfind.LOADS:
+            self.assertIn(ld[2], shipped, ld[0])
+            self.assertTrue(ld[2].startswith("vehicles/%s/" % ld[1]), ld[0])
+
+    def test_loads_fit_the_companies(self):
+        import math
+        ps = [place("steel", 500.0, 0.0, cat="steel_mill", name="Mon Valley Steel"),
+              place("lum", 600.0, 300.0, cat="lumber_store", name="Penn Lumber"),
+              place("fuel", 700.0, -300.0, cat="fuel_distributor", name="Sunoco Terminal")]
+        k = 0
+        for km in range(20, 95, 3):
+            for b in range(0, 360, 10):
+                k += 1
+                y, x = km * 1000 * math.cos(math.radians(b)), km * 1000 * math.sin(math.radians(b))
+                cat = ("auto_manufacturer", "building_supply_store", "gas_station")[k % 3]
+                ps.append(place(f"d{k:04d}", y, x, cat=cat, name=f"{cat} {k}"))
+        md = FakeMD({"places": feats("places", ps, mg.POINT)})
+        keep = jobfind.TRUCK_SEARCH_M
+        jobfind.TRUCK_SEARCH_M = 6000.0
+        try:
+            jobs = jobfind.offers(md, LAT0, LON0, 0, spot_fn=spot, kind="truck")
+        finally:
+            jobfind.TRUCK_SEARCH_M = keep
+        by = {j["pickup"]["name"]: j for j in jobs}
+        self.assertIn(by["Mon Valley Steel"]["cargo"], ("Steel coils", "Steel pipes"))
+        self.assertEqual(by["Penn Lumber"]["cargo"], "Lumber")
+        self.assertIn(by["Sunoco Terminal"]["cargo"], ("Gasoline", "Diesel"))
+        self.assertTrue(by["Penn Lumber"]["dropoff"]["name"].startswith("building_supply"), "lumber to a building supply")
+        if by["Sunoco Terminal"]["cargo"] == "Gasoline":
+            self.assertTrue(by["Sunoco Terminal"]["dropoff"]["name"].startswith("gas_station"), "fuel to a gas station")
+        self.assertTrue(by["Mon Valley Steel"]["trailer_config"].startswith("vehicles/flatbed/"))
+        self.assertFalse(jobfind.is_depot("sporting_goods_store", ""), "not a port")
+        self.assertFalse(jobfind.is_depot("gas_station", ""), "gas stations receive fuel, they do not ship it")
 
     def test_realistic_pay(self):
         # $2.50 a mile, a $350 minimum, the cargo's premium, x1.3 (the user's boost)

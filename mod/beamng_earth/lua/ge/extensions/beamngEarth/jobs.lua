@@ -163,14 +163,15 @@ local function removeTrailer()
   if active then active.trailerId = nil end
 end
 
-local function spawnTrailer(model)
+local function spawnTrailer(model, config)
   local veh, cv = playerVeh(), rawget(_G, 'core_vehicles')
   if not (veh and cv and cv.spawnNewVehicle) then return nil end
   local ok, o = pcall(function()
     local p, d = veh:getPosition(), veh:getDirectionVector()
     local back = vec3(p.x - d.x * M.TRAILER_BACK_M, p.y - d.y * M.TRAILER_BACK_M, p.z + 0.5)
     local rot = quatFromDir(vec3(d.x, d.y, 0), vec3(0, 0, 1))
-    return cv.spawnNewVehicle(model, { pos = back, rot = rot, autoEnterVehicle = false })
+    -- (config: the stock trailer config carrying the load, server jobfind.LOADS: steel coils, fuel, logs...)
+    return cv.spawnNewVehicle(model, { pos = back, rot = rot, autoEnterVehicle = false, config = config })
   end)
   return ok and o and o.getID and o:getID() or nil
 end
@@ -235,7 +236,7 @@ function M.update(dt, anchor, player)
         return
       end
       if job.trailer then
-        active.trailerId = spawnTrailer(job.trailer)
+        active.trailerId = spawnTrailer(job.trailer, job.trailer_config)
         msg('Your ' .. tostring(job.cargo) .. ' trailer is behind you: back up and couple it', 'info')
       end
       active.stage, active.t = 'deliver', 0

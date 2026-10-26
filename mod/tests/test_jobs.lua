@@ -87,9 +87,10 @@ trailer.delete = function() trailer.deleted = true end
 veh.getPosition = function() return { x = 0, y = 0, z = 0 } end
 veh.getDirectionVector = function() return { x = 0, y = 1, z = 0 } end
 local spawned = {}
-core_vehicles.spawnNewVehicle = function(model, opt) spawned[#spawned + 1] = { model, opt.pos } return trailer end
+core_vehicles.spawnNewVehicle = function(model, opt) spawned[#spawned + 1] = { model, opt.pos, opt.config } return trailer end
 be.getObjectByID = function(_, id) return id == 99 and not trailer.deleted and trailer or nil end
 local haul = { id = 't', kind = 'truck', car = 'us_semi', car_name = 'Gavril T-Series semi', trailer = 'tanker',
+               trailer_config = 'vehicles/tanker/petroleum_3.pc',
                cargo = 'Tanker: fuel', rent = 45, pay = 300, dist = 60000, dur = 3000, limit = 5040,
                pickup = { lat = 40.0, lon = -80.0, name = 'Acme' }, dropoff = { lat = 40.5, lon = -80.0, name = 'DC' } }
 map.objects[7].damage = 0
@@ -98,6 +99,7 @@ J.accept(1)
 J.update(0.1, anchor, { x = 0, y = 0, vx = 0, vy = 0 })
 T.check(replaced[#replaced][1] == 'us_semi', 'the rented semi')
 T.check(spawned[1][1] == 'tanker' and spawned[1][2].y == -16, 'its trailer 16 m behind')
+T.check(spawned[1][3] == 'vehicles/tanker/petroleum_3.pc', 'loaded with the job\'s cargo')
 bal = W.balance()
 J.update(100, anchor, { x = 0, y = 55500, vx = 0, vy = 0 })
 T.check(J._active() ~= nil and W.balance() == bal, 'at the drop-off without the trailer: not delivered')
