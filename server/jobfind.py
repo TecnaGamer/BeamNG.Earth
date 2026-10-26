@@ -63,12 +63,16 @@ NOT_DEPOT = ("self_storage", "parking", "gas", "fuel")
 TRUCK_KM = (24.0, 35.0, 48.0, 65.0, 90.0)
 TRUCK = "us_semi"
 TRUCK_NAME = "Gavril T-Series semi"
-TRUCK_PER_MILE = 2.6        # $ a mile, a semi's freight rate
-TRUCK_BASE = 120.0
+# pay (the user, 2026-10-26: "make it realistic", then "a 1.3x on that"): a load's market rate, $2.50 a mile (DAT dry
+# van contract, July 2026), at least TRUCK_MIN (short hauls pay a flat minimum: loading and unloading take hours),
+# times the cargo's premium, times TRUCK_BOOST; fuel and tolls are paid back on top (jobs.lua)
+TRUCK_PER_MILE = 2.50
+TRUCK_MIN = 350.0
+TRUCK_BOOST = 1.3
 RENT = 45.0                 # $ the rental company takes per job
 # cargo -> (trailer model, what the panel says, pay factor)
-CARGO = (("dryvan", "Dry van: general freight", 1.0), ("tanker", "Tanker: fuel", 1.3),
-         ("flatbed", "Flatbed: building materials", 1.1), ("log_trailer", "Log trailer: lumber", 1.15),
+CARGO = (("dryvan", "Dry van: general freight", 1.0), ("tanker", "Tanker: fuel", 1.25),
+         ("flatbed", "Flatbed: building materials", 1.15), ("log_trailer", "Log trailer: lumber", 1.15),
          ("hopper", "Hopper: gravel", 1.05), ("containerTrailer", "Container: imports", 1.1))
 # (midsize is the Gavril Grand Marshal's smaller sibling in some versions; the name shown is only a label)
 
@@ -141,6 +145,11 @@ def _places(md, lat, lon, half):
     return layers
 
 
+def truck_pay(dist, value):
+    """$ for a load hauled dist m with cargo premium value (to the nearest $5)."""
+    return float(5 * round(max(TRUCK_MIN, TRUCK_PER_MILE * dist / MI) * value * TRUCK_BOOST / 5.0))
+
+
 def pay_for(dist, value):
     """$ for a delivery of dist m in a car of value factor value (to the nearest $5)."""
     return float(5 * round((BASE_PAY + PER_MILE * dist / MI) * value / 5.0))
@@ -196,7 +205,7 @@ def offers(md, lat, lon, seed=0, route_fn=None, spot_fn=None, kind="car"):
             trailer, cargo, value = CARGO[(h >> 20) % len(CARGO)]
             job.update({"kind": "truck", "car": TRUCK, "car_name": TRUCK_NAME, "trailer": trailer, "cargo": cargo,
                         "rent": RENT})
-            pay = float(5 * round((TRUCK_BASE + TRUCK_PER_MILE * dist / MI) * value / 5.0))
+            pay = truck_pay(dist, value)
         else:
             model, car_name, value = CARS[(h >> 20) % len(CARS)]
             job.update({"kind": "car", "car": model, "car_name": car_name})

@@ -95,6 +95,12 @@ class OfferTest(unittest.TestCase):
 
 
 class TruckTest(unittest.TestCase):
+    def test_realistic_pay(self):
+        # $2.50 a mile, a $350 minimum, the cargo's premium, x1.3 (the user's boost)
+        self.assertEqual(jobfind.truck_pay(15 * jobfind.MI, 1.0), 455.0)
+        self.assertEqual(jobfind.truck_pay(40 * jobfind.MI, 1.25), 570.0)
+        self.assertEqual(jobfind.truck_pay(200 * jobfind.MI, 1.0), 650.0)
+
     def test_freight_between_depots_with_a_rented_semi(self):
         import math
         ps = [place("w1", 600.0, 0.0, cat="warehouse", name="Acme Warehouse"),
