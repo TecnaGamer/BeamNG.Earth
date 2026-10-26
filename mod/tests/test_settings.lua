@@ -445,4 +445,19 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- #5: the user's rock visibility choice persists when changed and across reloads.
+do
+  local trees0, settingsFile0 = package.loaded['beamngEarth/trees'], files[settings.FILE]
+  package.loaded['beamngEarth/trees'] = { setGroupEnabled = function() end }
+  settings.load()
+  settings.set('rocks', false)
+  T.check(files[settings.FILE].rocks == false, '#5: rock setting off is persisted')
+  T.check(settings.load().rocks == false, '#5: rock setting off survives reload')
+  settings.set('rocks', true)
+  T.check(files[settings.FILE].rocks == true, '#5: rock setting on is persisted')
+  package.loaded['beamngEarth/trees'] = trees0
+  files[settings.FILE] = settingsFile0
+  settings.load()
+end
+
 T.done('test_settings')

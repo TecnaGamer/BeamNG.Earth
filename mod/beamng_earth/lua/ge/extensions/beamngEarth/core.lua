@@ -74,6 +74,7 @@ local groundcover = require('beamngEarth/groundcover') -- grass on the surface l
 local roads = require('beamngEarth/roads') -- DecalRoads from the server's road tiles (docs/ROADMAP.md v1.6)
 local sea = require('beamngEarth/sea') -- the sea's WaterBlock tiles (server seatiles.py)
 local trees = require('beamngEarth/trees') -- trees, bushes, rocks (server vegetation.py)
+local streetlights = require('beamngEarth/streetlights') -- generated night lights on mapped OSM road surfaces
 local parking = require('beamngEarth/parking') -- parked cars on the road tiles' spots (stock gameplay_parking)
 local gasstations = require('beamngEarth/gasstations') -- pumps and the stock refuel prompt (server gasstations.py)
 gasstations.onCollide = roads.markCollisionDirty
@@ -1860,6 +1861,7 @@ local function onUpdate(dtReal, dtSim)
     t = mark('far', t)
     sea.update(st.anchorId, st.player)
     trees.update(st.anchorId, st.player, M.viewAway())
+    streetlights.update(st.anchorId, not (st.player and st.player.camera) and st.player or nil, dtReal)
     t = mark('sea+trees', t)
     local pb = nil
     if st.block then

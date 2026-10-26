@@ -37,6 +37,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   stop signs and speed-limit signs (mph or km/h by country), traffic lights and sidewalks where OpenStreetMap maps them;
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line) and tram tracks (street track where trams run on the road).
+- Mapped street lamps illuminate nearby roads at night, following the game's day/night state. Up to 24
+  non-shadowing lights within 90 m of the player follow their lamp models through streaming and origin shifts.
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
@@ -104,6 +106,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   move or resize them in the UI apps editor), and a one-time welcome page about the project.
 - Settings in the pause menu, keybinds, in-game reports (notes and performance recordings to share), and a
   wireframe view (Ctrl+Alt+W) that shows how the ground, the distant terrain and the roads are built.
+- **Rocks** in the settings page turns generated rocks and desert rocks off or on without changing trees or
+  terrain cliffs. The choice is saved; collision follows the existing streaming update budget.
 - A diagnostic log to send when something is slow: the world server's `logs/server.log` (in
   `%LOCALAPPDATA%\beamng-earth` on Windows, `~/.cache/beamng-earth` on Linux) records your hardware and settings, every
   hitch and frame-rate drop with where it happened and what was loading, and a summary every minute
