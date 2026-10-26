@@ -704,6 +704,7 @@ function M.uiGarageDo(action, arg)
   elseif action == 'parts' then ok, why = g.parts(a, p)
   elseif action == 'buy' or action == 'rent' then ok, why = g.acquire(arg, action)
   elseif action == 'store' then ok, why = g.store(a, p, arg)
+  elseif action == 'sell' then ok, why = g.sell(arg)
   end
   return { ok = ok and true or false, error = why }
 end

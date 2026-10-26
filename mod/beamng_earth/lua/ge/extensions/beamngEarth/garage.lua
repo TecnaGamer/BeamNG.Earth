@@ -216,6 +216,7 @@ function M.acquire(i, how)
   have = have or { id = p.id, name = p.name, lat = p.lat, lon = p.lon, cars = {} }
   if how == 'buy' then
     have.kind = 'own'
+    have.paid = price
   else
     have.kind = have.kind == 'own' and 'own' or 'rent'
     have.untilDay = math.max(tonumber(have.untilDay) or -1, d - 1) + M.RENT_DAYS
@@ -225,6 +226,27 @@ function M.acquire(i, how)
   local okP, places = pcall(require, 'beamngEarth/places')         -- a spawn point in the level select
   if okP and places.add then pcall(places.add, 'My garage: ' .. tostring(p.name), p.lat, p.lon) end
   say(how == 'buy' and ('You own ' .. tostring(p.name)) or ('Rented ' .. tostring(p.name) .. ' for a week'))
+  return true
+end
+
+-- Pure: what an owned place sells for (SELL_BACK of the price paid).
+M.SELL_BACK = 0.7
+function M.salePrice(p) return math.floor((tonumber(p and p.paid) or 0) * M.SELL_BACK / 5 + 0.5) * 5 end
+
+-- Sell an owned place (SELL_BACK of its price; its stored cars go with it) or end a lease (no refund).
+function M.sell(id)
+  local s = load()
+  local p = s.owned[id]
+  if not p then return false, 'not yours' end
+  if p.kind == 'own' then
+    local back = M.salePrice(p)
+    if back > 0 then wallet.add(back, 'Sold ' .. tostring(p.name)) end
+    say('Sold ' .. tostring(p.name))
+  else
+    say('Lease ended: ' .. tostring(p.name))
+  end
+  s.owned[id] = nil
+  save()
   return true
 end
 
@@ -261,7 +283,7 @@ function M.uiState(anchor, player)
   local mine = {}
   for _, p in pairs(s.owned) do
     mine[#mine + 1] = { id = p.id, name = p.name, lat = p.lat, lon = p.lon, kind = p.kind, held = M.held(p, d),
-                        daysLeft = p.kind == 'rent' and math.max(0, (tonumber(p.untilDay) or 0) - d + 1) or nil,
+                        paid = p.paid, daysLeft = p.kind == 'rent' and math.max(0, (tonumber(p.untilDay) or 0) - d + 1) or nil,
                         cars = p.cars or {} }
   end
   table.sort(mine, function(a, b) return tostring(a.name) < tostring(b.name) end)

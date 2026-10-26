@@ -59,4 +59,13 @@ T.check(G.store(anchor, home, 1), 'swap')
 local cars = G._state().owned.p1.cars
 T.check(cars[1].model == 'etk800' and replaced[#replaced][1] == 'pickup', 'the pickup out, the etk800 in storage')
 T.check(not G.store(anchor, at), 'storage only at your property')
+-- selling: 70 % of the price paid back, the place gone; a lease just ends
+local b1 = W.balance()
+T.check(G.sell('p1'), 'sell')
+T.near(W.balance() - b1, 21000, 1e-9, 'sold for 70 % of $30,000')
+T.check(G._state().owned.p1 == nil and G.at(anchor, home) == nil, 'not yours any more')
+G.acquire(1, 'rent')
+b1 = W.balance()
+T.check(G.sell('p1') and W.balance() == b1, 'a lease ends with no refund')
+T.check(not G.sell('nope'), 'nothing to sell')
 T.done('test_garage')
