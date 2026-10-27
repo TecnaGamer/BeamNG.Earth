@@ -199,6 +199,27 @@ function M.pois(levelIdentifier, elements)
   end
 end
 
+-- The world map's "Gas stations" overlay (settings.uiMapState): every known station (made or still queued to
+-- spawn) as { id, name, brand, lat, lon }, from its first prop/area's position in the current anchor's frame
+-- (kept current by M.transform on a rebase) converted by `anchor` (the active one, core._state().anchor). Only
+-- stations whose road tile has already reached this client - the server lays them out per road tile, so this is
+-- "where you've driven", not the whole map (the user, 2026-10-27).
+function M.mapPins(anchor)
+  if not anchor then return {} end
+  local out = {}
+  for id, st in pairs(stations) do
+    local p = (st.objs[1] and st.objs[1].pos) or (st.rec.props and st.rec.props[1] and st.rec.props[1].pos)
+      or (st.rec.areas and st.rec.areas[1] and st.rec.areas[1].pos)
+    if p then
+      local lat, lon = anchor:enuToGeodetic(p[1], p[2], p[3])
+      local r = st.rec
+      out[#out + 1] = { id = id, name = (r.name and r.name ~= '') and r.name or 'Gas station', brand = r.brand or '',
+        lat = lat, lon = lon }
+    end
+  end
+  return out
+end
+
 -- Level end / new session: everything goes.
 function M.reset()
   for _, st in pairs(stations) do deleteObjs(st) end

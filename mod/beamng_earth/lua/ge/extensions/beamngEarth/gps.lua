@@ -242,10 +242,10 @@ function M.status()
            routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries }
 end
 
--- The planned route for the map: { version, points = {{lat, lon}...}, dist, dur } or nil.
+-- The planned route for the map: { version, points = {{lat, lon}...}, dist, dur, elev = {{distM, elevM}...} } or nil.
 function M.route()
   if not route then return nil end
-  return { version = route.version, points = route.points, dist = route.dist, dur = route.dur }
+  return { version = route.version, points = route.points, dist = route.dist, dur = route.dur, elev = route.elev }
 end
 
 local function toEnu(anchor)
@@ -680,7 +680,7 @@ function M.update(anchor, player)
       pendingId = nil
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
-        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion }
+        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev }
         routeError, enu, routedTo = nil, nil, nil
       else
         routeError = r.error or 'no route'

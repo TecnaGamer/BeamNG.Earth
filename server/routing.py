@@ -69,6 +69,39 @@ def simplify(points, tol_m=SIMPLIFY_M):
     return [p for p, k in zip(points, keep) if k]
 
 
+def resample(points, max_points=120, min_step_m=50.0):
+    """points [(lat, lon)] (the route, however sparse its vertices are) at even distance steps, for an elevation
+    profile: [(lat, lon, dist_m)], the first at 0 and the last at the route's whole length, at most max_points,
+    step >= min_step_m. simplify() only keeps vertices at bends, so a long straight climb would else be two points
+    and no profile at all (dem.sample wants points spread along it instead). Pure."""
+    n = len(points)
+    if n == 0:
+        return []
+    if n == 1:
+        return [(points[0][0], points[0][1], 0.0)]
+    lat_ref = points[0][0]
+    xy = [_xy(la, lo, lat_ref) for la, lo in points]
+    seg = [math.hypot(xy[i + 1][0] - xy[i][0], xy[i + 1][1] - xy[i][1]) for i in range(n - 1)]
+    total = sum(seg)
+    if total <= 0:
+        return [(points[0][0], points[0][1], 0.0)]
+    step = max(min_step_m, total / max(1, max_points - 1))
+    out = []
+    i, done, s = 0, 0.0, 0.0
+    while s <= total:
+        while i < n - 2 and done + seg[i] < s:
+            done += seg[i]
+            i += 1
+        f = max(0.0, min(1.0, (s - done) / seg[i])) if seg[i] > 0 else 0.0
+        la = points[i][0] + f * (points[i + 1][0] - points[i][0])
+        lo = points[i][1] + f * (points[i + 1][1] - points[i][1])
+        out.append((la, lo, s))
+        s += step
+    if out[-1][2] < total - 1e-6:
+        out.append((points[-1][0], points[-1][1], total))
+    return out
+
+
 def parse(data):
     """{points: [[lat, lon], ...], dist (m), dur (s)} of an OSRM route response, or raises ValueError. Pure."""
     if not isinstance(data, dict) or data.get("code") != "Ok" or not data.get("routes"):

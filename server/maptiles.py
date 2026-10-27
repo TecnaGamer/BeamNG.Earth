@@ -111,6 +111,10 @@ LAYER_SOURCES = {
         "eoxlabels", "https://tiles.maps.eox.at/wmts/1.0.0/overlay_bright_3857/default/g/{z}/{y}/{x}.png", 14,
         "Overlay by " + EOX_MAP_CREDIT),
 }
+# "Dark" in the map's Layers panel is not a tile source of its own: the mod shows the "map" tiles (terrain-light,
+# which already has hillshaded relief baked in) through a CSS invert+hue-rotate filter (EarthMap.vue's .tile-dark),
+# the usual trick for a dark map without a dark-themed tile set of its own (checked, 2026-10-27: a colour-inverted
+# terrain-light tile over the Alps keeps the relief, the user wanted mountains to still show, not a flat dark colour).
 LAYERS = {"sat": "jpg", "map": "jpg", "labels": "png"}     # layer id -> file extension
 
 

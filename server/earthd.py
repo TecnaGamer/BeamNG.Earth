@@ -2839,7 +2839,8 @@ class Connection:
 
     async def route(self, msg):
         """{"id", "lat0", "lon0", "lat1", "lon1"} -> route_result {"id", "points": [[lat, lon]...], "dist", "dur",
-        "error"?}. Also (re)starts this route's corridor prefetch (route_download, routeahead.py)."""
+        "elev": [[dist_m, elev_m], ...]?, "error"?}. Also (re)starts this route's corridor prefetch (route_download,
+        routeahead.py)."""
         self.route_dl_version += 1
         version = self.route_dl_version
         out = {"type": "route_result", "id": msg.get("id"), "points": [], "dist": 0.0, "dur": 0.0}
@@ -2850,11 +2851,28 @@ class Connection:
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]
+        if "error" not in out and self.s.dem is not None and out["points"]:
+            try:                        # the map's elevation profile: a nice-to-have, the route works without it
+                out["elev"] = await asyncio.get_running_loop().run_in_executor(
+                    self.s.ui_pool, self._route_elevation, out["points"])
+            except Exception as e:
+                log.debug("route elevation: %s: %s", type(e).__name__, e)
         log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
                  msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         self.route_download(version, out["points"])
+
+    def _route_elevation(self, points):
+        """The route's elevation profile for the map (routing.resample onto even steps, dem.sample): [[dist_m,
+        elev_m], ...]. Blocking (run_in_executor): called from route() only."""
+        aid = self.active
+        zoom = self.s.anchors[aid].hm_zoom if aid in self.s.anchors else demmod.FINE_ZOOM
+        pts = routingmod.resample([(p[0], p[1]) for p in points])
+        lats = np.array([p[0] for p in pts])
+        lons = np.array([p[1] for p in pts])
+        elev = self.s.dem.sample(lats, lons, zoom)
+        return [[round(p[2], 1), round(float(e), 1)] for p, e in zip(pts, elev)]
 
     def route_download(self, version, points):
         """Prefetch the route's corridor (elevation tiles and road/building map cells) up to

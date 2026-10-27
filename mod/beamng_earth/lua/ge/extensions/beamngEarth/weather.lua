@@ -862,6 +862,10 @@ function M.statusLine()
     m.visM and string.format('%.0f km', m.visM / 1000) or '?')
 end
 
+-- The latest weather message (code, cover, wind, tempC, ...) as a plain table, unlike status() (a dumps() string
+-- for the console): the world map's weather badge (settings.uiMapState) reads it every second, too often to parse.
+function M.current() return lastMsg end
+
 function M.status()
   return dumps({ mode = mode, pending = S.pending, switched = S.switched, bwmFighting = bwmNow(),
     gravityOverride = S.gravityOverride ~= nil, bigMap = bigMapBusy(), inOurLevel = S.inOurLevel, grace = math.max(0, S.graceUntil - S.clock), mission = S.mission,

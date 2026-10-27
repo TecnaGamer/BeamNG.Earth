@@ -149,4 +149,18 @@ for _, o in ipairs(S.liveOf('TSStatic')) do o:delete() end             -- (the l
 G.prewarm({ '/x/a.dae' })
 T.check(#S.liveOf('TSStatic') == 1, 'made again after the level went')
 
+-- the world map's "Gas stations" overlay (settings.uiMapState -> gasstations.mapPins): every known station as
+-- lat/lon, queued or spawned alike, by the active anchor (a fake one here: enuToGeodetic's only caller in this file)
+G.reset()
+T.check(#G.mapPins(nil) == 0, 'no anchor: no pins')
+G.onRows(1, '1:3_3', { rec('map1', 500) })
+local fakeAnchor = { enuToGeodetic = function(self, x, y, z) return 40.0 + x * 1e-5, -80.0 + y * 1e-5, z end }
+local pins = G.mapPins(fakeAnchor)
+T.check(#pins == 1 and pins[1].id == 'map1' and pins[1].name == 'Speedway', 'a pin for the queued (not yet spawned) station too')
+T.near(pins[1].lat, 40.005, 1e-9, 'converted by the anchor, from its first prop (not yet spawned)')
+G.update(gov)
+local pins2 = G.mapPins(fakeAnchor)
+T.check(#pins2 == 1 and pins2[1].id == 'map1', 'still one pin once spawned')
+G.reset()
+
 T.done('test_gasstations')

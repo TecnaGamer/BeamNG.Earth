@@ -24,6 +24,19 @@ class RoutingTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             routing.parse({"code": "NoRoute", "routes": []})
 
+    def test_resample_even_steps(self):
+        line = [(39.0, -76.0), (39.0, -75.9)]              # ~8.6 km east, one straight segment
+        r = routing.resample(line, max_points=20)
+        self.assertEqual(r[0][2], 0.0)
+        self.assertAlmostEqual(r[-1][0], line[-1][0], places=6)
+        self.assertAlmostEqual(r[-1][1], line[-1][1], places=6)
+        for a, b in zip(r, r[1:]):
+            self.assertGreater(b[2], a[2])
+
+    def test_resample_short_line_one_point(self):
+        self.assertEqual(routing.resample([(39.0, -76.0)]), [(39.0, -76.0, 0.0)])
+        self.assertEqual(routing.resample([]), [])
+
     def test_url(self):
         u = routing.url(39.28, -76.59, 38.9, -77.03)
         self.assertIn("-76.590000,39.280000;-77.030000,38.900000", u)

@@ -16,6 +16,7 @@
           v-for="t in L.fallback"
           :key="L.id + t.key"
           class="map-tile"
+          :class="{ 'tile-dark': baseLayer === 'dark' && !L.overlay }"
           :src="t.src"
           :style="{ left: t.left + 'px', top: t.top + 'px', width: t.size + (L.overlay ? 0 : 1) + 'px', height: t.size + (L.overlay ? 0 : 1) + 'px' }"
           draggable="false"
@@ -24,6 +25,7 @@
           v-for="t in L.tiles"
           :key="L.id + ':' + t.key"
           class="map-tile"
+          :class="{ 'tile-dark': baseLayer === 'dark' && !L.overlay }"
           :src="t.src"
           :style="{ left: t.left + 'px', top: t.top + 'px', width: t.size + (L.overlay ? 0 : 1) + 'px', height: t.size + (L.overlay ? 0 : 1) + 'px' }"
           draggable="false"
@@ -68,6 +70,19 @@
         <div class="pin"></div>
         <div class="marker-label">{{ p.name }}</div>
       </div>
+      <!-- gas stations (settings.uiMapState's gasStations: only where a road tile with them has already reached
+           the client, so this is "where you've driven", not a world-wide search) -->
+      <div
+        v-for="g in gasMarkers"
+        :key="'g' + g.id"
+        class="marker gas-station"
+        :style="{ left: g.sx + 'px', top: g.sy + 'px' }"
+        @mousedown.stop
+        @click.stop="setGps(g.lat, g.lon, g.name)"
+      >
+        <div class="pin"></div>
+        <div class="marker-label">{{ g.name }}</div>
+      </div>
       <!-- the GPS destination -->
       <div v-if="gpsScreen" class="marker gps" :style="{ left: gpsScreen.x + 'px', top: gpsScreen.y + 'px' }">
         <div class="flag"></div>
@@ -90,6 +105,13 @@
     <!-- top bar: title, search, buttons -->
     <div class="map-top">
       <div class="map-title">BeamNG.Earth map</div>
+      <!-- the player's local time + weather (settings.uiMapState's weather: sky.lua's real clock for the lat/lon,
+           weather.lua's last message), 2026-10-27 -->
+      <div v-if="weatherBadge" class="weather-badge">
+        <span v-if="weatherBadge.icon">{{ weatherBadge.icon }}</span>
+        <span v-if="weatherBadge.tempC != null">{{ weatherBadge.tempC }}°C</span>
+        <span v-if="weatherBadge.localTime">{{ weatherBadge.localTime }}</span>
+      </div>
       <div class="search">
         <input
           ref="searchEl"
@@ -124,10 +146,13 @@
           <div class="panel-sub">Base map</div>
           <label class="layer-opt"><input type="radio" value="sat" v-model="baseLayer" /> Satellite</label>
           <label class="layer-opt"><input type="radio" value="map" v-model="baseLayer" /> Map</label>
+          <label class="layer-opt"><input type="radio" value="dark" v-model="baseLayer" /> Dark</label>
           <div class="panel-sub">Overlays</div>
           <label class="layer-opt"><input type="checkbox" v-model="labelsOn" /> Roads &amp; labels</label>
           <label class="layer-opt"><input type="checkbox" v-model="layersOn" /> Borders &amp; places
             <span class="layer-hint">(world to city zoom)</span></label>
+          <label class="layer-opt"><input type="checkbox" v-model="gasStationsOn" /> Gas stations
+            <span class="layer-hint">(where you've driven)</span></label>
         </div>
       </div>
       <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
@@ -135,6 +160,7 @@
 
     <!-- status: tiles unavailable / not connected -->
     <div v-if="notice" class="map-notice">{{ notice }}</div>
+    <div v-if="toast" class="map-toast">{{ toast }}</div>
 
     <!-- right-click menu -->
     <div v-if="ctx" class="ctx-menu" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.stop @contextmenu.prevent>
@@ -142,29 +168,41 @@
       <div class="ctx-item" :class="{ disabled: !!state.cannotGo }" @click="ctxTeleport">Teleport here</div>
       <div class="ctx-item" @click="ctxGps">Set GPS destination</div>
       <div class="ctx-item" @click="ctxSave">Save this place</div>
+      <div class="ctx-item" @click="ctxCopy">Copy coordinates</div>
       <div v-if="state.gps" class="ctx-item" @click="clearGps">Clear GPS</div>
     </div>
 
     <!-- the GPS destination -->
     <div v-if="state.gps" class="gps-chip" @mousedown.stop>
-      <span>GPS: {{ state.gps.name || fmtLatLon(state.gps.lat, state.gps.lon) }}</span>
-      <span v-if="state.gps.planning && !routePts.length" class="gps-dist">planning route…</span>
-      <span v-else-if="state.gps.remaining != null" class="gps-dist">{{ fmtMiles(state.gps.remaining) }}<template
-        v-if="state.gps.eta != null">, {{ fmtDur(state.gps.eta) }}</template></span>
-      <span v-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">no road route: heading straight there</span>
-      <span v-if="state.gps.routeDownload && state.gps.routeDownload.active" class="gps-download"
-            title="Downloading the route's road and elevation data ahead of time so driving it is smoother">
-        <span class="gps-download-bar"><span class="gps-download-fill" :style="{ width: (state.gps.routeDownload.total
-          ? (100 * state.gps.routeDownload.done / state.gps.routeDownload.total) : 0) + '%' }"></span></span>
-        {{ state.gps.routeDownload.done }} / {{ state.gps.routeDownload.total }}
-      </span>
-      <button class="map-btn small" @click="showOnMap(state.gps)">Show</button>
-      <button class="map-btn small" :disabled="!!state.cannotGo" @click="teleportNow(state.gps.lat, state.gps.lon, state.gps.name)">Teleport</button>
-      <button class="map-btn small" :class="{ primary: state.gps.autodrive }" @click="setAutodrive(!state.gps.autodrive)"
-              :title="state.gps.autodrive ? 'Stop driving by itself' : 'The car drives itself along the route (in its lane, at the speed limit)'">
-        {{ state.gps.autodrive ? "Autodrive on" : "Autodrive" }}
-      </button>
-      <button class="map-btn small" @click="clearGps">Clear</button>
+      <div class="gps-chip-row">
+        <span>GPS: {{ state.gps.name || fmtLatLon(state.gps.lat, state.gps.lon) }}</span>
+        <span v-if="state.gps.planning && !routePts.length" class="gps-dist">planning route…</span>
+        <span v-else-if="state.gps.remaining != null" class="gps-dist">{{ fmtMiles(state.gps.remaining) }}<template
+          v-if="state.gps.eta != null">, {{ fmtDur(state.gps.eta) }}</template></span>
+        <span v-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">no road route: heading straight there</span>
+        <span v-if="state.gps.routeDownload && state.gps.routeDownload.active" class="gps-download"
+              title="Downloading the route's road and elevation data ahead of time so driving it is smoother">
+          <span class="gps-download-bar"><span class="gps-download-fill" :style="{ width: (state.gps.routeDownload.total
+            ? (100 * state.gps.routeDownload.done / state.gps.routeDownload.total) : 0) + '%' }"></span></span>
+          {{ state.gps.routeDownload.done }} / {{ state.gps.routeDownload.total }}
+        </span>
+        <button class="map-btn small" @click="showOnMap(state.gps)">Show</button>
+        <button class="map-btn small" :disabled="!!state.cannotGo" @click="teleportNow(state.gps.lat, state.gps.lon, state.gps.name)">Teleport</button>
+        <button class="map-btn small" :class="{ primary: state.gps.autodrive }" @click="setAutodrive(!state.gps.autodrive)"
+                :title="state.gps.autodrive ? 'Stop driving by itself' : 'The car drives itself along the route (in its lane, at the speed limit)'">
+          {{ state.gps.autodrive ? "Autodrive on" : "Autodrive" }}
+        </button>
+        <button class="map-btn small" @click="clearGps">Clear</button>
+      </div>
+      <!-- the route's elevation profile (server routing.resample + dem.sample), with where the car is on it -->
+      <div v-if="elevStats" class="elev-profile" title="Elevation along the route">
+        <svg :width="ELEV_W" :height="ELEV_H" class="elev-svg">
+          <polygon :points="elevStats.area" class="elev-area" />
+          <polyline :points="elevStats.line" class="elev-line" />
+          <line :x1="elevStats.markerX" y1="0" :x2="elevStats.markerX" :y2="ELEV_H" class="elev-marker" />
+        </svg>
+        <div class="elev-minmax"><span>{{ Math.round(elevStats.minE) }} m</span><span>{{ Math.round(elevStats.maxE) }} m</span></div>
+      </div>
     </div>
 
     <!-- the confirmation -->
@@ -305,12 +343,17 @@ function poll() {
 const TILE_DIR = "/temp/beamngEarth/maptiles/"
 function stored(key, def) { try { const v = localStorage.getItem(key); return v === null ? def : v } catch (e) { return def } }
 function store(key, v) { try { localStorage.setItem(key, v) } catch (e) { /* storage blocked: not kept */ } }
-const baseLayer = ref(stored("beamngEarth.map.base", "sat") === "map" ? "map" : "sat")
+const BASE_LAYERS = new Set(["sat", "map", "dark"])
+const storedBase = stored("beamngEarth.map.base", "sat")
+const baseLayer = ref(BASE_LAYERS.has(storedBase) ? storedBase : "sat")
 const labelsOn = ref(stored("beamngEarth.map.labels", "0") === "1")
 watch(baseLayer, v => store("beamngEarth.map.base", v))
 watch(labelsOn, on => store("beamngEarth.map.labels", on ? "1" : "0"))
 const layersPanel = ref(false)
-const activeLayers = computed(() => (labelsOn.value ? [baseLayer.value, "labels"] : [baseLayer.value]))
+// "Dark" is not a tile source of its own: the "map" tiles (terrain-light, already hillshaded) through a CSS
+// filter (.tile-dark below) - the usual trick for a dark map without a dark-themed tile set of its own.
+const tileBaseLayer = computed(() => (baseLayer.value === "dark" ? "map" : baseLayer.value))
+const activeLayers = computed(() => (labelsOn.value ? [tileBaseLayer.value, "labels"] : [tileBaseLayer.value]))
 
 const readyTiles = ref({})                // layer -> Set of "z/x/y" whose file is there
 const NONE = new Set()
@@ -390,11 +433,19 @@ const notice = computed(() => {
   return ""
 })
 
+// the player's local time + weather, next to the title (state.weather: settings.uiMapState)
+const weatherBadge = computed(() => {
+  const w = state.value.weather
+  if (!w || (!w.localTime && w.code == null)) return null
+  return { icon: w.code != null ? mm.weatherIcon(w.code) : "", localTime: w.localTime || "",
+    tempC: w.tempC != null ? Math.round(w.tempC) : null }
+})
+
 const creditsFull = ref(false)          // the credits' whole text (else two lines)
 const attributionText = computed(() => {
   if (!state.value.mapPort) return ""
   const sat = baseLayer.value === "sat"
-  const parts = [mm.layerCredits(baseLayer.value, labelsOn.value)]   // the EOX map / labels layers shown
+  const parts = [mm.layerCredits(tileBaseLayer.value, labelsOn.value)]   // the EOX map / labels layers shown
   const cba = state.value.creditsByArea
   if (cba) {                                // only the imagery sources the view shows (the server's areas)
     const v = view.value
@@ -417,6 +468,16 @@ const onScreen = p => p.x > -50 && p.y > -50 && p.x < w.value + 50 && p.y < h.va
 const placeMarkers = computed(() =>
   (state.value.places || []).map(p => ({ ...p, ...(() => { const s = screen(p.lat, p.lon); return { sx: s.x, sy: s.y } })() }))
     .filter(p => onScreen({ x: p.sx, y: p.sy })))
+
+// gas stations (the Layers panel's "Gas stations" overlay): only those the client already knows (gasstations.lua,
+// from generated road tiles), so empty until you've driven near some
+const gasStationsOn = ref(stored("beamngEarth.map.gas", "0") === "1")
+watch(gasStationsOn, on => store("beamngEarth.map.gas", on ? "1" : "0"))
+const gasMarkers = computed(() => {
+  if (!gasStationsOn.value) return []
+  return toArray(state.value.gasStations).map(g => { const s = screen(g.lat, g.lon); return { ...g, sx: s.x, sy: s.y } })
+    .filter(g => onScreen({ x: g.sx, y: g.sy }))
+})
 
 const otherMarkers = computed(() =>
   (state.value.others || []).map(o => { const s = screen(o.lat, o.lon); return { ...o, sx: s.x, sy: s.y } })
@@ -860,6 +921,43 @@ function ctxSave() {
   panelOpen.value = true
   placesCall(`uiPlaceAdd("", ${luaStr(`${c.lat.toFixed(6)}, ${c.lon.toFixed(6)}`)})`, "Saved")
 }
+// decimal "lat, lon" (pasteable into Google Maps etc.), not the N/S/E/W display format
+const toast = ref("")
+let toastTimer = null
+function showToast(msg) {
+  toast.value = msg
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = "" }, 1500)
+}
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => showToast("Copied"), () => copyFallback(text))
+  } else {
+    copyFallback(text)
+  }
+}
+// the CEF UI's clipboard permission can be missing (navigator.clipboard rejects): the old execCommand way instead
+function copyFallback(text) {
+  try {
+    const ta = document.createElement("textarea")
+    ta.value = text
+    ta.style.position = "fixed"
+    ta.style.opacity = "0"
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand("copy")
+    document.body.removeChild(ta)
+    showToast("Copied")
+  } catch (e) {
+    showToast("Copy failed")
+  }
+}
+function ctxCopy() {
+  if (!ctx.value) return
+  const c = ctx.value
+  closeCtx()
+  copyText(`${c.lat.toFixed(6)}, ${c.lon.toFixed(6)}`)
+}
 function ctxGps() {
   if (!ctx.value) return
   const c = ctx.value
@@ -892,18 +990,39 @@ function clearGps() {
 }
 // the planned route (server routing.py), fetched when its version changes; drawn done (grey) / ahead (blue)
 const routePts = ref([])
+const routeElev = ref([])            // [[distM, elevM], ...] along the route (routing.resample, dem.sample)
 let routeVersion = 0
 watch(() => state.value.gps && state.value.gps.routeVersion, v => {
-  if (!v) { routePts.value = []; routeVersion = 0; return }
+  if (!v) { routePts.value = []; routeElev.value = []; routeVersion = 0; return }
   if (v === routeVersion) return
   engineLua("beamngEarth_settings and beamngEarth_settings.uiGpsRoute and beamngEarth_settings.uiGpsRoute() or nil", r => {
     if (!r || !r.points) return
     routeVersion = r.version
-    routePts.value = toArray(r.points).map(p => (Array.isArray(p) ? [Number(p[0]), Number(p[1])] : [Number(p["1"]), Number(p["2"])]))
-      .filter(p => isFinite(p[0]) && isFinite(p[1]))
+    const pair = p => (Array.isArray(p) ? [Number(p[0]), Number(p[1])] : [Number(p["1"]), Number(p["2"])])
+    routePts.value = toArray(r.points).map(pair).filter(p => isFinite(p[0]) && isFinite(p[1]))
+    routeElev.value = toArray(r.elev || []).map(pair).filter(p => isFinite(p[0]) && isFinite(p[1]))
   })
 })
-watch(() => state.value.gps, g => { if (!g) { routePts.value = []; routeVersion = 0 } })
+watch(() => state.value.gps, g => { if (!g) { routePts.value = []; routeElev.value = []; routeVersion = 0 } })
+
+// the elevation chart (a sparkline + fill, under the GPS box): min/max over the whole route, a marker at the
+// car's current distance along it (from the remaining distance, same as the route-ahead/done split above)
+const ELEV_W = 220, ELEV_H = 46
+const elevStats = computed(() => {
+  const pts = routeElev.value
+  if (pts.length < 2) return null
+  const total = pts[pts.length - 1][0]
+  if (!(total > 0)) return null
+  let minE = Infinity, maxE = -Infinity
+  for (const p of pts) { if (p[1] < minE) minE = p[1]; if (p[1] > maxE) maxE = p[1] }
+  const span = Math.max(1, maxE - minE)
+  const xs = d => (d / total) * ELEV_W
+  const ys = e => ELEV_H - ((e - minE) / span) * ELEV_H
+  const line = pts.map(p => `${xs(p[0]).toFixed(1)},${ys(p[1]).toFixed(1)}`).join(" ")
+  const remaining = state.value.gps && state.value.gps.remaining
+  const frac = remaining != null ? Math.max(0, Math.min(1, 1 - remaining / total)) : 0
+  return { line, area: `0,${ELEV_H} ${line} ${ELEV_W},${ELEV_H}`, minE, maxE, markerX: xs(frac * total) }
+})
 function routePath(from, to) {
   const pts = routePts.value.slice(from, to)
   if (pts.length < 2) return ""
@@ -1150,6 +1269,12 @@ const fmtLatLon = mm.fmtLatLon
   pointer-events: none;
   image-rendering: auto;
 }
+/* "Dark" base layer: the "map" tiles (terrain-light, already hillshaded) inverted and hue-rotated back towards
+   blue/grey - relief stays visible, just dark instead of the light "paper" look (checked against a sample tile,
+   2026-10-27: a plain satellite dark mode lost the mountains, the user wanted them kept) */
+.map-tile.tile-dark {
+  filter: invert(1) hue-rotate(180deg) brightness(0.92);
+}
 .map-grid {
   position: absolute;
   left: 0;
@@ -1173,6 +1298,11 @@ const fmtLatLon = mm.fmtLatLon
 .marker.place .pin {
   position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; border-radius: 50%;
   background: #ff9a3c; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+.marker.gas-station { cursor: pointer; z-index: 2; }
+.marker.gas-station .pin {
+  position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; border-radius: 50%;
+  background: #3ddc84; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
 .marker-label {
   position: absolute; left: 11px; top: -9px; white-space: nowrap; font-size: 12px; padding: 1px 5px;
@@ -1206,6 +1336,10 @@ const fmtLatLon = mm.fmtLatLon
 }
 .map-title {
   padding: 7px 12px; background: rgba(0, 0, 0, 0.7); border-radius: 4px; font-weight: 600; white-space: nowrap;
+}
+.weather-badge {
+  display: flex; gap: 7px; align-items: center; padding: 7px 12px; background: rgba(0, 0, 0, 0.7);
+  border-radius: 4px; white-space: nowrap; font-size: 13px;
 }
 .search { position: relative; flex: 1; max-width: 460px; }
 .search-input {
@@ -1282,10 +1416,17 @@ const fmtLatLon = mm.fmtLatLon
 .ctx-item.disabled { opacity: 0.45; cursor: default; }
 .ctx-item.disabled:hover { background: none; }
 .gps-chip {
-  position: absolute; left: 10px; top: 56px; z-index: 6; display: flex; gap: 8px; align-items: center;
+  position: absolute; left: 10px; top: 56px; z-index: 6; display: flex; flex-direction: column; gap: 6px;
   padding: 5px 8px 5px 12px; font-size: 13px; background: rgba(15, 18, 22, 0.88); border: 1px solid #36a3ff; border-radius: 5px;
 }
+.gps-chip-row { display: flex; gap: 8px; align-items: center; }
 .gps-dist { color: #9fd3ff; }
+.elev-profile { display: flex; gap: 8px; align-items: flex-end; }
+.elev-svg { display: block; flex-shrink: 0; }
+.elev-area { fill: rgba(54, 163, 255, 0.25); stroke: none; }
+.elev-line { fill: none; stroke: #9fd3ff; stroke-width: 1.5; }
+.elev-marker { stroke: #ff9a3c; stroke-width: 2; }
+.elev-minmax { display: flex; flex-direction: column; justify-content: space-between; height: 46px; font-size: 11px; color: #9aa4ae; }
 .gps-warn { color: #ffb08a; font-size: 12px; }
 .gps-download { display: flex; gap: 6px; align-items: center; color: #9fd3ff; font-size: 12px; }
 .gps-download-bar { width: 60px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.15); overflow: hidden; }
@@ -1303,6 +1444,10 @@ const fmtLatLon = mm.fmtLatLon
 .map-notice {
   position: absolute; left: 50%; top: 60px; transform: translateX(-50%); z-index: 9;
   padding: 7px 14px; background: rgba(120, 40, 30, 0.85); border-radius: 4px; font-size: 13px;
+}
+.map-toast {
+  position: absolute; left: 50%; bottom: calc(6.5vh + 40px); transform: translateX(-50%); z-index: 13;
+  padding: 6px 14px; background: rgba(20, 22, 26, 0.9); border-radius: 4px; font-size: 13px; pointer-events: none;
 }
 .confirm {
   position: absolute; left: 50%; bottom: 56px; transform: translateX(-50%); z-index: 11; min-width: 300px;
