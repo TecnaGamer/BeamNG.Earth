@@ -131,6 +131,7 @@ def _spotify_volumes(fn):
         nd = wintypes.UINT()
         vcall(coll, "GetCount", [ctypes.POINTER(wintypes.UINT)], ctypes.byref(nd))
         _seen.clear()
+        del _errors[:]
         for di in range(nd.value):
             try:
                 dev = ctypes.c_void_p()
@@ -151,7 +152,8 @@ def _spotify_volumes(fn):
             for i in range(n.value):
                 try:
                     got = _session(i, senum, vcall, GUID, guid, held, kernel32, fn)
-                except OSError:         # (one odd session: the others still)
+                except OSError as e:    # (one odd session: the others still; why, for the log)
+                    _errors.append("session %d: %s" % (i, _hr(e)))
                     continue
                 if got is not _SKIP:
                     out.append(got)
@@ -168,6 +170,15 @@ def _spotify_volumes(fn):
 
 _SKIP = object()
 _seen = set()               # the programs with audio sessions at the last look (the log, when Spotify is not among them)
+_errors = []                # what failed at the last look (the log: the user's slider found Spotify but set nothing)
+
+
+def _hr(e):
+    """An OSError from a COM call as its HRESULT in hex (0x80070005: access denied...)."""
+    code = getattr(e, "winerror", None)
+    if code is None and e.args and isinstance(e.args[0], int):
+        code = e.args[0]
+    return "0x%08X" % (code & 0xFFFFFFFF) if isinstance(code, int) else str(e)
 
 
 def _session(i, senum, vcall, GUID, guid, held, kernel32, fn):
@@ -191,10 +202,19 @@ def _session(i, senum, vcall, GUID, guid, held, kernel32, fn):
     if exe != SPOTIFY_EXE:
         return _SKIP
     vol = ctypes.c_void_p()
-    vcall(ctl, "QueryInterface", [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
-          ctypes.byref(guid(IID_ISimpleAudioVolume)), ctypes.byref(vol))
+    try:
+        vcall(ctl, "QueryInterface", [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
+              ctypes.byref(guid(IID_ISimpleAudioVolume)), ctypes.byref(vol))
+    except OSError as e:        # (the session control refused it: ask its IAudioSessionControl2 instead)
+        _errors.append("spotify volume interface: %s" % _hr(e))
+        vcall(ctl2, "QueryInterface", [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
+              ctypes.byref(guid(IID_ISimpleAudioVolume)), ctypes.byref(vol))
     held.append(vol)
-    return fn(vol, vcall)
+    try:
+        return fn(vol, vcall)
+    except OSError as e:
+        _errors.append("spotify volume call: %s" % _hr(e))
+        raise
 
 
 def _exe_name(kernel32, pid):
@@ -250,9 +270,14 @@ def set_volume(v):
     try:
         done = bool(_spotify_volumes(put))
         if not done:
-            _warn_once("media set volume: Spotify has no audio session (it has not played since it started); "
-                       "programs with sound: %s" % ", ".join(sorted(_seen)) if _seen else
-                       "media set volume: no audio sessions found on any output device")
+            if SPOTIFY_EXE in _seen:
+                _warn_once("media set volume: Spotify's session found but its volume could not be set: %s"
+                           % ("; ".join(_errors) or "no error given"))
+            elif _seen:
+                _warn_once("media set volume: Spotify has no audio session (it has not played since it started); "
+                           "programs with sound: %s" % ", ".join(sorted(_seen)))
+            else:
+                _warn_once("media set volume: no audio sessions found on any output device")
         return done
     except Exception as e:
         _warn_once("media set volume: %s: %s" % (type(e).__name__, e))
