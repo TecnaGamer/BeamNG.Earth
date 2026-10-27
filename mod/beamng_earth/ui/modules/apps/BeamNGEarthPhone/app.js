@@ -180,22 +180,25 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             '<div style="font-size:20px;font-weight:800">{{ p.rally.active.name }}<span ng-if="p.rally.active.car" style="font-size:12px;color:#aaa;font-weight:400"> · {{ p.rally.active.car }}</span></div>' +
             '<div ng-if="p.rally.active.phase == \'run\'"><div class="bnp-big" style="font-size:30px;font-variant-numeric:tabular-nums">{{ rtime(p.rally.active.t) }}</div>' +
               '<div style="height:6px;border-radius:3px;background:#333;margin:8px 0"><div style="height:6px;border-radius:3px;background:#ff3b30" ng-style="{width: (p.rally.active.s / p.rally.active.total * 100) + \'%\'}"></div></div>' +
-              '<div style="font-size:12px;color:#aaa">{{ dist(p.rally.active.s) }} of {{ dist(p.rally.active.total) }}<span ng-if="p.rally.active.penalty"> · +{{ p.rally.active.penalty }}s penalty</span></div></div>' +
+              '<div style="font-size:12px;color:#aaa">{{ dist(p.rally.active.s) }} of {{ dist(p.rally.active.total) }}<span ng-if="p.rally.active.penalty"> · +{{ p.rally.active.penalty }}s penalty</span></div>' +
+              '<div style="display:flex;gap:10px;margin-top:4px;font-size:12px;font-variant-numeric:tabular-nums"><span ng-repeat="t in p.rally.active.targets" ng-style="{color: medalColor(t.name), opacity: (p.rally.active.t + (p.rally.active.penalty || 0)) > t.time ? 0.35 : 1}">● {{ rtime(t.time) }}</span></div></div>' +
             '<div style="display:flex;gap:8px;margin-top:8px"><button class="bnp-btn" style="background:#0a84ff" ng-if="p.rally.active.phase == \'run\'" ng-click="lua(\'uiRallyReset()\')">Reset to road</button>' +
             '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiRallyQuit()\')">Quit stage</button></div></div>' +
           '<div class="bnp-card" style="background:#1d1d21" ng-if="p.rally.last && !p.rally.active">' +
             '<div style="font-size:12px;color:#aaa">LAST RUN · {{ p.rally.last.name }}</div>' +
             '<div class="bnp-big" style="font-size:26px" ng-if="!p.rally.last.dnf">{{ rtime(p.rally.last.time) }}<span ng-if="p.rally.last.record" style="font-size:12px;color:#30d158"> BEST</span></div>' +
+            '<div ng-if="!p.rally.last.dnf" style="font-size:13px;margin-top:2px" ng-style="{color: medalColor(p.rally.last.medal)}">{{ p.rally.last.medal ? p.rally.last.medal + " · +$" + p.rally.last.prize : "No medal" }}</div>' +
             '<div class="bnp-big" style="font-size:26px;color:#ff453a" ng-if="p.rally.last.dnf">DNF</div></div>' +
           '<div class="bnp-dim" ng-if="p.rally.error || rmsg" style="color:#ff9f0a;margin-bottom:6px">{{ rmsg || p.rally.error }}</div>' +
           '<div class="bnp-card" style="background:#1d1d21" ng-repeat="s in p.rally.stages" ng-if="!p.rally.active">' +
             '<div class="bnp-row" style="padding:0"><b style="font-size:17px">{{ s.name }}</b><span style="font-size:13px;color:#aaa">{{ s.miles.toFixed(2) }} mi</span></div>' +
             '<div style="font-size:12px;color:#aaa">{{ s.area }} · gravel<span ng-if="s.best"> · Best {{ rtime(s.best) }}</span></div>' +
-            '<div style="text-align:right;margin-top:6px"><button class="bnp-btn" style="background:#e10600" ng-disabled="p.rally.active" ng-click="rstart(s.id)">Start stage</button></div></div>' +
+            '<div style="display:flex;gap:10px;margin-top:6px;font-size:12px;font-variant-numeric:tabular-nums"><span ng-repeat="t in s.targets" ng-style="{color: medalColor(t.name)}">● {{ rtime(t.time) }} <span style="color:#aaa">${{ t.prize }}</span></span></div>' +
+            '<div style="text-align:right;margin-top:6px"><button class="bnp-btn" style="background:#e10600" ng-disabled="p.rally.active" ng-click="rstart(s.id)">Enter ${{ s.fee }}</button></div></div>' +
           '<div class="bnp-card" style="background:#1d1d21" ng-if="!p.rally.active"><div style="font-size:12px;color:#aaa;margin-bottom:6px">CO-DRIVER</div>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="bnp-btn" ng-repeat="v in p.rally.voices" ng-style="{background: p.rally.voice == v.id ? \'#e10600\' : \'#3a3a3e\'}" ng-click="rvoice(v.id)">{{ v.name }}</button>' +
             '<button class="bnp-btn" ng-style="{background: p.rally.voice == \'off\' ? \'#e10600\' : \'#3a3a3e\'}" ng-click="rvoice(\'off\')">Off</button></div></div>' +
-          '<div class="bnp-dim" style="font-size:11px">A rally car is loaned for the stage; your car is parked and given back at the finish. The co-driver calls each corner (also shown on screen).</div>' +
+          '<div class="bnp-dim" style="font-size:11px">Entry is refunded if you quit before GO. A rally car is loaned for the stage; your car is parked and given back at the finish. The co-driver calls each corner (also shown on screen).</div>' +
         '</div>' +
         // settings
         '<div class="bnp-view" ng-if="app == \'settings\'"><span class="bnp-back" ng-click="home()">‹ Home</span><div class="bnp-h">Settings</div>' +
@@ -290,6 +293,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
           poll()
         })
       }
+      scope.medalColor = function (m) { return { Gold: '#ffd60a', Silver: '#c7c7cc', Bronze: '#d08a4a' }[m] || '#aaa' }
       scope.rvoice = function (id) { lua('uiRallyVoice(' + JSON.stringify(id) + ')') }
       scope.media = function (a) { lua('uiPhoneMedia(' + JSON.stringify(a) + ')') }
       function poll() {

@@ -15,6 +15,27 @@ M.STAGES = {                    -- (server/rally.py STAGES: the same ids)
   { id = 'asaph', name = 'Asaph', area = 'Tioga State Forest, PA', miles = 8.71 },
   { id = 'painter', name = 'Painter', area = 'Tioga State Forest, PA', miles = 3.91 },
 }
+-- Money (the user, 2026-10-26: "pay a small fee to enter and win for beating certain times": $100, gold / silver /
+-- bronze, the fee back when you quit before GO): target times from the stage's length at an average speed each.
+M.FEE = 100
+M.MEDALS = { { name = 'Gold', kmh = 85, prize = 800 }, { name = 'Silver', kmh = 70, prize = 400 },
+             { name = 'Bronze', kmh = 55, prize = 200 } }
+
+-- Pure: the target times (s) of a stage dist m long: { {name, time, prize}... } gold first.
+function M.targets(dist)
+  local out = {}
+  for _, m in ipairs(M.MEDALS) do
+    out[#out + 1] = { name = m.name, prize = m.prize, time = math.floor((dist or 0) / (m.kmh / 3.6) + 0.5) }
+  end
+  return out
+end
+
+-- Pure: the best medal a time earns on a stage dist m long, or nil.
+function M.medal(time, dist)
+  for _, t in ipairs(M.targets(dist)) do if time <= t.time then return t end end
+  return nil
+end
+
 M.WAIT_S = 60                   -- the server's answer (it may fetch the forest's map data first)
 M.SETTLE_S = 6                  -- at the start this long before the car is put out (the world loading in)
 M.COUNT_S = 5
@@ -46,7 +67,6 @@ M.CLIP_GAP_S = 0.05
 M.CLIP_LEN_S = 0.9            -- a clip's length when its pack does not say
 local voiceQ, voiceT, metaCache = {}, 0, {}
 local loadBests            -- (below)
-local raceTimeReset        -- (below)
 local linePool, zCache, lineN = {}, {}, 0   -- the ground line (drawLine)
 
 -- Pure: a note's clips (phrase stems) in calling order.
@@ -119,6 +139,15 @@ end
 function M._voiceQ() return voiceQ end
 
 local function core() return rawget(_G, 'beamngEarth_core') end
+local function wallet() return require('beamngEarth/wallet') end
+
+-- the entry fee back while the stage has not started (quit before GO, the stage failing to load)
+local function refund()
+  if state and state.paid and state.phase ~= 'run' and state.phase ~= 'done' then
+    wallet().add(state.paid, 'Rally entry refund: ' .. tostring(state.name))
+    state.paid = nil
+  end
+end
 local function msg(text, icon, ttl, cat)
   local gh = rawget(_G, 'guihooks')
   if gh and gh.trigger then
@@ -260,18 +289,21 @@ function M.start(id)
   if not found then return false, 'no such stage' end
   local c = core()
   if not (c and c.requestRallyStage) then return false, 'BeamNG.Earth is not loaded' end
+  if (tonumber(wallet().balance()) or 0) < M.FEE then return false, string.format('the entry fee is $%d', M.FEE) end
   reqId = reqId + 1
   if not c.requestRallyStage(reqId, id) then return false, 'not connected to the world server' end
-  state, err = { phase = 'loading', id = id, name = found.name, req = reqId, wait = 0 }, nil
-  msg('Rally: loading the ' .. found.name .. ' stage...', 'flag', 6)
+  state, err = { phase = 'loading', id = id, name = found.name, req = reqId, wait = 0, paid = M.FEE }, nil
+  wallet().add(-M.FEE, 'Rally entry: ' .. found.name)
+  msg(string.format('Rally: $%d entry paid. Loading the %s stage...', M.FEE, found.name), 'flag', 6)
   return true
 end
 
 function M.quit()
   if not state then return false end
   restoreOwn()
-  raceTimeReset()
-  if state.phase == 'run' or state.phase == 'countdown' then msg('Stage abandoned', 'warning') end
+  if state.phase == 'run' then msg('Stage abandoned: the entry fee is lost', 'warning')
+  elseif state.paid then msg('Stage cancelled: $' .. state.paid .. ' entry refunded', 'info') end
+  refund()
   state = nil
   return true
 end
@@ -281,7 +313,7 @@ local function onStage(st)
   state.points, state.notes = st.points or {}, st.notes or {}
   local p = state.points[1]
   local c = core()
-  if not (p and c and c.teleport) then err = 'could not go to the stage' state = nil return end
+  if not (p and c and c.teleport) then err = 'could not go to the stage' refund() state = nil return end
   c.teleport(p[1], p[2], 'Rally: ' .. tostring(st.name), { record = false })
   state.phase, state.wait, state.near = 'travel', 0, 0
   msg(string.format('%s stage, %s: %.1f mi, %d calls. Going to the start...', tostring(st.name), tostring(st.area),
@@ -356,22 +388,6 @@ function M.preRender()
   if mgr and mgr.addDecals then pcall(mgr.addDecals, linePool, lineN) end
 end
 
--- The stock RaceTime app's clock (its 'raceTime' event, seconds).
-local timeT = 0
-local function raceTime(t, force)
-  local gh = rawget(_G, 'guihooks')
-  if not (gh and gh.trigger) then return end
-  timeT = timeT - 1
-  if force or timeT <= 0 then
-    timeT = 3
-    gh.trigger('raceTime', { time = t })
-  end
-end
-raceTimeReset = function()
-  local gh = rawget(_G, 'guihooks')
-  if gh and gh.trigger then gh.trigger('ScenarioResetTimer') end
-end
-
 -- Reset to road: the rally car back on the stage RESET_BACK_M behind where it got to, facing down the road, for
 -- RESET_S on the clock.
 M.RESET_BACK_M, M.RESET_S = 10, 5
@@ -424,17 +440,21 @@ end
 local function finish()
   local b = loadBests()
   local time = state.t + (state.penalty or 0)
-  raceTime(time, true)
   local prev = tonumber(b.best[state.id])
   local record = not prev or time < prev
+  b.dist = b.dist or {}
+  if b.dist[state.id] ~= state.total then b.dist[state.id] = state.total; saveBests() end
+  local medal = M.medal(time, state.total)
+  if medal then wallet().add(medal.prize, string.format('Rally %s: %s', medal.name, tostring(state.name))) end
   if record then
     b.best[state.id] = time
     b.splits[state.id] = state.splits
     saveBests()
   end
   last = { id = state.id, name = state.name, time = time, penalty = state.penalty, prev = prev, record = record,
-           car = state.carName }
-  msg(string.format('FINISH %s: %s%s%s', tostring(state.name), M.fmt(time),
+           car = state.carName, medal = medal and medal.name, prize = medal and medal.prize or 0 }
+  msg(string.format('FINISH %s: %s%s%s%s', tostring(state.name), M.fmt(time),
+    medal and string.format('  %s! +$%d', medal.name:upper(), medal.prize) or '  no medal',
     (state.penalty or 0) > 0 and string.format(' (+%ds jump start)', state.penalty) or '',
     record and (prev and string.format('  NEW BEST (-%.1f)', prev - time) or '  first time set')
       or string.format('  best %s (+%.1f)', M.fmt(prev), time - prev)), 'flag', 10)
@@ -452,9 +472,10 @@ function M.update(dt, anchor, player)
     local c = core()
     local r = c and c.takeRallyStage and c.takeRallyStage(state.req)
     if r then
-      if r.stage then onStage(r.stage) else err = r.error or 'the stage could not be built'; msg('Rally: ' .. err, 'warning'); state = nil end
+      if r.stage then onStage(r.stage) else err = r.error or 'the stage could not be built'; msg('Rally: ' .. err, 'warning'); refund(); state = nil end
     elseif state.wait > M.WAIT_S then
       err = 'the world server did not answer in time'
+      refund()
       state = nil
     end
     return
@@ -471,6 +492,7 @@ function M.update(dt, anchor, player)
       if not putOutCar(x, y, groundZ(x, y, player.z), hx or dx, hy or dy) then
         err = 'could not bring out the rally car'
         msg('Rally: ' .. err, 'warning')
+        refund()
         state = nil
         return
       end
@@ -481,6 +503,7 @@ function M.update(dt, anchor, player)
       err = 'the stage start did not load'
       msg('Rally: ' .. err, 'warning')
       restoreOwn()
+      refund()
       state = nil
     end
     return
@@ -488,7 +511,6 @@ function M.update(dt, anchor, player)
   drawGate(0, ColorF(0.95, 0.85, 0.1, 0.8), player.z)
   if state.phase == 'countdown' then
     drawLine(player.z)
-    raceTime(0)
     -- an even second a number (the user, 2026-10-26: "co driver counts down too fast, keep an even pace"): a frame's
     -- step capped (a hitch must not skip numbers, which then came out back to back), each number on its own beat
     state.cd = state.cd - math.min(dt, M.COUNT_STEP_MAX)
@@ -519,7 +541,6 @@ function M.update(dt, anchor, player)
   end
   if state.phase == 'run' then
     state.t = state.t + dt
-    raceTime(state.t + (state.penalty or 0))
     drawLine(player.z)
     local s, i, off = M.progress(state.xs, state.ys, state.cum, player.x, player.y, state.i)
     if off < 40 then state.s, state.i = math.max(state.s, s), i end
@@ -557,7 +578,7 @@ function M.update(dt, anchor, player)
   end
   if state.phase == 'done' then
     state.wait = state.wait + dt
-    if state.wait >= M.DONE_S then restoreOwn(); raceTimeReset(); state = nil end
+    if state.wait >= M.DONE_S then restoreOwn(); state = nil end
   end
 end
 
@@ -566,12 +587,15 @@ function M.uiState()
   local b = loadBests()
   local stages = {}
   for _, s in ipairs(M.STAGES) do
-    stages[#stages + 1] = { id = s.id, name = s.name, area = s.area, miles = s.miles, best = b.best[s.id] }
+    local dist = (b.dist and tonumber(b.dist[s.id])) or s.miles * 1609.344
+    stages[#stages + 1] = { id = s.id, name = s.name, area = s.area, miles = s.miles, best = b.best[s.id],
+                            targets = M.targets(dist), fee = M.FEE }
   end
   local a = nil
   if state then
     a = { phase = state.phase, name = state.name, t = state.t, s = state.s, total = state.total, car = state.carName,
-          notes = state.notes and #state.notes or nil, penalty = state.penalty, resets = state.resets }
+          notes = state.notes and #state.notes or nil, penalty = state.penalty, resets = state.resets,
+          targets = state.total and M.targets(state.total) or nil }
   end
   return { stages = stages, active = a, last = last, error = err, voices = M.VOICES, voice = voiceId() }
 end

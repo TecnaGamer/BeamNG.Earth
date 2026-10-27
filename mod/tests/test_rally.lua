@@ -9,6 +9,11 @@ vec3 = function(x, y, z) return { x = x, y = y, z = z } end
 quatFromDir = function() return { x = 0, y = 0, z = 0, w = 1 } end
 ColorF = function() return {} end
 local R = require('beamngEarth/rally')
+local Wl = require('beamngEarth/wallet')
+-- the medals: a 1500 m stage
+local tg = R.targets(1500)
+T.check(tg[1].name == 'Gold' and tg[1].time == 64 and tg[2].time == 77 and tg[3].time == 98, 'target times from the length')
+T.check(R.medal(60, 1500).name == 'Gold' and R.medal(90, 1500).name == 'Bronze' and R.medal(99, 1500) == nil, 'medal')
 
 -- pure
 T.check(R.fmt(65.25) == '1:05.2' or R.fmt(65.25) == '1:05.3', 'fmt ' .. R.fmt(65.25))
@@ -82,7 +87,10 @@ beamngEarth_core = {
   end,
   teleport = function(lat, lon) teleported = { lat, lon } return true end }
 
+T.check(not R.start('asaph'), 'no money: no entry')
+Wl.add(1000, 'test')
 T.check(R.start('asaph'), 'start')
+T.near(Wl.balance(), 900, 1e-9, 'the entry fee paid')
 T.check(not R.start('asaph'), 'one run at a time')
 T.check(sent.stage == 'asaph', 'the stage asked of the server')
 local P = { x = 0, y = 0, z = 0, vx = 0, vy = 0 }
@@ -120,9 +128,7 @@ T.check(rawget(_G, 'zCache') == nil, 'no stray global')
 local mr = R.mapRoute()
 T.check(mr and #mr.points == #pts and mr.version > 900000, 'the stage on the GPS map')
 T.check(mr.name == 'Rally: Asaph' and mr.remaining > 0, 'the minimap route named, the distance left')
-local lastTime
-for _, e in ipairs(events) do if e[1] == 'raceTime' then lastTime = e[2].time end end
-T.check(lastTime and lastTime > 0, 'the RaceTime app fed: ' .. tostring(lastTime))
+for _, e in ipairs(events) do T.check(e[1] ~= 'raceTime', 'no in-game timer') end
 -- reset to road
 local moved
 spawn = { safeTeleport = function(o, pos) moved = pos end }
@@ -160,10 +166,9 @@ T.check(hadSplit, 'the checkpoint split')
 T.check(saved and saved.best and saved.best.asaph and saved.best.asaph > 70, 'the best time saved (with the penalty)')
 for _ = 1, 70 do R.update(0.1, anchor, P) end
 T.check(R._state() == nil, 'the run over')
-T.check(events[#events][1] == 'ScenarioResetTimer' or true, 'clock')
-local reset = false
-for _, e in ipairs(events) do if e[1] == 'ScenarioResetTimer' then reset = true end end
-T.check(reset, 'the RaceTime clock cleared after the run')
+local lr = R.uiState().last
+T.check(lr.medal == 'Bronze' and lr.prize == 200, 'bronze: ' .. tostring(lr.medal) .. ' ' .. tostring(lr.time))
+T.near(Wl.balance(), 1100, 1e-9, 'the prize paid')
 T.check(R.mapRoute() == nil, 'the GPS back to normal')
 decals = 0
 R.preRender()
@@ -183,13 +188,16 @@ T.check(#R._voiceQ() == n0, 'off: nothing queued')
 R.setVoice('ak_2026-04-16')
 -- quit mid-run gives the car back
 R.start('asaph'); P.y = 0; P.vy = 0
+T.near(Wl.balance(), 1000, 1e-9, 'fee paid again')
 for _ = 1, 80 do R.update(0.1, anchor, P) end
 T.check(own.active == 0, 'out again')
 R.quit()
+T.near(Wl.balance(), 1100, 1e-9, 'quit before GO: refunded')
 T.check(own.active == 1 and player == own and R._state() == nil, 'quit: your car back')
 -- the server failing
 beamngEarth_core.takeRallyStage = function(id) return { id = id, error = 'the stage road was not found in the map data' } end
 R.start('painter'); R.update(0.1, anchor, P)
+T.near(Wl.balance(), 1100, 1e-9, 'the stage failing to load: refunded')
 T.check(R._state() == nil and R.uiState().error:find('not found'), 'server error shown')
 T.check(not R.start('nope'), 'unknown stage')
 T.done('test_rally')
