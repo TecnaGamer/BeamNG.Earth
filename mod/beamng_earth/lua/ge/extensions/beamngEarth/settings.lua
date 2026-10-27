@@ -686,7 +686,14 @@ function M.uiPhone()
     weekday = math.floor(((require('beamngEarth/dynweather')._state().day) or 0) % 7),
     prefs = prefs(), wallpapers = wallpapers(),
     bank = { balance = w.balance(), text = w.format(w.balance()), history = w.history() },
-    weather = require('beamngEarth/dynweather').uiState(mins, pl and pl.lat, pl and pl.lon),
+    weather = (function()
+      local u = require('beamngEarth/dynweather').uiState(mins, pl and pl.lat, pl and pl.lon)
+      -- (the weather paused: weather.lua in 'manual', set when the menu or another mod changed the weather; then
+      -- neither the real nor the dynamic weather is applied: the user, 2026-10-26: "I havent seen weather change yet")
+      local wx = ext('beamngEarth_weather')
+      u.paused = (wx and wx.getMode and wx.getMode() ~= 'real') or false
+      return u
+    end)(),
     jobs = require('beamngEarth/jobs').uiState(),
     rally = require('beamngEarth/rally').uiState(),
     media = core and core.mediaState and core.mediaState() or { ok = false },
@@ -746,6 +753,12 @@ function M.uiPhoneMedia(action, volume)
   mediaT = os.clock()
   -- (action 'volume': Spotify's mixer level to volume, 0..100: server media.set_volume)
   return core and core.requestMedia and core.requestMedia(tostring(action), volume) or false
+end
+
+-- The Weather app's "Turn on": the weather driven again (weather.lua 'real', saved), after a change in the game paused it.
+function M.uiPhoneWeatherResume()
+  M.set('weatherMode', 'real')
+  return true
 end
 
 function M.uiPhoneWeatherMode(mode)

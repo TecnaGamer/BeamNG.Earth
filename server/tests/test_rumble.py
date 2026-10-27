@@ -14,12 +14,14 @@ import rumble  # noqa: E402
 BIG = (-1e5, -1e5, 1e5, 1e5)
 
 
-def road(cls="motorway", urban=False, width=11.0, L=400.0):
-    return ("r1", roads.Spec(width, "paved", urban, cls, True, dir=1, lanes=3), np.array([(0.0, 0.0, 0.0), (L, 0.0, 0.0)]), 0.0)
-
-
 def ground(x, y):
     return 5.0 + 0.01 * np.asarray(x)
+
+
+def road(cls="motorway", urban=False, width=11.0, L=400.0, fid="r1", a=(0.0, 0.0), b=None, lift=0.0):
+    b = b if b is not None else (a[0] + L, a[1])
+    line = np.array([(a[0], a[1], float(ground(a[0], a[1])) + lift), (b[0], b[1], float(ground(b[0], b[1])) + lift)])
+    return (fid, roads.Spec(width, "paved", urban, cls, True, dir=1, lanes=3), line, 0.0)
 
 
 class StripTest(unittest.TestCase):
@@ -27,7 +29,7 @@ class StripTest(unittest.TestCase):
         g = rumble.strips([road()], BIG, ground)
         c = g["c"]
         ys = sorted({round(float(v), 3) for v in c[:, 1]})
-        off = 11.0 / 2 + rumble.EDGE_GAP_M + rumble.BAR_ACROSS_M / 2
+        off = rumble.offset(road()[1])
         self.assertEqual(ys, [round(-off, 3), round(off, 3)])
         xs = np.sort(c[c[:, 1] > 0][:, 0])
         self.assertTrue(np.allclose(np.diff(xs), rumble.PERIOD_M))
@@ -69,3 +71,28 @@ class StripTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlaceTest(unittest.TestCase):
+    """The user, 2026-10-26: strips on the outermost edge instead of beside the white line, and across other roads."""
+
+    def test_beside_the_edge_line_on_the_shoulder(self):
+        spec = road()[1]
+        edge = spec.width / 2 - roads.motorway_shoulder(spec)             # the edge line's centre
+        off = rumble.offset(spec)
+        self.assertAlmostEqual(off - rumble.BAR_ACROSS_M / 2, edge + roads.EDGE_LINE["w"] / 2 + rumble.EDGE_GAP_M)
+        self.assertLess(off + rumble.BAR_ACROSS_M / 2, spec.width / 2, "inside the pavement, not at its outer edge")
+
+    def test_narrow_edge_strip_on_the_line(self):
+        spec = road("trunk", width=8.0)[1]
+        self.assertAlmostEqual(rumble.offset(spec), spec.width / 2 - roads.EDGE_LINE["inset"])
+
+    def test_none_on_a_crossing_road(self):
+        cross = road("primary", width=7.0, fid="x", a=(200.0, -50.0), b=(200.0, 50.0))
+        c = rumble.strips([road(), cross], BIG, ground)["c"]
+        r = 3.5 + rumble.OTHER_CLEAR_M + rumble.BAR_ACROSS_M / 2
+        self.assertFalse((np.abs(c[:, 0] - 200.0) < r - 1e-6).any())
+        self.assertTrue((np.abs(c[:, 0] - 200.0) < r + 1.0).any(), "right up to it")
+
+    def test_none_on_a_bridge(self):
+        self.assertIsNone(rumble.strips([road(lift=6.0)], BIG, ground))

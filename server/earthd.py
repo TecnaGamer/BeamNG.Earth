@@ -3048,6 +3048,10 @@ class Connection:
         except Exception as e:
             log.warning("delivery jobs: %s: %s", type(e).__name__, e)
             out["error"] = "search failed"
+        for j in out["jobs"]:           # (how far its pickup is from you: the apps' "near me", the user 2026-10-26)
+            p = j.get("pickup") or {}
+            if p.get("lat") is not None:
+                j["away"] = round(jobfindmod.dist_m(lat, lon, p["lat"], p["lon"]), 1)
         if not out["jobs"] and "error" not in out:
             out["error"] = ("no warehouses or depots near here" if msg.get("kind") == "truck"
                             else "no garages near here")

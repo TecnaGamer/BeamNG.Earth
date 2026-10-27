@@ -17,8 +17,8 @@ angular.module('beamng.apps')
   return {
     template:
       '<div class="bngApp bnej"><style>' + css + '</style>' +
-      '<h1><span>JOBS <span class="dim" ng-if="s.streak">· streak {{ s.streak }}</span></span><span ng-hide="s.active"><button class="ghost" ng-click="refresh()">{{ s.searching ? "Searching..." : "Car jobs" }}</button> ' +
-        '<button class="ghost" ng-click="refresh(\'truck\')">Truck jobs</button></span></h1>' +
+      '<h1><span>JOBS <span class="dim" ng-if="s.streak">· streak {{ s.streak }}</span></span><span ng-hide="s.active"><button class="ghost" ng-click="refresh()">{{ s.searching ? "Searching..." : "Car jobs near me" }}</button> ' +
+        '<button class="ghost" ng-click="refresh(\'truck\')">Truck jobs near me</button></span></h1>' +
       '<div ng-if="s.active" class="card">' +
         '<div class="dim">{{ s.active.stage == "pickup" ? "Drive to the pickup and stop there" : "Deliver the car and stop at the garage" }}</div>' +
         '<div class="car">{{ s.active.car }}</div>' +
@@ -47,6 +47,7 @@ angular.module('beamng.apps')
           '<div class="row"><span class="car">{{ j.cargo || j.car_name }}</span><span class="pay">${{ j.pay.toFixed(0) }}</span></div>' +
           '<div class="dim" ng-if="j.rent">Rented semi, -${{ j.rent.toFixed(0) }} rental</div>' +
           '<div class="dim">{{ j.pickup.name }} → {{ j.dropoff.name }}</div>' +
+          '<div class="dim" ng-if="j.away != null">Pickup {{ (j.away / 1609.344).toFixed(1) }} mi from you</div>' +
           '<div class="row"><span class="dim">{{ (j.dist / 1609.344).toFixed(1) }} mi · {{ clock(j.limit) }} limit</span>' +
           '<button ng-click="take($index)">Take job</button></div>' +
         '</div>' +

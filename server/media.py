@@ -69,6 +69,16 @@ SLOT = {"QueryInterface": 0, "Release": 2, "GetDefaultAudioEndpoint": 4, "Activa
 SPOTIFY_EXE = "spotify.exe"
 
 
+_warned = set()
+
+
+def _warn_once(text):
+    """A volume failure in the log once (the user's slider did nothing, 2026-10-26: the next time, the log says why)."""
+    if text not in _warned:
+        _warned.add(text)
+        log.warning(text)
+
+
 def clamp_volume(v):
     """0..100 (int) of any number, or None. Pure."""
     try:
@@ -201,7 +211,7 @@ def volume():
     try:
         got = _spotify_volumes(get)
     except Exception as e:
-        log.debug("media volume: %s: %s", type(e).__name__, e)
+        _warn_once("media volume: %s: %s" % (type(e).__name__, e))
         return None
     return clamp_volume(got[0] * 100) if got else None
 
@@ -217,9 +227,12 @@ def set_volume(v):
         vcall(vol, "SetMasterVolume", [ctypes.c_float, ctypes.c_void_p], ctypes.c_float(v / 100.0), None)
         return True
     try:
-        return bool(_spotify_volumes(put))
+        done = bool(_spotify_volumes(put))
+        if not done:
+            _warn_once("media set volume: Spotify has no audio session (it has not played since it started)")
+        return done
     except Exception as e:
-        log.debug("media set volume: %s: %s", type(e).__name__, e)
+        _warn_once("media set volume: %s: %s" % (type(e).__name__, e))
         return False
 
 

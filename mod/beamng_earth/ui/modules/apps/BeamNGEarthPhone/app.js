@@ -70,8 +70,11 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
     '.bnp-big{font-size:34px;font-weight:800;letter-spacing:-.5px}',
     '.bnp-mctl{display:flex;justify-content:center;gap:26px;font-size:30px;margin-top:14px}.bnp-mctl span{cursor:pointer}',
     '.bnp-vol{display:flex;align-items:center;gap:10px;margin:18px 4px 6px;font-size:14px}',
-    '.bnp-vol input{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;background:rgba(255,255,255,.3);outline:none}',
-    '.bnp-vol input::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:pointer}',
+    '.bnp-vtrack{position:relative;flex:1;height:22px;cursor:pointer}',
+    '.bnp-vtrack:before{content:"";position:absolute;left:0;right:0;top:9px;height:4px;border-radius:2px;background:rgba(255,255,255,.3)}',
+    '.bnp-vfill{position:absolute;left:0;top:9px;height:4px;border-radius:2px;background:#1ed760}',
+    '.bnp-vknob{position:absolute;top:3px;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}',
+    '.bnp-vbtn{cursor:pointer;font-size:20px;width:22px;text-align:center;user-select:none}.bnp-vnum{width:26px;text-align:right;font-size:12px;opacity:.8}',
     '.bnp-art{width:100%;aspect-ratio:1;border-radius:16px;background:linear-gradient(135deg,#1ed760,#0c4d27);display:flex;align-items:center;justify-content:center;font-size:70px;margin:8px 0 14px}'
   ].join('\n')
 
@@ -99,6 +102,9 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
         '</div>' +
         // weather
         '<div class="bnp-view" ng-if="app == \'weather\'" style="background:linear-gradient(180deg,#3a7bd5,#1d3d75);color:#fff"><span class="bnp-back" style="color:#fff" ng-click="home()">‹ Home</span>' +
+          '<div ng-if="p.weather.paused" style="background:rgba(0,0,0,.35);border-radius:12px;padding:10px;margin-bottom:10px;font-size:12px">' +
+            '<b>Weather is paused.</b> It was changed in the game (the menu\'s Time &amp; Weather or another mod), so the forecast is not applied.' +
+            '<div style="text-align:right;margin-top:6px"><button class="bnp-btn" style="background:#fff;color:#1d3d75" ng-click="lua(\'uiPhoneWeatherResume()\')">Turn weather on</button></div></div>' +
           '<div style="text-align:center;margin:4px 0 14px"><div style="font-size:15px;font-weight:600">{{ p.place || "Your location" }}</div><div style="font-size:60px;font-weight:300;line-height:1.1">{{ deg(p.weather.now.tempC) }}</div>' +
           '<div style="font-size:15px">{{ p.weather.now.label }}</div><div style="font-size:14px;opacity:.85">H {{ deg(p.weather.days[0].hi) }}  L {{ deg(p.weather.days[0].lo) }}</div></div>' +
           '<div class="bnp-card" style="background:rgba(255,255,255,.15)"><div class="bnp-dim" style="color:#dfe9ff">TODAY</div><div style="display:flex;justify-content:space-between;margin-top:6px">' +
@@ -118,18 +124,20 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             '<div class="bnp-dim" ng-if="p.jobs.active.stage == \'pickup\' && !p.jobs.active.ready">Pull into the green bay at the pickup, then Start work</div>' +
             '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiJobCancel()\')">Cancel job</button></div>' +
           '<div ng-if="p.jobs.active && p.jobs.active.stops" class="bnp-dim">You are on a Beamazon route: see the Beamazon app.</div>' +
-          '<div ng-if="!p.jobs.active"><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button class="bnp-btn" ng-click="lua(\'uiJobsRefresh()\')">Car jobs</button><button class="bnp-btn alt" ng-click="lua(\'uiJobsRefresh(\\\'truck\\\')\')">Truck jobs</button></div>' +
+          '<div ng-if="!p.jobs.active"><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"><button class="bnp-btn" ng-click="lua(\'uiJobsRefresh()\')">Car jobs near me</button><button class="bnp-btn alt" ng-click="lua(\'uiJobsRefresh(\\\'truck\\\')\')">Truck jobs near me</button></div>' +
             '<div class="bnp-dim" ng-if="p.jobs.searching">Searching…</div><div class="bnp-dim" ng-if="p.jobs.error">{{ p.jobs.error }}</div>' +
             '<div class="bnp-card" ng-repeat="j in p.jobs.offers" ng-if="j.kind != \'parcel\'"><div class="bnp-row" style="padding:0"><b>{{ j.cargo || j.car_name }}</b><span class="bnp-pos">${{ j.pay.toFixed(0) }}</span></div>' +
-              '<div class="bnp-dim">{{ j.pickup.name }} → {{ j.dropoff.name }}</div><div class="bnp-row"><span class="bnp-dim">{{ (j.dist / 1609.344).toFixed(1) }} mi<span ng-if="j.rent"> · -${{ j.rent }} rent</span></span><button class="bnp-btn" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Take</button></div></div></div>' +
+              '<div class="bnp-dim">{{ j.pickup.name }} → {{ j.dropoff.name }}</div><div class="bnp-dim" ng-if="j.away != null">Pickup {{ dist(j.away) }} from you</div><div class="bnp-row"><span class="bnp-dim">{{ (j.dist / 1609.344).toFixed(1) }} mi<span ng-if="j.rent"> · -${{ j.rent }} rent</span></span><button class="bnp-btn" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Take</button></div></div></div>' +
         '</div>' +
         // music
         '<div class="bnp-view" ng-if="app == \'music\'" style="background:linear-gradient(180deg,#1f3b2a,#0d0f0e);color:#fff"><span class="bnp-back" style="color:#1ed760" ng-click="home()">‹ Home</span>' +
           '<div class="bnp-art">♫</div><div style="font-size:19px;font-weight:800">{{ p.media.title || "Nothing playing" }}</div><div style="opacity:.7;font-size:14px">{{ p.media.artist || (p.media.ok === false ? "Open Spotify on your PC" : "Spotify") }}</div>' +
           '<div class="bnp-mctl"><span ng-click="media(\'prev\')">⏮</span><span ng-click="media(\'play\')">{{ p.media.playing ? "⏸" : "▶" }}</span><span ng-click="media(\'next\')">⏭</span></div>' +
           // the volume (the user, 2026-10-26): Spotify's level in the Windows mixer, not the game's
-          '<div class="bnp-vol" ng-if="p.media.ok"><span>🔈</span><input type="range" min="0" max="100" step="1" ng-model="mvol.v" ng-change="setVol()" ng-disabled="p.media.volume == null"><span>🔊</span></div>' +
-          '<div style="opacity:.6;font-size:11px;text-align:center" ng-if="p.media.ok && p.media.volume == null">Play a song to set Spotify\'s volume</div>' +
+          // (our own slider, not <input type=range>: in the game the range input did not drag, the user 2026-10-26)
+          '<div class="bnp-vol" ng-if="p.media.ok"><span class="bnp-vbtn" ng-click="volStep(-10)">−</span>' +
+            '<div class="bnp-vtrack" ng-mousedown="volDown($event)"><div class="bnp-vfill" ng-style="{width: mvol.v + \'%\'}"></div><div class="bnp-vknob" ng-style="{left: mvol.v + \'%\'}"></div></div>' +
+            '<span class="bnp-vbtn" ng-click="volStep(10)">+</span><span class="bnp-vnum">{{ mvol.v }}</span></div>' +
         '</div>' +
         // garage
         // (one view for both: Garage = repair shops; Real Estate = property to buy / rent, and yours)
@@ -171,10 +179,10 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             '<button class="bnp-btn" style="background:#ff9900;color:#111;margin:6px 0;width:100%;font-size:15px;padding:10px" ng-if="p.jobs.active.ready" ng-click="lua(\'uiJobStart()\')">Start work</button>' +
             '<div style="font-size:12px;color:#c9ced6" ng-if="p.jobs.active.stage == \'pickup\' && !p.jobs.active.ready">Pull into the green bay at the depot, then Start work</div>' +
             '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiJobCancel()\')">Cancel route</button></div>' +
-          '<div ng-if="!p.jobs.active"><button class="bnp-btn" style="background:#ff9900;color:#111;margin-bottom:10px" ng-click="lua(\'uiJobsRefresh(\\\'parcel\\\')\')">{{ p.jobs.searching ? "Finding routes…" : "Find routes" }}</button>' +
+          '<div ng-if="!p.jobs.active"><button class="bnp-btn" style="background:#ff9900;color:#111;margin-bottom:10px" ng-click="lua(\'uiJobsRefresh(\\\'parcel\\\')\')">{{ p.jobs.searching ? "Finding routes…" : "Find routes near me" }}</button>' +
             '<div class="bnp-card" style="background:#232f3e" ng-repeat="j in p.jobs.offers" ng-if="j.kind == \'parcel\'">' +
               '<div class="bnp-row" style="padding:0"><b>{{ j.stops.length }} packages</b><span class="bnp-pos">${{ j.pay.toFixed(0) }}</span></div>' +
-              '<div style="font-size:12px;color:#c9ced6">From {{ j.pickup.name }} · {{ (j.dist / 1609.344).toFixed(1) }} mi · {{ clock(j.limit) }}</div>' +
+              '<div style="font-size:12px;color:#c9ced6">From {{ j.pickup.name }}<span ng-if="j.away != null"> ({{ dist(j.away) }} from you)</span> · {{ (j.dist / 1609.344).toFixed(1) }} mi · {{ clock(j.limit) }}</div>' +
               '<div style="text-align:right;margin-top:4px"><button class="bnp-btn" style="background:#ff9900;color:#111" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Start route</button></div></div></div>' +
         '</div>' +
         // Rally (the user, 2026-10-26: a real US stage, timed with pacenotes, in a loaned rally car): the STPR's forest
@@ -304,6 +312,21 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       // the slider's own value: the 1 s poll does not move it while you drag, or for a moment after
       scope.mvol = { v: 50, t: 0 }
       var volTimer = null
+      scope.volStep = function (d) { scope.mvol.v = Math.max(0, Math.min(100, Math.round(scope.mvol.v + d))); scope.setVol() }
+      // press on the track: the level there, and it follows the mouse until released (on the window: off the track too)
+      scope.volDown = function (ev) {
+        var track = ev.currentTarget
+        function at(e) {
+          var r = track.getBoundingClientRect()
+          var v = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1))) * 100)
+          scope.$evalAsync(function () { scope.mvol.v = v; scope.setVol() })
+        }
+        function up() { window.removeEventListener('mousemove', at); window.removeEventListener('mouseup', up) }
+        at(ev)
+        window.addEventListener('mousemove', at)
+        window.addEventListener('mouseup', up)
+        if (ev.preventDefault) ev.preventDefault()
+      }
       scope.setVol = function () {
         scope.mvol.t = Date.now()
         if (volTimer) return
