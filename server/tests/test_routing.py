@@ -29,9 +29,9 @@ class RoutingTest(unittest.TestCase):
         self.assertIn("-76.590000,39.280000;-77.030000,38.900000", u)
         self.assertTrue(u.startswith("https://routing.openstreetmap.de/"))
         self.assertNotIn("bearings", u)
-        self.assertNotIn("steps", u)
+        self.assertEqual(u.count("steps=true"), 1)    # (always: the GPS minimap's turn-by-turn, routing.turns)
         self.assertTrue(routing.url(39.28, -76.59, 38.9, -77.03, 370).endswith("&bearings=10,60;"))
-        self.assertIn("&steps=true", routing.url(39.28, -76.59, 38.9, -77.03, steps=True))
+        self.assertEqual(routing.url(39.28, -76.59, 38.9, -77.03, steps=True).count("steps=true"), 1)   # (not twice)
         self.assertTrue(routing.url(39.28, -76.59, 38.9, -77.03, 370, True).endswith("&bearings=10,60;"))
 
     def test_parse_steps(self):

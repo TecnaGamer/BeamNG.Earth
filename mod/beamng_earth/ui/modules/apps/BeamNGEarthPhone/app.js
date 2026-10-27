@@ -74,7 +74,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
     '.bnp-mctl{display:flex;justify-content:center;gap:26px;font-size:30px;margin-top:14px}.bnp-mctl span{cursor:pointer}',
     '.bnp-vol{display:flex;align-items:center;gap:10px;margin:18px 4px 6px;font-size:14px}',
     '.bnp-mapsview{padding:0 !important}.bnp-mapshost{position:absolute;left:0;top:0;right:0;bottom:0}',
-    '.bnp-mapsback{position:absolute;left:12px;top:38px;z-index:6;background:rgba(255,255,255,.85);color:#0a84ff;padding:3px 10px;border-radius:12px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.2)}',
+    '.bnp-mapsback{position:absolute;left:12px;bottom:24px;z-index:6;background:rgba(255,255,255,.85);color:#0a84ff;padding:3px 10px;border-radius:12px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.2)}',
     '.bnp-vtrack{position:relative;flex:1;height:22px;cursor:pointer}',
     '.bnp-vtrack:before{content:"";position:absolute;left:0;right:0;top:9px;height:4px;border-radius:2px;background:rgba(255,255,255,.3)}',
     '.bnp-vfill{position:absolute;left:0;top:9px;height:4px;border-radius:2px;background:#1ed760}',

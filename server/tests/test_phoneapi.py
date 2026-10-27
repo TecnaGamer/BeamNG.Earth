@@ -284,7 +284,8 @@ class SocketHandlersTest(unittest.TestCase):
         c = self.Conn(self.user_dir)
         asyncio.run(earthd.Connection.route(c, {"type": "route", "id": 4, "lat0": 39.2904, "lon0": -76.6122,
                                                 "lat1": 39.2950, "lon1": -76.6}))
-        self.assertNotIn("&steps=true", c.s.net.calls[-1], "the map's GPS route asks for none")
+        # (merged with the GPS minimap's turn-by-turn, 2026-10-27: every route carries OSRM's steps, asked for once)
+        self.assertEqual(c.s.net.calls[-1].count("steps=true"), 1, "the map's GPS route asks for them once")
 
     def test_route_alternatives_are_tagged(self):
         import earthd

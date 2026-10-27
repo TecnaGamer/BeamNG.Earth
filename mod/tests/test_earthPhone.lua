@@ -114,29 +114,18 @@ T.check(P.mounted(true) == true and P.isMounted() == true, 'the app says when it
 P.mounted(false)
 T.check(P.isMounted() == false, 'and when it goes')
 
--- an older saved app layout without the app: Page Up puts it in (written to the layout, as the UI Apps editor does)
+-- inside the BeamNG.Earth phone (merged 2026-10-27): Maps is drawn in the phone's screen, so nothing is ever added
+-- to the player's app layout (a standalone copy would show the map twice)
 local layout = { filename = '/settings/ui_apps/layouts/default/freeroam.uilayout.json', apps = { { appName = 'tacho2' } } }
 local sets, added = 0, nil
 extensions = { ui_appLayouts = {
   getCurrentLayout = function() return layout end,
   setCurrentLayout = function(l) sets = sets + 1; return l end,
-  addApp = function(file, name, placement)
-    added = { file = file, name = name, placement = placement }
-    layout.apps[#layout.apps + 1] = { appName = name, placement = placement }
-    return true
-  end } }
-T.check(P.ensureInLayout() == true and sets == 1, 'the app is added to the current layout and the UI told to refresh')
-T.check(added and added.name == 'beamngEarthPhone'
-  and added.file == '/settings/ui_apps/layouts/default/freeroam.uilayout.json',
-  'written into the layout the player uses')
-T.check(added.placement.right == '5px' and added.placement.height == '737px', 'above the speedometer, full height')
-T.check(P.ensureInLayout() == true and sets == 1, 'looking again: it is in the layout already (no second write)')
-local mem = { apps = {} }
-extensions = { ui_appLayouts = {
-  getCurrentLayout = function() return mem end,
-  setCurrentLayout = function() sets = sets + 1 end } }
-T.check(P.ensureInLayout() == true and #mem.apps == 1, 'no addApp: added in memory instead')
+  addApp = function(file, name, placement) added = name return true end } }
+T.check(P.ensureInLayout() == true and sets == 0 and added == nil and #layout.apps == 1, 'nothing added to the layout')
+P.setVisible(true)
+T.check(sets == 0 and added == nil, 'showing Maps adds nothing either')
+P.setVisible(false)
 extensions = nil
-T.check(P.ensureInLayout() == false, 'no app layout API: nothing added (and it says where to add the app)')
 
 T.done('test_earthPhone')
