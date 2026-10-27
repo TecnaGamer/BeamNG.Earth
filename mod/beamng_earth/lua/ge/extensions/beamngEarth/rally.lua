@@ -44,6 +44,7 @@ M.CLIP_GAP_S = 0.05
 M.CLIP_LEN_S = 0.9            -- a clip's length when its pack does not say
 local voiceQ, voiceT, metaCache = {}, 0, {}
 local loadBests            -- (below)
+local raceTimeReset        -- (below)
 
 -- Pure: a note's clips (phrase stems) in calling order.
 function M.clips(note)
@@ -266,6 +267,7 @@ end
 function M.quit()
   if not state then return false end
   restoreOwn()
+  raceTimeReset()
   if state.phase == 'run' or state.phase == 'countdown' then msg('Stage abandoned', 'warning') end
   state = nil
   return true
@@ -292,6 +294,7 @@ local function project(anchor)
     if i > 1 then cum[i] = cum[i - 1] + math.sqrt((xs[i] - xs[i - 1]) ^ 2 + (ys[i] - ys[i - 1]) ^ 2) end
   end
   state.xs, state.ys, state.cum, state.anchorRef = xs, ys, cum, anchor
+  zCache = {}
   state.total = cum[#cum] or 0
 end
 
@@ -306,6 +309,88 @@ local function along(s)
   end
   local n = #xs
   return xs[n], ys[n], xs[n] - xs[n - 1], ys[n] - ys[n - 1]
+end
+
+-- The way to go (the user, 2026-10-26: "a line on the ground (game feature), a gps route showing the race path, your
+-- time and a reset to road button"): the game's own ground arrows (core_groundMarkers' decal, drawn here straight along
+-- the stage: the game's route planner only knows the AI road graph, which leaves the forest tracks out), LINE_M ahead.
+M.LINE_M, M.LINE_STEP = 120, 3
+M.LINE_TEX = 'art/shapes/arrows/arrow_groundmarkers_1.png'
+local linePool, zCache = {}, {}
+local function drawLine(z0)
+  local mgr = rawget(_G, 'Engine') and Engine.Render and Engine.Render.DynamicDecalMgr
+  if not (mgr and mgr.addDecals and state.cum) then return end
+  local first = math.floor((state.s or 0) / M.LINE_STEP) + 1
+  local n = 0
+  for k = first, first + math.floor(M.LINE_M / M.LINE_STEP) do
+    local at = k * M.LINE_STEP
+    if at >= state.total then break end
+    local x, y, dx, dy = along(at)
+    local l = math.sqrt(dx * dx + dy * dy)
+    if l > 0 then
+      zCache[k] = zCache[k] or groundZ(x, y, z0)
+      n = n + 1
+      local d = linePool[n]
+      if not d then
+        d = { texture = M.LINE_TEX, position = vec3(0, 0, 0), forwardVec = vec3(0, 0, 0),
+              color = ColorF(0, 0.4, 1, 1), scale = vec3(1.5, 3, 2), fadeStart = 100, fadeEnd = 120 }
+        linePool[n] = d
+      end
+      d.position = vec3(x, y, zCache[k])
+      d.forwardVec = vec3(dx / l, dy / l, 0)
+      local ahead = at - (state.s or 0)          -- (faded in near the car and out far ahead, as the game's)
+      d.color = ColorF(0, 0.4, 1, math.max(0, math.min(1, ahead / 10, (M.LINE_M - ahead) / 20)))
+    end
+  end
+  if n > 0 then pcall(mgr.addDecals, linePool, n) end
+end
+
+-- The stock RaceTime app's clock (its 'raceTime' event, seconds).
+local timeT = 0
+local function raceTime(t, force)
+  local gh = rawget(_G, 'guihooks')
+  if not (gh and gh.trigger) then return end
+  timeT = timeT - 1
+  if force or timeT <= 0 then
+    timeT = 3
+    gh.trigger('raceTime', { time = t })
+  end
+end
+raceTimeReset = function()
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger then gh.trigger('ScenarioResetTimer') end
+end
+
+-- Reset to road: the rally car back on the stage RESET_BACK_M behind where it got to, facing down the road, for
+-- RESET_S on the clock.
+M.RESET_BACK_M, M.RESET_S = 10, 5
+function M.resetToRoad()
+  if not (state and state.phase == 'run' and state.cum) then return false, 'only during a stage' end
+  local be_ = rawget(_G, 'be')
+  local car = state.carId and be_ and be_:getObjectByID(state.carId)
+  if not car then return false, 'no rally car' end
+  local at = math.max(0, (state.s or 0) - M.RESET_BACK_M)
+  local x, y, dx, dy = along(at)
+  local z = groundZ(x, y, 0)
+  local ok = pcall(function()
+    local r = rot(dx, dy)
+    local sp = rawget(_G, 'spawn')
+    if sp and sp.safeTeleport then sp.safeTeleport(car, vec3(x, y, z + 0.5), r)
+    else car:setPositionRotation(x, y, z + 0.5, r.x, r.y, r.z, r.w) end
+  end)
+  if not ok then return false, 'could not move the car' end
+  state.penalty = (state.penalty or 0) + M.RESET_S
+  state.resets = (state.resets or 0) + 1
+  state.off = 0
+  msg('Back on the road: +' .. M.RESET_S .. ' s', 'warning', 3)
+  return true
+end
+
+-- For the GPS minimap (settings.uiGpsRoute): the stage as the route while a run is on, else nil.
+function M.mapRoute()
+  if not (state and state.points and state.phase ~= 'loading') then return nil end
+  return { version = 900000 + (state.req or 0), points = state.points, dist = state.stage and state.stage.dist,
+           dur = 0 }
 end
 
 local function drawGate(s, color, z)
@@ -327,6 +412,7 @@ end
 local function finish()
   local b = loadBests()
   local time = state.t + (state.penalty or 0)
+  raceTime(time, true)
   local prev = tonumber(b.best[state.id])
   local record = not prev or time < prev
   if record then
@@ -387,6 +473,8 @@ function M.update(dt, anchor, player)
   end
   drawGate(0, ColorF(0.95, 0.85, 0.1, 0.8), player.z)
   if state.phase == 'countdown' then
+    drawLine(player.z)
+    raceTime(0)
     state.cd = state.cd - dt
     local n = math.ceil(state.cd)
     if n ~= state.lastCall and n > 0 then
@@ -413,6 +501,8 @@ function M.update(dt, anchor, player)
   end
   if state.phase == 'run' then
     state.t = state.t + dt
+    raceTime(state.t + (state.penalty or 0))
+    drawLine(player.z)
     local s, i, off = M.progress(state.xs, state.ys, state.cum, player.x, player.y, state.i)
     if off < 40 then state.s, state.i = math.max(state.s, s), i end
     -- the co-driver: each call made its lead ahead of the corner
@@ -449,7 +539,7 @@ function M.update(dt, anchor, player)
   end
   if state.phase == 'done' then
     state.wait = state.wait + dt
-    if state.wait >= M.DONE_S then restoreOwn(); state = nil end
+    if state.wait >= M.DONE_S then restoreOwn(); raceTimeReset(); state = nil end
   end
 end
 
@@ -463,7 +553,7 @@ function M.uiState()
   local a = nil
   if state then
     a = { phase = state.phase, name = state.name, t = state.t, s = state.s, total = state.total, car = state.carName,
-          notes = state.notes and #state.notes or nil, penalty = state.penalty }
+          notes = state.notes and #state.notes or nil, penalty = state.penalty, resets = state.resets }
   end
   return { stages = stages, active = a, last = last, error = err, voices = M.VOICES, voice = voiceId() }
 end

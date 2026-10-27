@@ -615,6 +615,9 @@ end
 
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.
 function M.uiGpsRoute()
+  -- (a rally stage on: the stage is the route, rally.lua)
+  local r = require('beamngEarth/rally').mapRoute()
+  if r then return r end
   return require('beamngEarth/gps').route()
 end
 
@@ -760,6 +763,7 @@ function M.uiRally() return require('beamngEarth/rally').uiState() end
 function M.uiRallyStart(id) local ok, why = require('beamngEarth/rally').start(id) return { ok = ok, error = why } end
 function M.uiRallyQuit() return require('beamngEarth/rally').quit() end
 function M.uiRallyVoice(id) return require('beamngEarth/rally').setVoice(id) end
+function M.uiRallyReset() local ok, why = require('beamngEarth/rally').resetToRoad() return { ok = ok, error = why } end
 
 -- The map's "Nearest gas station" (the user, 2026-10-25: "a gas station spawn so i dont search forever"): send
 -- (-> { id } or { error }) and poll (id -> nil while the server searches, else { ok, name, dist } after teleporting

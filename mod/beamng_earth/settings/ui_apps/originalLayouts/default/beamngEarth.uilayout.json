@@ -181,6 +181,17 @@
         "width": "330px",
         "height": "650px"
       }
+    },
+    {
+      "appName": "raceTime",
+      "appVersion": 1,
+      "placement": {
+        "top": "70px",
+        "right": "320px",
+        "position": "absolute",
+        "width": "150px",
+        "height": "80px"
+      }
     }
   ],
   "removedApps": {

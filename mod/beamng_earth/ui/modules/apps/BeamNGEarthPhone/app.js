@@ -181,7 +181,8 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             '<div ng-if="p.rally.active.phase == \'run\'"><div class="bnp-big" style="font-size:30px;font-variant-numeric:tabular-nums">{{ rtime(p.rally.active.t) }}</div>' +
               '<div style="height:6px;border-radius:3px;background:#333;margin:8px 0"><div style="height:6px;border-radius:3px;background:#ff3b30" ng-style="{width: (p.rally.active.s / p.rally.active.total * 100) + \'%\'}"></div></div>' +
               '<div style="font-size:12px;color:#aaa">{{ dist(p.rally.active.s) }} of {{ dist(p.rally.active.total) }}<span ng-if="p.rally.active.penalty"> · +{{ p.rally.active.penalty }}s penalty</span></div></div>' +
-            '<button class="bnp-btn" style="background:#ff453a;margin-top:8px" ng-click="lua(\'uiRallyQuit()\')">Quit stage</button></div>' +
+            '<div style="display:flex;gap:8px;margin-top:8px"><button class="bnp-btn" style="background:#0a84ff" ng-if="p.rally.active.phase == \'run\'" ng-click="lua(\'uiRallyReset()\')">Reset to road</button>' +
+            '<button class="bnp-btn" style="background:#ff453a" ng-click="lua(\'uiRallyQuit()\')">Quit stage</button></div></div>' +
           '<div class="bnp-card" style="background:#1d1d21" ng-if="p.rally.last && !p.rally.active">' +
             '<div style="font-size:12px;color:#aaa">LAST RUN · {{ p.rally.last.name }}</div>' +
             '<div class="bnp-big" style="font-size:26px" ng-if="!p.rally.last.dnf">{{ rtime(p.rally.last.time) }}<span ng-if="p.rally.last.record" style="font-size:12px;color:#30d158"> BEST</span></div>' +

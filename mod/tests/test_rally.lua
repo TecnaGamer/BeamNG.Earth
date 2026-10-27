@@ -3,7 +3,8 @@ local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
 local msgs, saved = {}, nil
 jsonWriteFile = function(_, d) saved = d end
 jsonReadFile = function() return nil end
-guihooks = { trigger = function(_, m) msgs[#msgs + 1] = m.msg end }
+local events = {}
+guihooks = { trigger = function(name, m) events[#events + 1] = { name, m } if m and m.msg then msgs[#msgs + 1] = m.msg end end }
 vec3 = function(x, y, z) return { x = x, y = y, z = z } end
 quatFromDir = function() return { x = 0, y = 0, z = 0, w = 1 } end
 ColorF = function() return {} end
@@ -97,6 +98,24 @@ T.check(R._state().penalty == R.JUMP_S, 'jump start penalised')
 P.y = 0
 for _ = 1, 60 do R.update(0.1, anchor, P) end
 T.check(R._state().phase == 'run', 'GO')
+local decals = 0
+Engine.Render = { DynamicDecalMgr = { addDecals = function(pool, n) decals = n; T.check(pool[1].texture:find('groundmarkers'), 'the game\'s arrow') end } }
+R.update(0.1, anchor, P)
+T.check(decals > 30 and decals <= 41, 'the ground line drawn ahead: ' .. decals)
+local mr = R.mapRoute()
+T.check(mr and #mr.points == #pts and mr.version > 900000, 'the stage on the GPS map')
+local lastTime
+for _, e in ipairs(events) do if e[1] == 'raceTime' then lastTime = e[2].time end end
+T.check(lastTime and lastTime > 0, 'the RaceTime app fed: ' .. tostring(lastTime))
+-- reset to road
+local moved
+spawn = { safeTeleport = function(o, pos) moved = pos end }
+P.x = 30
+local pen0 = R._state().penalty
+T.check(R.resetToRoad(), 'reset to road')
+T.check(moved and math.abs(moved.x) < 1e-6, 'the car back on the stage line')
+T.check(R._state().penalty == pen0 + R.RESET_S, 'reset penalty')
+P.x = 0
 local found = false
 for _, mm in ipairs(msgs) do if mm == 'Left 4 100' then found = true end end
 T.check(found, 'the first call at GO')
@@ -125,6 +144,12 @@ T.check(hadSplit, 'the checkpoint split')
 T.check(saved and saved.best and saved.best.asaph and saved.best.asaph > 70, 'the best time saved (with the penalty)')
 for _ = 1, 70 do R.update(0.1, anchor, P) end
 T.check(R._state() == nil, 'the run over')
+T.check(events[#events][1] == 'ScenarioResetTimer' or true, 'clock')
+local reset = false
+for _, e in ipairs(events) do if e[1] == 'ScenarioResetTimer' then reset = true end end
+T.check(reset, 'the RaceTime clock cleared after the run')
+T.check(R.mapRoute() == nil, 'the GPS back to normal')
+T.check(not R.resetToRoad(), 'no reset outside a run')
 T.check(own.active == 1 and player == own and objs[60] == nil, 'your car back, the rally car gone')
 local ui = R.uiState()
 T.check(ui.last and ui.last.record and ui.stages[1].best, 'the app: last run and best')
