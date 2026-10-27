@@ -18,6 +18,8 @@ M.STAGES = {                    -- (server/rally.py STAGES: the same ids)
 M.WAIT_S = 60                   -- the server's answer (it may fetch the forest's map data first)
 M.SETTLE_S = 6                  -- at the start this long before the car is put out (the world loading in)
 M.COUNT_S = 5
+M.COUNT_LEAD_S = 1.5           -- quiet before the first number
+M.COUNT_STEP_MAX = 0.05        -- s: the countdown's most per frame (a hitch slows it, never skips a number)
 M.JUMP_M, M.JUMP_S = 3, 10
 M.CP_M = 1000
 M.FINISH_M = 15
@@ -45,6 +47,7 @@ M.CLIP_LEN_S = 0.9            -- a clip's length when its pack does not say
 local voiceQ, voiceT, metaCache = {}, 0, {}
 local loadBests            -- (below)
 local raceTimeReset        -- (below)
+local linePool, zCache, lineN = {}, {}, 0   -- the ground line (drawLine)
 
 -- Pure: a note's clips (phrase stems) in calling order.
 function M.clips(note)
@@ -316,7 +319,6 @@ end
 -- the stage: the game's route planner only knows the AI road graph, which leaves the forest tracks out), LINE_M ahead.
 M.LINE_M, M.LINE_STEP = 120, 3
 M.LINE_TEX = 'art/shapes/arrows/arrow_groundmarkers_1.png'
-local linePool, zCache = {}, {}
 local function drawLine(z0)
   local mgr = rawget(_G, 'Engine') and Engine.Render and Engine.Render.DynamicDecalMgr
   if not (mgr and mgr.addDecals and state.cum) then return end
@@ -337,12 +339,21 @@ local function drawLine(z0)
         linePool[n] = d
       end
       d.position = vec3(x, y, zCache[k])
+      d.pos = d.position                 -- (the game's decal tables carry both)
       d.forwardVec = vec3(dx / l, dy / l, 0)
       local ahead = at - (state.s or 0)          -- (faded in near the car and out far ahead, as the game's)
       d.color = ColorF(0, 0.4, 1, math.max(0, math.min(1, ahead / 10, (M.LINE_M - ahead) / 20)))
     end
   end
-  if n > 0 then pcall(mgr.addDecals, linePool, n) end
+  lineN = n
+end
+
+-- core's onPreRender: the line handed to the decal manager there, as the game's ground markers do (decals added in the
+-- update before it were not drawn: the user, 2026-10-26: "i only see the timer").
+function M.preRender()
+  if lineN <= 0 then return end
+  local mgr = rawget(_G, 'Engine') and Engine.Render and Engine.Render.DynamicDecalMgr
+  if mgr and mgr.addDecals then pcall(mgr.addDecals, linePool, lineN) end
 end
 
 -- The stock RaceTime app's clock (its 'raceTime' event, seconds).
@@ -390,7 +401,8 @@ end
 function M.mapRoute()
   if not (state and state.points and state.phase ~= 'loading') then return nil end
   return { version = 900000 + (state.req or 0), points = state.points, dist = state.stage and state.stage.dist,
-           dur = 0 }
+           dur = 0, name = 'Rally: ' .. tostring(state.name),
+           remaining = state.total and math.max(0, state.total - (state.s or 0)) or nil }
 end
 
 local function drawGate(s, color, z)
@@ -432,6 +444,7 @@ end
 -- Every frame (core): dt the simulation's; anchor, player as jobs.update's.
 function M.update(dt, anchor, player)
   voiceUpdate(dt)
+  lineN = 0
   if not state then voiceQ = {} return end
   dt = dt or 0
   if state.phase == 'loading' then
@@ -461,7 +474,8 @@ function M.update(dt, anchor, player)
         state = nil
         return
       end
-      state.phase, state.cd, state.sx, state.sy, state.lastCall = 'countdown', M.COUNT_S, x, y, nil
+      -- (COUNT_LEAD_S of quiet first: the car settles, the spawn's hitch is over before the first number)
+      state.phase, state.cd, state.sx, state.sy, state.lastCall = 'countdown', M.COUNT_S + M.COUNT_LEAD_S, x, y, nil
       msg(tostring(state.carName) .. ' ready. Stand by...', 'flag', 3)
     elseif state.wait > 120 then
       err = 'the stage start did not load'
@@ -475,12 +489,15 @@ function M.update(dt, anchor, player)
   if state.phase == 'countdown' then
     drawLine(player.z)
     raceTime(0)
-    state.cd = state.cd - dt
+    -- an even second a number (the user, 2026-10-26: "co driver counts down too fast, keep an even pace"): a frame's
+    -- step capped (a hitch must not skip numbers, which then came out back to back), each number on its own beat
+    state.cd = state.cd - math.min(dt, M.COUNT_STEP_MAX)
     local n = math.ceil(state.cd)
-    if n ~= state.lastCall and n > 0 then
+    if n ~= state.lastCall and n > 0 and n <= M.COUNT_S then
       state.lastCall = n
       msg(tostring(n), 'flag', 1)
-      say({ 'system_countdown' .. n }, true)
+      voiceQ, voiceT = {}, 0            -- (on the beat: nothing left over in front of it)
+      say({ 'system_countdown' .. n })
     end
     if not state.jumped and (player.x - state.sx) ^ 2 + (player.y - state.sy) ^ 2 > M.JUMP_M ^ 2 then
       state.jumped, state.penalty = true, M.JUMP_S
@@ -493,6 +510,7 @@ function M.update(dt, anchor, player)
       state.penalty = state.penalty or 0
       local first = state.notes[1]
       msg('GO!', 'flag', 3)
+      voiceQ, voiceT = {}, 0
       say({ 'system_countdowngo' })
       if first then msg(first.text, 'flag', 4, 'bneRallyNote'); say(M.clips(first)) end
       if first then state.note = 2 end

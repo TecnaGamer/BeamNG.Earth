@@ -1936,6 +1936,7 @@ end
 -- After physics, before rendering (main.lua:819-824): measure when a rebase's vehicle move became
 -- visible. Hook order relative to core_camera does not matter here; this only measures.
 local function onPreRender(dtReal, dtSim)
+  pcall(X.rally.preRender)                 -- (the rally's ground line: decals go in at pre-render)
   local probe = st.lagProbe
   if not probe then return end
   if moveVisible(probe) then

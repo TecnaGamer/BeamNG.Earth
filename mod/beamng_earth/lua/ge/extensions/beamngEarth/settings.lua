@@ -569,6 +569,12 @@ function M.uiGpsHud()
   local pl = st and st.player
   local gps = require('beamngEarth/gps')
   local g = gps.status()
+  -- (a rally stage on: the stage is the minimap's route, rally.lua)
+  local okR, rr = pcall(function() return require('beamngEarth/rally').mapRoute() end)
+  if okR and rr then
+    local last = rr.points[#rr.points] or {}
+    g = { name = rr.name, lat = last[1], lon = last[2], routeVersion = rr.version, remaining = rr.remaining }
+  end
   local okN, ng = pcall(require, 'beamngEarth/navgraph')
   return {
     visible = (st and st.inOurLevel and st.active) and true or false,

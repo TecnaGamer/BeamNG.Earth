@@ -96,14 +96,30 @@ P.y = 5
 R.update(0.1, anchor, P)
 T.check(R._state().penalty == R.JUMP_S, 'jump start penalised')
 P.y = 0
-for _ = 1, 60 do R.update(0.1, anchor, P) end
+-- an even pace: one number a second, a 2 s hitch skips none
+local beats, clock, hitched = {}, 0, false
+for _ = 1, 2000 do
+  local dt = 0.02
+  if not hitched and R._state().lastCall == 4 then dt, hitched = 2.0, true end
+  clock = clock + math.min(dt, R.COUNT_STEP_MAX)
+  local before = R._state().lastCall
+  R.update(dt, anchor, P)
+  if R._state().phase ~= 'countdown' then break end
+  if R._state().lastCall ~= before then beats[#beats + 1] = { R._state().lastCall, clock } end
+end
 T.check(R._state().phase == 'run', 'GO')
+T.check(#beats == 5 and beats[1][1] == 5 and beats[5][1] == 1, 'every number called once: ' .. #beats)
+for k = 2, #beats do T.near(beats[k][2] - beats[k - 1][2], 1.0, 0.03, 'a second between numbers') end
 local decals = 0
 Engine.Render = { DynamicDecalMgr = { addDecals = function(pool, n) decals = n; T.check(pool[1].texture:find('groundmarkers'), 'the game\'s arrow') end } }
 R.update(0.1, anchor, P)
-T.check(decals > 30 and decals <= 41, 'the ground line drawn ahead: ' .. decals)
+T.check(decals == 0, 'no decals in the update itself')
+R.preRender()
+T.check(decals > 30 and decals <= 41, 'the ground line drawn ahead at pre-render: ' .. decals)
+T.check(rawget(_G, 'zCache') == nil, 'no stray global')
 local mr = R.mapRoute()
 T.check(mr and #mr.points == #pts and mr.version > 900000, 'the stage on the GPS map')
+T.check(mr.name == 'Rally: Asaph' and mr.remaining > 0, 'the minimap route named, the distance left')
 local lastTime
 for _, e in ipairs(events) do if e[1] == 'raceTime' then lastTime = e[2].time end end
 T.check(lastTime and lastTime > 0, 'the RaceTime app fed: ' .. tostring(lastTime))
@@ -149,6 +165,9 @@ local reset = false
 for _, e in ipairs(events) do if e[1] == 'ScenarioResetTimer' then reset = true end end
 T.check(reset, 'the RaceTime clock cleared after the run')
 T.check(R.mapRoute() == nil, 'the GPS back to normal')
+decals = 0
+R.preRender()
+T.check(decals == 0, 'no line after the run')
 T.check(not R.resetToRoad(), 'no reset outside a run')
 T.check(own.active == 1 and player == own and objs[60] == nil, 'your car back, the rally car gone')
 local ui = R.uiState()
