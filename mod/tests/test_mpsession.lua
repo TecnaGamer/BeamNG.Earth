@@ -19,14 +19,16 @@ for _, bad in ipairs({ 80, 70000, 5.5, 'x' }) do
 end
 
 -- BeamMP's client API, stubbed
-local handlers, sent = {}, {}
+local handlers, sent, encoded = {}, {}, {}
 function AddEventHandler(name, fn) handlers[name] = fn end
-function TriggerServerEvent(name, data) sent[#sent + 1] = { name = name, data = data } end
+function TriggerServerEvent(name, data) sent[#sent + 1] = { name = name, data = data, value = encoded[data] } end
 function jsonEncode(t)
   local parts = {}
   for k, v in pairs(t) do parts[#parts + 1] = string.format('%q:%s', k, tostring(v)) end
   table.sort(parts)
-  return '{' .. table.concat(parts, ',') .. '}'
+  local s = '{' .. table.concat(parts, ',') .. '}'
+  encoded[s] = t
+  return s
 end
 local decoded = {}
 function jsonDecode(s) return decoded[s] end
@@ -112,6 +114,10 @@ T.check(#sent == n0 + 1, 'our anchor changed: a pose at once')
 
 -- the go-to asked of core (once a session, a little beside the other player)
 decoded.t = { lat = 36.7, lon = -118.3 }
+handlers.bngeGoTo('t')
+T.check(asked.go == nil,'legacy meet-player teleport is ignored by default')
+decoded.cfg = {joinNearPlayers=true}
+handlers.bngeConfig('cfg')
 handlers.bngeGoTo('t')
 T.check(asked.go and asked.go[1] == 36.7 and asked.go[2] > -118.3, 'go-to: beside the other player')
 asked.go = nil
@@ -387,5 +393,74 @@ do -- no car (BeamMP joins without one): the free camera on the ground, and at a
   ms.placeCamera({ x = 30, y = 40, z = 500 }, 'C')
   T.check(put == nil, 'a rebase (no teleport): a free camera keeps its height')
   be, core_camera, getPlayerVehicle, quatFromDir = savedBe, savedCam, savedGet, savedQ
+end
+do -- Saved server positions are exact, retried when the world server is not ready, and acknowledged after placement.
+  ms.reset()
+  ms.onPostJoin()
+  local oldCore=beamngEarth_core
+  handlers.bngeConfig('cfg')
+  handlers.bngeGoTo('t')
+  T.check(ms.state().wentTo,'meeting teleport arrived before delayed saved checkpoint')
+  local status, attempts='retry',0
+  local saved={lat=42.1,lon=-84.9,height=230,heading=215,resume=true,token='server-checkpoint'}
+  saved.vehicle={model='pickup',config={parts={engine='v8'}}}
+  local current={lat=42.1,lon=-84.9,height=230,heading=215}
+  beamngEarth_core={
+    multiplayerRestoreStatus=function() return status end,
+    restoreMultiplayer=function(p)
+      attempts=attempts+1
+      T.check(p.lon==saved.lon and p.heading==215,'server restore keeps exact longitude and heading')
+      T.check(p.vehicle==saved.vehicle,'server vehicle configuration reaches restore unchanged')
+      if attempts==1 then return false end
+      status='loading'; return true
+    end,
+    drivingPose=function() return current end,
+  }
+  decoded.restore=saved
+  handlers.bngeGoTo('restore')
+  asked.go=nil
+  handlers.bngeGoTo('t')
+  T.check(asked.go==nil,'meeting messages cannot replace an active saved-location restore')
+  ms.update(.1,anchor,{x=0,y=0,z=0})
+  T.check(attempts==1 and sent[#sent].value.progress==nil and sent[#sent].value.resumeAck==nil,
+    'failed initial request holds checkpoint and suppresses loading poses')
+  ms.update(ms.POSE_S+.1,anchor,{x=0,y=0,z=0})
+  T.check(attempts==2 and sent[#sent].value.progress==nil,'restore retries when world server becomes ready')
+  handlers.bngeGoTo('restore')
+  ms.update(ms.POSE_S+.1,anchor,{x=0,y=0,z=0})
+  T.check(attempts==2,'duplicate server restore does not request another teleport while loading')
+  status='ready'
+  ms.update(.1,anchor,{x=0,y=0,z=0})
+  T.check(sent[#sent].value.resumeAck==saved.token and sent[#sent].value.progress==current,
+    'first stable vehicle pose acknowledges completion and resumes server saves')
+  T.check(sent[#sent].value.vehicleResume==1,'pose advertises support for server vehicle persistence')
+  handlers.bngeGoTo('restore')
+  ms.update(ms.POSE_S+.1,anchor,{x=0,y=0,z=0})
+  T.check(attempts==2,'completed restore runs once per session')
+  current=nil
+  ms.update(ms.POSE_S+.1,anchor,{x=0,y=0,z=0,camera=true})
+  T.check(sent[#sent].value.progress==nil,'camera or unowned vehicle does not produce a checkpoint')
+  ms.reset(); ms.onPostJoin()
+  ms.update(.1,anchor,{x=0,y=0,z=0})
+  T.check(sent[#sent].value.resumeAck==nil,'new session forgets previous restore acknowledgment')
+  beamngEarth_core=oldCore
+end
+do -- Private guest identity is persisted before it is echoed in a pose, then reused on reconnect.
+  ms.reset();ms.onPostJoin()
+  local files={}
+  MPCoreNetwork={getCurrentServer=function() return {ip='example.test',port=30814} end}
+  jsonReadFile=function(path) return files[path] end
+  jsonWriteFile=function(path,value) files[path]=value;return true end
+  ms.update(.1,anchor,{x=0,y=0,z=0})
+  T.check(sent[#sent].value.guestResume==1 and not sent[#sent].value.guestToken,
+    'first guest-capable pose asks server for identity')
+  decoded.identity={token=string.rep('a',32)}
+  handlers.bngeGuestIdentity('identity')
+  ms.update(.1,anchor,{x=0,y=0,z=0})
+  T.check(sent[#sent].value.guestToken==decoded.identity.token,'stored private identity acknowledged immediately')
+  ms.reset();ms.onPostJoin();ms.update(.1,anchor,{x=0,y=0,z=0})
+  T.check(sent[#sent].value.joined and sent[#sent].value.guestToken==decoded.identity.token,
+    'reconnect first pose contains previous guest identity for checkpoint lookup')
+  MPCoreNetwork,jsonReadFile,jsonWriteFile=nil,nil,nil
 end
 T.done('test_mpsession')

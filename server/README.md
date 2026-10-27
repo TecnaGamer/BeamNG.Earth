@@ -637,6 +637,19 @@ Midtown Manhattan 14/4824/6157): 4.8 s cold, 90 MB / 64 requests, 2.5 MB of cell
 381 MB (DuckDB, 4 layers at once), ~40 MB in memory per loaded cell (16 MB of it the
 infrastructure `tags` JSON column).
 
+### Highway signs (custom migration)
+
+`highwaysigns.py`, `osmsigns.py` and `osmregions.py` provide exit/advance and overhead destination signs,
+route shields and mile references; `mergesigns.py` adds entrance-ramp warnings. `signstream.Tracker` schedules
+at most two sign tiles after their road tiles have been sent. A dedicated process pool runs `blockworker.signs_tile`
+when road processes are enabled; the thread fallback uses the same builder and graded elevation.
+
+Signs reuse `roads_tile` / `roads_drop` with keys `s<tx>_<ty>`. Their JSON has empty `chunks` and optional
+`exits`, `mileposts`, `merges` shapes, each `{shape, pos}`. They use the existing pooled-shape slots and inline
+JSON transport. The Lua road loader treats them as render-only, tracks their rebase coverage separately, and
+excludes them from road readiness. `roads_reset` resets both trackers. An updated regional index refreshes signs;
+1.6.3's road revisit cache continues to restore roads independently. See [../docs/HIGHWAY_SIGNS.md](../docs/HIGHWAY_SIGNS.md).
+
 ### Gas stations (`server/gasstations.py`; the user, 2026-10-23: "the refueling is the main part")
 
 A road tile (`roads_tile`'s JSON) carries `"fuel": [station, ...]` for the stations whose position lies in it; each

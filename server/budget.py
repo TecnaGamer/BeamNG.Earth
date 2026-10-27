@@ -20,17 +20,17 @@ SMALL_GB = 20.0             # below this much RAM: the small profile (a Steam De
 SMALL_DEM_TILES = 192       # decoded 512² float32 DEM tiles (1 MB each)
 SMALL_WALL_CELLS = 12       # cells of building walls for the street widths (roadwidth.WALL_CELLS, 48)
 SMALL_MAPDATA_MB = 160      # decoded map data layers (mapdata.MEM_MB, 192): a road tile's cells still fit
-SMALL_ROAD_PROCESSES = 2    # road-tile processes (earthd ROAD_PROCESSES; with one the road tiles never caught up)
+SMALL_ROAD_PROCESSES = 4    # road-tile processes (earthd ROAD_PROCESSES; with one the road tiles never caught up)
 # A desktop's road-tile processes by its threads and memory (each ~1-1.5 GB): driving off right after a teleport into
 # Manhattan at 50 mph, 2 had the road under the car for the first ~15 s and solid ~27 s after, 4 at ~6 s and ~15 s,
 # at the same frame rate (a 16-thread PC, 2026-10-25)
-ROAD_PROCESSES_BY_CPU = ((12, 24.0, 4), (8, 16.0, 3))     # (threads at least, GB at least, processes)
+ROAD_PROCESSES_BY_CPU = ((20, 48.0, 6), (16, 32.0, 5), (12, 24.0, 4), (8, 16.0, 3))     # (threads at least, GB at least, processes)
 SMALL_FAR_K = 0.8           # the far field's refinement factors (farfield.K_TABLE) times this: 204 tiles for 332
 SMALL_FAR_TEX = 256         # px of the far tiles' textures at every level (512 from L2 on a desktop)
 ARENA_MAX = 2               # glibc malloc arenas a process (small profile): one per thread kept freed memory ...
 TRIM_S = 20.0               # ... and every TRIM_S the freed memory is given back (malloc_trim): a worker held ~1 GB
                             # for ~0.3 GB of Python and numpy objects (traced, a Steam Deck 2026-10-20)
-SMALL_FAR_WORKERS = 2       # far-tile worker processes (earthd --workers)
+SMALL_FAR_WORKERS = 4       # far-tile worker processes (earthd --workers)
 SMALL_SERVER_SHARE = 0.5    # of the physical cores for the server (cpupin.SERVER_SHARE): one of four was too few
 # The imagery's background analyses (de-shadowing, colour seams) off: on a Steam Deck they kept one of the server's
 # threads busy (colour matching ~85 s of CPU in a Baltimore drive) and stream large arrays through the memory the GPU

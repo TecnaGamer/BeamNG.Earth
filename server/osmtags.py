@@ -3,20 +3,21 @@ roads, joined to Overture's road segments by their OpenStreetMap way id (the use
 have more info about the roads, lane count, road types").
 
 Overture's transportation theme has no lane count (removed in 2024, not back in schema v2.0.0) and few widths, but
-98.6 % of its segments come from OpenStreetMap and keep the way id (sources[1].record_id "w<id>@<version>"). OSM US's
+98.6 % of its segments come from OpenStreetMap and keep the way id (sources[].record_id "w<id>@<version>"). OSM US's
 Layercake publishes every OSM highway as one GeoParquet file (https://layercake.openstreetmap.us/layers/highways/,
 ODbL, ~29 GB, 2,467 row groups, spatially clustered, rebuilt about weekly), with the tags as columns and a bbox struct.
 Like overture.py, only what a cell needs is read, through rangeread (netfetch's limits, the block cache), with DuckDB
 reading the blocks: the footer once (9 MB), the bbox columns of the row groups whose statistics touch the cell, then
-the tag columns of the row groups that hold a matching way (no geometry). The tag values are parsed in the query
-(lanes "2;3" -> 2, width "7 m" / "23'" -> metres, maxspeed "30 mph" -> km/h).
+the tag columns of the row groups that hold a matching way. Tagged lane geometries support a conservative fallback
+when Overture references a replaced OSM way. The tag values are parsed in the query
+(unambiguous integer lanes only, width "7 m" / "23'" -> metres, maxspeed "30 mph" -> km/h).
 
 The file is rewritten in place: a version is pinned by its ETag (the cache directory; every range request carries
 If-Match, rangeread.Changed when it moved on), and the next version is taken on the next start (version()).
 
 A layer of its own is not needed: mapdata joins the tags into the roads layer when it builds a cell (all processes
 read the same cell file, so a road's lanes and width agree everywhere). Unreachable: the cell keeps no tags and the
-roads use their width guesses (roads.carriageway), as before.
+roads use temporary fallback counts; mapdata retries incomplete enrichment rather than caching guesses forever.
 """
 import logging
 import math
@@ -36,13 +37,13 @@ log = logging.getLogger("earthd.mapdata")
 URL = "https://data.openstreetmap.us/layercake/highways.parquet"
 HOST = "data.openstreetmap.us"
 VERSION_TTL_S = 7 * 86400       # a pinned version is checked again after this long (the file changes ~weekly)
-RETRY_S = 3600                  # the source unreachable: asked again after this long (offline, blocked, gone)
+RETRY_S = 60                    # a transient failure must not suppress lane data for the rest of a drive
 PATH = "osm/highways.parquet"   # (the path DuckDB reads it under)
 
 # The query: OSM way id and the parsed tags (NULL where absent or not understood).
 _NUM = r"'^\s*([0-9]+(?:\.[0-9]+)?)'"
 COLUMNS = {
-    "lanes": f"TRY_CAST(regexp_extract(lanes, '^\\s*([0-9]+)', 1) AS INTEGER)",
+    "lanes": "TRY_CAST(regexp_extract(lanes, '^\\s*([0-9]+)\\s*$', 1) AS INTEGER)",
     "width": (f"TRY_CAST(regexp_extract(width, {_NUM}, 1) AS DOUBLE) * "
               "CASE WHEN width LIKE '%ft%' OR width LIKE '%''%' THEN 0.3048 ELSE 1.0 END"),
     "maxspeed": (f"TRY_CAST(regexp_extract(maxspeed, {_NUM}, 1) AS DOUBLE) * "
@@ -52,16 +53,23 @@ COLUMNS = {
     "smoothness": "smoothness",
     "osm_surface": "surface",
     "osm_oneway": "oneway",
+    "osm_junction": "junction",
     "osm_layer": "TRY_CAST(layer AS INTEGER)",
     # for the segments Overture took from a relation (no way id: Samara's Novo-Sadovaya, "r3851280@53", drawn 10 m wide
     # instead of its 6 lanes, the user 2026-10-24): the way of the same name around them (join)
     "name": "name",
     "bx0": "bbox.xmin", "by0": "bbox.ymin", "bx1": "bbox.xmax", "by1": "bbox.ymax",
 }
-USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name"}
+USED = {"id", "type", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name"}
 FLOATS = ("lanes", "width", "maxspeed", "osm_layer")
-TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway")
+USED.add("junction")
+TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_junction")
 NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the same-named way it takes the tags of
+
+
+class TagMap(dict):
+    """Keep useful received tags while asking mapdata to retry incomplete enrichment."""
+    incomplete = False
 
 
 # Racetracks (GitHub #143): Overture's transportation theme has no highway=raceway (Daytona's oval and road course, the
@@ -216,15 +224,45 @@ class OsmTags:
                                f"{groups[rg]['first'] + groups[rg]['n'] - 1}" for rg in cand)
             box = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND bbox.ymin <= {lat1!r} "
                    f"AND bbox.ymax >= {lat0!r}")
-            cols = ", ".join(f"{expr} AS \"{name}\"" for name, expr in COLUMNS.items())
+            # Older cached Layercake schemas may not have junction yet.
+            cols = ", ".join(f"{('NULL' if name == 'osm_junction' and 'junction' not in want else expr)} AS \"{name}\""
+                             for name, expr in COLUMNS.items())
             # only the ways with a tag the roads use (and the raceways): join() treats a way without one as one not
             # here, and building a dict per way of every highway in the cell was most of this thread's CPU
             # (osmtags, 14 CPU-s of a Deck's teleport, 2026-10-23)
-            some = " OR ".join(f"{c} IS NOT NULL" for c in sorted(USED - {"id", "bbox"}))
-            rows = con.execute(f"""SELECT id, highway = 'raceway', file_row_number, {cols}
+            some = " OR ".join(f"{c} IS NOT NULL" for c in sorted((USED & want) - {"id", "type", "bbox"}))
+            rows = con.execute(f"""SELECT id, highway = 'raceway', file_row_number, {cols}, highway
                 FROM read_parquet({uri}, file_row_number = true)
-                WHERE ({only}) AND {box} AND (highway = 'raceway' OR {some})""").fetchall()
+                WHERE type = 'way' AND ({only}) AND {box} AND (highway = 'raceway' OR {some})""").fetchall()
             race = [r[2] for r in rows if r[1]]
+            # A source way can have been split/deleted since the Overture release.
+            # Keep current tagged-way geometry for a conservative spatial fallback.
+            geometry = {}
+            geometry_failed = False
+            lane_rows = [r[2] for r in rows if r[3] is not None]
+            if lane_rows and any('geometry' in groups[rg]['cols'] for rg in cand):
+                try:
+                    hit = [rg for rg in cand if any(groups[rg]['first'] <= r < groups[rg]['first'] + groups[rg]['n']
+                                                   for r in lane_rows)]
+                    rd._fetch(files, {PATH: [v for rg in hit for v in groups[rg]['cols'].get('geometry', [])]}, kind)
+                    try:
+                        con.execute('SET enable_geoparquet_conversion = false')
+                    except Exception:
+                        pass
+                    wanted = ', '.join(str(int(r)) for r in lane_rows)
+                    for wid, wkb in con.execute(f'SELECT id, geometry FROM read_parquet({uri}, file_row_number=true) '
+                                                f'WHERE file_row_number IN ({wanted})').fetchall():
+                        if wkb is not None:
+                            p = _linestring(bytes(wkb))
+                            if p is not None:
+                                geometry[int(wid)] = p
+                except rangeread.Changed:
+                    raise
+                except Exception as e:
+                    if any(isinstance(err, rangeread.Changed) for err in errors):
+                        raise next(err for err in errors if isinstance(err, rangeread.Changed))
+                    log.warning('osmtags: geometry fallback unavailable; keeping received way tags: %s', e)
+                    geometry_failed = True
             got = []
             if race:            # (rare: the raceways' own columns and geometry, of their row groups only)
                 hit = sorted({rg for r in race for rg in cand
@@ -246,8 +284,11 @@ class OsmTags:
             raise
         finally:
             con.close()
-        names = list(COLUMNS)
-        tags = {int(r[0]): {k: v for k, v in zip(names, r[3:]) if v is not None} for r in rows}
+        names = list(COLUMNS) + ['_highway']
+        tags = TagMap({int(r[0]): {k: v for k, v in zip(names, r[3:]) if v is not None} for r in rows})
+        tags.incomplete = geometry_failed
+        for wid, p in geometry.items():
+            tags[wid]['_coords'] = p
         ways = []
         for row in got:
             coords = _linestring(bytes(row[-1]))
@@ -367,4 +408,10 @@ def join(feats, tags):
         src = ids if c == "osm_oneway" else named
         feats.attrs[c if c.startswith("osm_") else "osm_" + c] = mg.text_column(
             [str(tags.get(w, {}).get(c, "")) if w is not None else "" for w in src])
+    import roadlanes
+    roadlanes.resolve(feats, tags, named)
+    # A refresh must also invalidate derived road/deck specs on a reused object.
+    for key in ('_road_specs', '_bridge_specs', '_tunnel_specs', '_generated_lanes', '_bnge_cell',
+                '_cached_lane_counts', '_lane_context_pending'):
+        feats.__dict__.pop(key, None)
     return feats

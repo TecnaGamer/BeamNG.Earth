@@ -27,7 +27,7 @@ URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (sp
 # driven at the US 65 mph, 2026-10-15)
 KMH_DEFAULT = {"motorway": 120, "trunk": 100, "primary": 80, "secondary": 70}
 MPH = 0.44704
-LANE_W_M = 3.3
+LANE_W_M = roads.LANE_M
 SIMPLIFY_M = 0.6            # a shape point is kept where the chord would be off by more than this
 MAX_EDGE_M = 80.0           # long straight edges are split (the AI and the spawner like shorter ones)
 WINDOW_M = 1100.0           # half size of the square around the player the graph covers
@@ -110,23 +110,29 @@ def driving_width(spec):
     """The width of a road's driving lanes: the drawn carriageway (spec.width) less its parking lanes and edge
     strips (roads.carriageway adds them), i.e. the class's driving width capped by the drawn one; a four-lane
     urban arterial is all lanes."""
+    if spec.lanes or spec.link or (spec.cls == "motorway" and spec.oneway):
+        parked = (not (spec.link or spec.roundabout or spec.roundabout_entry) and spec.urban and spec.cls in roads.PARKING_CLASSES
+                  and not (not spec.oneway and spec.cls in roads.URBAN_ARTERIAL))
+        margin = ((roads.PARKING_M if spec.oneway else 2 * roads.PARKING_M) if parked
+                  else 2 * roads.edge_margin(spec))
+        return float(max(1.0, spec.width - margin))
     if spec.urban and not spec.oneway and spec.cls in roads.URBAN_ARTERIAL:
         return float(spec.width)
     w = roads.STYLE.get(spec.cls, roads.STYLE["unknown"])[0]
     if spec.oneway and spec.cls in roads.ONEWAY_STYLE:
         w = roads.ONEWAY_STYLE[spec.cls]
-    if roads.rural_motorway(spec):      # two lanes between the shoulders (a ramp: one, roads.motorway_shoulder)
-        w = min(roads.MOTORWAY_RURAL_M, spec.width - 2 * roads.motorway_shoulder(spec))
     return float(min(spec.width, w))
 
 
 def _lanes(width, oneway, known=None):
     """Lanes (with the direction, against it) of a road whose driving lanes are `width` wide (known: OpenStreetMap's
-    lane count, both directions, osmtags.py): the same number each way on a two-way road (a lopsided split put the AI's
-    centre line off the road's)."""
+    lane count, both directions, osmtags.py). Odd mapped totals keep their extra lane;
+    without directional tags it is assigned along the geometry, as in roads.extras."""
     n = int(known) if known else max(1, int(round(width / LANE_W_M)))
     if oneway:
         return n, 0
+    if known and n >= 2:
+        return (n + 1) // 2, n // 2
     k = max(1, n // 2)
     return k, k
 
@@ -165,12 +171,14 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     ring_cands = []         # the roads the road tiles draw (fid, spec, pts, None): roundabout rings (islands.ring_fids)
     approaches = {}         # (connector, fid, end) -> (graph node next to it, traffic comes in)
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
+    pending_source = {}     # unshifted source point for bridge height lookup
+    node_priority = {}      # a shared ramp connector follows the through carriageway
     node_fid = {}           # name -> the feature it was made on (its deck, if any)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
         rspecs = roads.road_specs(feats, urban_fn, widths, left_hand)      # the roads the road tiles (and their props) see
-        bspecs = roads.bridge_specs(feats)
+        bspecs = roads.bridge_specs(feats, urban_fn, widths, left_hand)
         specs = [sp if sp is not None else bs for sp, bs in zip(rspecs, bspecs)]
         rules = feats.rules
         sub = rules.get("subclass")
@@ -255,6 +263,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         full.append(sj)
             full.append(order[-1])
             xy = np.stack([np.interp(full, s, p[:, 0]), np.interp(full, s, p[:, 1])], 1)
+            source_xy = xy.copy()
+            offset = roads.driving_offset(spec)
+            if offset:
+                xy = roads.offset_polyline(np.c_[xy, np.zeros(len(xy))], offset)[:, :2]
             names = [marks[v] for v in full]
             # this road's edge attributes
             mid = 0.5
@@ -266,7 +278,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         direction = int(ow.value[r])
             if direction == 0 and spec.oneway and spec.dir:     # a divided road's carriageway (roads.dual_carriageways)
                 direction = int(spec.dir)
-            lo, li = _lanes(w, direction != 0, spec.lanes)
+            known = spec.lanes or (2 if direction and not spec.link and spec.cls in {'motorway', 'trunk'} else None)
+            lo, li = _lanes(w, direction != 0, known)
             profile = _speed_profile(xy, w, direction != 0)
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
@@ -284,13 +297,22 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 if direction < 0:
                     a, b = b, a
                 pa, pb = xy[j] if direction >= 0 else xy[j + 1], xy[j + 1] if direction >= 0 else xy[j]
-                for nm, q in ((a, pa), (b, pb)):
-                    if nm not in nodes and nm not in pending:
+                qa, qb = (source_xy[j], source_xy[j+1]) if direction >= 0 else (source_xy[j+1], source_xy[j])
+                priority = (not spec.link, w)
+                for nm, q, original in ((a, pa, qa), (b, pb, qb)):
+                    if nm not in nodes and (nm not in pending or priority > node_priority[nm]):
                         pending[nm] = (float(q[0]), float(q[1]))
+                        pending_source[nm] = original
+                        node_priority[nm] = priority
                         node_fid[nm] = fid
                 legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(w / 2, 2)])
+                ew = w
+                if spec.bridge_ends:
+                    import bridgewidths
+                    narrow = float(bridgewidths.at(spec, [full[j], full[j + 1]], L).min())
+                    ew = driving_width(spec._replace(width=narrow))
+                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(ew / 2, 2)])
                 edge_fids.append(fid)
     import islands
     ring = islands.ring_directions(ring_cands, left_hand)
@@ -321,7 +343,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         Z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64).copy()
         if decks:
             for k, nm in enumerate(used):
-                dz = _deck_z(decks, node_fid.get(nm), X[k], Y[k])
+                dz = _deck_z(decks, node_fid.get(nm), *pending_source[nm])
                 if dz is not None:
                     Z[k] = dz
         radius = {}

@@ -837,4 +837,116 @@ do -- a rebase's anchor on its grid, the terrain hint shifted by the player's sp
   local ex, ey = require('beamngEarth/follow').target(dx + 290, dy, 30, 0)     -- (290 m to the 10 km rebase distance)
   T.check(cx == ex and cy == ey, string.format('rebase hint in the snapped frame: (%d, %d), want (%d, %d)', cx, cy, ex, ey))
 end
+
+do -- 1.6.2 server checkpoints through the 1.6.3 snapped-origin lifecycle.
+  core.onClientEndMission()
+  core.SNAP_TELEPORTS = true
+  local roads = require('beamngEarth/roads')
+  local places = require('beamngEarth/places')
+  local ready, placedDir = true, nil
+  local oldSettled, oldRay, oldQuat = roads.settledFor, castRayStatic, quatFromDir
+  local oldLast, oldNote = places.lastPosition, places.notePosition
+  local reads, saves, savedWrites = 0, 0, 0
+  places.lastPosition = function() reads=reads+1; return {lat=10,lon=10} end
+  places.notePosition = function() saves=saves+1 end
+  roads.settledFor = function() return ready end
+  castRayStatic = function(from, _, reach)
+    local d = from.z - 120
+    return d >= 0 and d < reach and d or reach
+  end
+  quatFromDir = function(direction) placedDir=direction;return quat(0,0,0,1) end
+  local oldGet=getPlayerVehicle
+  local mp,own=true,false
+  MPCoreNetwork={isMPSession=function() return mp end}
+  MPVehicleGE={isOwn=function() return own end,getVehicles=function() return {} end}
+  veh.engineLag,veh.vel='sync',vec3(0,0,0)
+  core.onClientStartMission()
+  frames(3)
+  serverSend({type='hello',protocol=4,format=4,cells=64,sessionId='mp-resume',farFormat='cdae',
+    material='bngEarthFar_v3',nearVisual='terrain'})
+  frames(5)
+  local request
+  getPlayerVehicle=function() return nil end
+  T.check(core.restoreMultiplayer({lat=44.0037,lon=-90.0061,height=121,heading=215,token='mp-save'}),'server restore accepted')
+  frames(3)
+  request=last('prepare_anchor')
+  T.near(request.lat,44,1e-8,'server restore uses the snapped anchor')
+  T.near(request.lon,-90.01,1e-8,'server restore snaps longitude')
+  T.check(core.multiplayerRestoreStatus('mp-save')=='loading','pending checkpoint reports loading')
+  serverSend({type='anchor_error',requestId=request.requestId,error='temporary elevation failure'})
+  frames(3)
+  T.check(core.multiplayerRestoreStatus('mp-save')=='loading','terrain retry retains checkpoint and suppresses client retry')
+  T.check(core.drivingPose()==nil,'terrain retry cannot save a temporary position')
+  T.check(pumpUntil(function() return last('prepare_anchor').requestId~=request.requestId end,1000),'checkpoint terrain is retried automatically')
+  request=last('prepare_anchor')
+  serverSend({type='anchor_ready',requestId=request.requestId,anchorId=32,lat=request.lat,lon=request.lon,
+    groundZ=120,terrain=terrainMsg(request.cx,request.cy,'/temp/mp-resume.png',0)})
+  local posesBefore=#received('pose')
+  frames(25)
+  T.check(#received('pose')>posesBefore,'free camera keeps world streaming while waiting for an owned vehicle')
+  T.check(core.multiplayerRestoreStatus('mp-save')=='loading','free camera cannot acknowledge a vehicle restore')
+  getPlayerVehicle=oldGet
+  frames(4)
+  T.check(core.drivingPose()==nil,'spectating another player cannot save their position')
+  own=true
+  frames(90)
+  T.check(core.multiplayerRestoreStatus('mp-save')=='ready','first owned vehicle completes the server restore')
+  local expectedX = require('beamngEarth/resume').direction(geodesy.newAnchor(request.lat,request.lon),veh.pos.x,veh.pos.y,215)
+  T.near(placedDir.x,expectedX,1e-6,'multiplayer vehicle receives true saved heading')
+  T.near(core.drivingPose().lon,-90.0061,1e-8,'snapped restore keeps exact saved longitude')
+  T.near(core.drivingPose().lat,44.0037,1e-8,'multiplayer checkpoint uses restored vehicle position')
+  T.check(reads==0 and saves==savedWrites,'multiplayer restore and driving leave singleplayer position untouched')
+  do -- Automatic vehicle spawn waits for collision, then for BeamMP ownership, exactly once.
+    local oldApi,oldEnter,oldCamera=core_vehicles,be.enterVehicle,commands.setGameCamera
+    local oldFind=scenetree.findObjectById
+    local spawns,entered,camera=0,0,0
+    local spawnOptions,spawnModel
+    core_vehicles={defaultVehicleModel='pickup',getModel=function() return {model={}} end,
+      spawnNewVehicle=function(model,opt)
+        spawns=spawns+1;spawnOptions,spawnModel=opt,model
+        veh.pos=vec3(opt.pos);getPlayerVehicle=oldGet
+        return veh
+      end}
+    scenetree.findObjectById=function(id) return id==veh.id and veh or oldFind(id) end
+    be.enterVehicle=function() entered=entered+1;getPlayerVehicle=oldGet end
+    commands.setGameCamera=function() camera=camera+1 end
+    MPVehicleGE.getServerVehicleID=function() return '7-0' end
+    getPlayerVehicle=function() return nil end
+    own,ready=false,false
+    core.restoreMultiplayer({lat=44.0037,lon=-90.0061,height=121,heading=160,token='mp-car',
+      vehicle={model='semi',config={parts={engine='diesel'},paints={{baseColor={.8,.1,.4,1}}}}}})
+    frames(3);request=last('prepare_anchor')
+    T.check(spawns==0,'no vehicle spawned before checkpoint terrain arrives')
+    serverSend({type='anchor_ready',requestId=request.requestId,anchorId=33,lat=request.lat,lon=request.lon,
+      groundZ=120,terrain=terrainMsg(request.cx,request.cy,'/temp/mp-car.png',0)})
+    frames(90)
+    T.check(spawns==0,'vehicle waits for road and bridge collision readiness')
+    ready=true;frames(5)
+    T.check(spawns==1 and spawnModel=='semi' and spawnOptions.config.parts.engine=='diesel',
+      'saved vehicle automatically spawned once the checkpoint road is ready')
+    T.check(spawnOptions.autoEnterVehicle and spawnOptions.paint.baseColor[3]==.4,
+      'spawn restores paint and requests the driver seat')
+    frames(220)
+    T.check(spawns==1 and core.multiplayerRestoreStatus('mp-car')=='loading',
+      'delayed server ownership cannot duplicate the spawn or acknowledge it early')
+    own=true;frames(90)
+    T.check(entered>0 and camera>0 and core.multiplayerRestoreStatus('mp-car')=='ready',
+      'accepted vehicle is entered and camera restored before checkpoint acknowledgment')
+    expectedX = require('beamngEarth/resume').direction(geodesy.newAnchor(request.lat,request.lon),veh.pos.x,veh.pos.y,160)
+    T.near(placedDir.x,expectedX,1e-6,'automatic vehicle placement keeps true saved heading')
+    T.check(core.drivingPose().vehicleId=='7-0','next pose selects exact active owned server vehicle')
+    T.check(reads==0 and saves==savedWrites,'automatic BeamMP vehicle restore leaves singleplayer checkpoints untouched')
+    core_vehicles,be.enterVehicle,commands.setGameCamera=oldApi,oldEnter,oldCamera
+    scenetree.findObjectById=oldFind
+  end
+
+  mp=false
+  core.onBeamMPServerLeave()
+  core.onClientEndMission()
+  T.check(reads==0 and saves==savedWrites,'disconnect cannot overwrite singleplayer position after BeamMP clears session flag')
+  MPCoreNetwork,MPVehicleGE=nil,nil
+  getPlayerVehicle=oldGet
+  roads.settledFor,castRayStatic,quatFromDir=oldSettled,oldRay,oldQuat
+  places.lastPosition,places.notePosition=oldLast,oldNote
+end
 T.done('test_core_stubbed')

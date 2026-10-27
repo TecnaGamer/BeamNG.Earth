@@ -78,8 +78,16 @@ def ribbons(chunks):
         xy, s, z = _resample(pts, DRAPE_STEP)
         if len(xy) < 2:
             continue
-        n = _normals(xy) * (float(c["w"]) / 2)
-        out.append((xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
+        width = float(c['w'])
+        if c.get('w_nodes') is not None:
+            source_s = np.r_[0., np.cumsum(np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1))]
+            width = np.interp(s, source_s, np.asarray(c['w_nodes'], float))[:, None]
+        n = _normals(xy) * (width / 2)
+        texture_s = s
+        if c.get('uv_s') is not None:
+            source_s = np.r_[0., np.cumsum(np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1))]
+            texture_s = np.interp(s, source_s, np.asarray(c['uv_s'], float))
+        out.append((xy + n, xy - n, texture_s / float(c.get("tl") or 10.0), c["m"], layer_of(c),
                     z if c.get("fixed") else None))
     return out
 
@@ -157,7 +165,22 @@ def _reach_past(c, box):
         n.insert(0, ends[0][None])
     if ends[1] is not None:
         n.append(ends[1][None])
-    return {**c, "n": np.concatenate(n).tolist()}
+    result = {**c, "n": np.concatenate(n).tolist()}
+    if c.get('w_nodes') is not None:
+        widths = list(c['w_nodes'])
+        if ends[0] is not None:
+            widths.insert(0, widths[0])
+        if ends[1] is not None:
+            widths.append(widths[-1])
+        result['w_nodes'] = widths
+    if c.get('uv_s') is not None:
+        stations = list(c['uv_s'])
+        if ends[0] is not None:
+            stations.insert(0, stations[0] - reach)
+        if ends[1] is not None:
+            stations.append(stations[-1] + reach)
+        result['uv_s'] = stations
+    return result
 
 
 GRID_M = 2.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
@@ -250,7 +273,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     over the drawn ground (within FOLLOW_TOL; drawn(lat, lon): the block's heights where they are not elev's, its
     ground raised over low arches): a ribbon straight across the road stood under the ground's bumps (up to 30 cm on hills), so it was drawn
     5 cm over it and the tyres sank into it (the user, 2026-10-20)."""
-    chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
+    chunks = [c for c in chunks if not c.get("tube_only") and not c.get("barrier")]
     if clip is not None:
         chunks = [_reach_past(c, clip) for c in chunks]
     rb = ribbons(chunks)                        # deck surfaces too: their asphalt over deck()'s concrete
@@ -380,10 +403,13 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=()):
     bridgetypes.truss_members) in painted steel (TRUSS_STEEL). (positions, tris, uvs, materials, tri
     material index) or None. ground: the tile's ground carriageways (roads.build_tile cover_out) for the parapet
     test, drawn or not (with the roads painted into the ground the chunks have none). Pure."""
+    import medianbarriers
+    import plazas
+    barriers = medianbarriers.build(chunks, origin)
     dch = [c for c in chunks if c.get("deck")]
     rb = [(r, c) for r, c in zip(ribbons(dch), dch) if r[5] is not None]
     if not rb and not piers and not beams:
-        return None
+        return barriers
     mats, P, UV, T, M = [], [], [], [], []
     nv = 0
 
@@ -436,8 +462,9 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=()):
         # girders under the slab
         half = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2
         ng = max(2, int(round(2 * half / GIRDER_EVERY)))
-        for off in np.linspace(-(half - 0.6), half - 0.6, ng):
-            mid = (left + right) / 2 + u * off
+        half_at = np.hypot(lat[:, 0], lat[:, 1]) / 2
+        for fraction in np.linspace(-1., 1., ng):
+            mid = (left + right) / 2 + u * ((half_at - 0.6) * fraction)[:, None]
             gl, gr = mid + u * GIRDER_W / 2, mid - u * GIRDER_W / 2
             GL, GR = np.c_[gl, z - DECK_DEPTH] - origin, np.c_[gr, z - DECK_DEPTH] - origin
             GLb, GRb = GL - [0, 0, GIRDER_D], GR - [0, 0, GIRDER_D]
@@ -473,8 +500,8 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=()):
             mats.append(steel(pt))
             _beams([b for b in beams if (b[4] if len(b) > 4 else "grey") == pt], origin, P, T, UV, M, len(mats) - 1)
     if not P:
-        return None
-    return (np.concatenate(P), np.concatenate(T), np.concatenate(UV), mats, np.concatenate(M))
+        return barriers
+    return plazas.merge((np.concatenate(P), np.concatenate(T), np.concatenate(UV), mats, np.concatenate(M)), barriers)
 
 
 TRUSS_STEEL = "bne_truss_steel"     # painted steel (the stock metal_paint, grey: tunnel.materials.json) ...
@@ -626,23 +653,23 @@ def _parapet_cover(rb, context=()):
         lat = left - right
         u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
         mid = (left + right) / 2
-        hw = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
+        hw = np.hypot(lat[:, 0], lat[:, 1]) / 2 + PARAPET_W
         oid = hash(c.get("fid", n)) & 0x3FFFFFFF
         for e in (left + u * PARAPET_W / 2, right - u * PARAPET_W / 2):
             pts.append(np.c_[e, z])
             own.append(np.full(len(z), oid))
         A.append(np.c_[mid[:-1], z[:-1]])
         B.append(np.c_[mid[1:], z[1:]])
-        HW.append(np.full(len(z) - 1, hw))
+        HW.append(np.minimum(hw[:-1], hw[1:]))
         OS.append(np.full(len(z) - 1, oid))
     for (left, right, v, m, layer, z), c in context:     # the decks around the tile: surfaces only
         lat = left - right
         mid = (left + right) / 2
-        hw = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
+        hw = np.hypot(lat[:, 0], lat[:, 1]) / 2 + PARAPET_W
         oid = hash(c.get("fid", "ctx")) & 0x3FFFFFFF
         A.append(np.c_[mid[:-1], z[:-1]])
         B.append(np.c_[mid[1:], z[1:]])
-        HW.append(np.full(len(z) - 1, hw))
+        HW.append(np.minimum(hw[:-1], hw[1:]))
         OS.append(np.full(len(z) - 1, oid))
     P_, O_ = np.concatenate(pts), np.concatenate(own).astype(np.int64)
     A_, B_, H_, S_ = np.concatenate(A), np.concatenate(B), np.concatenate(HW), np.concatenate(OS).astype(np.int64)

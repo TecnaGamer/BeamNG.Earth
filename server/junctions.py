@@ -21,12 +21,13 @@ import math
 import numpy as np
 
 import fast     # Rust kernels (earthfast)
+import roadmarkings
 
 RADIUS = 5.0                    # m, curb return radius when the class is not listed in RADII
 # by the larger road's class (street-view study of Fells Point, 2026-10-11: city corners are tight)
 RADII = {"residential": 3.0, "living_street": 3.0, "unclassified": 3.0, "service": 3.0,
          "tertiary": 4.5, "secondary": 6.0, "primary": 6.0, "trunk": 8.0}
-STOP_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.45}   # 1 m before the crosswalk
+STOP_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.35}   # 1 m before the crosswalk
 STOP_GAP = 1.0
 BULB_M = 6.0                    # m a curb extension runs along the street past the corner
 TAPER_M = 3.0                   # m over which it returns to the parking curb
@@ -259,7 +260,25 @@ def _across(roads, bi, bj, cr, X, walk_w, debug=None):
     return {"arc": curb, "inward": nrm, "outer": outer, "fill": None, "fills": fills, "ramps": []}, ti, tj
 
 
-def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None):
+def _near_node_pairs(pos, radius):
+    """Nearby node pairs in the original (a, b) order, without an all-pairs scan."""
+    if radius <= 0:
+        return
+    bins = {}
+    keys = []
+    for i, p in enumerate(pos):
+        key = (math.floor(p[0] / radius), math.floor(p[1] / radius))
+        keys.append(key)
+        bins.setdefault(key, []).append(i)
+    for a, (x, y) in enumerate(keys):
+        candidates = [b for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                      for b in bins.get((x + dx, y + dy), ()) if b > a]
+        for b in sorted(candidates):
+            if math.hypot(*(pos[a] - pos[b])) < radius:
+                yield a, b
+
+
+def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None, inner_sides=(), pavement=False):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
     has_walk(spec) -> bool; walk_w: sidewalk width. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
@@ -270,6 +289,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
         line_cuts: {fid: [(node xy, branch u, t)]}: that road's markings start t m from the node
                    (beyond its crosswalk)"""
     nodes = {}
+    import roundabouts
+    ring_corridors = roundabouts.corridors(roads)
     for ri, (fid, spec, pts, lon) in enumerate(roads):
         for vi, p in enumerate(pts):
             key = (round(float(p[0]) / NODE_TOL), round(float(p[1]) / NODE_TOL))
@@ -287,10 +308,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             parent[a] = parent[parent[a]]
             a = parent[a]
         return a
-    for a in range(len(jn)):
-        for b in range(a + 1, len(jn)):
-            if math.hypot(*(pos[a] - pos[b])) < MERGE_M:
-                parent[root(a)] = root(b)
+    for a, b in _near_node_pairs(pos, MERGE_M):
+        parent[root(a)] = root(b)
     # and junction nodes joined by a short connector (along a road: the five-way at Fells Point was
     # two nodes 10 m apart)
     node_of = {}
@@ -306,7 +325,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
         on = [(vi, node_of[(ri, vi)]) for vi in range(len(pts)) if (ri, vi) in node_of]
         for (v0, a), (v1, b) in zip(on[:-1], on[1:]):
             L = s_at[v1] - s_at[v0]
-            if L < CONNECTOR_M or L <= CONNECTOR_WIDTHS * max(node_w[a], node_w[b]):
+            if not getattr(spec, 'roundabout', False) and (L < CONNECTOR_M or L <= CONNECTOR_WIDTHS * max(node_w[a], node_w[b])):
                 parent[root(a)] = root(b)
                 reach[ri] = max(reach.get(ri, 0.0), float(L) + 0.5)
                 if a != b:
@@ -363,6 +382,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if ri == rj and n == 2:
                 continue
             spi, spj = roads[ri][1], roads[rj][1]
+            if (roads[ri][0], li) in inner_sides or (roads[rj][0], -lj) in inner_sides:
+                continue                        # the island owns this curb, including its cuts and ramps
             na, nb = node_of[(ri, vi)], node_of[(rj, vj)]
             cr = connector.get(frozenset((na, nb))) if na != nb else None
             if cr is not None and has_walk(spi) and has_walk(spj):
@@ -404,6 +425,11 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             # its own carriageway: no corner, bare ground in the angle, the user's report #46, 2026-10-17)
             for rscale in RADIUS_TRIES:
                 radius = max(RADII.get(spi.cls, RADIUS), RADII.get(spj.cls, RADIUS)) * rscale
+                if pavement:
+                    from roads import has_sidewalks
+                    if not (has_sidewalks(spi) and has_sidewalks(spj)):
+                        radius = max(radius, (12. if spi.cls in {'motorway', 'trunk', 'primary', 'secondary'}
+                                             or spj.cls in {'motorway', 'trunk', 'primary', 'secondary'} else 6.) * rscale)
                 if acute:
                     radius = min(radius, max(ACUTE_R_MIN, ACUTE_T_M * math.tan(math.radians(theta / 2))))
                 Z = _line_x(Pi + ni * (di + radius), ui, Pj - nj * (dj + radius), uj)
@@ -444,6 +470,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 z = np.r_[[_z_along(roads[ri][2], vi, si, t) for t in tpar[:len(pre)]], np.linspace(zi0, zj0, k),
                           [_z_along(roads[rj][2], vj, sj, t) for t in tpar[len(pre) + k:]]]
                 curb = np.c_[curb2, z]
+                if ring_corridors:
+                    from roads import densify
+                    if roundabouts.overlaps(densify(curb, .25), ring_corridors, .1):
+                        continue                # reject before cutting holes for a discarded corner
                 # inward (toward the sidewalk): the polyline's normals, oriented by the arc's centre
                 d = np.gradient(curb2, axis=0)
                 nrm = np.stack([-d[:, 1], d[:, 0]], axis=1)
@@ -474,7 +504,9 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                     if debug is not None:
                         debug.append(('on carriageway', hit[:8], hit in internal, roads[ri][0][:8], roads[rj][0][:8], round(theta), X.round(1).tolist()))
                     continue
-                corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": fill, "ramps": []}
+                corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": fill, "ramps": [],
+                          "road_sides": ((roads[ri][0], li), (roads[rj][0], -lj)),
+                          "edge_cuts": ((Pi.copy(), ui, ci), (Pj.copy(), uj, cj))}
                 corners.append(corner)
                 cuts.setdefault((roads[ri][0], li), []).append((Pi.copy(), ui, ci))
                 cuts.setdefault((roads[rj][0], -lj), []).append((Pj.copy(), uj, cj))
@@ -485,10 +517,14 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 break
             else:
                 continue
+        if pavement:
+            continue                            # pavement alone does not imply pedestrian crossings
         for i in range(n):                      # crosswalk + ramps on a branch with both corners
             if (i, "L") in side_t and (i, "R") in side_t:
                 ai, ri, vi, si, ui, li, Pi = branches[i]
                 spec = roads[ri][1]
+                if getattr(spec, 'roundabout', False):
+                    continue                    # crossings belong on approaches, never across circulation
                 w = spec.width / 2
                 dw = w - (parking_m if has_parking(spec) else 0.0)     # curb to curb at the bulbs
                 t = max(side_t[(i, "L")][0], side_t[(i, "R")][0]) + CW_GAP + CROSSWALK["w"] / 2
@@ -510,11 +546,12 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 crosswalks.append({"a": np.r_[a, z], "b": np.r_[b, z], "w": CROSSWALK["w"]})
                 # the stop line: across the half of the road whose traffic comes into the junction
                 # (right-hand traffic heading along -u drives on u's left), 1 m before the crosswalk
-                ts = t + CROSSWALK["w"] / 2 + STOP_GAP + STOP_LINE["w"] / 2
+                stop_width = roadmarkings.profile(spec.state).solid
+                ts = t + CROSSWALK["w"] / 2 + STOP_GAP + stop_width / 2
                 if _branch_len(roads[ri][2], vi, si) > ts + 2.0:
                     cs = Pi + ui * ts
                     zs = _z_along(roads[ri][2], vi, si, ts)
-                    stops.append({"a": np.r_[cs + nl * 0.2, zs], "b": np.r_[cs + nl * (dw - 0.3), zs], "w": STOP_LINE["w"]})
+                    stops.append({"a": np.r_[cs + nl * 0.2, zs], "b": np.r_[cs + nl * (dw - 0.3), zs], "w": stop_width})
                 t0, t1 = t - CROSSWALK["w"] / 2, t + CROSSWALK["w"] / 2
                 for key, side in (((i, "L"), li), ((i, "R"), -li)):
                     tt, corner, (how, s0, tref), bulb = side_t[key]

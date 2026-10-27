@@ -2,6 +2,7 @@
 and the roads using them (roads.road_specs / carriageway, navgraph lanes)."""
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -45,11 +46,64 @@ class JoinTest(unittest.TestCase):
         bbox = {"bx0": LON - 10 / M_LON, "by0": LAT - 5 / M_LAT, "bx1": LON + 110 / M_LON, "by1": LAT + 5 / M_LAT}
         osmtags.join(f, {9: dict(bbox, name="Main", lanes=6, osm_oneway="yes", sidewalk="separate")})
         self.assertEqual(f.attrs["osm_lanes"][0], 6)
+        self.assertEqual(roads.road_specs(f)[0].lanes, 6)
         self.assertEqual(str(f.attrs["osm_sidewalk"][0]), "separate")
         self.assertEqual(str(f.attrs["osm_oneway"][0]), "", "oneway is not inherited")
         self.assertTrue(np.isnan(f.attrs["osm_lanes"][1]), "the same name 500 m away")
         self.assertTrue(np.isnan(f.attrs["osm_lanes"][2]), "another name inside the bbox")
         self.assertGreater(roads.road_specs(f)[0].width, roads.road_specs(f)[2].width)
+
+    def test_osm_source_need_not_be_first(self):
+        import duckdb
+        import overture
+        with duckdb.connect() as con:
+            source = con.execute(f"""SELECT {overture._ROAD_SRC}.record_id FROM (
+                SELECT [{{'dataset': 'Other', 'record_id': 'external', 'property': ''}},
+                        {{'dataset': 'OpenStreetMap', 'record_id': 'w7@1', 'property': '/properties/name'}},
+                        {{'dataset': 'OpenStreetMap', 'record_id': 'w123@2', 'property': '/geometry'}}] AS sources)""").fetchone()[0]
+        f = tagged([[(0, 0), (200, 0)]], ['motorway'], [source], {123: {'lanes': 5}})
+        self.assertEqual(roads.road_specs(f)[0].lanes, 5)
+
+    def test_global_parquet_query_excludes_node_and_relation_id_collisions(self):
+        import duckdb
+        import rangeread
+        import struct
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'highways.parquet'
+            with duckdb.connect() as con:
+                con.execute('''CREATE TABLE highways AS SELECT type, id, lanes, 'motorway' AS highway,
+                    NULL::VARCHAR AS width, NULL::VARCHAR AS maxspeed, NULL::VARCHAR AS sidewalk,
+                    NULL::VARCHAR AS lit, NULL::VARCHAR AS smoothness, NULL::VARCHAR AS surface,
+                    'yes' AS oneway, NULL::VARCHAR AS layer, NULL::BLOB AS geometry, NULL::VARCHAR AS name,
+                    'roundabout' AS junction,
+                    {'xmin': lon, 'ymin': lat, 'xmax': lon + .001, 'ymax': lat + .001} AS bbox
+                    FROM (VALUES ('way', 1, '4', -84.5, 42.7), ('node', 1, '9', -84.5, 42.7),
+                        ('relation', 1, '8', -84.5, 42.7), ('way', 2, '3', 139.7, 35.7),
+                        ('way', 3, ' 2 ', -.1, 51.5), ('way', 4, '2;3', 12., 45.),
+                        ('way', 5, '2.5', 12., 45.)) t(type, id, lanes, lon, lat)''')
+                wkb = struct.pack('<BII4d', 1, 2, 2, -84.5, 42.7, -84.499, 42.701)
+                con.execute("UPDATE highways SET geometry=? WHERE type='way' AND id=1", [wkb])
+                con.execute('COPY highways TO ? (FORMAT PARQUET)', [str(path)])
+            reader = osmtags.OsmTags(tmp, None)
+            tags, raceways = reader._cell(rangeread.MemoryRange(path.read_bytes()), (-180., -90., 180., 90.), 'demand')
+            self.assertEqual([tags[i]['lanes'] for i in (1, 2, 3)], [4, 3, 2])
+            self.assertEqual(tags[1]['osm_junction'], 'roundabout')
+            self.assertNotIn('lanes', tags[4])
+            self.assertNotIn('lanes', tags[5])
+            self.assertEqual(raceways, [])
+            np.testing.assert_allclose(tags[1]['_coords'], [[-84.5, 42.7], [-84.499, 42.701]])
+            original = reader._reader._fetch
+            calls = []
+            def fail_geometry(*args):
+                calls.append(1)
+                if len(calls) == 2:
+                    raise OSError('geometry block unavailable')
+                return original(*args)
+            with patch.object(reader._reader, '_fetch', side_effect=fail_geometry):
+                tags, _ = reader._cell(rangeread.MemoryRange(path.read_bytes()), (-180., -90., 180., 90.), 'demand')
+            self.assertEqual(tags[1]['lanes'], 4, 'optional geometry failure must not discard received tags')
+            self.assertTrue(tags.incomplete, 'partial enrichment must retry, not cache missing counts forever')
 
 
 class SpecTest(unittest.TestCase):
@@ -58,18 +112,21 @@ class SpecTest(unittest.TestCase):
                    {1: {"lanes": 4}})
         a, b = roads.road_specs(f)
         self.assertEqual(a.lanes, 4)
-        self.assertIsNone(b.lanes)
+        self.assertIsNone(roads._lane_count(f, 1), 'the source count remains unknown')
+        self.assertEqual(b.lanes, 2, 'the widened rural fallback keeps two lanes')
         self.assertGreaterEqual(a.width, 4 * roads.LANE_W["secondary"], "four lanes wide")
         self.assertGreater(a.width, b.width, "wider than the class's guess")
 
-    def test_osm_width_is_the_width(self):
-        f = tagged([[(0, 0), (200, 0)]], ["residential"], ["w1@1"], {1: {"width": 9.0, "lanes": 2}})
-        self.assertAlmostEqual(roads.road_specs(f)[0].width, 9.0)
+    def test_osm_width_respects_the_rural_lane_minimum(self):
+        for width in (9.0, 15.0):
+            f = tagged([[(0, 0), (200, 0)]], ["residential"], ["w1@1"], {1: {"width": width, "lanes": 2}})
+            self.assertAlmostEqual(roads.road_specs(f)[0].width, max(11.0, width))
 
     def test_nonsense_is_not_believed(self):
         f = tagged([[(0, 0), (200, 0)]], ["residential"], ["w1@1"], {1: {"width": 400.0, "lanes": 40}})
         sp = roads.road_specs(f)[0]
-        self.assertIsNone(sp.lanes)
+        self.assertIsNone(roads._lane_count(f, 0), 'reject the invalid mapped count')
+        self.assertEqual(sp.lanes, 2, 'use the rural fallback')
         self.assertLess(sp.width, 40.0)
 
     def test_maxspeed_fills_a_missing_limit(self):

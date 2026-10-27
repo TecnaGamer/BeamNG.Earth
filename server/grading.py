@@ -433,7 +433,8 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP):
     every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
     # the carriageway as a city street would have it (never from the land cover), or the measured one
-    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) if built else spec.width
+    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway,
+                                               spec.lanes, spec.link)) if built and not (spec.roundabout or spec.roundabout_entry) else spec.width
     if spec.median:             # a divided road's carriageway: never over the other one
         width = max(spec.width, roadsmod.dual_cap(spec.median, width))
     plan = Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=width / 2)
@@ -596,6 +597,11 @@ class Grader:
                     self._lower_underpasses(key, plans)
                 except Exception as e:      # as the data has it rather than no grading
                     log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
+            if plans:
+                import roadcorners
+                corners = roadcorners.grade(plans, pspecs)
+                plans.extend(corners)
+                pclip.extend([True] * len(corners))
             # a long road's piece (planned with CLIP_MARGIN_M of the road either side for its profile) kept only within
             # the cell's own box: every stretch of road in one cell's plans, once (overlapping pieces from neighbouring
             # cells counted a road up to 9 times, and every batch of points graded differently: patches of ground
@@ -1087,7 +1093,7 @@ class Grader:
         parts = {}
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         if f is not None and len(f):
-            bs = roadsmod.bridge_specs(f)
+            bs = roadsmod.bridge_specs(f, None, self.widths)
             rs = roadsmod.road_specs(f, None, self.widths) if ground else [None] * len(f)
             for i in range(len(f)):
                 if bs[i] is None and rs[i] is None:
@@ -1808,6 +1814,29 @@ class GradedDem:
     def sample(self, lat, lon, zoom, progress=None):
         base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
         return self._grader.apply(lat, lon, base)
+
+    def bridge_approaches(self, frame, box):
+        """Whether this tile contains bridge ends needing the physics lattice's detail.
+
+        Coarse 4/8 m triangles can cut through the narrow approach fill even when
+        their sampled heights were graded correctly. Only those tiles need the
+        finer adaptive ground mesh; ordinary distant terrain stays inexpensive.
+        """
+        x0, y0, x1, y1 = box
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1]), np.array([y0, y1]), 0.0)
+        for key in mapcells.cells_for_bbox(float(min(la)), float(min(lo)), float(max(la)), float(max(lo))):
+            try:
+                cell = self._grader._cell_enu(key, ground=False)
+            except Exception as e:  # missing map data must not prevent the terrain tile from loading
+                log.debug("bridge approach detail: %s: %s", key, e)
+                continue
+            if cell is None:
+                continue
+            ends = np.asarray(cell['ends'])
+            if len(ends) and np.any((ends[:, 0] >= x0 - 10) & (ends[:, 0] <= x1 + 10)
+                                    & (ends[:, 1] >= y0 - 10) & (ends[:, 1] <= y1 + 10)):
+                return True
+        return False
 
     def __getattr__(self, name):
         return getattr(self._dem, name)

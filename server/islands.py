@@ -10,6 +10,7 @@ a curbed island along it (a sidewalk run of ISLAND_BAND_M inward) and the inside
 planting). Pure.
 """
 import math
+from itertools import chain
 
 import numpy as np
 
@@ -84,10 +85,12 @@ def _graph(roads_list):
     return edges, adj
 
 
-def _cycles(edges, adj, max_edges=MAX_EDGES, max_loop=MAX_LOOP_M):
+def _cycles(edges, adj, max_edges=MAX_EDGES, max_loop=MAX_LOOP_M, eligible=None):
     """Each short cycle of the road graph once: [(edge index, traversed from its start)]."""
     seen = set()
     for k0, (_, _, _, a0, b0, L0) in enumerate(edges):
+        if eligible is not None and k0 not in eligible:
+            continue
         if a0 == b0:                                    # a closed road: a loop by itself
             cycles = [[(k0, True)]]
         else:
@@ -98,6 +101,8 @@ def _cycles(edges, adj, max_edges=MAX_EDGES, max_loop=MAX_LOOP_M):
                 if len(path) > max_edges or L > max_loop:
                     continue
                 for k in adj.get(n, []):
+                    if eligible is not None and k not in eligible:
+                        continue
                     if any(k == q for q, _ in path):
                         continue
                     _, _, _, a, b, Lk = edges[k]
@@ -125,7 +130,7 @@ RING_ROUND = 0.82           # this round: a ring if RING_ONEWAY_SHARE of it is o
 RING_ONEWAY_SHARE = 0.5
 
 
-def ring_directions(roads_list, left_hand=False):
+def ring_directions(roads_list, left_hand=False, obstacles=()):
     """{fid: direction along its geometry} of roundabout rings: small loops round as a circle, or nearly that round and at least
     half one-way, all those driven the same way round (spec.dir: +1 along the geometry, -1 against). A junction on a ring gets no
     signals or stop signs (furniture.junction_controls): a ring entry looked like a crossroads of three major roads,
@@ -153,6 +158,9 @@ def ring_directions(roads_list, left_hand=False):
             members = {k for k, _ in cyc}
             if any(_crosses(poly, e[2]) for j, e in enumerate(edges) if j not in members):
                 continue
+            fids = {edges[k][0] for k in members}
+            if any(_crosses(poly, p) for fid, _, p, _ in obstacles if fid not in fids):
+                continue
             forward = along[0] if along else (signed_area > 0) != bool(left_hand)
             for k, fwd in cyc:
                 out[edges[k][0]] = 1 if fwd == forward else -1
@@ -170,18 +178,25 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
     structures: building centres (x, y); a loop round one is a block, not an island."""
     edges, adj = _graph(roads_list)
     found = []
-    for cyc in _cycles(edges, adj):
+    ring_edges = {k for k, e in enumerate(edges) if getattr(e[1], 'roundabout', False)}
+    seen = set()
+    for cyc in chain(_cycles(edges, adj),
+                     _cycles(edges, adj, RING_MAX_EDGES, RING_MAX_LOOP_M, ring_edges)):
         key = {k for k, _ in cyc}
+        if frozenset(key) in seen:
+            continue
+        seen.add(frozenset(key))
+        roundabout = key <= ring_edges
         L = sum(edges[k][5] for k, _ in cyc)
         ow = sum(edges[k][5] for k, _ in cyc if is_oneway(edges[k][1]))
-        if L > MAX_LOOP_M or ow < ONEWAY_SHARE * L:
+        if L > (RING_MAX_LOOP_M if roundabout else MAX_LOOP_M) or ow < ONEWAY_SHARE * L:
             continue
         parts = [edges[k][2] if fwd else edges[k][2][::-1] for k, fwd in cyc]
         poly = np.concatenate([p[:-1, :2] for p in parts])
         area = _area(poly)
-        if not (MIN_AREA_M2 <= abs(area) <= MAX_AREA_M2):
+        if not (MIN_AREA_M2 <= abs(area) <= (RING_MAX_AREA_M2 if roundabout else MAX_AREA_M2)):
             continue
-        if any(_inside(poly, c) for c in structures):
+        if not roundabout and any(_inside(poly, c) for c in structures):
             continue                                # a building inside: a city block, not an island
         if any(_crosses(poly, edges[j][2]) for j in range(len(edges)) if j not in key):
             continue                                # a road through it (a turn lane across the triangle, not
@@ -197,7 +212,10 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
         if not ccw:
             poly = poly[::-1]
         z = float(np.mean(np.concatenate([edges[k][2][:, 2] for k, _ in cyc])))
-        ring = _island_ring(poly, [(edges[k][2][:, :2], edges[k][1].width / 2.0) for k, _ in cyc], z)
+        # Splitter islands beside a roundabout also clear neighbouring ring arcs,
+        # not only the three roads enclosing their own loop.
+        clearance = key | ring_edges
+        ring = _island_ring(poly, [(edges[k][2][:, :2], edges[k][1].width / 2.0) for k in sorted(clearance)], z)
         found.append({"poly": poly, "inner": inner, "ring": ring})
     return found
 

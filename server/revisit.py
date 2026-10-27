@@ -45,8 +45,16 @@ def code_key():
         if not _code:
             here = os.path.dirname(os.path.abspath(__file__))
             h = hashlib.sha1()
+            # Frozen modules live inside PYZ, so scanning for *.py alone gave
+            # every custom EXE the same key when its native module was unchanged.
+            # Include the build's source fingerprint as well as the native bytes.
+            import peerwork
+            h.update(b"server-code\0" + peerwork.code_id().encode("ascii"))
             for name in sorted(os.listdir(here)):
-                if name.endswith(".py") or name.startswith("earthfast"):
+                # Packaged Python modules live in an archive, not beside __file__.
+                # The build writes their fingerprint here; otherwise two executables
+                # with different bridge solvers reuse the same old collision meshes.
+                if name == "CODE_ID" or name.endswith(".py") or name.startswith("earthfast"):
                     try:
                         with open(os.path.join(here, name), "rb") as f:
                             h.update(name.encode() + b"\0" + f.read())

@@ -1,0 +1,48 @@
+{
+  "bne_merge_yellow": {
+    "name": "bne_merge_yellow",
+    "mapTo": "bne_merge_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.67,
+          0.015,
+          1.0
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true,
+    "doubleSided": true
+  },
+  "bne_merge_black": {
+    "name": "bne_merge_black",
+    "mapTo": "bne_merge_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.008,
+          0.01,
+          0.009,
+          1.0
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true,
+    "doubleSided": true
+  }
+}

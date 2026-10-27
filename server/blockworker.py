@@ -301,7 +301,8 @@ def _bridges(aid, frame, elev):
         bridges = _s.bridges.get(aid)
         if bridges is None:
             bridges = _s.bridges[aid] = roadsmod.BridgeProfiles(
-                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev)
+                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev,
+                getattr(_s.surface, 'urban', None), _s.widths)
             sea = getattr(_s, "sea", None)
             bridges.wet = sea.depth if sea is not None else None        # (decks clear the water: roads.water_clear)
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
@@ -324,7 +325,8 @@ def _nav_bridges(aid, frame, elev):
         bridges = nav.get(aid)
         if bridges is None:
             bridges = nav[aid] = roadsmod.BridgeProfiles(
-                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev)
+                frame, lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"), elev,
+                getattr(_s.surface, 'urban', None), _s.widths)
             sea = getattr(_s, "sea", None)
             bridges.wet = sea.depth if sea is not None else None
             bridges.infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get(
@@ -456,6 +458,15 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     import rails as railsmod
     import roadmesh as roadmeshmod
     import roads as roadsmod
+    started = checkpoint = time.perf_counter()
+    stages = []
+
+    def timed(name):
+        nonlocal checkpoint
+        now = time.perf_counter()
+        stages.append((name, now - checkpoint))
+        checkpoint = now
+
     frame = geodesy.EnuFrame(lat, lon)
     # everything the tile will ask for, fetched at once (one after another, a fresh place's first tile took ~1 min)
     _s.md.warm(roadsmod.tile_needs(frame, tx, ty, buildings, _s.widths is not None,
@@ -463,12 +474,14 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     g, _ = _s.anchor(aid, lat, lon)
     cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
              for k in roadsmod.cells_of_tile(frame, tx, ty)]
+    timed("map/anchor")
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
         z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     bridges = _bridges(aid, frame, elev)
     tunnels = tunnel_profiles(aid, frame, elev, g)
+    timed("profiles")
     walks = []
     urban = _s.surface.urban if _s.surface is not None else None
     fuel, skip, fuel_cuts, fuel_pads = [], frozenset(), [], []
@@ -487,6 +500,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         items = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
                                              skip=skip)
         town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
+    timed("sites/buildings")
     rwalls = []
     ctx = []
     box = roadsmod.tile_bbox(tx, ty)
@@ -505,6 +519,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover,
                                  signals=furniture.signals_for(_s.md, frame,
                                                                roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+    timed("layout")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -521,8 +536,10 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
             import gasstations
             park = gasstations.clear_park(park, fuel)
         buildingsmod.brick_walks(walks, items, lat, lon)
+    timed("props/parking")
     mesh = roadmeshmod.build(frame, chunks, elev, (x0, y0, 0.0), lift, clip=box, follow=True, q=q, drawn=drawn)
     mesh = _with_plazas(mesh, frame, tx, ty, elev, (x0, y0, 0.0), getattr(_s, "surface", None))
+    timed("ground mesh")
     dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(roadsmod.tile_bbox(tx, ty)), ctx,
                               bridges.beams_in(roadsmod.tile_bbox(tx, ty)), ground=cover)
     tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
@@ -537,8 +554,27 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     if buildings:
         import buildings as buildingsmod
         bld = buildingsmod.road_tile(frame, tx, ty, _s.md, elev, None, None, items)
-    return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
-                               bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel, rail_mesh=rmesh) + (fuel_pads,)
+    timed("structures/rails")
+    result = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
+                                bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel, rail_mesh=rmesh) + (fuel_pads,)
+    timed("write")
+    elapsed = checkpoint - started
+    if elapsed >= 10.:
+        log.info("roads tile (%d, %d) anchor %s: %.2f s; %s", tx, ty, aid, elapsed,
+                 ", ".join("%s %.2f s" % stage for stage in stages))
+    return result
+
+
+def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True):
+    """Sign-only counterpart of Server.build_signs_tile, isolated from road workers."""
+    import signstream
+    g, _ = _s.anchor(aid, lat, lon)
+    frame = geodesy.EnuFrame(lat, lon)
+    def elev(la, lo):
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    return signstream.build_tile(_s.md, frame, aid, tx, ty, elev, out_dir, vfs_dir,
+                                 getattr(_s.surface, 'urban', None), _s.widths, left_hand, mph)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):
@@ -654,7 +690,7 @@ def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
 
 
 def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
-    """farfield.build_tile here (far-tile workers: the geometry, graded at levels <= 0 like the block, is
+    """farfield.build_tile here (far-tile workers: geometry graded through ROAD_GRADE_MAX_LEVEL is
     most of a far tile's cost; its texture is rendered in the server, where the imagery corrections live).
     Returns the Built; one built in this anchor's place before comes from the revisit cache."""
     import revisit
@@ -706,7 +742,7 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
     if _s.sea is not None:
         base = seacarvemod.SeaDem(base, _s.sea if tile.level <= seacarvemod.CARVE_MAX_LEVEL else None)
-    src = gradingmod.GradedDem(base, g) if (g is not None and tile.level <= 0) else base
+    src = gradingmod.GradedDem(base, g) if (g is not None and tile.level <= farfield.ROAD_GRADE_MAX_LEVEL) else base
     return farfield.build_tile(frame, src, tile, zoom, q, ref_zoom, with_sink=with_sink,
                                layout=layout)
 

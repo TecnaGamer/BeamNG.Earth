@@ -6,7 +6,7 @@
 --     heading (others(): the world map's arrows); the cars of a
 --     player whose anchor is not known (no BeamNG.Earth, or not heard yet) are deactivated here: they would stand in
 --     the wrong place;
---   - bngeGoTo { lat, lon }: on joining, a teleport to where the others are.
+--   - bngeGoTo { lat, lon, resume?, height?, heading?, token? }: on joining, our server checkpoint or the others' place.
 -- Damage: BeamMP sends parts that break off (break groups) but not dents; its own full-damage message (nodesVE.getNodes:
 -- every node and beam, applied on the other players' copies by its nodesGE) is never sent. This sends our own cars'
 -- damage on BeamMP's full-damage path (nodesGE.sendNodes), as only the beams broken or bent (DAMAGE_VE: tens of KB for
@@ -63,6 +63,7 @@ local floating = {}         -- game vehicle id -> true: floating here (off our b
 local poseIn, hideIn = 0, 0
 local joined = false        -- BeamMP joined and no pose sent yet: the first pose asks for the meeting place
 local wentTo = false        -- the session's one bngeGoTo done
+local restore, resumeAck = nil, nil -- server checkpoint being restored / completed token
 local camPlaced = false     -- the free camera put on the ground once (BeamMP joins without a car)
 local lastPlayers = -1      -- (the log: the player count as last logged)
 local stats = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }
@@ -504,17 +505,33 @@ local function onGoTo(data)
   local c = core()
   stats.go = stats.go + 1
   if test.late and testClock < M.TEST_LATE_S then lateGoTo = data; return end
-  if wentTo or not ok or type(d) ~= 'table' or not c then return end
+  if not ok or type(d) ~= 'table' or not c then return end
   local lat, lon = tonumber(d.lat), tonumber(d.lon)
-  if not lat or not lon then return end
-  wentTo = true
+  if not lat or not lon or lat ~= lat or lon ~= lon or math.abs(lat) > 90 or math.abs(lon) > 180 then return end
+  if d.resume == true then
+    if resumeAck or restore then return end
+    local pose = {version=1, sequence=1, lat=lat, lon=lon, height=tonumber(d.height), heading=tonumber(d.heading)}
+    if not require('beamngEarth/resume').valid(pose) or type(d.token) ~= 'string' or #d.token > 80 then return end
+    if not restore then restore = {data=d, retry=0} end
+    return -- exact saved coordinates; the 12 m meeting-place offset does not apply
+  end
+  -- Ignore legacy join teleports unless the server explicitly opts in. A saved
+  -- checkpoint can supersede an earlier meeting teleport, never the reverse.
+  if wentTo or restore or resumeAck or not config or config.joinNearPlayers ~= true then return end
   -- beside the other player, not on it (12 m east)
   lon = lon + M.GOTO_OFFSET_M / (111320 * math.max(0.01, math.cos(math.rad(lat))))
   log('I', 'beamngEarth', string.format('BeamMP: to the other players at %.5f, %.5f', lat, lon))
-  c.teleport(lat, lon, nil, { record = false })
+  wentTo = c.teleport(lat, lon, nil, { record = false }) ~= false
 end
 
 onGoToRef = onGoTo
+
+local function onGuestIdentity(data)
+  local ok, value = pcall(jsonDecode, data)
+  if ok and type(value)=='table' and require('beamngEarth/mpidentity').store(value.token) then
+    poseIn = 0 -- acknowledge only after the token has been safely written to this profile
+  end
+end
 
 -- No car yet (BeamMP joins without one): the free camera, left at the level's spawn point under the generated
 -- ground, put once on the ground at the origin (where the vehicle selector spawns the car); and lifted back over the
@@ -555,7 +572,27 @@ M.placeCamera = placeCamera     -- (tests)
 -- BeamMP's join done (core.lua onBeamMPPostJoin): the first pose asks the plugin where the others are.
 function M.onPostJoin()
   joined, wentTo, camPlaced, goTo = true, false, false, nil
+  restore, resumeAck = nil, nil
   anchors = {}
+  require('beamngEarth/mpidentity').reset()
+end
+
+local function restoreStep(dt)
+  if not restore then return end
+  local c = core()
+  if not c or not c.restoreMultiplayer or not c.multiplayerRestoreStatus then return end
+  local status = c.multiplayerRestoreStatus(restore.data.token)
+  if status == 'ready' then
+    resumeAck, restore, wentTo = restore.data.token, nil, true
+    poseIn = 0 -- acknowledge only after terrain and our own vehicle are placed
+    return
+  end
+  restore.retry = restore.retry - (dt or 0)
+  if status == 'retry' and restore.retry <= 0 then
+    restore.retry = M.POSE_S
+    c.restoreMultiplayer(restore.data)
+    camPlaced = false
+  end
 end
 
 -- Is (x, y) m or more inside our terrain block (nil: no block known)?
@@ -821,8 +858,10 @@ function M.update(dt, anchor, player)
     AddEventHandler('bngeGoTo', onGoTo, 'beamngEarth')
     AddEventHandler('bngePeers', onPeers, 'beamngEarth')
     AddEventHandler('bngeConfig', onConfig, 'beamngEarth')
+    AddEventHandler('bngeGuestIdentity', onGuestIdentity, 'beamngEarth')
     handlers = true
   end
+  restoreStep(dt)
   local mpanchor = require('beamngEarth/mpanchor')
   mpanchor.install()            -- (a no-op once installed, and until BeamMP's positionGE has loaded)
   M.wrapNodes()
@@ -932,8 +971,12 @@ function M.update(dt, anchor, player)
       local ok, nx, ny = pcall(anchor.northAt, anchor, player.x, player.y)
       if ok and tonumber(nx) and tonumber(ny) then h = (h - math.deg(math.atan2(nx, ny)) + 360) % 360 end
     end
+    local guestToken, guestResume = require('beamngEarth/mpidentity').identity()
     TriggerServerEvent('bngePose', jsonEncode({ v = M.PROTO, aLat = anchor.lat, aLon = anchor.lon, lat = lat,
       lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
+      resume = 1, vehicleResume = 1, resumeAck = resumeAck,
+      guestToken = guestToken, guestResume = guestResume, clientRuntime = require('beamngEarth/runtime').REVISION,
+      progress = not restore and core() and core().drivingPose and core().drivingPose() or nil,
       sp = share and share.port or nil, sc = share and share.code or nil, sw = share and share.weight or nil }))
     stats.poses = stats.poses + 1
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
@@ -1086,6 +1129,8 @@ end
 
 -- The session's end (BeamMP left, the level's end): the deactivated cars back on, everything forgotten.
 function M.reset()
+  restore, resumeAck = nil, nil
+  require('beamngEarth/mpidentity').reset()
   for gid in pairs(deactivated) do
     local veh = vehicle(gid)
     if veh then veh:setActive(1) end

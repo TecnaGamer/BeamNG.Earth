@@ -2,6 +2,8 @@
 -- once the mod is mounted. 'manual' keeps the extension loaded across level changes, and the mod manager loads
 -- every 'manual' extension right after the modScripts (loadManualUnloadExtensions): an extensions.load here
 -- logs a deprecation warning per call.
+-- dofile is deliberate: require() could return the local app's older cached copy.
+dofile('/lua/ge/extensions/beamngEarth/runtime.lua').refresh()
 setExtensionUnloadMode('beamngEarth_core', 'manual')
 -- The pause-menu settings page's Lua side (settings.lua) and the dev tools (dev.lua: everything off
 -- until the player turns something on; its hooks return at their first line meanwhile).

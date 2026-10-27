@@ -26,7 +26,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes.
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
-  shrubs), autumn colours in season.
+  shrubs), autumn colours in season. **Tree density** under World options offers Very Low, Low, Medium, High
+  (the original density), Very High and Max. Changes apply gradually; higher presets fill out distant woods
+  up to the available canopy data. Rocks, shrubs and road signs keep their normal density.
 - Buildings from Overture / OpenStreetMap with regional styles (US siding and brick, Alpine chalets, Nordic
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
   porches, churches with steeples, glass towers, far-away buildings drawn as a skyline.
@@ -39,6 +41,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   line) and tram tracks (street track where trams run on the road).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
+- Highway exit and advance signs, overhead destinations with route shields, merge warnings and Interstate mile
+  markers. Toggle **Highway Signs** under World settings; coverage follows mapped sign data and the bundled mile
+  references. See [docs/HIGHWAY_SIGNS.md](docs/HIGHWAY_SIGNS.md) for this custom migration.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
   road's two decks joined across a narrow median; tunnels through hills, with portals, lights and low arches where
@@ -236,7 +241,10 @@ BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive t
 
 Leaving a server turns BeamNG.Earth back on (joining one switches your other mods off).
 
-You are sent to where the others are. Cars show in the right place in everyone's world; other players show on the
+Returning players resume their server-saved position, heading and vehicle. Saves from the modified 1.6.2 version
+remain compatible; keep both checkpoint files when updating (see [server save instructions](beammp/README.md#saved-player-positions)).
+Players without a checkpoint stay at their starting location unless the server enables joining near others.
+Cars show in the right place in everyone's world; other players show on the
 world map (**M**) as green arrows; players far away (another country) are hidden until you meet. Crash damage: a crash
 you watch keeps the damage your own game worked out; a car that crashed out of your sight takes on its owner's damage
 (broken parts and dents) once it comes within about 0.6 miles.

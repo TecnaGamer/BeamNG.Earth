@@ -52,9 +52,10 @@ MATERIALS = (
     ("bngEarthGroundMud", "MUD"),
     ("bngEarthGroundCobble", "COBBLESTONE"),      # roads with paving stones / setts (roads.py "cobble")
     ("bngEarthGroundLawn", "GRASS"),              # mown yards in towns (short grass only, groundcover.lua)
+    ("bngEarthGroundGravelRoad", "GRAVEL"),      # explicit road correction; retain other loose-ground physics
     ("beamngEarthDirt", "DIRT"),
 )
-ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, DIRT = range(len(MATERIALS))
+ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, GRAVEL_ROAD, DIRT = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -213,9 +214,9 @@ def warp(lat, lon):
 
 
 # road surface kind (roads.py) -> material; drawn in this order (paved last: it wins at junctions)
-ROAD_MATERIAL = {"dirt": DIRT, "gravel": LOOSE, "cobble": COBBLE, "paved": ASPHALT,
+ROAD_MATERIAL = {"dirt": DIRT, "gravel": LOOSE, "gravel_road": GRAVEL_ROAD, "cobble": COBBLE, "paved": ASPHALT,
                  "rock": ROCK, "grass": GRASS}     # rock and grass roads: the ground's own materials (roads.terrain_surface)
-ROAD_ORDER = ("dirt", "gravel", "rock", "grass", "cobble", "paved")
+ROAD_ORDER = ("dirt", "gravel", "rock", "grass", "cobble", "paved", "gravel_road")
 
 
 def grid_affine(lat, lon):
@@ -340,7 +341,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     for k in ROAD_ORDER:
         m = np.asarray(layers[k]) > 0
         out[m] = ROAD_MATERIAL[k]
-    return out
+    import roadcorners
+    return paint_pads(out, lat, lon, roadcorners.pads(feats_list, urban_fn, widths))
 
 
 # Roads in the ground (the user, 2026-10-22: "I dont love that we are applying a floating road texture over the normal
@@ -352,7 +354,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
 # colour and opacity by surface, blended in this order (paved last: it wins at junctions); a trace of the photo is kept
 # (stains, patches), and most of it on unpaved tracks, which the photo shows well and a flat colour drew as stripes
 PHOTO_ROAD_RGBA = {"dirt": (122, 104, 82, 0.45), "gravel": (128, 118, 102, 0.6), "cobble": (112, 104, 96, 0.85),
-                   "paved": (95, 95, 94, 0.92)}
+                   "paved": (95, 95, 94, 0.92), "gravel_road": (126, 128, 132, 0.85),
+                   "gravel_tracks": (216, 209, 190, 0.7)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 
 
@@ -387,7 +390,19 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
                     continue
                 segs.append(np.stack([c[:-1], r[:-1], c[1:], r[1:]], axis=1))
                 hws.append(np.full(len(c) - 1, hw))
-                kind.append(np.full(len(c) - 1, kinds.index(sp.kind), np.uint8))
+                kind.append(np.full(len(c) - 1, kinds.index(sp.material if sp.material in PHOTO_ROAD_RGBA else sp.kind), np.uint8))
+                if sp.material == 'gravel_road':
+                    # The distant photo keeps the same two pale wheel paths as the near
+                    # draped material. These are colour only: the entire road stays GRAVEL.
+                    track_w = roadsmod.gravel_track_width(sp.width)
+                    line = np.c_[e, n, np.zeros(len(e))]
+                    for side in (-1, 1):
+                        track = roadsmod.offset_polyline(line, side * track_w * 0.24)
+                        tc = (track[:, 0] - x0) * px_m
+                        tr = (y0 + size - track[:, 1]) * px_m
+                        segs.append(np.stack([tc[:-1], tr[:-1], tc[1:], tr[1:]], axis=1))
+                        hws.append(np.full(len(tc) - 1, track_w * 0.11 * px_m))
+                        kind.append(np.full(len(tc) - 1, kinds.index('gravel_tracks'), np.uint8))
     if not segs:
         return None
     return np.concatenate(segs), np.concatenate(hws), np.concatenate(kind)
@@ -423,6 +438,8 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
     (earthfast.paint_lines, PHOTO_ROAD_RGBA). Pure (a new array)."""
     fast.require(49, "roads in the ground")
     h, w = rgb.shape[:2]
+    import roadcorners
+    rgb = photo_pads(rgb, frame, x0, y0, size, roadcorners.pads(feats_list, urban_fn, widths, frame))
     got = _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn, widths)
     if got is None:
         return rgb
@@ -483,6 +500,10 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
         return None
     pads = pads_mask(frame, x0, y0, size, px, _square_pads(frame, x0, y0, size, surface))
     feats = _square_roads(frame, x0, y0, size, surface)
+    import roadcorners
+    corner_mask = pads_mask(frame, x0, y0, size, px, roadcorners.pads(feats, surface.urban, widths, frame))
+    if corner_mask is not None:
+        pads = corner_mask if pads is None else np.maximum(pads, corner_mask)
     got = _road_segments(frame, x0, y0, size, px, px, feats, surface.urban, widths) if feats else None
     if got is None:
         return pads

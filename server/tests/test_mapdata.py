@@ -773,6 +773,32 @@ class DeterminismTest(Sources, SmallBlocks, unittest.TestCase):
 
 @needs_duckdb
 class CacheTest(Sources, SmallBlocks, unittest.TestCase):
+    def test_failed_osm_enrichment_retries_through_memory_mirror_and_disk(self):
+        import osmtags
+        md, _ = self.mapdata()
+        with mock.patch.object(osmtags.OsmTags, 'cell', side_effect=netfetch.Deferred('busy')):
+            first = md.cell(mf.CELL, ('roads',)).layers['roads']
+        self.assertFalse(np.isfinite(first.attrs['osm_lanes']).any())
+        self.assertTrue(first._osm_incomplete)
+        self.assertNotIn('_bnge_cell', first.__dict__, 'partial lane data must not populate durable road facts')
+        with np.load(md.path(mf.CELL, 'roads')) as data:
+            retry = float(data['_osm_retry_at'])
+        # Before expiry the cached fallback is usable; after expiry all three
+        # cache layers must let a successful OSM response replace it.
+        with mock.patch.object(osmtags.OsmTags, 'cell', return_value=({1: {'lanes': 2}}, [])) as request:
+            with mock.patch('revisit.fault') as fault:
+                md.cell(mf.CELL, ('roads',))
+            fault.assert_called_once()
+            request.assert_not_called()
+            with mock.patch.object(mapdata.time, 'time', return_value=retry+1):
+                second = md.cell(mf.CELL, ('roads',)).layers['roads']
+            request.assert_called_once()
+        self.assertTrue(np.isfinite(second.attrs['osm_lanes']).any())
+        self.assertFalse(getattr(second, '_osm_incomplete', False))
+        self.assertIn('_bnge_cell', second.__dict__)
+        with np.load(md.path(mf.CELL, 'roads')) as data:
+            self.assertNotIn('_osm_retry_at', data.files)
+
     def test_layout_and_hits(self):
         cache = os.path.join(self.tmp, "cache")
         md, t = self.mapdata(cache=cache)

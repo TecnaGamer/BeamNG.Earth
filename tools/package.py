@@ -68,6 +68,9 @@ def beammp_zip(out_dir, ver):
     with zipfile.ZipFile(mod, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in tree_files("mod/beamng_earth"):
             z.write(os.path.join(ROOT, "mod/beamng_earth", rel), rel)
+        # Server-only bootstrap replaces a local app's cached Lua runtime before joining.
+        for rel in tree_files("beammp/Client"):
+            z.write(os.path.join(ROOT, "beammp/Client", rel), rel)
     path = os.path.join(out_dir, f"BeamNG.Earth-BeamMP-Server-{ver}.zip")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr("Resources/Client/beamng_earth.zip", mod.getvalue(), zipfile.ZIP_STORED)

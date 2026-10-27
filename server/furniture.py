@@ -517,7 +517,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
                                  round(yaw_fn(out), 1), 1.0, height, 0.0])
         rule = LAMP_SPACING.get(spec.cls)
-        if town and spec.cls in TOWN_POLE_CLASSES:
+        if town and spec.cls in TOWN_POLE_CLASSES and spec.utility_poles:
             # towns and suburbs: wooden utility poles along one side, wired, a cobra-head lamp on every other
             pole_side = 1 if _h01(fid, "side") < 0.5 else -1
             if side == pole_side:
@@ -569,7 +569,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     if speeds:
         rows.extend(speed_signs(roads, speeds, box, left_hand, mph))
     for fid, spec, line, _ in roads:
-        if spec.urban or fid in lit or spec.cls not in POLE_CLASSES or len(line) < 2:
+        if spec.urban or fid in lit or spec.cls not in POLE_CLASSES or len(line) < 2 or not spec.utility_poles:
             continue
         side = 1 if _h01(fid, "pside") < 0.5 else -1
         phase = _h01(fid, "pphase") * POLE_SPACING

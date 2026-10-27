@@ -88,11 +88,16 @@ THEME_LICENCES = {
 }
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
+_ROAD_WAY = "s.dataset = 'OpenStreetMap' AND regexp_matches(s.record_id, '^w[0-9]+')"
+_ROAD_SRC = (f"coalesce(list_filter(sources, s -> {_ROAD_WAY} AND s.property = '/geometry')[1], "
+             f"list_filter(sources, s -> {_ROAD_WAY} AND coalesce(s.property, '') = '')[1], "
+             f"list_filter(sources, s -> {_ROAD_WAY})[1], sources[1])")
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
-                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}",
+                  cols=f"subtype, class, subclass, {_NAME}, {_ROAD_SRC}.dataset AS src_dataset, "
+                       f"{_ROAD_SRC}.record_id AS src_record",
                   text=("subtype", "class", "subclass", "name", "src_dataset", "src_record"),
                   extra="road_flags, rail_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
                         "subclass_rules, access_restrictions",

@@ -1,4 +1,36 @@
 {
+  "bne_median_cable_steel": {
+    "name": "bne_median_cable_steel", "mapTo": "bne_median_cable_steel",
+    "class": "Material", "version": 1.5,
+    "Stages": [{"baseColorFactor": [0.62, 0.66, 0.67, 1], "metallicFactor": 0.75, "roughnessFactor": 0.48}, {}, {}, {}],
+    "groundType": "METAL", "castShadows": true, "translucent": false
+  },
+  "bne_median_cable_reflector": {
+    "name": "bne_median_cable_reflector", "mapTo": "bne_median_cable_reflector",
+    "class": "Material", "version": 1.5,
+    "Stages": [{"baseColorFactor": [0.95, 0.56, 0.10, 1], "metallicFactor": 0.1, "roughnessFactor": 0.25}, {}, {}, {}],
+    "groundType": "METAL", "castShadows": true, "translucent": false
+  },
+  "bne_ky_barrier_concrete": {
+    "name": "bne_ky_barrier_concrete",
+    "mapTo": "bne_ky_barrier_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png",
+        "baseColorFactor": [0.78, 0.75, 0.68, 1],
+        "roughnessFactor": 0.9,
+        "metallicFactor": 0
+      }, {}, {}, {}
+    ],
+    "groundType": "CONCRETE",
+    "castShadows": true,
+    "translucent": false
+  },
   "bne_rail_ballast": {
     "name": "bne_rail_ballast",
     "mapTo": "bne_rail_ballast",
@@ -475,5 +507,64 @@
     ],
     "groundType": "CONCRETE",
     "translucent": false
+  },
+  "bne_road_gravel": {
+    "name": "bne_road_gravel",
+    "mapTo": "bne_road_gravel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0ec687bb-0a90-4c48-a7a5-dc0234dc2153",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/dirt/road_gravel/t_dirt_road_02_b.color.png",
+        "normalMap": "/assets/materials/decalroad/dirt/road_dirt/t_dirt_road_gravels_02_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/dirt/m_dirt_road_01/t_dirt_road_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/decalroad/dirt/m_dirt_road_01/t_dirt_road_ao.data.png",
+        "opacityMap": "/assets/materials/decalroad/dirt/m_dirt_road_01/t_dirt_road_o.data.png",
+        "detailNormalMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_nm.png",
+        "detailNormalMapStrength": 0.35,
+        "detailScale": [2.85, 6],
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.85,
+          0.87,
+          0.9,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRAVEL",
+    "castShadows": false,
+    "translucent": true,
+    "translucentZWrite": true
+  },
+  "bne_road_gravel_tracks": {
+    "name": "bne_road_gravel_tracks",
+    "mapTo": "bne_road_gravel_tracks",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "cc0ec6e0-3822-40c4-8f72-fcc06c484254",
+    "Stages": [
+      {
+        "baseColorFactor": [0.72, 0.68, 0.57, 1],
+        "normalMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_variation_02_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_variation_02_o.data.png",
+        "roughnessMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_variation_02_r.data.png",
+        "detailNormalMap": "/assets/materials/terrain/soil/t_gravel/t_gravel_nm.png",
+        "detailNormalMapStrength": 0.18,
+        "detailScale": [2.4, 20],
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRAVEL",
+    "castShadows": false,
+    "translucent": true,
+    "translucentZWrite": true
   }
 }

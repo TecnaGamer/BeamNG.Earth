@@ -22,6 +22,7 @@ import argparse
 import glob
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 
@@ -29,6 +30,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAME = "BeamNG.Earth"
 IS_WIN = os.name == "nt"
 SEP = ";" if IS_WIN else ":"
+
+# Some Python distributions load certificate policy data beside ssl.py even
+# before default trust roots are loaded. certifi does not replace that file.
+SSL_SUPPORT_FILES = ("codex-rejected-cas.pem",)
+
+
+def ssl_data_files():
+    """Preserve the build interpreter's TLS policy in the frozen runtime.
+
+    The Codex Python runtime's SSLContext constructor needs its rejection list.
+    Omitting it makes *every* HTTPS request fail with FileNotFoundError, even
+    with a CA bundle present. Stock Python needs no additional file here.
+    """
+    ssl.create_default_context()  # fail before packaging if this runtime is unusable
+    directory = os.path.dirname(ssl.__file__)
+    return [os.path.join(directory, name) for name in SSL_SUPPORT_FILES
+            if os.path.isfile(os.path.join(directory, name))]
 
 
 def version():
@@ -129,6 +147,7 @@ BOOT_SHIM = ("import sys\n"
 
 
 def pyinstaller(work, ico, onefile, ver=None, boot=None):
+    ssl_files = ssl_data_files()
     server = os.path.join(ROOT, "server")
     mods = sorted(os.path.splitext(os.path.basename(p))[0] for p in glob.glob(os.path.join(server, "*.py")))
     cmd = [sys.executable] + (["-c", BOOT_SHIM, boot] if boot else ["-m", "PyInstaller"])
@@ -141,6 +160,11 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
            "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}."]     # (bridgetypes.WD_PATH)
+    for asset in ('exit_glyphs.json', 'guide_glyphs.json', 'mile_markers_us.json', 'highway_marking_states.geojson',
+                  'ky_interstate_medians.json'):
+        cmd += ["--add-data", f"{os.path.join(server, asset)}{SEP}."]
+    for path in ssl_files:
+        cmd += ["--add-data", f"{path}{SEP}."]  # ssl.__file__ is at the extraction root
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork

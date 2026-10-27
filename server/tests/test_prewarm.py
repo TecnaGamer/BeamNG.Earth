@@ -14,6 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import buildings  # noqa: E402
 import cdae  # noqa: E402
+import exitsigns
+import mergesigns
+import milemarkers
 import prewarm  # noqa: E402
 import roadmesh  # noqa: E402
 import roads  # noqa: E402
@@ -26,7 +29,8 @@ class PrewarmTest(unittest.TestCase):
     def test_lists_every_material(self):
         mats = prewarm.materials()
         self.assertEqual(mats, sorted(set(mats)))
-        for m in (*buildings.MATERIALS, *sidewalks.MATERIALS, "line_yellow", "line_white", "crossing_white",
+        for m in (*buildings.MATERIALS, *sidewalks.MATERIALS, *exitsigns.GUIDE_MATERIALS,
+                  *milemarkers.MATERIALS, *mergesigns.MATERIALS, "line_yellow", "line_white", "crossing_white",
                   "road_asphalt_2lane", roadmesh.TUNNEL_STONE, roadmesh.DECK_SIDE, "bne_wire", "line_runway_white"):
             self.assertIn(m, mats)
         with tempfile.TemporaryDirectory() as d:

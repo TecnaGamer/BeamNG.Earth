@@ -71,6 +71,10 @@ import heightmap
 import imagery
 
 BASE = 256.0            # L0 tile size
+# Bridges remain visible beyond the 400 m near-ground ring. Their approach
+# fills must also survive in L1, otherwise the deck joins a road on raw terrain
+# several metres below the physics/graded approach (I-165 Exit 3, Bowling Green).
+ROAD_GRADE_MAX_LEVEL = 1
 MAX_LEVEL = 9           # L9 = 131 072 m
 RADIUS = 80000.0
 # Tile layouts by cell count (docs/V1_4_SPEC.md §3.1 M1; Layout below). Nothing reads these at call
@@ -867,9 +871,14 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
         ref = heightmap.surface_u(frame, lambda la, lo: dem.sample(la, lo, rz), rxs, rys)
     step_f = (NEAR_FINE_M if tile.level == layout.exact_level else
               NEAR_FINE_NEXT_M if tile.level == layout.exact_level + 1 else 0.0) if NEAR_FINE_M > 0 else 0.0
-    fine = (step_f > 0 and not with_sink and tile.level <= 0
+    bridge_detail = (0 <= tile.level <= ROAD_GRADE_MAX_LEVEL
+                     and callable(getattr(dem, 'bridge_approaches', None))
+                     and dem.bridge_approaches(frame, tile.bbox))
+    if bridge_detail:
+        step_f = min(step_f or heightmap.SQUARE, heightmap.SQUARE)
+    fine = (step_f > 0 and (bridge_detail or not with_sink) and tile.level <= ROAD_GRADE_MAX_LEVEL
             and (int(round(S / step_f)) & (int(round(S / step_f)) - 1)) == 0)
-    if fine:                            # (the two finest near levels, mesh mode: NEAR_FINE_M, NEAR_FINE_NEXT_M)
+    if fine:                            # optional near detail, plus bridge approaches in every rendering mode
         nf = int(round(S / step_f)) + 1
         xs = x0 + np.arange(nf) * step_f
         ys = y0 + np.arange(nf) * step_f
@@ -880,7 +889,7 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     adaptive = None
     if fine:
         fast.require(51, "fine near ground")
-        eps = NEAR_FINE_EPS * step_f
+        eps = min(NEAR_FINE_EPS * step_f, 0.04) if bridge_detail else NEAR_FINE_EPS * step_f
         while True:
             adaptive, surf, worst = fast._ef.rtin_mesh(np.ascontiguousarray(U), eps)
             if len(np.unique(adaptive)) + 4 * nf <= NEAR_FINE_VERTS:
