@@ -147,7 +147,10 @@ UNDER_ON = os.environ.get("BNE_UNDERPASS", "on") != "off"
 UNGRADED = {"raceway"}      # classes planned by nobody: the terrain is their surface (an oval's banking, GitHub #143) ...
 UNGRADED_MARGIN_M = 2.0     # ... and nothing else grades their carriageway (+ this: kerbs, apron): a road crossing a
                             # track, or a tunnel's open approach under one, cut a flat trench through Daytona's banking
-UNDER_CLEAR_M = 6.7         # deck surface to the road under: slab + girders (roadmesh DECK_DEPTH + GIRDER_D) + 4.5 m
+# The same structural headroom as the deck solver, including the lower road's
+# physical surface lift. A stale 6.7 m target forced short motorway decks into
+# clearance humps even after their underpass had been graded (Otto, Wyoming).
+UNDER_CLEAR_M = roadsmod.DECK_ROAD_CLEAR + ROAD_LIFT
 UNDER_GRADE = 0.06          # the dip's ramps
 UNDER_MAX_BRIDGE_M = 120.0  # only single short spans (both ends on the ground): a chain's inner ends are no abutments
 UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a low bridge than a pit)
@@ -973,6 +976,7 @@ class Grader:
             if not fixed:
                 ez[j, 0] += self._end_raised(b[0])
                 ez[j, 1] += self._end_raised(b[-1])
+        requirements = []
         for i, (fid, p) in enumerate(plans):
             xy = np.asarray(p.xy, np.float64)[:, :2]
             if len(xy) < 2:
@@ -982,40 +986,34 @@ class Grader:
                 continue
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             z = np.asarray(p.z, np.float64).copy()
-            changed = False
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], np.float64)
                 b, L, fixed = spans[bi]
                 if arc_b < APPROACH_MIN_CROSS_M or arc_b > L - APPROACH_MIN_CROSS_M:
                     continue                    # a junction at the bridge's end
                 lift(bi)
-                deck = float(ez[bi, 0] + (ez[bi, 1] - ez[bi, 0]) * arc_b / L)
+                corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M,
+                                    arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
+                deck = float(np.min(ez[bi, 0] + (ez[bi, 1] - ez[bi, 0]) * corridor / L))
                 # where along this road (its nearest vertex segment)
-                d = np.hypot(xy[:, 0] - pt[0], xy[:, 1] - pt[1])
-                sc = float(s[int(np.argmin(d))])
+                ab = np.diff(xy, axis=0)
+                t = np.clip(((pt - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+                j = int(np.argmin(np.linalg.norm(xy[:-1] + t[:, None] * ab - pt, axis=1)))
+                sc = float(s[j] + t[j] * (s[j + 1] - s[j]))
                 zc = float(np.interp(sc, s, z))
                 target = max(deck - UNDER_CLEAR_M, zc - UNDER_MAX_DROP_M)
                 if target >= zc - 0.1:
                     continue
-                room = (sc - float(s[0]), float(s[-1]) - sc)
-                dip = under_dip(s - sc, zc - target, room)
-                if dip is None:
-                    # no room for all of it in this part, even steep (a junction right at the bridge: the next part,
-                    # not crossing under it, stays up): as deep as UNDER_MAX_GRADE ramps reach inside it. The straight
-                    # ramps run on past the part's end and left a step of up to 7 m at that junction (BR-381 near
-                    # Pouso Alegre, 2026-10-25). TODO: carry the dip along the road across its junctions.
-                    fit = min(r - UNDER_FLAT_M for r in room) * 2 * UNDER_MAX_GRADE / math.pi
-                    if fit < 0.3:
-                        continue
-                    dip = under_dip(s - sc, min(fit, zc - target), room)
-                    if dip is None:
-                        continue
-                z = np.minimum(z, z + dip)
-                changed = True
-            if changed:
-                np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
-                np_.rid, np_.max_wall = p.rid, p.max_wall
-                plans[i] = (fid, np_)
+                requirements.append((i, sc, zc - target))
+        if not requirements:
+            return
+        offsets = underpass_offsets([p.xy for _fid, p in plans], requirements)
+        for i, ((fid, p), offset) in enumerate(zip(plans, offsets)):
+            if not np.any(offset < -1e-8):
+                continue
+            np_ = Plan(p.xy, np.asarray(p.z) + offset, p.half, p.abut, p.cut, p.road_half)
+            np_.rid, np_.max_wall = p.rid, p.max_wall
+            plans[i] = (fid, np_)
 
     def _abut_ends(self, key, pe, ok=None):
         """Which of the points pe (n, 2) (road ends; ok: those to look at) near cell key are within APPROACH_TOUCH_M
@@ -1727,6 +1725,75 @@ def fill_abutment(z, at_end, step=PROFILE_STEP):
     q = p.copy()
     q[:n] = np.minimum(np.maximum(p[:n], e), p[:n] + ABUT_MAX_M)
     return q[::-1] if at_end else q
+
+
+def underpass_offsets(lines, requirements):
+    """Smooth underpass dips along joined ground roads, never across space.
+
+    Requirements are (part, arc, depth) measured against the original plans.
+    A shared node receives the same offset in every incident part. The eighth
+    norm combines nearby dips smoothly without summing their full depths.
+    Loose ends and bridge abutments remain pinned; only connected ground
+    junctions can carry a dip beyond the part that crosses under the bridge.
+    """
+    nodes, edges, adj = roadsmod._chain_graph(lines)
+    degree = np.zeros(len(nodes), int)
+    for a, b, _s in edges:
+        degree[a] += 1
+        degree[b] += 1
+    terminal = roadsmod._dijkstra(adj, {int(i): 0.0 for i in np.flatnonzero(degree == 1)})
+    powers = [np.zeros(len(line)) for line in lines]
+    source_distance = np.full(len(nodes), np.inf)
+    for part, sc, depth in requirements:
+        a, b, arc = edges[part]
+        distances = roadsmod._dijkstra(adj, {a: sc, b: arc[-1] - sc})
+        source_distance = np.minimum(source_distance, distances)
+        if degree[a] == 1 and degree[b] == 1:
+            # Isolated parts keep their existing room/grade fitting. Only a
+            # connected junction needs the longer cross-part transition.
+            room = (sc, arc[-1] - sc)
+            dip = under_dip(arc - sc, depth, room)
+            if dip is None:
+                fit = max(0.0, min(r - UNDER_FLAT_M for r in room)) * 2 * UNDER_MAX_GRADE / math.pi
+                if fit < 0.3:
+                    continue
+                dip = under_dip(arc - sc, min(depth, fit), room)
+            if dip is not None:
+                powers[part] += (-dip) ** 8
+            continue
+        # Reserve half the grade allowance for the original road grade and
+        # blending at junctions. Connected ramps have room to spread the dip.
+        run = depth * math.pi / UNDER_GRADE
+        for i, (ea, eb, s) in enumerate(edges):
+            d = np.minimum(distances[ea] + s, distances[eb] + s[-1] - s)
+            if i == part:
+                d = np.minimum(d, np.abs(s - sc))
+            u = np.clip((d - UNDER_FLAT_M) / max(run, 1e-9), 0.0, 1.0)
+            drop = depth * 0.5 * (1.0 + np.cos(math.pi * u))
+            # Stop smoothly at a true loose end. Joined junctions are not ends.
+            room = np.minimum(terminal[ea] + s, terminal[eb] + s[-1] - s)
+            v = np.clip(room / max(run, 1e-9), 0.0, 1.0)
+            drop = np.minimum(drop, depth * 0.5 * (1.0 - np.cos(math.pi * v)))
+            powers[i] += drop ** 8
+    drops = [np.minimum(p ** (1.0 / 8), UNDER_MAX_DROP_M) for p in powers]
+    # Terrain grading blends incident roads across a junction footprint. Give
+    # those plans one common offset there, instead of blending opposing slopes.
+    # Never blend through a crossing's required full-clearance interval.
+    flat, fade = 12.0, 20.0
+    for node in np.flatnonzero((degree > 2) & (terminal > flat + fade)
+                              & (source_distance > flat + fade + UNDER_FLAT_M)):
+        incident = []
+        for i, (a, b, s) in enumerate(edges):
+            if a == node:
+                incident.append((i, s))
+            if b == node:
+                incident.append((i, s[-1] - s))
+        common = max(float(np.max(drops[i][distance <= flat])) for i, distance in incident)
+        for i, distance in incident:
+            u = np.clip((distance - flat) / fade, 0.0, 1.0)
+            blend = u * u * (3.0 - 2.0 * u)
+            drops[i] = common * (1.0 - blend) + drops[i] * blend
+    return [-drop for drop in drops]
 
 
 def under_dip(d, depth, room=(math.inf, math.inf)):
