@@ -81,12 +81,12 @@ local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 -- (my-features modules in one table: core.lua is at Lua's 200-locals limit)
-local X = { jobs = require('beamngEarth/jobs'),             -- garage-to-garage and truck deliveries (X.jobs.lua)
-  dynweather = require('beamngEarth/dynweather'),           -- the week's dynamic weather (X.dynweather.lua)
-  heat = require('beamngEarth/heat'),                       -- police heat: plates remembered, fines, footage (X.heat.lua)
-  garage = require('beamngEarth/garage'),                   -- repair shops and property (X.garage.lua)
+local X = { jobs = require('beamngEarth/jobs'),             -- garage-to-garage and truck deliveries (jobs.lua)
+  dynweather = require('beamngEarth/dynweather'),           -- the week's dynamic weather (dynweather.lua)
+  heat = require('beamngEarth/heat'),                       -- police heat: plates remembered, fines, footage (heat.lua)
+  garage = require('beamngEarth/garage'),                   -- repair shops and property (garage.lua)
   worldtraffic = require('beamngEarth/worldtraffic'),       -- the phone's world traffic switch (worldtraffic.lua)
-  wallet = require('beamngEarth/wallet'),                   -- the player's money: fuel and tolls (X.wallet.lua)
+  wallet = require('beamngEarth/wallet'),                   -- the player's money: fuel and tolls (wallet.lua)
   roadweather = require('beamngEarth/roadweather'),         -- rain and snow on the roads: grip and look
   rally = require('beamngEarth/rally'), rallyResults = {},  -- the Rally app's stages (rally.lua)
   placesResults = {}, jobResults = {}, mediaState = nil, fuelResults = {} }   -- the phone's / map's server answers
@@ -893,7 +893,7 @@ local function onMessage(msg)
     farfield.onRetex(msg) -- a shown tile's re-rendered texture (--colormatch / --deshadow)
   elseif t == 'weather' then
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
-    -- (dynamic weather, X.dynweather.lua: kept as the climate; the sky's clock still takes its UTC offset)
+    -- (dynamic weather, dynweather.lua: kept as the climate; the sky's clock still takes its UTC offset)
     local w = rawget(_G, 'beamngEarth_weather')
     if X.dynweather.onRealWeather(msg) then
       if w and w.onWeather then w.onWeather(msg) end
@@ -959,7 +959,7 @@ local function onMessage(msg)
   elseif t == 'rally_stage_result' then
     if msg.id then X.rallyResults[msg.id] = msg end       -- (rally.lua polls it)
   elseif t == 'delivery_jobs_result' then
-    if msg.id then X.jobResults[msg.id] = msg end         -- (X.jobs.lua polls it)
+    if msg.id then X.jobResults[msg.id] = msg end         -- (jobs.lua polls it)
   elseif t == 'nearest_fuel_result' then
     -- the gas station nearest the player (server fuelfind.py): settings.uiNearestFuelResult teleports there
     if msg.id then X.fuelResults[msg.id] = msg end
