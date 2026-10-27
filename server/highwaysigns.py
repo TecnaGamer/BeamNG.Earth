@@ -13,6 +13,8 @@ import milemarkers
 import osmregions
 import osmsigns
 import roads
+import roadside as roadsideprops
+import plazas
 import signroads
 import throughsigns
 
@@ -76,7 +78,7 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
         box = roads.tile_bbox(tx, ty)
         objects = osmsigns.tile_exit_objects(source, frame, tx, ty)
         context = source.context(urban, widths)
-        exits, miles, overheads = [], [], []
+        exits, miles, overheads, furniture = [], [], [], []
         for obj in {o['id']: o for o in objects if o.get('exit')}.values():
             pavements, mains = exitsigns.source_pavements(frame, obj, context, left_hand)
             # Decide replacement in the full source context, even if the roadside
@@ -97,8 +99,14 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
         for obj in milemarkers.unique_objects(objects):
             pavements = milemarkers.source_pavements(frame, obj, context, left_hand)
             miles.extend(milemarkers.place(frame, [obj], pavements, box, elev, chunks))
+        for obj in {o['id']: o for o in objects if o.get('roadside')}.values():
+            pavements = roadsideprops.source_pavements(frame, obj, context, left_hand)
+            placed = roadsideprops.place(frame, obj, pavements, box, elev, chunks, left_hand)
+            if placed:
+                furniture.append(placed)
         origin = (box[0], box[1], 0.)
-        return throughsigns.build(exits, overheads, origin), milemarkers.build(miles, origin)
+        return plazas.merge(throughsigns.build(exits, overheads, origin),
+                            roadsideprops.build(furniture, origin)), milemarkers.build(miles, origin)
     except CancelledError:
         raise
     except Exception as error:

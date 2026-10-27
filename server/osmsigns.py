@@ -14,11 +14,12 @@ import osmregions
 import exitsigns
 import milemarkers
 import throughsigns
+import roadsideindex
 
 log = logging.getLogger('earthd.osmsigns')
 VERSION = 4                         # compatible with the legacy whole-mile reference schema
-INDEX_SUFFIX = '.signs.v2.sqlite'    # v2 adds mainline destinations; retain prior indexes while rebuilding
-TAG_KEYS = ('highway',) + exitsigns.EXIT_KEYS + milemarkers.TAG_KEYS
+INDEX_SUFFIX = '.signs.v3.sqlite'    # v3 adds roadside lamps, speed panels, shields and Michigan adoption signs
+TAG_KEYS = tuple(dict.fromkeys(('highway',) + exitsigns.EXIT_KEYS + milemarkers.TAG_KEYS + roadsideindex.NODE_KEYS))
 
 
 def tile_exit_objects(md, frame, tx, ty):
@@ -38,6 +39,8 @@ def tile_exit_objects(md, frame, tx, ty):
         out += source.query_exits(frame, (x0 - margin, y0 - margin, x1 + margin, y1 + margin))
     if hasattr(source, 'query_through'):
         out += source.query_through(frame, (x0 - margin, y0 - margin, x1 + margin, y1 + margin))
+    if hasattr(source, 'query_roadside'):
+        out += source.query_roadside(frame, (x0-100., y0-100., x1+100., y1+100.))
     return out
 
 
@@ -50,15 +53,21 @@ def import_pbf(path, target):
     import osmium
     needed = set()
     main_ways, links, junctions, milestones = [], [], {}, {}
+    roadside_ways, roadside_nodes = [], []
     for n in osmium.FileProcessor(str(path), osmium.osm.NODE).with_filter(osmium.filter.KeyFilter(*TAG_KEYS)):
         tags = {k:v for k,v in n.tags if k in TAG_KEYS}
         if n.location.valid() and tags.get('highway') == 'motorway_junction':
             junctions[n.id] = tags
         elif n.location.valid() and tags.get('highway') == 'milestone':
             milestones[n.id] = (n.location.lon,n.location.lat,tags)
+        if n.location.valid() and (roadsideindex.lamp(tags) or roadsideindex.speed_node(tags)):
+            roadside_nodes.append((n.id, n.location.lon, n.location.lat, tags))
     for w in osmium.FileProcessor(str(path), osmium.osm.WAY).with_filter(osmium.filter.KeyFilter('highway')):
         refs = [n.ref for n in w.nodes]
         highway = w.tags.get('highway')
+        if highway in roadsideindex.ROAD_CLASSES:
+            roadside_ways.append((w.id, refs, {k:v for k,v in w.tags if k in roadsideindex.WAY_KEYS}))
+            needed.update(refs)
         if highway in exitsigns.MAIN_CLASSES or highway in exitsigns.LINK_CLASSES:
             wt = {k:v for k,v in w.tags if k in throughsigns.WAY_KEYS + milemarkers.WAY_KEYS}
             (main_ways if highway in exitsigns.MAIN_CLASSES else links).append((w.id, refs, wt))
@@ -69,8 +78,9 @@ def import_pbf(path, target):
             if n.location.valid():
                 neighbours[n.id] = (n.location.lon, n.location.lat)
     exits = exitsigns.index_records(main_ways, links, neighbours, junctions)
-    route_ways, relations = [], {}
+    route_ways, relations, roadside_relations = [], {}, {}
     main_ids = {wid for wid, _, _ in main_ways}
+    roadside_ids = {wid for wid, _, _ in roadside_ways}
     for r in osmium.FileProcessor(str(path), osmium.osm.RELATION).with_filter(osmium.filter.KeyFilter('route')):
         if r.tags.get('route') != 'road':
             continue
@@ -78,6 +88,9 @@ def import_pbf(path, target):
         direction = milemarkers.cardinal(r.tags.get('direction'))
         state = r.tags.get('is_in:state','')
         for m in r.members:
+            if m.type == 'w' and m.ref in roadside_ids:
+                roadside_relations.setdefault(m.ref, []).append(dict(network=r.tags.get('network', ''),
+                    ref=ref, direction=r.tags.get('direction', ''), role=m.role))
             if m.type != 'w' or m.ref not in main_ids:
                 continue
             posted = throughsigns.cardinal(m.role) or throughsigns.cardinal(r.tags.get('direction'))
@@ -88,13 +101,14 @@ def import_pbf(path, target):
     throughsigns.annotate_exits(exits, relations)
     through = throughsigns.index_records(main_ways, neighbours, exits, relations)
     mileposts = milemarkers.osm_records(main_ways, neighbours, milestones, route_ways)
+    roadside = roadsideindex.index_records(roadside_ways, neighbours, roadside_nodes, roadside_relations)
     os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
     tmp = f'{target}.{os.getpid()}.{threading.get_ident()}.tmp'
     try:
         with closing(sqlite3.connect(tmp)) as con:
             con.execute("CREATE TABLE objects(id INTEGER PRIMARY KEY, lon REAL, lat REAL, tags TEXT, ways TEXT, kind TEXT DEFAULT 'point')")
             con.execute('CREATE VIRTUAL TABLE spatial USING rtree(id, minlon, maxlon, minlat, maxlat)')
-            for obj in exits + through:
+            for obj in exits + through + roadside:
                 nid, lon, lat = obj['id'], obj['lon'], obj['lat']
                 con.execute('INSERT INTO objects VALUES(?,?,?,?,?,?)',
                             (nid,lon,lat,json.dumps(obj['tags']),json.dumps(obj['ways']),obj['kind']))
@@ -109,9 +123,9 @@ def import_pbf(path, target):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
-    log.info('OSM sign index ready: %d exits, %d overhead destinations, %d whole-mile references from %s',
-             len(exits), len(through), len(mileposts), path)
-    return len(exits)+len(through)+len(mileposts)
+    log.info('OSM sign index ready: %d exits, %d overhead destinations, %d whole-mile references, %d roadside objects from %s',
+             len(exits), len(through), len(mileposts), len(roadside), path)
+    return len(exits)+len(through)+len(mileposts)+len(roadside)
 
 
 class ObjectSource:
@@ -208,14 +222,18 @@ class ObjectSource:
     def query_through(self, frame, box):
         return self._query(frame, box, 'through')
 
+    def query_roadside(self, frame, box):
+        return self._query(frame, box, 'roadside')
+
     def _readable(self, name, exits):
         # Keep the prior scenery visible while the longer-approach index builds atomically.
         path = self.path(name)
         if os.path.exists(path):
             return path, VERSION
-        path = os.path.join(self.regions.root, name+'.signs.v1.sqlite')
-        if os.path.exists(path):
-            return path, VERSION
+        for suffix in ('.signs.v2.sqlite', '.signs.v1.sqlite'):
+            path = os.path.join(self.regions.root, name+suffix)
+            if os.path.exists(path):
+                return path, VERSION
         oldest = 3 if exits == 'mile_marker' else 1 if exits else 0
         for version in range(VERSION, oldest, -1):
             path = os.path.join(self.regions.root, name+f'.objects.v{version}.sqlite')
@@ -239,7 +257,7 @@ class ObjectSource:
                 path, version = self._readable(name, exits)
                 legacy = version == 1
                 with closing(sqlite3.connect(f'file:{path.replace(os.sep,"/")}?mode=ro',uri=True)) as con:
-                    if legacy and exits == 'through':
+                    if legacy and exits in ('through', 'roadside'):
                         continue
                     record_kind = exits if isinstance(exits, str) else 'exit' if exits else 'point'
                     kind = '' if legacy else " AND o.kind='"+record_kind+"'"
@@ -252,6 +270,8 @@ class ObjectSource:
                             out[nid]['mile_marker'] = decoded[0]
                         elif exits == 'through':
                             out[nid]['through'] = decoded[0]
+                        elif exits == 'roadside':
+                            out[nid]['roadside'] = decoded[0]
                         elif exits:
                             out[nid]['exit'] = decoded[0]
             except (OSError,sqlite3.Error,ValueError) as e:

@@ -162,8 +162,8 @@ def extras(fid, sp, pts, lon, left_hand, layouts):
     profile = roadmarkings.profile(sp.state)
     out = [(look, w, q) for look, w, q in roads.extras(sp, pts, lon, left_hand)
            if not look['m'].startswith('line_')]
-    for side, offset, colour in ((-direction, right, 'line_white'), (direction, right+drive, 'line_yellow')):
-        out.append((dict(roads.EDGE_LINE, m=colour, edge_side=side), profile.solid, line(offset)))
+    for side, offset in ((-direction, right), (direction, right+drive)):
+        out.append((dict(roads.EDGE_LINE, m=roads.edge_colour(sp, side), edge_side=side), profile.solid, line(offset)))
     length, gap, width = profile.travel
     clearance = (profile.solid+width)/2+.10
     for k in range(1, sp.lanes):

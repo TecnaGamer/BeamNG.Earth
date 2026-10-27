@@ -73,6 +73,26 @@ class RevisitTest(unittest.TestCase):
         self.assertNotEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 3))
         self.assertEqual(len(revisit.code_key()), 16)
 
+    def test_packaged_solver_change_invalidates_cached_collision_meshes(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(revisit, "_code", []), \
+                mock.patch.object(revisit, "__file__", os.path.join(d, "revisit.py")):
+            # A frozen app has no loose .py sources. Its native module can remain
+            # unchanged between Python-only bridge fixes.
+            with open(os.path.join(d, "earthfast.pyd"), "wb") as f:
+                f.write(b"same native module")
+            fingerprint = os.path.join(d, "CODE_ID")
+            with open(fingerprint, "w") as f:
+                f.write("original-1.6.3")
+            old = revisit.key("roads", 47.57282, -122.31967)
+            revisit.store(d, "roads", old, {"bridge.cdae": b"old collision mesh"})
+            with open(fingerprint, "w") as f:
+                f.write("bridge-clearance-fix")
+            revisit._code.clear()
+            new = revisit.key("roads", 47.57282, -122.31967)
+            self.assertNotEqual(old, new)
+            self.assertIsNone(revisit.load(d, "roads", new))
+
     def test_frozen_build_fingerprint_invalidates_old_geometry(self):
         import peerwork
         source = compile(Path(revisit.__file__).read_text(encoding='utf-8'), 'revisit.py', 'exec')

@@ -166,6 +166,14 @@ Calibrated inventory gaps and the regional milestone index use OpenStreetMap dat
 
 ## Advance guide-sign lettering
 
+`server/ky_interstate_medians.json` includes I-65/I-75 mainline geometry from
+OpenStreetMap contributors (ODbL 1.0) and 0.2-mile stations calibrated against
+the bundled Kentucky Transportation Cabinet references above. Source file hashes
+are retained in the inventory. `tools/build_ky_medians.py` reproduces it from the
+local Kentucky OSM extract. The Kentucky blue panels and Jersey barrier geometry
+are generated from the user's visual references; the supplied photographs are
+not redistributed. Concrete uses the player's installed BeamNG material assets.
+
 Advance destination panels use Roadgeek 2014 Series EEM v3.1 by Sammi De Guzman, a Highway Gothic reproduction, under the MIT license: [project and releases](https://github.com/sammdot/roadgeek-fonts/releases/tag/3.1). The font is retained in `tools/fonts/RG2014EEM.ttf` for reproducible atlas generation with `tools/generate_guide_lettering.py`. Runtime uses the baked shared opacity atlas and `server/guide_glyphs.json`; it does not load fonts or render per-sign images. The full copyright/license notice ships beside the atlas as `Roadgeek-LICENSE.txt`. Legacy lettering and mile-marker assets remain separate. Release ZIP SHA-256: `f532502d94b9d6b9d48b50d362f5b053c9d3f93f1ba4ddd2781f11f6771ad35c`.
 
 The [AARoads Shield Gallery](https://www.aaroads.com/shields/explore/) and the user's state-marker reference chart supplied visual references for the generated route-marker silhouettes. Gallery photographs and the chart are not bundled. State markers use the requested white guide-panel treatment: Michigan and California plus Arizona, Arkansas, Illinois, Indiana, Kansas, Kentucky, Missouri, Nevada, Ohio, Oklahoma, Pennsylvania, Tennessee and Texas. These are simplified vector drawings for readable sign insets, not surveyed reproductions. Unsupported states retain the circular white fallback. Tennessee uses the primary-style marker; the current destination tags do not distinguish primary/secondary marker variants.

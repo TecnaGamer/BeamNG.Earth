@@ -446,7 +446,8 @@ def _bridge_reach(feats, i):
     got = {"ranges": rngs, "over": [0.0, 0.0]}
     memo[i] = got
     specs = road_specs(feats)
-    up = specs[i]
+    # Entirely elevated features have no ground-road spec, but still need shoulder clearance.
+    up = specs[i] or _structure_spec(feats, i)
     rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
     if up is None or not rings or not any(k == "bridge" for _, _, k in rngs):
         return got
@@ -1452,28 +1453,12 @@ def tunnel_specs(feats):
 
 
 def _bridge_specs(feats, want="bridge"):
-    out = []
-    wanted = [any(k == want for _, _, k in raw_level_ranges(feats, i)) for i in range(len(feats))]
+    # Effective ranges include approach pieces promoted to decks by _skew_decks.
+    # ground_parts removes those pieces, so raw flags would leave missing decks.
+    wanted = [any(k == want for _, _, k in level_ranges(feats, i)) for i in range(len(feats))]
     if not any(wanted):
         return [None] * len(feats)
-    rules = feats.rules
-    for i in range(len(feats)):
-        cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE:
-            out.append(None)
-            continue
-        width = _rule_value(rules.get("width"), i)
-        rule_w = float(width) if width is not None and 1.0 <= float(width) <= 40.0 else None
-        if rule_w is None:
-            rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)
-        lanes = _lane_count(feats, i)
-        surf = _rule_value(rules.get("surface"), i)
-        kind = surface_kind(cls, surf)
-        ow = _rule_value(rules.get("oneway"), i) is not None
-        link = _is_link(feats, i)
-        dk = _dir_kmh(feats, i, None)
-        out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes, link), kind, False, cls, ow, 2.5, *dk,
-                        lanes=lanes, surf=surface_token(surf), link=link))
+    out = [_structure_spec(feats, i) for i in range(len(feats))]
     import roundabouts
     # Keep the adjoining ground profiles while resolving a one-lane interval;
     # selecting decks first hides the two-lane evidence at both of its ends.
@@ -1481,16 +1466,42 @@ def _bridge_specs(feats, want="bridge"):
     return [sp if keep else None for sp, keep in zip(out, wanted)]
 
 
+def _structure_spec(feats, i):
+    """A bridge/tunnel road's spec without consulting ranges (also used while extending ranges)."""
+    cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
+    if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE:
+        return None
+    rules = feats.rules
+    width = _rule_value(rules.get("width"), i)
+    rule_w = float(width) if width is not None and 1.0 <= float(width) <= 40.0 else None
+    if rule_w is None:
+        rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)
+    lanes = _lane_count(feats, i)
+    surf = _rule_value(rules.get("surface"), i)
+    kind = surface_kind(cls, surf)
+    ow = _rule_value(rules.get("oneway"), i) is not None
+    link = _is_link(feats, i)
+    dk = _dir_kmh(feats, i, None)
+    return Spec(carriageway(cls, kind, False, rule_w, ow, lanes, link), kind, False, cls, ow, 2.5, *dk,
+                lanes=lanes, surf=surface_token(surf), link=link)
+
+
 def _chain_graph(lines):
     """Nodes (end points within 0.5 m joined) and edges (start node, end node, arc lengths) of parts."""
     keys, nodes = {}, []
 
     def node(p):
-        k = (round(float(p[0]) * 2), round(float(p[1]) * 2))
-        if k not in keys:
-            keys[k] = len(nodes)
-            nodes.append(np.asarray(p[:2], np.float64))
-        return keys[k]
+        # Quantisation alone split ends centimetres apart on opposite sides of a bucket boundary.
+        k = (math.floor(float(p[0]) * 2), math.floor(float(p[1]) * 2))
+        near = [j for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                for j in keys.get((k[0] + dx, k[1] + dy), ())
+                if np.hypot(*(nodes[j] - p[:2])) < 0.5]
+        if near:
+            return min(near, key=lambda j: (float(np.hypot(*(nodes[j] - p[:2]))), j))
+        j = len(nodes)
+        keys.setdefault(k, []).append(j)
+        nodes.append(np.asarray(p[:2], np.float64))
+        return j
     edges = []
     for ln in lines:
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln[:, :2], axis=0).T))]
@@ -1615,18 +1626,226 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3):
 DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one deck's carriageways (_merge_overlaps)
 
 
+def _continuous_decks(lines, zs, ground_fn, crossings=(), separations=(), corridors=()):
+    """Reconcile final profiles on the connected sample graph, including shared junctions.
+
+    Overlap blending and level-specific clearance can disagree at a fork or lift a ramp's interior
+    far above its pinned abutment. Propagate height changes along the road at a bounded grade, then
+    cap them by the distance available to reach each real abutment. Disconnected crossing decks
+    remain separate. Terrain and abutments that already require a steeper grade keep that allowance;
+    an overlap lift alone cannot increase it. Unreachable clearance remains a reported deficit.
+    """
+    if not lines:
+        return zs
+    nodes, edges, adj = _chain_graph(lines)
+    # Each interior sample is a graph node; only actual end junctions share nodes. Crossings and
+    # parallel decks are deliberately not edges in this graph.
+    graph = [[] for _ in nodes]
+    indices, heights, end_heights = [], {}, {}
+    pins = {}
+    for z, (a, b, s) in zip(zs, edges):
+        ix = [a] + list(range(len(graph), len(graph) + max(0, len(s) - 2))) + [b]
+        graph.extend([] for _ in s[1:-1])
+        indices.append(ix)
+        for n, h in zip(ix, z):
+            if np.isfinite(h):
+                heights[n] = max(heights.get(n, -np.inf), float(h))
+        for n, h in ((a, z[0]), (b, z[-1])):
+            if np.isfinite(h):
+                end_heights.setdefault(n, []).append(float(h))
+            if len(adj[n]) == 1 and np.isfinite(h):
+                pins[n] = float(h)
+        for u, v, ds in zip(ix[:-1], ix[1:], np.diff(s)):
+            graph[u].append((v, float(ds)))
+            graph[v].append((u, float(ds)))
+    g = np.asarray(ground_fn(np.concatenate([ln[:, :2] for ln in lines])), np.float64)
+    terrain = np.full(len(graph), -np.inf)
+    for ix, gg in zip(indices, np.split(g, np.cumsum([len(ln) for ln in lines])[:-1])):
+        np.maximum.at(terrain, ix, gg)
+    # A short level deck can deliberately sit flush on its graded approaches.
+    # Retain its existing lift instead of adding a new five-centimetre crest;
+    # terrain and crossing requirements still remain hard lower bounds.
+    original = np.array([heights.get(n, np.inf) for n in range(len(graph))])
+    required = np.maximum(terrain, np.minimum(terrain + DECK_CLEAR, original))
+    distance = _dijkstra(graph, {n: 0.0 for n in pins})
+    # Preserve the usable corridor already achieved over each lower road. A grade correction
+    # must not turn a low-but-passable underpass into intersecting road surfaces. Only the
+    # corridor's minimum matters; an unnecessarily tall peak may still be flattened.
+    for cr in crossings:
+        k, sc, zc = cr[:3]
+        s, ix, z = edges[k][2], indices[k], zs[k]
+        if len(cr) == 3 and np.interp(sc, s, distance[ix]) <= AT_GRADE_REACH_M:
+            continue                            # the approach meeting its ground road, not an underpass
+        reach = DECK_CLEAR_REACH_M if len(cr) == 3 else 0.0
+        clearance = DECK_ROAD_CLEAR if len(cr) == 3 or cr[3] is None else cr[3]
+        lo, hi = max(0.0, sc - reach), min(s[-1], sc + reach)
+        at = np.r_[lo, s[(s > lo) & (s < hi)], hi]
+        target = min(float(np.min(np.interp(at, s, z))), zc + clearance)
+        for j in np.flatnonzero((s >= lo) & (s <= hi)):
+            required[ix[j]] = max(required[ix[j]], target)
+        # Cover the bracketing samples too, without retaining an unnecessary old peak there.
+        for point in (lo, hi):
+            j = int(np.searchsorted(s, point))
+            if j < len(s) and abs(s[j] - point) > 1e-8:
+                for end in (j - 1, j):
+                    required[ix[end]] = max(required[ix[end]], min(float(z[end]), target))
+    # At an ordinary mismatched fork, prefer the lower approach. In a stacked interchange
+    # the junction must remain free to rise with its connecting decks to clear lower roads.
+    for n, ends in end_heights.items():
+        if (not (separations or corridors) and len(ends) > 1
+                and max(ends) - min(ends) > 0.1 and required[n] <= min(ends) + 1e-8):
+            pins[n] = min(ends)
+    # Include real ground intersections as constraints before choosing a grade. Applying their
+    # caps afterwards would recreate a cliff beside a clearance floor.
+    gentle = [[(v, ds * DECK_MAX_GRADE) for v, ds in neighbours] for neighbours in graph]
+    ground_cap = _dijkstra(gentle, pins)
+    for cr in crossings:
+        if len(cr) != 3:
+            continue
+        k, sc, zc = cr
+        s, ix = edges[k][2], indices[k]
+        if (np.interp(sc, s, distance[ix]) > AT_GRADE_REACH_M
+                or np.interp(sc, s, ground_cap[ix]) >= zc + AT_GRADE_M
+                or np.interp(sc, s, zs[k]) >= zc + AT_GRADE_M):
+            continue
+        j = int(np.searchsorted(s, sc))
+        for at in (j - 1, j):
+            if 0 <= at < len(ix):
+                n = ix[at]
+                bound = max(zc + DECK_MAX_GRADE * abs(s[at] - sc), terrain[n])
+                if required[n] <= bound + DECK_CLEAR + 1e-8 and zs[k][at] <= bound + DECK_CLEAR + 1e-8:
+                    pins.setdefault(n, bound)
+    # Abutment envelopes retain the terrain and existing crossing clearance. Additional
+    # stack clearance stays within those envelopes: insufficient mapped approach length
+    # must be reported, rather than turned into a new vertical ramp.
+    ceilings = dict(pins)
+    distances = {n: _dijkstra(graph, {n: 0.0}) for n in ceilings}
+
+    last_cap = None
+
+    def solve():
+        nonlocal last_cap
+        cap = np.full(len(graph), np.inf)
+        for n, h in ceilings.items():
+            if n not in distances:
+                distances[n] = _dijkstra(graph, {n: 0.0})
+            d = distances[n]
+            valid = np.isfinite(d) & (d > 1e-6)
+            need = float(np.max((required[valid] - h) / d[valid], initial=DECK_MAX_GRADE))
+            for other, oh in pins.items():
+                if d[other] > 1e-6 and np.isfinite(d[other]):
+                    need = max(need, (oh - h) / d[other])
+            cap = np.minimum(cap, h + need * d)
+        last_cap = cap
+        # Spread a lift at the normal grade. A short, constrained abutment may need a
+        # steeper cap locally; that must not permit sharp dips everywhere in the network.
+        raised = -_dijkstra(gentle, {n: -max(h, required[n]) for n, h in heights.items()})
+        return np.minimum(raised, cap)
+
+    result = solve()
+    checks = list(separations) + list(corridors)
+    # A lower deck can rise while a dip or fork is reconciled. Require the full usable
+    # headroom against the final lower surface, including the slab and girders. Keeping
+    # the old gap here preserves intersections when the input decks already collide.
+    # First preserve the old gaps relative to the *solved* lower roads. Pinning
+    # their old absolute heights would retain unnecessary cliffs after a lower
+    # deck has moved down. Then use the remaining approach room for full clearance.
+    for full in (False, True):
+        feasible = last_cap.copy()
+        for _ in range(16):
+            changed = False
+            for hi, sh, lo, sl in (checks if full else separations):
+                hs, ls = edges[hi][2], edges[lo][2]
+                gap = DECK_ROAD_CLEAR if full else min(DECK_ROAD_CLEAR, float(
+                    np.interp(sh, hs, zs[hi]) - np.interp(sl, ls, zs[lo])))
+                target = float(np.interp(sl, ls, result[indices[lo]])) + gap
+                current = float(np.interp(sh, hs, result[indices[hi]]))
+                if not np.isfinite(target) or target <= current + 1e-6:
+                    continue
+                # Filling the lower deck's dip must not force a new wall on a short upper span.
+                # First retain the lower road's original height under that span, where its own
+                # terrain/clearance floors allow it, and spread the adjustment along that road.
+                old_lower = float(np.interp(sl, ls, zs[lo]))
+                if float(np.interp(sl, ls, result[indices[lo]])) > old_lower + 1e-6:
+                    lj = min(max(1, int(np.searchsorted(ls, sl))), len(ls) - 1)
+                    lowered = False
+                    for at in (lj - 1, lj):
+                        n, h = indices[lo][at], float(zs[lo][at])
+                        if n in pins or h >= ceilings.get(n, np.inf) - 1e-6:
+                            continue
+                        if n not in distances:
+                            distances[n] = _dijkstra(graph, {n: 0.0})
+                        limit = h + DECK_MAX_GRADE * distances[n]
+                        if (required <= limit + 1e-8).all() and all(ph <= limit[pn] + 1e-8 for pn, ph in pins.items()):
+                            ceilings[n] = h
+                            lowered = True
+                    if lowered:
+                        changed = True
+                        continue
+                j = min(max(1, int(np.searchsorted(hs, sh))), len(hs) - 1)
+                t = (sh - hs[j - 1]) / max(hs[j] - hs[j - 1], 1e-9)
+                ends = [(indices[hi][j - 1], 1 - t), (indices[hi][j], t)]
+                free = [(n, w) for n, w in ends if n not in pins and w > 1e-9]
+                weight = sum(w for _, w in free)
+                if weight <= 0:
+                    continue
+                for n, _ in free:
+                    height = result[n] + (target - current) / weight
+                    if full:
+                        height = min(feasible[n], height)
+                    if height > required[n] + 1e-6:
+                        required[n] = height
+                        changed = True
+            if not changed:
+                break
+            result = solve()
+    deficits = {}
+    for hi, sh, lo, sl in checks:
+        usable = (float(np.interp(sh, edges[hi][2], result[indices[hi]]))
+                  - float(np.interp(sl, edges[lo][2], result[indices[lo]]))
+                  - roadmesh.DECK_DEPTH - roadmesh.GIRDER_D)
+        if np.isfinite(usable) and usable < MIN_BRIDGE_HEADROOM_M - 1e-6:
+            deficits[hi, lo] = min(deficits.get((hi, lo), np.inf), usable)
+    if deficits:
+        log.warning("stacked bridge clearance below %.1f m target: %s; mapped approaches constrain headroom",
+                    MIN_BRIDGE_HEADROOM_M, [(hi, lo, round(h, 2)) for (hi, lo), h in sorted(deficits.items())[:3]])
+    return [result[ix] if np.isfinite(z).all() else z for ix, z in zip(indices, zs)]
+
+
 def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None):
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). Pure given ground_fn."""
     zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift)
     n_road = len(crossings)
-    if levels is None or len(lines) < 2:
-        return zs
+    if len(lines) < 2 or levels is None:
+        return _continuous_decks(lines, zs, ground_fn, crossings)
     over = _deck_crossings(lines)
     stacks = _deck_stacks(lines, levels, widths) if widths is not None else []
-    if not over and not stacks:
-        return _merge_overlaps(lines, zs, widths, levels) if widths is not None else zs
+    corridors = _deck_clearance_samples(lines, levels, widths) if widths is not None else []
+    # A ramp may join the mainline through a short third segment. Their overlap near that
+    # junction is a merge, even when the map assigns different levels. Requiring headroom
+    # there creates a wall; checking only whether the two parts share an endpoint misses it.
+    _, edges, adj = _chain_graph(lines)
+    distances = {}
+
+    def separated(i, si, j, sj):
+        ai, bi, arc_i = edges[i]
+        aj, bj, arc_j = edges[j]
+        shortest = np.inf
+        for n, along in ((ai, si), (bi, arc_i[-1] - si)):
+            if n not in distances:
+                distances[n] = _dijkstra(adj, {n: 0.0})
+            d = distances[n]
+            shortest = min(shortest, along + d[aj] + sj, along + d[bj] + arc_j[-1] - sj)
+        return shortest >= DECK_ROAD_CLEAR / DECK_GRADE
+
+    over = [(i, j, si, sj) for i, j, si, sj in over if separated(i, si, j, sj)]
+    stacks = [(hi, sh, lo, sl) for hi, sh, lo, sl in stacks if separated(hi, sh, lo, sl)]
+    corridors = [(hi, sh, lo, sl) for hi, sh, lo, sl in corridors if separated(hi, sh, lo, sl)]
+    if not over and not stacks and not corridors:
+        zs = _merge_overlaps(lines, zs, widths, levels) if widths is not None else zs
+        return _continuous_decks(lines, zs, ground_fn, crossings)
     arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln[:, :2], axis=0).T))] for ln in lines]
     for _ in range(4):
         extra = []
@@ -1645,7 +1864,61 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
             zs = new
             break
         zs = new
-    return _merge_overlaps(lines, zs, widths, levels) if widths is not None else zs
+    zs = _merge_overlaps(lines, zs, widths, levels) if widths is not None else zs
+    # Final clearance covers the whole overlapping road ribbons, not just their
+    # centrelines or 16 m stack samples. A descending deck can otherwise block
+    # the outside lane while passing the centre-point check.
+    separations = list(stacks)
+    for i, j, si, sj in over:
+        if levels[i] != levels[j]:
+            separations.append((i, si, j, sj) if levels[i] > levels[j] else (j, sj, i, si))
+    return _continuous_decks(lines, zs, ground_fn, crossings, separations, corridors)
+
+
+def _deck_clearance_samples(lines, levels, widths):
+    """Height constraints over overlapping deck strips, including skew crossings.
+
+    Use the same mitred edges as the mesh, widened for the parapet. For each
+    intersecting pair of sample strips, both upper ends clear both lower ends.
+    This conservative bound covers every point in their overlap, including
+    between samples and across the width; it needs no assumption about angle.
+    """
+    strips, arcs, bounds = [], [], []
+    for line, width in zip(lines, widths):
+        p = np.asarray(line, np.float64)[:, :2]
+        s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
+        half = float(width) / 2 + roadmesh.PARAPET_W
+        left, right = offset_polyline(p, half), offset_polyline(p, -half)
+        q = np.stack([left[:-1], right[:-1], right[1:], left[1:]], axis=1)
+        strips.append(q)
+        arcs.append(s)
+        bounds.append((q.min(axis=1), q.max(axis=1)))
+    out = set()
+    for i, upper in enumerate(strips):
+        umin, umax = bounds[i]
+        for j, lower in enumerate(strips):
+            if levels[i] <= levels[j] or not len(upper) or not len(lower):
+                continue
+            lmin, lmax = bounds[j]
+            if (umax.max(0) < lmin.min(0)).any() or (lmax.max(0) < umin.min(0)).any():
+                continue
+            a, b = np.nonzero(((umax[:, None] >= lmin) & (lmax >= umin[:, None])).all(2))
+            if not len(a):
+                continue
+            uq, lq = upper[a], lower[b]
+            # Separating-axis test for the convex mitred strips. Bounding boxes
+            # alone wrongly classify adjacent ramps at bends as stacked decks.
+            sides = np.concatenate([np.roll(uq, -1, axis=1) - uq,
+                                    np.roll(lq, -1, axis=1) - lq], axis=1)
+            axes = np.stack([-sides[:, :, 1], sides[:, :, 0]], axis=2)
+            up = np.einsum('nvc,nac->nva', uq, axes)
+            lp = np.einsum('nvc,nac->nva', lq, axes)
+            hit = ((up.max(1) >= lp.min(1) - 1e-8) & (lp.max(1) >= up.min(1) - 1e-8)).all(1)
+            for u, l in zip(a[hit], b[hit]):
+                for ue in (u, u + 1):
+                    for le in (l, l + 1):
+                        out.add((i, float(arcs[i][ue]), j, float(arcs[j][le])))
+    return sorted(out)
 
 
 STACK_STEP_M = 16.0     # m between the points where an upper deck must clear the one under it (_deck_stacks)
@@ -1954,27 +2227,8 @@ def _end_dists(lines, end_z):
     """The chain of lines (joined at end points within 0.5 m): its edges (start node, end node, arc (k,)),
     the heights end_z gives at its ends (points of one line only) and per end the distance along the chain
     to every node. Pure given end_z."""
-    keys, nodes = {}, []
-
-    def node(p):
-        k = (round(float(p[0]) * 2), round(float(p[1]) * 2))      # 0.5 m
-        if k not in keys:
-            keys[k] = len(nodes)
-            nodes.append(np.asarray(p[:2], np.float64))
-        return keys[k]
-    edges = []
-    for ln in lines:
-        seg = np.hypot(*np.diff(ln[:, :2], axis=0).T)
-        s = np.r_[0.0, np.cumsum(seg)]
-        edges.append((node(ln[0]), node(ln[-1]), s))
-    deg = np.zeros(len(nodes), int)
-    adj = [[] for _ in nodes]
-    for a, b, s in edges:
-        deg[a] += 1
-        deg[b] += 1
-        adj[a].append((b, s[-1]))
-        adj[b].append((a, s[-1]))
-    ends = [i for i in range(len(nodes)) if deg[i] == 1]
+    nodes, edges, adj = _chain_graph(lines)
+    ends = [i for i in range(len(nodes)) if len(adj[i]) == 1]
     ez = np.asarray(end_z(np.array([nodes[i] for i in ends]).reshape(-1, 2)), np.float64) if ends else np.zeros(0)
     import heapq
     dist = []                                   # per end: distance along the chain to every node
@@ -2233,6 +2487,17 @@ def sidewalk_stop(spec, fid, other, ofid):
     return other.width / 2
 
 
+def edge_colour(spec, side):
+    """Driver-left boundary of a one-way highway, ramp or divided carriageway.
+
+    Ramp classifications can change to primary/secondary at an interchange;
+    that must not turn their left boundary white. Two-way outer edges stay white.
+    """
+    highway = spec.cls in {'motorway', 'trunk'} or spec.link or bool(spec.median)
+    return ('line_yellow' if spec.oneway and highway and not spec.roundabout
+            and side == (spec.dir or 1) else 'line_white')
+
+
 def extras(spec, pts, lon, left_hand=False):
     """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
     pts: its centreline (k, 3) in the anchor frame; lon: its longitude (centre line colour). Pure."""
@@ -2311,8 +2576,7 @@ def extras(spec, pts, lon, left_hand=False):
         for side in (1, -1):
             inset = (edge_margin(spec, side) if spec.link or (cls == "motorway" and spec.oneway)
                      else max(EDGE_LINE["inset"], edge_margin(spec)))
-            color = ("line_yellow" if spec.oneway and cls in {"motorway", "trunk"}
-                     and side == (spec.dir or 1) else "line_white")
+            color = edge_colour(spec, side)
             out.append((dict(EDGE_LINE, m=color, edge_side=side), solid, offset_polyline(pts, side * (w / 2 - inset))))
     return out
 
@@ -2929,14 +3193,14 @@ class BridgeProfiles:
 
     def _resolve(self, start, pool, ground, loaded):
         """The chain of part `start` (keys), loading the cell at each loose end until closed."""
-        def nk(p):
-            return (round(float(p[0]) * 2), round(float(p[1]) * 2))
         while True:
-            by_node = {}
-            for k, (_, xy, *_) in pool.items():
-                by_node.setdefault(nk(xy[0]), []).append(k)
-                by_node.setdefault(nk(xy[-1]), []).append(k)
             keys = sorted(pool)
+            _, edges, _ = _chain_graph([pool[k][1] for k in keys])
+            endpoints = {k: (a, b) for k, (a, b, _) in zip(keys, edges)}
+            by_node = {}
+            for k, ends in endpoints.items():
+                for node in ends:
+                    by_node.setdefault(node, []).append(k)
             over = _deck_crossings([pool[k][1] for k in keys])
             crossing = {}
             for a, b, _, _ in over:
@@ -2950,21 +3214,20 @@ class BridgeProfiles:
             comp, stack = {start}, [start]
             while stack:                        # joined at nodes, or crossing (solved together)
                 k = stack.pop()
-                xy = pool[k][1]
-                nxt = [k2 for p in (xy[0], xy[-1]) for k2 in by_node.get(nk(p), ())]
+                nxt = [k2 for node in endpoints[k] for k2 in by_node[node]]
                 for k2 in nxt + sorted(crossing.get(k, ())):
                     if k2 not in comp:
                         comp.add(k2)
                         stack.append(k2)
             deg = {}
             for k in comp:
-                xy = pool[k][1]
-                for p in (xy[0], xy[-1]):
-                    deg[nk(p)] = deg.get(nk(p), 0) + 1
+                for node in endpoints[k]:
+                    deg[node] = deg.get(node, 0) + 1
             # the loose ends first, in key order: a cell loaded can put a longer copy of a part in the pool (_load), whose
             # ends deg never saw (KeyError: a Chicago road tile on a Windows test PC, 2026-10-24), and the set's order
             # changes with each process's string hashing (which cells CHAIN_CELLS let in)
-            ends = [p for k in sorted(comp) for p in (pool[k][1][0], pool[k][1][-1]) if deg[nk(p)] == 1]
+            ends = [p for k in sorted(comp) for node, p in zip(endpoints[k], (pool[k][1][0], pool[k][1][-1]))
+                    if deg[node] == 1]
             grew = False
             for p in ends:
                 la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
@@ -4474,7 +4737,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             roads.append((fid, spec, np.stack([e[k:k + m], n[k:k + m], u[k:k + m]], axis=1),
                           float(np.mean(ring[:, 0]))))
             k += m
-    chunks = []
+    import medianbarriers
+    chunks = medianbarriers.runs(frame, [(fid, sp, pts, sp.width) for fid, sp, pts, _ in roads],
+                                 (x0, y0, x1, y1), elev) if not left_hand else []
     if cover_out is not None:
         # the ground carriageways for the decks' parapet test (roadmesh.deck ground=): drawn or painted into the ground,
         # a deck at grade across one has no parapet over its lanes (GitHub #96). With the roads in the ground there
@@ -4870,7 +5135,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     path = os.path.join(out_dir, name)
     # (from PR #41, Madderose) with a road mesh the mod makes no DecalRoads: their chunks were ~36 % of the file it
     # parses on its main thread
-    data = {"v": VERSION, "chunks": [] if road_mesh is not None else [c for c in chunks if not c.get("tube_only")]}
+    data = {"v": VERSION, "chunks": [] if road_mesh is not None else
+            [c for c in chunks if not c.get("tube_only") and not c.get("barrier")]}
     if road_mesh is not None:
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"road_{aid}_{tx}_{ty}.cdae"
@@ -4990,6 +5256,9 @@ def collider_boxes(walks, chunks):
         mid[:, :2] = curb[:, :2] + outv * (ww / 2)
         add("walk", mid, ww / 2 + 0.5, -1.0, 1.0)
     for c in chunks or ():
+        if c.get("barrier") and len(c["n"]) > 1:
+            add("deck", c["n"], float(c["w"])/2., -.2,
+                max(float(t)-float(p[2]) for t,p in zip(c['top'], c['n'])))
         if c.get("deck") and len(c["n"]) > 1:
             add("deck", c["n"], float(c["w"]) / 2 + 1.0, -roadmesh.DECK_DEPTH - 1.0, 2.0)
     return out

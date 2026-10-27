@@ -57,14 +57,14 @@ def miles(value):
 
 def marker_id(state, route, mile, direction):
     # A separate negative ID range from OSM nodes (positive) and exit way IDs.
-    key = f'{state}:{route}:{mile}:{direction}'.encode()
+    key = f'{state}:{route}:{float(mile):g}:{direction}'.encode()
     return -(1 << 62)-int.from_bytes(hashlib.blake2b(key, digest_size=7).digest(), 'little')
 
 
 def _object(state, route, mile, direction, point, axis, source):
     lon, lat = map(float, point)
     return dict(id=marker_id(state, route, mile, direction), lon=lon, lat=lat, tags={},
-                mile_marker=dict(state=state, route=int(route), mile=int(mile), direction=direction,
+                mile_marker=dict(state=state, route=int(route), mile=round(float(mile), 1) if float(mile) % 1 else int(mile), direction=direction,
                                  axis=list(map(float, axis)), source=source))
 
 
@@ -107,6 +107,13 @@ def references():
                 if (state,route,mile,direction) in interpolated:
                     source += ':calibrated'
                 out.append(_object(state, route, mile, direction, point, axis,source))
+    import medianbarriers
+    known = {(o['mile_marker']['state'], o['mile_marker']['route'], o['mile_marker']['mile']) for o in out}
+    for state, stations in medianbarriers.station_sets():
+        for route, mile, lon, lat, ax, ay in stations:
+            if (state, int(route), mile) not in known:
+                out.append(_object(state, int(route), mile, 'N', [lon, lat], [ax, ay],
+                                   'dot:'+state.lower()+':osm-calibrated'))
     xy = np.array([[o['lon'], o['lat']] for o in out], float).reshape(-1, 2)
     return tuple(out), xy
 
@@ -141,7 +148,8 @@ def unique_objects(objects):
     return out
 
 
-def osm_records(main_ways, coords, markers, route_ways=()):
+def osm_records(main_ways, coords, markers, route_ways=(), mile_step=1., extend_miles=0., route_directions=None,
+                calibration_range=(.90, 1.10)):
     """Mapped references plus calibrated whole miles between compatible OSM anchors.
 
     Directed, unbranched Interstate chains only. Ambiguous forks, resets and gaps
@@ -227,21 +235,45 @@ def osm_records(main_ways, coords, markers, route_ways=()):
                 if dist[k] <= 40.:
                     found.append((float(ss[k]+t[k]*lengths[k]), mile, nid))
             found.sort()
-            candidates = [(s, int(round(m)), 'osm') for s,m,_ in found if abs(m-round(m)) < .001]
+            candidates = [(s, round(m/mile_step)*mile_step, 'osm') for s,m,_ in found
+                          if abs(m/mile_step-round(m/mile_step)) < .001]
             for (s0,m0,_), (s1,m1,_) in zip(found[:-1], found[1:]):
                 if abs(m1-m0) < .01 or abs(m1-m0) > 30.:
                     continue
                 ratio = (s1-s0)/(abs(m1-m0)*MILE_M)
-                if not .90 <= ratio <= 1.10:
+                if not calibration_range[0] <= ratio <= calibration_range[1]:
                     continue
-                for mile in range(math.floor(min(m0,m1))+1, math.ceil(max(m0,m1))):
+                for tick in range(math.floor(min(m0,m1)/mile_step)+1, math.ceil(max(m0,m1)/mile_step)):
+                    mile = round(tick*mile_step, 1)
                     candidates.append((s0+(mile-m0)/(m1-m0)*(s1-s0), mile, 'osm:interpolated'))
+            if extend_miles and len(found) >= 2:
+                # At state-line tails only, carry a nearby measured calibration
+                # along the same connected path, at most the requested distance.
+                for edge, neighbour, sign in ((found[0],found[1],-1), (found[-1],found[-2],1)):
+                    s0,m0,_ = edge
+                    s1,m1,_ = neighbour
+                    if abs(m1-m0) < .01 or not .90 <= abs((s1-s0)/((m1-m0)*MILE_M)) <= 1.10:
+                        continue
+                    slope = (s1-s0)/(m1-m0)
+                    for tick in range(1, round(extend_miles/mile_step)+1):
+                        mile = round(m0+np.sign(slope)*sign*tick*mile_step, 1)
+                        station = s0+(mile-m0)*slope
+                        if mile >= 0 and 0 <= station <= ss[-1]:
+                            candidates.append((station, mile, 'osm:tail-calibrated'))
             for station, mile, source in sorted(candidates, key=lambda row: (row[0], row[2] != 'osm')):
                 k = min(len(points)-2, max(0, int(np.searchsorted(ss,station,side='right')-1)))
                 fraction = np.clip((station-ss[k])/max(lengths[k],1e-9), 0., 1.)
                 point = points[k]*(1.-fraction)+points[k+1]*fraction
                 axis = ab[k]/max(lengths[k],1e-9)
-                obj = _object(state, route, mile, posteds[k], point, axis, source)
+                posted = posteds[k]
+                if route_directions and route in route_directions and len(found) >= 2:
+                    # Posted NORTH/SOUTH follows increasing/decreasing chainage,
+                    # including bends where northbound temporarily travels south.
+                    j = int(np.clip(np.searchsorted([a[0] for a in found], station)-1, 0, len(found)-2))
+                    forward = route_directions[route]
+                    if found[j+1][1] != found[j][1]:
+                        posted = forward if found[j+1][1] > found[j][1] else OPPOSITE[forward]
+                obj = _object(state, route, mile, posted, point, axis, source)
                 key = obj['id']
                 old = out.get(key)
                 if old is None or old['mile_marker']['source'] != 'osm':
@@ -267,6 +299,25 @@ def place(frame, objects, pavements, box, elev, chunks=()):
         info = obj.get('mile_marker')
         if not info:
             continue
+        if ((info.get('state') == 'KY' and info['route'] in (65, 75)) or
+                (info.get('state') == 'IN' and info['route'] == 65)):
+            import medianbarriers
+            mounting = medianbarriers.mount(frame, obj, pavements, elev)
+            if mounting is not None:
+                centre, travel = mounting
+                # A single post carries separately readable opposite faces.
+                if info['direction'] == 'N' and x0 <= centre[0] < x1 and y0 <= centre[1] < y1:
+                    key = (info['state'], info['route'], info['mile'], 'N')
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(dict(id=obj['id'], kind='mile_marker', centre=centre.tolist(),
+                                        travel=travel.tolist(), route=info['route'], direction='NORTH',
+                                        mile=info['mile'], bottom=float(centre[2])+.55,
+                                        width=.61, height=2.44, source=info['source'],
+                                        style='ky_blue', double_sided=True))
+                continue
+            if float(info['mile']) % 1:
+                continue           # fractional posts are mounted only on eligible barriers
         key = (info.get('state',''), info['route'], info['mile'], info['direction'])
         if key in seen:
             continue
@@ -334,6 +385,9 @@ class Mesh(exitsigns.Mesh):
             cursor += glyph['advance']*sx
 
     def panel(self, sign):
+        if sign.get('style') == 'ky_blue':
+            self.kentucky_panel(sign)
+            return
         self.centre = np.asarray(sign['centre'],float)
         travel = np.asarray(sign['travel'],float)
         self.face = np.r_[-travel,0.]
@@ -355,6 +409,48 @@ class Mesh(exitsigns.Mesh):
         self.shield(str(sign['route']),bottom+1.11,.405,.51)
         self.text('MILE',0.,bottom+.72,.24,w-.095)
         self.text(str(sign['mile']),0.,bottom+.18,.38,w-.105)
+
+    def kentucky_panel(self, sign):
+        """Blue 24 x 96 inch reference-style board, white outline and separate tenths box."""
+        self.centre = np.asarray(sign['centre'], float)
+        travel = np.asarray(sign['travel'], float)
+        self.face = np.r_[-travel, 0.]
+        self.right = np.array([travel[1], -travel[0], 0.])
+        bottom = sign['bottom']-self.centre[2]
+        w, h = sign['width'], sign['height']
+        # The centre is the wall's top, so the galvanized post seats into concrete.
+        self.box((-.0325, -.0325, -.10), (.0325, .0325, bottom+h-.12), 2)
+        self.rounded(w, bottom, h, .045, .05, 2, back=True, front=False)
+        tenths = int(round(float(sign['mile'])*10))
+        for face in range(2 if sign.get('double_sided') else 1):
+            self.face = np.r_[(-travel if face == 0 else travel), 0.]
+            self.right = np.array([travel[1], -travel[0], 0.])*(1 if face == 0 else -1)
+            rings = [self.outline(w-2*m, bottom+m, h-2*m, r)
+                     for m,r in ((0., .045), (.012, .034), (.026, .022))]
+            for outer, inner, mat in zip(rings, rings[1:], (6, 1)):
+                for i in range(len(outer)):
+                    j = (i+1)%len(outer)
+                    self.quad([(.05,*outer[i]),(.05,*outer[j]),(.05,*inner[j]),(.05,*inner[i])], mat)
+            inner = rings[-1]
+            # Split the blue interior around the divider; no coplanar overlapping panels.
+            split = bottom+.49
+            def clip(poly, level, above):
+                result = []
+                for a,b in zip(poly, np.roll(poly,-1,axis=0)):
+                    ia,ib = (a[1]>=level,b[1]>=level) if above else (a[1]<=level,b[1]<=level)
+                    if ia: result.append(a)
+                    if ia != ib: result.append(a+(b-a)*((level-a[1])/(b[1]-a[1])))
+                return np.asarray(result)
+            for poly, mat in ((clip(inner, split+.008, True), 6),
+                              (clip(clip(inner, split+.008, False), split-.008, True), 1),
+                              (clip(inner, split-.008, False), 6)):
+                for i in range(1, len(poly)-1):
+                    self.triangle(np.c_[np.full(3,.05), poly[[0,i,i+1]]], mat)
+            self.text('NORTH' if face == 0 else 'SOUTH', 0., bottom+2.10, .265, w-.075)
+            self.shield(str(sign['route']), bottom+1.39, .45, .58)
+            self.text('MILE', 0., bottom+.99, .265, w-.08)
+            self.text(str(tenths//10), 0., bottom+.57, .36, w-.095)
+            self.text('.'+str(tenths%10), 0., bottom+.08, .36, w-.13)
 
     def shield(self, route, bottom, width, height):
         # Interstate contour: broad red crown, curved blue bowl and a pointed base.

@@ -24,6 +24,7 @@ local stopwatch = require('beamngEarth/stopwatch')
 local M = {}
 
 M.MATERIAL_FILES = { '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/tunnel.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json',
   '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/west_coast_usa/art/shapes/roads/main.materials.json',   -- curbs, sidewalk1 (the sidewalk mesh)

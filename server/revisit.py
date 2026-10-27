@@ -51,7 +51,10 @@ def code_key():
             import peerwork
             h.update(b"server-code\0" + peerwork.code_id().encode("ascii"))
             for name in sorted(os.listdir(here)):
-                if name.endswith(".py") or name.startswith("earthfast"):
+                # Packaged Python modules live in an archive, not beside __file__.
+                # The build writes their fingerprint here; otherwise two executables
+                # with different bridge solvers reuse the same old collision meshes.
+                if name == "CODE_ID" or name.endswith(".py") or name.startswith("earthfast"):
                     try:
                         with open(os.path.join(here, name), "rb") as f:
                             h.update(name.encode() + b"\0" + f.read())

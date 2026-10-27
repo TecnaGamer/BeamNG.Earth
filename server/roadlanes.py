@@ -1,10 +1,11 @@
 """Resolve lane counts once, before ground, bridge, tunnel and AI specs diverge.
 
-Priority: explicit OSM way tag, unambiguous matching current OSM geometry, then
-agreement along a connected through road. Never borrow lanes from a ramp,
+Priority: scoped project corrections, explicit OSM way tag, unambiguous matching
+current OSM geometry, then agreement along a connected through road. Never borrow lanes from a ramp,
 opposing carriageway or crossing bridge. lane_source records the evidence.
 """
 import numpy as np
+import roadoverrides
 
 
 def cached_counts(feats, key, read):
@@ -154,11 +155,11 @@ def bounded_components(candidates, joins):
 
 
 def generated_counts(feats):
-    """Discard old one-ended single-lane guesses without rewriting map downloads.
+    """Apply project corrections and recheck guesses without rewriting downloads.
 
     A cached 'connected' count is inference, not an explicit OSM tag. A lone
     lanes=1 segment must not shrink all the untagged road leading up to it.
-    Direct OSM/geometry evidence and one-way carriageways are retained.
+    Otherwise direct OSM/geometry evidence and one-way carriageways are retained.
     """
     saved = feats.__dict__.get('_generated_lanes')
     if saved is not None:
@@ -166,6 +167,8 @@ def generated_counts(feats):
     values = feats.attrs.get('lane_count', feats.attrs.get('osm_lanes', [None] * len(feats)))
     counts = [count(v) for v in values]
     for i, value in feats.__dict__.get('_cached_lane_counts', {}).items():
+        counts[i] = value
+    for i, value in roadoverrides.lane_counts(feats).items():
         counts[i] = value
     sources = feats.attrs.get('lane_source', [''] * len(feats))
     classes = feats.attrs.get('class', [''] * len(feats))

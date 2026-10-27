@@ -129,6 +129,22 @@ class LaneGeometryTest(unittest.TestCase):
 
 
 class PaintTest(unittest.TestCase):
+    def test_lower_class_ramps_and_divided_roads_keep_the_driver_left_yellow(self):
+        for cls in ('motorway', 'trunk', 'primary', 'secondary', 'tertiary'):
+            for direction in (-1, 1):
+                for kind in ('ramp', 'divided'):
+                    sp = roads.Spec(14., 'paved', False, cls, True, dir=direction, lanes=2,
+                                    link=kind == 'ramp', median=30. if kind == 'divided' else None)
+                    edges = [row for row in roads.extras(sp, LINE, -85.) if 'edge_side' in row[0]]
+                    self.assertEqual(len(edges), 2)
+                    for look, _, p in edges:
+                        self.assertEqual(look['m'], 'line_yellow' if p[0, 1]*direction > 0 else 'line_white',
+                                         (cls, kind, direction))
+                    # Two-way roads still have white outer edges and a separate centre line.
+                    edges = [lk for lk, _, _ in roads.extras(sp._replace(oneway=False, dir=0), LINE, -85.)
+                             if 'edge_side' in lk]
+                    self.assertTrue(all(lk['m'] == 'line_white' for lk in edges))
+
     def spec(self, state='', link=False, direction=1):
         return roads.Spec(11.6, 'paved', False, 'motorway', True, dir=direction,
                           lanes=2, state=state, link=link)

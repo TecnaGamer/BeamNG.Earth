@@ -14,6 +14,15 @@ def crossing(shift=(0., 0.)):
 
 
 class PavementCornerTest(unittest.TestCase):
+    def test_oneway_highway_corner_preserves_yellow_left_edges(self):
+        sp = roads.Spec(14., 'paved', False, 'motorway', True, dir=1, lanes=2)
+        rows = [('in', sp, np.array([[-100., 0., 10.], [0., 0., 10.]]), -85.),
+                ('out', sp, np.array([[0., 0., 10.], [0., 100., 10.]]), -85.)]
+        chunks, cuts = roadcorners.tile(rows, (-100., -100., 100., 100.), False)
+        self.assertTrue(chunks)
+        self.assertTrue(cuts)
+        self.assertTrue(all(c['m'] == 'line_yellow' for c in chunks))
+
     def test_four_rounded_corners_without_sidewalks_or_crosswalks(self):
         f = crossing((100., 100.))
         frame, rows, corners = roadcorners.source([f], frame=FRAME)

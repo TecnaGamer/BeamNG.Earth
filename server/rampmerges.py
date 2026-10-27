@@ -298,7 +298,7 @@ def plans(rows, terminals=None):
                             start=float(guide_station[0]), end=float(guide_station[-1]), edge=edge, side=side,
                             guide=guide, outer=outer, span=span, normal=normal, spec=sp,
                             # Left/right relative to actual travel, not the OSM vertex order.
-                            color='line_yellow' if side * (-1 if entry else 1) > 0 else 'line_white'))
+                            color=roads.edge_colour(main[1], side * main_orientation)))
             extensions.append((main, station))
     for plan, (main, station) in zip(out, extensions):
         _extend(plan, main, station, mains, out)
@@ -374,7 +374,7 @@ def trim(fid, extras, layouts):
         coloured = [(look, p) for p in pieces]
         if look['m'] == 'line_yellow':
             for plan in layouts:
-                if fid != plan['ramp']:
+                if fid != plan['ramp'] or plan['color'] == 'line_yellow':
                     continue
                 split = []
                 for style, p in coloured:
@@ -399,9 +399,10 @@ def chunks(layouts, box, fixed=False):
     for p in layouts:
         profile = roadmarkings.profile(p['spec'].state)
         kind = 'entrance' if p['entry'] else 'exit'
-        # The taper still shares pavement with the mainline. Orange resumes on
-        # the source ramp edge only after color_cut, beyond both paved shoulders.
-        lines = [(dict(m='line_white', p=2, tl=6.4, ramp_merge=kind), profile.solid, p['outer'])]
+        # Preserve the mainline's outside boundary colour through the taper.
+        # A right-side ramp's inner edge stays white until the pavements split;
+        # a left-side ramp's outside edge remains yellow throughout.
+        lines = [(dict(m=p['color'], p=2, tl=6.4, ramp_merge=kind), profile.solid, p['outer'])]
         if profile.ramp:
             length, gap, width = profile.ramp
             look = dict(m='line_white', p=6, tl=length+gap, dash=(length, gap), ramp_merge=kind)

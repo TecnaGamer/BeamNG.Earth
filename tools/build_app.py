@@ -160,7 +160,8 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
            "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}."]     # (bridgetypes.WD_PATH)
-    for asset in ('exit_glyphs.json', 'guide_glyphs.json', 'mile_markers_us.json', 'highway_marking_states.geojson'):
+    for asset in ('exit_glyphs.json', 'guide_glyphs.json', 'mile_markers_us.json', 'highway_marking_states.geojson',
+                  'ky_interstate_medians.json'):
         cmd += ["--add-data", f"{os.path.join(server, asset)}{SEP}."]
     for path in ssl_files:
         cmd += ["--add-data", f"{path}{SEP}."]  # ssl.__file__ is at the extraction root

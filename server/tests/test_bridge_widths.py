@@ -15,6 +15,28 @@ def chain(widths=(13., 17.), reverse=False):
 
 
 class BridgeWidthTest(unittest.TestCase):
+    def test_promoted_approach_keeps_lane_width_and_collision_surface(self):
+        # The clearance fix extends the deck onto an unflagged road. That new
+        # deck must retain the infrastructure branch's three-lane cross section.
+        f = features([[(-40, 0), (5, 0)], [(5, 0), (100, 0)], [(0, -100), (0, 100)]],
+                     ['secondary', 'secondary', 'motorway'], flags=[(0, 'is_bridge')])
+        f.attrs['lane_count'] = np.array([3., 3., 2.])
+        self.assertEqual(roads.raw_level_ranges(f, 1), [])
+        self.assertTrue(roads.bridge_parts(f, 1))
+        sp = roads.bridge_specs(f)[1]
+        ground = roads.road_specs(f)[1]
+        self.assertEqual(sp.lanes, 3.)
+        self.assertEqual(sp.width, ground.width)
+        self.assertGreater(sp.width, 11.)
+        bp = roads.BridgeProfiles(FRAME, lambda _: f, lambda la, lo: np.full(np.shape(la), 10.))
+        parts = bp.parts([f], (-200., -200., 200., 200.))
+        self.assertTrue(any(fid == str(f.ids[1]) for fid, *_ in parts))
+        chunks = roads.build_tile(FRAME, 0, 0, [f], flat, bridges=bp)
+        decks = [c for c in chunks if c.get('deck') and c.get('fid') == str(f.ids[1]) and not c.get('ctx')]
+        self.assertTrue(decks)
+        self.assertTrue(all(c['w'] == sp.width for c in decks))
+        self.assertIsNotNone(roadmesh.deck(decks, [0., 0., 0.]))
+
     def test_sidewalk_suppressed_approach_keeps_its_width_and_edge_margins_on_deck(self):
         f = features([[(0, 0), (5, 0), (10, 0), (15, 0), (20, 0), (400, 0)]],
                      ['secondary'], flags=[(0, 'is_bridge', .4, .6)])

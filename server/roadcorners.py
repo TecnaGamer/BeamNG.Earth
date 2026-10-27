@@ -119,8 +119,12 @@ def tile(rows, box, draw_pavement):
         for side, cut in zip(sides, c['edge_cuts']):
             cuts.setdefault(side, []).append(cut)
         width = max(roadmarkings.profile(sp.state).solid for sp in specs)
+        colors = [roads.edge_colour(sp, side) for sp, (_, side) in zip(specs, sides)]
+        # A continuous left boundary must not become white just at its bend.
+        # A return between different boundary types remains junction paint.
+        look = dict(roads.EDGE_LINE, m=colors[0] if colors[0] == colors[1] else 'line_white')
         for p in roads.clip_polyline(arc, *box):
-            chunks.append(roads._chunk(roads.EDGE_LINE, width, p))
+            chunks.append(roads._chunk(look, width, p))
     return chunks, cuts
 
 

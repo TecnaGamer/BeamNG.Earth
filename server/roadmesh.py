@@ -273,7 +273,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     over the drawn ground (within FOLLOW_TOL; drawn(lat, lon): the block's heights where they are not elev's, its
     ground raised over low arches): a ribbon straight across the road stood under the ground's bumps (up to 30 cm on hills), so it was drawn
     5 cm over it and the tyres sank into it (the user, 2026-10-20)."""
-    chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
+    chunks = [c for c in chunks if not c.get("tube_only") and not c.get("barrier")]
     if clip is not None:
         chunks = [_reach_past(c, clip) for c in chunks]
     rb = ribbons(chunks)                        # deck surfaces too: their asphalt over deck()'s concrete
@@ -403,10 +403,13 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=()):
     bridgetypes.truss_members) in painted steel (TRUSS_STEEL). (positions, tris, uvs, materials, tri
     material index) or None. ground: the tile's ground carriageways (roads.build_tile cover_out) for the parapet
     test, drawn or not (with the roads painted into the ground the chunks have none). Pure."""
+    import medianbarriers
+    import plazas
+    barriers = medianbarriers.build(chunks, origin)
     dch = [c for c in chunks if c.get("deck")]
     rb = [(r, c) for r, c in zip(ribbons(dch), dch) if r[5] is not None]
     if not rb and not piers and not beams:
-        return None
+        return barriers
     mats, P, UV, T, M = [], [], [], [], []
     nv = 0
 
@@ -497,8 +500,8 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=()):
             mats.append(steel(pt))
             _beams([b for b in beams if (b[4] if len(b) > 4 else "grey") == pt], origin, P, T, UV, M, len(mats) - 1)
     if not P:
-        return None
-    return (np.concatenate(P), np.concatenate(T), np.concatenate(UV), mats, np.concatenate(M))
+        return barriers
+    return plazas.merge((np.concatenate(P), np.concatenate(T), np.concatenate(UV), mats, np.concatenate(M)), barriers)
 
 
 TRUSS_STEEL = "bne_truss_steel"     # painted steel (the stock metal_paint, grey: tunnel.materials.json) ...

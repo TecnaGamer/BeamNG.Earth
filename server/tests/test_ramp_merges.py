@@ -113,7 +113,7 @@ class MergeTest(unittest.TestCase):
     def test_orange_ramp_edge_is_white_until_pavements_separate(self):
         for entry in (False, True):
             for reverse in (False, True):
-                for side in (-1, 1):
+                for side in (-1,):
                     source = rows(entry, reverse, side=side)
                     plans = rampmerges.plans(source)
                     plan = plans[0]
@@ -139,6 +139,29 @@ class MergeTest(unittest.TestCase):
                     distance = rampmerges.project(plan['path'], point)[4][0]
                     self.assertAlmostEqual(distance, source[0][1].width/2, places=5)
                     self.assertTrue(all(c['m'] == 'line_white' for c in rampmerges.chunks(plans, BOX)))
+
+    def test_left_side_merges_keep_yellow_outside_edge_and_white_lane_dividers(self):
+        from types import SimpleNamespace
+        for entry in (False, True):
+            for reverse in (False, True):
+                source = rows(entry, reverse, side=1)
+                plans = rampmerges.plans(source)
+                self.assertEqual(len(plans), 1)
+                fid, sp, line, lon = source[1]
+                left = [(lk, p) for lk, _, p in rampmerges.trim(fid, roads.extras(sp, line, lon), plans)
+                        if lk.get('edge_side') == sp.dir]
+                self.assertTrue(left)
+                self.assertTrue(all(lk['m'] == 'line_yellow' for lk, _ in left))
+                tunnel = SimpleNamespace(parts=lambda cells, area: [(f, s, p[:, :2], p[:, 2], lo)
+                                                                    for f, s, p, lo in source])
+                for chunks in (rampmerges.chunks(plans, BOX), roads._deck_chunks(source, BOX),
+                               roads._tunnel_chunks(tunnel, [], BOX)):
+                    outer = [c for c in chunks if c.get('ramp_merge') and c['p'] == 2]
+                    self.assertTrue(outer)
+                    self.assertTrue(all(c['m'] == 'line_yellow' for c in outer))
+                    dividers = [c for c in chunks if c.get('ramp_merge') and c['p'] == 6]
+                    self.assertTrue(dividers)
+                    self.assertTrue(all(c['m'] == 'line_white' for c in dividers))
 
     def test_colour_transition_is_stable_across_clipping_and_fixed_decks(self):
         from types import SimpleNamespace
