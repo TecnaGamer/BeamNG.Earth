@@ -37,7 +37,7 @@ def layer_of(chunk):
     return "base"
 
 
-def _resample(pts, step):
+def _resample(pts, step, keep_vertices=False):
     """Points every `step` m along a polyline (k, 3), ends kept: (xy (m, 2), distance (m,), z (m,))."""
     seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
@@ -45,6 +45,13 @@ def _resample(pts, step):
         return pts[:1, :2], s[:1], pts[:1, 2]
     n = max(1, int(np.ceil(s[-1] / step)))
     t = np.linspace(0.0, s[-1], n + 1)
+    if keep_vertices:
+        # Prefer the original profile knots over almost coincident lattice
+        # samples: tiny segments destabilize the ribbon's miter normals.
+        j = np.searchsorted(s, t)
+        distance = np.minimum(np.abs(t - s[np.maximum(j - 1, 0)]),
+                              np.abs(t - s[np.minimum(j, len(s) - 1)]))
+        t = np.unique(np.r_[t[distance > 1e-8], s])
     return (np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], axis=1), t,
             np.interp(t, s, pts[:, 2]))
 
@@ -75,7 +82,7 @@ def ribbons(chunks):
         pts = np.asarray(c["n"], np.float64)
         if len(pts) < 2:
             continue
-        xy, s, z = _resample(pts, DRAPE_STEP)
+        xy, s, z = _resample(pts, DRAPE_STEP, keep_vertices=bool(c.get("deck") and c.get("fixed")))
         if len(xy) < 2:
             continue
         n = _normals(xy) * (float(c["w"]) / 2)

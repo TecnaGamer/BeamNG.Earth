@@ -1610,7 +1610,13 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     cap = [np.where(np.isfinite(z), np.maximum(c, z), c) for c, z in zip(cap, zs)]
     out, k0 = [], 0
     for k, (z, (a, b, s)) in enumerate(zip(zs, edges)):
-        g = gz[k0:k0 + len(z)] + lift
+        # Meet the graded approach exactly. A constant skin allowance right up
+        # to a pinned abutment otherwise restores a small lip after smoothing.
+        blend = np.ones(len(z))
+        for distance in ([s] if deg[a] == 1 else []) + ([s[-1] - s] if deg[b] == 1 else []):
+            u = np.clip(distance / DECK_SIGMA, 0.0, 1.0)
+            blend = np.minimum(blend, u * u * (3.0 - 2.0 * u))
+        g = gz[k0:k0 + len(z)] + lift * blend
         k0 += len(z)
         if not np.isfinite(z).all():
             out.append(z)
@@ -1639,6 +1645,7 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
             floor = np.maximum(np.minimum(req[k], cap[k]), g)
             zz = np.maximum(sm, floor)
             zz[0], zz[-1] = sm[0], sm[-1]
+            zz = _curve_deck(s, zz, floor, cap[k])
         out.append(zz)
     return out
 
@@ -1647,6 +1654,46 @@ DECK_CREST_R = 60.0     # m: the ground under a deck is its floor rounded to ver
 DECK_SIGMA = 12.0       # m, deck profile smoothing (at least) ...
 DECK_SIGMA_SHARE = 25.0  # ... a 25th of the part's length ...
 DECK_SIGMA_MAX = 40.0   # ... at most
+
+
+def _curve_deck(s, z, floor, cap):
+    """Project onto clearance/height bounds and bounded changes of grade.
+
+    Dykstra projections keep the result close to the solved profile. Endpoints
+    remain pinned. Infeasible map constraints retain the original profile.
+    Only bridge decks use this; tunnel and ground-road smoothing is unchanged.
+    """
+    ds = np.diff(s)
+    if len(z) < 3 or np.any(ds <= 0):
+        return z
+    lo, hi = np.minimum(floor, cap).copy(), cap.copy()
+    lo[[0, -1]] = hi[[0, -1]] = z[[0, -1]]
+    # A 300 m vertical radius limits the change of grade per metre.
+    limit = (ds[:-1] + ds[1:]) / 600.0
+    weights = np.c_[1 / ds[:-1], -1 / ds[:-1] - 1 / ds[1:], 1 / ds[1:]]
+    norm = (weights * weights).sum(1)
+    x = z.copy()
+    bound_correction = np.zeros_like(x)
+    corrections = np.zeros((len(limit), 3))
+    indices = np.arange(len(limit))[:, None] + np.arange(3)
+    for _ in range(2000):
+        y = x + bound_correction
+        x = np.clip(y, lo, hi)
+        bound_correction = y - x
+        for colour in range(3):
+            ids = np.arange(colour, len(limit), 3)
+            ix, w = indices[ids], weights[ids]
+            y = x[ix] + corrections[ids]
+            bend = (y * w).sum(1)
+            delta = (bend - np.clip(bend, -limit[ids], limit[ids])) / norm[ids]
+            projected = y - delta[:, None] * w
+            corrections[ids] = y - projected
+            x[ix] = projected
+        if (np.all(x >= lo - 1e-7) and np.all(x <= hi + 1e-7)
+                and np.all(np.abs((x[indices] * weights).sum(1)) <= limit + 1e-7)):
+            x[[0, -1]] = z[[0, -1]]
+            return x
+    return z
 
 
 def _no_sag(s, z):

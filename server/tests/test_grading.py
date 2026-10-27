@@ -485,14 +485,15 @@ class UnderpassTest(unittest.TestCase):
         g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 195.0, 0.0]), np.array([0.0, 0.0, 300.0]), 0.0)
         out = g.apply(la, lo, np.full(3, 10.0))
-        self.assertAlmostEqual(float(out[0]), 10.0 - grading.UNDER_CLEAR_M, delta=0.3, msg="under the deck")
+        self.assertAlmostEqual(float(out[0]), 10.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M),
+                               delta=0.3, msg="under the deck, within the maximum excavation depth")
         self.assertAlmostEqual(float(out[1]), 10.0, delta=0.1, msg="back up past the ramp")
         # the ramp: no steeper than UNDER_GRADE, and no kinks (the grade changes smoothly)
         xs = np.arange(0.0, 200.0, 2.0)
         la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
         z = g.apply(la, lo, np.full(len(xs), 10.0))
         grade = np.diff(z) / 2.0
-        self.assertLessEqual(float(np.abs(grade).max()), grading.UNDER_GRADE + 0.005)
+        self.assertLessEqual(float(np.abs(grade).max()), grading.UNDER_MAX_GRADE + 0.005)
         self.assertLess(float(np.abs(np.diff(grade)).max()), 0.01, "no kink")
         self.assertAlmostEqual(float(out[2]), 10.0, delta=0.1, msg="another road untouched")
 

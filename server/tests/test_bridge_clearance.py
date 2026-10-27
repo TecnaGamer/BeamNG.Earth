@@ -21,6 +21,36 @@ def line(length=400.0):
 
 
 class MinimumBridgeClearanceTest(TestCase):
+    def test_fixed_deck_near_lattice_knots_keep_full_width(self):
+        pts = [[0, 0, 10], [1.9999999999999998, 0, 11], [4, 0, 10]]
+        chunk = dict(roads.DECK, w=12.0, deck=True, fixed=True, n=pts)
+        left, right, _, _, _, z = roadmesh.ribbons([chunk])[0]
+        np.testing.assert_allclose(np.linalg.norm(left - right, axis=1), 12.0)
+        self.assertGreater(float(np.diff(left[:, 0]).min()), 1e-9)
+        self.assertAlmostEqual(float(z.max()), 11.0)
+
+    def test_clearance_floor_does_not_restore_a_sharp_crest(self):
+        xy = line(800.0)
+        z, = roads.deck_profile([xy], flat, [(0, 401.0, 10.0)])
+        slopes = np.diff(z) / np.diff(xy[:, 0])
+        self.assertLessEqual(float(np.abs(np.diff(slopes)).max()), 4.0 / 300.0 + 1e-6)
+        self.assertEqual(roads._clearance_deficits([xy], [z], [(0, 401.0, 10.0)]), [])
+        np.testing.assert_allclose(z[[0, -1]], 10.0)
+
+    def test_fixed_deck_mesh_keeps_profile_knots(self):
+        # Neither the crest nor the clearance corridor edge falls on the regular
+        # ribbon lattice. Rendering and collision must retain both elevations.
+        pts = np.array([[0, 0, 10], [9.3, 0, 18.5], [14.7, 0, 18.5], [25, 0, 10]])
+        chunk = dict(roads.DECK, w=12.0, deck=True, fixed=True, n=pts.tolist())
+        left, right, _, _, _, heights = roadmesh.ribbons([chunk])[0]
+        vertices, *_ = roadmesh.deck([chunk], (0, 0, 0))
+        for p in pts:
+            at = np.flatnonzero(np.isclose(left[:, 0], p[0]))
+            self.assertEqual(len(at), 1)
+            self.assertAlmostEqual(heights[at[0]], p[2])
+            self.assertTrue(np.any(np.isclose(vertices[:, 0], p[0]) & np.isclose(vertices[:, 2], p[2])))
+        np.testing.assert_allclose(left[:, 0], right[:, 0])
+
     def test_default_counts_slab_and_girders_below_six_metres(self):
         self.assertEqual(roads.MIN_BRIDGE_HEADROOM_M, 6.0)
         self.assertAlmostEqual(roads.DECK_ROAD_CLEAR,
