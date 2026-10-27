@@ -22,9 +22,15 @@ ATTRIBUTION = "Routing: OSRM (FOSSGIS), data (c) OpenStreetMap contributors (ODb
 BEARING_RANGE = 60          # degrees either side of the car's heading the start may take
 
 
-def url(lat0, lon0, lat1, lon1, bearing=None):
-    """bearing: the car's heading (compass degrees): the route starts on a road the car can follow that way."""
+def url(lat0, lon0, lat1, lon1, bearing=None, steps=False, alternatives=None):
+    """bearing: the car's heading (compass degrees): the route starts on a road the car can follow that way.
+    steps: also the turn-by-turn steps (the phone's instruction card). alternatives: how many routes to ask for
+    (the phone's route choice)."""
     u = OSRM_URL.format(lat0=float(lat0), lon0=float(lon0), lat1=float(lat1), lon1=float(lon1))
+    if steps and "steps=true" not in u:     # (OSRM_URL asks for them already: the GPS's turn-by-turn)
+        u += "&steps=true"
+    if alternatives:
+        u += f"&alternatives={int(alternatives)}"
     if bearing is not None:
         u += f"&bearings={int(bearing) % 360},{BEARING_RANGE};"
     return u
@@ -157,31 +163,104 @@ def turns(route):
     return out
 
 
-def parse(data):
-    """{points: [[lat, lon], ...], dist (m), dur (s), turns} of an OSRM route response (turns: the turn-by-turn,
-    turns()), or raises ValueError. Pure."""
-    if not isinstance(data, dict) or data.get("code") != "Ok" or not data.get("routes"):
-        raise ValueError(f"no route ({(data or {}).get('code') if isinstance(data, dict) else 'bad answer'})")
-    r = data["routes"][0]
+def parse_steps(route):
+    """[{at, dist, dur, name, type, modifier, exit?}] of an OSRM route's legs: at = metres from the route's start
+    where the maneuver is, type / modifier as OSRM names them ("turn" / "left", "depart", "arrive", ...), exit =
+    the roundabout's exit number. Pure."""
+    out, at = [], 0.0
+    for leg in route.get("legs") or []:
+        for s in leg.get("steps") or []:
+            man = s.get("maneuver") or {}
+            dist = float(s.get("distance") or 0.0)
+            step = {"at": round(at, 1), "dist": round(dist, 1), "dur": round(float(s.get("duration") or 0.0), 1),
+                    "name": str(s.get("name") or ""), "type": str(man.get("type") or ""),
+                    "modifier": str(man.get("modifier") or "")}
+            if man.get("exit") is not None:
+                step["exit"] = int(man["exit"])
+            out.append(step)
+            at += dist
+    return out
+
+
+def _one(r):
+    """{points, dist, dur, steps} of one OSRM route (geometry simplified). Pure."""
     coords = r["geometry"]["coordinates"]
-    pts = [(float(c[1]), float(c[0])) for c in coords]
-    pts = simplify(pts)
+    pts = simplify([(float(c[1]), float(c[0])) for c in coords])
     tol = SIMPLIFY_M
     while len(pts) > MAX_POINTS:            # very long routes: coarser
         tol *= 2
         pts = simplify(pts, tol)
-    return {"points": [[round(a, 6), round(b, 6)] for a, b in pts], "dist": float(r.get("distance") or 0),
-            "dur": float(r.get("duration") or 0), "turns": turns(r)}
+    out = {"points": [[round(a, 6), round(b, 6)] for a, b in pts], "dist": float(r.get("distance") or 0),
+           "dur": float(r.get("duration") or 0), "turns": turns(r)}
+    steps = parse_steps(r)                  # (the phone's Maps card; the GPS minimap uses "turns")
+    if steps:
+        out["steps"] = steps
+    return out
 
 
-def plan(lat0, lon0, lat1, lon1, net=None, bearing=None):
+def parse(data, alternatives=None):
+    """{points: [[lat, lon], ...], dist (m), dur (s), steps?, routes?} of an OSRM route response, or raises
+    ValueError. With alternatives: "routes" carries every route OSRM offered, each {points, dist, dur, steps, tag},
+    the first being the one the top-level fields describe. Pure."""
+    if not isinstance(data, dict) or data.get("code") != "Ok" or not data.get("routes"):
+        raise ValueError(f"no route ({(data or {}).get('code') if isinstance(data, dict) else 'bad answer'})")
+    out = _one(data["routes"][0])
+    if alternatives and len(data["routes"]) > 1:
+        tags = tag_alternatives(data["routes"])
+        out["routes"] = [dict(_one(r), tag=t["tag"], main_share=t["main_share"])
+                         for r, t in zip(data["routes"], tags)]
+    return out
+
+
+def main_share(route):
+    """The share of a route's distance on numbered roads (motorways and the like carry a ref), 0..1. The phone ranks
+    its route choices with it: OSRM's fastest route happily takes lanes that make no sense to drive. Pure."""
+    total = float(route.get("distance") or 0.0)
+    if total <= 0:
+        return 0.0
+    on_ref = 0.0
+    for leg in route.get("legs") or []:
+        for s in leg.get("steps") or []:
+            if str(s.get("ref") or "").strip():
+                on_ref += float(s.get("distance") or 0.0)
+    return min(1.0, on_ref / total)
+
+
+def tag_alternatives(routes):
+    """[{tag, main_share}] for the routes OSRM answered with, in their order: the quickest, the one that stays most
+    on numbered roads and the shortest get a name; the others are "Route n". Pure."""
+    if not routes:
+        return []
+    dur = [float(r.get("duration") or 0.0) for r in routes]
+    dist = [float(r.get("distance") or 0.0) for r in routes]
+    share = [main_share(r) for r in routes]
+    best = {"Fastest": dur.index(min(dur)), "Main roads": share.index(max(share)), "Shortest": dist.index(min(dist))}
+    out = [{"tag": None, "main_share": round(share[i], 3)} for i in range(len(routes))]
+    for name, i in best.items():
+        if out[i]["tag"] is None:
+            out[i]["tag"] = name
+    for i, r in enumerate(out):
+        if r["tag"] is None:
+            r["tag"] = f"Route {i + 1}"
+    return out
+
+
+def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, steps=False, alternatives=None):
     """The road route from (lat0, lon0) to (lat1, lon1) (blocking), starting the way bearing points if it can (else
-    without it). Raises netfetch.FetchError or ValueError."""
+    without it). With alternatives: also the other routes OSRM offers, as "routes" (each {points, dist, dur, steps,
+    tag}). Raises netfetch.FetchError or ValueError."""
     net = net if net is not None else netfetch.default_fetcher()
     if bearing is not None:
         try:
-            return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing), kind="demand").body.decode("utf-8")))
+            got = parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing, steps, alternatives),
+                                            kind="demand").body.decode("utf-8")), alternatives)
         except (ValueError, netfetch.FetchFailed) as e:   # no road that way near the start (OSRM: 400 NoSegment,
             if isinstance(e, netfetch.FetchFailed) and e.status != 400:      # a car across a field): any direction
                 raise
-    return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1), kind="demand").body.decode("utf-8")))
+            got = None
+    else:
+        got = None
+    if got is None:
+        got = parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, steps=steps, alternatives=alternatives),
+                                       kind="demand").body.decode("utf-8")), alternatives)
+    return got

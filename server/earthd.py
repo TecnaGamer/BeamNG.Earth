@@ -133,6 +133,7 @@ import imagery as imagerymod  # noqa: E402
 import matslots as matslotsmod  # noqa: E402
 import maptiles as maptilesmod  # noqa: E402
 import geocode as geocodemod  # noqa: E402
+import phoneapi as phoneapimod  # noqa: E402
 import routing as routingmod  # noqa: E402
 import updates as updatesmod  # noqa: E402
 import cpupin  # noqa: E402
@@ -2812,8 +2813,8 @@ class Connection:
         self.following = True                   # the mod moves its block (pose "follow"; false high up)
 
     async def map_tiles(self, msg):
-        """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels"; the
-        most wanted first): each written once under <user>/temp/beamngEarth/maptiles/ (maptiles.tile_path; the
+        """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels", or
+        "apple" for the phone; the most wanted first): each written once under <user>/temp/beamngEarth/maptiles/ (maptiles.tile_path; the
         game's UI loads it from there: its browser cancels every http request, even to 127.0.0.1) and said as soon
         as it is there, map_tiles_ready {"tiles": [[z, x, y, ok, layer]]}. Built maptiles.FILE_WORKERS at a time
         (one by one, a 48-tile view took ~10 s and was said only at the end, 2026-10-16); each request replaces
@@ -2853,7 +2854,8 @@ class Connection:
         try:
             r = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"))
+                float(msg["lon1"]), self.s.net, msg.get("bearing"), bool(msg.get("steps")),
+                msg.get("alternatives"))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]
@@ -2932,6 +2934,33 @@ class Connection:
                     log.debug("route download: %s: %s", type(e).__name__, e)
             push(False)
         self.s.route_pool.submit(run)
+
+    async def phone_search(self, msg):
+        """The phone's search {"id", "q", "lat"?, "lon"?} -> phone_search_result {"id", "results": [...], "error"?}:
+        the saved places of the user folder first, then Photon's places nearest first (phoneapi.search_cached)."""
+        out = {"type": "phone_search_result", "id": msg.get("id"), "results": []}
+        try:
+            out["results"], error = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, phoneapimod.search_cached, str(msg.get("q") or ""), msg.get("lat"), msg.get("lon"),
+                self.s.user_dir, self.s.net)
+            if error:
+                out["error"] = error
+        except Exception as e:          # offline: the phone shows the saved places it has
+            out["error"] = f"{type(e).__name__}: {e}"[:120]
+        log.debug("phone search %r: %d results%s", msg.get("q"), len(out["results"]),
+                  (" (" + out["error"] + ")") if "error" in out else "")
+        self.send(out)
+
+    async def phone_reverse(self, msg):
+        """A dropped pin's name {"id", "lat", "lon"} -> phone_reverse_result {"id", "name", "detail"}: Photon's
+        nearest place (phoneapi.reverse), or the coordinates when it cannot be asked."""
+        out = {"type": "phone_reverse_result", "id": msg.get("id"), "name": "", "detail": ""}
+        try:
+            out.update(await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, phoneapimod.reverse, float(msg["lat"]), float(msg["lon"]), self.s.net))
+        except Exception as e:
+            out["error"] = f"{type(e).__name__}: {e}"[:120]
+        self.send(out)
 
     async def server_list(self):
         """The BeamNG.Earth server list (native/serverlist, SERVER_LIST_URL) for the mod's tab in BeamMP's server browser
@@ -3378,6 +3407,10 @@ class Connection:
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "phone_search":            # the phone's search: the saved places, then Photon (phoneapi.py)
+            self.spawn(self.phone_search(msg))
+        elif kind == "phone_reverse":           # a dropped pin's name (phoneapi.reverse)
+            self.spawn(self.phone_reverse(msg))
         elif kind == "route":                   # the GPS: the whole road route (routing.py)
             self.spawn(self.route(msg))
         elif kind == "where":                   # the status bar's street, town and country (geocode.py)
@@ -4645,9 +4678,11 @@ async def main_async(args):
     map_srv = None
     if getattr(args, "map_tiles", "on") == "on" and server.imagery is not None:
         try:                        # the world map's tiles, 127.0.0.1 only (a failure only loses the map)
-            server.map_tiles = maptilesmod.MapTiles(server.imagery)
+            server.map_tiles = maptilesmod.MapTiles(
+                server.imagery, api=phoneapimod.PhoneApi(server.user_dir, server.net))
             map_srv, server.map_port = await server.map_tiles.start(getattr(args, "map_port", 0))
-            log.info("map tiles on http://127.0.0.1:%d/tiles/{z}/{x}/{y}.jpg", server.map_port)
+            log.info("map tiles on http://127.0.0.1:%d/tiles/{z}/{x}/{y}.jpg (and /api/search, /api/route)",
+                     server.map_port)
         except OSError as e:
             log.warning("map tiles off: %s", e)
     srv = await asyncio.start_server(

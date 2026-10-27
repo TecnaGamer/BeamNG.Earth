@@ -16,6 +16,10 @@
     {
       "control": "ctrl o",
       "action": "beamngEarth_phone"
+    },
+    {
+      "control": "pageup",
+      "action": "beamngEarth_phoneToggle"
     }
   ]
 }

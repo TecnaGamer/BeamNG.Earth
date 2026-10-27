@@ -11,3 +11,5 @@ setExtensionUnloadMode('beamngEarth_dev', 'manual')
 setExtensionUnloadMode('beamngEarth_report', 'manual')
 -- The BeamNG.Earth servers list for the tab in BeamMP's server browser (serverlist.lua; fetches only when asked).
 setExtensionUnloadMode('beamngEarth_serverlist', 'manual')
+-- The phone app's Lua side (earthPhone.lua: PgUp, the telemetry to the UI app, search and the destination).
+setExtensionUnloadMode('beamngEarth_earthPhone', 'manual')

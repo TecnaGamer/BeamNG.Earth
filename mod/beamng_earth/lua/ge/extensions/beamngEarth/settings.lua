@@ -478,7 +478,8 @@ end
 -- goes out too (it cancels).
 M.MAP_ASK_S = 4
 M.MAP_TILES_DIR = '/temp/beamngEarth/maptiles/'
-M.MAP_LAYERS = { sat = '.jpg', map = '.jpg', labels = '.png' }   -- server maptiles.LAYERS
+M.MAP_LAYERS = { sat = '.jpg', map = '.jpg', labels = '.png', apple = '.jpg', appledark = '.jpg',
+  labelsdark = '.png', sathd = '.jpg' }                                          -- server maptiles.LAYERS
 function M.mapTilePath(layer, z, x, y)
   local zxy = string.format('%d/%d/%d', z, x, y)
   if layer == 'sat' then return M.MAP_TILES_DIR .. zxy .. '.jpg' end   -- (where it always was)
@@ -643,6 +644,22 @@ end
 function M.togglePhone()
   phoneUp = not phoneUp
   if guihooks then guihooks.trigger('BneEarthPhone', { up = phoneUp }) end
+end
+
+-- The app on the phone's screen (the phone tells, '' for the home screen), and Page Up's phone-on-an-app
+-- (ianmadez's Maps, merged in 2026-10-27): up on app; up on another app: switched to it; up on it: put away.
+local phoneApp = ''
+function M.uiPhoneApp(id) phoneApp = tostring(id or '') return true end
+function M.togglePhoneApp(app)
+  app = tostring(app or '')
+  if phoneUp and phoneApp == app then
+    phoneUp = false
+    if guihooks then guihooks.trigger('BneEarthPhone', { up = false }) end
+  else
+    phoneUp, phoneApp = true, app
+    if guihooks then guihooks.trigger('BneEarthPhone', { up = true, app = app }) end
+  end
+  return phoneUp
 end
 
 local function wallpapers()

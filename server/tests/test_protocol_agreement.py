@@ -40,6 +40,11 @@ docs/V1_2_DESIGN.md §7 as amended by §12; server/README.md documents the same 
   - live retexture (--colormatch / --deshadow): the 'far_retex' message (additive the same way), sent
     in a session whose colour-match regions turn ready once the far field is shown; core.lua hands it
     to farfield.onRetex, which reads anchorId / key / texture.
+  - the phone (phoneapi.py, earthPhone.lua; additive): 'phone_search' -> 'phone_search_result' (the
+    saved places of the user folder first, then Photon nearest the car, each with distance_km),
+    'phone_reverse' -> 'phone_reverse_result' (a dropped pin's name), and 'route' gains steps,
+    'route_result' its [{at, dist, dur, name, type, modifier}] a phone destination asks for with the
+    GPS's own single OSRM request.
 """
 import json
 import math
@@ -130,8 +135,13 @@ MOD_TO_SERVER = {
     "gas_stations": {"on": F(bool)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},   # the map's search box
+    # the phone's search (phoneapi.py; additive): the saved places, then Photon, with the distance to each
+    "phone_search": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},
+    "phone_reverse": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},   # a dropped pin's name (phoneapi.reverse)
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
-              "bearing": F(NUM, OPT)},   # the GPS (routing.py); bearing: the car's heading, the route starts that way
+              "bearing": F(NUM, OPT),   # the GPS (routing.py); bearing: the car's heading, the route starts that way
+              "steps": F(bool, OPT),    # the phone's turn-by-turn steps asked with the route (routing.parse_steps)
+              "alternatives": F(int, OPT)},   # the phone's route choice: how many routes to ask for
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
     "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # the update notice's button: the server opens the releases page (updates.open_page; additive)
@@ -157,8 +167,13 @@ SERVER_TO_MOD = {
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT)},   # geocode.py (Photon)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "turns": F(list, OPT),
-                     "error": F(str, OPT)},  # OSRM; turns: the GPS's turn-by-turn (routing.turns)
+                     "error": F(str, OPT),  # OSRM; turns: the GPS's turn-by-turn (routing.turns)
+                     "steps": F(list, OPT),  # the phone's turn-by-turn steps [{at, dist, dur, name, type, modifier}]
+                     "routes": F(list, OPT)},  # the phone's route choices [{points, dist, dur, steps, tag}]
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},  # routeahead.py: the route's corridor
+    "phone_search_result": {"id": F(int), "results": F(list), "error": F(str, OPT)},   # phoneapi.search
+    "phone_reverse_result": {"id": F(int), "name": F(str), "detail": F(str, OPT),
+                             "error": F(str, OPT)},   # phoneapi.reverse (a dropped pin)
     "update": {"current": F(str), "latest": F(str), "url": F(str)},   # a newer version on GitHub (updates.py)
     "update_status": {"state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT),
                       "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
@@ -281,6 +296,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "update",                                     # only when GitHub has a newer version (online)
                        "geocode_result", "route_result",             # only when the map / GPS asks
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
+                       "phone_search_result", "phone_reverse_result",   # the phone's places (phoneapi.py)
                        "server_list"}                                # only when the BeamMP tab asks (online)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}

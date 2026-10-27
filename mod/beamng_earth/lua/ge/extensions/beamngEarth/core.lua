@@ -89,6 +89,7 @@ local X = { jobs = require('beamngEarth/jobs'),             -- garage-to-garage 
   wallet = require('beamngEarth/wallet'),                   -- the player's money: fuel and tolls (wallet.lua)
   roadweather = require('beamngEarth/roadweather'),         -- rain and snow on the roads: grip and look
   rally = require('beamngEarth/rally'), rallyResults = {},  -- the Rally app's stages (rally.lua)
+  phoneSearchResults = {}, phoneReverseResults = {},        -- the Maps app's place search / pin names (earthPhone.lua)
   placesResults = {}, jobResults = {}, mediaState = nil, fuelResults = {} }   -- the phone's / map's server answers
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
@@ -702,7 +703,7 @@ local function formatKnown(f)
 end
 
 local geocodeResults = {}       -- the world map's address search answers: id -> { results, error }
-local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, error }
+local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, steps, error }
 
 -- The pooled shape slots (far tiles, road / building tiles) let go since the last pose, for this server; nil if none.
 local function slotsGoneNow()
@@ -947,9 +948,6 @@ local function onMessage(msg)
     end
   elseif t == 'route_result' then
     if msg.id then routeResults[msg.id] = { points = msg.points or {}, dist = msg.dist, dur = msg.dur, error = msg.error } end
-  elseif t == 'route_download' then
-    -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
-    gps.onRouteDownload(msg)
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
   elseif t == 'places_near_result' then
@@ -963,6 +961,10 @@ local function onMessage(msg)
   elseif t == 'nearest_fuel_result' then
     -- the gas station nearest the player (server fuelfind.py): settings.uiNearestFuelResult teleports there
     if msg.id then X.fuelResults[msg.id] = msg end
+  elseif t == 'phone_search_result' then
+    if msg.id then X.phoneSearchResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+  elseif t == 'phone_reverse_result' then
+    if msg.id then X.phoneReverseResults[msg.id] = { name = msg.name, detail = msg.detail } end
   elseif t == 'map_tiles_ready' then
     -- a world map tile file is written (settings.mapTiles: the map polls every 250 ms while it misses tiles)
   elseif t == 'navgraph' then
@@ -2388,10 +2390,33 @@ function M.takeNearestFuel(id)
   X.fuelResults[id] = nil
   return r
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, steps, alternatives)
   if not net.isConnected() then return false end
-  net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing })
+  net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
+    steps = steps or nil, alternatives = alternatives or nil })
   return true
+end
+-- The phone's search (earthPhone.lua): the saved places, then Photon (phoneapi.py); the answer is phone_search_result.
+function M.requestPhoneSearch(id, q, lat, lon)
+  if not net.isConnected() then return false end
+  net.send({ type = 'phone_search', id = id, q = q, lat = lat, lon = lon })
+  return true
+end
+function M.takePhoneSearch(id)
+  local r = X.phoneSearchResults[id]
+  X.phoneSearchResults[id] = nil
+  return r
+end
+-- A dropped pin's name (earthPhone.lua): the server's nearest place, reversed (phoneapi.reverse).
+function M.requestPhoneReverse(id, lat, lon)
+  if not net.isConnected() then return false end
+  net.send({ type = 'phone_reverse', id = id, lat = lat, lon = lon })
+  return true
+end
+function M.takePhoneReverse(id)
+  local r = X.phoneReverseResults[id]
+  X.phoneReverseResults[id] = nil
+  return r
 end
 function M.takeRoute(id)
   local r = routeResults[id]

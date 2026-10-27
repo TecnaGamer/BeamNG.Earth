@@ -6,7 +6,7 @@
 // (wallpaper from the screenshots and the wallpapers folder, size, theme, accent, the weather mode). Everything through
 // beamngEarth_settings.uiPhone* (polled once a second while the phone is up).
 angular.module('beamng.apps')
-.directive('beamngEarthPhone', [function () {
+.directive('beamngEarthPhone', ['$ocLazyLoad', '$compile', function ($ocLazyLoad, $compile) {
   var S = 'beamngEarth_settings'
   var ICONS = {
     bank: '<path d="M4 10 L16 4 L28 10 Z M6 12 H26 M8 13 V23 M13 13 V23 M19 13 V23 M24 13 V23 M5 25 H27" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>',
@@ -16,10 +16,13 @@ angular.module('beamng.apps')
     garage: '<path d="M4 14 L16 6 L28 14 V27 H4 Z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><path d="M9 27 V18 H23 V27 M9 21 H23 M9 24 H23" fill="none" stroke="#fff" stroke-width="2"/>',
     realestate: '<path d="M5 15 L16 6 L27 15" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><path d="M8 13 V26 H24 V13" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M14 26 V19 H18 V26" fill="#fff"/><circle cx="25" cy="7" r="3.5" fill="#ffd34d"/>',
 beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path d="M6 11 L16 16 L26 11 M16 16 V28" fill="none" stroke="#b36b00" stroke-width="1.4"/><text x="16" y="25" text-anchor="middle" font-family="Arial Black,Arial" font-weight="900" font-size="11" fill="#1a1a1a">B</text>',
+    maps: '<path d="M16 3 C11 3 7.5 6.6 7.5 11.2 C7.5 17.2 16 28 16 28 C16 28 24.5 17.2 24.5 11.2 C24.5 6.6 21 3 16 3 Z" fill="#fff"/><circle cx="16" cy="11.2" r="3.4" fill="#0a84ff"/>',
     rally: '<path d="M8 5 V28" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M9 6 H25 V18 H9 Z" fill="#fff"/><path d="M9 6 H13 V10 H9 Z M17 6 H21 V10 H17 Z M13 10 H17 V14 H13 Z M21 10 H25 V14 H21 Z M9 14 H13 V18 H9 Z M17 14 H21 V18 H17 Z" fill="#111"/>',
     settings: '<circle cx="16" cy="16" r="4.5" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M16 4 V8 M16 24 V28 M4 16 H8 M24 16 H28 M7.5 7.5 L10.3 10.3 M21.7 21.7 L24.5 24.5 M7.5 24.5 L10.3 21.7 M21.7 10.3 L24.5 7.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>'
   }
   var APPS = [
+    // Maps: ianmadez's Apple/Google Maps style navigation (BeamNGEarthMaps, his PR #299), inside this phone
+    { id: 'maps', name: 'Maps', bg: 'linear-gradient(160deg,#5ac8fa,#0a84ff)' },
     { id: 'bank', name: 'Bank', bg: 'linear-gradient(160deg,#2fbf71,#127a46)' },
     { id: 'weather', name: 'Weather', bg: 'linear-gradient(160deg,#4aa3ff,#1c5fd6)' },
     { id: 'jobs', name: 'Jobs', bg: 'linear-gradient(160deg,#ff9f43,#e0601b)' },
@@ -70,6 +73,8 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
     '.bnp-big{font-size:34px;font-weight:800;letter-spacing:-.5px}',
     '.bnp-mctl{display:flex;justify-content:center;gap:26px;font-size:30px;margin-top:14px}.bnp-mctl span{cursor:pointer}',
     '.bnp-vol{display:flex;align-items:center;gap:10px;margin:18px 4px 6px;font-size:14px}',
+    '.bnp-mapsview{padding:0 !important}.bnp-mapshost{position:absolute;left:0;top:0;right:0;bottom:0}',
+    '.bnp-mapsback{position:absolute;left:12px;top:38px;z-index:6;background:rgba(255,255,255,.85);color:#0a84ff;padding:3px 10px;border-radius:12px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.2)}',
     '.bnp-vtrack{position:relative;flex:1;height:22px;cursor:pointer}',
     '.bnp-vtrack:before{content:"";position:absolute;left:0;right:0;top:9px;height:4px;border-radius:2px;background:rgba(255,255,255,.3)}',
     '.bnp-vfill{position:absolute;left:0;top:9px;height:4px;border-radius:2px;background:#1ed760}',
@@ -185,6 +190,9 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
               '<div style="font-size:12px;color:#c9ced6">From {{ j.pickup.name }}<span ng-if="j.away != null"> ({{ dist(j.away) }} from you)</span> · {{ (j.dist / 1609.344).toFixed(1) }} mi · {{ clock(j.limit) }}</div>' +
               '<div style="text-align:right;margin-top:4px"><button class="bnp-btn" style="background:#ff9900;color:#111" ng-click="lua(\'uiJobAccept(\' + ($index + 1) + \')\')">Start route</button></div></div></div>' +
         '</div>' +
+        // Maps (ianmadez's navigation, merged into the phone 2026-10-27): his map fills the screen, compiled in on open
+        '<div class="bnp-view bnp-mapsview" ng-if="app == \'maps\'"><div class="bnp-mapshost"></div>' +
+          '<span class="bnp-back bnp-mapsback" ng-click="home()">‹ Home</span></div>' +
         // Rally (the user, 2026-10-26: a real US stage, timed with pacenotes, in a loaned rally car): the STPR's forest
         // stages with your best times; the run you are on
         '<div class="bnp-view" ng-if="app == \'rally\'" style="background:#0d0d0f;color:#fff"><span class="bnp-back" style="color:#ff3b30" ng-click="home()">‹ Home</span>' +
@@ -237,7 +245,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       scope.app = null
       scope.p = { prefs: {}, bank: {}, weather: { days: [{}], now: {} }, jobs: {}, media: {}, wallpapers: [] }
       scope.apps = APPS
-      scope.dock = [APPS[0], APPS[2], APPS[4], APPS[APPS.length - 1]]
+      scope.dock = ['maps', 'bank', 'jobs', 'settings'].map(function (id) { return APPS.filter(function (a) { return a.id == id })[0] })
       scope.accents = ACCENTS
       scope.icon = function (id) {
         return 'url("data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">' + ICONS[id] + '</svg>') + '")'
@@ -269,12 +277,43 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       setTimeout(function () { themeVars() }, 0)
       function lua(cmd, cb) { if (window.bngApi) bngApi.engineLua(S + ' and ' + S + '.' + cmd, cb || function () { poll() }) }
       scope.lua = function (cmd) { lua(cmd) }
+      // Maps: his directive loaded on first use (the game loads an app's script only for apps in the layout:
+      // app-service.js, ocLazyLoad) and compiled into the screen; removed on leaving, so his $destroy hides it
+      var MAPS_SRC = '/ui/modules/apps/BeamNGEarthMaps/app.js'
+      var mapsScope = null, mapsEl = null, mapsLoad = null
+      function unmountMaps() {
+        if (mapsScope) { mapsScope.$destroy(); mapsScope = null }
+        if (mapsEl) { mapsEl.remove(); mapsEl = null }
+      }
+      function mountMaps() {
+        mapsLoad = mapsLoad || $ocLazyLoad.load(MAPS_SRC).catch(function () {
+          return new Promise(function (ok, fail) {          // (the loader's own fallback: a plain script tag)
+            var s = document.createElement('script'); s.src = MAPS_SRC; s.onload = ok; s.onerror = fail; document.head.appendChild(s)
+          })
+        })
+        mapsLoad.then(function () {
+          setTimeout(function () {
+            var host = element[0].querySelector('.bnp-mapshost')
+            if (!host || mapsEl || scope.app != 'maps') return
+            mapsScope = scope.$new(true)
+            mapsEl = $compile('<beamng-earth-maps class="is-embedded"></beamng-earth-maps>')(mapsScope)
+            host.appendChild(mapsEl[0])
+          }, 0)
+        })
+      }
       scope.open = function (id) {
+        if (scope.app == 'maps' && id != 'maps') unmountMaps()
         scope.app = id
+        lua('uiPhoneApp(' + JSON.stringify(id || '') + ')', function () {})
+        if (id == 'maps') mountMaps()
         if (id == 'garage') scope.gtab = 'repair'
         else if (id == 'realestate' && scope.gtab == 'repair') scope.gtab = 'property'
       }
-      scope.home = function () { scope.app = null }
+      scope.home = function () {
+        if (scope.app == 'maps') unmountMaps()
+        scope.app = null
+        lua('uiPhoneApp("")', function () {})
+      }
       scope.set = function (k, v) {
         scope.p.prefs[k] = v
         themeVars()
@@ -357,6 +396,8 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       scope.$on('BneEarthPhone', function (_, d) {
         scope.$evalAsync(function () {
           scope.up = d && d.up != null ? !!d.up : !scope.up
+          if (!scope.up && scope.app == 'maps') unmountMaps()     // (put away: the map stops streaming)
+          else if (scope.up && scope.app == 'maps' && !(d && d.app)) mountMaps()
           if (d && d.app) scope.open(d.app)           // (a garage spot: straight to its menu)
           if (scope.up) poll()
         })

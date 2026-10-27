@@ -46,5 +46,7 @@
 "onDown": "if beamngEarth_settings then beamngEarth_settings.togglePhone() end",
 "title": "BeamNG.Earth: phone",
 "desc": "Shows or hides your phone (bank, weather, jobs, music, settings)."
+},
+"beamngEarth_phoneToggle": {"cat":"gameplay", "order": 88, "ctx": "tlua", "onDown": "if beamngEarth_settings then beamngEarth_settings.togglePhoneApp('maps') end", "title": "BeamNG.Earth: phone, Maps", "desc": "Opens the phone straight on Maps (ianmadez's Apple/Google Maps style navigation: search a place, set a destination, turn-by-turn), or hides it. Page Up."
 }
 }

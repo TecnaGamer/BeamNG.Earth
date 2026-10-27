@@ -298,6 +298,7 @@ local function setRules()
   local r = graph.rules
   if r then
     M.rules = { rightHandDrive = r.rightHandDrive and true or false, turnOnRed = r.turnOnRed and true or false }
+    M.mph = r.mph and true or false
     M.SIGNAL_TYPE = r.redYellow and 'lightsBasicEU' or 'lightsBasic'
     -- (kept beside the rules, not in them: M.rules is written to the game's own road rules file) the GPS's speed
     -- limit box shows mph or km/h as the country posts them

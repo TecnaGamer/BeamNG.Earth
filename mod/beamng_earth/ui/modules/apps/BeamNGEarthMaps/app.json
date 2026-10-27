@@ -1,0 +1,21 @@
+{
+  "domElement": "<beamng-earth-maps></beamng-earth-maps>",
+  "name": "BeamNG.Earth: Maps",
+  "types": [
+    "ui.apps.categories.utility"
+  ],
+  "description": "ianmadez's Apple/Google Maps style navigation. It runs inside the BeamNG.Earth phone's Maps app (Ctrl+O, or Page Up straight to Maps); add the phone, not this, to a layout.",
+  "css": {
+    "right": "5px",
+    "bottom": "310px",
+    "width": "340px",
+    "height": "737px"
+  },
+  "author": "BeamNG.Earth",
+  "version": "1.0",
+  "directive": "beamngEarthMaps",
+  "appName": "beamngEarthMaps",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "yes"
+}

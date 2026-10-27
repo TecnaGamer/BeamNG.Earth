@@ -1,0 +1,775 @@
+/* The BeamNG.Earth phone. Every rule is scoped under .bngPhone and every class starts with bp- (the game's app
+   stylesheets are global: a bare .tile or .map here broke other apps' map). Shadows stay soft: no black halos.
+   The frame is a fixed 340 x 737 design, scaled to whatever box the app layout gives it (app.js fit()). */
+.bngPhone {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.bngPhone button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.bngPhone .bp-fit {
+  position: absolute;
+  width: 340px;
+  height: 737px;
+  transform-origin: top left;
+}
+
+.bngPhone .bp-phone {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 9px;
+  box-sizing: border-box;
+  border-radius: 49px;
+  pointer-events: auto;
+  background: linear-gradient(155deg, #343941 0%, #0e1114 56%, #1c2026 100%);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.26),
+    0 18px 34px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+
+/* Page Up: up and in quickly, a small settle at the top */
+.bngPhone .bp-phone.is-in {
+  animation: bp-phone-in 230ms cubic-bezier(0.22, 1.16, 0.36, 1);
+}
+@keyframes bp-phone-in {
+  from { opacity: 0; transform: translateY(30px) scale(0.975); }
+  60% { opacity: 1; }
+  to { opacity: 1; transform: none; }
+}
+
+.bngPhone .bp-screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 41px;
+  overflow: hidden;
+  background: #e9ebe4;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.55);
+  transition: background-color 220ms ease-out;
+}
+.bngPhone .bp-screen.is-dark { background: #1f1f22; }
+
+/* --- map ----------------------------------------------------------------------------------- */
+.bngPhone .bp-map {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background: #e9ebe4;
+  transition: background-color 220ms ease-out;
+}
+.bngPhone .bp-map:active { cursor: grabbing; }
+.bngPhone .bp-map.is-satellite { background: #24262a; }
+
+.bngPhone .bp-tile {
+  position: absolute;
+  width: 256px;
+  height: 256px;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.bngPhone .bp-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* the tiles and the route scale together while the wheel is between two tile levels */
+.bngPhone .bp-zoomable {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.bngPhone .bp-hint {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 88px;
+  padding: 9px 12px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #3c3c43;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10);
+}
+
+/* --- dynamic island ------------------------------------------------------------------------ */
+.bngPhone .bp-island {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 6;
+  width: 100px;
+  height: 28px;
+  transform: translateX(-50%);
+  border-radius: 15px;
+  background: #000;
+  color: #34c759;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: width 340ms cubic-bezier(0.34, 1.5, 0.64, 1);
+}
+.bngPhone .bp-island.is-wide { width: 158px; }
+
+.bngPhone .bp-glyph { width: 19px; height: 19px; }
+
+.bngPhone .bp-glyph path,
+.bngPhone .bp-banner-glyph path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* --- turn banner --------------------------------------------------------------------------- */
+.bngPhone .bp-banner {
+  position: absolute;
+  z-index: 5;
+  top: 48px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 13px;
+  border-radius: 17px;
+  color: #fff;
+  background: linear-gradient(180deg, #46c766 0%, #2e9f4c 100%);
+  box-shadow:
+    0 2px 6px rgba(26, 92, 48, 0.20),
+    0 8px 18px rgba(26, 92, 48, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  animation: bp-banner-in 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes bp-banner-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.bngPhone .bp-banner-glyph { width: 30px; height: 30px; flex: 0 0 30px; }
+
+.bngPhone .bp-banner-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.12;
+  min-width: 0;
+}
+.bngPhone .bp-banner-text strong {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.bngPhone .bp-banner-text span {
+  font-size: 14.5px;
+  opacity: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* the navigator's sentence, and the turn after it ("then turn left onto Oak Avenue") */
+.bngPhone .bp-banner-text .bp-caption { font-weight: 600; }
+.bngPhone .bp-banner-text .bp-then { font-size: 12.5px; font-weight: 500; opacity: 0.92; }
+.bngPhone .bp-banner.is-now {
+  background: linear-gradient(180deg, #34c759 0%, #1f8f3f 100%);
+  animation: bp-banner-in 240ms cubic-bezier(0.2, 0, 0, 1), bp-now 900ms ease-out 240ms;
+}
+@keyframes bp-now {
+  0% { box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.55), 0 8px 18px rgba(26, 92, 48, 0.16); }
+  100% { box-shadow: 0 0 0 14px rgba(52, 199, 89, 0), 0 8px 18px rgba(26, 92, 48, 0.16); }
+}
+
+/* --- search -------------------------------------------------------------------------------- */
+.bngPhone .bp-search {
+  position: absolute;
+  z-index: 5;
+  top: 48px;
+  left: 10px;
+  right: 10px;
+}
+
+.bngPhone .bp-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 20px;
+  font-size: 15px;
+  color: #0b0b0c;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.10),
+    0 6px 14px rgba(0, 0, 0, 0.07);
+  outline: none;
+}
+.bngPhone .bp-input::placeholder { color: #6b6b70; }
+.bngPhone .bp-input:focus {
+  box-shadow:
+    0 0 0 3px rgba(10, 132, 255, 0.32),
+    0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.bngPhone .bp-results {
+  margin-top: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(16px) saturate(1.3);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.10),
+    0 10px 22px rgba(0, 0, 0, 0.08);
+}
+/* the game's browser draws its own orange scrollbar: it is hidden and the lists still scroll (wheel / drag) */
+.bngPhone .bp-results,
+.bngPhone .bp-recents {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.bngPhone .bp-results::-webkit-scrollbar,
+.bngPhone .bp-recents::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.bngPhone .bp-group-label {
+  padding: 7px 14px 3px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #5b5b60;
+}
+/* four recents fit; more scroll inside the group */
+.bngPhone .bp-recents {
+  max-height: 232px;
+  overflow-y: auto;
+}
+
+.bngPhone .bp-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.bngPhone .bp-forget {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.06);
+  color: #48484a;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, transform 240ms cubic-bezier(0.34, 1.5, 0.64, 1);
+}
+.bngPhone .bp-forget svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+.bngPhone .bp-forget:active { transform: scale(0.9); background: rgba(0, 0, 0, 0.12); }
+@media (hover: hover) and (pointer: fine) {
+  .bngPhone .bp-forget:hover { background: rgba(255, 59, 48, 0.16); color: #d70015; }
+}
+
+.bngPhone .bp-result {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px 10px 14px;
+  cursor: pointer;
+}
+.bngPhone .bp-result + .bp-result { box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.08); }
+@media (hover: hover) and (pointer: fine) {
+  .bngPhone .bp-result:hover { background: rgba(10, 132, 255, 0.07); }
+}
+.bngPhone .bp-result:active { background: rgba(10, 132, 255, 0.14); }
+.bngPhone .bp-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0b0b0c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bngPhone .bp-meta {
+  font-size: 12.5px;
+  color: #4a4a4f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bngPhone .bp-result.is-muted {
+  cursor: default;
+  color: #5b5b60;
+  font-size: 13px;
+  font-weight: 500;
+}
+.bngPhone .bp-result.is-muted:active { background: transparent; }
+
+/* --- round buttons ------------------------------------------------------------------------- */
+.bngPhone .bp-round {
+  position: absolute;
+  right: 14px;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0a84ff;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px) saturate(1.3);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.10),
+    0 5px 12px rgba(0, 0, 0, 0.07);
+  transition:
+    transform 300ms cubic-bezier(0.34, 1.5, 0.64, 1),
+    box-shadow 300ms ease-out,
+    bottom 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.bngPhone .bp-round svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.bngPhone .bp-round svg .solid { fill: currentColor; stroke: none; }
+.bngPhone .bp-round:active {
+  transform: scale(0.93);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition:
+    transform 110ms cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 110ms ease-out,
+    bottom 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.bngPhone .bp-recenter { bottom: 88px; }
+.bngPhone .bp-layers { bottom: 144px; }
+.bngPhone .bp-search-button { bottom: 200px; }
+
+/* --- layer switcher ------------------------------------------------------------------------ */
+.bngPhone .bp-layer-sheet {
+  position: absolute;
+  z-index: 6;
+  right: 14px;
+  bottom: 200px;
+  width: 152px;
+  padding: 5px;
+  border-radius: 16px;
+  background: rgba(28, 28, 30, 0.86);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.22),
+    0 12px 26px rgba(0, 0, 0, 0.20);
+  animation: bp-sheet-in 180ms cubic-bezier(0.2, 0, 0, 1);
+  transition: bottom 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.bngPhone .bp-layer-opt {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border-radius: 11px;
+  color: #f2f2f7;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, transform 240ms cubic-bezier(0.34, 1.5, 0.64, 1);
+}
+.bngPhone .bp-layer-opt:active { transform: scale(0.97); background: rgba(255, 255, 255, 0.14); }
+@media (hover: hover) and (pointer: fine) {
+  .bngPhone .bp-layer-opt:hover { background: rgba(255, 255, 255, 0.10); }
+}
+.bngPhone .bp-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+.bngPhone .bp-swatch-street { background: linear-gradient(160deg, #f2f2ee 0%, #dfe7d4 60%, #b9d6f2 100%); }
+.bngPhone .bp-swatch-dark { background: linear-gradient(160deg, #3a3a3e 0%, #202024 60%, #14243a 100%); }
+.bngPhone .bp-swatch-terrain,
+.bngPhone .bp-swatch-satellite { background: linear-gradient(160deg, #6b7a52 0%, #4a5a3c 45%, #29405c 100%); }
+.bngPhone .bp-layer-name { flex: 1 1 auto; }
+.bngPhone .bp-tick {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: #34c759;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* --- speed limit --------------------------------------------------------------------------- */
+.bngPhone .bp-limit {
+  position: absolute;
+  right: 14px;
+  bottom: 22px;
+  width: 50px;
+  height: 58px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #111;
+  background: #fff;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.10),
+    0 5px 12px rgba(0, 0, 0, 0.08),
+    inset 0 0 0 3px #e03131,
+    inset 0 0 0 4px rgba(255, 255, 255, 0.9);
+  transition: bottom 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.bngPhone .bp-limit-value {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.bngPhone .bp-limit-unit {
+  margin-top: 2px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #48484a;
+}
+
+/* --- ETA sheet ----------------------------------------------------------------------------- */
+.bngPhone .bp-sheet {
+  position: absolute;
+  z-index: 5;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(16px) saturate(1.3);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.10),
+    0 10px 24px rgba(0, 0, 0, 0.08);
+  color: #0b0b0c;
+  animation: bp-sheet-in 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+.bngPhone .bp-sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+/* the route choices: the fastest, the one that keeps to the main roads, the shortest */
+.bngPhone .bp-routes {
+  display: flex;
+  gap: 6px;
+}
+.bngPhone .bp-route {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 6px;
+  border: 0;
+  border-radius: 11px;
+  background: rgba(118, 118, 128, 0.12);
+  color: #0b0b0c;
+  text-align: center;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, transform 240ms cubic-bezier(0.34, 1.5, 0.64, 1);
+}
+.bngPhone .bp-route:active { transform: scale(0.96); }
+.bngPhone .bp-route-tag {
+  font-size: 12.5px;
+  font-weight: 700;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bngPhone .bp-route-meta { font-size: 11.5px; font-weight: 600; color: #3c3c43; }
+.bngPhone .bp-route.is-on { background: rgba(10, 132, 255, 0.16); color: #0a58c9; }
+.bngPhone .bp-route.is-on .bp-route-meta { color: #0a58c9; }
+.bngPhone .bp-credit {
+  padding: 7px 14px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #5b5b60;
+}
+@keyframes bp-sheet-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+.bngPhone .bp-eta { display: flex; align-items: baseline; gap: 4px; flex: 0 0 auto; }
+.bngPhone .bp-eta-time {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.bngPhone .bp-eta-unit { font-size: 14px; font-weight: 600; color: #3c3c43; }
+
+.bngPhone .bp-meta-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  line-height: 1.3;
+}
+.bngPhone .bp-remaining {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0b0b0c;
+  font-variant-numeric: tabular-nums;
+}
+.bngPhone .bp-dest,
+.bngPhone .bp-error {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #3c3c43;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bngPhone .bp-error { color: #d70015; font-weight: 600; }
+/* "Recalculating route…": amber, bold, and it replaces the destination line until the new route is in */
+.bngPhone .bp-recalc {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #a34a00;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: bp-recalc 1.1s ease-in-out infinite;
+}
+@keyframes bp-recalc {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.bngPhone .bp-end {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 59, 48, 0.12);
+  color: #d70015;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform 300ms cubic-bezier(0.34, 1.5, 0.64, 1),
+    background-color 150ms ease-out;
+}
+.bngPhone .bp-end:active {
+  transform: scale(0.95);
+  background: rgba(255, 59, 48, 0.18);
+  transition:
+    transform 110ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 110ms ease-out;
+}
+
+/* --- dropped pin card ---------------------------------------------------------------------- */
+.bngPhone .bp-pin-card {
+  position: absolute;
+  z-index: 5;
+  left: 10px;
+  right: 10px;
+  bottom: 84px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 9px 9px 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(16px) saturate(1.3);
+  color: #0b0b0c;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.10),
+    0 10px 22px rgba(0, 0, 0, 0.08);
+  animation: bp-sheet-in 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.bngPhone .bp-pin-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
+  line-height: 1.25;
+}
+.bngPhone .bp-pin-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #0b0b0c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bngPhone .bp-pin-detail {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #4a4a4f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bngPhone .bp-go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 11px;
+  background: #0a84ff;
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(10, 132, 255, 0.28);
+  transition: transform 300ms cubic-bezier(0.34, 1.5, 0.64, 1), background-color 150ms ease-out;
+}
+.bngPhone .bp-go svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.bngPhone .bp-go:active {
+  transform: scale(0.94);
+  background: #0a72dd;
+  transition: transform 110ms cubic-bezier(0.2, 0, 0, 1), background-color 110ms ease-out;
+}
+.bngPhone .bp-go.is-busy {
+  background: #0a72dd;
+  cursor: default;
+  opacity: 0.85;
+}
+.bngPhone .bp-pin-x {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.06);
+  color: #6b6b70;
+  cursor: pointer;
+  transition: transform 240ms cubic-bezier(0.34, 1.5, 0.64, 1), background-color 150ms ease-out;
+}
+.bngPhone .bp-pin-x svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+.bngPhone .bp-pin-x:active { transform: scale(0.9); background: rgba(0, 0, 0, 0.12); }
+
+/* the button stack and the limit move up while the ETA sheet is out (it can carry the route chips too) */
+.bngPhone .is-routing .bp-limit { bottom: 148px; }
+.bngPhone .is-routing .bp-recenter { bottom: 214px; }
+.bngPhone .is-routing .bp-layers { bottom: 270px; }
+.bngPhone .is-routing .bp-search-button { bottom: 326px; }
+.bngPhone .is-routing .bp-layer-sheet { bottom: 326px; }
+
+/* and while a dropped pin's card is out */
+.bngPhone .has-pin .bp-recenter { bottom: 196px; }
+.bngPhone .has-pin .bp-layers { bottom: 252px; }
+.bngPhone .has-pin .bp-search-button { bottom: 308px; }
+.bngPhone .has-pin .bp-layer-sheet { bottom: 308px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bngPhone .bp-island,
+  .bngPhone .bp-round,
+  .bngPhone .bp-limit,
+  .bngPhone .bp-end,
+  .bngPhone .bp-result,
+  .bngPhone .bp-go,
+  .bngPhone .bp-pin-x,
+  .bngPhone .bp-layer-opt { transition: none; }
+  .bngPhone .bp-round:active,
+  .bngPhone .bp-end:active,
+  .bngPhone .bp-go:active,
+  .bngPhone .bp-pin-x:active,
+  .bngPhone .bp-layer-opt:active { transform: none; }
+  .bngPhone .bp-phone.is-in,
+  .bngPhone .bp-banner,
+  .bngPhone .bp-banner.is-now,
+  .bngPhone .bp-sheet,
+  .bngPhone .bp-pin-card,
+  .bngPhone .bp-layer-sheet { animation: none; }
+}
+
+/* Inside the BeamNG.Earth phone's Maps app (BeamNGEarthPhone, 2026-10-27): the phone has its own frame and island, so
+   this one's frame, rounded screen and island are left out and the map fills the phone's screen. */
+.bngPhone.is-embedded .bp-phone { padding: 0; border-radius: 0; background: none; box-shadow: none; }
+.bngPhone.is-embedded .bp-phone.is-in { animation: none; }
+.bngPhone.is-embedded .bp-screen { border-radius: 0; box-shadow: none; }
+.bngPhone.is-embedded .bp-island { display: none; }

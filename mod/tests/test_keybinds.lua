@@ -53,8 +53,14 @@ if found == 0 then
   print('test_keybinds: the game was not found (BEAMNG_DIR): only our own map checked')
 else
   T.check(stock[norm('shift-ctrl i')] ~= nil, 'the stock maps were read (Ctrl+Shift+I is the game\'s AI traffic toggle)')
+  -- keys the game binds too, which cannot want them at the same time as ours: PageUp is the phone's (ours runs in
+  -- the vehicle's tlua context, the game's "moveup" in the menus)
+  local shared = { pageup = 'moveup' }
   for _, c in ipairs(ours) do
-    T.check(stock[c[1]] == nil, string.format('%s (%s) is free in the game (bound to: %s)', c[1], c[2], tostring(stock[c[1]])))
+    local key = c[1]:match('(%S+)$')
+    local game = stock[c[1]]
+    local ok = game == nil or (shared[key] ~= nil and game == shared[key])
+    T.check(ok, string.format('%s (%s) is free in the game (bound to: %s)', c[1], c[2], tostring(game)))
   end
 end
 
