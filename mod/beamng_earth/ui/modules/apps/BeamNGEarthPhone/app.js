@@ -69,6 +69,9 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
     '.bnp-seg span.on{background:var(--card);font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.25)}',
     '.bnp-big{font-size:34px;font-weight:800;letter-spacing:-.5px}',
     '.bnp-mctl{display:flex;justify-content:center;gap:26px;font-size:30px;margin-top:14px}.bnp-mctl span{cursor:pointer}',
+    '.bnp-vol{display:flex;align-items:center;gap:10px;margin:18px 4px 6px;font-size:14px}',
+    '.bnp-vol input{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;background:rgba(255,255,255,.3);outline:none}',
+    '.bnp-vol input::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:pointer}',
     '.bnp-art{width:100%;aspect-ratio:1;border-radius:16px;background:linear-gradient(135deg,#1ed760,#0c4d27);display:flex;align-items:center;justify-content:center;font-size:70px;margin:8px 0 14px}'
   ].join('\n')
 
@@ -124,6 +127,9 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
         '<div class="bnp-view" ng-if="app == \'music\'" style="background:linear-gradient(180deg,#1f3b2a,#0d0f0e);color:#fff"><span class="bnp-back" style="color:#1ed760" ng-click="home()">‹ Home</span>' +
           '<div class="bnp-art">♫</div><div style="font-size:19px;font-weight:800">{{ p.media.title || "Nothing playing" }}</div><div style="opacity:.7;font-size:14px">{{ p.media.artist || (p.media.ok === false ? "Open Spotify on your PC" : "Spotify") }}</div>' +
           '<div class="bnp-mctl"><span ng-click="media(\'prev\')">⏮</span><span ng-click="media(\'play\')">{{ p.media.playing ? "⏸" : "▶" }}</span><span ng-click="media(\'next\')">⏭</span></div>' +
+          // the volume (the user, 2026-10-26): Spotify's level in the Windows mixer, not the game's
+          '<div class="bnp-vol" ng-if="p.media.ok"><span>🔈</span><input type="range" min="0" max="100" step="1" ng-model="mvol.v" ng-change="setVol()" ng-disabled="p.media.volume == null"><span>🔊</span></div>' +
+          '<div style="opacity:.6;font-size:11px;text-align:center" ng-if="p.media.ok && p.media.volume == null">Play a song to set Spotify\'s volume</div>' +
         '</div>' +
         // garage
         // (one view for both: Garage = repair shops; Real Estate = property to buy / rent, and yours)
@@ -295,6 +301,17 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
       }
       scope.medalColor = function (m) { return { Gold: '#ffd60a', Silver: '#c7c7cc', Bronze: '#d08a4a' }[m] || '#aaa' }
       scope.rvoice = function (id) { lua('uiRallyVoice(' + JSON.stringify(id) + ')') }
+      // the slider's own value: the 1 s poll does not move it while you drag, or for a moment after
+      scope.mvol = { v: 50, t: 0 }
+      var volTimer = null
+      scope.setVol = function () {
+        scope.mvol.t = Date.now()
+        if (volTimer) return
+        volTimer = setTimeout(function () {
+          volTimer = null
+          lua('uiPhoneMedia("volume", ' + Number(scope.mvol.v) + ')', function () {})
+        }, 120)
+      }
       scope.media = function (a) { lua('uiPhoneMedia(' + JSON.stringify(a) + ')') }
       function poll() {
         lua('uiPhone and ' + S + '.uiPhone() or nil', function (p) {
@@ -302,6 +319,7 @@ beamazon: '<path d="M6 11 L16 6 L26 11 V23 L16 28 L6 23 Z" fill="#ff9900"/><path
             if (p) {
               scope.p = p
               p.prefs = p.prefs || {}
+              if (p.media && p.media.volume != null && Date.now() - scope.mvol.t > 2500) scope.mvol.v = p.media.volume
               p.bank = p.bank || {}
               p.weather = p.weather || { days: [{}], now: {} }
               scope.g = p.garage || scope.g

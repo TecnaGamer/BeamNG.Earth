@@ -2352,9 +2352,9 @@ function M.takePlacesNear(id)
   X.placesResults[id] = nil
   return r
 end
-function M.requestMedia(action)
+function M.requestMedia(action, volume)
   if not net.isConnected() then return false end
-  net.send({ type = 'media', id = 1, action = action })
+  net.send({ type = 'media', id = 1, action = action, volume = tonumber(volume) })
   return true
 end
 function M.mediaState() return X.mediaState end

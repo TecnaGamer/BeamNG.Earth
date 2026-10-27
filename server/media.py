@@ -2,6 +2,10 @@
 Spotify, but the world server runs on the same PC, so it presses the media keys (play/pause, next, previous: Spotify
 and every other player obey them) and reads the song from Spotify's window title ("Artist - Song" while it plays;
 "Spotify" / "Spotify Premium" when paused). Windows only; elsewhere {"ok": False}.
+
+The volume (the user, 2026-10-26: "a volume slider to the music app", Spotify only): Spotify's own level in the
+Windows volume mixer (its audio sessions' ISimpleAudioVolume, through the Core Audio COM interfaces by ctypes: no
+packages), so the game's sound is left as it is.
 """
 import logging
 import sys
@@ -53,8 +57,175 @@ def _spotify_title():
     return found[0] if found else None
 
 
+# Core Audio (mmdeviceapi.h / audiopolicy.h): the GUIDs and the vtable slots used
+CLSID_MMDeviceEnumerator = "BCDE0395-E52F-467C-8E3D-C4579291692E"
+IID_IMMDeviceEnumerator = "A95664D2-9614-4F35-A746-DE8DB63617E6"
+IID_IAudioSessionManager2 = "77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"
+IID_IAudioSessionControl2 = "BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"
+IID_ISimpleAudioVolume = "87CE5498-68D6-44E5-9215-6F24A0F8A1C9"
+CLSCTX_ALL = 23
+SLOT = {"QueryInterface": 0, "Release": 2, "GetDefaultAudioEndpoint": 4, "Activate": 3, "GetSessionEnumerator": 5,
+        "GetCount": 3, "GetSession": 4, "GetProcessId": 14, "SetMasterVolume": 3, "GetMasterVolume": 4}
+SPOTIFY_EXE = "spotify.exe"
+
+
+def clamp_volume(v):
+    """0..100 (int) of any number, or None. Pure."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    if v != v:
+        return None
+    return int(round(min(100.0, max(0.0, v))))
+
+
+def _spotify_volumes(fn):
+    """fn(ISimpleAudioVolume pointer, vcall) for each of Spotify's audio sessions on the default output; returns
+    the results (empty: Spotify has no session, e.g. it has not played anything yet)."""
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("b", ctypes.c_ubyte * 16)]
+
+    def guid(s):
+        g = GUID()
+        ctypes.memmove(ctypes.byref(g), uuid.UUID(s).bytes_le, 16)
+        return g
+
+    def vcall(obj, name, argtypes, *args, restype=ctypes.HRESULT):
+        vtbl = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtbl[SLOT[name]])(obj, *args)
+
+    def release(obj):
+        if obj:
+            vcall(obj, "Release", [], restype=ctypes.c_ulong)
+
+    ole32, kernel32 = ctypes.windll.ole32, ctypes.windll.kernel32
+    inited = ole32.CoInitializeEx(None, 0) >= 0      # (RPC_E_CHANGED_MODE: this thread is already set up otherwise)
+    out, held = [], []
+    try:
+        enum = ctypes.c_void_p()
+        ole32.CoCreateInstance(ctypes.byref(guid(CLSID_MMDeviceEnumerator)), None, CLSCTX_ALL,
+                               ctypes.byref(guid(IID_IMMDeviceEnumerator)), ctypes.byref(enum))
+        if not enum:
+            return out
+        held.append(enum)
+        dev = ctypes.c_void_p()
+        vcall(enum, "GetDefaultAudioEndpoint", [ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
+              0, 1, ctypes.byref(dev))                                         # eRender, eMultimedia
+        held.append(dev)
+        mgr = ctypes.c_void_p()
+        vcall(dev, "Activate", [ctypes.POINTER(GUID), wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
+              ctypes.byref(guid(IID_IAudioSessionManager2)), CLSCTX_ALL, None, ctypes.byref(mgr))
+        held.append(mgr)
+        senum = ctypes.c_void_p()
+        vcall(mgr, "GetSessionEnumerator", [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(senum))
+        held.append(senum)
+        n = ctypes.c_int()
+        vcall(senum, "GetCount", [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
+        for i in range(n.value):
+            try:
+                got = _session(i, senum, vcall, GUID, guid, held, kernel32, fn)
+            except OSError:         # (one odd session: the others still)
+                continue
+            if got is not _SKIP:
+                out.append(got)
+    finally:
+        for o in reversed(held):
+            try:
+                release(o)
+            except OSError:
+                pass
+        if inited:
+            ole32.CoUninitialize()
+    return out
+
+
+_SKIP = object()
+
+
+def _session(i, senum, vcall, GUID, guid, held, kernel32, fn):
+    """fn's result for session i when it is Spotify's, else _SKIP."""
+    import ctypes
+    from ctypes import wintypes
+    ctl = ctypes.c_void_p()
+    vcall(senum, "GetSession", [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)], i, ctypes.byref(ctl))
+    held.append(ctl)
+    ctl2 = ctypes.c_void_p()
+    vcall(ctl, "QueryInterface", [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
+          ctypes.byref(guid(IID_IAudioSessionControl2)), ctypes.byref(ctl2))
+    held.append(ctl2)
+    pid = wintypes.DWORD()
+    try:
+        vcall(ctl2, "GetProcessId", [ctypes.POINTER(wintypes.DWORD)], ctypes.byref(pid))
+    except OSError:         # (the system sounds session: no single process)
+        return _SKIP
+    if _exe_name(kernel32, pid.value) != SPOTIFY_EXE:
+        return _SKIP
+    vol = ctypes.c_void_p()
+    vcall(ctl, "QueryInterface", [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
+          ctypes.byref(guid(IID_ISimpleAudioVolume)), ctypes.byref(vol))
+    held.append(vol)
+    return fn(vol, vcall)
+
+
+def _exe_name(kernel32, pid):
+    import ctypes
+    from ctypes import wintypes
+    h = kernel32.OpenProcess(0x1000, False, pid)             # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if not kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return ""
+        return buf.value.replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def volume():
+    """Spotify's mixer volume, 0..100, or None (not Windows, no Spotify session)."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    def get(vol, vcall):
+        f = ctypes.c_float()
+        vcall(vol, "GetMasterVolume", [ctypes.POINTER(ctypes.c_float)], ctypes.byref(f))
+        return f.value
+    try:
+        got = _spotify_volumes(get)
+    except Exception as e:
+        log.debug("media volume: %s: %s", type(e).__name__, e)
+        return None
+    return clamp_volume(got[0] * 100) if got else None
+
+
+def set_volume(v):
+    """Spotify's mixer volume to v (0..100). True when a Spotify session took it."""
+    v = clamp_volume(v)
+    if v is None or sys.platform != "win32":
+        return False
+    import ctypes
+
+    def put(vol, vcall):
+        vcall(vol, "SetMasterVolume", [ctypes.c_float, ctypes.c_void_p], ctypes.c_float(v / 100.0), None)
+        return True
+    try:
+        return bool(_spotify_volumes(put))
+    except Exception as e:
+        log.debug("media set volume: %s: %s", type(e).__name__, e)
+        return False
+
+
 def state():
-    """{"ok", "playing", "artist", "title"}: ok False when Spotify is not running (or not Windows)."""
+    """{"ok", "playing", "artist", "title", "volume"}: ok False when Spotify is not running (or not Windows); volume
+    0..100 or None."""
     if sys.platform != "win32":
         return {"ok": False, "playing": False, "artist": "", "title": ""}
     try:
@@ -67,7 +238,11 @@ def state():
     playing, artist, song = parse_title(title)
     if playing:
         _last.update(title=song, artist=artist)
-    return {"ok": True, "playing": playing, "artist": _last["artist"], "title": _last["title"]}
+    out = {"ok": True, "playing": playing, "artist": _last["artist"], "title": _last["title"]}
+    v = volume()
+    if v is not None:
+        out["volume"] = v
+    return out
 
 
 def press(action):

@@ -22,5 +22,24 @@ class MediaTest(unittest.TestCase):
         self.assertFalse(media.press("nope"))
 
 
+class VolumeTest(unittest.TestCase):
+    """The Music app's slider: Spotify's mixer level (Windows only)."""
+
+    def test_clamp(self):
+        import media
+        self.assertEqual([media.clamp_volume(v) for v in (-5, 0, 42.4, 42.6, 100, 180, "55")], [0, 0, 42, 43, 100, 100, 55])
+        self.assertIsNone(media.clamp_volume(None))
+        self.assertIsNone(media.clamp_volume("loud"))
+        self.assertIsNone(media.clamp_volume(float("nan")))
+
+    def test_elsewhere(self):
+        import media
+        if sys.platform == "win32":
+            self.skipTest("Windows: the real mixer")
+        self.assertIsNone(media.volume())
+        self.assertFalse(media.set_volume(50))
+        self.assertNotIn("volume", media.state())
+
+
 if __name__ == "__main__":
     unittest.main()

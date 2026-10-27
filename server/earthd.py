@@ -3091,12 +3091,15 @@ class Connection:
         self.send(out)
 
     async def media(self, msg):
-        """{"id", "action"?} -> media_state {"id", "ok", "playing", "artist", "title"}: the phone's Music app (media.py:
+        """{"id", "action"?, "volume"?} -> media_state {"id", "ok", "playing", "artist", "title", "volume"?}: the phone's
+        Music app (media.py: action "volume" sets Spotify's mixer level to volume (0..100);
         presses the media key of action, if any, then reads desktop Spotify's song)."""
         loop = asyncio.get_running_loop()
 
         def run():
-            if msg.get("action"):
+            if msg.get("action") == "volume":           # (the slider: Spotify's mixer level, media.set_volume)
+                mediamod.set_volume(msg.get("volume"))
+            elif msg.get("action"):
                 mediamod.press(str(msg.get("action")))
                 time.sleep(0.4)             # (Spotify retitles its window after the key)
             return mediamod.state()

@@ -140,7 +140,7 @@ MOD_TO_SERVER = {
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
     "nearest_fuel": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},
-    "media": {"id": F(int), "action": F(str, OPT)},
+    "media": {"id": F(int), "action": F(str, OPT), "volume": F(NUM, OPT)},
     "rally_stage": {"id": F(int), "stage": F(str)},     # the phone's Rally app (rally.py)
     "places_near": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "kind": F(str)},    # the phone's Garage app (shops.py)     # the phone's Music app (media.py)
     "delivery_jobs": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "seed": F(int), "kind": F(str, OPT)},   # the Jobs app (jobfind.py)     # the world map's "Nearest gas station" (fuelfind.py)
@@ -168,7 +168,8 @@ SERVER_TO_MOD = {
     "nearest_fuel_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT),
                             "dist": F(NUM, OPT), "error": F(str, OPT)},
     "places_near_result": {"id": F(int), "kind": F(str), "places": F(list), "error": F(str, OPT)},
-    "media_state": {"id": F(int), "ok": F(bool), "playing": F(bool), "artist": F(str), "title": F(str)},
+    "media_state": {"id": F(int), "ok": F(bool), "playing": F(bool), "artist": F(str), "title": F(str),
+                    "volume": F(int, OPT)},
     "delivery_jobs_result": {"id": F(int), "jobs": F(list), "error": F(str, OPT)},
     "rally_stage_result": {"id": F(int), "stage": F(dict, OPT), "error": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},

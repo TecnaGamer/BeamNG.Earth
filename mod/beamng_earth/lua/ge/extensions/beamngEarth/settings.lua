@@ -741,10 +741,11 @@ function M.uiPhoneSet(k, v)
   return true
 end
 
-function M.uiPhoneMedia(action)
+function M.uiPhoneMedia(action, volume)
   local core = ext('beamngEarth_core')
   mediaT = os.clock()
-  return core and core.requestMedia and core.requestMedia(tostring(action)) or false
+  -- (action 'volume': Spotify's mixer level to volume, 0..100: server media.set_volume)
+  return core and core.requestMedia and core.requestMedia(tostring(action), volume) or false
 end
 
 function M.uiPhoneWeatherMode(mode)
