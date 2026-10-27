@@ -64,7 +64,7 @@ IID_IAudioSessionManager2 = "77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"
 IID_IAudioSessionControl2 = "BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"
 IID_ISimpleAudioVolume = "87CE5498-68D6-44E5-9215-6F24A0F8A1C9"
 CLSCTX_ALL = 23
-SLOT = {"QueryInterface": 0, "Release": 2, "GetDefaultAudioEndpoint": 4, "Activate": 3, "GetSessionEnumerator": 5,
+SLOT = {"QueryInterface": 0, "Release": 2, "EnumAudioEndpoints": 3, "Item": 4, "GetDefaultAudioEndpoint": 4, "Activate": 3, "GetSessionEnumerator": 5,
         "GetCount": 3, "GetSession": 4, "GetProcessId": 14, "SetMasterVolume": 3, "GetMasterVolume": 4}
 SPOTIFY_EXE = "spotify.exe"
 
@@ -91,8 +91,9 @@ def clamp_volume(v):
 
 
 def _spotify_volumes(fn):
-    """fn(ISimpleAudioVolume pointer, vcall) for each of Spotify's audio sessions on the default output; returns
-    the results (empty: Spotify has no session, e.g. it has not played anything yet)."""
+    """fn(ISimpleAudioVolume pointer, vcall) for each of Spotify's audio sessions on every active output device (not
+    only the default: Spotify may play through a headset; the user's slider found none, 2026-10-26); returns the
+    results (empty: Spotify has no session, e.g. it has not played anything yet). The programs seen go to _seen."""
     import ctypes
     import uuid
     from ctypes import wintypes
@@ -123,26 +124,37 @@ def _spotify_volumes(fn):
         if not enum:
             return out
         held.append(enum)
-        dev = ctypes.c_void_p()
-        vcall(enum, "GetDefaultAudioEndpoint", [ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
-              0, 1, ctypes.byref(dev))                                         # eRender, eMultimedia
-        held.append(dev)
-        mgr = ctypes.c_void_p()
-        vcall(dev, "Activate", [ctypes.POINTER(GUID), wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
-              ctypes.byref(guid(IID_IAudioSessionManager2)), CLSCTX_ALL, None, ctypes.byref(mgr))
-        held.append(mgr)
-        senum = ctypes.c_void_p()
-        vcall(mgr, "GetSessionEnumerator", [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(senum))
-        held.append(senum)
-        n = ctypes.c_int()
-        vcall(senum, "GetCount", [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
-        for i in range(n.value):
+        coll = ctypes.c_void_p()
+        vcall(enum, "EnumAudioEndpoints", [ctypes.c_int, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)],
+              0, 1, ctypes.byref(coll))                                        # eRender, DEVICE_STATE_ACTIVE
+        held.append(coll)
+        nd = wintypes.UINT()
+        vcall(coll, "GetCount", [ctypes.POINTER(wintypes.UINT)], ctypes.byref(nd))
+        _seen.clear()
+        for di in range(nd.value):
             try:
-                got = _session(i, senum, vcall, GUID, guid, held, kernel32, fn)
-            except OSError:         # (one odd session: the others still)
+                dev = ctypes.c_void_p()
+                vcall(coll, "Item", [wintypes.UINT, ctypes.POINTER(ctypes.c_void_p)], di, ctypes.byref(dev))
+                held.append(dev)
+                mgr = ctypes.c_void_p()
+                vcall(dev, "Activate", [ctypes.POINTER(GUID), wintypes.DWORD, ctypes.c_void_p,
+                                        ctypes.POINTER(ctypes.c_void_p)],
+                      ctypes.byref(guid(IID_IAudioSessionManager2)), CLSCTX_ALL, None, ctypes.byref(mgr))
+                held.append(mgr)
+                senum = ctypes.c_void_p()
+                vcall(mgr, "GetSessionEnumerator", [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(senum))
+                held.append(senum)
+                n = ctypes.c_int()
+                vcall(senum, "GetCount", [ctypes.POINTER(ctypes.c_int)], ctypes.byref(n))
+            except OSError:         # (a device that will not say: the others still)
                 continue
-            if got is not _SKIP:
-                out.append(got)
+            for i in range(n.value):
+                try:
+                    got = _session(i, senum, vcall, GUID, guid, held, kernel32, fn)
+                except OSError:         # (one odd session: the others still)
+                    continue
+                if got is not _SKIP:
+                    out.append(got)
     finally:
         for o in reversed(held):
             try:
@@ -155,6 +167,7 @@ def _spotify_volumes(fn):
 
 
 _SKIP = object()
+_seen = set()               # the programs with audio sessions at the last look (the log, when Spotify is not among them)
 
 
 def _session(i, senum, vcall, GUID, guid, held, kernel32, fn):
@@ -173,7 +186,9 @@ def _session(i, senum, vcall, GUID, guid, held, kernel32, fn):
         vcall(ctl2, "GetProcessId", [ctypes.POINTER(wintypes.DWORD)], ctypes.byref(pid))
     except OSError:         # (the system sounds session: no single process)
         return _SKIP
-    if _exe_name(kernel32, pid.value) != SPOTIFY_EXE:
+    exe = _exe_name(kernel32, pid.value)
+    _seen.add(exe or "pid %d" % pid.value)
+    if exe != SPOTIFY_EXE:
         return _SKIP
     vol = ctypes.c_void_p()
     vcall(ctl, "QueryInterface", [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
@@ -185,6 +200,12 @@ def _session(i, senum, vcall, GUID, guid, held, kernel32, fn):
 def _exe_name(kernel32, pid):
     import ctypes
     from ctypes import wintypes
+    # (the handle a pointer: undeclared, ctypes cut it to a 32-bit int under 64-bit Python)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     h = kernel32.OpenProcess(0x1000, False, pid)             # PROCESS_QUERY_LIMITED_INFORMATION
     if not h:
         return ""
@@ -229,7 +250,9 @@ def set_volume(v):
     try:
         done = bool(_spotify_volumes(put))
         if not done:
-            _warn_once("media set volume: Spotify has no audio session (it has not played since it started)")
+            _warn_once("media set volume: Spotify has no audio session (it has not played since it started); "
+                       "programs with sound: %s" % ", ".join(sorted(_seen)) if _seen else
+                       "media set volume: no audio sessions found on any output device")
         return done
     except Exception as e:
         _warn_once("media set volume: %s: %s" % (type(e).__name__, e))
