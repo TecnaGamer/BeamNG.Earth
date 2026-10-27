@@ -141,6 +141,21 @@ class DeckContinuityTest(unittest.TestCase):
         for z in out:
             np.testing.assert_array_equal(z[[0, -1]], [0.0, 0.0])
 
+    def test_lowering_a_deck_releases_the_upper_approachs_old_height(self):
+        upper = line((0, 0), (200, 0))
+        lower = line((184, -100), (184, 100))
+        profiles = [np.full(len(upper), 22.0), np.full(len(lower), 20.0)]
+        for z in profiles:
+            z[[0, -1]] = 0.0
+        with self.assertLogs('earthd.roads', level='WARNING'):
+            out = roads._continuous_decks([upper, lower], profiles, flat,
+                                          separations=[(0, 184, 1, 100)])
+        # This short approach still cannot provide truck clearance. Keeping the
+        # old absolute upper height would add a 137% cliff as the lower deck drops.
+        self.assertGreaterEqual(np.interp(184, upper[:, 0], out[0]) - out[1][len(lower) // 2], 2.0 - 1e-6)
+        self.assertLess(float(np.interp(184, upper[:, 0], out[0])), 9.0)
+        self.assert_grade([upper, lower], out, 0.51)
+
     def test_level_change_through_short_connector_is_a_merge(self):
         # Mainline and ramp overlap beside their junction, but a third four-metre feature
         # connects them. They must not be interpreted as stacked decks at that fork.

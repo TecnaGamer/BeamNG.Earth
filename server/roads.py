@@ -1479,20 +1479,6 @@ def _continuous_decks(lines, zs, ground_fn, crossings=(), separations=(), corrid
             if j < len(s) and abs(s[j] - point) > 1e-8:
                 for end in (j - 1, j):
                     required[ix[end]] = max(required[ix[end]], min(float(z[end]), target))
-    # Preserve already available separation even on a short span that cannot reach
-    # the full target. Its existing grade allowance is not permission to introduce
-    # an even steeper approach just to meet a new clearance requirement.
-    for hi, sh, lo, sl in separations:
-        hs, ls = edges[hi][2], edges[lo][2]
-        lower = float(np.interp(sl, ls, zs[lo]))
-        target = min(float(np.interp(sh, hs, zs[hi])), lower + DECK_ROAD_CLEAR)
-        terrain_lift = max(0.0, float(np.interp(sl, ls, terrain[indices[lo]] + DECK_CLEAR)) - lower)
-        target += terrain_lift
-        j = min(max(1, int(np.searchsorted(hs, sh))), len(hs) - 1)
-        for at in (j - 1, j):
-            n = indices[hi][at]
-            if n not in pins:
-                required[n] = max(required[n], min(float(zs[hi][at]) + terrain_lift, target))
     # At an ordinary mismatched fork, prefer the lower approach. In a stacked interchange
     # the junction must remain free to rise with its connecting decks to clear lower roads.
     for n, ends in end_heights.items():
@@ -1525,10 +1511,10 @@ def _continuous_decks(lines, zs, ground_fn, crossings=(), separations=(), corrid
     ceilings = dict(pins)
     distances = {n: _dijkstra(graph, {n: 0.0}) for n in ceilings}
 
-    feasible = None
+    last_cap = None
 
     def solve():
-        nonlocal feasible
+        nonlocal last_cap
         cap = np.full(len(graph), np.inf)
         for n, h in ceilings.items():
             if n not in distances:
@@ -1540,8 +1526,7 @@ def _continuous_decks(lines, zs, ground_fn, crossings=(), separations=(), corrid
                 if d[other] > 1e-6 and np.isfinite(d[other]):
                     need = max(need, (oh - h) / d[other])
             cap = np.minimum(cap, h + need * d)
-        if feasible is None:
-            feasible = cap.copy()
+        last_cap = cap
         # Spread a lift at the normal grade. A short, constrained abutment may need a
         # steeper cap locally; that must not permit sharp dips everywhere in the network.
         raised = -_dijkstra(gentle, {n: -max(h, required[n]) for n, h in heights.items()})
@@ -1552,49 +1537,58 @@ def _continuous_decks(lines, zs, ground_fn, crossings=(), separations=(), corrid
     # A lower deck can rise while a dip or fork is reconciled. Require the full usable
     # headroom against the final lower surface, including the slab and girders. Keeping
     # the old gap here preserves intersections when the input decks already collide.
-    for _ in range(16):
-        changed = False
-        for hi, sh, lo, sl in checks:
-            hs, ls = edges[hi][2], edges[lo][2]
-            target = float(np.interp(sl, ls, result[indices[lo]])) + DECK_ROAD_CLEAR
-            current = float(np.interp(sh, hs, result[indices[hi]]))
-            if not np.isfinite(target) or target <= current + 1e-6:
-                continue
-            # Filling the lower deck's dip must not force a new wall on a short upper span.
-            # First retain the lower road's original height under that span, where its own
-            # terrain/clearance floors allow it, and spread the adjustment along that road.
-            old_lower = float(np.interp(sl, ls, zs[lo]))
-            if float(np.interp(sl, ls, result[indices[lo]])) > old_lower + 1e-6:
-                lj = min(max(1, int(np.searchsorted(ls, sl))), len(ls) - 1)
-                lowered = False
-                for at in (lj - 1, lj):
-                    n, h = indices[lo][at], float(zs[lo][at])
-                    if n in pins or h >= ceilings.get(n, np.inf) - 1e-6:
-                        continue
-                    if n not in distances:
-                        distances[n] = _dijkstra(graph, {n: 0.0})
-                    limit = h + DECK_MAX_GRADE * distances[n]
-                    if (required <= limit + 1e-8).all() and all(ph <= limit[pn] + 1e-8 for pn, ph in pins.items()):
-                        ceilings[n] = h
-                        lowered = True
-                if lowered:
-                    changed = True
+    # First preserve the old gaps relative to the *solved* lower roads. Pinning
+    # their old absolute heights would retain unnecessary cliffs after a lower
+    # deck has moved down. Then use the remaining approach room for full clearance.
+    for full in (False, True):
+        feasible = last_cap.copy()
+        for _ in range(16):
+            changed = False
+            for hi, sh, lo, sl in (checks if full else separations):
+                hs, ls = edges[hi][2], edges[lo][2]
+                gap = DECK_ROAD_CLEAR if full else min(DECK_ROAD_CLEAR, float(
+                    np.interp(sh, hs, zs[hi]) - np.interp(sl, ls, zs[lo])))
+                target = float(np.interp(sl, ls, result[indices[lo]])) + gap
+                current = float(np.interp(sh, hs, result[indices[hi]]))
+                if not np.isfinite(target) or target <= current + 1e-6:
                     continue
-            j = min(max(1, int(np.searchsorted(hs, sh))), len(hs) - 1)
-            t = (sh - hs[j - 1]) / max(hs[j] - hs[j - 1], 1e-9)
-            ends = [(indices[hi][j - 1], 1 - t), (indices[hi][j], t)]
-            free = [(n, w) for n, w in ends if n not in pins and w > 1e-9]
-            weight = sum(w for _, w in free)
-            if weight <= 0:
-                continue
-            for n, _ in free:
-                height = min(feasible[n], result[n] + (target - current) / weight)
-                if height > required[n] + 1e-6:
-                    required[n] = height
-                    changed = True
-        if not changed:
-            break
-        result = solve()
+                # Filling the lower deck's dip must not force a new wall on a short upper span.
+                # First retain the lower road's original height under that span, where its own
+                # terrain/clearance floors allow it, and spread the adjustment along that road.
+                old_lower = float(np.interp(sl, ls, zs[lo]))
+                if float(np.interp(sl, ls, result[indices[lo]])) > old_lower + 1e-6:
+                    lj = min(max(1, int(np.searchsorted(ls, sl))), len(ls) - 1)
+                    lowered = False
+                    for at in (lj - 1, lj):
+                        n, h = indices[lo][at], float(zs[lo][at])
+                        if n in pins or h >= ceilings.get(n, np.inf) - 1e-6:
+                            continue
+                        if n not in distances:
+                            distances[n] = _dijkstra(graph, {n: 0.0})
+                        limit = h + DECK_MAX_GRADE * distances[n]
+                        if (required <= limit + 1e-8).all() and all(ph <= limit[pn] + 1e-8 for pn, ph in pins.items()):
+                            ceilings[n] = h
+                            lowered = True
+                    if lowered:
+                        changed = True
+                        continue
+                j = min(max(1, int(np.searchsorted(hs, sh))), len(hs) - 1)
+                t = (sh - hs[j - 1]) / max(hs[j] - hs[j - 1], 1e-9)
+                ends = [(indices[hi][j - 1], 1 - t), (indices[hi][j], t)]
+                free = [(n, w) for n, w in ends if n not in pins and w > 1e-9]
+                weight = sum(w for _, w in free)
+                if weight <= 0:
+                    continue
+                for n, _ in free:
+                    height = result[n] + (target - current) / weight
+                    if full:
+                        height = min(feasible[n], height)
+                    if height > required[n] + 1e-6:
+                        required[n] = height
+                        changed = True
+            if not changed:
+                break
+            result = solve()
     deficits = {}
     for hi, sh, lo, sl in checks:
         usable = (float(np.interp(sh, edges[hi][2], result[indices[hi]]))
