@@ -103,7 +103,6 @@ local X = { jobs = require('beamngEarth/jobs'),             -- garage-to-garage 
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
 local farcars = require('beamngEarth/farcars')             -- far player cars saved, taken out and put back
-local fociBroken = false
 -- The pose's foci: the last collision foci (collisionfoci.lua), rounded, at most 16 (earthd FOCI_MAX); nil when none.
 local function poseFoci()
   local f = collisionfoci.last
@@ -123,7 +122,6 @@ local perflog = require('beamngEarth/perflog')         -- hitches and frame-rate
 local LEVEL_ID = 'beamng_earth'
 local MOD_VERSION = '0.4.0'
 M.MOD_VERSION = MOD_VERSION
-local lastHello = nil     -- the last server hello (scalars only; report.lua's hardware.json)
 local PROTOCOL = 4
 -- Far-tile artefact formats the mod reads: 3 (v1.3.1, 32-cell tiles) and 4 (docs/V1_4_SPEC.md 3.1
 -- M1: 64-cell tiles down to L-1, hello.cells, far_tile.tex). hello.format = the newest (FORMAT).
@@ -819,8 +817,8 @@ local function onMessage(msg)
     st.sessionId = msg.sessionId
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
-    lastHello = {}           -- the server's version and options, for the reports' hardware.json
-    for k, v in pairs(msg) do if k ~= 'attribution' and type(v) ~= 'table' then lastHello[k] = v end end
+    X.lastHello = {}           -- the server's version and options, for the reports' hardware.json
+    for k, v in pairs(msg) do if k ~= 'attribution' and type(v) ~= 'table' then X.lastHello[k] = v end end
     -- road tiles belong to the session that sent them: a restarted server (anchor ids start again
     -- at 1) never drops the old session's tiles, so they stayed forever (2026-10-11: meshes of four
     -- sessions in the scene, some built by older code)
@@ -2018,14 +2016,14 @@ local function onUpdate(dtReal, dtSim)
       st.parkBox = pb
       pb[1], pb[2], pb[3], pb[4] = lattice.groundBox(st.block.cx, st.block.cy)
     end
-    if not fociBroken then
+    if not X.fociBroken then
       local ok, err = pcall(collisionfoci.update, dtReal, { roads.setFoci, trees.setFoci }, extraFoci)
-      if not ok then fociBroken = true; log('E', 'beamngEarth', 'collision foci: ' .. tostring(err)) end
+      if not ok then X.fociBroken = true; log('E', 'beamngEarth', 'collision foci: ' .. tostring(err)) end
       t = mark('foci', t)
       ok, err = pcall(terrainpatch.update, dtReal, st.anchorId, collisionfoci.last, st.player, pb, net.send)
-      if not ok then fociBroken = true; log('E', 'beamngEarth', 'terrain patches: ' .. tostring(err)) end
+      if not ok then X.fociBroken = true; log('E', 'beamngEarth', 'terrain patches: ' .. tostring(err)) end
       ok, err = pcall(farcars.update, dtReal)
-      if not ok then fociBroken = true; log('E', 'beamngEarth', 'far cars: ' .. tostring(err)) end
+      if not ok then X.fociBroken = true; log('E', 'beamngEarth', 'far cars: ' .. tostring(err)) end
       t = mark('farcars', t)
     end
     parking.update(st.anchorId, not (st.player and st.player.camera) and st.player or nil, pb, gov)  -- (no car: none parked)
@@ -2093,7 +2091,7 @@ local function onLevelStart()
 
   activateWorld()
   -- the connected server's shape materials (its hello came at the main menu, before this level's objects)
-  if lastHello and lastHello.prewarm then roads.prewarm(lastHello.prewarm) end
+  if X.lastHello and X.lastHello.prewarm then roads.prewarm(X.lastHello.prewarm) end
   -- Something to stand on until the first anchor arrives (our level has no GroundPlane).
   local ok, err = terrain.loadFlat()
   if ok then
@@ -2362,9 +2360,9 @@ end
 
 -- The connected server's hello (its version and options; nil before one arrived), for the reports.
 function M.serverHello()
-  if not lastHello then return nil end
+  if not X.lastHello then return nil end
   local c = {}
-  for k, v in pairs(lastHello) do c[k] = v end
+  for k, v in pairs(X.lastHello) do c[k] = v end
   return c
 end
 
