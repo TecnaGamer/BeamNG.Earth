@@ -45,6 +45,7 @@ M.DETAIL_MAP = '/art/beamngEarth/detail_ground.dds'
 M.FIELDS = {
   { 'useAnisotropic', '1' },
   { 'roughnessFactor', '1' },
+  { 'castShadows', '0' },
 }
 M.DETAIL_FIELDS = {
   { 'detailMapUseUV', '1' },
@@ -161,6 +162,7 @@ function M.create(name, texture, detail)
   local fallback = false
   if m then
     if texture and FS:fileExists(texture) then setTexture(m, texture, detail) end
+    m:setField('castShadows', 0, '0')
   else
     m = createObject('Material')
     m:setField('mapTo', 0, name)

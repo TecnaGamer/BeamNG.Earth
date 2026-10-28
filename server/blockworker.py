@@ -167,12 +167,20 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     xproc.PRIORITY = nice
     _s = _State(cache_dir, offline, roads, grading, road_widths, surface, airports, sea, gas_stations)
     threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True, name="parent-watch").start()
-    threading.Thread(target=_read_warm, args=(warm_q,), daemon=True, name="warm-read").start()
-    threading.Thread(target=_warm_loop, daemon=True, name="roads-ahead").start()
+    if warm_q is not None:
+        threading.Thread(target=_read_warm, args=(warm_q,), daemon=True, name="warm-read").start()
+        threading.Thread(target=_warm_loop, daemon=True, name="roads-ahead").start()
 
 
 def _watch_parent(ppid):
     """Exit with the server: a killed server (SIGTERM) left its block processes running."""
+    if os.name == "nt":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x00100000, False, ppid)    # SYNCHRONIZE
+        if h:
+            k32.WaitForSingleObject(h, 0xFFFFFFFF)
+        os._exit(0)
     while os.getppid() == ppid:
         time.sleep(PARENT_POLL_S)
     os._exit(0)

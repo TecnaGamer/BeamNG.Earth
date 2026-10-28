@@ -106,6 +106,9 @@ trees.update(1, { x = 50, y = 50 })
 trees.onDrop({ anchorId = 1, key = '0_0' })
 trees.update(1, { x = 50, y = 50 })
 T.check(count() == 0 and trees.status().tiles == 0 and forests == 1, 'dropped: its items removed, its Forest kept')
+for _, o in pairs(S.objects) do
+  if o.class == 'Forest' then T.check(o.hidden == true, 'released empty Forest is hidden in pool') end
+end
 T.check(trees.forestName(3) == 'bngEarthForest_3', 'pool Forests are numbered')
 T.check(trees.typeName('/a/b-c', true) == 'bngEarthTree__a_b_c' and trees.typeName('/a/b-c') == 'bngEarthTree__a_b_c_n',
   'an item type per shape and solidity')
@@ -118,6 +121,9 @@ end
 trees.onTile({ anchorId = 1, key = '0_0', path = '/t/v.json', n = 100 }, 1)
 trees.update(1, { x = 50, y = 50 })
 T.check(count() == 100 and forests == 1, 'the next tile reuses the empty Forest')
+for _, o in pairs(S.objects) do
+  if o.class == 'Forest' then T.check(o.hidden == false, 'reused Forest is unhidden') end
+end
 trees.update(2, { x = 50, y = 50 })
 T.check(count() == 0, 'another anchor: removed')
 trees.onTile({ anchorId = 2, key = '0_0', path = '/t/v.json', n = 100 }, 2)
@@ -416,5 +422,21 @@ do
   T.check(count() == 2, 'rocks on again: back')
   trees.clear()
 end
+-- per-type shadowNullDetailSize (solid datablock = 35, non-solid datablock = 150)
+do
+  local sawSolid35, sawNonSolid150 = false, false
+  for _, o in pairs(S.objects) do
+    if o.class == 'TSForestItemData' and o.fields then
+      if o.fields.collidable == '1' and o.fields.shadowNullDetailSize == '35' then
+        sawSolid35 = true
+      elseif o.fields.collidable == '0' and o.fields.shadowNullDetailSize == '150' then
+        sawNonSolid150 = true
+      end
+    end
+  end
+  T.check(sawSolid35, 'solid TSForestItemData datablock gets shadowNullDetailSize 35')
+  T.check(sawNonSolid150, 'non-solid TSForestItemData datablock gets shadowNullDetailSize 150')
+end
+
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 T.done('test_trees')

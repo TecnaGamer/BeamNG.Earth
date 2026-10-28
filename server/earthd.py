@@ -4560,7 +4560,7 @@ async def main_async(args):
             "far tile", args.workers, mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, args.roads == "on",
                       args.grading == "on" and args.roads == "on",
-                      args.road_widths == "on" and args.roads == "on", False, ctx.Queue(maxsize=1),
+                      args.road_widths == "on" and args.roads == "on", False, None,
                       logging.getLogger().level, args.airports == "on", args.sea == "on", NICE_FAR,
                       roadsmod.ROADS_IN_GROUND))
     if far_pool is not None:
@@ -4584,14 +4584,14 @@ async def main_async(args):
         road_pool = poolsmod.RespawningPool(      # road tiles (blockworker.roads_tile)
             "road tile", args.road_processes, mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
-                      args.surface == "on", ctx.Queue(maxsize=1), logging.getLogger().level,
+                      args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
     far_bld_pool = None
     if road_pool is not None and args.buildings == "on":
         far_bld_pool = poolsmod.RespawningPool(   # far building tiles (blockworker.far_buildings_tile)
             "far building", 1, mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
-                      args.surface == "on", ctx.Queue(maxsize=1), logging.getLogger().level,
+                      args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_FAR_BUILDINGS, roadsmod.ROADS_IN_GROUND))
     server = Server(args.user_dir, args.cache_dir, args.workers, kfun, args.hysteresis, args.far_radius, fmt,
                     imagery=args.imagery, near_visual=args.near_visual, tex_near=args.tex_near,

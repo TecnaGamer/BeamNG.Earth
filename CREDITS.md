@@ -156,6 +156,8 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
   visibility to structural similarity", IEEE Trans. Image Processing 13(4), 2004: the SSIM measure
   `tools/benchmark.py compare` uses (own NumPy implementation).
 
+- `mpsteppe` (https://github.com/mpsteppe/BeamNG.Earth-Perf): first-time tree shape spawning throttle (`trees.FIRSTS_PER_FRAME` and `everMade` across origin rebases in `trees.lua`) and lean railway collision meshes (`rail_collision` / `railcol` in `server/roads.py` and `roads.lua`).
+
 ## User mods mentioned in the docs (not part of BeamNG.Earth)
 
 BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic Driver Camera,

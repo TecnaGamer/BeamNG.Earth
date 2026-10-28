@@ -19,6 +19,7 @@ docs/research/*.jsonl
 
 # agent worktrees
 .claude/
+.agents/
 tools/gcpatch/build/
 docs/research/streetview/
 docs/research/ortho/
@@ -30,3 +31,20 @@ dist/
 native/earthfast/target/
 build/
 native/serverlist/target/
+
+# Local caches, benchmark runs, and profiling artifacts
+cache/
+runs/
+scratch/
+perf_reports/
+prof_*.txt
+tools/monitor.ps1
+tools/orchestrate_*.py
+tools/parallel_tests.py
+tools/run_audit.py
+tools/run_deck_*.sh
+tools/run_pass*.py
+tools/run_pc_ab_ventoux.py
+tools/run_staged_ventoux.py
+tools/run_unloading_audit.py
+tools/stage_deck_start.py

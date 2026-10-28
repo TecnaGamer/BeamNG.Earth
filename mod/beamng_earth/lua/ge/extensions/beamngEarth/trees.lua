@@ -41,6 +41,14 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
+M.MAX_FAR_DIST = 1600
+M.NEAR_DIST = 550
+M.COLLIDE_DIST = 120
+M.COLLIDE_BUILD_AHEAD = 140
+M.COLLIDE_DROP_DIST = 150
+M.RECENTER_STEP = 60
+M.SOLID_SHADOW_NULL_PX = 35
+M.NONSOLID_SHADOW_NULL_PX = 150
 M.NO_COLLIDE = { shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
@@ -219,14 +227,25 @@ local foci = {}         -- other vehicles' collision foci { x, y, r, trees } (M.
 local ghostSince = nil               -- since the last rebase that left ghost tiles (M.transform)
 local types = {}        -- "shape" / "shape#n" (not solid) -> TSForestItemData
 local pop = {}          -- shape -> its items in the level
+local everMade = {}     -- shape -> true once an item of it was made in this level (allow: FIRSTS_PER_FRAME)
 local ready = false
 M.made, M.removed, M.errors = 0, 0, 0
 M.unknownGroups = {}      -- groups seen without a CATALOG entry (logged once each)
 
-local pool = {}          -- ids of empty Forests to reuse
+local pool = {}          -- ids of empty Forests to reuse (kept hidden while pooled)
+local forestHidden = {}  -- forestId -> true while hidden in pool
 local forestCount = 0
 local newForests = 0     -- Forests made this tree frame (FORESTS_PER_FRAME)
 M.forests = 0
+
+local function setForestHidden(id, f, hidden)
+  local isHidden = (forestHidden[id] == true)
+  if isHidden == hidden then return end
+  forestHidden[id] = hidden or nil
+  if not f then f = scenetree.findObjectById(id) end
+  if not f then return end
+  if f.setHidden then f:setHidden(hidden) else f.hidden = hidden end
+end
 
 -- Groups the player turned off (settings: Rocks off, GitHub #5): not shown, removed where made. (After
 -- MihneaTeodorStoica's PR #321.)
@@ -272,14 +291,19 @@ local function forest(t)
     if newForests >= M.FORESTS_PER_FRAME then return nil end
     f = newForest()
   end
-  t.forestId = f:getID()
+  local id = f:getID()
+  setForestHidden(id, f, false)
+  t.forestId = id
   return f
 end
 
--- An emptied tile's Forest back to the pool.
+-- An emptied tile's Forest back to the pool (hidden while pooled).
 local function releaseForest(t)
-  if t.forestId then pool[#pool + 1] = t.forestId end
+  local id = t.forestId
+  if not id then return end
   t.forestId = nil
+  setForestHidden(id, nil, true)
+  pool[#pool + 1] = id
 end
 
 local function setup()
@@ -313,6 +337,8 @@ local function itemType(shape, solid)
     d:setField('shapeFile', 0, shape .. '.dae')
     d:setField('collidable', 0, solid and '1' or '0')
     d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local shadowNullPx = solid and (M.SOLID_SHADOW_NULL_PX or 35) or (M.NONSOLID_SHADOW_NULL_PX or 150)
+    d:setField('shadowNullDetailSize', 0, tostring(shadowNullPx))
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end
@@ -415,27 +441,50 @@ end
 -- group: a sign's group (vienna_convention_speed_signs.lua) also makes a second item at the same spot and scale, its
 -- body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is shared by every
 -- sign, spelled in the tile's variant like the rest, so its population is split.
+local scratchMat = nil
+local scratchEuler = nil
+local scratchPos = nil
+
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local d = itemType(shape, vienna.faceSolid(group, solid))
   if not d then M.errors = M.errors + 1; return nil end
-  local m = MatrixF(true)
-  -- setFromEuler turns clockwise (the engine's headings): a row's yaw (counter-clockwise from +x, the server's) is
-  -- given negated. Positive, every prop was mirrored about the x axis: doors on north-south walls backwards, on
-  -- diagonal walls askew, benches and lamps turned (read back in-game 2026-10-17: rows at 141.6 rendered at -141.6)
+  scratchMat = scratchMat or MatrixF(true)
+  scratchEuler = scratchEuler or vec3(0, 0, 0)
+  scratchPos = scratchPos or vec3(0, 0, 0)
+  if not scratchEuler.set and type(scratchEuler) == 'table' then
+    local mt = getmetatable(scratchEuler)
+    if mt then mt.set = function(v, x, y, z) v.x, v.y, v.z = x, y, z end end
+  end
+  if not scratchPos.set and type(scratchPos) == 'table' then
+    local mt = getmetatable(scratchPos)
+    if mt then mt.set = function(v, x, y, z) v.x, v.y, v.z = x, y, z end end
+  end
   local f, b = t.f, (i - 1) * t.s
-  m:setFromEuler(vec3(0, 0, -math.rad(f[b + F_YAW])))
-  m:setPosition(vec3(f[b + F_X], f[b + F_Y], f[b + F_Z]))
-  local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
+  if scratchEuler.set then
+    scratchEuler:set(0, 0, -math.rad(f[b + F_YAW]))
+  else
+    scratchEuler.x, scratchEuler.y, scratchEuler.z = 0, 0, -math.rad(f[b + F_YAW])
+  end
+  scratchMat:setFromEuler(scratchEuler)
+  if scratchPos.set then
+    scratchPos:set(f[b + F_X], f[b + F_Y], f[b + F_Z])
+  else
+    scratchPos.x, scratchPos.y, scratchPos.z = f[b + F_X], f[b + F_Y], f[b + F_Z]
+  end
+  scratchMat:setPosition(scratchPos)
+  local ok, it = pcall(function() return fd:createNewItem(d, scratchMat, sc) end)
   if not ok then M.errors = M.errors + 1; return nil end
   local body = vienna.body(group)
   if body then
-    local pair = vienna.addBody(fd, it, spelled(body, variant), m, sc, solid, itemType)
+    local pair = vienna.addBody(fd, it, spelled(body, variant), scratchMat, sc, solid, itemType)
     if pair then it = pair else M.errors = M.errors + 1 end
   end
   M.made = M.made + 1
   pop[shape] = (pop[shape] or 0) + 1
+  everMade[shape] = true
   return it
 end
+M.addBatch = makeItem
 
 local function removeItem(fd, it, shape)
   if not vienna.remove(fd, it) then pcall(function() fd:removeItem(it) end) end
@@ -444,10 +493,18 @@ local function removeItem(fd, it, shape)
 end
 
 -- This frame's shapes: may an item of this shape change now? (see SHAPE_ITEMS_PER_FRAME)
+-- FIRSTS_PER_FRAME and everMade adapted from mpsteppe (https://github.com/mpsteppe/BeamNG.Earth-Perf):
+-- caps first-time C++ shape loads to 1 per frame while keeping everMade across anchor rebases.
 local touched, touchedItems = {}, 0
+M.FIRSTS_PER_FRAME = 1
+local firsts = 0
 local function allow(shape)
   if touched[shape] then return true end
   local n = pop[shape] or 0
+  if n == 0 and not everMade[shape] then
+    if firsts >= M.FIRSTS_PER_FRAME then return false end
+    firsts = firsts + 1
+  end
   if next(touched) ~= nil and touchedItems + n > M.SHAPE_ITEMS_PER_FRAME then return false end
   touched[shape], touchedItems = true, touchedItems + n
   return true
@@ -639,10 +696,28 @@ function M.update(anchorId, player, view, frameMs)
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
-  touched, touchedItems = {}, 0
+  touched, touchedItems, firsts = {}, 0, 0
   releaseGhosts(anchorId, player)
+  local dropOrder = nil
   for key, t in pairs(tiles) do
     if (t.anchor ~= anchorId and not t.ghost) or t.drop then
+      local dx = player and (math.abs(player.x - t.cx) - 128) or 0
+      local dy = player and (math.abs(player.y - t.cy) - 128) or 0
+      local dist = player and math.sqrt(math.max(dx, 0)^2 + math.max(dy, 0)^2) or 0
+      if not dropOrder then dropOrder = {} end
+      dropOrder[#dropOrder + 1] = { key = key, t = t, d = dist }
+    end
+  end
+  if dropOrder then
+    if #dropOrder > 1 then
+      table.sort(dropOrder, function(a, b)
+        local pa = a.d or 0
+        local pb = b.d or 0
+        return pa > pb
+      end)
+    end
+    for _, entry in ipairs(dropOrder) do
+      local key, t = entry.key, entry.t
       local f = t.forestId and scenetree.findObjectById(t.forestId)
       local fd = f and f:getData()
       local left = false
@@ -769,13 +844,21 @@ function M.update(anchorId, player, view, frameMs)
       t.shown = want
       t.band = band
       t.near = near
-      if skipped then t.pending = true; t.scan = { from = skipped, want = want, band = band, near = near } end
+      if skipped then
+        t.pending = true
+        t.scan = { from = skipped, want = want, band = band, near = near }
+      elseif want == 0 and t.forestId and next(t.made) == nil then
+        releaseForest(t)
+      end
     end
   end
   finish()
   -- nothing changed this frame: a spare Forest made for the pool (its ~9 ms alone, not in a frame of items)
   if budget == M.PER_FRAME * M.EVERY_N and newForests == 0 and #pool < M.POOL_SPARE then
-    pool[#pool + 1] = newForest():getID()
+    local sf = newForest()
+    local sid = sf:getID()
+    setForestHidden(sid, sf, true)
+    pool[#pool + 1] = sid
   end
 end
 
@@ -791,8 +874,29 @@ function M.clear()
 end
 
 -- Level end: the level deletes its objects itself.
+function M.urgentCount() return 0 end
+function M.stepUrgent() end
+M.ensureItemData = itemType
+
+function M.adoptExistingForests()
+  local mg = scenetree and scenetree.MissionGroup
+  if not mg or not mg.size then return 0 end
+  pool, forestHidden, forestCount = {}, {}, 0
+  for i = 0, mg:size() - 1 do
+    local o = mg:at(i)
+    if o and o.getClassName and o:getClassName() == 'Forest' then
+      local id = o:getID()
+      setForestHidden(id, o, true)
+      pool[#pool + 1] = id
+      forestCount = forestCount + 1
+    end
+  end
+  M.forests = forestCount
+  return #pool
+end
+
 function M.reset()
-  tiles, types, ready, pool, forestCount, pop = {}, {}, false, {}, 0, {}
+  tiles, types, ready, pool, forestHidden, forestCount, pop, everMade = {}, {}, false, {}, {}, 0, {}, {}
 end
 
 function M.status()

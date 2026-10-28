@@ -4793,7 +4793,7 @@ def shape_files(aid, tx, ty):
            "walk": f"walks_{aid}_{tx}_{ty}.cdae", "walkcol": f"walkcol_{aid}_{tx}_{ty}.cdae",
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
-           "rail": f"rail_{aid}_{tx}_{ty}.cdae"}
+           "rail": f"rail_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -4862,6 +4862,24 @@ def sound_boxes(chunks):
     return out + rows.ravel().tolist()
 
 
+# Lean railway collision mesh (railcol) adapted from mpsteppe (https://github.com/mpsteppe/BeamNG.Earth-Perf):
+# strips steel rails and sleepers from the physics collider so only the ballast bed and bridge decks collide.
+RAIL_RENDER_ONLY = ("bne_rail_steel", "bne_rail_sleeper", "bne_rail_steel_old", "bne_rail_sleeper_old")
+
+
+def rail_collision(mesh):
+    """railways.tile_mesh's mesh (positions, tris, uvs, materials, tri material) without the rails and sleepers, its
+    vertices compacted: (positions, tris, uvs, a material name), or None if nothing is left."""
+    P, T, UV, mats, M = mesh
+    keep = np.array([str(mats[int(m)]) not in RAIL_RENDER_ONLY for m in M], bool)
+    if not keep.any():
+        return None
+    T = np.asarray(T)[keep]
+    used, inv = np.unique(T.ravel(), return_inverse=True)
+    first = str(mats[int(np.asarray(M)[keep][0])])
+    return np.asarray(P)[used], inv.reshape(T.shape).astype(np.asarray(T).dtype), np.asarray(UV)[used], first
+
+
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=()):
@@ -4902,6 +4920,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         shape = f"rail_{aid}_{tx}_{ty}.cdae"
         roadmesh.write(os.path.join(out_dir, shape), rail_mesh)
         data["rail"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        col = rail_collision(rail_mesh)
+        if col is not None:         # the lean physics-only mesh: the drawn one then only renders (the mod's railcol)
+            import cdae
+            shape = f"railcol_{aid}_{tx}_{ty}.cdae"
+            cdae.write(os.path.join(out_dir, shape), col[0], col[1], uvs=col[2], material=col[3], collision_only=True)
+            data["railcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if walks:
         x0, y0, _, _ = tile_bbox(tx, ty)
         b = sidewalks.Builder((x0, y0, 0.0), collision=True)

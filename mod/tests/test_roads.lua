@@ -132,10 +132,15 @@ files['/t/wc.json'] = '{ chunks = { }, walk = { shape = "/t/walks_2_6_6.cdae", p
   'walkcol = { shape = "/t/walkcol_2_6_6.cdae", pos = { 0, 0, 0 } } }'
 roads.onTile({ anchorId = 2, key = '6_6', path = '/t/wc.json', n = 0 }, 2)
 roads.update(gov, 2)
-local kinds = {}
-for _, o in ipairs(statics()) do kinds[o.fields.shapeName] = o.fields.collisionType end
+local kinds, renderOff = {}, {}
+for _, o in ipairs(statics()) do
+  kinds[o.fields.shapeName] = o.fields.collisionType
+  renderOff[o.fields.shapeName] = (o.renderEnabled == false or o.fields.isRenderEnabled == 'false')
+end
 T.check(kinds['/t/walks_2_6_6.cdae'] == 'None' and kinds['/t/walkcol_2_6_6.cdae'] == 'Collision Mesh',
   'walkcol collides, the drawn sidewalks only render')
+T.check(renderOff['/t/walkcol_2_6_6.cdae'] == true and not renderOff['/t/walks_2_6_6.cdae'],
+  'collision-only walkcol mesh disables rendering so shadow cascades skip it')
 roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 T.check(#statics() == 0, 'walkcol dropped with its tile')
@@ -390,4 +395,33 @@ do
   for i = -4, -1 do for j = 4, 7 do s2['1:' .. i .. '_' .. j] = true end end
   T.check(roads.skyCovered(s2, 1, -1, 1), 'skyCovered: negative squares')
 end
+-- R6: M.NO_SHADOW applied once per level load and only reloads changed materials
+do
+  roads.reset()
+  local mCurbs = createObject('Material'); mCurbs:registerObject('curbs'); mCurbs:setField('castShadows', 0, '1')
+  local mLine = createObject('Material'); mLine:registerObject('line_white'); mLine:setField('castShadows', 0, '0')
+  S.calls.reload_Material = 0
+  S.calls.flush_Material = 0
+  S.calls.loadJsonMaterialsFile = 0
+  roads.onTile({ anchorId = 5, key = '0_0', path = '/t/a.json', n = 2 }, 5)
+  roads.update(gov, 5)
+  T.check(mCurbs:getField('castShadows', 0) == '0' and mLine:getField('castShadows', 0) == '0',
+    'NO_SHADOW sets castShadows=0 on stock road/sidewalk materials')
+  T.check(S.calls.reload_Material == 1 and S.calls.flush_Material == 1,
+    'NO_SHADOW only flushes/reloads materials whose castShadows changed')
+  local jsonLoads = S.calls.loadJsonMaterialsFile
+  -- Subsequent tiles in the same level load do not re-apply loadMaterials()
+  roads.onTile({ anchorId = 5, key = '1_0', path = '/t/b.json', n = 1 }, 5)
+  roads.update(gov, 5)
+  T.check(S.calls.loadJsonMaterialsFile == jsonLoads and S.calls.reload_Material == 1,
+    'NO_SHADOW applied once per level load, not per tile')
+  -- Even after a level reset, already-updated Material objects are not reloaded again
+  roads.reset()
+  roads.onTile({ anchorId = 6, key = '0_0', path = '/t/b.json', n = 1 }, 6)
+  roads.update(gov, 6)
+  T.check(S.calls.reload_Material == 1, 'idempotent across level reload when castShadows is already 0')
+  mCurbs:delete(); mLine:delete()
+  roads.reset()
+end
+
 T.done('test_roads')

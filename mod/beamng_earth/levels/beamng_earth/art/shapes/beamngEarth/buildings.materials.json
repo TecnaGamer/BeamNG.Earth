@@ -408,7 +408,8 @@
       {},
       {}
     ],
-    "translucent": false
+    "translucent": false,
+    "castShadows": false
   },
   "bne_bld_brick": {
     "name": "bne_bld_brick",
@@ -465,6 +466,65 @@
       {},
       {}
     ],
-    "translucent": false
+    "translucent": false,
+    "castShadows": false
+  },
+  "bne_bld_glass": {
+    "name": "bne_bld_glass",
+    "mapTo": "bne_bld_glass",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e371f4a2-8c45-5b1e-9d2a-6f8b3c1d9e0f",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_b.color.png",
+        "normalMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_nm.normal.png",
+        "roughnessMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_ao.data.png",
+        "metallicMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "emissiveMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_e.color.png",
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
+  },
+  "bne_bld_far": {
+    "name": "bne_bld_far",
+    "mapTo": "bne_bld_far",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7a91c3e4-5b12-4d89-9a01-3c4d5e6f7a8b",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_b.color.png",
+        "normalMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_nm.normal.png",
+        "roughnessMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_ao.data.png",
+        "metallicMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "emissiveMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_e.color.png",
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
   }
 }

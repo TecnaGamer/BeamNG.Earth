@@ -105,7 +105,8 @@
       {}
     ],
     "groundType": "METAL",
-    "translucent": false
+    "translucent": false,
+    "castShadows": false
   },
   "bne_tunnel_stone": {
     "name": "bne_tunnel_stone",
@@ -186,7 +187,8 @@
       {}
     ],
     "groundType": "GRASS",
-    "translucent": false
+    "translucent": false,
+    "castShadows": false
   },
   "bne_bridge_concrete": {
     "name": "bne_bridge_concrete",
