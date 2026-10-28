@@ -56,6 +56,7 @@ v = 0.5, so the result does not depend on the engine's v-flip. Below 1500 m the 
 the terrain material's dirt colour, blending into the height palette by 2500 m.
 """
 import json
+import functools
 import math
 import os
 from dataclasses import dataclass
@@ -308,8 +309,8 @@ class Tile:
         s = self.size
         return (self.i * s, self.j * s, (self.i + 1) * s, (self.j + 1) * s)
 
-    @property
-    def key(self):
+    @functools.cached_property
+    def key(self):          # (cached: swap_groups and the build order ask for it on every pose)
         return f"{self.level}_{self.i}_{self.j}"
 
     @property
@@ -322,7 +323,9 @@ class Tile:
         return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
 
 
+@functools.lru_cache(maxsize=65536)
 def tile_of(key):
+    """The Tile of a key (cached: Tiles are immutable; the far field's bookkeeping parses the same keys on every pose)."""
     lvl, i, j = (int(v) for v in key.split("_"))
     return Tile(lvl, i, j)
 

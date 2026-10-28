@@ -100,13 +100,13 @@ FEATURES = {
     "map:USGS Lidar": "USGS Lidar", "map:doi:10.5281/zenodo.8174931": "Shi et al. (East Asia buildings)",
     "land:esa-worldcover": "ESA WorldCover", "canopy:meta-wri-chm": "Meta & WRI",
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
-    "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008",
+    "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
 }
 SHORT.update(FEATURES)
 GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation"), ("map", "Map", "Far map"),
           ("land", "Land cover", "Far land cover"), ("canopy", "Trees", "Far trees"), ("sea", "Sea depth", "Far sea"),
           ("bridge", "Bridges", "Far bridges"), ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
-          ("grav", "Gravity", "Far gravity")]
+          ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
 # Display order of the ids (unknown ones follow, by name)
 ORDER = ([f"img:{n}" for n in IMAGERY] + [f"dem:{n}" for n in ELEVATION] + list(FEATURES) + [WEATHER_ID])
 
@@ -228,6 +228,8 @@ def feature_ids(conn):
     grav = getattr(getattr(conn, "gravity", None), "msg", None)
     if isinstance(grav, dict) and grav.get("source") == "egm2008":
         ids.add("grav:egm2008")
+    if veg_on:                      # (the trees' tiles carry the forest ambience's set: climate.koppen_at)
+        ids.add("climate:beck-kg")
     return ids
 
 

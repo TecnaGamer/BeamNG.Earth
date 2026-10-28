@@ -290,6 +290,7 @@ const settingsSchema = [
         options: [ { label: "Real weather", value: "real" }, { label: "Manual", value: "manual" } ] },
       { id: "realGravity", type: "bool", default: true, name: "Real gravity", desc: "Gravity follows the player: the server's real value (normal gravity plus the EGM2008 anomalies) or normal gravity by latitude and height. Off: the level's 9.81 m/s2." },
       { id: "groundCover", type: "bool", default: true, name: "Grass and shrubs", desc: "3D grass where the land cover is grassland or forest floor, and scrub with sparse grass on shrubland, near the car (the game's own Hirochi Raceway and West Coast USA plants). Needs ground surfaces from the world server (on by default)." },
+      { id: "rocks", type: "bool", default: true, name: "Rocks", desc: "Rocks and boulders on bare, rocky and steep ground. Off removes them (and their collision)." },
       { id: "groundCoverDensity", type: "select", default: "normal", name: "Grass density", desc: "How dense the grass and shrubs are. Without the optional grass patch (tools/gcpatch, Linux) the game regrows the grass in one slower frame each time the ground under the car moves (every ~130-190 m); higher density makes that frame longer.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" } ] },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads from OpenStreetMap / Overture within about 600 m of the car: paved roads as asphalt, gravel and dirt roads and tracks as worn dirt tracks, and the same surfaces under the tyres. Bridges, tunnels, markings and junction shapes come later." },
@@ -299,6 +300,7 @@ const settingsSchema = [
     name: "Interface",
     items: [
       { id: "hudVisible", type: "bool", default: false, name: "Status HUD", desc: "Show the compact BeamNG.Earth status window (connection, anchor, far field, quick buttons). Also whether it opens at level start." },
+      { id: "dashboardSatellite", type: "bool", default: true, name: "Satellite map on dashboard", desc: "Show BeamNG.Earth satellite imagery on compatible vehicle dashboard screens. Off restores the stock dashboard page." },
       { id: "creditsVisible", type: "bool", default: true, name: "Data credits on screen", desc: "Small text in a screen corner naming the sources of the imagery, elevation and weather around you right now (the far field's own sources on a second line). On by default: CC BY and similar licences ask for visible attribution. Hidden in the pause menu and the big map." },
       { id: "creditsCorner", type: "select", default: "bottom-left", name: "Data credits corner", desc: "The screen corner of the data credits.",
         options: [ { label: "Bottom left", value: "bottom-left" }, { label: "Bottom right", value: "bottom-right" }, { label: "Top left", value: "top-left" }, { label: "Top right", value: "top-right" } ] },

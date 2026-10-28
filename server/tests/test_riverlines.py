@@ -99,6 +99,18 @@ class PlanTest(unittest.TestCase):
         inside = [n for n in trib if abs(n[1] - big_y) < 40.0]
         self.assertLessEqual(len(inside), 1, "the stream stops at the river (one node into it)")
 
+    def test_tributary_wide_at_its_mouth_never_outranks_the_river(self):
+        """GitHub #323: a 30 m river whose last nodes measured 780 m (probed along the river it joins) left that
+        river's nodes out under itself; ranked by the median width, the main river keeps its water there."""
+        n = 40
+        main = {"kind": "river", "ids": ("main",), "centre": np.stack([np.arange(n) * 20.0, np.zeros(n)], -1),
+                "width": np.full(n, 150.0), "into": np.zeros(n, bool)}
+        trib = {"kind": "river", "ids": ("trib",), "centre": np.stack([np.full(n, 400.0), 800.0 - np.arange(n) * 20.0], -1),
+                "width": np.r_[np.full(n - 3, 30.0), [780.0, 780.0, 780.0]], "into": np.zeros(n, bool)}
+        riverlines._confluences([main, trib])
+        self.assertFalse(main["into"].any(), "the main river keeps every node")
+        self.assertTrue(trib["into"][-3:].all(), "the tributary ends where it enters the main river")
+
 
 if __name__ == "__main__":
     unittest.main()

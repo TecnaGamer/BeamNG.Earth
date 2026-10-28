@@ -109,6 +109,23 @@ export function searchPlaces(list, query, limit = 8) {
   return hits.slice(0, limit)
 }
 
+// A WMO weather code (settings.uiMapState's weather.code, from weather.lua's last message) as one emoji, the
+// same buckets as weather.lua's M.describe (clear / cloud / fog / rain / snow / showers / storm).
+export function weatherIcon(code) {
+  code = Number(code)
+  if (!Number.isFinite(code)) return ""
+  if (code === 0) return "☀️"             // clear sky
+  if (code <= 2) return "🌤️"         // mainly clear / partly cloudy
+  if (code === 3) return "☁️"              // overcast
+  if (code === 45 || code === 48) return "🌫️"   // fog
+  if (code >= 95) return "⛈️"              // thunderstorm
+  if (code >= 85) return "🌨️"        // snow showers
+  if (code >= 71 && code <= 77) return "❄️"           // snow
+  if (code >= 80) return "🌧️"        // rain showers
+  if (code >= 51 && code <= 67) return "🌧️"     // drizzle / rain
+  return "☁️"
+}
+
 export function fmtLatLon(lat, lon) {
   return `${Math.abs(lat).toFixed(5)}°${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(5)}°${lon >= 0 ? "E" : "W"}`
 }
@@ -156,6 +173,8 @@ export function centreFirst(tiles, w, h) {
 
 // The EOX map layers' credit (maps.eox.at asks for a link back; the data are OpenStreetMap's and others'), or "".
 export const EOX_MAP_CREDIT = "EOX IT Services GmbH (maps.eox.at), data © OpenStreetMap contributors and others"
+// base: "sat" / "map" ("dark" too - EarthMap.vue passes "map", its tiles with a CSS filter, nothing fetched
+// separately for it)
 export function layerCredits(base, labels) {
   if (base === "map") return `Map: Terrain Light${labels ? " and Overlay" : ""} by ${EOX_MAP_CREDIT}`
   if (labels) return `Labels: Overlay by ${EOX_MAP_CREDIT}`

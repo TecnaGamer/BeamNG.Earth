@@ -78,6 +78,7 @@ local TEXTURES = {      -- field, East Coast's file, the stock fallback (0.40 mo
 }
 
 local want = nil         -- { anchorId, tiles = { key -> tile }, rivers = { key -> river } } from the server
+M.riversVersion = 0      -- counts changes of want's rivers (ambience.lua's river sounds follow them)
 local made = {}         -- key -> { id, t }
 local madeRivers = {}   -- key -> id
 local madeAnchor = nil
@@ -233,7 +234,24 @@ function M.onMessage(msg)
       rivers[tostring(r[1])] = { kind = r[2], flow = tonumber(r[3]) or 0, nodes = r[4] }
     end
   end
-  want = { anchorId = msg.anchorId, tiles = tiles, rivers = rivers }
+  local shores = {}        -- (the shore sound's lines: server seacarve.shore_plan, ambience.lua)
+  for _, r in ipairs(type(msg.shores) == 'table' and msg.shores or {}) do
+    if type(r) == 'table' and type(r[3]) == 'table' and #r[3] >= 2 then
+      shores[tostring(r[1])] = { kind = r[2], nodes = r[3] }
+    end
+  end
+  want = { anchorId = msg.anchorId, tiles = tiles, rivers = rivers, shores = shores }
+  M.riversVersion = M.riversVersion + 1
+end
+
+-- The server's rivers (key -> { kind, flow, nodes = { {x, y, z, width, depth}, ... } }) and their anchor, or nil.
+function M.rivers()
+  if want then return want.rivers, want.anchorId end
+end
+
+-- The server's shorelines (key -> { kind = 'sea' | 'lake', nodes = { {x, y, z}, ... } }) and their anchor, or nil.
+function M.shores()
+  if want then return want.shores or {}, want.anchorId end
 end
 
 -- Every frame: the tiles of the server's set for the current anchor exist, the others are gone.
@@ -322,7 +340,11 @@ function M.transform(xf, newAnchorId)
     for _, r in pairs(want.rivers) do
       for _, n in ipairs(r.nodes) do n[1], n[2], n[3] = xf:apply(n[1], n[2], n[3]) end
     end
+    for _, r in pairs(want.shores or {}) do
+      for _, n in ipairs(r.nodes) do n[1], n[2], n[3] = xf:apply(n[1], n[2], n[3]) end
+    end
     want.anchorId = newAnchorId
+    M.riversVersion = M.riversVersion + 1
   end
   for key, m in pairs(made) do
     if m.t ~= (want and want.tiles or {})[key] then mapTile(m.t) end   -- (the same table as want's: mapped above)
@@ -352,12 +374,14 @@ end
 -- Disconnect, a new server session, mod unload: no tiles until the server says so again.
 function M.clear()
   want = nil
+  M.riversVersion = M.riversVersion + 1
   removeAll()
 end
 
 -- Level end: the level deletes its objects itself.
 function M.reset()
   want, made, madeRivers, madeAnchor, phys, physStale = nil, {}, {}, nil, nil, false
+  M.riversVersion = M.riversVersion + 1
 end
 
 function M.status()

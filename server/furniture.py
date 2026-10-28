@@ -15,9 +15,66 @@ import os
 
 import numpy as np
 
-# class: (spacing m, both sides staggered)
-LAMP_SPACING = {"trunk": (30.0, True), "primary": (30.0, True), "secondary": (32.0, True), "tertiary": (36.0, True),
-                "residential": (40.0, False), "unclassified": (42.0, False), "living_street": (36.0, False)}
+# class: (spacing m along one side, both sides staggered: a lamp every half that along the road). Measured (the user,
+# 2026-10-27: "check that they are realistically spaced apart") from OpenStreetMap's mapped street lamps (Overture
+# infrastructure street_lamp, matched to the nearest street, gaps along it): Prague, Warsaw, Szeged and Utrecht's main
+# roads ~30 m, their residential streets 25-30 m, nearly all on one side (the wide ones: both, or the median).
+LAMP_SPACING = {"trunk": (60.0, True), "primary": (60.0, True), "secondary": (30.0, False), "tertiary": (30.0, False),
+                "residential": (28.0, False), "unclassified": (32.0, False), "living_street": (25.0, False)}
+# North America (LAMP_REGIONS "na"): the cities' design standards, sparser: arterials 200-250 ft along a side,
+# staggered (Phoenix; San Antonio 150-200 ft), collectors 250 ft staggered (Queen Creek AZ), local streets 250-300 ft
+# (Liberty MO, Moorhead MN; Queen Creek up to 500 ft); on utility poles every other pole (TOWN_POLE_SPACING x 2)
+LAMP_SPACING_NA = {"trunk": (70.0, True), "primary": (70.0, True), "secondary": (76.0, True), "tertiary": (76.0, False),
+                   "residential": (76.0, False), "unclassified": (90.0, False), "living_street": (45.0, False)}
+# ... and their dense cores (a tile not `town`: building coverage POLES_COVERAGE or more) closer on the side streets:
+# Washington DC 60-150 ft (DDOT), Columbus' post tops 150-170 ft, Chicago's davits opposite or staggered
+LAMP_SPACING_NA_DENSE = dict(LAMP_SPACING_NA, residential=(46.0, False), unclassified=(50.0, False),
+                             living_street=(40.0, False))
+LAMP_REGIONS = {"US": "na", "CA": "na"}
+# US states' own practice (the state DOTs' lighting policies and their largest cities' design manuals, researched
+# 2026-10-27: .claude/work/street_lighting_research.md):
+# - the Mountain West and Oklahoma light single-family local streets at their intersections, mid-block only past
+#   300-600 ft (Salt Lake City, Denver, Boise, Oklahoma City; Elko 350-500 ft, Las Cruces 250-400 ft): "na:sparse"
+# - California, Oregon, Washington and Virginia light their freeways at the interchanges only (ramp gores, merges and
+#   terminals; "nodes, not roads": VDOT), never the urban mainline as the Midwest's, Texas' and Florida's metros do:
+#   "na:ramps"
+US_SPARSE_LOCAL = {"UT", "CO", "ID", "NV", "OK", "MT", "WY", "NM"}
+US_RAMPS_ONLY = {"CA", "OR", "WA", "VA"}
+LAMP_SPACING_NA_SPARSE = dict(LAMP_SPACING_NA, residential=(130.0, False), unclassified=(150.0, False),
+                              living_street=(60.0, False))
+LAMP_SPACING_NA_SPARSE_DENSE = dict(LAMP_SPACING_NA_DENSE, residential=(60.0, False), unclassified=(66.0, False))
+
+
+def lamp_region(country, region=None):
+    """The street lamp rules of a country (ISO 3166 alpha-2) and region (ISO 3166-2, e.g. "US-CA"): "na",
+    "na:sparse" or "na:ramps" (LAMP_SPACING_NA and the states' practice) or None (LAMP_SPACING)."""
+    r = LAMP_REGIONS.get(str(country or "").upper())
+    state = str(region or "").upper().partition("-")[2]
+    if r == "na" and str(country or "").upper() == "US":
+        if state in US_SPARSE_LOCAL:
+            return "na:sparse"
+        if state in US_RAMPS_ONLY:
+            return "na:ramps"
+    return r
+
+
+def _na(region):
+    return str(region or "").startswith("na")
+
+
+def lamp_spacing(region, dense=False):
+    """The class -> (spacing, both) table of a lamp region (dense: a city's core)."""
+    if region == "na:sparse":
+        return LAMP_SPACING_NA_SPARSE_DENSE if dense else LAMP_SPACING_NA_SPARSE
+    if _na(region):
+        return LAMP_SPACING_NA_DENSE if dense else LAMP_SPACING_NA
+    return LAMP_SPACING
+
+
+def highway_lit(region, link, urban):
+    """Is a highway (HIGHWAY_CLASSES) lit: every ramp; the mainline in built-up land, except where the state lights
+    its interchanges only."""
+    return bool(link) or (bool(urban) and region != "na:ramps")
 LAMP_CURB_M = 0.5           # m from the curb onto the sidewalk
 POLE_SPACING = 45.0
 POLE_CLASSES = {"secondary", "tertiary", "residential", "unclassified"}
@@ -84,6 +141,7 @@ WIRE_Z = 7.9                    # m above the pole's base (s_powerpole_3wire: 8.
 WIRE_SAG = 0.012                # sag per metre of span
 WIRE_SEG_M = 5.0
 WIRE_R = 0.012                  # m half width of a wire's ribbons
+WIRE_VERTS_MAX = 60000          # a tile's wire mesh at most (the engine's 16-bit index buffers; railways.VERTS_MAX)
 
 
 def wire_lines(poles):
@@ -105,20 +163,26 @@ def wire_lines(poles):
 
 
 def wire_mesh(lines, origin):
-    """A mesh of the wires: two crossed ribbons per segment (seen from any side): (positions, tris, uvs)."""
+    """A mesh of the wires (each its points, or (points, half width): WIRE_R when not given): two crossed ribbons per
+    segment (seen from any side): (positions, tris, uvs)."""
     P, T = [], []
     ox, oy, oz = origin
     for line in lines:
+        line, r = line if isinstance(line, tuple) else (line, WIRE_R)
+        if len(P) + 8 * (len(line) - 1) > WIRE_VERTS_MAX:       # (8 vertices a segment; the rest left out)
+            break
         for a, b in zip(line[:-1], line[1:]):
             d = b - a
             L = float(np.linalg.norm(d))
             if L < 1e-6:
                 continue
             d /= L
-            side = np.cross(d, [0.0, 0.0, 1.0])
-            side = side / (np.linalg.norm(side) or 1.0) * WIRE_R
-            up = np.cross(side, d)
-            up = up / (np.linalg.norm(up) or 1.0) * WIRE_R
+            # (np.cross written out: the same products and differences, without its per-call cost)
+            side = np.array([d[1] * 1.0 - d[2] * 0.0, d[2] * 0.0 - d[0] * 1.0, d[0] * 0.0 - d[1] * 0.0])
+            side = side / (np.linalg.norm(side) or 1.0) * r
+            up = np.array([side[1] * d[2] - side[2] * d[1], side[2] * d[0] - side[0] * d[2],
+                           side[0] * d[1] - side[1] * d[0]])
+            up = up / (np.linalg.norm(up) or 1.0) * r
             for v in (side, up):
                 i = len(P)
                 P += [a - v, b - v, b + v, a + v]
@@ -425,13 +489,75 @@ STREET_TREE_SHARE = 0.5         # streets with a row of trees (hashed per street
 STREET_TREE_SPACING = 11.0
 STREET_TREE_CURB_M = 0.9
 G_POLELAMP = "polelamp"     # a cobra-head arm on a utility pole (East Coast USA's electrical_pole_lamp)
+# The share of a country's low-voltage lines that are underground (the user, 2026-10-26: "Currently we've been placing
+# them almost everywhere"): the European Commission's "Overview of the Potential for Undergrounding the Electricity
+# Networks in Europe" (ICF Consulting, 2003; Europacable / Sycabel km of overhead and underground LV line, ~2000), the
+# underground share of each country's low-voltage km. Countries not listed: mostly overhead (the US, Canada, Japan,
+# Australia, most of the world). Old figures: the shares have only grown since.
+BURIED_LV = {"NL": 1.0, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30, "FR": 0.27,
+             "PT": 0.19, "AT": 0.15, "ES": 0.14}
+
+
+def buried_share(country):
+    """The share of the country's (ISO 3166 alpha-2) low-voltage lines underground (BURIED_LV), else 0."""
+    return BURIED_LV.get(str(country or "").upper(), 0.0)
+# The lamps' lenses (night lighting: nightlights.lua lights their material after dusk and puts its lights at them;
+# tools/build_lamp_lens.py): the stock heads' glass is a material every building's windows share. At each lamp's glass
+# (the centroid of its transparent vertices in the stock mesh, its local frame: x along the row's yaw; measured by
+# MihneaTeodorStoica for PR #340), LENS_DROP_M under it.
+G_LENS = "lamplens"
+# and a glow at each (tools/build_lamp_glow.py: a ball growing with distance, drawn at night only, so lamps show far off)
+G_GLOW = "lampglow"
+LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511)}
+LENS_DROP_M = 0.03
 TOWN_POLE_CLASSES = {"residential", "tertiary", "unclassified", "secondary", "living_street", "primary", "trunk"}
 TOWN_POLE_SPACING = 40.0
+# the main roads' poles carry a lamp each; the others every other pole in North America (~260 ft: its local streets'
+# 250-300 ft), every pole elsewhere (OpenStreetMap's mapped lamps: 25-30 m on residential streets)
+POLE_LAMP_EVERY = {"trunk", "primary", "secondary"}
+
+
+def pole_lamp(cls, k, region):
+    """Does the k-th utility pole along a road of class cls carry a lamp? (the sparse states: every third)"""
+    if cls in POLE_LAMP_EVERY or not _na(region):
+        return True
+    return k % (3 if region == "na:sparse" else 2) == 0
+# a town street without a mapped sidewalk: its lamps at the carriageway's edge (on its poles, or posts where the lines
+# are buried) LAMP_EDGE_M beyond it (the user, 2026-10-27: lamps only near the camera; Potee Street's streets had
+# lamps on a quarter of their length: only where a sidewalk was mapped)
+LAMP_EDGE_M = 1.2
+# highways (the user, 2026-10-27: "make sure highways have street lights"): in built-up land, and every ramp, lamp posts
+# along each carriageway's outer edge (a divided road's two one-way ways: both sides lit, nothing in the median)
+# (US freeways: 40-50 ft poles 220-270 ft apart, TxDOT's lighting manual; elsewhere closer and lower; the stock post
+# scaled to HIGHWAY_LAMP_H)
+HIGHWAY_CLASSES = {"motorway", "trunk"}
+HIGHWAY_LAMP_SPACING = {"na": 70.0, None: 45.0}
+LINK_LAMP_SPACING = {"na": 60.0, None: 40.0}
+HIGHWAY_LAMP_H = {"na": 13.5, None: 11.0}         # (ramps: the street post, NJDOT's 26 ft on ramps)
+LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
 POLE_LAMP_Z = 7.0           # m above the pole's base
 HYDRANT_SPACING = 120.0
 BENCH_SPACING = 140.0
 BIN_SPACING = 90.0
 BENCH_YAW = 90.0            # the bench model's front is its local +y (the yaw puts +x toward the road)
+
+
+def lamp_lenses(rows):
+    """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under the head of every lamp row (LAMP_HEADS; its scale: the row's
+    height over the catalog's, 1 for both), and a G_GLOW row at the same place."""
+    out = []
+    for r in rows:
+        head = LAMP_HEADS.get(r[0])
+        if head is None:
+            continue
+        a = math.radians(r[4])
+        c, s_ = math.cos(a), math.sin(a)
+        k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
+        hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
+        lens = [G_LENS, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
+                round(r[3] + hz - LENS_DROP_M, 2), r[4], 1.0, 1.0, r[7]]
+        out += [lens, [G_GLOW] + lens[1:]]
+    return out
 
 
 def _stations(run, line, spacing, phase, clear, side):
@@ -509,13 +635,19 @@ def under_decks(rows, decks, wires=None):
 
 
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, speeds=None, mph=True, decks=(),
-          signals=None):
+          signals=None, buried=0.0, region=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
-    width)]: nothing tall under them (under_decks)."""
+    width)]: nothing tall under them (under_decks). buried: the share of the country's low-voltage lines that are
+    underground (buried_share): that share of the roads (hashed) get no utility poles (a town's street its lamps
+    instead). region: lamp_region's (the lamps' spacing)."""
+    spacing_of = lamp_spacing(region, dense=not town)
     x0, y0, x1, y1 = box
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
+
+    def overhead(fid):          # does this road's line run on poles (not buried)?
+        return _h01(fid, "buried") >= buried
     import fast
     others = fast.Others([(fid, spec.width / 2, pts) for fid, spec, pts, _ in roads])
     rows = []
@@ -539,8 +671,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 if x0 <= q[0] < x1 and y0 <= q[1] < y1:
                     rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
                                  round(yaw_fn(out), 1), 1.0, height, 0.0])
-        rule = LAMP_SPACING.get(spec.cls)
-        if town and spec.cls in TOWN_POLE_CLASSES:
+        rule = spacing_of.get(spec.cls)
+        if town and spec.cls in TOWN_POLE_CLASSES and overhead(fid):
             # towns and suburbs: wooden utility poles along one side, wired, a cobra-head lamp on every other
             pole_side = 1 if _h01(fid, "side") < 0.5 else -1
             if side == pole_side:
@@ -555,7 +687,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                         rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                                      round(yaw, 1), 1.0, 9.2, 0.0])
                         k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
-                        if k % 2 == 0:
+                        if pole_lamp(spec.cls, k, region):
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                          round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
                 if wires is not None and len(run_poles) > 1:
@@ -597,24 +729,44 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 roads, speeds, box, left_hand, mph,
                 clear=lambda x, y, z, fid: _clear(np.array([x, y, z]), others, fid)))
     for fid, spec, line, _ in roads:
-        if spec.urban or fid in lit or spec.cls not in POLE_CLASSES or len(line) < 2:
+        if fid in lit or len(line) < 2:
+            continue
+        # a street in built-up land (spec.urban: the land cover; the tile's `town` is only "not a dense core", true in
+        # the countryside too) with no sidewalk run: lit from its edge; a country road: utility poles alone
+        highway = spec.cls in HIGHWAY_CLASSES and highway_lit(region, spec.link, spec.urban)
+        lamps = highway or (spec.urban and spec.cls in TOWN_POLE_CLASSES)
+        poles = not highway and overhead(fid) and (lamps or (not spec.urban and spec.cls in POLE_CLASSES))
+        if not (lamps or poles):
             continue
         side = 1 if _h01(fid, "pside") < 0.5 else -1
-        phase = _h01(fid, "pphase") * POLE_SPACING
+        if highway and spec.dir:            # a one-way carriageway: its outer edge (the drivers' right, left-hand: left)
+            side = int(spec.dir) if left_hand else -int(spec.dir)
+        if highway:
+            spacing = (LINK_LAMP_SPACING if spec.link else HIGHWAY_LAMP_SPACING)["na" if _na(region) else None]
+        else:
+            spacing = (TOWN_POLE_SPACING if lamps else POLE_SPACING) if poles else spacing_of[spec.cls][0]
+        phase = _h01(fid, "pphase") * spacing
         L = _arclen(line)[-1]
-        s = phase + POLE_SPACING * np.arange(0, int((L - phase) // POLE_SPACING) + 1)
+        s = phase + spacing * np.arange(0, int((L - phase) // spacing) + 1)
         if not len(s):
             continue
         P, D = _at(line, s)
         run = []
-        for p, d in zip(P, D):
+        for k, (p, d) in enumerate(zip(P, D)):
             n = np.array([-d[1], d[0]]) * side
-            q = p[:2] + n * (spec.width / 2 + POLE_OFF_M)
+            q = p[:2] + n * (spec.width / 2 + (POLE_OFF_M if poles else LAMP_EDGE_M))
             inside = x0 <= q[0] < x1 and y0 <= q[1] < y1
             if not _clear(np.array([q[0], q[1], p[2]]), others, fid):
                 if len(run) > 1 and wires is not None:
                     wires.extend(_own_spans(run, box))
                 run = []
+                continue
+            if not poles:                   # buried lines: lamp posts, their arms over the road
+                if inside:
+                    h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link
+                         else LAMP_H[G_LAMP])
+                    rows.append([G_LAMP, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                                 round(_yaw(-n[0], -n[1]), 1), 1.0, h, 0.0])
                 continue
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
@@ -622,9 +774,12 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             if inside:
                 rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                              round(yaw, 1), 1.0, 9.2, 0.0])
+                if lamps and pole_lamp(spec.cls, k, region):
+                    rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
+                                 round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
-    return under_decks(rows, list(decks), wires)
+    return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
 def _own_spans(run, box):

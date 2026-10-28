@@ -3,6 +3,20 @@
 This zip turns a BeamMP server into a BeamNG.Earth server: the real world, streamed around every player. Players join
 with the normal BeamMP launcher.
 
+> ## Help: the TGForever Discord, not BeamMP
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to get help setting this up, ask
+> questions, report bugs, chat with other players or help develop the mod.**
+>
+> BeamNG.Earth isn't like a normal BeamNG mod: it needs its own app running next to the game on every player's
+> computer. If something isn't working, it's almost certainly a BeamNG.Earth problem, not a BeamMP one, so please
+> **don't contact the BeamMP team, ask in BeamMP's channels or open BeamMP support tickets** when you run into trouble
+> getting BeamNG.Earth to work with BeamMP.
+>
+> **Your server is hidden from players who don't run BeamNG.Earth.** BeamMP can't install BeamNG.Earth for players who
+> join: it needs its own app (a launcher and a world server that builds the world on each player's computer). So
+> BeamMP's own server list never shows a BeamNG.Earth server. Players with the BeamNG.Earth app find it in the
+> BeamNG.Earth tab of BeamMP's server browser, or join by Direct Connect.
+
 ## Quick server setup
 
 1. **Get the BeamMP server** (the latest release from https://github.com/BeamMP/BeamMP-Server/releases; Windows:
@@ -59,6 +73,8 @@ data and little CPU: the world is built on each player's computer.
   the world can't load without it.
 - A player who joins is sent to where the others are, and each player's car shows in the right place in everyone's
   world, with its dents. Other players show on the world map (M) as arrows.
+- Each player's app builds the world around them on their own computer.
+<!-- Shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
 - (Turned off for now: each player builds their own world, and the setting below does nothing yet.) Players near
   each other share one world origin and split the work of building the world: each piece of the distant
   landscape is built once and sent to the others. For that, the other players must reach each player's computer on
@@ -66,4 +82,5 @@ data and little CPU: the world is built on each player's computer.
   everything themselves). To use another port on your server, edit the line `G.SHARE_PORT = 47621` near the top of
   `Resources/Server/BeamNGEarth/main.lua` and restart the server: every player who joins gets it. A player can still
   pick their own with the environment variable `BNGE_SHARE_PORT`.
+-->
 - Players far apart (another country) each build their own world and don't see each other's cars until they meet.

@@ -130,8 +130,10 @@ class StoreTest(unittest.TestCase):
                 return F()
         with tempfile.TemporaryDirectory() as d:
             roadwidth.RoadWidths(flaky, d).get("r1", road)
-            files = [f for _, _, fs in os.walk(d) for f in fs]
-            self.assertEqual(files, [], "a cell missing: not kept")
+            files = [os.path.relpath(os.path.join(r, f), d) for r, _, fs in os.walk(d) for f in fs]
+            # (a cell's walls are its own buildings: a neighbour that failed is not kept, the home cell is)
+            self.assertTrue(all(f.startswith(os.path.join(str(home.z), str(home.x), str(home.y) + ".")) for f in files),
+                            files)
 
 if __name__ == "__main__":
     unittest.main()

@@ -794,6 +794,42 @@ class SteepMachineLearnedTest(unittest.TestCase):
         self.assertTrue(bld._ml_steep(r, steep30, []), "no ways at all")
 
 
+
+
+class FarLampTest(unittest.TestCase):
+    """The far and skyline tiles' street lamps (buildings.far_lamps; the user, 2026-10-27: "extend the street and
+    window lights as far as the buildings render"): town streets in built-up squares, at the region's spacing; every
+    ramp; nothing in empty country."""
+
+    def test_far_lamps(self):
+        import furniture
+        from test_roads import features, rules, FRAME
+        f = features([[(-100, 50), (400, 50)], [(-100, 150), (400, 150)]], ["residential", "motorway"])
+        f.rules["subclass"] = rules([(1, "link")])
+        ground = lambda la, lo: np.zeros(np.shape(la))          # noqa: E731
+        lamps = bld.far_lamps(FRAME, [f], 0.0, 0.0, 256.0, {(0, 0)}, ground)
+        res = [p for p in lamps if abs(p[1] - 50) < 10]
+        ramp = [p for p in lamps if abs(p[1] - 150) < 10]
+        gaps = np.diff(sorted(p[0] for p in res))
+        self.assertTrue(np.allclose(gaps, furniture.LAMP_SPACING["residential"][0], atol=0.5), gaps)
+        self.assertTrue(all(p[2] == bld.FAR_LAMP_Z for p in lamps))
+        self.assertGreater(len(ramp), 3)
+        na = [p for p in bld.far_lamps(FRAME, [f], 0.0, 0.0, 256.0, {(0, 0)}, ground, "na") if abs(p[1] - 50) < 10]
+        self.assertLess(len(na), len(res), "North America: sparser")
+        empty = bld.far_lamps(FRAME, [f], 0.0, 0.0, 256.0, set(), ground)
+        self.assertEqual(empty, [], "no built-up square: none, the ramp's either (nothing to light past)")
+        country = bld.far_lamps(FRAME, [f], 0.0, 0.0, 256.0, {(5, 5)}, ground)
+        self.assertTrue(country and all(abs(p[1] - 150) < 10 for p in country), "elsewhere built-up: the ramp only")
+
+    def test_skyline_windows(self):
+        spec = bld.plan(rect(0, 0, 30, 20), {"class": "", "height": 30.0}, 0)
+        P, UV, T, M, mats, C = bld._sky_mesh([(spec, 0.0, 0.0)])
+        wall = mats.index(bld.SKY_WALL)
+        self.assertIn(wall, set(M.tolist()), "the walls take the night window map")
+        self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
+
+
+
 if __name__ == "__main__":
     unittest.main()
 

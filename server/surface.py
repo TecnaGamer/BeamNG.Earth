@@ -453,7 +453,7 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None):
 
 def _square_pads(frame, x0, y0, size, surface):
     """The gas station pads (Surface.fuel_pads) of the cells around [x0, x0 + size]² of frame (never waits)."""
-    if not getattr(surface, "gas_pads", False):
+    if not getattr(surface, "gas_pads", False) and getattr(surface, "extra_pads", None) is None:
         return []
     gx = x0 + np.array([0.0, size, 0.0, size, size / 2])
     gy = y0 + np.array([0.0, 0.0, size, size, size / 2])
@@ -505,14 +505,18 @@ PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons d
 # Squares and pedestrian areas (Overture land_use subtype "pedestrian": Mexico City's Zocalo read as bare dirt,
 # 2026-10-15): paving, under the parking lots and the roads drawn over them
 PLAZA_CLASSES = {"pedestrian", "plaza"}
+# Substations' yards (Overture infrastructure class substation; powerlines.py fills them with switchgear): crushed
+# stone, as West Coast USA's yard (the gravel layer), 2026-10-26
+YARD_CLASSES = {"substation"}
 
 
 def paint_lots(idx, lat, lon, feats_list):
     """idx with the squares and pedestrian areas (land_use polygons of subtype "pedestrian") of feats_list
     drawn in as plain paving (the asphalt layer), then the parking lots (polygons of class "parking") as asphalt (Lancaster County's
-    photos: the grass layer's ground cover grew on lots). Pure."""
+    photos: the grass layer's ground cover grew on lots), the substations' yards as gravel. Pure."""
     # (grey paving: the cobble layer's setts drew big squares and promenades pink, Harbor Point 2026-10-15)
     idx = _paint(idx, lat, lon, feats_list, _plazas, ASPHALT)
+    idx = _paint(idx, lat, lon, feats_list, _yards, LOOSE)
     return _paint(idx, lat, lon, feats_list, _parking, ASPHALT)
 
 
@@ -601,6 +605,11 @@ def pads_mask(frame, x0, y0, size, px, pads):
 def _parking(feats):
     cls = feats.attrs.get("class")
     return None if cls is None else np.isin(cls.astype(str), list(PARKING_CLASSES))
+
+
+def _yards(feats):
+    cls = feats.attrs.get("class")
+    return None if cls is None else np.isin(cls.astype(str), list(YARD_CLASSES))
 
 
 def _plazas(feats):
@@ -764,6 +773,7 @@ class Surface:
         self._pending_layers = set()    # (key, layers) queued
         self._last = None           # (lat, lon) of the last prefetch
         self.gas_pads = False       # gas station forecourts painted asphalt (earthd --gas-stations on: fuel_pads)
+        self.extra_pads = None      # (lat, lon) -> more pads painted the same (airportgrade's runway_pads)
         self._fuel_pads = {}        # station id -> (rings [(lat (k,), lon (k,))], bbox), the last FUEL_PAD_STATIONS
 
     def close(self):
@@ -896,8 +906,15 @@ class Surface:
                     if a1 >= la0 and a0 <= la1 and b1 >= lo0 and b0 <= lo1]
 
     def fuel_pads(self, lat, lon):
-        """[(lat (k,), lon (k,))] of the kept pads within the points' bounding box (the painters'; never waits)."""
-        return [r for _, rings in self.fuel_pad_items(lat, lon) for r in rings]
+        """[(lat (k,), lon (k,))] of the kept pads within the points' bounding box (the painters'; never waits), and
+        extra_pads' (the runways)."""
+        out = [r for _, rings in self.fuel_pad_items(lat, lon) for r in rings]
+        if self.extra_pads is not None:
+            try:
+                out += self.extra_pads(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+            except Exception as e:      # (no runways rather than no ground)
+                log.debug("surface: extra pads: %s: %s", type(e).__name__, e)
+        return out
 
     def lots(self, lat, lon):
         """The "infrastructure" and "land_use" Features of the cells around the points that are cached

@@ -776,14 +776,11 @@ class Dem:
                 sub[m] = self.sample(lat[m], lon[m], zoom, progress)
             out[valid] = sub
             return out.reshape(shape)
-        keys = {(tx, ty): (zoom, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)}
-        got = self.tiles(keys.values(), progress)
-        mosaic = np.empty((ny * TILE, nx * TILE), np.float32)
-        for (tx, ty), k in keys.items():
-            c, r = (tx - tx0) * TILE, (ty - ty0) * TILE
-            mosaic[r:r + TILE, c:c + TILE] = got[k]
+        keys = [(zoom, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]     # (row-major)
+        got = self.tiles(keys, progress)
         fx -= tx0 * TILE
         fy -= ty0 * TILE
-        fast.require(55, "bilinear_grid")
-        out[valid] = fast._ef.bilinear_grid(mosaic, fx, fy)
+        # (sampled from the tiles in place: a mosaic of them copied on every call cost ~2 s per 16 city road tiles)
+        fast.require(76, "bilinear_tiles")
+        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) for k in keys], nx, TILE, fx, fy)
         return out.reshape(shape)

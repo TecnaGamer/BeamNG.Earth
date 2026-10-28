@@ -275,9 +275,18 @@ function M.onRouteDownload(msg)
   downloadProgress = { total = tonumber(msg.total) or 0, done = tonumber(msg.done) or 0, active = msg.active == true }
 end
 
+-- Whether the game shows lengths in metric units (Options > Display, uiUnitLength; GitHub #327: the map said miles)
+local function metric()
+  local st = rawget(_G, 'settings')
+  local ok, v = pcall(function() return st and st.getValue and st.getValue('uiUnitLength') end)
+  return ok and v == 'metric'
+end
+M.metric = metric
+
 function M.status()
   if not dest then return nil end
   return { lat = dest.lat, lon = dest.lon, name = dest.name, dist = info and info.dist, bearing = info and info.bearing,
+           metric = metric(),
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
            autodrive = auto, autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
@@ -285,10 +294,10 @@ function M.status()
            next = info and info.next }
 end
 
--- The planned route for the map: { version, points = {{lat, lon}...}, dist, dur } or nil.
+-- The planned route for the map: { version, points = {{lat, lon}...}, dist, dur, elev = {{distM, elevM}...} } or nil.
 function M.route()
   if not route then return nil end
-  return { version = route.version, points = route.points, dist = route.dist, dur = route.dur }
+  return { version = route.version, points = route.points, dist = route.dist, dur = route.dur, elev = route.elev }
 end
 
 -- The GPS app's turn-by-turn (the user, 2026-10-25): the server's turns (routing.turns: lat, lon, at, arrow, text) placed
@@ -775,7 +784,7 @@ function M.update(anchor, player)
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
         route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion,
-                  turns = type(r.turns) == 'table' and r.turns or nil, steps = r.steps, routes = r.routes }
+                  turns = type(r.turns) == 'table' and r.turns or nil, steps = r.steps, routes = r.routes, elev = r.elev }
         routeError, enu, routedTo = nil, nil, nil
       else
         routeError = r.error or 'no route'

@@ -8,3 +8,5 @@ duckdb>=1.5,<2      # GEOMETRY and ST_AsWKB in core: no extension is installed o
                     # shipped 2.0.0 (released 2026-10-21), 1.5.4 1.5.6 (cold-cache server tests, 2026-10-23)
 fsspec              # DuckDB reads the remote files through rangeread.NetfetchFS
 certifi             # the packaged app's CA certificates where the system has none it finds (launcher.py)
+
+truststore>=0.10.4  # Windows: use native CryptoAPI chain validation (HTTPS)

@@ -14,8 +14,9 @@ class FakeNet:
     def __init__(self):
         self.urls = []
 
-    def get(self, url, kind="demand"):
+    def get(self, url, kind="demand", lane=None):
         self.urls.append(url)
+        self.lane = lane
         return types.SimpleNamespace(body=b'{"features": []}')
 
 

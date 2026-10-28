@@ -130,3 +130,13 @@ console.log("mapmath ok")
   assert.ok(m.layerCredits("sat", true).startsWith("Labels: Overlay by EOX") && m.layerCredits("sat", true).includes("OpenStreetMap"))
   console.log("mapmath tile layers ok")
 }
+
+// the map's weather badge: a WMO code into one emoji (settings.uiMapState's weather.code)
+{
+  assert.equal(m.weatherIcon(0), "☀️")
+  assert.equal(m.weatherIcon(63), m.weatherIcon(55))             // rain and drizzle: the same bucket
+  assert.equal(m.weatherIcon(95), "⛈️")
+  assert.equal(m.weatherIcon(73), "❄️")
+  assert.equal(m.weatherIcon(undefined), "")
+  console.log("mapmath weather icon ok")
+}

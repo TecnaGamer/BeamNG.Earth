@@ -28,7 +28,7 @@ def rules(entries, kind="text"):
     if not entries:
         return mapgeom.RuleTable(np.zeros(0, np.int32), np.zeros(0, "<U8"), np.zeros(0, np.float32), np.zeros(0, np.float32))
     f = np.array([e[0] for e in entries], np.int32)
-    v = np.array([e[1] for e in entries], np.float32 if kind == "float" else "<U16")
+    v = np.array([e[1] for e in entries], np.float32 if kind == "float" else "<U32")
     a = np.array([e[2] if len(e) > 2 else 0.0 for e in entries], np.float32)
     b = np.array([e[3] if len(e) > 3 else 1.0 for e in entries], np.float32)
     return mapgeom.RuleTable(f, v, a, b)
@@ -686,6 +686,13 @@ class BuildTileTest(unittest.TestCase):
         self.assertEqual(len(roads.bridge_parts(f, 0)), 1)
         self.assertIsNotNone(roads.road_specs(f)[0], "a street with a bridge in it stays")
         self.assertIsNotNone(roads.bridge_specs(f)[0])
+        # (OpenStreetMap's lane count makes the deck as wide as the road: a 4-lane bridge drawn at its class's 8 m,
+        # GitHub #378)
+        f4 = features([[(-200, 50), (200, 50)]], ["secondary"], levels=[(0, 1.0, 0.4, 0.6)])
+        f4.attrs["osm_lanes"] = np.array([4.0])
+        self.assertEqual(roads.bridge_specs(f4)[0].lanes, 4)
+        self.assertAlmostEqual(roads.bridge_specs(f4)[0].width, roads.road_specs(f4)[0].width, places=6)
+        self.assertGreater(roads.bridge_specs(f4)[0].width, roads.STYLE["secondary"][0] + 2.0)
 
         def slope(la, lo):
             e, _, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
@@ -1114,7 +1121,9 @@ class TileNeedsTest(unittest.TestCase):
         self.assertEqual(far, list(range(far[0], len(needs))), "the water ring last")
         bare = roads.tile_needs(frame, 0, 0, buildings=False, widths=False, water_ring=0)
         self.assertEqual({ly for _, ly in bare}, {"roads", "infrastructure"})
-        self.assertEqual(sorted({k.x for k, ly in bare if ly == "roads"}), list(range(xs[0] - 1, xs[-1] + 2)))
+        import gradesep
+        r = 2 if gradesep.ON else 1     # (grading's ring of roads; gradesep's neighbours of those when it is on)
+        self.assertEqual(sorted({k.x for k, ly in bare if ly == "roads"}), list(range(xs[0] - r, xs[-1] + r + 1)))
 
 
 class InGroundTest(unittest.TestCase):

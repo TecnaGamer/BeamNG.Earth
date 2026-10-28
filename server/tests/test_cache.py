@@ -681,6 +681,7 @@ class ServerCacheTest(Base):
         self.assertFalse(os.path.exists(os.path.join(self.root, "c2", cachemod.VERSION_FILE)),
                          "Server() alone writes nothing into the cache root")
 
+    @unittest.skip("shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while): earthd.share_port")
     def test_share_port(self):
         """The BeamMP group service's port: this machine's BNGE_SHARE_PORT, else the BeamMP server's, else 47621."""
         self.assertEqual(earthd.share_port(None, ""), earthd.peerworkmod.SHARE_PORT)

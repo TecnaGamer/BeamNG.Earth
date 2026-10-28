@@ -8,20 +8,18 @@
 --     bngePose, every 2 s and at once when its anchor changes), its name and heading (degrees from north; none
 --     without a car: the world map's arrows), to everyone each TICK_MS and at once when an anchor changes;
 --   - bngeGoTo { lat, lon }: a player who joins is sent to the others (the longest-joined player's place);
---   - bngeConfig { sharePort }: the server's settings (above), to a player at their first pose;
---   - bngePeers { me, members = [{ id, host, port, code, weight }] }: the players on the same anchor whose world server
---     shares generation (their pose's sp / sc / sw; host: the address BeamMP sees; weight: its machine's capacity,
---     its share of the tiles), each tick when its group changed. Players
---     near each other share an anchor (the clients converge, mpsession.lua), so they split the tiles to build.
+--   - bngeConfig { time, weather }: the server's settings (below), to a player at their first pose.
+-- (Shared world building, its bngeConfig sharePort and bngePeers, is commented out below: off since 2026-10-23.)
 -- Positions stay latitude / longitude here: no coordinates are converted on the server. Nothing of BeamMP itself is
 -- changed: only its events (MP.RegisterEvent, MP.TriggerClientEvent).
 local G = {}
 
 -- ===== Settings: edit here, then restart the BeamMP server ========================================================
--- The TCP port every player's world server listens on to share world building with the players near them (the
--- others connect to it: over the internet, each player forwards this port to their computer; on one network nothing
--- is needed). Sent to each player when they join. A player whose port is taken uses the next free one (up to 9 more).
-G.SHARE_PORT = 47621
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- -- The TCP port every player's world server listens on to share world building with the players near them (the
+-- -- others connect to it: over the internet, each player forwards this port to their computer; on one network nothing
+-- -- is needed). Sent to each player when they join. A player whose port is taken uses the next free one (up to 9 more).
+-- G.SHARE_PORT = 47621
 -- The BeamNG.Earth server list (the "BeamNG.Earth" tab of BeamMP's server browser, seen only by players with
 -- BeamNG.Earth). In ServerConfig.toml, Private = false with your AuthKey puts this server on it; this plugin then keeps
 -- it off BeamMP's own public list (every BeamMP player sees that one, with or without BeamNG.Earth) by switching
@@ -51,6 +49,31 @@ G.players = {}              -- pid -> { name, aLat, aLon, lat, lon, t, joinedAt 
 G.WEATHERS = { clear = true, cloudy = true, rain = true, storm = true, snow = true, fog = true }
 G.started = os.time()       -- (a running server clock starts here: every player computes the same time from it)
 G.clock = 0
+
+-- The notice printed when the server starts (the BeamMP team, 2026-10-27: players kept asking them for help with
+-- BeamNG.Earth): where to get help, and why players without BeamNG.Earth never see this server.
+G.DISCORD = 'https://discord.gg/tgf'
+function G.supportNotice()
+  local bar = string.rep('=', 78)
+  return {
+    bar,
+    'Join the TGForever Discord to get help with this server, ask questions,',
+    'report bugs, chat with other players or help develop the mod:',
+    '    ' .. G.DISCORD,
+    '',
+    'BeamNG.Earth is not like a normal BeamNG mod: it needs its own app running',
+    'next to the game. If something is not working, it is almost certainly a',
+    'BeamNG.Earth problem, not a BeamMP one: do NOT contact the BeamMP team or',
+    'open BeamMP support tickets about it.',
+    '',
+    'This server is hidden from players who do not run BeamNG.Earth. BeamMP cannot',
+    'install BeamNG.Earth for players who join (it needs its own app: a launcher and',
+    'a world server on each player\'s computer), so BeamMP\'s own server list never',
+    'shows it. Players with the BeamNG.Earth app find it in the "BeamNG.Earth" tab of',
+    'BeamMP\'s server browser, or join by Direct Connect.',
+    bar,
+  }
+end
 
 function G.key(aLat, aLon) return string.format('%.6f,%.6f', aLat, aLon) end
 
@@ -92,7 +115,7 @@ function G.meetingPlace(players, newPid)
   return best and { lat = players[best].lat, lon = players[best].lon } or nil
 end
 
--- A client's pose { v, aLat, aLon, lat, lon, joined, h, sp, sc, sw } (its world server's sharing port, code, weight). Returns place (the meeting place for its first pose after
+-- A client's pose { v, aLat, aLon, lat, lon, joined, h }. Returns place (the meeting place for its first pose after
 -- joining, or nil) and moved (its anchor is new or changed: the anchors go out at once).
 function G.onPose(pid, d, name)
   if type(d) ~= 'table' or tonumber(d.v) ~= G.PROTO then return nil, false end
@@ -111,11 +134,12 @@ function G.onPose(pid, d, name)
   p.name, p.aLat, p.aLon, p.lat, p.lon, p.t = name, aLat, aLon, lat, lon, G.clock
   local h = tonumber(d.h)
   p.h = (h and h >= 0 and h <= 360) and h or nil
-  local sp = tonumber(d.sp)
-  p.sp = (sp and sp >= 1 and sp <= 65535 and sp % 1 == 0) and sp or nil
-  p.sc = type(d.sc) == 'string' and #d.sc <= 64 and d.sc or nil
-  local sw = tonumber(d.sw)
-  p.sw = (sw and sw >= 0.1 and sw <= 1000) and sw or 1
+  -- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+  -- local sp = tonumber(d.sp)
+  -- p.sp = (sp and sp >= 1 and sp <= 65535 and sp % 1 == 0) and sp or nil
+  -- p.sc = type(d.sc) == 'string' and #d.sc <= 64 and d.sc or nil
+  -- local sw = tonumber(d.sw)
+  -- p.sw = (sw and sw >= 0.1 and sw <= 1000) and sw or 1
   if first and d.joined == true then
     local place = G.meetingPlace(G.live(), pid)
     if place and G.dist(place.lat, place.lon, lat, lon) > G.MEET_M then return place, moved end
@@ -123,40 +147,41 @@ function G.onPose(pid, d, name)
   return nil, moved
 end
 
-function G.onLeave(pid) G.players[pid] = nil; G.sentPeers[pid] = nil end
+function G.onLeave(pid) G.players[pid] = nil end
 
--- Pure: each sharing player's group { pid -> { me, members } }: the players with the same anchor that share (a
--- port, a code and an address), sorted by id (the same list for every member).
-function G.peers(players)
-  local byKey = {}
-  for pid, p in pairs(players) do
-    if p.sp and p.sc and p.ip then
-      local k = G.key(p.aLat, p.aLon)
-      byKey[k] = byKey[k] or {}
-      table.insert(byKey[k], { id = tostring(pid), host = p.ip, port = p.sp, code = p.sc, weight = p.sw })
-    end
-  end
-  local out = {}
-  for pid, p in pairs(players) do
-    local list = p.sp and p.sc and p.ip and byKey[G.key(p.aLat, p.aLon)]
-    if list then
-      table.sort(list, function(a, b) return a.id < b.id end)
-      out[pid] = { me = tostring(pid), members = list }
-    end
-  end
-  return out
-end
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- -- Pure: each sharing player's group { pid -> { me, members } }: the players with the same anchor that share (a
+-- -- port, a code and an address), sorted by id (the same list for every member).
+-- function G.peers(players)
+--   local byKey = {}
+--   for pid, p in pairs(players) do
+--     if p.sp and p.sc and p.ip then
+--       local k = G.key(p.aLat, p.aLon)
+--       byKey[k] = byKey[k] or {}
+--       table.insert(byKey[k], { id = tostring(pid), host = p.ip, port = p.sp, code = p.sc, weight = p.sw })
+--     end
+--   end
+--   local out = {}
+--   for pid, p in pairs(players) do
+--     local list = p.sp and p.sc and p.ip and byKey[G.key(p.aLat, p.aLon)]
+--     if list then
+--       table.sort(list, function(a, b) return a.id < b.id end)
+--       out[pid] = { me = tostring(pid), members = list }
+--     end
+--   end
+--   return out
+-- end
 
--- Pure: a group's signature (sent again only when it changes).
-function G.peersKey(g)
-  local parts = {}
-  for _, m in ipairs(g.members) do
-    parts[#parts + 1] = m.id .. '@' .. m.host .. ':' .. m.port .. '/' .. m.code .. 'x' .. tostring(m.weight)
-  end
-  return table.concat(parts, ',')
-end
+-- -- Pure: a group's signature (sent again only when it changes).
+-- function G.peersKey(g)
+--   local parts = {}
+--   for _, m in ipairs(g.members) do
+--     parts[#parts + 1] = m.id .. '@' .. m.host .. ':' .. m.port .. '/' .. m.code .. 'x' .. tostring(m.weight)
+--   end
+--   return table.concat(parts, ',')
+-- end
 
-G.sentPeers = {}            -- pid -> the signature last sent
+-- G.sentPeers = {}            -- pid -> the signature last sent
 
 -- Every TICK_MS: the anchors message for the clients.
 function G.tick(dt)
@@ -172,14 +197,11 @@ function G.timeConfig(time, speed, epoch)
   return { hours = h + m / 60, speed = math.max(0, tonumber(speed) or 0), epoch = epoch }
 end
 
--- The settings each player gets (bngeConfig): the sharing port, when it is a usable one; the server's time and weather
--- (nil: the real ones).
+-- The settings each player gets (bngeConfig): the server's time and weather (nil: the real ones). (Its sharePort,
+-- shared world building's, is commented out: off since 2026-10-23.)
 function G.config()
-  local port = tonumber(G.SHARE_PORT)
-  port = port and math.floor(port)
   local w = tostring(G.WEATHER or 'real'):lower()
-  return { sharePort = (port and port >= 1024 and port <= 65535) and port or nil,
-    time = G.timeConfig(G.TIME, G.TIME_SPEED, G.started), weather = G.WEATHERS[w] and w or nil }
+  return { time = G.timeConfig(G.TIME, G.TIME_SPEED, G.started), weather = G.WEATHERS[w] and w or nil }
 end
 
 -- Pure: the server's name, port and player cap from ServerConfig.toml's text.
@@ -265,15 +287,16 @@ if MP and MP.RegisterEvent then
 
   function BNGE_tick()
     MP.TriggerClientEvent(-1, 'bngeAnchors', encode(G.tick(G.TICK_MS / 1000)))
-    for pid, g in pairs(G.peers(G.live())) do
-      local sig = G.peersKey(g)
-      if G.sentPeers[pid] ~= sig then
-        G.sentPeers[pid] = sig
-        MP.TriggerClientEvent(pid, 'bngePeers', encode(g))
-        print(string.format('[BeamNG.Earth] %s shares generation with %d player(s)', tostring(G.players[pid].name),
-          #g.members - 1))
-      end
-    end
+    -- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+    -- for pid, g in pairs(G.peers(G.live())) do
+    --   local sig = G.peersKey(g)
+    --   if G.sentPeers[pid] ~= sig then
+    --     G.sentPeers[pid] = sig
+    --     MP.TriggerClientEvent(pid, 'bngePeers', encode(g))
+    --     print(string.format('[BeamNG.Earth] %s shares generation with %d player(s)', tostring(G.players[pid].name),
+    --       #g.members - 1))
+    --   end
+    -- end
   end
 
   local function serverConfig()
@@ -282,6 +305,8 @@ if MP and MP.RegisterEvent then
     if f then f:close() end
     return cfg
   end
+
+  for _, line in ipairs(G.supportNotice()) do print('[BeamNG.Earth] ' .. line) end
 
   -- a public server with its key goes on our list and off BeamMP's (its Private setting on while it runs: BeamMP's
   -- heartbeat sends it each time); otherwise direct connect only
@@ -318,8 +343,7 @@ if MP and MP.RegisterEvent then
   if cfg.time then
     timeText = tostring(G.TIME) .. (cfg.time.speed > 0 and (' running at x' .. tostring(cfg.time.speed)) or ', fixed')
   end
-  print(string.format('[BeamNG.Earth] plugin loaded (time %s, weather %s; players share world building on TCP port %s)',
-    timeText, cfg.weather or 'real', tostring(cfg.sharePort or 'their own default')))
+  print(string.format('[BeamNG.Earth] plugin loaded (time %s, weather %s)', timeText, cfg.weather or 'real'))
   if tostring(G.TIME or 'real'):lower() ~= 'real' and not cfg.time then
     print('[BeamNG.Earth] G.TIME "' .. tostring(G.TIME) .. '" is not "real" or HH:MM: the real time is used')
   end

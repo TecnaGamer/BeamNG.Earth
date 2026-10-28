@@ -6,14 +6,15 @@ where the track runs on a carriageway (a street tram, a level crossing) West Coa
 road_tramline decal, both rails in one 1.8 m ribbon (textureLength 30, as in its DecalRoads). Standard gauge. Flat: no
 collision, as the markings. Subways are left out.
 The classes railways.py builds as a colliding 3D track on the ground and on bridges (standard and narrow gauge, light
-rail, unknown: mpsteppe's PR #287) get only their street track here, where they cross a carriageway (railways.py stops
+rail: mpsteppe's PR #287) get only their street track here, where they cross a carriageway (railways.py stops
 its track at the road's edge); trams get it all.
 """
 import math
 
 import numpy as np
 
-KINDS = {"standard_gauge": "rail", "narrow_gauge": "narrow", "light_rail": "tram", "tram": "tram", "unknown": "rail"}
+KINDS = {"standard_gauge": "rail", "narrow_gauge": "narrow", "light_rail": "tram", "tram": "tram"}   # (no "unknown":
+# OpenStreetMap's proposed and unbuilt lines, railways.DRAWN)
 GAUGE_M = {"rail": 1.435, "narrow": 1.0, "tram": 1.435}
 HEAD_M = 0.075                  # a rail head's width; the rail lines lie half of it outside the gauge
 TRACK = {                       # ballast top width, sleeper length, sleeper width, sleeper spacing (m)
@@ -144,12 +145,12 @@ def tile_chunks(frame, tx, ty, cells):
             fid = str(feats.ids[i])
             if fid in seen:
                 continue
-            kind = KINDS.get(str(cls[i])) if str(sub[i]) == "rail" else None
-            # the classes railways.py builds as a 3D track (mpsteppe's PR #287): only where they cross a carriageway
-            # (its street track across the road, which railways.py leaves to the road), nothing on open ground
-            meshed = str(sub[i]) == "rail" and str(cls[i]) in railways.DRAWN
-            if meshed and railways._gone(feats, i):
-                continue
+            # the lines railways.py builds as a 3D track (mpsteppe's PR #287; railways.drawn, worn ones too): only where
+            # they cross a carriageway (its street track across the road, which railways.py leaves to the road),
+            # nothing on open ground
+            got = railways.drawn(feats, i) if str(sub[i]) == "rail" else None
+            meshed = got is not None
+            kind = KINDS.get(got[0] if meshed else str(cls[i])) if str(sub[i]) == "rail" else None
             if str(sub[i]) == "road":
                 if specs is None:
                     specs = roads.road_specs(feats)

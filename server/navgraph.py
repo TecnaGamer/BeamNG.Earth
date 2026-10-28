@@ -433,6 +433,16 @@ def country_near(db, lat, lon):
     return getattr(ap, "country", None) or getattr(rw, "country", None) or None
 
 
+def region_near(db, lat, lon):
+    """The ISO 3166-2 region (e.g. "US-CA") of the airport nearest (lat, lon) in airports.AirportDB db, or None."""
+    if db is None or not getattr(db, "runways", None):
+        return None
+    import airports
+    d = airports._hav(lat, lon, db._mid[:, 0], db._mid[:, 1])
+    ap = db.airports.get(db.runways[int(np.argmin(d))].airport_ident)
+    return getattr(ap, "region", None) or None
+
+
 REBUILD_M = 400.0           # a new graph once the player is this far from the last one's centre
 
 

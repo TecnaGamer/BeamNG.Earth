@@ -381,6 +381,17 @@ class RetryAfterTest(unittest.TestCase):
             f.get(url(MT))
         self.assertEqual(f.unavailable_hosts(), [MT])
 
+    def test_a_lane_has_its_own_breaker_under_the_hosts_policy(self):
+        """GitHub #350: the status bar's town lookups timed out, opened photon.komoot.io's breaker and the map's
+        search said 'unavailable'. A lane is the host's policy with its own bucket and breaker."""
+        P = "photon.komoot.io"
+        f, clock, sleep, tr = fetcher()
+        f.host(P + "#reverse").breaker.trip(60)
+        with self.assertRaises(nf.HostUnavailable):
+            f.get(f"https://{P}/reverse?lat=1&lon=2", lane="reverse")
+        self.assertEqual(f.get(f"https://{P}/api/?q=x").body, b"data")          # search: still open
+        self.assertIs(f.host(P + "#reverse").policy, f.host(P).policy)
+
     def test_optional_hosts_left_out_of_the_status(self):
         """GitHub #23: SourceForge (gravity only) blocked in the player's country showed "Degraded" for good."""
         f, clock, sleep, tr = fetcher()
@@ -849,7 +860,8 @@ class OfflineTest(unittest.TestCase):
         f.host(EOX).breaker.trip(60.0)
         self.assertFalse(f.offline)
         c.refresh_status()                                              # the note changed: re-sent
-        self.assertEqual(c.writer.msgs[-1]["text"], f"Ready | Degraded: {EOX} unreachable")
+        self.assertEqual(c.writer.msgs[-1]["text"],
+                         f"Ready | Degraded: {EOX} unreachable ({nf.ROLES[EOX]})")     # (what it affects)
         for h in (USGS, MT, "s3.amazonaws.com"):
             f.host(h).breaker.trip(60.0)
         self.assertTrue(f.offline)
@@ -893,3 +905,20 @@ class OfflineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RolesTest(unittest.TestCase):
+    def test_every_source_says_what_it_affects(self):
+        # the status line names what a source that does not answer affects (the user, 2026-10-27); SOURCES.md too
+        import imagery_regional
+        missing = [h for h, p in nf.POLICIES.items() if not p.denied and nf.role_of(h) is None]
+        self.assertEqual(missing, [])
+        self.assertEqual(sorted(set(imagery_regional.REGIONAL) - set(imagery_regional.PLACE)), [])
+        self.assertIn("Lower Saxony", nf.role_of("opendata.lgln.niedersachsen.de"))
+        self.assertIsNone(nf.role_of("example.com"))
+
+    def test_sources_md_names_every_source(self):
+        doc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "SOURCES.md"),
+                   encoding="utf-8").read()
+        missing = [h for h, p in nf.POLICIES.items() if not p.denied and h not in doc]
+        self.assertEqual(missing, [])

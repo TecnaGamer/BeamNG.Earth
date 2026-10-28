@@ -155,6 +155,217 @@ class CacheDirTest(unittest.TestCase):
             self.assertIsNone(launcher.cache_dir_arg(None, dd), "forgotten")
 
 
+class GpuPlan(unittest.TestCase):
+    """gpu_plan: the hybrid-graphics steering (the user's report, 2026-10-26: the game started directly rendered on
+    the integrated GPU where Steam's start used the dedicated one)."""
+
+    def test_nvidia_offload(self):
+        env, note = launcher.gpu_plan("auto", scan=[("intel", True, 0), ("nvidia", False, 0, "nvidia")])
+        self.assertEqual(env, {"__NV_PRIME_RENDER_OFFLOAD": "1", "__GLX_VENDOR_LIBRARY_NAME": "nvidia"})
+        self.assertIn("NVIDIA", note)
+
+    def test_nvidia_is_the_default_already(self):
+        env, note = launcher.gpu_plan("auto", scan=[("nvidia", True, 0, "nvidia"), ("intel", False, 0, "")])
+        self.assertIsNone(env)
+        self.assertIn("already", note)
+
+    def test_driverless_nvidia_goes_by_vram(self):
+        # a nouveau-bound NVIDIA card: Mesa's offload only, and only while it reports the more VRAM
+        env, note = launcher.gpu_plan("auto", scan=[("intel", True, 0), ("nvidia", False, 8 << 30, "nouveau")])
+        self.assertEqual(env, {"DRI_PRIME": "1"})
+        self.assertIn("nvidia", note)
+
+    def test_mesa_pair(self):
+        env, note = launcher.gpu_plan("auto", scan=[("amd", True, 512 << 20), ("amd", False, 8 << 30, "amdgpu")])
+        self.assertEqual(env, {"DRI_PRIME": "1"})
+        self.assertIn("DRI_PRIME=1", note)
+
+    def test_mesa_pair_default_is_the_bigger_one(self):
+        env, note = launcher.gpu_plan("auto", scan=[("amd", True, 12 << 30, "amdgpu"), ("amd", False, 512 << 20, "amdgpu")])
+        self.assertIsNone(env)
+        self.assertIn("most VRAM", note)
+
+    def test_vram_unknown_gives_up(self):
+        env, note = launcher.gpu_plan("auto", scan=[("intel", True, 0, "i915"), ("amd", False, 0, "amdgpu")])
+        self.assertIsNone(env)
+        self.assertIn("cannot tell", note)
+
+    def test_discrete_guesses_when_unknown(self):
+        env, note = launcher.gpu_plan("discrete", scan=[("intel", True, 0, "i915"), ("amd", False, 0, "amdgpu")])
+        self.assertEqual(env, {"DRI_PRIME": "1"})
+
+    def test_one_gpu_off_and_no_gpu(self):
+        self.assertIsNone(launcher.gpu_plan("auto", scan=[("amd", True, 4 << 30, "amdgpu")])[0])
+        self.assertIsNone(launcher.gpu_plan("off", scan=[("intel", True, 0, ""), ("nvidia", False, 0, "nvidia")])[0])
+        self.assertIsNone(launcher.gpu_plan("off", scan=[])[0])
+        self.assertIsNone(launcher.gpu_plan("auto", scan=[])[0])
+
+    def test_no_boot_flag_takes_the_first_card(self):
+        env, note = launcher.gpu_plan("auto", scan=[("other", False, 0, ""), ("other", False, 0, "")])
+        self.assertIsNone(env)
+
+    def test_player_vars_win(self):
+        scan = [("intel", True, 0, "i915"), ("nvidia", False, 0, "nvidia")]
+        for var, value in (("DRI_PRIME", "1"), ("__NV_PRIME_RENDER_OFFLOAD", "0"),
+                           ("MESA_VK_DEVICE_SELECT", "1002:744c"), ("VK_DRIVER_FILES", "/mine.json")):
+            env, note = launcher.gpu_plan("auto", environ={var: value}, scan=scan)
+            self.assertIsNone(env)
+            self.assertIn(var, note)
+
+
+class VdfTest(unittest.TestCase):
+    def test_tree(self):
+        self.assertEqual(launcher._vdf('"a" "1" "b" { "c" { "d" "2" } "e" "3" } // a comment'),
+                         {"a": "1", "b": {"c": {"d": "2"}, "e": "3"}})
+
+    def test_escapes(self):
+        self.assertEqual(launcher._vdf('"a" "x\\"y\\\\z"'), {"a": 'x"y\\z'})
+
+
+class SteamLaunchOptionsTest(unittest.TestCase):
+    """steam_launch_options: the game's line in Steam's config.vdf (this client's per-game settings) and
+    registry.vdf (an older one's)."""
+    APPS = ('"SteamPath" "/home/u/.local/share/Steam"\n'
+            f'\t"apps"\n\t{{\n\t\t"{launcher.APP_ID}"\n\t\t{{\n'
+            '\t\t\t"LaunchOptions" "DRI_PRIME=1 gamemoderun %command% -gfx dx11"\n'
+            '\t\t}\n\t}\n')
+    CONFIG = ('"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n\t\t\t\t'
+              + APPS + '\t\t\t}\n\t\t}\n\t}\n}\n')
+    REGISTRY = ('"registry.vdf"\n{\n\t"HKCU"\n\t{\n\t\t"Software"\n\t\t{\n\t\t\t"Valve"\n\t\t\t{\n'
+                '\t\t\t\t"Steam"\n\t\t\t\t{\n\t\t\t\t\t' + APPS + '\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n')
+
+    def test_found(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(launcher.steam_launch_options([d]), "no Steam config here")
+            with open(os.path.join(d, "registry.vdf"), "w") as f:
+                f.write(self.REGISTRY)
+            self.assertEqual(launcher.steam_launch_options([d]), "DRI_PRIME=1 gamemoderun %command% -gfx dx11")
+
+    def test_config_vdf_first(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "config"))
+            with open(os.path.join(d, "config", "config.vdf"), "w") as f:
+                f.write(self.CONFIG)
+            self.assertEqual(launcher.steam_launch_options([d]), "DRI_PRIME=1 gamemoderun %command% -gfx dx11")
+
+    def test_this_machines_partial_registry(self):
+        # a registry.vdf without the game's apps at all (a ~/.steam one): config read, no options
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "registry.vdf"), "w") as f:
+                f.write('"Registry"\n{\n\t"HKCU"\n\t{\n\t\t"Software"\n\t\t{\n\t\t\t"Valve"\n\t\t\t{\n'
+                        '\t\t\t\t"Steam"\n\t\t\t\t{\n\t\t\t\t\t"SteamPID" "0"\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n')
+            self.assertEqual(launcher.steam_launch_options([d]), "")
+            self.assertIsNone(launcher.steam_launch_options([os.path.join(d, "config")]))
+
+
+class SplitLaunchOptionsTest(unittest.TestCase):
+    def test_env_wrapper_options(self):
+        self.assertEqual(launcher.split_launch_options("DRI_PRIME=1 gamemoderun %command% -gfx dx11"),
+                         ({"DRI_PRIME": "1"}, ["gamemoderun"], ["-gfx", "dx11"]))
+
+    def test_env_only(self):
+        self.assertEqual(
+            launcher.split_launch_options("__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia %command%"),
+            ({"__NV_PRIME_RENDER_OFFLOAD": "1", "__GLX_VENDOR_LIBRARY_NAME": "nvidia"}, [], []))
+
+    def test_wrappers_only(self):
+        self.assertEqual(launcher.split_launch_options("gamemoderun mangohud %command%"),
+                         ({}, ["gamemoderun", "mangohud"], []))
+
+    def test_no_command_means_game_options(self):
+        self.assertEqual(launcher.split_launch_options("-gfx dx11"), ({}, [], ["-gfx", "dx11"]))
+
+    def test_empty(self):
+        self.assertEqual(launcher.split_launch_options(""), ({}, [], []))
+
+
+class SteamRunningTest(unittest.TestCase):
+    """steam_running sees a Flatpak Steam although its steam.pid names a pid inside its own PID namespace (the
+    user's report, 2026-10-26: the app then started the game through Steam, where the GPU choice is lost)."""
+
+    def fake_proc(self, comms):
+        """comms: {pid: comm text}"""
+        real_open, real_listdir = open, os.listdir
+
+        def listdir(p):
+            return [str(k) for k in comms] if p == "/proc" else real_listdir(p)
+
+        def fopen(p, *a, **k):
+            parts = str(p).split("/")
+            if len(parts) == 4 and parts[1] == "proc" and parts[3] == "comm" and int(parts[2]) in comms:
+                import io
+                return io.StringIO(comms[int(parts[2])])
+            return real_open(p, *a, **k)
+
+        return mock.patch.multiple(launcher.os, listdir=listdir), mock.patch("builtins.open", fopen)
+
+    def run_it(self, home_files, comms):
+        with tempfile.TemporaryDirectory() as d:
+            for name, text in home_files.items():
+                p = os.path.join(d, name)
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, "w") as f:
+                    f.write(text)
+            p1, p2 = self.fake_proc(comms)
+            with mock.patch.dict(os.environ, {"HOME": d}), p1, p2:
+                return launcher.steam_running()
+
+    def test_flatpak_pid_namespace(self):
+        self.assertTrue(self.run_it({".var/app/com.valvesoftware.Steam/.steam/steam.pid": "1252\n"}, {500: "steam"}))
+
+    def test_pidfile_pid_alive(self):
+        self.assertTrue(self.run_it({".steam/steam.pid": "500\n"}, {500: "steam"}))
+
+    def test_pidfile_pid_is_not_steam(self):
+        self.assertFalse(self.run_it({".steam/steam.pid": "500\n"}, {500: "bash"}))
+
+    def test_nothing_running(self):
+        self.assertFalse(self.run_it({}, {500: "steamwebhelper", 501: "kwin"}))
+
+
+class DirectStartAdoptsOptionsTest(unittest.TestCase):
+    """The direct start applies the launch options' variables to the game's environment and appends their options
+    (through Steam, Steam applies them itself: nothing passed on)."""
+
+    def run_start(self, steam_args, user_dir=None):
+        calls = []
+
+        def popen(argv, **kw):
+            if not calls:
+                calls.append((argv, kw["env"]))   # the game's spawn; a later one is the through-Steam fallback
+            return mock.Mock(poll=lambda: 0)      # "ended at once": the launcher then goes through Steam instead
+
+        with mock.patch.object(launcher, "linux_game_exe", return_value="/g/BeamNG/BinLinux/BeamNG.drive.x64"), \
+                mock.patch.object(launcher, "sandboxed_game", return_value=False), \
+                mock.patch.object(launcher, "steam_running", return_value=True), \
+                mock.patch.object(launcher, "gcpatch_lib", return_value=None), \
+                mock.patch.object(launcher, "steam_runtime", return_value=None), \
+                mock.patch.object(launcher.subprocess, "Popen", popen), \
+                mock.patch.dict(os.environ, {"BNGE_GAME_ARGS": ""}):
+            launcher.start_game(False, user_dir=user_dir, steam_args=steam_args)
+        argv, env = calls[0]
+        return argv, env
+
+    def test_env_and_options_reach_the_game(self):
+        argv, env = self.run_start(({"DRI_PRIME": "1"}, [], ["-forcecloud"]))
+        self.assertEqual(argv, ["/g/BeamNG/BinLinux/BeamNG.drive.x64", "-forcecloud"])
+        self.assertEqual(env["DRI_PRIME"], "1")
+        self.assertEqual(env["SteamAppId"], launcher.APP_ID)
+
+    def test_wrapper_wraps_the_game(self):
+        argv, env = self.run_start(({}, ["gamemoderun"], []))
+        self.assertEqual(argv, ["gamemoderun", "/g/BeamNG/BinLinux/BeamNG.drive.x64"])
+
+    def test_userpath_reaches_the_game(self):
+        # the mod and the settings live in the user folder the launcher chose: the game is told the folder its
+        # version folder sits in (a Flatpak Steam's folder, the user's report 2026-10-26)
+        argv, env = self.run_start(({}, [], []), user_dir="/u/flatpak/BeamNG.drive/current")
+        self.assertEqual(argv[:3], ["/g/BeamNG/BinLinux/BeamNG.drive.x64", "-userpath",
+                                    "/u/flatpak/BeamNG.drive"])
+        argv, env = self.run_start(({}, [], []), user_dir="/u/own/folder")
+        self.assertEqual(argv[1:3], ["-userpath", "/u/own/folder"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

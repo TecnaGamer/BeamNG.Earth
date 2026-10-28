@@ -445,4 +445,19 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- #44: dashboard visibility is a persisted player setting.
+do
+  local dashboard0, settingsFile0 = rawget(_G, 'beamngEarth_dashboard'), files[settings.FILE]
+  beamngEarth_dashboard = nil
+  settings.load()
+  settings.set('dashboardSatellite', false)
+  T.check(files[settings.FILE].dashboardSatellite == false, '#44: dashboard visibility off is persisted')
+  T.check(settings.load().dashboardSatellite == false, '#44: dashboard visibility off survives reload')
+  settings.set('dashboardSatellite', true)
+  T.check(files[settings.FILE].dashboardSatellite == true, '#44: dashboard visibility on is persisted')
+  beamngEarth_dashboard = dashboard0
+  files[settings.FILE] = settingsFile0
+  settings.load()
+end
+
 T.done('test_settings')

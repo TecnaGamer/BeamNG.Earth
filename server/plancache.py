@@ -96,12 +96,14 @@ class PlanCache:
             with np.load(src, allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
+                lists["b"] = _split(f, "b") if "b_n" in f.files else []
         except (OSError, ValueError, KeyError, TypeError):
             return None
-        plans, cuts = [], iter(lists["c"])
+        plans, cuts, banks = [], iter(lists["c"]), iter(lists["b"])
         for m, xy, z in zip(meta["plans"], lists["p"], lists["z"]):
             pl = Plan(xy, z, m["half"], tuple(m["abut"]), next(cuts) if m["cut"] else None, m["road_half"])
             pl.rid, pl.max_wall = m["rid"], m["max_wall"]
+            pl.bank = next(banks) if m.get("bank") else None
             plans.append((m["fid"], pl))
         keeps = list(zip(lists["k"], meta["keeps"]))
         covers = list(zip(lists["v"], meta["covers"]))
@@ -130,7 +132,8 @@ class PlanCache:
         """Write cell key's plans for the run's other processes; persist: also into the revisit cache (complete plans:
         nothing they read failed or was missing, Grader._plan_cell)."""
         meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
-                           "rid": int(p.rid), "max_wall": float(p.max_wall), "cut": p.cut is not None}
+                           "rid": int(p.rid), "max_wall": float(p.max_wall), "cut": p.cut is not None,
+                           "bank": getattr(p, "bank", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
                 "opens": [{k: (v.item() if hasattr(v, "item") else v) for k, v in sp._asdict().items()}
@@ -140,6 +143,7 @@ class PlanCache:
             _pack(arrays, "p", [p.xy for _f, p in plans])
             _pack(arrays, "z", [p.z for _f, p in plans])
             _pack(arrays, "c", [p.cut for _f, p in plans if p.cut is not None])
+            _pack(arrays, "b", [p.bank for _f, p in plans if getattr(p, "bank", None) is not None])
             _pack(arrays, "k", [xy for xy, _hw in keeps])
             _pack(arrays, "v", [xy for xy, _w in covers])
             _pack(arrays, "o", [xy for xy, _sp in opens])

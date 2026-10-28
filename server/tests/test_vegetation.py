@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
 import vegetation as veg  # noqa: E402
@@ -133,6 +134,28 @@ class VegetationTest(unittest.TestCase):
         self.assertAlmostEqual(z, float(f.geodetic_to_enu(items.lat[:1], items.lon[:1], np.array([12.0]))[2][0]),
                                delta=0.5)
 
+
+    def test_tile_ambience(self):
+        # the forest ambience (the mod's ambience.lua): the tile's trees and bushes in AUDIO_CELL_M squares, each node
+        # [x, y, z, depth, size, count] inside the tile, every sounding item counted once; Baltimore's set temperate
+        md = FakeMapData()
+        v = veg.Vegetation(md, None)
+        f = geodesy.EnuFrame(LAT, LON)
+        items = v.cell(KEY)
+        e, n, _ = f.geodetic_to_enu(items.lat, items.lon, np.zeros(len(items)))
+        tx, ty = int(np.floor(e[0] / veg.TILE)), int(np.floor(n[0] / veg.TILE))
+        ground = lambda la, lo: np.full(np.shape(la), 12.0)        # noqa: E731
+        js = veg.tile_items(f, tx, ty, v, lambda k: True, ground, as_json=True)
+        rows = veg.tile_items(f, tx, ty, v, lambda k: True, ground)
+        a = np.array(js.audio).reshape(-1, 6)
+        self.assertGreater(len(a), 0)
+        self.assertEqual(int(a[:, 5].sum()), sum(1 for r in rows if r[0] in veg.AUDIO_SOUND))
+        self.assertTrue(((a[:, 0] >= tx * veg.TILE) & (a[:, 0] < (tx + 1) * veg.TILE)).all())
+        self.assertTrue(((a[:, 4] >= 0) & (a[:, 4] <= 1)).all() and (a[:, 3] >= 0).all())
+        self.assertEqual(js.biome, [0, 0])
+        empty = veg.tile_items(f, tx + 40, ty + 40, v, lambda k: True, ground, as_json=True)
+        self.assertEqual((empty, empty.audio), ("[]", []))         # (no items: still its set)
+        self.assertEqual(empty.biome, [0, 0])
 
     def test_dense_tile_sends_its_lowest_ranks(self):
         # GitHub #66: Bodø's forest tiles held 10-20k items each; a tile sends TILE_ROWS_MAX at most, the lowest ranks
@@ -263,3 +286,83 @@ class RockSinkTest(unittest.TestCase):
         self.assertEqual(z[2], 30.0)
         flat = veg._sink_rocks(f, it, e, n, np.zeros(3), lambda la, lo: np.zeros(np.size(la)))
         self.assertTrue(np.allclose(flat, 0.0, atol=0.02), "no sinking on flat ground")
+
+
+class FlatTileTest(unittest.TestCase):
+    """A vegetation tile as one flat array (the mod's hello.vegFlat): no table per item in the game's Lua (trees.lua)."""
+
+    def test_flat_json(self):
+        import json
+        rows = [[0, 1.5, -2.25, 3.0, 90.0, 1.0, 12.0, 0.5], [3, -0.0, 4.0, 5.5, -45.5, 0.8, 2.0, 0.0001]]
+        js = veg.JsonRows(json.dumps(rows, separators=(",", ":")))
+        js.n = 2
+        self.assertEqual(veg.flat_json(rows), json.dumps([v for r in rows for v in r], separators=(",", ":")))
+        self.assertEqual(veg.flat_json(js), veg.flat_json(rows))
+        self.assertEqual(json.loads(veg.flat_json(js)), [v for r in rows for v in r])
+        one = veg.JsonRows(json.dumps(rows[:1], separators=(",", ":")))
+        self.assertEqual(json.loads(veg.flat_json(one)), rows[0])
+        self.assertEqual(veg.flat_json([]), "[]")
+        self.assertEqual(veg.flat_json(veg.JsonRows("[]")), "[]")
+
+    def test_write_tile_both_formats(self):
+        import json
+        import os
+        import tempfile
+        rows = [[1, 10.0, 20.0, 30.0, 0.0, 1.0, 15.0, 0.25]] * 3
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(veg.write_tile(tmp, "/v", 7, -1, 2, rows), ("/v/veg_7_-1_2.json", 3))
+            self.assertEqual(veg.write_tile(tmp, "/v", 7, -1, 2, rows, flat=True), ("/v/veg_7_-1_2.flat.json", 3))
+            with open(os.path.join(tmp, "veg_7_-1_2.json")) as fh:
+                old = json.load(fh)
+            with open(os.path.join(tmp, "veg_7_-1_2.flat.json")) as fh:
+                new = json.load(fh)
+        self.assertEqual(old, {"groups": list(veg.GROUPS), "items": rows})        # an older mod's: unchanged
+        self.assertEqual(new, {"groups": list(veg.GROUPS), "stride": veg.FLAT_STRIDE, "flat": rows[0] * 3})
+        self.assertEqual(veg.FLAT_STRIDE, len(rows[0]))
+
+
+class FlatHelloTest(unittest.TestCase):
+    """The connection builds its vegetation tiles flat only for a mod whose hello says it reads them (vegFlat)."""
+
+    def run_hello(self, extra):
+        import test_server
+        h = test_server.ServerHarness()
+        h.setUp()
+        try:
+            asked = []
+            h.server.build_veg_tile = lambda aid, tx, ty, flat=False: asked.append(flat)
+            h.c.send(dict({"type": "hello", "protocol": 4, "format": h.MOD_FORMAT, "modVersion": "0.4.0"}, **extra))
+            h.c.until(lambda m: m["type"] == "hello", timeout=10)
+            h.conn().build_veg_tile(1, 0, 0)
+            return h.conn().veg_flat, asked
+        finally:
+            h.tearDown()
+
+    def test_vegflat_hello(self):
+        self.assertEqual(self.run_hello({"vegFlat": True}), (True, [True]))
+
+    def test_older_mod_gets_rows(self):
+        self.assertEqual(self.run_hello({}), (False, [False]))
+        self.assertEqual(self.run_hello({"vegFlat": "yes"}), (False, [False]))      # (only a JSON true)
+
+
+class DemFailedTest(unittest.TestCase):
+    """A cell built while the DEM could not answer is not kept on disk (from PR #295): its slope rocks were missing for
+    good."""
+
+    def test_failed_dem_cell_not_cached(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            v = veg.Vegetation(None, cache_dir=tmp)
+            v._path = lambda x, y: os.path.join(tmp, f"{x}_{y}.npz")
+
+            def build(x, y, fail):
+                v._tl.dem_failed = fail
+                return veg.Items(*(np.zeros(0) for _ in range(9)))
+            v._build = lambda x, y: build(x, y, True)
+            v._load(1, 2)
+            self.assertFalse(os.path.exists(v._path(1, 2)), "a failed DEM: not kept")
+            v._build = lambda x, y: build(x, y, False)
+            v._load(1, 2)
+            self.assertTrue(os.path.exists(v._path(1, 2)), "answered: kept")

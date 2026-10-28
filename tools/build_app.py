@@ -31,6 +31,13 @@ IS_WIN = os.name == "nt"
 SEP = ";" if IS_WIN else ":"
 
 
+def _overture_release():
+    """overture.RELEASE, read from the source (the build script does not import the server)."""
+    import re
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server", "overture.py"), encoding="utf-8") as f:
+        return re.search(r'^RELEASE = "([^"]+)"', f.read(), re.M).group(1)
+
+
 def version():
     with open(os.path.join(ROOT, "VERSION"), encoding="utf-8") as f:
         return f.read().strip()
@@ -137,10 +144,16 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--specpath", work, "--paths", server, "--paths", ROOT, "--icon", ico,
            "--collect-submodules", "fsspec",
            "--hidden-import", "certifi", "--collect-data", "certifi",   # CA bundle fallback (launcher.ensure_ca_certs)
+           "--hidden-import", "truststore",     # Windows: the native certificate store (netfetch.windows_ssl_context, PR #371)
            "--add-data", f"{os.path.join(ROOT, 'mod', 'beamng_earth')}{SEP}mod/beamng_earth",
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
-           "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}."]     # (bridgetypes.WD_PATH)
+           "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}.",     # (bridgetypes.WD_PATH)
+           "--add-data", f"{os.path.join(server, 'koppen_1991_2020_0p1.png')}{SEP}.",  # (climate.PATH)
+           "--add-data", f"{os.path.join(server, 'oil_wells.npz')}{SEP}.",  # (oilwells.PATH)
+           "--add-data", f"{os.path.join(server, 'refineries.npz')}{SEP}.",  # (industry.PATH)
+           # (overture.BUNDLED: the pinned release's STAC index, tools/build_stac_index.py)
+           "--add-data", f"{os.path.join(server, 'overture_stac_' + _overture_release() + '.json.gz')}{SEP}."]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork

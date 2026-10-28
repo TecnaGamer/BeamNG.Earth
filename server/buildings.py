@@ -13,6 +13,7 @@ on red brick), m_highrise_metal's are office curtain wall and a shopfront; each 
 its windows a whole number of bays along every wall (no window cut at a corner). Pure functions of the
 footprints and a ground-height function; no game state.
 """
+import os
 import hashlib
 import math
 
@@ -72,8 +73,9 @@ BARN_CLASSES = {"barn", "farm_auxiliary", "stable", "cowshed"}
 MARBLE = "bne_bld_marble"   # cut white marble (the stock m_marble_cut): Baltimore's row house steps
 BRICK_WALL = "bne_bld_brick"    # plain red brick (the stock brick_plain): a garage's skin
 CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a precast garage's skin
+SKY_WALL = "bne_bld_sky"    # the skyline's walls: plain (vertex colours), their windows lit at night (_sky_mesh)
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
-             STONE, MARBLE, BRICK_WALL, CONCRETE)
+             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -212,39 +214,14 @@ def _area2(p):
     return float(np.dot(x, np.concatenate((y[1:], y[:1]))) - np.dot(np.concatenate((x[1:], x[:1])), y))
 
 
-def _close2(a, b):
-    """np.allclose(a, b) of two 2-vectors (rtol 1e-5, atol 1e-8; NaN never close) without its per-call cost."""
-    ax, ay, bx, by = float(a[0]), float(a[1]), float(b[0]), float(b[1])
-    return abs(ax - bx) <= 1e-08 + 1e-05 * abs(bx) and abs(ay - by) <= 1e-08 + 1e-05 * abs(by)
-
-
 def clean_ring(p):
     """The ring (n, 2) without its closing point, duplicate and nearly collinear vertices, counter-clockwise;
-    None if fewer than 3 are left."""
-    p = np.asarray(p, np.float64)[:, :2]
-    if len(p) > 1 and _close2(p[0], p[-1]):
-        p = p[:-1]
-    tol = SIMPLIFY_M
-    for _ in range(8):
-        if len(p) < 3:
-            return None
-        prev, nxt = np.concatenate((p[-1:], p[:-1])), np.concatenate((p[1:], p[:1]))     # np.roll by hand
-        d = nxt - prev
-        L = np.hypot(d[:, 0], d[:, 1])
-        off = np.abs(d[:, 0] * (p[:, 1] - prev[:, 1]) - d[:, 1] * (p[:, 0] - prev[:, 0])) / np.maximum(L, 1e-9)
-        drop = (off < tol) | (np.hypot(*(p - prev).T) < 1e-3)
-        if not drop.any():
-            if len(p) <= MAX_VERTS:
-                break
-            tol *= 1.6
-            continue
-        # drop every other candidate at most, so a run of near-collinear points is not removed whole
-        idx = np.nonzero(drop)[0]
-        keep = np.ones(len(p), bool)
-        keep[idx[::2]] = False
-        p = p[keep]
-    if len(p) < 3:
+    None if fewer than 3 are left. The simplification in Rust (earthfast.clean_ring_core: numpy's arithmetic)."""
+    fast.require(76, "clean_ring_core")
+    p = fast._ef.clean_ring_core(np.ascontiguousarray(np.asarray(p, np.float64)[:, :2]), float(SIMPLIFY_M), int(MAX_VERTS))
+    if p is None:
         return None
+    p = np.asarray(p, np.float64)
     if _area2(p) < 0:
         p = p[::-1]
     return p
@@ -252,69 +229,20 @@ def clean_ring(p):
 
 def triangulate(p):
     """Ear clipping of the counter-clockwise simple ring p (n, 2): (n-2, 3) indices into p (fewer if the
-    ring is not simple: the rest is left out)."""
-    n = len(p)
-    p = np.asarray(p, np.float64)[:, :2].tolist()      # plain floats: the same products, without numpy's per-scalar cost
-    idx = list(range(n))
-    out = []
-
-    def cross(a, b, c):
-        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-
-    guard = 0
-    while len(idx) > 3 and guard < 4 * n * n:
-        guard += 1
-        m = len(idx)
-        found = False
-        for k in range(m):
-            i0, i1, i2 = idx[k - 1], idx[k], idx[(k + 1) % m]
-            a, b, c = p[i0], p[i1], p[i2]
-            if cross(a, b, c) <= 1e-12:
-                continue
-            ear = True
-            for j in idx:
-                if j in (i0, i1, i2):
-                    continue
-                q = p[j]
-                if cross(a, b, q) >= 0 and cross(b, c, q) >= 0 and cross(c, a, q) >= 0:
-                    ear = False
-                    break
-            if ear:
-                out.append((i0, i1, i2))
-                del idx[k]
-                found = True
-                break
-        if not found:
-            break
-    if len(idx) == 3:
-        out.append(tuple(idx))
-    return np.array(out, np.int64).reshape(-1, 3)
+    ring is not simple: the rest is left out). The Rust loop (earthfast.triangulate)."""
+    fast.require(76, "triangulate")
+    return np.asarray(fast._ef.triangulate(np.ascontiguousarray(np.asarray(p, np.float64)[:, :2])), np.int64)
 
 
 def oriented_box(p):
     """The minimum-area rectangle around ring p along one of its edges: (centre (2,), axis u (2,) along the
-    long side, half length, half width)."""
-    # in plain floats (numpy's per-edge calls on a handful of points were ~8 % of a far buildings tile); the same
-    # products and sums as p @ u, bit for bit (checked on Baltimore's 17.5k building rings, 2026-10-20)
-    pts = np.asarray(p, np.float64).tolist()
-    n = len(pts)
-    best = None
-    for i in range(n):
-        x0, y0 = pts[i]
-        x1, y1 = pts[(i + 1) % n]
-        ex, ey = x1 - x0, y1 - y0
-        L = math.hypot(ex, ey)
-        if L < 1e-6:
-            continue
-        ux, uy = ex / L, ey / L
-        vx, vy = -uy, ux
-        a = [x * ux + y * uy for x, y in pts]
-        b = [x * vx + y * vy for x, y in pts]
-        amin, amax, bmin, bmax = min(a), max(a), min(b), max(b)
-        area = (amax - amin) * (bmax - bmin)
-        if best is None or area < best[0]:
-            best = (area, ux, uy, vx, vy, amin, amax, bmin, bmax)
-    _, ux, uy, vx, vy, amin, amax, bmin, bmax = best
+    long side, half length, half width). The edge search in Rust (earthfast.oriented_box_core: the same products and
+    sums, math.hypot's own rounding), the rest here as before."""
+    fast.require(76, "oriented_box_core")
+    best = fast._ef.oriented_box_core(np.ascontiguousarray(np.asarray(p, np.float64)[:, :2]))
+    if best is None:
+        raise ValueError("oriented_box: a ring without an edge")
+    ux, uy, vx, vy, amin, amax, bmin, bmax = best
     sa, sb = amax + amin, bmax + bmin
     c = np.array([ux * sa / 2 + vx * sb / 2, uy * sa / 2 + vy * sb / 2])
     hl, hw = np.float64((amax - amin) / 2), np.float64((bmax - bmin) / 2)     # (numpy scalars, as before)
@@ -757,6 +685,23 @@ class Mesh:
         self.M += (mat[0], mat[0])
         self.n += 4
 
+    def quads(self, P, UV, mid, mats):
+        """Quads from a kernel (earthfast.building_walls): P 12 numbers per quad, UV 8, mid the index into mats (material
+        tokens) per quad; the same lists quad() would make."""
+        q = len(mid)
+        if not q:
+            return
+        i = self.n
+        self.P += P
+        self.UV += UV
+        cols = [tuple(mt[1]) * 4 if mt is not None else None for mt in mats]
+        for k in mid:
+            self.C += cols[k]
+        self.T += (np.arange(q, dtype=np.int64)[:, None] * 4 + np.array([0, 1, 2, 0, 2, 3], np.int64) + i).ravel().tolist()
+        idx = [mt[0] if mt is not None else None for mt in mats]
+        self.M += [idx[k] for k in mid for _ in (0, 1)]
+        self.n += 4 * q
+
     def tri(self, a, b, c, uva, uvb, uvc, mat):
         i = self.n
         self.P += (*a, *b, *c)
@@ -791,12 +736,6 @@ class Mesh:
                 np.array(self.C, np.uint8).reshape(-1, 4))
 
 
-def _band_v(band, k):
-    """v range (bottom, top) of band k (0 = the image top) of a 4-band sheet; a hair inside it."""
-    eps = 1.5 / 1024
-    return 1.0 - (k + 1) / BANDS + eps, 1.0 - k / BANDS - eps
-
-
 # A sash window cut from the plaster sheet (band 2, bay 0, its sill included): u, v ranges (Collada v up)
 WIN_UV = (53 / 1024, 154 / 1024, 1.0 - (512 + 238) / 1024, 1.0 - (512 + 45) / 1024)
 WIN_W, WIN_H, WIN_SILL = 1.05, 1.75, 0.85   # m
@@ -805,154 +744,36 @@ DOOR_GAP_M = 0.75           # m each side of a front door kept free of the groun
 WIN_OUT_M = 0.03            # m the window stands proud of its wall
 
 
-def _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, wallmat, mat_idx, edge=None):
-    """A wall of a plain tileable material (world-scaled UV) with sash windows laid over it, a whole
-    number per floor centred in their bays."""
-    su = SIDING_UV_M
-    m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z_eave), (a[0], a[1], z_eave),
-           (0, z0 / su), (L / su, z0 / su), (L / su, z_eave / su), (0, z_eave / su), wallmat)
-    if spec.windows is False:
-        if spec.front is not None and spec.front == edge and L > 4.0:
-            # a big box's storefront: the shopfront band over the wall, a whole number of its bays
-            d = (b - a) / L
-            out = np.array([d[1], -d[0]]) * WIN_OUT_M
-            base = z_eave - spec.floors * spec.floor_h
-            zt = min(base + GROUND_FLOOR_SHOP_M, z_eave - 0.6)
-            nbs = max(1, int(round(L * 0.7 / (TILE_PX_M / BAND_SHOP[1]))))
-            v0, v1 = _band_v(BAND_SHOP, BAND_SHOP[0])
-            p, q = a + d * (L * 0.15) + out, a + d * (L * 0.85) + out
-            m.quad((p[0], p[1], base), (q[0], q[1], base), (q[0], q[1], zt), (p[0], p[1], zt),
-                   (0, v0), (nbs / BAND_SHOP[1], v0), (nbs / BAND_SHOP[1], v1), (0, v1), mat_idx[SHOP])
-        return
-    nb = int(L // HOUSE_BAY_M)
-    if nb < 1 or L < 2.0:
-        return
-    d = (b - a) / L
-    out = np.array([d[1], -d[0]]) * WIN_OUT_M
-    win = mat_idx["bne_bld_fac_white"]
-    u0, u1, v0, v1 = WIN_UV
-    base = z_eave - spec.floors * spec.floor_h
-    for f in range(spec.floors):
-        zf = base + f * spec.floor_h + WIN_SILL
-        if zf + WIN_H > z_eave - 0.2:
-            continue
-        for k in range(nb):
-            if f == 0 and nb % 2 == 1 and k == nb // 2:
-                continue                                # where a front door may stand (doors(): the middle)
-            c = a + d * (L * (k + 0.5) / nb) + out
-            p, q = c - d * WIN_W / 2, c + d * WIN_W / 2
-            m.quad((p[0], p[1], zf), (q[0], q[1], zf), (q[0], q[1], zf + WIN_H), (p[0], p[1], zf + WIN_H),
-                   (u0, v0), (u1, v0), (u1, v1), (u0, v1), win)
+_WALL_CONSTS = None
 
 
 def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
-    """Each wall of the ring, floor by floor: one band of the window sheet, a whole number of bays."""
-    n = len(ring)
-    fac = mat_idx[spec.facade]
-    pts = np.asarray(ring, np.float64)[:, :2].tolist()     # (plain floats: the arithmetic below, per bay)
-    for i in range(n):
-        a, b = ring[i], ring[(i + 1) % n]
-        L = float(math.hypot(*(b - a)))
-        if L < 0.05:
-            continue
-        if spec.wall:
-            _plain_wall_with_windows(m, spec, a, b, L, z0, z_eave, fac, mat_idx, i)
-            continue
-        (ax, ay), (bx, by) = pts[i], pts[(i + 1) % n]
-        if spec.plain:
-            u1 = L / SIDING_UV_M
-            m.quad((ax, ay, z0), (bx, by, z0), (bx, by, z_eave), (ax, ay, z_eave),
-                   (0, z0 / SIDING_UV_M), (u1, z0 / SIDING_UV_M), (u1, z_eave / SIDING_UV_M), (0, z_eave / SIDING_UV_M),
-                   fac)
-            continue
-        bays_per_tile = spec.band[1]
-        bay = TILE_PX_M / bays_per_tile
-        nb = int(round(L / bay))
-        u1 = (nb / bays_per_tile) if nb >= 1 else 0.02 * L          # a short wall: the plain strip at the sheet's edge
-        # the floors stand on the footprint's highest ground; below it a plain plinth (a slope's basement)
-        base = z_eave - spec.floors * spec.floor_h
-        za = z0
-        if base - z0 > FOUNDATION_M + 0.4:
-            pv0, pv1 = _band_v(spec.band, spec.band[0])
-            hp = (base - 0.3) - z0                      # the plinth: the band's plain strip at its scale
-            _plain_strip(m, a, b, z0, base - 0.3, bays_per_tile, bay, pv0,
-                         pv0 + (pv1 - pv0) * min(1.0, hp / max(spec.floor_h, 1e-3)), fac, whole=lite)
-            za = base - 0.3
-        for f in range(spec.floors):
-            zb = z_eave if f == spec.floors - 1 else base + (f + 1) * spec.floor_h
-            if f == 0 and spec.shop:
-                mat, (_, k_bpt) = mat_idx[SHOP], BAND_SHOP
-                band_k = BAND_SHOP[0]
-                nbs = max(1, int(round(L / (TILE_PX_M / k_bpt))))
-                uu = nbs / k_bpt if L > 2.0 else 0.02 * L
-            else:
-                mat, band_k, uu = fac, spec.band[0], u1
-                if len(spec.band) > 2 and nb >= 1 and not lite:     # the good bays only, one quad each
-                    v0, v1 = _band_v(spec.band, band_k)
-                    good = spec.band[2]
-                    dk = None
-                    if f == 0 and spec.door and spec.door[0] == i and spec.roof == "flat":
-                        dk = min(nb - 1, int(spec.door[1] / L * nb))      # the bay behind the front door
-                    dx, dy = bx - ax, by - ay
-                    for k in range(nb):
-                        g = good[int(_hash01(spec.seed, i, f, k) * len(good))]
-                        t0, t1 = k / nb, (k + 1) / nb
-                        pa, pb = (ax + dx * t0, ay + dy * t0), (ax + dx * t1, ay + dy * t1)
-                        if k == dk:
-                            _plain_strip(m, pa, pb, za, zb, bays_per_tile, bay, v0, v1, mat)
-                            continue
-                        m.quad((pa[0], pa[1], za), (pb[0], pb[1], za), (pb[0], pb[1], zb), (pa[0], pa[1], zb),
-                               (g / bays_per_tile, v0), ((g + 1) / bays_per_tile, v0), ((g + 1) / bays_per_tile, v1),
-                               (g / bays_per_tile, v1), mat)
-                    za = zb
-                    continue
-            v0, v1 = _band_v(spec.band, band_k)
-            door = spec.door if (f == 0 and spec.roof == "flat" and spec.door and spec.door[0] == i) else None
-            if door is not None and DOOR_GAP_M < door[1] < L - DOOR_GAP_M:
-                # the band either side of the door; a plain strip of the sheet's wall behind it, whole bays of the
-                # band (a gap cutting a bay left a sliver of its window beside the door, the user 2026-10-17)
-                s0, s1 = door[1] - DOOR_GAP_M, door[1] + DOOR_GAP_M
-                if nb >= 1:
-                    bw = L / nb
-                    s0, s1 = max(0.0, math.floor(s0 / bw) * bw), min(L, math.ceil(s1 / bw) * bw)
-                for ta, tb in ((0.0, s0), (s1, L)):
-                    if tb - ta < 1e-3:
-                        continue
-                    pa, pb = a + (b - a) * (ta / L), a + (b - a) * (tb / L)
-                    m.quad((pa[0], pa[1], za), (pb[0], pb[1], za), (pb[0], pb[1], zb), (pa[0], pa[1], zb),
-                           (uu * ta / L, v0), (uu * tb / L, v0), (uu * tb / L, v1), (uu * ta / L, v1), mat)
-                pa, pb = a + (b - a) * (s0 / L), a + (b - a) * (s1 / L)
-                _plain_strip(m, pa, pb, za, zb, bays_per_tile, bay, v0, v1, mat, whole=lite)
-                za = zb
-                continue
-            # the foundation and the parapet stretch the band a little; the windows stay a floor's height
-            m.quad((ax, ay, za), (bx, by, za), (bx, by, zb), (ax, ay, zb),
-                   (0, v0), (uu, v0), (uu, v1), (0, v1), mat)
-            za = zb
+    """Each wall of the ring, floor by floor: one band of the window sheet, a whole number of bays; a plain wall with
+    sash windows laid over it for a plain tileable material (spec.wall; a big box's storefront band); a plain plinth
+    under the floors on a slope; a shopfront ground floor; the good bays only where a band has some; the front door's
+    bay as the band's plain strip, at the sheet's scale. The Rust loop (earthfast.building_walls: the quads the Python
+    made, in its order and arithmetic)."""
+    global _WALL_CONSTS
+    if _WALL_CONSTS is None:
+        _WALL_CONSTS = [float(v) for v in (SIDING_UV_M, TILE_PX_M, FOUNDATION_M, BANDS, BAND_SHOP[0], BAND_SHOP[1],
+                                           DOOR_GAP_M, PLAIN_STRIP, GROUND_FLOOR_SHOP_M, WIN_OUT_M, HOUSE_BAY_M,
+                                           *WIN_UV, WIN_W, WIN_H, WIN_SILL)]
+    fast.require(76, "building_walls")
+    band = spec.band or (0, 1)
+    good = list(band[2]) if len(band) > 2 else []
+    door = spec.door
+    P, UV, mid = fast._ef.building_walls(
+        np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), float(z0), float(z_eave), bool(spec.wall),
+        bool(spec.plain), int(band[0]), int(band[1]), [int(g) for g in good], int(spec.floors), float(spec.floor_h),
+        bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
+        float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
+        int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
+    if mid:
+        m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
+                             mat_idx["bne_bld_fac_white"] if spec.wall else None])
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)
-
-
-def _plain_strip(m, pa, pb, za, zb, bays_per_tile, bay_w, v0, v1, mat, whole=False):
-    """The wall from pa to pb (za..zb) in slices of the band's plain strip between its first two windows, at the
-    sheet's own scale (a bay of the sheet = bay_w m). The wall behind a front door was one texel of the sheet
-    stretched over it, a blurred smear round every door (the user, 2026-10-17). whole (the lite mesh: far buildings,
-    a near tile's distant detail): one slice stretched over it (the plinths of buildings on a slope were ~78 % of a
-    far buildings tile's quads, ~1 m slices nobody sees from 600 m)."""
-    ax, ay, bx, by = float(pa[0]), float(pa[1]), float(pb[0]), float(pb[1])
-    dx, dy = bx - ax, by - ay
-    L = math.hypot(dx, dy)
-    if L < 1e-3:
-        return
-    c, h = 1.0 / bays_per_tile, 0.5 * PLAIN_STRIP / bays_per_tile
-    sw = max(0.1, PLAIN_STRIP * bay_w)                  # m one slice covers
-    n = 1 if whole else max(1, int(round(L / sw)))
-    uva, uvb, uvc, uvd = (c - h, v0), (c + h, v0), (c + h, v1), (c - h, v1)
-    for j in range(n):
-        t0, t1 = j / n, (j + 1) / n
-        qax, qay, qbx, qby = ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1
-        m.quad((qax, qay, za), (qbx, qby, za), (qbx, qby, zb), (qax, qay, zb), uva, uvb, uvc, uvd, mat)
 
 
 def _cornice(m, spec, ring, z_eave, mat_idx):
@@ -2280,7 +2101,7 @@ class _PartsOf:
 
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset()):
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
     building in two cells is taken once, by id); elev(lat, lon) the physics ground. part_layers: the
@@ -2290,7 +2111,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     bridge's painted steel). bridges_xy / water_xy (bridge_lines, water_rings): a machine-learned footprint (not
     OSM) on a road bridge, over water or on a public road (roads_xy, or ml_roads_xy for that test alone: the far
     buildings) is a deck, a boat or a vehicle, left out (_ml_false). skip: ids of buildings left out (a gas station's
-    canopy, drawn by the mod from the stock levels' props: gasstations.tile_sites)."""
+    canopy, drawn by the mod from the stock levels' props: gasstations.tile_sites). min_size (min height m, min
+    footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
+    any other work on a building."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
     seen = set()
     rings, attrs, looks, mins = [], [], [], []
@@ -2324,6 +2147,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             cx, cy = float(e[:-1].sum() / k), float(n[:-1].sum() / k)
             if not (x0 <= cx < x1 and y0 <= cy < y1):
                 continue
+            if min_size is not None:
+                h_ = a["height"][i] if a.get("height") is not None else None
+                if h_ is None or not np.isfinite(h_):
+                    fl_ = a["num_floors"][i] if a.get("num_floors") is not None else None
+                    h_ = float(fl_) * 3.2 if fl_ is not None and np.isfinite(fl_) else 0.0
+                if h_ < min_size[0] and abs(float(np.dot(e[:-1], n[1:]) - np.dot(e[1:], n[:-1]))) / 2 < min_size[1]:
+                    continue
             at = {k: (a[k][i] if k in a else None) for k in
                   ("class", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name", "facade_material")}
             hh_ = at.get("height")
@@ -2587,6 +2417,22 @@ def collider_boxes(items, x0, y0):
     return out
 
 
+def garage_sound_boxes(items, x0, y0, kind):
+    """The sound spaces (roads.sound_boxes rows [kind, x, y, z, length, width, height, yaw], anchor frame) of the
+    tile's parking structures drawn as open decks (deck_plan: the ones driven into): each its footprint's oriented
+    box from its lowest ground to its top."""
+    out = []
+    for spec, gmin, gmax in items:
+        if deck_plan(spec, gmin, gmax) is None:
+            continue
+        c, u, hl, hw = oriented_box(spec.ring)
+        z0, z1 = gmin - 0.5, gmax + spec.height + 1.0
+        out += [float(kind), round(float(c[0]) + x0, 2), round(float(c[1]) + y0, 2), round((z0 + z1) / 2, 2),
+                round(2 * float(hl), 2), round(2 * float(hw), 2), round(z1 - z0, 2),
+                round(math.atan2(float(u[1]), float(u[0])), 4)]
+    return out
+
+
 # The engine's LOD size of a near tile's shape below which its buildings are drawn as the lite mesh (the far tiles' one:
 # no window bays, steps, porches, signs, cornices or roof clutter): the engine's own camera LOD (cdae lods), the tile's
 # whole shape at once. Calibrated in game (2026-10-18, 1440p, the game's mesh detail at its default 2): a 21 m radius
@@ -2633,8 +2479,9 @@ STOOP_W = 1.3               # m wide the steps
 DOOR_ROAD_M = 30.0          # a front door on the wall facing the nearest road within this
 DOOR_CLASSES_SKIP = SHED_CLASSES | INDUSTRIAL_CLASSES
 G_DOOR = "door"
-FAR_SEND_M = 1600.0         # far building tiles (render-only, the lite mesh) sent within this (Chebyshev)
-FAR_DROP_M = 1900.0         # ... dropped beyond
+FAR_SEND_M = float(os.environ.get("BNE_BLDFAR_SEND_M", "1600"))    # far building tiles (render-only, the lite mesh)
+                                                                    # sent within this (Chebyshev)
+FAR_DROP_M = float(os.environ.get("BNE_BLDFAR_DROP_M", str(FAR_SEND_M + 300)))     # ... dropped beyond
 FAR_PER_POSE = 4
 
 
@@ -2921,7 +2768,7 @@ def road_tile(frame, tx, ty, md, ground, lines=None, props=None, items=None):
     return meshes, collider_boxes(items, x0, y0), collision_mesh(items)
 
 
-def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid):
+def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None):
     """A far (render-only) building tile written to the session folder: (vfs path of its JSON, building
     count) or None. The lite mesh of the same buildings as road_tile's."""
     import json
@@ -2941,6 +2788,10 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid):
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     mesh = build(items, lite=True)
     data = {"v": 1}
+    lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
+                      built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)
+    if lamps:
+        data["lamps"] = lamps
     if mesh is not None:
         shape = f"bldfar_{aid}_{tx}_{ty}.cdae"
         write(os.path.join(out_dir, shape), mesh)
@@ -2953,6 +2804,321 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid):
         f.write(json.dumps(data))       # (json.dump to a file: the pure-Python encoder)
     staging.replace(tmp, path)
     return f"{vfs_dir}/{name}", len(items)
+
+
+# ------------------------------------------------------------------------------------------- far street lamps
+# The street lamps past the road tiles (the user, 2026-10-27: "extend the street and window lights as far as the
+# buildings render"): the far and skyline tiles carry their streets' lamps as glow points (trees.lua's lampglow group,
+# night only), placed along the mapped roads by furniture.py's spacing: the town streets in built-up squares (at least
+# FAR_LAMP_MIN_BLD buildings in its 256 m square: the near rule's land cover is not at hand here), the highways there
+# and every ramp. FAR_LAMP_Z over the ground, over the carriageway's edge.
+FAR_LAMP_MIN_BLD = 8
+FAR_LAMP_Z = 8.0
+FAR_LAMP_MAX = 4000         # a tile's most (the skyline's 1 km squares: a dense city's ~3000)
+
+
+def built_squares(items, x0, y0, size, sq=256.0):
+    """The set of (i, j) 256 m squares of a tile (x0, y0 its corner; items' rings tile-relative) holding at least
+    FAR_LAMP_MIN_BLD buildings."""
+    import collections
+    n = collections.Counter()
+    for spec, _gmin, _gmax in items:
+        c = np.asarray(spec.ring, np.float64)[:, :2].mean(0)
+        n[(int(c[0] // sq), int(c[1] // sq))] += 1
+    return {k for k, v in n.items() if v >= FAR_LAMP_MIN_BLD}
+
+
+def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=256.0):
+    """The lamps of a far tile's streets: [x, y, z] in the anchor frame (rounded), at most FAR_LAMP_MAX. built: the
+    tile's built-up 256 m squares (built_squares); ground(lat, lon) the ground (arrays); region: furniture.lamp_region's
+    (the spacing)."""
+    import furniture
+    import roads as roadsmod
+    import fast
+    if not built:
+        return []
+    table = furniture.lamp_spacing(region)
+    hw = "na" if furniture._na(region) else None
+    pts, off, spacing, phase, side, lit_any = [], [0], [], [], [], []
+    for f in road_layers:
+        if f is None or len(f.kind) == 0:
+            continue
+        specs = roadsmod.road_specs(f)
+        bb = f.boxes(frame)
+        near = np.flatnonzero((bb[:, 2] - x0 >= -20) & (bb[:, 0] - x0 <= size + 20)
+                              & (bb[:, 3] - y0 >= -20) & (bb[:, 1] - y0 <= size + 20))
+        for i in near.tolist():
+            sp = specs[i]
+            if sp is None:
+                continue
+            highway = sp.cls in furniture.HIGHWAY_CLASSES
+            if highway and not furniture.highway_lit(region, sp.link, True):
+                continue
+            if highway:
+                every = (furniture.LINK_LAMP_SPACING if sp.link else furniture.HIGHWAY_LAMP_SPACING)[hw]
+                rules = [(every, -float(sp.dir) if sp.dir else (1.0 if furniture._h01(str(f.ids[i]), "pside") < 0.5
+                                                               else -1.0), 0.0)]
+            elif sp.cls in table:
+                every, both = table[sp.cls]
+                sd = 1.0 if furniture._h01(str(f.ids[i]), "side") < 0.5 else -1.0
+                rules = [(every, sd, 0.0)] + ([(every, -sd, every / 2)] if both else [])
+            else:
+                continue
+            ph0 = furniture._h01(str(f.ids[i]), "pphase")
+            reach = max(1.0, sp.width / 2 - 1.0)
+            parts = roadsmod.ground_parts(f, i) if roadsmod.level_ranges(f, i) else [None]
+            for part in parts:
+                if part is None:
+                    a = f.coord_off[f.ring_off[f.part_off[i]]]
+                    b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
+                    part = f.lonlat[a:b]
+                if len(part) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(f, frame, np.asarray(part, np.float64))
+                xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], 1)
+                for every, sd, shift in rules:
+                    pts.append(xy)
+                    off.append(off[-1] + len(xy))
+                    spacing.append(every)
+                    phase.append(ph0 * every + shift)
+                    side.append(sd * reach)
+                    lit_any.append(bool(highway and sp.link))
+    if not pts:
+        return []
+    fast.require(87, "lamp_stations")
+    st = fast._ef.lamp_stations(np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
+                                np.asarray(spacing, np.float64), np.asarray(phase, np.float64),
+                                np.asarray(side, np.float64), [x0, y0, x0 + size, y0 + size])
+    if not len(st):
+        return []
+    keep = [k for k in range(len(st)) if lit_any[int(st[k, 2])]
+            or (int((st[k, 0] - x0) // sq), int((st[k, 1] - y0) // sq)) in built]
+    st = st[keep][:FAR_LAMP_MAX]
+    if not len(st):
+        return []
+    lat, lon, _ = frame.enu_to_geodetic(st[:, 0], st[:, 1], 0.0)
+    z = np.asarray(ground(np.asarray(lat), np.asarray(lon)), np.float64) + FAR_LAMP_Z
+    return np.round(np.c_[st[:, 0], st[:, 1], z], 1).tolist()
+
+
+# ------------------------------------------------------------------------------------------- the skyline
+# Past the far buildings, a lighter ring out to SKY_SEND_M (the user, 2026-10-27: "see how far away we can render
+# buildings"): one mesh per SKY_UNIT x SKY_UNIT road tiles (1 km), only the buildings big enough to see that far
+# (SKY_MIN_H tall or SKY_MIN_AREA_M2 large), the lite mesh, the tallest first up to the 16-bit vertex budget. Far
+# buildings to 4.8 km as 256 m tiles cost +37 % frame time at Federal Hill (1129 objects, ~0.7 GB of meshes); a
+# skyline tile stands for 16 of them and holds a fraction of their buildings. The far buildings are sent for every
+# tile of a skyline square that comes within FAR_SEND_M (vegetation.Tracker group), and the mod shows a skyline tile
+# only while none of its squares' far buildings are there: no overlap, no hole.
+SKY_UNIT = 4
+SKY_SEND_M = float(os.environ.get("BNE_SKY_SEND_M", "4800"))
+SKY_DROP_M = SKY_SEND_M + 800.0
+SKY_PER_POSE = 2
+SKY_MIN_AREA_M2 = 40.0      # (sheds left out)
+SKY_BOX_AREA_M2 = 600.0     # a footprint smaller than this is drawn as its oriented box
+SKY_MAX_CORNERS = 12        # a larger one with more corners: every k-th kept
+
+
+# The mean colour of each building material's base texture (tools: a 64 x 64 resize of each material's
+# baseColorMap from the game's content zips, 2026-10-27): a skyline building is drawn in its facade's and its roof's
+# mean colour times their tints (MARBLE, nearly white, sampled at one texel: the vertex colour is the colour)
+MAT_MEAN = {"bne_bld_facade": (0.679, 0.676, 0.683), "bne_bld_shop": (0.669, 0.691, 0.699),
+            "bne_bld_office": (0.47, 0.493, 0.492), "bne_bld_roof_flat": (0.432, 0.431, 0.43),
+            "bne_bld_roof_slate": (0.359, 0.36, 0.388), "bne_bld_roof_shingle": (0.585, 0.577, 0.571),
+            "bne_bld_siding": (0.822, 0.822, 0.822), "bne_bld_stucco": (0.795, 0.795, 0.795),
+            "bne_bld_roof_metal": (0.642, 0.642, 0.642), "bne_bld_panel": (0.815, 0.815, 0.814),
+            "bne_bld_metalwall": (0.841, 0.841, 0.841), "bne_bld_stone": (0.83, 0.818, 0.803),
+            "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513)}
+SKY_UV = (0.5, 0.5)
+# the skyline walls' windows (tools/build_sky_windows.py: SKY_WIN_BAYS x SKY_WIN_FLOORS of them in its map), lit at
+# night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")
+SKY_BAY_M = 3.5
+SKY_WIN_BAYS = SKY_WIN_FLOORS = 16
+
+
+def _sky_colour(look, f):
+    """RGBA bytes of a LOOKS name drawn plain: its material's mean colour x its tint x the jitter f."""
+    if look not in LOOKS:
+        return (150, 150, 150, 255)
+    mat, tint = LOOKS[look]
+    mean = MAT_MEAN.get(mat, (0.7, 0.7, 0.7))
+    return tuple(int(max(0, min(255, round(255 * m * t * f)))) for m, t in zip(mean, tint)) + (255,)
+
+
+def _sky_mesh(items):
+    """The skyline mesh of [(Spec, gmin, gmax)]: per building a quad per wall and its flat roof, in MARBLE at one
+    texel, coloured per vertex (~4 per corner + the roof's corners: a row house is 20 vertices, the lite mesh ~72).
+    (positions, uvs, tris, tri material indices, MATERIALS, colours) as build, or None."""
+    m = Mesh()
+    mi = MATERIALS.index(MARBLE)
+    ms = MATERIALS.index(SKY_WALL)
+    uv = SKY_UV
+    for spec, gmin, gmax in items:
+        ring = np.asarray(spec.ring, np.float64)[:, :2]
+        if len(ring) < 3:
+            continue
+        if _area2(ring) < 0:
+            ring = ring[::-1]
+        f = 1.0 + JITTER * (2.0 * _hash01(spec.seed, "jit") - 1.0)
+        windows = spec.windows is not False
+        wall = (ms if windows else mi, _sky_colour(spec.facade, f))
+        roof = (mi, _sky_colour(spec.roof_mat or ROOF_FLAT, f))
+        z0 = gmin - SKIRT_LITE_M
+        z1 = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
+        if z1 <= z0 + 0.5:
+            continue
+        n = len(ring)
+        # (windows: u along the walls in bays, v up in storeys from the ground, both over the map's count)
+        zb = gmin
+        fh = float(spec.floor_h or FLOOR_M) * SKY_WIN_FLOORS
+        bw = SKY_BAY_M * SKY_WIN_BAYS
+        v0, v1 = (z0 - zb) / fh, (z1 - zb) / fh
+        u = 0.0
+        for i in range(n):
+            a, b = ring[i], ring[(i + 1) % n]
+            if windows:
+                du = float(math.hypot(*(b - a))) / bw
+                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1),
+                       (u, v0), (u + du, v0), (u + du, v1), (u, v1), wall)
+                u += du
+            else:
+                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, wall)
+        m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
+    if not m.n:
+        return None
+    P, UV, T, M, C = m.arrays()
+    return P, UV, T, M, MATERIALS, C
+
+
+def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=None):
+    """A skyline tile (render-only) written to the session folder: (vfs path of its JSON, building count) or None
+    when its cells are not at hand (fetched in the background: asked again later). Key (ux, uy): SKY_UNIT x SKY_UNIT
+    road tiles from road tile (ux * SKY_UNIT, uy * SKY_UNIT)."""
+    import json
+    import roads
+    x0, y0, _, _ = roads.tile_bbox(ux * SKY_UNIT, uy * SKY_UNIT)
+    x1, y1 = x0 + SKY_UNIT * roads.TILE, y0 + SKY_UNIT * roads.TILE
+    keys = sorted({k for i in range(SKY_UNIT) for j in range(SKY_UNIT)
+                   for k in roads.cells_of_tile(frame, ux * SKY_UNIT + i, uy * SKY_UNIT + j, margin=0.0)}, key=str)
+    # (and the roads: their street lamps, far_lamps)
+    if not all(md.has(k, "buildings") and md.has(k, "roads") for k in keys):
+        for k in keys:                      # (the background lane: never before what the player is near)
+            md.prefetch(k, layers=("buildings", "roads"))
+        return None
+    cds = [md.cell(k, layers=("buildings", "roads"), kind="background") for k in keys]
+    layers = [c.layers.get("buildings") for c in cds]
+    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2))
+    lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
+                      built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)
+    for spec, _gmin, _gmax in items:        # (the simplest shape: a box or a few corners, a flat roof, nothing on it)
+        ring = np.asarray(spec.ring, np.float64)
+        if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
+            c, u, hl, hw = oriented_box(ring)
+            v = np.array([-u[1], u[0]])
+            ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+        elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
+            ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
+        spec.ring = ring
+        spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = "flat", None, None, None, None, None
+    items.sort(key=lambda it: (-(float(it[0].height or 0.0) + float(it[0].min_h or 0.0)), str(it[0].seed)))
+    picked, n = [], 0
+    for it in items:                        # (the tallest first, up to the 16-bit vertex budget: 5 per corner)
+        k = 5 * len(it[0].ring)
+        if n + k > MAX_MESH_VERTS:
+            break
+        picked.append(it)
+        n += k
+    mesh = _sky_mesh(picked) if picked else None
+    data = {"v": 1}
+    if mesh is not None:
+        shape = f"bldsky_{aid}_{ux}_{uy}.cdae"
+        if lamps:
+            data["lamps"] = lamps
+        write(os.path.join(out_dir, shape), mesh)
+        data["shape"] = f"{vfs_dir}/{shape}"
+        data["pos"] = [x0, y0, 0.0]
+    name = f"bldsky_{aid}_{ux}_{uy}.json"
+    path = os.path.join(out_dir, name)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        f.write(json.dumps(data))
+    staging.replace(tmp, path)
+    return f"{vfs_dir}/{name}", len(picked) if mesh is not None else 0
+
+
+# ------------------------------------------------------------------------------------------- far bridges
+# The road bridges past the road tiles (their decks only came with the road tiles, ~0.8 km: a city's bridges were
+# gone beyond that): one render-only slab per road tile that has bridge decks, out to BRIDGE_FAR_SEND_M, from the same
+# deck solver as the road tiles (roads.BridgeProfiles), each part's segments in the tile of their midpoint (offsets
+# from the whole part: tiles meet without a gap). A slab: the deck's top, its sides and its underside down to its
+# girders, plain grey (MARBLE at one texel, vertex colours). The mod hides one while its road tile has a deck.
+BRIDGE_FAR_SEND_M = float(os.environ.get("BNE_BRIDGE_FAR_SEND_M", "4800"))
+BRIDGE_FAR_DROP_M = BRIDGE_FAR_SEND_M + 500.0
+BRIDGE_FAR_PER_POSE = 2
+BRIDGE_TOP_RGBA = (92, 92, 94, 255)        # the deck's asphalt from afar
+BRIDGE_SIDE_RGBA = (176, 174, 168, 255)    # its concrete
+
+
+def _bridge_slab(parts, x0, y0, x1, y1):
+    """The slab mesh of the bridge parts [(xy (k, 2), z (k,), width m)] (anchor frame) for the segments whose midpoint
+    is in [x0, x1) x [y0, y1), relative to (x0, y0), or None."""
+    import roadmesh
+    m = Mesh()
+    mi = MATERIALS.index(MARBLE)
+    uv = SKY_UV
+    top, side = (mi, BRIDGE_TOP_RGBA), (mi, BRIDGE_SIDE_RGBA)
+    depth = roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
+    for xy, z, w in parts:
+        xy = np.asarray(xy, np.float64)[:, :2]
+        z = np.asarray(z, np.float64)
+        if len(xy) < 2:
+            continue
+        nrm = roadmesh._normals(xy) * (w / 2.0)
+        L, R = xy + nrm - (x0, y0), xy - nrm - (x0, y0)
+        mid = (xy[:-1] + xy[1:]) / 2.0
+        inside = (mid[:, 0] >= x0) & (mid[:, 0] < x1) & (mid[:, 1] >= y0) & (mid[:, 1] < y1)
+        for i in np.flatnonzero(inside):
+            j = i + 1
+            a, b, zt0, zt1 = L[i], L[j], z[i], z[j]
+            c, d = R[i], R[j]
+            zb0, zb1 = zt0 - depth, zt1 - depth
+            m.quad((a[0], a[1], zt0), (c[0], c[1], zt0), (d[0], d[1], zt1), (b[0], b[1], zt1), uv, uv, uv, uv, top)
+            m.quad((a[0], a[1], zb0), (a[0], a[1], zt0), (b[0], b[1], zt1), (b[0], b[1], zb1), uv, uv, uv, uv, side)
+            m.quad((d[0], d[1], zb1), (d[0], d[1], zt1), (c[0], c[1], zt0), (c[0], c[1], zb0), uv, uv, uv, uv, side)
+            m.quad((c[0], c[1], zb0), (a[0], a[1], zb0), (b[0], b[1], zb1), (d[0], d[1], zb1), uv, uv, uv, uv, side)
+    if not m.n:
+        return None
+    P, UV, T, M, C = m.arrays()
+    return P, UV, T, M, MATERIALS, C
+
+
+def far_bridge_tile(frame, tx, ty, md, bridges, out_dir, vfs_dir, aid):
+    """A far bridge tile (render-only) written to the session folder: (vfs path of its JSON, part count) or None when
+    its road cells are not at hand (fetched in the background: asked again later). bridges: the anchor's
+    roads.BridgeProfiles."""
+    import json
+    import roads
+    x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
+    keys = roads.cells_of_tile(frame, tx, ty, margin=0.0)
+    if not all(md.has(k, "roads") for k in keys):
+        for k in keys:
+            md.prefetch(k, layers=("roads",))
+        return None
+    cells = [md.cell(k, layers=("roads",), kind="background").layers.get("roads") for k in keys]
+    parts = [(xy, z, float(spec.width)) for _fid, spec, xy, z, _lon in bridges.parts(cells, (x0, y0, x1, y1))]
+    mesh = _bridge_slab(parts, x0, y0, x1, y1) if parts else None
+    data = {"v": 1}
+    if mesh is not None:
+        shape = f"brfar_{aid}_{tx}_{ty}.cdae"
+        write(os.path.join(out_dir, shape), mesh)
+        data["shape"] = f"{vfs_dir}/{shape}"
+        data["pos"] = [x0, y0, 0.0]
+    name = f"brfar_{aid}_{tx}_{ty}.json"
+    path = os.path.join(out_dir, name)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        f.write(json.dumps(data))
+    staging.replace(tmp, path)
+    return f"{vfs_dir}/{name}", len(parts) if mesh is not None else 0
 
 
 # ------------------------------------------------------------------------------------------- the ground photo

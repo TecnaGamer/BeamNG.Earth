@@ -1,0 +1,31 @@
+{
+  "bne_lamp_lens": {
+    "name": "bne_lamp_lens",
+    "mapTo": "bne_lamp_lens",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fa60661e-44c5-50ca-a5bc-41418eb930b5",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.85,
+          0.8,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.25,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "doubleSided": true
+  }
+}

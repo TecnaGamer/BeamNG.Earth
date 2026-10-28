@@ -33,6 +33,9 @@ log = logging.getLogger("earthd.roadwidth")
 STEP = 6.0              # m between cross-sections
 END_SKIP = 10.0         # m kept clear of each end of a road (junctions)
 REACH = 25.0            # m searched each side
+NEAR_M = REACH + 10.0   # m round a road the cells whose buildings it is measured against
+COMBOS = 32             # sets of cells' walls kept (roads near a cell's edge)
+NEAR_STEP_M = 200.0     # m between a road's points its cells are found round
 MIN_SAMPLES = 4
 WALLED = 0.6            # share of cross-sections with a building on both sides
 AGREE = 0.3             # IQR / median at most this
@@ -47,7 +50,7 @@ WALL_CELLS = 48          # cells of building walls kept per process (budget.py: 
 # A cell's walls also on disk (store_dir), float32 in the cell's frame (within a few km of its centre: sub-mm): every
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
 # process, the road processes and the server each did it again (7.4 s of a 15 s Baltimore block, 2026-10-20)
-WALLS_VERSION = 1
+WALLS_VERSION = 2         # (2: a cell's own buildings only, 2026-10-27)
 
 class Walls:
     """Building wall segments (metres, a local frame) with a bucket index for ray casts."""
@@ -270,12 +273,12 @@ class RoadWidths:
         self.store_dir = store_dir
         self.memo = {}                          # fid -> (carriageway, walk) or None
         self.walls = OrderedDict()              # cell key -> (frame, Walls), the WALL_CELLS last used
+        self.combos = OrderedDict()             # cell keys -> (frame, Walls) of a road near cells' edges
         self.lock = threading.Lock()
         self.key_locks = {}                     # cell key -> Lock: one thread builds a cell's walls
 
     def _walls(self, key):
-        """The walls of the buildings in cell key and the 8 around it (a street near a cell edge sees
-        both sides), in a frame at the cell's centre."""
+        """The walls of the buildings in cell key, in a frame at the cell's centre."""
         with self.lock:
             got = self.walls.get(str(key))
             kl = self.key_locks.setdefault(str(key), threading.Lock())
@@ -295,10 +298,8 @@ class RoadWidths:
                 if self.store_dir and hasattr(key, "z") else None)
         segs = _read_segs(path) if path else None
         if segs is None:
-            dlat, dlon = 0.5 * (lat1 - lat0), 0.5 * (lon1 - lon0)
             parts, complete = [], True
-            for k2 in mapcells.cells_for_bbox(lat0 - dlat * 0.1, lon0 - dlon * 0.1, lat1 + dlat * 0.1,
-                                              lon1 + dlon * 0.1):
+            for k2 in (key,):
                 try:
                     feats = self.cell_fn(k2)
                 except Exception:
@@ -333,15 +334,53 @@ class RoadWidths:
                 self.walls.popitem(last=False)
             return got
 
+    def _near_walls(self, ll):
+        """(frame, Walls) of the buildings in the cells within NEAR_M of the road (lon/lat (k, 2)): its own cell's,
+        or, near a cell's edge, those of the cells there in the first one's frame (kept for the COMBOS last used).
+        Each road read the buildings of the 8 cells around its middle's too: ~75 cells of buildings for one road
+        tile's planning on a first visit to a Pennsylvania town, 2026-10-27; a width needs the walls within REACH."""
+        # (the cells along it: every NEAR_STEP_M of it; its box's cells were a grid of them for a long rural road)
+        seg = np.hypot(np.diff(ll[:, 1]) * 111320.0, np.diff(ll[:, 0]) * 111320.0 * np.cos(np.radians(ll[:-1, 1])))
+        s = np.r_[0.0, np.cumsum(seg)]
+        t = np.r_[np.arange(0.0, s[-1], NEAR_STEP_M), s[-1]] if s[-1] > 0 else np.zeros(1)
+        lat, lon = np.interp(t, s, ll[:, 1]), np.interp(t, s, ll[:, 0])
+        dlat = (NEAR_M + NEAR_STEP_M / 2) / 111320.0
+        dlon = dlat / max(0.05, float(np.cos(np.radians(np.mean(lat)))))
+        keys = sorted(mapcells.cells_near_points(lat, lon, dlat, dlon), key=str)
+        if len(keys) == 1:
+            return self._walls(keys[0])
+        ck = tuple(str(k) for k in keys)
+        with self.lock:
+            got = self.combos.get(ck)
+            if got is not None:
+                self.combos.move_to_end(ck)
+                return got
+        frame, segs = None, []
+        for k in keys:
+            f, w = self._walls(k)
+            sg = np.asarray(w.segs, np.float64)
+            if frame is None:
+                frame = f
+            elif len(sg):
+                pts = sg.reshape(-1, 2)
+                la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+                e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+                sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+            segs.append(sg)
+        got = (frame, Walls(np.concatenate(segs) if segs else np.zeros((0, 4))))
+        with self.lock:
+            got = self.combos.setdefault(ck, got)
+            while len(self.combos) > COMBOS:
+                self.combos.popitem(last=False)
+        return got
+
     def get(self, fid, lonlat):
         """(carriageway m, sidewalk m) of road fid (geometry lonlat (k, 2)), or None (defaults)."""
         with self.lock:
             if fid in self.memo:
                 return self.memo[fid]
         ll = np.asarray(lonlat, np.float64)
-        mid = ll[len(ll) // 2]
-        key = mapcells.cell_of(float(mid[1]), float(mid[0]))
-        frame, walls = self._walls(key)
+        frame, walls = self._near_walls(ll)
         res = None
         if len(walls.segs):
             e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)

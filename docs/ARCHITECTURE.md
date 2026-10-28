@@ -1510,7 +1510,12 @@ The user asked for "trees, rocks and other decoration" (ROADMAP v1.9 "Cities & n
     returns nil for datablocks), after loading the shapes' `main.materials.json`.
   - A tile shows the items whose rank is under its distance's threshold: all within 300 m, half to
     550 m, a quarter to 900 m, an eighth beyond (2026-10-14: out to 1280 m like the far buildings).
-  - Up to 300 items are made or removed per frame (~19 us each, 2026-10-13 probe: 1024 items in 19 ms).
+  - Items are made and removed every third frame, at most 750 and `FRAME_MS` (4 ms) of Lua per such frame
+    (`LOADING_FRAME_MS`, 12 ms, while the world loads; none in the governor's heavy frames); a pass stopped by
+    either goes on from its row in the next one. A tile's Forest comes from a pool: a new one costs ~9 ms to
+    register, so one a frame at most, and a few spares are made in tree frames with nothing else to do.
+    (2026-10-26, Fells Point autodrive, A/B twice: the slowest 1 % of tree frames 16.5-18.8 ->
+    9.5-9.6 ms, the worst 53-87 -> 15-17 ms; the same 90,228 forest items in the same places.)
 - **Regions (`vegetation.regional`, 2026-10-14):** a coarse climate from the position and the land cover
   turns the generic groups into the stock maps' species: West Coast pines / redwoods and oaks /
   eucalyptus (west of -114), junipers, desert bushes and rocks in the dry West's open land, palms on warm

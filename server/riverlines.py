@@ -37,6 +37,7 @@ PIECE_M = 1024.0            # pieces on this lattice of the anchor frame
 SPACING_M = {"river": 20.0, "stream": 10.0, "canal": 15.0}
 WIDTH_M = {"river": 12.0, "stream": 4.0, "canal": 8.0}         # without an outline
 WIDTH_MAX_M = 2000.0        # m: wide rivers (the Susquehanna at Harrisburg: ~1 km)
+WIDTH_OUTLIER = 4.0         # a node at most this times its river's median width (_nodes)
 WIDTH_STEP_M = 4.0          # the banks searched this finely
 WIDTH_PAD, WIDTH_PAD_M = 1.1, 2.0   # a River this much wider than the bed: no carved edge left uncovered
 CHANNEL_PROBE_M = 3.0
@@ -245,8 +246,11 @@ def _confluences(rivers):
     are left out (two
     Rivers over each other: their ripples flow two ways, 2026-10-13); the wider one carries the water."""
     rank_of = {"river": 0, "canal": 1, "stream": 2}     # a stream inside a river's outline measures the
+    # (by the median width: at its mouth the width probed across a tributary's outline runs on along the river it
+    # joins, the Vitba's 780 m at Vitebsk, so by its widest node it outranked the Daugava, whose nodes there were
+    # left out: no water under Castle Street's bridge, GitHub #323)
     order = sorted(range(len(rivers)), key=lambda k: (rank_of[rivers[k]["kind"]],   # river's width there
-                                                     -float(rivers[k]["width"].max()), rivers[k]["ids"]))
+                                                     -float(np.median(rivers[k]["width"])), rivers[k]["ids"]))
     for rank, k in enumerate(order):
         rv = rivers[k]
         for w in order[:rank]:
@@ -279,6 +283,10 @@ def _nodes(frame, ids, kind, pts, water_at, dem_at, outline_at, level_at=None, r
         cla, clo = _lalo(frame, centre)
         carved = np.asarray(level_at(cla, clo), np.float64)
         level = np.where(np.isfinite(carved), carved + CARVED_ABOVE_M, level)
+    # (a node far wider than its river's own median width measured into other water: a tributary's mouth probed
+    # along the river it joins, 780 m for the 30 m Vitba at Vitebsk, GitHub #323)
+    if len(width) >= 3:
+        width = np.minimum(width, max(WIDTH_OUTLIER * float(np.median(width)), WIDTH_M[kind]))
     depth = np.clip(width / 8.0, *DEPTH_M)
     # the surface in the anchor frame (the curve included)
     _, _, z = frame.geodetic_to_enu(la, lo, level)

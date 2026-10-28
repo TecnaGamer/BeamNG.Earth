@@ -6,10 +6,12 @@ python launcher.py).
   2. starts the world server (server/earthd.py) with the recommended options,
   3. starts BeamNG.drive unless it already runs. Linux: the native game directly, with tools/gcpatch preloaded
      (keeps the grass when the physics block moves; it checks the game build and does nothing on another), so no
-     Steam launch options are needed; through Steam when that is not possible (Steam not running) and for the
-     Windows build under Proton (found from Steam's compatibility setting, else from the user folder the game
-     wrote last). Windows: through Steam. Under Wine / Proton (the .exe started with protontricks) it cannot start
-     the game: it asks you to press Play in Steam.
+     Steam launch options are needed — the direct start adopts them anyway (their environment, a wrapper command
+     and the game's options after %command%), and puts the game on a hybrid laptop's discrete GPU when the default
+     one is the weaker (the integrated one; --gpu off says no); through Steam when that is not possible (Steam not
+     running) and for the Windows build under Proton (found from Steam's compatibility setting, else from the user
+     folder the game wrote last). Windows: through Steam. Under Wine / Proton (the .exe started with protontricks)
+     it cannot start the game: it asks you to press Play in Steam.
   4. stops the server when the game closes (or on Ctrl+C / closing the window).
 
 It runs in a console window, like BeamMP's launcher: the .exe opens one when it has none, the AppImage opens a
@@ -19,6 +21,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
     launcher.py --no-game        only the server (start the game yourself)
     launcher.py --no-gcpatch     the game without the grass patch
     launcher.py --proton / --native   Linux: which build of the game to start (default: found)
+    launcher.py --gpu off        hybrid graphics: never steer the game's GPU (auto does, discrete forces it)
     launcher.py -- --verbose     anything after -- goes to the server
 """
 
@@ -100,6 +103,27 @@ def title(text):
     _out("")
     _out(f"  {text}")
     _out("  " + "-" * max(24, len(text)))
+
+
+DISCORD = "https://discord.gg/tgf"
+
+
+def support_notice(multiplayer=False):
+    """Where to get help (the BeamMP team, 2026-10-27: players kept asking them about BeamNG.Earth): the Discord once at
+    every start; once BeamMP is up, what it means for multiplayer (said once each: the user, 2026-10-27)."""
+    if not multiplayer:
+        say("Join the TGForever Discord to chat, get help, report bugs or help develop")
+        say(f"the mod: {DISCORD}")
+        return
+    _out("")
+    _out("  " + "=" * 78)
+    _out("  BeamNG.Earth is not like a normal BeamNG mod: it needs this app running")
+    _out("  next to the game. If something is not working in multiplayer, it is almost")
+    _out("  certainly a BeamNG.Earth problem, not a BeamMP one: ask on the TGForever")
+    _out("  Discord above, and do NOT contact the BeamMP team or open BeamMP support")
+    _out("  tickets about it.")
+    _out("  BeamNG.Earth servers are in the \"BeamNG.Earth\" tab of BeamMP's server browser.")
+    _out("  " + "=" * 78)
 
 
 def problem(msg, hint=None):
@@ -361,10 +385,23 @@ def steam_running():
         try:
             with open(pidfile) as f:
                 pid = int(f.read().strip())
-            if os.path.exists(f"/proc/{pid}"):
-                return True
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() == "steam":
+                    return True
         except (OSError, ValueError):
             pass
+    # (a Flatpak Steam runs in its own PID namespace: its steam.pid names a pid the host cannot see — the user's
+    # report, 2026-10-26: the app then started the game through Steam, where the GPU choice and the grass patch do
+    # not reach the game — so a running client is also recognised by its process)
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/comm") as f:
+                if f.read().strip() == "steam":
+                    return True
+        except OSError:
+            continue
     return False
 
 
@@ -440,6 +477,10 @@ def steam_launch(game_args=()):
         steam = shutil.which("steam")
         cmd = [steam, "-applaunch", APP_ID, *game_args] if steam else \
             ["xdg-open", f"steam://run/{APP_ID}//{' '.join(game_args)}/"]
+        if any(os.environ.get(k) for k in STEER_VARS) and steam_running():
+            say("(a Steam client is already running: it starts the game in its own environment, where the GPU "
+                "variables this app set do not reach it — quit Steam and start again for the direct start, or set "
+                "the variables on Steam itself)")
         subprocess.Popen(cmd, env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
 
@@ -510,8 +551,183 @@ def windows_game_dir():
 GFX_ARG = {"dx11": "dx11", "dx12": "d3d12", "vk": "vk"}
 
 
-def start_game(use_gcpatch, build="native", gfx="", user_dir=None):
-    """Start the game; returns a Popen when this process started it directly, else None (through Steam)."""
+# --- the GPUs (Linux: a hybrid laptop's game on the discrete one, the launch options adopted) ------
+
+STEER_VARS = ("DRI_PRIME", "__NV_PRIME_RENDER_OFFLOAD", "__GLX_VENDOR_LIBRARY_NAME", "MESA_VK_DEVICE_SELECT",
+              "VK_DRIVER_FILES", "VK_ICD_FILENAMES")     # one set: the player (or their launch options) steer
+GPU_VENDORS = {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}
+
+
+def gpu_scan():
+    """Every PCI display controller, in DRM card order: (vendor, boot, vram, driver) — vendor from the PCI ID
+    ("nvidia"/"amd"/"intel"/"other"), boot: the firmware starts it (the GPU apps get by default), vram: the bytes
+    the driver reports (0: it does not say; NVIDIA's proprietary one never does), driver: the bound kernel
+    module's name ("" none)."""
+    import glob
+    out = []
+    for card in sorted(glob.glob("/sys/class/drm/card[0-9]*")):
+        d = os.path.join(card, "device")
+        try:
+            with open(os.path.join(d, "class")) as f:
+                if not f.read().strip().startswith("0x03"):    # a display controller (VGA, or NVIDIA's 3D one)
+                    continue
+            with open(os.path.join(d, "vendor")) as f:
+                vendor = GPU_VENDORS.get(f.read().strip().lower(), "other")
+        except OSError:
+            continue                    # a non-PCI card (simpledrm, a VM's): nothing to read
+        boot, vram, driver = False, 0, ""
+        try:
+            with open(os.path.join(d, "boot_vga")) as f:
+                boot = f.read().strip() == "1"
+        except OSError:
+            pass
+        for n in ("mem_info_vram_size", "mem_info_vram_total"):        # amdgpu's name, then nouveau's
+            try:
+                with open(os.path.join(d, n)) as f:
+                    vram = int(f.read())
+                    break
+            except (OSError, ValueError):
+                pass
+        try:
+            driver = os.path.basename(os.path.realpath(os.path.join(d, "driver")))
+        except OSError:
+            pass
+        out.append((vendor, boot, vram, driver))
+    return out
+
+
+def _gb(n):
+    """VRAM bytes as text (0: "unknown")."""
+    return f"{n / (1 << 30):.1f} GB" if n else "unknown"
+
+
+def gpu_plan(mode, environ=None, scan=None):
+    """(env, note) that put the game (and the server's GPU work) on the discrete GPU of a hybrid-graphics machine,
+    (None, note) when there is nothing to do (the note says why, for the log). mode: "auto" steers only when the
+    default GPU looks weaker than another (a laptop's integrated one — the user's report, 2026-10-26: the game
+    started directly rendered on the integrated GPU where Steam's start used the dedicated one), "discrete" does it
+    whenever a discrete one can be named, "off" never. A steering variable already set (the player's, or Steam's
+    launch options') wins: nothing is overridden.
+
+    The variables: NVIDIA's driver wants __NV_PRIME_RENDER_OFFLOAD (the Vulkan loader then offers the NVIDIA device
+    first) and the GL one __GLX_VENDOR_LIBRARY_NAME; Mesa's follow DRI_PRIME=1 (render offload: the GPU that is not
+    the default one) through its device-select layer, which the server's wgpu compute sees too. Which of two Mesa
+    GPUs is the discrete one comes from the VRAM they report; without that (and without the NVIDIA driver) auto
+    gives up and discrete guesses DRI_PRIME=1."""
+    environ = os.environ if environ is None else environ
+    for k in STEER_VARS:
+        if environ.get(k):
+            return None, f"{k} is set already: the player steers, nothing done"
+    if mode == "off":
+        return None, ""
+    gpus = scan if scan is not None else gpu_scan()
+    if len(gpus) < 2:
+        return None, ("one GPU: nothing to steer" if gpus else "no GPU seen: nothing to steer")
+    boot = next((g for g in gpus if g[1]), gpus[0])
+    nv = [g for g in gpus if g[0] == "nvidia" and g[3] == "nvidia"]
+    if nv:
+        if boot not in nv or mode == "discrete":
+            return ({"__NV_PRIME_RENDER_OFFLOAD": "1", "__GLX_VENDOR_LIBRARY_NAME": "nvidia"},
+                    "NVIDIA PRIME render offload: the game renders on the NVIDIA GPU" +
+                    (" (--gpu discrete; the default GPU is the NVIDIA one already)" if boot in nv else ""))
+        return None, "the default GPU is the NVIDIA one already: nothing to steer"
+    big = max(gpus, key=lambda g: g[2])
+    if big[2] <= boot[2]:
+        if mode == "discrete" and not big[2] and not boot[2]:
+            return {"DRI_PRIME": "1"}, "DRI_PRIME=1 (--gpu discrete; the drivers do not say which GPU has more VRAM)"
+        return None, ("the default GPU has the most VRAM: nothing to steer" if big[2] else
+                      "cannot tell which GPU has more VRAM: nothing steered (set DRI_PRIME=1, or --gpu discrete)")
+    return {"DRI_PRIME": "1"}, (f"DRI_PRIME=1: the game renders on the {big[0]} GPU ({_gb(big[2])}; the default "
+                                f"{boot[0]} one has {_gb(boot[2])})")
+
+
+def _vdf(text):
+    """Steam's VDF format as a dict tree ("key" "value" pairs in { } braces; // comments; a duplicate key keeps
+    the last)."""
+    import re
+    text = re.sub(r"(^|\s)//[^\n]*", r"\1", text)
+    out, stack, key = {}, [], None
+    cur = out
+    for quoted, brace in re.findall(r'"((?:\\.|[^"\\])*)"|([{}])', text):
+        if brace == "{":
+            stack.append((cur, key))
+            cur, key = {}, None
+        elif brace == "}":
+            done, (cur, key) = cur, stack.pop()
+            cur[key] = done
+            key = None
+        elif key is None:
+            key = re.sub(r"\\(.)", r"\1", quoted)
+        else:
+            cur[key] = re.sub(r"\\(.)", r"\1", quoted)
+            key = None
+    return out
+
+
+def _vdf_apps_options(tree, appid):
+    """LaunchOptions of appid in a parsed VDF tree: the value under the appid key's dict, wherever it nests
+    (config.vdf's InstallConfigStore/Software/Valve/Steam/apps, registry.vdf's HKCU/.../apps)."""
+    found = []
+
+    def walk(node):
+        if not isinstance(node, dict):
+            return
+        for k, v in node.items():
+            if k == appid and isinstance(v, dict) and "LaunchOptions" in v:
+                found.append(str(v["LaunchOptions"] or ""))
+            walk(v)
+
+    walk(tree)
+    return found[0] if found else ""
+
+
+def steam_launch_options(roots=None):
+    """The game's launch options line from Steam's config: config.vdf's apps (this client's per-game settings) and
+    registry.vdf's apps (an older client's, this machine's ~/.steam one too), "" for none, None when there is no
+    Steam config here. Steam writes the file when it saves the setting (a start through Steam applies the options
+    itself, so only the direct start adopts them; the Windows game always starts through Steam)."""
+    import install
+    seen = False
+    for root in roots if roots is not None else install._steam_roots():
+        for name in (os.path.join("config", "config.vdf"), "registry.vdf"):
+            try:
+                with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                    tree = _vdf(f.read())
+            except OSError:
+                continue
+            seen = True
+            line = _vdf_apps_options(tree, APP_ID)
+            if line:
+                return line
+    return "" if seen else None
+
+
+def split_launch_options(line):
+    """(env, wrapper, options) of Steam's launch options line: NAME=VALUE tokens before %command% are variables for
+    the game's environment, other tokens before it are a command that wraps it (gamemoderun, mangohud), the tokens
+    after it are the game's own options. Without %command% the whole line is the game's options (Steam needs
+    %command% to export variables too, so none was meant)."""
+    import re
+    pre, have_cmd, post = line.partition("%command%")
+    if not have_cmd:
+        return {}, [], pre.split()
+    env, wrapper = {}, []
+    for t in pre.split():
+        name, eq, value = t.partition("=")
+        if eq and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            env[name] = value
+        else:
+            wrapper.append(t)
+    return env, wrapper, post.split()
+
+
+def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({}, [], [])):
+    """Start the game; returns a Popen when this process started it directly, else None (through Steam).
+
+    steam_args: (env, wrapper, options) adopted from Steam's launch options for the direct start (through Steam,
+    Steam applies them itself): variables for the game's environment, a command that wraps it (gamemoderun,
+    mangohud), the game's own options after %command%."""
+    steam_env, wrapper, steam_opts = steam_args
     win_args = ["-gfx", GFX_ARG.get(gfx, gfx)] if gfx else []
     extra = os.environ.get("BNGE_GAME_ARGS", "").split()     # (tests: e.g. "-bngetest car,damage")
     win_args += extra
@@ -560,8 +776,21 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None):
                 if user_dir:        # where the mod raises the patch's level flag (tools/gcpatch)
                     env["BNGEARTH_USER_DIR"] = user_dir
             runtime = steam_runtime(exe)
+            env.update(steam_env)       # the launch options' variables (after the patch's: the player's win)
             row("Game", "starting" + ("  (with the grass patch)" if lib else ""))
-            proc = subprocess.Popen(([runtime, "--verb=waitforexitandrun", "--"] if runtime else []) + [exe] + extra,
+            if wrapper or steam_opts:
+                row("Steam options", " ".join(wrapper + ["%command%"] + steam_opts))
+            # -userpath is the folder the game puts its version folder in ("current"): the launcher's user folder is
+            # that version folder, so the game gets its parent (a Flatpak Steam's folder, the user's report
+            # 2026-10-26 — without it the game made a second "current" in it, without the mod). A player's own
+            # folder without the version naming goes as it is.
+            base = os.path.basename(user_dir or "")
+            game_user = os.path.dirname(user_dir) if user_dir and (base == "current" or
+                                                                   base.replace(".", "").isdigit()) else user_dir
+            proc = subprocess.Popen(([*wrapper] if wrapper else []) +
+                                    ([runtime, "--verb=waitforexitandrun", "--"] if runtime else []) +
+                                    [exe] + (["-userpath", game_user] if game_user else []) + extra +
+                                    list(steam_opts),
                                     cwd=os.path.dirname(os.path.dirname(exe)), env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             t0 = time.time()
@@ -895,6 +1124,11 @@ def main():
     # 2026-10-16); --gfx skips it
     ap.add_argument("--gfx", default="", choices=["dx11", "dx12", "vk", ""],
                     help="the Windows build's renderer, skipping its launch options dialog (default: the dialog)")
+    ap.add_argument("--gpu", default="auto", choices=["auto", "discrete", "off"], metavar="MODE",
+                    help="Linux: which GPU the game renders on when the machine has two (hybrid graphics): auto "
+                         "(default) puts it on the discrete one when the default would be the weaker (the "
+                         "integrated one), discrete forces that, off never steers; a GPU variable you or Steam's "
+                         "launch options already set wins")
     ap.add_argument("--no-terminal", action="store_true", help="Linux: no terminal window (log to a file)")
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for the server")
     args = ap.parse_args()
@@ -1036,6 +1270,7 @@ def beammp_up(user_dir, build, args):
     version = bmplaunch.log_version(bmplaunch.read_log(log_path))
     row("Multiplayer", f"BeamMP{' v' + version if version else ''} ready: in the game, Multiplayer, then a server "
         "running BeamNG.Earth")
+    support_notice(multiplayer=True)
 
     def watch():                            # (a launcher too old for BeamMP's current mod: said once, plainly)
         for _ in range(60):
@@ -1060,6 +1295,7 @@ def beammp_up(user_dir, build, args):
 def run(args):
     import install
     title(f"BeamNG.Earth {install.version()}")
+    support_notice()
     wine = under_wine()
     build = "native"
     if args.user_dir:
@@ -1070,6 +1306,18 @@ def run(args):
     else:
         user_dir = user_folder()
     tool = steam_compat_tool() if not IS_WIN and not args.user_dir else None
+    steam_args = ({}, [], [])
+    if not IS_WIN:
+        line = steam_launch_options()
+        if line:
+            steam_args = split_launch_options(line)
+            if any(steam_args):
+                row("Steam options", line)
+        gpu_env, gpu_note = gpu_plan(args.gpu, environ=dict(os.environ, **steam_args[0]))
+        if gpu_env:
+            os.environ.update(gpu_env)      # the server inherits them too (its own GPU work: earthfast's compute)
+        if gpu_note:
+            row("GPU", gpu_note)
     row("Game folder", user_dir + ("  (the Windows build, Proton)" if build == "proton" else "")
         + (f"  (Steam compatibility tool: {tool})" if tool else ""))       # (which was read: GitHub #56)
     running = game_alive()
@@ -1115,7 +1363,14 @@ def run(args):
     row("Server log", log_path)
     beammp = None
     try:
-        beammp = None if args.no_game else beammp_up(user_dir, build, args)
+        try:
+            beammp = None if args.no_game else beammp_up(user_dir, build, args)
+        except OSError as e:
+            # (multiplayer is optional: a damaged BeamMP launcher folder, WinError 1392 "the file or directory is
+            # corrupted and unreadable", stopped the app before the game started, GitHub #282)
+            row("Multiplayer", f"BeamMP not started ({e}); if this repeats, delete the BeamMP-Launcher folder in "
+                               "%LOCALAPPDATA% (BeamNG.Earth downloads it again)")
+            beammp = None
         if args.no_game:
             say()
             say("Start BeamNG.drive and pick 'BeamNG.Earth' in Freeroam. Ctrl+C stops the server.")
@@ -1133,7 +1388,7 @@ def run(args):
         else:
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
-            proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir)
+            proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args)
         say()
         say("In the game: Freeroam > BeamNG.Earth.  Closing the game stops the server.")
         say()

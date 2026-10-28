@@ -176,6 +176,7 @@ class Vegetation:
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
+        self._tl = threading.local()    # per build thread: .dem_failed (the DEM could not answer: _load keeps no cell)
         self._warm, self._warm_thread = [], None
         self._warm_cv = threading.Condition()
 
@@ -248,8 +249,12 @@ class Vegetation:
         if p and os.path.exists(p):
             with np.load(p, allow_pickle=False) as f:
                 return Items(*(f[n] for n in fields))
+        self._tl.dem_failed = False
         items = self._build(x, y)
-        if p:
+        # (a cell built while the DEM could not answer, offline or no tile, lacks its slope rocks: it serves this
+        # session but is not kept, so the next one builds it whole. From cristivasile's PR #295. No DEM at all,
+        # self.dem None, is a setting, not a failure)
+        if p and not self._tl.dem_failed:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
@@ -429,6 +434,7 @@ class Vegetation:
             z = np.asarray(self.dem.sample(lat, lon, ROCK_SLOPE_ZOOM), np.float64).reshape(4, len(px))
         except Exception as e:          # (offline, no tile): rocks as without a DEM
             log.debug("vegetation: no slope: %s", e)
+            self._tl.dem_failed = True
             return None
         return np.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
 
@@ -584,8 +590,44 @@ BUILD_PER_POSE = 8
 
 
 class JsonRows(str):
-    """tile_items' rows already as their JSON text (as_json; write_tile writes it as is); n: how many."""
+    """tile_items' rows already as their JSON text (as_json; write_tile writes it as is); n: how many; audio, biome:
+    the tile's forest ambience (_ambience)."""
     n = 0
+    audio = ()
+    biome = (0, 0)
+
+
+# The forest ambience (the mod's ambience.lua feeds the stock core_audioForest): the trees and bushes of a tile in
+# squares of AUDIO_CELL_M (12 a tile; the stock nodes are ~20 m apart), sized by height as the stock classes (a third
+# and two thirds of the 95th percentile's volume: 0.69 and 0.87 of its height, ~22 m)
+AUDIO_CELL_M = 256.0 / 12
+AUDIO_H_MID = 15.0
+AUDIO_H_LARGE = 19.0
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK)]
+
+
+def _ambience(group, e, n, z, height, lat, lon):
+    """(audio, biome) of a tile's items: audio its sound nodes as one flat list of [x, y, z, depth, size, count] rows
+    (earthfast.audio_nodes), biome its ambience set and variant (earthfast.audio_biome)."""
+    fast.require(80, "audio_nodes")
+    f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
+    g = np.ascontiguousarray(group, np.uint8)
+    nodes = fast._ef.audio_nodes(g, f64(e), f64(n), f64(z), f64(height), AUDIO_SOUND, AUDIO_CELL_M, AUDIO_H_MID,
+                                 AUDIO_H_LARGE)
+    nodes[:, :4] = np.round(nodes[:, :4], 1)
+    nodes[:, 4] = np.round(nodes[:, 4], 2)
+    import climate
+    biome = fast._ef.audio_biome(g, float(lat), float(lon), [G_DESERT_SHRUB, G_DESERT_ROCK, G_JUNIPER],
+                                 climate.koppen_at(float(lat), float(lon)))
+    return nodes.ravel().tolist(), list(biome)
+
+
+def _no_items(as_json, lat, lon):
+    if not as_json:
+        return []
+    out = JsonRows("[]")
+    out.audio, out.biome = _ambience([], [], [], [], [], lat, lon)
+    return out
 
 
 def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False):
@@ -596,6 +638,7 @@ def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False):
     x0, y0, x1, y1 = roadsmod.tile_bbox(tx, ty)
     la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), np.zeros(4))
     keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
+    clat, clon = float(la.mean()), float(lo.mean())
     parts = []
     for k in keys:
         if not cell_ready(k):
@@ -603,19 +646,19 @@ def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False):
         parts.append(veg.cell(k))
     items = parts[0] if len(parts) == 1 else _concat_all(parts)
     if len(items) == 0:
-        return []
+        return _no_items(as_json, clat, clon)
     e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, np.zeros(len(items)))
     e, n = np.asarray(e), np.asarray(n)
     sel = (e >= x0) & (e < x1) & (n >= y0) & (n < y1)
     if not sel.any():
-        return []
+        return _no_items(as_json, clat, clon)
     it = items.take(sel)
     e, n = e[sel], n[sel]
     if sea is not None:                 # nothing in the water (lakes, rivers, sea: their carved beds)
         dry = sea.water(it.lat, it.lon)[0] <= 0
         it, e, n = it.take(dry), e[dry], n[dry]
     if len(it) == 0:
-        return []
+        return _no_items(as_json, clat, clon)
     if len(it) > TILE_ROWS_MAX:         # dense forest: the lowest ranks only (the mod shows no more of a tile)
         keep = np.sort(np.argpartition(it.rank, TILE_ROWS_MAX - 1)[:TILE_ROWS_MAX])
         it, e, n = it.take(keep), e[keep], n[keep]
@@ -629,6 +672,7 @@ def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False):
         out = JsonRows(fast._ef.veg_rows_json(np.ascontiguousarray(it.group, np.int64), f64(e), f64(n), f64(z),
                                                f64(it.yaw), f64(it.scale), f64(it.height), f64(it.rank)))
         out.n = len(it)
+        out.audio, out.biome = _ambience(it.group, e, n, z, it.height, clat, clon)
         return out
     return [[int(g), round(float(a), 2), round(float(b), 2), round(float(c), 2), round(float(yw), 1),
              round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
@@ -666,14 +710,35 @@ def _concat_all(parts):
     return out
 
 
-def write_tile(out_dir, vfs_dir, aid, tx, ty, rows):
+FLAT_STRIDE = 8             # numbers an item in a flat tile: tile_items' row, in its order
+
+
+def flat_json(rows):
+    """tile_items' rows (a list, or its JsonRows text) as the JSON text of one flat array, FLAT_STRIDE numbers an item,
+    the same numbers as json.dumps writes in the rows: no table per item in the game's Lua, which every garbage
+    collection walks (trees.lua). The JsonRows text is flattened as text, without Python objects."""
     import json
-    name = f"veg_{aid}_{tx}_{ty}.json"
+    if isinstance(rows, JsonRows):
+        return "[" + rows[2:-2].replace("],[", ",") + "]" if len(rows) > 2 else "[]"
+    return json.dumps([v for r in rows for v in r], separators=(",", ":"))
+
+
+def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False):
+    """The tile's file: {"groups", "items": rows}, or with flat (a mod that reads it: hello.vegFlat) {"groups",
+    "stride": FLAT_STRIDE, "flat": [...]} (flat_json) under its own name. (vfs path, items)."""
+    import json
+    name = f"veg_{aid}_{tx}_{ty}.flat.json" if flat else f"veg_{aid}_{tx}_{ty}.json"
     path = os.path.join(out_dir, name)
     tmp = staging.tmp_for(path)
     with open(tmp, "w") as f:
-        if isinstance(rows, JsonRows):  # (tile_items as_json: the items' text, as json.dumps writes them)
-            f.write(json.dumps({"groups": list(GROUPS), "items": []}, separators=(",", ":"))[:-3] + rows + "}")
+        # (the tile's sound: the forest cloud's nodes and biome, ambience.lua; tile_items as_json's rows carry them)
+        sound = {"audio": rows.audio, "biome": rows.biome} if isinstance(rows, JsonRows) else {}
+        if flat:
+            head = dict({"groups": list(GROUPS)}, **sound, stride=FLAT_STRIDE, flat=[])
+            f.write(json.dumps(head, separators=(",", ":"))[:-3] + flat_json(rows) + "}")
+        elif isinstance(rows, JsonRows):  # (tile_items as_json: the items' text, as json.dumps writes them)
+            head = dict({"groups": list(GROUPS)}, **sound, items=[])
+            f.write(json.dumps(head, separators=(",", ":"))[:-3] + rows + "}")
         else:
             f.write(json.dumps({"groups": list(GROUPS), "items": rows}, separators=(",", ":")))  # the C encoder
     staging.replace(tmp, path)
@@ -684,7 +749,13 @@ class Tracker:
     """Per connection: which tiles of a kind the mod has (as roads.Tracker): vegetation tiles by default
     (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
 
-    def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=BUILD_PER_POSE, kind="veg", skip_m=None):
+    def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=BUILD_PER_POSE, kind="veg", skip_m=None, group=None,
+                 unit=1, inner=None):
+        # group G (the far buildings under the skyline tiles): every tile of a G x G group whose square comes within
+        # send_m is wanted (a skyline tile shows only while none of its tiles do: no overlap, no hole). unit U (the
+        # skyline tiles): keys are U x U squares of road tiles; inner (m, G): squares whose G-group comes within m are
+        # not wanted (the far buildings' own groups)
+        self.group, self.unit, self.inner = group, unit, inner
         self.aid = None
         self.sent = set()
         self.building = set()
@@ -721,19 +792,25 @@ class Tracker:
             self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-tile")
         spots = [(x, y)] + ([tuple(view)] if view else [])
         skip = {k for p in spots for k in roadsmod.tiles_near(*p, self.skip_m)} if self.skip_m else ()
-        car = set(roadsmod.tiles_near(x, y, self.send_m))
+        if self.inner is not None:          # (the skyline: not where the far buildings' groups are)
+            skip = {k for p in spots for k in self._near(*p, self.inner[0], unit=self.unit, group=self.inner[1])}
+        car = set(self._near(x, y, self.send_m))
         self.car = car - set(skip)          # (progress: the loading line's tiles)
-        seen = set(roadsmod.tiles_near(*view, self.send_m)) - car if view else set()
+        seen = set(self._near(*view, self.send_m)) - car if view else set()
         others = set()
         for f in foci:
-            others.update(roadsmod.tiles_near(f[0], f[1], min(self.send_m, f[2] + roadsmod.TILE / 2)))
+            others.update(self._near(f[0], f[1], min(self.send_m, f[2] + roadsmod.TILE / 2)))
         others -= car | seen
         want = [k for k in car | seen | others if k not in self.sent and k not in self.building and k not in skip]
-        car_key = roadsmod.view_key(conn, aid, x, y)
-        cam_key = roadsmod.view_key(conn, aid, *view) if seen else None
+        if self.unit == 1:
+            car_key = roadsmod.view_key(conn, aid, x, y)
+            cam_key = roadsmod.view_key(conn, aid, *view) if seen else None
+        else:                               # (keys in larger squares: nearest first)
+            car_key = lambda k: self._dist(k, x, y)     # noqa: E731
+            cam_key = (lambda k: self._dist(k, *view)) if seen else None    # noqa: E731
 
         def focus_d(k):
-            return min(roadsmod.tile_distance(k[0], k[1], f[0], f[1]) for f in foci)
+            return min(self._dist(k, f[0], f[1]) for f in foci)
         want.sort(key=lambda k: (2, focus_d(k)) if k in others else (1, cam_key(k)) if k in seen else (0, car_key(k)))
         # at most per_pose in flight: each waits in a thread of the loop's shared executor, and a teleport's
         # hundreds (one per pose, uncapped) held every thread while the road tiles under the car waited for one
@@ -742,10 +819,37 @@ class Tracker:
             self.building.add((tx, ty))
             fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
-        for k in [k for k in self.sent if all(roadsmod.tile_distance(k[0], k[1], *p) > self.drop_m for p in spots)
-                  and all(roadsmod.tile_distance(k[0], k[1], f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
+        for k in [k for k in self.sent if all(self._dist(k, *p) > self.drop_m for p in spots)
+                  and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
             self.sent.discard(k)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
+
+    def _near(self, x, y, m, unit=None, group=None):
+        """Keys (tiles, or unit x unit squares of tiles) whose square, or whose group's square, comes within m."""
+        import roads as roadsmod
+        unit = self.unit if unit is None else unit
+        group = self.group if group is None else group
+        if group:                           # (whole groups of `group` tiles; keys in `unit` squares)
+            gs = roadsmod.TILE * group
+            g0x, g1x = math.floor((x - m) / gs), math.floor((x + m) / gs)
+            g0y, g1y = math.floor((y - m) / gs), math.floor((y + m) / gs)
+            per = group // unit
+            return [(gx * per + i, gy * per + j) for gx in range(g0x, g1x + 1) for gy in range(g0y, g1y + 1)
+                    for i in range(per) for j in range(per)]
+        if unit == 1:
+            return roadsmod.tiles_near(x, y, m)
+        us = roadsmod.TILE * unit
+        u0x, u1x = math.floor((x - m) / us), math.floor((x + m) / us)
+        u0y, u1y = math.floor((y - m) / us), math.floor((y + m) / us)
+        return [(ux, uy) for ux in range(u0x, u1x + 1) for uy in range(u0y, u1y + 1)]
+
+    def _dist(self, k, x, y):
+        """m (Chebyshev) from (x, y) to key k's square, or to its group's (the far buildings under the skyline)."""
+        import roads as roadsmod
+        size = roadsmod.TILE * (self.group or self.unit)
+        per = (self.group // self.unit) if self.group else 1
+        x0, y0 = (k[0] // per) * size, (k[1] // per) * size
+        return max(x0 - x, x - (x0 + size), y0 - y, y - (y0 + size), 0.0)
 
     def _built(self, conn, aid, key, fut):
         if aid != self.aid:                 # (an old anchor's: the same key may be in flight for the new one)
@@ -769,8 +873,8 @@ class Tracker:
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
-        if self.kind == "bldfar" and pool is not None:      # its mesh at a pooled shape path (matslots.py)
-            slots = pool(conn, {"shape": f"bldfar_{aid}_{key[0]}_{key[1]}.cdae"})
+        if self.kind in ("bldfar", "bldsky", "brfar") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
+            slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
             if slots:
                 m["slots"] = slots
         conn.send(m)

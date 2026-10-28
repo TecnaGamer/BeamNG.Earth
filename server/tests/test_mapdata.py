@@ -1030,7 +1030,9 @@ class CliTest(Sources, SmallBlocks, unittest.TestCase):
     def test_offline_uncached_fails_cleanly(self):
         err = io.StringIO()
         with redirect_stdout(io.StringIO()), redirect_stderr(err):
-            rc = mapdata.main(["--key", "14/1/1", "--layers", "roads", "--cache-dir", os.path.join(self.tmp, "e"),
+            # (a cell with map files: the release's index ships with the app, so a cell no file covers is simply
+            # empty offline)
+            rc = mapdata.main(["--key", "14/4706/6244", "--layers", "roads", "--cache-dir", os.path.join(self.tmp, "e"),
                                "--offline", "--dump"])
         self.assertEqual(rc, 1)
         self.assertIn("mapdata:", err.getvalue())

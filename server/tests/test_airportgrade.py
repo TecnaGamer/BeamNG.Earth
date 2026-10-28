@@ -36,6 +36,22 @@ class AirportGradeTest(unittest.TestCase):
         la, lo = np.meshgrid(np.linspace(lat0 - half, lat0 + half, n), np.linspace(lon0 - half, lon0 + half, n), indexing="ij")
         return la, lo
 
+    def test_runway_pads_cover_the_paved_runways_end_to_end(self):
+        # (GitHub #337: only the markings were drawn; the runway's own surface came from the photo alone)
+        import geodesy
+        la, lo = self.grid(45.0, 7.0)
+        pads = self.ag.runway_pads(la, lo)
+        rws = [r for g in self.ag._groups(la, lo) for r in g if r.paved and not r.closed and r.surface != "water"]
+        self.assertEqual(len(pads), len(rws))
+        self.assertTrue(rws)
+        for (pla, plo), rw in zip(pads, rws):
+            f = geodesy.EnuFrame(float(np.mean(pla)), float(np.mean(plo)), 0.0)
+            e, n, _ = f.geodetic_to_enu(pla, plo, np.zeros(4))
+            sides = np.hypot(np.diff(np.r_[e, e[:1]]), np.diff(np.r_[n, n[:1]]))
+            self.assertAlmostEqual(float(max(sides)), rw.length_m, delta=1.0)
+            self.assertAlmostEqual(float(min(sides)), rw.width_m + 2 * airportgrade.RUNWAY_PAD_SHOULDER_M, delta=0.5)
+        self.assertEqual(self.ag.runway_pads(*self.grid(46.0, 8.0)), [], "no runway: no pads")
+
     def test_far_from_airports_untouched(self):
         la, lo = self.grid(46.0, 8.0)
         z = self.dem.fn(la, lo)

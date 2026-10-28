@@ -51,6 +51,12 @@ M.CUT_S = 8
 M.CUT_FRESH_M = 250
 M.FRESH_S = 5
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
+-- At speed a car respawned behind the camera is never seen again: on a motorway every car ahead reached the block's
+-- edge within ~30 s and reappeared behind the player, who drove alone (GitHub #353, Albany to New York). Faster than
+-- AHEAD_MS, a respawned car goes ahead along the player's way instead, AHEAD_M (min, max) on, short of the block's
+-- edge guard (a car popping in 100+ m ahead at motorway speed is hardly seen; in town it still goes behind).
+M.AHEAD_MS = 20         -- (45 mph)
+M.AHEAD_M = { 100, 200 }
 -- (gameplay_walk: 0.40's traffic.lua calls gameplay_walk.addVehicleToBlacklist when it activates its cars, and this
 -- level had none loaded: the cars spawned and never drove, 2026-10-19)
 M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
@@ -419,6 +425,23 @@ end
 
 local function playerId() return be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1 end
 
+-- Pure: where a respawned car goes, (x, y, dirX, dirY, min m, max m) for gameplay_traffic.forceTeleport, or nil for
+-- behind the camera: ahead of a player at (px, py) moving (vx, vy) m/s faster than AHEAD_MS, AHEAD_M along the way but
+-- no farther than the block b's edge guard (GUARD_M + a margin) in that direction; nil too when that leaves no room.
+function M.aheadSpot(px, py, vx, vy, b)
+  local sp = math.sqrt(vx * vx + vy * vy)
+  if sp < M.AHEAD_MS then return nil end
+  local dx, dy = vx / sp, vy / sp
+  local reach = math.huge
+  if b then
+    if dx > 1e-6 then reach = math.min(reach, (b[3] - px) / dx) elseif dx < -1e-6 then reach = math.min(reach, (b[1] - px) / dx) end
+    if dy > 1e-6 then reach = math.min(reach, (b[4] - py) / dy) elseif dy < -1e-6 then reach = math.min(reach, (b[2] - py) / dy) end
+  end
+  local hi = math.min(M.AHEAD_M[2], reach - M.GUARD_M - 20)
+  if hi < M.AHEAD_M[1] then return nil end
+  return px, py, dx, dy, M.AHEAD_M[1], hi
+end
+
 -- Pure: is a car that has stood still since `since` (nil: moving) at distance d from the player stuck at `now`?
 function M.stuck(since, now, d)
   return since ~= nil and now - since >= M.STUCK_S and d >= M.STUCK_FAR_M
@@ -465,7 +488,13 @@ local function guard(b, all)
           -- behind the camera: the stock default is 100-500 m in front of it, where the player sees the car
           -- pop in and its tyres smoke as it lands (the photo comparisons, 2026-10-14)
           local cp, cf = core_camera and core_camera.getPosition(), core_camera and core_camera.getForward()
-          if cp and cf then
+          local pu = pv and pv:getVelocity()
+          local ax, ay, adx, ady, amin, amax = nil
+          if pp and pu and not all then ax, ay, adx, ady, amin, amax = M.aheadSpot(pp.x, pp.y, pu.x, pu.y, b) end
+          if ax then
+            stats.aheadRespawns = (stats.aheadRespawns or 0) + 1
+            pcall(gt.forceTeleport, id, vec3(ax, ay, pp.z), vec3(adx, ady, 0), amin, amax)
+          elseif cp and cf then
             pcall(gt.forceTeleport, id, cp, -cf, M.RESPAWN_M[1], M.RESPAWN_M[2])
           else
             pcall(gt.forceTeleport, id)
@@ -508,6 +537,12 @@ function M.takeChoice(o)
                police = o.trafficPolice == 'enabled', trafficAmount = tonumber(o.trafficAmount) or -1,
                -- (0.40 renamed trafficParkedAmount to trafficParkingAmount)
                parkedAmount = tonumber(o.trafficParkingAmount or o.trafficParkedAmount) or -1 }
+  -- (as stock freeroam: with traffic and parked cars both chosen, Options > Gameplay's parked vehicles setting off
+  -- means none; GitHub #320 / #145: parked cars came with the setting off)
+  local st = rawget(_G, 'settings')
+  if M.choice.traffic and M.choice.parked and st and st.getValue and st.getValue('trafficParkedVehicles') == false then
+    M.choice.parked = false
+  end
   if log then
     log('I', 'beamngEarth', string.format('traffic choice: traffic %s, parked %s, police %s (freeroam %s / %s)',
       tostring(M.choice.traffic), tostring(M.choice.parked), tostring(M.choice.police), tostring(o.trafficMode),
@@ -667,7 +702,7 @@ function M.applies() return stats.applies end
 function M.status()
   return { graph = graph and graph.serial or nil, applies = stats.applies, lastMs = stats.lastMs,
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
-           cuts = stats.cuts, cutRespawns = stats.cutRespawns,
+           cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil }

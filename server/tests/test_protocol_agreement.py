@@ -96,7 +96,9 @@ MOD_TO_SERVER = {
     # restarted server keeps an earlier run's folder named here, docs/ROADMAP.md "Robustness" 3)
     "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "sessions": F((list, dict), OPT),
               # a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session
-              "slotSession": F(str, OPT), "slotsHeld": F((list, dict), OPT)},
+              "slotSession": F(str, OPT), "slotsHeld": F((list, dict), OPT),
+              # the mod reads a vegetation tile as one flat array (veg_tile's data: {groups, stride, flat}; trees.lua)
+              "vegFlat": F(bool, OPT)},
     "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
                        # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
                        "px": F(NUM, OPT), "py": F(NUM, OPT),
@@ -126,9 +128,9 @@ MOD_TO_SERVER = {
     # the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)
     "perf_log": {"lines": F((list, dict))},
     # BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our
-    # anchor ({id, host, port, code, weight} each)
-    "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)
-    "peers": {"me": F(str), "members": F(list)},
+    # anchor ({id, host, port, code, weight} each). (Commented out 2026-10-27: shared world building is off.)
+    # "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)
+    # "peers": {"me": F(str), "members": F(list)},
     # roads (roads.py; additive): the mod removed its roads (switched off and on again): send them again
     "roads_reset": {},
     # gas stations (gasstations.py; additive): on, sent after every hello
@@ -169,7 +171,8 @@ SERVER_TO_MOD = {
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "turns": F(list, OPT),
                      "error": F(str, OPT),  # OSRM; turns: the GPS's turn-by-turn (routing.turns)
                      "steps": F(list, OPT),  # the phone's turn-by-turn steps [{at, dist, dur, name, type, modifier}]
-                     "routes": F(list, OPT)},  # the phone's route choices [{points, dist, dur, steps, tag}]
+                     "routes": F(list, OPT),  # the phone's route choices [{points, dist, dur, steps, tag}]
+                     "elev": F((list, dict), OPT)},  # elev: the map's profile (routing.resample, dem.sample)
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},  # routeahead.py: the route's corridor
     "phone_search_result": {"id": F(int), "results": F(list), "error": F(str, OPT)},   # phoneapi.search
     "phone_reverse_result": {"id": F(int), "name": F(str), "detail": F(str, OPT),
@@ -214,7 +217,8 @@ SERVER_TO_MOD = {
                      "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
                      "fuelShapes": F(list, OPT)},          # 2026-10-23: the region's gas station shapes (--gas-stations)
     "anchor_error": {"requestId": F(int, NULL), "error": F(str)},
-    "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (mpsession.onShare)
+    # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
+    # building, commented out 2026-10-27)
     "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},
     "terrain_refresh": {"anchorId": F(int), **TERRAIN},     # the graded block in place of the provisional one
     "terrain_error": {"requestId": F(int, NULL), "anchorId": F(int, NULL), "error": F(str)},
@@ -262,6 +266,14 @@ SERVER_TO_MOD = {
     "bldfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
                     "slots": F(dict, OPT)},    # {"shape": [pooled shape path, serial]}
     "bldfar_drop": {"anchorId": F(int), "key": F(str)},
+    # the skyline past them (buildings.skyline_tile): the same, one per SKY_UNIT x SKY_UNIT road tiles
+    "bldsky_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                    "slots": F(dict, OPT)},
+    "bldsky_drop": {"anchorId": F(int), "key": F(str)},
+    # the bridges past the road tiles (buildings.far_bridge_tile): the same, a road tile's square of decks
+    "brfar_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                   "slots": F(dict, OPT)},
+    "brfar_drop": {"anchorId": F(int), "key": F(str)},
     # the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges
     "navgraph": {"anchorId": F(int), "path": F(str), "cx": F(NUM), "cy": F(NUM), "nodes": F(int), "edges": F(int),
                  "serial": F(int)},
@@ -291,6 +303,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "sea",                                        # --sea on: needs map data (test_seacarve)
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
+                       "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
@@ -306,6 +319,12 @@ GRAVITY_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "egm2008_n36.np
 # levels down to -2 (mesh mode); a textured tile's shape is its material name's pooled file (matslots.py)
 SHAPE_RE = r"^/temp/beamngEarth/[^/]+/(far_\d+_-?\d+_-?\d+_-?\d+|slot_\d{5})\.cdae$"
 HM_RE = r"^/temp/beamngEarth/[^/]+/hm_\d+_-?\d+_-?\d+\.png$"
+
+
+def code_only(text, mark):
+    """text without its whole-line comments (lines starting with mark: commented-out code is not part of the
+    protocol, e.g. shared world building's messages, 2026-10-27)."""
+    return "\n".join(line for line in text.split("\n") if not line.lstrip().startswith(mark))
 
 
 def lua_tables(text, start):
@@ -346,7 +365,7 @@ def mod_sends():
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua",), r"\bsend\(\{")):
-        text = "\n".join((LUA / n).read_text(encoding="utf-8") for n in names)
+        text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
         for m in re.finditer(pattern, text):
             t = lua_tables(text, m.end() - 1)
             keys, nested = top_keys(t)
@@ -359,14 +378,14 @@ def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
     for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua"):
-        text = (LUA / name).read_text(encoding="utf-8")
+        text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}
     return out
 
 
 def server_reads():
-    text = (Path(earthd.__file__)).read_text(encoding="utf-8")
+    text = code_only((Path(earthd.__file__)).read_text(encoding="utf-8"), "#")
     out = set(re.findall(r"msg\.get\(\"(\w+)\"", text)) | set(re.findall(r"msg\[\"(\w+)\"\]", text))
     out |= set(re.findall(r"_num\(msg, \"(\w+)\"", text))
     return out
@@ -899,9 +918,10 @@ class ServerMessagesTest(test_server.ServerHarness):
         self.assertIn("clearedBytes", until(lambda m: m["type"] == "cache"))
         c.send({"type": "app_path"})                    # the page's cache folder and BeamMP launcher (no choice made)
         self.assertTrue(until(lambda m: m["type"] == "app_paths")["cacheDir"])
-        c.send({"type": "share"})                       # a BeamMP session: our group service's port and code
-        self.assertTrue(until(lambda m: m["type"] == "share")["code"])
-        c.send({"type": "peers", "me": "1", "members": []})     # (alone: no group; nothing answered)
+        # (shared world building, commented out 2026-10-27)
+        # c.send({"type": "share"})                       # a BeamMP session: our group service's port and code
+        # self.assertTrue(until(lambda m: m["type"] == "share")["code"])
+        # c.send({"type": "peers", "me": "1", "members": []})     # (alone: no group; nothing answered)
         c.send({"type": "prepare_anchor", "requestId": 1, "lat": test_server.LAT, "lon": test_server.LON,
                 "cx": 0, "cy": 0})
         a = until(lambda m: m["type"] == "anchor_ready")

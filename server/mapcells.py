@@ -159,6 +159,30 @@ def cell_of(lat, lon, z=ZOOM):
     return CellKey(z, _exact_col(float(x), float(lon), n) % n, _exact_row(float(y), float(lat), n))
 
 
+def cells_of(lat, lon, z=ZOOM):
+    """[cell_of(lat[i], lon[i])] for arrays of points, at once: the tile formula for all, cell_of's exact edge rules for
+    the few within EDGE_EPS of an edge (the same cells; road planning asked cell_of point by point ~60000 times per 16
+    city road tiles, 2026-10-26)."""
+    lat = np.asarray(lat, np.float64).ravel()
+    lon = np.asarray(lon, np.float64).ravel()
+    if not len(lat):
+        return []
+    if not ((lat >= -MAX_LAT) & (lat <= MAX_LAT)).all():
+        bad = lat[~((lat >= -MAX_LAT) & (lat <= MAX_LAT))][0]
+        raise ValueError(f"latitude {bad} is beyond the Web-Mercator limit {MAX_LAT}")
+    n = 1 << z
+    x, y = tile_xy(lat, lon, z)
+    xi = np.floor(x)
+    yi = np.clip(np.floor(y), 0, n - 1)
+    edge = (x - xi < EDGE_EPS) | (xi + 1 - x < EDGE_EPS) | (y - yi < EDGE_EPS) | (yi + 1 - y < EDGE_EPS)
+    xs = (xi.astype(np.int64) % n).tolist()
+    ys = yi.astype(np.int64).tolist()
+    out = [CellKey(z, cx, cy) for cx, cy in zip(xs, ys)]
+    for i in np.flatnonzero(edge).tolist():
+        out[i] = cell_of(float(lat[i]), float(lon[i]), z)
+    return out
+
+
 def cells_for_bbox(lat0, lon0, lat1, lon1, z=ZOOM, max_cells=4096):
     """Every cell that intersects the lat/lon box (west lon0 to east lon1; lon1 < lon0 crosses the
     antimeridian), in row-major order (north to south, west to east), each once. Latitudes are

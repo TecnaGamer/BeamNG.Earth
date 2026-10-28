@@ -241,6 +241,28 @@ function M.prewarm(shapes)
   end
 end
 
+-- The night lights' places (nightlights.lua): over each made station's pump islands, under its canopy (stations were
+-- dark at night, 2026-10-27). Kept per station and made again when its record changes.
+M.LIGHT_UP_M = 4.6
+function M.lightPoints()
+  local out = {}
+  for _, st in pairs(stations) do
+    if st.made then
+      if st.lightRec ~= st.rec then
+        st.lights = {}
+        for _, p in ipairs(st.rec.props or {}) do
+          if type(p.shape) == 'string' and p.shape:lower():find('pump') and type(p.pos) == 'table' then
+            st.lights[#st.lights + 1] = { p.pos[1], p.pos[2], p.pos[3] + M.LIGHT_UP_M }
+          end
+        end
+        st.lightRec = st.rec
+      end
+      for _, l in ipairs(st.lights) do out[#out + 1] = l end
+    end
+  end
+  return out
+end
+
 function M.count()
   local n = 0
   for _, st in pairs(stations) do if st.made then n = n + 1 end end

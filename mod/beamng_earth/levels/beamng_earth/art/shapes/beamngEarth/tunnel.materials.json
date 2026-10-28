@@ -475,5 +475,137 @@
     ],
     "groundType": "CONCRETE",
     "translucent": false
+  },
+  "bne_rail_ballast_weedy": {
+    "name": "bne_rail_ballast_weedy",
+    "mapTo": "bne_rail_ballast_weedy",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "591d15c9-815b-5518-9668-00787ef4d544",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/grass/t_dirt_vegetation/t_dirt_vegetation_b.png",
+        "normalMap": "/assets/materials/terrain/grass/t_dirt_vegetation/t_dirt_vegetation_nm.png",
+        "roughnessMap": "/assets/materials/terrain/grass/t_dirt_vegetation/t_dirt_vegetation_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/grass/t_dirt_vegetation/t_dirt_vegetation_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.62,
+          0.6,
+          0.48,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRAVEL",
+    "translucent": false
+  },
+  "bne_rail_ballast_grown": {
+    "name": "bne_rail_ballast_grown",
+    "mapTo": "bne_rail_ballast_grown",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7c7c9460-1fb8-5b3a-ba65-29d36edaf618",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/soil/t_dirt_dry_grassy/t_dirt_dry_grassy_b.png",
+        "normalMap": "/assets/materials/terrain/soil/t_dirt_dry_grassy/t_dirt_dry_grassy_nm.png",
+        "roughnessMap": "/assets/materials/terrain/soil/t_dirt_dry_grassy/t_dirt_dry_grassy_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/soil/t_dirt_dry_grassy/t_dirt_dry_grassy_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.5,
+          0.5,
+          0.4,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "DIRT",
+    "translucent": false
+  },
+  "bne_rail_sleeper_old": {
+    "name": "bne_rail_sleeper_old",
+    "mapTo": "bne_rail_sleeper_old",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6920750d-5eb0-5173-905b-01ab01b2ef43",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.3,
+          0.27,
+          0.23,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "translucent": false
+  },
+  "bne_rail_steel_old": {
+    "name": "bne_rail_steel_old",
+    "mapTo": "bne_rail_steel_old",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "672b11d9-1df6-587b-a76e-aaf30d615998",
+    "Stages": [
+      {
+        "metallicFactor": 0.25,
+        "roughnessFactor": 0.85,
+        "baseColorFactor": [
+          0.33,
+          0.17,
+          0.09,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_bridge_asphalt": {
+    "name": "bne_bridge_asphalt",
+    "mapTo": "bne_bridge_asphalt",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d364e483-ecf2-50c9-a4a9-b34d7ee84460",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_b.png",
+        "normalMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_nm.png",
+        "roughnessMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.52,
+          0.52,
+          0.53,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ASPHALT",
+    "translucent": false
   }
 }

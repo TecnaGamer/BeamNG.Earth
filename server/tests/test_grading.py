@@ -53,6 +53,45 @@ class ProfileTest(unittest.TestCase):
         self.assertTrue(np.allclose(grading.smooth_profile(short, 2.0, 12.0), short, atol=1e-9))
 
 
+class BankTest(unittest.TestCase):
+    """A motorway's curve leans into its turn (grading.bank, grade_points): its inside lower, a straight level."""
+
+    def arc(self, r, ang, step=2.0):
+        th = np.arange(0.0, ang, step / r)
+        return np.stack([r * np.sin(th), r - r * np.cos(th)], axis=1)       # a left turn from (0, 0) heading +x
+
+    def test_left_curve_banked_inside_lower(self):
+        xy = self.arc(400.0, 1.2)
+        sp = roads.Spec(11.0, "paved", False, "motorway")
+        b = grading.bank(xy, sp, ext=(1, 1))
+        self.assertIsNotNone(b)
+        mid = b[len(b) // 2]
+        v, f = grading.BANK_DESIGN["motorway"]
+        r_min = v * v / (127.0 * (grading.BANK_E_MAX + f))
+        self.assertAlmostEqual(mid, -grading.BANK_E_MAX * min(1.0, r_min / 400.0), places=2)   # left (inside) lower
+        plan = grading._plan(xy, np.full(len(xy), 50.0), sp)
+        # graded across the carriageway at the middle: the outside (right) higher than the inside (left)
+        i = len(xy) // 2
+        p = xy[i]
+        th = np.arctan2(xy[i + 1, 1] - xy[i - 1, 1], xy[i + 1, 0] - xy[i - 1, 0])
+        n = np.array([-np.sin(th), np.cos(th)])          # left
+        pts = np.array([p + n * 4.0, p - n * 4.0])
+        z = grading.grade_points(pts[:, 0], pts[:, 1], np.full(2, 50.0), [plan])
+        self.assertAlmostEqual(float(z[1] - z[0]), -mid * 8.0, places=1)
+
+    def test_straight_and_city_streets_level(self):
+        xy = np.stack([np.arange(0, 300, 2.0), np.zeros(150)], axis=1)
+        self.assertIsNone(grading.bank(xy, roads.Spec(11.0, "paved", False, "motorway"), ext=(1, 1)))
+        self.assertIsNone(grading.bank(self.arc(150.0, 1.0), roads.Spec(7.0, "paved", False, "residential")))
+
+    def test_faded_to_level_at_a_bridge(self):
+        xy = self.arc(300.0, 1.0)
+        b = grading.bank(xy, roads.Spec(11.0, "paved", False, "motorway"), abut=(True, False), ext=(0, 1))
+        self.assertEqual(float(b[0]), 0.0)
+        self.assertLess(abs(float(b[len(b) // 2])), 0.09)
+        self.assertGreater(abs(float(b[len(b) // 2])), 0.03)
+
+
 class CrestTest(unittest.TestCase):
     def test_no_kinks_over_a_crest(self):
         # a road over a crest (the grade falls 4 % per 10 m): the graded centreline's slope changes smoothly, not
@@ -485,14 +524,15 @@ class UnderpassTest(unittest.TestCase):
         g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 195.0, 0.0]), np.array([0.0, 0.0, 300.0]), 0.0)
         out = g.apply(la, lo, np.full(3, 10.0))
-        self.assertAlmostEqual(float(out[0]), 10.0 - grading.UNDER_CLEAR_M, delta=0.3, msg="under the deck")
+        self.assertAlmostEqual(float(out[0]), 10.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M),
+                               delta=0.3, msg="under the deck, within the maximum excavation depth")
         self.assertAlmostEqual(float(out[1]), 10.0, delta=0.1, msg="back up past the ramp")
         # the ramp: no steeper than UNDER_GRADE, and no kinks (the grade changes smoothly)
         xs = np.arange(0.0, 200.0, 2.0)
         la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
         z = g.apply(la, lo, np.full(len(xs), 10.0))
         grade = np.diff(z) / 2.0
-        self.assertLessEqual(float(np.abs(grade).max()), grading.UNDER_GRADE + 0.005)
+        self.assertLessEqual(float(np.abs(grade).max()), grading.UNDER_MAX_GRADE + 0.005)
         self.assertLess(float(np.abs(np.diff(grade)).max()), 0.01, "no kink")
         self.assertAlmostEqual(float(out[2]), 10.0, delta=0.1, msg="another road untouched")
 
@@ -553,6 +593,15 @@ class RacewayKeepTest(unittest.TestCase):
         base = sloped(la, lo)
         out = g.apply(la, lo, base)
         self.assertAlmostEqual(float(out[0]), float(base[0]), places=6, msg="on the track: the terrain")
+
+
+
+class NeverRaisedTest(unittest.TestCase):
+    def test_links_are_raised_motorways_not(self):
+        S = roads.Spec
+        self.assertTrue(grading._never_raised(S(18.8, "paved", False, "motorway", True)))
+        self.assertFalse(grading._never_raised(S(11.6, "paved", False, "motorway", True, link=True)))
+        self.assertFalse(grading._never_raised(S(8.0, "paved", False, "secondary", False)))
 
 
 if __name__ == "__main__":

@@ -136,7 +136,13 @@ function M.formatHardware(hw)
   local gpuName = first(gpu, { 'name', 'description' })
   if gpuName then
     local extra = {}
-    if num(gpu.memoryMB) then extra[#extra + 1] = string.format('%.0f MB VRAM', gpu.memoryMB) end
+    -- memoryMB is the native total-capacity field in MB; zero does not identify usable capacity.
+    local memoryMB = num(gpu.memoryMB)
+    if memoryMB and memoryMB > 0 then
+      extra[#extra + 1] = string.format('%.0f MB VRAM', memoryMB)
+    else
+      extra[#extra + 1] = 'VRAM capacity unavailable'
+    end
     local keys = {}
     for k in pairs(gpu) do keys[#keys + 1] = k end
     table.sort(keys)

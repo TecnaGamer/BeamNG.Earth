@@ -2,6 +2,195 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.7.0 beta (2026-10-27)
+
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
+> develop the mod.** For help, that includes multiplayer:
+> BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working
+> with BeamMP, it's almost certainly a BeamNG.Earth problem, not a BeamMP one. Please don't contact the BeamMP team or
+> open BeamMP support tickets about it. BeamNG.Earth servers are hidden from players who don't run BeamNG.Earth
+> (BeamMP can't install it for them: it needs its own app), so they only show in the BeamNG.Earth tab of BeamMP's
+> server browser.
+
+Works with BeamNG.drive 0.40.3.
+
+### New
+- **Where to get help, shown where you'll see it**: the app's window, the BeamMP server's console when it starts and
+  both READMEs now say plainly that help with BeamNG.Earth, multiplayer included, is on the TGForever Discord
+  (discord.gg/tgf), not from the BeamMP team (BeamNG.Earth isn't like a normal mod: problems with it on BeamMP
+  are almost certainly ours), and why BeamNG.Earth servers are hidden from players without BeamNG.Earth.
+- **Forest sounds**: wind in the trees and a background sound for the landscape, using the stock
+  maps' own ambient sounds: louder and fuller in dense, tall forest, quiet in open land. The set follows the real
+  climate zone (a Köppen-Geiger climate map): temperate forest as East Coast USA, oceanic as West Coast USA,
+  Mediterranean as Italy, deserts and polar as Utah and Johnson Valley, tropics as Jungle Rock Island.
+- **River sounds**: rivers and streams have the stock maps' running-water sound, louder as you get closer (as loud
+  as East Coast USA's river at the same distance in testing). Canals, lakes and the sea are quiet for now.
+- **Tunnel, bridge and parking garage sounds**: inside a tunnel the outside sounds go quiet and the stock maps' tunnel
+  echo is used (in short tunnels and under low arches the outside is only muffled), under bridges and overpasses the
+  stock under-bridge echo, and in the parking garages you can drive into the stock parking garage echo. Outside sounds
+  fade out over the last stretch before a tunnel's mouth (and back in as you leave) instead of cutting off.
+- **Shore sounds**: waves along the coasts and large lakes (a sound in the game's files that no stock map uses).
+- **Pump jacks at oil wells**: West Coast USA's animated pump jack, with its engine and squeak sounds, at the oil wells
+  OpenStreetMap maps (gas wells and closed wells left out).
+- **Night lighting** (GitHub #3): after dusk about half the buildings' windows light up (warm, now and then cool),
+  offices and shopfronts glow softly, and gas station forecourts and tunnels are lit. Street lamps glow as points of
+  light out to as far as buildings are drawn (about 3 miles), and light the streets in view out to about half a mile
+  (the 128 nearest, favouring the ones ahead of you), their light reaching across the street more than behind the
+  pole, as real street lamps' does. The distant skyline's windows light up too. In testing at night in a city about 0.1 ms
+  a frame on a PC, about 1.3 ms on a Steam Deck (about 38 to 36 fps).
+- **More streets have street lamps**: town streets without a mapped sidewalk now have lamps too (before, only about a
+  quarter of a Baltimore neighbourhood's streets had any), on the utility poles where the lines run overhead, on lamp
+  posts where they are buried. Highways in towns and every ramp get tall lamp posts along their outer edge. The
+  spacing follows real practice: in North America the cities' and state DOTs' design standards (about 230-250 ft
+  apart on main roads, every other utility pole on side streets, closer in dense city cores), elsewhere the street
+  lamps OpenStreetMap maps in European cities (about 100 ft apart, mostly on one side). US states differ as they do in
+  real life: the Mountain West and Oklahoma light their side streets sparsely, and California, Oregon, Washington and
+  Virginia light their freeways only at the interchanges.
+- **Fewer utility poles where power lines are underground**: in countries where most low-voltage lines are buried
+  (the Netherlands, the UK, Germany, Denmark and others, in proportion) that share of the roads has no poles and wires;
+  town streets there get street lamps instead.
+- **A Rocks setting** (GitHub #5, after PR #321 by MihneaTeodorStoica): turn the rocks and boulders off.
+- **Satellite map on car navigation screens** (GitHub #44, PR #334 by MihneaTeodorStoica): cars with a navigation
+  screen show BeamNG.Earth's satellite map there, turning with the car (Settings > Interface to turn it off).
+- **High-voltage power lines and substations from the map**: the transmission lines OpenStreetMap maps now have
+  lattice towers at their mapped tower spots with the conductors hung between them (underground cables left out).
+  Where a line reaches a mapped substation it ends on the gantries of a switchyard laid out as West Coast USA's (bays of
+  gantries, busbars on their supports, breakers, transformers and lightning masts), and the rest of the substation is
+  filled with more of them, on gravel behind a chain-link fence.
+- **Refinery and power plant sounds**: West Coast USA's refinery machinery sounds inside refineries and petrochemical
+  plants, and its power plant sound (quieter) at fuel-burning and nuclear power plants.
+- **Rain sound**: rain now has a sound (the game's own rain loop), louder in heavier rain, fading in and out with the
+  weather, and quiet inside tunnels.
+- **Buildings and bridges much farther away**: a light skyline of buildings out to about 3 miles past the far
+  buildings (about 1.4 miles before), and bridge decks out to about 3 miles (they used to vanish past half a mile),
+  for a small frame cost (about 8 % in the busiest view tested).
+- **The route's elevation profile on the map** (PR #379 by SwissCheese26): a small chart in its own box under the GPS
+  box, with where you are on it and the route's total climb and descent (smoothed, so a bridge over a valley is no
+  spike, and a flat drive draws flat), **Copy coordinates** on the map's right-click menu, a **Dark** base map, and the local time and
+  weather next to the map's title.
+- **Banked motorway curves**: motorways, expressways and their ramps now lean into their curves (up to 8 %, more on
+  tighter bends), easing in and out over about 60 ft.
+- **Railroad crossing gates, lights and signs**: level crossings now have crossbucks, flashing lights or gates (raised),
+  the crossbuck in the Americas and the St Andrew's cross elsewhere. In the US they match what the Federal Railroad
+  Administration's crossing inventory lists for each crossing; elsewhere they follow the road's size.
+- **Old railways look old**: abandoned and disused lines are drawn worn, with weeds or grass in the ballast, rusty
+  rails and missing sleepers.
+- **BeamMP servers no longer have a sharing port**: shared world building (players near each other splitting the work
+  of building the world) has been switched off for a while and stays off for now, so its setting (`G.SHARE_PORT`) and
+  the TCP port players had to open for it are gone. Each player's app builds their own world, as before.
+
+### Faster world building
+- **Much faster first visits near high-voltage power lines**: each piece of road read the ground under every tower
+  of every power line touching it, the whole line, often 60 miles of it. One spot in rural Pennsylvania downloaded
+  about 6,500 elevation tiles for its first piece of road (5 minutes); now about 290 (30 seconds).
+- **Shorter tree hitches**: the trees' work is spread over frames with a time budget, one new forest object a frame,
+  and tree tiles arrive as one flat list of numbers (fewer, shorter garbage collections). In the contributor's tests the
+  worst tree frame went from 53-87 ms to 15-17 ms (PRs #318 and #329 by Paul-CodeGH).
+- The hidden HUD window no longer builds its view every frame (PR #315 by Paul-CodeGH); railway pieces far from a tile
+  are skipped before their heights are looked up (PR #341 by teddante).
+- **Faster first visits than 1.6.3**: the elevation is looked up without copying its tiles on every lookup, the road
+  levelling (where the ground meets the roads) is about a third quicker, and more of the building code (walls,
+  footprints, roof outlines) is native code. In testing on fresh places with empty caches: on a PC (Linz, Austria) the
+  first roads came in about 26 s after a teleport instead of 31, and all nearby roads in about 33 s instead of 37; on a
+  Steam Deck (Brasov, Romania) the first roads in about 55 s instead of 66, all nearby roads in about 78 s instead of
+  89, and everything around you, distant land included, in about 105 s instead of 118.
+
+### Fixes
+- **Reduced the chance of sidewalks without collision** (driving in town): a sidewalk's collision is held back while the
+  car is on it, so it never turns solid around the wheels, and that held back the whole area's sidewalks whenever the
+  car came within about 13 ft of any curb there. Now only a car actually over a sidewalk holds them.
+- **The status line says what a data source that is not answering affects**: for example "imagery.nationalmap.gov
+  unreachable (detailed US aerial photos (NAIP); coarser photos meanwhile)" instead of the address alone. The new
+  [SOURCES.md](SOURCES.md) explains every source the game uses, what it is sent, and what you see while it is down.
+- **The map's GPS distance follows the game's units** (GitHub #327): km / m with metric units, mi / ft with imperial.
+- **Parked cars follow the game's 'parked vehicles' setting** (GitHub #320, #145): they came even with it off.
+- **Linux: hybrid-graphics laptops** start the game on the dedicated GPU, a Flatpak Steam's game starts directly,
+  and your Steam launch options are used for the direct start (PR #351 by joshuaeroman).
+- **Reduced the chance of no roads or buildings when Overture's index server is down** (GitHub #357): the app now
+  carries the map data's file index itself (it was unreachable for about an hour on Oct 26).
+- **Reduced the chance of 'Address search unavailable' after the first search** (GitHub #350): the status bar's
+  town lookups can no longer shut the search out.
+- **Roads still under construction are left out** (GitHub #184) in newly visited places.
+- **Reduced the chance of the app stopping with WinError 1392** (GitHub #282): a damaged BeamMP launcher folder now
+  only skips multiplayer for that start, with a hint.
+- **Reduced the chance of a force-feedback wheel locking fully right after opening the map** (GitHub #284): the map
+  no longer touches the steering when it opens.
+- **Reduced the chance of a railway lying across the road under a rail bridge** (GitHub #311, #345, #364: New Britain,
+  the Netherlands, Calgary's Deerfoot Trail): roads now dip under rail bridges as they do under road overpasses
+  (Calgary: about 3-6 ft of room before, about 20 ft now), and a line over a short road underpass mapped only on the
+  road gets a bridge (PR #370 by doichoiboi).
+- **Reduced the chance of falling through the world after a teleport** (found at a tunnel near Grenoble, GitHub #339):
+  a car set down over a hole, or falling fast right after a teleport, is put back on the nearest ground.
+- **Reduced the chance of 'stac.overturemaps.org unreachable' and other HTTPS errors on Windows** (GitHub #373, PR #371
+  by akariiirl): the app checks certificates with Windows' own certificate store, and ships the Overture map index
+  itself.
+- **Reduced the chance of bare dirt everywhere on a first visit** (the Harz mountains, GitHub #316): ground that was
+  built before the land cover data came is painted again once it is there.
+- **Runways are paved end to end** (GitHub #337, Tallinn): the runway itself is now painted into the ground, not
+  only its markings.
+- **Reduced the chance of a dry riverbed where a tributary joins a river** (GitHub #323, Vitebsk): the bigger
+  river keeps its water at the confluence.
+- **Bridges and tunnels as wide as their road** (GitHub #378, diagnosed by RiDexSS): decks now use OpenStreetMap's
+  lane count and width (a 4-lane bridge in Perm was drawn with one lane each way).
+- **More traffic ahead of you on motorways** (GitHub #353): traffic cars leaving the drivable area now come back
+  ahead of you when you drive faster than 45 mph, not behind (Albany test drive: about 6 cars within 820 ft ahead
+  instead of 2).
+- **Reduced the chance of a wall at the start of a bridge** (found on test drives on the New York Thruway): a deck
+  no longer climbs steeper than 15 % off its end over lower ground.
+- **Smoother main roads where the elevation data is coarse** (GitHub #335): primary roads now get the same long,
+  gentle profile as motorways, so a main road across flat forest no longer rides every bump of the 30 m data.
+- **Reduced the chance of humps on short overpasses** (PR #374 by wyo-backroads: I-80 over Otto Road, Wyoming):
+  short motorway decks no longer crest over the road under them, and that road's dip carries on through its
+  junctions.
+- **Reduced the chance of crashing at freeway exits on bridges** (found on a test drive: US-101's exit to Mission
+  Road over the Los Angeles River): an exit ramp leaving an elevated freeway no longer drops below the freeway while
+  still beside it, and it runs down on a fill to the street.
+- **Reduced the chance of a sudden step on a road dipping under a bridge** (found on a test drive: US-101 at Los
+  Angeles' Union Station): every piece of the world now works out the same dip, and the road there no longer
+  crosses phantom tracks.
+- **Railways that aren't built yet are no longer drawn**: proposed lines and lines under construction were drawn as
+  real track across roads.
+- **Smoother level crossings**: the rails now lie level with the road where a railway crosses it (they stood about 2 ft
+  over the road at its edge), the track easing down to them over the last 100 ft or so.
+- **Reduced the chance of a steep hump where a bridge meets a side road's bridge** (found on a test drive, US-24
+  near Buena Vista, Colorado: the deck climbed about 33 ft in 65 ft and flipped the car at 52 mph).
+- **Reduced the chance of a road bridge lying on the tracks it crosses** (GitHub #324, Vitebsk): road decks and
+  their approach ramps now rise over railways as over roads (Vitebsk: about 7 ft under the rails before, up to
+  about 17 ft of room now; a track right at a deck's mapped end can still be tight).
+- **Reduced the chance of old cached places after an update**: the app's cache of visited places now notices every
+  code change in the packaged app (from PR #368 by cody196).
+- **Gas stations**: a shop mapped as a house beside its canopy, canopies that aren't neat rectangles, and stations whose
+  pin sits on the road (PR #309 by FluffyProgramming).
+- **Reduced the chance of overpasses sitting too low with the road under them dug out** (GitHub #306, BR-343 at
+  Teresina): 1.6.3 carries a bridge's deck a few feet onto the next road segment, and that piece was not treated as
+  part of the bridge, so the overpass lost its approach ramp on that side (about 15 ft too low there).
+- **Reduced the chance of grass and gravel on roads (and their grip gone) on fast first visits** (Discord, mountain
+  roads in Japan): the ground under a road is now painted again as soon as its map data arrives, instead of staying
+  grass until the ground there was built again for another reason.
+- **Reduced the chance of gas stations on the wrong side of the road** (GitHub #308, Rio de Janeiro): a station's lot
+  mapped as one big building is now its forecourt with a canopy (it was drawn as a block), a roof counts as a canopy
+  only when shaped like one (pumps stood on train tracks under a platform roof), and never one across the street.
+- **Reduced the chance of steep drops on interchange ramps** (Dallas' High Five): a ramp held up beside its twin
+  dropped back to its own height in a few car lengths where the two parted (35 % over 30 ft); it now comes down at
+  most at the 6 % a deck climbs, and a raised joint no longer leaves a short ramp beyond it to drop to the ground
+  (Birmingham's Spaghetti Junction: 40 % down a 160 ft ramp, now 6 %).
+
+### Which file do I need?
+- **`BeamNG.Earth-1.7.0-beta.exe`: Windows players.** The whole app in one file: run it and it installs the mod into
+  BeamNG.drive, starts the world server, BeamMP and the game (Windows may warn about an unknown app: More info > Run
+  anyway). Steam must be running.
+- **`BeamNG.Earth-1.7.0-beta-x86_64.AppImage`: Linux and Steam Deck players** (on the Deck, in Desktop Mode). Make it
+  executable (right-click > Properties, or `chmod +x`) and run it.
+- **Joining a BeamMP server with BeamNG.Earth?** Run the app above, then in the game: More > BeamMP, the
+  **BeamNG.Earth** category.
+- **`BeamNG.Earth-BeamMP-Server-1.7.0-beta.zip`: only for people hosting a BeamMP server** (unzip it into the server's
+  folder; see its README). Players don't need it.
+- **`Source code (zip)` and `Source code (tar.gz)`: for developers.** Added by GitHub to every release; not needed to
+  play.
+
+If you want to talk about this mod with me or other people, join my Discord server, TGForever, at
+[discord.gg/tgf](https://discord.gg/tgf) and head to the #beamng-earth channel.
+
 ## 1.6.3 beta (2026-10-25)
 
 Works with BeamNG.drive 0.40.3.

@@ -118,7 +118,9 @@ def reverse(lat, lon, net=None, country=None):
     """The town, state and country around (lat, lon) (blocking), in country's language (lang_for). Raises
     netfetch.FetchError on network trouble."""
     net = net if net is not None else netfetch.default_fetcher()
-    return parse_place(json.loads(net.get(reverse_url(lat, lon, lang=lang_for(country)), kind="demand")
+    # (a lane of its own: the status bar asks as the player moves, and its timeouts opened the host's breaker and
+    # shut the map's search out, "Address search unavailable", GitHub #350)
+    return parse_place(json.loads(net.get(reverse_url(lat, lon, lang=lang_for(country)), kind="demand", lane="reverse")
                                   .body.decode("utf-8")))
 
 

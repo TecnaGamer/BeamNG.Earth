@@ -95,6 +95,7 @@ local deleteQ = {}          -- object ids
 local loadedMaterials = false
 local anchorId = nil
 local far = {}              -- far buildings (server buildings.far_tile): key "a:tx_ty" -> { anchor, id, shape, pos, hidden }
+local farSeen = {}          -- far tile keys that arrived (with buildings or none): the skyline tiles' test
 local farQ = {}             -- keys of far tiles to make
 local lastError = nil
 local sinceChange = stopwatch.new()  -- ms since a tile arrived / went or a road was made / deleted
@@ -261,9 +262,41 @@ local function dropTile(key)
   end
   parked, walkQ, held, createQ = purge(parked), purge(walkQ), purge(held), purge(createQ)
   if t.props then require('beamngEarth/trees').dropKey((key:gsub(':', ':p', 1))) end
+  if t.props then require('beamngEarth/nightlights').dropKey(key) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
+  if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
+  if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
   tiles[key] = nil
+end
+
+-- A far tile's street lamps (server buildings.far_lamps: { {x, y, z}, ... }, the far and skyline tiles' streets past
+-- the road tiles; the user, 2026-10-27: "extend the street and window lights as far as the buildings render"): glow
+-- rows of trees.lua's lampglow group (drawn at night only) while the tile shows, one trees tile per 256 m square
+-- (its distance rings and caps; ranks hashed under the farthest ring's 0.2: every one shown, a cap thinning evenly).
+M.FAR_LAMP_GROUPS = { 'lampglow' }
+local function farLamps(key, f, on)
+  if on == (f.lampKeys ~= nil) then return end
+  local ok, trees = pcall(require, 'beamngEarth/trees')
+  if not ok then return end
+  if not on then
+    for _, k in ipairs(f.lampKeys) do trees.dropKey(k) end
+    f.lampKeys = nil
+    return
+  end
+  local by, tag = {}, 'FL' .. tostring(key):gsub('[^%w]', '') .. '|'
+  for i, p in ipairs(f.lamps) do
+    if type(p) == 'table' and p[1] and p[2] and p[3] then
+      local k = tag .. math.floor(p[1] / 256) .. '_' .. math.floor(p[2] / 256)
+      by[k] = by[k] or {}
+      by[k][#by[k] + 1] = { 0, p[1], p[2], p[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
+    end
+  end
+  f.lampKeys = {}
+  for k, rows in pairs(by) do
+    trees.onRows(f.anchor, k, rows, M.FAR_LAMP_GROUPS)
+    f.lampKeys[#f.lampKeys + 1] = f.anchor .. ':' .. k
+  end
 end
 
 -- Every road not of anchor aid goes (a new anchor: the server re-sends its tiles).
@@ -275,10 +308,14 @@ local function switchAnchor(aid)
   end
   for key, f in pairs(far) do
     if f.anchor ~= aid and not f.ghost then
+      farLamps(key, f, false)
       if f.id then deleteQ[#deleteQ + 1] = f.id end
       slotDrop(f.slot)
       far[key] = nil
     end
+  end
+  for key in pairs(farSeen) do
+    if string.sub(key, 1, #tostring(aid) + 1) ~= tostring(aid) .. ':' then farSeen[key] = nil end
   end
   local keep = {}
   for _, q in ipairs(createQ) do if tiles[q.key] then keep[#keep + 1] = q end end
@@ -435,6 +472,7 @@ function M.onTile(msg, currentAnchor)
   end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     require('beamngEarth/trees').onRows(msg.anchorId, 'p' .. tostring(msg.key), data.props.items, data.props.groups)
+    require('beamngEarth/nightlights').onRows(key, data.props.items, data.props.groups)   -- (the lamps' light)
     tiles[key].props = true
   end
   if type(data.park) == 'table' and data.park[1] then      -- curbside parking spots (parking.lua)
@@ -447,6 +485,14 @@ function M.onTile(msg, currentAnchor)
   if type(data.fuel) == 'table' and data.fuel[1] then      -- gas stations: pumps, refuel areas (gasstations.lua)
     require('beamngEarth/gasstations').onRows(msg.anchorId, key, data.fuel)
     tiles[key].fuel = true
+  end
+  if type(data.wells) == 'table' and data.wells[1] then    -- oil wells' pump jacks (pumpjacks.lua)
+    require('beamngEarth/pumpjacks').onRows(key, data.wells)
+    tiles[key].wells = true
+  end
+  if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
+    require('beamngEarth/ambience').onSpaces(key, data.sound)
+    tiles[key].sound = true
   end
   if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
     walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
@@ -474,22 +520,36 @@ function M.onTile(msg, currentAnchor)
 end
 
 -- Server message `bldfar_tile` {anchorId, key, path, n}: a far tile's buildings (render-only, the lite mesh);
--- shown only while the road tile of the same square has no building mesh of its own.
-function M.onFarTile(msg, currentAnchor)
+-- shown only while the road tile of the same square has no building mesh of its own. `bldsky_tile` the same for a
+-- skyline tile (server buildings.skyline_tile: SKY_UNIT x SKY_UNIT road tiles, key "ux_uy"), shown only while not all
+-- of its squares' far tiles are here (they come as whole groups: no hole while they arrive, none left over after).
+M.SKY_UNIT = 4
+-- `brfar_tile` (kind 'B'): a far bridge tile's decks (server buildings.far_bridge_tile), shown only while the road
+-- tile of the same square has no deck or road mesh of its own.
+function M.onFarTile(msg, currentAnchor, kind)
+  if kind == true then kind = 'S' end
+  local sky = kind == 'S'
   if not M.enabled then return false end
   switchAnchor(currentAnchor)
   if msg.anchorId ~= currentAnchor then return false end
   local ok, data = true, msg.data              -- (in the message, else the file: as onTile)
   if type(data) ~= 'table' then ok, data = pcall(jsonDecode, readFile(msg.path) or '') end
   if not ok or type(data) ~= 'table' then lastError = 'unreadable far building tile ' .. tostring(msg.path); return false end
-  local key = tileKey(msg.anchorId, msg.key)
+  local key = tileKey(msg.anchorId, (kind or '') .. msg.key)
+  if not kind then farSeen[key] = true end
   local old = far[key]
+  if old then farLamps(key, old, false) end
   if old and old.id then deleteQ[#deleteQ + 1] = old.id end
   if old then slotDrop(old.slot) end
   far[key] = nil
   local sl = msgSlot(msg, 'shape')
   if data.shape and type(data.pos) == 'table' then
-    far[key] = { anchor = msg.anchorId, shape = sl and sl.path or data.shape, pos = data.pos, slot = sl }
+    local ux, uy = nil, nil
+    if sky then ux, uy = string.match(tostring(msg.key), '^(-?%d+)_(-?%d+)$') end
+    far[key] = { anchor = msg.anchorId, shape = sl and sl.path or data.shape, pos = data.pos, slot = sl,
+                 sky = sky and { tonumber(ux), tonumber(uy) } or nil,
+                 deckOf = kind == 'B' and tileKey(msg.anchorId, msg.key) or nil,
+                 lamps = type(data.lamps) == 'table' and #data.lamps > 0 and data.lamps or nil }
     farQ[#farQ + 1] = key
   else
     slotDrop(sl)
@@ -497,27 +557,50 @@ function M.onFarTile(msg, currentAnchor)
   return true
 end
 
--- Server message `bldfar_drop` {anchorId, key}.
-function M.onFarDrop(msg)
-  local key = tileKey(msg.anchorId, msg.key)
+-- Server message `bldfar_drop` {anchorId, key} (`bldsky_drop` with sky).
+function M.onFarDrop(msg, kind)
+  if kind == true then kind = 'S' end
+  local key = tileKey(msg.anchorId, (kind or '') .. msg.key)
+  if not kind then farSeen[key] = nil end
   local f = far[key]
   if f and f.ghost then return end
+  if f then farLamps(key, f, false) end
   if f and f.id then deleteQ[#deleteQ + 1] = f.id end
   if f then slotDrop(f.slot) end
   far[key] = nil
 end
 
 -- A far tile is hidden while its square's road tile shows buildings (they are the same, colliding).
+-- Pure: are all the far tiles of skyline square (ux, uy) of anchor aid here (seen: key -> true)?
+function M.skyCovered(seen, aid, ux, uy)
+  local n = M.SKY_UNIT
+  for i = 0, n - 1 do
+    for j = 0, n - 1 do
+      if not seen[tileKey(aid, (ux * n + i) .. '_' .. (uy * n + j))] then return false end
+    end
+  end
+  return true
+end
+
 local function updateFar(gov)
   for key, f in pairs(far) do
     if f.id then
-      local hide = tiles[key] ~= nil and tiles[key].bld ~= nil
+      local hide
+      if f.sky then
+        hide = M.skyCovered(farSeen, f.anchor, f.sky[1], f.sky[2])
+      elseif f.deckOf then
+        local t = tiles[f.deckOf]
+        hide = t ~= nil and (t.deck ~= nil or t.road ~= nil)
+      else
+        hide = tiles[key] ~= nil and tiles[key].bld ~= nil
+      end
       if hide ~= (f.hidden or false) then
         local o = scenetree.findObjectById(f.id)
         if o then o:setHidden(hide) end
         f.hidden = hide
       end
     end
+    if f.lamps then farLamps(key, f, f.id ~= nil and not f.hidden) end
   end
   while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
     local key = table.remove(farQ, 1)
@@ -661,6 +744,7 @@ local function releaseGhosts(player)
   for key, f in pairs(far) do
     if f.ghost then
       if all then
+        farLamps(key, f, false)
         if f.id then deleteQ[#deleteQ + 1] = f.id end
         slotDrop(f.slot)
         far[key] = nil
@@ -786,6 +870,11 @@ end
 -- the last reloadCollision, is removed again before it, and made once the car is clear.
 M.PLAYER_R = 3.0    -- m around the player's position (half a car's length, and some)
 M.PLAYER_DZ = 2.5   -- m above / below
+-- a sidewalk's boxes already reach past its slab by about 1 m (server roads.collider_boxes: half its width + 0.5 m
+-- + COLLIDER_MARGIN_M): only the car over the sidewalk itself holds it. With PLAYER_R a car anywhere within ~4 m of a
+-- curb held the whole tile's sidewalk collision (one mesh a tile), and a tile made again while the car drove its
+-- streets had no solid sidewalks at all (the user, 2026-10-27: "sidewalks are missing collision", Fells Point)
+M.WALK_PLAYER_R = 0.0
 M.DECK_BOX_BELOW_M = 2.2    -- a deck box's floor is this far under its lowest surface (server roads.collider_boxes:
                             -- roadmesh.DECK_DEPTH 1.2 + 1.0)
 M.DECK_ON_M = 0.2           -- the car's position this far under that surface or less: on the deck (not held)
@@ -805,7 +894,7 @@ playerIn = function(boxes, what)
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   if not veh then return false end
   local p = veh:getPosition()
-  local r, dz = M.PLAYER_R, M.PLAYER_DZ
+  local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
       if what == 'deck' then

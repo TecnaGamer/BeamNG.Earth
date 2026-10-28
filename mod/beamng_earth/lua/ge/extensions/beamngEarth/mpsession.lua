@@ -18,16 +18,18 @@
 -- our world server serves its group (the "share" message, on the port the plugin's bngeConfig names: its port and code
 -- go out in our poses); the plugin sends
 -- each player the others on its anchor (bngePeers), handed to the world server ("peers"), which splits the far tiles
--- among them (server/peerwork.py).
+-- among them (server/peerwork.py). Commented out below (2026-10-27; off since 2026-10-23, the user: not coming back for
+-- a while): each player builds their own world; the cars still show in the right place (mpanchor converts positions).
 -- BeamMP's files are not changed: its client events, its own functions, and mpanchor's wrap of positionGE.handle.
 local M = {}
 
 M.PROTO = 2                 -- as the plugin's G.PROTO
--- Shared generation (below) on? Off for now (the user, 2026-10-23: "disable the shared gen. think is causing problems"):
--- no group service (no "share", so no port in our poses and no bngePeers for us), no converging onto the others'
--- anchor, no landing on it after a teleport. Each player builds their own world; the cars still show in the right
--- place (mpanchor converts positions between anchors).
-M.SHARE_GEN = false
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- -- Shared generation (below) on? Off for now (the user, 2026-10-23: "disable the shared gen. think is causing problems"):
+-- -- no group service (no "share", so no port in our poses and no bngePeers for us), no converging onto the others'
+-- -- anchor, no landing on it after a teleport. Each player builds their own world; the cars still show in the right
+-- -- place (mpanchor converts positions between anchors).
+-- M.SHARE_GEN = false
 M.POSE_S = 2
 M.HIDE_S = 0.5
 -- A car switched off here (far, or its owner's anchor unknown) comes back on only over ground (terrainpatch.groundReady
@@ -49,11 +51,12 @@ M.DAMAGE_SETTLE_S = 2
 M.DAMAGE_NEAR_M = 2000      -- a player this near sees our cars' damage (sendDamage)
 M.STATUS_S = 5              -- the session's state to the log and STATUS_FILE this often
 M.STATUS_FILE = '/temp/beamngEarth/mpsession_status.json'
-M.CONFIG_WAIT_S = 10        -- the server's settings waited for this long before sharing without them (an older plugin
-                            -- sends none)
-M.ADOPT_M = 7500            -- another player's anchor this near is ours to share (half the rebase distance: no loop)
-M.CONVERGE_S = 5            -- the anchor checked this often (converge)
-M.SETTLE_S = 10             -- ... and not within this of our own anchor's last change
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- M.CONFIG_WAIT_S = 10        -- the server's settings waited for this long before sharing without them (an older plugin
+--                             -- sends none)
+-- M.ADOPT_M = 7500            -- another player's anchor this near is ours to share (half the rebase distance: no loop)
+-- M.CONVERGE_S = 5            -- the anchor checked this often (converge)
+-- M.SETTLE_S = 10             -- ... and not within this of our own anchor's last change
 
 local handlers = false
 local anchors = {}          -- tostring(server player id) -> { aLat, aLon, lat, lon } (bngeAnchors)
@@ -66,12 +69,13 @@ local wentTo = false        -- the session's one bngeGoTo done
 local camPlaced = false     -- the free camera put on the ground once (BeamMP joins without a car)
 local lastPlayers = -1      -- (the log: the player count as last logged)
 local stats = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }
-local share = nil           -- { port, code } of our world server's group service (onShare); false: asked
-local config = nil          -- the server's settings (bngeConfig { sharePort }), nil until they come
-local configWait = 0        -- s waited for them
-local convergeIn = 0
-local anchorSince = 0       -- seconds our anchor has been the same (converge's settle)
-local lastAnchorKey = nil
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- local share = nil           -- { port, code } of our world server's group service (onShare); false: asked
+-- local config = nil          -- the server's settings (bngeConfig { sharePort }), nil until they come
+-- local configWait = 0        -- s waited for them
+-- local convergeIn = 0
+-- local anchorSince = 0       -- seconds our anchor has been the same (converge's settle)
+-- local lastAnchorKey = nil
 local statusIn = 5
 local members = {}          -- tostring(pid) -> true: the other players within DAMAGE_NEAR_M at the last check
 local sentDamage = {}       -- own game vehicle id -> the damage its state was last sent at
@@ -79,27 +83,28 @@ local damageSince = {}      -- own game vehicle id -> seconds its damage has dif
 
 function M.key(aLat, aLon) return string.format('%.6f,%.6f', aLat, aLon) end
 
--- Pure: the anchor a player at (lat, lon) should share: of the players' anchors (bngeAnchors' table) within ADOPT_M of
--- it, the one the most of them use, ties to the lowest key; skip: a player id left out (ourselves, for a teleport).
--- -> aLat, aLon, players on it (nil: none in reach)
-function M.pickAnchor(list, lat, lon, skip)
-  local count, ll = {}, {}
-  for pid, a in pairs(list) do
-    local aLat, aLon = type(a) == 'table' and tonumber(a.aLat), type(a) == 'table' and tonumber(a.aLon)
-    if pid ~= skip and aLat and aLon then
-      local k = M.key(aLat, aLon)
-      count[k], ll[k] = (count[k] or 0) + 1, { aLat, aLon }
-    end
-  end
-  local best, bestN = nil, 0
-  for k, n in pairs(count) do
-    if M.dist(lat, lon, ll[k][1], ll[k][2]) <= M.ADOPT_M and (n > bestN or (n == bestN and k < best)) then
-      best, bestN = k, n
-    end
-  end
-  if best then return ll[best][1], ll[best][2], bestN end
-  return nil
-end
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- -- Pure: the anchor a player at (lat, lon) should share: of the players' anchors (bngeAnchors' table) within ADOPT_M of
+-- -- it, the one the most of them use, ties to the lowest key; skip: a player id left out (ourselves, for a teleport).
+-- -- -> aLat, aLon, players on it (nil: none in reach)
+-- function M.pickAnchor(list, lat, lon, skip)
+--   local count, ll = {}, {}
+--   for pid, a in pairs(list) do
+--     local aLat, aLon = type(a) == 'table' and tonumber(a.aLat), type(a) == 'table' and tonumber(a.aLon)
+--     if pid ~= skip and aLat and aLon then
+--       local k = M.key(aLat, aLon)
+--       count[k], ll[k] = (count[k] or 0) + 1, { aLat, aLon }
+--     end
+--   end
+--   local best, bestN = nil, 0
+--   for k, n in pairs(count) do
+--     if M.dist(lat, lon, ll[k][1], ll[k][2]) <= M.ADOPT_M and (n > bestN or (n == bestN and k < best)) then
+--       best, bestN = k, n
+--     end
+--   end
+--   if best then return ll[best][1], ll[best][2], bestN end
+--   return nil
+-- end
 
 -- Pure: the remote vehicles to deactivate: owners { game vehicle id -> owner's server player id }, known (owner's id
 -- -> true when its anchor is known). -> { game vehicle id -> true }
@@ -421,25 +426,22 @@ local function onAnchors(data)
   end
 end
 
--- core.teleportTo: the anchor of other players near (lat, lon) to teleport onto (aLat, aLon), nil if none.
-function M.adoptAnchor(lat, lon)
-  if not M.SHARE_GEN or not next(anchors) then return nil end         -- (outside a session: empty)
-  return M.pickAnchor(anchors, lat, lon, myPid())
-end
+-- core.teleportTo: the anchor of other players near (lat, lon) to teleport onto (aLat, aLon), nil if none: none while
+-- shared world building is commented out (its pickAnchor above).
+function M.adoptAnchor(lat, lon) return nil end
 
--- Our world server's group service is up (core: the "share" answer): { port, code }.
-function M.onShare(msg)
-  local port = tonumber(msg.port)
-  share = port and { port = port, code = tostring(msg.code or ''), weight = tonumber(msg.weight) } or false
-  log('I', 'beamngEarth', 'BeamMP: sharing generation on port ' .. tostring(port))
-end
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- -- Our world server's group service is up (core: the "share" answer): { port, code }.
+-- function M.onShare(msg)
+--   local port = tonumber(msg.port)
+--   share = port and { port = port, code = tostring(msg.code or ''), weight = tonumber(msg.weight) } or false
+--   log('I', 'beamngEarth', 'BeamMP: sharing generation on port ' .. tostring(port))
+-- end
 
--- The server's settings (the plugin's bngeConfig, at our first pose): the port our world server shares on.
+-- The server's settings (the plugin's bngeConfig, at our first pose): its time and weather.
 local function onConfig(data)
   local ok, d = pcall(jsonDecode, data)
   if not ok or type(d) ~= 'table' then return end
-  config = d
-  log('I', 'beamngEarth', 'BeamMP: the server\'s sharing port ' .. tostring(d.sharePort))
   M.applyServerSky(d)
 end
 
@@ -459,45 +461,46 @@ function M.applyServerSky(d)
   end
 end
 
--- Pure: the port our world server shares on: the BeamMP server's (bngeConfig) when it is a usable one, else nil.
-function M.sharePort(cfg)
-  local port = cfg and tonumber(cfg.sharePort)
-  if port and (port ~= math.floor(port) or port < 1024 or port > 65535) then port = nil end
-  return port
-end
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- -- Pure: the port our world server shares on: the BeamMP server's (bngeConfig) when it is a usable one, else nil.
+-- function M.sharePort(cfg)
+--   local port = cfg and tonumber(cfg.sharePort)
+--   if port and (port ~= math.floor(port) or port < 1024 or port > 65535) then port = nil end
+--   return port
+-- end
 
-local function onPeers(data)
-  if not M.SHARE_GEN then return end
-  local ok, d = pcall(jsonDecode, data)
-  if not ok or type(d) ~= 'table' or type(d.members) ~= 'table' then return end
-  stats.peers = #d.members
-  require('beamngEarth/net').send({ type = 'peers', me = tostring(d.me), members = d.members })
-  log('I', 'beamngEarth', string.format('BeamMP: %d player(s) share our anchor\'s generation', #d.members))
-end
+-- local function onPeers(data)
+--   if not M.SHARE_GEN then return end
+--   local ok, d = pcall(jsonDecode, data)
+--   if not ok or type(d) ~= 'table' or type(d.members) ~= 'table' then return end
+--   stats.peers = #d.members
+--   require('beamngEarth/net').send({ type = 'peers', me = tostring(d.me), members = d.members })
+--   log('I', 'beamngEarth', string.format('BeamMP: %d player(s) share our anchor\'s generation', #d.members))
+-- end
 
--- Onto the anchor of the players near us when it is not ours (pickAnchor, everyone's anchors with ours): a smooth
--- rebase (core.rebaseTo). Every player applies the same rule, so a group ends on one anchor; a car ahead that
--- rebased takes the ones following onto its new anchor.
-local function converge(dt, anchor, lat, lon)
-  if not M.SHARE_GEN then return end
-  local k = M.key(anchor.lat, anchor.lon)
-  if k ~= lastAnchorKey then lastAnchorKey, anchorSince = k, 0 end
-  anchorSince = anchorSince + (dt or 0)
-  convergeIn = convergeIn - (dt or 0)
-  if convergeIn > 0 or anchorSince < M.SETTLE_S then return end
-  convergeIn = M.CONVERGE_S
-  local mine = myPid()
-  if not mine or not anchors[mine] then return end   -- (ours not heard back yet: the counts would be off)
-  local aLat, aLon = M.pickAnchor(anchors, lat, lon)
-  if not aLat or M.key(aLat, aLon) == k then return end
-  local c = core()
-  local ok, why = false, 'no core'
-  if c and c.rebaseTo then ok, why = c.rebaseTo(aLat, aLon) end
-  if ok then
-    stats.converged = stats.converged + 1
-    log('I', 'beamngEarth', string.format('BeamMP: onto the shared anchor %s', M.key(aLat, aLon)))
-  end
-end
+-- -- Onto the anchor of the players near us when it is not ours (pickAnchor, everyone's anchors with ours): a smooth
+-- -- rebase (core.rebaseTo). Every player applies the same rule, so a group ends on one anchor; a car ahead that
+-- -- rebased takes the ones following onto its new anchor.
+-- local function converge(dt, anchor, lat, lon)
+--   if not M.SHARE_GEN then return end
+--   local k = M.key(anchor.lat, anchor.lon)
+--   if k ~= lastAnchorKey then lastAnchorKey, anchorSince = k, 0 end
+--   anchorSince = anchorSince + (dt or 0)
+--   convergeIn = convergeIn - (dt or 0)
+--   if convergeIn > 0 or anchorSince < M.SETTLE_S then return end
+--   convergeIn = M.CONVERGE_S
+--   local mine = myPid()
+--   if not mine or not anchors[mine] then return end   -- (ours not heard back yet: the counts would be off)
+--   local aLat, aLon = M.pickAnchor(anchors, lat, lon)
+--   if not aLat or M.key(aLat, aLon) == k then return end
+--   local c = core()
+--   local ok, why = false, 'no core'
+--   if c and c.rebaseTo then ok, why = c.rebaseTo(aLat, aLon) end
+--   if ok then
+--     stats.converged = stats.converged + 1
+--     log('I', 'beamngEarth', string.format('BeamMP: onto the shared anchor %s', M.key(aLat, aLon)))
+--   end
+-- end
 
 local function onGoTo(data)
   local ok, d = pcall(jsonDecode, data)
@@ -553,9 +556,14 @@ end
 M.placeCamera = placeCamera     -- (tests)
 
 -- BeamMP's join done (core.lua onBeamMPPostJoin): the first pose asks the plugin where the others are.
+-- (and where to get help: the BeamMP team, 2026-10-27, players kept asking them about BeamNG.Earth)
+M.SUPPORT = 'BeamNG.Earth on BeamMP: for help join the TGForever Discord, https://discord.gg/tgf. BeamNG.Earth is '
+  .. 'not like a normal BeamNG mod: if something is not working, it is almost certainly a BeamNG.Earth problem, not a '
+  .. 'BeamMP one, so please do not contact the BeamMP team or open BeamMP support tickets about it.'
 function M.onPostJoin()
   joined, wentTo, camPlaced, goTo = true, false, false, nil
   anchors = {}
+  log('I', 'beamngEarth', M.SUPPORT)
 end
 
 -- Is (x, y) m or more inside our terrain block (nil: no block known)?
@@ -819,7 +827,7 @@ function M.update(dt, anchor, player)
   if not handlers and rawget(_G, 'AddEventHandler') then
     AddEventHandler('bngeAnchors', onAnchors, 'beamngEarth')
     AddEventHandler('bngeGoTo', onGoTo, 'beamngEarth')
-    AddEventHandler('bngePeers', onPeers, 'beamngEarth')
+    -- AddEventHandler('bngePeers', onPeers, 'beamngEarth')     -- (shared world building, commented out)
     AddEventHandler('bngeConfig', onConfig, 'beamngEarth')
     handlers = true
   end
@@ -912,11 +920,12 @@ function M.update(dt, anchor, player)
       anchors = anchors, stats = stats, hidden = hidden, remote = remote, own = own, player = player and { x = player.x,
       y = player.y, z = player.z, camera = player.camera } or nil }, true)
   end
-  configWait = configWait + (dt or 0)
-  if share == nil and M.SHARE_GEN and (config or configWait >= M.CONFIG_WAIT_S) then
-    share = false               -- our world server's group service, asked once a session (its answer: onShare), on
-    require('beamngEarth/net').send({ type = 'share', port = M.sharePort(config) })     -- the server's port
-  end
+  -- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+  -- configWait = configWait + (dt or 0)
+  -- if share == nil and M.SHARE_GEN and (config or configWait >= M.CONFIG_WAIT_S) then
+  --   share = false               -- our world server's group service, asked once a session (its answer: onShare), on
+  --   require('beamngEarth/net').send({ type = 'share', port = M.sharePort(config) })     -- the server's port
+  -- end
   if not anchor then return end
   placeCamera(player, M.key(anchor.lat, anchor.lon))
   anchorRef = anchor
@@ -933,13 +942,13 @@ function M.update(dt, anchor, player)
       if ok and tonumber(nx) and tonumber(ny) then h = (h - math.deg(math.atan2(nx, ny)) + 360) % 360 end
     end
     TriggerServerEvent('bngePose', jsonEncode({ v = M.PROTO, aLat = anchor.lat, aLon = anchor.lon, lat = lat,
-      lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
-      sp = share and share.port or nil, sc = share and share.code or nil, sw = share and share.weight or nil }))
+      lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil }))   -- (sp / sc / sw: shared world
+      -- building's port, code and weight, commented out)
     stats.poses = stats.poses + 1
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
     joined = false
   end
-  converge(dt, anchor, lat, lon)
+  -- converge(dt, anchor, lat, lon)     -- (shared world building, commented out)
   hideIn = hideIn - (dt or 0)
   if hideIn > 0 then return end
   hideIn = M.HIDE_S
@@ -1102,7 +1111,7 @@ function M.reset()
   deactivated, anchors, poseIn, hideIn, joined, wentTo, camPlaced, lastPlayers = {}, {}, 0, 0, false, false, false, -1
   waitGround = {}
   members, sentDamage, damageSince, restoredAt, restores = {}, {}, {}, {}, {}
-  share, config, configWait, convergeIn, anchorSince, lastAnchorKey = nil, nil, 0, 0, 0, nil
+  -- share, config, configWait, convergeIn, anchorSince, lastAnchorKey = nil, nil, 0, 0, 0, nil   -- (shared world building)
   stats, statusIn = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }, M.STATUS_S
   require('beamngEarth/mpanchor').reset()
 end

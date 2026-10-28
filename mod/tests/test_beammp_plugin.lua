@@ -9,6 +9,12 @@ local M_PER_DEG = 111194.9     -- (G.dist's sphere)
 
 T.check(math.abs(G.dist(0, 0, 1000 / M_PER_DEG, 0) - 1000) < 1, 'dist: 1 km north')
 
+-- the startup notice: the Discord for help, not BeamMP's developers; why the server is hidden from other players
+local notice = table.concat(G.supportNotice(), '\n')
+T.check(notice:find('discord.gg/tgf', 1, true) and notice:find('do NOT contact the BeamMP team', 1, true)
+  and notice:find('hidden from players who do not run BeamNG.Earth', 1, true), 'startup notice: ' .. notice)
+for _, line in ipairs(G.supportNotice()) do T.check(#line <= 80, 'notice lines fit a console: ' .. line) end
+
 -- the first player: alone, nowhere to go; its anchor new: sent at once
 G.players, G.clock = {}, 0
 local place, moved = G.onPose(1, { v = G.PROTO, aLat = 36, aLon = -118, lat = 36, lon = -118, joined = true }, 'a')
@@ -34,32 +40,35 @@ T.check(G.anchors(G.live())['1'].h == 90.5, 'anchors: the heading (the map arrow
 G.onPose(1, { v = G.PROTO, aLat = 36.2, aLon = -118, lat = 36.2, lon = -118, h = 'x' }, 'a')
 T.check(G.anchors(G.live())['1'].h == nil, 'anchors: a bad heading left out')
 
--- config: the sharing port set at the top of main.lua, a bad one left out (each player's own default)
-T.check(G.config().sharePort == 47621, 'config: the default sharing port')
-G.SHARE_PORT = 50000
-T.check(G.config().sharePort == 50000, 'config: an edited port')
-for _, bad in ipairs({ 80, 70000, 'x' }) do
-  G.SHARE_PORT = bad
-  T.check(G.config().sharePort == nil, 'config: a bad port left out: ' .. tostring(bad))
-end
-G.SHARE_PORT = 47621
+-- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+-- -- config: the sharing port set at the top of main.lua, a bad one left out (each player's own default)
+-- T.check(G.config().sharePort == 47621, 'config: the default sharing port')
+-- G.SHARE_PORT = 50000
+-- T.check(G.config().sharePort == 50000, 'config: an edited port')
+-- for _, bad in ipairs({ 80, 70000, 'x' }) do
+--   G.SHARE_PORT = bad
+--   T.check(G.config().sharePort == nil, 'config: a bad port left out: ' .. tostring(bad))
+-- end
+-- G.SHARE_PORT = 47621
 
--- peers: the sharing players on one anchor, the same sorted list for each; a player on another anchor alone
+-- -- peers: the sharing players on one anchor, the same sorted list for each; a player on another anchor alone
+-- G.players = {}
+-- G.onPose(1, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40, lon = -111.9, sp = 47621, sc = 'c1' }, 'u1')
+-- G.onPose(2, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40.01, lon = -111.9, sp = 47621, sc = 'c1' }, 'u2')
+-- G.onPose(3, { v = G.PROTO, aLat = 45.46, aLon = 9.19, lat = 45.46, lon = 9.19, sp = 47621, sc = 'c1' }, 'it')
+-- G.onPose(4, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40, lon = -111.9 }, 'noshare')
+-- G.onPose(5, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40, lon = -111.9, sp = 99999, sc = 'c1' }, 'badport')
+-- for pid, ip in pairs({ [1] = '10.0.0.1', [2] = '10.0.0.2', [3] = '10.0.0.3', [4] = '10.0.0.4', [5] = '10.0.0.5' }) do
+--   G.players[pid].ip = ip
+-- end
+-- local pe = G.peers(G.live())
+-- T.check(pe[1] and #pe[1].members == 2 and pe[1].members[1].id == '1' and pe[1].members[2].host == '10.0.0.2'
+--   and pe[2] and G.peersKey(pe[1]) == G.peersKey(pe[2]), 'peers: Utah\'s two share one list')
+-- T.check(pe[3] and #pe[3].members == 1, 'peers: Italy alone')
+-- T.check(pe[4] == nil and pe[5] == nil, 'peers: no sharing port (or a bad one): left out')
+-- config: no sharing port any more (shared world building commented out), the time and weather only
+T.check(G.config().sharePort == nil and G.SHARE_PORT == nil, 'config: no sharing port')
 G.players = {}
-G.onPose(1, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40, lon = -111.9, sp = 47621, sc = 'c1' }, 'u1')
-G.onPose(2, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40.01, lon = -111.9, sp = 47621, sc = 'c1' }, 'u2')
-G.onPose(3, { v = G.PROTO, aLat = 45.46, aLon = 9.19, lat = 45.46, lon = 9.19, sp = 47621, sc = 'c1' }, 'it')
-G.onPose(4, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40, lon = -111.9 }, 'noshare')
-G.onPose(5, { v = G.PROTO, aLat = 40, aLon = -111.9, lat = 40, lon = -111.9, sp = 99999, sc = 'c1' }, 'badport')
-for pid, ip in pairs({ [1] = '10.0.0.1', [2] = '10.0.0.2', [3] = '10.0.0.3', [4] = '10.0.0.4', [5] = '10.0.0.5' }) do
-  G.players[pid].ip = ip
-end
-local pe = G.peers(G.live())
-T.check(pe[1] and #pe[1].members == 2 and pe[1].members[1].id == '1' and pe[1].members[2].host == '10.0.0.2'
-  and pe[2] and G.peersKey(pe[1]) == G.peersKey(pe[2]), 'peers: Utah\'s two share one list')
-T.check(pe[3] and #pe[3].members == 1, 'peers: Italy alone')
-T.check(pe[4] == nil and pe[5] == nil, 'peers: no sharing port (or a bad one): left out')
-G.players, G.sentPeers = {}, {}
 
 -- bad input ignored; stale poses and players who left out
 T.check(G.onPose(4, { v = 1, aLat = 1, aLon = 1, lat = 1, lon = 1 }, 'd') == nil and G.players[4] == nil,

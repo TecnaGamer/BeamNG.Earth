@@ -168,6 +168,35 @@ class FollowTest(unittest.TestCase):
         flat = Q[:, 0] < 7.9
         self.assertGreater(Q[flat, 2].max(), 0.25, "the slope before it followed")
 
+
+class TrimOverlapsTest(unittest.TestCase):
+    """A ramp leaving its mainline lower, their decks overlapping in plan: each ends halfway between their centre
+    lines (US-101's exit 1E over the Los Angeles River: the mainline's side stood in the ramp's lanes)."""
+
+    def ribbon(self, y, half, z, fid):
+        x = np.arange(0.0, 50.0, 5.0)
+        mid = np.c_[x, np.full(len(x), y)]
+        left, right = mid + [0, half], mid - [0, half]
+        return ((left, right, x / 10, "m", "base", np.full(len(x), z)), {"fid": fid})
+
+    def test_halfway_between_decks_at_another_height(self):
+        main = self.ribbon(10.0, 9.4, 95.0, "main")
+        ramp = self.ribbon(0.0, 5.8, 92.6, "ramp")
+        (m, _), (r, _) = roadmesh.trim_overlaps([main, ramp])
+        np.testing.assert_allclose(m[1][:, 1], 5.0 + roadmesh.TRIM_GAP_M)     # the mainline's right edge
+        np.testing.assert_allclose(r[0][:, 1], 5.0 - roadmesh.TRIM_GAP_M)     # the ramp's left edge
+        np.testing.assert_allclose(m[0][:, 1], 19.4)                            # the far edges as they were
+        np.testing.assert_allclose(r[1][:, 1], -5.8)
+
+    def test_one_surface_or_stacked_kept(self):
+        for dz in (0.1, 6.0):            # (one surface at a split; an upper roadway over a lower one)
+            main = self.ribbon(10.0, 9.4, 95.0, "main")
+            ramp = self.ribbon(0.0, 5.8, 95.0 - dz, "ramp")
+            (m, _), (r, _) = roadmesh.trim_overlaps([main, ramp])
+            np.testing.assert_allclose(m[1], main[0][1])
+            np.testing.assert_allclose(r[0], ramp[0][0])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -186,7 +215,7 @@ class BridgeTest(unittest.TestCase):
         deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
                 "n": [[0, 0, 20.0], [50, 0, 22.0]]}
         P, T, UV, mats, M = roadmesh.deck([deck], (0.0, 0.0, 0.0))
-        self.assertEqual(mats, [roadmesh.DECK_SIDE], "an opaque slab")
+        self.assertEqual(mats, [roadmesh.DECK_SIDE, roadmesh.DECK_TOP], "an opaque slab, a plain asphalt top")
         n = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])
         n /= np.linalg.norm(n, axis=1)[:, None]
         flat = np.abs(n[:, 2]) > 0.5

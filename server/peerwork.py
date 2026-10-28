@@ -29,6 +29,9 @@ world server (GroupHelper, SHARE_PORT). A member asks the owner for every tile i
 when the owner fails. A player alone in its group owns everything. In a session (sharing on) every tile built is kept,
 alone too, and before building one it owns a member asks the others whether they have it ("cached": a player who
 arrives where another has been for a while gets that player's tiles instead of building half of them again).
+Groups are commented out (2026-10-27; off since 2026-10-23, the user: not coming back for a while): GroupHelper here,
+earthd's "share" / "peers" messages and share_port, the plugin's sharing port and mpsession's side. set_group, serve
+and the group parts of SharedFarPool stay, unused; the helpers (--peers, BNGE_PEERS) work as before.
 """
 import argparse
 import hashlib
@@ -60,7 +63,7 @@ JOBS = ("far_geometry", "far_tile")
 CONNECT_S = 3.0
 JOB_TIMEOUT_S = 120.0
 HELPER_RETRY_S = 60.0
-SHARE_PORT = 47621              # a player's world server serving its group (GroupHelper; earthd --share-port)
+# SHARE_PORT = 47621            # a player's world server serving its group (GroupHelper; shared world building, commented out)
 GROUP_CONNS = 8                 # connections to each group member: its tiles asked for at once
 CACHE_BYTES = 1 << 30           # ReplyCache's disk use at most
 MAX_SLOTS = 32                  # helper connections a requester keeps at most (its far threads: one per slot)
@@ -548,61 +551,62 @@ class Helper:
 
 
 # --- the requester -------------------------------------------------------------------------------------------------
-class GroupHelper:
-    """A player's world server serving its group (SharedFarPool.serve): started by the first BeamMP session (earthd's
-    "share" message), on SHARE_PORT or the next free port."""
+# (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+# class GroupHelper:
+#     """A player's world server serving its group (SharedFarPool.serve): started by the first BeamMP session (earthd's
+#     "share" message), on SHARE_PORT or the next free port."""
 
-    def __init__(self, pool, aid_for, out_dir):
-        self.pool, self.aid_for, self.out_dir = pool, aid_for, out_dir
-        os.makedirs(out_dir, exist_ok=True)
-        self.port = None
+#     def __init__(self, pool, aid_for, out_dir):
+#         self.pool, self.aid_for, self.out_dir = pool, aid_for, out_dir
+#         os.makedirs(out_dir, exist_ok=True)
+#         self.port = None
 
-    def handle(self, sock, addr):
-        try:
-            h, _ = recv_msg(sock)
-            mine = {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "workers": GROUP_CONNS}
-            if h.get("op") != "hello" or h.get("protocol") != PROTOCOL or h.get("code") != mine["code"]:
-                send_msg(sock, dict(mine, ok=False, error="a different BeamNG.Earth version"))
-                return
-            send_msg(sock, mine)
-            while True:
-                h, _ = recv_msg(sock)
-                try:
-                    head, blobs = self.pool.serve(h, self.aid_for, self.out_dir)
-                except Exception as e:
-                    send_msg(sock, {"ok": False, "error": f"{type(e).__name__}: {e}"[:500]})
-                    continue
-                send_msg(sock, head, blobs)
-        except (ConnectionError, OSError, ValueError) as e:
-            log.debug("group helper: %s: %s", addr, e)
-        finally:
-            try:
-                sock.close()
-            except OSError:
-                pass
+#     def handle(self, sock, addr):
+#         try:
+#             h, _ = recv_msg(sock)
+#             mine = {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "workers": GROUP_CONNS}
+#             if h.get("op") != "hello" or h.get("protocol") != PROTOCOL or h.get("code") != mine["code"]:
+#                 send_msg(sock, dict(mine, ok=False, error="a different BeamNG.Earth version"))
+#                 return
+#             send_msg(sock, mine)
+#             while True:
+#                 h, _ = recv_msg(sock)
+#                 try:
+#                     head, blobs = self.pool.serve(h, self.aid_for, self.out_dir)
+#                 except Exception as e:
+#                     send_msg(sock, {"ok": False, "error": f"{type(e).__name__}: {e}"[:500]})
+#                     continue
+#                 send_msg(sock, head, blobs)
+#         except (ConnectionError, OSError, ValueError) as e:
+#             log.debug("group helper: %s: %s", addr, e)
+#         finally:
+#             try:
+#                 sock.close()
+#             except OSError:
+#                 pass
 
-    def start(self, port=SHARE_PORT, tries=10):
-        """Listen (a thread); returns the port, or None when none of port .. port + tries - 1 is free."""
-        helper = self
+#     def start(self, port=SHARE_PORT, tries=10):
+#         """Listen (a thread); returns the port, or None when none of port .. port + tries - 1 is free."""
+#         helper = self
 
-        class H(socketserver.BaseRequestHandler):
-            def handle(self):
-                helper.handle(self.request, self.client_address)
+#         class H(socketserver.BaseRequestHandler):
+#             def handle(self):
+#                 helper.handle(self.request, self.client_address)
 
-        class S(socketserver.ThreadingTCPServer):
-            daemon_threads = True
-            allow_reuse_address = False
-        for p in range(port, port + tries):
-            try:
-                srv = S(("0.0.0.0", p), H)
-            except OSError:
-                continue
-            threading.Thread(target=srv.serve_forever, daemon=True, name="group-helper").start()
-            self.port = p = srv.server_address[1]           # (port 0: the one picked)
-            log.info("compute sharing: serving our group on port %d (code %s)", p, code_id())
-            return p
-        log.warning("compute sharing: no free port in %d..%d", port, port + tries - 1)
-        return None
+#         class S(socketserver.ThreadingTCPServer):
+#             daemon_threads = True
+#             allow_reuse_address = False
+#         for p in range(port, port + tries):
+#             try:
+#                 srv = S(("0.0.0.0", p), H)
+#             except OSError:
+#                 continue
+#             threading.Thread(target=srv.serve_forever, daemon=True, name="group-helper").start()
+#             self.port = p = srv.server_address[1]           # (port 0: the one picked)
+#             log.info("compute sharing: serving our group on port %d (code %s)", p, code_id())
+#             return p
+#         log.warning("compute sharing: no free port in %d..%d", port, port + tries - 1)
+#         return None
 
 
 class _Conn:

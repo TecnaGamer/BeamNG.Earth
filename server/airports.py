@@ -256,6 +256,7 @@ class Airport:
     elev_m: float | None
     country: str
     municipality: str
+    region: str = ""                # ISO 3166-2 (OurAirports iso_region, e.g. "US-CA"): furniture.lamp_region's state
 
 
 def _num(v):
@@ -545,7 +546,8 @@ class AirportDB:
                                       name=(a.get("name") or "").strip(), lat=lat, lon=lon,
                                       elev_m=e * FT if e is not None else None,
                                       country=(a.get("iso_country") or "").strip(),
-                                      municipality=(a.get("municipality") or "").strip())
+                                      municipality=(a.get("municipality") or "").strip(),
+                                      region=(a.get("iso_region") or "").strip())
         stats["airports"] = len(airports)
         rrows.sort(key=lambda r: _int(r.get("id")))
         count = Counter()
@@ -847,7 +849,7 @@ class Store:
     # The parsed snapshot, pickled next to its CSV files: the server's main process and every worker parsed the
     # 86k airports themselves, ~257 MB a process for ~50 MB kept (a Steam Deck, 2026-10-20). PARSED_V: raise it when
     # the classes change.
-    PARSED_V = 3
+    PARSED_V = 4
 
     def _parsed(self, d):
         import pickle

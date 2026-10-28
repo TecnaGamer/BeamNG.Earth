@@ -62,6 +62,21 @@ class SpecTest(unittest.TestCase):
         self.assertGreaterEqual(a.width, 4 * roads.LANE_W["secondary"], "four lanes wide")
         self.assertGreater(a.width, b.width, "wider than the class's guess")
 
+    def test_a_road_not_built_yet_is_not_drawn(self):
+        """GitHub #184: a trunk road under construction (OSM highway=construction, which Overture calls "unknown") was
+        drawn as a finished road; highway=proposed likewise. Any other highway value is drawn as before."""
+        f = tagged([[(0, 0), (200, 0)], [(0, 30), (200, 30)], [(0, 60), (200, 60)]], ["unknown"] * 3,
+                   ["w1@1", "w2@1", "w3@1"],
+                   {1: {"osm_highway": "construction"}, 2: {"osm_highway": "proposed"}, 3: {"lanes": 2}})
+        specs = roads.road_specs(f)
+        self.assertIsNone(specs[0])
+        self.assertIsNone(specs[1])
+        self.assertIsNotNone(specs[2])
+        self.assertTrue(roads.unbuilt(f, 0) and not roads.unbuilt(f, 2))
+        # a cell cached before the column existed: drawn as before
+        g = features([[(0, 0), (200, 0)]], ["unknown"])
+        self.assertIsNotNone(roads.road_specs(g)[0])
+
     def test_osm_width_is_the_width(self):
         f = tagged([[(0, 0), (200, 0)]], ["residential"], ["w1@1"], {1: {"width": 9.0, "lanes": 2}})
         self.assertAlmostEqual(roads.road_specs(f)[0].width, 9.0)

@@ -16,6 +16,7 @@ import threading
 import numpy as np
 
 import dem as demmod
+import geodesy
 import mapcells
 import runwaygeom
 import runwaymarks
@@ -27,6 +28,7 @@ MAX_CELLS = 64              # a box spanning more map-data cells (a far tile) as
 # Markings as road-tile chunks (roads.build_tile's format; the road mesh draws them like the lane lines)
 MARK_PIECE_M = 50.0         # strokes cut into pieces this long, each in the tile of its midpoint
 MARK_NODE_M = 10.0          # ... with a node this often (they follow the graded ground)
+RUNWAY_PAD_SHOULDER_M = 1.5    # m of paved shoulder painted each side of a runway (runway_pads)
 MARK_LOOK = {"white": {"m": "line_runway_white", "tl": 6.4, "p": 2},      # mod: levels/beamng_earth/art/runway
              "yellow": {"m": "line_runway_yellow", "tl": 6.4, "p": 2}}
 
@@ -37,6 +39,7 @@ class AirportGrader:
         self._plans = {}                # frozenset of runway ids -> [Plan]
         self._group_locks = {}          # frozenset of runway ids -> the lock its planning holds
         self._mark_cache = {}           # runway id -> its markings in lat/lon (_marks)
+        self._pad_cache = {}            # runway id -> its rectangle in lat/lon (runway_pads)
         self._lock = threading.Lock()
         self.stats = {"plans": 0, "graded_calls": 0}
 
@@ -137,6 +140,32 @@ class AirportGrader:
                         "n": [[round(float(x), 3), round(float(y), 3), round(float(z), 3)]
                               for x, y, z in zip(px, py, zs[i:i + m])]})
             i += m
+        return out
+
+    def runway_pads(self, lat, lon):
+        """[(lat (4,), lon (4,))]: the paved, open runways near the points (their map-data cells) as rectangles end to
+        end and RUNWAY_PAD_SHOULDER_M wider each side than the runway, painted in like the gas stations' forecourts
+        (surface.Surface.extra_pads: the ground's asphalt layer and the photo). Only the markings were drawn: where
+        the photo is soft or pale the runway looked unpaved (Tallinn, GitHub #337)."""
+        out = []
+        for g in self._groups(lat, lon):
+            for rw in g:
+                if not rw.paved or rw.closed or rw.surface == "water":
+                    continue
+                with self._lock:
+                    pad = self._pad_cache.get(rw.id)
+                if pad is None:
+                    geo = runwaygeom.geometry(rw)
+                    f = geodesy.EnuFrame(geo.lat_c, geo.lon_c, 0.0)
+                    hl, hw = geo.length / 2, geo.width / 2 + RUNWAY_PAD_SHOULDER_M
+                    ue, un = geo.ue, geo.un
+                    e = np.array([-hl * ue - hw * -un, hl * ue - hw * -un, hl * ue + hw * -un, -hl * ue + hw * -un])
+                    n = np.array([-hl * un - hw * ue, hl * un - hw * ue, hl * un + hw * ue, -hl * un + hw * ue])
+                    la, lo, _ = f.enu_to_geodetic(e, n, np.zeros(4))
+                    pad = (np.asarray(la, np.float64), np.asarray(lo, np.float64))
+                    with self._lock:
+                        self._pad_cache[rw.id] = pad
+                out.append(pad)
         return out
 
     def _marks(self, rw):

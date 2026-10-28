@@ -56,11 +56,15 @@ COLUMNS = {
     # for the segments Overture took from a relation (no way id: Samara's Novo-Sadovaya, "r3851280@53", drawn 10 m wide
     # instead of its 6 lanes, the user 2026-10-24): the way of the same name around them (join)
     "name": "name",
+    # a road not built yet (GitHub #184: a trunk road under construction, opening 2026-12-31, drawn as a finished road;
+    # Overture calls highway=construction "unknown"): only these two values, every other highway NULL
+    "osm_highway": "CASE WHEN highway IN ('construction', 'proposed') THEN highway END",
     "bx0": "bbox.xmin", "by0": "bbox.ymin", "bx1": "bbox.xmax", "by1": "bbox.ymax",
 }
 USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name"}
 FLOATS = ("lanes", "width", "maxspeed", "osm_layer")
-TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway")
+TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_highway")
+UNBUILT = ("construction", "proposed")      # osm_highway's values: not drawn (roads.unbuilt)
 NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the same-named way it takes the tags of
 
 
@@ -220,7 +224,8 @@ class OsmTags:
             # only the ways with a tag the roads use (and the raceways): join() treats a way without one as one not
             # here, and building a dict per way of every highway in the cell was most of this thread's CPU
             # (osmtags, 14 CPU-s of a Deck's teleport, 2026-10-23)
-            some = " OR ".join(f"{c} IS NOT NULL" for c in sorted(USED - {"id", "bbox"}))
+            some = " OR ".join([f"{c} IS NOT NULL" for c in sorted(USED - {"id", "bbox"})]
+                               + [f"highway IN ({', '.join(repr(v) for v in UNBUILT)})"])
             rows = con.execute(f"""SELECT id, highway = 'raceway', file_row_number, {cols}
                 FROM read_parquet({uri}, file_row_number = true)
                 WHERE ({only}) AND {box} AND (highway = 'raceway' OR {some})""").fetchall()

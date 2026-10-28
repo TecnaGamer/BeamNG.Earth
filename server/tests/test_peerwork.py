@@ -186,6 +186,7 @@ class CountingLocal:
         return f
 
 
+@unittest.skip("shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while): GroupHelper")
 class GroupTest(unittest.TestCase):
     def test_each_tile_built_once_in_the_group(self):
         import tempfile

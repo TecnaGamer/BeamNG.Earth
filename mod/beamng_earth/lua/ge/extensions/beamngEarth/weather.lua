@@ -526,6 +526,7 @@ local function applyPrecip(e, c)
   local alt = e.getCloudAltitudeKm and tonumber(e.getCloudAltitudeKm())
   local cz = cameraZ()
   if alt and cz and cz > alt * 1000 then rain, snow = 0, 0 end
+  M.rainNow = rain                          -- (its sound: ambience.lua)
   drivePrecip(M.RAIN_NAME, rain, M.RAIN_POOL)
   drivePrecip(M.SNOW_NAME, snow, M.SNOW_POOL)
 end
@@ -641,6 +642,7 @@ end
 
 local function hidePrecip()
   for name in pairs(S.precip) do pcall(drivePrecip, name, 0, 0) end
+  M.rainNow = 0
   pcall(restoreSun)
 end
 
@@ -869,6 +871,10 @@ function M.roadInputs()
   if not c then return nil end
   return tonumber(c.rainPct) or 0, tonumber(c.snowPct) or 0, tonumber(c.tempC) or (S.temp and S.temp.value) or 15
 end
+
+-- The latest weather message (code, cover, wind, tempC, ...) as a plain table, unlike status() (a dumps() string
+-- for the console): the world map's weather badge (settings.uiMapState) reads it every second, too often to parse.
+function M.current() return lastMsg end
 
 function M.status()
   return dumps({ mode = mode, pending = S.pending, switched = S.switched, bwmFighting = bwmNow(),

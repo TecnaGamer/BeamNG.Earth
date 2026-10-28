@@ -1,6 +1,7 @@
 """routing: the GPS's whole-route planning (OSRM response handling, simplification)."""
 import sys
 import unittest
+import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,6 +24,19 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual((r["dist"], r["dur"]), (1234.5, 99.0))
         with self.assertRaises(ValueError):
             routing.parse({"code": "NoRoute", "routes": []})
+
+    def test_resample_even_steps(self):
+        line = [(39.0, -76.0), (39.0, -75.9)]              # ~8.6 km east, one straight segment
+        r = routing.resample(line, max_points=20)
+        self.assertEqual(r[0][2], 0.0)
+        self.assertAlmostEqual(r[-1][0], line[-1][0], places=6)
+        self.assertAlmostEqual(r[-1][1], line[-1][1], places=6)
+        for a, b in zip(r, r[1:]):
+            self.assertGreater(b[2], a[2])
+
+    def test_resample_short_line_one_point(self):
+        self.assertEqual(routing.resample([(39.0, -76.0)]), [(39.0, -76.0, 0.0)])
+        self.assertEqual(routing.resample([]), [])
 
     def test_url(self):
         u = routing.url(39.28, -76.59, 38.9, -77.03)
@@ -130,3 +144,17 @@ class TurnsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RouteProfileSmoothTest(unittest.TestCase):
+    def test_spikes_of_a_sample_or_two_go_the_climb_stays(self):
+        # (the ground under a bridge, an embankment's bump: the map's chart drew them as peaks, the user 2026-10-27)
+        import earthd
+        climb = np.linspace(10.0, 40.0, 40)
+        z = climb.copy()
+        z[10] += 15.0           # a bump one sample long
+        z[25:27] -= 12.0        # a valley under a bridge, two samples
+        got = earthd.route_profile_smooth(z)
+        self.assertLess(float(np.abs(got - climb)[2:-2].max()), 2.0)     # (of 12-15 m spikes)
+        self.assertEqual(len(got), len(z))
+        self.assertTrue(np.allclose(earthd.route_profile_smooth([5.0, 6.0]), [5.0, 6.0]))

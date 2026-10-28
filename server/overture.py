@@ -186,6 +186,23 @@ def intersects(b, bounds):
     return b[0] <= lon1 and b[2] >= lon0 and b[1] <= lat1 and b[3] >= lat0
 
 
+# The pinned release's whole index shipped with the app (tools/build_stac_index.py): the server never asks
+# stac.overturemaps.org for it. That host was down for about an hour on 2026-10-26 and no fresh place got roads or
+# buildings (GitHub #357); it also saves a first visit an item request per file.
+BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overture_stac_{release}.json.gz")
+
+
+def _bundle(release):
+    """{"theme/type": {"license", "files": [[name, bbox, urls, size], ...]}} of the release's shipped index, or {}."""
+    import gzip
+    try:
+        with gzip.open(BUNDLED.format(release=release), "rt", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data.get("collections", {}) if data.get("release") == release else {}
+
+
 class StacIndex:
     """The release's per-file index: which parquet files of a theme/type intersect a box."""
 
@@ -193,6 +210,7 @@ class StacIndex:
         self.release, self.raw_dir, self.fetcher = release, raw_dir, fetcher
         self._coll = {}
         self._lock = threading.Lock()
+        self._bundled = _bundle(release)
 
     def _json(self, url, path, kind):
         try:
@@ -220,6 +238,12 @@ class StacIndex:
         key = (theme, typ)
         with self._lock:
             c = self._coll.get(key)
+        if c is None and f"{theme}/{typ}" in self._bundled:
+            b = self._bundled[f"{theme}/{typ}"]
+            c = {"items": [r[0] for r in b["files"]], "bboxes": [r[1] for r in b["files"]], "license": b.get("license"),
+                 "rows": b["files"]}
+            with self._lock:
+                self._coll[key] = c
         if c is None:
             raw = self._json(f"{STAC_ROOT}/{self.release}/{theme}/{typ}/collection.json",
                              os.path.join(self._dir(theme, typ), "collection.json"), kind)
@@ -236,6 +260,8 @@ class StacIndex:
         """[(name, [aws url, azure url], size)] of the files whose bbox intersects `bounds`, in
         index order."""
         c = self.collection(theme, typ, kind)
+        if "rows" in c:                         # (the shipped index: no item requests)
+            return [(name, list(urls), int(size)) for name, bb, urls, size in c["rows"] if intersects(bb, bounds)]
         out = []
         for i, (href, bb) in enumerate(zip(c["items"], c["bboxes"])):
             if not intersects(bb, bounds):
