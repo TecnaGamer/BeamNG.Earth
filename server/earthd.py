@@ -93,6 +93,11 @@ import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
+import fuelfind as fuelfindmod  # noqa: E402
+import jobfind as jobfindmod  # noqa: E402
+import media as mediamod  # noqa: E402
+import shops as shopsmod  # noqa: E402
+import rally as rallymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
@@ -128,6 +133,7 @@ import imagery as imagerymod  # noqa: E402
 import matslots as matslotsmod  # noqa: E402
 import maptiles as maptilesmod  # noqa: E402
 import geocode as geocodemod  # noqa: E402
+import phoneapi as phoneapimod  # noqa: E402
 import routing as routingmod  # noqa: E402
 import updates as updatesmod  # noqa: E402
 import cpupin  # noqa: E402
@@ -1260,6 +1266,7 @@ class Server:
         props = [] if self.buildings else None
         lines = [] if self.buildings else None
         wires = [] if self.buildings else None
+        guide = [] if self.buildings else None
         park = [] if self.buildings else None
         items = town = None
         if self.buildings:
@@ -1278,7 +1285,7 @@ class Server:
         cover = []                      # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
-                                     widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
+                                     widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park, guide=guide,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor), buried=self.buried(anchor),
                                      lamp_region=self.lamp_region(anchor),
                                      structures=buildingsmod.centres(items, tx, ty) if items else (),
@@ -1337,7 +1344,7 @@ class Server:
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
-                                   rail_mesh=rmesh, garage_sound=garage_sound, wells=oil_wells)
+                                   rail_mesh=rmesh, guide=guide, garage_sound=garage_sound, wells=oil_wells)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
@@ -2760,7 +2767,8 @@ BOOST_MOVE_MS = 3.0         # the loading boost ends when the player moves faste
 BOOST_MAX_S = 120.0         # ... or this long after the teleport
 BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at first)
 
-ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph")
+ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
+                     "guide")
 
 
 class _BoundedLru:
@@ -2904,8 +2912,8 @@ class Connection:
         self.following = True                   # the mod moves its block (pose "follow"; false high up)
 
     async def map_tiles(self, msg):
-        """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels"; the
-        most wanted first): each written once under <user>/temp/beamngEarth/maptiles/ (maptiles.tile_path; the
+        """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels", or
+        "apple" for the phone; the most wanted first): each written once under <user>/temp/beamngEarth/maptiles/ (maptiles.tile_path; the
         game's UI loads it from there: its browser cancels every http request, even to 127.0.0.1) and said as soon
         as it is there, map_tiles_ready {"tiles": [[z, x, y, ok, layer]]}. Built maptiles.FILE_WORKERS at a time
         (one by one, a 48-tile view took ~10 s and was said only at the end, 2026-10-16); each request replaces
@@ -2946,7 +2954,8 @@ class Connection:
         try:
             r = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"))
+                float(msg["lon1"]), self.s.net, msg.get("bearing"), bool(msg.get("steps")),
+                msg.get("alternatives"))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]
@@ -3049,6 +3058,33 @@ class Connection:
             push(False)
         self.s.route_pool.submit(run)
 
+    async def phone_search(self, msg):
+        """The phone's search {"id", "q", "lat"?, "lon"?} -> phone_search_result {"id", "results": [...], "error"?}:
+        the saved places of the user folder first, then Photon's places nearest first (phoneapi.search_cached)."""
+        out = {"type": "phone_search_result", "id": msg.get("id"), "results": []}
+        try:
+            out["results"], error = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, phoneapimod.search_cached, str(msg.get("q") or ""), msg.get("lat"), msg.get("lon"),
+                self.s.user_dir, self.s.net)
+            if error:
+                out["error"] = error
+        except Exception as e:          # offline: the phone shows the saved places it has
+            out["error"] = f"{type(e).__name__}: {e}"[:120]
+        log.debug("phone search %r: %d results%s", msg.get("q"), len(out["results"]),
+                  (" (" + out["error"] + ")") if "error" in out else "")
+        self.send(out)
+
+    async def phone_reverse(self, msg):
+        """A dropped pin's name {"id", "lat", "lon"} -> phone_reverse_result {"id", "name", "detail"}: Photon's
+        nearest place (phoneapi.reverse), or the coordinates when it cannot be asked."""
+        out = {"type": "phone_reverse_result", "id": msg.get("id"), "name": "", "detail": ""}
+        try:
+            out.update(await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, phoneapimod.reverse, float(msg["lat"]), float(msg["lon"]), self.s.net))
+        except Exception as e:
+            out["error"] = f"{type(e).__name__}: {e}"[:120]
+        self.send(out)
+
     async def server_list(self):
         """The BeamNG.Earth server list (native/serverlist, SERVER_LIST_URL) for the mod's tab in BeamMP's server browser
         (serverlist.lua): fetched here, as the game's Lua may only open connections to local addresses ("connect
@@ -3134,6 +3170,127 @@ class Connection:
             if got is not None:
                 out["lat"], out["lon"], out["name"] = got
                 log.info("random place: %s (%.5f, %.5f)", got[2], got[0], got[1])
+        self.send(out)
+
+    async def delivery_jobs(self, msg):
+        """{"id", "lat", "lon", "seed"} -> delivery_jobs_result {"id", "jobs": [...]} (jobfind.offers: garage-to-garage
+        deliveries from near the point), or {"id", "error"}."""
+        out = {"type": "delivery_jobs_result", "id": msg.get("id"), "jobs": []}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            lat, lon, seed = float(msg["lat"]), float(msg["lon"]), int(msg.get("seed") or 0)
+        except (KeyError, TypeError, ValueError):
+            out["error"] = "no position"
+            self.send(out)
+            return
+        if md is None:
+            out["error"] = "no map data"
+            self.send(out)
+            return
+        net = self.s.net
+
+        def route(la0, lo0, la1, lo1):
+            return routingmod.plan(la0, lo0, la1, lo1, net)
+        try:
+            out["jobs"] = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, jobfindmod.offers, md, lat, lon, seed, route, None,
+                "truck" if msg.get("kind") == "truck" else "car") if msg.get("kind") != "parcel" else \
+                await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, jobfindmod.parcel_offers, md, lat, lon,
+                                                                 seed)
+        except Exception as e:
+            log.warning("delivery jobs: %s: %s", type(e).__name__, e)
+            out["error"] = "search failed"
+        for j in out["jobs"]:           # (how far its pickup is from you: the apps' "near me", the user 2026-10-26)
+            p = j.get("pickup") or {}
+            if p.get("lat") is not None:
+                j["away"] = round(jobfindmod.dist_m(lat, lon, p["lat"], p["lon"]), 1)
+        if not out["jobs"] and "error" not in out:
+            out["error"] = ("no warehouses or depots near here" if msg.get("kind") == "truck"
+                            else "no garages near here")
+        log.info("%s jobs near %.5f, %.5f: %d", msg.get("kind") or "delivery", lat, lon, len(out["jobs"]))
+        self.send(out)
+
+    async def rally_stage(self, msg):
+        """{"id", "stage"} -> rally_stage_result {"id", "stage": {id, name, area, event, points, dist, notes}?,
+        "error"?} (rally.py: a real stage road from the map data, with its pacenotes)."""
+        out = {"type": "rally_stage_result", "id": msg.get("id")}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            if md is None:
+                raise ValueError("no map data")
+            out["stage"] = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, rallymod.build, md, str(msg.get("stage") or ""))
+            log.info("rally stage %s: %.1f km, %d notes", out["stage"]["id"], out["stage"]["dist"] / 1000,
+                     len(out["stage"]["notes"]))
+        except Exception as e:
+            out["error"] = f"{e}"[:160] if isinstance(e, ValueError) else f"{type(e).__name__}: {e}"[:160]
+            log.warning("rally stage %s: %s", msg.get("stage"), out["error"])
+        self.send(out)
+
+    async def places_near(self, msg):
+        """{"id", "lat", "lon", "kind": "repair" | "property"} -> places_near_result {"id", "kind", "places", "error"?}
+        (shops.py: real repair shops / property near the point, nearest first)."""
+        kind = "property" if msg.get("kind") == "property" else "repair"
+        out = {"type": "places_near_result", "id": msg.get("id"), "kind": kind, "places": []}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+            if md is None:
+                raise ValueError("no map data")
+            out["places"] = await asyncio.get_running_loop().run_in_executor(
+                self.s.ui_pool, shopsmod.near, md, lat, lon, kind)
+        except Exception as e:
+            out["error"] = f"{type(e).__name__}: {e}"[:120]
+        if not out["places"] and "error" not in out:
+            out["error"] = "none near here"
+        log.info("%s places near %s, %s: %d", kind, msg.get("lat"), msg.get("lon"), len(out["places"]))
+        self.send(out)
+
+    async def media(self, msg):
+        """{"id", "action"?, "volume"?} -> media_state {"id", "ok", "playing", "artist", "title", "volume"?}: the phone's
+        Music app (media.py: action "volume" sets Spotify's mixer level to volume (0..100);
+        presses the media key of action, if any, then reads desktop Spotify's song)."""
+        loop = asyncio.get_running_loop()
+
+        def run():
+            if msg.get("action") == "volume":           # (the slider: Spotify's mixer level, media.set_volume)
+                mediamod.set_volume(msg.get("volume"))
+            elif msg.get("action"):
+                mediamod.press(str(msg.get("action")))
+                time.sleep(0.4)             # (Spotify retitles its window after the key)
+            return mediamod.state()
+        try:
+            st = await loop.run_in_executor(self.s.ui_pool, run)
+        except Exception as e:
+            st = {"ok": False, "playing": False, "artist": "", "title": ""}
+            log.debug("media: %s: %s", type(e).__name__, e)
+        self.send(dict(st, type="media_state", id=msg.get("id")))
+
+    async def nearest_fuel(self, msg):
+        """{"id", "lat", "lon"} -> nearest_fuel_result {"id", "lat", "lon", "name", "dist"} on the road beside the gas
+        station nearest the point (fuelfind.nearest), or {"id", "error"} when none is near or the map data is missing."""
+        out = {"type": "nearest_fuel_result", "id": msg.get("id")}
+        md = getattr(self.s, "mapdata", None)
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+        except (KeyError, TypeError, ValueError):
+            out["error"] = "no position"
+            self.send(out)
+            return
+        got = None
+        if md is None:
+            out["error"] = "no map data"
+        else:
+            try:
+                got = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, fuelfindmod.nearest, md, lat, lon)
+            except Exception as e:
+                log.warning("nearest gas station: %s: %s", type(e).__name__, e)
+                out["error"] = "search failed"
+        if got is not None:
+            out.update(got)
+            log.info("nearest gas station: %s, %.0f m (%.5f, %.5f)", got["name"], got["dist"], got["lat"], got["lon"])
+        elif "error" not in out:
+            out["error"] = "no gas station within %d km" % int(fuelfindmod.RINGS_M[-1] / 1000)
         self.send(out)
 
     async def where(self, msg):
@@ -3382,12 +3539,26 @@ class Connection:
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "phone_search":            # the phone's search: the saved places, then Photon (phoneapi.py)
+            self.spawn(self.phone_search(msg))
+        elif kind == "phone_reverse":           # a dropped pin's name (phoneapi.reverse)
+            self.spawn(self.phone_reverse(msg))
         elif kind == "route":                   # the GPS: the whole road route (routing.py)
             self.spawn(self.route(msg))
         elif kind == "where":                   # the status bar's street, town and country (geocode.py)
             self.spawn(self.where(msg))
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
             self.spawn(self.random_place(msg))
+        elif kind == "nearest_fuel":            # the world map's "Nearest gas station" (fuelfind.py)
+            self.spawn(self.nearest_fuel(msg))
+        elif kind == "places_near":             # the phone's Garage app (shops.py)
+            self.spawn(self.places_near(msg))
+        elif kind == "rally_stage":             # the phone's Rally app (rally.py)
+            self.spawn(self.rally_stage(msg))
+        elif kind == "media":                   # the phone's Music app (media.py)
+            self.spawn(self.media(msg))
+        elif kind == "delivery_jobs":           # the Jobs app's garage-to-garage deliveries (jobfind.py)
+            self.spawn(self.delivery_jobs(msg))
         elif kind == "place_previews":          # the level select's place pictures (placepreview.py)
             self.spawn(self.place_previews(msg))
         elif kind == "update_now":              # the update notice's "Update now" (selfupdate.py)
@@ -4689,9 +4860,11 @@ async def main_async(args):
     map_srv = None
     if getattr(args, "map_tiles", "on") == "on" and server.imagery is not None:
         try:                        # the world map's tiles, 127.0.0.1 only (a failure only loses the map)
-            server.map_tiles = maptilesmod.MapTiles(server.imagery)
+            server.map_tiles = maptilesmod.MapTiles(
+                server.imagery, api=phoneapimod.PhoneApi(server.user_dir, server.net))
             map_srv, server.map_port = await server.map_tiles.start(getattr(args, "map_port", 0))
-            log.info("map tiles on http://127.0.0.1:%d/tiles/{z}/{x}/{y}.jpg", server.map_port)
+            log.info("map tiles on http://127.0.0.1:%d/tiles/{z}/{x}/{y}.jpg (and /api/search, /api/route)",
+                     server.map_port)
         except OSError as e:
             log.warning("map tiles off: %s", e)
     srv = await asyncio.start_server(

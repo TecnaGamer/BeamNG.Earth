@@ -1,0 +1,19 @@
+{
+  "domElement": "<beamng-earth-gps></beamng-earth-gps>",
+  "name": "BeamNG.Earth: GPS",
+  "types": [
+    "ui.apps.categories.utility"
+  ],
+  "description": "Satellite minimap with the GPS route, the next turn, distance and arrival time, and the speed limit (BeamNG.Earth).",
+  "css": {
+    "width": "440px",
+    "height": "260px"
+  },
+  "author": "BeamNG.Earth",
+  "version": "1.0",
+  "directive": "beamngEarthGps",
+  "appName": "beamngEarthGps",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "no"
+}

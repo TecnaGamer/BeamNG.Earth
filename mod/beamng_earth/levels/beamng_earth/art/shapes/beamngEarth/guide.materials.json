@@ -1,0 +1,59 @@
+{
+  "bne_guide_atlas": {
+    "name": "bne_guide_atlas",
+    "mapTo": "bne_guide_atlas",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/guide_atlas.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.35,
+          0.35,
+          0.35,
+          1.0
+        ],
+        "specularPower": 24,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "bne_guide_steel": {
+    "name": "bne_guide_steel",
+    "mapTo": "bne_guide_steel",
+    "class": "Material",
+    "Stages": [
+      {
+        "diffuseColor": [
+          0.58,
+          0.6,
+          0.62,
+          1.0
+        ],
+        "specular": [
+          0.6,
+          0.62,
+          0.65,
+          1.0
+        ],
+        "specularPower": 40,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  }
+}

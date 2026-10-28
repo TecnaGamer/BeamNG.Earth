@@ -257,10 +257,25 @@ class SpeedSignTest(unittest.TestCase):
         self.assertGreater(west[2], 50.0)
 
     def test_no_sign_without_a_model_or_on_short_roads(self):
-        self.assertEqual(furniture.speed_signs([road("t", "tertiary", True)], {"t": 35.0}, (-500, -50, 700, 150)), [])
+        self.assertEqual(furniture.speed_signs([road("t", "tertiary", True)], {"t": 95.0}, (-500, -50, 700, 150)), [])
         self.assertEqual(furniture.speed_signs([road("s", "tertiary", True, x0=0.0, x1=100.0)], {"s": 30.0},
                                                (-500, -50, 700, 150)), [])
 
+
+    def test_motorway_carriageway_signs_its_own_traffic_and_repeats(self):
+        """A one-way carriageway (a motorway's, a divided road's): signs for its traffic only, SIGN_ONEWAY_IN_M in, then
+        every SIGN_REPEAT_M (the user, 2026-10-25: "I hardly see any signs")."""
+        pts = np.array([(0.0, 0.0, 0.0), (8000.0, 0.0, 0.0)])
+        east = ("m", roads.Spec(11.0, "paved", False, "motorway", True, dir=1, lanes=3), pts, 0.0)
+        rows = furniture.speed_signs([east], {"m": 65.0}, (-50, -50, 8050, 50))
+        xs = sorted(round(r[1]) for r in rows)
+        S = furniture.SIGN_ONEWAY_IN_M
+        self.assertEqual(xs, [round(S), round(S + furniture.SIGN_REPEAT_M), round(S + 2 * furniture.SIGN_REPEAT_M)])
+        self.assertTrue(all(r[0] == "speed65" and r[2] < 0 for r in rows), "on the right of eastbound traffic")
+        west = ("w", roads.Spec(11.0, "paved", False, "motorway", True, dir=-1, lanes=3), pts, 0.0)
+        rows = furniture.speed_signs([west], {"w": 65.0}, (-50, -50, 8050, 50))
+        self.assertEqual(max(round(r[1]) for r in rows), round(8000 - S))
+        self.assertTrue(all(r[2] > 0 for r in rows), "on the right of westbound traffic")
 
     def test_km_h_signs_where_limits_are_in_km_h(self):
         """Europe: round km/h signs are used there, including higher motorway limits and no-limit signs."""

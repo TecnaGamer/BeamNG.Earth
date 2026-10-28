@@ -488,7 +488,8 @@ end
 -- goes out too (it cancels).
 M.MAP_ASK_S = 4
 M.MAP_TILES_DIR = '/temp/beamngEarth/maptiles/'
-M.MAP_LAYERS = { sat = '.jpg', map = '.jpg', labels = '.png' }   -- server maptiles.LAYERS
+M.MAP_LAYERS = { sat = '.jpg', map = '.jpg', labels = '.png', apple = '.jpg', appledark = '.jpg',
+  labelsdark = '.png', sathd = '.jpg' }                                          -- server maptiles.LAYERS
 function M.mapTilePath(layer, z, x, y)
   local zxy = string.format('%d/%d/%d', z, x, y)
   if layer == 'sat' then return M.MAP_TILES_DIR .. zxy .. '.jpg' end   -- (where it always was)
@@ -586,9 +587,273 @@ function M.uiGpsAutodrive(on)
   return { ok = true, autodrive = require('beamngEarth/gps').setAutodrive(on) }
 end
 
+-- The GPS app (BeamNGEarthGps, the bottom-left minimap; the user, 2026-10-25): what it draws, polled a few times a
+-- second. visible: in our level with the world running; mapOpen: the world map is open (the app then asks for no tiles:
+-- mapTiles keeps one wanted list, the map's); player { lat, lon, heading (deg from true north), speed (m/s) };
+-- gps (a destination set): { name, lat, lon, routeVersion, progress, remaining (m), eta (s), next { arrow, text, dist },
+-- planning }; limit { value, unit } under the car; street: its name; mph: the country's distance units.
+function M.uiGpsHud()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  local gps = require('beamngEarth/gps')
+  local g = gps.status()
+  -- (a rally stage on: the stage is the minimap's route, rally.lua)
+  local okR, rr = pcall(function() return require('beamngEarth/rally').mapRoute() end)
+  if okR and rr then
+    local last = rr.points[#rr.points] or {}
+    g = { name = rr.name, lat = last[1], lon = last[2], routeVersion = rr.version, remaining = rr.remaining }
+  end
+  local okN, ng = pcall(require, 'beamngEarth/navgraph')
+  return {
+    visible = (st and st.inOurLevel and st.active) and true or false,
+    mapOpen = mapOpen,
+    mapPort = net.isConnected() and st and st.mapPort or nil,
+    player = (pl and pl.lat) and { lat = pl.lat, lon = pl.lon, heading = playerHeading(), speed = pl.speed } or nil,
+    gps = g and { name = g.name, lat = g.lat, lon = g.lon, routeVersion = g.routeVersion, progress = g.progress,
+      remaining = g.remaining, eta = g.eta, next = g.next, planning = g.planning } or nil,
+    limit = gps.speedLimit(),
+    street = (function() local okS, sb = pcall(require, 'beamngEarth/statusbar'); return okS and sb.street() or '' end)(),
+    mph = not okN or ng.mph ~= false,
+    clock = M.gameClock(),
+  }
+end
+
+-- The game's time of day as minutes after midnight (the GPS clock; the user, 2026-10-26: "add time display on the gps
+-- hud"), or nil. core_environment's time: 0 is noon, 0.5 midnight.
+function M.gameClock()
+  local env = rawget(_G, 'core_environment')
+  local ok, tod = pcall(function() return env and env.getTimeOfDay and env.getTimeOfDay() end)
+  local t = ok and type(tod) == 'table' and tonumber(tod.time) or nil
+  if not t then return nil end
+  return math.floor(((t * 24 + 12) % 24) * 60) % 1440
+end
+
+-- The wallet app (BeamNGEarthWallet): { balance, text, last = { amount, reason } }.
+function M.uiWallet()
+  local w = require('beamngEarth/wallet')
+  local h = w.history()
+  local okH, hv = pcall(function() return require('beamngEarth/heat').current() end)
+  return { balance = w.balance(), text = w.format(w.balance()), last = h[1], heat = okH and hv or 0 }
+end
+function M.uiWalletReset() require('beamngEarth/wallet').reset() return M.uiWallet() end
+
+-- The GPS app's fast pose (polled ~20 times a second; the app moves its map every frame between them): { lat, lon,
+-- heading (deg from true north), speed (m/s) } or nil.
+function M.uiGpsPose()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  if not (pl and pl.lat) then return nil end
+  return { lat = pl.lat, lon = pl.lon, heading = playerHeading(), speed = pl.speed }
+end
+
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.
 function M.uiGpsRoute()
+  -- (a rally stage on: the stage is the route, rally.lua)
+  local r = require('beamngEarth/rally').mapRoute()
+  if r then return r end
   return require('beamngEarth/gps').route()
+end
+
+-- The phone (BeamNGEarthPhone; the user, 2026-10-26): its state in one poll, its settings (saved in PHONE_FILE), the
+-- wallpapers (screenshots and WALLPAPER_DIR), the Music app (server media.py), the weather mode, the key's toggle.
+local PHONE_FILE = '/settings/beamngEarth_phone.json'
+local WALLPAPER_DIR = '/settings/beamngEarth_wallpapers/'
+local phonePrefs, phoneUp, mediaT = nil, false, -math.huge
+
+local function prefs()
+  if phonePrefs then return phonePrefs end
+  local ok, got = pcall(jsonReadFile, PHONE_FILE)
+  phonePrefs = (ok and type(got) == 'table') and got or { theme = 'dark', size = 1 }
+  return phonePrefs
+end
+
+function M.togglePhone()
+  phoneUp = not phoneUp
+  if guihooks then guihooks.trigger('BneEarthPhone', { up = phoneUp }) end
+end
+
+-- The app on the phone's screen (the phone tells, '' for the home screen), and Page Up's phone-on-an-app
+-- (ianmadez's Maps, merged in 2026-10-27): up on app; up on another app: switched to it; up on it: put away.
+local phoneApp = ''
+function M.uiPhoneApp(id) phoneApp = tostring(id or '') return true end
+function M.togglePhoneApp(app)
+  app = tostring(app or '')
+  if phoneUp and phoneApp == app then
+    phoneUp = false
+    if guihooks then guihooks.trigger('BneEarthPhone', { up = false }) end
+  else
+    phoneUp, phoneApp = true, app
+    if guihooks then guihooks.trigger('BneEarthPhone', { up = true, app = app }) end
+  end
+  return phoneUp
+end
+
+local function wallpapers()
+  local out = {}
+  local fs = rawget(_G, 'FS')
+  for _, dir in ipairs({ WALLPAPER_DIR, '/screenshots/' }) do
+    for _, pat in ipairs({ '*.jpg', '*.png', '*.jpeg' }) do
+      local ok, files = pcall(function() return fs:findFiles(dir, pat, 0, false, false) end)
+      if ok and type(files) == 'table' then
+        for _, f in ipairs(files) do if #out < 24 then out[#out + 1] = f end end
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a > b end)       -- (screenshots: newest first by their dated names)
+  return out
+end
+
+function M.uiPhone()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  local w = require('beamngEarth/wallet')
+  local mins = M.gameClock()
+  local okN, ng = pcall(require, 'beamngEarth/navgraph')
+  local mph = not okN or ng.mph ~= false
+  if os.clock() - mediaT > 3 and core and core.requestMedia then      -- the song, every few seconds while up
+    mediaT = os.clock()
+    core.requestMedia(nil)
+  end
+  local okL, sb = pcall(require, 'beamngEarth/statusbar')
+  local loc = okL and sb.location and sb.location() or {}
+  local clock = ''
+  if mins then
+    local h, m = math.floor(mins / 60), mins % 60
+    clock = mph and string.format('%d:%02d %s', (h % 12 == 0) and 12 or h % 12, m, h < 12 and 'AM' or 'PM')
+      or string.format('%02d:%02d', h, m)
+  end
+  return {
+    up = phoneUp, time = clock, mph = mph,
+    place = (loc and (loc.place or loc.street)) or nil,
+    weekday = math.floor(((require('beamngEarth/dynweather')._state().day) or 0) % 7),
+    prefs = prefs(), wallpapers = wallpapers(),
+    bank = { balance = w.balance(), text = w.format(w.balance()), history = w.history() },
+    weather = (function()
+      local u = require('beamngEarth/dynweather').uiState(mins, pl and pl.lat, pl and pl.lon)
+      -- (the weather paused: weather.lua in 'manual', set when the menu or another mod changed the weather; then
+      -- neither the real nor the dynamic weather is applied: the user, 2026-10-26: "I havent seen weather change yet")
+      local wx = ext('beamngEarth_weather')
+      u.paused = (wx and wx.getMode and wx.getMode() ~= 'real') or false
+      return u
+    end)(),
+    jobs = require('beamngEarth/jobs').uiState(),
+    rally = require('beamngEarth/rally').uiState(),
+    media = core and core.mediaState and core.mediaState() or { ok = false },
+    garage = require('beamngEarth/garage').uiState(st and st.anchor, pl),
+  }
+end
+
+-- The Garage app (garage.lua): its state; refresh; the actions where you stand.
+local function here()
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  return st and st.anchor, st and st.player
+end
+function M.uiGarage() local a, p = here() return require('beamngEarth/garage').uiState(a, p) end
+function M.uiGarageRefresh(kind)
+  local _, p = here()
+  return require('beamngEarth/garage').refresh(kind, p and p.lat, p and p.lon)
+end
+function M.uiGarageDo(action, arg)
+  local g, a, p = require('beamngEarth/garage'), here()
+  local ok, why
+  if action == 'repair' then ok, why = g.repair(a, p)
+  elseif action == 'respray' then ok, why = g.respray(a, p, arg)
+  elseif action == 'plates' then ok, why = g.plates(a, p)
+  elseif action == 'parts' then ok, why = g.parts(a, p)
+  elseif action == 'buy' or action == 'rent' then ok, why = g.acquire(arg, action)
+  elseif action == 'store' then ok, why = g.store(a, p, arg)
+  elseif action == 'sell' then ok, why = g.sell(arg)
+  elseif action == 'buyout' then ok, why = g.buyout(arg)
+  end
+  return { ok = ok and true or false, error = why }
+end
+function M.uiGarageNav(list, i)        -- list: 'repair', 'property' or 'mine'; i from 1
+  local a, p = here()
+  local s = require('beamngEarth/garage').uiState(a, p)
+  local item = (s[list] or {})[tonumber(i) or 0]
+  return item and require('beamngEarth/gps').setDestination(item.lat, item.lon, item.name) or false
+end
+-- (testing, the user 2026-10-26: "I'll also need a temporary cash boost to see how these things work")
+function M.uiCashBoost() require('beamngEarth/wallet').add(10000, 'Test cash') return true end
+
+function M.phonePref(k) return prefs()[k] end
+
+function M.uiPhoneSet(k, v)
+  local p = prefs()
+  if k == 'traffic' then
+    p.traffic = v and true or false
+    require('beamngEarth/worldtraffic').set(p.traffic)
+  elseif k == 'theme' or k == 'accent' or k == 'wallpaper' then p[k] = tostring(v)
+  elseif k == 'size' then p.size = math.max(0.7, math.min(1.3, tonumber(v) or 1)) end
+  pcall(jsonWriteFile, PHONE_FILE, p, true)
+  return true
+end
+
+function M.uiPhoneMedia(action, volume)
+  local core = ext('beamngEarth_core')
+  mediaT = os.clock()
+  -- (action 'volume': Spotify's mixer level to volume, 0..100: server media.set_volume)
+  return core and core.requestMedia and core.requestMedia(tostring(action), volume) or false
+end
+
+-- The Weather app's "Turn on": the weather driven again (weather.lua 'real', saved), after a change in the game paused it.
+function M.uiPhoneWeatherResume()
+  M.set('weatherMode', 'real')
+  return true
+end
+
+function M.uiPhoneWeatherMode(mode)
+  require('beamngEarth/dynweather').setMode(mode)
+  return true
+end
+
+-- The Jobs app (jobs.lua): its state; refresh the offers near the player; accept offer i; cancel.
+function M.uiJobs() return require('beamngEarth/jobs').uiState() end
+function M.uiJobsRefresh(kind)
+  local core = ext('beamngEarth_core')
+  local st = core and core._state and core._state() or nil
+  local pl = st and st.player
+  return require('beamngEarth/jobs').refresh(pl and pl.lat, pl and pl.lon, (kind == 'truck' or kind == 'parcel') and kind or nil)
+end
+function M.uiJobAccept(i) local ok, why = require('beamngEarth/jobs').accept(i) return { ok = ok, error = why } end
+function M.uiJobStart() local ok, why = require('beamngEarth/jobs').startWork() return { ok = ok, error = why } end
+function M.uiJobCancel() return require('beamngEarth/jobs').cancel() end
+
+-- The Rally app (rally.lua): its state; start stage id; quit the run.
+function M.uiRally() return require('beamngEarth/rally').uiState() end
+function M.uiRallyStart(id) local ok, why = require('beamngEarth/rally').start(id) return { ok = ok, error = why } end
+function M.uiRallyQuit() return require('beamngEarth/rally').quit() end
+function M.uiRallyVoice(id) return require('beamngEarth/rally').setVoice(id) end
+function M.uiRallyReset() local ok, why = require('beamngEarth/rally').resetToRoad() return { ok = ok, error = why } end
+
+-- The map's "Nearest gas station" (the user, 2026-10-25: "a gas station spawn so i dont search forever"): send
+-- (-> { id } or { error }) and poll (id -> nil while the server searches, else { ok, name, dist } after teleporting
+-- beside the station, or { error }).
+local fuelId = 0
+function M.uiNearestFuel()
+  local core = ext('beamngEarth_core')
+  if not core or not core.requestNearestFuel then return { error = 'BeamNG.Earth is not loaded' } end
+  local st = core._state and core._state() or nil
+  local pl = st and st.player
+  if not (pl and pl.lat and pl.lon) then return { error = 'no position yet' } end
+  local why = places.cannotGo and places.cannotGo()
+  if why then return { error = why } end
+  fuelId = fuelId + 1
+  if not core.requestNearestFuel(fuelId, pl.lat, pl.lon) then return { error = 'not connected to the world server' } end
+  return { id = fuelId }
+end
+function M.uiNearestFuelResult(id)
+  local core = ext('beamngEarth_core')
+  local r = core and core.takeNearestFuel and core.takeNearestFuel(tonumber(id))
+  if not r then return nil end
+  if r.error or not (tonumber(r.lat) and tonumber(r.lon)) then return { error = r.error or 'no gas station found' } end
+  local ok, why = places.goTo(r.lat, r.lon, r.name)
+  if not ok then return { error = why or 'teleport refused' } end
+  return { ok = true, name = r.name, dist = r.dist }
 end
 
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else

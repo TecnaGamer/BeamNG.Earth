@@ -186,6 +186,11 @@ end
 -- setting on (toggling it gathers the list again: settings.lua, showMissionMarkersToggled).
 function M.pois(levelIdentifier, elements)
   if not freeroam_gasStations or not M.enabled then return end
+  -- our pumps cost money (wallet.lua): the stock refuel wrapped once, priced per gallon where mph is posted
+  require('beamngEarth/wallet').wrapRefuel(freeroam_gasStations, function()
+    local okN, ng = pcall(require, 'beamngEarth/navgraph')
+    return not okN or ng.mph ~= false
+  end)
   local career = career_career and career_career.isActive()
   if not career and not (settings and settings.getValue('enableGasStationsInFreeroam')) then return end
   for id, st in pairs(stations) do

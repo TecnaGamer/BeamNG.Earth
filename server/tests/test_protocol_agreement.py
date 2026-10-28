@@ -40,6 +40,11 @@ docs/V1_2_DESIGN.md §7 as amended by §12; server/README.md documents the same 
   - live retexture (--colormatch / --deshadow): the 'far_retex' message (additive the same way), sent
     in a session whose colour-match regions turn ready once the far field is shown; core.lua hands it
     to farfield.onRetex, which reads anchorId / key / texture.
+  - the phone (phoneapi.py, earthPhone.lua; additive): 'phone_search' -> 'phone_search_result' (the
+    saved places of the user folder first, then Photon nearest the car, each with distance_km),
+    'phone_reverse' -> 'phone_reverse_result' (a dropped pin's name), and 'route' gains steps,
+    'route_result' its [{at, dist, dur, name, type, modifier}] a phone destination asks for with the
+    GPS's own single OSRM request.
 """
 import json
 import math
@@ -132,8 +137,13 @@ MOD_TO_SERVER = {
     "gas_stations": {"on": F(bool)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},   # the map's search box
+    # the phone's search (phoneapi.py; additive): the saved places, then Photon, with the distance to each
+    "phone_search": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},
+    "phone_reverse": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},   # a dropped pin's name (phoneapi.reverse)
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
-              "bearing": F(NUM, OPT)},   # the GPS (routing.py); bearing: the car's heading, the route starts that way
+              "bearing": F(NUM, OPT),   # the GPS (routing.py); bearing: the car's heading, the route starts that way
+              "steps": F(bool, OPT),    # the phone's turn-by-turn steps asked with the route (routing.parse_steps)
+              "alternatives": F(int, OPT)},   # the phone's route choice: how many routes to ask for
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
     "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # the update notice's button: the server opens the releases page (updates.open_page; additive)
@@ -141,6 +151,11 @@ MOD_TO_SERVER = {
     "update_now": {},                   # the update notice's "Update now" (selfupdate.py)
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
+    "nearest_fuel": {"id": F(int), "lat": F(NUM), "lon": F(NUM)},
+    "media": {"id": F(int), "action": F(str, OPT), "volume": F(NUM, OPT)},
+    "rally_stage": {"id": F(int), "stage": F(str)},     # the phone's Rally app (rally.py)
+    "places_near": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "kind": F(str)},    # the phone's Garage app (shops.py)     # the phone's Music app (media.py)
+    "delivery_jobs": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "seed": F(int), "kind": F(str, OPT)},   # the Jobs app (jobfind.py)     # the world map's "Nearest gas station" (fuelfind.py)
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
     "place_previews": {"places": F((list, dict))},
 }
@@ -153,15 +168,28 @@ TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squ
 SERVER_TO_MOD = {
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT)},   # geocode.py (Photon)
-    "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
-                      "elev": F((list, dict), OPT)},  # OSRM; elev: the map's profile (routing.resample, dem.sample)
+    "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "turns": F(list, OPT),
+                     "error": F(str, OPT),  # OSRM; turns: the GPS's turn-by-turn (routing.turns)
+                     "steps": F(list, OPT),  # the phone's turn-by-turn steps [{at, dist, dur, name, type, modifier}]
+                     "routes": F(list, OPT),  # the phone's route choices [{points, dist, dur, steps, tag}]
+                     "elev": F((list, dict), OPT)},  # elev: the map's profile (routing.resample, dem.sample)
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},  # routeahead.py: the route's corridor
+    "phone_search_result": {"id": F(int), "results": F(list), "error": F(str, OPT)},   # phoneapi.search
+    "phone_reverse_result": {"id": F(int), "name": F(str), "detail": F(str, OPT),
+                             "error": F(str, OPT)},   # phoneapi.reverse (a dropped pin)
     "update": {"current": F(str), "latest": F(str), "url": F(str)},   # a newer version on GitHub (updates.py)
     "update_status": {"state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT),
                       "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
                      "country": F(str, OPT)},   # the status bar's location
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
+    "nearest_fuel_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT),
+                            "dist": F(NUM, OPT), "error": F(str, OPT)},
+    "places_near_result": {"id": F(int), "kind": F(str), "places": F(list), "error": F(str, OPT)},
+    "media_state": {"id": F(int), "ok": F(bool), "playing": F(bool), "artist": F(str), "title": F(str),
+                    "volume": F(int, OPT)},
+    "delivery_jobs_result": {"id": F(int), "jobs": F(list), "error": F(str, OPT)},
+    "rally_stage_result": {"id": F(int), "stage": F(dict, OPT), "error": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "hello": {"protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
@@ -265,6 +293,11 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "update_status",                              # the player's "Update now" (test_selfupdate)
                        "where_result",                               # the status bar: asked by the mod while driving
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
+                       "nearest_fuel_result",                          # the world map's button: map data (test_fuelfind)
+                       "delivery_jobs_result",
+                       "rally_stage_result",                           # the Rally app: map data (test_rally)
+                       "media_state",
+                       "places_near_result",                           # the Garage app: map data (test_shops)                                  # the phone: desktop Spotify (test_media)                         # the Jobs app: map data (test_jobfind)
                                                                      # (test_randomplace)
                        "block_base",                                 # a lazy imagery source (test_detail)
                        "sea",                                        # --sea on: needs map data (test_seacarve)
@@ -276,6 +309,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "update",                                     # only when GitHub has a newer version (online)
                        "geocode_result", "route_result",             # only when the map / GPS asks
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
+                       "phone_search_result", "phone_reverse_result",   # the phone's places (phoneapi.py)
                        "server_list"}                                # only when the BeamMP tab asks (online)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}

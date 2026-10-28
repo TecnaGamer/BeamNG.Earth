@@ -89,14 +89,15 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # roads 4: OpenStreetMap's raceways appended (osmtags.raceways, GitHub #143)
 # roads 5: a segment from an OSM relation (no way id) takes the tags of the same-named way around it (osmtags.join)
 # roads 6: rail segments' rail_flags (is_bridge / is_tunnel) in the "flags" rule (railways.py, mpsteppe's PR #287)
-# (osmtags osm_highway, construction/proposed roads left out, GitHub #184: only cells fetched after it; the cached
-# ones get it with the next Overture release bump, not a roads 7 here: every player's roads fetched again)
-LAYER_VERSIONS = {"roads": 6}
+# roads 7: routes and destinations as JSON (the green guide signs, guidesigns.py); upstream's construction/proposed
+# roads left out (GitHub #184) ride along
+LAYER_VERSIONS = {"roads": 7}
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
-VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places")
+VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
+                 "divisions")
 RASTER_LAYERS = ("landcover", "canopy")
-OPTIONAL_LAYERS = ("building_parts", "places")   # built only when asked for by name (buildings.py, gasstations.py)
+OPTIONAL_LAYERS = ("building_parts", "places", "divisions")   # built only when asked for by name (buildings.py, gasstations.py)
 LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LAYERS
 ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")

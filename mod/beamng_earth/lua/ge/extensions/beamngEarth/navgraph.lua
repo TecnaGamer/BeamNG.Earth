@@ -12,6 +12,9 @@ local M = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
 M.MIN_GAP_S = 1.0
+M.GRAPH_GAP_S = 6.0     -- a new server graph alone (the block not moved RECLIP_M) waits this long: each apply
+                        -- makes every car drop its route (the user, 2026-10-25: cars turned round while loading)
+M.LOG_S = 60            -- traffic diagnostics to the game log this often
 -- An apply (or its signals' second step) waits for a light frame (governor roomFor: at most APPLY_ROOM_MS of streaming
 -- and other work spent in it, not a terrain commit's), APPLY_WAIT_FRAMES at most
 M.APPLY_ROOM_MS = 4.0
@@ -23,6 +26,7 @@ M.RECLIP_M = 150
 M.UI_MAP = false        -- send our graph to the UI (the big map) on every apply
 M.RULES_FILE = '/temp/beamngEarth/roadRules.json'
 M.rules = { rightHandDrive = false, turnOnRed = true }    -- US; `rightHandDrive = true` means driving on the left
+M.mph = true            -- speed limits posted in mph (setRules: the country's)
 M.enabled = true
 -- Traffic (gameplay_traffic, the player's traffic amount): started once the first graph is in the map; a car
 -- within GUARD_M of the block's edge (or past it, where there is no ground) is respawned on the graph
@@ -42,8 +46,8 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 -- respawned too: to the AI the cut is a dead end, and a car spawned facing one made a three-point turn on the spot
 -- (GitHub #72, "spawns the wrong way and tries to turn around immediately"; Bathurst 2026-10-21: 20 m from a cut)
 -- A car that has just appeared (FRESH_S) turns round for a cut much farther ahead (Bathurst: 89 m): CUT_FRESH_M.
-M.CUT_M = 60
-M.CUT_S = 4
+M.CUT_M = 150         -- (2026-10-25: 60 / 4 s was inside the AI's 80-100 m planning: it turned round first)
+M.CUT_S = 8
 M.CUT_FRESH_M = 250
 M.FRESH_S = 5
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
@@ -60,6 +64,8 @@ M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
 local graph = nil       -- the server's last graph {anchor, nodes, edges}
 local applied = nil     -- {anchor, serial, box} of the graph in the game's map now
 local dirty = false
+local graphOnly = false   -- dirty only from a new server graph (GRAPH_GAP_S), not a block move
+local logAt, logApplies, logCuts = nil, 0, 0
 local lastApply = -math.huge
 local persistent = nil  -- the node table handed out once (research §2.7.2)
 local ours = false
@@ -137,10 +143,40 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
-          inRadius = e[8], outRadius = e[8] }
+          inRadius = e[8], outRadius = e[8], postedLimit = e[9] }   -- (posted: the GPS's speed limit box)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
+      end
+    end
+  end
+  -- A node this table leaves a dead end that the server's graph did not (its only other link left out as too steep,
+  -- tooSteep: a bridge whose node heights came out wrong) is a cut too: to the AI it is a dead end like the clip's,
+  -- and a car driving into one stopped and turned round there (the user, 2026-10-25: traffic "wants to stop ... and
+  -- turn around"). A real dead end (a cul-de-sac: one neighbour in the server's graph too) is not.
+  local origDeg = {}
+  for _, e in ipairs(g.edges) do
+    step()
+    local a, bb = e[1], e[2]
+    if a ~= bb then
+      for _, pair in ipairs({ { a, bb }, { bb, a } }) do
+        local k = pair[1]
+        if keep[k] then
+          local t = origDeg[k] or {}
+          t[pair[2]] = true
+          origDeg[k] = t
+        end
+      end
+    end
+  end
+  for name, t in pairs(nodes) do
+    if not cut[name] then
+      local have, had = 0, 0
+      for _ in pairs(t.links) do have = have + 1 end
+      for _ in pairs(origDeg[name] or {}) do had = had + 1 end
+      if have <= 1 and had > have then
+        cut[name] = true
+        cutList[#cutList + 1] = { t.pos.x, t.pos.y }
       end
     end
   end
@@ -163,7 +199,7 @@ function M.onMessage(msg, currentAnchor)
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil }
-  dirty = true
+  dirty, graphOnly = true, true
   return true
 end
 
@@ -268,7 +304,11 @@ local function setRules()
   local r = graph.rules
   if r then
     M.rules = { rightHandDrive = r.rightHandDrive and true or false, turnOnRed = r.turnOnRed and true or false }
+    M.mph = r.mph and true or false
     M.SIGNAL_TYPE = r.redYellow and 'lightsBasicEU' or 'lightsBasic'
+    -- (kept beside the rules, not in them: M.rules is written to the game's own road rules file) the GPS's speed
+    -- limit box shows mph or km/h as the country posts them
+    M.mph = r.mph ~= false
   end
 end
 
@@ -413,6 +453,8 @@ local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
+  -- better traffic and police driving (aitune.lua): each car's AI tuned once, police chases toned down
+  pcall(function() require('beamngEarth/aitune').tick(gt.getTrafficData(), getObjectByID) end)
   local me = playerId()
   local pv = me >= 0 and getObjectByID(me) or nil
   local pp = pv and pv:getPosition() or nil
@@ -434,7 +476,7 @@ local function guard(b, all)
         seenAt[id] = { p.x, p.y, s0[3] }
         local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
-        if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
+        if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1; logCuts = logCuts + 1 end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
@@ -589,6 +631,12 @@ end
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
   local t0 = os.clock()
+  logAt = logAt or t0
+  if t0 - logAt >= M.LOG_S then
+    if started then log('I', 'beamngEarth', string.format('navgraph: %d map applies, %d respawns before a cut in %d s',
+      logApplies, logCuts, math.floor(t0 - logAt))) end
+    logAt, logApplies, logCuts = t0, 0, 0
+  end
   if applied and t0 - lastGuard >= M.GUARD_S then
     lastGuard = t0
     local ok, err = pcall(guard, b, false)
@@ -611,15 +659,16 @@ function M.update(aid, b, gov)
     return
   end
   -- a small block move alone does not re-apply (each apply is a ~40 ms frame); one of RECLIP_M does
-  if not (dirty or foreign) and applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty = true end
+  if applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty, graphOnly = true, false end
   if not (dirty or foreign) then return end
   local t = os.clock()
-  if t - lastApply < M.MIN_GAP_S and not foreign then return end
+  if not foreign and t - lastApply < ((graphOnly and applied and applied.anchor == aid) and M.GRAPH_GAP_S or M.MIN_GAP_S) then return end
   local pre = buildNodes(b)
   if not pre or not room(gov) then return end
   prep = nil
   lastApply = t
-  dirty, foreign = false, false
+  dirty, foreign, graphOnly = false, false, false
+  logApplies = logApplies + 1
   local sw = stopwatch.new()
   local okA = apply(b, pre)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end

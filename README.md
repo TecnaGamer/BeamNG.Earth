@@ -117,6 +117,44 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Saved places and recent places; "Where you left off" in the level select puts you back where you last drove (it
   is saved as you drive, at teleports and when the game closes).
 
+### In-Game iPhone Navigation UI (hotkey: **PgUp**)
+
+A phone-sized UI app that lives in the corner of the screen while you drive: an iPhone 15-18 Pro frame (dynamic
+island, glass bezel) over an Apple Maps style map of the real world. Page Up shows and hides it; it sits in the
+`.Earth` app layout above the speedometer and scales to whatever box the UI Apps editor gives it.
+
+**What it does**
+- **The map**: three styles from the companion server - *Map* (terrain-light restyled into the Apple palette: white
+  roads, soft blocks, pale greens, light blue water), *Dark* (a real night palette: dark land, pale minor roads,
+  bright motorways, saturated navy water, light labels) and *Satellite* (Sentinel-2 imagery with road labels over
+  it). The wheel zooms continuously (a notch is a quarter level; tiles scale between levels).
+- **Where you are**: the car in real time (position and heading - never its speed), the road's speed limit from the
+  AI road graph (mph or km/h by country), and a re-center button that pins the map back on the car.
+- **Finding places**: search as you type. Recent places answer at once (four shown, the rest scroll, **X** forgets
+  one for good); then saved places and OpenStreetMap places from Photon, nearest first, each with its distance; a
+  typed **latitude, longitude** is offered too, parsed by the same code as the **M** map's search. Typing takes the
+  keyboard, so the car does not drive off while you type.
+- **Dropping a pin**: double tap the map anywhere; the card names the spot (reverse geocoded) and **Directions**
+  starts the route there.
+- **Turn-by-turn, spoken-style**: the green card says what a navigator would say - "Turn left onto Camino de las
+  Vinas", "then turn right onto Calle Mayor" for two turns close together, "Now, ..." as you reach one, roundabouts
+  by exit number - and the dynamic island mirrors the maneuver.
+- **Route choices**: OSRM's alternatives arrive with the same request, tagged *Fastest*, *Main roads* (the most
+  distance on numbered roads) and *Shortest*; a chip switches the GPS to that route.
+- **The guided line**: the blue route is eaten away behind you as you drive, grows back if you turn round, and while
+  the phone is open a wrong turn is re-planned quickly (40 m off route, at most every 2.5 s) with a clear
+  **Recalculating route...** state before the new direction appears.
+- **ETA card**: time and distance left, the destination, **End Route**.
+- **Server endpoints**: the same places and route are on `http://127.0.0.1:<map port>/api/search`, `/api/reverse`
+  and `/api/route` for tools and tests.
+
+**What it is, and what it is not**
+- **Is**: a heads-up driving companion - find a real place, drop a pin, read the next maneuver and keep the route
+  and ETA in the corner of your eye without leaving the road.
+- **Is not**: a replacement for the fullscreen **M** map (macro navigation, teleporting, layers, saving places,
+  settings). They are separate UI apps: the phone only sets the same GPS destination the map sets, so the stock
+  arrows, the minimap and Autodrive behave exactly as before, and neither app needs the other to be open.
+
 **Interface and tools**
 - A slim status bar (street, town, country, and under it the loading progress of the ground, roads & buildings, trees and
   distant land after a teleport), the Earth coordinates above the minimap, a connection banner when something is

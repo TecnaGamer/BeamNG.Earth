@@ -1,0 +1,1082 @@
+{
+  "us_advisory10": {
+    "name": "us_advisory10",
+    "mapTo": "us_advisory10",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory10.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory15": {
+    "name": "us_advisory15",
+    "mapTo": "us_advisory15",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory15.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory20": {
+    "name": "us_advisory20",
+    "mapTo": "us_advisory20",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory20.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory25": {
+    "name": "us_advisory25",
+    "mapTo": "us_advisory25",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory25.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory30": {
+    "name": "us_advisory30",
+    "mapTo": "us_advisory30",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory30.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory35": {
+    "name": "us_advisory35",
+    "mapTo": "us_advisory35",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory35.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory40": {
+    "name": "us_advisory40",
+    "mapTo": "us_advisory40",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory40.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory45": {
+    "name": "us_advisory45",
+    "mapTo": "us_advisory45",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory45.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory50": {
+    "name": "us_advisory50",
+    "mapTo": "us_advisory50",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory50.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory55": {
+    "name": "us_advisory55",
+    "mapTo": "us_advisory55",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory55.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory60": {
+    "name": "us_advisory60",
+    "mapTo": "us_advisory60",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory60.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory65": {
+    "name": "us_advisory65",
+    "mapTo": "us_advisory65",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory65.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory70": {
+    "name": "us_advisory70",
+    "mapTo": "us_advisory70",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory70.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory75": {
+    "name": "us_advisory75",
+    "mapTo": "us_advisory75",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory75.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_advisory80": {
+    "name": "us_advisory80",
+    "mapTo": "us_advisory80",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_advisory80.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_chevron_l": {
+    "name": "us_chevron_l",
+    "mapTo": "us_chevron_l",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_chevron_l.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_chevron_r": {
+    "name": "us_chevron_r",
+    "mapTo": "us_chevron_r",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_chevron_r.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed15": {
+    "name": "us_speed15",
+    "mapTo": "us_speed15",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed15.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed20": {
+    "name": "us_speed20",
+    "mapTo": "us_speed20",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed20.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed25": {
+    "name": "us_speed25",
+    "mapTo": "us_speed25",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed25.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed30": {
+    "name": "us_speed30",
+    "mapTo": "us_speed30",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed30.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed35": {
+    "name": "us_speed35",
+    "mapTo": "us_speed35",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed35.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed40": {
+    "name": "us_speed40",
+    "mapTo": "us_speed40",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed40.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed45": {
+    "name": "us_speed45",
+    "mapTo": "us_speed45",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed45.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed50": {
+    "name": "us_speed50",
+    "mapTo": "us_speed50",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed50.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed55": {
+    "name": "us_speed55",
+    "mapTo": "us_speed55",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed55.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed60": {
+    "name": "us_speed60",
+    "mapTo": "us_speed60",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed60.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed65": {
+    "name": "us_speed65",
+    "mapTo": "us_speed65",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed65.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed70": {
+    "name": "us_speed70",
+    "mapTo": "us_speed70",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed70.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed75": {
+    "name": "us_speed75",
+    "mapTo": "us_speed75",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed75.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed80": {
+    "name": "us_speed80",
+    "mapTo": "us_speed80",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed80.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_speed85": {
+    "name": "us_speed85",
+    "mapTo": "us_speed85",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_speed85.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_warn_curve_l": {
+    "name": "us_warn_curve_l",
+    "mapTo": "us_warn_curve_l",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_warn_curve_l.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_warn_curve_r": {
+    "name": "us_warn_curve_r",
+    "mapTo": "us_warn_curve_r",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_warn_curve_r.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_warn_turn_l": {
+    "name": "us_warn_turn_l",
+    "mapTo": "us_warn_turn_l",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_warn_turn_l.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  },
+  "us_warn_turn_r": {
+    "name": "us_warn_turn_r",
+    "mapTo": "us_warn_turn_r",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/levels/beamng_earth/art/shapes/beamngEarth/us_warn_turn_r.png",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "specular": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "specularPower": 20,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaTest": true,
+    "alphaRef": 127,
+    "doubleSided": false
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "domElement": "<beamng-earth-jobs></beamng-earth-jobs>",
+  "name": "BeamNG.Earth: Jobs",
+  "types": ["ui.apps.categories.utility"],
+  "description": "Jobs around the map (BeamNG.Earth): garage-to-garage car deliveries between real garages.",
+  "css": {"width": "360px", "height": "430px"},
+  "author": "BeamNG.Earth",
+  "version": "1.0",
+  "directive": "beamngEarthJobs",
+  "appName": "beamngEarthJobs",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "yes"
+}

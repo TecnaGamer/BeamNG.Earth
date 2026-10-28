@@ -20,6 +20,10 @@ M.VIA_M = 250           -- the arrows' path is pinned to the route by a waypoint
                         -- its own shortest way to the target: Fells Point 2026-10-14, a loop round a block)
 M.OFF_ROUTE_M = 120     -- farther from the route: planned again ...
 M.REROUTE_S = 20        -- ... at most this often
+-- while the phone is open the same thing is tighter (a wrong turn is corrected in seconds, as a phone navigator
+-- does): the phone's own routing, the map's GPS keeps its forgiving values
+M.PHONE_OFF_M = 40
+M.PHONE_REROUTE_S = 2.5
 -- Past the local graph's edge the arrows go on along the planned route itself (the user, 2026-10-14, a Cannonball run:
 -- "the in game arrows would keep ending and I'd have to wait a while before they continue": the graph only covers the
 -- terrain block, which lags a fast car): the stock planner's path gets the route's next TAIL_M appended, a point every
@@ -44,14 +48,14 @@ M.AUTO_AGGRESSION = 0.3
 M.AUTO_DAMAGE = 20000
 
 local dest = nil        -- { lat, lon, name }
-local route = nil       -- { points = {{lat, lon}...}, dist, dur, version } | false (no route: steering) | nil (none yet)
+local route = nil       -- { points = {{lat, lon}...}, dist, dur, version, steps } | false (no route: steering) | nil (none yet)
 local routeVersion = 0
 local routeError = nil
+local wantSteps = false -- the phone asked for the turn-by-turn steps with the route
 local pendingId, nextId = nil, 0
 local lastRequest = -math.huge
 local enu = nil         -- { anchor, x = {}, y = {}, cum = {} } of the route in the current anchor's frame
 local progress = 1      -- index of the route segment the player is on
-local progressS = nil   -- ... and the distance along the route there (routePosition: no jumps to another bend)
 local routedTo = nil    -- the node id (or 'final') the current arrows go to
 local lastCheck = -math.huge
 local info = nil        -- { dist, bearing, remaining, eta } at the last check
@@ -206,16 +210,55 @@ local function requestRoute(player)
   local veh = playerVeh()
   local d = veh and veh.getDirectionVector and veh:getDirectionVector()
   local b = d and M.compass(d.x, d.y)
-  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b) then
+  -- the phone's destination also asks for the alternative routes (its route choice); the map's GPS does not
+  local alts = wantSteps and M.ALTERNATIVES or nil
+  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b, wantSteps, alts) then
     pendingId, lastRequest = nextId, os.clock()
   end
 end
 
-function M.setDestination(lat, lon, name)
+-- The turn-by-turn steps (the phone's instruction card): asked with the route (no extra request), nil when off.
+function M.steps()
+  return route and route.steps or nil
+end
+
+-- The phone is on screen: re-route on a wrong turn sooner (M.PHONE_OFF_M / M.PHONE_REROUTE_S) than the map's GPS.
+function M.phoneRouting(on)
+  tight = on and true or false
+  return tight
+end
+function M.tight() return tight end
+
+M.ALTERNATIVES = 3      -- routes to ask for with a phone destination (its route choice), 0: only the fastest
+
+-- The route choices OSRM offered: [{tag, dist, dur, main_share, chosen}] (nil until a phone route is in).
+function M.options()
+  if not route or type(route.routes) ~= 'table' or #route.routes < 2 then return nil end
+  local out = {}
+  for i, r in ipairs(route.routes) do
+    out[i] = { tag = r.tag or ('Route ' .. i), dist = r.dist, dur = r.dur, main_share = r.main_share,
+      chosen = (r.dist == route.dist and r.dur == route.dur) and true or false }
+  end
+  return out
+end
+
+-- Drive one of those choices instead (the phone's chips): the same shape core.takeRoute hands the GPS.
+function M.useRoute(i)
+  local r = route and type(route.routes) == 'table' and route.routes[tonumber(i) or 0]
+  if not r or type(r.points) ~= 'table' or #r.points < 2 then return false end
+  routeVersion = routeVersion + 1
+  route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, steps = r.steps,
+    routes = route.routes }
+  routeError, enu, routedTo, pendingId = nil, nil, nil, nil
+  lastRequest = os.clock()
+  return true
+end
+
+function M.setDestination(lat, lon, name, steps)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon then return false end
   dest = { lat = lat, lon = lon, name = name }
-  route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
+  route, routeError, pendingId, enu, progress, info = nil, nil, nil, nil, 1, nil
   routedTo, lastCheck, lastRequest = nil, -math.huge, -math.huge     -- plan and route at the next update
   downloadProgress = nil         -- the previous destination's bar, not this one's (its own push is coming)
   return true
@@ -224,7 +267,6 @@ end
 function M.clear()
   if auto then M.setAutodrive(false) end
   dest, route, routeError, pendingId, enu, info = nil, nil, nil, nil, nil, nil
-  downloadProgress = nil
   clearArrows()
 end
 
@@ -248,13 +290,56 @@ function M.status()
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
            autodrive = auto, autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
-           routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries }
+           routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries,
+           next = info and info.next }
 end
 
 -- The planned route for the map: { version, points = {{lat, lon}...}, dist, dur, elev = {{distM, elevM}...} } or nil.
 function M.route()
   if not route then return nil end
   return { version = route.version, points = route.points, dist = route.dist, dur = route.dur, elev = route.elev }
+end
+
+-- The GPS app's turn-by-turn (the user, 2026-10-25): the server's turns (routing.turns: lat, lon, at, arrow, text) placed
+-- on this route line, and the next one ahead of the car.
+M.TURN_PASSED_M = 3     -- a turn this far behind the car's spot on the route is passed
+M.TURN_WINDOW_M = 250   -- a turn is looked for this far (plus TURN_WINDOW_SHARE of the way) around where OSRM puts it
+M.TURN_WINDOW_SHARE = 0.03
+
+-- Pure: the first index k with cum[k] >= v (#cum + 1 when none), cum ascending.
+function M.lowerBound(cum, v)
+  local lo, hi = 1, #cum + 1
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    if cum[mid] < v then lo = mid + 1 else hi = mid end
+  end
+  return lo
+end
+
+-- Pure: each turn's arc length along the route line (xs, ys, cum): the nearest point near where OSRM's own distance
+-- (ats[j], scaled to this simplified line's length by scale) puts it, never before the turn before it, so a route
+-- passing one spot twice takes the right pass, and a long route costs a few segments per turn.
+function M.placeTurns(xs, ys, cum, tx, ty, ats, scale)
+  local out, n, i0 = {}, #xs, 1
+  for j = 1, #tx do
+    local guess = (tonumber(ats[j]) or 0) * scale
+    local tol = M.TURN_WINDOW_M + M.TURN_WINDOW_SHARE * guess
+    local lo = math.max(i0, M.lowerBound(cum, guess - tol) - 1, 1)
+    local hi = math.min(n, M.lowerBound(cum, guess + tol) + 1)
+    if hi <= lo then lo, hi = math.max(1, math.min(lo, n - 1)), n end
+    local i, t = M.nearestSegment(xs, ys, tx[j], ty[j], lo, hi)
+    out[j] = cum[i] + t * (cum[i + 1] - cum[i])
+    i0 = i
+  end
+  return out
+end
+
+-- Pure: the index of the first turn not yet passed at arc length here (a turn is passed once the car is TURN_PASSED_M
+-- beyond it: right at it the card still shows it), or nil past the last.
+function M.nextTurn(turnS, here)
+  for j = 1, #turnS do
+    if turnS[j] > here - M.TURN_PASSED_M then return j end
+  end
 end
 
 local function toEnu(anchor)
@@ -265,6 +350,15 @@ local function toEnu(anchor)
     if i > 1 then cum[i] = cum[i - 1] + math.sqrt((xs[i] - xs[i - 1]) ^ 2 + (ys[i] - ys[i - 1]) ^ 2) end
   end
   enu = { anchor = anchor, x = xs, y = ys, cum = cum }
+  if type(route.turns) == 'table' and #route.turns > 0 and #xs >= 2 then
+    local tx, ty, ats = {}, {}, {}
+    for j, tn in ipairs(route.turns) do
+      tx[j], ty[j] = anchor:geodeticToEnu(tonumber(tn.lat) or 0, tonumber(tn.lon) or 0, 0)
+      ats[j] = tonumber(tn.at) or 0
+    end
+    local total = tonumber(route.dist) or 0
+    enu.turnS = M.placeTurns(xs, ys, cum, tx, ty, ats, total > 0 and cum[#cum] / total or 1)
+  end
   progress = 1
   return enu
 end
@@ -689,7 +783,8 @@ function M.update(anchor, player)
       pendingId = nil
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
-        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev }
+        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion,
+                  turns = type(r.turns) == 'table' and r.turns or nil, steps = r.steps, routes = r.routes, elev = r.elev }
         routeError, enu, routedTo = nil, nil, nil
       else
         routeError = r.error or 'no route'
@@ -718,17 +813,22 @@ function M.update(anchor, player)
   if route then
     local e = toEnu(anchor)
     local n = #e.x
-    local vx, vy = player.vx or 0, player.vy or 0
-    local i, t, off = M.routePosition(e.x, e.y, e.cum, player.x, player.y, vx, vy, progressS, progress - 5,
-      progress + 400)
-    if off > M.OFF_ROUTE_M then
-      i, t, off = M.routePosition(e.x, e.y, e.cum, player.x, player.y, vx, vy, progressS, 1, n)
-    end
+    local i, t, off = M.nearestSegment(e.x, e.y, player.x, player.y, progress - 5, progress + 400)
+    if off > M.OFF_ROUTE_M then i, t, off = M.nearestSegment(e.x, e.y, player.x, player.y, 1, n) end
     progress = i
     progressS = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
     local remaining = e.cum[n] - (e.cum[i] + t * (e.cum[i + 1] - e.cum[i]))
     info.remaining = remaining + off
     info.off = off
+    if e.turnS then
+      local here = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
+      local j = M.nextTurn(e.turnS, here)
+      local tn = j and route.turns[j]
+      if tn then
+        info.next = { arrow = tn.arrow, text = tn.text, dist = math.max(0, e.turnS[j] - here),
+                      lat = tonumber(tn.lat), lon = tonumber(tn.lon) }
+      end
+    end
     if auto and not paused then
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end
@@ -744,7 +844,7 @@ function M.update(anchor, player)
       end
     end
     if route.dist and route.dist > 0 and route.dur then info.eta = route.dur * remaining / route.dist end
-    if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
+    if off > offM and not pendingId and now - lastRequest > rerouteS then requestRoute(player) end
     local tg = nodes and routeTarget(e, nodes, i, t)
     if tg then
       -- set again only when the target moved on by a good stretch (each setPath re-plans the arrows)
@@ -769,6 +869,38 @@ function M.update(anchor, player)
 end
 
 -- The level ended: the arrows went with it (the destination and its route stay for the next level start).
+-- The GPS app's speed limit box: the posted limit of the AI graph's edge under the player's car (navgraph.lua
+-- postedLimit; speedLimit, the driving target, where there is none), rounded as signs post them, in the country's unit
+-- (navgraph.mph). Looked up at most once a second (edgeUnder walks the graph). nil off the graph.
+M.LIMIT_S = 1.0
+local limitAt, limitVal = -math.huge, nil
+
+-- Pure: a limit in m/s as a sign shows it: { value, unit } (mph to 5, km/h to 10).
+function M.signLimit(ms, mph)
+  ms = tonumber(ms)
+  if not ms or ms <= 0 then return nil end
+  if mph then return { value = math.floor(ms * 2.2369363 / 5 + 0.5) * 5, unit = 'mph' } end
+  return { value = math.floor(ms * 3.6 / 10 + 0.5) * 10, unit = 'km/h' }
+end
+
+function M.speedLimit()
+  local now = os.clock()
+  if now - limitAt < M.LIMIT_S then return limitVal end
+  limitAt, limitVal = now, nil
+  local veh = playerVeh()
+  local m = rawget(_G, 'map') and map.getMap and map.getMap()
+  if not (veh and m and m.nodes) then return nil end
+  local p, d = veh:getPosition(), veh:getDirectionVector()
+  local hl = math.sqrt(d.x * d.x + d.y * d.y)
+  if hl < 0.1 then return nil end
+  local a, b = M.edgeUnder(m.nodes, p.x, p.y, d.x / hl, d.y / hl)
+  local e = a and m.nodes[a] and m.nodes[a].links and m.nodes[a].links[b]
+  if not e then return nil end
+  local okN, ng = pcall(require, 'beamngEarth/navgraph')
+  limitVal = M.signLimit(e.postedLimit or e.speedLimit, not okN or ng.mph ~= false)
+  return limitVal
+end
+
 function M.reset()
   routedTo, info, lastCheck, enu, progress, progressS = nil, nil, -math.huge, nil, 1, nil
 end

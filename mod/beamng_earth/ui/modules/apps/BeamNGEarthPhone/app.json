@@ -1,0 +1,14 @@
+{
+  "domElement": "<beamng-earth-phone></beamng-earth-phone>",
+  "name": "BeamNG.Earth: Phone",
+  "types": ["ui.apps.categories.utility"],
+  "description": "Your phone (BeamNG.Earth): bank, weather forecast, jobs, music, settings. Ctrl+O shows / hides it.",
+  "css": {"width": "330px", "height": "650px"},
+  "author": "BeamNG.Earth",
+  "version": "1.0",
+  "directive": "beamngEarthPhone",
+  "appName": "beamngEarthPhone",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "yes"
+}

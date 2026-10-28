@@ -4404,11 +4404,68 @@ def drains(run, side, caps, walk_w=None):
     return res
 
 
+def _counties(frame, divisions, box):
+    """guidesigns.county_index's counties from the "divisions" layer cells near box: [(name, region, [(outer Path,
+    [hole Path])])], the pieces of one county (clipped to their cells) one entry each."""
+    from polygon import Path
+    out = []
+    x0, y0, x1, y1 = box
+    for feats in divisions or ():
+        if feats is None or len(feats) == 0:
+            continue
+        xy = feats.xy_in(frame)
+        nm, rg, sub = (feats.attrs.get(c) for c in ("name", "region", "subtype"))
+        for i in range(len(feats)):
+            if sub is not None and str(sub[i]) != "county":
+                continue
+            polys = []
+            for part in feats.parts(i, xy):
+                if not part or len(part[0]) < 4:
+                    continue
+                o = part[0]
+                if o[:, 0].max() < x0 or o[:, 0].min() > x1 or o[:, 1].max() < y0 or o[:, 1].min() > y1:
+                    continue
+                polys.append((Path(o), [Path(h) for h in part[1:] if len(h) >= 4]))
+            if polys:
+                out.append((str(nm[i]) if nm is not None and nm[i] else "", str(rg[i]) if rg is not None else "",
+                            polys))
+    return out
+
+
+def _guide_plan(frame, seen, roads, box, mph, left_hand, divisions=None):
+    """guidesigns.plan for a tile: the Overture routes / destinations of its roads, the towns within reach."""
+    import guidesigns
+    import randomplace
+    attrs = {}
+    for fid, (feats, i, _spec) in seen.items():
+        r, d, nm = feats.attrs.get("routes"), feats.attrs.get("dests"), feats.attrs.get("name")
+        attrs[fid] = {"routes": r[i] if r is not None else None, "dests": d[i] if d is not None else None,
+                      "name": nm[i] if nm is not None else None}
+    if not any(sp.cls in guidesigns.MAIN for _f, sp, _l, _ in roads):
+        return []
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    la, lo, _ = frame.enu_to_geodetic(cx, cy, 0.0)
+    near = [t for t in randomplace.towns() if abs(t[0] - float(la)) < 2.0 and abs(t[1] - float(lo)) < 2.6]
+    towns_xy = []
+    if near:
+        e, n, _ = frame.geodetic_to_enu(np.array([t[0] for t in near]), np.array([t[1] for t in near]), 0.0)
+        towns_xy = [(float(a), float(b), t[2]) for a, b, t in zip(e, n, near)]
+    x0, y0, x1, y1 = box
+    m = guidesigns.REACH_M
+    counties = _counties(frame, divisions, (x0 - m, y0 - m, x1 + m, y1 + m))
+
+    def geo(x, y):
+        la, lo, _ = frame.enu_to_geodetic(np.asarray(x, np.float64), np.asarray(y, np.float64), 0.0)
+        return np.atleast_1d(la), np.atleast_1d(lo)
+    return guidesigns.plan(roads, attrs, box, mph=mph, left_hand=left_hand, towns_xy=towns_xy, geo=geo,
+                           counties=counties)
+
+
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None):
+               signals=None, guide=None, divisions=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -4634,6 +4691,21 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         props.extend(furniture.place(roads, walks, (x0, y0, x1, y1), wires=wires, town=bool(town), left_hand=left_hand,
                                      speeds={k: v for k, v in speeds.items() if v is not None}, mph=mph,
                                      decks=decks, signals=signals, buried=buried, region=lamp_region))
+    if guide is not None and walks is not None:     # green guide signs on motorways and trunk roads (guidesigns.py)
+        try:
+            guide.extend(_guide_plan(frame, seen, roads, (x0, y0, x1, y1), mph, left_hand, divisions))
+            import rumble
+
+            def zfn(x, y):              # the drawn ground the road surfaces lie on (else the elevation)
+                if ground is not None:
+                    return ground(x, y)
+                la, lo, _ = frame.enu_to_geodetic(x, y, np.zeros(len(x)))
+                return np.asarray(elev(la, lo), np.float64)
+            bars = rumble.strips(roads, (x0, y0, x1, y1), zfn)
+            if bars is not None:
+                guide.append(bars)
+        except Exception as e:      # no signs rather than no tile
+            log.warning("guide signs %s,%s: %s: %s", tx, ty, type(e).__name__, e)
     if park is not None and walks is not None:      # curbside parking spots (parking.py)
         import parking
         dirs = {}
@@ -4793,7 +4865,7 @@ def shape_files(aid, tx, ty):
            "walk": f"walks_{aid}_{tx}_{ty}.cdae", "walkcol": f"walkcol_{aid}_{tx}_{ty}.cdae",
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
-           "rail": f"rail_{aid}_{tx}_{ty}.cdae"}
+           "rail": f"rail_{aid}_{tx}_{ty}.cdae", "guide": f"guide_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -4864,7 +4936,7 @@ def sound_boxes(chunks):
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
-               rail_mesh=None, garage_sound=(), wells=()):
+               rail_mesh=None, guide=None, garage_sound=(), wells=()):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -4950,6 +5022,21 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             shape = f"wire_{aid}_{tx}_{ty}.cdae"
             cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material="bne_wire", object_name="wires")
             data["wire"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    if guide:                       # the green guide signs and their steel (guidesigns.py), solid like the sidewalks
+        import cdae
+        import guidesigns
+        gx0, gy0, _, _ = tile_bbox(tx, ty)
+        gm = guidesigns.mesh(guide, (gx0, gy0, 0.0))
+        if gm is not None:
+            shape = f"guide_{aid}_{tx}_{ty}.cdae"
+            cdae.write(os.path.join(out_dir, shape), gm[0], gm[1], uvs=gm[2], material=guidesigns.MATERIALS,
+                       tri_materials=gm[3], object_name="guide")
+            data["guide"] = {"shape": f"{vfs_dir}/{shape}", "pos": [gx0, gy0, 0.0]}
+        # the toll gantries for the mod's wallet: [x, y, travel dx, dy, half span] in the anchor's frame
+        tl = [[g["x"], g["y"], g["d"][0], g["d"][1], round(g["width"] / 2 + guidesigns.GANTRY_POST_M, 2)]
+              for g in guide if g.get("kind") == "toll"]
+        if tl:
+            data["tolls"] = tl
     if props:                       # furniture.place's rows: Forest items (trees.lua), groups by index
         groups = sorted({r[0] for r in props})
         data["props"] = {"groups": groups, "items": [[groups.index(r[0])] + r[1:] for r in props]}

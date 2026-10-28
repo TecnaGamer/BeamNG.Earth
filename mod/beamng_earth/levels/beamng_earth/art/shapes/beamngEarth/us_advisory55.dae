@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor>
+      <author>BeamNG Earth</author>
+      <authoring_tool>Python generator</authoring_tool>
+    </contributor>
+    <created>2026-10-23T00:00:00</created>
+    <modified>2026-10-23T00:00:00</modified>
+    <unit meter="1" name="meter"/>
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_images>
+    <image id="us_advisory55_image">
+      <init_from>us_advisory55.png</init_from>
+    </image>
+  </library_images>
+  <library_effects>
+    <effect id="us_advisory55_effect">
+      <profile_COMMON>
+        <newparam sid="us_advisory55_surface">
+          <surface type="2D">
+            <init_from>us_advisory55_image</init_from>
+          </surface>
+        </newparam>
+        <newparam sid="us_advisory55_sampler">
+          <sampler2D>
+            <source>us_advisory55_surface</source>
+          </sampler2D>
+        </newparam>
+        <technique sid="common">
+          <lambert>
+            <diffuse>
+              <texture texture="us_advisory55_sampler" texcoord="UVMap"/>
+            </diffuse>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="sign_metal_effect">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <diffuse>
+              <color>0.62 0.64 0.66 1</color>
+            </diffuse>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_materials>
+    <material id="us_advisory55_material" name="us_advisory55">
+      <instance_effect url="#us_advisory55_effect"/>
+    </material>
+    <material id="sign_metal_material" name="sign_metal">
+      <instance_effect url="#sign_metal_effect"/>
+    </material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="us_advisory55_4_geom">
+      <mesh>
+        <source id="us_advisory55_4_positions">
+          <float_array id="us_advisory55_4_positions_array" count="60">-0.2286 -0.005 1.4428 0.2286 -0.005 1.4428 0.2286 -0.005 1.9 -0.2286 -0.005 1.9 0.0 0.005 1.6714 0.2286 0.005 1.4428 -0.2286 0.005 1.4428 0.0 0.005 1.6714 0.0 0.005 1.6714 0.2286 0.005 1.9 0.2286 0.005 1.4428 0.0 0.005 1.6714 0.0 0.005 1.6714 -0.2286 0.005 1.9 0.2286 0.005 1.9 0.0 0.005 1.6714 0.0 0.005 1.6714 -0.2286 0.005 1.4428 -0.2286 0.005 1.9 0.0 0.005 1.6714</float_array>
+          <technique_common>
+            <accessor source="#us_advisory55_4_positions_array" count="20" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="us_advisory55_4_normals">
+          <float_array id="us_advisory55_4_normals_array" count="60">0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0</float_array>
+          <technique_common>
+            <accessor source="#us_advisory55_4_normals_array" count="20" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="us_advisory55_4_uv">
+          <float_array id="us_advisory55_4_uv_array" count="40">0.0 0.0 1.0 0.0 1.0 1.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0</float_array>
+          <technique_common>
+            <accessor source="#us_advisory55_4_uv_array" count="20" stride="2">
+              <param name="S" type="float"/>
+              <param name="T" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="us_advisory55_4_vertices">
+          <input semantic="POSITION" source="#us_advisory55_4_positions"/>
+        </vertices>
+        <triangles count="2" material="us_advisory55_material">
+          <input semantic="VERTEX" source="#us_advisory55_4_vertices" offset="0"/>
+          <input semantic="NORMAL" source="#us_advisory55_4_normals" offset="0"/>
+          <input semantic="TEXCOORD" source="#us_advisory55_4_uv" offset="0" set="0"/>
+          <p>0 1 2 0 2 3</p>
+        </triangles>
+        <triangles count="8" material="sign_metal_material">
+          <input semantic="VERTEX" source="#us_advisory55_4_vertices" offset="0"/>
+          <input semantic="NORMAL" source="#us_advisory55_4_normals" offset="0"/>
+          <input semantic="TEXCOORD" source="#us_advisory55_4_uv" offset="0" set="0"/>
+          <p>4 5 6 4 6 7 8 9 10 8 10 11 12 13 14 12 14 15 16 17 18 16 18 19</p>
+        </triangles>
+      </mesh>
+    </geometry>
+    <geometry id="us_advisory55_col_4_geom">
+      <mesh>
+        <source id="us_advisory55_col_4_positions">
+          <float_array id="us_advisory55_col_4_positions_array" count="72">-0.2286 -0.005 1.4428 0.2286 -0.005 1.4428 0.2286 -0.005 1.9 -0.2286 -0.005 1.9 -0.2286 0.035 1.4428 0.2286 0.035 1.4428 0.2286 0.035 1.9 -0.2286 0.035 1.9 -0.2286 -0.005 1.4428 -0.2286 0.035 1.4428 -0.2286 0.035 1.9 -0.2286 -0.005 1.9 0.2286 -0.005 1.4428 0.2286 0.035 1.4428 0.2286 0.035 1.9 0.2286 -0.005 1.9 -0.2286 -0.005 1.9 0.2286 -0.005 1.9 0.2286 0.035 1.9 -0.2286 0.035 1.9 -0.2286 -0.005 1.4428 0.2286 -0.005 1.4428 0.2286 0.035 1.4428 -0.2286 0.035 1.4428</float_array>
+          <technique_common>
+            <accessor source="#us_advisory55_col_4_positions_array" count="24" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="us_advisory55_col_4_normals">
+          <float_array id="us_advisory55_col_4_normals_array" count="72">0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0 0.0 0.0 -1.0</float_array>
+          <technique_common>
+            <accessor source="#us_advisory55_col_4_normals_array" count="24" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="us_advisory55_col_4_uv">
+          <float_array id="us_advisory55_col_4_uv_array" count="48">-0.4572 2.8856 0.4572 2.8856 0.4572 3.8 -0.4572 3.8 -0.4572 2.8856 0.4572 2.8856 0.4572 3.8 -0.4572 3.8 -0.01 2.8856 0.07 2.8856 0.07 3.8 -0.01 3.8 -0.01 2.8856 0.07 2.8856 0.07 3.8 -0.01 3.8 -0.4572 -0.01 0.4572 -0.01 0.4572 0.07 -0.4572 0.07 -0.4572 -0.01 0.4572 -0.01 0.4572 0.07 -0.4572 0.07</float_array>
+          <technique_common>
+            <accessor source="#us_advisory55_col_4_uv_array" count="24" stride="2">
+              <param name="S" type="float"/>
+              <param name="T" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="us_advisory55_col_4_vertices">
+          <input semantic="POSITION" source="#us_advisory55_col_4_positions"/>
+        </vertices>
+        <triangles count="12" material="sign_metal_material">
+          <input semantic="VERTEX" source="#us_advisory55_col_4_vertices" offset="0"/>
+          <input semantic="NORMAL" source="#us_advisory55_col_4_normals" offset="0"/>
+          <input semantic="TEXCOORD" source="#us_advisory55_col_4_uv" offset="0" set="0"/>
+          <p>0 1 2 0 2 3 4 6 5 4 7 6 8 10 9 8 11 10 12 13 14 12 14 15 16 17 18 16 18 19 20 22 21 20 23 22</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="us_advisory55_scene" name="us_advisory55_scene">
+      <node id="us_advisory55_node4" name="sign4" type="NODE">
+        <instance_geometry url="#us_advisory55_4_geom">
+          <bind_material>
+            <technique_common>
+              <instance_material symbol="us_advisory55_material" target="#us_advisory55_material">
+                <bind_vertex_input semantic="UVMap" input_semantic="TEXCOORD" input_set="0"/>
+              </instance_material>
+              <instance_material symbol="sign_metal_material" target="#sign_metal_material"/>
+            </technique_common>
+          </bind_material>
+        </instance_geometry>
+      </node>
+      <node id="us_advisory55_colmesh" name="Colmesh-1" type="NODE">
+        <instance_geometry url="#us_advisory55_col_4_geom">
+          <bind_material>
+            <technique_common>
+              <instance_material symbol="sign_metal_material" target="#sign_metal_material"/>
+            </technique_common>
+          </bind_material>
+        </instance_geometry>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene>
+    <instance_visual_scene url="#us_advisory55_scene"/>
+  </scene>
+</COLLADA>

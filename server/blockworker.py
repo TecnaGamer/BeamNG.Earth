@@ -487,6 +487,14 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     props = [] if buildings else None
     lines = [] if buildings else None
     wires = [] if buildings else None
+    guide = [] if buildings else None
+    divisions = []                      # county outlines for the county line signs (guidesigns.py); none offline
+    if buildings:
+        try:
+            divisions = [_s.md.cell(k, layers=("divisions",), kind="demand").layers.get("divisions")
+                         for k in roadsmod.cells_of_tile(frame, tx, ty)]
+        except Exception as e:      # an unreachable source costs the county signs, not the tile
+            log.debug("county outlines of road tile %d_%d: %s", tx, ty, e)
     park = [] if buildings else None
     items = town = None
     if buildings:
@@ -507,7 +515,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
-                                 props=props, lines=lines, wires=wires, town=town, park=park,
+                                 props=props, lines=lines, wires=wires, town=town, park=park, guide=guide, divisions=divisions,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
                                  tunnels=tunnels, walls=rwalls,
@@ -574,7 +582,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
                                bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel, rail_mesh=rmesh,
-                               garage_sound=garage_sound, wells=oil_wells) + (fuel_pads,)
+                               guide=guide, garage_sound=garage_sound, wells=oil_wells) + (fuel_pads,)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):

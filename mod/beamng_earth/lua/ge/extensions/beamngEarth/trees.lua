@@ -195,6 +195,8 @@ M.CATALOG = {
 }
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
+-- the US signs (speed limits 15-85 mph, warnings, plaques, chevrons): ours over the stock Utah speed signs
+require('beamngEarth/us_signs').install(M)
 local MATERIALS = {
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
@@ -282,10 +284,18 @@ local function releaseForest(t)
   t.forestId = nil
 end
 
+M.SIGN_MATERIALS = { '/levels/beamng_earth/art/shapes/beamngEarth/sign_speed.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/us_signs.materials.json' }
+
 local function setup()
   if ready then return true end
   for _, m in ipairs(MATERIALS) do
     local p = m .. '/main.materials.json'
+    if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
+  end
+  -- the generated signs' own material files (their faces' textures and the shared sign metal): the level does not load
+  -- them by itself, and without them every face drew as bare grey (the user, 2026-10-25: "bare metal signs")
+  for _, p in ipairs(M.SIGN_MATERIALS) do
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
   ready = true

@@ -1,0 +1,11 @@
+{
+  "bne_pennsylvania_2_1": {
+    "information": {
+      "authors": "BeamNG.Earth",
+      "name": "Pennsylvania (BeamNG.Earth)",
+      "value": 50
+    },
+    "slotType": "licenseplate_design_2_1",
+    "licenseplate_path": "vehicles/common/licenseplates/bne_pennsylvania/bne_pennsylvania.sktemplate.json"
+  }
+}
