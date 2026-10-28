@@ -234,3 +234,15 @@ class SpanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_tower_spans_a_sparse_twin_carriageway():
+    # a suspension span's ways can run a kilometre between nodes: the twin is beside it at the tower, though its
+    # nearest node is 500 m off (a leg stood in its lanes on 25 de Abril and the Bay Bridge)
+    import numpy as np
+    import bridgetypes as bt
+    a = (np.array([[0.0, 0.0], [1000.0, 0.0]]), np.array([60.0, 60.0]), 12.0)
+    b = (np.array([[0.0, 20.0], [1000.0, 20.0]]), np.array([60.0, 60.0]), 12.0)
+    P, arcs, tans = bt._prep([a, b])
+    _, _, _, lo, hi, _, _ = bt._station(P, tans, 0, 500.0, arcs)
+    assert lo < -6.0 and hi > 26.0

@@ -891,13 +891,21 @@ def _station(P, tans, k, sc, arcs):
     for k2, (xy2, z2, w2) in enumerate(P):
         if k2 == k:
             continue
-        d = np.hypot(*(xy2 - p).T)
+        # the nearest point on its segments, not its nearest node: a suspension span's way can run a kilometre
+        # between nodes, and its twin carriageway was missed there, a tower leg standing in its lanes (25 de Abril,
+        # the Bay Bridge, 2026-10-28)
+        a, b = xy2[:-1], xy2[1:]
+        ab = b - a
+        f = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+        q = a + f[:, None] * ab
+        d = np.hypot(*(q - p).T)
         m = int(np.argmin(d))
-        if d[m] > SIDE_REACH_M or abs(tans[k2][m] @ t) < PARALLEL_COS or abs(float((xy2[m] - p) @ t)) > PANEL_M:
+        if d[m] > SIDE_REACH_M or abs(tans[k2][m] @ t) < PARALLEL_COS or abs(float((q[m] - p) @ t)) > PANEL_M:
             continue
-        off = float((xy2[m] - p) @ nrm)
+        off = float((q[m] - p) @ nrm)
+        zq = float(z2[m] + f[m] * (z2[m + 1] - z2[m]))
         lo, hi = min(lo, off - w2 / 2), max(hi, off + w2 / 2)
-        zlo, zhi = min(zlo, float(z2[m])), max(zhi, float(z2[m]))
+        zlo, zhi = min(zlo, zq), max(zhi, zq)
     g = PARAPET_W + SIDE_GAP_M
     return p, t, nrm, lo - g, hi + g, zlo, zhi
 
