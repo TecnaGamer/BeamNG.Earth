@@ -342,7 +342,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         m = np.asarray(layers[k]) > 0
         out[m] = ROAD_MATERIAL[k]
     import roadcorners
-    return paint_pads(out, lat, lon, roadcorners.pads(feats_list, urban_fn, widths))
+    return paint_pads(out, lat, lon, roadcorners.pads(feats_list, urban_fn, widths,
+                      lonlat_bounds=(float(lon.min()), float(lat.min()), float(lon.max()), float(lat.max()))))
 
 
 # Roads in the ground (the user, 2026-10-22: "I dont love that we are applying a floating road texture over the normal
@@ -439,7 +440,9 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
     fast.require(49, "roads in the ground")
     h, w = rgb.shape[:2]
     import roadcorners
-    rgb = photo_pads(rgb, frame, x0, y0, size, roadcorners.pads(feats_list, urban_fn, widths, frame))
+    margin = size / min(w, h)  # include rasterization at the border pixel
+    rgb = photo_pads(rgb, frame, x0, y0, size, roadcorners.pads(feats_list, urban_fn, widths, frame,
+                     bounds=(x0 - margin, y0 - margin, x0 + size + margin, y0 + size + margin)))
     got = _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn, widths)
     if got is None:
         return rgb
@@ -501,7 +504,9 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
     pads = pads_mask(frame, x0, y0, size, px, _square_pads(frame, x0, y0, size, surface))
     feats = _square_roads(frame, x0, y0, size, surface)
     import roadcorners
-    corner_mask = pads_mask(frame, x0, y0, size, px, roadcorners.pads(feats, surface.urban, widths, frame))
+    margin = size / px
+    corner_mask = pads_mask(frame, x0, y0, size, px, roadcorners.pads(feats, surface.urban, widths, frame,
+                           bounds=(x0 - margin, y0 - margin, x0 + size + margin, y0 + size + margin)))
     if corner_mask is not None:
         pads = corner_mask if pads is None else np.maximum(pads, corner_mask)
     got = _road_segments(frame, x0, y0, size, px, px, feats, surface.urban, widths) if feats else None

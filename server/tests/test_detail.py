@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import unittest
+import threading
 
 import struct
 
@@ -84,9 +85,14 @@ class DetailServerTest(ServerHarness):
         c.send({"type": "prepare_terrain", "requestId": 9, "anchorId": aid, "cx": 130.0, "cy": -190.0})
         tr, _ = c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
         self.assertEqual((tr["cx"], tr["cy"]), (128.0, -128.0))
+        if "base" not in tr:
+            photo, _ = c.until(lambda m: m["type"] == "block_base" and m.get("cx") == tr["cx"]
+                              and m.get("cy") == tr["cy"], timeout=30)
+            tr.update(base=photo["base"], baseSize=photo["baseSize"])
         self.assertEqual(tr["baseSize"], 512 * 2.0)
         path = self.fs(tr["base"])
-        self.assertTrue(path.endswith("_base.png") and os.path.exists(path))
+        self.assertRegex(path, r"_base_r\d+\.png$")
+        self.assertTrue(os.path.exists(path))
         im = Image.open(path)
         self.assertEqual((im.size, im.mode), ((earthd.BASE_PX, earthd.BASE_PX), "RGB"))
         self.assertGreater(np.asarray(im).std(), 5.0, "a real photo, not a flat fill")
@@ -139,8 +145,11 @@ class DetailBaseRefreshTest(ServerHarness):
         c.send({"type": "commit_anchor", "anchorId": aid})
         c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
         key = (aid, 0.0, 0.0)
+        first = self.server.hm[key].get("base")
+        if first is None:
+            initial, _ = c.until(lambda m: m["type"] == "block_base", timeout=30)
+            first = os.path.basename(initial["base"])
         self.assertIn(key, self.server.base_stale, "NAIP not on disk: the photo will be redone")
-        first = self.server.hm[key]["base"]
         self.pose(aid, 0.0, 0.0)
         quiet = c.drain(1.0)
         self.assertFalse([m for m in quiet if m["type"] == "block_base"], "not before its NAIP is here")
@@ -149,7 +158,8 @@ class DetailBaseRefreshTest(ServerHarness):
         m, _ = c.until(lambda m: m["type"] == "block_base", timeout=30)
         self.assertEqual((m["anchorId"], m["cx"], m["cy"], m["baseSize"]), (aid, 0.0, 0.0, 512 * 2.0))
         path = self.fs(m["base"])
-        self.assertTrue(path.endswith("_base_r1.png") and os.path.exists(path))
+        self.assertRegex(path, r"_base_r\d+\.png$")
+        self.assertTrue(os.path.exists(path))
         self.assertEqual(self.server.hm[key]["base"], os.path.basename(path))
         self.assertNotEqual(os.path.basename(path), first)
         self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "temp", "art", "terrainmaterialcache",
@@ -194,9 +204,8 @@ class DetailQuickPhotoTest(ServerHarness):
         self.assertTrue(asked)
 
 
-class DetailFastPhotoLaterTest(ServerHarness):
-    """A fast player (earthd FAST_BASE_V): a block whose photo is slow goes without it, the photo follows (block_base)
-    and later answers for the block carry it."""
+class DetailPhotoLaterTest(ServerHarness):
+    """At ordinary speeds a blocked photo cannot hold drivable ground; it still arrives in full later."""
     near_visual = "detail"
     with_imagery = True
     cells = 64
@@ -207,18 +216,21 @@ class DetailFastPhotoLaterTest(ServerHarness):
         aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
         s = self.server
         orig = s.write_base
+        release = threading.Event()
 
         def slow(*a, **kw):
-            time.sleep(1.0)
+            if not release.wait(10):
+                raise TimeoutError("test did not release photo")
             return orig(*a, **kw)
         s.write_base = slow
-        s.fast = True
-        t0 = time.monotonic()
-        self.c.send({"type": "prepare_terrain", "requestId": 3, "anchorId": aid, "cx": 512.0, "cy": 0.0})
-        tr, _ = self.c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
-        self.assertNotIn("base", tr, "sent without its photo")
-        self.assertLess(time.monotonic() - t0, 0.95, "not held for the photo")
-        m, _ = self.c.until(lambda m: m["type"] == "block_base", timeout=30)
+        try:
+            self.c.send({"type": "prepare_terrain", "requestId": 3, "anchorId": aid, "cx": 512.0, "cy": 0.0})
+            tr, _ = self.c.until(lambda m: m["type"] == "terrain_ready", timeout=5)
+            self.assertNotIn("base", tr, "sent while the photo remains blocked")
+            self.assertFalse(release.is_set())
+        finally:
+            release.set()
+        m, _ = self.c.until(lambda m: m["type"] == "block_base" and m.get("cx") == 512., timeout=30)
         self.assertEqual((m["anchorId"], m["cx"], m["cy"]), (aid, 512.0, 0.0))
         self.assertTrue(os.path.exists(self.fs(m["base"])))
         self.assertEqual(s.hm[(aid, 512.0, 0.0)]["base"], os.path.basename(m["base"]))

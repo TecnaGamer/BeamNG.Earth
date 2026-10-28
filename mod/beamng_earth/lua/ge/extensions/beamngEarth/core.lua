@@ -942,15 +942,24 @@ local function onMessage(msg)
     local sl = rawget(_G, 'beamngEarth_serverlist')
     if sl and sl.onList then sl.onList(msg) end
   elseif t == 'block_base' then
-    -- detail mode: a block's base photo rendered again with its NAIP tiles (server base_refresh): the block
-    -- in use takes it now, a ready one not committed yet takes it at its commit
-    if nearVisual == 'detail' and msg.anchorId == st.anchorId and type(msg.base) == 'string' then
-      local b, tp = st.block, st.terrainPending
-      if b and b.cx == msg.cx and b.cy == msg.cy and FS:fileExists(msg.base) then
-        terrain.setBase(msg.base, tonumber(msg.baseSize))
-        st.baseRefreshes = (st.baseRefreshes or 0) + 1
+    -- Photos can follow drivable ground at any speed, including while changing anchors.
+    if nearVisual == 'detail' and type(msg.base) == 'string' then
+      local function update(tr)
+        if tr and tr.cx == msg.cx and tr.cy == msg.cy then
+          tr.base, tr.baseSize = msg.base, tonumber(msg.baseSize)
+        end
       end
-      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
+      if msg.anchorId == st.anchorId then
+        local b, tp = st.block, st.terrainPending
+        if b and b.cx == msg.cx and b.cy == msg.cy and FS:fileExists(msg.base) then
+          terrain.setBase(msg.base, tonumber(msg.baseSize))
+          st.baseRefreshes = (st.baseRefreshes or 0) + 1
+        end
+        if tp then update(tp.msg) end
+      end
+      local p, r = st.pending, st.rebasing
+      if p and p.msg and p.msg.anchorId == msg.anchorId then update(p.msg.terrain) end
+      if r and r.msg and r.msg.anchorId == msg.anchorId then update(r.terrain) end
     end
   elseif t == 'ground_ahead' then
     -- the highest ground near the player's path (server groundahead.py): the altitude rule (follow.lua)
@@ -1745,7 +1754,8 @@ local function perfContext()
   local d = {}
   if st.commitFrames then d[#d + 1] = 'ground block swap' end
   if st.terrainPending and st.terrainPending.sentAt then
-    d[#d + 1] = string.format('next block asked %.1fs ago', st.clock - st.terrainPending.sentAt)
+    d[#d + 1] = st.terrainPending.ready and 'next block ready, awaiting swap'
+      or string.format('next block asked %.1fs ago', st.clock - st.terrainPending.sentAt)
   end
   local okF, fs = pcall(farfield.stats)
   if okF and fs then

@@ -144,13 +144,12 @@ class RouteDownloadTest(unittest.TestCase):
         self.assertTrue(sent)
         self.assertNotEqual(sent[-1].get("done"), sent[-1].get("total"))
 
-    def test_no_buildings_roads_only(self):
+    def test_no_buildings_still_prefetches_signal_infrastructure(self):
         mapdata = FakeMapdata()
         c, sent = connection(FakeDem(), mapdata, buildings=False)
         earthd.Connection.route_download(c, 1, ROUTE)
         self.assertTrue(mapdata.fetched)
-        for key, layer in mapdata.fetched:
-            self.assertEqual(layer, "roads")
+        self.assertEqual({layer for key, layer in mapdata.fetched}, {"roads", "infrastructure"})
 
 
 if __name__ == "__main__":

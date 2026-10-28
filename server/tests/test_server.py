@@ -132,6 +132,8 @@ class ServerHarness(unittest.TestCase):
         self.loop.close()
         self.server.tile_pool.shutdown(wait=True)
         self.server.hm_pool.shutdown(wait=True)
+        self.server.base_pool.shutdown(wait=True, cancel_futures=True)
+        self.server.urgent_base_pool.shutdown(wait=True, cancel_futures=True)
         if self.server.horizon_pool is not None:
             self.server.horizon_pool.shutdown(wait=True)
         if self.server.imagery is not None:

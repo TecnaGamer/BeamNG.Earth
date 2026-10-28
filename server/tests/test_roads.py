@@ -1097,6 +1097,13 @@ class UrbanBesideTest(unittest.TestCase):
 
 
 class TileNeedsTest(unittest.TestCase):
+    def test_signal_margin_is_prefetched_at_cell_boundaries(self):
+        for tx in range(-10, 11):
+            keys = set(roads.cells_of_tile(FRAME, tx, 0, roads.SIGNALS_MARGIN_M))
+            needs = roads.tile_needs(FRAME, tx, 0, buildings=False, widths=False)
+            self.assertTrue(keys.issubset({k for k, layer in needs if layer == 'infrastructure'}))
+            self.assertEqual(len(needs), len(set(needs)))
+
     def test_the_cells_a_tile_asks_for(self):
         frame = geodesy.EnuFrame(43.2965, 5.3698)
         own = set(roads.cells_of_tile(frame, 0, 0))

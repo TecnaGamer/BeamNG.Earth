@@ -217,6 +217,7 @@ MIN_PIECE_M = 3.0               # shorter sidewalk / line pieces are dropped
 WALK_STEP_M = 1.0               # m the ground under a sidewalk may lie off the road's level: further, a cutting's wall or
                                 # a drop is there and the sidewalk stops (it was draped up a wall, Munich's McGraw-Graben)
 NEAR_M = 40.0                   # roads this far outside the tile still cut its sidewalks / lines
+SIGNALS_MARGIN_M = 60.0         # mapped signals used by junctions just beyond a road tile's edge
 # Carriageway = driving width + parking lanes on city streets or paved edge strips on rural roads
 # (docs/research/2026-10-11-official-road-study.md §2: rural paved surface = AI width + 2-2.5 m;
 # West Coast USA's plain streets 12.5 m for 8 m of driving: ~2.3 m of parking each side). A width
@@ -2910,6 +2911,8 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
     own = set(keys)
     tile = ("roads", "infrastructure") + (TILE_BUILDING_LAYERS if buildings else ())
     needs = [(k, ly) for k in sorted(keys) for ly in tile]
+    # signals_for reads farther than the tile's road cells. Warm those boundary cells too.
+    needs += [(k, "infrastructure") for k in cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M) if k not in own]
     needs += [(k, "roads") for k in ring(1) if k not in own]
     if widths:      # the walls of the cells the ring's roads cross, each with its neighbours' buildings
         needs += [(k, "buildings") for k in ring(2) if k not in own]

@@ -278,7 +278,8 @@ def _near_node_pairs(pos, radius):
                 yield a, b
 
 
-def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None, inner_sides=(), pavement=False):
+def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None, inner_sides=(), pavement=False,
+         pavement_bounds=None):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
     has_walk(spec) -> bool; walk_w: sidewalk width. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
@@ -287,7 +288,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
         crosswalks: [dict(a (3,), b (3,), w)]: across a road, curb to curb
         ramps: {(fid, side): [(node xy, branch u, t0, t1)]}: curb ramp along that sidewalk
         line_cuts: {fid: [(node xy, branch u, t)]}: that road's markings start t m from the node
-                   (beyond its crosswalk)"""
+                   (beyond its crosswalk)
+    pavement_bounds: optional output rectangle for pavement-only callers. All input roads remain in the
+    junction grouping and clearance tests; only junctions provably outside the requested image are skipped.
+    """
     nodes = {}
     import roundabouts
     ring_corridors = roundabouts.corridors(roads)
@@ -357,6 +361,17 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
     for cid in sorted(groups, key=lambda c: tuple(np.round(pos[groups[c][0]], 2))):
         inc = sorted({x for a in groups[cid] for x in jn[a]})
         X = np.mean([pos[a] for a in groups[cid]], axis=0)
+        if pavement_bounds is not None and pavement and walk_w == 0. and parking_m == 0. and len(groups[cid]) == 1:
+            # A simple corner's tangents are <= 40 m (below); its arc is at most two radii from a
+            # tangent, and the fill's tip is <= 20 + MERGE_M from X. Include the node's rounding
+            # tolerance as well. Merged connector corners use _across, whose reach is different:
+            # retain those in full. No geometry, tessellation or neighbouring-road context is reduced.
+            radius = max(12., RADIUS, *(RADII.get(roads[ri][1].cls, RADIUS) for ri, _ in inc))
+            extent = max(40. + max(roads[ri][1].width for ri, _ in inc) / 2 + 2 * radius,
+                         20. + MERGE_M) + 2 * NODE_TOL
+            x0, y0, x1, y1 = pavement_bounds
+            if X[0] + extent < x0 or X[0] - extent > x1 or X[1] + extent < y0 or X[1] - extent > y1:
+                continue
         branches = []                           # (angle, ri, vi, step, u, side of the road on u's left, origin)
         for ri, vi in inc:
             pts = roads[ri][2]

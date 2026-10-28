@@ -92,7 +92,7 @@ class _State:
 
 
 ANCHORS_KEPT = 2
-SIGNALS_MARGIN_M = 60.0         # m around a road tile its junctions' mapped traffic signals are taken from
+SIGNALS_MARGIN_M = 60.0         # compatibility alias; road tile warm/build use roads.SIGNALS_MARGIN_M
 WATER_BED_M = 0.05           # ground carved deeper than this under the water gets the bed layer (MUD)
 
 
@@ -510,6 +510,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo),
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
+    signals = furniture.signals_for(_s.md, frame, roadsmod.cells_of_tile(frame, tx, ty, roadsmod.SIGNALS_MARGIN_M))
+    timed("signals")
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
@@ -517,8 +519,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                                  tunnels=tunnels, walls=rwalls,
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover,
-                                 signals=furniture.signals_for(_s.md, frame,
-                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+                                 signals=signals)
     timed("layout")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
@@ -774,13 +775,7 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     server renders it, fetching what is missing). In the server process it ran 2 s alone but 8-11 s next to the
     rest of the world's threads on a Steam Deck (one interpreter lock), and the next block waited for it. fuel_pads:
     the gas station pads around it (_take_pads)."""
-    _take_pads(fuel_pads)
     import imagery as imagerymod
-    import roads as roadsmod
-    import rockface as rockfacemod
-    import staging
-    from PIL import Image
-    import buildings as buildingsmod
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     pending = set()
@@ -788,6 +783,21 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         rgb, used = im.render(frame, x0, y0, size, px, pending)
     except imagerymod.ImageryError:
         return None
+    rgb = finish_base_photo(rgb, lat, lon, x0, y0, size, px, buildings, rock_zoom, path, cache, fuel_pads)
+    return rgb, used, pending
+
+
+def finish_base_photo(rgb, lat, lon, x0, y0, size, px, buildings, rock_zoom, path, cache, fuel_pads=None):
+    """Decorate already rendered pixels without changing their imagery corrections. Dedicated photo workers
+    run this for both corrected server imagery and the disk-only base_photo path. Terrain workers stay free."""
+    t0, cpu0 = time.perf_counter(), time.thread_time()
+    _take_pads(fuel_pads)
+    import roads as roadsmod
+    import rockface as rockfacemod
+    import staging
+    from PIL import Image
+    import buildings as buildingsmod
+    frame = geodesy.EnuFrame(lat, lon)
     rgb = np.asarray(rgb, np.uint8)
     if buildings and _s.md is not None:
         try:
@@ -796,12 +806,15 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
                 rgb = buildingsmod.fill_photo(rgb, mask, size, px)
         except Exception as e:      # the photo stays as it is
             log.info("base photo: building mask: %s", e)
+    t1 = time.perf_counter()
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.write_base)
         try:
             import surface as surfacemod
-            rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths)
+            rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None),
+                                         getattr(_s, "widths", None))
         except Exception as e:      # the photo stays as it is
             log.info("base photo: roads: %s", e)
+    t2 = time.perf_counter()
     try:            # (earthd.Server.write_base)
         n = 65
         xs = x0 + np.arange(n) * (size / (n - 1))
@@ -810,14 +823,21 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         rgb = rockfacemod.rock(rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1))
     except Exception as e:
         log.debug("base photo: rock faces: %s", e)
+    t3 = time.perf_counter()
     tmp = staging.tmp_for(path)
     # stored, not deflated: the game reads the packed cache entry (terraincache), this file only if that is stale;
     # level 1 was 0.15 s of a block photo on a Steam Deck, level 0 0.08 (3 MB, a session keeps a few)
     Image.fromarray(rgb, "RGB").save(tmp, format="PNG", compress_level=0)
     staging.replace(tmp, path)
     user_dir, base_vfs, ao_vfs, ao_value = cache
+    t4 = time.perf_counter()
     terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
-    return rgb, used, pending
+    elapsed = time.perf_counter() - t0
+    log.log(logging.INFO if elapsed > 3. else logging.DEBUG,
+            "base decoration %s in %.2f s: buildings %.2f roads %.2f rock %.2f png %.2f cache %.2f cpu %.2f",
+            os.path.basename(path), elapsed, t1-t0, t2-t1, t3-t2, t4-t3,
+            time.perf_counter()-t4, time.thread_time()-cpu0)
+    return rgb
 
 
 def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):

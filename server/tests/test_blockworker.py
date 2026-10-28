@@ -197,30 +197,30 @@ class BasePhotoTest(unittest.TestCase):
 
 
 class BaseRoutingTest(unittest.TestCase):
-    """earthd: the base photo goes to the other lane's block process when the server has no imagery analyses; with
-    them (or a tile missing on disk) it is rendered in the server (write_base)."""
+    """Photos never borrow a physics worker. Analyses still render corrected pixels in the server."""
 
     def test_routing_and_fallback(self):
         import earthd
+        import itertools
         S = earthd.Server
         s = SimpleNamespace(block_pools=[("request", None), ("prefetch", None)], imagery=object(), deshadow=None,
-                            colormatch=None)
-        self.assertEqual(S._base_process(s, earthd.LANE_REQUEST), "prefetch")
-        self.assertEqual(S._base_process(s, earthd.LANE_PREFETCH), "request")
+                            colormatch=None, photo_pool="photos", base_rev=itertools.count(1))
+        self.assertEqual(S._base_process(s, earthd.LANE_REQUEST), "photos")
+        self.assertEqual(S._base_process(s, earthd.LANE_PREFETCH), "photos")
         for k in ("deshadow", "colormatch"):
             self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), k: object()}), earthd.LANE_REQUEST), k)
-        self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), "block_pools": []}), earthd.LANE_REQUEST))
+        self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), "photo_pool": None}), earthd.LANE_REQUEST))
         calls = []
 
-        def write_base(anchor, cx, cy, photo=None, quick=False):
+        def write_base(anchor, cx, cy, photo=None, quick=False, rev=0):
             calls.append((cx, cy))
             photo.append("here")
             return "here.png"
         s.write_base = write_base
-        s._base_elsewhere = lambda anchor, cx, cy, pool, photo: None         # a tile not on disk
+        s._base_elsewhere = lambda anchor, cx, cy, pool, photo, rev: None         # a tile not on disk
         name, photo, _ = S._base_photo(s, None, 1, 2, "pool")
         self.assertEqual((name, photo, calls), ("here.png", ["here"], [(1, 2)]))
-        s._base_elsewhere = lambda anchor, cx, cy, pool, photo: photo.append("there") or "there.png"
+        s._base_elsewhere = lambda anchor, cx, cy, pool, photo, rev: photo.append("there") or "there.png"
         name, photo, _ = S._base_photo(s, None, 3, 4, "pool")
         self.assertEqual((name, photo, calls), ("there.png", ["there"], [(1, 2)]))
 

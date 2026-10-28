@@ -236,9 +236,7 @@ AHEAD_LAYERS = ("roads", "buildings", "building_parts", "infrastructure", "water
 ROUTE_AHEAD_ON = True            # --route-prefetch
 ROUTE_AHEAD_MAX_M = 20000.0      # --route-prefetch-km * 1000 (15-25 km is sane; the user, 2026-10-22)
 ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long before the next one in the corridor
-FAST_BASE_V = 70.0              # m/s (157 mph): faster, a block waits at most BASE_FAST_WAIT_S for its photo after its
-BASE_FAST_WAIT_S = 0.15         # heights, then goes without it (block_base later): blocks took 0.6-3 s at 600 mph on a
-                                # Steam Deck, mostly the photo (heights 0.1-0.4 s), and the game paused 11 times a minute
+BASE_WAIT_S = 0.15              # maximum extra wait for a photo once drivable ground is ready, at every speed
 PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_progress)
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
 PERF_LOG_LINES, PERF_LOG_CHARS = 40, 2000   # a perf_log message's lines and characters a line, at most
@@ -532,7 +530,7 @@ class Server:
                  colormatch="off", credits=None, cache=None, retex_rate=RETEX_RATE, surface=None,
                  mapdata=None, grading=False, road_widths=False, block_pools=(), sidewalks=True, buildings=False, traffic=False, far_pool=None,
                  road_pool=None, airports_db=None, sea=None, vegetation=None, leaf_on=True, season_mode="off",
-                 far_bld_pool=None, gas_stations=False, sign_pool=None):
+                 far_bld_pool=None, gas_stations=False, sign_pool=None, photo_pool=None):
         """kfun: K(L) for every level (default: the layout's K table); near_radii: the min-level
         radii (default: the layout's); cells: 32 (v1.3.1) or 64 (M1, mesh mode only); tex: texture
         px per level from the finest (default: tex_near, tex_near, tex_far with 32 cells,
@@ -641,10 +639,9 @@ class Server:
         self.hm_here, self.hm_here_lock = 0, threading.Lock()  # blocks building in this process (far tiles wait)
         # a block's base photo rendered beside its heights (they do not depend on each other): after them it added
         # 2.3 s to a 12 s Baltimore block on a Steam Deck (2026-10-20)
-        self.base_pool = ThreadPoolExecutor(HM_THREADS, thread_name_prefix="base-photo")
-        # the photos a player waits for (a teleport's first block, the request lane's): never queued behind the other
-        # blocks' (each holds a base-photo thread until its block process renders it; a teleport's photo waited
-        # ~20 s behind the old place's on a Deck, 2026-10-23)
+        self.base_pool = ThreadPoolExecutor(2, thread_name_prefix="base-photo")
+        self.photo_pool = photo_pool  # decoration/BC7 never queue on either terrain physics process
+        # Separate request and background feeders, bounded so obsolete photos cannot flood the process queue.
         self.urgent_base_pool = ThreadPoolExecutor(2, thread_name_prefix="base-urgent")
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
@@ -709,7 +706,6 @@ class Server:
         self.base_stale = set()         # blocks whose base photo lacks lazy imagery (NAIP) still to come
         self.pads_rebuild = set()       # blocks built without gas station pads that lie on them (pads_stale)
         self.pads_changed_at = 0.0      # (time.monotonic) the last new pad: Connection.pads_refresh waits a little
-        self.fast = False               # the player faster than FAST_BASE_V (the latest pose): photos follow blocks
         self.base_pending = {}          # block -> the analysis regions its base photo was rendered without
         self.base_rev = itertools.count(1)
         self.hm_committed = deque(maxlen=HM_KEEP_COMMITTED)
@@ -1243,7 +1239,7 @@ class Server:
                                      terrain_paint=self.surface is not None, cover_out=cover,
                                      signals=furnituremod.signals_for(
                                          self.mapdata, anchor.frame,
-                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)))
+                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, roadsmod.SIGNALS_MARGIN_M)))
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells)     # railway and tram tracks on the ground
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -1437,7 +1433,7 @@ class Server:
             pts.append((float(la), float(lo)))
         reach = self.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
         zoom = anchor.hm_zoom
-        layers = (AHEAD_LAYERS if self.buildings else ("roads",)) if self.mapdata is not None else ()
+        layers = (AHEAD_LAYERS if self.buildings else ("roads", "infrastructure")) if self.mapdata is not None else ()
         self.ahead_busy = True
 
         def run():
@@ -1628,7 +1624,7 @@ class Server:
         if mats is not None:          # the .ter's own material list (MATERIALS indices)
             info["mats"] = mats
         info["stages"] = stages
-        return self._finish_heightmap(anchor, cx, cy, info, t0, base)
+        return self._finish_heightmap(anchor, cx, cy, info, t0, base, defer_base=not provisional)
 
     def tunnels_of(self, anchor, elev, g):
         """anchor.tunnels (roads.TunnelProfiles), made now if not yet (elev: the caller's ground; g: the anchor's
@@ -1690,12 +1686,11 @@ class Server:
         return idx
 
     def _base_process(self, lane):
-        """The block process that renders the base photo of a block built in lane (blockworker.base_photo): the
-        other lane's, usually idle while this one builds the heights; None (rendered here) with the imagery
-        analyses on (they live in this process) or without block processes."""
-        if not self.block_pools or self.imagery is None or self.deshadow is not None or self.colormatch is not None:
+        """The dedicated photo pool can also render uncorrected imagery directly from disk.
+        With analyses on, write_base renders corrected imagery here and sends its pixels to that same pool."""
+        if self.imagery is None or self.deshadow is not None or self.colormatch is not None:
             return None
-        return self.block_pools[LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST][0]
+        return self.photo_pool
 
     def _base_photo(self, anchor, cx, cy, pool=None, urgent=False, quick=False):
         """base_pool: the block's base photo (write_base; in the block process pool when given and its imagery
@@ -1704,18 +1699,19 @@ class Server:
         fetched ahead of the far field's (Imagery.urgent, netfetch "urgent"). quick: write_base's."""
         t1 = time.perf_counter()
         photo = []
-        name = self._base_elsewhere(anchor, cx, cy, pool, photo) if pool is not None else None
+        rev = next(self.base_rev)  # overlapping rebuilds of one key must never overwrite each other's files
+        name = self._base_elsewhere(anchor, cx, cy, pool, photo, rev) if pool is not None else None
         if name is None:
             with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
-                name = self.write_base(anchor, cx, cy, photo=photo, quick=quick)
+                name = self.write_base(anchor, cx, cy, rev=rev, photo=photo, quick=quick)
         return name, photo, time.perf_counter() - t1
 
-    def _base_elsewhere(self, anchor, cx, cy, pool, photo):
+    def _base_elsewhere(self, anchor, cx, cy, pool, photo, rev=0):
         """write_base in a block process (blockworker.base_photo): the file name, or None when it lacked an imagery
         tile on disk or failed (then rendered here)."""
         size = self.layout.block * heightmap.SQUARE
         key = (anchor.id, cx, cy)
-        name = self.base_name(key)
+        name = self.base_name(key, rev)
         im = self.imagery
         tex = {"chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                "season_mode": im.season_mode}
@@ -1746,23 +1742,29 @@ class Server:
         else:
             self.base_stale.add(key)
 
-    def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None):
+    def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None, defer_base=True):
         """The base photo (detail mode; rendered here: the imagery corrections live in this process; base: its
         future from _base_photo, started with the heights), the timings."""
         if base is not None:
             t1 = time.perf_counter()
-            if self.fast and not base.done():
-                concurrent.futures.wait([base], timeout=BASE_FAST_WAIT_S)
-            if self.fast and not base.done():
-                # a fast player (FAST_BASE_V): the block goes now and its photo when done (block_base)
+            if defer_base and not base.done():
+                concurrent.futures.wait([base], timeout=BASE_WAIT_S)
+            if defer_base and not base.done():
+                # Drivable ground must not wait for visual decoration, at any speed. Register delivery
+                # only after _hm_done publishes this exact entry; no timing-based retries or stale sends.
                 info["base"] = None
                 info["stages"]["baseWait"] = time.perf_counter() - t1
                 info["stages"]["baseLater"] = 1.0
-                base.add_done_callback(lambda f, key=(anchor.id, cx, cy): self._base_later(key, f))
+                info["_base_future"] = base
                 info["seconds"] = time.perf_counter() - t0
                 info["zoom"] = anchor.hm_zoom
                 return info
-            info["base"], photo, info["stages"]["baseRender"] = base.result()
+            try:
+                info["base"], photo, info["stages"]["baseRender"] = base.result()
+            except Exception as e:
+                log.info("base photo %s failed (terrain retained): %s", (anchor.id, cx, cy), e)
+                info["base"], photo = None, []
+                self.base_stale.add((anchor.id, cx, cy))
             info["stages"]["baseWait"] = time.perf_counter() - t1
             if photo and info.get("layers") and info.get("ter"):
                 try:                # lawns only where the photo is green (before the game reads the block)
@@ -1773,33 +1775,37 @@ class Server:
         info["zoom"] = anchor.hm_zoom
         return info
 
-    def _base_later(self, key, fut, tries=4):
-        """A block sent without its photo (a fast player): the photo, once rendered, onto the block's entry (later
-        terrain_ready answers) and to the mod (block_base: the block in use takes it now, a ready one at its commit)."""
+    def _base_later(self, key, info, fut):
+        """Event-loop callback after publishing the heightmap. Never update a replaced/evicted block."""
+        if self.hm.get(key) is not info:
+            if key not in self.hm and key not in self.hm_inflight and not fut.cancelled():
+                # A running job can finish after eviction (queued jobs are cancelled). Remove its
+                # late file as well, without touching any replacement now using the same key.
+                try:
+                    name = fut.result()[0]
+                    if name:
+                        self._remove(os.path.join(self.out_dir, name))
+                        self._remove(os.path.join(terraincache.cache_dir(self.user_dir),
+                                     terraincache.base_key(f"{self.vfs_dir}/{name}", BASE_AO_VFS) + ".dds"))
+                    self.base_stale.discard(key)
+                    self.base_pending.pop(key, None)
+                except Exception:
+                    pass
+            return
+        info.pop("_base_future", None)
         try:
             name = fut.result()[0]
-        except Exception:
+        except Exception as e:
+            log.info("late base photo %s failed (terrain retained): %s", key, e)
+            self.base_stale.add(key)
             return
-        conns = [c for c in list(self.connections) if getattr(c, "loop", None) is not None]
-        if not name or not conns:
+        if not name or info.get("base"):
             return
+        info["base"] = name
         size = self.layout.block * heightmap.SQUARE
-        loop = conns[0].loop
-
-        def apply(left=tries):
-            info = self.hm.get(key)
-            if info is None and left > 0:       # (the block's entry is stored just after it is built)
-                loop.call_later(0.25, apply, left - 1)
-                return
-            if info is not None and not info.get("base"):
-                info["base"] = name
-            for c in list(self.connections):    # (the mod drops another anchor's)
-                c.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
-                        "base": f"{self.vfs_dir}/{name}", "baseSize": size})
-        try:
-            loop.call_soon_threadsafe(apply)
-        except RuntimeError:
-            pass                                # (the loop has closed)
+        for c in list(self.connections):
+            c.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
+                    "base": f"{self.vfs_dir}/{name}", "baseSize": size})
 
     def base_name(self, key, rev=0):
         return self.hm_name(key)[:-4] + ("_base.png" if not rev else f"_base_r{rev}.png")
@@ -1831,6 +1837,25 @@ class Server:
         path = os.path.join(self.out_dir, name)
         rgb = np.asarray(rgb, np.uint8)
         stamps = [("imagery", time.perf_counter())]
+        if self.photo_pool is not None and not quick:
+            try:
+                # Keep the exact de-shadow/colour-matched pixels. Only the CPU-heavy road/building
+                # paint, cliff shading and BC7 encoding move out of the server's interpreter.
+                rgb = self.photo_pool.submit(
+                    blockworker.finish_base_photo, rgb, anchor.lat, anchor.lon, x0, y0, size, BASE_PX,
+                    bool(self.buildings and self.mapdata is not None), anchor.zooms[0], path,
+                    (self.user_dir, f"{self.vfs_dir}/{name}", BASE_AO_VFS, BASE_AO),
+                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, size)).result()
+                self._base_kept(anchor, cx, cy, pending)
+                if photo is not None:
+                    photo.append(rgb)
+                log.log(logging.INFO if time.perf_counter() - t0 > SLOW_BASE_S else logging.DEBUG,
+                        "base photo %s r%d in %.2f s: imagery %.2f, decoration process %.2f",
+                        (anchor.id, cx, cy), rev, time.perf_counter() - t0,
+                        stamps[0][1] - t0, time.perf_counter() - stamps[0][1])
+                return name
+            except Exception as e:
+                log.warning("base photo %s worker failed, rendering here: %s", (anchor.id, cx, cy), e)
         if self.buildings and self.mapdata is not None and not quick:   # no roofs beside the 3D buildings
             try:
                 mask = buildingsmod.photo_mask(anchor.frame, x0, y0, size, BASE_PX, self.mapdata)
@@ -1927,6 +1952,15 @@ class Server:
                  info["seconds"], " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()),
                  info["zBase"], info["maxHeight"], round(1 / info["q"]))
         self.hm[key] = info
+        base = info.get("_base_future")
+        if base is not None:
+            loop = asyncio.get_running_loop()
+            def done(f):
+                try:
+                    loop.call_soon_threadsafe(self._base_later, key, info, f)
+                except RuntimeError:
+                    pass  # server stopped
+            base.add_done_callback(done)
         self.evict_heightmaps(fresh=key)
 
     def evict_heightmaps(self, fresh=None):
@@ -1947,6 +1981,8 @@ class Server:
                  if a.first_terrain is not None and (newest is None or aid > newest)}
         for key in [k for k in self.hm if k not in keep][:max(0, len(self.hm) - HM_CACHE)]:
             info = self.hm.pop(key)
+            if info.get("_base_future") is not None:
+                info["_base_future"].cancel()  # skip obsolete work still waiting for a photo thread
             self._remove(os.path.join(self.out_dir, self.hm_name(key)))
             self._remove(os.path.join(self.out_dir, self.base_name(key)))
             self.base_stale.discard(key)
@@ -2890,7 +2926,7 @@ class Connection:
         aid = self.active
         zoom = self.s.anchors[aid].hm_zoom if aid in self.s.anchors else demmod.FINE_ZOOM
         reach = self.s.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
-        layers = (AHEAD_LAYERS if self.s.buildings else ("roads",)) if self.s.mapdata is not None else ()
+        layers = (AHEAD_LAYERS if self.s.buildings else ("roads", "infrastructure")) if self.s.mapdata is not None else ()
         pts = routeaheadmod.arc_length_points(points, ROUTE_AHEAD_MAX_M)
         dem_keys, cell_layer_pairs = routeaheadmod.need(self.s.dem, self.s.mapdata, pts, reach, zoom, layers)
         total = len(dem_keys) + len(cell_layer_pairs)
@@ -3691,7 +3727,6 @@ class Connection:
         else:
             return
         self.vel = (vx, vy)
-        self.s.fast = math.hypot(vx, vy) > FAST_BASE_V
         if self.s.boost_on:
             since = time.monotonic() - getattr(self, "boost_t0", 0.0)
             moving = math.hypot(vx, vy) > BOOST_MOVE_MS and since > BOOST_GRACE_S     # (the car settling: not moving)
@@ -3809,22 +3844,25 @@ class Connection:
         anchor = s.anchors.get(aid)
         cands = [k for k in list(s.hm_committed)[-1:] + list(s.hm_sent)[-1:] if k in s.base_stale and k[0] == aid]
         size = s.layout.block * heightmap.SQUARE
-        key = next((k for k in cands if k in s.hm and s.base_ready(anchor, k[1], k[2])), None)
+        key = next((k for k in cands if k in s.hm and "_base_future" not in s.hm[k]
+                    and s.base_ready(anchor, k[1], k[2])), None)
         if key is None:
             return
         self.base_busy = True
 
         async def run():
             try:
-                pool = s.block_pools[LANE_PREFETCH][0] if s.block_pools else None     # its BC7 encode
-                name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
+                before = s.hm.get(key)
+                name = await self.loop.run_in_executor(s.base_pool, s.write_base, anchor, key[1], key[2], s.photo_pool,
                                                        next(s.base_rev))
                 info = s.hm.get(key)
-                if name is None or info is None:
+                if name is None or info is None or info is not before:
                     return
                 old, info["base"] = info.get("base"), name
                 if old and old != name and old != s.base_name(key):
                     s._remove(os.path.join(s.out_dir, old))
+                    s._remove(os.path.join(terraincache.cache_dir(s.user_dir),
+                              terraincache.base_key(f"{s.vfs_dir}/{old}", BASE_AO_VFS) + ".dds"))
                 log.info("base photo of %s rendered again with its NAIP (%s)", key, name)
                 self.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
                            "base": f"{s.vfs_dir}/{name}", "baseSize": size})
@@ -4390,7 +4428,7 @@ async def main_async(args):
     AHEAD_ON = args.download_ahead == "on"
     ROUTE_AHEAD_ON = args.route_prefetch == "on" and args.route_prefetch_km > 0
     ROUTE_AHEAD_MAX_M = args.route_prefetch_km * 1000.0
-    block_pools, far_pool = [], None
+    block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
         ctx = multiprocessing.get_context("spawn")
@@ -4410,6 +4448,12 @@ async def main_async(args):
                       args.road_widths == "on" and args.roads == "on", False, ctx.Queue(maxsize=1),
                       logging.getLogger().level, args.airports == "on", args.sea == "on", NICE_FAR,
                       roadsmod.ROADS_IN_GROUND))
+        photo_pool = poolsmod.RespawningPool(
+            "terrain photo", 2, mp_context=ctx, initializer=blockworker.init,
+            initargs=(args.cache_dir, args.offline, args.roads == "on", False,
+                      args.road_widths == "on" and args.roads == "on", args.surface == "on", ctx.Queue(maxsize=1),
+                      logging.getLogger().level, False, False, NICE_FAR,
+                      roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on"))
     if far_pool is not None:
         # compute sharing: far tiles to helpers (--peers) and, in a BeamMP group, split with the players on our anchor,
         # built with the same settings as these workers (peerwork.py)
@@ -4468,7 +4512,7 @@ async def main_async(args):
                     gas_stations=args.gas_stations == "on" and args.roads == "on",
                     traffic=args.traffic == "on" and args.roads == "on",
                     block_pools=block_pools, far_pool=far_pool, road_pool=road_pool, airports_db=airports_db,
-                    far_bld_pool=far_bld_pool, sign_pool=sign_pool,
+                    far_bld_pool=far_bld_pool, sign_pool=sign_pool, photo_pool=photo_pool,
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.update_check = args.update_check == "on"
@@ -4573,6 +4617,8 @@ async def main_async(args):
             map_srv.close()
         if sign_pool is not None:
             sign_pool.shutdown(wait=False, cancel_futures=True)
+        if photo_pool is not None:
+            photo_pool.shutdown(wait=False, cancel_futures=True)
         net.close()                 # today's request counters
         disk.close()                # the cache's last uses
 

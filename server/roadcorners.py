@@ -2,6 +2,7 @@
 from collections import OrderedDict
 from concurrent.futures import Future
 from threading import Lock
+import math
 import numpy as np
 import junctions
 
@@ -10,17 +11,17 @@ _PENDING = {}
 _LOCK = Lock()
 
 
-def find(rows):
+def find(rows, bounds=None):
     # Roundabout circulation/approaches retain their own constrained geometry.
     valid = lambda sp: sp.kind in ('paved', 'cobble') and not (sp.roundabout or sp.roundabout_entry) and sp.cls != 'raceway'
-    return junctions.find(rows, valid, 0., pavement=True)[0]
+    return junctions.find(rows, valid, 0., pavement=True, pavement_bounds=bounds)[0]
 
 
 def source(cells, urban=None, widths=None, frame=None, left_hand=False):
     return tuple(_entry(cells, urban, widths, frame, left_hand)[:3])
 
 
-def _entry(cells, urban=None, widths=None, frame=None, left_hand=False):
+def _entry(cells, urban=None, widths=None, frame=None, left_hand=False, bounds=None, lonlat_bounds=None):
     import roads, geodesy
     cells = tuple(f for f in cells if f is not None and len(f))
     if not cells:
@@ -28,10 +29,20 @@ def _entry(cells, urban=None, widths=None, frame=None, left_hand=False):
     if frame is None:
         lon, lat = cells[0].lonlat[0]
         frame = geodesy.EnuFrame(float(lat), float(lon), 0.)
+    if lonlat_bounds is not None:
+        lo0, la0, lo1, la1 = lonlat_bounds
+        e, n, _ = frame.geodetic_to_enu(np.array([la0, la0, la1, la1]), np.array([lo0, lo1, lo0, lo1]), 0.)
+        # The terrain's pixel-centre grid plus its border pixels; also covers projection curvature.
+        bounds = (float(e.min()) - 4., float(n.min()) - 4., float(e.max()) + 4., float(n.max()) + 4.)
+    if bounds is not None:
+        # Blocks advance by 128 m. Outward rounding lets several successive blocks reuse the
+        # same full-detail pads instead of rebuilding junctions for every slight footprint shift.
+        bounds = (math.floor(bounds[0] / 512.) * 512., math.floor(bounds[1] / 512.) * 512.,
+                  math.ceil(bounds[2] / 512.) * 512., math.ceil(bounds[3] / 512.) * 512.)
     specs = [roads.road_specs(f, urban, widths, left_hand) for f in cells]
     memos = tuple(f.__dict__['_road_specs'] for f in cells)
     key = (tuple((id(f), id(memo)) for f, memo in zip(cells, memos)),
-           frame.lat0, frame.lon0, frame.h0, urban, widths, bool(left_hand))
+           frame.lat0, frame.lon0, frame.h0, urban, widths, bool(left_hand), bounds)
     with _LOCK:
         saved = _CACHE.get(key)
         if saved is not None:
@@ -44,7 +55,7 @@ def _entry(cells, urban=None, widths=None, frame=None, left_hand=False):
     if not owner:
         return pending.result()  # texture and material requests share the same build
     try:
-        rows, corners = _build(cells, specs, frame)
+        rows, corners = _build(cells, specs, frame, bounds)
         pads = []
         for c in corners:
             for poly in ([c['fill']] if c['fill'] is not None else []) + c.get('fills', []):
@@ -65,7 +76,7 @@ def _entry(cells, urban=None, widths=None, frame=None, left_hand=False):
         raise
 
 
-def _build(cells, specs, frame):
+def _build(cells, specs, frame, bounds=None):
     import roads
     rows, seen = [], set()
     for f, fspecs in zip(cells, specs):
@@ -78,11 +89,11 @@ def _build(cells, specs, frame):
                 e, n, _ = frame.geodetic_to_enu(p[:, 1], p[:, 0], 0.)
                 rows.append((fid, sp, np.c_[e, n, np.zeros(len(p))], float(p[:, 0].mean())))
     rows.sort(key=lambda row: (row[0], tuple(row[2][0])))
-    return rows, find(rows)
+    return rows, find(rows, bounds)
 
 
-def pads(cells, urban=None, widths=None, frame=None):
-    return _entry(cells, urban, widths, frame)[3]
+def pads(cells, urban=None, widths=None, frame=None, bounds=None, lonlat_bounds=None):
+    return _entry(cells, urban, widths, frame, bounds=bounds, lonlat_bounds=lonlat_bounds)[3]
 
 
 def tile(rows, box, draw_pavement):

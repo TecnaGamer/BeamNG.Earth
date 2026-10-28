@@ -4,8 +4,65 @@ from threading import Event
 from unittest import TestCase, mock
 import numpy as np
 from test_pavement_corners import crossing
-from test_roads import FRAME
+from test_roads import FRAME, features
 import geodesy, junctions, roadcorners, roundabouts
+import surface
+
+
+class BoundedPavementTest(TestCase):
+    def test_bounded_photo_material_and_mask_match_full_cell_geometry(self):
+        # Nearby, boundary and remote junctions, with different angles/widths and one merged connector.
+        lines, classes = [], []
+        for j, (x, y) in enumerate([(0, 0), (60, 30), (-75, 12), (400, 400), (-800, 600)]):
+            a = j * .19
+            rotation = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+            for p in ([[-100, 0], [0, 0], [100, 0]], [[0, -100], [0, 0], [0, 100]]):
+                lines.append(np.asarray(p) @ rotation + [x, y])
+                classes.append('secondary' if j % 2 else 'residential')
+        lines += [[(200, -100), (200, 0), (200, 100)], [(210, -100), (210, 0), (210, 100)], [(200, 0), (210, 0)]]
+        classes += ['residential'] * 3
+        f = features(lines, classes)
+        pads = roadcorners.pads
+        def full(cells, urban=None, widths=None, frame=None, **kwargs):
+            return pads(cells, urban, widths, frame)
+        for x, y in [(-32., -32.), (48., 0.), (175., -20.), (370., 370.)]:
+            with self.subTest(origin=(x, y)):
+                e, n = np.meshgrid(np.linspace(x, x+64, 65), np.linspace(y, y+64, 65))
+                la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.)
+                rgb = np.full((128, 128, 3), 220, np.uint8)
+                mats = np.full((65, 65), surface.GRASS, np.uint8)
+                cover = type('Cover', (), {'urban': None, 'roads': lambda *a: ([f], True)})()
+                actual = (surface.photo_roads(rgb, FRAME, x, y, 64., [f]),
+                          surface.paint_roads(mats, la, lo, [f], 1.),
+                          surface.road_mask(FRAME, x, y, 64., 128, cover))
+                with mock.patch.object(roadcorners, 'pads', full):
+                    expected = (surface.photo_roads(rgb, FRAME, x, y, 64., [f]),
+                                surface.paint_roads(mats, la, lo, [f], 1.),
+                                surface.road_mask(FRAME, x, y, 64., 128, cover))
+                for a, b in zip(actual, expected):
+                    np.testing.assert_array_equal(a, b)
+
+    def test_remote_simple_junction_skips_corner_work_but_keeps_merged_connectors(self):
+        _, rows, _ = roadcorners.source([crossing((1000., 1000.))], frame=FRAME)
+        with mock.patch.object(junctions, '_on_carriageway', side_effect=AssertionError('remote corner work')):
+            self.assertEqual(roadcorners.find(rows, (-32., -32., 32., 32.)), [])
+        f = features([[(1000, -100), (1000, 0), (1000, 100)],
+                      [(1010, -100), (1010, 0), (1010, 100)], [(1000, 0), (1010, 0)]], ['residential'] * 3)
+        _, rows, full = roadcorners.source([f], frame=FRAME)
+        with mock.patch.object(junctions, '_branch_dir', wraps=junctions._branch_dir) as branches:
+            clipped = roadcorners.find(rows, (-32., -32., 32., 32.))
+            self.assertGreater(branches.call_count, 0, 'merged connector is still evaluated')
+        self.assertEqual(len(full), len(clipped), 'merged connector context retained conservatively')
+        for a, b in zip(full, clipped):
+            np.testing.assert_array_equal(a['arc'], b['arc'])
+
+    def test_bounds_are_part_of_corner_cache_identity(self):
+        f = crossing()
+        near = roadcorners.pads([f], frame=FRAME, bounds=(-32., -32., 32., 32.))
+        far = roadcorners.pads([f], frame=FRAME, bounds=(1000., 1000., 1100., 1100.))
+        self.assertTrue(near)
+        self.assertEqual(far, [])
+        self.assertIs(near, roadcorners.pads([f], frame=FRAME, bounds=(-32., -32., 32., 32.)))
 
 
 class JunctionSearchTest(TestCase):
