@@ -58,7 +58,8 @@ class PackagedExitSignsTest(unittest.TestCase):
                     self.assertEqual(uvs.shape, (len(positions), 2))
                     self.assertTrue(np.isfinite(positions).all())
                     self.assertGreater(len(triangles), 0)
-                    self.assertTrue(np.any(indices == materials.index("bne_exit_letters")))
+                    # Both gore and advance panels now use compact guide lettering.
+                    self.assertTrue(np.any(indices == materials.index("bne_guide_letters")))
                 finally:
                     exitsigns.lettering.cache_clear()
 

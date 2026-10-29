@@ -18,14 +18,17 @@ Untagged urban highways could gain a third lane, and nearby same-named roads cou
 - Deduplicate repeated exit records using their labels, junction location and incoming direction. Keep separate exits and opposing carriageways distinct.
 - Place paired destinations at the same junction on a shared overhead gantry, preserving each destination's route shields, exit number and left/right decision arrow. The Exit 72 Lansing/Grand Rapids versus Detroit case is covered by a regression fixture.
 - Resolve overlapping roadside panels and overhead assemblies before tile ownership, so adjacent tiles cannot emit duplicate replacements. Recheck pavement clearance when a residual conflict requires moving a sign; retain separate roadside destinations when an overhead assembly cannot fit.
+- Restore 1.7.0's content-sized exit panels and compact lettering proportions. Panel height follows the actual route and destination rows, keeping simple signs short and multi-row signs taller. Give text-only route references their own readable row while retaining 1.7.1's unified lettering atlas.
+- Restore two roadside poles for single-destination signs and three for multiple destinations (or multiple routes when no destination names are present). Gore and rest-area signs retain two poles. Sample terrain separately under every pole and preserve shared overhead gantries for paired destinations.
 
 ## Validation
 
-- **626 of 627 Python tests passed across 39 suites**, using Python 3.12 and the supplied version-100 native module; no skipped tests in the final results.
+- **122 of 123 Python tests passed across 14 sign suites** after the size/pole follow-up, including new compact-panel, lettering-clearance and terrain-following pole checks. No tests were skipped.
+- Before the size/pole follow-up, **626 of 627 Python tests passed across 39 suites**, using Python 3.12 and the supplied version-100 native module; no tests were skipped.
 - The remaining font-atlas regeneration test also fails against the unchanged `74ebb34` files in the same Windows environment: regenerated font metrics differ from the committed atlas metadata. The bundled font artwork and metrics are unchanged by this PR.
 - **126 Lua assertions passed** in the road and highway-sign client suites under LuaJIT 2.1, using a high-resolution test clock for Windows.
 - Coverage includes lane defaults and OSM resolution, Parquet decoding, directional paint/AI agreement, bridges, tunnels, terrain grading, vegetation, cache refresh and the captured I-80/Otto Road replay. New checks cover offline mile references, actual bundled I-65 corridor placement, two-sided blue markers, treatment boundaries, barrier collision and duplicate suppression, packaged data, paired exit gantries and tile ownership.
-- Visually inspected previews rendered from the generated blue-marker and paired-exit meshes with the bundled lettering atlas.
+- Visually inspected previews rendered from the generated blue-marker, two-/three-pole roadside and paired-exit meshes with the bundled lettering atlas.
 - The existing corner-grading fixture explicitly retains its original 13 m road width, keeping that geometry test independent of the changed lane defaults.
 - `git diff --check` passed.
 - An in-game drive has not been performed.
