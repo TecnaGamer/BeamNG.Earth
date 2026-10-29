@@ -55,6 +55,10 @@ RAIL_GRADE_ON = os.environ.get("BNE_RAIL_GRADE", "1") != "0"    # the ground lai
 RAIL_TAG = "rail:"
 SHOULDER_M = 1.0            # m of flat shoulder beyond the carriageway, each side
 SIDEWALK_MARGIN_M = 0.5     # m of flat ground beyond a sidewalk (roads.SIDEWALK_CLASSES)
+# Experimental: leave existing worlds unchanged unless explicitly enabled.
+# Supporting every corner of a terrain cell touching pavement needs its full
+# diagonal, not an arbitrary extra metre of visible asphalt. See shoulder().
+TERRAIN_EDGE_SUPPORT = os.environ.get("BNE_TERRAIN_EDGE_SUPPORT", "off").lower() == "on"
 LONG_PART_M = 3000.0        # a road part longer than this is planned per cell, only within CLIP_MARGIN_M of the cell
 CLIP_MARGIN_M = 400.0
 PLAN_THREADS = 4            # cells planned at once (_plan_missing)
@@ -497,8 +501,15 @@ def shoulder(spec):
         return 0.0
     if spec.cls in roadsmod.SIDEWALK_CLASSES or (spec.cls == "trunk" and (not spec.oneway
                                                                           or roadsmod._arterial(spec))):
-        return spec.walk + SIDEWALK_MARGIN_M
-    return SHOULDER_M
+        verge = spec.walk + SIDEWALK_MARGIN_M
+    else:
+        verge = SHOULDER_M
+    if TERRAIN_EDGE_SUPPORT:
+        import heightmap
+        # Symmetric grading support, including median-facing edges. Visible
+        # pavement, lanes and banking retain their existing dimensions/profile.
+        verge = max(verge, math.hypot(heightmap.SQUARE, heightmap.SQUARE))
+    return verge
 
 
 def _twin_trimmed(secs):
