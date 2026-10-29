@@ -61,6 +61,78 @@ def road_mph(feats, i, spec, mph=True, at=0.5):
     return float(v)
 
 
+# Traffic is population-adaptive, not a live vehicle-count feed. We estimate the local character from the same
+# mapped roads / WorldCover built-up classification already needed by the graph. Sampling a circle rather than the
+# whole 2.2 km window keeps the profile local as the player moves between a city centre, suburbs and open country.
+TRAFFIC_SAMPLE_RADIUS_M = 750.0
+TRAFFIC_MAJOR_CLASSES = {"motorway", "trunk", "primary"}
+TRAFFIC_LOCAL_CLASSES = {"secondary", "tertiary", "residential", "unclassified", "living_street", "service"}
+
+
+def _length_within_radius(xy, centre, radius):
+    """Length in metres of a polyline inside a circle, clipping each segment exactly (xy in local metres)."""
+    p = np.asarray(xy, np.float64)
+    if len(p) < 2 or radius <= 0:
+        return 0.0
+    a = p[:-1] - np.asarray(centre, np.float64)
+    d = np.diff(p, axis=0)
+    seg = np.hypot(d[:, 0], d[:, 1])
+    A = np.einsum("ij,ij->i", d, d)
+    valid_seg = A > 1e-12
+    if not valid_seg.any():
+        return 0.0
+    B = 2.0 * np.einsum("ij,ij->i", a, d)
+    C = np.einsum("ij,ij->i", a, a) - radius * radius
+    disc = B * B - 4.0 * A * C
+    hit = valid_seg & (disc >= 0.0)
+    if not hit.any():
+        return 0.0
+    root = np.sqrt(np.maximum(disc[hit], 0.0))
+    denom = 2.0 * A[hit]
+    lo = np.maximum(0.0, (-B[hit] - root) / denom)
+    hi = np.minimum(1.0, (-B[hit] + root) / denom)
+    fraction = np.maximum(0.0, hi - lo)
+    return float(np.sum(seg[hit] * fraction))
+
+
+def traffic_profile(total_m, urban_m, major_m, local_m, sample_radius_m=TRAFFIC_SAMPLE_RADIUS_M):
+    """Estimate local traffic character from mapped road lengths. Returns JSON-safe diagnostics and target multiplier.
+
+    Road density is road-centreline km per km², not a claimed real-world vehicle count. Urban cover distinguishes
+    built-up streets; secondary / tertiary / residential roads distinguish connected country areas from a lone
+    remote highway. When cover data is unavailable, dense mapped road networks still classify as urban/suburban.
+    """
+    total_m = max(0.0, float(total_m))
+    urban_m = min(total_m, max(0.0, float(urban_m)))
+    major_m = min(total_m, max(0.0, float(major_m)))
+    local_m = max(0.0, float(local_m))
+    radius = max(1.0, float(sample_radius_m))
+    area_km2 = math.pi * (radius / 1000.0) ** 2
+    density = total_m / 1000.0 / area_km2
+    local_density = local_m / 1000.0 / area_km2
+    urban_share = urban_m / total_m if total_m > 1.0 else 0.0
+    major_share = major_m / total_m if total_m > 1.0 else 0.0
+
+    # The thresholds are deliberately bands, not a claim of measured vehicle throughput. The 750 m radius samples
+    # several blocks in towns but keeps a lone highway from being mistaken for a city because it crosses the window.
+    if density >= 9.0 or (density >= 7.5 and urban_share >= 0.20):
+        band, multiplier = "city", 1.00
+    elif density >= 4.5 or (density >= 3.5 and urban_share >= 0.18):
+        band, multiplier = "suburban", 0.78
+    elif density >= 1.5 and urban_share >= 0.18:
+        band, multiplier = "town", 0.58
+    elif local_density >= 0.45 or (density >= 1.2 and major_share < 0.70):
+        band, multiplier = "rural", 0.30
+    else:
+        band, multiplier = "remote", 0.12
+
+    return {"band": band, "multiplier": multiplier,
+            "roadDensityKmKm2": round(density, 2), "localRoadDensityKmKm2": round(local_density, 2),
+            "urbanRoadShare": round(urban_share, 3), "majorRoadShare": round(major_share, 3),
+            "sampleRadiusM": int(round(radius)), "sampleAreaKm2": round(area_km2, 3),
+            "source": "mapped-roads+available-WorldCover"}
+
+
 def _rdp(p, tol):
     """Indices kept by Ramer-Douglas-Peucker on polyline p (k, 2)."""
     keep = np.zeros(len(p), bool)
@@ -181,6 +253,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     approaches = {}         # (connector, fid, end) -> (graph node next to it, traffic comes in)
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
     node_fid = {}           # name -> the feature it was made on (its deck, if any)
+    traffic_total_m = traffic_urban_m = traffic_major_m = traffic_local_m = 0.0
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -215,6 +288,19 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             L = float(s[-1])
             if L < 1.0:
                 continue
+            # Keep a local, classified sample for adaptive traffic. Only count driveable road classes and exclude
+            # mapped footways / parking aisles; overlapping map cells are already de-duplicated by `seen`.
+            subclass = roads._rule_value(sub, i)
+            if spec.cls in DRIVE and subclass not in SKIP_SUBCLASSES:
+                local_length = _length_within_radius(p, (cx, cy), TRAFFIC_SAMPLE_RADIUS_M)
+                if local_length > 0.0:
+                    traffic_total_m += local_length
+                    if bool(getattr(spec, "urban", False)):
+                        traffic_urban_m += local_length
+                    if spec.cls in TRAFFIC_MAJOR_CLASSES:
+                        traffic_major_m += local_length
+                    if spec.cls in TRAFFIC_LOCAL_CLASSES:
+                        traffic_local_m += local_length
             carriage.append((spec.width / 2, p))     # (the signal heads keep off every carriageway, decks too)
             # the junction arms as the road tiles' props see them (every road they draw: service roads, driveways
             # and tracks too, no bridge-only roads), so furniture.junction_controls decides the same there and here
@@ -361,7 +447,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         if k not in pairs:
             pairs.add(k)
             uniq.append(e)
-    return {"nodes": nodes, "edges": uniq, "signals": signals}
+    profile = traffic_profile(traffic_total_m, traffic_urban_m, traffic_major_m, traffic_local_m)
+    return {"nodes": nodes, "edges": uniq, "signals": signals, "trafficProfile": profile}
 
 
 STOP_BACK_M = 2.0           # the stop point: this far before the junction's widest road edge

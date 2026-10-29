@@ -27,6 +27,8 @@ class GraphTest(unittest.TestCase):
         g = graph([[(0, 0), (100, 0)], [(100, 0), (100, 100)]], ["residential", "residential"],
                   connectors=[(0, "A", 0.0, 0.0), (0, "J", 1.0, 1.0), (1, "J", 0.0, 0.0), (1, "B", 1.0, 1.0)])
         self.assertIn("cJ", g["nodes"])
+        self.assertIn("trafficProfile", g, "the graph carries adaptive traffic diagnostics to the game")
+        self.assertEqual(g["trafficProfile"]["sampleRadiusM"], navgraph.TRAFFIC_SAMPLE_RADIUS_M)
         links = [e for e in g["edges"] if "cJ" in e[:2]]
         self.assertEqual(len(links), 2, "both roads end at the junction node")
         x, y, z, r = g["nodes"]["cJ"]
@@ -101,6 +103,37 @@ class GraphTest(unittest.TestCase):
             self.assertAlmostEqual(n[2], 10.0 + 4.0 * (n[0] - 50.0) / 100.0, delta=0.05)
         self.assertTrue(all(n[2] == 10.0 for n in off), "the ground (flat 10 m) off the bridge")
 
+
+
+class TrafficProfileTest(unittest.TestCase):
+    def test_polyline_length_is_clipped_to_sample_circle(self):
+        self.assertAlmostEqual(navgraph._length_within_radius([[-100, 0], [100, 0]], (0, 0), 50), 100.0)
+        self.assertAlmostEqual(navgraph._length_within_radius([[-100, 50], [100, 50]], (0, 0), 50), 0.0)
+        self.assertAlmostEqual(navgraph._length_within_radius([[-10, 0], [10, 0]], (0, 0), 50), 20.0)
+        self.assertEqual(navgraph._length_within_radius([[0, 0]], (0, 0), 50), 0.0)
+
+    def test_density_bands_distinguish_city_suburb_town_country_and_outback(self):
+        city = navgraph.traffic_profile(30000, 28500, 5000, 24000)
+        suburb = navgraph.traffic_profile(10000, 9000, 2000, 7500)
+        suburb_without_cover = navgraph.traffic_profile(10000, 0, 2000, 7500)
+        town = navgraph.traffic_profile(3000, 2400, 200, 2600)
+        rural = navgraph.traffic_profile(5000, 0, 500, 4400)
+        outback = navgraph.traffic_profile(1500, 0, 1450, 0)
+        self.assertEqual(city["band"], "city")
+        self.assertEqual(suburb["band"], "suburban")
+        self.assertEqual(suburb_without_cover["band"], "suburban", "road density still classifies built-up networks if cover is pending")
+        self.assertEqual(town["band"], "town")
+        self.assertEqual(rural["band"], "rural")
+        self.assertEqual(outback["band"], "remote")
+        self.assertGreater(city["multiplier"], suburb["multiplier"])
+        self.assertGreater(suburb["multiplier"], town["multiplier"])
+        self.assertGreater(rural["multiplier"], outback["multiplier"])
+
+    def test_empty_map_data_falls_back_to_remote_profile(self):
+        p = navgraph.traffic_profile(0, 0, 0, 0)
+        self.assertEqual(p["band"], "remote")
+        self.assertEqual(p["roadDensityKmKm2"], 0)
+        self.assertEqual(p["source"], "mapped-roads+available-WorldCover")
 
 
 class SignalsTest(unittest.TestCase):

@@ -1143,8 +1143,10 @@ class Server:
             except OSError:
                 pass
         path = navgraphmod.write(self.out_dir, self.vfs_dir, aid, serial, graph)
-        log.debug("navgraph %d of anchor %d: %d nodes in %.2f s", serial, aid, len(graph["nodes"]),
-                 time.perf_counter() - t0)
+        tp = graph.get("trafficProfile", {})
+        log.debug("navgraph %d of anchor %d: %d nodes in %.2f s; adaptive traffic %s (roads %.2f km/km², built-up %.0f%%)",
+                  serial, aid, len(graph["nodes"]), time.perf_counter() - t0, tp.get("band", "unknown"),
+                  tp.get("roadDensityKmKm2", 0.0), 100 * tp.get("urbanRoadShare", 0.0))
         return path, len(graph["nodes"]), len(graph["edges"])
 
     boost_on = False
