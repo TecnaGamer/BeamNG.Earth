@@ -36,7 +36,7 @@ CROSS_SLOPE = 0.015     # sidewalk cross slope, rising away from the road
 CURB_REPEAT_M = 9.0     # m of curb per texture width (3 joints of 3 m)
 SLAB_REPEAT_M = 45.0    # m of sidewalk per texture width (4096 px, a 205 px strip ~ 2.25 m)
 MATERIALS = ("curbs", "sidewalk1", "tactile_indicator",  # West Coast USA (art/shapes/roads), loaded by the mod
-             "bne_sidewalk_brick")                       # red brick pavers (buildings.materials.json)
+             "bne_sidewalk_brick", "bne_eu_curb", "bne_eu_asphalt_walk", "bne_eu_tactile")
 BRICK = 3
 BRICK_REPEAT_M = 1.2        # m per repeat of the brick paver texture
 
@@ -186,6 +186,10 @@ class Builder:
         self.n = 0
         self.col = Builder._lean(origin) if collision else None   # the lean collision mesh beside it
         self.lean = False
+        self.europe = False
+
+    def _materials(self, indices):
+        return np.take((4, 5, 6, 3), indices) if self.europe else indices
 
     @classmethod
     def _lean(cls, origin):
@@ -213,8 +217,12 @@ class Builder:
         k = len(ring)
         for a, b, mat, va, vb in strips:
             rep = CURB_REPEAT_M if mat == 0 else SLAB_REPEAT_M
+            if self.europe:
+                rep = 1.0 if mat == 0 else 2.0
             P = np.concatenate([ring[:, a], ring[:, b]])
             UV = np.concatenate([np.stack([s / rep, np.full(k, va)], 1), np.stack([s / rep, np.full(k, vb)], 1)])
+            if self.europe and mat == 1:
+                UV = np.concatenate([np.c_[s/2., prof[:, a, 0]/2.], np.c_[s/2., prof[:, b, 0]/2.]])
             if mat == 1 and slab == BRICK:      # brick pavers: a tileable texture in world metres
                 UV = np.concatenate([np.stack([s / BRICK_REPEAT_M, prof[:, a, 0] / BRICK_REPEAT_M], 1),
                                      np.stack([s / BRICK_REPEAT_M, prof[:, b, 0] / BRICK_REPEAT_M], 1)])
@@ -236,13 +244,14 @@ class Builder:
             o3 = np.concatenate([toward_out[i], np.zeros((k - 1, 1))], 1)
             want = -dp[:, 1:2] * o3 + dp[:, 0:1] * np.array([0.0, 0.0, 1.0])
             self.T.append(base + _orient(tris - base, P, np.concatenate([want, want])))
-            self.M.append(np.r_[mats, mats])
+            self.M.append(self._materials(np.r_[mats, mats]))
 
-    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1):
+    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False):
         """One sidewalk run: curb (k, 3) the curb line (z = the road there), toward_out (k, 2) unit
         vectors from the curb outwards (scaled by the miter), w its width; caps: end caps at the
         (start, end) (not where the run goes on in the next tile or meets a corner piece); ramps:
         curb ramps [(s0, s1)] in arc length along the curb."""
+        self.europe = bool(europe and not self.lean)
         curb = np.asarray(curb, np.float64)
         toward_out = np.asarray(toward_out, np.float64)
         if len(curb) < 2:
@@ -280,14 +289,15 @@ class Builder:
             t = curb[min(end + 1, k - 1), :2] - curb[max(end - 1, 0), :2]
             t = np.r_[t / max(np.hypot(*t), 1e-9), 0.0] * sgn
             self.T.append(base + _orient(fan - base, P, t))
-            self.M.append(np.full(len(fan), 0))
+            self.M.append(self._materials(np.full(len(fan), 0)))
 
-    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=()):
+    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False):
         """A corner piece: the curb along the polyline arc (k, 3) (a curb return, with the straight
         runs and tapers of curb extensions; inward: unit vectors toward the sidewalk), the slab from
         the curb top to the outer corner points [(x, y, z) ...] (from the second sidewalk's end round
         to the first's), and the back faces along the outer edges. ramps: [(s0, s1)] arc lengths
         where the curb is lowered (the slab then slopes up from it toward the outer corner)."""
+        self.europe = bool(europe and not self.lean)
         arc = np.asarray(arc, np.float64)
         inward = np.asarray(inward, np.float64)
         if self.col is not None:
@@ -313,6 +323,8 @@ class Builder:
         # planar, at the runs' texel density (the sheet is 4096 x 1024: SLAB_REPEAT_M wide, a quarter
         # of that high); a constant v stretched one texel row over the corner (the user, 2026-10-11)
         UV = np.c_[poly[:, 0] / SLAB_REPEAT_M, poly[:, 1] / (SLAB_REPEAT_M / 4.0)]
+        if self.europe:
+            UV = poly[:, :2]/2.
         base = self._add(poly, UV)
         m = len(poly)
         if len(out) == 3:                                   # a fan from O
@@ -325,7 +337,7 @@ class Builder:
             order = np.arange(m) if area > 0 else np.arange(m)[::-1]
             fan = order[buildings.triangulate(xy[order])]
         self.T.append(base + _orient(fan, poly, np.array([0.0, 0.0, 1.0])))
-        self.M.append(np.full(len(fan), 1))
+        self.M.append(self._materials(np.full(len(fan), 1)))
         c = poly[:, :2].mean(axis=0)
         drop = h + SINK + 2.5 * CROSS_SLOPE
         for a, b in zip(out[:-1], out[1:]):                 # back faces down to the ground, sloping out (BACK_RUN)
@@ -342,7 +354,7 @@ class Builder:
             base = self._add(P, UV)
             quad = np.array([(0, 1, 2), (0, 2, 3)])
             self.T.append(base + _orient(quad, P, want))
-            self.M.append(np.zeros(2, int))
+            self.M.append(self._materials(np.zeros(2, int)))
 
     def empty(self):
         return self.n == 0

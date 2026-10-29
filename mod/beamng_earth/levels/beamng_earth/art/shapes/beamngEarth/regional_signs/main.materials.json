@@ -1,0 +1,204 @@
+{
+  "bne_sign_white": {
+    "name": "bne_sign_white",
+    "mapTo": "bne_sign_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.93,
+          0.93,
+          0.89,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "8d8b41c7-286a-51a8-826c-ee3dc98697ce",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_sign_red": {
+    "name": "bne_sign_red",
+    "mapTo": "bne_sign_red",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.76,
+          0.015,
+          0.02,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "787c43e9-e31a-5e74-8b0e-ad96b54cde7e",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_sign_black": {
+    "name": "bne_sign_black",
+    "mapTo": "bne_sign_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.01,
+          0.012,
+          0.013,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      }
+    ],
+    "persistentId": "08bff5f2-b159-5eb7-a356-841d69c8919c",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_sign_metal": {
+    "name": "bne_sign_metal",
+    "mapTo": "bne_sign_metal",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.46,
+          0.49,
+          0.5,
+          1
+        ],
+        "metallicFactor": 0.65,
+        "roughnessFactor": 0.45
+      }
+    ],
+    "persistentId": "66b7fa39-3dbd-561c-a5a7-f83257272149",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_sign_yellow": {
+    "name": "bne_sign_yellow",
+    "mapTo": "bne_sign_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.69,
+          0.05,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "dc0a7eb1-e37e-5a8a-8dfa-0f9c3d7ef1a6",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_sign_glyph": {
+    "name": "bne_sign_glyph",
+    "mapTo": "bne_sign_glyph",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_opacity.data.png"
+      }
+    ],
+    "persistentId": "23421441-700c-510d-ae1b-8f5c0b59ece6",
+    "doubleSided": false,
+    "translucent": false,
+    "alphaTest": true,
+    "alphaRef": 80,
+    "castShadows": false
+  },
+  "bne_sign_blue": {
+    "name": "bne_sign_blue",
+    "mapTo": "bne_sign_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.015,
+          0.1,
+          0.4,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      }
+    ],
+    "persistentId": "28b5f29e-f6ec-508f-9dba-33805436f7f1",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_sign_green": {
+    "name": "bne_sign_green",
+    "mapTo": "bne_sign_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.025,
+          0.23,
+          0.08,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      }
+    ],
+    "persistentId": "6aceb6c4-3312-563c-8658-3584f6fc299a",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_sign_glyph_white": {
+    "name": "bne_sign_glyph_white",
+    "mapTo": "bne_sign_glyph_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_white.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_opacity.data.png"
+      }
+    ],
+    "persistentId": "5f30090f-9985-525d-8e52-9ed1b15f192e",
+    "doubleSided": false,
+    "translucent": false,
+    "alphaTest": true,
+    "alphaRef": 80,
+    "castShadows": false
+  }
+}

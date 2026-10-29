@@ -5646,7 +5646,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None, country=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None, marks=None, roads_out=None):
+               signals=None, marks=None, roads_out=None, pole_profile=None, signs=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -5936,9 +5936,41 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import furniture
         decks = [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in chunks if ch.get("deck")]
         props.extend(furniture.place(roads, walks, (x0, y0, x1, y1), wires=wires, town=bool(town), left_hand=left_hand,
-                                     decks=decks, signals=signals, buried=buried, region=lamp_region,
+                                     decks=decks, signals=signals, buried=buried, region=lamp_region, pole_profile=pole_profile, pole_frame=frame,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
+    if walks is not None and pole_profile is not None:
+        import poleprofiles
+        european = poleprofiles.europe_selector(pole_profile, frame)
+        for wk in walks:
+            points = np.asarray(wk['corner']['arc'] if 'corner' in wk else wk['pts'])
+            if len(points):
+                wk['europe'] = bool(european(*points[len(points)//2]))
+    if signs is not None and props is not None:
+        import townsigns
+        import osmtags
+        way_ids = {fid: osmtags.way_id(str(f.attrs.get("src_record", [""] * len(f))[i]))
+                   for fid, (f, i, sp) in seen.items()}
+        # Short features need their neighbours to test a sustained town approach.
+        # Context only: these lines never add carriageways, poles or junctions.
+        sign_context = list(roads)
+        own_fids = {r[0] for r in roads}
+        for fid, (f, i, sp) in sorted(seen.items()):
+            if fid in own_fids or sp.cls not in townsigns.CLASSES or sp.link:
+                continue
+            fb = f.boxes(frame)[i]
+            if fb[2] < x0-200 or fb[0] > x1+200 or fb[3] < y0-200 or fb[1] > y1+200:
+                continue
+            for ring in ground_parts(f, i):
+                ex, ny = mapgeom.enu_xy(f, frame, ring)
+                if len(ex) > 1:
+                    sign_context.append((fid, sp, np.c_[ex, ny, np.zeros(len(ex))], float(np.mean(ring[:, 0]))))
+        sign_mesh, sign_posts, sign_records = townsigns.place(frame, roads, (x0, y0, x1, y1), pole_profile,
+                                                           ground=ground, urban=urban_fn, way_ids=way_ids,
+                                                           context_roads=sign_context)
+        if sign_mesh is not None:
+            signs.append((sign_mesh, sign_records))
+            props.extend(sign_posts)
     aisles = {fid for fid, (f, i, sp) in seen.items()
               if sp.kind == "paved" and _rule_value(f.rules.get("subclass"), i) == "parking_aisle"}
     if (park is not None and walks is not None) or (marks is not None and aisles):
@@ -6101,7 +6133,7 @@ def shape_files(aid, tx, ty):
            "walk": f"walks_{aid}_{tx}_{ty}.cdae", "walkcol": f"walkcol_{aid}_{tx}_{ty}.cdae",
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
-           "rail": f"rail_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae"}
+           "rail": f"rail_{aid}_{tx}_{ty}.cdae", "signs": f"signs_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -6172,7 +6204,7 @@ def sound_boxes(chunks):
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
-               rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None):
+               rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, signs=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -6221,18 +6253,24 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             cdae.write(os.path.join(out_dir, shape), col[0], col[1], uvs=col[2], material=col[3],
                        tri_materials=col[4], collision_only=True)
             data["railcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    if signs:
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        shape = f"signs_{aid}_{tx}_{ty}.cdae"
+        signs[0][0].write(os.path.join(out_dir, shape))
+        data["signs"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        data["regionalSigns"] = signs[0][1]
     if walks:
         x0, y0, _, _ = tile_bbox(tx, ty)
         b = sidewalks.Builder((x0, y0, 0.0), collision=True)
         for wk in walks:
             if "corner" in wk:
                 c = wk["corner"]
-                b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()))
+                b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()), europe=wk.get('europe', False))
                 continue
             ww = wk.get("w", SIDEWALK["w"])
             curb, out = sidewalks.run_geometry(wk["pts"], wk["side"], ww)
             b.add_run(curb, out, ww, caps=wk["caps"], ramps=wk.get("ramps", ()),
-                      slab=sidewalks.BRICK if wk.get("brick") else 1)
+                      slab=sidewalks.BRICK if wk.get("brick") else 1, europe=wk.get('europe', False))
         if not b.empty():
             shape = f"walks_{aid}_{tx}_{ty}.cdae"
             b.write(os.path.join(out_dir, shape))

@@ -14,6 +14,8 @@ import math
 
 import numpy as np
 
+import poleprofiles
+
 # class: (spacing m along one side, both sides staggered: a lamp every half that along the road). Measured (the user,
 # 2026-10-27: "check that they are realistically spaced apart") from OpenStreetMap's mapped street lamps (Overture
 # infrastructure street_lamp, matched to the nearest street, gaps along it): Prague, Warsaw, Szeged and Utrecht's main
@@ -140,7 +142,7 @@ WIRE_R = 0.012                  # m half width of a wire's ribbons
 WIRE_VERTS_MAX = 60000          # a tile's wire mesh at most (the engine's 16-bit index buffers; railways.VERTS_MAX)
 
 
-def wire_lines(poles):
+def wire_lines(poles, anchors=None, radius=None):
     """Polylines (k, 3) of the wires between consecutive poles [(x, y, z, yaw_deg)] of one road side."""
     out = []
     for (x0, y0, z0, w0), (x1, y1, z1, w1) in zip(poles[:-1], poles[1:]):
@@ -149,12 +151,14 @@ def wire_lines(poles):
             continue
         k = max(2, int(math.ceil(span / WIRE_SEG_M)))
         t = np.linspace(0.0, 1.0, k + 1)
-        for off in WIRE_ARMS:
-            a = np.array([x0 + math.cos(math.radians(w0)) * off, y0 + math.sin(math.radians(w0)) * off, z0 + WIRE_Z])
-            b = np.array([x1 + math.cos(math.radians(w1)) * off, y1 + math.sin(math.radians(w1)) * off, z1 + WIRE_Z])
+        for ax, ay, az in (anchors if anchors is not None else [(off, 0.0, WIRE_Z) for off in WIRE_ARMS]):
+            c0, s0 = math.cos(math.radians(w0)), math.sin(math.radians(w0))
+            c1, s1 = math.cos(math.radians(w1)), math.sin(math.radians(w1))
+            a = np.array([x0 + c0 * ax - s0 * ay, y0 + s0 * ax + c0 * ay, z0 + az])
+            b = np.array([x1 + c1 * ax - s1 * ay, y1 + s1 * ax + c1 * ay, z1 + az])
             p = a[None] + (b - a)[None] * t[:, None]
             p[:, 2] -= 4.0 * WIRE_SAG * span * t * (1.0 - t)
-            out.append(p)
+            out.append(p if radius is None else (p, radius))
     return out
 
 
@@ -444,7 +448,7 @@ def buried_share(country):
 G_LENS = "lamplens"
 # and a glow at each (tools/build_lamp_glow.py: a ball growing with distance, drawn at night only, so lamps show far off)
 G_GLOW = "lampglow"
-LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511)}
+LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511), "fr_lantern": (0.0, 0.0, 4.67)}
 LENS_DROP_M = 0.03
 TOWN_POLE_CLASSES = {"residential", "tertiary", "unclassified", "secondary", "living_street", "primary", "trunk"}
 TOWN_POLE_SPACING = 40.0
@@ -473,7 +477,7 @@ PARTIAL_END_M = 15.0        # m from a rural ramp's ends its two lamps stand (pa
                             # Handbook 2012 / AASHTO: luminaires at the gores and the ramp terminals only; every rural
                             # ramp lit end to end put 27 lamps on a Wyoming interchange of I-80, Discord 2026-10-28)
 HIGHWAY_LAMP_H = {"na": 13.5, None: 11.0}         # (ramps: the street post, NJDOT's 26 ft on ramps)
-LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
+LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1, "fr_lantern": 5.4}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
 POLE_LAMP_Z = 7.0           # m above the pole's base
 HYDRANT_SPACING = 120.0
 BENCH_SPACING = 140.0
@@ -493,7 +497,7 @@ def lamp_lenses(rows):
         c, s_ = math.cos(a), math.sin(a)
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
         hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
-        lens = [G_LENS, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
+        lens = ["fr_lantern_light" if r[0] == "fr_lantern" else G_LENS, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
                 round(r[3] + hz - LENS_DROP_M, 2), r[4], 1.0, 1.0, r[7]]
         out += [lens, [G_GLOW] + lens[1:]]
     return out
@@ -560,7 +564,8 @@ def under_decks(rows, decks, wires=None):
     if wires is not None:
         keep = []
         for w in wires:
-            w = np.asarray(w, np.float64)
+            entry = w
+            w = np.asarray(w[0] if isinstance(w, tuple) else w, np.float64)
             hit = False
             for x, y, wz in w[:, :3]:
                 z = deck_z(x, y)
@@ -568,19 +573,23 @@ def under_decks(rows, decks, wires=None):
                     hit = True
                     break
             if not hit:
-                keep.append(w)
+                keep.append(entry)
         wires[:] = keep
     return out
 
 
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
-          signals=None, buried=0.0, region=None, lighting=None):
+          signals=None, buried=0.0, region=None, lighting=None, pole_profile=None, pole_frame=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
     width)]: nothing tall under them (under_decks). buried: the share of the country's low-voltage lines that are
     underground (buried_share): that share of the roads (hashed) get no utility poles (a town's street its lamps
-    instead). region: lamp_region's (the lamps' spacing)."""
+    instead). region: lamp_region's (the lamps' spacing). pole_profile: optional poleprofiles profile;
+    changes the pole shape and its wire attachment geometry, never its placement or lamp spacing.
+    pole_frame: ENU frame for the position-based country profiles."""
+    pole_at = poleprofiles.selector(pole_profile, pole_frame)
+    kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
     spacing_of = lamp_spacing(region, dense=not town)
     lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
     x0, y0, x1, y1 = box
@@ -609,8 +618,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             for p, out in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
                 if x0 <= q[0] < x1 and y0 <= q[1] < y1:
-                    rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
-                                 round(yaw_fn(out), 1), 1.0, height, 0.0])
+                    chosen, height_ = group, height
+                    if group == G_LAMP and town and spec.cls in {"residential", "tertiary", "unclassified", "living_street"} and _h01(fid, "lantern") < .7 and kit_at(*q, p[2]):
+                        chosen, height_ = "fr_lantern", 5.4
+                    rows.append([chosen, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
+                                 round(yaw_fn(out), 1), 1.0, height_, 0.0])
         rule = spacing_of.get(spec.cls)
         if town and spec.cls in TOWN_POLE_CLASSES and overhead(fid):
             # towns and suburbs: wooden utility poles along one side, wired, a cobra-head lamp on every other
@@ -622,10 +634,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
                     yaw = _yaw(out[0], out[1])
-                    run_poles.append((float(q[0]), float(q[1]), float(p[2]), yaw))
+                    pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
+                    run_poles.append((float(q[0]), float(q[1]), float(p[2]), yaw, pole_style))
                     if x0 <= q[0] < x1 and y0 <= q[1] < y1:
-                        rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                                     round(yaw, 1), 1.0, 9.2, 0.0])
+                        rows.append([pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                                     round(yaw, 1), 1.0, pole_style.height, 0.0])
                         k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
                         if lighting.get(fid) != "no" and pole_lamp(spec.cls, k, region):
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
@@ -705,20 +718,30 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 if inside:
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link
                          else LAMP_H[G_LAMP])
-                    rows.append([G_LAMP, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                    group = G_LAMP
+                    if town and spec.cls in {"residential", "tertiary", "unclassified", "living_street"} and _h01(fid, "lantern") < .7 and kit_at(*q, p[2]):
+                        group, h = "fr_lantern", 5.4
+                    rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                                  round(_yaw(-n[0], -n[1]), 1), 1.0, h, 0.0])
                 continue
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
-            run.append((float(q[0]), float(q[1]), float(p[2]), yaw))
+            pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
+            run.append((float(q[0]), float(q[1]), float(p[2]), yaw, pole_style))
             if inside:
-                rows.append([G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                             round(yaw, 1), 1.0, 9.2, 0.0])
+                rows.append([pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                             round(yaw, 1), 1.0, pole_style.height, 0.0])
                 if lamps and pole_lamp(spec.cls, k, region):
                     rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                  round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
+    if poleprofiles.kit_enabled(pole_profile):
+        import regionalmarkers
+        country_at=poleprofiles.country_selector(pole_profile,pole_frame)
+        rows.extend(regionalmarkers.place(roads, box, country_at, lighting=lighting))
+        import regionalstops
+        rows=regionalstops.localize(rows,pole_profile,pole_frame,country_at)
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
@@ -728,5 +751,10 @@ def _own_spans(run, box):
     out = []
     for a, b in zip(run[:-1], run[1:]):
         if x0 <= a[0] < x1 and y0 <= a[1] < y1:
-            out.extend(wire_lines([a, b]))
+            sa, sb = a[4], b[4]
+            if (sa.wire_anchors, sa.wire_radius) == (sb.wire_anchors, sb.wire_radius):
+                out.extend(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius))
+            # Different electrical layouts (three conductors / one bundle): terminate
+            # the run here. Inventing a three-to-one electrical connection is misleading;
+            # dedicated transition hardware is outside this visual prototype's scope.
     return out
