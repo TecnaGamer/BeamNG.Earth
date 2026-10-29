@@ -218,6 +218,7 @@ class MapTiles:
         imagery.ImageryError when a fetch failed (and no later source had the tile)."""
         z, x, y = check_tile(z, x, y)
         err = None
+        now = getattr(self.imagery, "tile_now", None)      # (imagery.Imagery's; a stand-in may have tiles() only)
         for src in self.order(z):
             if z < src.min_zoom:
                 continue
@@ -227,7 +228,10 @@ class MapTiles:
             if not imagerymod.in_bounds(*key):
                 continue                    # a regional source elsewhere
             try:
-                t = self.imagery.tiles([key], self.kind).get(key)
+                if now is not None:                 # in this thread, not behind the world's fetches on the pool
+                    t = now(key, self.kind)
+                else:
+                    t = self.imagery.tiles([key], self.kind).get(key)
             except imagerymod.ImageryError as e:
                 err = e
                 continue

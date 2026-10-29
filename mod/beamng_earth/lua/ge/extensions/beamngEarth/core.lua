@@ -2483,6 +2483,8 @@ function M.dashboardContext()
     active = st.inOurLevel == true,
     connected = net.isConnected(),
     mapPort = st.mapPort,
+    anchorId = st.anchorId,         -- (the screens draw only a road graph of this anchor: its frame is the world's)
+    anchor = st.anchor,             -- (read-only: the satellite tiles' corners in the world frame, dashboard.lua)
     attribution = attributionText(farfield.counters()),
     imageryCreditsByArea = creditsByArea,
     otherCredits = serverOtherCredits,

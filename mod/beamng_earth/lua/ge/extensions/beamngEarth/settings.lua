@@ -83,8 +83,10 @@ M.SCHEMA = {
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
   -- signstream.py, from cody196's PR #363); needs Roads
   highwaySigns = { kind = 'bool', default = true, label = 'Highway signs' },
-  -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
-  dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
+  -- the vehicles' navigation screens (dashboard.lua): the car's own map with our road graph, or with the satellite
+  -- imagery under the roads
+  dashboardMap = { kind = 'enum', default = 'map', values = { 'map', 'satellite' },
+    label = 'Car navigation screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
@@ -109,7 +111,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'quality', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardMap',
   'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
@@ -187,7 +189,9 @@ values = defaults() -- until load(): the defaults (= today's behaviour)
 
 -- Settings no longer on the page, left in older files: ignored without a warning (gasStations: gas stations are
 -- always on since the user's 2026-10-25 "make gas station always enabled and remove the toggle")
-M.RETIRED = { gasStations = true }
+-- dashboardSatellite: the on / off satellite switch, replaced by dashboardMap (its satellite choice: the stock map
+-- page now stays, with the imagery under its roads)
+M.RETIRED = { gasStations = true, dashboardSatellite = true }
 
 -- A valid value for key, or nil + error. Numbers are clamped to the range; strings that read as a
 -- number or boolean are accepted (the page sends what its controls hold).
@@ -448,9 +452,9 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
   end,
-  dashboardSatellite = function(v)
+  dashboardMap = function(v)
     local dashboard = ext('beamngEarth_dashboard')
-    if dashboard and dashboard.setEnabled then dashboard.setEnabled(v) end
+    if dashboard and dashboard.setStyle then dashboard.setStyle(v) end
   end,
   hudVisible = function(v)
     if M.pageExists() then ui.visible = v end

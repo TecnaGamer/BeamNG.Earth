@@ -505,6 +505,142 @@ class ChainTest(unittest.TestCase):
             imagery.SOURCES[n].attribution.encode("ascii")
 
 
+class TileNowTest(unittest.TestCase):
+    """Imagery.tile_now (the world map's tile files): fetched in the calling thread, never queued on the fetch pool
+    behind the world's own fetches; the same answers as tiles()."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def serve(name, z, x, y):
+        return 200, png(background(z, x, y))
+
+    def test_same_as_tiles_without_the_pool(self):
+        im = FakeNet(self.tmp.name, self.serve, chain=("usgs", "eox2023"), tone=0.0)
+        block = threading.Event()
+        for _ in range(imagery.FETCH_WORKERS * 2):      # the pool busy and a queue behind it (the far field)
+            im.pool.submit(block.wait)
+        try:
+            key = (imagery.SOURCES["usgs"], 16, 16950, 24260)
+            t = im.tile_now(key)
+            self.assertIsNotNone(t)
+            self.assertIn(key, im._lru)                         # kept for the next caller
+            self.assertNotIn(key, im._inflight)
+            self.assertEqual({(r[0], r[1]) for r in im.requests}, {("usgs", 10), ("usgs", 12), ("usgs", 16)})
+            n = len(im.requests)
+            self.assertIs(im.tile_now(key), t)                  # from memory, no request
+            self.assertEqual(len(im.requests), n)
+            # outside the coverage probe (a 404 at z12): None, z16 never asked
+            im2 = FakeNet(tempfile.mkdtemp(dir=self.tmp.name),
+                          lambda n_, z, x, y: (404, b"") if z == 12 else self.serve(n_, z, x, y),
+                          chain=("usgs", "eox2023"), tone=0.0)
+            self.assertIsNone(im2.tile_now(key))
+            self.assertNotIn(("usgs", 16), {(r[0], r[1]) for r in im2.requests})
+        finally:
+            block.set()
+
+    def test_shares_one_fetch(self):
+        gate, started = threading.Event(), threading.Event()
+
+        def serve(name, z, x, y):
+            if z == 16:
+                started.set()
+                gate.wait(5)
+            return self.serve(name, z, x, y)
+        im = FakeNet(self.tmp.name, serve, chain=("usgs",), tone=0.0)
+        key = (imagery.SOURCES["usgs"], 16, 16950, 24260)
+        with futures.ThreadPoolExecutor(4) as ex:
+            got = [ex.submit(im.tile_now, key)]
+            self.assertTrue(started.wait(5))
+            got += [ex.submit(im.tile_now, key) for _ in range(3)]      # (four z17 map tiles, one z16 photo)
+            time.sleep(0.05)
+            gate.set()
+            tiles = [f.result(5) for f in got]
+        self.assertTrue(all(t is tiles[0] for t in tiles))
+        self.assertEqual(sum(1 for r in im.requests if r[1] == 16), 1)
+
+    def test_joins_a_running_world_fetch(self):
+        gate, started = threading.Event(), threading.Event()
+
+        def serve(name, z, x, y):
+            if z == 16:
+                started.set()
+                gate.wait(5)
+            return self.serve(name, z, x, y)
+        im = FakeNet(self.tmp.name, serve, chain=("usgs",), tone=0.0)
+        key = (imagery.SOURCES["usgs"], 16, 16950, 24260)
+        im.tiles([(imagery.SOURCES["usgs"], 12, key[2] >> 4, key[3] >> 4)])     # the probes known
+        with im._lock:
+            world = im._future(key, "prefetch")                 # the far field's, running on the pool
+        self.assertTrue(started.wait(5))
+        with futures.ThreadPoolExecutor(1) as ex:
+            f = ex.submit(im.tile_now, key)
+            time.sleep(0.05)
+            gate.set()
+            self.assertIs(f.result(5), world.result(5))
+        self.assertEqual(sum(1 for r in im.requests if r[1] == 16), 1)
+
+
+class TileNowTakeoverTest(unittest.TestCase):
+    """Imagery.tile_now and the world's own fetches of the same tile: one network request whichever comes first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_takes_over_a_queued_world_fetch_without_a_second_request(self):
+        gate = threading.Event()
+
+        def serve(name, z, x, y):
+            if z == 16:
+                gate.wait(5)
+            return 200, png(background(z, x, y))
+        im = FakeNet(self.tmp.name, serve, chain=("usgs",), tone=0.0)
+        key = (imagery.SOURCES["usgs"], 16, 16950, 24260)
+        im.tiles([(imagery.SOURCES["usgs"], 12, key[2] >> 4, key[3] >> 4)])     # the probes known
+        block = threading.Event()
+        for _ in range(imagery.FETCH_WORKERS):          # the pool busy: the world's fetch of key stays queued
+            im.pool.submit(block.wait)
+        try:
+            with im._lock:
+                world = im._future(key, "prefetch")
+            self.assertFalse(world.running())
+            with futures.ThreadPoolExecutor(1) as ex:
+                f = ex.submit(im.tile_now, key)
+                time.sleep(0.05)
+                gate.set()
+                t = f.result(5)                         # while the pool is still blocked: not queued behind it
+                self.assertIsNotNone(t)
+                self.assertFalse(world.done())
+                block.set()
+                self.assertIs(world.result(5), t)       # the queued fetch, when it ran, took the map tile's result
+        finally:
+            block.set()
+        self.assertEqual(sum(1 for r in im.requests if r[1] == 16), 1)
+
+    def test_a_dropped_world_prefetch_is_fetched_again_here(self):
+        im = FakeNet(self.tmp.name, lambda n, z, x, y: (200, png(background(z, x, y))), chain=("usgs",), tone=0.0)
+        key = (imagery.SOURCES["usgs"], 16, 16950, 24260)
+        im.tiles([(imagery.SOURCES["usgs"], 12, key[2] >> 4, key[3] >> 4)])
+        world = futures.Future()                        # the far field's prefetch of key, running
+        world.urgent = False
+        world.set_running_or_notify_cancel()
+        with im._lock:
+            im._inflight[key] = world
+        with futures.ThreadPoolExecutor(1) as ex:
+            f = ex.submit(im.tile_now, key)
+            time.sleep(0.05)
+            world.set_exception(imagery.ImageryError("bucket low, prefetch dropped", deferred=True))
+            self.assertIsNotNone(f.result(5))
+        self.assertEqual(sum(1 for r in im.requests if r[1] == 16), 1)
+
+
 class ExportTransport:
     """netfetch transport for an export source ("naip": bbox + size in the URL) and XYZ tiles for the rest:
     serve_export(z, x, y, size) -> (status, body) for the parent tile the bbox is; XYZ as ServeTransport."""

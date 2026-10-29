@@ -462,16 +462,22 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
--- #44: dashboard visibility is a persisted player setting.
+-- #44: what the car navigation screens show is a persisted player setting (map by default).
 do
   local dashboard0, settingsFile0 = rawget(_G, 'beamngEarth_dashboard'), files[settings.FILE]
-  beamngEarth_dashboard = nil
+  local styles = {}
+  beamngEarth_dashboard = { setStyle = function(v) styles[#styles + 1] = v end }
   settings.load()
-  settings.set('dashboardSatellite', false)
-  T.check(files[settings.FILE].dashboardSatellite == false, '#44: dashboard visibility off is persisted')
-  T.check(settings.load().dashboardSatellite == false, '#44: dashboard visibility off survives reload')
-  settings.set('dashboardSatellite', true)
-  T.check(files[settings.FILE].dashboardSatellite == true, '#44: dashboard visibility on is persisted')
+  T.check(settings.get('dashboardMap') == 'map', '#44: the car screens show the road map by default')
+  settings.set('dashboardMap', 'satellite')
+  T.check(files[settings.FILE].dashboardMap == 'satellite', '#44: the satellite choice is persisted')
+  T.check(settings.load().dashboardMap == 'satellite', '#44: the satellite choice survives reload')
+  T.check(styles[#styles] == 'satellite', '#44: the choice goes to the screens')
+  T.check(settings.validate('dashboardMap', 'photo') == nil, '#44: an unknown choice is refused')
+  files[settings.FILE] = { dashboardSatellite = true }
+  local _, warnings = settings.load()
+  T.check(#warnings == 0 and settings.get('dashboardMap') == 'map',
+    '#44: the old satellite switch in a settings file is ignored without a warning')
   beamngEarth_dashboard = dashboard0
   files[settings.FILE] = settingsFile0
   settings.load()
