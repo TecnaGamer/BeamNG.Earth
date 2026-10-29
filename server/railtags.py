@@ -170,7 +170,7 @@ class RailTags(Shards):
 LANES_ON = os.environ.get("BNE_LANETAGS", "on") != "off"
 # OpenStreetMap's lane-level road tags (tools/build_lane_tags.py), attrs osm_<key with ':' as '_'>: the road markings'
 # lane-by-lane data (markings.py)
-LANE_COLUMNS = ("turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
+LANE_COLUMNS = ("lanes", "turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
                 "change:lanes:forward", "change:lanes:backward", "placement", "placement:forward", "placement:backward",
                 "lanes:forward", "lanes:backward", "lanes:both_ways", "overtaking", "overtaking:forward",
                 "overtaking:backward", "divider", "lane_markings", "bus:lanes", "busway", "hov:lanes",
@@ -178,6 +178,8 @@ LANE_COLUMNS = ("turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn
 
 
 def lane_attr(key):
+    if key == "lanes":
+        return "osm_lane_total"     # preserve the independently downloaded Layercake count
     return "osm_" + key.replace(":", "_")
 
 
@@ -209,6 +211,8 @@ class LaneTags(Shards):
                             cols[c][i] = t[c]
         for c in LANE_COLUMNS:
             feats.attrs[lane_attr(c)] = cols[c]
+        import roadlanes
+        roadlanes.invalidate(feats)
 
 
 SIGNS_ON = os.environ.get("BNE_SIGNTAGS", "on") != "off"

@@ -127,14 +127,6 @@ def driving_width(spec):
     return float(min(spec.width, w))
 
 
-def _osm_count(v):
-    try:
-        n = int(str(v).split(";")[0])
-        return n if 1 <= n <= 8 else None
-    except (TypeError, ValueError):
-        return None
-
-
 def _lanes(width, oneway, known=None):
     """Lanes (with the direction, against it) of a road whose driving lanes are `width` wide (known: OpenStreetMap's
     lane count, both directions, osmtags.py): the same number each way on a two-way road (a lopsided split put the AI's
@@ -283,11 +275,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 direction = int(spec.dir)
             if spec.kind == "paved" and spec.cls in roads.LANE_CLASSES:     # (the painted lanes: roads.lane_layout)
                 n = roads.lane_layout(spec)[1]
-                lo, li = (n, 0) if direction != 0 else (max(1, n // 2), max(1, n // 2))
                 tags = roads.lane_tags(feats, i) or {}
-                f_, b_ = _osm_count(tags.get("lanes:forward")), _osm_count(tags.get("lanes:backward"))
-                if direction == 0 and f_ and b_ and not tags.get("lanes:both_ways"):
-                    lo, li = f_, b_         # (an uneven split: markings.lane_plan moves the centre line the same)
+                import roadlanes
+                lo, li = ((n, 0) if direction else roadlanes.directions(n, tags)[:2]
+                          if spec.lanes or tags else _lanes(w, False, n))
             else:
                 lo, li = _lanes(w, direction != 0, spec.lanes)
             profile = _speed_profile(xy, w, direction != 0, urban=bool(getattr(spec, "urban", True)))

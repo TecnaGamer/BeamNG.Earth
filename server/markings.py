@@ -86,11 +86,8 @@ def dashes(pts, pattern, phase=0.0):
 
 
 def _count(v):
-    try:
-        n = int(str(v).split(";")[0].strip())
-        return n if 0 <= n <= 12 else None
-    except (TypeError, ValueError):
-        return None
+    import roadlanes
+    return roadlanes.count(v, 0)
 
 
 def _vals(v):
@@ -114,8 +111,6 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     osm = {k: v for k, v in (osm or {}).items() if v not in (None, "")}
     if not osm:
         return None
-    fwd, bwd, both = _count(osm.get("lanes:forward")), _count(osm.get("lanes:backward")), \
-        _count(osm.get("lanes:both_ways")) or 0
     if not two_way:
         n = lanes
         ch = _vals(osm.get("change:lanes"))
@@ -127,17 +122,10 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
             # positive: the leftmost lane starts at +drive/2)
             out.append((drive / 2 - k * lw, "lane", solid))
         return out
-    if fwd is None and bwd is None:
-        if lanes and lanes - both >= 2:
-            fwd = bwd = None
-            half = (lanes - both) / 2
-            fwd, bwd = int(round(half + 0.25)), int(lanes - both - int(round(half + 0.25)))
-        else:
-            return None
-    if fwd is None:
-        fwd = max(1, (lanes or 2) - both - bwd)
-    if bwd is None:
-        bwd = max(1, (lanes or 2) - both - fwd)
+    if lanes < 2:
+        return None
+    import roadlanes
+    fwd, bwd, both = roadlanes.directions(lanes, osm)
     n = fwd + bwd + both
     lw = drive / max(n, 1)
     # right-hand traffic: the backward lanes on the left of the way's direction (offsets positive), then the turn lane,

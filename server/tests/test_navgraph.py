@@ -63,9 +63,9 @@ class GraphTest(unittest.TestCase):
             lo, li = navgraph._lanes(w, False)
             self.assertEqual(lo, li, cls)
 
-    def test_rural_motorway_two_lanes(self):
+    def test_motorway_defaults_two_lanes(self):
         import roads
-        for urban, n in ((False, 2), (True, 3)):
+        for urban, n in ((False, 2), (True, 2)):
             sp = roads.Spec(roads.carriageway("motorway", "paved", urban, None, True), "paved", urban, "motorway", True)
             self.assertEqual(navgraph._lanes(navgraph.driving_width(sp), True), (n, 0), urban)
         ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True)
