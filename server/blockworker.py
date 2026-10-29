@@ -52,6 +52,8 @@ class _State:
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
         import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
         _railways.COARSE_AT = self.dem.coarse_at
+        # (and no separation in the ground under a rail bridge: railways.flat_rail_crossing)
+        _railways.RAW_ELEV = lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM)
         # runways graded in (--airports on): the copy the server loaded, never refreshed here
         self.airports = load_airports(cache_dir, self.dem) if airports else None
         md = mapdatamod.MapData(cache_dir, fetcher=net) if (roads or surface or sea) else None
