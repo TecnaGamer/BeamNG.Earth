@@ -366,3 +366,89 @@ class DemFailedTest(unittest.TestCase):
             v._build = lambda x, y: build(x, y, False)
             v._load(1, 2)
             self.assertTrue(os.path.exists(v._path(1, 2)), "answered: kept")
+
+
+class ProvenceIgnFrTest(unittest.TestCase):
+    """Provence & French Open Data (server/ign_fr.py + server/vegetation.py): vineyards, cypress windbreaks &
+    narrow-crown cypresses, lavender fields, and olive groves."""
+
+    def test_provence_regional_species(self):
+        # Narrow-crowned tree in Provence -> G_CYPRESS
+        g_nar = int(veg.regional(np.array([veg.G_DECIDUOUS]), np.array([8.0]), np.array([44.12]), np.array([5.02]),
+                                 np.array([veg.WC["tree"]]), np.array([0.8]), narrow=np.array([True]))[0])
+        self.assertEqual(g_nar, veg.G_CYPRESS)
+        # Cropland / farmstead tree in Provence -> G_CYPRESS
+        g_crop = int(veg.regional(np.array([veg.G_DECIDUOUS]), np.array([7.0]), np.array([44.12]), np.array([5.02]),
+                                  np.array([veg.WC["crop"]]), np.array([0.4]))[0])
+        self.assertEqual(g_crop, veg.G_CYPRESS)
+        # Broadleaf tree on Mediterranean shrubland -> G_OLIVE
+        g_oli = int(veg.regional(np.array([veg.G_DECIDUOUS]), np.array([5.0]), np.array([44.12]), np.array([5.02]),
+                                 np.array([veg.WC["shrub"]]), np.array([0.5]))[0])
+        self.assertEqual(g_oli, veg.G_OLIVE)
+
+    def test_ign_fr_parcels_and_cypress_hedgerows(self):
+        import ign_fr
+        pkey = mapcells.cell_of(44.12, 5.02)
+        lon0, lat0, lon1, lat1 = pkey.bounds()
+        x0, y1 = veg._to3857(lon0, lat1)
+        x1, y0 = veg._to3857(lon1, lat0)
+        dx = (x1 - x0) / 512
+        chm = Raster(np.zeros((512, 512), np.uint8), x0, y1, dx, nodata=255)
+
+        def lonlat(r, c):
+            lo, la = veg._to4326(x0 + (c + 0.5) * dx, y1 - (r + 0.5) * dx)
+            return [float(lo), float(la)]
+
+        def rect_ring(r0, c0, r1, c1):
+            return [lonlat(r0, c0), lonlat(r0, c1), lonlat(r1, c1), lonlat(r1, c0), lonlat(r0, c0)]
+
+        fr_dict = {
+            "polys": [
+                ["vineyard", [[rect_ring(60, 60, 130, 180)]]],
+                ["lavender", [[rect_ring(200, 60, 250, 140)]]],
+                ["olive", [[rect_ring(300, 60, 350, 130)]]],
+            ],
+            "hedges": [
+                [[lonlat(40, 60), lonlat(40, 180)], 7.5, 2.0],
+            ],
+        }
+        fr_cell = ign_fr._cell_from_dict(fr_dict)
+        cd = SimpleNamespace(
+            bounds=pkey.bounds(),
+            layers={"canopy": chm, "landcover": Raster(None, 0, 0, 1), "buildings": None, "roads": None, "water": None},
+        )
+        md = SimpleNamespace(
+            release="t",
+            ign_fr=SimpleNamespace(cell=lambda k, bounds=None, kind="demand": fr_cell),
+            cell=lambda k, layers=None, kind="demand": cd,
+        )
+        it = veg.Vegetation(md, None).cell(pkey)
+        groups = set(veg.GROUPS[g] for g in it.group)
+        self.assertIn("cypress", groups)
+        self.assertIn("vineyard_block", groups)
+        self.assertIn("vineyard", groups)
+        self.assertIn("lavender", groups)
+        self.assertIn("olive", groups)
+
+    def test_lavender_imagery_tint(self):
+        import ign_fr
+        pkey = mapcells.cell_of(44.08, 5.40)
+        lon0, lat0, lon1, lat1 = pkey.bounds()
+        clat, clon = 0.5 * (lat0 + lat1), 0.5 * (lon0 + lon1)
+        frame = geodesy.EnuFrame(clat, clon)
+        # Lavender polygon covering [-40, 40] x [-40, 40] in ENU
+        la, lo, _ = frame.enu_to_geodetic(
+            np.array([-40.0, 40.0, 40.0, -40.0, -40.0]),
+            np.array([-40.0, -40.0, 40.0, 40.0, -40.0]),
+            np.zeros(5),
+        )
+        ring = [[float(lo[k]), float(la[k])] for k in range(5)]
+        fr_cell = ign_fr._cell_from_dict({"polys": [["lavender", [[ring]]]], "hedges": []})
+        ign = ign_fr.IgnFr(None, None)
+        ign._mem[(pkey.z, pkey.x, pkey.y)] = fr_cell
+        rgb = np.full((64, 64, 3), 120, dtype=np.uint8)
+        out = ign.tint_lavender_rgb(rgb, frame, -64.0, -64.0, 128.0)
+        # Centre pixel (32, 32) is inside the lavender polygon -> blue channel raised over green
+        self.assertGreater(int(out[32, 32, 2]), int(out[32, 32, 1]) + 20)
+        # Corner pixel (0, 0) is outside the lavender polygon -> unchanged
+        np.testing.assert_array_equal(out[0, 0], rgb[0, 0])

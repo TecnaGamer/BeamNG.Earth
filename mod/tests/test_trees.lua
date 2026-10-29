@@ -41,8 +41,8 @@ end
 local trees = require('beamngEarth/trees')
 trees.EVERY_N = 1               -- (every update works here; the batching is tested below)
 -- (no time budget, no spare Forests: both tested at the end)
-local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
-trees.FRAME_MS, trees.POOL_SPARE = math.huge, 0
+local FRAME_MS, POOL_SPARE, FIRSTS_PER_FRAME = trees.FRAME_MS, trees.POOL_SPARE, trees.FIRSTS_PER_FRAME
+trees.FRAME_MS, trees.POOL_SPARE, trees.FIRSTS_PER_FRAME = math.huge, 0, math.huge
 local function count() local n = 0; for _ in pairs(items) do n = n + 1 end; return n end
 
 -- the variant: a height inside its range, scaled to it
@@ -415,6 +415,25 @@ do
   trees.update(14, { x = 10, y = 10 })
   T.check(count() == 2, 'rocks on again: back')
   trees.clear()
+end
+-- Provence & Mediterranean groups (cypress, vineyard, vineyard_block, lavender, olive)
+do
+  local s1, _ = trees.pick('cypress', 1.65, 0.2)
+  local s2, _ = trees.pick('cypress', 7.5, 0.2)
+  local s3, _ = trees.pick('vineyard', 1.71, 0.2)
+  local s4, _ = trees.pick('vineyard_block', 1.86, 0.2)
+  local s5, _ = trees.pick('lavender', 0.85, 0.2)
+  local s6, _ = trees.pick('olive', 4.0, 0.2)
+  local s7, _ = trees.pick('olive', 11.0, 0.2)
+  T.check(s1:find('cypress_hedge_3m') ~= nil, 'short cypress picks cypress_hedge_3m')
+  T.check(s2:find('cypress_tree') ~= nil, 'tall cypress picks cypress_tree')
+  T.check(s3:find('grape_vine$') ~= nil, 'vineyard picks grape_vine')
+  T.check(s4:find('grape_vine_group') ~= nil, 'vineyard_block picks grape_vine_group')
+  T.check(s5:find('bne_lavender_row') ~= nil, 'lavender picks bne_lavender_row')
+  T.check(s6:find('olive') ~= nil, '4m olive group picks olive tree')
+  T.check(s7:find('holm_oak') ~= nil, '11m olive group picks holm_oak')
+  T.check(trees.NO_COLLIDE.vineyard and trees.NO_COLLIDE.vineyard_block and trees.NO_COLLIDE.lavender,
+    'vineyards and lavender rows do not collide')
 end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 T.done('test_trees')

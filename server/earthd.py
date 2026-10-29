@@ -3265,8 +3265,10 @@ class Connection:
                 except Exception:
                     log.exception("client %s: message %r failed", self.peer, msg.get("type"))
                 await self.writer.drain()
-        except (protocol.ProtocolError, ConnectionError) as e:
+        except protocol.ProtocolError as e:
             log.warning("client %s: %s", self.peer, e)
+        except ConnectionError as e:
+            log.info("client %s: %s", self.peer, e)
         finally:
             self.route_dl_version += 1          # (a running route_download stops: no one to show its bar to)
             self.s.connections.discard(self)

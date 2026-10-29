@@ -16,5 +16,70 @@
       {}
     ],
     "castShadows": false
+  },
+  "bne_lavender": {
+    "name": "bne_lavender",
+    "mapTo": "bne_lavender",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7a2d9c4e-8f1b-4d3a-9e5c-2b8f6a1d3e90",
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_ao.data.png",
+        "baseColorFactor": [
+          0.92,
+          0.86,
+          1.0,
+          1.0
+        ],
+        "baseColorMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_b.color.png",
+        "normalMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_nm.normal.png",
+        "opacityMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_o.data.png",
+        "roughnessMap": "/assets/materials/foliage/groundcover/t_lavender/t_lavender_r.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 55,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "dynamicCubemap": true,
+    "materialTag0": "beamng",
+    "materialTag1": "vegetation",
+    "materialTag2": "Natural",
+    "subSurface": true,
+    "subSurfaceIntensity": 0.9,
+    "translucentBlendOp": "None"
+  },
+  "bne_lavender_foliage": {
+    "name": "bne_lavender_foliage",
+    "mapTo": "bne_lavender_foliage",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8b3e0d5f-9a2c-4e4b-af6d-3c9a7b2e4f01",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_lavender_b.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_lavender_o.png",
+        "metallicFactor": 0,
+        "roughnessFactor": 0.88
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "dynamicCubemap": true,
+    "materialTag0": "beamng",
+    "materialTag1": "vegetation",
+    "materialTag2": "Natural",
+    "subSurface": true,
+    "subSurfaceIntensity": 0.85,
+    "translucentBlendOp": "None"
   }
 }

@@ -234,7 +234,10 @@ def _regional_policies():
         host = urllib.parse.urlsplit(url).hostname
         if host in POLICIES or host in out:
             continue
-        if kind == "xyz":
+        if host == "data.geopf.fr":
+            out[host] = HostPolicy(rate=35.0, burst=100.0, max_conc=16, daily_budget=80000, allow_prefetch=True,
+                                   miss_ttl=30 * DAY, timeout=15.0, optional=True, **TILE_HOST)
+        elif kind == "xyz":
             out[host] = HostPolicy(rate=6.0, burst=20.0, max_conc=4, daily_budget=20000, allow_prefetch=True,
                                    miss_ttl=30 * DAY, timeout=20.0, optional=True, **TILE_HOST)
         else:
