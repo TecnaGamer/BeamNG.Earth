@@ -159,7 +159,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'lidarbc_ortho_index.json.gz')}{SEP}.",     # (bcortho.INDEX_PATH)
            # the highway signs' lettering metrics and US state outlines (exitsigns.GLYPHS, signstates.DATA)
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
-           "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}."]
+           "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'mile_markers_us.json')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}."]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork

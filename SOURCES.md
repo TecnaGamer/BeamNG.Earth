@@ -108,6 +108,13 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed
   bridges, and their real spans and heights.
 - **The Overture Maps file index**: a copy for when its server does not answer.
+- **Interstate mile references** (`server/mile_markers_us.json`): the restored Michigan DOT and Kentucky
+  Transportation Cabinet inventory from the 1.7.0 custom build, dated 2026-10-23. Source URLs and calibration
+  metadata are included in the file. These supplement the weekly OSM sign shards.
+- **Kentucky I-65/I-75 and southern Indiana I-65 corridors** (`server/ky_interstate_medians.json`):
+  OpenStreetMap contributors (ODbL), Kentucky Transportation Cabinet and Indiana DOT reference posts.
+  The file retains the source credits, snapshot hashes and calibrated 0.2-mile stations. It identifies
+  the custom median treatments; placement uses the currently generated pavement.
 
 ## Never contacted
 

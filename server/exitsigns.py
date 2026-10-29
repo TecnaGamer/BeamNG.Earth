@@ -367,6 +367,7 @@ def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, 
     label = obj['exit']['label']
     return dict(id=obj['id'], kind=kind, label=label, style=sign_style(label), state=state,
                 centre=[float(centre[0]), float(centre[1]), z], travel=travel.tolist(), side=side,
+                road_point=np.asarray(road_point[:2]).tolist(),
                 bottom=bottom, width=width, height=height, bases=bases.tolist(), post_offsets=list(offsets),
                 distance=distance_text, advance_m=distance_m)
 
