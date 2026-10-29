@@ -427,4 +427,30 @@ do
   for _, m in pairs(made) do m:delete() end
   roads.reset()
 end
+-- Custom median walls have their own collision and lifecycle, separate from decks and signs.
+do
+  roads.reset()
+  gov.allow, gov.tries = nil, 0
+  car.pos = vec3(103, 105, .5)
+  getPlayerVehicle = function() return car end
+  files['/t/barrier.json'] = '{ chunks = {}, barrier = { shape = "/t/barrier_7_0_0.cdae", pos = { 0, 0, 0 } }, ' ..
+    'colliders = { barrier = { { 99.5, 100, -.5, 100.5, 110, 1.9 } } } }'
+  roads.onTile({ anchorId = 7, key = '0_0', path = '/t/barrier.json', n = 0 }, 7)
+  roads.update(gov, 7)
+  T.check(#statics() == 1, 'barrier beside the car loads without a wide collision hold')
+  T.check(statics()[1].fields.collisionType == 'Visible Mesh Final', 'custom barrier collides')
+  roads.onDrop({ anchorId = 7, key = '0_0' })
+  roads.update(gov, 7)
+  T.check(#statics() == 0, 'barrier deleted with its tile')
+  car.pos = vec3(100, 105, .5)
+  roads.onTile({ anchorId = 7, key = '0_0', path = '/t/barrier.json', n = 0 }, 7)
+  roads.update(gov, 7)
+  T.check(#statics() == 0, 'barrier collision held while intersecting the car')
+  car.pos = vec3(103, 105, .5)
+  roads.update(gov, 7)
+  T.check(#statics() == 1, 'barrier released once the car is clear')
+  roads.clear()
+  T.check(#statics() == 0, 'clear leaves no orphaned barrier')
+  getPlayerVehicle = nil
+end
 T.done('test_roads')

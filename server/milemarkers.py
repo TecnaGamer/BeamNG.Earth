@@ -1,11 +1,16 @@
-"""Whole-mile Interstate reference signs from mapped OpenStreetMap milestones (from cody196's PR #363).
+"""Interstate reference signs from bundled DOT inventory and mapped OpenStreetMap milestones (from cody196's PR #363).
 
 The weekly sign shards (tools/build_sign_tags.py) carry osm_records' references: mapped highway=milestone nodes on
 an Interstate's directed carriageway, and the whole miles between two compatible ones (interpolated only where the
-chainage agrees with the mapped mileage). No worker invents mile zero or restarts a count at a tile. The panel is
-opaque geometry with the shared opacity-atlas lettering, mounted beyond the paved shoulder.
+chainage agrees with the mapped mileage). Bundled DOT references restore the previous build's coverage even without
+those shards. No worker invents mile zero or restarts a count at a tile. Green panels stand beyond the paved shoulder;
+the configured Kentucky/southern Indiana concrete medians carry blue, two-sided panels every 0.2 miles.
 """
 from collections import defaultdict
+from functools import lru_cache
+import json
+import logging
+from pathlib import Path
 import hashlib
 import math
 import re
@@ -13,6 +18,9 @@ import re
 import numpy as np
 
 import exitsigns
+
+log = logging.getLogger('earthd.milemarkers')
+DATA = Path(__file__).with_name('mile_markers_us.json')
 
 MILE_M = 1609.344
 WIDTH, HEIGHT, BOTTOM = .55, 2.10, 1.15
@@ -62,15 +70,81 @@ def _object(state, route, mile, direction, point, axis, source):
                                  axis=list(map(float, axis)), source=source))
 
 
+@lru_cache(maxsize=1)
+def references():
+    """One immutable reference set; normalize both carriageways before any tile query."""
+    try:
+        with DATA.open(encoding='utf-8') as stream:
+            data = json.load(stream)
+    except (OSError, ValueError) as exc:
+        log.warning('Mile-marker references unavailable: %s; continuing with OSM references', exc)
+        return (), np.empty((0,2))
+    grouped = defaultdict(lambda: defaultdict(list))
+    interpolated = {tuple(row) for row in data.get('interpolated',())}
+    for state, route, mile, direction, lon, lat in data['markers']:
+        grouped[state, int(route)][int(mile)].append((direction, np.array([lon, lat], float)))
+    out = []
+    for (state, route), stations in sorted(grouped.items()):
+        ordered = sorted(stations)
+        centres = {mile: np.mean([point for _, point in stations[mile]], axis=0) for mile in ordered}
+        for i, mile in enumerate(ordered):
+            before = ordered[max(0, i-1)]
+            after = ordered[min(len(ordered)-1, i+1)]
+            delta = centres[after]-centres[before]
+            delta *= [math.cos(math.radians(float(centres[mile][1]))), 1.]
+            norm = float(np.linalg.norm(delta))
+            directions = {d for d, _ in stations[mile] if d}
+            if not directions:
+                # These two sources use statewide Interstate mileage. MI carries the
+                # actual posted direction, including I-69's EAST/WEST section.
+                directions = {'N' if route % 2 else 'E'}
+            directions |= {OPPOSITE[d] for d in directions}
+            for direction in sorted(directions):
+                points = [p for d, p in stations[mile] if d == direction]
+                point = np.mean(points, axis=0) if points else centres[mile]
+                axis = delta/norm if norm > 1e-12 else np.array(AXES[direction])
+                if direction in ('S', 'W'):
+                    axis = -axis if norm > 1e-12 else axis
+                source = 'dot:'+state.lower()
+                if (state,route,mile,direction) in interpolated:
+                    source += ':calibrated'
+                out.append(_object(state, route, mile, direction, point, axis,source))
+    import medianbarriers
+    known = {(o['mile_marker']['state'], o['mile_marker']['route'], o['mile_marker']['mile']) for o in out}
+    try:
+        station_sets = medianbarriers.station_sets()
+    except (OSError, ValueError, KeyError) as exc:
+        log.warning('Kentucky median references unavailable: %s; retaining whole-mile references', exc)
+        station_sets = ()
+    for state, stations in station_sets:
+        for route, mile, lon, lat, ax, ay in stations:
+            if (state, int(route), mile) not in known:
+                out.append(_object(state, int(route), mile, 'N', [lon, lat], [ax, ay],
+                                   'dot:'+state.lower()+':osm-calibrated'))
+    xy = np.array([[o['lon'], o['lat']] for o in out], float).reshape(-1, 2)
+    return tuple(out), xy
+
+
+def query(frame, box):
+    """A vector bbox lookup, with no downloads or regional PBF work on the road thread."""
+    x0, y0, x1, y1 = box
+    lat, lon, _ = frame.enu_to_geodetic(np.array([x0,x1,x0,x1]), np.array([y0,y0,y1,y1]), 0.)
+    objects, xy = references()
+    keep = ((xy[:, 0] >= lon.min()) & (xy[:, 0] <= lon.max()) &
+            (xy[:, 1] >= lat.min()) & (xy[:, 1] <= lat.max()))
+    return [objects[i] for i in np.flatnonzero(keep)]
+
+
 def _metric(points, at):
     return (np.asarray(points, float)-at)*[111320.*math.cos(math.radians(float(at[1]))), 111320.]
 
 
 def unique_objects(objects):
-    """One sign per reference; a mapped milestone wins over an interpolated mile at the same place."""
+    """One sign per reference: bundled DOT inventory, mapped OSM, then interpolated OSM."""
     groups, out = defaultdict(list), []
     ordered = sorted((o for o in objects if o.get('mile_marker')),
-                     key=lambda o: (o['mile_marker']['source'] != 'osm', o['id']))
+                     key=lambda o: (not o['mile_marker']['source'].startswith('dot:'),
+                                    o['mile_marker']['source'] != 'osm', o['id']))
     for obj in ordered:
         info = obj['mile_marker']
         key = (info['route'],info['mile'],info['direction'])
@@ -230,6 +304,23 @@ def place(frame, objects, pavements, box, elev, chunks=()):
         info = obj.get('mile_marker')
         if not info:
             continue
+        if ((info.get('state') == 'KY' and info['route'] in (65, 75)) or
+                (info.get('state') == 'IN' and info['route'] == 65)):
+            import medianbarriers
+            mounting = medianbarriers.mount(frame, obj, pavements, elev)
+            if mounting is not None:
+                centre, travel = mounting
+                # A single post carries separately readable opposite faces.
+                if info['direction'] == 'N' and x0 <= centre[0] < x1 and y0 <= centre[1] < y1:
+                    key = (info['state'], info['route'], info['mile'], 'N')
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(dict(id=obj['id'], kind='mile_marker', centre=centre.tolist(),
+                                        travel=travel.tolist(), route=info['route'], direction='NORTH',
+                                        mile=info['mile'], bottom=float(centre[2])+.55,
+                                        width=.61, height=2.44, source=info['source'],
+                                        style='ky_blue', double_sided=True))
+                continue
         if float(info['mile']) % 1:
             continue           # whole miles only (a fractional reference has no shoulder post)
         key = (info.get('state',''), info['route'], info['mile'], info['direction'])
@@ -300,6 +391,9 @@ class Mesh(exitsigns.Mesh):
             cursor += glyph['advance']*sx
 
     def panel(self, sign):
+        if sign.get('style') == 'ky_blue':
+            self.kentucky_panel(sign)
+            return
         self.centre = np.asarray(sign['centre'],float)
         travel = np.asarray(sign['travel'],float)
         self.face = np.r_[-travel,0.]
@@ -321,6 +415,49 @@ class Mesh(exitsigns.Mesh):
         self.shield(str(sign['route']),bottom+1.11,.405,.51)
         self.text('MILE',0.,bottom+.72,.24,w-.095)
         self.text(str(sign['mile']),0.,bottom+.18,.38,w-.105)
+
+    def kentucky_panel(self, sign):
+        """Blue 24 x 96 inch reference-style board, white outline and separate tenths box."""
+        self.centre = np.asarray(sign['centre'], float)
+        travel = np.asarray(sign['travel'], float)
+        self.face = np.r_[-travel, 0.]
+        self.right = np.array([travel[1], -travel[0], 0.])
+        bottom = sign['bottom']-self.centre[2]
+        w, h = sign['width'], sign['height']
+        # The centre is the wall's top, so the galvanized post seats into concrete.
+        self.box((-.0325, -.0325, -.10), (.0325, .0325, bottom+h-.12), 2)
+        self.rounded(w, bottom, h, .045, .05, 2, back=True, front=False)
+        tenths = int(round(float(sign['mile'])*10))
+        for face in range(2 if sign.get('double_sided') else 1):
+            self.face = np.r_[(-travel if face == 0 else travel), 0.]
+            self.right = np.array([travel[1], -travel[0], 0.])*(1 if face == 0 else -1)
+            rings = [self.outline(w-2*m, bottom+m, h-2*m, r)
+                     for m,r in ((0., .045), (.012, .034), (.026, .022))]
+            for outer, inner, mat in zip(rings, rings[1:], (6, 1)):
+                for i in range(len(outer)):
+                    j = (i+1)%len(outer)
+                    self.quad([(.05,*outer[i]),(.05,*outer[j]),(.05,*inner[j]),(.05,*inner[i])], mat)
+            inner = rings[-1]
+            # Split the blue interior around the divider; no coplanar overlapping panels.
+            split = bottom+.49
+            def clip(poly, level, above):
+                result = []
+                for a,b in zip(poly, np.roll(poly,-1,axis=0)):
+                    ia,ib = (a[1]>=level,b[1]>=level) if above else (a[1]<=level,b[1]<=level)
+                    if ia: result.append(a)
+                    if ia != ib: result.append(a+(b-a)*((level-a[1])/(b[1]-a[1])))
+                return np.asarray(result)
+            for poly, mat in ((clip(inner, split+.008, True), 6),
+                              (clip(clip(inner, split+.008, False), split-.008, True), 1),
+                              (clip(inner, split-.008, False), 6)):
+                for i in range(1, len(poly)-1):
+                    self.triangle(np.c_[np.full(3,.05), poly[[0,i,i+1]]], mat)
+            self.text('NORTH' if face == 0 else 'SOUTH', 0., bottom+2.10, .265, w-.075)
+            self.shield(str(sign['route']), bottom+1.39, .45, .58)
+            self.text('MILE', 0., bottom+.99, .265, w-.08)
+            self.text(str(tenths//10), 0., bottom+.57, .36, w-.095)
+            self.text('.'+str(tenths%10), 0., bottom+.08, .36, w-.13)
+
 
     def shield(self, route, bottom, width, height):
         # Interstate contour: broad red crown, curved blue bowl and a pointed base.

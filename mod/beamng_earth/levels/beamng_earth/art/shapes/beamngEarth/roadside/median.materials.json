@@ -1,0 +1,78 @@
+{
+  "bne_median_cable_steel": {
+    "name": "bne_median_cable_steel",
+    "mapTo": "bne_median_cable_steel",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.66,
+          0.67,
+          1
+        ],
+        "metallicFactor": 0.75,
+        "roughnessFactor": 0.48
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "castShadows": true,
+    "translucent": false
+  },
+  "bne_median_cable_reflector": {
+    "name": "bne_median_cable_reflector",
+    "mapTo": "bne_median_cable_reflector",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.56,
+          0.1,
+          1
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.25
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "castShadows": true,
+    "translucent": false
+  },
+  "bne_ky_barrier_concrete": {
+    "name": "bne_ky_barrier_concrete",
+    "mapTo": "bne_ky_barrier_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png",
+        "baseColorFactor": [
+          0.78,
+          0.75,
+          0.68,
+          1
+        ],
+        "roughnessFactor": 0.9,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "castShadows": true,
+    "translucent": false
+  }
+}

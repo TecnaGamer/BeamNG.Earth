@@ -34,7 +34,8 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
-  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json' }
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/median.materials.json' }
 M.FADE = '450 150'          -- distanceFade: start, range (m)
 M.enabled = true
 -- the highway signs (server signstream.py, from cody196's PR #363) and the speed-limit signs (speedsigns.py): sign tiles
@@ -275,7 +276,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
@@ -479,7 +480,7 @@ function M.onTile(msg, currentAnchor)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
   for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
-      'railcol', 'exits', 'mileposts', 'merges', 'speeds' }) do
+      'railcol', 'barrier', 'exits', 'mileposts', 'merges', 'speeds' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -553,7 +554,7 @@ function M.onTile(msg, currentAnchor)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol' }) do
+  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
@@ -692,7 +693,7 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'railcol',
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'barrier', 'rail', 'railcol',
   'exits', 'mileposts', 'merges', 'speeds' }
 
 function M.transform(xf, geodesy)
@@ -954,6 +955,7 @@ playerIn = function(boxes, what)
   if not veh then return false end
   local p = veh:getPosition()
   local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
+  if what == 'barrier' then r = 1.0 end -- only a car intersecting the narrow median holds its collision
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
       if what == 'deck' then

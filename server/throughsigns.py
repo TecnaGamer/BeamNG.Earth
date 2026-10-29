@@ -206,7 +206,7 @@ def dimensions(content):
 
 
 def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
-              exit_label=None, side=1, distance='', allow_outside=False):
+              exit_label=None, side=1, distance='', allow_outside=False, branch_panels=None):
     import signroads
     extra = obj.get('through', obj.get('exit'))
     found = _candidate(pavements, q, direction, extra['main_ids'])
@@ -225,9 +225,17 @@ def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
     lat, lon, _ = frame.enu_to_geodetic(float(at_xy[0]), float(at_xy[1]), 0.)
     import signstates
     state = str(signstates.states(lat, lon).item())
-    w, h = dimensions(content)
-    panels = [dict(label=content, width=w, height=h, offset=0., exit=False)]
-    if exit_label:
+    if branch_panels is not None:
+        panels = [dict(p) for p in branch_panels]
+        total = sum(p['width'] for p in panels)+.4*(len(panels)-1)
+        cursor = -total/2.
+        for panel in panels:
+            panel['offset'] = cursor+panel['width']/2.
+            cursor += panel['width']+.4
+    else:
+        w, h = dimensions(content)
+        panels = [dict(label=content, width=w, height=h, offset=0., exit=False)]
+    if exit_label and branch_panels is None:
         ew, eh = signs.dimensions(exit_label, 'advance', state)
         panels[0]['offset'] = -side*(ew+.25)/2.
         panels.append(dict(label=exit_label, width=ew, height=eh,
@@ -257,6 +265,23 @@ def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
                 travel=travel.tolist(), panels=panels, bottom=bottom, bases=bases,
                 poles=[v[0] for v in poles], side=side, distance=distance,
                 state=state)
+
+
+def branches(frame, objects, panels, pavements, box, elev, chunks=()):
+    """Distinct destinations at one directed junction, together above the approach."""
+    import signlayout
+    if len({signlayout.label_key(s['label']) for s in panels}) < 2:
+        return None
+    panels = sorted(panels, key=lambda s: (s['side'], signlayout.label_key(s['label']), s['id']))
+    first = panels[0]
+    q, travel = np.asarray(first['road_point']), np.asarray(first['travel'])
+    if any(np.dot(s['travel'], travel) < .98 or np.linalg.norm(np.asarray(s['road_point'])-q) > 25.
+           for s in panels):
+        return None
+    boards = [dict(label=s['label'], width=s['width'], height=s['height'], exit=True,
+                   side=s['side'], kind=s['kind']) for s in panels]
+    return _assembly(frame, objects[first['id']], pavements, q, travel, box, elev, chunks, None,
+                     distance=first['distance'], allow_outside=True, branch_panels=boards)
 
 
 def place(frame, objects, pavements, box, elev, chunks=(), mph=True, allow_outside=False):
@@ -348,15 +373,16 @@ class Mesh(signs.Mesh):
             self.centre = anchor+self.right*panel['offset']
             w, h, content = panel['width'], panel['height'], panel['label']
             if panel['exit']:
+                panel_side = panel.get('side', sign['side'])
                 # Reuse the established exit panel and tab layout without its posts.
                 self.rounded_panel(w,bottom,h,0)
                 if content['ref']:
                     tw = min(w, max(2.2, signs.guide_width('EXIT '+content['ref'], .36)+.5))
-                    ty = sign['side']*(w-tw)/2
+                    ty = panel_side*(w-tw)/2
                     self.rounded_panel(tw,bottom+h,.66,0,ty)
                     self.guide_text('EXIT '+content['ref'],ty,bottom+h+.16,.36,tw-.3)
                 layout = signs.advance_layout(dict(label=content, width=w, height=h,
-                    side=sign['side'], kind='advance', distance=sign['distance'], state=sign['state']))
+                    side=panel_side, kind=panel.get('kind', 'advance'), distance=sign['distance'], state=sign['state']))
                 for row in layout['lines']:
                     self.guide_text(row['value'],row['y'],bottom+row['baseline'],row['height'],row['max_width'])
                 for row in layout.get('directions', ()):
@@ -364,6 +390,8 @@ class Mesh(signs.Mesh):
                 for route in layout['routes']:
                     self.route_shield(route,bottom)
                 self.distance_text(layout['distance'],bottom,signs.portrait(sign['state']))
+                if layout['arrow']:
+                    self.arrow(layout['arrow_y'], bottom+layout['arrow_bottom'], panel_side < 0, layout['arrow_size'])
             else:
                 self.rounded_panel(w,bottom,h,0)
                 routes = signs.route_symbols(content['routes'], sign['state'])

@@ -149,12 +149,15 @@ def modules(roads_near, box, left_hand=False, country=None, mapped_rows=(), deck
         [float(v) for v in box]), np.float64)
 
 
-def tile_rows(frame, roads_near, box, elev, left_hand=False, country=None, mapped_rows=(), decks=()):
+def tile_rows(frame, roads_near, box, elev, left_hand=False, country=None, mapped_rows=(), decks=(), custom=()):
     """Forest rows (guardrails.forest_rows' layout and GROUPS) of the median barriers in road tile box (x0, y0, x1,
     y1): roads_near the tile's ground carriageways (roads.build_tile roads_out: (fid, spec, centreline (k, 3), lon)),
     decks its bridges' (BridgeProfiles.parts: (fid, spec, xy, z, lon)), elev(lat, lon) the ground, mapped_rows the
     tile's mapped barrier rows (none of ours along them)."""
     mods = modules(roads_near, box, left_hand, country, mapped_rows, decks)
+    if custom:
+        import medianbarriers
+        mods = medianbarriers.native_modules(mods, custom)
     if not len(mods):
         return []
     ends = np.concatenate([mods[:, 2:4], mods[:, 4:6]])
