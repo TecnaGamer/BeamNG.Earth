@@ -426,6 +426,10 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, widths=_s.widths, left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys))
     graph["rules"] = rules
+    tp = graph.get("trafficProfile", {})
+    log.debug("navgraph %d of anchor %d: adaptive traffic %s (roads %.2f km/km², built-up %.0f%%)",
+              serial, aid, tp.get("band", "unknown"), tp.get("roadDensityKmKm2", 0.0),
+              100 * tp.get("urbanRoadShare", 0.0))
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])
 

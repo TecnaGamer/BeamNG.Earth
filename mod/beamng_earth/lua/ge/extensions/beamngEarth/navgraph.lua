@@ -66,6 +66,12 @@ local ours = false
 local foreign = false
 local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
+-- Adaptive traffic diagnostics. The selected traffic amount remains the player's baseline / cap; automatic mode may
+-- add a small city-centre bonus. The profile comes from mapped local road density + built-up land cover on the server.
+local trafficBaseAmount = nil
+local trafficBaseAuto = false
+local trafficDensityState = nil
+local trafficNoProfileWarned = false
 local started = false
 local respawnAll = false
 local lastGuard = -math.huge
@@ -162,7 +168,8 @@ function M.onMessage(msg, currentAnchor)
   local ok, g = pcall(jsonDecode, readFile(msg.path) or '')
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
-            signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil }
+            signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
+            trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil }
   dirty = true
   return true
 end
@@ -383,6 +390,99 @@ local function trafficSystem()
   return gameplay_traffic
 end
 
+local function positiveInt(v)
+  local n = tonumber(v)
+  if n and n >= 1 and n < 1000 then return math.floor(n + 0.5) end
+  return nil
+end
+
+local function readTrafficAmount(gt)
+  -- getTrafficVars reflects the native traffic controller's resolved amount for automatic (-1) mode.
+  if gt and type(gt.getTrafficVars) == 'function' then
+    local ok, vars = pcall(gt.getTrafficVars)
+    if ok and type(vars) == 'table' then
+      local n = positiveInt(vars.activeAmount) or positiveInt(vars.amount) or positiveInt(vars.trafficAmount)
+      if n then return n, 'gameplay_traffic.getTrafficVars' end
+    end
+  end
+  local st = rawget(_G, 'settings')
+  if st and type(st.getValue) == 'function' then
+    local ok, v = pcall(st.getValue, 'trafficAmount')
+    local n = ok and positiveInt(v) or nil
+    if n then return n, 'settings.trafficAmount' end
+  end
+  return 6, 'fallback default'
+end
+
+function M.trafficTarget(profile, baseline, automatic)
+  -- Pure helper, also exercised in mod/tests/test_navgraph.lua.
+  local band = type(profile) == 'table' and tostring(profile.band or 'unknown') or 'unknown'
+  local mult = type(profile) == 'table' and tonumber(profile.multiplier) or nil
+  local multipliers = { city = 1.0, suburban = 0.78, town = 0.58, rural = 0.30, remote = 0.12 }
+  if not mult or mult <= 0 or mult > 1.5 then mult = multipliers[band] or 1.0 end
+  local base = positiveInt(baseline) or 6
+  local target
+  if band == 'city' and automatic then
+    -- Automatic mode may make a city a little busier than the user's normal amount, but keeps a modest cap to avoid
+    -- a sudden performance hit. Explicit trafficAmount choices are never exceeded.
+    target = base < 12 and math.min(12, math.max(base, math.ceil(base * 1.25))) or base
+  else
+    target = math.max(1, math.floor(base * mult + 0.5))
+  end
+  return band, target, base, mult
+end
+
+local function trafficTarget(profile)
+  return M.trafficTarget(profile, trafficBaseAmount, trafficBaseAuto)
+end
+
+local function updateTrafficDensity(profile, force)
+  if type(profile) ~= 'table' then
+    if not trafficNoProfileWarned then
+      log('W', 'beamngEarth', 'adaptive traffic: no trafficProfile received from server; using BeamNG default density')
+      trafficNoProfileWarned = true
+    end
+    trafficDensityState = { band = 'unknown', target = nil, base = trafficBaseAmount, source = 'missing profile' }
+    return false
+  end
+  local gt = gameplay_traffic
+  if not (M.choice and M.choice.traffic and gt and type(gt.getState) == 'function' and gt.getState() == 'on') then
+    return false
+  end
+  local band, target, base, mult = trafficTarget(profile)
+  local old = trafficDensityState
+  if not force and old and old.band == band and old.target == target then
+    -- Refresh metrics for the status/debug view even when the profile remains in the same band.
+    old.roadDensityKmKm2 = tonumber(profile.roadDensityKmKm2) or old.roadDensityKmKm2
+    old.localRoadDensityKmKm2 = tonumber(profile.localRoadDensityKmKm2) or old.localRoadDensityKmKm2
+    old.urbanRoadShare = tonumber(profile.urbanRoadShare) or old.urbanRoadShare
+    old.majorRoadShare = tonumber(profile.majorRoadShare) or old.majorRoadShare
+    old.sampleRadiusM = tonumber(profile.sampleRadiusM) or old.sampleRadiusM
+    old.source = tostring(profile.source or 'mapped roads')
+    return false
+  end
+  local ok, err = pcall(gt.setActiveAmount, target)
+  if not ok then
+    log('W', 'beamngEarth', 'adaptive traffic: could not set active vehicle target: ' .. tostring(err))
+    trafficDensityState = { band = band, target = target, base = base, multiplier = mult,
+      roadDensityKmKm2 = tonumber(profile.roadDensityKmKm2), urbanRoadShare = tonumber(profile.urbanRoadShare),
+      source = tostring(profile.source or 'mapped roads'), error = tostring(err) }
+    return false
+  end
+  trafficDensityState = { band = band, target = target, base = base, multiplier = mult,
+    roadDensityKmKm2 = tonumber(profile.roadDensityKmKm2),
+    localRoadDensityKmKm2 = tonumber(profile.localRoadDensityKmKm2),
+    urbanRoadShare = tonumber(profile.urbanRoadShare), majorRoadShare = tonumber(profile.majorRoadShare),
+    sampleRadiusM = tonumber(profile.sampleRadiusM), source = tostring(profile.source or 'mapped roads') }
+  log('I', 'beamngEarth', string.format(
+    'adaptive traffic: %s | target %d active vehicles (baseline %d, %s) | road density %.2f km/km^2; local roads %.2f km/km^2; built-up roads %.0f%%; major roads %.0f%% | source=%s',
+    band, target, base, trafficBaseAuto and 'automatic amount' or 'player-selected amount',
+    tonumber(profile.roadDensityKmKm2) or 0, tonumber(profile.localRoadDensityKmKm2) or 0,
+    100 * (tonumber(profile.urbanRoadShare) or 0), 100 * (tonumber(profile.majorRoadShare) or 0),
+    tostring(profile.source or 'mapped roads')))
+  return true
+end
+
 local function playerId() return be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1 end
 
 -- Pure: where a respawned car goes, (x, y, dirX, dirY, min m, max m) for gameplay_traffic.forceTeleport, or nil for
@@ -516,9 +616,33 @@ local function startTraffic()
   M.restoreChoice()       -- freeroam's own spawn time has passed
   local c = M.choice
   local gt = c.traffic and trafficSystem() or nil
-  if gt and gt.getState() ~= 'on' then
-    local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1, { police = c.police })
-    if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+  if gt then
+    local setupOk, setupErr = true, nil
+    if gt.getState() ~= 'on' then
+      setupOk, setupErr = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1, { police = c.police })
+    end
+    if not setupOk then
+      log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(setupErr))
+    else
+      trafficBaseAuto = not (tonumber(c.trafficAmount) and tonumber(c.trafficAmount) > 0)
+      local resolved, how
+      if not trafficBaseAuto then
+        resolved, how = positiveInt(c.trafficAmount), 'player-selected amount'
+      else
+        resolved, how = readTrafficAmount(gt)
+      end
+      trafficBaseAmount = resolved or 6
+      if how == 'fallback default' then
+        log('W', 'beamngEarth', 'adaptive traffic: could not read BeamNG auto amount; using baseline 6')
+      end
+      log('I', 'beamngEarth', string.format('adaptive traffic: enabled (baseline %d, %s); profiles update with the local road graph',
+        trafficBaseAmount, trafficBaseAuto and ('automatic: ' .. tostring(how)) or 'player-selected'))
+      updateTrafficDensity(graph and graph.trafficProfile, true)
+    end
+  elseif not c.traffic then
+    log('I', 'beamngEarth', 'adaptive traffic: not applied because traffic is disabled in the freeroam options')
+  else
+    log('W', 'beamngEarth', 'adaptive traffic: BeamNG traffic controller is unavailable; leaving traffic unchanged')
   end
 end
 
@@ -639,6 +763,8 @@ function M.update(aid, b, gov)
         pcall(guard, b, true)
       end
     end
+    -- Apply only after the new road graph is live, so profile changes never point traffic at an old graph.
+    if started then updateTrafficDensity(graph.trafficProfile, false) end
   end
 end
 
@@ -656,13 +782,16 @@ function M.status()
            cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
-           traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
+           traffic = gameplay_traffic and gameplay_traffic.getState() or nil,
+           trafficDensity = trafficDensityState, trafficBaseline = trafficBaseAmount,
+           trafficBaselineAuto = trafficBaseAuto, incomingTrafficProfile = graph and graph.trafficProfile or nil }
 end
 
 function M.reset()
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
+  trafficBaseAmount, trafficBaseAuto, trafficDensityState, trafficNoProfileWarned = nil, false, nil, false
   pendingSignals = nil
   stillSince = {}
   seenAt = {}

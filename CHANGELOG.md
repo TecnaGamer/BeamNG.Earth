@@ -15,6 +15,7 @@ What changed in each release of BeamNG.Earth, newest first.
 Works with BeamNG.drive 0.40.3.
 
 ### New
+- **Adaptive traffic density**: the active traffic population now follows mapped road density and built-up land cover, so city centres stay busier while suburbs, country roads and remote highways progressively thin out. Automatic traffic settings get a modest city-centre bonus; explicit player-selected amounts are respected. Console diagnostics report the selected band, mapped-road measurements and active vehicle target. This first version needs no additional API account and estimates geographic character rather than modelling live incidents or exact vehicle counts.
 - **Settings in a tab of their own in the pause menu** (next to BeamMP's), in the game's own style, every page listed
   down the side: Graphics, World, Interface, Multiplayer, Storage, Feedback, About, Developer.
 - **Quality presets and many more graphics settings**: Low / Medium / High / Ultra presets, plus an **Extreme**

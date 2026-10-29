@@ -5,6 +5,14 @@ local N = require('beamngEarth/navgraph')
 
 T.check(N.lanes(2, 1, false) == '-++' and N.lanes(2, 1, true) == '++-' and N.lanes(1, 0, false) == '+',
   'lanes: against first for right-hand traffic')
+local band, target, base = N.trafficTarget({ band = 'city', multiplier = 1.0 }, 8, true)
+T.check(band == 'city' and target == 10 and base == 8, 'automatic traffic has a modest city-centre bonus')
+local _, suburb = N.trafficTarget({ band = 'suburban', multiplier = 0.78 }, 8, true)
+local _, rural = N.trafficTarget({ band = 'rural', multiplier = 0.30 }, 8, true)
+local _, remote = N.trafficTarget({ band = 'remote', multiplier = 0.12 }, 8, true)
+T.check(suburb == 6 and rural == 2 and remote == 1, 'suburban, rural and remote traffic scale down')
+local _, explicitCity = N.trafficTarget({ band = 'city', multiplier = 1.0 }, 5, false)
+T.check(explicitCity == 5, 'an explicit player-selected traffic amount is never exceeded')
 
 local g = {
   nodes = { a = { 0, 0, 1, 4 }, b = { 50, 0, 1, 4 }, c = { 100, 0, 1, 3 }, far = { 5000, 0, 1, 3 } },
