@@ -157,6 +157,8 @@ def pins(frame, layers):
             fid = str(f.ids[i])
             if fid in seen:
                 continue
+            if _is_ev(name) or _is_ev(brand):
+                continue        # (a charger filed as a gas station is a charger site: evchargers.charger_pins)
             seen.add(fid)
             if xy is None:
                 xy = f.xy_in(frame)
