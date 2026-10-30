@@ -98,6 +98,7 @@ export const settingsSchema = [
     name: "About",
     items: [
       { id: "connection", type: "info", name: "Companion app", desc: "The connection to the BeamNG.Earth app (127.0.0.1:47613) that builds the world, and the session id it gave this game." },
+      { id: "vramProfile", type: "info", name: "Hardware scaling", desc: "Dynamic render distance budget profile auto-scaled from detected GPU video memory." },
       { id: "anchor", type: "info", name: "World origin", desc: "The current world origin (anchor) and its latitude / longitude. A rebase moves it under you." },
       { id: "player", type: "info", name: "Your position", desc: "Your latitude / longitude and the distance from the world origin." },
       { id: "weather", type: "info", name: "Weather data", desc: "Real weather from Open-Meteo.com, every 10 min or 25 km." },
@@ -212,6 +213,7 @@ export function fmt(v, digits) {
 export function infoValue(item) {
   const s = status.value
   if (item.id === "connection") return connectionText.value
+  if (item.id === "vramProfile") return s.vramProfile ? (s.vramMB ? `${s.vramProfile.toUpperCase()} (${Math.round(s.vramMB / 1024)} GB VRAM)` : s.vramProfile.toUpperCase()) : "-"
   if (item.id === "anchor") return s.anchorId ? `#${s.anchorId}  ${fmt(s.anchorLat, 5)}, ${fmt(s.anchorLon, 5)}` : "none"
   if (item.id === "player") return (typeof s.playerLat === "number") ? `${fmt(s.playerLat, 5)}, ${fmt(s.playerLon, 5)}  (${fmt(s.dist / 1000, 1)} km from origin)` : "-"
   if (item.id === "attribution") return s.attribution || "-"

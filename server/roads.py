@@ -3890,13 +3890,13 @@ def tile_distance(tx, ty, x, y):
     return box_gap(*tile_bbox(tx, ty), x, y)
 
 
-def wanted_tiles(x, y, vx=0.0, vy=0.0):
-    """The tile keys the mod should have around (x, y): those within SEND_M, and moving at FAST_MS or more also those
+def wanted_tiles(x, y, vx=0.0, vy=0.0, send_m=SEND_M):
+    """The tile keys the mod should have around (x, y): those within send_m, and moving at FAST_MS or more also those
     within CORRIDOR_M of the path ahead, up to LEAD_S of driving (LEAD_MAX_M at most)."""
-    want = set(tiles_near(x, y, SEND_M))
+    want = set(tiles_near(x, y, send_m))
     s = math.hypot(vx, vy)
     lead = min(LEAD_MAX_M, s * LEAD_S)
-    if s < FAST_MS or lead <= SEND_M:
+    if s < FAST_MS or lead <= send_m:
         return want
     ux, uy = vx / s, vy / s
     d = 0.0
@@ -7180,7 +7180,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
 class Tracker:
     """Per connection: which road tiles the mod has, building and announcing the ones it needs."""
 
-    def __init__(self):
+    def __init__(self, send_m=SEND_M, drop_m=DROP_M):
+        self.send_m = send_m
+        self.drop_m = drop_m
         self.aid = None
         self.sent = set()       # (tx, ty) announced for self.aid
         self.building = set()
@@ -7224,15 +7226,15 @@ class Tracker:
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-tile")
         vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
         fast = math.hypot(vx, vy) >= FAST_MS
-        car = wanted_tiles(x, y, vx, vy)
+        car = wanted_tiles(x, y, vx, vy, send_m=self.send_m)
         self.car = car                      # (progress: the loading line's road tiles)
-        seen = set(tiles_near(*view, SEND_M)) - car if view else set()
+        seen = set(tiles_near(*view, self.send_m)) - car if view else set()
         others = set()
         for f in foci:
-            others.update(tiles_near(f[0], f[1], min(SEND_M, f[2] + TILE / 2)))
+            others.update(tiles_near(f[0], f[1], min(self.send_m, f[2] + TILE / 2)))
         others -= car | seen
         wanted = car | seen | others
-        start = set(tiles_near(x, y, SEND_M)) if ground_busy else wanted
+        start = set(tiles_near(x, y, self.send_m)) if ground_busy else wanted
         now = time.monotonic()
         want = [k for k in start if k not in self.sent and k not in self.building and k not in self.empty
                 and self.retry.get(k, 0.0) <= now]
@@ -7255,7 +7257,7 @@ class Tracker:
                 log.warning("roads tile %s of anchor %d: building for %.0f s (%d tiles in flight, %d sent): the road "
                             "workers may be stuck", k, aid, now - t0, len(self.building), len(self.sent))
         def far(k):
-            return tile_distance(k[0], k[1], x, y) > DROP_M and (not view or tile_distance(k[0], k[1], *view) > DROP_M) \
+            return tile_distance(k[0], k[1], x, y) > self.drop_m and (not view or tile_distance(k[0], k[1], *view) > self.drop_m) \
                 and all(tile_distance(k[0], k[1], f[0], f[1]) > f[2] + TILE for f in foci)
         drop = [k for k in self.sent if k not in wanted and far(k)]
         for k in drop:

@@ -76,6 +76,38 @@ class BudgetTest(unittest.TestCase):
         im.close()
 
 
+    def test_vram_profiles(self):
+        # Default / unknown VRAM
+        self.assertEqual(budget.vram_profile(None)["name"], "medium")
+        self.assertEqual(budget.vram_profile(0)["name"], "medium")
+
+        # Tiers by VRAM capacity in MB
+        self.assertEqual(budget.vram_profile(2048)["name"], "low")
+        self.assertEqual(budget.vram_profile(4096)["name"], "low")
+        self.assertEqual(budget.vram_profile(8192)["name"], "medium")
+        self.assertEqual(budget.vram_profile(12288)["name"], "high")
+        self.assertEqual(budget.vram_profile(16384)["name"], "ultra")
+        self.assertEqual(budget.vram_profile(24576)["name"], "ultra")
+
+        # High tier check
+        high = budget.vram_profile(12288)
+        self.assertEqual(high["roads_send"], 896.0)
+        self.assertEqual(high["bldfar_send"], 2400.0)
+        self.assertEqual(high["veg_send"], 1792.0)
+
+        # Ultra tier check
+        ultra = budget.vram_profile(24576)
+        self.assertEqual(ultra["roads_send"], 1152.0)
+        self.assertEqual(ultra["bldfar_send"], 3200.0)
+        self.assertEqual(ultra["veg_send"], 2304.0)
+
+        # Environment override
+        with mock.patch.dict(os.environ, {"BNGE_VRAM_PROFILE": "ultra"}):
+            self.assertEqual(budget.vram_profile(4096)["name"], "ultra")
+        with mock.patch.dict(os.environ, {"BNE_ROADS_SEND_M": "1500"}):
+            self.assertEqual(budget.vram_profile(8192)["roads_send"], 1500.0)
+
+
 class PriorityTest(unittest.TestCase):
     """lower_priority in a child process: Windows' classes (below normal for the server; a worker keeps its
     parent's, never idle: starved on the server's few cores), elsewhere niceness."""

@@ -643,6 +643,34 @@ class ServerTest(ServerHarness):
         self.hello(3)
         self.hello(4)
 
+    def test_vram_profile_scaling(self):
+        """Feature 2: Dynamic VRAM-based render distance and tracker radius scaling."""
+        # 1) Send hello with high VRAM (e.g. 16 GB -> ultra profile)
+        self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0", "vramMB": 16384})
+        m, _ = self.c.until(lambda m: m["type"] == "hello", timeout=10)
+        self.assertEqual(m.get("vramProfile"), "ultra")
+        conn = self.conn()
+        self.assertEqual(conn.vram_profile, "ultra")
+        self.assertEqual(conn.roads.send_m, 1152.0)
+        self.assertEqual(conn.veg.send_m, 2304.0)
+        self.assertEqual(conn.bldfar.send_m, 3200.0)
+
+        # 2) Send hello with 12 GB -> high profile
+        self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0", "vramMB": 12288})
+        m2, _ = self.c.until(lambda m: m["type"] == "hello", timeout=10)
+        self.assertEqual(m2.get("vramProfile"), "high")
+        self.assertEqual(conn.roads.send_m, 896.0)
+        self.assertEqual(conn.veg.send_m, 1792.0)
+        self.assertEqual(conn.bldfar.send_m, 2400.0)
+
+        # 3) Send hello with 4 GB -> low profile
+        self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0", "vramMB": 4096})
+        m3, _ = self.c.until(lambda m: m["type"] == "hello", timeout=10)
+        self.assertEqual(m3.get("vramProfile"), "low")
+        self.assertEqual(conn.roads.send_m, 512.0)
+        self.assertEqual(conn.veg.send_m, 960.0)
+        self.assertEqual(conn.bldfar.send_m, 1200.0)
+
     def test_status_backlog(self):
         """status.backlog (V1_4_SPEC §4, M0) = desired - shown of the current anchor. Status goes out
         on events only by default (v1.3.1); --status-interval re-sends it while the backlog changes."""

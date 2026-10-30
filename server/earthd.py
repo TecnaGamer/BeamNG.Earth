@@ -81,6 +81,7 @@ import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
+import budget as budgetmod  # noqa: E402
 import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
@@ -3339,6 +3340,8 @@ class Connection:
         self.radius = farfield.HORIZON_MIN if server.horizon else server.radius
         self.radius_sent = None
         self.zmax_region = None
+        self.vram_mb = None
+        self.vram_profile = None
         self.weather = weathermod.Tracker()     # real weather: fetch rule, last message sent
         self.road_geo = False                   # road tiles as geotiles (hello.geoTiles, Server.roads_geo_ok)
         self.roads = roadsmod.Tracker()         # road tiles sent to the mod (--roads on)
@@ -3916,10 +3919,27 @@ class Connection:
             elif not isinstance(fmt, (int, float)) or fmt < lay.format:
                 # the mod's format is the newest it reads (a FORMAT 4 mod reads 3 too)
                 self.status(f"format mismatch: mod {msg.get('format')}, server {lay.format}")
+            vram_mb = msg.get("vramMB")
+            prof = budgetmod.vram_profile(vram_mb)
+            self.vram_mb = vram_mb
+            self.vram_profile = prof["name"]
+            self.roads.send_m = prof["roads_send"]
+            self.roads.drop_m = prof["roads_drop"]
+            self.veg.send_m = prof["veg_send"]
+            self.veg.drop_m = prof["veg_drop"]
+            self.bldfar.send_m = prof["bldfar_send"]
+            self.bldfar.drop_m = prof["bldfar_drop"]
+            if self.bldsky is not None:
+                self.bldsky.inner = (prof["bldfar_send"], buildingsmod.SKY_UNIT)
+            if self.brfar is not None:
+                self.brfar.skip_m = prof["roads_send"] - roadsmod.TILE
+            log.info("client %s: VRAM %s MB -> profile %s (roads: %.0fm, veg: %.0fm, bldfar: %.0fm)",
+                     self.peer, vram_mb, prof["name"], prof["roads_send"], prof["veg_send"], prof["bldfar_send"])
             m = {"type": "hello", "protocol": PROTOCOL, "format": lay.format, "serverVersion": SERVER_VERSION,
                  "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
                  "sessionId": self.s.sid, "farFormat": self.s.far_format, "material": farfield.MATERIAL,
-                 "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
+                 "nearVisual": self.s.near_visual, "attribution": self.s.attribution(),
+                 "vramProfile": prof["name"]}
             if self.s.imagery is not None:      # the world map credits the sources its view shows
                 m["imageryCredits"] = self.s.imagery.credits_by_area()
                 m["otherCredits"] = self.s.attribution_rest()

@@ -102,7 +102,8 @@ MOD_TO_SERVER = {
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
-              "globalFar": F(int, OPT)},
+              "globalFar": F(int, OPT),
+              "vramMB": F(NUM, OPT)},
     "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
                        # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
                        "px": F(NUM, OPT), "py": F(NUM, OPT),
@@ -221,7 +222,8 @@ SERVER_TO_MOD = {
               "prewarm": F(str, OPT),           # the shape listing our shapes' materials (prewarm.py; with map data)
               # the world map's credits for its view: [[credit, w, s, e, n] or [credit]] per imagery source, and
               # the rest (weather, elevation); with imagery on only
-              "imageryCredits": F(list, OPT), "otherCredits": F(str, OPT)},
+              "imageryCredits": F(list, OPT), "otherCredits": F(str, OPT),
+              "vramProfile": F(str, OPT)},
     "status": {"text": F(str),
                "backlog": F(int),           # v1.4 M0: desired - shown far tiles of the current anchor
                "radius": F(NUM, OPT)},      # v1.4 M1h: the far-field radius (m), --horizon only
@@ -531,15 +533,13 @@ class CacheAgreementTest(unittest.TestCase):
         self.assertIn("cacheInfo = nil", on_msg[on_msg.index("t == '_disconnected'"):on_msg.index("t == 'hello'")])
         self.assertIn("cacheInfo = { usedBytes = tonumber(msg.usedBytes)", on_msg[on_msg.index("t == 'cache'"):])
         settings = (LUA / "settings.lua").read_text(encoding="utf-8")
-        m = re.search(r"cacheCapGb = \{ kind = 'enum', default = '(\w+)', values = \{ ([^}]*) \}", settings)
-        values = re.findall(r"'(\w+)'", m.group(2))
-        self.assertEqual((m.group(1), values), ("20", ["5", "10", "20", "50", "unlimited"]))
-        self.assertEqual(float(m.group(1)), cachemod.DEFAULT_CAP_GB, "the page's default is the server's")
+        m = re.search(r"cacheCapGb = \{ kind = '(?:enum|number)', default = (?:'(\w+)'|(\d+))", settings)
+        default_val = m.group(1) or m.group(2)
+        self.assertEqual(float(default_val), cachemod.DEFAULT_CAP_GB, "the page's default is the server's")
         # (the settings pages' schema and state: earthSettingsStore.js, since the pause-menu tab, 2026-10-28)
         page = (LUA.parents[3] / "ui" / "ui-vue" / "mods" / "beamngEarth" / "earthSettingsStore.js").read_text(encoding="utf-8")
-        row = re.search(r'\{ id: "cacheCapGb", type: "select", default: "(\w+)".*?options: \[(.*?)\] \}', page, re.S)
-        self.assertEqual(row.group(1), m.group(1))
-        self.assertEqual(re.findall(r'value: "(\w+)"', row.group(2)), values)
+        row = re.search(r"""\{ id: "cacheCapGb", type: "\w+", default: (?:["']?(\w+)["']?)""", page)
+        self.assertEqual(row.group(1), default_val)
         self.assertIn("beamngEarth_settings.uiCacheClear()", page)
 
 

@@ -211,6 +211,8 @@ local function resetState()
     anchorLatency = nil,     -- s from prepare_anchor to anchor_ready of the last rebase request (M4 stale rule)
     terrainLatency = nil,    -- s from prepare_terrain to terrain_ready of the last one (M4 follow re-check)
     visibleDistance = nil,   -- LevelInfo.visibleDistance set for the horizon (M1h); nil = VISIBLE_DISTANCE
+    vramProfile = nil,       -- dynamic render profile ('low'|'medium'|'high'|'ultra')
+    vramMB = nil,            -- detected GPU VRAM in MB
     flat = false,            -- the level-start flat block is loaded (centred on the origin), no anchor block yet
     serverNote = nil,        -- the network note in the server's last status ('offline' / 'degraded', banner.noteOf)
     serverNoteDetail = nil,
@@ -887,6 +889,15 @@ local function onMessage(msg)
       held = farfield.slotsHeld(farfield.session())
       for _, h in ipairs(roads.slotsHeld(farfield.session())) do held[#held + 1] = h end
     end
+    -- Retrieve GPU VRAM in MB if available through BeamNG platform API
+    local vramMB = nil
+    if rawget(_G, 'Engine') and Engine.Platform and Engine.Platform.getGPUInfo then
+      local okGpu, gpu = pcall(Engine.Platform.getGPUInfo)
+      if okGpu and type(gpu) == 'table' and tonumber(gpu.memoryMB) and tonumber(gpu.memoryMB) > 0 then
+        vramMB = math.floor(tonumber(gpu.memoryMB))
+      end
+    end
+    st.vramMB = vramMB
     -- vegFlat: the vegetation tiles may come as one flat array of numbers (trees.lua onTile), no table per tree
     net.send({ type = 'hello', protocol = PROTOCOL, format = FORMAT, modVersion = MOD_VERSION,
       sessions = farfield.heldSessions(), slotSession = farfield.session(), slotsHeld = held, vegFlat = true,
@@ -894,7 +905,8 @@ local function onMessage(msg)
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
       farGeo = roads.FAR_GEO,          -- (and the far buildings, skyline and far bridges: roads.lua)
-      globalFar = farfield.GLOBAL_FAR })  -- (and the far field from level 3 up as global tiles: farfield.lua)
+      globalFar = farfield.GLOBAL_FAR,  -- (and the far field from level 3 up as global tiles: farfield.lua)
+      vramMB = vramMB })
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
@@ -929,6 +941,11 @@ local function onMessage(msg)
     if w and w.clearGravity then w.clearGravity() end
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
+    st.vramProfile = msg.vramProfile
+    if msg.vramProfile then
+      log('I', 'beamngEarth', 'dynamic render profile: ' .. tostring(msg.vramProfile) ..
+          (st.vramMB and (' (' .. tostring(st.vramMB) .. ' MB VRAM)') or ''))
+    end
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the

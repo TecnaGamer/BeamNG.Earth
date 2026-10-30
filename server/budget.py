@@ -46,6 +46,67 @@ SMALL_FIN_MB = 32
 SMALL_FIN_DECODED = 96
 
 
+# Dynamic VRAM-based render profiles (Feature 2):
+# Allows clients with higher GPU VRAM (e.g. 12-24 GB) to dynamically experience larger draw distances,
+# further building LODs, and extended road / vegetation streaming, while keeping low-VRAM machines stable.
+VRAM_PROFILES = {
+    "low": {
+        "roads_send": 512.0, "roads_drop": 832.0,
+        "veg_send": 960.0, "veg_drop": 1280.0,
+        "bldfar_send": 1200.0, "bldfar_drop": 1500.0,
+        "far_k_scale": 0.8, "far_tex_max": 256,
+    },
+    "medium": {
+        "roads_send": 640.0, "roads_drop": 960.0,
+        "veg_send": 1280.0, "veg_drop": 1600.0,
+        "bldfar_send": 1600.0, "bldfar_drop": 1900.0,
+        "far_k_scale": 1.0, "far_tex_max": 512,
+    },
+    "high": {
+        "roads_send": 896.0, "roads_drop": 1216.0,
+        "veg_send": 1792.0, "veg_drop": 2112.0,
+        "bldfar_send": 2400.0, "bldfar_drop": 2700.0,
+        "far_k_scale": 1.25, "far_tex_max": 512,
+    },
+    "ultra": {
+        "roads_send": 1152.0, "roads_drop": 1472.0,
+        "veg_send": 2304.0, "veg_drop": 2624.0,
+        "bldfar_send": 3200.0, "bldfar_drop": 3500.0,
+        "far_k_scale": 1.5, "far_tex_max": 1024,
+    },
+}
+
+
+def vram_profile_name(vram_mb=None):
+    """Profile name ('low', 'medium', 'high', 'ultra') based on VRAM in MB. BNGE_VRAM_PROFILE overrides."""
+    force = os.environ.get("BNGE_VRAM_PROFILE", "").lower()
+    if force in VRAM_PROFILES:
+        return force
+    if vram_mb is None or not (isinstance(vram_mb, (int, float)) and vram_mb > 0):
+        return "medium"
+    if vram_mb < 6000:
+        return "low"
+    elif vram_mb < 11000:
+        return "medium"
+    elif vram_mb < 16000:
+        return "high"
+    else:
+        return "ultra"
+
+
+def vram_profile(vram_mb=None):
+    """Return the profile dict for the given VRAM capacity, respecting environment overrides."""
+    name = vram_profile_name(vram_mb)
+    prof = dict(VRAM_PROFILES[name], name=name)
+    if "BNE_ROADS_SEND_M" in os.environ:
+        prof["roads_send"] = float(os.environ["BNE_ROADS_SEND_M"])
+        prof["roads_drop"] = float(os.environ.get("BNE_ROADS_DROP_M", str(prof["roads_send"] + 320)))
+    if "BNE_BLDFAR_SEND_M" in os.environ:
+        prof["bldfar_send"] = float(os.environ["BNE_BLDFAR_SEND_M"])
+        prof["bldfar_drop"] = float(os.environ.get("BNE_BLDFAR_DROP_M", str(prof["bldfar_send"] + 300)))
+    return prof
+
+
 def total_gb():
     """The machine's RAM in GB (None if unknown)."""
     try:
