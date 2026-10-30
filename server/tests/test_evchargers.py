@@ -169,6 +169,20 @@ class LayoutTest(unittest.TestCase):
         pts = np.array([(p["x"], p["y"]) for p in site.props])
         self.assertTrue(gs._clear(pts, houses, []), "clear of the buildings")
 
+    def test_kerbside_keeps_driveways_clear(self):
+        # (the user, 2026-10-30: "do the driveway fix now") a kerbside charger never stands in a driveway's mouth, nor
+        # does the car charging at it: the row slides along the kerb instead
+        road = (np.array([(-300.0, 0.0), (300.0, 0.0)]), 4.0)
+        drive = np.array([(0.0, 4.0), (0.0, 30.0)])               # a driveway off the road, right at the pin
+        site = ev.layout(charger(x=0.0, y=5.0), [], [road], [drive], "default")
+        self.assertIsNotNone(site)
+        self.assertEqual(site.pad, [], "still a kerbside site")
+        pts = np.array([(p["x"], p["y"]) for p in site.props])
+        areas = np.array([(a["x"], a["y"]) for a in site.areas])
+        self.assertTrue((gs._seg_dist(pts, drive[:-1], drive[1:]) >= ev.DRIVE_CLEAR_M - 1e-6).all(), pts)
+        self.assertTrue((np.abs(areas[:, 0]) >= ev.STALL_M / 2 + ev.DRIVE_HALF_M - 1e-6).all(), areas)
+        self.assertTrue((np.abs(pts[:, 0]) <= 2 * ev.KERB_GAP_M + ev.KERB_GAP_M).all(), "near its own spot")
+
     def test_style_shapes_have_chargers(self):
         for style in ("default", "us_east", "europe"):
             self.assertTrue(set(ev.CHARGER_SHAPES[style]) <= set(gs.style_shapes(style)), style)

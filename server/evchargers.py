@@ -173,6 +173,12 @@ KERB_REACH_M = 10.0         # a charger this near a public road's edge is a kerb
 KERB_OFF_M = 0.8            # its charger this far behind the carriageway's edge (on the kerb)
 KERB_LANE_M = 1.2           # its charge area's centre this far inside the edge (a car parked along it)
 KERB_GAP_M = 6.0            # kerbside chargers along the road (a parallel-parked car's length)
+# (the user, 2026-10-30: "do the driveway fix now") a driveway's mouth stays clear: no kerbside charger within
+# DRIVE_CLEAR_M of a service road, no car charging across one (its area's half length + DRIVE_HALF_M); the row slides
+# along the kerb by whole spaces (KERB_SLIDE) to find room
+DRIVE_HALF_M = 3.0          # a driveway's half width
+DRIVE_CLEAR_M = 3.5
+KERB_SLIDE = (0, 1, -1, 2, -2)
 
 
 def _placements(ch, roads, service):
@@ -201,7 +207,7 @@ def _placements(ch, roads, service):
         nrm = np.array([-u[1], u[0]])
         if np.dot(p - q, nrm) < 0:
             nrm = -nrm
-        kerb_tries.append(("kerb", (q, u, nrm, half)))
+        kerb_tries += [("kerb", (q + u * (k * KERB_GAP_M), u, nrm, half)) for k in KERB_SLIDE]
     road = _nearest([r[0] for r in roads], p)
     f = (road[0] - p) / max(road[2], 1e-9) if road is not None and road[2] > 1e-6 else np.array([0.0, 1.0])
     u = np.array([-f[1], f[0]])
@@ -219,11 +225,14 @@ def _kerb_row(q, u, nrm, half, n):
     return along + nrm[None] * (half + KERB_OFF_M), along + nrm[None] * (half - KERB_LANE_M)
 
 
-def _kerb_clear(pts, areas, blds, roads):
+def _kerb_clear(pts, areas, blds, roads, service=()):
     """Kerbside chargers clear of buildings and off every public road's carriageway; their charge areas (at the road's
-    edge) out of buildings."""
+    edge) out of buildings; both clear of every driveway's mouth (service lines: DRIVE_CLEAR_M, DRIVE_HALF_M)."""
     for line, half in roads:
         if (gs._seg_dist(pts, line[:-1], line[1:]) < half + KERB_OFF_M - 0.05).any():
+            return False
+    for line in service:
+        if (gs._seg_dist(pts, line[:-1], line[1:]) < DRIVE_CLEAR_M).any() or                 (gs._seg_dist(areas, line[:-1], line[1:]) < STALL_M / 2 + DRIVE_HALF_M).any():
             return False
     return gs._clear(pts, blds, []) and gs._clear(areas, blds, [])
 
@@ -244,7 +253,7 @@ def layout(ch, blds, roads, service=(), style="default"):
             if kind == "kerb":
                 q, u, nrm, half = data
                 pts, stalls = _kerb_row(q, u, nrm, half, n)
-                if not _kerb_clear(pts, stalls, blds, roads):
+                if not _kerb_clear(pts, stalls, blds, roads, service):
                     continue
                 front, area_yaw, pad = -nrm, gs._yaw(u), []
             else:
