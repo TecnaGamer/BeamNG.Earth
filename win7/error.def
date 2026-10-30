@@ -1,0 +1,7 @@
+LIBRARY "API-MS-WIN-CORE-WINRT-ERROR-L1-1-1"
+
+EXPORTS
+    GetRestrictedErrorInfo
+    SetRestrictedErrorInfo
+    RoOriginateErrorW
+    RoOriginateLanguageException

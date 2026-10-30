@@ -2,7 +2,7 @@
 numpy
 Pillow>=11          # with WebP support; its DXT1 encoder writes the tile textures
 # map data (mapdata.py: Overture GeoParquet through DuckDB, read over netfetch); earthd runs without them
-duckdb>=1.5,<2      # GEOMETRY and ST_AsWKB in core: no extension is installed or loaded. Not 2.0: its reads of
+duckdb>=1.5         # GEOMETRY and ST_AsWKB in core: no extension is installed or loaded. Not 2.0: its reads of
                     # the remote GeoParquet through rangeread.NetfetchFS fail now and then on a first visit ("ZSTD
                     # Decompression failure", "don't know what type"): road tags and water missing; 1.5.5 and 1.6.0
                     # shipped 2.0.0 (released 2026-10-21), 1.5.4 1.5.6 (cold-cache server tests, 2026-10-23)

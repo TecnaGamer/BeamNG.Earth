@@ -1,0 +1,70 @@
+#
+# The Python Imaging Library
+# $Id$
+#
+# GRIB stub adapter
+#
+# Copyright (c) 1996-2003 by Fredrik Lundh
+#
+# See the README file for information on usage and redistribution.
+#
+from __future__ import annotations
+
+import os
+
+from . import Image, ImageFile
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import IO
+
+
+def register_handler(handler: ImageFile.StubHandler | None) -> None:
+    """
+    Install application-specific GRIB image handler.
+
+    :param handler: Handler object.
+    """
+    GribStubImageFile._handler = handler
+
+
+# --------------------------------------------------------------------
+# Image adapter
+
+
+def _accept(prefix: bytes) -> bool:
+    return len(prefix) >= 8 and prefix.startswith(b"GRIB") and prefix[7] == 1
+
+
+class GribStubImageFile(ImageFile.StubImageFile):
+    format = "GRIB"
+    format_description = "GRIB"
+
+    def _open(self) -> None:
+        assert self.fp is not None
+        if not _accept(self.fp.read(8)):
+            msg = "Not a GRIB file"
+            raise SyntaxError(msg)
+
+        self.fp.seek(-8, os.SEEK_CUR)
+
+        # make something up
+        self._mode = "F"
+
+
+def _save(im: Image.Image, fp: IO[bytes], filename: str | bytes) -> None:
+    if GribStubImageFile._handler is None or not hasattr(
+        GribStubImageFile._handler, "save"
+    ):
+        msg = "GRIB save handler not installed"
+        raise OSError(msg)
+    GribStubImageFile._handler.save(im, fp, filename)
+
+
+# --------------------------------------------------------------------
+# Registry
+
+Image.register_open(GribStubImageFile.format, GribStubImageFile, _accept)
+Image.register_save(GribStubImageFile.format, _save)
+
+Image.register_extension(GribStubImageFile.format, ".grib")
