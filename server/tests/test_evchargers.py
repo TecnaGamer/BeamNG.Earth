@@ -14,7 +14,8 @@ import mapgeom as mg  # noqa: E402
 
 import evchargers as ev  # noqa: E402
 import gasstations as gs  # noqa: E402
-from test_gasstations import FRAME, feats  # noqa: E402
+import roads  # noqa: E402
+from test_gasstations import FRAME, FakeMD, feats, flat, station_md  # noqa: E402
 
 
 def places(rows):
@@ -155,6 +156,85 @@ class LayoutTest(unittest.TestCase):
 
     def test_reach(self):
         self.assertGreaterEqual(ev.reach_of(charger()), ev.AISLE_REACH_M + ev.STALL_M)
+
+
+def ev_md(rows, osm=None, buildings=None):
+    """A FakeMD with these Overture places, a public road at y = -100 and OSM cells (osm_fuel_cached) of osm rows
+    (None: not fetched)."""
+    rds = feats("roads", [("r-1", [(-400.0, -100.0), (800.0, -100.0)], {"class": "secondary"})], mg.LINE)
+    md = FakeMD({"places": places(rows) if rows else None, "roads": rds, "buildings": buildings})
+    md.osm_fuel_cached = lambda key: osm
+    return md
+
+
+class TileTest(unittest.TestCase):
+    def test_tile_has_chargers(self):
+        pads = []
+        md = ev_md([("pla-ev", (100.0, 100.0), {"basic_category": "ev_charging_station", "name": "ChargePoint"})], [])
+        recs, _ = gs.tile_sites(FRAME, 0, 0, md, flat, pads=pads)
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["energy"], ["electricEnergy"])
+        self.assertEqual(recs[0]["name"], "ChargePoint")
+        self.assertEqual(len(recs[0]["areas"]), len(recs[0]["props"]))
+        self.assertEqual([p[0] for p in pads], [recs[0]["id"]], "its pad for the ground's painters")
+
+    def test_osm_only_charger(self):
+        md = ev_md([], [osm_row(5, 100.0, 100.0)])
+        recs, _ = gs.tile_sites(FRAME, 0, 0, md, flat)
+        self.assertEqual([r["name"] for r in recs], ["EV charger"])
+
+    def test_charger_owned_by_one_tile(self):
+        x = roads.TILE - 2.0
+        md = ev_md([("pla-ev", (x, 100.0), {"basic_category": "ev_charging_station"})], [])
+        a = gs.tile_sites(FRAME, 0, 0, md, flat)[0]
+        b = gs.tile_sites(FRAME, 1, 0, md, flat)[0]
+        self.assertEqual((len(a), len(b)), (1, 0), "a record in the tile that owns its position only")
+
+    def test_charger_beside_station(self):
+        import polygon
+        md = station_md()
+        md.all["places"] = feats("places", [
+            ("pla-1", (240.0, 100.0), {"basic_category": "gas_station", "name": "Speedway", "operating_status": "open"}),
+            ("pla-ev", (250.0, 130.0), {"basic_category": "ev_charging_station", "operating_status": "open"})],
+            mg.POINT)
+        md.osm_fuel_cached = lambda key: []
+        pads = []
+        recs, _ = gs.tile_sites(FRAME, 0, 0, md, flat, pads=pads)
+        fuel = [r for r in recs if "energy" not in r]
+        evs = [r for r in recs if r.get("energy") == ["electricEnergy"]]
+        self.assertEqual((len(fuel), len(evs)), (1, 1))
+        fuel_pad = dict(pads)[fuel[0]["id"]]
+        ring = np.stack(roads_xy(fuel_pad[0]), 1)
+        pts = np.array([p["pos"][:2] for p in evs[0]["props"]])
+        self.assertFalse(polygon.contains_points(ring, pts).any(), "no charger on the forecourt")
+        d = gs._seg_dist(pts, ring[:-1], ring[1:])
+        self.assertTrue((d <= 12.0).all(), d)
+
+    def test_chargers_without_data(self):
+        import revisit
+        f0 = revisit.faults()
+        recs, _ = gs.tile_sites(FRAME, 0, 0, ev_md([], None), flat)
+        self.assertEqual(recs, [])
+        self.assertGreater(revisit.faults(), f0, "an unfetched OSM cell: the tile not kept")
+
+    def test_no_fuel_station_lost(self):
+        md = station_md()
+        md.osm_fuel_cached = lambda key: []
+        before = gs.tile_sites(FRAME, 0, 0, md, flat)[0]
+        md.all["places"] = feats("places", [
+            ("pla-1", (240.0, 100.0), {"basic_category": "gas_station", "name": "Speedway", "operating_status": "open"}),
+            ("pla-ev", (100.0, 900.0), {"basic_category": "ev_charging_station", "operating_status": "open"})],
+            mg.POINT)
+        after = gs.tile_sites(FRAME, 0, 0, md, flat)[0]
+        self.assertEqual(before, after)
+        self.assertEqual([r["name"] for r in after], ["Speedway"])
+
+
+def roads_xy(ll):
+    """(x, y) in FRAME of a pad's (lat, lon) arrays."""
+    la, lo = ll
+    e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+    return np.asarray(e, np.float64), np.asarray(n, np.float64)
 
 
 if __name__ == "__main__":
