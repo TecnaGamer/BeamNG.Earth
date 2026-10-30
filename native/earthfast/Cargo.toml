@@ -16,6 +16,11 @@ numpy = "0.25"
 wgpu = { version = "25", default-features = false, features = ["wgsl", "vulkan", "dx12", "metal"] }
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
+# LAZ point clouds (roadz.rs: USGS 3DEP's EPT nodes for bridge decks); laz-rs, pure Rust, Apache-2.0
+laz = { version = "0.13", default-features = false }
+# The finished imagery tiles' JPEGs decoded inside the far-texture warp (fartex.rs: no GIL hand-over per tile);
+# zune-jpeg, pure Rust, MIT / Apache-2.0 / Zlib
+zune-jpeg = "0.5"
 
 [profile.release]
 opt-level = 3

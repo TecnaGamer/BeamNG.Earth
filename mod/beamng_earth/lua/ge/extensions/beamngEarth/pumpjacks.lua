@@ -90,6 +90,24 @@ function M.onRows(key, rows)
   if #t.jacks > 0 and M.onCollide then M.onCollide() end
 end
 
+-- A road geotile's jacks placed again (roads.lua M.replace: rows mapped into the new anchor's world): moved where the
+-- count is the same, made again else.
+function M.placeRows(key, rows)
+  local t = tiles[key]
+  if not t or type(rows) ~= 'table' or #t.jacks ~= math.min(#rows, M.TILE_MAX) then return M.onRows(key, rows) end
+  for i, j in ipairs(t.jacks) do
+    local r = rows[i]
+    if type(r) == 'table' and #r >= 4 then
+      j.x, j.y, j.z, j.th = r[1], r[2], r[3], -math.rad(r[4])
+      for k, pos in ipairs(M.partPositions(j.x, j.y, j.z, j.th)) do
+        local o = j.objs[k] and scenetree.findObjectById(j.objs[k])
+        if o then place(o, pos, j.th) end
+      end
+    end
+  end
+  if M.onCollide then M.onCollide() end
+end
+
 -- The road tile goes (roads.lua dropTile).
 function M.dropKey(key)
   local t = tiles[key]

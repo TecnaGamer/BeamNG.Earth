@@ -54,6 +54,37 @@ class RespawnTest(unittest.TestCase):
         finally:
             p.shutdown()
 
+    def test_jobs_in_flight_are_counted(self):
+        """inflight (Server.live_busy: the saved areas' downloads wait for it): up at a submit, down when the job ends,
+        fails or is cancelled, also when a pool made again cancels its futures (its own lock: no deadlock)."""
+        import time
+        p = pools.RespawningPool("test", 1)
+        try:
+            self.assertEqual(p.inflight, 0)
+            f = p.submit(time.sleep, 0.3)
+            self.assertEqual(p.inflight, 1)
+            f.result(timeout=30)
+            time.sleep(0.05)
+            self.assertEqual(p.inflight, 0)
+            with self.assertRaises(ZeroDivisionError):
+                p.submit(divmod, 1, 0).result(timeout=30)
+            time.sleep(0.05)
+            self.assertEqual(p.inflight, 0)
+            hung = p.submit(time.sleep, 3600)
+            queued = p.submit(abs, -1)
+            time.sleep(0.3)
+            with self.assertLogs("earthd.pools", "WARNING"):
+                self.assertTrue(p.recycle("test"))
+            for fut in (hung, queued):
+                try:
+                    fut.result(timeout=30)
+                except Exception:
+                    pass
+            time.sleep(0.05)
+            self.assertEqual(p.inflight, 0)
+        finally:
+            p.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

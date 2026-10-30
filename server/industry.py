@@ -84,7 +84,7 @@ def refinery_sound_rows(frame, tx, ty, md, elev):
     ky = np.arange(np.floor(y0 / GRID_M), np.ceil(y1 / GRID_M))
     gx, gy = np.meshgrid((kx + 0.5) * GRID_M, (ky + 0.5) * GRID_M)
     pts = np.stack([gx.ravel(), gy.ravel()], -1)
-    pts = pts[(pts[:, 0] >= x0) & (pts[:, 0] < x1) & (pts[:, 1] >= y0) & (pts[:, 1] < y1)]
+    pts = pts[roads.box_owns(roads.tile_bbox(tx, ty), pts[:, 0], pts[:, 1])]
     if not len(pts):
         return []
     # every ring of the areas near (all of an area's rings: even-odd within it)
@@ -127,7 +127,7 @@ def power_plant_sound_rows(frame, tx, ty, md, elev):
     ky = np.arange(np.floor(y0 / GRID_M), np.ceil(y1 / GRID_M))
     gx, gy = np.meshgrid((kx + 0.5) * GRID_M, (ky + 0.5) * GRID_M)
     pts = np.stack([gx.ravel(), gy.ravel()], -1)
-    pts = pts[(pts[:, 0] >= x0) & (pts[:, 0] < x1) & (pts[:, 1] >= y0) & (pts[:, 1] < y1)]
+    pts = pts[roads.box_owns(roads.tile_bbox(tx, ty), pts[:, 0], pts[:, 1])]
     if not len(pts):
         return []
     inside = np.zeros(len(pts), bool)

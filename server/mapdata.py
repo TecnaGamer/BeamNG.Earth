@@ -254,6 +254,8 @@ class MapData:
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
+        import roadz                    # (real road / deck / tunnel heights where a source has them: BNE_ROADZ)
+        roadz.install(cache_dir, self.fetcher, self)
         self.lane_tags = railtags.LaneTags(cache_dir, self.fetcher) if railtags.LANES_ON else None   # (markings.py)
         import highwaysigns             # (exit, overhead and mile-marker signs: railtags.SignTags, signstream.py)
         self.highway_signs = highwaysigns.Source(self) if railtags.SIGNS_ON else None
@@ -703,6 +705,26 @@ class MapData:
         for k, key, layer in todo:
             self._warm_ex.submit(run, k, key, layer)
         return len(todo)
+
+    def predownload(self, key, layer):
+        """A saved area's cell layer (areas.py): built from its sources at netfetch "predownload" and stored, unless it
+        is on disk; not loaded or mirrored (the session's cells keep the mirror). True when built now. Raises the
+        sources' netfetch errors."""
+        key = _key(key)
+        path = self.path(key, layer)
+        if os.path.exists(path):
+            return False
+        with self._key_lock(key, layer):
+            got, mine = xproc.once(path + ".lock", lambda: path if os.path.exists(path) else None, BUILD_WAIT_S,
+                                   "predownload")
+            if got is not None:
+                return False
+            try:
+                self._store(path, self._build(key, layer, "predownload"))
+            finally:
+                if mine:
+                    xproc.release(path + ".lock")
+        return True
 
     def cell_at(self, lat, lon, layers=LAYERS, kind="demand"):
         return self.cell(mapcells.cell_of(lat, lon), layers, kind)

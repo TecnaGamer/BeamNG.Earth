@@ -139,3 +139,45 @@ class RoadClearanceTest(unittest.TestCase):
         kept = riverlines._nodes(frame, ("w",), "river", pts, water, dem, None, road_clear=rc)
         self.assertGreater(free["width"].min(), 14.0)
         self.assertLessEqual(kept["width"].max(), 2 * (7.0 - riverlines.ROAD_MARGIN_M) + 1e-6)
+
+
+class UndergroundTest(unittest.TestCase):
+    """Rivers piped underground (OSM tunnel=* / location=underground, in Overture's source tags) are neither drawn nor
+    carved: Novosibirsk's Kamenka under its streets was a strip of water along a dual carriageway (2026-10-25)."""
+
+    @staticmethod
+    def lines(tags):
+        f = Lines([("s1", "stream", "stream", [east(-1500), east(-200)]),
+                   ("s2", "stream", "stream", [east(-200), east(1500)])])
+        f.attrs["tags"] = np.array(tags, object)
+        return f
+
+    def test_tags(self):
+        f = self.lines(['{"waterway":"river","tunnel":"yes"}', '{"waterway":"stream","tunnel":"culvert"}'])
+        self.assertTrue(riverlines.underground(f, 0) and riverlines.underground(f, 1))
+        f = self.lines(['{"waterway":"river","location":"underground"}', '{"waterway":"river","tunnel":"no"}'])
+        self.assertTrue(riverlines.underground(f, 0))
+        self.assertFalse(riverlines.underground(f, 1), "tunnel=no: open")
+        f = self.lines(['{"waterway":"river","layer":"-1"}', None])
+        self.assertFalse(riverlines.underground(f, 0), "a layer alone (under a bridge) is open water")
+        self.assertFalse(riverlines.underground(f, 1), "no tags")
+        self.assertFalse(riverlines.underground(Lines([("a", "river", "river", [east(0), east(10)])]), 0),
+                         "no tags column")
+        f = self.lines(['{not json "tunnel"', ''])
+        self.assertFalse(riverlines.underground(f, 0) or riverlines.underground(f, 1))
+
+    def test_piped_part_not_drawn(self):
+        f = geodesy.EnuFrame(LAT, LON)
+
+        def dem(la, lo):
+            return 50.0 - (np.asarray(lo) - LON) / M_LON / 100.0
+
+        def plan(lines):
+            return riverlines.plan(f, 0.0, 0.0, lambda k: lines, lambda la, lo: np.zeros(np.shape(la)), dem)
+
+        both = plan(self.lines(['{"waterway":"stream"}', '{"waterway":"stream"}']))
+        piped = plan(self.lines(['{"waterway":"stream"}', '{"waterway":"stream","tunnel":"culvert"}']))
+        xs = lambda rv: [x for r in rv for x, _, _, _, _ in r.nodes]      # noqa: E731
+        self.assertGreater(max(xs(both)), 1000.0, "open: drawn on to its end")
+        self.assertTrue(piped, "the open part is still drawn")
+        self.assertLess(max(xs(piped)), -150.0, "the piped part (from -200 m on) is not")

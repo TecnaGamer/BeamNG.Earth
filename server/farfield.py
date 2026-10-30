@@ -59,7 +59,7 @@ import json
 import functools
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from PIL import Image
@@ -370,8 +370,12 @@ SSE_SPACING_CAP = 2.0
 
 def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
            radius=RADIUS, max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131,
-           disc=False, horizon=None, forced_level=0, view=None):
+           disc=False, horizon=None, forced_level=0, view=None, region=None):
     """Desired tiles for a player at (px, py).
+
+    region (global far tiles, select_global): a Region, the refined finest global tiles; the roots are then the
+    max_level nodes over it, a node outside it is dropped, one across its edge is a Piece per global tile it overlaps
+    when it does not split (only its part inside that tile), one inside it a Tile.
 
     forced: bboxes (terrain blocks) under which everything is refined to `forced_level` (terrain mode:
     L0; detail mode: L-1, so tile edges meet the 128 m-grid edges of a 512² block).
@@ -390,9 +394,10 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
     radii = NEAR_RADII[layout.cells] if radii is None else radii
     lo_x, lo_y, hi_x, hi_y = px - radius, py - radius, px + radius, py + radius
     s = level_size(max_level)
+    rx0, ry0, rx1, ry1 = (lo_x, lo_y, hi_x, hi_y) if region is None else region.bbox
     stack = [(max_level, i, j)
-             for j in range(math.floor(lo_y / s), math.ceil(hi_y / s))
-             for i in range(math.floor(lo_x / s), math.ceil(hi_x / s))]
+             for j in range(math.floor(ry0 / s), math.ceil(ry1 / s))
+             for i in range(math.floor(rx0 / s), math.ceil(rx1 / s))]
     out, refined = {}, set()
     while stack:
         node = stack.pop()
@@ -406,6 +411,11 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
                 continue                                # outside the disc, or beyond the horizon
         elif not (x0 < hi_x and x1 > lo_x and y0 < hi_y and y1 > lo_y):
             continue                                    # outside the far radius
+        cover = None
+        if region is not None:
+            cover = region.cover(x0, y0, x1, y1)
+            if cover == []:
+                continue                                # a global tile's
         if lvl > min_level:
             if lvl > forced_level and any(x0 < b[2] and x1 > b[0] and y0 < b[3] and y1 > b[1] for b in forced):
                 split = True
@@ -425,6 +435,11 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
                 i2, j2 = 2 * i, 2 * j
                 stack += [(lvl - 1, i2, j2), (lvl - 1, i2 + 1, j2), (lvl - 1, i2, j2 + 1), (lvl - 1, i2 + 1, j2 + 1)]
                 continue
+        if cover:                                       # across the region's edge: its part in each global tile
+            for qi, _area, poly in cover:
+                p = Piece(lvl, i, j, *region.tiles[qi], tuple(poly), region.quads[qi])
+                out[p.key] = p
+            continue
         t = Tile(lvl, i, j)
         out[t.key] = t
     return out, refined
@@ -479,15 +494,17 @@ def diff(old, new):
     return [k for k in new if k not in old], [k for k in old if k not in new]
 
 
-def swap_groups(old, new):
+def swap_groups(old, new, polys=None):
     """LOD changes from key set `old` to `new` as swap groups: [(adds, removes)], each a
     connected set of added and removed tiles that overlap (a parent and its descendants), so
     both sides have the same footprint. Tiles that enter or leave the far radius have no
-    counterpart and form one-sided groups. Sorted lists, deterministic order."""
+    counterpart and form one-sided groups. Sorted lists, deterministic order.
+    Global tiles and pieces (select_global) join by their footprints: polys(key) -> the key's footprint polygon (flat
+    x, y list) in the anchor's world, or None (unknown: one-sided)."""
     adds, removes = diff(old, new)
     side = {k: 0 for k in adds}
     side.update({k: 1 for k in removes})
-    by_node = {tile_of(k).node: k for k in side}
+    by_node = {tile_of(k).node: k for k in side if not is_special_key(k)}
     parent = {k: k for k in side}
 
     def find(k):
@@ -496,7 +513,22 @@ def swap_groups(old, new):
             k = parent[k]
         return k
 
+    special = [k for k in side if is_special_key(k)]
+    if special and polys is not None:
+        keys, ps = [], []
+        for k in side:
+            p = polys(k) if is_special_key(k) else _square(tile_of(k).bbox)
+            if p is not None:
+                keys.append(k)
+                ps.append([float(v) for v in p])
+        fast.require(GLOBAL_NEED, "global far tiles")
+        for a, b in fast._ef.far_overlap_pairs(ps, [side[k] for k in keys], GLOBAL_MIN_AREA, GLOBAL_OVERLAP_REL):
+            ka, kb = keys[a], keys[b]
+            if is_special_key(ka) or is_special_key(kb):
+                parent[find(ka)] = find(kb)
     for k in side:
+        if is_special_key(k):
+            continue
         lvl, i, j = tile_of(k).node
         while lvl < HORIZON_MAX_LEVEL:          # (no L10 node exists outside horizon mode)
             lvl, i, j = lvl + 1, i >> 1, j >> 1
@@ -531,6 +563,250 @@ def skirt_depth(size, err=0.0):
     return max(2.0, 0.02 * size, 2.5 * err + 1.0)
 
 
+# --- global far tiles (geotiles phase 3b: docs/V1_4_SPEC.md 3.7 M6 on the geotiles grid) ------------------------
+# Far levels L >= GLOBAL_MIN_LEVEL are tiles of the Web-Mercator quadtree (key m<z>_<x>_<y>; earthfast farglobal.rs),
+# their geometry in each tile's own frame (geotiles.frame: the ENU plane at its centre, the world convention), their
+# texture the finished imagery over the tile's Mercator square: made once, the same for every anchor, placed into the
+# anchor's world by the mod (geotile.lua placement at the tile's pivot: rigid, |h - pivot| x D / R off horizontally,
+# under a pixel at the distances these tiles are drawn at), so a rebase builds and sends none of them again. A far level
+# L is the zoom global_zoom(lat) - (L - 3) (the edge within 0.7-1.4x of 256 * 2^L at the anchor's latitude); the
+# distance rule takes each tile's real size. The refined tiles of the finest global zoom (the Region) are filled by the
+# anchor's own quadtree (L <= 2: it tiles the anchor's plane exactly and meets the block bit for bit), its nodes across
+# the region's edge cut to each global tile they overlap (Piece: key <L>_<i>_<j>_c<z>_<x>_<y>, the node's mesh clipped
+# to the tile's quad in the anchor's world, skirts along the cut). Beyond GLOBAL_MAX_LAT the far field is the anchor's
+# quadtree as before (no Web Mercator there).
+GLOBAL_MIN_LEVEL = 3
+GLOBAL_MAX_LAT = 84.5          # deg: the selection's whole radius must stay within Web Mercator
+GLOBAL_MIN_AREA = 1e-3          # m^2: an overlap below this is a shared edge, not an overlap
+GLOBAL_OVERLAP_REL = 0.01      # ... and below this of the smaller footprint (the quads' straight edges off the curved parallels)
+GLOBAL_NEED = 109               # earthfast farglobal.rs
+GLOBAL_GEO_VERSION = 1          # bump: every global tile's cached geometry / texture is built again
+GLOBAL_PROTO = 1                # hello.globalFar: the mod places global far tiles (farfield.lua GLOBAL_FAR)
+
+
+def global_zoom(lat):
+    """The Web-Mercator zoom of far level GLOBAL_MIN_LEVEL at a latitude: its tiles' edge within [0.7, 1.4) x 2048 m."""
+    c = 40075016.686 * max(math.cos(math.radians(min(abs(float(lat)), demmod.MAX_LAT))), 1e-6)
+    return int(math.floor(math.log2(c / (0.7 * level_size(GLOBAL_MIN_LEVEL)))))
+
+
+def global_dem_zoom(z, cells):
+    """DEM zoom of a global tile of zoom z (Web-Mercator aligned: pixels half its vertex spacing at any latitude, so
+    neighbours of one zoom sample the same DEM along their shared edge)."""
+    return max(0, min(FAR_MAX_ZOOM, int(z) - int(round(math.log2(demmod.TILE / (2 * cells))))))
+
+
+def is_global_key(k):
+    return isinstance(k, str) and k[:1] == "m"
+
+
+def is_piece_key(k):
+    return isinstance(k, str) and "_c" in k
+
+
+def is_special_key(k):
+    """A global tile's or a piece's key (not a plain anchor quadtree node)."""
+    return is_global_key(k) or is_piece_key(k)
+
+
+def global_key(z, x, y):
+    return f"m{int(z)}_{int(x)}_{int(y)}"
+
+
+def parse_global(k):
+    """(z, x, y) of a global key, or None."""
+    if not is_global_key(k):
+        return None
+    try:
+        z, x, y = (int(v) for v in k[1:].split("_"))
+    except ValueError:
+        return None
+    return z, x, y
+
+
+def _square(bb):
+    x0, y0, x1, y1 = bb
+    return (x0, y0, x1, y0, x1, y1, x0, y1)
+
+
+def _poly_bbox(p):
+    xs, ys = p[0::2], p[1::2]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+@dataclass(frozen=True, eq=False)
+class GTile:
+    """A global far tile: zoom z, (x, y), its far level, its quad (SW, SE, NE, NW at h = 0; flat) in the selecting
+    anchor's world and its real edge (m)."""
+    z: int
+    x: int
+    y: int
+    level: int
+    quad: tuple
+    size: float
+
+    @functools.cached_property
+    def key(self):
+        return global_key(self.z, self.x, self.y)
+
+    @property
+    def node(self):
+        return ("m", self.z, self.x, self.y)
+
+    @functools.cached_property
+    def bbox(self):
+        return _poly_bbox(self.quad)
+
+    @property
+    def poly(self):
+        return self.quad
+
+    def distance(self, x, y):
+        x0, y0, x1, y1 = self.bbox
+        return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
+
+
+@dataclass(frozen=True, eq=False)
+class Piece:
+    """The part of anchor node (level, i, j) inside global tile (cz, cx, cy) (select's region mode): poly the
+    overlap (flat, the anchor's world), quad the global tile's."""
+    level: int
+    i: int
+    j: int
+    cz: int
+    cx: int
+    cy: int
+    poly: tuple
+    quad: tuple
+
+    @functools.cached_property
+    def key(self):
+        return f"{self.level}_{self.i}_{self.j}_c{self.cz}_{self.cx}_{self.cy}"
+
+    @property
+    def base(self):
+        """The whole node (its geometry and texture are the node's, cut)."""
+        return Tile(self.level, self.i, self.j)
+
+    @property
+    def node(self):
+        return (self.level, self.i, self.j)
+
+    @property
+    def size(self):
+        return level_size(self.level)
+
+    @functools.cached_property
+    def bbox(self):
+        return _poly_bbox(self.poly)
+
+    def distance(self, x, y):
+        x0, y0, x1, y1 = self.bbox
+        return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
+
+
+class Region:
+    """The refined tiles of the finest global zoom (far_global_select's regions): what the anchor's nodes fill."""
+
+    def __init__(self, z, regions):
+        self.tiles = [(int(z), int(x), int(y)) for x, y, _ in regions]
+        self.quads = [tuple(float(v) for v in q) for _, _, q in regions]
+        self.arr = np.ascontiguousarray(np.array(self.quads, np.float64).reshape(-1, 8))
+        xs, ys = self.arr[:, 0::2], self.arr[:, 1::2]
+        self.bbox = (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))
+
+    def cover(self, x0, y0, x1, y1):
+        """None: the box lies inside the region; []: outside it; else [(index, area, polygon)] of the tiles it
+        overlaps (it crosses the region's edge)."""
+        got = fast._ef.far_box_cover(self.arr, float(x0), float(y0), float(x1), float(y1), GLOBAL_MIN_AREA)
+        a = (x1 - x0) * (y1 - y0)
+        if sum(g[1] for g in got) >= a - max(1e-7 * a, GLOBAL_MIN_AREA * (1 + len(got))):
+            return None
+        return got
+
+
+def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS, radius=RADIUS,
+                  max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131, disc=False,
+                  horizon=None, forced_level=0, view=None):
+    """select() with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile, Mercator zoom zf for level 3) and the
+    anchor's nodes (L <= 2, Tile / Piece) in the refined zoom-zf tiles. frame: the anchor's EnuFrame; the rest as
+    select(). Returns ({key: tile}, refined nodes: anchor (L, i, j) and global ("m", z, x, y))."""
+    fast.require(GLOBAL_NEED, "global far tiles")
+    kfun = kfun or layout.k
+    radii = NEAR_RADII[layout.cells] if radii is None else radii
+    gprev = [tuple(n[1:]) for n in prev_refined if len(n) == 4]
+    ghold = [tuple(n[1:]) for n in hold if len(n) == 4]
+    ks = [float(kfun(lvl)) if lvl >= 1 else 0.0 for lvl in range(max_level + 1)]
+    rmin = max([float(r) for m, r in radii.items() if m >= min_level] or [0.0])
+    hz = None
+    if horizon is not None:
+        g = horizon.grid
+        merc = getattr(g, "merc", None)
+        hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED), np.ascontiguousarray(g.base, np.float64),
+              float(g.half), float(level_size(HORIZON_GRID_LEVEL)),
+              (int(merc[0]), int(merc[1]), int(merc[2]), merc[3]) if merc is not None else None)
+    tiles, grefined, regions = fast._ef.far_global_select(
+        float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
+        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz)
+    out = {}
+    for z, x, y, q, s in tiles:
+        t = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q), float(s))
+        out[t.key] = t
+    refined = {("m", int(z), int(x), int(y)) for z, x, y in grefined}
+    if regions:
+        aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
+                            GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,
+                            None, forced_level, view, region=Region(zf, regions))
+        out.update(aout)
+        refined |= aref
+    return out, refined
+
+
+def global_frame_ll(z, x, y):
+    """(lat, lon) of a global tile's frame (its centre)."""
+    fast.require(GLOBAL_NEED, "global far tiles")
+    cl, cn = fast._ef.geo_tile_info(int(z), int(x), int(y))[:2]
+    return float(cl), float(cn)
+
+
+def build_global(dem, z, x, y, zoom, ref_zoom, layout=V131):
+    """A global tile's Built (pos (0, 0, pz) and positions in its own frame, the world convention; planar: its
+    Mercator position, u east, v north; grid: its surface's world z on the Mercator vertex grid, [j north, i east]):
+    the DEM at `zoom` on its (cells + 1)^2 Mercator grid, the 2x reference at ref_zoom, simplified like the anchor's far
+    levels (rtin within ADAPT_EPS of the spacing)."""
+    fast.require(GLOBAL_NEED, "global far tiles")
+    n = layout.cells
+
+    def ll(steps):
+        f = np.arange(steps + 1) / steps
+        X, Y = np.meshgrid(x + f, (y + 1) - f)          # [j north, i east]
+        w = float(2 ** z)
+        lon = X / w * 360.0 - 180.0
+        lat = np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * Y / w))))
+        return lat, lon
+    lat, lon = ll(n)
+    elev = np.ascontiguousarray(np.asarray(dem.sample(lat, lon, zoom), np.float64))
+    rlat, rlon = ll(2 * n)
+    ref = np.ascontiguousarray(np.asarray(dem.sample(rlat, rlon, ref_zoom), np.float64))
+    eps = ADAPT_EPS if layout.cells == 64 else 0.0
+    P, nrm, uv, planar, tris, grid, pz, err, skirt, size = fast._ef.far_global_mesh(int(z), int(x), int(y), elev,
+                                                                                    ref, float(eps))
+    return Built([0.0, 0.0, float(pz)], P, nrm, uv, planar, tris, grid.astype(np.float32), float(err), None,
+                 float(skirt), float(size))
+
+
+def clip_built(built, poly):
+    """The Built of a node cut to a convex polygon (flat x, y in the anchor's world): far_clip_mesh, the skirts along
+    the cut as deep as the node's."""
+    fast.require(GLOBAL_NEED, "global far tiles")
+    q = np.asarray(poly, np.float64).reshape(-1, 2) - np.asarray(built.pos[:2], np.float64)
+    P, nrm, uv, planar, tris = fast._ef.far_clip_mesh(
+        np.ascontiguousarray(built.positions, np.float64), np.ascontiguousarray(built.normals, np.float64),
+        np.ascontiguousarray(built.uvs, np.float64), np.ascontiguousarray(built.planar, np.float64),
+        np.ascontiguousarray(built.tris, np.int64), np.ascontiguousarray(q), float(built.skirt))
+    return replace(built, positions=P, normals=nrm, uvs=uv, planar=planar, tris=tris)
+
+
 # --- horizon mode (M1h) ------------------------------------------------------------------
 def horizon_distance(h, r=R_REFRACTED):
     """Distance (m) from a point h m above sea level to its sea-level horizon, sqrt(2 R' h) (0 at or
@@ -554,8 +830,12 @@ class HorizonGrid:
     (i - n/2, j - n/2), and its 2x2 maximum pyramid up to HORIZON_MAX_LEVEL. Built once per anchor by
     horizon_grid() (a coarse DEM pass), so a tile's zmax never depends on whether it was built."""
 
-    def __init__(self, half, base, zoom=None):
+    def __init__(self, half, base, zoom=None, merc=None):
         self.half, self.zoom = float(half), zoom
+        # (zb, bx0, by0, maxima [rows, cols]): the highest DEM block of every Web-Mercator tile of zoom zb from
+        # (bx0, by0) (horizon_grid's mosaic: a block of `block` px of a 512 px DEM tile of zoom z is a tile of zoom
+        # z + log2(512 / block)): the global far tiles' cull, the same for every anchor (select_global)
+        self.merc = merc
         base = np.asarray(base, np.float64)
         n = base.shape[0]
         if base.shape != (n, n) or n * level_size(HORIZON_GRID_LEVEL) != 2 * half or n % (
@@ -701,7 +981,8 @@ def horizon_grid(frame, dem, half, zoom=HORIZON_DEM_ZOOM, block=HORIZON_BLOCK, c
     for cj in range(n):
         for ci in range(n):
             base[cj, ci] = m[y0[cj, ci]:y1[cj, ci] + 1, x0[cj, ci]:x1[cj, ci] + 1].max()
-    return HorizonGrid(half, base, zoom)
+    merc = (zoom + int(round(math.log2(nb))), tx0 * nb, ty0 * nb, np.ascontiguousarray(m, np.float64))
+    return HorizonGrid(half, base, zoom, merc)
 
 
 # --- colour ----------------------------------------------------------------------------

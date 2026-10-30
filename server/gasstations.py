@@ -1527,13 +1527,14 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
     list that gets (station id, [(lat (k,), lon (k,))]) of this tile's stations' forecourt pads (forecourt_pad; the
     ground's painters: surface.Surface.add_fuel_pads). Without places data (offline, no file): no stations."""
     import roads
-    x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
+    box = roads.tile_bbox(tx, ty)
+    x0, y0, x1, y1 = box
     try:
         keys = roads.cells_of_tile(frame, tx, ty, margin=REACH_M + MERGE_M)
         places = [md.cell(k, layers=("places",), kind="demand").layers.get("places") for k in keys]
         stations = merge(pins(frame, places))
     except Exception as e:      # an unreachable source costs the stations, not the tile
-        log.debug("gas stations of road tile %d_%d: %s", tx, ty, e)
+        log.debug("gas stations of road tile %s_%s: %s", tx, ty, e)
         return [], frozenset()
     sites = []
     for st in stations:
@@ -1558,7 +1559,7 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
         if cuts is not None:
             cuts.extend(site.drives)
         st = site.station
-        if x0 <= st.x < x1 and y0 <= st.y < y1:
+        if roads.box_owns(box, st.x, st.y):
             recs.append(_record(site, frame, elev))
             if pads is not None and site.pad:
                 pads.append((st.id, _pad_ll(site.pad, frame)))

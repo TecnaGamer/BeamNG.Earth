@@ -42,7 +42,8 @@ def tile_wells(frame, tx, ty, elev):
     """The rows of road tile (tx, ty)'s pump jacks; elev(lat, lon): the ground (the tile's graded one)."""
     import buildings
     import roads
-    x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
+    box = roads.tile_bbox(tx, ty)
+    x0, y0, x1, y1 = box
     la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1], np.float64), np.array([y0, y0, y1, y1], np.float64),
                                       np.zeros(4))
     wla, wlo = near(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
@@ -50,7 +51,7 @@ def tile_wells(frame, tx, ty, elev):
         return []
     e, n, _ = frame.geodetic_to_enu(wla, wlo, np.zeros(len(wla)))
     e, n = np.asarray(e), np.asarray(n)
-    keep = (e >= x0) & (e < x1) & (n >= y0) & (n < y1)
+    keep = roads.box_owns(box, e, n)
     if not keep.any():
         return []
     wla, wlo, e, n = wla[keep], wlo[keep], e[keep], n[keep]

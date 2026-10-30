@@ -17,6 +17,7 @@ import numpy as np
 
 import dem as demmod
 import geodesy
+import geotiles
 import mapcells
 import runwaygeom
 import runwaymarks
@@ -103,7 +104,8 @@ class AirportGrader:
         ({"m", "w", "tl", "p", "n": [[x, y, z], ...]}): every stroke near a runway touching the tile's
         map-data cells, cut into MARK_PIECE_M pieces, each in the tile of its midpoint; z from elev (the
         graded ground) at nodes MARK_NODE_M apart. tile_bbox(tx, ty) -> (x0, y0, x1, y1)."""
-        x0, y0, x1, y1 = tile_bbox(tx, ty)
+        box = tile_bbox(tx, ty)
+        x0, y0, x1, y1 = box
         la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), np.zeros(4))
         pieces = []
         for g in self._groups(la, lo):
@@ -120,7 +122,7 @@ class AirportGrader:
                     for i in range(n):
                         a, b = i / n, (i + 1) / n
                         mx, my = sx0 + (sx1 - sx0) * (a + b) / 2, sy0 + (sy1 - sy0) * (a + b) / 2
-                        if not (x0 <= mx < x1 and y0 <= my < y1):
+                        if not geotiles.box_owns(box, mx, my):
                             continue
                         k = max(1, int(np.ceil(L * (b - a) / MARK_NODE_M)))
                         f = np.linspace(a, b, k + 1)

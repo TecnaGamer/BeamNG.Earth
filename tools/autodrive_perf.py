@@ -14,7 +14,7 @@ open) and writes <out>/drive.mp4 without its audio track (the microphone is in i
 Checks (the user, 2026-10-14: "add a check to see if the car crashes or stops"): a crash (the car's damage jumps by
 CRASH_DAMAGE between polls), a stop (slower than STALL_MS for STOP_S while the destination is still ahead) and
 leaving the route by OFF_ROUTE_M are events: events.jsonl, a screenshot each (event_<n>.jpg), listed in the
-summary. A crash or a stop ends the run (--keep-going drives on).
+summary. A crash or a stop ends the run (--keep-going drives on: after a crash the car is reset in place first).
 Writes <out>/samples.jsonl (one poll per line) and <out>/summary.json; prints the summary. The game's MCP server
 must be on (Options > Advanced) and the companion server running.
 """
@@ -532,6 +532,14 @@ def main():
                         evf.flush()
                         if ev["kind"] in ("crash", "stop") and not a.keep_going:
                             break
+                        if ev["kind"] == "crash" and a.keep_going:
+                            # (the user, 2026-10-29: "just reset the vehicle if the ai driver crashes during a test
+                            # run"): repaired in place, autodrive on again
+                            time.sleep(1.5)
+                            lua("getPlayerVehicle(0):queueLuaCommand('obj:requestReset(RESET_PHYSICS)') return 1")
+                            time.sleep(2.0)
+                            lua("beamngEarth_settings.uiGpsAutodrive(true) return 1")
+                            print("reset after the crash", flush=True)
                     if r["gps"].get("autodrive") is False and rows[0]["gps"].get("autodrive"):
                         break                   # arrived (the GPS clears itself) or stopped by hand
                 time.sleep(max(0.0, POLL_S - (time.time() - t0)))

@@ -2,7 +2,7 @@
 -- The seed on the first run only, the file round trip, a corrupt file (warned, kept as .bak, empty
 -- list), add / rename / delete, recent places (newest first, 200 m dedup, cap), lat/lon parsing
 -- (Google Maps' "lat, lon", N/S/E/W, degrees-minutes-seconds), "go" through beamngEarth_core.teleport
--- (only with a connected server and a player vehicle), core recording its teleports, and the
+-- (only with a connected server, in the BeamNG.Earth level; no car needed), core recording its teleports, and the
 -- settings page's bridge.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
@@ -218,26 +218,37 @@ refuses('36.5 30 N, 118 W')
 refuses('1 2 3')
 
 ------------------------------------------------------------------------------------------
--- go: through beamngEarth_core.teleport, only with a server and a player vehicle
+-- go: through beamngEarth_core.teleport, only with a server and the BeamNG.Earth level; no car needed (core puts the
+-- free camera there)
 
 places._reset()
 files[F] = { version = 1, places = { { id = 5, name = 'Kern River ravine', lat = 36.506422, lon = -118.402437 } } }
 places.load()
 local tele = {}
-beamngEarth_core = { teleport = function(lat, lon, name) tele[#tele + 1] = { lat, lon, name }; return true end }
-local veh = nil
-function getPlayerVehicle() return veh end
+local coreSt = { inOurLevel = false }
+beamngEarth_core = { teleport = function(lat, lon, name) tele[#tele + 1] = { lat, lon, name }; return true end,
+  _state = function() return coreSt end }
+function getPlayerVehicle() return nil end
 local okGo, err = places.go(5)
 T.check(not okGo and err:match('not connected') and #tele == 0, 'go: refused while the server is not connected')
 local ui1 = places.uiState()
 T.check(ui1.cannotGo and ui1.cannotGo:match('not connected'), 'page: the not-connected reason')
 net.isConnected = function() return true end -- net keeps its state private
 okGo, err = places.go(5)
-T.check(not okGo and err:match('vehicle') and #tele == 0, 'go: refused without a player vehicle')
-veh = { id = 1 }
+T.check(not okGo and err:match('BeamNG.Earth level') and #tele == 0, 'go: refused outside the BeamNG.Earth level')
+T.check(places.uiState().cannotGo == 'Load the BeamNG.Earth level first', 'page: the not-in-the-level reason')
+coreSt.inOurLevel = true
 okGo = places.go(5)
 T.check(okGo and #tele == 1 and tele[1][1] == 36.506422 and tele[1][2] == -118.402437 and tele[1][3] == 'Kern River ravine',
-  'go: beamngEarth_core.teleport(lat, lon, name) with the place\'s values')
+  'go: beamngEarth_core.teleport(lat, lon, name) with the place\'s values, with no car')
+function getPlayerVehicle() return { id = 1 } end
+T.check(places.cannotGo() == nil, 'go: with a car too')
+beamngEarth_core.groundReady = function() return false end
+okGo, err = places.go(5)
+T.check(not okGo and err == 'Loading the ground: wait a moment' and #tele == 1, 'go: refused while the ground is loading')
+beamngEarth_core.groundReady = function() return true end
+T.check(places.cannotGo() == nil, 'go: once the ground is in')
+beamngEarth_core.groundReady = nil
 T.check(places.uiState().cannotGo == nil, 'page: can go')
 okGo, err = places.go(6)
 T.check(not okGo and err:match('no such') and #tele == 1, 'go: unknown id')
@@ -280,7 +291,7 @@ local st = settings.uiPlaces()
 T.check(st.ok and #st.places == 0 and #st.recent == 0 and st.here == nil, 'uiPlaces: lists, no position yet')
 res = settings.uiPlaceAddHere('Here')
 T.check(not res.ok and res.error:match('Position unknown') and #res.places == 0, 'save current place: refused without a position')
-beamngEarth_core._state = function() return { player = { lat = 46.5286, lon = 10.4532 } } end
+beamngEarth_core._state = function() return { inOurLevel = true, player = { lat = 46.5286, lon = 10.4532 } } end
 st = settings.uiPlaces()
 T.check(st.here == '46.52860, 10.45320', 'uiPlaces: the current position')
 res = settings.uiPlaceAddHere('Stelvio')

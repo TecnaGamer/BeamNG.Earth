@@ -33,9 +33,19 @@
           @error="onTileError($event, t)"
         />
       </template>
+      <!-- the cache view (server covermap.py): what is downloaded where, at what detail; under the grid and markers -->
+      <canvas v-show="cacheOn" ref="cacheEl" class="cache-canvas" :width="w" :height="h" />
+      <!-- saved areas (server areas.py) and the box being picked -->
+      <div v-for="a in areaRects" :key="'ar' + a.id" class="area-rect" :class="a.cls"
+           :style="{ left: a.x + 'px', top: a.y + 'px', width: a.w + 'px', height: a.h + 'px' }">
+        <span class="area-rect-label">{{ a.name }}</span>
+      </div>
+      <div v-if="selectRect" class="area-rect selecting"
+           :style="{ left: selectRect.x + 'px', top: selectRect.y + 'px', width: selectRect.w + 'px', height: selectRect.h + 'px' }" />
+      <div v-if="selecting" class="pad-hint" :class="{ 'below-gps': !!state.gps }">{{ selectHint }}</div>
       <!-- a controller: the point A picks (the centre; padTick) -->
       <div v-if="padMode" class="pad-cross" />
-      <div v-if="padMode" class="pad-hint" :class="{ 'below-gps': !!state.gps }">Right stick: move &middot; LT / RT: zoom
+      <div v-if="padMode && !selecting" class="pad-hint" :class="{ 'below-gps': !!state.gps }">Right stick: move &middot; LT / RT: zoom
         &middot; A: {{ state.gps ? "clear GPS" : "set GPS here" }} &middot; X: teleport &middot; Y: {{ state.gps &&
         state.gps.autodrive ? "stop autodrive" : "autodrive" }} &middot; B: back</div>
       <svg class="map-grid" :width="w" :height="h">
@@ -43,6 +53,8 @@
           <polyline v-for="(p, i) in stateLines" :key="'s' + i" class="layer-state" :points="p" />
           <polyline v-for="(p, i) in borderLines" :key="'b' + i" class="layer-border" :points="p" />
         </g>
+        <polyline v-for="r in areaRoutes" :key="'rt' + r.id" class="area-route" :class="r.cls" :points="r.points"
+                  :style="{ strokeWidth: r.px + 'px' }" />
         <polyline v-if="routeDone" class="route-done" :points="routeDone" />
         <polyline v-if="routeAhead" class="route-line-casing" :points="routeAhead" />
         <polyline v-if="routeAhead" class="route-line" :points="routeAhead" />
@@ -78,10 +90,11 @@
       <div v-if="target" class="marker target" :style="{ left: targetScreen.x + 'px', top: targetScreen.y + 'px' }">
         <div class="cross"></div>
       </div>
-      <!-- the other players (a BeamMP session) -->
-      <div v-for="o in otherMarkers" :key="'o' + o.name" class="marker other" :style="{ left: o.sx + 'px', top: o.sy + 'px' }">
+      <!-- the other players (a BeamMP session): a click on a name follows that player (as the Players list's Follow) -->
+      <div v-for="o in otherMarkers" :key="'o' + o.pid" class="marker other" :class="{ followed: follow === o.pid }"
+           :style="{ left: o.sx + 'px', top: o.sy + 'px' }">
         <div class="arrow" :style="{ transform: 'rotate(' + (o.h || 0) + 'deg)' }" :class="{ noheading: o.h == null }"></div>
-        <span class="marker-label">{{ o.name }}</span>
+        <span class="marker-label" :title="follow === o.pid ? 'Stop following' : 'Follow on the map'" @mousedown.stop @click.stop="followPlayer(o)" @dblclick.stop>{{ o.name }}</span>
       </div>
       <!-- the player -->
       <div v-if="playerScreen" class="marker player" :style="{ left: playerScreen.x + 'px', top: playerScreen.y + 'px' }">
@@ -126,9 +139,40 @@
       </div>
       <button class="map-btn" @click="zoomBy(1)" title="Zoom in">+</button>
       <button class="map-btn" @click="zoomBy(-1)" title="Zoom out">-</button>
-      <button class="map-btn" :class="{ on: follow }" @click="centreOnMe" title="Centre on the car and follow it">Me</button>
+      <button class="map-btn" :class="{ on: follow === true }" @click="centreOnMe" title="Centre on the car and follow it">Me</button>
+      <button class="map-btn" :class="{ on: selecting }" @click="toggleSelect"
+              title="Pick an area to pre-cache: its map data, elevation and imagery downloaded ahead of time, and the world built too if you like (or Shift + drag on the map)">Pre-cache area</button>
+      <!-- the other players of a BeamMP session, nearest first: follow one on the map, or a GPS route to them -->
+      <div v-if="state.others" class="layers-wrap">
+        <button class="map-btn" :class="{ on: playersPanel || typeof follow === 'string' }"
+                @click="playersPanel = !playersPanel; layersPanel = false"
+                :title="followedPlayer ? 'Following ' + followedPlayer.name + ' (drag the map to stop)' : 'The other players'">
+          <span v-if="followedPlayer" class="following">Following {{ followedPlayer.name }}</span>
+          <template v-else>Players ({{ otherList.length }})</template>
+        </button>
+        <div v-if="playersPanel" class="layers-panel players-panel" :style="{ maxHeight: `calc(${h}px - 74px - 6.5vh)` }"
+             @mousedown.stop @wheel.stop @dblclick.stop>
+          <div class="players-head">
+            <span class="panel-sub">Other players</span>
+            <button class="map-btn small" :disabled="!otherList.length" @click="showAllPlayers"
+                    title="Zoom out to show everyone">Show all</button>
+          </div>
+          <div v-for="p in playerRows" :key="p.pid" class="panel-item">
+            <div class="item-text" @click="followPlayer(p)" title="Follow on the map">
+              <div class="item-name">{{ p.name }}</div>
+              <div class="item-sub">{{ p.dist == null ? "" : fmtMiles(p.dist) + " away" }}</div>
+            </div>
+            <div class="item-btns">
+              <button class="map-btn small" :class="{ on: follow === p.pid }" @click="followPlayer(p)"
+                      :title="follow === p.pid ? 'Stop following' : 'Keep the map on them as they move, until you drag the map (the map only: your car stays where it is)'">{{ follow === p.pid ? "Following" : "Follow" }}</button>
+              <button class="map-btn small" @click="gpsToPlayer(p)" title="A GPS route to where they are now">GPS</button>
+            </div>
+          </div>
+          <div v-if="!otherList.length" class="panel-empty">No other players on the map yet.</div>
+        </div>
+      </div>
       <div class="layers-wrap">
-        <button class="map-btn" :class="{ on: layersPanel }" @click="layersPanel = !layersPanel" title="Base map and overlays">Layers</button>
+        <button class="map-btn" :class="{ on: layersPanel }" @click="layersPanel = !layersPanel; playersPanel = false" title="Base map and overlays">Layers</button>
         <div v-if="layersPanel" class="layers-panel" @mousedown.stop @wheel.stop @dblclick.stop>
           <div class="panel-sub">Base map</div>
           <label class="layer-opt"><input type="radio" value="sat" v-model="baseLayer" /> Satellite</label>
@@ -138,9 +182,23 @@
           <label class="layer-opt"><input type="checkbox" v-model="labelsOn" /> Roads &amp; labels</label>
           <label class="layer-opt"><input type="checkbox" v-model="layersOn" /> Borders &amp; places
             <span class="layer-hint">(world to city zoom)</span></label>
+          <label class="layer-opt" title="What is downloaded on this computer, and at what detail (LB / RB: the next view)">
+            <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
+          <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
+                     :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
         </div>
       </div>
       <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
+    </div>
+
+    <!-- the cache view's legend (bumpers: the next view) -->
+    <div v-if="cacheOn" class="cache-legend" @mousedown.stop @wheel.stop>
+      <div class="cache-legend-title">Cache: {{ mm.CACHE_MODE_NAMES[cacheMode] }}</div>
+      <div v-for="c in cacheLegendRows" :key="c.id" class="cache-legend-row">
+        <span class="cache-swatch" :style="{ background: c.css }"></span>{{ c.name }}<span v-if="c.note" class="layer-hint">&nbsp;{{ c.note }}</span>
+      </div>
+      <div v-if="cacheMode === 'elevation' || cacheMode === 'imagery'" class="cache-legend-hint">Faint: only part of the square</div>
+      <div v-if="cacheMsg" class="cache-legend-hint">{{ cacheMsg }}</div>
     </div>
 
     <!-- status: tiles unavailable / not connected -->
@@ -173,6 +231,8 @@
           {{ state.gps.routeDownload.done }} / {{ state.gps.routeDownload.total }}
         </span>
         <button class="map-btn small" @click="showOnMap(state.gps)">Show</button>
+        <button v-if="routePts.length >= 2" class="map-btn small" @click="askRoute(routeHalf)"
+                title="Pre-cache this route: its data (elevation, roads, buildings, aerial photos) downloaded and kept, and the world built too if you like">Pre-cache route</button>
         <button class="map-btn small" :disabled="!!state.cannotGo" @click="teleportNow(state.gps.lat, state.gps.lon, state.gps.name)">Teleport</button>
         <button class="map-btn small" :class="{ primary: state.gps.autodrive }" @click="setAutodrive(!state.gps.autodrive)"
                 :title="state.gps.autodrive ? 'Stop driving by itself' : 'The car drives itself along the route (in its lane, at the speed limit)'">
@@ -207,6 +267,42 @@
         <button class="map-btn primary" :disabled="!!state.cannotGo || busy" @click="teleport">Teleport</button>
         <button class="map-btn" @click="setGps(target.lat, target.lon, target.name); target = null">Set GPS</button>
         <button class="map-btn" @click="target = null; teleportMsg = ''">Cancel</button>
+      </div>
+    </div>
+
+    <!-- a picked area: its estimate and Download (server areas.py plan) -->
+    <div v-if="areaAsk" class="confirm area-confirm" @mousedown.stop @wheel.stop>
+      <div class="confirm-title">{{ areaAsk.route ? "Pre-cache along this route?" : "Pre-cache this area?" }}</div>
+      <div v-if="areaAsk.route" class="panel-row route-width">
+        <span class="layer-hint">Width each side:</span>
+        <button v-for="o in ROUTE_WIDTHS" :key="o.m" class="map-btn small" :class="{ primary: areaAsk.half === o.m }"
+                :disabled="areaAsk.busy" @click="askRoute(o.m)">{{ metricUnits ? o.km : o.mi }}</button>
+      </div>
+      <div v-if="!areaAsk.plan" class="confirm-where">Working out what it needs...</div>
+      <template v-else-if="areaAsk.plan.ok">
+        <div class="confirm-where"><template v-if="areaAsk.plan.km != null">{{ fmtMiles(areaAsk.plan.km * 1000) }} of route,
+          </template>{{ fmtArea(areaAsk.plan.km2) }} &middot; about {{ fmtBytes(areaAsk.plan.downloadBytes) }} to download,
+          {{ fmtBytes(areaAsk.plan.diskBytes) }} on disk &middot; {{ fmtEta(areaAsk.plan) }}</div>
+        <div v-for="hst in areaHosts" :key="hst[0]" class="area-host">{{ hst[0] }}: {{ hst[1].toLocaleString() }} requests<template
+          v-if="hst[2] > 1"> (about {{ Math.ceil(hst[2]) }} days: its daily limit)</template></div>
+        <div v-if="areaAsk.plan.excluded && areaAsk.plan.excluded.length" class="confirm-warn">Not included (these sources
+          are fetched while you drive): {{ areaAsk.plan.excluded.join(", ") }}</div>
+        <div v-if="areaAsk.plan.worldTiles" class="confirm-where">Builds {{ areaAsk.plan.worldTiles.toLocaleString() }} road
+          tiles ahead ({{ areaAsk.plan.worldMissing.toLocaleString() }} not built yet)</div>
+        <div class="area-note">It downloads in the background, slower while you drive, and the data is kept when the
+          cache is cleared or full.<template v-if="!areaWorld"> The world itself is still built when you get there.</template></div>
+        <div class="panel-row area-name-row">
+          <input v-model="areaName" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="Name (optional)"
+                 maxlength="60" @keydown.enter.stop.prevent="confirmArea" @keydown.esc.stop.prevent="cancelSelect" @mousedown.stop />
+        </div>
+      </template>
+      <label class="layer-opt area-world" title="Also build the roads, sidewalks, bridges, buildings and street furniture ahead of time, so arriving there loads them instead of building them (more disk space and time; rebuilt after a BeamNG.Earth update)">
+        <input type="checkbox" :checked="areaWorld" :disabled="areaAsk.busy" @change="setAreaWorld($event.target.checked)" />
+        Build the world too <span class="layer-hint">(roads and buildings ready when you arrive)</span></label>
+      <div v-if="areaAsk.error" class="confirm-warn">{{ areaAsk.error }}</div>
+      <div class="confirm-btns">
+        <button class="map-btn primary" :disabled="!areaAsk.plan || !areaAsk.plan.ok || areaAsk.busy" @click="confirmArea">Pre-cache{{ padMode ? " (X)" : "" }}</button>
+        <button class="map-btn" @click="cancelSelect">Cancel{{ padMode ? " (B)" : "" }}</button>
       </div>
     </div>
 
@@ -259,6 +355,25 @@
         </div>
         <div v-if="!placeList.length" class="panel-empty">No saved places yet.</div>
 
+        <div class="panel-sub">Pre-cached areas <span class="layer-hint">(Pre-cache area / Pre-cache route)</span></div>
+        <div v-for="a in areaList" :key="'a' + a.id" class="panel-item area-item">
+          <div class="item-text" @click="showArea(a)" title="Show on the map">
+            <div class="item-name">{{ a.name }}<span v-if="a.route" class="layer-hint"> (route)</span><span
+              v-if="a.mode === 'world'" class="layer-hint"> (world built)</span></div>
+            <div class="item-sub">{{ areaStateText(a) }}</div>
+            <div class="area-bar"><span class="area-bar-fill" :class="a.state" :style="{ width: areaPct(a) + '%' }"></span></div>
+          </div>
+          <div class="item-btns">
+            <button v-if="a.state !== 'done'" class="map-btn small" @click="areaCmd(a, a.state === 'paused' ? 'resume' : 'pause')">
+              {{ a.state === "paused" ? "Resume" : "Pause" }}</button>
+            <button class="map-btn small" :class="{ danger: confirmAreaId === a.id }" @click="deleteArea(a)"
+                    title="Stop and forget this area (its data stays in the cache, no longer kept)">
+              {{ confirmAreaId === a.id ? "Confirm" : "Delete" }}</button>
+          </div>
+        </div>
+        <div v-if="!areaList.length" class="panel-empty">Nothing pre-cached yet.</div>
+        <div v-if="areaMsg" class="panel-msg" :class="{ warn: areaMsgError }">{{ areaMsg }}</div>
+
         <div class="panel-sub">Recent places</div>
         <div v-for="r in recentList" :key="'r' + r.index + '_' + r.lat" class="panel-item">
           <div class="item-text" @click="showOnMap(r)" title="Show on the map">
@@ -290,6 +405,7 @@ import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"
 import * as mm from "./mapmath.js"
 import layerData from "./maplayers.js"
+import { BngSelect } from "@/common/components/base"
 
 const props = defineProps({ embedded: { type: Boolean, default: false } })
 const embedded = props.embedded
@@ -297,7 +413,8 @@ const embedded = props.embedded
 const rootEl = ref(null), viewEl = ref(null), searchEl = ref(null)
 const w = ref(1280), h = ref(720)
 const view = ref({ lat: 20, lon: 0, z: 3 })
-const follow = ref(true)              // the view follows the car until the user pans
+// what the view follows until the user pans: true the car, a player's pid (the Players list) that player, false nothing
+const follow = ref(true)
 const state = ref({ places: [], recent: [] })
 const target = ref(null)              // { lat, lon, name } waiting for "Teleport here?"
 const teleportMsg = ref("")
@@ -321,11 +438,26 @@ function poll() {
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapState and beamngEarth_settings.uiMapState() or nil", s => {
     if (!s) { state.value = { places: [], recent: [], missing: true }; return }
     state.value = { places: [], recent: [], ...s }
-    if (s.player && follow.value) {
-      view.value = { ...view.value, lat: s.player.lat, lon: s.player.lon, z: seenPlayer.value ? view.value.z : 12 }
+    if (!s.others && playersPanel.value) closePlayers()   // (out of the session: not open again by itself in the next)
+    if (followingPlayer()) {
+      const o = followedPlayer.value
+      if (o) glideTo(o.lat, o.lon)
+      else { follow.value = false; showToast("That player is no longer on the map") }
+    } else if (s.player && follow.value) {
+      centreOn(s.player.lat, s.player.lon, seenPlayer.value ? view.value.z : 12)
       seenPlayer.value = true
     }
   })
+}
+// a new view only when it moved (to half a pixel: a parked car's position still wobbles in the last digits): a parked
+// car, or a player's position (sent every 2 s), would redraw the tiles, borders and labels every second for nothing
+function centreOn(lat, lon, z) {
+  const v = view.value
+  if (v.z === z) {
+    const a = mm.project(v.lat, v.lon, z), b = mm.project(lat, lon, z)
+    if (Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5) return
+  }
+  view.value = { lat, lon, z }
 }
 
 // Tiles are files the server writes into the game's temp folder on request (the game's UI browser cancels every
@@ -463,9 +595,16 @@ const placeMarkers = computed(() =>
   (state.value.places || []).map(p => ({ ...p, ...(() => { const s = screen(p.lat, p.lon); return { sx: s.x, sy: s.y } })() }))
     .filter(p => onScreen({ x: p.sx, y: p.sy })))
 
+// state.others: mpsession.others() ({ pid, name, lat, lon, h }), nil outside a BeamMP session. An older mod's Lua (a
+// player's own copy, mods/unpacked: the server's zip does not replace the Lua it already runs) has no pid: their name
+const otherList = computed(() => toArray(state.value.others).map(o => (o.pid != null ? o : { ...o, pid: "name:" + o.name })))
+// (a followed player at the centre: the view is on them or gliding there, glideTo; drawn at their latest position the
+// arrow jumped ahead at each update and the map slid after it)
 const otherMarkers = computed(() =>
-  (state.value.others || []).map(o => { const s = screen(o.lat, o.lon); return { ...o, sx: s.x, sy: s.y } })
-    .filter(o => onScreen({ x: o.sx, y: o.sy })))
+  otherList.value.map(o => {
+    const s = o.pid === follow.value ? { x: w.value / 2, y: h.value / 2 } : screen(o.lat, o.lon)
+    return { ...o, sx: s.x, sy: s.y }
+  }).filter(o => onScreen({ x: o.sx, y: o.sy })))
 
 const playerScreen = computed(() => {
   const p = state.value.player
@@ -575,8 +714,11 @@ function localXY(ev) {
 function onDown(ev) {
   if (ev.button !== 0) return
   layersPanel.value = false
+  // (a click beside the Players list only closes it, as a menu: not a GPS route there or a drag)
+  if (playersPanel.value) { closePlayers(); return }
   if (ctx.value) { closeCtx(); return }
   results.value = []
+  if (selecting.value || ev.shiftKey) { startBox(ev); return }
   const p = localXY(ev)
   drag = { x: p.x, y: p.y, sx: p.x, sy: p.y, moved: false }
   window.addEventListener("mousemove", onMove)
@@ -636,6 +778,9 @@ function onWheel(ev) {
   const p = localXY(ev)
   const v = view.value
   const z2 = v.z + (ev.deltaY < 0 ? 0.5 : -0.5)
+  // following a player: zoomed round them (the centre), still following (a pan stops it; the user, 2026-10-28: "it
+  // actually follows the player icon, until you move the map around manually")
+  if (followingPlayer()) { view.value = mm.zoomAt(v.lat, v.lon, v.z, z2, w.value / 2, h.value / 2, w.value, h.value); return }
   const r = mm.zoomAt(v.lat, v.lon, v.z, z2, p.x, p.y, w.value, h.value)
   if (Math.abs(p.x - w.value / 2) > 2 || Math.abs(p.y - h.value / 2) > 2) follow.value = false
   view.value = r
@@ -643,8 +788,11 @@ function onWheel(ev) {
 
 function onDblClick(ev) {
   clearTimeout(clickTimer)
+  // (the second click of a double-click on a player's name, which the first click's Follow moved: no zoom, still on them)
+  if (Date.now() - followedAt < 500) return
   const p = localXY(ev)
   const v = view.value
+  if (followingPlayer()) { view.value = mm.zoomAt(v.lat, v.lon, v.z, v.z + 1, w.value / 2, h.value / 2, w.value, h.value); return }
   view.value = mm.zoomAt(v.lat, v.lon, v.z, v.z + 1, p.x, p.y, w.value, h.value)
   follow.value = false
 }
@@ -658,6 +806,78 @@ function centreOnMe() {
   follow.value = true
   const p = state.value.player
   if (p) view.value = { ...view.value, lat: p.lat, lon: p.lon, z: Math.max(view.value.z, 12) }
+}
+
+// ---- the Players list (a BeamMP session) ---------------------------------------------------
+const playersPanel = ref(false)
+// nearest first (Lua's order, by name, without our position); only worked out while the list is open (nothing
+// else reads it)
+const playerRows = computed(() => {
+  const me = state.value.player
+  const rows = otherList.value.map(o => ({ ...o, dist: me ? mm.distanceM(me.lat, me.lon, o.lat, o.lon) : null }))
+  return me ? rows.sort((a, b) => a.dist - b.dist) : rows
+})
+// a focused button of the list goes with it: the focus back on the map (its keys: Esc)
+function closePlayers() {
+  const el = document.activeElement
+  const lost = !el || el === document.body || !!(el.closest && el.closest(".players-panel"))
+  playersPanel.value = false
+  if (lost && rootEl.value) rootEl.value.focus({ preventScroll: true })
+}
+// the map's view stays on them as they move (poll, glideTo), until a pan (a zoom keeps it: onWheel, onDblClick, the
+// pad's triggers); the car stays where it is
+let followedAt = 0
+const followingPlayer = () => typeof follow.value === "string"
+const followedPlayer = computed(() => (followingPlayer() ? otherList.value.find(p => p.pid === follow.value) || null : null))
+function followPlayer(o) {
+  closePlayers()
+  // (Following again: stop, the view left where it is; not the second click of a double-click on their name)
+  if (follow.value === o.pid) { if (Date.now() - followedAt > 500) follow.value = false; return }
+  followedAt = Date.now()
+  follow.value = o.pid
+  glide = null
+  view.value = { lat: o.lat, lon: o.lon, z: Math.max(view.value.z, 12) }
+}
+// Their positions come every 2 s (mpsession.POSE_S, the plugin's TICK_MS): the view glides to each, at an even speed
+// over that time, so a moving player (drawn at the centre: otherMarkers) moves on smoothly rather than in jumps; a jump
+// farther than the view (a teleport) is shown at once. Each glide frame is a pan's work, only while following a player
+// who moves.
+const GLIDE_MS = 2000
+let glide = null, glideFrame = 0
+function glideTo(lat, lon) {
+  // (the poll is every second, a new position every 2 s: the same one again keeps its glide, else it never got there)
+  if (glide && glide.lat === lat && glide.lon === lon) return
+  const v = view.value, s = screen(lat, lon)
+  const dx = s.x - w.value / 2, dy = s.y - h.value / 2
+  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return
+  if (Math.abs(dx) > w.value || Math.abs(dy) > h.value) { glide = null; view.value = { lat, lon, z: v.z }; return }
+  glide = { lat, lon, lat0: v.lat, lon0: v.lon, dLat: lat - v.lat, dLon: mm.wrapLon(lon - v.lon), t0: performance.now() }
+  if (!glideFrame) glideFrame = nextFrame(glideStep) || 1
+}
+function glideStep(now) {
+  glideFrame = 0
+  const g = glide
+  if (!g || !followingPlayer()) { glide = null; return }      // (a pan, Me, a search: the glide stops with the follow)
+  // (a frame's time can be from just before glideTo: not backwards)
+  const t = Math.max(0, Math.min(1, ((typeof now === "number" ? now : performance.now()) - g.t0) / GLIDE_MS))
+  view.value = { lat: g.lat0 + g.dLat * t, lon: mm.wrapLon(g.lon0 + g.dLon * t), z: view.value.z }
+  if (t < 1) glideFrame = nextFrame(glideStep) || 1
+  else glide = null
+}
+// to where they are now (the route does not follow them)
+function gpsToPlayer(o) {
+  closePlayers()
+  setGps(o.lat, o.lon, o.name)
+}
+// everyone, us included, in the part of the map the Places panel leaves free (as .map-bottom.beside-panel)
+function showAllPlayers() {
+  const pts = state.value.player ? [state.value.player, ...otherList.value] : otherList.value
+  if (!pts.length) return
+  closePlayers()
+  follow.value = false
+  const right = panelOpen.value ? 376 : 0
+  const v = mm.fitView(pts, w.value - right, h.value, 80)
+  view.value = { ...mm.pan(v.lat, v.lon, v.z, -right / 2, 0), z: v.z }
 }
 
 // ---- controller (settings.lua mapControls: the stock big map's actions and bindings while this map is open) ---------
@@ -687,7 +907,7 @@ function padTick(ts) {
   const sx = sq(pad.lr) + kx, sy = sq(pad.ud) + ky
   const dz = (pad.zin > PAD_DEAD ? pad.zin : 0) - (pad.zout > PAD_DEAD ? pad.zout : 0) + sq(pad.zaxis)
   if (sx || sy || dz) {
-    follow.value = false
+    if (sx || sy || !followingPlayer()) follow.value = false     // (the triggers' zoom: still on a followed player)
     const v = view.value
     let nv = v
     if (sx || sy) {
@@ -696,6 +916,7 @@ function padTick(ts) {
     }
     if (dz) nv = { ...nv, z: Math.max(mm.MIN_Z, Math.min(mm.MAX_Z, nv.z + dz * PAD_ZOOM_S * dt)) }
     view.value = nv
+    if (selecting.value && boxStart.value && !areaAsk.value) boxEnd.value = { lat: nv.lat, lon: nv.lon }
   }
   if (padActive()) padFrame = nextFrame(padTick) || 1
   else padLast = 0
@@ -734,6 +955,14 @@ function buttonFocused() {
 function padSelect() {
   // A on a focused button is the button's (the menu's own 'ok')
   if (buttonFocused()) return
+  if (selecting.value && !areaAsk.value) {          // picking an area: the crosshair is a corner
+    padMode.value = true
+    const v = view.value
+    if (!boxStart.value) { boxStart.value = boxEnd.value = { lat: v.lat, lon: v.lon }; return }
+    boxEnd.value = { lat: v.lat, lon: v.lon }
+    askArea()
+    return
+  }
   if (!padMode.value) { padMode.value = true; return }      // the first A shows the crosshair
   if (state.value.gps) { clearGps(); return }                // again: clears it (the stock map's set / clear route)
   const v = view.value
@@ -742,6 +971,7 @@ function padSelect() {
 
 // X: teleport to the GPS destination, else to the crosshair (the stock map's quick travel)
 function padTeleport() {
+  if (selecting.value) { if (areaAsk.value) confirmArea(); return }      // X: download the picked area
   if (state.value.cannotGo || busy.value) return
   const g = state.value.gps
   if (g) teleportNow(g.lat, g.lon, g.name)
@@ -750,6 +980,7 @@ function padTeleport() {
 
 // Y: the autodrive on or off; with no destination, to the crosshair
 function padAutodrive() {
+  if (selecting.value) return
   const g = state.value.gps
   if (g) setAutodrive(!g.autodrive)
   else if (padMode.value) setGps(view.value.lat, view.value.lon, "", () => setAutodrive(true))
@@ -782,10 +1013,12 @@ mapEvents.on("BeamNGEarthMapInput", d => {
     case "move_key": if (d.b >= 1 && d.b <= 4) pad.keys[d.b - 1] = a; if (a) padStart(); break
     case "select": padSelect(); break
     case "pad_x": case "pad_y": padButton(d.kind, a); break
+    case "filter": if (a) cycleCache(Number(d.b) < 0 || a < 0 ? -1 : 1); break   // the bumpers (bigMap's onChangeUiFilter)
   }
 })
 mapEvents.on("UINavigation", (name, value) => {
   if (FOCUS_MOVES.has(name)) { if (Number(value)) showSelected(); return }
+  if (selecting.value && (name === "back" || name === "cancel" || name === "menu_back") && Number(value)) { cancelSelect(); return }
   padButton(name, value)
 })
 // declared to the menus (v-bng-on-ui-nav on the root) so the UI keeps X / Y on while the map is open; the presses
@@ -794,6 +1027,369 @@ function onNavDeclared() { return false }
 // the mouse takes over again: no crosshair
 watch(cursor, () => { if (padMode.value && !padActive()) padMode.value = false })
 
+
+// ---- the cache view (server covermap.py; settings.uiCacheMap): what is downloaded where, and at what detail -----------
+// A grid of levels for the view (8 cells a map tile: mapmath.cacheGridZoom), asked 300 ms after the view settles and
+// every 5 s while it is shown, drawn on a canvas under the grid; moved with the view in between. Remembered.
+const cacheEl = ref(null)
+const cacheOn = ref(stored("beamngEarth.map.cache", "0") === "1")
+const storedCacheMode = stored("beamngEarth.map.cacheMode", "summary")
+const cacheMode = ref(mm.CACHE_MODES.includes(storedCacheMode) ? storedCacheMode : "summary")
+watch(cacheOn, on => store("beamngEarth.map.cache", on ? "1" : "0"))
+watch(cacheMode, v => store("beamngEarth.map.cacheMode", v))
+const cacheModeOptions = mm.CACHE_MODES.map(v => ({ label: mm.CACHE_MODE_NAMES[v], value: v }))
+const cacheSelectConfig = { value: o => o.value, label: o => o.label }
+const cacheGrid = ref(null)               // { z, x0, y0, w, h, cells: Uint8Array, mode }
+const cacheMsg = ref("")
+const CACHE_ASK_MS = 300, CACHE_REFRESH_MS = 5000, CACHE_POLL_MS = 100, CACHE_POLL_TRIES = 50
+let cacheTimer = null, cachePollTimer = null, cacheSeq = 0
+function scheduleCache(ms) {
+  clearTimeout(cacheTimer)
+  cacheTimer = setTimeout(askCache, ms)
+}
+function askCache() {
+  cacheTimer = null
+  if (!cacheOn.value) return
+  const v = view.value
+  const b = mm.cacheGridBox(v.lat, v.lon, v.z, w.value, h.value, mm.cacheGridZoom(v.z))
+  const mode = cacheMode.value
+  const seq = ++cacheSeq
+  clearTimeout(cachePollTimer)
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiCacheMap and beamngEarth_settings.uiCacheMap(${b.z}, ${b.x0}, ${b.y0}, ${b.x1}, ${b.y1}, ${luaStr(mode)}) or nil`, r => {
+    if (seq !== cacheSeq) return
+    if (!r || r.error || !r.id) {
+      cacheMsg.value = (r && r.error) || "Cache view unavailable (BeamNG.Earth not loaded?)"
+      scheduleCache(CACHE_REFRESH_MS)
+      return
+    }
+    let tries = 0
+    const poll = () => {
+      if (seq !== cacheSeq) return
+      engineLua(`beamngEarth_settings and beamngEarth_settings.uiCacheMapResult(${r.id}) or nil`, res => {
+        if (seq !== cacheSeq) return
+        if (!res) {
+          if (++tries < CACHE_POLL_TRIES) cachePollTimer = setTimeout(poll, CACHE_POLL_MS)
+          else { cacheMsg.value = "No answer from the companion server"; scheduleCache(CACHE_REFRESH_MS) }
+          return
+        }
+        const waiting = res.ready === false
+        cacheMsg.value = res.error ? String(res.error) : waiting ? "Indexing the cache..." : ""
+        if (!res.error && !waiting) {
+          cacheGrid.value = { z: res.z, x0: res.x0, y0: res.y0, w: res.w, h: res.h, cells: mm.b64Bytes(res.cells), mode }
+        }
+        scheduleCache(waiting ? 1000 : CACHE_REFRESH_MS)
+      })
+    }
+    cachePollTimer = setTimeout(poll, CACHE_POLL_MS / 2)
+  })
+}
+watch([view, w, h], () => { if (cacheOn.value) scheduleCache(CACHE_ASK_MS) })
+watch([cacheOn, cacheMode], () => {
+  if (cacheGrid.value && cacheGrid.value.mode !== cacheMode.value) cacheGrid.value = null
+  if (cacheOn.value) scheduleCache(0)
+  else { cacheSeq++; clearTimeout(cacheTimer); clearTimeout(cachePollTimer); cacheMsg.value = "" }
+}, { immediate: true })
+onUnmounted(() => { cacheSeq++; clearTimeout(cacheTimer); clearTimeout(cachePollTimer) })
+
+// the bumpers: off -> each view in turn -> off
+function cycleCache(dir) {
+  const list = mm.CACHE_MODES
+  let i = cacheOn.value ? list.indexOf(cacheMode.value) + dir : (dir > 0 ? 0 : list.length - 1)
+  if (i < 0 || i >= list.length) { cacheOn.value = false; showToast("Cache view off"); return }
+  cacheMode.value = list[i]
+  cacheOn.value = true
+  showToast(`Cache: ${mm.CACHE_MODE_NAMES[list[i]]}`)
+}
+
+const CACHE_ALPHA = 0.45, CACHE_ALPHA_PARTIAL = 0.2
+const cacheCss = (rgb, a) => `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${a})`
+const cacheMetric = computed(() => !!((state.value.weather && state.value.weather.metric) || (state.value.gps && state.value.gps.metric)))
+const cacheLegendRows = computed(() => {
+  const mode = cacheMode.value
+  const detail = mode === "elevation" || mode === "imagery"
+  const rows = mm.cacheLegend(mode).map(c => ({ ...c, css: cacheCss(c.rgb, CACHE_ALPHA + 0.2), note: "" }))
+  if (detail) {
+    const f = m => mm.fmtRes(m, cacheMetric.value)
+    for (let i = 0; i < rows.length; i++) {
+      const lo = i + 1 < rows.length ? rows[i + 1].max : 0
+      rows[i].note = rows[i].max === Infinity ? `(over ${f(lo)})` : lo ? `(${f(lo)} - ${f(rows[i].max)})` : `(under ${f(rows[i].max)})`
+    }
+    rows.reverse()
+  }
+  return rows
+})
+
+function drawCache() {
+  const cv = cacheEl.value
+  if (!cv) return
+  const ctx = cv.getContext("2d")
+  if (!ctx) return
+  ctx.clearRect(0, 0, cv.width, cv.height)
+  const g = cacheGrid.value
+  if (!cacheOn.value || !g || !g.cells || g.cells.length < g.w * g.h) return
+  const v = view.value, W = w.value, H = h.value
+  const c = mm.project(v.lat, v.lon, v.z)
+  const s = mm.TILE * Math.pow(2, v.z - g.z)          // px a cell
+  const left0 = W / 2 - c.x, top0 = H / 2 - c.y
+  for (let j = 0; j < g.h; j++) {
+    const y = g.y0 + j
+    const ya = Math.round(top0 + y * s), yb = Math.round(top0 + (y + 1) * s)
+    if (yb < 0 || ya > H) continue
+    const lat = mm.unproject(0, (y + 0.5) * mm.TILE, g.z).lat
+    for (let i = 0; i < g.w; i++) {
+      const lv = g.cells[j * g.w + i]
+      if (!lv) continue
+      const x = g.x0 + i
+      const xa = Math.round(left0 + x * s), xb = Math.round(left0 + (x + 1) * s)
+      if (xb < 0 || xa > W) continue
+      const k = mm.cacheClass(g.mode, lv, lat)
+      if (!k) continue
+      ctx.fillStyle = cacheCss(k.rgb, k.partial ? CACHE_ALPHA_PARTIAL : CACHE_ALPHA)
+      ctx.fillRect(xa, ya, Math.max(1, xb - xa), Math.max(1, yb - ya))
+    }
+  }
+}
+let cacheFrame = 0
+watch([cacheGrid, view, w, h, cacheOn], () => {
+  if (!cacheFrame) cacheFrame = nextFrame(() => { cacheFrame = 0; drawCache() }) || 1
+})
+
+// ---- saved areas (server areas.py; settings.uiArea*): pick a box, see its estimate, download it ahead -------------
+// The Area button (or Shift + drag): drag a box on the map; a controller: A at one corner, A at the other (the
+// crosshair), X downloads, B cancels. The confirm box shows the server's estimate (size, download, time with the hosts'
+// daily limits, the imagery left out). The list (Places panel) shows each area's progress, Pause / Resume, Delete.
+const selecting = ref(false)
+const boxStart = ref(null), boxEnd = ref(null)      // { lat, lon } corners
+const areaAsk = ref(null)                           // { box: {s, w, n, e}, plan, error, busy }
+const areaName = ref("")
+const areas = ref({ areas: [] })
+const areaMsg = ref(""), areaMsgError = ref(false)
+const confirmAreaId = ref(null)
+let areaSeq = 0, areaTimer = null, confirmAreaTimer = null
+const areaList = computed(() => toArray(areas.value && areas.value.areas))
+const selectHint = computed(() => (areaAsk.value ? "X: pre-cache this area · B: cancel"
+  : padMode.value ? (boxStart.value ? "A: the other corner · B: cancel" : "A: one corner of the area · B: cancel")
+    : "Drag a box over the area to download · Esc: cancel"))
+
+function toggleSelect() {
+  if (selecting.value) { cancelSelect(); return }
+  // (picking an area: the Players list closed, and a followed player's glide no longer moves the map under the box)
+  if (playersPanel.value) closePlayers()
+  if (followingPlayer()) follow.value = false
+  selecting.value = true
+  boxStart.value = boxEnd.value = null
+  areaAsk.value = null
+}
+function cancelSelect() {
+  selecting.value = false
+  boxStart.value = boxEnd.value = null
+  areaAsk.value = null
+  areaSeq++
+}
+function llAt(ev) {
+  const p = localXY(ev)
+  const v = view.value
+  return mm.fromScreen(p.x, p.y, v.lat, v.lon, v.z, w.value, h.value)
+}
+function startBox(ev) {
+  selecting.value = true
+  areaAsk.value = null
+  boxStart.value = llAt(ev)
+  boxEnd.value = boxStart.value
+  const move = e => { boxEnd.value = llAt(e) }
+  const up = e => {
+    window.removeEventListener("mousemove", move)
+    window.removeEventListener("mouseup", up)
+    boxEnd.value = llAt(e)
+    askArea()
+  }
+  window.addEventListener("mousemove", move)
+  window.addEventListener("mouseup", up)
+}
+// the box (south, west, north, east) of the two corners, or null
+const pickedBox = computed(() => {
+  const a = boxStart.value, b = boxEnd.value
+  if (!a || !b) return null
+  return { s: Math.min(a.lat, b.lat), n: Math.max(a.lat, b.lat), w: Math.min(a.lon, b.lon), e: Math.max(a.lon, b.lon) }
+})
+function rectOf(b) {
+  const p0 = screen(b.n, b.w), p1 = screen(b.s, b.e)
+  return { x: Math.min(p0.x, p1.x), y: Math.min(p0.y, p1.y), w: Math.abs(p1.x - p0.x), h: Math.abs(p1.y - p0.y) }
+}
+const selectRect = computed(() => { view.value; w.value; h.value; return selecting.value && pickedBox.value ? rectOf(pickedBox.value) : null })
+const areaRects = computed(() => {
+  view.value; w.value; h.value
+  if (!(panelOpen.value || cacheOn.value || selecting.value)) return []
+  return areaList.value.filter(a => !a.route).map(a => ({ id: a.id, name: a.name, cls: a.state, ...rectOf(a) }))
+    .filter(r => r.x < w.value && r.y < h.value && r.x + r.w > 0 && r.y + r.h > 0)
+})
+// saved routes (areas.py "route": its points, ~400 at most; "half": m each side): their corridors, the line as wide
+// as the corridor
+const areaRoutes = computed(() => {
+  view.value; w.value; h.value
+  if (!(panelOpen.value || cacheOn.value)) return []
+  return areaList.value.filter(a => a.route).map(a => {
+    const pts = toArray(a.route).map(p => toArray(p))
+    if (pts.length < 2) return null
+    const lat = Number(pts[0][0]), lon = Number(pts[0][1])
+    const p0 = screen(lat, lon), p1 = screen(lat + (Number(a.half) || 800) / 111195, lon)
+    return { id: a.id, cls: a.state, px: Math.max(3, 2 * Math.abs(p1.y - p0.y)),
+      points: pts.map(p => { const q = screen(Number(p[0]), Number(p[1])); return `${q.x.toFixed(1)},${q.y.toFixed(1)}` }).join(" ") }
+  }).filter(Boolean)
+})
+// "Save route": the planned GPS route's corridor, this far each side (m)
+const ROUTE_WIDTHS = [
+  { m: 402, mi: "¼ mi", km: "0.4 km" }, { m: 805, mi: "½ mi", km: "0.8 km" },
+  { m: 1609, mi: "1 mi", km: "1.6 km" }, { m: 3219, mi: "2 mi", km: "3.2 km" },
+]
+const routeHalf = ref(805)
+// "Build the world too" (server areas.py mode "world"): the estimate asked again with it
+const areaWorld = ref(false)
+const areaMode = () => (areaWorld.value ? "world" : "data")
+function setAreaWorld(on) {
+  areaWorld.value = !!on
+  const a = areaAsk.value
+  if (!a) return
+  if (a.route) askRoute(a.half)
+  else askArea(a.box)
+}
+function askRoute(half) {
+  routeHalf.value = half
+  const seq = ++areaSeq
+  areaAsk.value = { route: true, half, plan: null, error: "" }
+  areaName.value = state.value.gps && state.value.gps.name ? String(state.value.gps.name).slice(0, 60) : ""
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiRoutePlan and beamngEarth_settings.uiRoutePlan(${half}, ${luaStr(areaMode())}) or nil`, r => {
+    if (seq !== areaSeq || !areaAsk.value) return
+    if (!r || r.error || !r.id) { areaAsk.value = { ...areaAsk.value, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
+    let tries = 0
+    const poll = () => {
+      if (seq !== areaSeq || !areaAsk.value) return
+      engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaPlanResult(${r.id}) or nil`, res => {
+        if (seq !== areaSeq || !areaAsk.value) return
+        if (!res) {
+          if (++tries < 200) setTimeout(poll, 150)
+          else areaAsk.value = { ...areaAsk.value, error: "No answer from the companion server" }
+          return
+        }
+        areaAsk.value = { ...areaAsk.value, plan: res, error: res.ok ? "" : String(res.error || "Not possible") }
+      })
+    }
+    setTimeout(poll, 100)
+  })
+}
+function askArea(again) {
+  const b = again || pickedBox.value
+  if (!b) return
+  const rect = rectOf(b)
+  if (!again && (rect.w < 6 || rect.h < 6)) { boxStart.value = boxEnd.value = null; return }      // a click, not a box
+  const seq = ++areaSeq
+  areaAsk.value = { box: b, plan: null, error: "" }
+  if (!again) areaName.value = ""
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaPlan and beamngEarth_settings.uiAreaPlan(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaMode())}) or nil`, r => {
+    if (seq !== areaSeq || !areaAsk.value) return
+    if (!r || r.error || !r.id) { areaAsk.value = { ...areaAsk.value, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
+    let tries = 0
+    const poll = () => {
+      if (seq !== areaSeq || !areaAsk.value) return
+      engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaPlanResult(${r.id}) or nil`, res => {
+        if (seq !== areaSeq || !areaAsk.value) return
+        if (!res) {
+          if (++tries < 100) setTimeout(poll, 150)
+          else areaAsk.value = { ...areaAsk.value, error: "No answer from the companion server" }
+          return
+        }
+        areaAsk.value = { ...areaAsk.value, plan: res, error: res.ok ? "" : String(res.error || "Not possible") }
+      })
+    }
+    setTimeout(poll, 100)
+  })
+}
+const areaHosts = computed(() => {
+  const p = areaAsk.value && areaAsk.value.plan
+  return p ? toArray(p.hosts).map(hst => toArray(hst)).slice(0, 5) : []
+})
+function confirmArea() {
+  const a = areaAsk.value
+  if (!a || !a.plan || !a.plan.ok || a.busy) return
+  areaAsk.value = { ...a, busy: true }
+  const b = a.box
+  const call = a.route
+    ? `beamngEarth_settings.uiRouteAdd and beamngEarth_settings.uiRouteAdd(${a.half}, ${luaStr(areaName.value)}, ${luaStr(areaMode())})`
+    : `beamngEarth_settings.uiAreaAdd and beamngEarth_settings.uiAreaAdd(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaName.value)}, ${luaStr(areaMode())})`
+  engineLua(`beamngEarth_settings and ${call} or nil`, r => {
+    if (!r || r.error) { areaAsk.value = { ...a, busy: false, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
+    let tries = 0
+    const poll = () => {
+      engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaResult(${r.id}) or nil`, res => {
+        if (!res) { if (++tries < 60) setTimeout(poll, 150); else areaAsk.value = { ...a, busy: false, error: "No answer from the companion server" }; return }
+        if (!res.ok) { areaAsk.value = { ...a, busy: false, error: String(res.error || "Not saved") }; return }
+        cancelSelect()
+        panelOpen.value = true
+        areaMsg.value = a.route ? "Downloading along the route in the background" : "Downloading the area in the background"
+        areaMsgError.value = false
+        pollAreas()
+      })
+    }
+    setTimeout(poll, 100)
+  })
+}
+function areaCmd(a, op) {
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaCmd and beamngEarth_settings.uiAreaCmd(${luaStr(a.id)}, ${luaStr(op)}) or nil`, r => {
+    if (!r || r.error) { areaMsg.value = (r && r.error) || "BeamNG.Earth is not loaded"; areaMsgError.value = true; return }
+    setTimeout(pollAreas, 200)
+  })
+}
+function deleteArea(a) {
+  clearTimeout(confirmAreaTimer)
+  if (confirmAreaId.value !== a.id) {
+    confirmAreaId.value = a.id
+    confirmAreaTimer = setTimeout(() => { confirmAreaId.value = null }, 4000)
+    return
+  }
+  confirmAreaId.value = null
+  areaCmd(a, "delete")
+}
+function showArea(a) {
+  follow.value = false
+  const lat = (Number(a.s) + Number(a.n)) / 2, lon = (Number(a.w) + Number(a.e)) / 2
+  // the zoom where the box fills about half the view
+  const span = Math.max(1e-6, (Number(a.e) - Number(a.w)) / 360)
+  const z = Math.max(mm.MIN_Z, Math.min(15, Math.log2(w.value * 0.5 / (mm.TILE * span))))
+  view.value = { lat, lon, z }
+}
+function pollAreas() {
+  engineLua("beamngEarth_settings and beamngEarth_settings.uiAreas and beamngEarth_settings.uiAreas() or nil", r => {
+    if (r) areas.value = r
+  })
+}
+function areaPct(a) { return a.total ? Math.min(100, Math.round(100 * a.done / a.total)) : (a.state === "done" ? 100 : 0) }
+function areaStateText(a) {
+  const pct = `${areaPct(a)} %`
+  const what = { queued: "queued", checking: "checking what is there", running: "downloading", paused: "paused",
+    waiting: "waiting", done: "downloaded" }[a.state] || a.state
+  return a.msg ? `${pct} · ${what}: ${a.msg}` : `${pct} · ${what}`
+}
+areaTimer = setInterval(() => { if (panelOpen.value || cacheOn.value || selecting.value) pollAreas() }, 2000)
+pollAreas()
+onUnmounted(() => { clearInterval(areaTimer); clearTimeout(confirmAreaTimer); areaSeq++ })
+
+const metricUnits = computed(() => cacheMetric.value)
+function fmtArea(km2) {
+  const mi2 = km2 / 2.58999
+  const m = metricUnits.value
+  const v = m ? km2 : mi2
+  return `${v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString()} ${m ? "km²" : "sq mi"}`
+}
+function fmtBytes(b) {
+  if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`
+  return `${Math.max(1, Math.round(b / 1e6))} MB`
+}
+function fmtEta(p) {
+  if (p.days > 1) return `about ${Math.ceil(p.days)} days (the hosts' daily limits)`
+  const s = p.seconds || 0
+  if (s < 3600) return `about ${Math.max(1, Math.round(s / 60))} min`
+  return `about ${Math.round(s / 3600)} h`
+}
 
 // ---- Places panel (settings.lua uiPlace* -> places.lua; every call answers with both lists) ---------
 // the places panel; closed, the saved places' pins leave the map too (the user, 2026-10-14). Remembered.
@@ -1040,8 +1636,9 @@ function fmtHeight(m) {
   return state.value.gps && state.value.gps.metric ? `${Math.round(m)} m` : `${Math.round(m * 3.28084)} ft`
 }
 function fmtMiles(m) {
-  // (the game's own length unit, Options > Display: gps.lua's metric; GitHub #327)
-  if (state.value.gps && state.value.gps.metric) {
+  // (the game's own length unit, Options > Display: gps.lua's metric; GitHub #327. uiMapState's own metric with no
+  // GPS route: the Players list)
+  if ((state.value.gps || state.value).metric) {
     const km = m / 1000
     return km < 1 ? `${Math.round(m / 10) * 10} m` : `${km < 10 ? km.toFixed(1) : Math.round(km)} km`
   }
@@ -1177,6 +1774,8 @@ function close() {
 }
 
 function onEscape() {
+  if (playersPanel.value) { closePlayers(); return }
+  if (selecting.value) { cancelSelect(); return }
   if (layersPanel.value) { layersPanel.value = false; return }
   if (target.value) { target.value = null; return }
   if (results.value.length) { results.value = []; return }
@@ -1209,6 +1808,8 @@ onUnmounted(() => {
   window.removeEventListener("mousemove", onMove)
   window.removeEventListener("mouseup", onUp)
   if (padFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(padFrame)
+  if (glideFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(glideFrame)
+  glide = null
   padFrame = 0
   engineLua("if beamngEarth_settings and beamngEarth_settings.mapOpened then beamngEarth_settings.mapOpened(false) end")
 })
@@ -1276,6 +1877,40 @@ const fmtLatLon = mm.fmtLatLon
 .map-tile.tile-dark {
   filter: invert(1) hue-rotate(180deg) brightness(0.92);
 }
+.cache-canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+.area-rect {
+  position: absolute; pointer-events: none; border: 2px dashed rgba(255, 154, 60, 0.9); box-sizing: border-box;
+  background: rgba(255, 154, 60, 0.07); z-index: 1;
+}
+.area-rect.done { border-color: rgba(61, 220, 132, 0.9); background: rgba(61, 220, 132, 0.06); }
+.area-rect.paused { border-color: rgba(160, 170, 180, 0.9); background: none; }
+.map-grid .area-route { fill: none; stroke: rgba(255, 181, 74, 0.28); stroke-linecap: round; stroke-linejoin: round; }
+.map-grid .area-route.done { stroke: rgba(61, 220, 132, 0.22); }
+.map-grid .area-route.paused { stroke: rgba(160, 170, 180, 0.25); }
+.route-width { gap: 6px; align-items: center; margin: 4px 0; }
+.area-world { display: block; margin: 6px 0 2px; }
+.area-rect.selecting { border: 2px solid #ffb54a; background: rgba(255, 181, 74, 0.15); z-index: 3; }
+.area-rect-label {
+  position: absolute; left: 4px; top: 2px; font-size: 11px; padding: 0 4px; background: rgba(0, 0, 0, 0.6);
+  border-radius: 3px; white-space: nowrap;
+}
+.area-confirm { max-width: 520px; }
+.area-host { font-size: 12px; color: #c8d2dc; margin-top: 2px; }
+.area-note { font-size: 11px; color: #9aa4ae; margin-top: 6px; }
+.area-name-row { margin-top: 8px; }
+.area-bar { height: 4px; margin-top: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.area-bar-fill { display: block; height: 100%; background: #36a3ff; transition: width 0.3s linear; }
+.area-bar-fill.done { background: #3ddc84; }
+.area-bar-fill.paused, .area-bar-fill.waiting { background: #9aa4ae; }
+.cache-select { margin: 2px 0 4px; }
+.cache-legend {
+  position: absolute; left: 10px; bottom: calc(6.5vh + 40px); z-index: 9; padding: 6px 10px 7px; font-size: 12px;
+  background: rgba(15, 18, 22, 0.88); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 5px; cursor: default;
+}
+.cache-legend-title { font-weight: 600; margin-bottom: 4px; }
+.cache-legend-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; white-space: nowrap; }
+.cache-swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid rgba(255, 255, 255, 0.35); flex-shrink: 0; }
+.cache-legend-hint { margin-top: 3px; font-size: 11px; color: #9aa4ae; }
 .map-grid {
   position: absolute;
   left: 0;
@@ -1314,6 +1949,10 @@ const fmtLatLon = mm.fmtLatLon
 }
 .marker.player .arrow.noheading { clip-path: circle(45%); }
 .marker.other { z-index: 3; pointer-events: none; }
+.marker.other .marker-label { pointer-events: auto; cursor: pointer; }
+.marker.other .marker-label:hover { color: #c5ffdd; }
+.marker.other.followed { z-index: 4; }
+.marker.other.followed .marker-label { background: #17613c; box-shadow: 0 0 0 1px #3ddc84; }
 .marker.other .arrow {
   position: absolute; left: -9px; top: -11px; width: 18px; height: 22px;
   background: #3ddc84;
@@ -1368,6 +2007,11 @@ const fmtLatLon = mm.fmtLatLon
 .layer-opt { display: block; padding: 4px 0; font-size: 13px; white-space: nowrap; cursor: pointer; }
 .layer-opt input { margin: 0 6px 0 0; vertical-align: -2px; cursor: pointer; }
 .layer-hint { font-size: 11px; color: #9aa4ae; }
+.players-panel { width: 300px; box-sizing: border-box; overflow-y: auto; }
+.map-btn .following { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  vertical-align: bottom; }
+.players-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.players-head .panel-sub { margin: 0; }
 .map-btn.small { padding: 4px 8px; font-size: 12px; }
 .map-btn.danger { background: #a3302a; border-color: #a3302a; }
 

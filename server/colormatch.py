@@ -902,6 +902,7 @@ class ColorMatch:
     disk = cachemod.NONE    # the server's cache.Cache (last use per file, the size cap); set by earthd
     PENDING = PENDING
     refs = REFS                         # the reference layers (imagery credits them)
+    source, version = SOURCE, VERSION   # (the finished pyramid's settings: imagery.Imagery._fin_sig, with meta)
 
     def __init__(self, cache_dir, mode="s2", region_z=REGION_Z, mem_regions=MEM_REGIONS):
         if mode not in MODES[1:]:
@@ -1319,9 +1320,19 @@ class ColorMatch:
         return s
 
     # --- tiles ---------------------------------------------------------------------------------
+    def poll(self, rk):
+        """A region apply() left a tile raw for (PENDING, or "far"): "ready" (its field is here: the tile is to be
+        corrected again), "wait" (wanted, queued) or "far" (beyond REQUEST_M of the anchor)."""
+        if self.field(rk) is not None:
+            return "ready"
+        with self._lock:
+            return "wait" if self._wanted(rk) else "far"
+
     def apply(self, key, rgb, imagery):
-        """(corrected RGB or None if unchanged, cacheable) for a decoded source tile's RGB (raw, or
-        relit by --deshadow), or (PENDING, region) if its region is not ready yet."""
+        """(corrected RGB or None if unchanged, True) for a decoded source tile's RGB (raw, or relit by --deshadow),
+        (None, "far") when its region lies beyond REQUEST_M of the anchor (raw while it does), (None or the RGB,
+        False) when a neighbour of the inpaint margin could not be fetched (not to be kept), or (PENDING, region) if
+        its region is not ready yet."""
         src, z, x, y = key
         if not self.handles(key):
             return None, True
@@ -1332,7 +1343,7 @@ class ColorMatch:
                 wanted = self._wanted(rk)
             if not wanted:                  # beyond REQUEST_M of the anchor: raw, nothing to wait for
                 self._count("far")
-                return None, False
+                return None, "far"
             self._count("pending")
             return PENDING, rk
         if F is EMPTY:

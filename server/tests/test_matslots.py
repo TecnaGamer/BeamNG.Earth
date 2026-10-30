@@ -114,6 +114,37 @@ class ServerTest(unittest.TestCase):
         with open(slot, "rb") as fh:
             self.assertEqual(fh.read(), b"head" + name.encode() + b"tail")
 
+    def test_reslot_again_restamps_the_files_own_name(self):
+        """A tile renamed twice (a global far tile kept across rebases, its name reclaimed at each): the second rename
+        restamps the name its own file carries, not the first rename's (that failed, and the tile was sent under a
+        name another tile had: it drew that tile's texture, red Utah far tiles on Pikes Peak's ground, 2026-10-29)."""
+        ck, built = self.add("0_0_0")
+        others = []
+        for rename in range(3):
+            self.s.matslots.release(ck)
+            others.append(self.s.matslots.take((2, f"x_{rename}")))    # its name goes to another tile
+            info = self.s.reslot(ck, self.s.tiles[ck])
+            self.assertTrue(self.s.matslots.owns(ck, info.material), rename)
+            self.assertNotIn(info.material, others)
+            with open(os.path.join(self.s.out_dir, info.shape), "rb") as fh:
+                self.assertEqual(fh.read(), b"head" + info.material.encode() + b"tail")
+
+    def test_reslot_without_a_name_keeps_none(self):
+        """A shape with no pooled name in it cannot be renamed: the tile does not own the name it had (the streamer
+        then builds it again instead of sending it under another tile's name)."""
+        ck, name = self.add("0_0_0")
+        with open(os.path.join(self.s.out_dir, self.s.tile_name(*ck)), "wb") as fh:
+            fh.write(b"no name here")
+        self.s.matslots.release(ck)
+        self.s.matslots.take((2, "x"))
+        info = self.s.reslot(ck, self.s.tiles[ck])
+        self.assertFalse(self.s.matslots.owns(ck, info.material))
+
+    def test_name_in(self):
+        p = matslots.MatSlots("ab12")
+        self.assertEqual(p.name_in(b"\x01\x16bngEarthFar_ab12_00042\x03"), "bngEarthFar_ab12_00042")
+        self.assertIsNone(p.name_in(b"bngEarthFar_zz99_00042"))
+
     def test_place_is_a_link_or_copy(self):
         src = os.path.join(self.s.out_dir, "a.cdae")
         dst = os.path.join(self.s.out_dir, "slot_00001.cdae")

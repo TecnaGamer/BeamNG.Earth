@@ -505,6 +505,8 @@ class WorldTest(unittest.TestCase):
         for k, t in self.im.tiles(list(self.raw)).items():
             self.assertTrue((t.rgb == self.raw[k]).all())
         files = [os.path.relpath(os.path.join(d, f), self.cache) for d, _, fs in os.walk(self.cache) for f in fs]
+        fin = os.path.join("imagery", f"fin{imagery.FIN_VERSION}-")
+        files = [f for f in files if not f.startswith(fin)]         # (the finished pyramid: the corrected tiles)
         for f in files:
             self.assertTrue(f.startswith(os.path.join("colormatch", f"v{cm.VERSION}", "usgs", str(RZ)) + os.sep), f)
         base = os.path.join("colormatch", f"v{cm.VERSION}", "usgs", str(RZ))
@@ -983,10 +985,10 @@ def golden(**kw):
 
 
 class FlagOffTest(unittest.TestCase):
-    # sha256 of these renders by the imagery code before the de-shadow and colour-match hooks
-    # (commit 6465d26; test_deshadow.FlagOffTest pins the same digests)
-    GOLDEN = {1.0: "a280901fd28e63a83cfd3071569293a1bcdaea8e9e1ca7c747f06885e9061991",
-              0.0: "b9ef73bdb4cdd702ee42ce66e85967e415744bbb91f99dc1730c2b74b51da83f"}
+    # sha256 of these renders by the imagery code without the de-shadow and colour-match hooks (test_deshadow.FlagOffTest
+    # pins the same digests: the finished pyramid's since 2026-10-29)
+    GOLDEN = {1.0: "f0b36dae73d66c9d15d056a6bfbf4b37aee3e0af42ccc53e1de4bdd208790b3c",
+              0.0: "a8c2eedb16fa69f148c11b613099c8d7501e60a2a9cbef2fa1cc48f420a01e47"}
 
     def test_render_byte_identical_without_colormatch(self):
         for tone, digest in self.GOLDEN.items():
@@ -1064,17 +1066,15 @@ class DeshadowOrderTest(unittest.TestCase):
         im2 = WorldImagery(os.path.join(root, "imagery"), world, colormatch=c2, deshadow=FakeDeshadow(), tone=1.0)
         rk = regions(world)[0]
         key = (U, 16, rk[0] * 4 + 2, rk[1] * 4 + 3)
-        n = 2 ** 16
-        fx, fy = np.meshgrid(key[2] * 256 + np.arange(0.5, 256), key[3] * 256 + np.arange(0.5, 256))
-        img, ox, oy, _ = im2._mosaic(U, 16, fx, fy, False)
-        m = np.asarray(img)
-        r, c0 = (key[3] * 256 - oy), (key[2] * 256 - ox)
-        got = m[r:r + 256, c0:c0 + 256]
+        f = im2.finished([key])[key]            # the finished source tile (the pyramid's)
+        got = f.data if isinstance(f.data, np.ndarray) else imagery.fast._ef.jpeg_rgb(f.data)
         relit = FakeDeshadow().relight(key, im2.tiles([key])[key], im2)
         want, _ = c2.apply(key, relit, im2)
         self.assertIsNotNone(want)
-        self.assertTrue((got[..., :3] == want).all())          # the gain on the relit tile
-        self.assertTrue((got[..., 3] == 254).all())             # ... marked relit for the tone curve
+        lut_ds = imagery.tone_lut(1.0, FakeDeshadow.tone_lift)
+        d = np.abs(got.astype(int) - lut_ds[want].astype(int))     # the gain on the relit tile, then its curve
+        self.assertLess(d.mean(), 1.0)                              # (as its JPEG: imagery.FIN_QUALITY)
+        self.assertTrue(f.relit and f.cm)                           # ... marked relit (its texels count as such)
         self.assertTrue((im2.tiles([key])[key].rgb == raw[key]).all())     # the raw tile stays
         # the tone curve comes last: the relit texels' curve over the corrected values
         frame = geodesy.EnuFrame(*lonlat(world, *world.P))
@@ -1085,7 +1085,9 @@ class DeshadowOrderTest(unittest.TestCase):
         t0, _ = im3.render(frame, *sq, 256)
         im3.close()
         self.assertEqual(used.get("deshadow"), 256 * 256)
-        self.assertTrue((t1 == imagery.tone_lut(1.0, FakeDeshadow.tone_lift)[t0]).all())
+        d = np.abs(t1.astype(int) - lut_ds[t0].astype(int))       # (per source tile before the warp: within a level)
+        self.assertLess(d.mean(), 1.0)
+        self.assertLessEqual(int(np.percentile(d, 99)), 4)
         # the analysis reads the raw tiles: the seams detected with de-shadowing on are the same
         c4 = cm.ColorMatch(tempfile.mkdtemp(dir=tmp.name), "s2", region_z=RZ)
         im4 = WorldImagery(os.path.join(root, "imagery4"), world, colormatch=c4, deshadow=FakeDeshadow())
@@ -1108,7 +1110,9 @@ class DeshadowOrderTest(unittest.TestCase):
         keys = z16_tiles(world)
         got = {}
         for k, t in im2.tiles(keys).items():
-            got[k] = im2._colormatched(k, im2.deshadow.relight(k, t, im2), True, None)
+            relit = im2.deshadow.relight(k, t, im2)
+            out, _ = c2.apply(k, relit, im2)
+            got[k] = relit if out is None else out
         after = mosaic(got, world)
         relit = ds.to_srgb(np.clip(ds.to_lin(mosaic(raw, world)) * RELIGHT, 0, 1))
         for rk in regions(world):

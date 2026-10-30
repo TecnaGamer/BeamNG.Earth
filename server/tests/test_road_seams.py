@@ -121,7 +121,7 @@ class MotorwaySeamTest(unittest.TestCase):
         f.lonlat = np.concatenate([self.ll(np.arange(a, b + 1, 2.)) for a, b in ranges])
         specs = roads.road_specs(f)
         parts = [(roads.ground_parts(f, i)[0], specs[i]) for i in range(3)]
-        g = grading.Grader(FRAME, FakeMD(f), self.raw)
+        g = grading._Planner(FRAME, FakeMD(f), self.raw)      # (a planner in FRAME: its chain lookup)
         g._chain_cands(mapcells.cell_of(LAT, LON), f, specs)
         ext = g._extensions(parts, [str(fid) for fid in f.ids])
         self.assertIsNotNone(ext[0][1])

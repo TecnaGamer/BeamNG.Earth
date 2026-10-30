@@ -65,7 +65,7 @@ def fixture(raw_dir):
 
 def server(md, out):
     anchor = SimpleNamespace(id=1, lat=LAT, lon=LON, frame=FRAME, zooms=[15], bridges=None, tunnels=None)
-    return SimpleNamespace(mapdata=md, anchors={1: anchor}, road_pool=None, far_bld_pool=None, sign_pool=None,
+    ns = SimpleNamespace(mapdata=md, anchors={1: anchor}, road_pool=None, far_bld_pool=None, sign_pool=None,
         gas_stations=False, surface=None,
         grader_for=lambda a: None, ground=lambda f, la, lo, z: z, dem=FakeDem(),
         grader_lock=threading.Lock(), sea=None, buildings=False, road_widths=None,
@@ -73,6 +73,8 @@ def server(md, out):
         country=lambda a: 'US', lamp_region=lambda a: None, keep_fuel_pads=lambda pads: None,
         airports=None, near_visual='detail', out_dir=out, vfs_dir='/temp/test', sidewalks=False,
         _tunnel_ground=lambda a, g: None)
+    ns.chain_view = lambda *a, **kw: earthd.Server.chain_view(ns, *a, **kw)
+    return ns
 
 
 def init_sign_worker(raw_dir):

@@ -25,14 +25,25 @@ class RespawningPool:
         self._pool = ProcessPoolExecutor(*args, **kwargs)
         self._last = -float("inf")
         self.respawns = 0
+        self.inflight = 0           # jobs submitted and not done (Server.live_busy: the saved areas' downloads wait)
+        # (its own lock: a future cancelled by _renew's shutdown runs _done in that thread, under self._lock)
+        self._count_lock = threading.Lock()
 
     def submit(self, fn, *args, **kwargs):
         with self._lock:
             pool = self._pool
         try:
-            return pool.submit(fn, *args, **kwargs)
+            fut = pool.submit(fn, *args, **kwargs)
         except BrokenProcessPool:
-            return self._renew(pool).submit(fn, *args, **kwargs)
+            fut = self._renew(pool).submit(fn, *args, **kwargs)
+        with self._count_lock:
+            self.inflight += 1
+        fut.add_done_callback(self._done)
+        return fut
+
+    def _done(self, _fut):
+        with self._count_lock:
+            self.inflight = max(0, self.inflight - 1)
 
     def _renew(self, broken):
         with self._lock:

@@ -156,6 +156,28 @@ if recovery then
   local d = recovery.recoveryPoints
   if d and d.head and d.tail then for i = d.head + 1, d.tail do map(d[i]) end end
   map(recovery.homePoint)
+end
+-- the vehicle's copy of the road graph moved with it, as a new table: the AI drops its plan (ai.lua updateGFX: a
+-- new mapmgr.mapData) and plans again on the moved points in this very step (it kept the old frame's points until the
+-- moved graph came from GE a few frames later and swerved: Baltimore's North Front Street, 2026-10-29)
+local md = mapmgr and mapmgr.mapData
+if type(md) == 'table' and md.positions then
+  local seen = {}
+  local function mv(v)
+    if type(v) ~= 'cdata' and type(v) ~= 'table' or seen[v] or not v.x then return end
+    seen[v] = true
+    local w = rot(v)
+    v:set(w.x + T[1], w.y + T[2], w.z + T[3])
+  end
+  for _, q in pairs(md.positions) do mv(q) end
+  for _, links in pairs(md.graph or {}) do
+    if type(links) == 'table' then
+      for _, e in pairs(links) do if type(e) == 'table' then mv(e.inPos) mv(e.outPos) end end
+    end
+  end
+  local c = setmetatable({}, getmetatable(md))
+  for k, v in pairs(md) do c[k] = v end
+  mapmgr.mapData = c
 end]], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], t[1], t[2], t[3], p.x, p.y, p.z, x, y, z)
   local ok2, err2 = pcall(veh.queueLuaCommand, veh, cmd)
   if not ok2 then log('W', 'beamngEarth', 'recovery point update skipped: ' .. tostring(err2)) end

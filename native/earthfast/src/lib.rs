@@ -19,6 +19,15 @@ mod ribbons;
 mod groundpaint;
 mod medians;
 mod speedsigns;
+mod cachemap;
+mod areacover;
+mod geotiles;
+mod geocontent;
+mod farcontent;
+mod sidewalks;
+mod roadz;
+mod fartex;
+mod farglobal;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -2204,21 +2213,10 @@ fn srgb_monotonic() -> bool {
     true
 }
 
-/// imagery.mip_arrays below level 0: the levels 1.. (uint8 [h, w, c], c 3 or 4) of a power-of-two image: linear-light
-/// (lut: the 256 float32 values of _TO_LIN) 2 x 2 averages, each from the previous unsharpened one, then sharpened
-/// by sharpen (3 x 3 box, edge-padded) where both sides are >= 4, back to sRGB (x ** (1 / 2.2)), as the numpy code
-/// in float32. A 4th channel (alpha: the terrain cache's ambient occlusion) is averaged as it is, not sharpened (the
-/// 3-channel loop read an RGBA image's bytes as RGB: grey mips under the photo's, GitHub #115, 2026-10-23).
-#[pyfunction]
-fn mip_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyReadonlyArray1<'py, f32>, sharpen: f32)
-                   -> PyResult<Vec<Bound<'py, numpy::PyArray3<u8>>>> {
-    let img = rgb.as_array();
-    let lut = lut.as_array();
+/// mip_levels' levels (fartex.rs dds_levels calls it too); img (h, w, 3 or 4).
+pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::ndarray::ArrayView1<f32>, sharpen: f32)
+                              -> Vec<numpy::ndarray::Array3<u8>> {
     let nc = img.shape()[2];
-    if nc != 3 && nc != 4 {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!("mip_levels: 3 or 4 channels, not {}", nc)));
-    }
-    let levels = py.allow_threads(|| {
     let (mut h, mut w) = (img.shape()[0], img.shape()[1]);
     let to_lin = |i: usize, v: u8| -> f32 { if i % nc < 3 { lut[v as usize] } else { v as f32 / 255.0f32 } };
     let mut lin: Vec<f32> = match img.as_slice() {
@@ -2303,7 +2301,23 @@ fn mip_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyReado
         out.push(numpy::ndarray::Array3::from_shape_vec((h, w, nc), bytes).unwrap());
     }
     out
-    });
+}
+
+/// imagery.mip_arrays below level 0: the levels 1.. (uint8 [h, w, c], c 3 or 4) of a power-of-two image: linear-light
+/// (lut: the 256 float32 values of _TO_LIN) 2 x 2 averages, each from the previous unsharpened one, then sharpened
+/// by sharpen (3 x 3 box, edge-padded) where both sides are >= 4, back to sRGB (x ** (1 / 2.2)), as the numpy code
+/// in float32. A 4th channel (alpha: the terrain cache's ambient occlusion) is averaged as it is, not sharpened (the
+/// 3-channel loop read an RGBA image's bytes as RGB: grey mips under the photo's, GitHub #115, 2026-10-23).
+#[pyfunction]
+fn mip_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyReadonlyArray1<'py, f32>, sharpen: f32)
+                   -> PyResult<Vec<Bound<'py, numpy::PyArray3<u8>>>> {
+    let img = rgb.as_array();
+    let lut = lut.as_array();
+    let nc = img.shape()[2];
+    if nc != 3 && nc != 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!("mip_levels: 3 or 4 channels, not {}", nc)));
+    }
+    let levels = py.allow_threads(|| mip_levels_core(img, lut, sharpen));
     Ok(levels.into_iter().map(|a| a.into_pyarray(py)).collect())
 }
 
@@ -2444,102 +2458,97 @@ fn np_mod_f32(a: f32, b: f32) -> f32 {
 }
 
 /// season._smooth for float32 x with Python-float edges: t = clip((x - a) / (b - a), 0, 1), t * t * (3 - 2 t).
-fn sm_f32(x: f32, a: f64, b: f64) -> f32 {
+pub(crate) fn sm_f32(x: f32, a: f64, b: f64) -> f32 {
     let t = ((x - a as f32) / ((b - a) as f32)).max(0.0).min(1.0);
     t * t * (3.0f32 - 2.0f32 * t)
 }
 
-/// season.grade_full's per-texel part, the same float32 operations in numpy's order: the vegetation texels (green the
-/// largest channel; hue 60-175 deg ramps, saturation 0.12-0.22) of rgb (h, w, 3) moved toward fall / winter /
-/// spring with the noise n, pick and canopy (h, w) as season.py computes them. None: no vegetation texel (unchanged).
-#[pyfunction]
+/// season.grade's per-texel part (fartex.rs season_img): the vegetation texels (green the largest channel; hue
+/// 60-175 deg ramps, saturation 0.12-0.22) of img (h, w, 3) moved toward fall / winter / spring with the noise n,
+/// pick and canopy (h, w), the float32 operations of the numpy code it replaced, in its order. None: no vegetation
+/// texel (unchanged).
 #[allow(clippy::too_many_arguments)]
-fn season_grade<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, n: PyReadonlyArray2<'py, f32>,
-                     pick: PyReadonlyArray2<'py, f32>, canopy: PyReadonlyArray2<'py, f32>, fall: f64, winter: f64,
-                     spring: f64, pal: PyReadonlyArray2<'py, f32>, fall_yellow: f64, winter_desat: f64)
-                     -> Option<Bound<'py, numpy::PyArray3<u8>>> {
-    let img = rgb.as_array();
-    let (nv_, pk, cn, pl) = (n.as_array(), pick.as_array(), canopy.as_array(), pal.as_array());
-    let res = py.allow_threads(|| {
-        let (hh, ww) = (img.shape()[0], img.shape()[1]);
-        let mut out = img.to_owned();
-        let mut any = false;
-        let w_fall = (1.0f64).min(fall * 1.6) as f32;
-        let (ta, tb) = (0.62 - 0.5 * fall, 0.72 - 0.5 * fall);
-        let (fy, fl, wi, sp) = (fall_yellow as f32, fall as f32, winter as f32, spring as f32);
-        let wd = winter_desat as f32;
-        let k255 = 255.0f32;
-        for y in 0..hh {
-            for x in 0..ww {
-                let (r8, g8, b8) = (img[[y, x, 0]], img[[y, x, 1]], img[[y, x, 2]]);
-                if !(g8 >= r8 && g8 >= b8) {
-                    continue;
-                }
-                // season._hsv
-                let (r, g, b) = (r8 as f32 / k255, g8 as f32 / k255, b8 as f32 / k255);
-                let mx = r.max(g).max(b);
-                let mn = r.min(g).min(b);
-                let d = mx - mn + 1e-6f64 as f32;
-                let hraw = if mx == r {
-                    np_mod_f32((g - b) / d, 6.0)
-                } else if mx == g {
-                    (b - r) / d + 2.0
-                } else {
-                    (r - g) / d + 4.0
-                } * 60.0f32;
-                let hv = np_mod_f32(hraw, 360.0);
-                let sv = if mx > 0.0 { (mx - mn) / (mx + 1e-6f64 as f32) } else { 0.0 };
-                let vg = sm_f32(hv, 60.0, 75.0) * (1.0f32 - sm_f32(hv, 160.0, 175.0)) * sm_f32(sv, 0.12, 0.22);
-                if !(vg > 0.01f64 as f32) {
-                    continue;
-                }
-                any = true;
-                let vv = mx;
-                let (nn, pkk, cg) = (nv_[[y, x]], pk[[y, x]], cn[[y, x]]);
-                let turned = sm_f32(nn, ta, tb);
-                let k = (pkk * 3.0f32).max(0.0).min(2.999f64 as f32) as i8 as usize;
-                let (th, tv, ts) = (pl[[k, 0]], pl[[k, 1]], pl[[k, 2]]);
-                let w = vg * cg * turned * w_fall;
-                let mut nh = hv + (55.0f32 - hv) * vg * fy * fl;
-                nh = nh + (th - nh) * w;
-                let mut ns = sv * (1.0f32 + (ts - 1.0f32) * w);
-                let mut nvv = vv * (1.0f32 + (tv - 1.0f32) * w);
-                if winter > 0.0 {
-                    let bare = vg * cg * wi * sm_f32(nn, 0.25, 0.4);
-                    let grass = vg * (1.0f32 - cg) * wi;
-                    nh = nh + (30.0f32 - nh) * bare + (45.0f32 - nh) * grass;
-                    ns = ns * (1.0f32 - wd * bare) * (1.0f32 - 0.45f64 as f32 * grass);
-                    nvv = nvv * (1.0f32 + 0.15f64 as f32 * bare);
-                }
-                if spring > 0.0 {
-                    let f = vg * sp;
-                    nh = nh + (82.0f32 - nh) * 0.5f32 * f;
-                    nvv = nvv * (1.0f32 + 0.08f64 as f32 * f);
-                    ns = ns * (1.0f32 + 0.1f64 as f32 * f);
-                }
-                // season._rgb
-                let s_ = ns.max(0.0).min(1.0);
-                let v_ = nvv.max(0.0).min(1.0);
-                let h6 = np_mod_f32(nh, 360.0) / 60.0f32;
-                let fl6 = h6.floor();
-                let i = ((fl6 as i8) as i32).rem_euclid(6) as usize;
-                let f = h6 - fl6;
-                let p = v_ * (1.0f32 - s_);
-                let q = v_ * (1.0f32 - f * s_);
-                let t = v_ * (1.0f32 - (1.0f32 - f) * s_);
-                let four = [v_, q, p, t];
-                const RI: [usize; 6] = [0, 1, 2, 2, 3, 0];
-                const GI: [usize; 6] = [3, 0, 0, 1, 2, 2];
-                const BI: [usize; 6] = [2, 2, 3, 0, 0, 1];
-                let px = [four[RI[i]], four[GI[i]], four[BI[i]]];
-                for c in 0..3 {
-                    out[[y, x, c]] = (px[c] * 255.0f32).round_ties_even().max(0.0).min(255.0) as u8;
-                }
+pub(crate) fn season_grade_core(img: numpy::ndarray::ArrayView3<u8>, nv_: numpy::ndarray::ArrayView2<f32>,
+                                pk: numpy::ndarray::ArrayView2<f32>, cn: numpy::ndarray::ArrayView2<f32>, fall: f64,
+                                winter: f64, spring: f64, pl: numpy::ndarray::ArrayView2<f32>, fall_yellow: f64,
+                                winter_desat: f64) -> Option<numpy::ndarray::Array3<u8>> {
+    let (hh, ww) = (img.shape()[0], img.shape()[1]);
+    let mut out = img.to_owned();
+    let mut any = false;
+    let w_fall = (1.0f64).min(fall * 1.6) as f32;
+    let (ta, tb) = (0.62 - 0.5 * fall, 0.72 - 0.5 * fall);
+    let (fy, fl, wi, sp) = (fall_yellow as f32, fall as f32, winter as f32, spring as f32);
+    let wd = winter_desat as f32;
+    let k255 = 255.0f32;
+    for y in 0..hh {
+        for x in 0..ww {
+            let (r8, g8, b8) = (img[[y, x, 0]], img[[y, x, 1]], img[[y, x, 2]]);
+            if !(g8 >= r8 && g8 >= b8) {
+                continue;
+            }
+            // season._hsv
+            let (r, g, b) = (r8 as f32 / k255, g8 as f32 / k255, b8 as f32 / k255);
+            let mx = r.max(g).max(b);
+            let mn = r.min(g).min(b);
+            let d = mx - mn + 1e-6f64 as f32;
+            let hraw = if mx == r {
+                np_mod_f32((g - b) / d, 6.0)
+            } else if mx == g {
+                (b - r) / d + 2.0
+            } else {
+                (r - g) / d + 4.0
+            } * 60.0f32;
+            let hv = np_mod_f32(hraw, 360.0);
+            let sv = if mx > 0.0 { (mx - mn) / (mx + 1e-6f64 as f32) } else { 0.0 };
+            let vg = sm_f32(hv, 60.0, 75.0) * (1.0f32 - sm_f32(hv, 160.0, 175.0)) * sm_f32(sv, 0.12, 0.22);
+            if !(vg > 0.01f64 as f32) {
+                continue;
+            }
+            any = true;
+            let vv = mx;
+            let (nn, pkk, cg) = (nv_[[y, x]], pk[[y, x]], cn[[y, x]]);
+            let turned = sm_f32(nn, ta, tb);
+            let k = (pkk * 3.0f32).max(0.0).min(2.999f64 as f32) as i8 as usize;
+            let (th, tv, ts) = (pl[[k, 0]], pl[[k, 1]], pl[[k, 2]]);
+            let w = vg * cg * turned * w_fall;
+            let mut nh = hv + (55.0f32 - hv) * vg * fy * fl;
+            nh = nh + (th - nh) * w;
+            let mut ns = sv * (1.0f32 + (ts - 1.0f32) * w);
+            let mut nvv = vv * (1.0f32 + (tv - 1.0f32) * w);
+            if winter > 0.0 {
+                let bare = vg * cg * wi * sm_f32(nn, 0.25, 0.4);
+                let grass = vg * (1.0f32 - cg) * wi;
+                nh = nh + (30.0f32 - nh) * bare + (45.0f32 - nh) * grass;
+                ns = ns * (1.0f32 - wd * bare) * (1.0f32 - 0.45f64 as f32 * grass);
+                nvv = nvv * (1.0f32 + 0.15f64 as f32 * bare);
+            }
+            if spring > 0.0 {
+                let f = vg * sp;
+                nh = nh + (82.0f32 - nh) * 0.5f32 * f;
+                nvv = nvv * (1.0f32 + 0.08f64 as f32 * f);
+                ns = ns * (1.0f32 + 0.1f64 as f32 * f);
+            }
+            // season._rgb
+            let s_ = ns.max(0.0).min(1.0);
+            let v_ = nvv.max(0.0).min(1.0);
+            let h6 = np_mod_f32(nh, 360.0) / 60.0f32;
+            let fl6 = h6.floor();
+            let i = ((fl6 as i8) as i32).rem_euclid(6) as usize;
+            let f = h6 - fl6;
+            let p = v_ * (1.0f32 - s_);
+            let q = v_ * (1.0f32 - f * s_);
+            let t = v_ * (1.0f32 - (1.0f32 - f) * s_);
+            let four = [v_, q, p, t];
+            const RI: [usize; 6] = [0, 1, 2, 2, 3, 0];
+            const GI: [usize; 6] = [3, 0, 0, 1, 2, 2];
+            const BI: [usize; 6] = [2, 2, 3, 0, 0, 1];
+            let px = [four[RI[i]], four[GI[i]], four[BI[i]]];
+            for c in 0..3 {
+                out[[y, x, c]] = crate::fartex::rint_small(px[c] * 255.0f32).max(0.0).min(255.0) as u8;
             }
         }
-        if any { Some(out) } else { None }
-    });
-    res.map(|o| o.into_pyarray(py))
+    }
+    if any { Some(out) } else { None }
 }
 
 /// cdae.tangents: per-vertex tangents (xyz, w) by Lengyel's method, the numpy code's operations in its order (the
@@ -2608,30 +2617,21 @@ fn tangents<'py>(py: Python<'py>, v: PyReadonlyArray2<'py, f64>, uv: PyReadonlyA
     out.into_pyarray(py)
 }
 
-/// season._noise: smooth value noise in [0, 1] (float32) on the unit lattice at x, y (float32 (h, w)); numpy's int64
-/// hash with its wrap-around products and arithmetic shifts, the float32 smoothstep and lerps in its order.
-#[pyfunction]
-fn season_noise<'py>(py: Python<'py>, x: PyReadonlyArray2<'py, f32>, y: PyReadonlyArray2<'py, f32>, seed: i64)
-                     -> Bound<'py, PyArray2<f32>> {
-    let (xa, ya) = (x.as_array(), y.as_array());
-    let out = py.allow_threads(|| {
-        let sd = seed.wrapping_mul(83492791);
-        let h = |ix: f32, iy: f32| -> f32 {
-            let mut v = (ix as i64).wrapping_mul(73856093) ^ (iy as i64).wrapping_mul(19349663) ^ sd;
-            v = (v ^ (v >> 13)).wrapping_mul(1274126177);
-            ((v ^ (v >> 16)) & 0xFFFF) as f32 / 65535.0f32
-        };
-        numpy::ndarray::Array2::from_shape_fn(xa.raw_dim(), |(i, j)| {
-            let (xv, yv) = (xa[[i, j]], ya[[i, j]]);
-            let (x0, y0) = (xv.floor(), yv.floor());
-            let (mut fx, mut fy) = (xv - x0, yv - y0);
-            fx = fx * fx * (3.0f32 - 2.0f32 * fx);
-            fy = fy * fy * (3.0f32 - 2.0f32 * fy);
-            let (a, b, c, d) = (h(x0, y0), h(x0 + 1.0, y0), h(x0, y0 + 1.0), h(x0 + 1.0, y0 + 1.0));
-            (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy
-        })
-    });
-    out.into_pyarray(py)
+/// season._noise at one point: smooth value noise in [0, 1] (float32) on the unit lattice; numpy's int64 hash with
+/// its wrap-around products and arithmetic shifts, the float32 smoothstep and lerps in its order (fartex.rs).
+pub(crate) fn season_noise_at(xv: f32, yv: f32, seed: i64) -> f32 {
+    let sd = seed.wrapping_mul(83492791);
+    let h = |ix: f32, iy: f32| -> f32 {
+        let mut v = (ix as i64).wrapping_mul(73856093) ^ (iy as i64).wrapping_mul(19349663) ^ sd;
+        v = (v ^ (v >> 13)).wrapping_mul(1274126177);
+        ((v ^ (v >> 16)) & 0xFFFF) as f32 / 65535.0f32
+    };
+    let (x0, y0) = (xv.floor(), yv.floor());
+    let (mut fx, mut fy) = (xv - x0, yv - y0);
+    fx = fx * fx * (3.0f32 - 2.0f32 * fx);
+    fy = fy * fy * (3.0f32 - 2.0f32 * fy);
+    let (a, b, c, d) = (h(x0, y0), h(x0 + 1.0, y0), h(x0, y0 + 1.0), h(x0 + 1.0, y0 + 1.0));
+    (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy
 }
 
 /// A TIFF tile of float32 samples stored with the floating-point predictor (3; the Copernicus DEM): each row holds
@@ -3116,50 +3116,54 @@ fn triangulate<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> Bound<'py
     let a = p.as_array();
     let n = a.nrows();
     let pts: Vec<(f64, f64)> = (0..n).map(|i| (a[[i, 0]], a[[i, 1]])).collect();
-    let out = py.allow_threads(|| {
-        let cross = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
-        let mut idx: Vec<usize> = (0..n).collect();
-        let mut out: Vec<[i64; 3]> = Vec::new();
-        let mut guard = 0usize;
-        while idx.len() > 3 && guard < 4 * n * n {
-            guard += 1;
-            let m = idx.len();
-            let mut found = false;
-            for k in 0..m {
-                let (i0, i1, i2) = (idx[(k + m - 1) % m], idx[k], idx[(k + 1) % m]);
-                let (pa, pb, pc) = (pts[i0], pts[i1], pts[i2]);
-                if cross(pa, pb, pc) <= 1e-12 {
+    let out = py.allow_threads(|| ear_clip(&pts));
+    let flat: Vec<i64> = out.iter().flat_map(|t| t.iter().copied()).collect();
+    numpy::ndarray::Array2::from_shape_vec((out.len(), 3), flat).unwrap().into_pyarray(py)
+}
+
+/// triangulate's ear clipping (also the sidewalks' corner slabs: sidewalks.rs).
+pub(crate) fn ear_clip(pts: &[(f64, f64)]) -> Vec<[i64; 3]> {
+    let n = pts.len();
+    let cross = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut out: Vec<[i64; 3]> = Vec::new();
+    let mut guard = 0usize;
+    while idx.len() > 3 && guard < 4 * n * n {
+        guard += 1;
+        let m = idx.len();
+        let mut found = false;
+        for k in 0..m {
+            let (i0, i1, i2) = (idx[(k + m - 1) % m], idx[k], idx[(k + 1) % m]);
+            let (pa, pb, pc) = (pts[i0], pts[i1], pts[i2]);
+            if cross(pa, pb, pc) <= 1e-12 {
+                continue;
+            }
+            let mut ear = true;
+            for &j in &idx {
+                if j == i0 || j == i1 || j == i2 {
                     continue;
                 }
-                let mut ear = true;
-                for &j in &idx {
-                    if j == i0 || j == i1 || j == i2 {
-                        continue;
-                    }
-                    let q = pts[j];
-                    if cross(pa, pb, q) >= 0.0 && cross(pb, pc, q) >= 0.0 && cross(pc, pa, q) >= 0.0 {
-                        ear = false;
-                        break;
-                    }
-                }
-                if ear {
-                    out.push([i0 as i64, i1 as i64, i2 as i64]);
-                    idx.remove(k);
-                    found = true;
+                let q = pts[j];
+                if cross(pa, pb, q) >= 0.0 && cross(pb, pc, q) >= 0.0 && cross(pc, pa, q) >= 0.0 {
+                    ear = false;
                     break;
                 }
             }
-            if !found {
+            if ear {
+                out.push([i0 as i64, i1 as i64, i2 as i64]);
+                idx.remove(k);
+                found = true;
                 break;
             }
         }
-        if idx.len() == 3 {
-            out.push([idx[0] as i64, idx[1] as i64, idx[2] as i64]);
+        if !found {
+            break;
         }
-        out
-    });
-    let flat: Vec<i64> = out.iter().flat_map(|t| t.iter().copied()).collect();
-    numpy::ndarray::Array2::from_shape_vec((out.len(), 3), flat).unwrap().into_pyarray(py)
+    }
+    if idx.len() == 3 {
+        out.push([idx[0] as i64, idx[1] as i64, idx[2] as i64]);
+    }
+    out
 }
 
 /// buildings.clean_ring's simplification: the ring (n, 2) without its closing point (np.allclose), its nearly collinear
@@ -4180,29 +4184,32 @@ fn bc1_block(t: &[[i32; 3]; 16]) -> [u8; 8] {
 #[pyfunction]
 fn bc1_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py, PyBytes> {
     let a = img.as_array();
-    let out = py.allow_threads(|| {
-        let (h, w) = (a.shape()[0], a.shape()[1]);
-        let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
-        let mut out = vec![0u8; nby * nbx * 8];
-        let mut t = [[0i32; 3]; 16];
-        for by in 0..nby {
-            for bx in 0..nbx {
-                for yy in 0..4 {
-                    let y = (by * 4 + yy).min(h - 1);
-                    for xx in 0..4 {
-                        let x = (bx * 4 + xx).min(w - 1);
-                        for c in 0..3 {
-                            t[yy * 4 + xx][c] = a[[y, x, c]] as i32;
-                        }
+    let out = py.allow_threads(|| bc1_encode_core(a));
+    PyBytes::new(py, &out)
+}
+
+/// bc1_encode's blocks (fartex.rs dds_levels calls it too).
+pub(crate) fn bc1_encode_core(a: numpy::ndarray::ArrayView3<u8>) -> Vec<u8> {
+    let (h, w) = (a.shape()[0], a.shape()[1]);
+    let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
+    let mut out = vec![0u8; nby * nbx * 8];
+    let mut t = [[0i32; 3]; 16];
+    for by in 0..nby {
+        for bx in 0..nbx {
+            for yy in 0..4 {
+                let y = (by * 4 + yy).min(h - 1);
+                for xx in 0..4 {
+                    let x = (bx * 4 + xx).min(w - 1);
+                    for c in 0..3 {
+                        t[yy * 4 + xx][c] = a[[y, x, c]] as i32;
                     }
                 }
-                let o = (by * nbx + bx) * 8;
-                out[o..o + 8].copy_from_slice(&bc1_block(&t));
             }
+            let o = (by * nbx + bx) * 8;
+            out[o..o + 8].copy_from_slice(&bc1_block(&t));
         }
-        out
-    });
-    PyBytes::new(py, &out)
+    }
+    out
 }
 
 /// Pillow's Image.transform(MESH, BILINEAR) of an RGBA image (H, W, 4) onto a px x px output, exactly (Pillow warps
@@ -4215,109 +4222,7 @@ fn mesh_warp<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>, qx: PyReadonl
                   qy: PyReadonlyArray2<'py, f64>, cells: usize, cw: usize, px: usize)
                   -> Bound<'py, numpy::PyArray3<u8>> {
     let (a, qx, qy) = (img.as_array(), qx.as_array(), qy.as_array());
-    let out = py.allow_threads(|| {
-        let (ih, iw, bands) = (a.shape()[0] as i64, a.shape()[1] as i64, a.shape()[2]);
-        let mut out = numpy::ndarray::Array3::<u8>::zeros((px, px, bands));
-        // each mesh row writes its own band of output rows: the bands on up to 4 threads (the same numbers; a block's
-        // ground photo waits for two of these warps, ~50 ms each on a Steam Deck)
-        let band_len = (cw * px * bands).max(1);
-        let nthreads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4);
-        let flat = out.as_slice_mut().expect("a new array is contiguous");
-        let mut bands_v: Vec<(usize, &mut [u8])> = flat.chunks_mut(band_len).enumerate().filter(|(r, _)| *r < cells).collect();
-        let mut groups: Vec<Vec<(usize, &mut [u8])>> = (0..nthreads).map(|_| Vec::new()).collect();
-        for (k, item) in bands_v.drain(..).enumerate() {
-            groups[k % nthreads].push(item);
-        }
-        let clipx = |x: i64| -> usize { (if x < 0 { 0 } else if x < iw { x } else { iw - 1 }) as usize };
-        let clipy = |y: i64| -> usize { (if y < 0 { 0 } else if y < ih { y } else { ih - 1 }) as usize };
-        let warp_band = |r: usize, band: &mut [u8]| {
-            for c in 0..cells {
-                let (bx0, by0) = (c * cw, r * cw);
-                let (bx1, by1) = (((c + 1) * cw).min(px), ((r + 1) * cw).min(px));
-                let (w, h) = ((c + 1) * cw - c * cw, (r + 1) * cw - r * cw);
-                let (nwx, nwy) = (qx[[r, c]], qy[[r, c]]);
-                let (swx, swy) = (qx[[r + 1, c]], qy[[r + 1, c]]);
-                let (sex, sey) = (qx[[r + 1, c + 1]], qy[[r + 1, c + 1]]);
-                let (nex, ney) = (qx[[r, c + 1]], qy[[r, c + 1]]);
-                let as_ = 1.0 / w as f64;
-                let at = 1.0 / h as f64;
-                let a0 = nwx;
-                let a1 = (nex - nwx) * as_;
-                let a2 = (swx - nwx) * at;
-                let a3 = (sex - swx - nex + nwx) * as_ * at;
-                let a4 = nwy;
-                let a5 = (ney - nwy) * as_;
-                let a6 = (swy - nwy) * at;
-                let a7 = (sey - swy - ney + nwy) * as_ * at;
-                for y in by0..by1 {
-                    for x in bx0..bx1 {
-                        let xin = (x - bx0) as f64 + 0.5;
-                        let yin = (y - by0) as f64 + 0.5;
-                        let mut xx = a0 + a1 * xin + a2 * yin + a3 * xin * yin;
-                        let mut yy = a4 + a5 * xin + a6 * yin + a7 * xin * yin;
-                        if xx < 0.0 || xx >= iw as f64 || yy < 0.0 || yy >= ih as f64 {
-                            continue;                       // fill: 0
-                        }
-                        xx -= 0.5;
-                        yy -= 0.5;
-                        let xi = if xx < 0.0 { xx.floor() as i64 } else { xx as i64 };
-                        let yi = if yy < 0.0 { yy.floor() as i64 } else { yy as i64 };
-                        let dx = xx - xi as f64;
-                        let dy = yy - yi as f64;
-                        let (x0, x1) = (clipx(xi), clipx(xi + 1));
-                        let row0 = clipy(yi);
-                        let has1 = yi + 1 >= 0 && yi + 1 < ih;
-                        // the premultiplied source value (Pillow's rgbA2rgba: MULDIV255 for colour, alpha as is)
-                        let pm = |row: usize, col: usize, b: usize| -> f64 {
-                            let v = a[[row, col, b]] as u32;
-                            if b == 3 || bands < 4 {
-                                return v as f64;
-                            }
-                            let t = v * a[[row, col, 3]] as u32 + 128;
-                            (((t >> 8) + t) >> 8) as f64
-                        };
-                        let mut px_ = [0u8; 4];
-                        for b in 0..bands {
-                            let p0 = pm(row0, x0, b);
-                            let p1 = pm(row0, x1, b);
-                            let v1 = p0 + (p1 - p0) * dx;
-                            let v2 = if has1 {
-                                let q0 = pm((yi + 1) as usize, x0, b);
-                                let q1 = pm((yi + 1) as usize, x1, b);
-                                q0 + (q1 - q0) * dx
-                            } else {
-                                v1
-                            };
-                            px_[b] = (v1 + (v2 - v1) * dy) as u8;
-                        }
-                        // back from premultiplied (Pillow's rgba2rgbA)
-                        if bands == 4 {
-                            let al = px_[3] as i32;
-                            if al != 255 && al != 0 {
-                                for b in 0..3 {
-                                    px_[b] = ((255 * px_[b] as i32) / al).clamp(0, 255) as u8;
-                                }
-                            }
-                        }
-                        for b in 0..bands {
-                            band[((y - by0) * px + x) * bands + b] = px_[b];
-                        }
-                    }
-                }
-            }
-        };
-        std::thread::scope(|sc| {
-            for g in groups {
-                let wb = &warp_band;
-                sc.spawn(move || {
-                    for (r, band) in g {
-                        wb(r, band);
-                    }
-                });
-            }
-        });
-        out
-    });
+    let out = py.allow_threads(|| fartex::warp_rgba(a, qx, qy, cells, cw, px, 4));
     out.into_pyarray(py)
 }
 
@@ -5068,7 +4973,17 @@ fn rtin_mesh<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, f64>, max_err: f64)
         return Err(pyo3::exceptions::PyValueError::new_err("rtin_mesh: a (2^k + 1)² grid"));
     }
     let hv: Vec<f64> = g.iter().copied().collect();
-    let (tris, surf, worst) = py.allow_threads(|| {
+    let (tris, surf, worst) = py.allow_threads(|| rtin_core(&hv, n, max_err));
+    let m = tris.len();
+    let tris = numpy::ndarray::Array2::from_shape_vec((m, 3), tris.into_iter().flatten().collect()).unwrap();
+    let surf = numpy::ndarray::Array2::from_shape_vec((n, n), surf).unwrap();
+    Ok((tris.into_pyarray(py), surf.into_pyarray(py), worst))
+}
+
+/// rtin_mesh's mesh of a (2^k + 1)^2 grid hv (n = 2^k + 1): (tris, surf, worst).
+pub(crate) fn rtin_core(hv: &[f64], n: usize, max_err: f64) -> (Vec<[i64; 3]>, Vec<f64>, f64) {
+    let t = n - 1;
+
         let at = |x: usize, y: usize| hv[y * n + x];
         let num = t * t * 2 - 2;
         let parents = num - t * t;
@@ -5167,11 +5082,6 @@ fn rtin_mesh<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, f64>, max_err: f64)
             worst = worst.max((surf[k] - hv[k]).abs());
         }
         (tris, surf, worst)
-    });
-    let m = tris.len();
-    let tris = numpy::ndarray::Array2::from_shape_vec((m, 3), tris.into_iter().flatten().collect()).unwrap();
-    let surf = numpy::ndarray::Array2::from_shape_vec((n, n), surf).unwrap();
-    Ok((tris.into_pyarray(py), surf.into_pyarray(py), worst))
 }
 
 #[pymodule]
@@ -5197,6 +5107,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(power::power_line_layout, m)?)?;
     m.add_function(wrap_pyfunction!(lamps::lamp_stations, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_beside, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_end_joins, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_gaps, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
     m.add_function(wrap_pyfunction!(islands::road_cycles, m)?)?;
     m.add_function(wrap_pyfunction!(ribbons::ribbon_edges, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::mask_segments, m)?)?;
@@ -5236,9 +5151,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(loop_crossed, m)?)?;
     m.add_function(wrap_pyfunction!(any_within, m)?)?;
     m.add_function(wrap_pyfunction!(shared_walls, m)?)?;
-    m.add_function(wrap_pyfunction!(season_grade, m)?)?;
     m.add_function(wrap_pyfunction!(tangents, m)?)?;
-    m.add_function(wrap_pyfunction!(season_noise, m)?)?;
     m.add_function(wrap_pyfunction!(terrarium_heights, m)?)?;
     m.add_function(wrap_pyfunction!(bilinear_grid, m)?)?;
     m.add_function(wrap_pyfunction!(bilinear_tiles, m)?)?;
@@ -5294,6 +5207,44 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(medians::median_rows, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
-    m.add("VERSION", 100)?;
+    m.add_class::<cachemap::CoverIndex>()?;
+    m.add_function(wrap_pyfunction!(cachemap::cover_rect_tiles, m)?)?;
+    m.add_function(wrap_pyfunction!(areacover::area_tiles, m)?)?;
+    m.add_function(wrap_pyfunction!(areacover::area_km2, m)?)?;
+    m.add_function(wrap_pyfunction!(areacover::keys_in_boxes, m)?)?;
+    m.add_function(wrap_pyfunction!(areacover::corridor_tiles, m)?)?;
+    m.add_function(wrap_pyfunction!(areacover::corridor_size, m)?)?;
+    m.add_function(wrap_pyfunction!(areacover::keys_in_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::las_decode, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::roadz_match, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::profile_clean, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::deck_lidar, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::deck_blend, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::lidar_gap_stretch, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_tile_of, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_tile_info, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_tile_quad, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_tiles_near, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_quad_dist, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_world_map, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_world_to_geodetic, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_placement, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_global_select, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_clip_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(geocontent::geo_owns, m)?)?;
+    m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
+    m.add_function(wrap_pyfunction!(geocontent::cdae_zstats, m)?)?;
+    m.add_function(wrap_pyfunction!(geocontent::cdae_shear, m)?)?;
+    m.add_function(wrap_pyfunction!(geocontent::clip_segments_convex, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::sidewalk_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(farcontent::bridge_slabs, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::tile_warp, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
+    m.add("VERSION", 114)?;
     Ok(())
 }

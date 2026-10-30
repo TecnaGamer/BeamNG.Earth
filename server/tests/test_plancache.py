@@ -80,10 +80,10 @@ class PlanCacheTest(unittest.TestCase):
         self.assertIsNone(plancache.for_grader(self.dir, self.grader(FakeMD(None), False), None, None))
 
     def test_waits_for_an_equal_planner(self):
-        c = plancache.PlanCache(self.dir, 1.0, 2.0, "s")
+        c = plancache.PlanCache(self.dir, "s")
         state, mine = c.claim(KEY)
         self.assertEqual((state, mine), (None, True))
-        other = plancache.PlanCache(self.dir, 1.0, 2.0, "s")
+        other = plancache.PlanCache(self.dir, "s")
         got = []
         t = threading.Thread(target=lambda: got.append(other.claim(KEY)))
         t.start()
@@ -97,7 +97,7 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(other.stats["waited"], 1)
 
     def test_does_not_wait_behind_a_less_favoured_planner(self):
-        c = plancache.PlanCache(self.dir, 1.0, 2.0, "s")
+        c = plancache.PlanCache(self.dir, "s")
         with mock.patch.object(xproc, "PRIORITY", 5):
             self.assertEqual(c.claim(KEY), (None, True))
         t0 = time.monotonic()
@@ -105,7 +105,7 @@ class PlanCacheTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 0.5)
 
     def test_stale_lock_taken_over(self):
-        c = plancache.PlanCache(self.dir, 1.0, 2.0, "s")
+        c = plancache.PlanCache(self.dir, "s")
         self.assertEqual(c.claim(KEY), (None, True))
         lock = c._path(KEY) + ".lock"
         old = time.time() - xproc.STALE_S - 5

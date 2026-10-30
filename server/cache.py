@@ -30,7 +30,11 @@ until LOW_WATER (90 %) of the cap is left, at most every EVICT_S. Never evicted:
 server process used within PROTECT_S (an hour: the area around the player), and empty files (404 and
 "no seams" markers: they save requests; clear() removes them). Directories stay (a writer may be about
 to put a file there). clear() removes every MANAGED file but the ones this server process used at all
-(the current session's, however long ago).
+(the current session's, however long ago). Neither touches a file in a saved area (pinned(keys): areas.py,
+the map's downloads ahead).
+
+on_change(key, added): a key new to the index or gone from it (the map's cache view, covermap.py); never called
+for a repeat hit.
 
 Per-source lifetimes (ROADMAP "Caching" 3): LIFETIMES maps a path prefix to the longest a file may be
 kept after its download (s); the start-up walk deletes older ones. Empty today: none of the current
@@ -110,6 +114,15 @@ class NoCache:
 NONE = NoCache()
 
 
+def _inside(path, root):
+    """Is path's real location (links resolved) inside root's?"""
+    try:
+        r = os.path.realpath(root)
+        return os.path.commonpath([os.path.realpath(path), r]) == r
+    except ValueError:              # (another drive on Windows)
+        return False
+
+
 class Cache(NoCache):
     """Bookkeeping, cap and eviction for one cache root. used() / wrote() / read() are thread-safe and
     cheap (any producer thread); evict(), clear() and save() take a while (the background thread, or
@@ -135,7 +148,22 @@ class Cache(NoCache):
         self._wake = threading.Event()
         self._closed = False
         self.stats = {"evicted": 0, "evicted_bytes": 0, "cleared": 0, "cleared_bytes": 0, "expired": 0}
+        # on_change(key, added): a key new to the index or gone from it (never a repeat hit), called under the lock
+        # (the map's cache view, covermap.py: it only queues the key). Set after the start-up walk.
+        self.on_change = None
+        # pinned(keys) -> [bool]: keys in a saved area (areas.py), skipped by evict() and clear(); pinned_bytes: their
+        # size for the settings page (areas.py counts it now and then), None without saved areas
+        self.pinned = None
+        self.pinned_bytes = None
         self.managed = self._check_version()
+        # a cache whose tracked folders are links into another one is never ours to trim: a benchmark's scratch
+        # cache of links into the real one (its index left out, so the default cap) evicted ~7 GB of the real
+        # cache's files through them, 2026-10-29. Read-only use is fine; eviction, clear and expiry stay off
+        linked = [top for top in MANAGED + KEPT if os.path.islink(os.path.join(self.root, top))]
+        if linked and self.managed:
+            log.warning("cache: %s under %s are links to elsewhere: this cache is left alone (no eviction or clear)",
+                        ", ".join(linked), self.root)
+            self.managed = False
         saved_cap = self._load_index()
         self._cap = cap_bytes(cap_gb if cap_gb is not None else
                               saved_cap / GB if saved_cap is not None else DEFAULT_CAP_GB)
@@ -212,6 +240,8 @@ class Cache(NoCache):
                 self._entries[key] = [size, t]
                 if size is not None:
                     self._used += size
+                if self.on_change is not None:
+                    self.on_change(key, True)
             else:
                 e[1] = t
                 if size is not None and e[0] != size:
@@ -250,6 +280,8 @@ class Cache(NoCache):
             if e is not None:
                 self._used -= e[0] or 0
                 self._dirty = True
+                if self.on_change is not None:
+                    self.on_change(key, False)
 
     # --- index -----------------------------------------------------------------------------------
     def _load_index(self):
@@ -415,6 +447,7 @@ class Cache(NoCache):
             floor = self._floor()
             order = sorted((e[1], k) for k, e in self._entries.items()
                            if self._evictable(k, e[0]) and e[1] < floor)
+        order = self._unpinned(order, lambda item: item[1])
         self._last_evict = self.now()
         n = b = 0
         for _, key in order:
@@ -430,6 +463,35 @@ class Cache(NoCache):
                      _gb(self._used), _gb(cap) if cap else "unlimited")
         return n, b
 
+    def _unpinned(self, items, key_of):
+        """items without the ones whose key is in a saved area (pinned; outside the lock: a batch call)."""
+        pinned = self.pinned
+        if pinned is None or not items:
+            return items
+        try:
+            mask = pinned([key_of(it) for it in items])
+        except Exception as e:      # (no pins rather than no eviction)
+            log.warning("cache: saved areas not checked: %s", e)
+            return items
+        return [it for it, p in zip(items, mask) if not p]
+
+    def keys(self):
+        """A snapshot of the tracked keys (the map's cache view builds its index from it once)."""
+        with self._lock:
+            return list(self._entries)
+
+    def sizes(self, keys=None):
+        """[(key, bytes)] of the tracked files with a known size (all, or those of keys)."""
+        with self._lock:
+            if keys is None:
+                return [(k, e[0]) for k, e in self._entries.items() if e[0] is not None]
+            out = []
+            for k in keys:
+                e = self._entries.get(k)
+                if e is not None and e[0] is not None:
+                    out.append((k, e[0]))
+            return out
+
     def _remove(self, key, floor, empty_too):
         """Delete one tracked file unless it was used since `floor` (checked under the lock, so a
         producer's used() a moment earlier wins). Bytes removed, or None."""
@@ -438,8 +500,11 @@ class Cache(NoCache):
             if e is None or e[1] >= floor or not (self._evictable(key, e[0]) or
                                                   empty_too and e[0] == 0 and key.split("/", 1)[0] in MANAGED):
                 return None
+            path = self._path(key)
+            if not _inside(path, self.root):       # (never a file whose real place is outside this cache)
+                return None
             try:
-                os.remove(self._path(key))
+                os.remove(path)
             except FileNotFoundError:
                 pass
             except OSError as err:
@@ -448,6 +513,8 @@ class Cache(NoCache):
             del self._entries[key]
             self._used -= e[0] or 0
             self._dirty = True
+            if self.on_change is not None:
+                self.on_change(key, False)
             return e[0] or 0
 
     def clear(self, wait=60.0):
@@ -460,6 +527,7 @@ class Cache(NoCache):
         floor = self.started
         with self._lock:
             keys = [k for k, e in self._entries.items() if e[1] < floor and k.split("/", 1)[0] in MANAGED]
+        keys = self._unpinned(keys, lambda k: k)
         n = b = 0
         for key in keys:
             got = self._remove(key, floor, empty_too=True)
@@ -486,6 +554,8 @@ class Cache(NoCache):
              "files": files, "ready": self.ready, "managed": self.managed}
         if cleared is not None:
             m["clearedBytes"] = int(cleared)
+        if self.pinned_bytes is not None:
+            m["pinnedBytes"] = int(self.pinned_bytes)
         return m
 
     # --- the background thread -------------------------------------------------------------------
@@ -554,6 +624,34 @@ def prune_dir(root, max_bytes, keep_s=600.0, match=None, now=None):
             total -= size
             removed += 1
     return removed, total
+
+
+def prune_versions(root, keep):
+    """The version folders under root ("v<n>": vegetation/v18, seacarve/v19, roadwidth/v2) but keep removed: a
+    generator update writes a new folder and never reads the old one again. Anything else under root stays.
+    -> (folders removed, bytes freed)"""
+    import re
+    import shutil
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return 0, 0
+    n = freed = 0
+    for name in names:
+        p = os.path.join(root, name)
+        if name == keep or not re.fullmatch(r"v\d+", name) or not os.path.isdir(p) or os.path.islink(p):
+            continue
+        size = 0
+        for dirpath, _dirs, files in os.walk(p):
+            for f in files:
+                try:
+                    size += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+        shutil.rmtree(p, ignore_errors=True)
+        if not os.path.exists(p):
+            n, freed = n + 1, freed + size
+    return n, freed
 
 
 _touched = set()

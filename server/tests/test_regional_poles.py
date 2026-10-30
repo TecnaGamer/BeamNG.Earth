@@ -200,7 +200,7 @@ class PipelineTest(unittest.TestCase):
     def test_worker_cache_separates_profiles_and_forwards_them(self):
         import blockworker
         keys, forwarded = [], []
-        def revisit(kind, key, aid, tx, ty, out, vfs, name, build, extra, result):
+        def revisit(kind, key, aid, tx, ty, out, vfs, name, build, extra, result, where=None):
             keys.append(key)
             return build()
         def build(*args):

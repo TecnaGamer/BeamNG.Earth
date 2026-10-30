@@ -252,9 +252,11 @@ T.check(res.rebaseDistance == rebase.DEFAULT_DISTANCE and files[settings.FILE].r
 ------------------------------------------------------------------------------------------
 -- the download cache (server cache.py): the cap setting, the usage line, the clear button
 
-T.check(settings.defaults().cacheCapGb == '20' and settings.cacheCapGb() == 20, 'cache cap: 20 GB by default')
-T.check(settings.validate('cacheCapGb', 'unlimited') == 'unlimited' and settings.validate('cacheCapGb', '7') == nil,
-  'cache cap: the page\'s values only')
+T.check(settings.defaults().cacheCapGb == 20 and settings.cacheCapGb() == 20, 'cache cap: 20 GB by default')
+T.check(settings.validate('cacheCapGb', '7') == 7 and settings.validate('cacheCapGb', 12.5) == 12.5
+  and settings.validate('cacheCapGb', 'unlimited') == 0 and settings.validate('cacheCapGb', -3) == 0
+  and settings.validate('cacheCapGb', 'lots') == nil,
+  'cache cap: any number of GB typed (the old choices and "unlimited" (0) still read)')
 local capsSent, clears, queries, connected = {}, 0, 0, true
 local cacheInfo = nil
 beamngEarth_core = { _state = function() return stTbl end,
@@ -264,11 +266,14 @@ beamngEarth_core = { _state = function() return stTbl end,
   cacheState = function() return cacheInfo end }
 settings.uiSet('cacheCapGb', '50')
 settings.uiSet('cacheCapGb', 'unlimited')
-T.check(capsSent[1] == 50 and capsSent[2] == 0 and files[settings.FILE].cacheCapGb == 'unlimited',
+T.check(capsSent[1] == 50 and capsSent[2] == 0 and files[settings.FILE].cacheCapGb == 0,
   'cache cap: saved, sent to the server in GB (unlimited = 0)')
 settings.applyAll()
 T.check(capsSent[3] == 0, 'cache cap: applied with the rest (the level start)')
 T.check(settings.cacheLine(nil) == 'no information from the server', 'cache line: no server (or one without a cache)')
+T.check(settings.cacheLine({ usedBytes = 3e9, capBytes = 20e9, files = 10, ready = true, managed = true,
+  pinnedBytes = 1.5e9 }) == '3.0 GB of 20 GB, 10 files, 1.5 GB in saved areas (Clear cache keeps them)',
+  'cache line: the saved areas\' share')
 T.check(settings.cacheLine({ usedBytes = 1.23e9, capBytes = 20e9, files = 34877, ready = true, managed = true })
   == '1.2 GB of 20 GB, 34877 files', 'cache line: used of cap')
 T.check(settings.cacheLine({ usedBytes = 45e6, capBytes = 0, files = 9, ready = true, managed = true })
@@ -296,7 +301,7 @@ beamngEarth_core = nil
 r = settings.uiCacheClear()
 T.check(not r.ok and r.error == 'mod not loaded', 'uiCacheClear: no core')
 settings.uiReset()
-T.check(settings.get('cacheCapGb') == '20', 'uiReset: the cap back to 20 GB')
+T.check(settings.get('cacheCapGb') == 20, 'uiReset: the cap back to 20 GB')
 
 ------------------------------------------------------------------------------------------
 -- the compact HUD draws (permissive imgui stub)

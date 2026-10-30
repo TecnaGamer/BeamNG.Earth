@@ -1,13 +1,14 @@
 """Road plans shared between the server's processes (2026-10-23).
 
-A cell's road plans (grading.Grader._plan_cell: the profiles, the kept carriageways, the tunnels' covers and open
-sections) are a pure function of the anchor, the cell, the map data and elevation, and the grading settings, and
+A cell's road plans (grading._Planner._plan_cell: the profiles, the kept carriageways, the tunnels' covers and open
+sections) are a pure function of the cell, the map data and elevation, and the grading settings (in the frame of the
+cell's planning region, geotiles.PLAN_Z: no anchor in them since 2026-10-29, so every anchor reads them), and
 every process that grades needs them: both terrain-block processes (each warmed the cells ahead of the player for
 itself) and the road-tile processes. On a Steam Deck a fresh place's teleport spent ~300 CPU-s planning the same
 cells up to four times over, of ~1000 CPU-s for its whole world on four cores. Now the first process to plan a cell
 writes it here; the others read it, or wait while one is planning it (a lock file) instead of planning it again.
 
-The files: <cache>/plans/<run>/<anchor lat_lon>/<signature>/<z>_<x>_<y>.npz, the arrays as npz (no pickle) and the
+The files: <cache>/plans/<run>/<signature>/<z>_<x>_<y>.npz, the arrays as npz (no pickle) and the
 rest as JSON (Spec as its fields). One server run's own (RUN_ENV, set by earthd before its workers start): a plan made
 while some elevation was missing stays out of the next run. A stale lock (xproc.STALE_S: a process that died planning)
 is taken over; a wait longer than WAIT_S plans the cell here as before; a process waits only for a planner at least as
@@ -56,25 +57,27 @@ def start_run(cache_dir):
     os.environ[RUN_ENV] = f"{os.getpid()}_{int(time.time())}"
 
 
+FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
+
+
 def for_grader(cache_dir, grader, widths, wet):
-    """The PlanCache of a grading.Grader (its anchor frame; settings that change plans in the signature), or None
-    outside a server run. Complete plans are kept in the revisit cache too (persist): a place's next visit (a game
-    started where it was left) reads them instead of planning again."""
+    """The PlanCache of a grading.Grader (any anchor's: the plans are its store's, in the planning regions' frames;
+    settings that change plans in the signature), or None outside a server run. Complete plans are kept in the revisit
+    cache too (persist): a place's next visit (a game started where it was left, or anchored anywhere near) reads them
+    instead of planning again."""
     run = os.environ.get(RUN_ENV)
     if not run:
         return None
-    f = grader.frame
     md = getattr(grader, "md", None)
-    pc = PlanCache(os.path.join(cache_dir, "plans", run), f.lat0, f.lon0,
-                   f"w{int(widths is not None)}s{int(wet is not None)}")
-    pc.persist = (cache_dir, (round(float(f.lat0), 7), round(float(f.lon0), 7), pc.signature,
+    pc = PlanCache(os.path.join(cache_dir, "plans", run), f"w{int(widths is not None)}s{int(wet is not None)}")
+    pc.persist = (cache_dir, (FRAMES, pc.signature,
                               md.versions() if md is not None and hasattr(md, "versions") else None))
     return pc
 
 
 class PlanCache:
-    def __init__(self, root, lat, lon, signature):
-        self.dir = os.path.join(root, f"{lat:.9f}_{lon:.9f}", signature)
+    def __init__(self, root, signature):
+        self.dir = os.path.join(root, FRAMES, signature)
         self.signature = signature
         self.persist = None     # (cache dir, key parts) of the revisit cache's copy (for_grader), or None
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
@@ -117,6 +120,18 @@ class PlanCache:
         import revisit
         return revisit.key("plans", *self.persist[1], (int(key[0]), int(key[1]), int(key[2])))
 
+    def _where(self, key):
+        """revisit.where of cell key's plans (the map's cache view), or None."""
+        import mapcells
+        import revisit
+        try:
+            w, s, e, n = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
+            _frames, sig, versions = self.persist[1]
+            # (the sidecar's place: the cell's own centre, no anchor)
+            return revisit.where((s + n) / 2, (w + e) / 2, s, w, n, e, revisit.sig(plans=sig, md=versions))
+        except Exception:
+            return None
+
     def _kept(self, key):
         """The revisit cache's copy of cell key's plans (a file-like npz), or None."""
         if self.persist is None:
@@ -156,7 +171,8 @@ class PlanCache:
             if persist and self.persist is not None:
                 import revisit
                 with open(p, "rb") as fh:
-                    revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()})
+                    revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()},
+                                  where=self._where(key))
         except (OSError, ValueError, TypeError):
             return False
         with self._lock:

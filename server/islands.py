@@ -16,9 +16,13 @@ import numpy as np
 import fast
 
 JOIN_M = 1.5            # road ends this close are one graph node
-MAX_EDGES = 5           # roads in a loop
-MAX_LOOP_M = 400.0      # loop length
-MAX_AREA_M2 = 1200.0     # a roundabout ~40 m across; city blocks round one-way streets are 2000 m2+ (Fells Point)
+MAX_EDGES = 10          # roads in a loop (a ring split at every entry; matches RING_MAX_EDGES)
+MAX_LOOP_M = 450.0      # loop length (matches RING_MAX_LOOP_M)
+# Roundabouts up to ~120 m across (RING_MAX_AREA_M2). The old 1200 m2 cut off rings ~40 m across: their inner
+# sidewalks stayed and junctions cut them into four arcs with gaps at the entries (Chavagnes-en-Paillers,
+# 46.91387, -1.24230, 2026-10-28). City blocks of one-way streets are filtered by roundness below, not by area.
+MAX_AREA_M2 = 12000.0
+SMALL_AREA_M2 = 1200.0  # below this: any mostly-one-way loop (turnarounds, teardrops); above: must be round
 MIN_AREA_M2 = 25.0
 ONEWAY_SHARE = 0.4      # at least this share of the loop's length one-way
 ISLAND_BAND_M = 1.2     # the island's curb band (a sidewalk run this wide, inward)
@@ -145,22 +149,61 @@ def ring_fids(roads_list):
     return set(ring_directions(roads_list))
 
 
+JOIN_APPROACH_M = 1.5       # an approach end this close to a ring end meets it
+APPROACH_NO_WALK_M = 80.0   # approaches shorter than this: no sidewalks (entry/exit lanes)
+ENTRY_CLEAR_M = 4.0         # sidewalks stop this far outside a ring's carriageway (no stub into the circle)
+
+
+def ring_approaches(roads_list, ring=None):
+    """Feature ids of roads that meet a roundabout ring at an end (not themselves on the ring). Short ones are the
+    entry/exit lanes whose sidewalks became rectangular stubs against the circle (Chavagnes-en-Paillers 2026-10-28)."""
+    ring = set(ring if ring is not None else ring_fids(roads_list))
+    if not ring:
+        return set()
+    ends = []
+    for fid, _, pts, _ in roads_list:
+        if fid in ring and len(pts) >= 2:
+            ends.append(pts[0, :2])
+            ends.append(pts[-1, :2])
+    if not ends:
+        return set()
+    ends = np.asarray(ends, np.float64)
+    out = set()
+    for fid, _, pts, _ in roads_list:
+        if fid in ring or len(pts) < 2:
+            continue
+        for p in (pts[0, :2], pts[-1, :2]):
+            if float(np.min(np.hypot(*(ends - p).T))) < JOIN_APPROACH_M:
+                out.add(fid)
+                break
+    return out
+
+
 def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False)), structures=()):
     """[{"poly": (k, 2) loop centreline (counter-clockwise), "inner": {fid: side (+1 left / -1 right of its
     geometry)}, "ring": (k, 3) curb line counter-clockwise or None}] of roads_list [(fid, spec, pts (k, 3), lon)].
     structures: building centres (x, y); a loop round one is a block, not an island."""
     edges, adj = _graph(roads_list)
     found = []
-    for cyc in _cycles(edges, adj):
+    for cyc in _cycles(edges, adj, MAX_EDGES, MAX_LOOP_M):
         key = {k for k, _ in cyc}
         L = sum(edges[k][5] for k, _ in cyc)
-        ow = sum(edges[k][5] for k, _ in cyc if is_oneway(edges[k][1]))
-        if L > MAX_LOOP_M or ow < ONEWAY_SHARE * L:
+        if L > MAX_LOOP_M or L <= 0:
             continue
         parts = [edges[k][2] if fwd else edges[k][2][::-1] for k, fwd in cyc]
         poly = np.concatenate([p[:-1, :2] for p in parts])
         area = _area(poly)
-        if not (MIN_AREA_M2 <= abs(area) <= MAX_AREA_M2):
+        abs_area = abs(area)
+        if not (MIN_AREA_M2 <= abs_area <= MAX_AREA_M2):
+            continue
+        ow = sum(edges[k][5] for k, _ in cyc if is_oneway(edges[k][1]))
+        oneway_ok = ow >= ONEWAY_SHARE * L
+        rnd = 4 * math.pi * abs_area / (L * L)
+        # Roundabouts: same roundness rule as ring_directions (a mapped ring often has no oneway tags in Overture,
+        # Chavagnes-en-Paillers 2026-10-28: rnd 0.99 but ow 0/102, so the central island was skipped and only the
+        # entry teardrops matched). Small non-round loops: mostly one-way (turnarounds, teardrops).
+        is_roundabout = rnd >= RING_ROUND_ANY or (rnd >= RING_ROUND and oneway_ok)
+        if not (is_roundabout or (abs_area <= SMALL_AREA_M2 and oneway_ok)):
             continue
         if any(_inside(poly, c) for c in structures):
             continue                                # a building inside: a city block, not an island
@@ -179,7 +222,12 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
             poly = poly[::-1]
         z = float(np.mean(np.concatenate([edges[k][2][:, 2] for k, _ in cyc])))
         ring = _island_ring(poly, [(edges[k][2][:, :2], edges[k][1].width / 2.0) for k, _ in cyc], z)
-        found.append({"poly": poly, "inner": inner, "ring": ring})
+        found.append({"poly": poly, "inner": inner, "ring": ring, "round": is_roundabout})
+    # A roundabout's island wins over entry teardrops that reuse its ring edges (those left four short curb
+    # scraps and no central island at Chavagnes-en-Paillers).
+    ring_roads = {fid for f in found if f.get("round") for fid in f["inner"]}
+    if ring_roads:
+        found = [f for f in found if f.get("round") or not (set(f["inner"]) & ring_roads)]
     return found
 
 

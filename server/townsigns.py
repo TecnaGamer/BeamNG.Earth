@@ -11,6 +11,7 @@ import json
 import math
 from pathlib import Path
 import numpy as np
+from geotiles import box_owns
 import poleprofiles
 import signmesh
 import europeinfra
@@ -163,7 +164,7 @@ def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,
                 q=shifted[2].copy();q[:2]+=shoulder*(spec.width/2+.7+width/2)
                 if clear(q):p=q;break
             else:return
-        if not(x0<=p[0]<x1 and y0<=p[1]<y1) or country_at(*p)!=country:return
+        if not box_owns(box, p[0], p[1]) or country_at(*p)!=country:return
         if ground is not None:
             p[2]=float(np.asarray(ground(np.array([p[0]]),np.array([p[1]]))).ravel()[0])
         w=mesh.town(p,d,display_name,s.get('ref',''),s.get('kind','both'),style=style)

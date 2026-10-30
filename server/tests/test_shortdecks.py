@@ -75,7 +75,7 @@ class DepthTest(unittest.TestCase):
 
 class WaterFillTest(unittest.TestCase):
     def grader(self, need):
-        g = object.__new__(grading.Grader)
+        g = object.__new__(grading._Planner)
         g.wet = lambda la, lo: np.ones(np.shape(la))
         g.frame = FRAME
 

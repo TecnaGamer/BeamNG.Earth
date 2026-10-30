@@ -80,8 +80,24 @@ end
 -- z that of the point at its height. At its height a point lands h x distance / earth radius farther out (2-3 m at
 -- 1650 m, 13 km from the anchor), so a lat / lon read from (x, y, z) with z in it missed the road it stood on.
 function Anchor:worldToGeodetic(x, y, z)
-  local lat, lon = self:enuToGeodetic(x, y, 0)
+  -- (the place whose h = 0 point has these x, y: the plane point (x, y, 0) lies d^2 / 2R over the ellipsoid, its
+  -- lat / lon cm off at 15 km; two corrections make it exact to well under a mm)
+  local qx, qy = x, y
+  local lat, lon = self:enuToGeodetic(qx, qy, 0)
+  for _ = 1, 2 do
+    local ex, ey = self:geodeticToEnu(lat, lon, 0)
+    qx, qy = qx + (x - ex), qy + (y - ey)
+    lat, lon = self:enuToGeodetic(qx, qy, 0)
+  end
+  -- h whose up is z (Newton on the up, whose rate is the cosine between this frame's up and the place's normal; the
+  -- plane point's own height was h x d^2 / R^2 off: 9 mm at 1650 m and 15 km)
   local _, _, h = self:enuToGeodetic(x, y, z or 0)
+  local sl, cl = sin(rad(lat)), cos(rad(lat))
+  local rate = self.ux * cl * cos(rad(lon)) + self.uy * cl * sin(rad(lon)) + self.uz * sl
+  for _ = 1, 2 do
+    local _, _, u = self:geodeticToEnu(lat, lon, h)
+    h = h + ((z or 0) - u) / rate
+  end
   return lat, lon, h
 end
 
@@ -149,6 +165,11 @@ function Anchor:worldTransformTo(other, x, y, z)
   local wx, wy, wz = other:geodeticToWorld(self:worldToGeodetic(x, y, z))
   xf.t[1], xf.t[2], xf.t[3] = xf.t[1] + wx - rx, xf.t[2] + wy - ry, xf.t[3] + wz - rz
   return xf
+end
+
+-- A Transform from a rotation r (9 numbers, row-major) and a translation t (3).
+function M.transformOf(r, t)
+  return setmetatable({ r = r, t = t }, Transform)
 end
 
 -- A point of the old frame in the new frame.

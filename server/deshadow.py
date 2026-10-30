@@ -700,6 +700,7 @@ def _atomic_write(path, write):
 class Deshadow:
     """Region values (background thread) and per-tile relight for one Imagery (bind())."""
     disk = cachemod.NONE    # the server's cache.Cache (last use per file, the size cap); set by earthd
+    source, version = SOURCE, VERSION       # (the finished pyramid's settings: imagery.Imagery._fin_sig)
 
     def __init__(self, cache_dir, dem, mode="full", mem_tiles=MEM_TILES, wait_s=WAIT_S):
         if mode not in MODES[1:]:
@@ -1004,23 +1005,30 @@ class Deshadow:
     def relight(self, key, tile, imagery):
         """Relit RGB of a decoded source tile, or None to use it as is (other source or zoom, blank,
         region not ready / gated off, nothing to undo)."""
+        return self.relight_final(key, tile, imagery)[0]
+
+    def relight_final(self, key, tile, imagery):
+        """(relight(), state): "final" (the tile's answer for good), ("wait", rk) (its region rk is not ready, or
+        beyond REQUEST_M of the anchor: raw for now; poll(rk) says when that changes) or "error" (a neighbour
+        could not be fetched: raw this time). The finished pyramid (imagery.Imagery.finished) keeps only final
+        answers for good."""
         src, z, x, y = key
-        if src.name != SOURCE or not MIN_Z <= z <= MAX_Z or tile.uniform:
-            return None
+        if getattr(src, "name", src) != SOURCE or not MIN_Z <= z <= MAX_Z or tile.uniform:
+            return None, "final"
         ck = (z, x, y)
         with self._lock:
             v = self._lru.get(ck)
             if v is not None:
                 self._lru.move_to_end(ck)
-                return None if v is SAME else v
+                return (None if v is SAME else v), "final"
         rk = region_of(z, x, y)
         R = self.region(rk, wait=not getattr(self._tl, "nowait", False))
         if R is None:
             self._count("pending")
-            return None
+            return None, ("wait", rk)
         if not R.params.get("ok"):
             self._count("off")
-            return None
+            return None, "final"
         png, same = self._tile_paths(z, x, y)
         v = None
         if os.path.exists(same):
@@ -1035,7 +1043,7 @@ class Deshadow:
         if v is None:
             v = self._relight_new(key, tile, imagery, R, rk)
             if v is None:
-                return None
+                return None, "error"
             _atomic_write(same if v is SAME else png,
                           (lambda f: None) if v is SAME else
                           (lambda f: Image.fromarray(v, "RGB").save(f, "PNG", compress_level=1)))
@@ -1046,7 +1054,16 @@ class Deshadow:
             self._lru[ck] = v
             while len(self._lru) > self.mem_tiles:
                 self._lru.popitem(last=False)
-        return None if v is SAME else v
+        return (None if v is SAME else v), "final"
+
+    def poll(self, rk):
+        """A region relight_final left a tile raw for: "ready" (its tile is to be relit again: the region is
+        ready, waited for as relight would), "wait" (wanted, queued) or "far" (beyond REQUEST_M of the anchor)."""
+        if self.region(rk, wait=not getattr(self._tl, "nowait", False)) is not None:
+            return "ready"
+        with self._lock:
+            far = self._center is not None and self._distance(rk) > REQUEST_M
+        return "far" if far else "wait"
 
     def _relight_new(self, key, tile, imagery, R, rk):
         src, z, x, y = key

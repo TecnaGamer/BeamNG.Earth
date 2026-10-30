@@ -4,6 +4,7 @@ albedo texture, haze and JPEG), the region cache, the hook in imagery.Imagery an
 being byte-identical to the imagery without it. No network.
 
 Timing (per-tile cost) runs only with DESHADOW_TIMING=1 (CPU load from other work makes it flaky)."""
+import glob
 import hashlib
 import io
 import json
@@ -464,8 +465,9 @@ class DeshadowObjectTest(unittest.TestCase):
         self.assertLess(abs(np.median(lr[sunlit] / lw[sunlit]) - 1), 0.25)
         files = files_under(self.cache)
         ds_dir = os.path.join("imagery", f"usgs-ds{ds.VERSION}-full")
-        for f in files:     # only region values and relit tiles: the raw tile cache is never written
-            self.assertTrue(f.startswith("deshadow" + os.sep) or f.startswith(ds_dir + os.sep), f)
+        fin = os.path.join("imagery", f"fin{imagery.FIN_VERSION}-")
+        for f in files:     # only region values, relit tiles and the finished pyramid: the raw tile cache is never written
+            self.assertTrue(f.startswith("deshadow" + os.sep) or f.startswith(ds_dir + os.sep) or f.startswith(fin), f)
         self.assertTrue(any(f.endswith(".png") for f in files))
         self.assertIn(os.path.join("deshadow", "usgs", "12", str(RK[0]), f"{RK[1]}.json"), files)
         self.assertIn(os.path.join("deshadow", "usgs", "12", str(RK[0]), f"{RK[1]}.npz"), files)
@@ -483,8 +485,18 @@ class DeshadowObjectTest(unittest.TestCase):
         im.close()
         self.assertEqual(dem.calls, 0)
         self.assertTrue((rgb == self.relit).all())
-        self.assertGreater(d.stats.get("disk", 0), 0)
+        self.assertGreater(im.stats_snapshot().get("finished:disk", 0), 0)    # (the finished pyramid's relit tiles)
         self.assertNotIn("edge", d.stats)
+        # without the pyramid: the relit tiles from the de-shadow cache, the same texture
+        for f in glob.glob(os.path.join(root, "imagery", f"fin{imagery.FIN_VERSION}-*")):
+            shutil.rmtree(f)
+        d = ds.Deshadow(root, dem, "full", wait_s=0)
+        im = RegionImagery(os.path.join(root, "imagery"), deshadow=d, tone=0.0)
+        rgb, used = im.render(self.frame, *self.square)
+        im.close()
+        self.assertEqual(dem.calls, 0)
+        self.assertTrue((rgb == self.relit).all())
+        self.assertGreater(d.stats.get("disk", 0), 0)
 
     def test_version_bump_recomputes(self):
         root = self.copy_cache()
@@ -516,7 +528,13 @@ class DeshadowObjectTest(unittest.TestCase):
             self.assertTrue((im.lut_ds == imagery.tone_lut(1.0, lift)).all())
             if mode == "full":
                 rgb, used = im.render(self.frame, *self.square)
-                self.assertTrue((rgb == im.lut_ds[self.relit]).all())        # every texel relit here
+                # every texel relit here: the reduced lift's curve (applied per finished source tile, before the warp
+                # and the tile's JPEG, so within a few levels of the curve of the tone-0 texture)
+                near = np.abs(rgb.astype(int) - im.lut_ds[self.relit].astype(int))
+                plain = np.abs(rgb.astype(int) - im.lut[self.relit].astype(int))
+                self.assertEqual(used.get("deshadow"), rgb.shape[0] * rgb.shape[1])
+                self.assertLess(near.mean(), 1.0)
+                self.assertLess(near.mean(), 0.6 * plain.mean())
             im.close()
 
     def test_lambert_mode_reuses_the_region(self):
@@ -590,6 +608,8 @@ class DeshadowObjectTest(unittest.TestCase):
         for f in os.listdir(os.path.join(root, "deshadow", "usgs", "12", str(RK[0]))):
             os.remove(os.path.join(root, "deshadow", "usgs", "12", str(RK[0]), f))     # the region again
         shutil.rmtree(os.path.join(root, "imagery", f"usgs-ds{ds.VERSION}-full"))
+        for f in glob.glob(os.path.join(root, "imagery", f"fin{imagery.FIN_VERSION}-*")):
+            shutil.rmtree(f)        # (the finished pyramid's relit tiles too)
         d = ds.Deshadow(root, FakeDem(block=gate), "full", wait_s=0)
         heard, done = [], threading.Event()
         d.add_listener(lambda rk, changed: (heard.append((rk, changed, threading.current_thread().name)), done.set()))
@@ -662,9 +682,10 @@ def golden(**kw):
 
 
 class FlagOffTest(unittest.TestCase):
-    # sha256 of these renders by the imagery code before the de-shadow hook (commit 6465d26)
-    GOLDEN = {1.0: "a280901fd28e63a83cfd3071569293a1bcdaea8e9e1ca7c747f06885e9061991",
-              0.0: "b9ef73bdb4cdd702ee42ce66e85967e415744bbb91f99dc1730c2b74b51da83f"}
+    # sha256 of these renders by the imagery code without the de-shadow hook: the finished pyramid's (geotiles phase 3a,
+    # 2026-10-29: the tone curve per source tile, kept as JPEGs; before it, commit 6465d26's a280901f / b9ef73bd)
+    GOLDEN = {1.0: "f0b36dae73d66c9d15d056a6bfbf4b37aee3e0af42ccc53e1de4bdd208790b3c",
+              0.0: "a8c2eedb16fa69f148c11b613099c8d7501e60a2a9cbef2fa1cc48f420a01e47"}
 
     def test_render_byte_identical_without_deshadow(self):
         for tone, digest in self.GOLDEN.items():

@@ -11,7 +11,7 @@ they agree):
   2. grade: from that summer look toward the season of the date at the place (season_amounts): fall turns the
      tree canopy yellow / orange / rust in patches (world-anchored noise, so tiles and anchors agree) and yellows
      everything green a little; the share of turned trees grows with the amount. Winter and spring: later.
-Pure functions of their inputs (no state); numpy only.
+Pure functions of their inputs (no state); numpy, and the grade in Rust (earthfast.season_img).
 """
 import datetime
 
@@ -104,90 +104,32 @@ def leaf_on(rgb, ref):
     return np.asarray(out)
 
 
-def _box(a, r):
-    """Mean of a (float) over (2r+1)² windows, edges clamped."""
-    p = np.pad(a.astype(np.float64), r + 1, mode="edge")
-    c = p.cumsum(0).cumsum(1)
-    k = 2 * r + 1
-    out = c[k:, k:] - c[:-k, k:] - c[k:, :-k] + c[:-k, :-k]
-    return (out[:a.shape[0], :a.shape[1]] / (k * k)).astype(np.float32)
-
-
-def _noise(x, y, seed):
-    """Smooth value noise in [0, 1] on a unit lattice (x, y float arrays of one shape) (earthfast.season_noise)."""
-    fast.require(1, "season noise")
-    x, y = np.asarray(x, np.float32), np.asarray(y, np.float32)
-    shape = x.shape
-    flat = lambda a: np.ascontiguousarray(a.reshape(1, -1) if a.ndim != 2 else a)     # noqa: E731 (the kernel: 2-D)
-    return fast._ef.season_noise(flat(x), flat(y), int(seed)).reshape(shape)
-
-
-
 GRADE_HALF_PX = 512         # textures this big are graded at half size and applied as a colour ratio
-
-
-def grade(rgb, xm, ym, amounts):
-    """season grade (grade_full) of rgb; at GRADE_HALF_PX or more, computed on a half-size copy and applied as a
-    per-channel ratio (the colour change is a few metres coarse at most, the detail stays the texture's own)."""
-    if not any(float(amounts.get(k, 0.0)) > 0.0 for k in ("fall", "winter", "spring")):
-        return rgb
-    hh, ww = rgb.shape[:2]
-    if min(hh, ww) < GRADE_HALF_PX:
-        return grade_full(rgb, xm, ym, amounts)
-    sm = (ww // 2, hh // 2)
-    small = np.asarray(Image.fromarray(rgb, "RGB").resize(sm, Image.BOX))
-    g = grade_full(small, xm[::2, ::2][:sm[1], :sm[0]], ym[::2, ::2][:sm[1], :sm[0]], amounts)
-    if g is small:
-        return rgb
-    ratio = (g.astype(np.float32) + 2.0) / (small.astype(np.float32) + 2.0)
-    up = np.stack([np.asarray(Image.fromarray(ratio[..., c], "F").resize((ww, hh), Image.BILINEAR)) for c in range(3)], -1)
-    return np.clip(np.rint(rgb.astype(np.float32) * up), 0, 255).astype(np.uint8)
-
-
-def grade_full(rgb, xm, ym, amounts):
-    """rgb (uint8, a summer look) toward the season: amounts {"fall": 0..1}; xm, ym (float [h, w]) the texels'
-    world position in metres (east, north: noise anchored to the world). Unchanged when every amount is 0. Only
-    the vegetation's texels are converted; the noise is computed on a grid of ~2 m and interpolated."""
-    fall = float(amounts.get("fall", 0.0))
-    winter = float(amounts.get("winter", 0.0))
-    spring = float(amounts.get("spring", 0.0))
-    if fall <= 0.0 and winter <= 0.0 and spring <= 0.0:
-        return rgb
-    fast.require(1, "season grade")
-    return _grade_rust(np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3]), xm, ym, fall, winter, spring)
-
-
-def _noise_and_canopy(v, xm, ym, hh, ww):
-    """grade_full's canopy (h, w) and noise n, pick (h, w), float32."""
-    texel = max(1e-3, float(abs(xm[0, -1] - xm[0, 0])) / max(1, ww - 1))
-    if texel <= CANOPY_TEXTURE_MAX_M:
-        m1 = _box(v, 2)
-        std = np.sqrt(np.clip(_box(v * v, 2) - m1 * m1, 0.0, None))
-        canopy = _smooth(std, *CANOPY_STD) * (1.0 - _smooth(m1, *CANOPY_V))
-    else:
-        canopy = 1.0 - _smooth(v, *CANOPY_V)
-    f = max(1, int(2.0 / texel), -(-max(hh, ww) // NOISE_GRID))
-    xs, ys = xm[::f, ::f], ym[::f, ::f]
-
-    def up(a):
-        return a if f == 1 else np.asarray(Image.fromarray(a.astype(np.float32), "F").resize((ww, hh), Image.BILINEAR))
-    n = up(0.75 * _noise(xs / PATCH_M[0], ys / PATCH_M[0], 1) + 0.25 * _noise(xs / PATCH_M[1], ys / PATCH_M[1], 2))
-    pick = up(_noise(xs / PATCH_M[2], ys / PATCH_M[2], 3))
-    return canopy, n, pick
-
-
 _PAL32 = np.array(FALL_PALETTE, np.float32)
 
 
-def _grade_rust(rgb, xm, ym, fall, winter, spring):
-    """grade_full by the Rust kernel (earthfast.season_grade; the noise and canopy as above). ~2/3 of a far tile's season grade was numpy's masked indexing (~14 s of a teleport's far threads)."""
-    hh, ww = rgb.shape[:2]
-    # rgb.max(-1) without the strided reduction (the same bytes)
-    v = np.maximum(np.maximum(rgb[..., 0], rgb[..., 1]), rgb[..., 2]).astype(np.float32) / 255.0
-    canopy, n, pick = _noise_and_canopy(v, xm, ym, hh, ww)
-    f32 = lambda a: np.ascontiguousarray(np.broadcast_to(np.asarray(a, np.float32), (hh, ww)))  # noqa: E731
-    out = fast._ef.season_grade(np.ascontiguousarray(rgb), f32(n), f32(pick), f32(canopy), fall, winter, spring,
-                                _PAL32, FALL_YELLOW, WINTER_BARE_DESAT)
+def grade(rgb, xm, ym, amounts):
+    """rgb (uint8 (h, w, 3), a summer look) toward the season: amounts {"fall": 0..1, "winter", "spring"}; xm, ym (float
+    (h, w)) the texels' world position in metres (east, north: noise anchored to the world). Unchanged when every
+    amount is 0. Only the vegetation's texels are converted; the canopy is the darker texels textured at the 2-3 m
+    scale (by brightness alone for texels coarser than CANOPY_TEXTURE_MAX_M), the noise computed on a grid of ~2 m
+    and interpolated; at GRADE_HALF_PX or more, computed on a half-size copy and applied as a per-channel ratio (the
+    colour change is a few metres coarse at most, the detail stays the texture's own). xm, ym may instead be a 2-D
+    grid over the texture (corner to corner), upscaled to its texels by Pillow's BILINEAR. The Rust kernel
+    earthfast.season_img (Pillow's resampling where this module used it: the same numbers)."""
+    fall, winter, spring = (float(amounts.get(k, 0.0)) for k in ("fall", "winter", "spring"))
+    if fall <= 0.0 and winter <= 0.0 and spring <= 0.0:
+        return rgb
+    fast.require(108, "season grade")
+
+    def f32(a):     # the texels' own (anything broadcasting to them), or a 2-D grid over the texture (upscaled there)
+        a = np.asarray(a, np.float32)
+        if a.ndim != 2 or a.shape == rgb.shape[:2]:
+            a = np.broadcast_to(a, rgb.shape[:2])
+        return np.ascontiguousarray(a)
+    out = fast._ef.season_img(np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3]), f32(xm), f32(ym), _PAL32,
+                              (fall, winter, spring, FALL_YELLOW, WINTER_BARE_DESAT, tuple(CANOPY_V), tuple(CANOPY_STD),
+                               tuple(PATCH_M), NOISE_GRID, CANOPY_TEXTURE_MAX_M, GRADE_HALF_PX))
     return rgb if out is None else out
 
 

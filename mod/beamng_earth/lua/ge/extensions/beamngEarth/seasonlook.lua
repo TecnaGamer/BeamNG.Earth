@@ -11,13 +11,17 @@ M.CHECK_S = 5           -- leaf materials load with the first tree of their shap
 -- full fall (multiplies the material's own factor; above 1 on red: a green leaf texture cannot turn red otherwise)
 M.SPECIES = {
   { mats = { 'oak_leaves_01', 'oak_leaves_02', 'oak_leaves_03', 'm_oak_leaves_distant' },
-    merged = { 'm_oak_merged_foliage' }, tint = { 1.55, 0.72, 0.32 }, days = -12,     -- oaks turn last
+    merged = { 'm_oak_merged_foliage' }, folders = { 'trees_oak' }, tint = { 1.55, 0.72, 0.32 }, days = -12,
     winter = { 1.05, 0.68, 0.45 } },        -- oaks and beeches keep dead brown leaves through winter
-  { mats = { 'beech_leaves', 'm_beech_leaves_distant' }, merged = { 'm_beech_merged_foliage' },
+  { mats = { 'beech_leaves', 'm_beech_leaves_distant' }, merged = { 'm_beech_merged_foliage' }, folders = { 'trees_beech' },
     tint = { 1.6, 1.0, 0.35 }, days = 0, winter = { 1.15, 0.8, 0.5 } },
-  { mats = { 'Birch_Leaves_01', 'm_birch_leaves_distant' }, merged = {}, tint = { 1.7, 1.3, 0.3 }, days = 10,
+  { mats = { 'Birch_Leaves_01', 'm_birch_leaves_distant' }, merged = {}, folders = { 'trees_birch', 'trees_aspen' },
+    tint = { 1.7, 1.3, 0.3 }, days = 10,
     winter = { 1.0, 0.9, 0.7 } },           -- (a leafless birch is not possible with its shape: pale instead)
 }
+-- (oaks turn last; folders: the species' tree shapes, whose far imposters (the engine's flat pictures of a whole tree,
+-- materials 'imposter_mat__<shape path>') take the same tint: they kept their summer green while the 3D trees in front
+-- of them had turned, the user 2026-10-29)
 M.SPRING = { 0.95, 1.1, 0.8 }   -- the fresh flush, every species
 M.EASE = 1.6            -- tint = amount ^ EASE: a tree holds its green early in the turn
 
@@ -88,14 +92,39 @@ end
 local function tintOne(name, field, tint, t)
   local m = scenetree.findObject(name)
   if not m then return end
-  if not orig[name] then orig[name] = { field, parse(m:getField(field, 0)) } end
+  local k = name .. '|' .. field
+  if not orig[k] then orig[k] = { field, parse(m:getField(field, 0)), name } end
   local key = string.format('%.2f %.2f %.2f %.2f', tint[1], tint[2], tint[3], t)
-  if applied[name] == key then return end
-  local c = M.blend(orig[name][2], tint, t)
+  if applied[k] == key then return end
+  local c = M.blend(orig[k][2], tint, t)
   m:setField(field, 0, string.format('%.3f %.3f %.3f %.3f', c[1], c[2], c[3], c[4]))
   m:flush()
   m:reload()
-  applied[name] = key
+  applied[k] = key
+end
+
+-- Pure: the species (an M.SPECIES entry) of an imposter material by its name (the shape's path in it), or nil.
+function M.imposterSpecies(name)
+  name = tostring(name or '')
+  if name:sub(1, 14) ~= 'imposter_mat__' then return nil end
+  local l = name:lower()
+  for _, sp in ipairs(M.SPECIES) do
+    for _, f in ipairs(sp.folders or {}) do
+      if l:find(f:lower(), 1, true) then return sp end
+    end
+  end
+  return nil
+end
+
+-- The imposter materials of the species' shapes in the scene now (they load with their shapes: looked for again at
+-- every check), as {name, species}
+local function imposters()
+  local out = {}
+  for _, name in ipairs(scenetree.findClassObjects and scenetree.findClassObjects('Material') or {}) do
+    local sp = M.imposterSpecies(name)
+    if sp then out[#out + 1] = { name, sp } end
+  end
+  return out
 end
 
 -- Every frame in our level (lat: the anchor's latitude): the leaf materials tinted to the season, checked every CHECK_S.
@@ -110,12 +139,18 @@ function M.update(inOurLevel, lat)
     for _, n in ipairs(sp.mats) do pcall(tintOne, n, 'baseColorFactor', tint, t) end
     for _, n in ipairs(sp.merged) do pcall(tintOne, n, 'diffuseColor', tint, t) end
   end
+  -- (one field: on these version 1 materials baseColorFactor and diffuseColor are the same colour, so tinting both
+  -- tinted the far trees twice, brighter and redder than the 3D trees in front of them, the user 2026-10-29)
+  for _, e in ipairs(imposters()) do
+    local tint, t = M.speciesTint(e[2], mode, doy, lat)
+    pcall(tintOne, e[1], 'baseColorFactor', tint, t)
+  end
 end
 
 -- Leaving our level: the stock factors back (other levels share the materials while the game runs).
 function M.restore()
-  for name, o in pairs(orig) do
-    local m = scenetree and scenetree.findObject(name)
+  for k, o in pairs(orig) do
+    local m = scenetree and scenetree.findObject(o[3] or k)
     if m then
       pcall(function()
         m:setField(o[1], 0, string.format('%.3f %.3f %.3f %.3f', o[2][1], o[2][2], o[2][3], o[2][4]))

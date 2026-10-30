@@ -2,6 +2,94 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.7.2 beta (2026-10-29)
+
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
+> develop the mod.** For help, that includes multiplayer:
+> BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working
+> with BeamMP, it's almost certainly a BeamNG.Earth problem, not a BeamMP one. Please don't contact the BeamMP team or
+> open BeamMP support tickets about it. BeamNG.Earth servers are hidden from players who don't run BeamNG.Earth
+> (BeamMP can't install it for them: it needs its own app), so they only show in the BeamNG.Earth tab of BeamMP's
+> server browser.
+
+Works with BeamNG.drive 0.40.4.
+
+### New
+- **See what's downloaded on the map**: Layers > Cache colours the map by what is on your disk (some data, the far
+  view's data, or everything needed to drive there), with views for elevation, aerial photos and map data, and
+  **World built**: where the terrain, far view, roads and buildings are already generated and kept on disk.
+- **Pre-cache an area**: drag a box on the map (the Pre-cache area button or Shift+drag) to download every bit of
+  elevation, aerial photo and map data it needs, with the size, download and time shown first. It downloads in the
+  background when the game isn't loading anything, picks up where it left off after a restart, and Clear cache keeps
+  your pre-cached areas.
+- **Pre-cache a GPS route**: Pre-cache route on the map's GPS box downloads everything along the planned route (a quarter
+  mile to 2 miles each side) the same way as a pre-cached area, starting from the route's start, and keeps it.
+- **Build the world ahead**: tick "Build the world too" when pre-caching an area or a route (up to 155 square miles) and
+  its roads, sidewalks, bridges, buildings and street furniture are built in the background as well, so arriving
+  there is much faster (Annapolis: the roads round the car were ready 4 seconds after a teleport instead of 23).
+  After a BeamNG.Earth update they are built again in the background.
+- **Download along the GPS route** (Settings > Storage): what a planned route downloads ahead by itself: the next 12
+  miles (as before), the whole route (up to 300 miles), or nothing.
+- **Players list on the map in multiplayer**: follow another player, show everyone, or set the GPS to them (thanks
+  iambobab, #459).
+- **Teleport without a car**: with no car the free camera goes to the place, and Go waits for the ground to load
+  (thanks iambobab, #460).
+
+### Improved
+- The download cache's size limit (Settings > Storage) is now typed in GB (any size; 0 for no limit) instead of
+  picked from a list.
+- **Steadier game speed**: the game's time no longer speeds up and slows down as much while the world loads around
+  you. A new setting, **Even frame pacing** (Graphics, on by default), keeps the time between frames steady, which
+  costs up to about a tenth of your frame rate; turn it off for the highest frame rate. It stays off below 30 fps.
+  Some of the mod's own work each frame was also cut (the far buildings' checks, new tree groups made while driving).
+- **Smoother, faster rebases** (the world's origin moving with you every 9 miles): roads, buildings, bridges,
+  street furniture and trees no longer disappear and get rebuilt around you; they are built once per place, kept,
+  and only the road surface is laid again (Fells Point: the roads within 300 m exact again after 0.4 s instead of
+  2.2 s, about 6x less work; Los Angeles 1.3 s instead of 4.7 s). Teleporting near a place you visited reuses it too.
+- **Faster far view after a rebase or teleport**: the aerial photos' shadow removal, colour matching and tone are
+  now done once per photo tile and kept on disk, so the far view's ground no longer redoes them for every new
+  origin (Kern River: the far view ready after a rebase in 8.7 s instead of 11.8 s, with about a quarter less
+  CPU; first visits are a bit faster too). It uses up to about 60 MB of the download cache per place.
+- Building colours, roofs and all-way stops are now chosen from each building's and junction's own map data, so they
+  stay the same wherever you start from (some buildings and junctions look different once).
+- **Bridges and tunnels at their real heights where measured data exists**: in the US, bridge decks follow the USGS
+  lidar survey of the bridge itself (the LA Four Level's ramps came out within about 2 inches of the survey, from
+  about 2.5 ft off); in France (IGN BD TOPO) and Norway (the national road database), bridges, tunnels and roads on
+  coarse terrain take the countries' own measured road heights (the Millau viaduct within an inch, from about 8 ft).
+  Elsewhere bridges are worked out from the terrain as before.
+
+### Fixed
+- Reduced the chance of speed-limit and highway signs appearing only when you are right next to them while driving:
+  they now come as soon as the roads under them are in (about 700 m ahead instead of about 300).
+- Turn arrows painted on the road now show the arrow the right way up (with game 0.40 straight-ahead lanes showed an
+  upside-down "EXIT" instead).
+- Reduced the chance of a freeway exit sign standing in a street's lane where an exit ramp comes down (Baltimore's
+  Guilford Avenue exit), and made one-destination exit signs their real size (they stood about 20 ft tall).
+- Reduced the chance of rivers that run underground in pipes being drawn as open water and carved into the ground
+  (thanks iknlm, #474).
+- Reduced the chance of large roundabouts getting a too-small island, entry stubs, or the aerial photo's road showing
+  through the island (thanks soifaxa, #468).
+- Reduced the chance of sidewalks, street lamps and stone bridge walls on rural divided highways (thanks
+  wyo-backroads, #458).
+- Reduced the chance of traffic cars being respawned again and again in a loop (thanks OmdevShastri, #493).
+- Reduced the chance of far-away trees staying summer green while the trees near you have their autumn colours: the
+  flat far versions of oaks, beeches, birches and aspens now take the season's colours too.
+- Reduced the chance of elevated ramps and viaduct stretches the map marks as ground being drawn at street level in
+  the US: the lidar survey along them decides (the Springfield Interchange: no more ramps under 15 ft over a road,
+  the Backlick Road bridge with its real clearance).
+- Reduced the chance of autodrive and traffic driving a few feet off their lanes where a ramp joins a motorway.
+- Reduced the chance of a hole or the end of a bridge wall in your way where a street leaves a bridge at an angle
+  (Charles Street over I-83 in Baltimore): such junctions get a paved pad with a railing only over the drop.
+- Reduced the chance of a viaduct ending in a drop to the street where the map starts a branch a few feet off its
+  split (Baltimore's Jones Falls Expressway had a 26 ft drop across the lanes; the Springfield Interchange a 44 ft
+  step), and of short stretches between two bridges being drawn at street level.
+- Reduced the chance of autodrive and traffic swerving or running off the road right after the world's origin moves
+  (every 9 miles): the AI's road map now moves with the world at once.
+- Reduced the chance of other players' cars in multiplayer standing a few yards off the road on high ground when
+  your world origins are far apart.
+
+Questions, bugs or just want to chat? Join the TGForever Discord: https://discord.gg/tgf
+
 ## 1.7.1 beta (2026-10-29)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
@@ -111,7 +199,7 @@ Works with BeamNG.drive 0.40.3.
   contribution).
 - Reduced the chance of autodrive and traffic crawling at 30 km/h on narrow country roads with a higher limit
   (GitHub #451, the Netherlands' 60 km/h roads).
-- **Underpasses are open roads under a bridge** (GitHub #450, the A-7 near Málaga; #228, #231, #243, the A7 in
+- **Underpasses are open roads under a bridge** (GitHub #450, the A-7 near Málaga; #228, #243, the A7 in
   Germany): the map often marks the road under a highway as a short tunnel, and it was built as a tube in an
   embankment, its vault and openings in the highway's lanes. A short road tunnel (under about 260 ft, counting all of
   its pieces) with little ground over it is now a road under a bridge, as are streets over a railway the map marks

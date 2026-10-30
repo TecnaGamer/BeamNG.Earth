@@ -554,6 +554,15 @@ class Dem:
                 continue
         return got, False
 
+    def predownload(self, z, x, y):
+        """A saved area's tile (areas.py) at netfetch "predownload" (hosts that allow it, within its share of the daily
+        budget), unless has() says it needs nothing: True when fetched now (or a 404 remembered). Raises
+        netfetch.FetchError (Deferred, BudgetExceeded, ...) for the caller to wait or skip."""
+        if self.has(z, x, y):
+            return False
+        self._download(MAPTERHORN, z, x, y, kind="predownload")
+        return True
+
     def has(self, z, x, y):
         """True when Mapterhorn tile (z, x, y) needs no download: on disk, a 404 remembered, or not in Mapterhorn's
         file list (_listed; those never land on disk, and routeahead.py's bar stopped short of its total). For

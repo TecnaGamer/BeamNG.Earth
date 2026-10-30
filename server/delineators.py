@@ -8,6 +8,7 @@ across joins. This avoids a tile's changing neighbours shifting whole rows.
 """
 import math
 import numpy as np
+from geotiles import box_owns
 import delineatorprofiles as profiles
 import europeinfra
 
@@ -77,7 +78,7 @@ def place(roads, box, country_at, clearance_roads, lighting=None):
     others = fast.Others(clearance_roads)
     for fid, spec, line, _ in roads:
         for _, side, code, q, tangent in candidates(fid, spec, line, country_at, (lighting or {}).get(fid)):
-            if not (x0 <= q[0] < x1 and y0 <= q[1] < y1):
+            if not box_owns(box, q[0], q[1]):
                 continue
             if not others.clear(q, None, .65):
                 continue

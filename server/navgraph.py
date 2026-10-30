@@ -181,6 +181,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     approaches = {}         # (connector, fid, end) -> (graph node next to it, traffic comes in)
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
     node_fid = {}           # name -> the feature it was made on (its deck, if any)
+    pending_by = {}         # name -> (-width, fid) of the road whose point it is (the widest's, then the lower id)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -308,9 +309,15 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     a, b = b, a
                 pa, pb = xy[j] if direction >= 0 else xy[j + 1], xy[j + 1] if direction >= 0 else xy[j]
                 for nm, q in ((a, pa), (b, pb)):
-                    if nm not in nodes and nm not in pending:
+                    # a connector the map's lines reach at different points (a ramp's end 3.3 m off the motorway's
+                    # joint, I-83 in Baltimore: the AI's lanes stood 3 m east of the drawn ones, their edge on the
+                    # parapet, 2026-10-29) stands where the widest road's line reaches it (then the lower id): not
+                    # wherever the first road read put it
+                    old = pending_by.get(nm)
+                    if nm not in nodes and (old is None or (-w, fid) < old):
                         pending[nm] = (float(q[0]), float(q[1]))
                         node_fid[nm] = fid
+                        pending_by[nm] = (-w, fid)
                 legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
                 edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(w / 2, 2)])

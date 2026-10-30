@@ -34,7 +34,7 @@ import staging
 
 log = logging.getLogger("earthd.seacarve")
 
-VERSION = 19
+VERSION = 20                # (20: no river beds carved along underground rivers, riverlines.underground)
 SEA_E = 0.0                 # m: the sea surface (the DEMs' heights are above mean sea level)
 DEPTH_SLOPE = 0.15          # floor depth per metre from the shoreline (1 : 6.7)
 DEPTH_CAP = 6.0             # m: the floor's depth away from the shore without bathymetry (Chesapeake mean
@@ -521,7 +521,7 @@ class SeaCarver:
                 for i in np.flatnonzero(f.kind == 2):
                     kind = riverlines._kind(str(f.attrs["subtype"][i]), str(cls[i]))
                     gid = str(f.ids[i])
-                    if kind is None or bool(inter[i]) or gid in seen:
+                    if kind is None or bool(inter[i]) or gid in seen or riverlines.underground(f, i):
                         continue
                     seen.add(gid)
                     lines.append((gid, kind, [ring for part in f.parts(i) for ring in part]))
@@ -564,7 +564,8 @@ class SeaCarver:
                 cls = f.attrs.get("class", np.full(len(f.kind), "", object))
                 for i in np.flatnonzero(f.kind == 2):
                     gid = str(f.ids[i])
-                    if gid in seen or riverlines._kind(str(f.attrs["subtype"][i]), str(cls[i])) != "river":
+                    if gid in seen or riverlines._kind(str(f.attrs["subtype"][i]), str(cls[i])) != "river" \
+                            or riverlines.underground(f, i):
                         continue
                     seen.add(gid)
                     for part in f.parts(i):

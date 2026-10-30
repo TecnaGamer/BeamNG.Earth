@@ -555,9 +555,13 @@ end
 -- ... and applied (newNodes: the game's map now): the AI gets the part of its path valid in both graphs at once,
 -- before the new map reaches the vehicle; with less than two nodes left it drives the lanes on its own until the next
 -- check gives it the route again.
-function M.afterGraph(keep, newNodes)
+function M.afterGraph(keep, newNodes, moved)
   local veh = playerVeh()
   if not keep or not veh or not newNodes then return end
+  -- (a rebase moved the graph, navgraph.transform: the same ids, every position moved. The AI drops its plan by
+  -- itself when its car gets the new map (ai.lua updateGFX: a new mapmgr.mapData -> currentRoute nil) and plans its
+  -- path again on it; a path given here would only reset it)
+  if moved then M.graphMoves = (M.graphMoves or 0) + 1 end
   local ids = M.validFrom(keep.ids, 1, { newNodes })
   -- the AI's whole path ahead is still a path of the new graph: left alone (each new path resets the AI: the
   -- gearbox's "arcade" note, and right after one it swerved onto a sidewalk into a pole, Lauterbrunnen 2026-10-15)

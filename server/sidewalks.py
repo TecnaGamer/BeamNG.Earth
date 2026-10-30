@@ -47,16 +47,6 @@ V_BAND_TOP, V_LIGHT_LOW, V_BAND_LOW = 1.0 - 1 / 512, 1.0 - 40 / 512, 1.0 - 63 / 
 V_SLAB_IN, V_SLAB_OUT = 1.0 - 0.195, 1.0 - 0.005
 
 
-def _orient(tris, P, want):
-    """tris (m, 3) flipped where their normal points against want (m, 3) or (3,)."""
-    a, b, c = P[tris[:, 0]], P[tris[:, 1]], P[tris[:, 2]]
-    n = np.cross(b - a, c - a)
-    flip = (n * want).sum(-1) < 0
-    tris = tris.copy()
-    tris[flip] = tris[flip][:, ::-1]
-    return tris
-
-
 def _normals_2d(xy):
     """Unit left normals at each point of a polyline (mitred like roads.offset_polyline, clamped)."""
     d = np.diff(xy, axis=0)
@@ -84,7 +74,7 @@ PAD_W = 0.6             # m of a ramp's slope from the curb that is the tactile 
 
 
 def profile(h=CURB_H, w=2.5, hr=None):
-    """The cross-section points (offset from the curb line outwards, height above the road): face
+    """(The reference the Rust sweep follows, earthfast sidewalks.rs profile: tests pin its shape.) The cross-section points (offset from the curb line outwards, height above the road): face
     bottom, face top, nose end, curb top end, ramp end, slab outer top, back bottom (BACK_RUN out). hr: the curb's
     height (h, or lower at a curb ramp: the slab then climbs from hr at the curb top to h at
     RAMP_RUN)."""
@@ -158,138 +148,28 @@ def simplify(pts, tol=LEAN_TOL_M):
     return np.nonzero(keep)[0]
 
 
-def curb_heights(s, ramps, h=CURB_H):
-    """The curb height at arc lengths s along a run with curb ramps [(s0, s1)]: RAMP_H inside, sloping
-    back to h over RAMP_FLARE either side. Pure."""
-    hr = np.full(len(s), float(h))
-    for s0, s1 in ramps:
-        d = np.maximum(s0 - s, s - s1)          # < 0 inside the ramp
-        f = np.clip(d / RAMP_FLARE, 0.0, 1.0)
-        hr = np.minimum(hr, RAMP_H + f * (h - RAMP_H))
-    return hr
-
-
-def refine(s, ramps, step=0.5, margin=1.0):
-    """Arc lengths s with points added every `step` m around the ramps (so they have their shape)."""
-    extra = [np.arange(max(0.0, a - RAMP_FLARE - margin), min(s[-1], b + RAMP_FLARE + margin), step)
-             for a, b in ramps]
-    ends = [v for a, b in ramps for v in (a, b, a - RAMP_FLARE, b + RAMP_FLARE) if 0 < v < s[-1]]
-    return np.unique(np.r_[s, np.concatenate(extra) if extra else [], ends])
-
-
 class Builder:
-    """Accumulates sidewalk runs and corners into one mesh (positions relative to `origin`)."""
+    """Accumulates sidewalk runs and corners into one mesh (positions relative to `origin`), swept in Rust
+    (earthfast.sidewalk_mesh: the profile, ramps, tactile pads, caps and corner slabs, in the old Python's arithmetic
+    and order) when its arrays are asked for; collision: the lean collision mesh beside it (self.col.arrays())."""
 
     def __init__(self, origin, collision=False):
         self.origin = np.asarray(origin, np.float64)
-        self.P, self.UV, self.T, self.M = [], [], [], []
-        self.n = 0
-        self.col = Builder._lean(origin) if collision else None   # the lean collision mesh beside it
-        self.lean = False
-        self.europe = False
-
-    def _materials(self, indices):
-        return np.take((4, 5, 6, 3), indices) if self.europe else indices
-
-    @classmethod
-    def _lean(cls, origin):
-        b = cls(origin)
-        b.lean = True
-        return b
-
-    def _add(self, P, UV):
-        k = self.n
-        self.P.append(P)
-        self.UV.append(UV)
-        self.n += len(P)
-        return k
-
-    def _sections(self, curb, toward_out, w, h, hr):
-        """ring (k, 7, 3) of the cross-sections, and the per-point profiles (k, 7, 2)."""
-        k = len(curb)
-        prof = np.stack([profile(h, w, float(x)) for x in hr])
-        ring = np.empty((k, prof.shape[1], 3))
-        ring[:, :, :2] = curb[:, None, :2] + toward_out[:, None, :] * prof[:, :, 0:1]
-        ring[:, :, 2] = curb[:, None, 2] + prof[:, :, 1]
-        return ring - self.origin, prof
-
-    def _strips(self, ring, prof, toward_out, s, strips, tactile=None, slab=1):
-        k = len(ring)
-        for a, b, mat, va, vb in strips:
-            rep = CURB_REPEAT_M if mat == 0 else SLAB_REPEAT_M
-            if self.europe:
-                rep = 1.0 if mat == 0 else 2.0
-            P = np.concatenate([ring[:, a], ring[:, b]])
-            UV = np.concatenate([np.stack([s / rep, np.full(k, va)], 1), np.stack([s / rep, np.full(k, vb)], 1)])
-            if self.europe and mat == 1:
-                UV = np.concatenate([np.c_[s/2., prof[:, a, 0]/2.], np.c_[s/2., prof[:, b, 0]/2.]])
-            if mat == 1 and slab == BRICK:      # brick pavers: a tileable texture in world metres
-                UV = np.concatenate([np.stack([s / BRICK_REPEAT_M, prof[:, a, 0] / BRICK_REPEAT_M], 1),
-                                     np.stack([s / BRICK_REPEAT_M, prof[:, b, 0] / BRICK_REPEAT_M], 1)])
-                mat = BRICK
-            mats = np.full(k - 1, mat)
-            if tactile is not None and a == 3:  # the ramp's slope: a tactile pad where lowered
-                mats[tactile] = 2
-                UV = UV.copy()
-                tu = s / TACTILE_REPEAT_M
-                UV[:k, 0] = np.where(np.concatenate((tactile, tactile[-1:])), tu, UV[:k, 0])
-                UV[k:, 0] = np.where(np.concatenate((tactile, tactile[-1:])), tu, UV[k:, 0])
-            base = self._add(P, UV)
-            i = np.arange(k - 1)
-            A, A1, B1, B = base + i, base + i + 1, base + k + i + 1, base + k + i
-            tris = np.concatenate([np.stack([A, B1, A1], 1), np.stack([A, B, B1], 1)])
-            # counter-clockwise seen from outside (dae convention): the profile runs clockwise
-            # (offset out, z up), so an edge's outward normal is its left normal (-dz, doff)
-            dp = 0.5 * ((prof[:-1, b] - prof[:-1, a]) + (prof[1:, b] - prof[1:, a]))
-            o3 = np.concatenate([toward_out[i], np.zeros((k - 1, 1))], 1)
-            want = -dp[:, 1:2] * o3 + dp[:, 0:1] * np.array([0.0, 0.0, 1.0])
-            self.T.append(base + _orient(tris - base, P, np.concatenate([want, want])))
-            self.M.append(self._materials(np.r_[mats, mats]))
+        self.pieces = []            # (kind 0 run / 1 corner, points (k, 3), dirs (k, 2), outer (m, 3), ramps, w, h, caps,
+        self._built = None          # slab, europe); the Rust meshes once built (full, lean)
+        self.col = _Lean(self) if collision else None
 
     def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False):
         """One sidewalk run: curb (k, 3) the curb line (z = the road there), toward_out (k, 2) unit
         vectors from the curb outwards (scaled by the miter), w its width; caps: end caps at the
         (start, end) (not where the run goes on in the next tile or meets a corner piece); ramps:
         curb ramps [(s0, s1)] in arc length along the curb."""
-        self.europe = bool(europe and not self.lean)
         curb = np.asarray(curb, np.float64)
-        toward_out = np.asarray(toward_out, np.float64)
         if len(curb) < 2:
             return
-        if self.col is not None:
-            self.col.add_run(curb, toward_out, w, h, caps, ramps)
-        s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(curb[:, :2], axis=0).T))))
-        if ramps:
-            s2 = refine(s, ramps)
-            curb = np.stack([np.interp(s2, s, curb[:, c]) for c in range(3)], axis=1)
-            toward_out = np.stack([np.interp(s2, s, toward_out[:, c]) for c in range(2)], axis=1)
-            s = s2
-        hr = curb_heights(s, ramps, h)
-        if self.lean:                           # the collision mesh: fewer points, the lean profile
-            keep = simplify(np.c_[curb, hr])
-            curb, toward_out, s, hr = curb[keep], toward_out[keep], s[keep], hr[keep]
-        k = len(curb)
-        ring, prof = self._sections(curb, toward_out, w, h, hr)
-        if self.lean:
-            ring, prof = ring[:, LEAN], prof[:, LEAN]
-            self._strips(ring, prof, toward_out, s, LEAN_STRIPS)
-        else:
-            low = hr < h - 1e-6
-            tactile = (low[:-1] | low[1:]) if low.any() else None
-            self._strips(ring, prof, toward_out, s, STRIPS, tactile, slab)
-        for end, sgn, cap in ((0, -1, caps[0]), (k - 1, 1, caps[1])):   # end caps: a fan over the profile
-            if not cap:
-                continue
-            P = ring[end]
-            pr = prof[end]
-            UV = np.stack([pr[:, 0] / CURB_REPEAT_M, V_BAND_LOW + (pr[:, 1] + SINK) / (h + SINK + 0.05)
-                           * (V_LIGHT_LOW - V_BAND_LOW)], 1)
-            base = self._add(P, UV)
-            fan = np.array([(base, base + j, base + j + 1) for j in range(1, len(pr) - 1)])
-            t = curb[min(end + 1, k - 1), :2] - curb[max(end - 1, 0), :2]
-            t = np.r_[t / max(np.hypot(*t), 1e-9), 0.0] * sgn
-            self.T.append(base + _orient(fan - base, P, t))
-            self.M.append(self._materials(np.full(len(fan), 0)))
+        self.pieces.append((0, curb[:, :3], np.asarray(toward_out, np.float64)[:, :2], None, list(ramps), float(w),
+                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe)))
+        self._built = None
 
     def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False):
         """A corner piece: the curb along the polyline arc (k, 3) (a curb return, with the straight
@@ -297,73 +177,70 @@ class Builder:
         the curb top to the outer corner points [(x, y, z) ...] (from the second sidewalk's end round
         to the first's), and the back faces along the outer edges. ramps: [(s0, s1)] arc lengths
         where the curb is lowered (the slab then slopes up from it toward the outer corner)."""
-        self.europe = bool(europe and not self.lean)
-        arc = np.asarray(arc, np.float64)
-        inward = np.asarray(inward, np.float64)
-        if self.col is not None:
-            self.col.add_corner(arc, inward, outer, h, ramps)
-        s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(arc[:, :2], axis=0).T))))
-        if ramps:
-            s2 = refine(s, ramps)
-            arc = np.stack([np.interp(s2, s, arc[:, c]) for c in range(3)], axis=1)
-            inward = np.stack([np.interp(s2, s, inward[:, c]) for c in range(2)], axis=1)
-            inward /= np.maximum(np.hypot(*inward.T), 1e-9)[:, None]
-            s = s2
-        hr = curb_heights(s, ramps, h)
-        if self.lean:                           # the collision mesh: fewer points, the curb as one face
-            keep = simplify(np.c_[arc, hr])
-            arc, inward, s, hr = arc[keep], inward[keep], s[keep], hr[keep]
-        k = len(arc)
-        ring, prof = self._sections(arc, inward, 2.5, h, hr)
-        self._strips(ring, prof, inward, s, ((0, 3, 0, 0.0, 0.0),) if self.lean else CURB_STRIPS)
-        inner = ring[:, 3]                                  # the curb top's inner edge, at h
-        out = np.asarray(outer, np.float64) - self.origin
-        out[:, 2] = out[:, 2] + h + 2.5 * CROSS_SLOPE
-        poly = np.vstack([inner, out])                      # arc from Ti to Tj, then Tj_out, O, Ti_out
-        # planar, at the runs' texel density (the sheet is 4096 x 1024: SLAB_REPEAT_M wide, a quarter
-        # of that high); a constant v stretched one texel row over the corner (the user, 2026-10-11)
-        UV = np.c_[poly[:, 0] / SLAB_REPEAT_M, poly[:, 1] / (SLAB_REPEAT_M / 4.0)]
-        if self.europe:
-            UV = poly[:, :2]/2.
-        base = self._add(poly, UV)
-        m = len(poly)
-        if len(out) == 3:                                   # a fan from O
-            o_idx = k + 1
-            fan = np.array([(o_idx, a, (a + 1) % m) for a in range(m) if a != o_idx and (a + 1) % m != o_idx])
-        else:                                               # round a merged junction's connector: ear clipping
-            import buildings
-            xy = poly[:, :2]
-            area = float(np.sum(xy[:, 0] * np.roll(xy[:, 1], -1) - np.roll(xy[:, 0], -1) * xy[:, 1]))
-            order = np.arange(m) if area > 0 else np.arange(m)[::-1]
-            fan = order[buildings.triangulate(xy[order])]
-        self.T.append(base + _orient(fan, poly, np.array([0.0, 0.0, 1.0])))
-        self.M.append(self._materials(np.full(len(fan), 1)))
-        c = poly[:, :2].mean(axis=0)
-        drop = h + SINK + 2.5 * CROSS_SLOPE
-        for a, b in zip(out[:-1], out[1:]):                 # back faces down to the ground, sloping out (BACK_RUN)
-            t = b[:2] - a[:2]
-            nrm = np.array([t[1], -t[0]]) / max(float(np.hypot(*t)), 1e-9)
-            if nrm @ (0.5 * (a[:2] + b[:2]) - c) < 0:
-                nrm = -nrm
-            run = np.r_[nrm * BACK_RUN * drop, -drop]
-            P = np.array([a, b, b + run, a + run])
-            L = float(np.hypot(*(b[:2] - a[:2]))) / CURB_REPEAT_M
-            UV = np.array([[0, V_LIGHT_LOW], [L, V_LIGHT_LOW], [L, V_BAND_LOW], [0, V_BAND_LOW]])
-            mid = 0.5 * (a[:2] + b[:2])
-            want = np.r_[mid - c, 0.0]
-            base = self._add(P, UV)
-            quad = np.array([(0, 1, 2), (0, 2, 3)])
-            self.T.append(base + _orient(quad, P, want))
-            self.M.append(self._materials(np.zeros(2, int)))
+        self.pieces.append((1, np.asarray(arc, np.float64)[:, :3], np.asarray(inward, np.float64)[:, :2],
+                            np.asarray(outer, np.float64).reshape(-1, 3), list(ramps), 2.5, float(h), (False, False),
+                            1, bool(europe)))
+        self._built = None
 
     def empty(self):
-        return self.n == 0
+        return not self.pieces
+
+    def _native(self, ps):
+        """Unmodified 1.7.2 native geometry, for a batch of pieces with one palette."""
+        import fast
+        fast.require(104, "sidewalk_mesh")
+        kind = np.array([p[0] for p in ps], np.int64)
+        pts = np.ascontiguousarray(np.concatenate([p[1] for p in ps]) if ps else np.zeros((0, 3)))
+        dirs = np.ascontiguousarray(np.concatenate([p[2] for p in ps]) if ps else np.zeros((0, 2)))
+        off = np.r_[0, np.cumsum([len(p[1]) for p in ps])].astype(np.int64)
+        outs = [p[3] if p[3] is not None else np.zeros((0, 3)) for p in ps]
+        outer = np.ascontiguousarray(np.concatenate(outs) if ps else np.zeros((0, 3)))
+        ooff = np.r_[0, np.cumsum([len(o) for o in outs])].astype(np.int64)
+        rs = [np.asarray(p[4], np.float64).reshape(-1, 2) for p in ps]
+        ramps = np.ascontiguousarray(np.concatenate(rs) if ps else np.zeros((0, 2)))
+        roff = np.r_[0, np.cumsum([len(r) for r in rs])].astype(np.int64)
+        return fast._ef.sidewalk_mesh(
+            kind, pts, dirs, off, outer, ooff, ramps, roff, np.array([p[5] for p in ps], np.float64),
+            np.array([p[6] for p in ps], np.float64), np.array([p[7] for p in ps], bool).reshape(-1, 2),
+            np.array([p[8] for p in ps], np.int64), tuple(float(v) for v in self.origin), self.col is not None)
+
+    @staticmethod
+    def _join(meshes):
+        if len(meshes) == 1:
+            return meshes[0]
+        offsets = np.r_[0, np.cumsum([len(m[0]) for m in meshes])]
+        return (np.concatenate([m[0] for m in meshes]),
+                np.concatenate([m[1] + offsets[i] for i, m in enumerate(meshes)]),
+                np.concatenate([m[2] for m in meshes]), np.concatenate([m[3] for m in meshes]))
+
+    def _build(self):
+        if self._built is None:
+            # Keep contiguous batches: one native call in the usual single-country case,
+            # identical vertex/triangle order even where a tile straddles a border.
+            from itertools import groupby
+            batches = [(flag, list(ps)) for flag, ps in groupby(self.pieces, key=lambda p: p[9])]
+            if not batches:
+                batches = [(False, [])]
+            full, lean = [], []
+            for european, ps in batches:
+                drawn, collision = self._native(ps)
+                if european:
+                    P, T, UV, M = drawn
+                    UV = UV.copy()
+                    # Original tactile/brick UVs stay intact. Asphalt uses metre-scale
+                    # planar coordinates, the neutral curb repeats every metre.
+                    curb = np.unique(T[M == 0])
+                    slab = np.setdiff1d(np.unique(T[M == 1]), np.unique(T[M == 2]))
+                    UV[curb, 0] *= CURB_REPEAT_M
+                    UV[slab] = P[slab, :2] / 2.0
+                    drawn = P, T, UV, np.take((4, 5, 6, 3), M)
+                full.append(drawn)
+                lean.append(collision)       # palette never changes collision geometry/materials
+            self._built = self._join(full), self._join(lean)
+        return self._built
 
     def arrays(self):
-        P = np.concatenate(self.P)
-        UV = np.concatenate(self.UV)
-        T = np.concatenate(self.T)
-        M = np.concatenate(self.M)
+        P, T, UV, M = self._build()[0]
         return P, T, UV, M
 
     def write(self, path):
@@ -374,6 +251,20 @@ class Builder:
         """The lean collision mesh (Builder(collision=True)) as a never-drawn collision shape."""
         P, T, UV, M = self.col.arrays()
         return cdae.write(path, P, T, uvs=UV, material=MATERIALS[0], collision_only=True)
+
+
+class _Lean:
+    """A Builder's lean collision mesh (the same pieces: earthfast.sidewalk_mesh's second mesh)."""
+
+    def __init__(self, b):
+        self.b = b
+
+    def arrays(self):
+        P, T, UV, M = self.b._build()[1]
+        return P, T, UV, M
+
+    def empty(self):
+        return self.b.empty()
 
 
 def run_geometry(walk_line, side, w):

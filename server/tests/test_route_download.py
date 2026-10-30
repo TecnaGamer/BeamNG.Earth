@@ -127,6 +127,19 @@ class RouteDownloadTest(unittest.TestCase):
         self.assertEqual(dem.fetched, [])
         self.assertEqual(mapdata.fetched, [])
 
+    def test_modes(self):
+        # the GPS setting "Download along route": off sends the empty bar; the whole route reaches past ROUTE_AHEAD_MAX_M
+        c, sent = connection(FakeDem(), FakeMapdata())
+        earthd.Connection.route_download(c, 1, ROUTE, "off")
+        self.assertEqual(sent, [{"type": "route_download", "total": 0, "done": 0, "active": False}])
+        long_route = [[36.0, -115.0], [36.3, -115.0]]          # ~33 km north
+        totals = {}
+        for mode in ("ahead", "route"):
+            c, sent = connection(FakeDem(), FakeMapdata())
+            earthd.Connection.route_download(c, 1, long_route, mode)
+            totals[mode] = sent[-1]["total"]
+        self.assertGreater(totals["route"], totals["ahead"])
+
     def test_superseded_job_stops_early(self):
         conn_box = {}
 

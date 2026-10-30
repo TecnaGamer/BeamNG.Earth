@@ -9,6 +9,7 @@ from functools import lru_cache
 import gzip,hashlib,json,math
 from pathlib import Path
 import numpy as np
+from geotiles import box_owns
 
 DATA_PATH=Path(__file__).with_name('data')/'fr_direction_signs.json.gz'
 DATA_SHA256='be2a2a625ef55710c34c55f11a9ff05ac691d20775d6690da7c374b00702397f'
@@ -51,7 +52,7 @@ def add(frame,roads,box,french,mesh,ground=None,data=None):
             chosen=next((q for q in candidates if all(f._seg_dist_min(q,line)>=half+.65 for half,line in lines)),None)
             if chosen is None:continue
             p[:2]=chosen
-        if not(x0<=p[0]<x1 and y0<=p[1]<y1) or not french(*p):continue
+        if not box_owns(box, p[0], p[1]) or not french(*p):continue
         # Multiple relations on the same support: a stack, bounded to four rows.
         key=(round(float(p[0]),1),round(float(p[1]),1),tuple(s['labels']))
         if key in occupied:continue

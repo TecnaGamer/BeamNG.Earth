@@ -41,11 +41,15 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 -- A car heading for a graph node whose road the clip cut off (within 45 degrees, CUT_M or CUT_S of driving away) is
 -- respawned too: to the AI the cut is a dead end, and a car spawned facing one made a three-point turn on the spot
 -- (GitHub #72, "spawns the wrong way and tries to turn around immediately"; Bathurst 2026-10-21: 20 m from a cut)
--- A car that has just appeared (FRESH_S) turns round for a cut much farther ahead (Bathurst: 89 m): CUT_FRESH_M.
+-- A car that has just appeared (FRESH_S) turns round for a cut much farther ahead (Bathurst: 89 m): CUT_FRESH_M
+-- (250 m sent cars respawned near a cut straight back again: traffic popping in and out, PR #493, OmdevShastri).
+-- A car respawned for a cut or for standing still is not respawned for those again within COOLDOWN_S (one that
+-- leaves the block's guard still is at once).
 M.CUT_M = 60
 M.CUT_S = 4
-M.CUT_FRESH_M = 250
+M.CUT_FRESH_M = 95
 M.FRESH_S = 5
+M.COOLDOWN_S = 8.0
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
 -- At speed a car respawned behind the camera is never seen again: on a motorway every car ahead reached the block's
 -- edge within ~30 s and reappeared behind the player, who drove alone (GitHub #353, Albany to New York). Faster than
@@ -64,6 +68,7 @@ local lastApply = -math.huge
 local persistent = nil  -- the node table handed out once (research §2.7.2)
 local ours = false
 local foreign = false
+local urgent = false      -- a rebase moved the graph: applied again without waiting for MIN_GAP_S (M.transform)
 local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
@@ -273,7 +278,7 @@ local function setRules()
 end
 
 -- pre: toNodes' results built ahead (buildNodes), else made here
-local function apply(b, pre)
+local function apply(b, pre, moved)
   setRules()
   local tN = os.clock()
   local nodes, nn, ne, cl
@@ -317,7 +322,7 @@ local function apply(b, pre)
     persistent = m.nodes
   end
   local tA = os.clock()
-  if keep then pcall(gps.afterGraph, keep, m.nodes) end    -- before the vehicles' new map
+  if keep then pcall(gps.afterGraph, keep, m.nodes, moved) end    -- before the vehicles' new map
   stats.gpsMs = stats.gpsMs + (os.clock() - tA) * 1000
   be:queueAllObjectLua('mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
@@ -410,6 +415,7 @@ end
 -- Traffic cars the block left behind (or all, after a teleport), and stuck ones, are respawned on the graph.
 local stillSince = {}   -- car id -> os.clock() it stopped moving
 local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
+local lastTeleport = {} -- car id -> os.clock() it was last teleported
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
@@ -434,15 +440,18 @@ local function guard(b, all)
         seenAt[id] = { p.x, p.y, s0[3] }
         local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
-        if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
           stillSince[id] = nil
         end
         local d = pp and (p - pp):length() or math.huge
-        if all or toCut or not M.inside(b, p.x, p.y, M.GUARD_M) or M.stuck(stillSince[id], now, d) then
+        local underCooldown = (now - (lastTeleport[id] or -math.huge)) < M.COOLDOWN_S
+        local urgent = not M.inside(b, p.x, p.y, M.GUARD_M)
+        if all or urgent or (not underCooldown and (toCut or M.stuck(stillSince[id], now, d))) then
+          if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
           stillSince[id] = nil
+          lastTeleport[id] = now
           -- behind the camera: the stock default is 100-500 m in front of it, where the player sees the car
           -- pop in and its tyres smoke as it lands (the photo comparisons, 2026-10-14)
           local cp, cf = core_camera and core_camera.getPosition(), core_camera and core_camera.getForward()
@@ -525,6 +534,29 @@ end
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come
 -- back on the new place's graph once it is in.
 local heldActive = nil
+-- A rebase (core finishRebase, xf: the old frame -> the new one): the server's graph moved into the new anchor and
+-- applied again at once, as the roads and trees are moved. It was dropped instead (its anchor no longer the current
+-- one) and the game's map stayed in the old frame until the server's graph for the new anchor came, seconds later:
+-- the AI planned toward roads hundreds of metres off and swerved, into a street tree on North Front Street, Baltimore
+-- (Steam Deck, 3 of 3 rebase drives, 2026-10-29). The server's own graph replaces this one when it comes.
+function M.transform(xf, anchorId)
+  if not graph or not xf then return false end
+  local nodes = {}
+  for name, n in pairs(graph.nodes) do
+    local m = {}
+    for i, v in ipairs(n) do m[i] = v end
+    m[1], m[2], m[3] = xf:apply(n[1], n[2], n[3])
+    nodes[name] = m
+  end
+  graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
+            rules = graph.rules, moved = true }
+  dirty, urgent = true, true
+  if applied then applied.box = nil end
+  return true
+end
+
+function M.currentGraph() return graph end      -- (tests)
+
 function M.onTeleport()
   respawnAll = true
   local gt = gameplay_traffic
@@ -614,14 +646,24 @@ function M.update(aid, b, gov)
   if not (dirty or foreign) and applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty = true end
   if not (dirty or foreign) then return end
   local t = os.clock()
-  if t - lastApply < M.MIN_GAP_S and not foreign then return end
-  local pre = buildNodes(b)
-  if not pre or not room(gov) then return end
+  if t - lastApply < M.MIN_GAP_S and not foreign and not urgent then return end
+  -- (a moved graph, M.transform: built in one go and applied in this frame, whatever the frame budget: until the cars
+  -- have it their AI drives on points of the old frame)
+  local pre
+  if urgent then
+    setRules()
+    pre = { M.toNodes(graph, b and { b[1], b[2], b[3], b[4] } or nil, M.EDGE_M, M.rules.rightHandDrive) }
+  else
+    pre = buildNodes(b)
+    if not pre or not room(gov) then return end
+  end
   prep = nil
   lastApply = t
   dirty, foreign = false, false
+  local moved = urgent
+  urgent = false
   local sw = stopwatch.new()
-  local okA = apply(b, pre)
+  local okA = apply(b, pre, moved)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if okA then
     applied = { anchor = aid, serial = graph.serial, box = b and { b[1], b[2], b[3], b[4] } or {} }
@@ -666,6 +708,7 @@ function M.reset()
   pendingSignals = nil
   stillSince = {}
   seenAt = {}
+  lastTeleport = {}
   cuts = {}
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }

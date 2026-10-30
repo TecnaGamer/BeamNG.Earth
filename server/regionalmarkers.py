@@ -7,6 +7,7 @@ placement exclusions. Every object's country is tested at its actual position.
 """
 import math
 import numpy as np
+from geotiles import box_owns
 import europeinfra
 import delineatorprofiles
 
@@ -25,7 +26,7 @@ def place(roads, box, french_at, lighting=None):
     rows = delineators.place(roads,box,french_at,clearance_roads,lighting)
     x0,y0,x1,y1=box
     def put(kind,q,z,yaw=0,section=None):
-        if not (x0<=q[0]<x1 and y0<=q[1]<y1):return
+        if not box_owns(box, q[0], q[1]):return
         country=french_at(float(q[0]),float(q[1]),float(z))
         if country is True:country='FR'  # legacy tests / fr-varied
         kit=europeinfra.KITS.get(country)

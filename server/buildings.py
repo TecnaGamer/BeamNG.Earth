@@ -453,7 +453,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     arid West (district_town): single-storey main streets and ranch houses."""
     area = _area2(ring) / 2
     c = ring.mean(0)
-    seed = _hash01(round(float(c[0]) * 2), round(float(c[1]) * 2), round(area)) if look is None else look
+    # (its random choices: keyed on the map feature's id, the same from every anchor and tile; a ring without one
+    # by its local centroid, as before. Keyed on the centroid in the tile's frame alone, a house changed its look
+    # whenever a rebase moved the anchor: geotiles, 2026-10-29)
+    sid = attrs.get("seed_id")
+    seed = look if look is not None else _hash01(sid, "plan") if sid is not None else \
+        _hash01(round(float(c[0]) * 2), round(float(c[1]) * 2), round(area))
     style = region_style(lat, lon)
     _, _, hl, hw = oriented_box(ring)
     box_fill = area / max(4 * hl * hw, 1e-6)
@@ -2252,8 +2257,9 @@ class _PartsOf:
 
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None):
-    """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1)
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None):
+    """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
+    tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
     building in two cells is taken once, by id); elev(lat, lon) the physics ground. part_layers: the
     building parts of the same cells: a building whose parts all have heights is drawn as its parts
@@ -2296,7 +2302,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             e, n = mapgeom.enu_xy(f, frame, outer)
             k = len(e) - 1             # the same reduction as np.mean, without its wrapper (36k calls a tile set)
             cx, cy = float(e[:-1].sum() / k), float(n[:-1].sum() / k)
-            if not (x0 <= cx < x1 and y0 <= cy < y1):
+            if not (x0 <= cx < x1 and y0 <= cy < y1) if own is None else not own.owns(cx, cy):
                 continue
             if min_size is not None:
                 h_ = a["height"][i] if a.get("height") is not None else None
@@ -2308,6 +2314,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = {k: (a[k][i] if k in a else None) for k in
                   ("class", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color")}
+            if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
+                at["seed_id"] = str(key)
             hh_ = at.get("height")
             if hh_ is not None and np.isfinite(hh_) and 0 < hh_ < FLAT_FOOTPRINT_M and not parts_of.get(str(key)):
                 continue                # a mapped area, not a building (the Golden Gate toll plaza's 0.01 m footprint
@@ -2650,6 +2658,8 @@ FAR_SEND_M = float(os.environ.get("BNE_BLDFAR_SEND_M", "1600"))    # far buildin
                                                                     # sent within this (Euclidean: roads.tiles_near)
 FAR_DROP_M = float(os.environ.get("BNE_BLDFAR_DROP_M", str(FAR_SEND_M + 300)))     # ... dropped beyond
 FAR_PER_POSE = 4
+FAR_GEO = 1                 # the far geotiles' protocol (hello.farGeo, the mod's roads.lua M.FAR_GEO): far buildings,
+                            # skyline and far bridges in the global tiles' frames (blockworker.far_geo)
 
 
 MAIN_STREET_CLASSES = {"primary", "secondary", "tertiary"}
@@ -2877,10 +2887,12 @@ def road_tile_items(frame, tx, ty, md, ground, decks=None, skip=frozenset()):
     [(xy (k, 2), z (k,))] in the anchor frame (roads.BridgeProfiles.parts): buildings they run through get a way.
     skip: building ids left out (gas station canopies)."""
     import roads
-    x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
+    box = roads.tile_bbox(tx, ty)
+    x0, y0, x1, y1 = box
     cds = [md.cell(k, layers=("buildings", "building_parts", "roads", "infrastructure", "water"), kind="demand")
            for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
     return tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground,
+                          own=box if hasattr(box, "owns") else None,
                           part_layers=[c.layers.get("building_parts") for c in cds],
                           west_town=district_town(frame, tx, ty, md),
                           roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
@@ -2907,7 +2919,7 @@ POLES_COVERAGE = 0.30       # ... and its streets get wired wooden poles (furnit
 
 
 def coverage(items, tile=256.0):
-    """The share of the tile covered by building footprints."""
+    """The share of the tile (a square of side tile m: roads.tile_side) covered by building footprints."""
     return sum(_area2(s.ring) / 2 for s, _, _ in items if (s.min_h or 0) <= 0.5) / (tile * tile)
 
 
@@ -2935,28 +2947,41 @@ def road_tile(frame, tx, ty, md, ground, lines=None, props=None, items=None):
     return meshes, collider_boxes(items, x0, y0), collision_mesh(items)
 
 
-def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None):
-    """A far (render-only) building tile written to the session folder: (vfs path of its JSON, building
-    count) or None. The lite mesh of the same buildings as road_tile's."""
-    import json
-    import os
+FAR_LAYERS = ("buildings", "building_parts", "infrastructure", "roads", "water")
+
+
+def far_items(frame, tile, ty, md, ground, lamp_region=None):
+    """The far (lite) buildings of road tile (tile, ty) (an anchor tile, or a geotile: tile a geotiles.GeoBox, ty None:
+    its own buildings, those the road geotile of the same key holds) in frame: (items, lamps [[x, y, z], ...] of its
+    streets in frame, the tile's box)."""
     import roads
-    x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
-    cds = [md.cell(k, layers=("buildings", "building_parts", "infrastructure", "roads", "water"), kind="demand")
-           for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
-    items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground,
+    box = roads.tile_bbox(tile, ty)
+    x0, y0, x1, y1 = box
+    own = box if hasattr(box, "owns") else None
+    cds = [md.cell(k, layers=FAR_LAYERS, kind="demand") for k in roads.cells_of_tile(frame, tile, ty, margin=0.0)]
+    items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds],
-                           west_town=district_town(frame, tx, ty, md),
+                           west_town=district_town(frame, tile, ty, md),
                            garages_xy=garage_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
+    size = max(x1 - x0, y1 - y0)
+    lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
+                      built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)
+    return items, lamps, box
+
+
+def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None):
+    """A far (render-only) building tile written to the session folder: (vfs path of its JSON, building
+    count) or None. The lite mesh of the same buildings as road_tile's."""
+    import json
+    import os
+    items, lamps, (x0, y0, _x1, _y1) = far_items(frame, tx, ty, md, ground, lamp_region)
     mesh = build(items, lite=True)
     data = {"v": 1}
-    lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
-                      built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)
     if lamps:
         data["lamps"] = lamps
     if mesh is not None:
@@ -2995,10 +3020,11 @@ def built_squares(items, x0, y0, size, sq=256.0):
     return {k for k, v in n.items() if v >= FAR_LAMP_MIN_BLD}
 
 
-def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=256.0):
-    """The lamps of a far tile's streets: [x, y, z] in the anchor frame (rounded), at most FAR_LAMP_MAX. built: the
-    tile's built-up 256 m squares (built_squares); ground(lat, lon) the ground (arrays); region: furniture.lamp_region's
-    (the spacing)."""
+def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=256.0, own=None):
+    """The lamps of a far tile's streets: [x, y, z] in frame (rounded; z the frame's up at FAR_LAMP_Z over the ground),
+    at most FAR_LAMP_MAX. built: the tile's built-up 256 m squares (built_squares); ground(lat, lon) the ground
+    (arrays); region: furniture.lamp_region's (the spacing); own: a geotile's box (geotiles.OwnedBox): only its own
+    lamps (each in one tile)."""
     import furniture
     import roads as roadsmod
     import fast
@@ -3060,11 +3086,16 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
         return []
     keep = [k for k in range(len(st)) if lit_any[int(st[k, 2])]
             or (int((st[k, 0] - x0) // sq), int((st[k, 1] - y0) // sq)) in built]
-    st = st[keep][:FAR_LAMP_MAX]
+    st = st[keep]
+    if own is not None and len(st):
+        st = st[np.asarray(own.owns(st[:, 0], st[:, 1]), bool)]
+    st = st[:FAR_LAMP_MAX]
     if not len(st):
         return []
     lat, lon, _ = frame.enu_to_geodetic(st[:, 0], st[:, 1], 0.0)
-    z = np.asarray(ground(np.asarray(lat), np.asarray(lon)), np.float64) + FAR_LAMP_Z
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    h = np.asarray(ground(lat, lon), np.float64) + FAR_LAMP_Z
+    z = np.asarray(frame.geodetic_to_enu(lat, lon, h)[2], np.float64)     # (the frame's up: the Earth's curvature)
     return np.round(np.c_[st[:, 0], st[:, 1], z], 1).tolist()
 
 
@@ -3156,16 +3187,11 @@ def _sky_mesh(items):
     return P, UV, T, M, MATERIALS, C
 
 
-def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=None):
-    """A skyline tile (render-only) written to the session folder: (vfs path of its JSON, building count) or None
-    when its cells are not at hand (fetched in the background: asked again later). Key (ux, uy): SKY_UNIT x SKY_UNIT
-    road tiles from road tile (ux * SKY_UNIT, uy * SKY_UNIT)."""
-    import json
-    import roads
-    x0, y0, _, _ = roads.tile_bbox(ux * SKY_UNIT, uy * SKY_UNIT)
-    x1, y1 = x0 + SKY_UNIT * roads.TILE, y0 + SKY_UNIT * roads.TILE
-    keys = sorted({k for i in range(SKY_UNIT) for j in range(SKY_UNIT)
-                   for k in roads.cells_of_tile(frame, ux * SKY_UNIT + i, uy * SKY_UNIT + j, margin=0.0)}, key=str)
+def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
+    """The skyline's buildings of box (x0, y0, x1, y1) in frame over map cells keys: (picked items, lamps), or None when
+    the cells are not at hand (fetched in the background: asked again later). own: a geotile's box (its own buildings
+    and lamps, each in one tile)."""
+    x0, y0, x1, y1 = box
     # (and the roads: their street lamps, far_lamps)
     if not all(md.has(k, "buildings") and md.has(k, "roads") for k in keys):
         for k in keys:                      # (the background lane: never before what the player is near)
@@ -3173,9 +3199,10 @@ def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=N
         return None
     cds = [md.cell(k, layers=("buildings", "roads"), kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
-    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2))
-    lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
-                      built_squares(items, 0.0, 0.0, x1 - x0), ground, lamp_region)
+    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2), own=own)
+    size = max(x1 - x0, y1 - y0)
+    lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
+                      built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)
     for spec, _gmin, _gmax in items:        # (the simplest shape: a box or a few corners, a flat roof, nothing on it)
         ring = np.asarray(spec.ring, np.float64)
         if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
@@ -3194,6 +3221,23 @@ def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=N
             break
         picked.append(it)
         n += k
+    return picked, lamps
+
+
+def skyline_tile(frame, ux, uy, md, ground, out_dir, vfs_dir, aid, lamp_region=None):
+    """A skyline tile (render-only) written to the session folder: (vfs path of its JSON, building count) or None
+    when its cells are not at hand (fetched in the background: asked again later). Key (ux, uy): SKY_UNIT x SKY_UNIT
+    road tiles from road tile (ux * SKY_UNIT, uy * SKY_UNIT)."""
+    import json
+    import roads
+    x0, y0, _, _ = roads.tile_bbox(ux * SKY_UNIT, uy * SKY_UNIT)
+    x1, y1 = x0 + SKY_UNIT * roads.TILE, y0 + SKY_UNIT * roads.TILE
+    keys = sorted({k for i in range(SKY_UNIT) for j in range(SKY_UNIT)
+                   for k in roads.cells_of_tile(frame, ux * SKY_UNIT + i, uy * SKY_UNIT + j, margin=0.0)}, key=str)
+    got = sky_items(frame, (x0, y0, x1, y1), keys, md, ground, lamp_region)
+    if got is None:
+        return None
+    picked, lamps = got
     mesh = _sky_mesh(picked) if picked else None
     data = {"v": 1}
     if mesh is not None:
@@ -3225,37 +3269,44 @@ BRIDGE_TOP_RGBA = (92, 92, 94, 255)        # the deck's asphalt from afar
 BRIDGE_SIDE_RGBA = (176, 174, 168, 255)    # its concrete
 
 
-def _bridge_slab(parts, x0, y0, x1, y1):
-    """The slab mesh of the bridge parts [(xy (k, 2), z (k,), width m)] (anchor frame) for the segments whose midpoint
-    is in [x0, x1) x [y0, y1), relative to (x0, y0), or None."""
+FAR_NEED = 106             # earthfast.bridge_slabs
+
+
+def bridge_slabs(parts, origin, box=None, owners=None):
+    """The slab meshes of the bridge parts [(xy (k, 2), z (k,), width m)] (in one frame), relative to origin (x, y),
+    by owner (earthfast.bridge_slabs): box (x0, y0, x1, y1): the segments whose midpoint is in [x0, x1) x [y0, y1), one
+    mesh under the key None; owners (frame, cz, pz, px, py): those whose midpoint's place lies in a zoom-cz geotile
+    under the zoom-pz one (px, py), a mesh per geotile {(gx, gy): mesh}. Each (positions, uvs, tris, tri materials,
+    MATERIALS, colours) as build: the deck's top, its sides and its underside down to its girders, plain grey."""
+    import fast
     import roadmesh
-    m = Mesh()
+    parts = [(np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64), float(w)) for xy, z, w in parts]
+    parts = [p for p in parts if len(p[0]) >= 2]
+    if not parts:
+        return {}
+    fast.require(FAR_NEED, "bridge_slabs")
+    xy = np.ascontiguousarray(np.concatenate([p[0] for p in parts]))
+    z = np.ascontiguousarray(np.concatenate([p[1] for p in parts]))
+    off = np.r_[0, np.cumsum([len(p[0]) for p in parts])].astype(np.int64)
+    w = np.array([p[2] for p in parts], np.float64)
+    if owners is None:
+        lat0 = lon0 = 0.0
+        cz = pz = px = py = 0
+        bb = tuple(float(v) for v in box)
+    else:
+        frame, cz, pz, px, py = owners
+        lat0, lon0, bb = float(frame.lat0), float(frame.lon0), (0.0, 0.0, 0.0, 0.0)
+    got = fast._ef.bridge_slabs(xy, z, off, w, (float(origin[0]), float(origin[1])),
+                                float(roadmesh.DECK_DEPTH + roadmesh.GIRDER_D), BRIDGE_TOP_RGBA, BRIDGE_SIDE_RGBA, bb,
+                                lat0, lon0, int(cz), int(pz), int(px), int(py))
     mi = MATERIALS.index(MARBLE)
-    uv = SKY_UV
-    top, side = (mi, BRIDGE_TOP_RGBA), (mi, BRIDGE_SIDE_RGBA)
-    depth = roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
-    for xy, z, w in parts:
-        xy = np.asarray(xy, np.float64)[:, :2]
-        z = np.asarray(z, np.float64)
-        if len(xy) < 2:
+    out = {}
+    for gx, gy, P, T, C in got:
+        if not len(T):
             continue
-        nrm = roadmesh._normals(xy) * (w / 2.0)
-        L, R = xy + nrm - (x0, y0), xy - nrm - (x0, y0)
-        mid = (xy[:-1] + xy[1:]) / 2.0
-        inside = (mid[:, 0] >= x0) & (mid[:, 0] < x1) & (mid[:, 1] >= y0) & (mid[:, 1] < y1)
-        for i in np.flatnonzero(inside):
-            j = i + 1
-            a, b, zt0, zt1 = L[i], L[j], z[i], z[j]
-            c, d = R[i], R[j]
-            zb0, zb1 = zt0 - depth, zt1 - depth
-            m.quad((a[0], a[1], zt0), (c[0], c[1], zt0), (d[0], d[1], zt1), (b[0], b[1], zt1), uv, uv, uv, uv, top)
-            m.quad((a[0], a[1], zb0), (a[0], a[1], zt0), (b[0], b[1], zt1), (b[0], b[1], zb1), uv, uv, uv, uv, side)
-            m.quad((d[0], d[1], zb1), (d[0], d[1], zt1), (c[0], c[1], zt0), (c[0], c[1], zb0), uv, uv, uv, uv, side)
-            m.quad((c[0], c[1], zb0), (a[0], a[1], zb0), (b[0], b[1], zb1), (d[0], d[1], zb1), uv, uv, uv, uv, side)
-    if not m.n:
-        return None
-    P, UV, T, M, C = m.arrays()
-    return P, UV, T, M, MATERIALS, C
+        UV = np.tile(np.asarray(SKY_UV, np.float64), (len(P), 1))
+        out[None if owners is None else (int(gx), int(gy))] = (P, UV, T, np.full(len(T), mi, np.int64), MATERIALS, C)
+    return out
 
 
 def far_bridge_tile(frame, tx, ty, md, bridges, out_dir, vfs_dir, aid):
@@ -3272,7 +3323,7 @@ def far_bridge_tile(frame, tx, ty, md, bridges, out_dir, vfs_dir, aid):
         return None
     cells = [md.cell(k, layers=("roads",), kind="background").layers.get("roads") for k in keys]
     parts = [(xy, z, float(spec.width)) for _fid, spec, xy, z, _lon in bridges.parts(cells, (x0, y0, x1, y1))]
-    mesh = _bridge_slab(parts, x0, y0, x1, y1) if parts else None
+    mesh = bridge_slabs(parts, (x0, y0), box=(x0, y0, x1, y1)).get(None) if parts else None
     data = {"v": 1}
     if mesh is not None:
         shape = f"brfar_{aid}_{tx}_{ty}.cdae"
@@ -3393,10 +3444,10 @@ BRICK_WALK_COVERAGE = 0.35  # dense old cores (row houses) of brick regions ...
 BRICK_WALK_SHARE = 0.55     # ... pave this share of their streets' sidewalks with brick (hashed per street)
 
 
-def brick_walks(walks, items, lat, lon):
+def brick_walks(walks, items, lat, lon, tile=256.0):
     """Marks the sidewalk runs (roads.build_tile's walks) of a dense brick-region tile that are brick pavers
     (Fells Point's historic streets): every run of a street the same."""
-    if not walks or brick_share(lat, lon) < 0.7 or coverage(items) < BRICK_WALK_COVERAGE:
+    if not walks or brick_share(lat, lon) < 0.7 or coverage(items, tile) < BRICK_WALK_COVERAGE:
         return
     for wk in walks:
         fid = wk.get("fid")

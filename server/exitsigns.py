@@ -439,15 +439,16 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
             # vary through lane-count changes, rather than being the native Spec width.
             edge = abs((cross[k]*(1.-t)+cross[k+1]*t)@right)*paved_width/2.
             centre = at[:2] + right * side * (edge + 2. + width / 2.)
-            if kind == 'decision':
-                # Never put the new panel in a nearby ramp/frontage-road pavement.
-                polygons = _outlines(pavements)
-                for _ in range(12):
-                    if _clear(centre, width/2+.5, polygons):
-                        break
-                    centre += right*side
-                else:
-                    continue
+            # Never put a panel in a nearby road's pavement or on a bridge deck (a ramp still mapped as a bridge where it
+            # comes down: not in the ground pavements; an EXIT 3 panel stood in the Fallsway's lane where the Jones
+            # Falls Expressway's Guilford Avenue ramp lands, Baltimore 2026-10-29). Advance panels too.
+            polygons = _outlines(pavements)
+            for _ in range(12):
+                if _clear(centre, width/2+.5, polygons) and not _on_deck(centre, chunks, width/2+1.):
+                    break
+                centre += right*side
+            else:
+                continue
             if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1) or _on_deck(at[:2], chunks, 2.):
                 continue
             out.append(_make_sign(obj, kind, centre, travel, at, frame, elev, side, width, height, text, distance, state))
@@ -603,7 +604,10 @@ def dimensions(label, kind, state=''):
                   + (.28+guide_width(r['qualifier'].title(),.46)
                      if r['qualifier'] in ('NORTH','SOUTH','EAST','WEST') else 0.) for r in routes]
         width = min(6.0, max(3.5, max([guide_width(s,.58) for s in names]+groups+[0.])+.65))
-        return width, max(width*1.22, .6+len(routes)*1.20+len(names)*.85+1.1)
+        # (its content's height, a little taller for the portrait look: width * 1.22 alone made a long one-name panel
+        # ~6 m tall and nearly empty, the Guilford Avenue exit, Baltimore 2026-10-29)
+        content = .6+len(routes)*1.20+len(names)*.85+1.1
+        return width, max(content, min(width*1.22, content*1.35))
     lines = label['names'] or ([] if label['routes'] else ['EXIT '+label['ref']])
     longest = max([guide_width(s, .64) for s in lines]+[2.7])
     width = min(8.5, max(5., longest+.76+.95+(1.45 if label['routes'] else 0.)))

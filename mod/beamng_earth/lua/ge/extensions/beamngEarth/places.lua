@@ -456,8 +456,12 @@ function M.cannotGo()
   local core = rawget(_G, 'beamngEarth_core')
   if not core or not core.teleport then return 'BeamNG.Earth is not loaded' end
   if not net.isConnected() then return 'Companion server not connected' end
-  local gpv = rawget(_G, 'getPlayerVehicle')
-  if not gpv or not gpv(0) then return 'No player vehicle (load a level first)' end
+  -- (no car needed: with none the free camera goes there, core.placePlayer; the user, 2026-10-28: "teleport to
+  -- locations without being in a vehicle". The car stood in for a level being loaded)
+  local st = core._state and core._state() or nil
+  if not (st and st.inOurLevel) then return 'Load the BeamNG.Earth level first' end
+  -- (the ground where the player is loaded first: a teleport under way, being set down; core.groundReady)
+  if core.groundReady and not core.groundReady() then return 'Loading the ground: wait a moment' end
   return nil
 end
 

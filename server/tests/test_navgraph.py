@@ -37,6 +37,20 @@ class GraphTest(unittest.TestCase):
             self.assertEqual((e[3], e[4]), (1, 1), "a two-way residential street: one lane each way")
             self.assertAlmostEqual(e[5], 25 * navgraph.MPH, places=2)
 
+    def test_offset_connector_at_the_widest_road(self):
+        """A ramp's line ends 3.3 m off the motorway's joint at their shared connector (I-83 in Baltimore): the node
+        stands on the motorway's line, whichever road comes first."""
+        for order in (0, 1):
+            lines = [[(0, -200), (0, 0)], [(0, 0), (0, 200)], [(60, -150), (3.3, 0)]]
+            classes = ["primary", "primary", "residential"]
+            con = [(0, "J", 1.0, 1.0), (1, "J", 0.0, 0.0), (2, "J", 1.0, 1.0)]
+            if order:
+                lines, classes = lines[::-1], classes[::-1]
+                con = [(2 - f, c, a, b) for f, c, a, b in con]
+            x, y, _z, _r = graph(lines, classes, connectors=con)["nodes"]["cJ"]
+            self.assertAlmostEqual(x, 0.0, delta=0.05, msg=order)
+            self.assertAlmostEqual(y, 0.0, delta=0.05)
+
     def test_long_edges_split_and_oneway_against_the_geometry(self):
         g = graph([[(0, 0), (300, 0)]], ["secondary"], connectors=[(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)],
                   oneway=[(0, -1.0)], speeds=[(0, 72.0)])

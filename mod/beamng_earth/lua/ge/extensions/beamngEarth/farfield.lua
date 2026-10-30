@@ -33,7 +33,16 @@
 --     takes the new file when it is. Nothing is deleted here: the server deletes the old file with the
 --     tile's other files.
 -- Keys are opaque. A tile's footprint is [pos.x, pos.x + 256*2^level] x [pos.y, ...] (levels below
--- 0 are the finer near tiles of mesh mode: L-1 = 128 m, L-2 = 64 m).
+-- 0 are the finer near tiles of mesh mode: L-1 = 128 m, L-2 = 64 m), or the AABB of its `poly` (flat x, y list).
+--
+-- Global far tiles (geotiles phase 3b, hello.globalFar = GLOBAL_FAR; server farfield.select_global): from far level 3
+-- up the server sends tiles of the Web-Mercator grid (key 'm<z>_<x>_<y>') made in their own frame: far_tile.frame
+-- {lat, lon}, pos {0, 0, pivot z}, poly (its quad in the anchor's world, for the footprint). This module places them
+-- into the current anchor's world (geotile.placement at the pivot: rigid, setPosRot) and keeps them across rebases and
+-- teleports, placed again into the new anchor (transform / switchAnchor with the new anchor): the server keeps them
+-- shown and never sends them again. Their instances carry anchor GLOBAL_AID (0). Near the player the anchor's own
+-- tiles fill the refined global tiles; those across that region's edge are pieces ('<L>_<i>_<j>_c<z>_<x>_<y>', a
+-- node's mesh cut to a global tile, footprint from poly).
 --
 -- Near visual (server hello.nearVisual, setNearVisual):
 --   'terrain' (v1.2): the TerrainBlock is the visible near ground. The server keeps the 8 x 8 L0
@@ -91,6 +100,7 @@ local crossover = require('beamngEarth/crossover')
 local lattice = require('beamngEarth/lattice')
 local satmat = require('beamngEarth/satmat')
 local governor = require('beamngEarth/governor')
+local geotile = require('beamngEarth/geotile')
 
 local floor, min, max, abs, huge, ln = math.floor, math.min, math.max, math.abs, math.huge, math.log
 local sqrt, deg, rad, atan, tan = math.sqrt, math.deg, math.rad, math.atan, math.tan
@@ -116,6 +126,8 @@ M.MAX_LEVEL = 9         -- coarsest level (server farfield.MAX_LEVEL); the horiz
                         -- are never under the player (they split within 328 km), so shownAt stops here
 M.EXACT_OFF = 0.01      -- m; an exact tile further than this off its height (crossover) is a miss
 M.RETEX_PER_FRAME = 2   -- far_retex material switches per frame at most (each also a governor unit)
+M.GLOBAL_FAR = 1        -- hello.globalFar: global far tiles placed here (server farfield.GLOBAL_PROTO)
+M.GLOBAL_AID = 0        -- the anchor id of a global tile's instance (it belongs to none)
 
 local pending = {}      -- key -> instance received but not shown yet (current anchor)
 local live = {}         -- key -> shown instance (current anchor), covered or not
@@ -161,6 +173,7 @@ local clock = 0         -- s, transition clock (advanced by update)
 local materialChecked = false
 local nearVisual = 'terrain' -- 'terrain' | 'mesh' | 'detail' (server hello; survives forget(): a server setting)
 local rawView = false        -- detail mode, dev tools: the tiles are the ground (the block hidden by core)
+local anchorObj = nil        -- the current anchor (geodesy): global tiles are placed into its world (setAnchor)
 
 -- The tiles use the mesh-mode layout and rules (import order, old-anchor drops, the exact-ground metric).
 local function meshLayout() return nearVisual ~= 'terrain' end
@@ -288,7 +301,53 @@ end
 ------------------------------------------------------------------------------------------
 -- instances
 
+-- A global tile placed into anchor a's world (geotile.placement at its pivot, rigid) and its footprint: the AABB of
+-- its quad there.
+local function placeGlobal(inst, a)
+  local g = inst.global
+  if not g or not a then return end
+  local pl = geotile.placement(g.frame, a, 0, 0, g.pz)
+  local xf = geodesy.transformOf(pl.r, pl.t)
+  inst.x, inst.y, inst.z = xf:apply(0, 0, g.pz)
+  inst.qx, inst.qy, inst.qz, inst.qw = xf:beamngQuat()
+  inst.rotated = true
+  local q = geotile.quad(a, g.z, g.x, g.y)
+  inst.x0, inst.y0 = min(q[1][1], q[2][1], q[3][1], q[4][1]), min(q[1][2], q[2][2], q[3][2], q[4][2])
+  inst.x1, inst.y1 = max(q[1][1], q[2][1], q[3][1], q[4][1]), max(q[1][2], q[2][2], q[3][2], q[4][2])
+end
+M._placeGlobal = placeGlobal
+
+-- (z, x, y) of a global key 'm<z>_<x>_<y>', or nil.
+function M.parseGlobal(key)
+  local z, x, y = tostring(key):match('^m(%d+)_(%-?%d+)_(%-?%d+)$')
+  if not z then return nil end
+  return tonumber(z), tonumber(x), tonumber(y)
+end
+
 local function newInst(msg, seq)
+  local inst = M._newInst(msg, seq)
+  local poly = type(msg.poly) == 'table' and msg.poly or nil
+  if poly and #poly >= 6 then -- a piece's / a global tile's footprint
+    local x0, y0, x1, y1 = huge, huge, -huge, -huge
+    for k = 1, #poly - 1, 2 do
+      local px, py = tonumber(poly[k]) or 0, tonumber(poly[k + 1]) or 0
+      x0, y0, x1, y1 = min(x0, px), min(y0, py), max(x1, px), max(y1, py)
+    end
+    inst.x0, inst.y0, inst.x1, inst.y1 = x0, y0, x1, y1
+  end
+  local z, gx, gy = M.parseGlobal(msg.key)
+  if z and type(msg.frame) == 'table' then
+    local fr = geotile.frameOf(msg)
+    if fr then
+      inst.global = { z = z, x = gx, y = gy, frame = fr, pz = inst.z }
+      inst.anchor = M.GLOBAL_AID
+      placeGlobal(inst, anchorObj)
+    end
+  end
+  return inst
+end
+
+function M._newInst(msg, seq)
   local level = tonumber(msg.level) or 0
   local size = lattice.L0 * 2 ^ level
   local x, y, z = tonumber(msg.pos[1]) or 0, tonumber(msg.pos[2]) or 0, tonumber(msg.pos[3]) or 0
@@ -391,6 +450,7 @@ local function spawn(inst)
   serial = serial + 1
   o:registerObject('bngEarthFar_' .. serial .. '_' .. (inst.key:gsub('[^%w_]', '_')))
   scenetree.MissionGroup:addObject(o)
+  if inst.rotated then writePos(o, inst, 0) end -- (a global tile: its placement's rotation)
   inst.id, inst.loaded, inst.off, inst.hidden = o:getID(), true, 0, true
   if M.pooledShape(inst.shape) then
     slotHolder[inst.shape], holderPath[inst.id] = inst.id, inst.shape
@@ -971,8 +1031,9 @@ end
 -- geodesy Anchor:transformTo). TSStatic:setPosRot(x,y,z, qx,qy,qz,qw) takes a BeamNG quaternion
 -- (editor/tech/roadArchitect/staticMesh.lua:151, tech/techCore.lua handleTeleportScenarioObject).
 -- The tile's own rotation is applied first, then R: q_new = q_old * Rq (BeamNG order).
--- Running transitions end first. Call before switchAnchor(..., true).
-function M.transform(xf)
+-- Running transitions end first. Call before switchAnchor(..., true). newAnchor (geodesy): the new anchor, into whose
+-- world the global tiles are placed exactly (their own placement, not the move).
+function M.transform(xf, newAnchor)
   finishAll()
   dropAllSpares() -- their positions are the old frame's
   if xf.inverse then
@@ -984,6 +1045,11 @@ function M.transform(xf)
   local bx, by, bz, bw = xf:beamngQuat()
   local function move(inst)
     if inst.doomed then return end
+    if inst.global and newAnchor then
+      placeGlobal(inst, newAnchor)
+      setTransform(inst)
+      return
+    end
     local s = inst.x1 - inst.x0
     -- footprint: AABB of the moved corners (slightly larger than the turned square)
     local ax, ay = xf:apply(inst.x0, inst.y0, inst.z)
@@ -999,8 +1065,26 @@ function M.transform(xf)
   end
   for _, inst in pairs(live) do move(inst) end
   for _, inst in pairs(old) do move(inst) end
+  if newAnchor then anchorObj = newAnchor end
   if watcher then watcher.onReset() end
 end
+
+-- The current anchor (geodesy) the global tiles are placed into; a change places every kept one again.
+function M.setAnchor(a)
+  if a == anchorObj then return end
+  anchorObj = a
+  if not a then return end
+  for _, set in ipairs({ live, pending }) do
+    for _, inst in pairs(set) do
+      if inst.global and not inst.doomed then
+        placeGlobal(inst, a)
+        if inst.id then setTransform(inst) end
+      end
+    end
+  end
+end
+
+function M.anchorObj() return anchorObj end
 
 -- New committed anchor. keepOld=true (rebase): current tiles stay until the server removes them or
 -- the new far_done. keepOld=false (teleport): everything is hidden at once and deleted progressively.
@@ -1008,21 +1092,37 @@ end
 -- newSession: the server session the new anchor belongs to (hello.sessionId; nil = unchanged). A
 -- resync with a restarted server keeps the old session's tiles like a rebase; its far_removes never
 -- come (the new server does not know them), so they go when covered (mesh) or at the new far_done.
-function M.switchAnchor(newAnchorId, keepOld, blk, newSession)
+function M.switchAnchor(newAnchorId, keepOld, blk, newSession, newAnchor)
   switching = true
-  local ok, err = pcall(switchAnchor, newAnchorId, keepOld, blk, newSession)
+  local ok, err = pcall(switchAnchor, newAnchorId, keepOld, blk, newSession, newAnchor)
   switching = false
   dropAllSpares()
   if not ok then error(err, 0) end
 end
 
-switchAnchor = function(newAnchorId, keepOld, blk, newSession)
+switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
   finishAll()
   dropAllSpares()
   ensureMaterial()
+  -- global tiles stay shown (the server keeps them, any anchor's), placed into the new anchor; another server
+  -- session's are a previous anchor's tiles (that server does not know them)
+  local sameSession = newSession == nil or newSession == session
+  local due = minPendingSeq() -- (with the global tiles still loading: a removal after one waits for it)
+  local globals, loading = {}, {}
+  if sameSession then
+    for key, inst in pairs(live) do
+      if inst.global and not inst.doomed then globals[key] = inst end
+    end
+    for key in pairs(globals) do live[key] = nil end
+    -- ... and those still loading (sent, not swapped in): the server keeps them sent, its swap comes under the new
+    -- anchor (sent again otherwise: a global tile in flight at a rebase was built and imported twice)
+    for key, inst in pairs(pending) do
+      if inst.global and not inst.doomed then loading[key] = inst end
+    end
+    for key in pairs(loading) do pending[key] = nil end
+  end
   local keep = {}
   if keepOld then
-    local due = minPendingSeq()
     -- removals whose adds are all shown stay valid in the new frame
     for i = rH, rT do
       local r = removals[i]
@@ -1046,8 +1146,24 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession)
     end
     old, oldCount, lossy, oldFrames = {}, 0, {}, {}
   end
-  pending, live = {}, {}
+  pending, live = loading, globals
+  if newAnchor and newAnchor ~= anchorObj then
+    anchorObj = newAnchor
+    for _, inst in pairs(globals) do
+      placeGlobal(inst, newAnchor)
+      setTransform(inst)
+    end
+  end
   mainQ, mH, mT, preQ, pH, pT, nQueued = {}, 1, 0, {}, 1, 0, 0
+  for _, inst in ipairs(bySeq(loading)) do      -- (transform moved only the shown ones)
+    placeGlobal(inst, anchorObj)
+    if inst.id then setTransform(inst) end
+    if inst.queued then
+      nQueued = nQueued + 1
+      if inst.prefetch then pT = pT + 1; preQ[pT] = inst else mT = mT + 1; mainQ[mT] = inst end
+    end
+  end
+  for _, inst in pairs(globals) do applyCover(inst, false) end
   groups, activeGroups, moving = {}, 0, {}
   removals, rH, rT = keep, 1, #keep
   anchorId = newAnchorId
@@ -1393,6 +1509,7 @@ function M.forget()
   objSlot = {}
   pending, live, old, oldCount, lossy, doomed, moving = {}, {}, {}, 0, {}, {}, {}
   oldFrames, under.level, under.old, under.miss = {}, nil, false, false
+  anchorObj = nil
   mainQ, mH, mT, preQ, pH, pT, nQueued = {}, 1, 0, {}, 1, 0, 0
   groups, activeGroups, removals, rH, rT = {}, 0, {}, 1, 0
   anchorId, doneReceived, block, session = nil, false, nil, nil
@@ -1413,10 +1530,12 @@ end
 function M.heldAnchors()
   local set = {}
   for _, inst in pairs(old) do
-    if inst.anchor ~= nil and inst.anchor ~= anchorId and inst.session == session then set[inst.anchor] = true end
+    if inst.anchor ~= nil and inst.anchor ~= anchorId and inst.anchor ~= M.GLOBAL_AID and inst.session == session then
+      set[inst.anchor] = true
+    end
   end
   for id, a in pairs(doomedAnchor) do
-    if a ~= anchorId and (doomedSession[id] or nil) == session then set[a] = true end
+    if a ~= anchorId and a ~= M.GLOBAL_AID and (doomedSession[id] or nil) == session then set[a] = true end
   end
   local out = {}
   for a in pairs(set) do out[#out + 1] = a end

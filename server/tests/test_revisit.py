@@ -65,6 +65,55 @@ class RevisitTest(unittest.TestCase):
             finally:
                 revisit.CACHE_DIR = old
 
+    def test_sidecar_lines_are_written_compacted_and_dropped(self):
+        """store(where=...) appends one line to this process's sidecar; compact() folds older files into one, the
+        last line per item, without the items whose zip is gone; a file written after `before` stays as it is."""
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            sig = revisit.sig(sidewalks=True, md={"overture": "2026-09-23.1"})
+            ks = [revisit.key("roads", 39.28, -76.56, i) for i in range(3)]
+            for i, k in enumerate(ks):
+                self.assertTrue(revisit.store(d, "roads", k, {"a": b"x"},
+                                              where=revisit.where(39.28, -76.56, 39.28 + i * 0.01, -76.56, 39.29, -76.55,
+                                                                  sig)))
+            self.assertTrue(revisit.store(d, "far", revisit.key("far", 1), {"a": b"x"}))     # (no where: no line)
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            mine = os.listdir(wd)
+            self.assertEqual(len(mine), 1)
+            with open(os.path.join(wd, mine[0])) as f:
+                rows = [revisit.parse_where(line) for line in f]
+            self.assertEqual([r[3] for r in rows], ks)
+            self.assertEqual(rows[0][:3], (revisit.code_key(), sig, "roads"))
+            self.assertAlmostEqual(rows[2][6], 39.30)
+            self.assertIsNone(revisit.parse_where("damaged\tline\n"))
+            # an older run's file: two lines for one item (the last wins), one item whose zip is gone
+            old = os.path.join(wd, "1_1.tsv")
+            with open(os.path.join(wd, mine[0])) as f:
+                lines = f.readlines()
+            gone = revisit.key("roads", 0, 0, 9)
+            with open(old, "w") as f:
+                f.writelines(lines + [lines[0], lines[0].replace(ks[0], gone)])
+            past = time.time() - 100
+            os.utime(old, (past, past))
+            self.assertEqual(revisit.compact(d, time.time() - 50), 3)
+            self.assertTrue(revisit.COMPACTED.is_set())
+            names = sorted(os.listdir(wd))
+            self.assertIn(mine[0], names, "this process's own file stays")
+            self.assertNotIn("1_1.tsv", names)
+            comp = [n for n in names if n.startswith("c")]
+            with open(os.path.join(wd, comp[0])) as f:
+                kept = [revisit.parse_where(line)[3] for line in f]
+            self.assertEqual(sorted(kept), sorted(ks), "the line whose zip is gone is dropped")
+
+    def test_settings_signature(self):
+        cur = {"sidewalks": True, "md": {"overture": "2026-09-23.1"}, "tone": 1.0}
+        s = revisit.sig(sidewalks=True, md={"overture": "2026-09-23.1"})
+        self.assertTrue(revisit.sig_current(s, cur))
+        self.assertFalse(revisit.sig_current(s, dict(cur, sidewalks=False)), "a setting changed")
+        self.assertFalse(revisit.sig_current(revisit.sig(lanes=1), cur), "a setting the server does not name")
+        self.assertTrue(revisit.sig_current("", cur))
+        self.assertEqual(revisit.sig(b=1, a=2), revisit.sig(a=2, b=1))
+
     def test_the_key_holds_the_code(self):
         self.assertEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 2))
         self.assertNotEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 3))

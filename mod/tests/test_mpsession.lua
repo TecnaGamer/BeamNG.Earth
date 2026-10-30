@@ -205,6 +205,13 @@ handlers.bngeAnchors('o')
 local o = ms.others()
 T.check(#o == 2 and o[1].name == 'bob' and o[1].h == 271.5 and o[2].name == 'player 3' and o[2].h == nil,
   'others: the other players, named, with headings')
+T.check(o[1].pid == '2' and o[2].pid == '3', 'others: with their server ids (the map keys and follows players by them)')
+-- two players of the same name stay two (their ids), in the same order every time
+decoded.same = { ['4'] = { aLat = 0, aLon = 179.9, lat = 0, lon = 179.9, name = 'bob' }, ['2'] = decoded.o['2'] }
+handlers.bngeAnchors('same')
+o = ms.others()
+T.check(#o == 2 and o[1].pid == '2' and o[2].pid == '4' and o[1].name == o[2].name, 'others: same-named players apart, by id')
+handlers.bngeAnchors('o')
 
 -- a car the game deleted here (BeamMP's sphere) comes back once its owner is near, not again at once
 local restored = {}
@@ -368,8 +375,8 @@ do -- a car switched off here: its BeamMP name tag hidden with it, shown again a
   ms.nametag(7, true)                       -- (no BeamMP: nothing)
   MPVehicleGE = saved
 end
-do -- no car (BeamMP joins without one): the free camera on the ground, and at a teleport's target on the ground again,
-   -- lower ground too (it was left hundreds of metres up and the car spawned there fell: the user, 2026-10-24)
+do -- no car (BeamMP joins without one): the free camera on the ground, and lifted when under it. A teleport's target is
+   -- core's to put the camera at (core.moveCamera; test_teleport_nocar.lua), so not the join's first spot after it
   local savedBe, savedCam, savedGet, savedQ = rawget(_G, 'be'), rawget(_G, 'core_camera'), rawget(_G, 'getPlayerVehicle'), rawget(_G, 'quatFromDir')
   local ground, put = 100, nil
   be = { getSurfaceHeightBelow = function(_, p) return ground end }
@@ -377,20 +384,37 @@ do -- no car (BeamMP joins without one): the free camera on the ground, and at a
   getPlayerVehicle = function() return nil end
   quatFromDir = quatFromDir or function() return { x = 0, y = 0, z = 0, w = 1 } end
   ms.onPostJoin()
-  ms.placeCamera({ x = 5, y = 5, z = 0 }, 'A')
-  T.check(put and put[3] == 103, 'first: on the ground at the origin')
+  ms.placeCamera({ x = 5, y = 5, z = 0 })
+  T.check(put and put[1] == 0 and put[2] == -8 and put[3] == 103, 'first: on the ground at the origin')
   put = nil
-  ms.placeCamera({ x = 0, y = -8, z = 400 }, 'A')
+  ms.placeCamera({ x = 0, y = -8, z = 400 })
   T.check(put == nil, 'a free camera flown up stays')
-  ms.onTeleport(30, 40)
-  ground = 2
-  ms.placeCamera({ x = 0, y = -8, z = 103 }, 'A')
-  T.check(put == nil, 'the teleport\'s anchor not in yet: not moved')
-  ms.placeCamera({ x = 0, y = -8, z = 103 }, 'B')
-  T.check(put and put[1] == 30 and put[2] == 40 and put[3] == 5, 'new anchor: at the target, 3 m over its ground')
+  ms.placeCamera({ x = 30, y = 40, z = 50 })
+  T.check(put and put[1] == 30 and put[2] == 40 and put[3] == 103, 'under the ground: lifted where it is, 3 m over it')
+  -- a teleport asked before the join's first placement (the ground not in yet): core places the camera, not the join
+  ms.onPostJoin()
   put = nil
-  ms.placeCamera({ x = 30, y = 40, z = 500 }, 'C')
-  T.check(put == nil, 'a rebase (no teleport): a free camera keeps its height')
+  ms.onTeleport()
+  ms.placeCamera({ x = 900, y = 700, z = 106 })
+  T.check(put == nil, 'after a teleport: the camera core put at its target (over the ground) is left there')
+  ms.placeCamera({ x = 900, y = 700, z = 60 })
+  T.check(put and put[1] == 900 and put[2] == 700, 'after a teleport: still lifted where it is when under the ground')
+  -- under the terrain but over collision just below: a tunnel's tube (core put it there, or flown in): left there
+  local savedRay = rawget(_G, 'castRayStatic')
+  local rayFrom = nil
+  castRayStatic = function(from, dir, len) rayFrom = from.z; return 2.5 end
+  put = nil
+  ms.placeCamera({ x = 900, y = 700, z = 60 })
+  T.check(put == nil, 'in the tube of a tunnel (collision 2.5 m under it): not lifted out onto the hill')
+  T.check(rayFrom and rayFrom <= 60.1 + 1e-9, 'the ray from the camera (from higher it met the ground over it)')
+  castRayStatic = function(from, dir, len) return len end        -- (the engine's "nothing hit": the length)
+  ms.placeCamera({ x = 900, y = 700, z = 60 })
+  T.check(put and put[3] == 103, 'under the terrain over nothing: lifted as before')
+  castRayStatic = savedRay
+  put = nil
+  getPlayerVehicle = function() return { id = 1 } end
+  ms.placeCamera({ x = 0, y = 0, z = -50 })
+  T.check(put == nil, 'a car: the camera is never moved here')
   be, core_camera, getPlayerVehicle, quatFromDir = savedBe, savedCam, savedGet, savedQ
 end
 T.done('test_mpsession')

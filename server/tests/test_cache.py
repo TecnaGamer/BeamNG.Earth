@@ -736,6 +736,97 @@ class PruneDirTest(unittest.TestCase):
         self.assertEqual(os.path.getmtime(path), 1, "once per process")
 
 
+class ChangeHookTest(Base):
+    """on_change (the map's cache view, covermap.py): called for keys new to the index and keys gone from it, never for
+    a repeat hit; the view's index follows the cache through writes, evictions, forgets and clears."""
+
+    def test_hook_only_on_new_and_removed_keys(self):
+        put(self.root, "dem/mapterhorn/12/1/1.webp", MB, T0 - 3 * DAY)
+        c = self.make(cap_gb=0)
+        seen = []
+        c.on_change = lambda key, added: seen.append((key, added))
+        c.used(os.path.join(self.root, "dem/mapterhorn/12/1/1.webp"))          # a repeat hit: nothing
+        c.read(os.path.join(self.root, "dem/mapterhorn/12/1/1.webp"))
+        self.assertEqual(seen, [])
+        p = put(self.root, "imagery/usgs/16/2/3.jpg", 1000)
+        c.wrote(p)
+        c.wrote(p)                                                             # replaced: no second call
+        self.assertEqual(seen, [("imagery/usgs/16/2/3.jpg", True)])
+        c.forget(p)
+        self.assertEqual(seen[-1], ("imagery/usgs/16/2/3.jpg", False))
+        c.forget(p)
+        self.assertEqual(len(seen), 2, "forgetting an unknown key: nothing")
+
+    def test_cover_index_stays_in_sync(self):
+        import covermap
+        import revisit
+        revisit.COMPACTED.set()
+        for i in range(6):
+            put(self.root, f"imagery/usgs/16/100/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        c = self.make(cap_gb=0.0045)
+        cm = covermap.CoverMap(c, self.root)
+        self.assertTrue(cm.build(wait=1.0))
+        self.assertEqual(cm.idx.count(covermap.IMG), (6, 0))
+        p = put(self.root, "imagery/usgs/16/100/9.jpg", 1000)
+        c.wrote(p)
+        miss = put(self.root, "imagery/usgs/16/100/8.404", 0)
+        c.wrote(miss, 0)
+        c.evict()                       # 2 of the old MB files go (down to 90 % of 4.5 MB)
+        cm._drain()
+        self.assertEqual(cm.idx.count(covermap.IMG), (5, 1))
+        c.clear()
+        cm._drain()
+        self.assertEqual(cm.idx.count(covermap.IMG), (1, 1), "the older files go, this session's two stay")
+
+
+class PinTest(Base):
+    """Saved areas (areas.py): pinned keys are skipped by evict() and clear(); pinnedBytes in the 'cache' message."""
+
+    def test_pinned_files_survive_eviction_and_clear(self):
+        for i in range(6):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0.002)
+        c.pinned = lambda keys: [k.endswith(("/0.jpg", "/1.jpg")) for k in keys]
+        c.evict()
+        self.assertEqual([exists(self.root, f"imagery/usgs/16/1/{i}.jpg") for i in range(6)],
+                         [True, True, False, False, False, False])
+        put(self.root, "imagery/usgs/16/1/7.jpg", MB, T0 - DAY)
+        c.scan()
+        c.clear()
+        self.assertTrue(exists(self.root, "imagery/usgs/16/1/0.jpg"))
+        self.assertFalse(exists(self.root, "imagery/usgs/16/1/7.jpg"))
+        self.assertNotIn("pinnedBytes", c.message())
+        c.pinned_bytes = 2 * MB
+        self.assertEqual(c.message()["pinnedBytes"], 2 * MB)
+
+    def test_a_failing_pin_check_evicts_as_before(self):
+        for i in range(3):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0.002)
+
+        def boom(keys):
+            raise RuntimeError("x")
+        c.pinned = boom
+        self.assertEqual(c.evict()[0], 2)
+
+
+class PruneVersionsTest(unittest.TestCase):
+    def test_only_older_version_folders_go(self):
+        import shutil
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        for d in ("v1", "v17", "v18", "notes", "v2x"):
+            os.makedirs(os.path.join(root, d, "rel", "4704"))
+            with open(os.path.join(root, d, "rel", "4704", "6244.npz"), "wb") as f:
+                f.write(b"x" * 10)
+        n, freed = cachemod.prune_versions(root, "v18")
+        self.assertEqual((n, freed), (2, 20))
+        self.assertEqual(sorted(os.listdir(root)), ["notes", "v18", "v2x"])
+        self.assertEqual(cachemod.prune_versions(os.path.join(root, "missing"), "v1"), (0, 0))
+
+
 class HeldReadTest(unittest.TestCase):
     """A file another process is replacing on Windows (PermissionError for a moment): read again, then a miss."""
 
@@ -765,3 +856,33 @@ class HeldReadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinkedCacheTest(unittest.TestCase):
+    """A scratch cache of links into a real one must never delete the real one's files (2026-10-29: ~7 GB evicted
+    through the links of a benchmark's scratch cache)."""
+
+    def test_a_cache_whose_folders_are_links_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as real, tempfile.TemporaryDirectory() as scratch:
+            d = os.path.join(real, "dem", "z")
+            os.makedirs(d)
+            f = os.path.join(d, "1.webp")
+            with open(f, "wb") as fh:
+                fh.write(b"x" * 4096)
+            os.symlink(os.path.join(real, "dem"), os.path.join(scratch, "dem"))
+            c = cachemod.Cache(scratch, cap_gb=0.000001, start=False)
+            self.assertFalse(c.managed, "linked folders: left alone")
+            c.scan()
+            c.evict(0)
+            c.clear(wait=0.1)
+            self.assertTrue(os.path.exists(f), "the real file stays")
+
+    def test_remove_never_follows_a_link_out_of_the_cache(self):
+        with tempfile.TemporaryDirectory() as real, tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "dem", "z"))
+            target = os.path.join(real, "1.webp")
+            with open(target, "wb") as fh:
+                fh.write(b"x" * 10)
+            os.symlink(target, os.path.join(root, "dem", "z", "1.webp"))
+            self.assertFalse(cachemod._inside(os.path.join(root, "dem", "z", "1.webp"), root))
+            self.assertTrue(cachemod._inside(os.path.join(root, "dem", "z", "2.webp"), root))

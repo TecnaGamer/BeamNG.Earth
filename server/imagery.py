@@ -24,11 +24,21 @@ host. A source whose host cannot be asked fails at once (ImageryError), and rend
 next source. prefetch() asks with kind="prefetch" (dropped when the host's bucket is low; render
 then fetches the tile on demand).
 
-Output: DDS DXT1 with a full mip chain (write_dds). Pillow 12 writes DXT1 but no mipmaps (its
-header always says 0 mips), so every level is box-downsampled and BC1-encoded by Pillow separately
-and the levels are concatenated under our own header (DDSD_MIPMAPCOUNT, DDSCAPS_MIPMAP|COMPLEX).
+The finished pyramid (geotiles phase 3a, 2026-10-29): what does not depend on the anchor is done once per source
+tile and kept: Imagery.finished() is the tile de-shadowed (--deshadow), colour-matched (--colormatch) and tone-mapped,
+with its nodata mask, under <cache>/imagery/fin<FIN_VERSION>-<settings>/<source>/z/x/y.bnf (a JPEG, FIN_QUALITY), in
+memory as that JPEG (MEM_FINISHED_MB) and the recent ones decoded (MEM_DECODED). A texture for any anchor is then a
+warp of finished tiles (earthfast.tile_warp: decode, mosaic, Pillow's MESH / BILINEAR, the chain's composite, no GIL),
+the season grade (earthfast.season_img: date and texel size dependent, so per texture) and its DDS: a rebase or a
+teleport back renders none of the corrections again. A tile made while a correction's region was not ready (or beyond
+REQUEST_M) is kept with that region noted and made again once it is ready (_fresh).
+
+Output: DDS DXT1 with a full mip chain (write_dds): linear-light 2 x 2 levels, each sharpened, and their BC1 blocks
+(earthfast.dds_levels: the GPU's encoder when there is one) under our own header (DDSD_MIPMAPCOUNT,
+DDSCAPS_MIPMAP|COMPLEX).
 """
 import contextlib
+import hashlib
 import io
 import logging
 import math
@@ -302,6 +312,15 @@ def range_in_bounds(src, z, tx0, tx1, ty0, ty1):
     return lon1 > w and lon0 < e and lat1 > s and lat0 < n
 
 
+def _under(pz, px, py, z):
+    """(x0, x1, y0, y1) of the zoom-z tiles under tile (pz, px, py), or its ancestor at z when z < pz."""
+    if z >= pz:
+        s = z - pz
+        return px << s, ((px + 1) << s) - 1, py << s, ((py + 1) << s) - 1
+    s = pz - z
+    return px >> s, px >> s, py >> s, py >> s
+
+
 def lat_lon_bbox(mb):
     """An EPSG:3857 extent (minx, miny, maxx, maxy) as WMS 1.3.0's EPSG:4326 BBOX: "south,west,north,east" (latitude
     first). The source draws it in plate carree: over an export parent (~1 km) its rows are within ~1e-4 of the
@@ -376,7 +395,41 @@ def as_tile(rgb):
     return Tile(rgb, is_uniform(rgb))
 
 
-_SAME = object()                    # colour-match LRU marker: the tile is unchanged
+# The finished pyramid (geotiles phase 3a, .claude/work/geotiles_plan.md): every source tile once de-shadowed,
+# colour-matched and tone-mapped (Imagery.finished), kept on disk under <cache>/imagery/fin<FIN_VERSION>-<settings>/
+# <source>/z/x/y.bnf, so a far tile's texture or a block's photo for any anchor is a warp of these (earthfast.tile_warp)
+# and a rebase or a teleport back renders none of it again.
+FIN_VERSION = 1             # bump: every finished tile is made again (its directory holds it)
+FIN_MAGIC = b"BNF1"
+FIN_QUALITY = 95            # its JPEG (4:4:4): ~44 KB a tile, PSNR ~50 dB to the finished pixels, 0.6 ms to decode
+MEM_FINISHED_MB = 160       # finished tiles kept in memory as their JPEGs (~44 KB; a rebase's far field ~2000 of them)
+MEM_DECODED = 384           # ... and the most recent ones decoded too (192 KB each: neighbouring textures share tiles)
+
+
+@dataclass
+class Finished:
+    """A source tile as the textures sample it (Imagery.finished), de-shadowed, colour-matched and tone-mapped. data:
+    its JPEG as kept on disk (bytes: earthfast.tile_warp decodes it, so a texture is the same from memory or disk),
+    or its RGB (256, 256, 3) uint8 (a uniform tile, or one not kept); relit: by --deshadow (its texels count as
+    such); uniform: one colour (a later source fills it); hole: its nodata texels (nodata_mask, None: none), left out
+    where a later source can fill them; cm: the colour match changed it; wait: the corrections not applied because
+    their region was not ready, (("ds" | "cm", (rx, ry)), ...): it is made again once one is (Imagery._fresh)."""
+    data: object
+    relit: bool
+    uniform: bool
+    hole: object = None
+    cm: bool = False
+    wait: tuple = ()
+
+    def for_mosaic(self, last):
+        """(data, alpha, hole) for earthfast.tile_warp: the nodata texels left out for a source that is not the chain's
+        last (the next one fills them); a relit tile's alpha 254 (counted as relit)."""
+        return self.data, 254 if self.relit else 255, (None if last else self.hole)
+
+    def nbytes(self):
+        return (len(self.data) if isinstance(self.data, bytes) else self.data.nbytes) + \
+            (self.hole.nbytes if self.hole is not None else 0) + 200
+
 # render(pending=) entries: a colour-match region is (rx, ry); a de-shadow region still to come is
 # (DS_PENDING, rx, ry) (both z12, so the tag keeps them apart; earthd asks the matching object)
 DS_PENDING = "ds"
@@ -411,7 +464,6 @@ class Imagery:
         self.leaf_on = leaf_on
         self.season_mode = season_mode
         self.lut = tone_lut(tone)
-        self.lut_table = self.lut.tolist() * 3          # Image.point: one LUT per band
         self.deshadow = deshadow
         if deshadow is not None:
             deshadow.bind(self)
@@ -419,8 +471,12 @@ class Imagery:
         self.colormatch = colormatch
         if colormatch is not None:
             colormatch.bind(self)
-        self._cm_lru = OrderedDict()        # (source, z, x, y, "cm1", relit) -> corrected RGB, or the input
-        self._holes = OrderedDict()         # (source, z, x, y) -> nodata_mask of its tile (None: none)
+        self.mem_finished = MEM_FINISHED_MB * 1_000_000      # (bytes)
+        self._fin = OrderedDict()           # (source, z, x, y) -> Finished (finished())
+        self._fin_bytes = 0
+        self._fin_rgb = OrderedDict()       # (source, z, x, y) -> (its Finished, its JPEG decoded): MEM_DECODED
+        self._fin_busy = {}                 # (source, z, x, y) -> Event: a thread is finishing it
+        self._fin_sigs = {}                 # source name -> its finished tiles' settings hash (_fin_sig)
         self._lru = OrderedDict()           # (source, z, x, y) -> Tile, or None (404)
         self._export_locks = {}             # export parent -> its fetch lock (_download_export)
         self._warm_want = []                # warm(): lazy tiles ahead of the player, nearest first
@@ -643,6 +699,49 @@ class Imagery:
             return self._download(src, z, x, y)
         finally:
             self._local.kind = "demand"
+
+    def predownload_sources(self, pz, px, py, zw, fetch_probes=True, excluded=None):
+        """A saved area's square (areas.py): per source of the chain in order, (src, [(src, z, x, y)]) of the tiles a
+        render at zoom zw would ask for under tile (pz, px, py): its zoom capped at the source's, inside its bounds.
+        Sources whose host takes no pre-download (the regional services) are left out (their names added to
+        `excluded`), and a source whose coverage probe says it has nothing there (fetch_probes: the probe fetched as
+        "predownload"; else only a probe known on disk). Lazy sources (NAIP, Maryland's 6-inch photos: only warm()
+        fetches them while driving) are in: a render uses their tiles once they are on disk; one request of an export
+        source writes 4 ** export tiles (raw: _download_export). The caller fetches a source's tiles and stops at the
+        first that had any."""
+        for src in self.chain:
+            z = min(zw, src.max_zoom)
+            p = self.fetcher.policy(netfetch.host_of(src.url))
+            if z < src.min_zoom:
+                continue
+            if p is None or p.interactive_only or not p.offline_ok:
+                if excluded is not None and range_in_bounds(src, z, *_under(pz, px, py, z)):
+                    excluded.add(src.name)
+                continue
+            x0, x1, y0, y1 = _under(pz, px, py, z)
+            if not range_in_bounds(src, z, x0, x1, y0, y1):
+                continue
+            keys = [(src, z, x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1) if in_bounds(src, z, x, y)]
+            if not keys:
+                continue
+            probe = self._probe_key(keys[0])
+            if probe is not None and _under(pz, px, py, probe[1])[0] == _under(pz, px, py, probe[1])[1]:
+                if fetch_probes:
+                    got = self.tiles([probe], kind="predownload").get(probe)
+                    if not self._covered(got):
+                        continue
+                elif os.path.exists(self._paths(*probe)[1]):
+                    continue
+            yield src, keys
+
+    def on_disk(self, key):
+        """A source tile's file is there (no read)."""
+        return self._on_disk(key)
+
+    def on_disk_or_missing(self, key):
+        """A source tile is on disk or known to be missing there (its .404 marker)."""
+        jpg, miss = self._paths(*key)
+        return os.path.exists(jpg) or os.path.exists(miss)
 
     def _on_disk(self, key):
         src, z, x, y = key
@@ -1003,14 +1102,220 @@ class Imagery:
                 while len(self._lru) > self.mem_tiles:
                     self._lru.popitem(last=False)
 
-    # --- sampling ----------------------------------------------------------------------------
-    def _mosaic(self, src, z, fx, fy, last, pending=None, corrected=None):
-        """RGBA mosaic of src's tiles at zoom z covering global pixel coordinates fx, fy (A = 255
-        where the source has data, 254 where a de-shadowed tile replaced it); returns (image,
-        origin x, origin y, any data) or None if it would take more than MAX_MOSAIC tiles.
-        pending: a set that collects the colour-match regions not ready yet (tiles left raw) and
-        the de-shadow regions still to come, as (DS_PENDING, rx, ry);
-        corrected: a set that collects the keys of the tiles the colour match changed."""
+    # --- the finished pyramid (geotiles phase 3a) ------------------------------------------------
+    def _fin_sig(self, src):
+        """The settings a source's finished tiles depend on, as a short hash (their directory): FIN_VERSION, the
+        tone curves and, for the source the de-shadow / colour match correct, their mode and version."""
+        parts = [FIN_VERSION, self.lut.tobytes(), self.lut_ds.tobytes() if self.deshadow is not None else None]
+        for obj in (self.deshadow, self.colormatch):
+            if obj is not None and getattr(obj, "source", src.name) == src.name:
+                parts.append((type(obj).__name__, getattr(obj, "mode", None), getattr(obj, "version", None),
+                              sorted((getattr(obj, "meta", None) or {}).items())))
+        return hashlib.sha1(repr(parts).encode()).hexdigest()[:10]
+
+    def _fin_path(self, key):
+        src, z, x, y = key
+        sig = self._fin_sigs.get(src.name)
+        if sig is None:
+            sig = self._fin_sigs[src.name] = self._fin_sig(src)
+        return os.path.join(self.cache_dir, f"fin{FIN_VERSION}-{sig}", src.name, str(z), str(x), f"{y}.bnf")
+
+    def _raw_stamp(self, key):
+        """(size, mtime ns) of a source tile's raw file, (0, 0) when there is none on disk."""
+        try:
+            st = os.stat(self._paths(*key)[0])
+        except OSError:
+            return 0, 0
+        return st.st_size, st.st_mtime_ns
+
+    def _fin_keep(self, key, f):
+        """A finished tile kept: to disk (a small header: flags, the raw file it was made from, the corrections still
+        to come; its RGB as a JPEG (FIN_QUALITY, 4:4:4; a uniform tile's as a PNG); its nodata mask as packed bits if it
+        has one) and to memory as the disk has it (the JPEG: a texture is the same from either)."""
+        path = self._fin_path(key)
+        b = io.BytesIO()
+        if f.uniform:                   # (one colour: a PNG of ~1 KB, exact)
+            Image.fromarray(f.data, "RGB").save(b, "PNG", compress_level=1)
+        else:
+            Image.fromarray(f.data, "RGB").save(b, "JPEG", quality=FIN_QUALITY, subsampling=0)
+        jpg = b.getvalue()
+        if not f.uniform:
+            f.data = jpg
+        self._fin_put(key, f)
+        flags = (1 if f.uniform else 0) | (2 if f.relit else 0) | (4 if f.cm else 0) | (8 if f.hole is not None else 0)
+        head = FIN_MAGIC + struct.pack("<BBH2Q", flags, len(f.wait), 0, *self._raw_stamp(key))
+        head += b"".join(struct.pack("<B2I", 1 if k == "ds" else 2, int(rk[0]), int(rk[1])) for k, rk in f.wait)
+        data = head + struct.pack("<I", len(jpg)) + jpg + (np.packbits(f.hole).tobytes() if f.hole is not None else b"")
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = staging.tmp_for(path)
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            staging.replace(tmp, path)
+            self.disk.wrote(path, len(data))
+        except OSError as e:            # (a full disk: made again next time)
+            log.debug("finished tile %s not kept: %s", key[1:], e)
+
+    def _fin_read(self, key):
+        """A finished tile from disk, or None (none, unreadable, or made from a raw file that has changed since)."""
+        path = self._fin_path(key)
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            if data[:4] != FIN_MAGIC:
+                return None
+            flags, nwait, _, size, mtime = struct.unpack_from("<BBH2Q", data, 4)
+            stamp = self._raw_stamp(key)
+            if stamp != (0, 0) and stamp != (size, mtime):
+                return None                 # the raw tile was fetched again: made again from it
+            o = 24
+            wait = []
+            for _ in range(nwait):
+                k, rx, ry = struct.unpack_from("<B2I", data, o)
+                wait.append(("ds" if k == 1 else "cm", (rx, ry)))
+                o += 9
+            (n,) = struct.unpack_from("<I", data, o)
+            o += 4
+            img = data[o:o + n]
+            if flags & 1:               # (a uniform tile's PNG: decoded here)
+                im = Image.open(io.BytesIO(img))
+                img = np.asarray(im if im.mode == "RGB" else im.convert("RGB"))
+                if img.shape != (TILE, TILE, 3):
+                    return None
+            elif len(img) != n or img[:2] != b"\xff\xd8":
+                return None
+            hole = None
+            if flags & 8:
+                hole = np.unpackbits(np.frombuffer(data, np.uint8, TILE * TILE // 8, o + n))[:TILE * TILE] \
+                    .reshape(TILE, TILE).astype(bool)
+        except (OSError, ValueError, struct.error):
+            return None
+        self.disk.used(path, len(data))
+        self._count("finished:disk")
+        return Finished(img, bool(flags & 2), bool(flags & 1), hole, bool(flags & 4), tuple(wait))
+
+    def _fresh(self, key, f, pending):
+        """Can a finished tile made before a correction's region was ready still be used? False once one of them
+        is (then it is made again); else its regions still to come go into pending, as when it was made."""
+        for kind, rk in f.wait:
+            obj = self.deshadow if kind == "ds" else self.colormatch
+            st = obj.poll(rk) if obj is not None else "ready"
+            if st == "ready":
+                return False
+            if st == "wait" and pending is not None:
+                pending.add((DS_PENDING,) + tuple(rk) if kind == "ds" else tuple(rk))
+        return True
+
+    def _make_finished(self, key, tile, pending):
+        """(Finished, keep) of a decoded source tile: raw -> de-shadow -> colour gain -> tone curve (colormatch.py
+        §6), and its nodata mask. keep: nothing it needed failed (a neighbour's fetch) and every correction not
+        applied is one whose region can be polled later (Finished.wait)."""
+        rgb, relit, wait, keep = tile.rgb, None, [], True
+        ds = self.deshadow
+        if ds is not None:
+            # a region still to come is asked before the relight (see deshadow.pending_region)
+            ds_wait = ds.pending_region(key, tile) if hasattr(ds, "pending_region") else None
+            if hasattr(ds, "relight_final"):
+                relit, state = ds.relight_final(key, tile, self)
+            else:                       # (a stand-in without the states: never kept)
+                relit, state = ds.relight(key, tile, self), None
+            if relit is None and ds_wait is not None and pending is not None:
+                pending.add((DS_PENDING,) + tuple(ds_wait))
+            if isinstance(state, tuple) and state[0] == "wait" and hasattr(ds, "poll"):
+                wait.append(("ds", tuple(state[1])))
+            elif state != "final":
+                keep = False
+        if relit is not None:
+            rgb = relit
+        cm = False
+        c = self.colormatch
+        if c is not None and not tile.uniform and c.handles(key):
+            out, info = c.apply(key, rgb, self)
+            if out is c.PENDING:        # its region is not ready: raw this time
+                if pending is not None:
+                    pending.add(info)
+                if hasattr(c, "poll"):
+                    wait.append(("cm", tuple(info)))
+                else:
+                    keep = False
+            else:
+                if info == "far" and hasattr(c, "poll"):    # beyond REQUEST_M of the anchor: raw while it is
+                    wait.append(("cm", tuple(c.region_of(*key[1:]))))
+                elif info is not True:                      # a neighbour-fetch fallback
+                    keep = False
+                if out is not None:
+                    rgb, cm = out, True
+        self._count("finished:made")
+        return Finished(np.ascontiguousarray((self.lut_ds if relit is not None else self.lut)[rgb]), relit is not None,
+                        tile.uniform, nodata_mask(tile.rgb), cm, tuple(wait)), keep
+
+    def _fin_put(self, key, f):
+        with self._lock:
+            old = self._fin.pop(key, None)
+            if old is not None:
+                self._fin_bytes -= old.nbytes()
+            self._fin[key] = f
+            self._fin_bytes += f.nbytes()
+            while self._fin_bytes > self.mem_finished and len(self._fin) > 1:
+                self._fin_bytes -= self._fin.popitem(last=False)[1].nbytes()
+
+    def finished(self, keys, pending=None):
+        """{(source, z, x, y): Finished, or None (no data there: 404, outside the coverage probes, a lazy tile not
+        fetched)} of source tiles: from memory, else from disk (the finished pyramid), else made from the raw tile
+        (fetched / decoded as tiles() does) and kept. pending: collects the correction regions not ready yet, as
+        (DS_PENDING, rx, ry) / (rx, ry). Raises ImageryError (a raw tile could not be fetched)."""
+        keys = list(dict.fromkeys(keys))
+        out, need = {}, []
+        for k in keys:
+            with self._lock:
+                f = self._fin.get(k)
+                if f is not None:
+                    self._fin.move_to_end(k)
+            if f is None:
+                f = self._fin_read(k)
+                if f is not None and (not f.wait or self._fresh(k, f, pending)):
+                    self._fin_put(k, f)
+                    out[k] = f
+                    continue
+            elif not f.wait or self._fresh(k, f, pending):
+                out[k] = f
+                continue
+            need.append(k)
+        if not need:
+            return out
+        raw = self.tiles(need)
+        for k in need:
+            t = raw.get(k)
+            if t is None:
+                out[k] = None
+                continue
+            with self._lock:            # another texture finishing the same tile: wait for it
+                ev = self._fin_busy.get(k)
+                mine = ev is None
+                if mine:
+                    ev = self._fin_busy[k] = threading.Event()
+            if not mine:
+                ev.wait()
+                with self._lock:
+                    f = self._fin.get(k)
+                if f is not None and (not f.wait or self._fresh(k, f, pending)):
+                    out[k] = f
+                    continue
+            try:
+                f, keep = self._make_finished(k, t, pending)
+                if keep:
+                    self._fin_keep(k, f)
+                out[k] = f
+            finally:
+                if mine:
+                    with self._lock:
+                        self._fin_busy.pop(k, None)
+                    ev.set()
+        return out
+
+    def _mosaic_keys(self, src, z, fx, fy):
+        """(tx0, ty0, nx, ny, {(tx, ty): key}) of src's zoom-z tiles covering global pixel coordinates fx, fy, or None
+        if that would take more than MAX_MOSAIC tiles."""
         n = 2 ** z
         tx0, tx1 = int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE
         ty0 = max(0, int(math.floor(fy.min() - 1)) // TILE)
@@ -1018,138 +1323,82 @@ class Imagery:
         nx, ny = tx1 - tx0 + 1, ty1 - ty0 + 1
         if nx * ny > MAX_MOSAIC or ny <= 0:
             return None
-        keys = {(tx, ty): (src, z, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)}
-        got = self.tiles(keys.values())
-        mosaic = np.zeros((ny * TILE, nx * TILE, 4), np.uint8)
-        any_data = False
-        for (tx, ty), k in keys.items():
-            a = got[k]
-            if a is None or (not last and a.uniform):
-                continue                    # missing here: the next source fills it
-            c, r = (tx - tx0) * TILE, (ty - ty0) * TILE
-            # --deshadow: a region still to come is asked before relight() (see pending_region)
-            ds_wait = (self.deshadow.pending_region(k, a)
-                       if pending is not None and hasattr(self.deshadow, "pending_region") else None)
-            relit = None if self.deshadow is None else self.deshadow.relight(k, a, self)
-            if relit is None and ds_wait is not None:
-                pending.add((DS_PENDING,) + tuple(ds_wait))
-            rgb = a.rgb if relit is None else relit
-            if self.colormatch is not None and not a.uniform and self.colormatch.handles(k):
-                cm = self._colormatched(k, rgb, relit is not None, pending)
-                if cm is not rgb and corrected is not None:
-                    corrected.add(k)
-                rgb = cm
-            mosaic[r:r + TILE, c:c + TILE, :3] = rgb
-            mosaic[r:r + TILE, c:c + TILE, 3] = 255 if relit is None else 254
-            if not last:                    # black past the photo's edge inside the tile: the next source fills it
-                hole = self._hole(k, a)
-                if hole is not None:
-                    mosaic[r:r + TILE, c:c + TILE, 3][hole] = 0
-            any_data = True
-        return mosaic, tx0 * TILE, ty0 * TILE, any_data
-
-    def _hole(self, key, tile):
-        """nodata_mask of a source tile, kept in a small LRU beside the decoded tiles."""
-        with self._lock:
-            if key in self._holes:
-                self._holes.move_to_end(key)
-                return self._holes[key]
-        m = nodata_mask(tile.rgb)
-        with self._lock:
-            self._holes[key] = m
-            while len(self._holes) > self.mem_tiles:
-                self._holes.popitem(last=False)
-        return m
-
-    def _colormatched(self, key, rgb, relit, pending):
-        """The colour-seam corrected RGB of a source tile (raw or relit: raw -> de-shadow -> colour
-        gain -> tone curve), from a second LRU; the raw Tile in _lru stays as it is."""
-        ck = key + ("cm1", relit)
-        with self._lock:
-            v = self._cm_lru.get(ck)
-            if v is not None:
-                self._cm_lru.move_to_end(ck)
-                return rgb if v is _SAME else v
-        out, info = self.colormatch.apply(key, rgb, self)
-        if out is self.colormatch.PENDING:     # its region is not ready: raw this time
-            if pending is not None:
-                pending.add(info)
-            return rgb
-        if info:                            # cacheable (not a neighbour-fetch fallback)
-            with self._lock:
-                self._cm_lru[ck] = _SAME if out is None else out
-                while len(self._cm_lru) > self.mem_tiles:
-                    self._cm_lru.popitem(last=False)
-        return rgb if out is None else out
+        return tx0, ty0, nx, ny, {(tx, ty): (src, z, tx % n, ty) for ty in range(ty0, ty1 + 1)
+                                  for tx in range(tx0, tx1 + 1)}
 
     def render(self, frame, x0, y0, size, px, pending=None):
         """_render(); texels from a lazy source (NAIP) then take their large-scale colour from the rest of
         the chain (match_colours): NAIP's detail, USGS's colours, so the block's photo meets the far tiles
         around it (USGS, colour-matched and de-shadowed) without a seam (in-game 2026-10-13, Annapolis: the
         NAIP block was a darker, greener square, its water much darker)."""
-        rgb, used = self._render(frame, x0, y0, size, px, pending)
+        return self.render_where(EnuSquare(frame, x0, y0, size), px, pending)
+
+    def render_merc(self, z, x, y, px, pending=None):
+        """render() of Web-Mercator tile (z, x, y) with a gutter(px) border: px x px, the tile itself covering texels
+        g .. px - g on both axes (gutter_uv of its Mercator position), row 0 north (the far field's global tiles,
+        farfield.GTile: the same texture for every anchor)."""
+        return self.render_where(MercSquare(z, x, y, px), px, pending)
+
+    def render_where(self, where, px, pending=None):
+        """render() of a square (EnuSquare, MercSquare)."""
+        rgb, used = self._render(where, px, pending)
         if any(s.lazy and s.name in used for s in self.chain) and not all(s.lazy for s in self.chain):
             # the reference only gives the colour above MATCH_SIGMA_M: rendered and matched at MATCH_DOWN times
             # coarser texels (64x fewer texels to render, blur and stream through memory than at full size)
             small = max(MATCH_MIN_PX, px // MATCH_DOWN)
             try:
-                ref, _ = self._render(frame, x0, y0, size, small, pending, skip_lazy=True)
+                ref, _ = self._render(where, small, pending, skip_lazy=True)
             except ImageryError:            # the reference is unreachable: NAIP as served
                 ref = None
             if ref is not None:
-                rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (size / small))
+                rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small))
                 if self.leaf_on and any(s.leaf_off and s.name in used for s in self.chain):
                     rgb = season.leaf_on(rgb, ref)
                     used["leafon"] = sum(used.get(s.name, 0) for s in self.chain if s.leaf_off)
-        return self._seasoned(frame, x0, y0, size, rgb), used
+        return self._seasoned(where, rgb), used
 
     SEASON_GRID = 17            # world positions for the season noise: on this grid, bilinear in between
 
-    def _seasoned(self, frame, x0, y0, size, rgb):
+    def _seasoned(self, where, rgb):
         """rgb graded toward the season (season.grade; season_mode "off": unchanged)."""
         if self.season_mode in (None, "off", "summer"):
             return rgb
-        n = self.SEASON_GRID
-        k = np.linspace(0.0, size, n)
-        E, N = np.meshgrid(x0 + k, y0 + size - k)               # row 0 = north
-        lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
+        lat, lon = where.grid(self.SEASON_GRID - 1)             # row 0 = north
         amounts = season.amounts_for(self.season_mode, float(np.mean(lat)))
         if not any(v > 0 for v in amounts.values()):
             return rgb
         xm, ym = season.world_metres(lat, lon)
-        px = rgb.shape[0]
-        up = lambda a: np.asarray(Image.fromarray(a.astype(np.float32), "F").resize((px, px), Image.BILINEAR))
-        return season.grade(rgb, up(xm - xm.min()) + float(xm.min()), up(ym - ym.min()) + float(ym.min()), amounts)
+        return season.grade(rgb, xm, ym, amounts)       # (the grid, upscaled to the texels in the kernel)
 
-    def _render(self, frame, x0, y0, size, px, pending=None, skip_lazy=False):
-        """Texture of the ENU square [x0, x0+size] x [y0, y0+size] (anchor `frame`), px x px,
+    def _render(self, where, px, pending=None, skip_lazy=False):
+        """Texture of a square (where: EnuSquare: [x0, x0+size] x [y0, y0+size] of an anchor's frame; MercSquare),
+        px x px,
         row 0 = north edge, column 0 = west edge (texel centres at (i + 0.5) * size / px).
-        Returns (uint8 [px, px, 3] after the tone curve, {source: texels}).
+        Returns (uint8 [px, px, 3], tone-mapped, {source: texels}).
 
-        The ENU -> lat/lon -> Web-Mercator mapping is evaluated on a MESH_CELLS² grid of cell
-        corners and mapped bilinearly in between (Pillow's MESH transform, BILINEAR sampling):
-        the mapping is smooth enough that this is exact to well under a texel (second-order
-        error ~ R tan(lat) dphi² / 8 for a cell of dphi rad: ~4 m on a 131 km tile at 36 deg,
-        0.01 of its 512 m texel; nothing measurable on near tiles). Each texel takes the first
-        source of the chain whose four bilinear taps all have data. pending: a set that collects the
-        colour-match regions (--colormatch) that were not ready, i.e. whose tiles stayed raw here, and
+        A warp of the finished source tiles (finished(): de-shadowed, colour-matched, tone-mapped once per
+        source tile and kept on disk, so nothing of that is done again for another anchor's tiles): the ENU ->
+        lat/lon -> Web-Mercator mapping is evaluated on a MESH_CELLS² grid of cell corners and mapped bilinearly
+        in between (Pillow's MESH transform, BILINEAR sampling, earthfast.tile_warp): the mapping is smooth
+        enough that this is exact to well under a texel (second-order error ~ R tan(lat) dphi² / 8 for a cell of
+        dphi rad: ~4 m on a 131 km tile at 36 deg, 0.01 of its 512 m texel; nothing measurable on near tiles).
+        Each texel takes the first source of the chain whose four bilinear taps all have data. pending: a set that
+        collects the colour-match regions (--colormatch) that were not ready, i.e. whose tiles stayed raw here, and
         the de-shadow regions (--deshadow) still to come, as (DS_PENDING, rx, ry).
         The counts also carry "none" (fallback colour), "deshadow" (relit texels) and, with
         --colormatch, "colormatch": the texels of the sources whose mosaic had tiles the colour match
         changed (their colours then come partly from its S2 references: the data credits name them)."""
         cells = min(MESH_CELLS, px)
         cw = px // cells
-        k = np.arange(cells + 1) * (size / cells)
-        E, N = np.meshgrid(x0 + k, y0 + size - k)                 # [row (north first), col]
-        lat_raw, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
+        lat_raw, lon = where.grid(cells)                         # [row (north first), col]
         lat = np.clip(lat_raw, -89.9, 89.9)
-        zw = zoom_for(float(lat[cells // 2, cells // 2]), size / px)
+        zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
         out = np.zeros((px, px, 3), np.uint8)
-        filled = np.zeros((px, px), bool)
-        relit = None if self.deshadow is None else np.zeros((px, px), bool)
-        used, error = {}, None
+        filled = np.zeros((px, px), np.uint8)
+        used, error, relit, full = {}, None, 0, False
+        fast.require(108, "imagery tile_warp")
         for i, src in enumerate(self.chain):
-            cm_keys = set() if self.colormatch is not None else None
+            last = i == len(self.chain) - 1
             z = min(zw, src.max_zoom)
             if z < src.min_zoom or (skip_lazy and src.lazy):
                 continue
@@ -1157,70 +1406,80 @@ class Imagery:
                 bs, bw, bn, be = src.bounds
                 if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
                     continue
+            m = None
             while True:
                 fx, fy = mercator_px(lat, lon, z)
                 w = TILE * 2 ** z
                 fx = fx - w * np.round((fx - fx[0, 0]) / w)        # unwrap across the antimeridian
-                try:
-                    m = self._mosaic(src, z, fx, fy, i == len(self.chain) - 1, pending, cm_keys)
-                except ImageryError as e:   # this source is unreachable: the next one may do
-                    if self.strict:
-                        raise
-                    error, m = e, False
-                    break
+                m = self._mosaic_keys(src, z, fx, fy)
                 if m is not None or z <= src.min_zoom:
                     break
                 z -= 1                      # footprint too large for the zoom: coarser
-            if not m:
+            if m is None:
                 continue
-            mos, ox, oy, any_data = m
-            if not any_data:
+            tx0, ty0, nx, ny, keys = m
+            try:
+                fin = self.finished(keys.values(), pending)
+            except ImageryError as e:       # this source is unreachable: the next one may do
+                if self.strict:
+                    raise
+                error = e
                 continue
-            qx, qy = fx - ox, fy - oy
-            # Pillow's MESH / BILINEAR warp of the RGBA mosaic, byte for byte, in Rust (no GIL, no per-cell calls)
-            fast.require(0, "mesh_warp")
-            res = fast._ef.mesh_warp(mos, np.ascontiguousarray(qx, np.float64), np.ascontiguousarray(qy, np.float64),
-                                     cells, cw, px)
-            alpha = res[..., 3]
-            hit = alpha == 255 if relit is None else alpha >= 254
-            if not used and hit.all():      # the usual case: one source covers the texture
-                out[:] = res[..., :3]
-                filled[:] = True
-                if relit is not None:
-                    relit[:] = alpha == 254
-            else:
-                hit &= ~filled
-                np.copyto(out, res[..., :3], where=hit[..., None])
-                filled |= hit
-                if relit is not None:
-                    relit |= hit & (alpha == 254)
-            if hit.any():
-                used[src.name] = int(hit.sum())
-                if cm_keys:
-                    used["colormatch"] = used.get("colormatch", 0) + int(hit.sum())
-            if filled.all():
+            tiles, cm_any, jpeg_of = [], False, {}
+            for (tx, ty), key in keys.items():
+                f = fin.get(key)
+                if f is None or (not last and f.uniform):
+                    continue                # missing here: the next source fills it
+                data, alpha, hole = f.for_mosaic(last)
+                if isinstance(data, bytes):
+                    with self._lock:
+                        d = self._fin_rgb.get(key)
+                        if d is not None and d[0] is f:
+                            self._fin_rgb.move_to_end(key)
+                            data = d[1]
+                        else:
+                            jpeg_of[len(tiles)] = (key, f)
+                tiles.append((tx - tx0, ty - ty0, data, alpha, hole))
+                cm_any |= f.cm
+            if not tiles:
+                continue
+            qx = np.ascontiguousarray(fx - tx0 * TILE, np.float64)
+            qy = np.ascontiguousarray(fy - ty0 * TILE, np.float64)
+            hits, rh, full, decoded = fast._ef.tile_warp(tiles, nx, ny, qx, qy, cells, cw, out, filled)
+            if decoded:
+                with self._lock:
+                    for i, rgb in decoded:
+                        if i in jpeg_of:
+                            key, f = jpeg_of[i]
+                            self._fin_rgb[key] = (f, rgb)
+                            self._fin_rgb.move_to_end(key)
+                    while len(self._fin_rgb) > MEM_DECODED:
+                        self._fin_rgb.popitem(last=False)
+            if hits:
+                used[src.name] = int(hits)
+                relit += int(rh)
+                if cm_any:
+                    used["colormatch"] = used.get("colormatch", 0) + int(hits)
+            if full:
                 break
-        if not filled.all():
+        if not full:
             if error is not None:           # not known to be uncovered: do not bake a fallback
                 raise error
-            out[~filled] = FALLBACK_RGB
+            hole = filled == 0
+            out[hole] = self.lut[np.array(FALLBACK_RGB)]
             if np.abs(lat_raw).max() > MAX_LAT:      # the polar caps: snow
-                i, j = np.nonzero(~filled)
-                t = size / px
-                la, _, _ = frame.enu_to_geodetic(x0 + (j + 0.5) * t, y0 + size - (i + 0.5) * t, 0.0)
+                i, j = np.nonzero(hole)
+                la = where.texel_lat(i, j, px)
                 cap = np.abs(la) > MAX_LAT
-                out[i[cap], j[cap]] = POLAR_RGB
+                out[i[cap], j[cap]] = self.lut[np.array(POLAR_RGB)]
                 if cap.any():
                     used["polar"] = int(cap.sum())
-            used["none"] = int((~filled).sum()) - used.get("polar", 0)
+            used["none"] = int(hole.sum()) - used.get("polar", 0)
             if not used["none"]:
                 del used["none"]
-        if relit is not None and relit.any():
-            used["deshadow"] = int(relit.sum())
-            res = self.lut[out]
-            res[relit] = self.lut_ds[out[relit]]
-            return res, used
-        return np.asarray(Image.fromarray(out, "RGB").point(self.lut_table)), used
+        if relit:
+            used["deshadow"] = relit
+        return out, used
 
     def close(self):
         if self.deshadow is not None:
@@ -1228,6 +1487,53 @@ class Imagery:
         if self.colormatch is not None:
             self.colormatch.close()
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+
+class EnuSquare:
+    """The square [x0, x0 + size] x [y0, y0 + size] of an anchor's frame (render's area)."""
+
+    def __init__(self, frame, x0, y0, size):
+        self.frame, self.x0, self.y0, self.size = frame, x0, y0, size
+
+    def grid(self, n):
+        """(lat, lon) of its (n + 1)^2 grid of corners, row 0 north, column 0 west."""
+        k = np.arange(n + 1) * (self.size / n)
+        E, N = np.meshgrid(self.x0 + k, self.y0 + self.size - k)
+        lat, lon, _ = self.frame.enu_to_geodetic(E, N, 0.0)
+        return lat, lon
+
+    def texel_lat(self, i, j, px):
+        t = self.size / px
+        la, _, _ = self.frame.enu_to_geodetic(self.x0 + (j + 0.5) * t, self.y0 + self.size - (i + 0.5) * t, 0.0)
+        return la
+
+
+class MercSquare:
+    """Web-Mercator tile (z, x, y) and a gutter(px) border round it (render_merc's area): its size the tile's edge
+    (m, at its centre's latitude) over the texels the tile covers, times px."""
+
+    def __init__(self, z, x, y, px):
+        g = gutter(px)
+        self.z, self.x, self.y = int(z), int(x), int(y)
+        self.f0 = -g / (px - 2 * g)                     # the square in tile fractions: [f0, f1]
+        self.f1 = 1.0 - self.f0
+        lat_c = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * (y + 0.5) / 2 ** z))))
+        self.size = EARTH_CIRC * math.cos(math.radians(lat_c)) / 2 ** z * (self.f1 - self.f0)
+
+    def _ll(self, fx, fy):
+        w = float(2 ** self.z)
+        lon = (self.x + fx) / w * 360.0 - 180.0
+        lat = np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * (self.y + fy) / w))))
+        return lat, lon
+
+    def grid(self, n):
+        f = self.f0 + np.arange(n + 1) * ((self.f1 - self.f0) / n)
+        FX, FY = np.meshgrid(f, f)                       # row 0 north: y fraction grows southwards
+        return self._ll(FX, FY)
+
+    def texel_lat(self, i, j, px):
+        t = (self.f1 - self.f0) / px
+        return self._ll(self.f0 + (j + 0.5) * t, self.f0 + (i + 0.5) * t)[0]
 
 
 # --- texture gutter ----------------------------------------------------------------------
@@ -1291,42 +1597,28 @@ def mip_chain(img):
 _BC1_GPU_FAILED = False
 
 
-def _bc1_gpu(levels):
-    """The levels' BC1 blocks on the GPU (earthfast.bc1_encode_gpu: the same encoder in float32, ~1 block in 1000
-    differs; a 512 px texture's CPU time 9.3 -> 2.0 ms), or None: no GPU, or it failed (logged once; the CPU encoder
-    from then on)."""
-    global _BC1_GPU_FAILED
-    if _BC1_GPU_FAILED or not fast.gpu() or getattr(fast._ef, "VERSION", 0) < 59:
-        return None
-    try:
-        return fast._ef.bc1_encode_gpu(levels)
-    except Exception as e:
-        _BC1_GPU_FAILED = True
-        log.warning("imagery: GPU BC1 encoding failed (%s); the CPU from now on", e)
-        return None
-
-
 def encode_dds(rgb):
     """DDS bytes of an RGB image (uint8 [h, w, 3], power-of-two sides): DXT1 (BC1, no alpha)
-    with the full mip chain."""
-    rgb = np.asarray(rgb, np.uint8)
+    with the full mip chain (mip_arrays' levels), in one Rust call (earthfast.dds_levels: the GPU's BC1 encoder when
+    there is one, ~1 block in 1000 differs from the CPU's; a 512 px texture's CPU time 9.3 -> 2.0 ms; the CPU's
+    encoder: endpoints on each block's principal axis, refined, nearest-colour indices)."""
+    global _BC1_GPU_FAILED
+    rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8))
     h, w = rgb.shape[:2]
-    blobs = []
-    # the Rust BC1 encoder: endpoints on each block's principal axis, refined, nearest-colour indices (2026-10-16:
-    # RMSE 3.39 -> 2.86 on 60 imagery tiles against Pillow's min / max 565 endpoints), without the GIL
-    fast.require(0, "bc1_encode")
-    levels = [np.ascontiguousarray(lv) for lv in mip_arrays(rgb)]
-    blobs = _bc1_gpu(levels) or [fast._ef.bc1_encode(lv) for lv in levels]
-    for lv, data in zip(levels, blobs):
-        assert len(data) == dxt1_size(lv.shape[1], lv.shape[0]), (lv.shape, len(data))
+    fast.require(108, "imagery dds_levels")
+    data, n, err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), not _BC1_GPU_FAILED and bool(fast.gpu()))
+    if err is not None and not _BC1_GPU_FAILED:
+        _BC1_GPU_FAILED = True          # (logged once; the CPU encoder from then on)
+        log.warning("imagery: GPU BC1 encoding failed (%s); the CPU from now on", err)
+    assert len(data) == sum(dxt1_size(max(1, w >> k), max(1, h >> k)) for k in range(n)), (rgb.shape, len(data))
     flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE
     head = (DDS_MAGIC
-            + struct.pack("<7I", 124, flags, h, w, dxt1_size(w, h), 0, len(blobs))
+            + struct.pack("<7I", 124, flags, h, w, dxt1_size(w, h), 0, n)
             + struct.pack("<11I", *((0,) * 11))
             + struct.pack("<2I4s5I", 32, DDPF_FOURCC, b"DXT1", 0, 0, 0, 0, 0)
             + struct.pack("<5I", DDSCAPS_TEXTURE | DDSCAPS_MIPMAP | DDSCAPS_COMPLEX, 0, 0, 0, 0))
     assert len(head) == DDS_HEADER
-    return head + b"".join(blobs)
+    return head + data
 
 
 def write_dds(path, rgb):

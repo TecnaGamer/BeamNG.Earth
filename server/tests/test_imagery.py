@@ -115,7 +115,8 @@ class ReprojectionTest(unittest.TestCase):
         clat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * cy_px / W))))
         ce, cn, _ = frame.geodetic_to_enu(clat, clon, float(h))
         col, row = (ce - x0) / t - 0.5, (y0 + size - cn) / t - 0.5      # texel centres at +0.5
-        lum = rgb[..., 0].astype(float) - 20
+        # (above the background's 20 by more than the finished tiles' JPEG ringing round the mark: imagery.FIN_QUALITY)
+        lum = rgb[..., 0].astype(float) - 40
         w = np.clip(lum, 0, None)
         rr, cc = np.mgrid[0:px, 0:px]
         cy, cx = (w * rr).sum() / w.sum(), (w * cc).sum() / w.sum()
@@ -262,7 +263,7 @@ class ChainTest(unittest.TestCase):
         self.assertTrue((a == b).all() and (a == c).all())
         self.assertEqual(set(used), {"eox2023"})
         stats = im2.stats_snapshot()
-        self.assertGreater(stats.get("eox2023:disk", 0), 0)
+        self.assertGreater(stats.get("finished:disk", 0), 0)    # (the finished tiles: no raw tile read again)
         markers = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f.endswith(".404")]
         self.assertTrue(markers)
 
@@ -672,7 +673,7 @@ class ExportImageryTest(unittest.TestCase):
         self.assertTrue(all(x % 2 for x, y in usgs_naip), "USGS NAIP only where USDA was black")
         self.assertLessEqual(usgs_naip, usda)
         self.assertTrue(im.lazy_ready(self.frame, -512.0, -512.0, 1024.0, 1024))
-        _, used = im._render(self.frame, -512.0, -512.0, 1024.0, 1024)
+        _, used = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
         self.assertIn("naipusda", used)
         # where a USDA tile meets a USGS-NAIP one, neither has all four bilinear taps: a texel line of USGS
         self.assertLess(used.get("usgs", 0), 0.001 * 1024 * 1024)
@@ -705,7 +706,7 @@ class ExportImageryTest(unittest.TestCase):
         usda = {r[2:] for r in self.requests if r[0] == "naipusda"}
         self.assertTrue(md and usda)
         self.assertTrue(all(x % 2 for x, y in usda), "USDA only where Maryland's image was white")
-        _, used = im._render(self.frame, -512.0, -512.0, 1024.0, 1024)
+        _, used = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
         self.assertIn("md6in", used)
         self.assertIn("naipusda", used)
         # far from Maryland: never asked
@@ -741,8 +742,8 @@ class ExportImageryTest(unittest.TestCase):
         im = self.make()
         self.assertEqual(self.warm(im, [(128.0, 128.0)]), [])
         rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
-        raw, _ = im._render(self.frame, 0.0, 0.0, 256.0, 256)
-        ref, _ = im._render(self.frame, 0.0, 0.0, 256.0, 256, None, skip_lazy=True)
+        raw, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        ref, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256, None, skip_lazy=True)
         self.assertEqual(set(used), {"naip"})
         far, near = np.abs(raw.mean((0, 1)) - ref.mean((0, 1))), np.abs(rgb.mean((0, 1)) - ref.mean((0, 1)))
         self.assertGreater(far.max(), 50)

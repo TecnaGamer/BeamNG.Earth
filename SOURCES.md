@@ -38,6 +38,9 @@ A few things hold for all of them:
 | AWS Terrain Tiles (backup) | `s3.amazonaws.com` | Coarser heights (SRTM and similar) where Mapterhorn has none or does not answer. | Only matters while Mapterhorn is down too; with both down, new places have no terrain. | named |
 | Copernicus DEM GLO-30 | `copernicus-dem-30m.s3.amazonaws.com` | Heights near the North and South Poles, where the other sources stop. | No terrain past about 85° north or south. | named |
 | NRCan HRDEM mosaic (CanElevation) | `canelevation-dem.s3.ca-central-1.amazonaws.com` | Canada's lidar ground heights: the distant terrain is lined up with them (and, opt-in, the near terrain read from them). | Canada's distant terrain may stand on the forest tops. | optional |
+| USGS 3DEP lidar point clouds | `s3-us-west-2.amazonaws.com` | In the US, the real height of bridge decks, measured along each bridge from the lidar points (about 13 MB per map cell full of bridges, once). Off with `BNE_LIDAR_DECKS=off`. | Bridge decks get the estimated heights. | optional |
+| NVDB (Statens vegvesen) | `nvdbapiles.atlas.vegvesen.no` | In Norway, the measured heights of bridges and tunnels (and roads where the terrain is coarse). Off with `BNE_ROADZ=off`. | Estimated heights. | optional |
+| IGN BD TOPO roads | `data.geopf.fr` (WFS) | In France, the measured heights of bridges and tunnels (and roads where the terrain is coarse). Off with `BNE_ROADZ=off`. | Estimated heights. | optional |
 | LidarBC (Province of British Columbia) | `nrs.objectstore.gov.bc.ca` | British Columbia's 10-15 cm aerial photos (around Vancouver and Victoria); opt-in, its lidar terrain and measured tree heights. | Those places get the next photo source. | optional |
 
 ## Aerial and satellite photos (what the ground looks like)

@@ -13,8 +13,14 @@ Per road (roads.road_specs; bridges, tunnels and off-ground segments are left ou
 - several roads at one point (junctions, divided carriageways) blend their targets by inverse distance
   from each centreline (BLEND_R), so they meet in a gradual slope.
 The core width never depends on the land cover (it is taken as urban for every built road), and
-each map cell's plan is made once per anchor and cached, so the block and the tiles built later from
-the same anchor always agree.
+each map cell's plan is made once and cached, so the block and the tiles built later always agree.
+
+Plans do not depend on the anchor (geotiles, 2026-10-29): a cell is planned in the frame of its planning region
+(geotiles.PLAN_Z: the ENU plane at the region's centre; heights geodetic, as ever) by that region's _Planner, one per
+region per process (PlanStore, shared by every anchor's Grader). A Grader is an anchor's view of them: apply() grades
+points in their region's frame (the same heights whatever the anchor: the anchor never enters the sums), plans() and
+_cell_plans() give the plans' vertices mapped exactly into the anchor's world (geotiles.world_xy_map). A region's
+planner reads a neighbouring region's cells mapped into its own frame (_Planner._import).
 
 GradedDem(dem, grader) is a drop-in for dem.Dem where only sample() is graded; use it for the block
 and the levels <= 0 tiles only (coarser tiles sink under the block and cover far more ground).
@@ -158,6 +164,8 @@ APPROACH_SKIP = ("motorway", "trunk")   # never raised (their links are: _never_
 WATER_LIFT_ON = os.environ.get("BNE_WATER_FILL", "on") != "off"
 WATER_CURVE_M = 16.0        # m from an abutment a deck over water spends on its vertical curve before climbing ...
 WATER_MAX_LIFT = 2.0        # ... and its approach fill is raised at most this (any class: a motorway's too)
+OBS_HALF_M = 4.0            # m: the half width a bridge line is matched with when its abutment's lift is measured
+OBS_END_M = 12.0            # m from the end the measured deck's height is taken at most (its first measured station)
 APPROACH_GAP_M = 1.0        # m of flat ground kept between a ramp's fill slope and the road beside it
 ENU_CACHE_MAX = 512         # cells' road parts in the anchor frame kept (Grader._cell_enu; ~0.02-0.5 MB each)
 APPROACH_CELL_M = 450.0     # m: a plan's end this far from a cell cannot raise what that cell's queries see
@@ -325,12 +333,14 @@ def _normals(xy):
     return np.stack([-d[:, 1] / ln, d[:, 0] / ln], axis=1)
 
 
-def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False):
+def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
     the part's profile smoothing; pins: per part (start, end) heights its ends are held at, or None (Grader._pins: a
-    road ending on a more smoothed one meets it at its height). Pure given elev."""
+    road ending on a more smoothed one meets it at its height); obs(xy (m, 2), spec) -> measured heights (m,) of a
+    part's samples (NaN where none) or None: they stand in for the DEM's (roadz.py, on coarse elevation: Grader._obs).
+    Pure given elev and obs."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -388,6 +398,11 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         nb, na = len(before), len(after)
         zx = zall[k:k + nb + len(xy) + na]
         k += nb + len(xy) + na
+        if obs is not None:
+            o = obs(xy, spec)
+            if o is not None and len(o) == len(xy) and np.isfinite(o).any():
+                zx = zx.copy()
+                zx[nb:nb + len(xy)] = np.where(np.isfinite(o), o, zx[nb:nb + len(xy)])
         ab = (False, False)
         if abut is not None and ABUT_FILL_ON:
             ab = (bool(abut[j][0]), bool(abut[j][1]))
@@ -724,12 +739,16 @@ def _twin_trimmed(secs):
     return out
 
 
-class Grader:
-    """The road plans of one anchor frame, per map cell, made once (worker threads; it fetches the road
-    cells it lacks)."""
+_UNSET = object()
 
-    def __init__(self, frame, mapdata, elev, widths=None):
+
+class _Planner:
+    """The road plans of one planning region (geotiles.PLAN_Z), in its frame, per map cell, made once (worker threads;
+    it fetches the road cells it lacks). store: the PlanStore it belongs to (its other regions, its settings)."""
+
+    def __init__(self, frame, mapdata, elev, widths=None, store=None, region=None):
         self.frame, self.md, self.elev, self.widths = frame, mapdata, elev, widths
+        self.store, self.region = store, region
         self.cells = {}
         self.failed = {}        # cell key -> monotonic time of the last failed fetch
         self.lock = threading.Lock()
@@ -737,10 +756,53 @@ class Grader:
         self.covers = {}        # cell key -> [(xy (k, 2), half width)]: the tunnels whose ground over them stays
         self.keeps = {}         # cell key -> [(xy (k, 2), half width)]: the UNGRADED roads' carriageways
         self.opens = {}         # cell key -> [(xy (k, 2), Spec)]: the tunnels' open sections (roads in the open)
-        self.shared = None      # plancache.PlanCache: the cells' plans shared with the server's other processes
-        self.wet = None         # wet(lat, lon) -> water depth (m): tunnels under water are left out, as
-                                # roads.TunnelProfiles leaves them (their "open" sections graded a dam across the river:
-                                # the Maastunnel's bed raised from -6 m to -0.4 m, storm-ace's GitHub #85)
+
+    # the store's settings (set on the anchors' Graders after they are made): shared: plancache.PlanCache (the cells'
+    # plans shared with the server's other processes); wet(lat, lon) -> water depth (m): tunnels under water are left
+    # out, as roads.TunnelProfiles leaves them (their "open" sections graded a dam across the river: the Maastunnel's
+    # bed raised from -6 m to -0.4 m, storm-ace's GitHub #85); dem: its urgent lane (_plan_missing)
+    def _store_attr(name):
+        def get(self):
+            own = self.__dict__.get("_own_" + name, _UNSET)
+            if own is not _UNSET:
+                return own
+            return getattr(getattr(self, "store", None), name, None)
+
+        def put(self, v):           # (a planner of its own: tests)
+            self.__dict__["_own_" + name] = v
+        return property(get, put)
+    shared = _store_attr("shared")
+    wet = _store_attr("wet")
+    dem = _store_attr("dem")
+    del _store_attr
+
+    def _foreign(self, key):
+        """The planner of cell key's region when it is not this one's (None: this one plans it)."""
+        if self.store is None:
+            return None
+        import geotiles
+        r = geotiles.region_of_cell(key)
+        return None if r == self.region else self.store.planner(r)
+
+    def _import(self, src, key):
+        """Cell key planned by src (another region's planner), its vertices mapped exactly into this frame."""
+        plans = src._cell_plans(key)
+        with src.lock:
+            if key not in src.cells:            # (its fetch failed: asked again later)
+                return []
+            keeps, covers, opens = src.keeps.get(key, []), src.covers.get(key, []), src.opens.get(key, [])
+        import geotiles
+
+        def m(xy):
+            return geotiles.world_xy_map(src.frame, self.frame, xy)
+        got = ([(fid, mapped_plan(p, m)) for fid, p in plans], [(m(xy), hw) for xy, hw in keeps],
+               [(m(xy), w) for xy, w in covers], [(m(xy), sp) for xy, sp in opens])
+        with self.lock:
+            self.cells.setdefault(key, got[0])
+            self.keeps.setdefault(key, got[1])
+            self.covers.setdefault(key, got[2])
+            self.opens.setdefault(key, got[3])
+            return self.cells[key]
 
     def _cell_plans(self, key):
         with self.lock:
@@ -748,6 +810,10 @@ class Grader:
             kl = self.key_locks.setdefault(key, threading.Lock())
         if got is not None:
             return got
+        src = self._foreign(key)
+        if src is not None:
+            with kl:
+                return self._import(src, key)
         with kl:
             return self._plan_cell(key)
 
@@ -830,7 +896,7 @@ class Grader:
             pparts = []                         # (fid, spec, lon/lat ring) of each plan (roadcorners.grade_rows)
             coarse = COARSE_EASE_ON and self._coarse(key)
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
-                                                                         coarse=coarse)):
+                                                                         coarse=coarse, obs=self._obs(key))):
                 if p is not None:
                     p.rid = road_id(fid)
                     plans.append((fid, p))
@@ -900,9 +966,12 @@ class Grader:
             # than LONG_PART_M by all of it (TunnelProfiles.ends grades them by the roads' plans alone)
             tplans = plans
             if own is not None:
+                # (by the cell's quad in this frame, not its box: a cell at a planning region's edge stands turned
+                # ~0.16 deg in it, and boxes left slivers planned twice or not at all between neighbouring cells)
+                quad = self._clip_quad(key)
                 kept, tplans = [], []
                 for (fid, p), cl in zip(plans, pclip):
-                    pieces = trim_plan(p, own)
+                    pieces = trim_plan(p, own if quad is None else quad)
                     kept.extend((fid, q) for q in pieces)
                     tplans.extend((fid, q) for q in (pieces if cl else [p]))
                 plans = kept
@@ -1092,7 +1161,8 @@ class Grader:
                 parts = [(part, asks[n][0][4]) for n, (part, _last, _whole) in zip(jobs, preps)]
                 ext = self._extensions(parts, [asks[n][0][5] for n in jobs])
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
-                                   coarse=COARSE_EASE_ON and self._coarse_ll(parts[0][0]))
+                                   coarse=COARSE_EASE_ON and self._coarse_ll(parts[0][0]),
+                                   obs=self._obs(None, parts[0][0]))
                 for n, (part, last, whole), p in zip(jobs, preps, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
             except Exception as e:      # one at a time, each its own failure (_stronger_z)
@@ -1151,7 +1221,7 @@ class Grader:
             # (the profile alone: its cutting's walls cost most of a plan and no height, 2026-10-25)
             p = plan_roads(self.frame, [(part, cand[4])], self.elev, None,
                            self._extensions([(part, cand[4])], [cand[5]]), cuts=False,
-                           coarse=COARSE_EASE_ON and self._coarse_ll(part))[0]
+                           coarse=COARSE_EASE_ON and self._coarse_ll(part), obs=self._obs(None, part))[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
             log.debug("grading: pin height of %s: %s: %s", cand[5], type(e).__name__, e)
@@ -1159,6 +1229,16 @@ class Grader:
                 memo[k] = None
         with self.lock:
             return memo.get(k)
+
+    def _clip_quad(self, key):
+        """The cell's quad (4, 2: its corners SW, SE, NE, NW at h = 0) in the frame, or None for a key without bounds:
+        the cells' own pieces of the plans (trim_plan), each place in one cell's whatever the frame."""
+        if not hasattr(key, "bounds"):
+            return None
+        lon0, lat0, lon1, lat1 = key.bounds()
+        e, n, _ = self.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon1, lon0]),
+                                             0.0)
+        return np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
 
     def _clip_box(self, key, margin=CLIP_MARGIN_M):
         """The cell's box in the frame (east / north), margin wider each side; None for a key without bounds."""
@@ -1188,6 +1268,50 @@ class Grader:
             la, lo, _ = self.frame.enu_to_geodetic(run[:, 0], run[:, 1], 0.0)
             out.append(np.stack([np.asarray(lo, np.float64), np.asarray(la, np.float64)], axis=1))
         return out
+
+    def _obs(self, key, lonlat=None):
+        """plan_roads' obs: the measured heights of ground roads (roadz.PROVIDER, level 0) where cell key's (or the
+        part's) elevation is only the coarse global model (dem.coarse_at): on lidar terrain the DTM is the better
+        height (decimetres; BD TOPO's Z is 1.5-2.5 m), so None there, as when roadz is off."""
+        import roadz
+        prov = roadz.PROVIDER
+        if prov is None or not prov.enabled:
+            return None
+        if not (self._coarse(key) if key is not None else self._coarse_ll(lonlat)):
+            return None
+
+        def obs(xy, spec):
+            try:
+                return prov.observed(self.frame, xy, spec.width / 2, 0)
+            except Exception as e:      # the DEM's rather than no grading
+                log.debug("grading: measured road heights: %s: %s", type(e).__name__, e)
+                return None
+        return obs
+
+    def _observed_lift(self, bridge, xy, z_at):
+        """(m the abutment at bridge end xy is raised, the measured deck end's height) when a source measured the deck
+        (roadz.PROVIDER, level 1): the measured deck end over the ground there, 0 or more; None when none did (the
+        inference: bridge_lifts)."""
+        import roadz
+        prov = roadz.PROVIDER
+        if prov is None or not prov.enabled:
+            return None
+        try:
+            z = prov.observed(self.frame, bridge, OBS_HALF_M, 1)
+        except Exception as e:
+            log.debug("grading: measured deck at %s: %s: %s", xy, type(e).__name__, e)
+            return None
+        if z is None:
+            return None
+        z = np.asarray(z, np.float64)
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(bridge, axis=0).T))]
+        at_end = bool(np.hypot(*(bridge[-1] - xy)) < np.hypot(*(bridge[0] - xy)))
+        d = (s[-1] - s) if at_end else s
+        near = np.flatnonzero(np.isfinite(z) & (d <= OBS_END_M))
+        if not len(near):
+            return None
+        k = int(near[np.argmin(d[near])])
+        return max(0.0, float(z[k]) - float(z_at(np.asarray([xy], np.float64))[0])), float(z[k])
 
     def _coarse(self, key):
         """Is cell key's elevation only the coarse global model (dem.coarse_at its centre)? False without a DEM."""
@@ -1256,6 +1380,14 @@ class Grader:
                 if _never_raised(specs[i]) and not got[3]:
                     continue
                 lift, others = got[0], got[1]
+                if len(got) > 4 and got[4] is not None:
+                    # (a measured deck end: up to its height from the plan's own there, not from the ground under the
+                    # point, which may lie down the cut the deck spans: Charles Street's approach over I-83 rose 2.2 m
+                    # over its plan to a deck end measured at the street's height, 2026-10-29)
+                    zp = float(np.asarray(p.z, np.float64)[-1 if at_end else 0])
+                    lift = min(float(got[4]) - zp, APPROACH_MAX_LIFT)
+                    if lift < APPROACH_MIN_LIFT:
+                        continue
                 a = approach_add(p.xy, at_end, lift, p.half, others)
                 if a is not None:
                     add = a if add is None else np.maximum(add, a)
@@ -1687,6 +1819,11 @@ class Grader:
             if np.hypot(*(end - xy)) <= APPROACH_TOUCH_M:
                 best = lift
                 break
+        seen = self._observed_lift(bridge, xy, z_at)
+        if seen is not None:            # (a measured deck: its own end, not what the clearance rules would need)
+            seen, target = seen
+            return None if seen < APPROACH_MIN_LIFT else (min(seen, APPROACH_MAX_LIFT), others, approaches, False,
+                                                          target)
         wl = self._water_lift(bridge, chain, xy, z_at) if bridge_chain_ends_free(bridge, bridges, xy) else 0.0
         if wl >= APPROACH_MIN_LIFT and (best is None or wl > best):
             return min(wl, WATER_MAX_LIFT), others, approaches, True
@@ -1759,6 +1896,21 @@ class Grader:
             self._chains = t
         return self._chains
 
+    def _drowned(self, key, ring):
+        """roads.TunnelProfiles.drowned for tunnel part key (ring: its lon / lat points): the process's tunnel chain
+        store's (the road tiles' and blocks', blockworker: store.tunnel_store), whose chains are resolved once for all
+        of them, when it is there; else this frame's own (_chains_for)."""
+        get = getattr(self.store, "tunnel_store", None) if getattr(self, "store", None) is not None else None
+        cs = get() if callable(get) else None
+        if cs is not None:
+            try:
+                st = cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                if st.wet is not None:
+                    return st.drowned(key, ring)
+            except Exception as e:      # (this frame's own then)
+                log.debug("grading: the chain store's drowned: %s: %s", type(e).__name__, e)
+        return self._chains_for().drowned(key, ring)
+
     def _tunnel_sections(self, feats, key=None, road_plans=()):
         """[(fid, spec, xy, z, kind)] of the tunnels' sections (roads.tunnel_sections on the ungraded ground, its
         ends graded by road_plans: the cell's road Plans, as roads.TunnelProfiles.ends grades them with the roads'
@@ -1783,7 +1935,7 @@ class Grader:
                 if self.wet is not None and \
                         (np.asarray(self.wet(la, lo)) > 0.5).mean() > roadsmod.TUNNEL_WET_SHARE:
                     continue
-                if self.wet is not None and self._chains_for().drowned((str(feats.ids[i]), j), ring):
+                if self.wet is not None and self._drowned((str(feats.ids[i]), j), ring):
                     continue            # (a dry piece of an underwater tunnel: left out with it, GitHub #128)
                 g = np.asarray(self.elev(la, lo), np.float64)
                 if road_plans:
@@ -1883,6 +2035,9 @@ class Grader:
 
     def planned(self, key):
         """True once cell key's plans exist (made, or failed recently)."""
+        src = self._foreign(key)
+        if src is not None:
+            return src.planned(key)
         with self.lock:
             f = self.failed.get(key)
             return key in self.cells or (f is not None and time.monotonic() - f < RETRY_S)
@@ -1971,7 +2126,14 @@ class Grader:
         keys = self._keys(lat, lon)
         if planned_only:
             with self.lock:
-                keys = [k for k in keys if k in self.cells]
+                have = {k for k in keys if k in self.cells}
+            for k in keys:              # (a neighbouring region's, planned there: read in)
+                src = None if k in have else self._foreign(k)
+                if src is not None:
+                    with src.lock:
+                        if k in src.cells:
+                            have.add(k)
+            keys = [k for k in keys if k in have]
             if not keys:
                 return base
         plans, pack = self._plan_set(keys, roads_only)
@@ -2047,15 +2209,184 @@ class Grader:
         return mask if mask.any() else None
 
 
+def mapped_plan(p, fn):
+    """Plan p with its vertices through fn (xy (n, 2) -> (n, 2): geotiles.world_xy_map); heights, widths, cuttings and
+    banking as they are (geodetic, or along / across the road)."""
+    q = Plan(fn(p.xy), p.z, p.half, p.abut, p.cut, p.road_half)
+    q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+    return q
+
+
+class PlanStore:
+    """Every road plan of a process, whatever the anchor: one _Planner per planning region (geotiles.PLAN_Z), made on
+    first use. mapdata, elev (lat, lon -> m at PROFILE_ZOOM, raw), widths as the Grader's; wet, dem, shared (the
+    planners' settings) set after it is made, as on a Grader (which forwards them here)."""
+
+    def __init__(self, mapdata, elev, widths=None):
+        self.md, self.elev, self.widths = mapdata, elev, widths
+        self.wet = None
+        self.dem = None
+        self.shared = None
+        self.lock = threading.Lock()
+        self.planners = OrderedDict()   # (rx, ry) -> _Planner, the least recently used first
+
+    @staticmethod
+    def frame_of(region):
+        """The planning frame of a region (geotiles.region_frame; a test replaying samples captured in one frame
+        sets its own)."""
+        import geotiles
+        return geotiles.region_frame(*region)
+
+    def planner(self, region):
+        region = (int(region[0]), int(region[1]))
+        with self.lock:
+            got = self.planners.get(region)
+            if got is None:
+                got = self.planners[region] = _Planner(self.frame_of(region), self.md, self.elev, self.widths,
+                                                       store=self, region=region)
+                # (the regions far behind go: their plans are on disk, plancache; a drive across a continent kept
+                # every cell it passed)
+                while len(self.planners) > PLANNERS_KEPT:
+                    self.planners.popitem(last=False)
+            else:
+                self.planners.move_to_end(region)
+            return got
+
+    def planner_of_cell(self, key):
+        import geotiles
+        return self.planner(geotiles.region_of_cell(key))
+
+    def planners_of(self, lat, lon):
+        """[(planner, index array)] of the points' regions (most calls: one)."""
+        import geotiles
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        rx, ry = geotiles.region_of(lat, lon)
+        rx, ry = np.atleast_1d(rx), np.atleast_1d(ry)
+        if len(rx) and (rx == rx[0]).all() and (ry == ry[0]).all():
+            return [(self.planner((int(rx[0]), int(ry[0]))), None)]
+        out = []
+        for a, b in sorted({(int(a), int(b)) for a, b in zip(rx, ry)}):
+            out.append((self.planner((a, b)), np.flatnonzero((rx == a) & (ry == b))))
+        return out
+
+
+PLANNERS_KEPT = 6               # planning regions a PlanStore keeps in memory (~30 km each)
+MAPPED_MAX = 256                # cells' plans mapped into an anchor's world kept (Grader._cell_plans)
+
+
+class Grader:
+    """The road plans as one anchor frame sees them (the PlanStore's, store: shared by the process's anchors; its own
+    without one). Heights (apply) are the planners', in their regions' frames: the same at a place whatever the
+    anchor. Plans and outlines handed out (plans, _cell_plans) are in this frame's world."""
+
+    def __init__(self, frame, mapdata, elev, widths=None, store=None):
+        self.frame = frame
+        self.store = store if store is not None else PlanStore(mapdata, elev, widths)
+        self.md, self.elev, self.widths = self.store.md, self.store.elev, self.store.widths
+        self.lock = threading.Lock()
+        self._mapped = OrderedDict()        # cell key -> its plans in this frame
+
+    def _set(name):
+        return property(lambda self: getattr(self.store, name), lambda self, v: setattr(self.store, name, v))
+    wet = _set("wet")
+    dem = _set("dem")
+    shared = _set("shared")
+    del _set
+
+    def planned(self, key):
+        """True once cell key's plans exist (made, or failed recently), by any anchor of the store."""
+        return self.store.planner_of_cell(key).planned(key)
+
+    def warm(self, key):
+        """Make cell key's plans now (worker threads: the lookahead ahead of the player)."""
+        self.store.planner_of_cell(key)._cell_plans(key)
+
+    def _cell_plans(self, key):
+        """[(fid, Plan)] of cell key, in this frame's world (mapped from its region's frame; kept)."""
+        with self.lock:
+            got = self._mapped.get(key)
+            if got is not None:
+                self._mapped.move_to_end(key)
+                return got
+        pl = self.store.planner_of_cell(key)
+        plans = pl._cell_plans(key)
+        with pl.lock:
+            done = key in pl.cells
+        import geotiles
+
+        def m(xy):
+            return geotiles.world_xy_map(pl.frame, self.frame, xy)
+        got = [(fid, mapped_plan(p, m)) for fid, p in plans]
+        if done:
+            with self.lock:
+                got = self._mapped.setdefault(key, got)
+                while len(self._mapped) > MAPPED_MAX:
+                    self._mapped.popitem(last=False)
+        return got
+
+    _clip_box = _Planner._clip_box          # (in this frame: self.frame only)
+    _keys = staticmethod(_Planner._keys)
+    _over_tunnels = _Planner._over_tunnels  # (a namespace with covers and lock: tests)
+    _on_kept = _Planner._on_kept
+
+    def plans(self, lat, lon, roads_only=False):
+        """The Plans touching the points' area (each road once), in this frame's world; roads_only: not the tunnels'
+        (TUNNEL_TAG). In the order of the plans' own region (as _Planner._plan_set)."""
+        keys = self._keys(lat, lon)
+        got = {}
+        for key in keys:
+            for fid_part, p in self._cell_plans(key):
+                if roads_only and TUNNEL_TAG in fid_part:
+                    continue
+                got.setdefault((fid_part, float(p.xy[0, 0]), float(p.xy[0, 1])), p)
+        return [got[k] for k in sorted(got)]
+
+    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
+        """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base."""
+        lat = np.asarray(lat, np.float64)
+        lon = np.asarray(lon, np.float64)
+        base = np.asarray(base, np.float64)
+        if base.size == 0:
+            return base
+        parts = self.store.planners_of(lat, lon)
+        if len(parts) == 1:
+            return parts[0][0].apply(lat, lon, base, lift, roads_only, planned_only)
+        la, lo, b = lat.ravel(), lon.ravel(), base.ravel()
+        out = np.array(b, np.float64, copy=True)
+        for pl, idx in parts:
+            out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
+        return out.reshape(base.shape)
+
+    def open_tunnels(self, lat, lon):
+        """_Planner.open_tunnels by the points' regions: [(lat (k,), lon (k,), Spec)], each section once."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        if lat.size == 0:
+            return []
+        out, seen = [], set()
+        for pl, idx in self.store.planners_of(lat, lon):
+            for la, lo, spec in pl.open_tunnels(lat if idx is None else lat[idx], lon if idx is None else lon[idx]):
+                k = (round(float(la[0]), 7), round(float(lo[0]), 7), len(la))
+                if k not in seen:
+                    seen.add(k)
+                    out.append((la, lo, spec))
+        return out
+
+
 def trim_plan(p, box):
-    """The pieces of Plan p within box (x0, y0, x1, y1): cut at its edges (earthfast.clip_segments), heights and
+    """The pieces of Plan p within box (x0, y0, x1, y1), or a convex polygon (k, 2): cut at its edges (earthfast.clip_segments), heights and
     cuttings with them; an end not at p's own end leads onto no bridge. [Plan]."""
     import fast
-    fast.require(44, "clip_segments")
     xy = np.ascontiguousarray(np.asarray(p.xy, np.float64)[:, :2])
     if len(xy) < 2:
         return [p]
-    t = np.asarray(fast._ef.clip_segments(xy, tuple(float(v) for v in box)))
+    if np.ndim(box) == 2:               # a convex polygon (a cell's quad: _Planner._clip_quad)
+        fast.require(104, "clip_segments_convex")
+        t = np.asarray(fast._ef.clip_segments_convex(xy, np.ascontiguousarray(box, np.float64)))
+    else:
+        fast.require(44, "clip_segments")
+        t = np.asarray(fast._ef.clip_segments(xy, tuple(float(v) for v in box)))
     ok = np.isfinite(t[:, 0])
     if ok.all() and (t[:, 0] == 0.0).all() and (t[:, 1] == 1.0).all():
         return [p]

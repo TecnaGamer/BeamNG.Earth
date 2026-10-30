@@ -140,3 +140,61 @@ console.log("mapmath ok")
   assert.equal(m.weatherIcon(undefined), "")
   console.log("mapmath weather icon ok")
 }
+
+// the cache view's grid (covermap.py cache_map): zoom, box, decoding and classes
+{
+  assert.equal(m.cacheGridZoom(2), 6)
+  assert.equal(m.cacheGridZoom(12.4), 15)
+  assert.equal(m.cacheGridZoom(13.6), 16)
+  assert.equal(m.cacheGridZoom(18), 16)
+  const b = m.cacheGridBox(39.2826, -76.5916, 13, 1600, 900, 16)
+  assert.equal(b.z, 16)
+  // the centre's cell is inside, about 8 cells per 256 px tile
+  const c = m.project(39.2826, -76.5916, 16)
+  assert.ok(b.x0 <= c.x / 256 && c.x / 256 <= b.x1 + 1 && b.y0 <= c.y / 256 && c.y / 256 <= b.y1 + 1)
+  near(b.x1 - b.x0 + 1, 1600 / 256 * 8, 1.01, "cells across")
+  // a huge window: clipped to the cell limit, inside the world
+  const big = m.cacheGridBox(0, 0, 3, 10000, 10000, 6)
+  assert.ok((big.x1 - big.x0 + 1) * (big.y1 - big.y0 + 1) <= m.CACHE_MAX_CELLS)
+  assert.ok(big.x0 >= 0 && big.y0 >= 0 && big.x1 <= 63 && big.y1 <= 63)
+  assert.deepEqual(Array.from(m.b64Bytes("AAEC/w==")), [0, 1, 2, 255])
+  // detail classes by ground resolution: z17 imagery at 39 N (~0.9 m) is sharp, z12 (~29 m) coarse, partial flagged
+  assert.equal(m.cacheClass("imagery", 17, 39).name, "Sharp")
+  assert.equal(m.cacheClass("imagery", 12, 39).name, "Coarse")
+  assert.equal(m.cacheClass("imagery", 14 | m.CACHE_PARTIAL, 39).partial, true)
+  assert.equal(m.cacheClass("elevation", 16, 39).name, "Sharp")      // 512 px tiles: ~1.2 m
+  assert.equal(m.cacheClass("summary", 3, 39).name, "Ready to drive")
+  assert.equal(m.cacheClass("mapdata", 0, 39), null)
+  assert.equal(m.fmtRes(1.2, true), "1.2 m")
+  assert.equal(m.fmtRes(30, false), "98 ft")
+  console.log("mapmath cache view ok")
+}
+
+// the Players list and its Show all: great-circle distances, and a view fitting everyone (the antimeridian, one player)
+{
+  near(m.distanceM(0, 0, 0, 1), 111195, 1, "a degree of the equator")
+  near(m.distanceM(51.5074, -0.1278, 40.7128, -74.006), 5570e3, 5e3, "London - New York")
+  near(m.distanceM(0, 179.5, 0, -179.5), m.distanceM(0, 0, 0, 1), 1e-6, "across the antimeridian: the short way")
+  assert.equal(m.distanceM(36.6, -118, 36.6, -118), 0)
+  const one = m.fitView([{ lat: 36.6, lon: -118 }], 1280, 720, 60, 12)
+  assert.deepEqual([Math.round(one.lat * 1e6) / 1e6, one.lon, one.z], [36.6, -118, 12], "one player: on them, at maxZ")
+  // Fiji and Samoa (either side of 180): side by side round 180, zoomed in, not the whole world between them
+  const pac = m.fitView([{ lat: -17.7, lon: 178 }, { lat: -13.8, lon: -172 }], 1280, 720, 60, 12)
+  near(Math.abs(pac.lon), 177, 1e-9, "centred on the antimeridian side")
+  assert.ok(pac.z > 4, `zoomed in on the Pacific: z ${pac.z}`)
+  for (const p of [{ lat: -17.7, lon: 178 }, { lat: -13.8, lon: -172 }]) {
+    const s = m.toScreen(p.lat, p.lon, pac.lat, pac.lon, pac.z, 1280, 720)
+    assert.ok(s.x >= 59.99 && s.x <= 1220.01 && s.y >= 59.99 && s.y <= 660.01, `inside the padded view: ${s.x}, ${s.y}`)
+  }
+  // players round the world: zoomed out, all of them still on screen
+  const spread = [{ lat: 50, lon: 0 }, { lat: -30, lon: 120 }, { lat: 10, lon: -120 }]
+  const world = m.fitView(spread, 1280, 720, 60, 12)
+  assert.ok(world.z < 3, `zoomed out: z ${world.z}`)
+  for (const p of spread) {
+    const s = m.toScreen(p.lat, p.lon, world.lat, world.lon, world.z, 1280, 720)
+    assert.ok(s.x >= 59.99 && s.x <= 1220.01 && s.y >= 59.99 && s.y <= 660.01, `round the world, on screen: ${s.x}, ${s.y}`)
+  }
+  // more than the map's widest view holds: at MIN_Z, not past it
+  assert.equal(m.fitView([{ lat: 80, lon: 0 }, { lat: -80, lon: 0 }], 1280, 720, 60, 12).z, m.MIN_Z)
+  console.log("mapmath players ok")
+}

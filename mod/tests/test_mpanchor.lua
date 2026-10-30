@@ -33,12 +33,13 @@ T.check(ma.knows(4) and not ma.knows(5), 'knows the anchors it was told')
 positionGE.handle('p:4-0:{"pos":[100,200,30]}')
 local out = enc[#enc]
 local theirs, ours = geodesy.newAnchor(36.52, -118.08), geodesy.newAnchor(36.5, -118.1)
-local ex, ey, ez = theirs:transformTo(ours):apply(100, 200, 30)
+-- (the world convention: the place through latitude / longitude, x, y at h = 0; geodesy worldToGeodetic)
+local ex, ey, ez = ours:geodeticToWorld(theirs:worldToGeodetic(100, 200, 30))
 T.check(got[#got] == 'p:4-0:ENC' .. #enc and math.abs(out.pos[1] - ex) < 1e-6 and math.abs(out.pos[2] - ey) < 1e-6
   and math.abs(out.pos[3] - ez) < 1e-6, 'a known player\'s position: in our frame')
 -- the same point on Earth: their frame -> geodetic == our frame -> geodetic
-local la1, lo1 = theirs:enuToGeodetic(100, 200, 30)
-local la2, lo2 = ours:enuToGeodetic(out.pos[1], out.pos[2], out.pos[3])
+local la1, lo1 = theirs:worldToGeodetic(100, 200, 30)
+local la2, lo2 = ours:worldToGeodetic(out.pos[1], out.pos[2], out.pos[3])
 T.check(math.abs(la1 - la2) < 1e-9 and math.abs(lo1 - lo2) < 1e-9, 'the same real-world point')
 
 -- the Earth's curvature: player 6's anchor 15 km off (a rebase apart), its car beside ours. A flat shift would put
@@ -46,7 +47,7 @@ T.check(math.abs(la1 - la2) < 1e-9 and math.abs(lo1 - lo2) < 1e-9, 'the same rea
 local aLat6 = 36.5 + 15000 / 111000
 ma.setRemote(6, aLat6, -118.1)
 local mine6, theirs6 = geodesy.newAnchor(36.5, -118.1), geodesy.newAnchor(aLat6, -118.1)
-local te, tn, tu = mine6:toFrame(theirs6, 3, 4, 1.5)          -- a point 5 m from our origin, in their frame
+local te, tn, tu = theirs6:geodeticToWorld(mine6:worldToGeodetic(3, 4, 1.5))   -- 5 m from our origin, in their world
 positionGE.handle(string.format('p:6-0:{"pos":[%.9f,%.9f,%.9f]}', te, tn, tu))
 local p6 = enc[#enc].pos
 T.check(math.abs(p6[1] - 3) < 1e-4 and math.abs(p6[2] - 4) < 1e-4 and math.abs(p6[3] - 1.5) < 1e-4,

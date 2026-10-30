@@ -111,6 +111,10 @@ do
   T.check(#sent == 0, 'still valid: no new path for the AI')
   G.afterGraph(keep, { b = n(100, {}), c = n(200, {}) })
   T.check(#sent == 1, 'a broken step: the AI gets the part that is left')
+  -- a rebase moved the graph (navgraph.transform): the same ids, but the AI's plan held the old frame's points
+  local before = G.graphMoves or 0
+  G.afterGraph(keep, same, true)
+  T.check(#sent == 1 and (G.graphMoves or 0) == before + 1, 'a moved graph: no new path (the AI plans again by itself on the new map)')
   getPlayerVehicle = saved
 end
 do -- the game's loaded graph keeps each edge on one node only (map.lua convertToSingleSided)

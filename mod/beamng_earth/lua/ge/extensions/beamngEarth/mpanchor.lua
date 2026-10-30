@@ -116,6 +116,8 @@ local function transformFor(pid)
   end
   local theirs, ours = geodesy.newAnchor(r.lat, r.lon), geodesy.newAnchor(myLat, myLon)
   local xf = theirs:transformTo(ours)
+  -- (the anchors too: a position goes over through latitude / longitude, the world convention: x, y at h = 0)
+  xf.theirs, xf.ours = theirs, ours
   xfCache[pid] = { myLat = myLat, myLon = myLon, rLat = r.lat, rLon = r.lon, xf = xf }
   return xf
 end
@@ -127,7 +129,14 @@ end
 -- then R"): newRot = quatMul(rot, xf:beamngQuat()).
 local function applyTransform(decoded, xf)
   if decoded.pos then
-    decoded.pos[1], decoded.pos[2], decoded.pos[3] = xf:apply(decoded.pos[1], decoded.pos[2], decoded.pos[3])
+    -- (where their world puts the spot, in ours: the rigid move alone landed a car h x D / R off the road, 3.9 m at
+    -- 1650 m with anchors 15 km apart; geodesy worldToGeodetic / geodeticToWorld)
+    local p = decoded.pos
+    if xf.theirs and xf.ours and (xf.theirs.lat ~= xf.ours.lat or xf.theirs.lon ~= xf.ours.lon) then
+      p[1], p[2], p[3] = xf.ours:geodeticToWorld(xf.theirs:worldToGeodetic(p[1], p[2], p[3]))
+    else
+      p[1], p[2], p[3] = xf:apply(p[1], p[2], p[3])
+    end
   end
   if decoded.vel then
     decoded.vel[1], decoded.vel[2], decoded.vel[3] = xf:rotate(decoded.vel[1], decoded.vel[2], decoded.vel[3])

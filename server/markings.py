@@ -268,7 +268,7 @@ def gores(roads_):
 
 # Turn arrows (MUTCD 3B.20: two per turn lane, near the start of the full lane and before the stop line) from
 # OpenStreetMap's turn:lanes, drawn with West Coast USA's road-marking decal sheet (roadmarkings1, 4 x 4 cells:
-# row 0 left, right and straight arrows; cell rows from the top)
+# row 0 left, right and straight arrows; cell rows from the top: arrow_quad turns them into the shape's V)
 ARROW_MATERIAL = "roadmarkings1"
 ARROW_CELLS = {"left": (0.0, 0.0), "right": (0.25, 0.0), "through": (0.5, 0.0)}
 ARROW_CELL_M = (4.0, 3.0)           # the cell's quad: m along, across (the arrow ~2.8 m by 0.8 m in it)
@@ -357,5 +357,9 @@ def arrow_quad(centre, t, kind_):
     fwd, side = np.r_[t * L / 2, 0.0], np.r_[n * W / 2, 0.0]
     corners = np.stack([c + fwd + side, c + fwd - side, c - fwd - side, c - fwd + side])
     u0, v0 = ARROW_CELLS[kind_]
-    uv = np.array([[u0, v0], [u0 + 0.25, v0], [u0 + 0.25, v0 + 0.25], [u0, v0 + 0.25]])
+    # (the shape's V runs up from the sheet's bottom: the cell's top (1 - v0) at the arrow's tip. Read from the top
+    # down, every arrow showed the bottom row upside down: blank in the old sheet, game 0.40's "EXIT" for the
+    # straight ones, Baltimore 2026-10-29)
+    top, bottom = 1.0 - v0, 1.0 - v0 - 0.25
+    uv = np.array([[u0, top], [u0 + 0.25, top], [u0 + 0.25, bottom], [u0, bottom]])
     return corners, uv

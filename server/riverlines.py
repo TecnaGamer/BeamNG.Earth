@@ -21,6 +21,7 @@ across the river's outline where Overture has one (seacarve's outline mask), the
 the banks, else WIDTH_M by class.
 """
 import hashlib
+import json
 import math
 from dataclasses import dataclass
 
@@ -131,6 +132,27 @@ class River:
                 [[round(x, 2), round(y, 2), round(z, 2), round(w, 1), round(d, 1)] for x, y, z, w, d in self.nodes]]
 
 
+def underground(f, i):
+    """Whether water line i of Features f runs underground by its OSM tags (Overture's source tags): tunnel=yes /
+    culvert / ... or location=underground. A river piped under a city (Novosibirsk's Kamenka, under the streets of its
+    centre) was drawn as open water and its bed carved: a strip of water lay along the streets (2026-10-25); a culvert
+    under a road, a strip across it."""
+    tags = f.attrs.get("tags") if hasattr(f, "attrs") else None
+    if tags is None:
+        return False
+    t = tags[i]
+    if not isinstance(t, str) or ('"tunnel"' not in t and '"location"' not in t):
+        return False
+    try:
+        d = json.loads(t)
+    except ValueError:
+        return False
+    if not isinstance(d, dict):
+        return False
+    return (str(d.get("tunnel", "no")).strip().lower() not in ("no", "")
+            or str(d.get("location", "")).strip().lower() == "underground")
+
+
 def _kind(sub, cls):
     if cls in SKIP_CLASSES or sub not in SUBTYPES:
         return None
@@ -216,7 +238,8 @@ def plan(frame, x, y, cell_water, water_at, dem_at, outline_at=None, radius=None
             continue
         for i in np.flatnonzero(f.kind == 2):
             kind = _kind(str(f.attrs["subtype"][i]), str(f.attrs.get("class", [""] * len(f.kind))[i]))
-            if kind is None or bool(f.attrs.get("is_intermittent", np.zeros(len(f.kind), bool))[i]):
+            if kind is None or bool(f.attrs.get("is_intermittent", np.zeros(len(f.kind), bool))[i]) \
+                    or underground(f, i):
                 continue
             gid = str(f.ids[i])
             if gid in seen:

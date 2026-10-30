@@ -391,6 +391,11 @@ do
   trees.POOL_SPARE = 0
   trees.clear()
 end
+-- spares only while calm (the governor's loading budget: a teleport, the level's start, the car standing), none while
+-- driving (a ~9 ms Forest every 3 s of a town drive made the game's time run unevenly, 2026-10-29)
+T.check(trees.spareWanted(FRAME_MS) == 0, 'driving (the real frame budget): no spare Forests made')
+T.check(trees.spareWanted(trees.LOADING_FRAME_MS) == trees.POOL_SPARE_CALM, 'calm: a bigger pool made ready')
+T.check(trees.spareWanted(nil) == trees.POOL_SPARE, 'no governor: POOL_SPARE')
 
 -- the row cap (ROWS_PER_FRAME) leaves a tile's refresh (navgraph's signal heads: M.suppress) for a later frame; it
 -- dropped it, and the tile kept its static signal under the switchable one
@@ -486,5 +491,68 @@ do -- country-specific delineators use the same non-solid pools on revisit
   T.check(count() == 3 and solidCount() == 0, 'European delineator revisit remains non-solid')
   T.check(trees.CATALOG.stop_arret[1][1]:match('stop_arret$') ~= nil, 'Quebec uses the accented ARRET asset')
   T.check(trees.CATALOG.stop_dur[1][1]:match('stop_dur$') ~= nil, 'Turkey uses the DUR asset')
+end
+-- geotiles (server --geo-tiles on): a tile in its own frame is made where its placement puts it in the anchor's
+-- world; a rebase moves its Forest (nothing made again) unless it must collide, then it is made again at the new
+-- placement; it is no ghost and needs nothing from the server again
+do
+  local gd = require('beamngEarth/geodesy')
+  local gt = require('beamngEarth/geotile')
+  trees.clear()
+  trees.reset()
+  for k in pairs(items) do items[k] = nil end
+  trees.POOL_SPARE, trees.RECHECK_S = 0, -1
+  local LAT, LON = 39.2834, -76.5934
+  local A = gd.newAnchor(LAT - 0.02, LON - 0.1)        -- the world before: ~9 km away
+  local gx, gy = gt.tileOf(LAT, LON)
+  local key = gt.key(gx, gy)
+  local cl, cn = gt.centre(17, gx, gy)
+  local tf = gd.newAnchor(cl, cn)
+  local grows = {}
+  for i = 0, 49 do grows[#grows + 1] = string.format('{0, %d, %d, %d, 30, 1, 12, %.2f}', i * 4 - 100, i * 3 - 75,
+    40 + i, i / 100) end
+  files['/t/g.json'] = '{ groups = {}, items = { ' .. table.concat(grows, ', ') .. ' } }'
+  trees.onTile({ anchorId = 21, key = key, path = '/t/g.json', n = 50, frame = { cl, cn }, pivot = 60 }, 21, A)
+  local px, py = A:geodeticToWorld(cl, cn, 0)
+  trees.update(21, { x = px + 1000, y = py })
+  T.check(count() == 35, 'a geotile 1 km off: its lower ranks made (not colliding)')
+  local function off(pl)            -- the worst distance of an item from its row placed by pl
+    local worst = 0
+    for it in pairs(items) do
+      local best = math.huge
+      for k = 0, 49 do
+        local x, y, z = gt.apply(pl, k * 4 - 100, k * 3 - 75, 40 + k)
+        best = math.min(best, math.abs(x - it.m.p.x) + math.abs(y - it.m.p.y) + math.abs(z - it.m.p.z))
+      end
+      worst = math.max(worst, best)
+    end
+    return worst
+  end
+  local w = off(gt.placement(tf, A, 0, 0, 60))
+  T.check(w < 1e-6, 'each item at its row placed into the anchor\'s world: ' .. w)
+  local made = trees.made
+  -- a rebase: the new anchor at the tile
+  local B = gd.newAnchor(cl, cn)
+  local xf = A:worldTransformTo(B, px, py, 60)
+  trees.transform(xf, gd, B)
+  T.check(trees.status().tiles == 1 and count() == 35, 'kept across the rebase, no ghost')
+  T.check(trees.geoMoved == 1, 'placed again')
+  -- as far from the player in the new world: drawn moved, nothing made again
+  trees.update(21, { x = 1000, y = 0 })
+  T.check(trees.made == made and count() == 35, 'far: its Forest moved, no item made again')
+  local f
+  for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and math.abs(o.pos.x) > 1 then f = o end end
+  T.check(f ~= nil, 'its Forest took the move')
+  -- the player at it: it must collide, made again at its placement in the new world
+  for _ = 1, 4 do trees.update(21, { x = 0, y = 0 }) end
+  T.check(trees.geoFlushed == 1 and trees.made == made + 50 and count() == 50,
+    'near: made again (once) at the new placement: ' .. tostring(trees.geoFlushed) .. ' ' .. (trees.made - made))
+  w = off(gt.placement(tf, B, 0, 0, 60))
+  T.check(w < 1e-6, 'at the new placement: ' .. w)
+  -- its drop by key, whatever the anchor
+  trees.onDrop({ anchorId = 99, key = key })
+  for _ = 1, 3 do trees.update(21, { x = 0, y = 0 }) end
+  T.check(count() == 0 and trees.status().tiles == 0, 'dropped')
+  trees.RECHECK_S = 1.0
 end
 T.done('test_trees')

@@ -983,7 +983,7 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None):
                                                                      [ln for *_, ln in roads])):
         for ri, _arc_r, pt in crs:
             pt = np.asarray(pt, np.float64)
-            if not (box[0] <= pt[0] < box[2] and box[1] <= pt[1] < box[3]):
+            if not roadsmod.box_owns(box, pt[0], pt[1]):
                 continue
             lfid, rxy, rcls = rails[ri]
             w = worn.get(lfid, 0)

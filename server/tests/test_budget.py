@@ -19,11 +19,13 @@ class BudgetTest(unittest.TestCase):
         import copy
         import farfield
         self.saved = (dem.MEM_TILES, imagery.MEM_TILES, mapdata.MEM_MB, seacarve.MEM_CELLS, roadwidth.WALL_CELLS)
+        self.fin = (imagery.MEM_FINISHED_MB, imagery.MEM_DECODED)
         self.far = (copy.deepcopy(farfield.K_TABLE), copy.deepcopy(farfield.TEX_DEFAULT))
 
     def tearDown(self):
         import farfield
         dem.MEM_TILES, imagery.MEM_TILES, mapdata.MEM_MB, seacarve.MEM_CELLS, roadwidth.WALL_CELLS = self.saved
+        imagery.MEM_FINISHED_MB, imagery.MEM_DECODED = self.fin
         farfield.K_TABLE.clear(), farfield.K_TABLE.update(self.far[0])
         farfield.TEX_DEFAULT.clear(), farfield.TEX_DEFAULT.update(self.far[1])
 
@@ -55,6 +57,23 @@ class BudgetTest(unittest.TestCase):
         self.assertGreaterEqual(mapdata.MEM_MB, 128, "a road tile's cells fit (Baltimore's: ~124 MB)")
         d = dem.Dem(os.path.join(os.path.dirname(__file__), "_no_cache"), fetcher=mock.Mock())
         self.assertEqual(d.mem_tiles, budget.SMALL_DEM_TILES, "read when the cache is made")
+
+    def test_small_finished_imagery(self):
+        """The finished imagery pyramid's memory by the RAM on a small machine (a Steam Deck: ~58 MB of its JPEGs,
+        96 decoded, for the desktop's 160 MB and 384), the desktop's kept."""
+        self.assertFalse(budget.apply(False))
+        self.assertEqual((imagery.MEM_FINISHED_MB, imagery.MEM_DECODED), self.fin)
+        with mock.patch.object(budget, "total_gb", return_value=14.5):
+            self.assertTrue(budget.apply(True))
+        self.assertEqual(imagery.MEM_FINISHED_MB, 58)
+        self.assertEqual(imagery.MEM_DECODED, budget.SMALL_FIN_DECODED)
+        imagery.MEM_FINISHED_MB = self.fin[0]
+        with mock.patch.object(budget, "total_gb", return_value=4.0):
+            budget.apply(True)
+        self.assertEqual(imagery.MEM_FINISHED_MB, budget.SMALL_FIN_MB, "at least this")
+        im = imagery.Imagery(os.path.join(os.path.dirname(__file__), "_no_cache"), fetcher=mock.Mock())
+        self.assertEqual(im.mem_finished, budget.SMALL_FIN_MB * 1_000_000, "read when the cache is made")
+        im.close()
 
 
 class PriorityTest(unittest.TestCase):

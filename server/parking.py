@@ -34,6 +34,13 @@ HYDRANT_CLEAR_M = 4.6       # m kept clear of a hydrant (US: 15 ft)
 DRIVE_CLEAR_M = 4.2         # m from a driveway's mouth to a spot's centre
 
 
+
+
+def _owns(box, x, y):
+    """Is (x, y) the tile's own point (geotiles.box_owns: a geotile's exactly, an anchor tile's half-open box)?"""
+    import geotiles
+    return geotiles.box_owns(box, x, y)
+
 def curb_spots(roads, walks, box, left_hand=False, directions=None):
     """Rows [x, y, z, heading] of the curbside spots of a tile box (x0, y0, x1, y1). roads: build_tile's
     (fid, spec, centreline (k, 3), lon); walks: its sidewalk runs (dicts with fid, pts, side, w). left_hand:
@@ -61,7 +68,7 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
         phase = furniture._h01(fid, side, "parkph") * SPOT_LEN_M
         for p, away in furniture._stations(run, line, SPOT_LEN_M, phase, CORNER_CLEAR_M, side):
             q = p[:2] - away * (w / 2 + CURB_OFF_M)          # from the sidewalk's middle past the curb
-            if not (x0 <= q[0] < x1 and y0 <= q[1] < y1):
+            if not (_owns(box, q[0], q[1])):
                 continue
             # the car's right side to the curb: heading h with right(h) = (h_y, -h_x) = away
             if spec.oneway:
@@ -157,7 +164,7 @@ def lot_spots(rings, box, z_at, blockers=()):
                 ok &= path.contains_points(centres + sx * hx + sy * hy)
             heading = math.degrees(math.atan2(nose * v[1], nose * v[0])) % 360.0
             for q in centres[ok]:
-                if x0 <= q[0] < x1 and y0 <= q[1] < y1:
+                if _owns(box, q[0], q[1]):
                     cand.append((float(q[0]), float(q[1]), heading))
     if not cand:
         return []
@@ -267,7 +274,7 @@ def aisle_spots(roads, aisles, box, blockers=(), lots=()):
             n = np.stack([-D[:, 1], D[:, 0]], 1) * side
             Q = P[:, :2] + n * (spec.width / 2 + LOT_SPOT_D_M / 2)
             for q, nn, p in zip(Q, n, P):
-                if not (x0 <= q[0] < x1 and y0 <= q[1] < y1):
+                if not (_owns(box, q[0], q[1])):
                     continue
                 if not furniture._clear(np.array([q[0], q[1], p[2]]), others, fid):
                     continue

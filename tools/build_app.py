@@ -157,6 +157,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'lidarbc_index.json.gz')}{SEP}.",     # (lidarbc.INDEX_PATH)
            "--add-data", f"{os.path.join(server, 'lidarbc_dsm_index.json.gz')}{SEP}.",     # (lidarbc.DSM_INDEX_PATH)
            "--add-data", f"{os.path.join(server, 'lidarbc_ortho_index.json.gz')}{SEP}.",     # (bcortho.INDEX_PATH)
+           "--add-data", f"{os.path.join(server, 'usgs3dep_index.json.gz')}{SEP}.",     # (roadz.LIDAR_INDEX_PATH)
            # the highway signs' lettering metrics and US state outlines (exitsigns.GLYPHS, signstates.DATA)
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}."]

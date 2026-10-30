@@ -6,6 +6,8 @@ for every road tile. medians.py adds the median barriers where none is mapped, i
 """
 import hashlib
 import json
+
+import geotiles
 import logging
 import math
 
@@ -724,7 +726,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                                 supports = _overlaps_bridge_approach(a, b, parapets[run_no])
                             if supports:
                                 support_hits[run_no].add((fid, part_no, k))
-                    if x0 <= p[0] < x1 and y0 <= p[1] < y1:
+                    if geotiles.box_owns(exact, p[0], p[1]):
                         candidates.append((module, p, a, b, rank, False))
                         if two_sided:
                             candidates.append((3, p, a, b, rank, True))
@@ -733,11 +735,11 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                 # cable barrier ends with its last module.)
                 if not rail:
                     pass
-                elif x0 <= first_a[0] < x1 and y0 <= first_a[1] < y1:
+                elif geotiles.box_owns(exact, first_a[0], first_a[1]):
                     candidates.append((1, first_a, first_a, first_b, first_rank, False))
                     if two_sided:
                         candidates.append((4, first_a, first_a, first_b, first_rank, True))
-                if rail and x0 <= last_b[0] < x1 and y0 <= last_b[1] < y1:
+                if rail and geotiles.box_owns(exact, last_b[0], last_b[1]):
                     candidates.append((2, last_b, last_a, last_b, last_rank, False))
                     if two_sided:
                         candidates.append((5, last_b, last_a, last_b, last_rank, True))
@@ -787,7 +789,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
         }
         supported = [run for i, run in enumerate(parapets)
                      if run.get("deck", i) in supported_decks]
-        rails = _self_doubles(bridge_rows(supported)) if supported else []
+        rails = _self_doubles(bridge_rows(supported, frame)) if supported else []
 
     if not placements:
         if supported_decks_out is not None:
@@ -906,7 +908,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
     return result
 
 
-def bridge_rows(parapets):
+def bridge_rows(parapets, frame=None):
     """Forest rows (same layout as forest_rows) for the rails a bridge builds along its own deck edges.
 
     `parapets` are roadmesh.parapet_runs(): per free deck edge the strip centre line ("line"), the deck's
@@ -917,7 +919,8 @@ def bridge_rows(parapets):
 
     Modules are spread over the whole run (step at most MODULE_STEP_M) so they reach both ends of the run;
     runs are clipped at the tile box, so neighbouring tiles meet without a gap. No end caps: the rail goes
-    on into the approach's mapped rail.
+    on into the approach's mapped rail. frame: the tile's (its modules' ranks hashed from their lat / lon: the same
+    module the same rank whatever frame or tile builds it); None: from x, y.
     """
     rows = []
     for run in parapets or ():
@@ -957,7 +960,11 @@ def bridge_rows(parapets):
             za, zb = float(np.interp(sa, arc, z)), float(np.interp(sb, arc, z))
             p = 0.5 * (a + b)
             zp = float(np.interp(0.5 * (sa + sb), arc, z))
-            key = f"bridge:{p[0]:.1f}:{p[1]:.1f}"
+            if frame is not None:
+                pla, plo, _ = frame.enu_to_geodetic(float(p[0]), float(p[1]), 0.0)
+                key = f"bridge:{float(pla):.6f}:{float(plo):.6f}"
+            else:
+                key = f"bridge:{p[0]:.1f}:{p[1]:.1f}"
             rank = int.from_bytes(hashlib.blake2b(key.encode("utf-8"), digest_size=4).digest(), "big") / 4294967296.0
             forward = np.array([float(b[0] - a[0]), float(b[1] - a[1]), zb - za], np.float64)
             norm = float(np.linalg.norm(forward))

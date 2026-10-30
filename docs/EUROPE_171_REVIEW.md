@@ -1,9 +1,12 @@
-# European infrastructure contribution — v4
+# European infrastructure contribution — v4, integrated with 1.7.2
 
-Base: public v1.7.1-beta, `8aaf4ebdd0485facadc755a612f4b0a2b55e4c57`.
+Current base: public v1.7.2-beta, `8375d5171454dcc8ca9005f9a34bf37229ff9523`.
+Originally submitted against v1.7.1-beta, `8aaf4ebdd0485facadc755a612f4b0a2b55e4c57`.
 Enable with `python start.py -- --regional-poles europe`; default is `off`.
-Runtime code, models and geographic data match the tested Europe v4 package.
-The contribution preparation corrects outdated documentation only.
+The model and geographic-data set remains Europe v4. The runtime now uses
+1.7.2's retained geotile content, area/route prebuilding and native sidewalk
+geometry. See [EUROPE_172_MERGE.md](EUROPE_172_MERGE.md) for the integration and
+new regression checks. This filename is kept so existing PR links still work.
 
 ## Review map
 
@@ -13,7 +16,7 @@ The contribution preparation corrects outdated documentation only.
 | 56 country/territory profiles and 44 added models | server/europeinfra.py, tools/build_european_infrastructure.py | EUROPE_INFRASTRUCTURE.md |
 | French poles, lanterns, signs and dark sidewalks | server/regionalmarkers.py, server/townsigns.py, server/directionsigns.py, server/sidewalks.py | FRENCH_FURNITURE_EXPERIMENT.md |
 | Country deployment and short rural road posts | server/delineatorprofiles.py, server/delineators.py | DELINEATOR_RESEARCH.md |
-| Quebec ARRET and Turkey DUR appearances | server/regionalstops.py | EUROPE_INFRASTRUCTURE.md and data notices |
+| Quebec ARRÊT and Turkey DUR appearances | server/regionalstops.py | EUROPE_INFRASTRUCTURE.md and data notices |
 | Streaming, LOD, collisions and night-light reuse | mod/beamng_earth/lua/ge/extensions/beamngEarth/{trees,roads,nightlights}.lua | accompanying mod/tests |
 
 The base junction functions, classification constants and navigation call paths
@@ -32,13 +35,21 @@ approximations therefore remain. No new runtime package or native build is added
 | europe_infrastructure | 25 |
 | delineator_density | 25 |
 | furniture | 21 |
-| navgraph | 11 |
+| navgraph | 12 |
 | sidewalk_collision | 8 |
 | blockworker | 5 |
-| revisit | 4 |
-| Total | 162 |
+| revisit | 6 |
+| regional_geotiles | 4 |
+| roadgeo | 9 (2 skipped: real map cache absent) |
+| geotiles | 14 |
+| areas | 17 |
+| signready | 1 |
+| Total | 210: 208 passed, 2 skipped |
 
-Lua: trees/furniture 104, roads 95, nightlights 14: 213 assertions.
+Lua: trees/furniture 116, roads 95, nightlights 14, roadgeo 37: 262 assertions passed.
+These are targeted integration checks, not a claim that the entire upstream
+test suite was run. Tests used the official 1.7.2 earthfast module, version 114;
+the native binaries in Git are unchanged relative to upstream.
 The 113 regional tests also passed in the contributor's Windows installer.
 Tests include real country/Quebec boundary cases, text and mesh generation,
 tile splits, all four German rural road classes, short features, curve density,
@@ -46,12 +57,12 @@ lighting/speed exclusions, road clearance and France's preserved sparse J6.
 The independent Shapely comparison covers 7,493 positions on the same dataset.
 These checks do not establish source survey accuracy or in-game frame times.
 
-Earlier French pole rendering and FR/DE transitions were observed in game.
-Complete Europe v4 importing/rendering, headlights, night lighting, LODs,
-perceived collision, repeated visits and Windows gameplay performance still
-need testing. The model preview sheets are generator renders, not game captures.
-The full upstream suite is not claimed green: a prior bare-verge-paint failure
-was reproduced on the pristine public base; the affected suites above passed.
+The contributor reported successful in-game testing of the 1.7.1 version before
+submission. The 1.7.2 integration still needs an in-game check, especially a
+rebase/teleport, prebuilt area revisit, night lighting, LODs and collisions.
+The model preview sheets are generator renders, not game captures. An earlier
+bare-verge-paint failure was reproduced on the pristine 1.7.1 public base;
+no claim about that unrelated case on 1.7.2 is made here.
 
 ## Data and remaining decisions
 

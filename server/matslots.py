@@ -24,6 +24,7 @@ own file, replaced atomically when the slot goes to another tile. The mod frees 
 spare or a doomed object before loading it again (farfield.lua freeSlot).
 """
 import os
+import re
 import shutil
 import threading
 import staging
@@ -51,6 +52,11 @@ class MatSlots:
     @staticmethod
     def number(name):
         return int(name.rsplit("_", 1)[1])
+
+    def name_in(self, data):
+        """The pooled name a shape file's bytes carry (this pool's), or None."""
+        m = re.search(re.escape(self.prefix.encode()) + rb"\d{%d}" % DIGITS, data)
+        return m.group(0).decode() if m else None
 
     @staticmethod
     def file(name, ext=".cdae"):

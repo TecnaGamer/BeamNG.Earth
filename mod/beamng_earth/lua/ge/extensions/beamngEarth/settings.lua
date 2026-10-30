@@ -98,8 +98,15 @@ M.SCHEMA = {
   creditsCorner = { kind = 'enum', default = 'bottom-left', values = credits.CORNERS, label = 'Data credits corner' },
   creditsSize = { kind = 'enum', default = 'small', values = { 'small', 'normal' }, label = 'Data credits size' },
   -- the server's download cache (server cache.py): its size cap in GB, sent on every hello and change
-  cacheCapGb = { kind = 'enum', default = '20', values = { '5', '10', '20', '50', 'unlimited' },
-    label = 'Download cache size' },
+  -- (typed on the page since 2026-10-29, the user: "change the cache limit setting to be a text box"; 0: unlimited.
+  -- The old choices '5' .. '50' read as numbers, 'unlimited' as 0: MIGRATE)
+  cacheCapGb = { kind = 'number', default = 20, min = 0, max = 100000, label = 'Download cache size (GB, 0: unlimited)' },
+  -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily
+  framePacing = { kind = 'bool', default = true, label = 'Even frame pacing' },
+  -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles
+  -- (20 km), or the whole route (up to 300 miles)
+  routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
+    label = 'Download along the GPS route' },
   devOutlineKm = { kind = 'number', default = 3, min = 0.5, max = 20, label = 'Dev outlines radius (km)' },
   devMapKm = { kind = 'number', default = 10, min = 1, max = 80, label = 'Dev mini-map radius (km)' },
   -- not on the page (not in ORDER): the welcome version last shown (EarthWelcome.vue)
@@ -107,12 +114,12 @@ M.SCHEMA = {
   -- not on the page: the newer version whose update notice the player dismissed (core.lua drawUpdateNotice)
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
 }
-M.ORDER = { 'quality', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
   'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
+  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'devOutlineKm', 'devMapKm' }
 
 -- Stored but not on the settings page
 M.HIDDEN = { welcomeSeen = true, updateDismissed = true, qualityDetected = true }
@@ -169,7 +176,7 @@ end
 -- Old values that still load (and set) as their replacement, without a warning: 'auto' weather
 -- (real unless BWM_Weather was changing the weather) is Real now, which switches itself to Manual
 -- when anyone changes the weather.
-M.MIGRATE = { weatherMode = { auto = 'real' } }
+M.MIGRATE = { weatherMode = { auto = 'real' }, cacheCapGb = { unlimited = 0 } }
 
 local values = {}       -- the settings in use (always complete and valid)
 local cachePolls = 0    -- uiState calls (the cache usage is asked every CACHE_POLL-th)
@@ -195,6 +202,7 @@ function M.validate(key, v)
   local s = M.SCHEMA[key]
   if not s then return nil, 'unknown setting ' .. tostring(key) end
   if s.kind == 'number' then
+    if M.MIGRATE[key] and M.MIGRATE[key][v] ~= nil then v = M.MIGRATE[key][v] end
     local n = tonumber(v)
     if not n or n ~= n or n == math.huge or n == -math.huge then return nil, key .. ': not a number' end
     return math.max(s.min, math.min(s.max, n))
@@ -313,7 +321,7 @@ end
 function M.get(key) return values[key] end
 
 -- The download cache's cap for the server: GB, 0 = unlimited.
-function M.cacheCapGb() return tonumber(values.cacheCapGb) or 0 end
+function M.cacheCapGb() return math.max(0, tonumber(values.cacheCapGb) or 0) end
 
 -- bytes as the page shows them: "350 MB", "1.2 GB", "20 GB" (decimal units, as the cap)
 local function size(b, whole)
@@ -329,8 +337,10 @@ function M.cacheLine(c)
   if not c.ready then return 'counting files... (' .. used .. ' so far)' end
   local files = string.format('%d files', c.files or 0)
   if not c.managed then return used .. ', ' .. files .. ' (a newer version\'s cache: left alone)' end
-  if (c.capBytes or 0) <= 0 then return used .. ', ' .. files .. ' (no limit)' end
-  return used .. ' of ' .. size(c.capBytes, true) .. ', ' .. files
+  local kept = (c.pinnedBytes or 0) > 0 and (', ' .. size(c.pinnedBytes) .. ' in saved areas (Clear cache keeps them)')
+    or ''
+  if (c.capBytes or 0) <= 0 then return used .. ', ' .. files .. ' (no limit)' .. kept end
+  return used .. ' of ' .. size(c.capBytes, true) .. ', ' .. files .. kept
 end
 
 function M.getAll()
@@ -729,7 +739,8 @@ function M.mapTiles(list)
 end
 
 -- What the map polls every second: the player, the places, the tile endpoint, the credits.
--- The other players of a BeamMP session for the map's arrows ({ { name, lat, lon, h } }), nil outside one.
+-- The other players of a BeamMP session for the map's arrows and its Players list ({ { pid, name, lat, lon, h } },
+-- mpsession.others()), nil outside one.
 local function otherPlayers()
   local okB, inMP = pcall(function() return require('beamngEarth/beammp').inSession() end)
   if not okB or not inMP then return nil end
@@ -771,6 +782,7 @@ function M.uiMapState()
     attribution = core and core.attribution and core.attribution() or '',
     creditsByArea = core and core.creditsByArea and core.creditsByArea() or nil,
     gps = require('beamngEarth/gps').status(),
+    metric = require('beamngEarth/gps').metric(),     -- (the game's length unit with no GPS route: the Players list)
     weather = localWeatherBadge(),
   }
 end
@@ -815,6 +827,66 @@ end
 function M.uiGeocodeResult(id)
   local core = ext('beamngEarth_core')
   return core and core.takeGeocode and core.takeGeocode(tonumber(id)) or nil
+end
+
+-- The map's cache view (server covermap.py): ask (z, x0, y0, x1, y1, mode -> { id } or { error }) and poll (id -> nil
+-- while waiting, else { z, x0, y0, w, h, cells (base64 levels), gen, ready, error }).
+local cacheMapId = 0
+function M.uiCacheMap(z, x0, y0, x1, y1, mode)
+  local core = ext('beamngEarth_core')
+  if not core or not core.requestCacheMap then return { error = 'BeamNG.Earth is not loaded' } end
+  cacheMapId = cacheMapId + 1
+  if not core.requestCacheMap(cacheMapId, tonumber(z), tonumber(x0), tonumber(y0), tonumber(x1), tonumber(y1),
+      tostring(mode or 'summary')) then
+    return { error = 'Companion server not connected' }
+  end
+  return { id = cacheMapId }
+end
+function M.uiCacheMapResult(id)
+  local core = ext('beamngEarth_core')
+  return core and core.takeCacheMap and core.takeCacheMap(tonumber(id)) or nil
+end
+
+-- Saved areas (server areas.py): a picked box's estimate (send -> { id }, poll -> nil or the estimate), a new area and
+-- pause / resume / delete (send -> { id }, poll uiAreaResult -> nil or { ok, error }), the list (uiAreas).
+local areaId = 0
+local function areaSend(fn, ...)
+  local core = ext('beamngEarth_core')
+  if not core or not core[fn] then return { error = 'BeamNG.Earth is not loaded' } end
+  areaId = areaId + 1
+  if not core[fn](areaId, ...) then return { error = 'Companion server not connected' } end
+  return { id = areaId }
+end
+-- mode: 'data' (the downloads) or 'world' (them, then the roads, buildings etc. built ahead: server areas.py)
+local function areaMode(mode) return mode == 'world' and 'world' or 'data' end
+function M.uiAreaPlan(s, w, n, e, mode)
+  return areaSend('requestAreaPlan', tonumber(s), tonumber(w), tonumber(n), tonumber(e), areaMode(mode))
+end
+function M.uiAreaPlanResult(id)
+  local core = ext('beamngEarth_core')
+  return core and core.takeAreaPlan and core.takeAreaPlan(tonumber(id)) or nil
+end
+function M.uiAreaAdd(s, w, n, e, name, mode)
+  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode))
+end
+-- A saved route: the GPS's planned route with half m each side (the estimate, then the download, as an area's).
+function M.uiRoutePlan(half, mode)
+  return areaSend('requestRoutePlan', tonumber(half), areaMode(mode))
+end
+function M.uiRouteAdd(half, name, mode)
+  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode))
+end
+function M.uiAreaCmd(area, op)
+  return areaSend('areaCmd', tostring(area or ''), tostring(op or ''))
+end
+function M.uiAreaResult(id)
+  local core = ext('beamngEarth_core')
+  return core and core.takeAreaResult and core.takeAreaResult(tonumber(id)) or nil
+end
+function M.uiAreas()
+  local core = ext('beamngEarth_core')
+  local a = core and core.areasState and core.areasState()
+  return { areas = a and a.areas or {}, pinnedBytes = a and a.pinnedBytes or nil }
 end
 
 -- "lat, lon" typed in the map's search box -> { lat, lon } or { error }.
