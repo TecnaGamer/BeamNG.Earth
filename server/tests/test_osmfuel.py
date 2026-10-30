@@ -131,12 +131,14 @@ class OsmFuelReadTest(unittest.TestCase):
         cls.dir = tempfile.mkdtemp()
         p = os.path.join(cls.dir, "pois.parquet").replace("\\", "/")
         con = duckdb.connect()
-        # 20 row groups of 2000 rows, row group g between latitudes g and g + 0.5, one fuel station each
+        # 20 row groups of 2000 rows, row group g between latitudes g and g + 0.5, one fuel station and one EV
+        # charging station each
         con.execute(f"""COPY (SELECT i::BIGINT AS id, 'Brand' AS brand, 'Name ' || i::VARCHAR AS name, '' AS building,
             {{'xmin': (-79.0 + (i % 2000) / 4000.0)::FLOAT, 'ymin': ((i // 2000) + (i % 2000) / 4000.0)::FLOAT,
               'xmax': (-79.0 + (i % 2000) / 4000.0 + 0.0001)::FLOAT,
               'ymax': ((i // 2000) + (i % 2000) / 4000.0 + 0.0001)::FLOAT}} AS bbox,
-            CASE WHEN i % 2000 = 1000 THEN 'fuel' ELSE 'cafe' || (i % 50)::VARCHAR END AS amenity
+            CASE WHEN i % 2000 = 1000 THEN 'fuel' WHEN i % 2000 = 1500 THEN 'charging_station'
+                 ELSE 'cafe' || (i % 50)::VARCHAR END AS amenity
             FROM range(40000) t(i) ORDER BY i) TO '{p}' (FORMAT parquet, ROW_GROUP_SIZE 2000)""")
         cls.blooms = con.execute(f"""SELECT bloom_filter_offset, bloom_filter_offset + bloom_filter_length
             FROM parquet_metadata('{p}') WHERE bloom_filter_offset IS NOT NULL""").fetchall()
@@ -156,6 +158,23 @@ class OsmFuelReadTest(unittest.TestCase):
         remote.reads.clear()
         rows = o._fuel(remote, (-79.0, 5.1, -78.0, 5.3), "demand")
         self.assertEqual([r["name"] for r in rows], ["Name 11000"])
+        self.assertEqual(rows[0]["amenity"], "fuel")
+        bloom = [(s, e) for s, e, _ in remote.reads for a, b in self.blooms if s < b and e > a]
+        self.assertEqual(bloom, [], "no bloom filter read")
+
+    def test_charging_stations_read(self):
+        # (EV chargers, the user 2026-10-29: "real life ev stations mapped like the gas stations are") OSM's
+        # amenity=charging_station rows come with the fuel rows, from the same columns, still no bloom filter read
+        import osmfuel
+        import overture
+        import rangeread
+        o = osmfuel.OsmFuel(self.dir, None)
+        o._reader = overture.Reader(self.dir, None)
+        remote = rangeread.MemoryRange(self.data)
+        o._fuel(remote, (10.0, 10.0, 10.1, 10.1), "demand")
+        remote.reads.clear()
+        rows = o._fuel(remote, (-79.0, 5.3, -78.0, 5.4), "demand")
+        self.assertEqual([(r["name"], r["amenity"]) for r in rows], [("Name 11500", "charging_station")])
         bloom = [(s, e) for s, e, _ in remote.reads for a, b in self.blooms if s < b and e > a]
         self.assertEqual(bloom, [], "no bloom filter read")
 

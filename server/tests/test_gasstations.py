@@ -1287,6 +1287,17 @@ class TileTest(unittest.TestCase):
         md.osm_fuel_cached = lambda key: None
         self.assertEqual(gs.tile_sites(FRAME, 0, 0, md, flat)[0], [], "not fetched yet: as without OSM")
 
+    def test_osm_points_by_amenity(self):
+        # (EV chargers) an OSM cell holds fuel and charging stations: each reader takes its own amenity; a row without
+        # one (a cell kept before chargers were read) is fuel
+        la, lo, _ = FRAME.enu_to_geodetic(240.0, 100.0, 0.0)
+        bbox = (float(lo), float(la), float(lo), float(la))
+        rows = [{"id": 1, "amenity": "fuel", "name": "A", "brand": "", "bbox": bbox},
+                {"id": 2, "amenity": "charging_station", "name": "B", "brand": "", "bbox": bbox},
+                {"id": 3, "name": "C", "brand": "", "bbox": bbox}]
+        self.assertEqual([o["id"] for o in gs._osm_points(FRAME, [rows])], [1, 3])
+        self.assertEqual([o["id"] for o in gs._osm_points(FRAME, [rows], amenity="charging_station")], [2])
+
     def test_tile_sites_unfetched_osm_cell_not_kept(self):
         # a road tile built while one of its OSM cells is not fetched yet is not kept for the next visit (revisit.fault:
         # it is built again when the cell comes, earthd Server.osm_fuel_want); with every cell fetched it is

@@ -1829,13 +1829,14 @@ def _pad_ll(polys, frame):
     return out
 
 
-def _osm_points(frame, cells):
-    """[{"id", "x", "y", "name", "brand"}] in frame of the cached OSM cells' fuel stations (osmfuel rows; None: a cell
-    not fetched yet), each once (a station in two cells), at its bbox's centre."""
+def _osm_points(frame, cells, amenity="fuel"):
+    """[{"id", "x", "y", "name", "brand"}] in frame of the cached OSM cells' rows of that amenity (osmfuel rows: fuel
+    or charging stations; a row without one is fuel; None: a cell not fetched yet), each once (a station in two
+    cells), at its bbox's centre."""
     out, seen = [], set()
     for rows in cells:
         for r in rows or ():
-            if r["id"] in seen:
+            if r.get("amenity", "fuel") != amenity or r["id"] in seen:
                 continue
             seen.add(r["id"])
             x0, y0, x1, y1 = r["bbox"]

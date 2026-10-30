@@ -78,6 +78,8 @@ LAYER_THREADS = 12              # layers built at once, every cell and caller of
 OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at once (alongside their Overture roads)
 OSM_FUEL = os.environ.get("BNGE_OSM_FUEL", "1") != "0"     # OpenStreetMap's fuel stations per cell (osmfuel.py; the
                                 # user, 2026-10-28: "lets test OSM if it is too laggy we will revert")
+OSM_POI_VERSION = 2             # the cells' rows: 2 = fuel and charging stations, with their amenity (EV chargers,
+                                # 2026-10-29); a new version is a new folder, and part of versions()
 # (cell, layer)s built ahead at once by warm() (a fresh place's first road tile asked for ~70 of them one after another:
 # 56 s in Marseille, GitHub #241): half the CPUs, at most 8, and none on 8 or fewer: each is a DuckDB query and a
 # decode of its own, and on a Steam Deck (4 cores, 8 threads) the work done ahead kept the CPUs from the road tiles
@@ -323,7 +325,7 @@ class MapData:
                 "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
                 "lanes": lanes.known() if lanes is not None else None,
                 "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
-                "osmfuel": OSM_FUEL}
+                "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
 
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.
@@ -484,7 +486,7 @@ class MapData:
             return {}, []
 
     def osm_fuel_path(self, key):
-        return os.path.join(self.raw_dir, "osmfuel_cells", f"{_key(key)}.json")
+        return os.path.join(self.raw_dir, "osmfuel_cells", f"v{OSM_POI_VERSION}", f"{_key(key)}.json")
 
     def osm_fuel_cached(self, key):
         """The cell's OpenStreetMap fuel stations (osmfuel.OsmFuel.cell rows) as fetched by osm_fuel_fetch, or None when
