@@ -910,7 +910,9 @@ class RegionTest(unittest.TestCase):
         self.assertFalse([n for n in names["default"] if n.startswith(("italy_", "eca_"))], names["default"])
         self.assertFalse([n for n in names["europe"] if n.startswith(("s_fuel_", "eca_"))], names["europe"])
         self.assertIn("eca_gastation_pumps.DAE", names["us_east"])
-        self.assertTrue(names["default"] <= names["us_east"], "East Coast's fall back to West Coast's islands")
+        import evchargers                       # (EV chargers are the style's own: none falls back)
+        ev = {x.rsplit("/", 1)[-1] for x in evchargers.CHARGER_SHAPES["default"]}
+        self.assertTrue(names["default"] - ev <= names["us_east"], "East Coast's fall back to West Coast's islands")
         for style, roof in (("default", self.ROOF_EAST), ("europe", self.ROOF_EAST), ("us_east", self.ROOF_EAST),
                             ("us_east", rect("small", 0.0, 22.0, 14.0, 8.0, cls="roof"))):
             for site in (gs.layout(STATION, [SHOP, roof], ROAD, style=style), gs.layout(STATION, [SHOP], ROAD, style=style)):
