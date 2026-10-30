@@ -460,11 +460,11 @@ function screen(lat, lon) {
 const onScreen = p => p.x > -50 && p.y > -50 && p.x < w.value + 50 && p.y < h.value + 50
 
 const placeMarkers = computed(() =>
-  (state.value.places || []).map(p => ({ ...p, ...(() => { const s = screen(p.lat, p.lon); return { sx: s.x, sy: s.y } })() }))
+  toArray(state.value.places).map(p => ({ ...p, ...(() => { const s = screen(p.lat, p.lon); return { sx: s.x, sy: s.y } })() }))
     .filter(p => onScreen({ x: p.sx, y: p.sy })))
 
 const otherMarkers = computed(() =>
-  (state.value.others || []).map(o => { const s = screen(o.lat, o.lon); return { ...o, sx: s.x, sy: s.y } })
+  toArray(state.value.others).map(o => { const s = screen(o.lat, o.lon); return { ...o, sx: s.x, sy: s.y } })
     .filter(o => onScreen({ x: o.sx, y: o.sy })))
 
 const playerScreen = computed(() => {

@@ -734,7 +734,8 @@ local function otherPlayers()
   local okB, inMP = pcall(function() return require('beamngEarth/beammp').inSession() end)
   if not okB or not inMP then return nil end
   local ok, list = pcall(function() return require('beamngEarth/mpsession').others() end)
-  return ok and list or nil
+  -- (none: nil, an empty Lua table reaches the map as {} and not [])
+  return ok and type(list) == 'table' and next(list) ~= nil and list or nil
 end
 
 -- The map's weather + local-time badge (the player's spot): sky.lua's real local clock for the lat/lon, and the

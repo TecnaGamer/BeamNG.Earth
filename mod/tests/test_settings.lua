@@ -462,6 +462,21 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- The map's other players in a BeamMP session: none is nil, not an empty table (it reaches EarthMap.vue as {}, not
+-- [], and the map's .map() threw every second: the map stopped drawing in multiplayer).
+do
+  local b0, m0 = package.loaded['beamngEarth/beammp'], package.loaded['beamngEarth/mpsession']
+  local others = {}
+  package.loaded['beamngEarth/beammp'] = { inSession = function() return true end }
+  package.loaded['beamngEarth/mpsession'] = { others = function() return others end }
+  local ok, st = pcall(settings.uiMapState)
+  T.check(ok and st.others == nil, 'map in a session, no other players: others nil')
+  others = { { name = 'a', lat = 1, lon = 2 } }
+  ok, st = pcall(settings.uiMapState)
+  T.check(ok and type(st.others) == 'table' and #st.others == 1, 'map in a session, one other player: listed')
+  package.loaded['beamngEarth/beammp'], package.loaded['beamngEarth/mpsession'] = b0, m0
+end
+
 -- #44: dashboard visibility is a persisted player setting.
 do
   local dashboard0, settingsFile0 = rawget(_G, 'beamngEarth_dashboard'), files[settings.FILE]
