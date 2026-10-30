@@ -129,6 +129,40 @@ JUNCTION_END_M = 10.0       # m: a same-class road ending this close to the othe
 JUNCTION_TAPER_M = 40.0     # m along the side road the height change is eased in over (half the road when shorter)
 JUNCTION_MAX_M = 6.0        # m: a bigger difference is left as it was (bad data; Perm, GitHub #414: 4-5 m steps where a
                             # 30 m DEM smeared an embankment into the junctions)
+# A side road's landing (the user, 2026-10-29: "still getting bumps in the road from side-roads"): a side road's plan
+# climbed at its own grade from the joined road's centreline, so across the joined road's own lanes and footpath the two
+# plans disagreed, and the blend tilted the main road's near lane up (or down) to every side road: a hump at each turn-off
+# (7 % hillside: 0.2 m, a 6 % cross slope in the lanes). Now the side road lies on the joined road's surface across that
+# road's whole flat core (Plan.half: carriageway, shoulder or footpath) and JUNCTION_LANDING_M past it, then eases to its
+# own profile over JUNCTION_TAPER_M, as real junctions are built (the side road's grade starts at the kerb line).
+JUNCTION_LANDING_ON = os.environ.get("BNE_JUNCTION_LANDING", "1") != "0"
+JUNCTION_LANDING_M = 3.0
+# Equal ranks (a residential street ending on another): the joined road's two parts end at the junction too (Overture
+# splits roads there), which JUNCTION_END_M took for one road continuing into the next, so a T of two streets of one
+# class was never snapped. A road counts as going through a junction when another part of its rank leaves the node within
+# JUNCTION_THROUGH_DEG of straight on; an equal-ranked road that doesn't go through yields to one that does.
+JUNCTION_THROUGH_DEG = 35.0
+# ... and the landing's height step eased out no longer than it must be: its cosine adds at most JUNCTION_EASE_GRADE to
+# the road's own grade (over 40 m whatever the step, a track leaving up a 30 % bank ran in a trench 1-2.4 m deep for
+# 30 m, the user 2026-10-29 at -32.0951, 116.03866: "a closer and a bit more aggressive" curve), JUNCTION_EASE_MIN_M at
+# least (a small step over a short ease: a kink)
+JUNCTION_EASE_GRADE = float(os.environ.get("BNE_JUNCTION_EASE_GRADE", "0.04"))
+JUNCTION_EASE_MINOR_GRADE = 0.15    # ... on a track, a driveway, a service road (pad_class_w under PAD_LANDING_MIN_W)
+JUNCTION_EASE_MIN_M = 30.0
+JUNCTION_EASE_MINOR_MIN_M = 8.0
+
+
+def ease_length(step, minor=False):
+    """m a height step (m) is eased out over (cosine) along a road: its added grade at most JUNCTION_EASE_GRADE
+    (JUNCTION_EASE_MINOR_GRADE on a minor road), from JUNCTION_EASE_MIN_M (_MINOR_) to JUNCTION_TAPER_M. Pure."""
+    g = JUNCTION_EASE_MINOR_GRADE if minor else JUNCTION_EASE_GRADE
+    lo = JUNCTION_EASE_MINOR_MIN_M if minor else JUNCTION_EASE_MIN_M
+    return float(np.clip(abs(step) * math.pi / (2.0 * max(g, 1e-6)), lo, JUNCTION_TAPER_M))
+
+
+def _minor(spec):
+    """A track, a driveway, a service road: climbs from the other road's carriageway edge and eases out more steeply."""
+    return pad_class_w(spec) < PAD_LANDING_MIN_W
 # Roads side by side where the elevation is only the coarse global model (dem.coarse_at: no lidar; GitHub #414, Perm on
 # Copernicus' 30 m: service roads 7 m beside the primary stood 4-5 m over it, where Mapillary shows them at grade): a
 # lower-ranked road within COARSE_REACH_M of a higher-ranked one's edge eased to its height (equal ranks halfway), less a
@@ -142,6 +176,23 @@ COARSE_MAX_STEP_M = 6.0
 COARSE_MAX_SLOPE = 0.25
 COARSE_SIGMA_M = 8.0
 COARSE_SIDE_M = 12.0        # m: plan_roads' side samples on coarse elevation (the median of three)
+# Neighbouring roads coupled (the user, 2026-10-29: "the current model sinks or lifts roads too much, where perhaps the
+# roads need to be on a similar level"): two at-grade roads side by side are each sampled and smoothed on their own, and
+# the coarse model's error does not cancel between them: a frontage road 18 m beside a primary ended up 2-3x as far above
+# or below it as the ground truly is, with steep connectors between. On coarse elevation (dem.coarse_at), where a road
+# runs alongside a higher- (or equal-, half way) ranked one, within NEIGHBOUR_GAP_M of its edge (fully within
+# NEIGHBOUR_FULL_M) and within NEIGHBOUR_PARALLEL_DEG of its direction, it takes that road's height plus the ground's own
+# fall between them: the difference of a far smoother surface (NEIGHBOUR_TREND_SIGMA_M: a hillside's grade, not the
+# data's noise). A difference over NEIGHBOUR_MAX_M is left: a real separation. Roads meeting at a node are left to
+# snap_junctions. Before the junctions are snapped (connectors meet the coupled heights) and the approaches lifted and
+# the underpasses dipped (bridges and their roads keep their separation). BNE_NEIGHBOURS=0: off.
+NEIGHBOUR_ON = os.environ.get("BNE_NEIGHBOURS", "1") != "0"
+NEIGHBOUR_GAP_M = 20.0
+NEIGHBOUR_FULL_M = 12.0
+NEIGHBOUR_PARALLEL_DEG = 30.0
+NEIGHBOUR_MAX_M = 4.0
+NEIGHBOUR_TREND_SIGMA_M = 45.0
+NEIGHBOUR_SMOOTH_M = 10.0       # m: the change smoothed along the road: no step where the neighbour ends
 
 
 # Overpass approach ramps (from KyzoFox's 1.5.4, PR #64). A short bridge over a road had its ends on the ground on both
@@ -331,6 +382,33 @@ def _normals(xy):
     d = np.gradient(xy, axis=0)
     ln = np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)
     return np.stack([-d[:, 1] / ln, d[:, 0] / ln], axis=1)
+
+
+_STENCILS = {}
+
+
+def _stencil(r, sigma):
+    """(offsets (19, 2) m, weights summing to 1): hexagonal rings out to r (the centre, 6 at r / 2, 12 at r), Gaussian
+    weights of sigma."""
+    got = _STENCILS.get((r, sigma))
+    if got is None:
+        pts = [(0.0, 0.0)]
+        for ring, n in ((0.5, 6), (1.0, 12)):
+            pts += [(r * ring * math.cos(2 * math.pi * i / n), r * ring * math.sin(2 * math.pi * i / n)) for i in range(n)]
+        off = np.array(pts, np.float64)
+        w = np.exp(-0.5 * (np.hypot(off[:, 0], off[:, 1]) / sigma) ** 2)
+        got = _STENCILS[(r, sigma)] = (off, w / w.sum())
+    return got
+
+
+def field_heights(frame, elev, xy, r, sigma):
+    """elev's Gaussian-weighted mean over the _stencil(r, sigma) around each point xy (n, 2) in the frame: one call."""
+    off, wts = _stencil(r, sigma)
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    cloud = (xy[None, :, :] + off[:, None, :]).reshape(-1, 2)
+    la, lo, _ = frame.enu_to_geodetic(cloud[:, 0], cloud[:, 1], 0.0)
+    z = np.asarray(elev(la, lo), np.float64).reshape(len(off), -1)
+    return (wts[:, None] * z).sum(axis=0)
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None):
@@ -625,6 +703,115 @@ def _nearest_on(p, x, y):
     return float(dist[i]), float(p.z[i] + (p.z[i + 1] - p.z[i]) * t[i]), min(s, float(seg.sum()) - s)
 
 
+def _end_at(q, x, y):
+    """0 when Plan q's first point is nearer (x, y) than its last, else -1."""
+    a, b = q.xy[0, :2], q.xy[-1, :2]
+    return 0 if math.hypot(a[0] - x, a[1] - y) <= math.hypot(b[0] - x, b[1] - y) else -1
+
+
+def _out_dir(p, end):
+    """Unit direction Plan p leaves its end (0 or -1) in, over CHAIN_LOOK_M."""
+    line = p.xy[:, :2] if end == 0 else p.xy[::-1, :2]
+    d = _point_along(line, CHAIN_LOOK_M) - line[0]
+    n = math.hypot(*d)
+    return d / n if n > 1e-9 else d
+
+
+def _goes_through(plans, rank, boxes, j, end):
+    """Does the road of plans[j] go on through its end (0 / -1): another plan of its rank leaving the same node within
+    JUNCTION_THROUGH_DEG of straight on (a road split at a junction, as Overture splits them)?"""
+    p = plans[j]
+    x, y = float(p.xy[end, 0]), float(p.xy[end, 1])
+    u = _out_dir(p, end)
+    lim = -math.cos(math.radians(JUNCTION_THROUGH_DEG))
+    for k in np.flatnonzero((rank == rank[j]) & (boxes[:, 0] <= x) & (x <= boxes[:, 2]) & (boxes[:, 1] <= y)
+                            & (y <= boxes[:, 3])):
+        if k == j:
+            continue
+        q = plans[k]
+        for qe in (0, -1):
+            if math.hypot(float(q.xy[qe, 0]) - x, float(q.xy[qe, 1]) - y) <= CHAIN_JOIN_M:
+                if float(u @ _out_dir(q, qe)) <= lim:
+                    return True
+    return False
+
+
+def couple_neighbours(plans, specs, trend):
+    """NEIGHBOUR_* above: plans (in place) running alongside a higher- or equal-ranked one take its height plus the ground's
+    fall between them. specs: their Specs; trend(xy (n, 2)) -> the far smoother surface's heights there. Plans leading
+    onto a bridge (abut) are left as they are, and are no neighbour to follow either."""
+    rank = np.array([road_rank(sp) for sp in specs])
+    order = sorted(range(len(plans)), key=lambda j: (-rank[j], j))
+    reach = NEIGHBOUR_GAP_M
+    boxes = np.array([[p.xy[:, 0].min(), p.xy[:, 1].min(), p.xy[:, 0].max(), p.xy[:, 1].max()] for p in plans],
+                     np.float64).reshape(-1, 4)
+    cos_par = math.cos(math.radians(NEIGHBOUR_PARALLEL_DEG))
+    ends = np.array([[p.xy[0, :2], p.xy[-1, :2]] for p in plans], np.float64).reshape(-1, 2, 2)
+    for j in order:
+        p = plans[j]
+        if len(p.xy) < 2 or p.abut[0] or p.abut[1]:
+            continue
+        P = np.asarray(p.xy, np.float64)[:, :2]
+        g = np.gradient(P, axis=0)
+        tdir = g / np.maximum(np.hypot(g[:, 0], g[:, 1]), 1e-9)[:, None]
+        pad = reach + p.road_half + 20.0
+        cand = np.flatnonzero((rank >= rank[j]) & (boxes[:, 0] <= boxes[j, 2] + pad) & (boxes[:, 2] >= boxes[j, 0] - pad)
+                              & (boxes[:, 1] <= boxes[j, 3] + pad) & (boxes[:, 3] >= boxes[j, 1] - pad))
+        best_w = np.zeros(len(P))
+        best_q = np.zeros((len(P), 2))
+        best_zq = np.zeros(len(P))
+        for k in cand:
+            q = plans[k]
+            if k == j or len(q.xy) < 2 or q.abut[0] or q.abut[1] or q.rid == p.rid:
+                continue
+            # (roads that meet at a node are a junction, snap_junctions': a road's two parts either side of a junction, a
+            # slip road leaving its motorway)
+            if np.hypot(*(ends[j][:, None, :] - ends[k][None, :, :]).reshape(-1, 2).T).min() <= CHAIN_JOIN_M:
+                continue
+            a, b = q.xy[:-1, :2], q.xy[1:, :2]
+            d = b - a
+            ll = np.maximum((d * d).sum(1), 1e-12)
+            t = np.clip(((P[:, None, 0] - a[None, :, 0]) * d[None, :, 0] + (P[:, None, 1] - a[None, :, 1]) * d[None, :, 1])
+                        / ll[None, :], 0.0, 1.0)
+            qx = a[None, :, 0] + t * d[None, :, 0]
+            qy = a[None, :, 1] + t * d[None, :, 1]
+            dist = np.hypot(qx - P[:, None, 0], qy - P[:, None, 1])
+            si = dist.argmin(1)
+            r_ = np.arange(len(P))
+            dmin = dist[r_, si]
+            gap = dmin - q.road_half - p.road_half
+            sdir = d[si] / np.sqrt(ll[si])[:, None]
+            par = np.abs((tdir * sdir).sum(1)) >= cos_par
+            u = np.clip((gap - NEIGHBOUR_FULL_M) / max(NEIGHBOUR_GAP_M - NEIGHBOUR_FULL_M, 1e-9), 0.0, 1.0)
+            w = (1.0 - u * u * (3.0 - 2.0 * u)) * par * (gap <= NEIGHBOUR_GAP_M)
+            w *= 1.0 if rank[k] > rank[j] else 0.5
+            zq = q.z[si] + (q.z[si + 1] - q.z[si]) * t[r_, si]
+            take = w > best_w
+            best_w[take] = w[take]
+            best_q[take] = np.c_[qx[r_, si], qy[r_, si]][take]
+            best_zq[take] = zq[take]
+        on = best_w > 0
+        if not on.any():
+            continue
+        idx = np.flatnonzero(on)
+        f = np.asarray(trend(np.vstack([P[idx], best_q[idx]])), np.float64)
+        target = best_zq[idx] + (f[:len(idx)] - f[len(idx):])
+        diff = target - p.z[idx]
+        keep = np.abs(diff) <= NEIGHBOUR_MAX_M
+        delta = np.zeros(len(P))
+        wt = np.zeros(len(P))
+        delta[idx[keep]] = best_w[idx[keep]] * diff[keep]
+        wt[idx[keep]] = best_w[idx[keep]]
+        if not wt.any():
+            continue
+        # smoothed along the road (a Gaussian over arc length), as a fraction of the coupled share: it fades out where the
+        # neighbour ends instead of stepping
+        s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(P, axis=0).T))]
+        kern = np.exp(-0.5 * ((s_[:, None] - s_[None, :]) / NEIGHBOUR_SMOOTH_M) ** 2)
+        kern /= kern.sum(1, keepdims=True)
+        p.z = np.asarray(p.z, np.float64) + kern @ delta
+
+
 def snap_junctions(plans, specs):
     """A side road's end at a junction takes the height of the road it joins, eased in over
     JUNCTION_TAPER_M along the side road (each road is smoothed on its own: a side road met the main road up to a metre
@@ -649,6 +836,7 @@ def snap_junctions(plans, specs):
             best = None
             near = np.flatnonzero((rank >= rank[j]) & (boxes[:, 0] <= x) & (x <= boxes[:, 2]) & (boxes[:, 1] <= y)
                                   & (y <= boxes[:, 3]))
+            p_through = None
             for k in near:
                 if k == j:
                     continue
@@ -657,17 +845,46 @@ def snap_junctions(plans, specs):
                 if dist > q.road_half + JUNCTION_REACH_M:
                     continue
                 if rank[k] == rank[j] and from_end < JUNCTION_END_M:
-                    continue        # the same class end to end: a road's continuation, not a junction
+                    if not JUNCTION_LANDING_ON:
+                        continue    # the same class end to end: a road's continuation, not a junction
+                    # (it yields only to a road going through the node, and only when it doesn't go through itself)
+                    if p_through is None:
+                        p_through = _goes_through(plans, rank, boxes, j, end)
+                    if p_through or not _goes_through(plans, rank, boxes, k, 0 if _end_at(q, x, y) == 0 else -1):
+                        continue
                 if best is None or dist < best[0]:
-                    best = (dist, zq)
+                    best = (dist, zq, k)
             if best is None:
                 continue
             delta = best[1] - p.z[end]
             if abs(delta) > JUNCTION_MAX_M:
                 continue            # a ramp up to an overpass, or bad data: as it was
-            taper = min(JUNCTION_TAPER_M, 0.5 * length)
-            u = (s if end == 0 else length - s) / max(taper, 1e-6)
-            dz += delta * np.where(u < 1.0, 0.5 * (1.0 + np.cos(np.pi * np.clip(u, 0.0, 1.0))), 0.0)
+            d_end = s if end == 0 else length - s
+            hold, d_hold = 0.0, delta
+            if JUNCTION_LANDING_ON:
+                # the landing: on the joined road's surface (its plan's height nearest each vertex) across its flat core
+                # and JUNCTION_LANDING_M past it
+                q = plans[best[2]]
+                # (a quarter of the part at most: a short connector between two roads keeps half its length to climb)
+                minor = _minor(specs[j])
+                reach = min((q.road_half + PAD_LANDING_MINOR_M) if minor else (q.half + JUNCTION_LANDING_M),
+                            0.25 * length)
+                for i in np.flatnonzero((d_end > 0.0) & (d_end <= reach)):
+                    zi = _nearest_on(q, float(p.xy[i, 0]), float(p.xy[i, 1]))[1]
+                    dz[i] += zi - (p.z[i] + dz[i])
+                    if d_end[i] >= hold:
+                        hold, d_hold = float(d_end[i]), float(dz[i])     # (the landing's far end: eased from there)
+            taper = max(min(JUNCTION_TAPER_M, 0.5 * length - hold), VERTEX_STEP)
+            if JUNCTION_LANDING_ON:
+                taper = min(taper, ease_length(d_hold, _minor(specs[j])))
+            u = (d_end - hold) / taper
+            ease = np.where(u < 1.0, 0.5 * (1.0 + np.cos(np.pi * np.clip(u, 0.0, 1.0))), 0.0)
+            if hold > 0.0:
+                ease = np.where(d_end <= hold, 0.0, ease)       # (the landing's vertices are set already)
+                dz[end] += delta
+                dz += d_hold * np.where(d_end > hold, ease, 0.0)
+            else:
+                dz += delta * ease
         # crossings (GitHub #414, Perm: service roads crossing a primary at a shared node stood as 4-5 m walls across
         # it): where this road runs over a higher-ranked road's carriageway away from its own ends, it takes that
         # road's height there, eased in over JUNCTION_TAPER_M either side (with the coarse easing: BNE_COARSE_EASE=1)
@@ -701,6 +918,353 @@ def snap_junctions(plans, specs):
             dz += delta * np.where(u < 1.0, 0.5 * (1.0 + np.cos(np.pi * np.clip(u, 0.0, 1.0))), 0.0)
         if dz.any():
             p.z = p.z + dz
+
+
+# Junction pads (the user, 2026-10-29: "lower ranked roads impacting higher ranked ones ... side streets coming in from a
+# sloped hill create bumps and likewise dips on the lower side"; "roads facing each other having more influence ... especially
+# when the facing roads are the same class"). grade_points blends every road's flat cross-section by distance alone, so
+# inside a junction each road pulls the ground toward its own surface: where they disagree (equal ranks, which never
+# snap; a road crossing another with no node; a crossroads on a slope, which no set of flat cross-sections can meet) the
+# middle of the junction is a compromise, a bump on one side and a dip on the other. Weighting the blend by rank only
+# moves the compromise (and needs the Rust loop changed); here every road is made to agree instead, so the blend's
+# weights no longer matter there:
+#   - each branch at a node (a road's end; or a road crossing another's centreline away from its ends: two branches)
+#     gets an authority, its class's weight (PAD_CLASS_W) times its "through" factor (a branch with another one facing
+#     it, PAD_FACE_DEG: a through road; a T's stem keeps PAD_STEM_F), normalised by the node's strongest, ** PAD_GAMMA;
+#   - one plane is fitted to the branches' heights at the node and their grades leaving it, weighted by authority (and
+#     pulled level by PAD_RIDGE): a T on a hillside is the main road's own grade and height, with next to no tilt
+#     across it; a crossroads of equal roads a plane that matches both their grades;
+#   - over the pad (each branch out to the other branches' cores + PAD_LANDING_M) every road lies on that plane: its
+#     centreline height and its cross slope (Plan.bank: grade_points tilts its core by it), then back to its own
+#     profile and cross slope over JUNCTION_TAPER_M / PAD_BANK_TAPER_M.
+# The strongest road is all but unchanged (the plane is its own surface); the others warp to it, as real junctions are
+# built. BNE_JUNCTION_PAD=0: off.
+PAD_ON = os.environ.get("BNE_JUNCTION_PAD", "1") != "0"
+PAD_CLASS_W = {"motorway": 1.0, "trunk": 0.9, "primary": 0.8, "secondary": 0.65, "tertiary": 0.5,
+               "residential": 0.35, "unclassified": 0.35, "living_street": 0.3, "service": 0.2, "track": 0.15}
+PAD_OTHER_W = 0.25          # a class not listed
+PAD_LINK_F = 0.75           # a slip road: its class's weight times this
+PAD_UNBUILT_F = 0.6         # a gravel / dirt road: times this
+PAD_FACE_DEG = (120.0, 160.0)   # angle to the most opposite other branch: no through road under the first, fully at it
+PAD_STEM_F = 0.35           # a branch with none facing it keeps this share of its class's weight
+PAD_GAMMA = 2.0             # authority = (weight / the node's strongest) ** this
+PAD_MIN = 0.02
+PAD_FIT_POW = 2.0           # the plane fitted with the authorities ** this (the strongest road all but decides it)
+PAD_GRADE_M = 15.0          # m along a branch its grade leaving the node is taken over
+PAD_FLAT_W = 1.0            # how much a road wants its own cross section across it, against its grade along it
+PAD_RIDGE = 0.05            # the plane's tilt pulled to level with this weight (an authority is at most 1)
+PAD_MAX_TILT = 0.15         # never steeper (bad data)
+PAD_LANDING_M = 3.0         # m past the other branches' cores the pad reaches ...
+PAD_LANDING_MINOR_M = 0.5   # ... on a branch weighing less than PAD_LANDING_MIN_W (a track, a driveway)
+PAD_LANDING_MIN_W = 0.3
+PAD_MIN_SIN = 0.35          # (a branch at a shallow angle: its core reaches along the other at most 1 / this)
+PAD_REACH_F = 0.4           # a pad reaches at most this share of the branch (a short part keeps the rest to climb)
+PAD_BANK_TAPER_M = 15.0     # m the cross slope returns to the road's own over
+PAD_TAPERS_M = (8.0, 12.0, 16.0, 24.0, 32.0)    # m: the shorter eases back to a road's own profile (pad's edge on)
+PAD_SINK_M = 0.25           # m a road is let sink under (or stand over) its own profile on the ease, past the pad's step
+PAD_CROSS_MAX_M = 1.5       # m: two roads crossing with no node further apart than this are not at grade (left)
+PAD_MIN_DELTA_M = 0.01      # m: a smaller change is not made
+PAD_GRID_M = 32.0           # m: the crossing search's buckets
+PAD_MIN_PART_M = 20.0       # m: a branch shorter than this (to its part's end) is left out of the pad
+
+
+def pad_class_w(spec):
+    """A road's own weight at a junction by its class (PAD_CLASS_W), less for a slip road or an unbuilt one. Pure."""
+    cls = spec.cls or ""
+    w = PAD_CLASS_W.get(cls.removesuffix("_link"), PAD_OTHER_W)
+    if cls.endswith("_link") or getattr(spec, "link", False):
+        w *= PAD_LINK_F
+    if spec.kind not in roadsmod.BUILT:
+        w *= PAD_UNBUILT_F
+    return w
+
+
+def pad_authority(weights, dirs):
+    """The authority (0, 1] of each branch at one node: weights (n,) by class (pad_class_w), dirs (n, 2) the way each
+    leaves the node. A branch with another facing it (PAD_FACE_DEG; fully only one of its own weight) is through, a stem
+    keeps PAD_STEM_F of its weight;
+    then each over the node's strongest, ** PAD_GAMMA. Equal through roads all 1. Pure."""
+    w = np.asarray(weights, np.float64)
+    n = len(w)
+    if n < 2:
+        return np.ones(n)
+    d = np.asarray(dirs, np.float64).reshape(n, 2)
+    d = d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-12)[:, None]
+    cos = np.clip(d @ d.T, -1.0, 1.0)
+    np.fill_diagonal(cos, 1.0)
+    lo, hi = PAD_FACE_DEG
+    u = np.clip((np.degrees(np.arccos(cos)) - lo) / (hi - lo), 0.0, 1.0)
+    # (facing: by angle, and fully only by a branch of its own weight: a street across a primary from a driveway is
+    # hardly a through road)
+    sim = np.minimum(w[:, None], w[None, :]) / np.maximum(np.maximum(w[:, None], w[None, :]), 1e-12)
+    face = (u * u * (3.0 - 2.0 * u) * sim).max(axis=1)
+    raw = w * (PAD_STEM_F + (1.0 - PAD_STEM_F) * face)
+    top = raw.max()
+    if top <= 0:
+        return np.ones(n)
+    return np.clip((raw / top) ** PAD_GAMMA, PAD_MIN, 1.0)
+
+
+def pad_plane(z, grades, dirs, auth, cross=None):
+    """(z0, g (2,)): the plane z0 + g . (p - node) fitted to the branches' heights z (n,) at the node, their grades (n,)
+    along dirs (n, 2) leaving it and their own cross slopes (cross (n,), toward each branch's left; None: level),
+    weighted by auth (n,) (a road wants its own grade along it and its own cross section across it, PAD_FLAT_W), the
+    tilt pulled level by PAD_RIDGE and capped at PAD_MAX_TILT. Pure."""
+    z, gr, a = (np.asarray(v, np.float64) for v in (z, grades, auth))
+    cr = np.zeros(len(a)) if cross is None else np.asarray(cross, np.float64)
+    d = np.asarray(dirs, np.float64).reshape(-1, 2)
+    d = d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-12)[:, None]
+    nl = np.c_[-d[:, 1], d[:, 0]]
+    z0 = float((a * z).sum() / max(a.sum(), 1e-12))
+    # least squares: a_i (g . d_i - grade_i)^2 + PAD_FLAT_W a_i (g . n_i - cross_i)^2 + PAD_RIDGE |g|^2
+    M = (a[:, None, None] * (d[:, :, None] * d[:, None, :] + PAD_FLAT_W * nl[:, :, None] * nl[:, None, :])).sum(0) \
+        + PAD_RIDGE * np.eye(2)
+    g = np.linalg.solve(M, (a[:, None] * (d * gr[:, None] + PAD_FLAT_W * nl * cr[:, None])).sum(0))
+    t = float(np.hypot(*g))
+    if t > PAD_MAX_TILT:
+        g *= PAD_MAX_TILT / t
+    return z0, g
+
+
+def _arcs(p):
+    return np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(p.xy, np.float64)[:, :2], axis=0).T))]
+
+
+def _pad_nodes(plans, rank, boxes):
+    """[(node xy (2,), [(plan j, arc at the node, direction +1 / -1)])]: the plans' ends joined within CHAIN_JOIN_M
+    (three branches or more, or two of different roads at an angle), and the at-grade crossings of two plans away from
+    their ends (two branches each)."""
+    ends = []
+    for j, p in enumerate(plans):
+        if len(p.xy) < 2:
+            continue
+        s = _arcs(p)
+        for e, (arc, sgn) in enumerate(((0.0, 1), (float(s[-1]), -1))):
+            if p.abut[e]:
+                continue
+            ends.append((j, arc, sgn, float(p.xy[-1 if e else 0, 0]), float(p.xy[-1 if e else 0, 1])))
+    nodes = []
+    if ends:
+        xy = np.array([[e[3], e[4]] for e in ends])
+        used = np.zeros(len(ends), bool)
+        order = np.argsort(xy[:, 0], kind="stable")
+        sx = xy[order, 0]
+        for ii, i in enumerate(order):
+            if used[i]:
+                continue
+            lo = np.searchsorted(sx, xy[i, 0] - CHAIN_JOIN_M)
+            hi = np.searchsorted(sx, xy[i, 0] + CHAIN_JOIN_M, side="right")
+            grp = [int(k) for k in order[lo:hi] if not used[k] and math.hypot(*(xy[k] - xy[i])) <= CHAIN_JOIN_M]
+            used[grp] = True
+            br = [(ends[k][0], ends[k][1], ends[k][2]) for k in grp]
+            # (and a road going on through the node in one part: two branches)
+            x, y = float(xy[i, 0]), float(xy[i, 1])
+            mine = {b[0] for b in br}
+            for k in np.flatnonzero((boxes[:, 0] <= x) & (x <= boxes[:, 2]) & (boxes[:, 1] <= y) & (y <= boxes[:, 3])):
+                if int(k) in mine or len(plans[k].xy) < 2:
+                    continue
+                dist, _zq, from_end = _nearest_on(plans[k], x, y)
+                if dist <= CHAIN_JOIN_M and from_end >= JUNCTION_END_M:
+                    sk = _arcs(plans[k])
+                    A = np.asarray(plans[k].xy, np.float64)[:, :2]
+                    dd = A[1:] - A[:-1]
+                    ll = np.maximum((dd * dd).sum(1), 1e-12)
+                    t = np.clip(((x - A[:-1, 0]) * dd[:, 0] + (y - A[:-1, 1]) * dd[:, 1]) / ll, 0.0, 1.0)
+                    m = int(np.argmin(np.hypot(A[:-1, 0] + t * dd[:, 0] - x, A[:-1, 1] + t * dd[:, 1] - y)))
+                    at = float(sk[m] + t[m] * (sk[m + 1] - sk[m]))
+                    br += [(int(k), at, 1), (int(k), at, -1)]
+            if len({plans[b[0]].rid for b in br}) < 2:
+                continue        # (one road's own parts: its chain)
+            nodes.append((xy[i].copy(), br))
+    # crossings with no node: proper intersections of two plans' centrelines, each away from both plans' ends (every
+    # segment bucketed on a PAD_GRID_M grid, the pairs within a bucket tested at once)
+    segs = [(j, np.asarray(p.xy, np.float64)[:, :2]) for j, p in enumerate(plans) if len(p.xy) >= 2]
+    if not segs:
+        return nodes
+    P0 = np.concatenate([xy[:-1] for _j, xy in segs])
+    P1 = np.concatenate([xy[1:] for _j, xy in segs])
+    J = np.concatenate([np.full(len(xy) - 1, j) for j, xy in segs])
+    K = np.concatenate([np.arange(len(xy) - 1) for _j, xy in segs])
+    rid = np.array([p.rid for p in plans])
+    lo = np.floor(np.minimum(P0, P1) / PAD_GRID_M).astype(np.int64)
+    hi = np.floor(np.maximum(P0, P1) / PAD_GRID_M).astype(np.int64)
+    nx_ = hi[:, 0] - lo[:, 0] + 1
+    ny_ = hi[:, 1] - lo[:, 1] + 1
+    cnt = nx_ * ny_
+    sid = np.repeat(np.arange(len(P0)), cnt)
+    loc = np.arange(len(sid)) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+    cx = lo[sid, 0] + loc % np.repeat(nx_, cnt)
+    cy = lo[sid, 1] + loc // np.repeat(nx_, cnt)
+    key = cx * 2000003 + cy
+    o = np.argsort(key, kind="stable")
+    key, sid = key[o], sid[o]
+    start = np.r_[0, np.flatnonzero(np.diff(key)) + 1]
+    size = np.diff(np.r_[start, len(key)])
+    gsize = np.repeat(size, size)
+    lidx = np.arange(len(key)) - np.repeat(start, size)
+    m = gsize - 1 - lidx                        # partners after each one in its bucket
+    ia = np.repeat(np.arange(len(key)), m)
+    ib = ia + (np.arange(len(ia)) - np.repeat(np.cumsum(m) - m, m)) + 1
+    sa_, sb_ = sid[ia], sid[ib]
+    keep = (J[sa_] != J[sb_]) & (rid[J[sa_]] != rid[J[sb_]])
+    sa_, sb_ = sa_[keep], sb_[keep]
+    if len(sa_):
+        pair = np.unique(np.c_[np.minimum(sa_, sb_), np.maximum(sa_, sb_)], axis=0)
+        sa_, sb_ = pair[:, 0], pair[:, 1]
+        r = P1[sa_] - P0[sa_]
+        t_ = P1[sb_] - P0[sb_]
+        qp = P0[sb_] - P0[sa_]
+        den = r[:, 0] * t_[:, 1] - r[:, 1] * t_[:, 0]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = (qp[:, 0] * t_[:, 1] - qp[:, 1] * t_[:, 0]) / den
+            v = (qp[:, 0] * r[:, 1] - qp[:, 1] * r[:, 0]) / den
+        hit = np.flatnonzero((np.abs(den) > 1e-12) & (u >= 0) & (u < 1) & (v >= 0) & (v < 1))
+        arcs = {}
+        for h in hit:
+            j, k = int(J[sa_[h]]), int(J[sb_[h]])
+            for x in (j, k):
+                if x not in arcs:
+                    arcs[x] = _arcs(plans[x])
+            sj, sk = arcs[j], arcs[k]
+            i, mm = int(K[sa_[h]]), int(K[sb_[h]])
+            a_arc = float(sj[i] + u[h] * (sj[i + 1] - sj[i]))
+            b_arc = float(sk[mm] + v[h] * (sk[mm + 1] - sk[mm]))
+            if min(a_arc, sj[-1] - a_arc) < JUNCTION_END_M or min(b_arc, sk[-1] - b_arc) < JUNCTION_END_M:
+                continue    # (at an end: a node, found above, or a near miss)
+            nodes.append((P0[sa_[h]] + u[h] * r[h], [(j, a_arc, 1), (j, a_arc, -1), (k, b_arc, 1), (k, b_arc, -1)]))
+    return nodes
+
+
+def junction_pads(plans, specs, nodes=None):
+    """PAD_* above: the plans (in place) at every node lie on one plane over the junction's pad, its height and tilt
+    weighted by each branch's authority (rank, and whether a branch faces it). plans: [Plan], specs: their Specs;
+    nodes: a previous call's (the same plans' lines, other heights: the pass after the dips). Returns the nodes."""
+    if not PAD_ON or len(plans) < 2:
+        return nodes
+    rank = np.array([road_rank(sp) for sp in specs])
+    if nodes is None:
+        boxes = np.array([q.bbox for q in plans], np.float64).reshape(-1, 4)
+        nodes = _pad_nodes(plans, rank, boxes)
+    # the strongest junctions first: a short part between two takes the stronger one's pad
+    nodes.sort(key=lambda nd: (-max(rank[b[0]] for b in nd[1]), float(nd[0][0]), float(nd[0][1])))
+    arcs = {}
+    for node, br in nodes:
+        for j, _a, _s in br:
+            if j not in arcs:
+                arcs[j] = _arcs(plans[j])
+        crossing = all(0.0 < arc < float(arcs[j][-1]) for j, arc, _s in br)
+        info = []
+        for j, arc, sgn in br:
+            p = plans[j]
+            s = arcs.get(j)
+            if s is None:
+                s = arcs[j] = _arcs(p)
+            avail = float(s[-1] - arc) if sgn > 0 else float(arc)
+            if avail < PAD_MIN_PART_M:
+                continue            # (a median's crossover, a short link: its two ends' landings, snap_junctions)
+            look = min(CHAIN_LOOK_M, avail)
+            px_ = np.interp(arc + sgn * look, s, p.xy[:, 0]) - np.interp(arc, s, p.xy[:, 0])
+            py_ = np.interp(arc + sgn * look, s, p.xy[:, 1]) - np.interp(arc, s, p.xy[:, 1])
+            gl = min(PAD_GRADE_M, avail)
+            z_n = float(np.interp(arc, s, p.z))
+            grade = (float(np.interp(arc + sgn * gl, s, p.z)) - z_n) / gl
+            b_n = 0.0 if p.bank is None else float(np.interp(arc, s, p.bank)) * sgn     # (toward the branch's left)
+            info.append((j, arc, sgn, avail, np.array([px_, py_]), z_n, grade, pad_class_w(specs[j]), b_n))
+        if len(info) < 2 or len({plans[i[0]].rid for i in info}) < 2:
+            continue
+        if len(info) == 2 and float(info[0][4] @ info[1][4]) < -math.cos(math.radians(PAD_FACE_DEG[0])) * \
+                math.hypot(*info[0][4]) * math.hypot(*info[1][4]):
+            continue                # (a road going on into its next part: its chain's)
+        zs = np.array([i[5] for i in info])
+        if zs.max() - zs.min() > (PAD_CROSS_MAX_M if crossing else JUNCTION_MAX_M):
+            continue                # (a ramp to an overpass, bad data, two roads crossing at two levels: as they were)
+        dirs = np.array([i[4] for i in info])
+        dirs /= np.maximum(np.hypot(dirs[:, 0], dirs[:, 1]), 1e-12)[:, None]
+        auth = pad_authority([i[7] for i in info], dirs)
+        # each branch's tangent at the node: through a road (a branch facing it, PAD_FACE_DEG[1]) the central difference
+        # of the two (a crest's or a sag's one-sided grades both lean the same way), else its own grade leaving it
+        gr = np.array([i[6] for i in info])
+        cosd = dirs @ dirs.T
+        np.fill_diagonal(cosd, 1.0)
+        tang = gr.copy()
+        lim = -math.cos(math.radians(PAD_FACE_DEG[1]))
+        for n in range(len(info)):
+            m = int(np.argmin(cosd[n]))
+            if cosd[n, m] <= lim:
+                tang[n] = 0.5 * (gr[n] - gr[m])
+        z0, g = pad_plane(zs, tang, dirs, auth ** PAD_FIT_POW, [i[8] for i in info])
+        nx, ny = float(node[0]), float(node[1])
+        for n, (j, arc, sgn, avail, _d, z_n, _g, _w, _b) in enumerate(info):
+            p = plans[j]
+            s = arcs[j]
+            # the pad along this branch: out to the other branches' cores (at their angle) and PAD_LANDING_M past
+            # (a landing past them for a street's traffic to stop on; a track or a driveway climbs from the other's
+            # carriageway edge, over its verge)
+            street = pad_class_w(specs[j]) >= PAD_LANDING_MIN_W
+            land = PAD_LANDING_M if street else PAD_LANDING_MINOR_M
+            reach = 0.0
+            for m, other in enumerate(info):
+                if other[0] == j:
+                    continue
+                sin = abs(dirs[n, 0] * dirs[m, 1] - dirs[n, 1] * dirs[m, 0])
+                if float(dirs[n] @ dirs[m]) > 0 or sin >= PAD_MIN_SIN:      # (not the branch facing it)
+                    q = plans[other[0]]
+                    reach = max(reach, (q.half if street else q.road_half) / max(sin, PAD_MIN_SIN))
+            reach = min(reach + land, PAD_REACH_F * avail)
+            d_all = (s - arc) * sgn
+            win = np.flatnonzero((d_all >= -1e-9) & (d_all <= reach + JUNCTION_TAPER_M))    # (all it can change)
+            if not len(win):
+                continue
+            d = d_all[win]
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            zw = np.asarray(p.z, np.float64)[win]
+            # the plane, less the branch's own tangent: added to its profile, its height and tangent at the node become
+            # the plane's and its own vertical curve stays (a road the plane is made from is all but unchanged)
+            # (by its authority: a weak branch, a side road whose own end is the landing's step, lies on the plane itself)
+            flat = z0 + g[0] * (xy[win, 0] - nx) + g[1] * (xy[win, 1] - ny)
+            plane = flat + auth[n] * (zw - (z_n + tang[n] * d))
+            tan = np.gradient(xy, axis=0)[win] if len(xy) > 1 else np.zeros((len(win), 2))
+            tan /= np.maximum(np.hypot(tan[:, 0], tan[:, 1]), 1e-12)[:, None]
+            bank_plane = g[0] * -tan[:, 1] + g[1] * tan[:, 0]      # (m per m toward the plan's left)
+            own_bank = np.zeros(len(win)) if p.bank is None else np.asarray(p.bank, np.float64)[win]
+            pad = d <= reach
+            if not pad.any():
+                continue
+            z = zw.copy()
+            bank = own_bank.copy()
+            z[pad] = plane[pad]
+            bank[pad] = bank_plane[pad]
+            # back to its own: from the plane (carried on past the pad) to its own profile, the share eased out
+            # (cosine): the grade runs on from the pad's without a break (easing the pad edge's height difference
+            # alone kept the pad's level to its edge and its own grade right after: a 5-7 % kink there on a hillside)
+            # (a track's or a driveway's as short as it must be: a side road leaving up a steep bank, held to the pad's level over a long ease,
+            # ran in a trench 2.4 m deep, its own grade 30 %, the user 2026-10-29 at -32.0951, 116.03866: the longest
+            # ease of PAD_TAPERS_M, up to JUNCTION_TAPER_M, that sinks it (or raises it) at most PAD_SINK_M more than the
+            # pad edge's step faded out would, as a real one's ramp is: short and sharp on a bank, long on a gentle slope)
+            de = float(d[pad].max())
+            out = d > de
+            k_e = int(np.argmax(np.where(pad, d, -np.inf)))
+            step_ = abs(float(plane[k_e] - zw[k_e]))     # (the pad edge's own step: kept, whatever the ease)
+            longest = max(min(JUNCTION_TAPER_M, 0.5 * avail - de, ease_length(step_, not street)), VERTEX_STEP)
+            # (a street keeps its long ease: a junction's grade break is what its drivers feel)
+            for taper in [longest] + ([] if street else sorted((t for t in PAD_TAPERS_M if t < longest), reverse=True)):
+                w = 0.5 * (1.0 + np.cos(np.pi * np.clip((d - de) / taper, 0.0, 1.0)))
+                if not out.any() or float((np.abs(w[out] * (plane[out] - zw[out])) - w[out] * step_).max()) <= PAD_SINK_M:
+                    break
+            btaper = max(min(PAD_BANK_TAPER_M, taper), VERTEX_STEP)
+            wb = 0.5 * (1.0 + np.cos(np.pi * np.clip((d - de) / btaper, 0.0, 1.0)))
+            z[out] += w[out] * (plane[out] - z[out])
+            bank[out] += wb[out] * (bank_plane[out] - bank[out])
+            if np.abs(z - zw).max() < PAD_MIN_DELTA_M and np.abs(bank - own_bank).max() < 1e-3:
+                continue
+            znew = np.asarray(p.z, np.float64).copy()
+            znew[win] = z
+            p.z = znew
+            if p.bank is not None or np.abs(bank).max() > 1e-4:
+                bnew = np.zeros(len(xy)) if p.bank is None else np.asarray(p.bank, np.float64).copy()
+                bnew[win] = bank
+                p.bank = bnew
+    return nodes
 
 
 def shoulder(spec):
@@ -903,9 +1467,18 @@ class _Planner:
                     pspecs.append(part[1])
                     pclip.append(cl)
                     pparts.append((fid, part[1], part[0]))
+            if NEIGHBOUR_ON and plans and self._coarse(key):
+                try:
+                    r = 2.0 * NEIGHBOUR_TREND_SIGMA_M
+                    couple_neighbours([p for _f, p in plans], pspecs,
+                                      lambda xy: field_heights(self.frame, self.elev, xy, r, NEIGHBOUR_TREND_SIGMA_M))
+                except Exception as e:      # each road on its own rather than no grading
+                    log.debug("grading: neighbours of %s: %s: %s", key, type(e).__name__, e)
+            pad_nodes = None
             if JUNCTION_SNAP_ON and plans:
                 try:
                     snap_junctions([p for _f, p in plans], pspecs)
+                    pad_nodes = junction_pads([p for _f, p in plans], pspecs)
                 except Exception as e:      # blended as before rather than no grading
                     log.debug("grading: junctions of %s: %s: %s", key, type(e).__name__, e)
             if COARSE_EASE_ON and plans:
@@ -929,6 +1502,7 @@ class _Planner:
                 # the dip had lowered: a hump at each, the user 2026-10-28)
                 try:
                     snap_junctions([p for _f, p in plans], pspecs)
+                    junction_pads([p for _f, p in plans], pspecs, pad_nodes)
                 except Exception as e:
                     log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
             if CORNERS_ON and plans:
@@ -1446,7 +2020,7 @@ class _Planner:
             if k2 not in seen:
                 seen.add(k2)
                 uniq.append((b, fixed, rail))
-        spans = []
+        spans, span_rail = [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
         coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
         for n, (b, fixed, rail) in enumerate(uniq):
@@ -1459,6 +2033,7 @@ class _Planner:
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
             if rail or not (d < 0.75).any():
                 spans.append((b, L, fixed))
+                span_rail.append(rail)
         if not spans:
             return
         gids = sorted(ground)
@@ -1490,6 +2065,15 @@ class _Planner:
                 b, L, fixed = spans[bi]
                 if arc_b < APPROACH_MIN_CROSS_M or arc_b > L - APPROACH_MIN_CROSS_M:
                     continue                    # a junction at the bridge's end
+                if span_rail[bi]:
+                    # (the ground shows no separation: the track is raised over the road instead, as on coarse
+                    # elevation: railways.flat_rail_crossing, asked with the same ground there)
+                    import railways
+                    tt = np.clip(((pt - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+                    jj = int(np.argmin(np.linalg.norm(xy[:-1] + tt[:, None] * ab - pt, axis=1)))
+                    s_x = float(s[jj] + tt[jj] * (s[jj + 1] - s[jj]))
+                    if railways.flat_rail_crossing(self.frame, b, xy, s_x, self.elev):
+                        continue
                 ze = deck_ends(bi)
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
                 deck = float(np.min(ze[0] + (ze[1] - ze[0]) * corridor / L))
