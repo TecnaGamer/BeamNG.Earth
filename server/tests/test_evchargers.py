@@ -236,6 +236,17 @@ class TileTest(unittest.TestCase):
         self.assertEqual(recs, [])
         self.assertGreater(revisit.faults(), f0, "an unfetched OSM cell: the tile not kept")
 
+    def test_long_building_kept_clear(self):
+        # (in game, Berlin, 2026-10-29: chargers drawn inside a block) a building over the charger whose centre is far
+        # (an 800 m block, its centre 250 m off) is an obstacle too: no charger inside it
+        import polygon
+        ring = [(-50.0, 50.0), (750.0, 50.0), (750.0, 150.0), (-50.0, 150.0), (-50.0, 50.0)]
+        blds = feats("buildings", [("b-long", ring, {"class": "apartments"})], mg.POLYGON)
+        md = ev_md([("pla-ev", (100.0, 100.0), {"basic_category": "ev_charging_station"})], [], buildings=blds)
+        recs, _ = gs.tile_sites(FRAME, 0, 0, md, flat)
+        pts = np.array([p["pos"][:2] for r in recs for p in r["props"]]).reshape(-1, 2)
+        self.assertFalse(len(pts) and polygon.contains_points(np.array(ring), pts).any(), pts)
+
     def test_no_fuel_station_lost(self):
         md = station_md()
         md.osm_fuel_cached = lambda key: []

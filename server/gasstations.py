@@ -1668,6 +1668,36 @@ def buildings_near(frame, layers, x, y, r):
     return out
 
 
+def buildings_touching(frame, layers, x, y, r):
+    """Bld of the buildings whose outline's bounding box comes within r of (x, y) in frame, each once: buildings_near
+    by the outline, not its centre (EV chargers, in game in Berlin, 2026-10-29: chargers drawn inside a long block whose
+    centre was far off; the stations keep buildings_near, their layouts unchanged)."""
+    out, seen = [], set()
+    for f in layers:
+        if f is None or len(f) == 0:
+            continue
+        a = f.attrs
+        xy = f.xy_in(frame)
+        bb = f.boxes(frame)
+        near = np.flatnonzero((bb[:, 0] <= x + r) & (bb[:, 2] >= x - r) & (bb[:, 1] <= y + r) & (bb[:, 3] >= y - r))
+        for i in near.tolist():
+            fid = str(f.ids[i])
+            if fid in seen or f.part_off[i + 1] == f.part_off[i]:
+                continue
+            ring = np.asarray(_outer(f, i, xy), np.float64)
+            if len(ring) < 4:
+                continue
+            seen.add(fid)
+
+            def txt(k):
+                v = a[k][i] if k in a else None
+                return "" if v is None else str(v)
+            h = a["height"][i] if "height" in a else None
+            out.append(Bld(fid, ring, txt("class"), txt("name"), txt("src_dataset"),
+                           float(h) if h is not None and np.isfinite(h) else None))
+    return out
+
+
 def drive_lines(frame, layers, x, y, r):
     """(centreline (k, 2), half carriageway width) of the public roads (buildings.THROUGH_CLASSES) with a point within
     r of (x, y) in frame, each road once; the width as the road mesh draws it (roads.road_specs: lane counts, width
@@ -1856,7 +1886,7 @@ def _charger_site(frame, md, ch, stations):
     r = evchargers.reach_of(at)
     cds = [md.cell(k, layers=("buildings", "roads"), kind="demand") for k in _cells_near(frame, at.x, at.y, r)]
     rls = [c.layers.get("roads") for c in cds]
-    blds = buildings_near(frame, [c.layers.get("buildings") for c in cds], at.x, at.y, r) + pads
+    blds = buildings_touching(frame, [c.layers.get("buildings") for c in cds], at.x, at.y, r) + pads
     la, lo, _ = frame.enu_to_geodetic(at.x, at.y, 0.0)
     return evchargers.layout(at, blds, drive_lines(frame, rls, at.x, at.y, r + 50.0),
                              service_lines(frame, rls, at.x, at.y, r), style_of(float(la), float(lo)))
