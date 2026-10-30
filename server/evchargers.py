@@ -166,11 +166,22 @@ def _row(centre, u, f, n):
     return ch, stalls, pad
 
 
+# (the 8 sample places, 2026-10-29: 191 of 267 sites skipped, most of them street chargers 0-3 m from the road's
+# edge, median 1-1.6 m in Utrecht, Berlin and Oslo) a charger by a public road stands on its kerb facing it, its car
+# parked at the road's edge, as a street charger is
+KERB_REACH_M = 10.0         # a charger this near a public road's edge is a kerbside one
+KERB_OFF_M = 0.8            # its charger this far behind the carriageway's edge (on the kerb)
+KERB_LANE_M = 1.2           # its charge area's centre this far inside the edge (a car parked along it)
+KERB_GAP_M = 6.0            # kerbside chargers along the road (a parallel-parked car's length)
+
+
 def _placements(ch, roads, service):
-    """[(row centre, row direction u, front f)] to try, in order: along the nearest aisle (big sites first) and at the
-    position facing the nearest public road, then away from it."""
+    """[(kind, data)] to try, in order. "row" (centre, u, f): a row along the nearest aisle (the stalls toward it) or at
+    the position facing the nearest public road, then away from it. "kerb" (q, u, n, half): on the nearest public
+    road's kerb when its edge is within KERB_REACH_M. A big site tries the aisle, then the kerb; a small one the kerb
+    first."""
     p = np.array([ch.x, ch.y], np.float64)
-    out = []
+    aisle_tries = []
     aisle = _nearest(service, p)
     if aisle is not None and aisle[2] <= AISLE_REACH_M:
         q, u, dist = aisle
@@ -178,33 +189,75 @@ def _placements(ch, roads, service):
         if np.dot(p - q, nrm) < 0:
             nrm = -nrm
         centre = q + nrm * (AISLE_HALF_M + STALL_M + CHARGER_BACK_M)
-        out.append((centre, u, -nrm))       # (the stalls toward the aisle, the chargers behind them)
+        aisle_tries.append(("row", (centre, u, -nrm)))     # (the stalls toward the aisle, the chargers behind them)
+    kerb_tries = []
+    best = None
+    for line, half in roads:
+        got = _nearest([line], p)
+        if got is not None and (best is None or got[2] - half < best[0][2] - best[1]):
+            best = (got, half)
+    if best is not None and best[0][2] - best[1] <= KERB_REACH_M:
+        (q, u, dist), half = best
+        nrm = np.array([-u[1], u[0]])
+        if np.dot(p - q, nrm) < 0:
+            nrm = -nrm
+        kerb_tries.append(("kerb", (q, u, nrm, half)))
     road = _nearest([r[0] for r in roads], p)
     f = (road[0] - p) / max(road[2], 1e-9) if road is not None and road[2] > 1e-6 else np.array([0.0, 1.0])
     u = np.array([-f[1], f[0]])
-    at_pin = [(p, u, f), (p, u, -f)]
-    return out + at_pin if ch.big else at_pin + out
+    at_pin = [("row", (p, u, f)), ("row", (p, u, -f))]
+    if ch.big:
+        return aisle_tries + kerb_tries + at_pin
+    return kerb_tries + at_pin + aisle_tries
+
+
+def _kerb_row(q, u, nrm, half, n):
+    """n chargers on a road's kerb centred on q along u (nrm: from the road to the kerb), facing the road: (charger
+    points, charge area centres)."""
+    offs = (np.arange(n) - (n - 1) / 2.0) * KERB_GAP_M
+    along = q[None] + offs[:, None] * u[None]
+    return along + nrm[None] * (half + KERB_OFF_M), along + nrm[None] * (half - KERB_LANE_M)
+
+
+def _kerb_clear(pts, areas, blds, roads):
+    """Kerbside chargers clear of buildings and off every public road's carriageway; their charge areas (at the road's
+    edge) out of buildings."""
+    for line, half in roads:
+        if (gs._seg_dist(pts, line[:-1], line[1:]) < half + KERB_OFF_M - 0.05).any():
+            return False
+    return gs._clear(pts, blds, []) and gs._clear(areas, blds, [])
 
 
 def layout(ch, blds, roads, service=(), style="default"):
-    """A charger site (gasstations.Site): a straight row of count_of(ch) chargers CHARGER_GAP_M apart, each facing its
+    """A charger site (gasstations.Site): count_of(ch) chargers in a straight row CHARGER_GAP_M apart, each facing its
     stall STALL_M deep, along the nearest service line within AISLE_REACH_M (the stalls on the aisle's side) or at the
-    site's position facing the nearest public road; the row shortened to fit, every charger and stall clear of
-    buildings and public roads (gasstations._clear); one asphalt pad round it (the user, 2026-10-29: "Ground paint
-    minimum"). None when not even one charger fits (a charger in a parking garage)."""
+    site's position facing the nearest public road; or, by a public road, on its kerb KERB_GAP_M apart facing it, the
+    cars parked at its edge (_kerb_row). The row is shortened to fit, every charger and stall clear of buildings and
+    public roads (gasstations._clear; a kerbside charge area at the road's edge: _kerb_clear). One asphalt pad round a
+    row (the user, 2026-10-29: "Ground paint minimum"), none at a kerb (road and sidewalk are paved). None when not
+    even one charger fits (a charger in a parking garage)."""
     shapes = CHARGER_SHAPES.get(style, CHARGER_SHAPES["default"])
     shape = shapes[0] if ch.big else shapes[1]
     tries = _placements(ch, roads, service)
     for n in range(count_of(ch), 0, -1):
-        for centre, u, f in tries:
-            pts, stalls, pad = _row(centre, u, f, n)
-            if not gs._clear(np.vstack([pts, stalls]), blds, roads):
-                continue
-            yaw = gs._yaw(f)
+        for kind, data in tries:
+            if kind == "kerb":
+                q, u, nrm, half = data
+                pts, stalls = _kerb_row(q, u, nrm, half, n)
+                if not _kerb_clear(pts, stalls, blds, roads):
+                    continue
+                front, area_yaw, pad = -nrm, gs._yaw(u), []
+            else:
+                centre, u, f = data
+                pts, stalls, ring = _row(centre, u, f, n)
+                if not gs._clear(np.vstack([pts, stalls]), blds, roads):
+                    continue
+                front, area_yaw, pad = f, gs._yaw(f), [ring]
+            yaw = gs._yaw(front)
             props = [dict(shape=shape, x=float(x), y=float(y), dz=0.0, yaw=(yaw + CHARGER_DYAW) % 360.0,
                           scale=[1.0, 1.0, 1.0], collide=True) for x, y in pts]
-            areas = [dict(x=float(x), y=float(y), dz=gs.AREA_DZ, yaw=yaw % 360.0, half=[STALL_M, AREA_W_M, 2.75],
+            areas = [dict(x=float(x), y=float(y), dz=gs.AREA_DZ, yaw=area_yaw % 360.0, half=[STALL_M, AREA_W_M, 2.75],
                           icon=gs.ICON_DZ) for x, y in stalls]
             st = gs.Station(ch.id, ch.x, ch.y, ch.name or "EV charger", ch.brand, (ch.id,), True, True)
-            return gs.Site(st, props, areas, (), shop_id="ev:" + ch.id, pad=[pad])
+            return gs.Site(st, props, areas, (), shop_id="ev:" + ch.id, pad=pad)
     return None

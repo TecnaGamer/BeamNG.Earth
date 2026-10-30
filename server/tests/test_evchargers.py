@@ -145,10 +145,29 @@ class LayoutTest(unittest.TestCase):
         self.assertIsNone(ev.layout(charger(), [garage], [ROAD], [], "default"))
 
     def test_never_on_a_road(self):
-        road = (np.array([(-300.0, 0.0), (300.0, 0.0)]), 6.0)    # the pin on a road's centreline
+        # the pin on a road's centreline: the chargers stand off the carriageway (at its kerb), never on it
+        road = (np.array([(-300.0, 0.0), (300.0, 0.0)]), 6.0)
         site = ev.layout(charger(), [], [road], [], "default")
-        if site is not None:
-            self.assertTrue(self._clear(site, [], [road]))
+        self.assertIsNotNone(site)
+        pts = np.array([(p["x"], p["y"]) for p in site.props])
+        self.assertTrue((gs._seg_dist(pts, road[0][:-1], road[0][1:]) >= road[1] + ev.KERB_OFF_M - 1e-6).all())
+
+    def test_kerbside_charger(self):
+        # (the 8 sample places, 2026-10-29: 191 of 267 sites skipped, most of them street chargers 0-3 m from the
+        # road's edge) a charger by a road stands on the kerb facing it; its car charges parked at the road's edge
+        road = (np.array([(-300.0, 0.0), (300.0, 0.0)]), 4.0)
+        houses = [bld("h", 0.0, 12.0, 60.0, 8.0)]           # the buildings 8 m behind the kerb
+        site = ev.layout(charger(x=0.0, y=5.0), houses, [road], [], "default")
+        self.assertIsNotNone(site)
+        self.assertEqual(len(site.props), 2)
+        for p, a in zip(site.props, site.areas):
+            self.assertAlmostEqual(p["y"], 4.0 + ev.KERB_OFF_M, places=3, msg="on the kerb")
+            self.assertLess(a["y"], 4.0, "its car at the road's edge")
+            self.assertGreater(a["y"], 0.0, "on its own side of the road")
+            self.assertAlmostEqual(a["yaw"] % 180.0, 0.0, places=3, msg="parked along the road")
+        self.assertEqual(site.pad, [], "no paint: road and sidewalk are paved")
+        pts = np.array([(p["x"], p["y"]) for p in site.props])
+        self.assertTrue(gs._clear(pts, houses, []), "clear of the buildings")
 
     def test_style_shapes_have_chargers(self):
         for style in ("default", "us_east", "europe"):
