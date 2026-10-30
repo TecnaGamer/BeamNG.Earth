@@ -989,12 +989,14 @@ def _eca_site(st, lanes, others, roads):
 def style_shapes(style):
     """Every shape a station of that style (style_of) can use: the ones the mod preloads for the anchor's region
     (earthd anchor_ready fuelShapes; only that region's: a Steam Deck's memory, the user, 2026-10-23)."""
+    import evchargers                           # (and the style's EV chargers: evchargers.CHARGER_SHAPES)
+    ev = list(dict.fromkeys(evchargers.CHARGER_SHAPES.get(style, evchargers.CHARGER_SHAPES["default"])))
     west = [*PUMP_KIT["pump"], _ROOF, _PILLAR, BOLLARD]
     if style == "europe":
-        return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD]
+        return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD, *ev]
     if style == "us_east":
-        return [ECA_UNIT, *west]                # (West Coast's islands under a small canopy, and the pump pairs)
-    return west
+        return [ECA_UNIT, *west, *ev]           # (West Coast's islands under a small canopy, and the pump pairs)
+    return west + ev
 
 
 def _lanes_box(lanes):

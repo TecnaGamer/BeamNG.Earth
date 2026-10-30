@@ -8,6 +8,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import numpy as np  # noqa: E402
+
 import mapgeom as mg  # noqa: E402
 
 import evchargers as ev  # noqa: E402
@@ -68,6 +70,91 @@ class ChargerSitesTest(unittest.TestCase):
         a = [(c.id, c.records) for c in ev.merge(pins, osm)]
         b = [(c.id, c.records) for c in ev.merge(list(reversed(pins)), osm)]
         self.assertEqual(a, b)
+
+
+def bld(bid, cx, cy, w, h):
+    ring = np.array([(cx - w / 2, cy - h / 2), (cx + w / 2, cy - h / 2), (cx + w / 2, cy + h / 2),
+                     (cx - w / 2, cy + h / 2), (cx - w / 2, cy - h / 2)], np.float64)
+    return gs.Bld(bid, ring, "retail", "", "OpenStreetMap", None)
+
+
+def charger(big=False, tesla=False, records=1, x=0.0, y=0.0):
+    return ev.Charger("evtest", x, y, "Test", "", records, big, tesla)
+
+
+ROAD = (np.array([(-300.0, 60.0), (300.0, 60.0)]), 4.0)        # a public road 60 m north, 8 m wide
+AISLE = np.array([(-100.0, 15.0), (100.0, 15.0)])               # a parking aisle 15 m north of the pin
+
+
+class LayoutTest(unittest.TestCase):
+    def _clear(self, site, blds, roads):
+        pts = [(p["x"], p["y"]) for p in site.props] + [(a["x"], a["y"]) for a in site.areas]
+        return gs._clear(np.array(pts, np.float64), blds, roads)
+
+    def test_big_row_along_aisle(self):
+        site = ev.layout(charger(big=True, records=2), [], [ROAD], [AISLE], "default")
+        self.assertEqual((len(site.props), len(site.areas)), (4, 4))
+        ys = {round(p["y"], 3) for p in site.props}
+        self.assertEqual(len(ys), 1, "a straight row parallel to the aisle")
+        self.assertTrue(all(abs(a["y"] - 15.0) < abs(p["y"] - 15.0) for a, p in zip(site.areas, site.props)),
+                        "each stall between its charger and the aisle")
+        self.assertTrue(all(p["shape"] == ev.CHARGER_SHAPES["default"][0] for p in site.props), "the big model")
+        import polygon
+        pad = site.pad[0]
+        pts = np.array([(p["x"], p["y"]) for p in site.props] + [(a["x"], a["y"]) for a in site.areas])
+        self.assertTrue(polygon.contains_points(pad, pts).all(), "the pad covers chargers and stalls")
+        self.assertTrue(self._clear(site, [], [ROAD]))
+
+    def test_chargers_face_their_stalls(self):
+        site = ev.layout(charger(big=True, records=2), [], [ROAD], [AISLE], "default")
+        p, a = site.props[0], site.areas[0]
+        f = np.array([a["x"] - p["x"], a["y"] - p["y"]])
+        self.assertAlmostEqual(p["yaw"] % 360.0, (gs._yaw(f) + ev.CHARGER_DYAW) % 360.0, places=3)
+        self.assertAlmostEqual(a["yaw"] % 360.0, gs._yaw(f) % 360.0, places=3, msg="the area's depth along the stall")
+
+    def test_tesla_row_of_eight(self):
+        site = ev.layout(charger(big=True, tesla=True), [], [ROAD], [AISLE], "default")
+        self.assertEqual(len(site.props), 8)
+
+    def test_count_of(self):
+        self.assertEqual(ev.count_of(charger()), 2)
+        self.assertEqual(ev.count_of(charger(big=True, records=2)), 4)
+        self.assertEqual(ev.count_of(charger(big=True, records=3)), 6)
+        self.assertEqual(ev.count_of(charger(big=True, records=9)), 8)
+        self.assertEqual(ev.count_of(charger(big=True, tesla=True)), 8)
+
+    def test_small_pair_at_pin(self):
+        site = ev.layout(charger(), [], [ROAD], [], "default")
+        self.assertEqual(len(site.props), 2)
+        self.assertTrue(all(p["shape"] == ev.CHARGER_SHAPES["default"][1] for p in site.props), "the small model")
+        self.assertTrue(all(np.hypot(p["x"], p["y"]) < 10.0 for p in site.props), "at the pin")
+        self.assertTrue(self._clear(site, [], [ROAD]))
+
+    def test_shortened_when_tight(self):
+        # walls 3 x 3 m apart east and west of the aisle's stall row leave room for 3 chargers
+        blds = [bld("w", -6.6, 7.0, 4.0, 14.0), bld("e", 6.6, 7.0, 4.0, 14.0)]
+        site = ev.layout(charger(big=True, records=2), blds, [ROAD], [np.array([(-100.0, 15.0), (100.0, 15.0)])],
+                         "default")
+        self.assertIsNotNone(site)
+        self.assertLess(len(site.props), 4)
+        self.assertTrue(self._clear(site, blds, [ROAD]))
+
+    def test_charger_in_garage_skipped(self):
+        garage = bld("garage", 0.0, 0.0, 120.0, 120.0)
+        self.assertIsNone(ev.layout(charger(), [garage], [ROAD], [], "default"))
+
+    def test_never_on_a_road(self):
+        road = (np.array([(-300.0, 0.0), (300.0, 0.0)]), 6.0)    # the pin on a road's centreline
+        site = ev.layout(charger(), [], [road], [], "default")
+        if site is not None:
+            self.assertTrue(self._clear(site, [], [road]))
+
+    def test_style_shapes_have_chargers(self):
+        for style in ("default", "us_east", "europe"):
+            self.assertTrue(set(ev.CHARGER_SHAPES[style]) <= set(gs.style_shapes(style)), style)
+
+    def test_reach(self):
+        self.assertGreaterEqual(ev.reach_of(charger()), ev.AISLE_REACH_M + ev.STALL_M)
 
 
 if __name__ == "__main__":

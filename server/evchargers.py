@@ -14,6 +14,8 @@ import math
 import re
 from dataclasses import dataclass
 
+import numpy as np
+
 import gasstations as gs
 
 log = logging.getLogger("earthd.evchargers")
@@ -95,3 +97,114 @@ def merge(pins, osm, merge_m=gs.MERGE_M):
         out.append(Charger("ev" + s[0][0], float(s[0][2]), float(s[0][3]), name, brand, len(s),
                            len(s) >= 2 or bool(NETWORK_WORDS.search(words)), bool(TESLA_WORDS.search(words))))
     return out
+
+
+# --- a site's layout ------------------------------------------------------------------------------------------------
+# the stock models (docs/research/2026-10-29-ev-chargers.md): (a big site's, a small site's) per gasstations.style_of
+_WCA = "/levels/west_coast_usa/art/shapes/buildings/"
+CHARGER_SHAPES = {
+    "default": (_WCA + "s_fuel_charger_car_2020.dae", _WCA + "s_fuel_charger_car_2022.dae"),
+    "us_east": ("/levels/east_coast_usa/art/shapes/buildings/eca_charging_station.DAE",) * 2,
+    "europe": ("/levels/italy/art/shapes/buildings/charging_station_a.DAE",
+               "/levels/italy/art/shapes/buildings/charging_station_b.DAE"),
+}
+# the mod's yaw (gasstations.lua yawQuat) turns a charger's front to _yaw(front) + this (in game, 2026-10-29: yaw 0
+# faced -y, yaw 90 faced +x)
+CHARGER_DYAW = 90.0
+CHARGER_GAP_M = 3.0         # chargers along a row (a stall's width)
+STALL_M = 5.5               # a stall's depth, in front of its charger
+CHARGER_BACK_M = 0.5        # the charger behind its stall
+AISLE_HALF_M = 3.0          # a parking aisle's half width: its stalls start there
+AISLE_REACH_M = 30.0        # a big site's row along an aisle this near its position
+ROW_BIG = 4
+ROW_TESLA = 8               # (a Supercharger's usual 8)
+ROW_MAX = 8
+ROW_SMALL = 2
+AREA_W_M = 2.4              # a stall's charge area across (its depth along the stall: STALL_M)
+ENERGY = ("electricEnergy",)
+
+
+def count_of(ch):
+    """Chargers wanted at a site: ROW_TESLA for Tesla's, 2 per record (ROW_BIG..ROW_MAX) for a big site, else
+    ROW_SMALL."""
+    if ch.tesla:
+        return ROW_TESLA
+    if ch.big:
+        return min(ROW_MAX, max(ROW_BIG, 2 * ch.records))
+    return ROW_SMALL
+
+
+def reach_of(ch):
+    """How far from its position a site's chargers and stalls can reach (the road tiles that lay it out)."""
+    return AISLE_REACH_M + AISLE_HALF_M + STALL_M + CHARGER_BACK_M + ROW_MAX * CHARGER_GAP_M / 2
+
+
+def _nearest(lines, p):
+    """(point (2,), unit direction (2,), distance) of the nearest point on polylines lines to p, or None."""
+    best = None
+    for line in lines:
+        a, b = line[:-1], line[1:]
+        d = b - a
+        L2 = np.maximum((d * d).sum(1), 1e-12)
+        t = np.clip(((p - a) * d).sum(1) / L2, 0.0, 1.0)
+        q = a + d * t[:, None]
+        dist = np.hypot(*(q - p).T)
+        k = int(np.argmin(dist))
+        if best is None or dist[k] < best[2]:
+            best = (q[k], d[k] / np.sqrt(L2[k]), float(dist[k]))
+    return best
+
+
+def _row(centre, u, f, n):
+    """n chargers centred on centre along u, their fronts to f: (charger points, stall centres, pad ring)."""
+    offs = (np.arange(n) - (n - 1) / 2.0) * CHARGER_GAP_M
+    ch = centre[None] + offs[:, None] * u[None]
+    stalls = ch + f[None] * (CHARGER_BACK_M + STALL_M / 2.0)
+    half = n * CHARGER_GAP_M / 2.0
+    back, front = centre - f * CHARGER_BACK_M * 2, centre + f * (CHARGER_BACK_M + STALL_M)
+    pad = np.array([back - u * half, back + u * half, front + u * half, front - u * half, back - u * half])
+    return ch, stalls, pad
+
+
+def _placements(ch, roads, service):
+    """[(row centre, row direction u, front f)] to try, in order: along the nearest aisle (big sites first) and at the
+    position facing the nearest public road, then away from it."""
+    p = np.array([ch.x, ch.y], np.float64)
+    out = []
+    aisle = _nearest(service, p)
+    if aisle is not None and aisle[2] <= AISLE_REACH_M:
+        q, u, dist = aisle
+        nrm = np.array([-u[1], u[0]])
+        if np.dot(p - q, nrm) < 0:
+            nrm = -nrm
+        centre = q + nrm * (AISLE_HALF_M + STALL_M + CHARGER_BACK_M)
+        out.append((centre, u, -nrm))       # (the stalls toward the aisle, the chargers behind them)
+    road = _nearest([r[0] for r in roads], p)
+    f = (road[0] - p) / max(road[2], 1e-9) if road is not None and road[2] > 1e-6 else np.array([0.0, 1.0])
+    u = np.array([-f[1], f[0]])
+    at_pin = [(p, u, f), (p, u, -f)]
+    return out + at_pin if ch.big else at_pin + out
+
+
+def layout(ch, blds, roads, service=(), style="default"):
+    """A charger site (gasstations.Site): a straight row of count_of(ch) chargers CHARGER_GAP_M apart, each facing its
+    stall STALL_M deep, along the nearest service line within AISLE_REACH_M (the stalls on the aisle's side) or at the
+    site's position facing the nearest public road; the row shortened to fit, every charger and stall clear of
+    buildings and public roads (gasstations._clear); one asphalt pad round it (the user, 2026-10-29: "Ground paint
+    minimum"). None when not even one charger fits (a charger in a parking garage)."""
+    shapes = CHARGER_SHAPES.get(style, CHARGER_SHAPES["default"])
+    shape = shapes[0] if ch.big else shapes[1]
+    tries = _placements(ch, roads, service)
+    for n in range(count_of(ch), 0, -1):
+        for centre, u, f in tries:
+            pts, stalls, pad = _row(centre, u, f, n)
+            if not gs._clear(np.vstack([pts, stalls]), blds, roads):
+                continue
+            yaw = gs._yaw(f)
+            props = [dict(shape=shape, x=float(x), y=float(y), dz=0.0, yaw=(yaw + CHARGER_DYAW) % 360.0,
+                          scale=[1.0, 1.0, 1.0], collide=True) for x, y in pts]
+            areas = [dict(x=float(x), y=float(y), dz=gs.AREA_DZ, yaw=yaw % 360.0, half=[STALL_M, AREA_W_M, 2.75],
+                          icon=gs.ICON_DZ) for x, y in stalls]
+            st = gs.Station(ch.id, ch.x, ch.y, ch.name or "EV charger", ch.brand, (ch.id,), True, True)
+            return gs.Site(st, props, areas, (), shop_id="ev:" + ch.id, pad=[pad])
+    return None
