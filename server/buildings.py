@@ -20,6 +20,7 @@ import math
 import numpy as np
 
 import fast
+import landmarks
 import mapgeom
 import staging
 
@@ -74,8 +75,14 @@ MARBLE = "bne_bld_marble"   # cut white marble (the stock m_marble_cut): Baltimo
 BRICK_WALL = "bne_bld_brick"    # plain red brick (the stock brick_plain): a garage's skin
 CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a precast garage's skin
 SKY_WALL = "bne_bld_sky"    # the skyline's walls: plain (vertex colours), their windows lit at night (_sky_mesh)
+LANDMARK_IRON = "bne_lm_iron"   # a landmark's painted iron (landmarks.py; vertex colours), lit at night (nightlights.lua)
+LANDMARK_STONE = "bne_lm_stone"     # ... its stone (vertex colours), dark at night (lit by its lamps: the Colosseum)
+LANDMARK_FLOODLIT = "bne_lm_floodlit"   # ... its floodlit stone, glowing at night (the Arc de Triomphe, Big Ben)
+LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosseum's arches): points of light at night
+LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
-             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL)
+             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
+             LANDMARK_FLOODLIT, LANDMARK_DIAL)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -444,6 +451,29 @@ def tree_line_m(lat):
     return max(0.0, 3600.0 - 110.0 * max(0.0, abs(float(lat)) - 32.0))
 
 
+def landmark_spec(ring, name):
+    """The Spec of landmark `name` (landmarks.WAYS) on its footprint ring: drawn by landmarks.build, no walls."""
+    h = landmarks.height(name)
+    return Spec(ring=np.asarray(ring, np.float64), floors=1, floor_h=h, height=h, roof="flat", roof_mat=ROOF_FLAT,
+                facade=name, band=0, shop=False, plain=True, min_h=0.0, wall=None, door=None, windows=None, front=None,
+                steeple=False, stoop=False, sign=None, porch=False, cls=landmarks.LANDMARK, seed=0.5, deck=False,
+                pitch=0.0, portal=False)
+
+
+LANDMARK_MATERIALS = {"iron": LANDMARK_IRON, "stone": LANDMARK_STONE, "floodlit": LANDMARK_FLOODLIT}
+
+
+def _landmark_tokens():
+    """landmarks.build's tokens: its lamps and dials, in their own materials (lit at night)."""
+    return {"lamp": (MATERIALS.index(LANDMARK_LAMP), landmarks.LAMP_COLOUR),
+            "dial": (MATERIALS.index(LANDMARK_DIAL), landmarks.BB_DIAL),
+            "floodlit": (MATERIALS.index(LANDMARK_FLOODLIT), (255, 255, 255, 255))}
+
+
+def _landmark_token(spec):
+    return (MATERIALS.index(LANDMARK_MATERIALS[landmarks.material(spec.facade)]), landmarks.colour(spec.facade))
+
+
 def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, dense=False, west_town=False,
          alpine=False):
     """The Spec of a footprint (local ring (n, 2) in metres, counter-clockwise) from its Overture attributes
@@ -451,6 +481,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     covers it, garage_rings) and the number of buildings
     sharing a wall with it. Height and roof are predicted when not given. west_town: a small town of the
     arid West (district_town): single-storey main streets and ranch houses."""
+    if attrs.get("landmark"):           # (landmarks.py: its own model, no prediction)
+        return landmark_spec(ring, attrs["landmark"])
     area = _area2(ring) / 2
     c = ring.mean(0)
     # (its random choices: keyed on the map feature's id, the same from every anchor and tile; a ring without one
@@ -1482,6 +1514,9 @@ def build(specs_and_ground, lite=False):
     for spec, gmin, gmax in specs_and_ground:
         if spec.cls == "toll_booth":        # a stock prop (toll_booth_rows)
             continue
+        if spec.cls == landmarks.LANDMARK:
+            landmarks.build(m, spec, gmin, _landmark_token(spec), lite, _landmark_tokens())
+            continue
         mat_idx = _Looks(spec.seed)
         if spec.cls in BRIDGE_CLASSES:
             _steel_frame(m, spec, gmin, mat_idx[spec.facade if spec.facade in LOOKS else STEEL], lite)
@@ -1565,6 +1600,9 @@ def collision_mesh(specs_and_ground):
     for spec, gmin, gmax in specs_and_ground:
         if spec.cls in BRIDGE_CLASSES:          # its legs (the decks run between them)
             _steel_frame(m, spec, gmin, tok, True, legs_only=True)
+            continue
+        if spec.cls == landmarks.LANDMARK:      # (its legs and decks: walked and driven under)
+            landmarks.collision(m, spec, gmin, tok)
             continue
         if deck_plan(spec, gmin, gmax) is not None:
             _parking_deck(m, spec, gmin, gmax, _Looks(spec.seed))
@@ -2316,6 +2354,17 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    "facade_material", "facade_color", "roof_material", "roof_color")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
+            lm = landmarks.of(a["src_record"][i]) if a.get("src_record") is not None else None
+            if lm is not None:          # a landmark (landmarks.py): its own model on its footprint, its parts left out
+                ring = clean_ring(np.stack([e - x0, n - y0], 1))
+                if ring is not None:
+                    rings.append(ring)
+                    attrs.append({"landmark": lm, "height": landmarks.height(lm)})
+                    looks.append(None)
+                    mins.append(0.0)
+                    if key is not None:
+                        seen.add(key)
+                continue
             hh_ = at.get("height")
             if hh_ is not None and np.isfinite(hh_) and 0 < hh_ < FLAT_FOOTPRINT_M and not parts_of.get(str(key)):
                 continue                # a mapped area, not a building (the Golden Gate toll plaza's 0.01 m footprint
@@ -2583,7 +2632,7 @@ def collider_boxes(items, x0, y0):
     for spec, gmin, gmax in items:
         if deck_plan(spec, gmin, gmax) is not None:     # an open parking deck: driven into on purpose
             continue
-        if spec.cls in BRIDGE_CLASSES:                  # a bridge's frame: driven through between its legs
+        if spec.cls in BRIDGE_CLASSES or spec.cls == landmarks.LANDMARK:   # a frame: driven through between its legs
             continue
         r = spec.ring
         out.append([round(float(r[:, 0].min() + x0), 2), round(float(r[:, 1].min() + y0), 2),
@@ -3158,6 +3207,9 @@ def _sky_mesh(items):
     ms = MATERIALS.index(SKY_WALL)
     uv = SKY_UV
     for spec, gmin, gmax in items:
+        if spec.cls == landmarks.LANDMARK:      # (its far-away model, not a box of its footprint's size)
+            landmarks.build(m, spec, gmin, _landmark_token(spec), lite=True, tokens=_landmark_tokens())
+            continue
         ring = np.asarray(spec.ring, np.float64)[:, :2]
         if len(ring) < 3:
             continue
