@@ -36,6 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 import mapcells
+import railways as railwaysmod
 import roads as roadsmod
 import seatiles
 
@@ -1420,21 +1421,28 @@ class _Planner:
             d = np.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
             if rail or not (d < 0.75).any():
-                spans.append((b, L, fixed))
+                spans.append((b, L, fixed, rail))
         if not spans:
             return
         gids = sorted(ground)
         lines = [ground[g][0] for g in gids]
-        crs = roadsmod._crossings_by([b for b, _L, _f in spans], lines)
+        crs = roadsmod._crossings_by([b for b, _L, _f, _r in spans], lines)
         ez, raised = {}, set()
 
         def deck_ends(j):           # (an overpass's abutments' ground, raised when it is: as high as its ramps could
             got = ez.get(j)         # take them; asked only for one a road crosses under: every span's took 2 s a
             if got is None:         # Canton cell, 2026-10-25)
-                b, _L, fixed = spans[j]
+                b, _L, fixed, rail = spans[j]
                 ends = np.array([b[0], b[-1]], f64)
                 ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
                 got = np.asarray(self.elev(np.asarray(ela), np.asarray(elo)), f64).reshape(2).copy()
+                if rail:            # (the track's level beyond its ends, as railways.profile lays the deck)
+                    def ground_xy(q):
+                        qla, qlo, _ = self.frame.enu_to_geodetic(q[:, 0], q[:, 1], 0.0)
+                        return np.asarray(self.elev(np.asarray(qla), np.asarray(qlo)), f64)
+                    for e, lv in enumerate(railwaysmod.approach_levels(b[:, :2], ground_xy)):
+                        if lv is not None:
+                            got[e] = max(got[e], lv[0])
                 if not fixed:
                     got[0] += self._end_raised(b[0])
                     got[1] += self._end_raised(b[-1])
@@ -1449,7 +1457,7 @@ class _Planner:
             ab = np.diff(xy, axis=0)
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], f64)
-                b, L, fixed = spans[bi]
+                b, L, fixed, rail = spans[bi]
                 if arc_b < APPROACH_MIN_CROSS_M or arc_b > L - APPROACH_MIN_CROSS_M:
                     continue                    # a junction at the bridge's end
                 ze = deck_ends(bi)
@@ -1460,9 +1468,12 @@ class _Planner:
                 j = int(np.argmin(np.linalg.norm(xy[:-1] + t[:, None] * ab - pt, axis=1)))
                 # (the deck's own clearance: its depth scales with its span, roads.deck_depth; the full-depth
                 # UNDER_CLEAR_M dug the road out under a short overpass that sits lower)
-                clear = roadsmod.deck_road_clear(roadsmod.deck_depth(roadsmod.geom_span([b]))) + ROAD_LIFT
+                # (a rail deck's height is its bed: its own depth under the ballast's top, railways.DECK_D)
+                depth = railwaysmod.DECK_D - railwaysmod.BALLAST_H if rail else \
+                    roadsmod.deck_depth(roadsmod.geom_span([b]))
+                clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
-                decks.append(deck)
+                decks.append((deck, fixed))
         if not cands:
             return
         zc = self._under_ground(lines, [ground[g][1:] for g in gids], cands)
@@ -1470,9 +1481,10 @@ class _Planner:
         lidar = UNDER_LIDAR_ON and not coarse and dem is not None and hasattr(dem, "coarse_at")
         requirements = []
         floor = seatiles.SEA_E + UNDER_SEA_M
-        for (i, sc, top), deck, z in zip(cands, decks, zc):
-            if lidar and deck < z + UNDER_LIDAR_DECK_M:
-                continue                        # (the ends' ground is not the deck: the road keeps its own)
+        for (i, sc, top), (deck, fixed), z in zip(cands, decks, zc):
+            if lidar and not fixed and deck < z + UNDER_LIDAR_DECK_M:
+                continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
+                                                # rises; a never-raised deck, a railway's or a motorway's, cannot)
             target = max(top, z - UNDER_MAX_DROP_M)
             if UNDER_SEA_ON and z >= floor:
                 target = max(target, floor)     # (not under the sea's surface: its water tiles would flood it)
