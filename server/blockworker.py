@@ -34,6 +34,7 @@ import seacarve as seacarvemod
 import staging
 import surface as surfacemod
 import terraincache
+import townsigns as townsignsmod
 import xproc
 
 log = logging.getLogger("earthd.blockworker")
@@ -655,11 +656,12 @@ class _Parts:
 
 
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
-                q, rkey, centre, skin_margin=0.0, walks_raw=None):
+                q, rkey, centre, skin_margin=0.0, walks_raw=None, out_dir=None, vfs_dir=None):
     """A road tile's parts in frame: tile (tx, ty) of an anchor, or a geotiles.GeoBox (its own frame, no anchor in
     it). g: the frame's grading.Grader view (None: no grading); q: the height quantum the sidewalks' curbs are put on
     (None: the ground as it is: a geotile's content); rkey: the railways' ground cache key; centre (lat, lon): the
-    place's (the brick pavement's region). skin_margin, walks_raw: roads.build_tile's (a geotile's skin pieces)."""
+    place's (the brick pavement's region). skin_margin, walks_raw: roads.build_tile's (a geotile's skin pieces).
+    out_dir, vfs_dir: where the town signs' faces are written (town_signs; None: no town signs)."""
     import parking as parkingmod
     import rails as railsmod
     import roadmesh as roadmeshmod
@@ -717,6 +719,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
+    town_faces = {}                     # the town signs' faces the tile's props use (BNE_TOWNSIGNS)
+    towns = (town_signs(frame, tx, ty, out_dir, vfs_dir, town_faces)
+             if props is not None and out_dir is not None else None)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
@@ -727,7 +732,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
                                  signals=furniture.signals_for(_s.md, frame,
-                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)),
+                                 towns=towns)
+    P.town_faces = town_faces
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     mark("rails")
@@ -841,7 +848,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     frame = geodesy.EnuFrame(lat, lon)
     g, _ = _s.anchor(aid, lat, lon)
     P = _tile_parts(mark, frame, (tx, ty), zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                    country, q, (aid, lat, lon), (lat, lon))
+                    country, q, (aid, lat, lon), (lat, lon), out_dir=out_dir, vfs_dir=vfs_dir)
     mesh = roadmeshmod.build(frame, P.chunks, P.elev, P.origin, lift, clip=P.box, follow=True, q=q, drawn=P.drawn,
                              context=P.ctx)
     mark("mesh")
@@ -850,7 +857,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              wells=P.wells) + (P.fuel_pads,)
+                              wells=P.wells, towns=P.town_faces) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -948,7 +955,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         _, n = roadsmod.write_tile(tmpdir, vfs_dir, 0, tile, None, P.chunks, None, None, P.dmesh, P.bld, P.props,
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound, wells=P.wells,
-                                   decals=False)
+                                   decals=False, towns=P.town_faces)
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)
@@ -1058,7 +1065,8 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
     g = _frame_grader(tile.frame)
     walks_raw = []
     P = _tile_parts(mark, tile.frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                    country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw)
+                    country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw,
+                    out_dir=out_dir, vfs_dir=vfs_dir)
     P.walks_raw = walks_raw
     path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
     mark("write")
@@ -1074,6 +1082,9 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
                     if name.endswith(".json"):
                         data = data.decode("utf-8").replace(f"{vfs_dir}/", "@V@/").encode("utf-8")
                     blobs[name] = data
+            for name, p in _town_face_files(out_dir, vfs_dir, names["json"]):     # (its town signs' faces too)
+                with open(p, "rb") as fh:
+                    blobs[name] = fh.read()
             s, w, nn, e = geotiles.info(gx, gy)[2:]
             wh = revisit.where(*geotiles.centre(gx, gy), s, w, nn, e,
                                revisit.sig(buildings=bool(buildings), gas_stations=bool(gas_stations),
@@ -1369,6 +1380,37 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         return out
     finally:
         watch.cancel()
+
+
+TOWNS_MARGIN_M = 400.0      # m around a road tile whose communes its town signs read (a road's state is read along it)
+
+
+def town_signs(frame, tx, ty, out_dir, vfs_dir, faces):
+    """roads.build_tile's towns for a road tile here (townsigns.Towns.maker, the process's own Towns: each commune's
+    agglomeration made once), or None when the town signs are off (BNE_TOWNSIGNS) or there is no land cover."""
+    if not townsignsmod.ON or _s.md is None or _s.surface is None:
+        return None
+    if getattr(_s, "towns", None) is None:
+        _s.towns = townsignsmod.Towns(_s.md, _s.surface)
+    import roads as roadsmod
+    return _s.towns.maker(frame, roadsmod.cells_of_tile(frame, tx, ty, TOWNS_MARGIN_M), out_dir, vfs_dir, faces)
+
+
+def _town_face_files(out_dir, vfs_dir, json_name):
+    """[(file name, path)] of the town signs' faces (townsigns.write_face's .png and .dae) a written tile's JSON names:
+    a geotile's content kept in the revisit cache keeps them with it (a later session's folder has none)."""
+    import revisit
+    try:
+        with open(os.path.join(out_dir, json_name), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    out = []
+    for name in revisit.shapes_in(text, vfs_dir):
+        p = os.path.join(out_dir, name)
+        if name.startswith("town") and os.path.exists(p):
+            out.append((name, p))
+    return out
 
 
 def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, ty, decks=()):

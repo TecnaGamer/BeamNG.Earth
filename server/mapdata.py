@@ -94,14 +94,30 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # (osmtags osm_highway, construction/proposed roads left out, GitHub #184: only cells fetched after it; the cached
 # ones get it with the next Overture release bump, not a roads 7 here: every player's roads fetched again)
 # roads 7: a way without lanes takes the same-named way's (osmtags.join); one-way ends at their own lane (oneway_joins)
-LAYER_VERSIONS = {"roads": 7}
+# divisions 2: Switzerland's, Portugal's and others' communes not simplified (overture.COUNTY_COMMUNES); Friulian,
+# Sardinian and Frisian names (overture.REGIONAL_LANGS)
+# divisions 4, division_points 3: the Latin forms of Cyrillic and Greek names (overture.LATIN_COLS); Latvia's regions
+# divisions 5: Norway's and Iceland's counties not simplified (overture.COUNTY_COMMUNES)
+# divisions 6: Albania's and Kosovo's too; the regions of Montenegro, Andorra, Liechtenstein and San Marino
+# divisions 7: Belarus' counties (its cities) too
+# divisions 8, division_points 4: Welsh, Scottish Gaelic and Irish names; Ireland's, Cyprus' and Monaco's regions
+# divisions 9: the Caribbean islands' parishes and Puerto Rico's municipios (their regions)
+# divisions 10: Libya's, Djibouti's, the Seychelles' and Mayotte's regions
+# divisions 11: Bhutan's, the Maldives', North Korea's, the Solomons', Samoa's, Guam's and Vietnam's regions
+# divisions 12: the Isle of Man's, Jersey's, Greenland's, Bermuda's, the Caymans', the British Virgin Islands', the
+# Turks and Caicos' and Palau's regions
+# divisions 13: Anguilla's, Bonaire's, Norfolk Island's and Gibraltar's own areas; 14: Pitcairn's; 15: Christmas
+# Island's shire; 16: Montserrat's, Wallis and Futuna's and the Marshall Islands' regions
+LAYER_VERSIONS = {"roads": 7, "divisions": 16, "division_points": 4}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
-VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places")
+VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
+                 "divisions", "division_points")
 RASTER_LAYERS = ("landcover", "canopy")
-OPTIONAL_LAYERS = ("building_parts", "places")   # built only when asked for by name (buildings.py, gasstations.py)
+# built only when asked for by name (buildings.py, gasstations.py, townsigns.py)
+OPTIONAL_LAYERS = ("building_parts", "places", "divisions", "division_points")
 LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LAYERS
 ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")

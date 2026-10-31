@@ -649,6 +649,31 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
                          ("convenience_store", "convenience_store", "Q7492551", "Sheetz", "Sheetz", "open", "meta"))
         self.assertAlmostEqual(float(p.attrs["confidence"][0]), 0.92, places=5)
 
+    def test_divisions_layer_reads_the_communes_and_counties(self):
+        """Overture divisions (an optional layer: the town entry signs, 2026-10-28): the land communes, whole (not
+        cut at the cell's edge), with their names and their names in France's regional languages, and the county
+        around them, its outline simplified; the region and a maritime part are left out."""
+        self.assertNotIn("divisions", mapdata.LAYERS)
+        md, t = self.mapdata()
+        d = md.cell(mf.CELL, ("divisions",)).layers["divisions"]
+        self.assertEqual(list(d.ids), ["div-county", "div-east", "div-west"])
+        self.assertEqual(d.kind.tolist(), [mg.POLYGON] * 3)
+        self.assertEqual([str(v) for v in d.attrs["name"]], ["Gard", "Est", "Ouest"])
+        self.assertEqual([str(v) for v in d.attrs["subtype"]], ["county", "locality", "locality"])
+        self.assertEqual([str(v) for v in d.attrs["name_oc"]], ["", "", "Oèst"])
+        self.assertEqual([str(v) for v in d.attrs["name_ca"]], ["", "", "Oest"])
+        # (the English name read for a Cyrillic or Greek name's Latin form only: townsigns.latin_name)
+        self.assertEqual([str(v) for v in d.attrs["name_en"]], ["", "", "West"])
+        self.assertEqual({str(v) for v in d.attrs["country"]}, {"FR"})
+        self.assertFalse(d.clipped.any())
+        county = d.parts(0)[0][0]
+        self.assertLess(len(county), 100, "the county's thousand vertices simplified")
+        self.assertTrue(np.array_equal(county[0], county[-1]), "its ring still closed")
+        west = d.parts(2)[0][0]
+        lon0, _, lon1, _ = mf.CELL.bounds()
+        self.assertEqual(len(west), 5, "a commune's outline as it is")
+        self.assertLess(float(west[:, 0].min()), lon0, "the west commune reaches past the cell, whole")
+
     def test_build_owned_covers_every_feature_once(self):
         """'Build the owned features of every cell' builds each whole feature once and every piece
         of a clipped polygon once: the park (3 x 3 cells) and the harbour (2 x 2) come out whole,

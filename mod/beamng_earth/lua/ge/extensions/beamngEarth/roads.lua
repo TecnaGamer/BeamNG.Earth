@@ -589,6 +589,10 @@ local function geoRows(key, t, data, replacing)
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     -- (at a rebase trees.lua places its own geotiles: trees.transform)
     if not replacing then
+      -- the town signs' faces: their Materials and shapes first (townsigns.lua)
+      if type(data.townsigns) == 'table' then
+        require('beamngEarth/townsigns').register(require('beamngEarth/trees'), data.townsigns)
+      end
       require('beamngEarth/trees').onGeoRows('p' .. t.gkey, t.gkey, data.props.items, data.props.groups, nil,
         t.frame, t.rowPivot or 0, t.anchorObj)
     end
@@ -977,6 +981,11 @@ function M.onTile(msg, currentAnchor, a)
     for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
   end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
+    if type(data.townsigns) == 'table' then   -- the town signs' faces: their Materials and shapes first (townsigns.lua)
+      local townsigns, trees = require('beamngEarth/townsigns'), require('beamngEarth/trees')
+      townsigns.register(trees, data.townsigns)
+      townsigns.addSigns(trees, msg.anchorId, data.props.items, data.props.groups)   -- (the trees in front: hidden)
+    end
     require('beamngEarth/trees').onRows(msg.anchorId, 'p' .. tostring(msg.key), data.props.items, data.props.groups)
     require('beamngEarth/nightlights').onRows(key, data.props.items, data.props.groups)   -- (the lamps' light)
     tiles[key].props = true

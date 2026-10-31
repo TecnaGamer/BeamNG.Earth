@@ -15,6 +15,7 @@ local geotile = require('beamngEarth/geotile')
 -- collision (probe 2026-10-17), so a moved tile that must collide (within SOLID_M) has its items made again at the
 -- new placement first (flush), and only those: the far ones never collide.
 M.geoMoved, M.geoFlushed = 0, 0
+local townsigns = require('beamngEarth/townsigns')      -- the town signs' faces (their groups come with the tiles)
 
 M.PER_FRAME = 250       -- items made or removed per frame at most
 M.ROWS_PER_FRAME = 12000 -- rows of changing tiles looked at per frame at most (Lua time: 30000 averaged 2.5 ms)
@@ -558,9 +559,9 @@ local function shapeOf(t, i)
   return s, sc
 end
 
--- group: a sign's group (vienna_convention_speed_signs.lua) also makes a second item at the same spot and scale, its
--- body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is shared by every
--- sign, spelled in the tile's variant like the rest, so its population is split.
+-- group: a sign's group (vienna_convention_speed_signs.lua, townsigns.lua) also makes a second item at the same spot
+-- and scale, its body, and takes the collision. Only the first shape is counted in pop (allow's budget): the body is
+-- shared by every sign, spelled in the tile's variant like the rest, so its population is split.
 -- One matrix and two vectors for every item made (from Madderose's PR #41): createNewItem copies the transform into
 -- the item, as the stock foliage scatter tool relies on (editor/toolUtilities/foliageScatter.lua reuses its pose and
 -- vectors for every item it plants). A new MatrixF and two to five vec3 an item were garbage for the Lua collector,
@@ -568,7 +569,7 @@ end
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
-  local d = itemType(shape, vienna.faceSolid(group, solid))
+  local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)))
   if not d then M.errors = M.errors + 1; return nil end
   if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
   local m = itemMat
@@ -605,7 +606,7 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   end
   local ok, it = pcall(function() return fd:createNewItem(d, m, sc) end)
   if not ok then M.errors = M.errors + 1; return nil end
-  local body = vienna.body(group)
+  local body = vienna.body(group) or townsigns.body(group)
   if body then
     local pair = vienna.addBody(fd, it, spelled(body, variant), m, sc, solid, itemType)
     if pair then it = pair else M.errors = M.errors + 1 end
@@ -781,11 +782,29 @@ end
 M.tileThreshold = tileThreshold
 
 -- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh() re-runs every tile's rows
--- after it changes.
+-- after it changes. M.hiders[name](group, x, y, anchor) -> true hides one too, for the other modules that need it
+-- (townsigns.lua: the trees in front of a town sign), each under its own name; M.refreshNear re-runs the rows of the
+-- tiles near a spot that changed.
 M.suppress = nil
+M.hiders = {}
+local function hidden(g, x, y, anchor)
+  if M.suppress and M.suppress(g, x, y) then return true end
+  for _, fn in pairs(M.hiders) do
+    if fn(g, x, y, anchor) then return true end
+  end
+  return false
+end
 function M.refresh()
   for _, t in pairs(tiles) do t.pending, t.scan = true, nil end      -- (every row again: an interrupted pass too)
   dirty = true
+end
+-- The anchor's tiles (256 m squares) that reach within r (m) of (x, y): their rows looked at again.
+function M.refreshNear(anchor, x, y, r)
+  for _, t in pairs(tiles) do
+    if t.anchor == anchor and math.abs(t.cx - x) <= 128 + r and math.abs(t.cy - y) <= 128 + r then
+      t.pending, t.scan = true, nil
+    end
+  end
 end
 
 -- Which of the capped groups a tile at distance d still shows (changes re-run its rows).
@@ -1081,8 +1100,9 @@ function M.update(anchorId, player, view, frameMs)
           r = 2
           if not M.unknownGroups[g] then M.unknownGroups[g] = true; log('W', 'beamngEarth.trees', 'no shapes for group ' .. g) end
         end
-        -- an item something else stands in for (navgraph.lua's switchable signal heads)
-        if g and M.suppress and M.suppress(g, f[b + F_X], f[b + F_Y]) then r = 2 end
+        -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
+        -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
+        if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
         if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i)

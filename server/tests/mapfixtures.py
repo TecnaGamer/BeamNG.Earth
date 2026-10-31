@@ -13,6 +13,7 @@ Everything a cell of the map-data pipeline reads, generated deterministically at
 Pixel values follow formulas (worldcover_class, canopy_value) so tests can check any window.
 """
 import json
+import math
 import os
 import re
 import struct
@@ -205,6 +206,11 @@ PLACE_SCHEMA = """id VARCHAR, version INTEGER, names STRUCT("primary" VARCHAR), 
     taxonomy STRUCT("primary" VARCHAR), brand STRUCT(wikidata VARCHAR, names STRUCT("primary" VARCHAR)),
     sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[], operating_status VARCHAR,
     confidence DOUBLE"""
+DIV_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR,
+    names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR),
+                 rules STRUCT(variant VARCHAR, language VARCHAR, value VARCHAR)[]),
+    sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[], country VARCHAR,
+    region VARCHAR, division_id VARCHAR"""
 SCHEMAS = {
     ("transportation", "segment"): SEG_SCHEMA,
     ("transportation", "connector"): CON_SCHEMA,
@@ -213,6 +219,7 @@ SCHEMAS = {
     ("base", "land_use"): BASE_SCHEMA + ", surface VARCHAR, elevation INTEGER",
     ("base", "infrastructure"): BASE_SCHEMA + ", height DOUBLE, surface VARCHAR",
     ("places", "place"): PLACE_SCHEMA,
+    ("divisions", "division_area"): DIV_SCHEMA,
 }
 OSM = {"property": "", "dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "w1@1"}
 MSFT_H = {"property": "/properties/height", "dataset": "Microsoft ML Buildings", "license": "ODbL-1.0",
@@ -299,9 +306,33 @@ def features():
                 taxonomy={"primary": "convenience_store"}, brand={"wikidata": "Q7492551", "names": {"primary": "Sheetz"}},
                 sources=[dict(OSM, dataset="meta", record_id="m1")], operating_status="open", confidence=0.92,
                 wkt="POINT({!r} {!r})".format(*_cell_xy(0.6, 0.3)))]
+    # two communes meeting in the middle of the cell (the town entry signs, 2026-10-28), one with names in other
+    # languages, the county around them (its outline a thousand vertices: simplified), and what the divisions layer's
+    # `where` leaves out: a commune's maritime part and the region
+    n = 1000
+    t = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    lon0, lat0, lon1, lat1 = CELL.bounds()
+    wavy = [(lon0 + (0.5 + (2.5 + 0.0001 * math.sin(40 * a)) * math.cos(a)) * (lon1 - lon0),
+             lat0 + (0.5 + 2.5 * math.sin(a)) * (lat1 - lat0)) for a in t]
+    div = [dict(id="div-west", version=1, subtype="locality", **{"class": "land"},
+                names={"primary": "Ouest", "common": {"oc": "Oèst", "ca": "Oest", "en": "West"}},
+                sources=[OSM], country="FR", region="FR-OCC", division_id="d-west",
+                wkt=_wkt_poly([_box(-0.5, -0.5, 0.5, 1.5)])),
+           dict(id="div-east", version=1, subtype="locality", **{"class": "land"}, names={"primary": "Est"},
+                sources=[OSM], country="FR", region="FR-OCC", division_id="d-east",
+                wkt=_wkt_poly([_box(0.5, -0.5, 1.5, 1.5)])),
+           dict(id="div-county", version=1, subtype="county", **{"class": "land"}, names={"primary": "Gard"},
+                sources=[OSM], country="FR", region="FR-OCC", division_id="d-county",
+                wkt=_wkt_poly([wavy + wavy[:1]])),
+           dict(id="div-region", version=1, subtype="region", **{"class": "land"}, names={"primary": "Occitanie"},
+                sources=[OSM], country="FR", region="FR-OCC", division_id="d-region",
+                wkt=_wkt_poly([_box(-3.0, -3.0, 4.0, 4.0)])),
+           dict(id="div-sea", version=1, subtype="locality", **{"class": "maritime"}, names={"primary": "Est"},
+                sources=[OSM], country="FR", region="FR-OCC", division_id="d-east",
+                wkt=_wkt_poly([_box(1.0, -0.5, 1.5, 1.5)]))]
     return {("transportation", "segment"): seg, ("transportation", "connector"): con,
             ("buildings", "building"): bld, ("base", "water"): wat, ("base", "land_use"): lu,
-            ("base", "infrastructure"): inf, ("places", "place"): pla}
+            ("base", "infrastructure"): inf, ("places", "place"): pla, ("divisions", "division_area"): div}
 
 
 def _coords(wkt):
@@ -325,6 +356,8 @@ def split_top(text):
 def _param(col, v):
     if col == "source_tags" and v is not None:        # a MAP parameter
         return {"key": list(v), "value": list(v.values())}
+    if col == "names" and v is not None and "common" in v:      # (the divisions' names in other languages: a MAP)
+        return dict(v, common={"key": list(v["common"]), "value": list(v["common"].values())})
     return v
 
 
