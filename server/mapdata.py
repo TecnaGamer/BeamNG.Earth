@@ -74,7 +74,7 @@ import xproc
 
 log = logging.getLogger("earthd.mapdata")
 
-LAYER_THREADS = 4               # layers of a cell built at once (each fetches through the shared limits)
+LAYER_THREADS = 12              # layers built at once, every cell and caller of the process (mostly waiting on downloads: 4 were a fresh place's first graded block's ~25 s queue, Ipswich 2026-10-30)
 OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at once (alongside their Overture roads)
 # (cell, layer)s built ahead at once by warm() (a fresh place's first road tile asked for ~70 of them one after another:
 # 56 s in Marseille, GitHub #241): half the CPUs, at most 8, and none on 8 or fewer: each is a DuckDB query and a
@@ -564,7 +564,13 @@ class MapData:
     _mirror_lock = threading.Lock()
 
     def _mirror_note(self, nbytes):
-        """Count what this process wrote; every MIRROR_MB / 8 of it, the mirror cut back to MIRROR_MB."""
+        """Count what this process wrote; every MIRROR_MB / 8 of it, the mirror cut back to MIRROR_MB. Only in the
+        server's own process: every worker process walked the whole mirror (~100k files) at its first write, several
+        at once on a first visit, on the server's few CPUs while the world loaded (2026-10-30); earthd prunes it at
+        its start too (prune_own_caches)."""
+        import multiprocessing
+        if multiprocessing.current_process().name != "MainProcess":
+            return
         with MapData._mirror_lock:
             MapData._mirror_written += nbytes
             now = time.monotonic()

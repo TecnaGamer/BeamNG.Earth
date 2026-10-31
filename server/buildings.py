@@ -2710,21 +2710,28 @@ def doors(items, lines, x0, y0, drives=None):
             continue
         ring = drawn_ring(spec) + np.array([x0, y0])
         best = None
+        # every wall's middle against every road segment at once (a wall at a time: ~6 numpy calls per wall), the same
+        # numbers: each wall's nearest segment k, the nearest point on it Q and its distance
+        nxt = np.concatenate((ring[1:], ring[:1]))
+        E = nxt - ring
+        MID = (ring + nxt) / 2
+        T = np.clip(((MID[:, None, :] - A[None]) * D[None]).sum(2) / L2[None], 0, 1)
+        Q = A[None] + T[..., None] * D[None]
+        DIST = np.hypot(*(Q - MID[:, None, :]).transpose(2, 0, 1))
+        K = DIST.argmin(1)
         for i in range(len(ring)):
-            a, b = ring[i], ring[(i + 1) % len(ring)]
-            e = b - a
+            a = ring[i]
+            e = E[i]
             Le = float(math.hypot(*e))
             if Le < 2.5:
                 continue
-            mid = (a + b) / 2
-            t = np.clip(((mid - A) * D).sum(1) / L2, 0, 1)
-            q = A + t[:, None] * D
-            dist = np.hypot(*(q - mid).T)
-            k = int(dist.argmin())
+            mid = MID[i]
+            dist = DIST[i]
+            k = int(K[i])
             if dist[k] > DOOR_ROAD_M:
                 continue
             out = np.array([e[1], -e[0]]) / Le
-            if float(np.dot(q[k] - mid, out)) <= 0:
+            if float(np.dot(Q[i, k] - mid, out)) <= 0:
                 continue                                 # the wall faces away from that road
             rank = (bool(SMINOR[k]) if storefront else False, float(dist[k]))
             if best is None or rank < best[0]:

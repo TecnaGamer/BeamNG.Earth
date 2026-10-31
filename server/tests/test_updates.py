@@ -12,7 +12,7 @@ class FakeNet:
     def __init__(self, body=None, err=None):
         self.body, self.err, self.urls = body, err, []
 
-    def get(self, url, kind="demand"):
+    def get(self, url, kind="demand", headers=None):
         self.urls.append((url, kind))
         if self.err:
             raise self.err
@@ -32,6 +32,34 @@ class UpdatesTest(unittest.TestCase):
         self.assertFalse(updates.newer("1.4.0-preview", "1.4.0-preview"))
         self.assertTrue(updates.newer("1.10.0", "1.9.3"), "numbers, not text")
         self.assertFalse(updates.newer("<html>404</html>", "1.0.0"), "not a version: no update")
+
+    def test_development_builds(self):
+        # the dev branch's pre-releases (v<VERSION>.dev.<n>): after their beta, before the next, in number order
+        self.assertTrue(updates.newer("1.7.2-beta.dev.1", "1.7.2-beta"))
+        self.assertTrue(updates.newer("1.7.2-beta.dev.10", "1.7.2-beta.dev.9"), "numbers, not text")
+        self.assertTrue(updates.newer("1.7.3-beta", "1.7.2-beta.dev.99"))
+        self.assertFalse(updates.newer("1.7.2-beta", "1.7.2-beta.dev.1"))
+        self.assertTrue(updates.is_dev("1.7.2-beta.dev.3"))
+        self.assertFalse(updates.is_dev("1.7.2-beta"))
+
+    def test_development_build_checks_the_prereleases(self):
+        import json
+        page = f"https://github.com/{updates.REPO}/releases/tag/"
+        rels = [{"tag_name": "v1.7.2-beta.dev.12", "html_url": page + "v1.7.2-beta.dev.12", "prerelease": True},
+                {"tag_name": "v1.7.3-beta.dev.2", "html_url": "https://evil.example/x", "prerelease": True},
+                {"tag_name": "v1.7.2-beta.dev.11", "html_url": page + "v1.7.2-beta.dev.11", "prerelease": True},
+                {"tag_name": "v1.8.0-beta", "html_url": page + "v1.8.0-beta", "draft": True},
+                {"tag_name": "v1.7.2-beta", "html_url": page + "v1.7.2-beta"}]
+        updates._releases[:] = [0.0, None]
+        net = FakeNet(json.dumps(rels))
+        r = updates.check("1.7.2-beta.dev.11", net)
+        self.assertEqual((r["latest"], r["url"], r["dev"]), ("1.7.2-beta.dev.12", page + "v1.7.2-beta.dev.12", True),
+                         "the newest of this project's pages, no draft")
+        self.assertEqual(net.urls[0][0], updates.RELEASES_API)
+        self.assertIsNone(updates.check("1.7.2-beta.dev.12", net), "up to date (the list kept: no second request)")
+        self.assertEqual(len(net.urls), 1)
+        updates._releases[:] = [0.0, None]
+        self.assertIsNone(updates.check("1.7.2-beta", FakeNet("1.7.2-beta")), "a beta asks VERSION on main as before")
 
     def test_check(self):
         net = FakeNet("1.5.0-preview\n")

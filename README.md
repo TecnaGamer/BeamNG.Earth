@@ -168,7 +168,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
   out to the real horizon, for the strongest PCs (it is never picked for you). The Graphics page's settings:
   - **Even frame pacing** (on): keeps the time between frames steady so the game's speed doesn't pulse while the
-    world loads around you; costs up to about a tenth of the frame rate, and stays off below 30 fps.
+    world loads around you; costs about a seventh of the frame rate while the world loads (a city drive: 81
+    fps against 94), and stays off below 30 fps.
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
@@ -233,6 +234,13 @@ double-click `run_server.bat` (Windows) or run `python3 install.py` (Linux). The
 
 **Updating:** the mod tells you in game when a newer version is on GitHub. Download the new file and run it (from
 the source: unzip it over the old folder and run the installer again).
+
+**Development builds (pre-releases):** every change pushed to the `dev` branch is built automatically and published
+as a GitHub **pre-release** named after the beta it follows, with a build number (for example
+`1.7.2-beta.dev.37`). They have the newest fixes and features, but they are **built from the development branch
+and not thoroughly tested**: expect bugs, and things may change or break from one build to the next. The beta
+releases are the tested ones. A development build says so in game, and its update check offers the next development
+build (or the next beta, if that is newer); a beta only ever offers betas.
 
 **Uninstalling:** delete the `beamng_earth` folder in `<BeamNG user folder>/current/mods/unpacked/` and the
 downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your home folder (`~/.cache/beamng-earth` on Linux,

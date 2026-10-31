@@ -10,6 +10,7 @@ mod ambience;
 mod power;
 mod underpass;
 mod coarseease;
+mod junctionsnap;
 mod tunnelcover;
 mod gradesep;
 mod lamps;
@@ -301,6 +302,28 @@ fn bc1_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) ->
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         let refs: Vec<(usize, usize, &[u8])> = data.iter().map(|(w, h, b)| (*w, *h, b.as_slice())).collect();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc1_encode(g, &refs)))
+            .unwrap_or_else(|_| Err("the GPU kernel panicked".to_string()))
+    }).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    Ok(out.iter().map(|b| PyBytes::new(py, b)).collect())
+}
+
+/// BC7 (mode 6) blocks of several RGBA images (a texture's mip levels: [(h, w, 4) uint8]) on the GPU (gpu.rs): one
+/// bytes object per image, as bc7_encode's (float32 maths: a few blocks can differ from it). RuntimeError: no GPU or
+/// it failed.
+#[pyfunction]
+fn bc7_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) -> PyResult<Vec<Bound<'py, PyBytes>>> {
+    let mut refs: Vec<(usize, usize, &[u8])> = Vec::with_capacity(imgs.len());
+    for a in &imgs {
+        let sh = a.as_array().shape().to_vec();
+        if sh[2] != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err("bc7_encode_gpu: (h, w, 4) images"));
+        }
+        let b = a.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("bc7_encode_gpu: contiguous images"))?;
+        refs.push((sh[1], sh[0], b));
+    }
+    let out = py.allow_threads(|| {
+        let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc7_encode(g, &refs)))
             .unwrap_or_else(|_| Err("the GPU kernel panicked".to_string()))
     }).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     Ok(out.iter().map(|b| PyBytes::new(py, b)).collect())
@@ -2214,93 +2237,155 @@ fn srgb_monotonic() -> bool {
 }
 
 /// mip_levels' levels (fartex.rs dds_levels calls it too); img (h, w, 3 or 4).
+/// Rows of out (row_len values each) filled by f(row, its values) on up to 8 threads in bands (each value from its own
+/// inputs only: the same numbers as one thread).
+fn par_rows<T: Send, F: Fn(usize, &mut [T]) + Sync>(out: &mut [T], row_len: usize, f: F) {
+    let rows = if row_len == 0 { 0 } else { out.len() / row_len };
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(rows.max(1));
+    if threads <= 1 || rows * row_len < 1 << 16 {
+        for (y, r) in out.chunks_mut(row_len.max(1)).enumerate() {
+            f(y, r);
+        }
+        return;
+    }
+    let per = rows.div_ceil(threads);
+    std::thread::scope(|sc| {
+        for (bi, band) in out.chunks_mut(per * row_len).enumerate() {
+            let f = &f;
+            sc.spawn(move || {
+                for (k, r) in band.chunks_mut(row_len).enumerate() {
+                    f(bi * per + k, r);
+                }
+            });
+        }
+    });
+}
+
 pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::ndarray::ArrayView1<f32>, sharpen: f32)
                               -> Vec<numpy::ndarray::Array3<u8>> {
     let nc = img.shape()[2];
     let (mut h, mut w) = (img.shape()[0], img.shape()[1]);
     let to_lin = |i: usize, v: u8| -> f32 { if i % nc < 3 { lut[v as usize] } else { v as f32 / 255.0f32 } };
-    let mut lin: Vec<f32> = match img.as_slice() {
-        Some(sl) => sl.iter().enumerate().map(|(i, &v)| to_lin(i, v)).collect(),
-        None => img.iter().enumerate().map(|(i, &v)| to_lin(i, v)).collect(),
+    let owned;
+    let src: &[u8] = match img.as_slice() {
+        Some(sl) => sl,
+        None => { owned = img.iter().copied().collect::<Vec<u8>>(); &owned }
     };
     let mut out = Vec::new();
+    let mut lin: Vec<f32>;
+    if h > 1 && w > 1 {
+        // level 1 from the bytes at once (the level-0 floats were 268 MB for a 4096² RGBA photo): the vertical then the
+        // horizontal averages, in that order, of the same floats
+        let (nh, nw) = (h / 2, w / 2);
+        let row0 = w * nc;
+        lin = vec![0f32; nh * nw * nc];
+        par_rows(&mut lin, nw * nc, |y, r| {
+            for x in 0..nw {
+                for c in 0..nc {
+                    let a = (2 * y) * row0 + (2 * x) * nc + c;
+                    let b = a + row0;
+                    let v0 = 0.5f32 * (to_lin(a, src[a]) + to_lin(b, src[b]));
+                    let v1 = 0.5f32 * (to_lin(a + nc, src[a + nc]) + to_lin(b + nc, src[b + nc]));
+                    r[x * nc + c] = 0.5f32 * (v0 + v1);
+                }
+            }
+        });
+        h = nh;
+        w = nw;
+        out.push(mip_finish(&lin, h, w, nc, sharpen));
+    } else {
+        lin = src.iter().enumerate().map(|(i, &v)| to_lin(i, v)).collect();
+    }
     while h.max(w) > 1 {
         let (mut nh, mut nw) = (h, w);
         if h > 1 {
             nh = h / 2;
             let mut nl = vec![0f32; nh * w * nc];
-            for y in 0..nh {
-                for x in 0..w * nc {
-                    nl[y * w * nc + x] = 0.5f32 * (lin[(2 * y) * w * nc + x] + lin[(2 * y + 1) * w * nc + x]);
+            let rl = w * nc;
+            par_rows(&mut nl, rl, |y, r| {
+                for x in 0..rl {
+                    r[x] = 0.5f32 * (lin[(2 * y) * rl + x] + lin[(2 * y + 1) * rl + x]);
                 }
-            }
+            });
             lin = nl;
         }
         if w > 1 {
             nw = w / 2;
             let mut nl = vec![0f32; nh * nw * nc];
-            for y in 0..nh {
+            par_rows(&mut nl, nw * nc, |y, r| {
                 for x in 0..nw {
                     for c in 0..nc {
-                        nl[(y * nw + x) * nc + c] =
-                            0.5f32 * (lin[(y * w + 2 * x) * nc + c] + lin[(y * w + 2 * x + 1) * nc + c]);
+                        r[x * nc + c] = 0.5f32 * (lin[(y * w + 2 * x) * nc + c] + lin[(y * w + 2 * x + 1) * nc + c]);
                     }
                 }
-            }
+            });
             lin = nl;
         }
         h = nh;
         w = nw;
-        let lev: Vec<f32> = if h.min(w) >= 4 && sharpen > 0.0 {
-            let at = |y: isize, x: isize, c: usize| -> f32 {
-                let yy = y.clamp(0, h as isize - 1) as usize;
-                let xx = x.clamp(0, w as isize - 1) as usize;
-                lin[(yy * w + xx) * nc + c]
-            };
-            let mut l2 = lin.clone();           // (alpha kept as averaged)
-            let row = w * nc;
-            // the interior: no clamping (the same sum, term by term)
-            for y in 1..h - 1 {
-                for x in 1..w - 1 {
-                    for c in 0..3 {
-                        let q = y * row + x * nc + c;
-                        let blur = (lin[q - row - nc] + lin[q - row] + lin[q - row + nc] + lin[q - nc] + lin[q]
-                            + lin[q + nc] + lin[q + row - nc] + lin[q + row] + lin[q + row + nc]) / 9.0f32;
-                        l2[q] = lin[q] + sharpen * (lin[q] - blur);
-                    }
-                }
-            }
-            for y in 0..h as isize {
-                for x in 0..w as isize {
-                    if y > 0 && y < h as isize - 1 && x > 0 && x < w as isize - 1 {
-                        continue;
-                    }
-                    for c in 0..3 {
-                        // the numpy sum's order: rows top to bottom, each left to right
-                        let blur = (at(y - 1, x - 1, c) + at(y - 1, x, c) + at(y - 1, x + 1, c) + at(y, x - 1, c)
-                            + at(y, x, c) + at(y, x + 1, c) + at(y + 1, x - 1, c) + at(y + 1, x, c)
-                            + at(y + 1, x + 1, c)) / 9.0f32;
-                        let v = at(y, x, c);
-                        l2[((y as usize) * w + x as usize) * nc + c] = v + sharpen * (v - blur);
-                    }
-                }
-            }
-            l2
-        } else {
-            lin.clone()
+        out.push(mip_finish(&lin, h, w, nc, sharpen));
+    }
+    out
+}
+
+/// A mip level's bytes from its (unsharpened) linear floats: sharpened (3 x 3 box, edge-padded) where both sides are
+/// >= 4, back to sRGB; the alpha as averaged.
+fn mip_finish(lin: &[f32], h: usize, w: usize, nc: usize, sharpen: f32) -> numpy::ndarray::Array3<u8> {
+    let lev: Vec<f32> = if h.min(w) >= 4 && sharpen > 0.0 {
+        let at = |y: isize, x: isize, c: usize| -> f32 {
+            let yy = y.clamp(0, h as isize - 1) as usize;
+            let xx = x.clamp(0, w as isize - 1) as usize;
+            lin[(yy * w + xx) * nc + c]
         };
-        let th = srgb_thresholds();
-        let bytes: Vec<u8> = lev.iter().enumerate().map(|(i, &v)| {
-            let c = v.clamp(0.0, 1.0);
-            if i % nc < 3 {
+        let mut l2 = lin.to_vec();           // (alpha kept as averaged)
+        let row = w * nc;
+        // the interior: no clamping (the same sum, term by term)
+        par_rows(&mut l2, row, |y, r| {
+            if y == 0 || y == h - 1 {
+                return;
+            }
+            for x in 1..w - 1 {
+                for c in 0..3 {
+                    let q = y * row + x * nc + c;
+                    let blur = (lin[q - row - nc] + lin[q - row] + lin[q - row + nc] + lin[q - nc] + lin[q]
+                        + lin[q + nc] + lin[q + row - nc] + lin[q + row] + lin[q + row + nc]) / 9.0f32;
+                    r[x * nc + c] = lin[q] + sharpen * (lin[q] - blur);
+                }
+            }
+        });
+        for y in 0..h as isize {
+            for x in 0..w as isize {
+                if y > 0 && y < h as isize - 1 && x > 0 && x < w as isize - 1 {
+                    continue;
+                }
+                for c in 0..3 {
+                    // the numpy sum's order: rows top to bottom, each left to right
+                    let blur = (at(y - 1, x - 1, c) + at(y - 1, x, c) + at(y - 1, x + 1, c) + at(y, x - 1, c)
+                        + at(y, x, c) + at(y, x + 1, c) + at(y + 1, x - 1, c) + at(y + 1, x, c)
+                        + at(y + 1, x + 1, c)) / 9.0f32;
+                    let v = at(y, x, c);
+                    l2[((y as usize) * w + x as usize) * nc + c] = v + sharpen * (v - blur);
+                }
+            }
+        }
+        l2
+    } else {
+        lin.to_vec()
+    };
+    let th = srgb_thresholds();
+    let mut bytes = vec![0u8; lev.len()];
+    par_rows(&mut bytes, w * nc, |y, r| {
+        for (k, b) in r.iter_mut().enumerate() {
+            let i = y * w * nc + k;
+            let c = lev[i].clamp(0.0, 1.0);
+            *b = if i % nc < 3 {
                 th.partition_point(|&t| t <= c) as u8      // the byte the formula gives (monotonic: thresholds)
             } else {
                 (c * 255.0f32 + 0.5f32) as u8
-            }
-        }).collect();
-        out.push(numpy::ndarray::Array3::from_shape_vec((h, w, nc), bytes).unwrap());
-    }
-    out
+            };
+        }
+    });
+    numpy::ndarray::Array3::from_shape_vec((h, w, nc), bytes).unwrap()
 }
 
 /// imagery.mip_arrays below level 0: the levels 1.. (uint8 [h, w, c], c 3 or 4) of a power-of-two image: linear-light
@@ -5093,6 +5178,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadgeom::curve_deck, m)?)?;
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
+    m.add_function(wrap_pyfunction!(junctionsnap::snap_junctions, m)?)?;
+    m.add_function(wrap_pyfunction!(bc7_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
@@ -5245,6 +5332,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
-    m.add("VERSION", 114)?;
+    m.add("VERSION", 116)?;
     Ok(())
 }

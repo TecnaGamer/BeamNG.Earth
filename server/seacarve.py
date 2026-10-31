@@ -21,6 +21,7 @@ import logging
 import math
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from collections import OrderedDict
 
@@ -252,6 +253,9 @@ def _cells_of(cx, cy):
     return out
 
 
+FETCH_THREADS = 8       # water cells fetched at once (water(), _build)
+
+
 class SeaCarver:
     """The water of the map-data cells near the player: the sea (level SEA_E) and lakes (each at its own
     level, measured from the DEM), with their floors carved from the shore."""
@@ -358,9 +362,13 @@ class SeaCarver:
         river = np.zeros((n, n), bool)
         lake = np.full((n, n), -1, np.int32)
         lake_ids = []
+        around = [(dx, dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dx, dy) != (0, 0)]
+        with ThreadPoolExecutor(FETCH_THREADS, thread_name_prefix="sea-water") as ex:     # (side by side)
+            got = dict(zip(around, ex.map(lambda d: self._water((mapcells.ZOOM, x + d[0], y + d[1])), around)))
+        got[(0, 0)] = own
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
-                f = own if (dx, dy) == (0, 0) else self._water((mapcells.ZOOM, x + dx, y + dy))
+                f = got[(dx, dy)]
                 if f is None:
                     continue
                 for i in self._sea_rows(f):
@@ -874,6 +882,14 @@ class SeaCarver:
         cx = np.floor(mx / CELL_PX).astype(np.int64)
         cy = np.floor(my / CELL_PX).astype(np.int64)
         later = []
+        if wait:
+            # the cells not at hand built side by side, their water cells fetched side by side first (one after
+            # another they were 4-20 s of a fresh place's first graded block: Norwich 2026-10-30)
+            need = [(int(kx), int(ky)) for kx, ky in _cells_of(cx, cy) if not self.ready(int(kx), int(ky))]
+            if len(need) > 1:
+                with ThreadPoolExecutor(min(len(need), FETCH_THREADS), thread_name_prefix="sea-cells") as ex:
+                    list(ex.map(lambda k: self._water((mapcells.ZOOM, k[0], k[1])), need))
+                    list(ex.map(lambda k: self.raster(*k), need))
         for kx, ky in _cells_of(cx, cy):
             sel = (cx == kx) & (cy == ky)
             if not wait and not self.ready(int(kx), int(ky)):

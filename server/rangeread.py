@@ -185,7 +185,10 @@ class RemoteFile:
         if self.fetcher.miss_alive(marker, self.urls[0]):
             raise Missing(f"{self.urls[0]}: not found (remembered)")
         err = None
-        for url in self.urls:
+        # the mirrors take turns by block (Overture's AWS and Azure copies: twice the connections the hosts allow one
+        # client), each one's failure asking the next
+        k = (i0 // MAX_RUN + i0) % len(self.urls)
+        for url in self.urls[k:] + self.urls[:k]:
             hd = {"Range": f"bytes={start}-{end - 1}"}
             if self.if_match:
                 hd["If-Match"] = self.if_match

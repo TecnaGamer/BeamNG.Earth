@@ -611,96 +611,31 @@ def road_rank(spec):
     return r - 1 if cls != base else r
 
 
-def _nearest_on(p, x, y):
-    """(distance, height, arc position from p's nearer end) of the point of Plan p's centreline nearest (x, y)."""
-    a, b = p.xy[:-1, :2], p.xy[1:, :2]
-    d = b - a
-    ll = np.maximum((d * d).sum(1), 1e-12)
-    t = np.clip(((x - a[:, 0]) * d[:, 0] + (y - a[:, 1]) * d[:, 1]) / ll, 0.0, 1.0)
-    q = a + d * t[:, None]
-    dist = np.hypot(q[:, 0] - x, q[:, 1] - y)
-    i = int(dist.argmin())
-    seg = np.sqrt(ll)
-    s = float(seg[:i].sum() + seg[i] * t[i])
-    return float(dist[i]), float(p.z[i] + (p.z[i + 1] - p.z[i]) * t[i]), min(s, float(seg.sum()) - s)
-
-
 def snap_junctions(plans, specs):
     """A side road's end at a junction takes the height of the road it joins, eased in over
     JUNCTION_TAPER_M along the side road (each road is smoothed on its own: a side road met the main road up to a metre
     off, blended over BLEND_R only: a bump at every turn-off). Plans are changed in place, the higher ranks first, so
-    a residential street joining a tertiary road meets it at its already adjusted height. plans: [Plan], specs:
-    their Specs."""
-    order = sorted(range(len(plans)), key=lambda j: -road_rank(specs[j]))
-    rank = np.array([road_rank(sp) for sp in specs])
-    boxes = np.array([q.bbox for q in plans], np.float64).reshape(-1, 4)
-    for j in order:
-        p = plans[j]
-        if len(p.xy) < 2:
-            continue
-        seg = np.hypot(*np.diff(p.xy[:, :2], axis=0).T)
-        s = np.r_[0.0, np.cumsum(seg)]
-        length = s[-1]
-        dz = np.zeros(len(p.z))
-        for end in (0, -1):
-            if p.abut[0 if end == 0 else 1]:
-                continue            # a bridge abutment's end: the deck's height (dev)
-            x, y = float(p.xy[end, 0]), float(p.xy[end, 1])
-            best = None
-            near = np.flatnonzero((rank >= rank[j]) & (boxes[:, 0] <= x) & (x <= boxes[:, 2]) & (boxes[:, 1] <= y)
-                                  & (y <= boxes[:, 3]))
-            for k in near:
-                if k == j:
-                    continue
-                q = plans[k]
-                dist, zq, from_end = _nearest_on(q, x, y)
-                if dist > q.road_half + JUNCTION_REACH_M:
-                    continue
-                if rank[k] == rank[j] and from_end < JUNCTION_END_M:
-                    continue        # the same class end to end: a road's continuation, not a junction
-                if best is None or dist < best[0]:
-                    best = (dist, zq)
-            if best is None:
-                continue
-            delta = best[1] - p.z[end]
-            if abs(delta) > JUNCTION_MAX_M:
-                continue            # a ramp up to an overpass, or bad data: as it was
-            taper = min(JUNCTION_TAPER_M, 0.5 * length)
-            u = (s if end == 0 else length - s) / max(taper, 1e-6)
-            dz += delta * np.where(u < 1.0, 0.5 * (1.0 + np.cos(np.pi * np.clip(u, 0.0, 1.0))), 0.0)
-        # crossings (GitHub #414, Perm: service roads crossing a primary at a shared node stood as 4-5 m walls across
-        # it): where this road runs over a higher-ranked road's carriageway away from its own ends, it takes that
-        # road's height there, eased in over JUNCTION_TAPER_M either side (with the coarse easing: BNE_COARSE_EASE=1)
-        for k in ([] if not COARSE_EASE_ON else np.flatnonzero((rank > rank[j]) & (boxes[:, 0] <= p.bbox[2]) & (boxes[:, 2] >= p.bbox[0])
-                                & (boxes[:, 1] <= p.bbox[3]) & (boxes[:, 3] >= p.bbox[1]))):
-            q = plans[k]
-            if len(q.xy) < 2:
-                continue
-            inner = np.flatnonzero((s > JUNCTION_END_M) & (s < length - JUNCTION_END_M))
-            if not len(inner):
-                continue
-            a, b = q.xy[:-1, :2], q.xy[1:, :2]
-            d = b - a
-            ll = np.maximum((d * d).sum(1), 1e-12)
-            P = p.xy[inner, :2]
-            t = np.clip(((P[:, None, 0] - a[None, :, 0]) * d[None, :, 0] + (P[:, None, 1] - a[None, :, 1]) * d[None, :, 1])
-                        / ll[None, :], 0.0, 1.0)
-            dist = np.hypot(a[None, :, 0] + t * d[None, :, 0] - P[:, None, 0], a[None, :, 1] + t * d[None, :, 1] - P[:, None, 1])
-            si = dist.argmin(1)
-            dmin = dist[np.arange(len(inner)), si]
-            hit = dmin <= q.road_half
-            if not hit.any():
-                continue
-            h = int(np.argmin(np.where(hit, dmin, np.inf)))       # the crossing point (nearest the other's line)
-            i_, sg = int(inner[h]), int(si[h])
-            zq = float(q.z[sg] + (q.z[sg + 1] - q.z[sg]) * t[h, sg])
-            delta = zq - (p.z[i_] + dz[i_])
-            if abs(delta) > JUNCTION_MAX_M or abs(delta) < 0.05:
-                continue
-            u = np.abs(s - s[i_]) / max(min(JUNCTION_TAPER_M, 0.5 * length), 1e-6)
-            dz += delta * np.where(u < 1.0, 0.5 * (1.0 + np.cos(np.pi * np.clip(u, 0.0, 1.0))), 0.0)
-        if dz.any():
-            p.z = p.z + dz
+    a residential street joining a tertiary road meets it at its already adjusted height. With the coarse easing
+    (BNE_COARSE_EASE=1) also the crossings (GitHub #414, Perm: service roads crossing a primary at a shared node stood
+    as 4-5 m walls across it): where a road runs over a higher-ranked road's carriageway away from its own ends, it takes
+    that road's height there. plans: [Plan], specs: their Specs. In Rust (earthfast.snap_junctions: 15 CPU-s of a
+    teleport's road plans in Python, 2026-10-30)."""
+    if not plans:
+        return
+    import fast
+    fast.require(115, "the junctions' heights")
+    n = [len(p.xy) for p in plans]
+    off = np.concatenate([[0], np.cumsum(n)]).astype(np.int64)
+    xy = np.ascontiguousarray(np.concatenate([np.asarray(p.xy, np.float64)[:, :2] for p in plans]).reshape(-1, 2))
+    z = np.ascontiguousarray(np.concatenate([np.asarray(p.z, np.float64) for p in plans]))
+    rank = np.array([road_rank(sp) for sp in specs], np.int64)
+    half = np.array([p.road_half for p in plans], np.float64)
+    abut = np.array([[bool(p.abut[0]), bool(p.abut[1])] for p in plans], np.uint8).reshape(-1, 2)
+    boxes = np.ascontiguousarray(np.array([q.bbox for q in plans], np.float64).reshape(-1, 4))
+    out, changed = fast._ef.snap_junctions(xy, z, off, rank, half, abut, boxes, JUNCTION_REACH_M, JUNCTION_END_M,
+                                           JUNCTION_TAPER_M, JUNCTION_MAX_M, bool(COARSE_EASE_ON))
+    for j in np.flatnonzero(changed):
+        plans[j].z = out[off[j]:off[j + 1]].copy()
 
 
 def shoulder(spec):
@@ -847,6 +782,15 @@ class _Planner:
 
     def _make_cell(self, key):
         """(plans, keeps, covers, opens) of cell key, or None when its roads could not be fetched."""
+        widths = getattr(self, "widths", None)
+        if widths is not None and hasattr(widths, "prefetch"):
+            # the cell's buildings (its roads' widths) fetched while its roads are: one after the other before
+            def walls():
+                try:
+                    widths.prefetch([key])
+                except Exception as e:
+                    log.debug("grading: walls of %s: %s: %s", key, type(e).__name__, e)
+            threading.Thread(target=walls, daemon=True, name="walls-ahead").start()
         try:
             feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
         except Exception as e:      # no road data: ungraded (asked again after RETRY_S)
@@ -2341,6 +2285,18 @@ class Grader:
                     continue
                 got.setdefault((fid_part, float(p.xy[0, 0]), float(p.xy[0, 1])), p)
         return [got[k] for k in sorted(got)]
+
+    def prepare(self, lat, lon):
+        """Plan the cells the points' area needs now (several at once, _Planner._plan_missing), returning when they are:
+        a block's builder starts it beside its own work (its sea floor waited on the water cells, then its grading on
+        the road cells: 4 + 9 s of a fresh place's first block, one after the other, Lincoln 2026-10-30)."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        for pl, idx in self.store.planners_of(lat, lon):
+            keys = pl._keys(lat[idx], lon[idx])
+            pl._plan_missing(keys)      # (two or more at once; one is planned here)
+            for k in keys:
+                pl._cell_plans(k)
 
     def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
         """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base."""

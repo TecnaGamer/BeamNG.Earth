@@ -3324,16 +3324,24 @@ def _blocker_segments(blockers):
     for last, arr in _BLOCKERS:         # one read of the tuple: another thread may replace it meanwhile
         if last is blockers and arr[3] == len(blockers):
             return arr[:3]
-    segs, starts, hws = [], [0], []
-    for line, hw in blockers:
-        line = np.asarray(line, np.float64)
-        if len(line) < 2:
-            continue
-        segs.append(np.hstack([line[:-1, :2], line[1:, :2]]))
-        starts.append(starts[-1] + len(line) - 1)
-        hws.append(float(hw))
-    arr = (np.ascontiguousarray(np.vstack(segs)) if segs else np.zeros((0, 4)), np.array(starts, np.int64),
-           np.array(hws, np.float64), len(blockers))
+    # every line's segments in one go (an hstack per line: a road's blockers are all the other roads near the tile,
+    # ~30k hstacks a 9-tile set, 2026-10-25)
+    lines = [np.asarray(line, np.float64) for line, _ in blockers]
+    keep = [k for k, line in enumerate(lines) if len(line) >= 2]
+    if keep:
+        n = np.array([len(lines[k]) for k in keep], np.int64)
+        pts = np.concatenate([lines[k][:, :2] for k in keep])
+        first = np.ones(len(pts), bool)
+        first[np.cumsum(n) - 1] = False         # a line's last point starts no segment
+        a = np.flatnonzero(first)
+        segs = np.empty((len(a), 4))
+        segs[:, :2] = pts[a]
+        segs[:, 2:] = pts[a + 1]
+        starts = np.concatenate((np.zeros(1, np.int64), np.cumsum(n - 1)))
+        hws = np.array([float(blockers[k][1]) for k in keep], np.float64)
+    else:
+        segs, starts, hws = np.zeros((0, 4)), np.zeros(1, np.int64), np.zeros(0, np.float64)
+    arr = (segs, starts, hws, len(blockers))
     _BLOCKERS = ((blockers, arr),) + _BLOCKERS[:3]
     return arr[:3]
 
@@ -7393,7 +7401,7 @@ class GeoTracker:
         reach = TILE / 2 * math.sqrt(2.0)
         out = set()
         for tx, ty in tiles_near(x, y, r):
-            ks = geotiles.tiles_near(frame, (tx + 0.5) * TILE, (ty + 0.5) * TILE, reach)
+            ks = geotiles.tiles_near(frame, (tx + 0.5) * TILE, (ty + 0.5) * TILE, reach, exact=True)
             if all(((a, b) in self.sent and (a, b) in self.skins) or (a, b) in self.retry for a, b, _ in ks):
                 out.add((tx, ty))
         return out
@@ -7502,6 +7510,12 @@ class GeoTracker:
                     along = ((cx - x) * vx + (cy - y) * vy) / s
                     if along < -TILE / 2:
                         d = d * SIDE_PENALTY + LEAD_MAX_M
+                    else:
+                        # (by the distance along the path, a tile off the corridor later by how far off it is: by
+                        # their plain distance the sides within SEND_M all came before the corridor beyond it, and
+                        # at 500 mph the car outran its road tiles, 0 m of them ahead, Indianapolis 2026-10-30)
+                        side = abs(((cx - x) * vy - (cy - y) * vx) / s)
+                        d = max(0.0, along) + max(0.0, side - CORRIDOR_M) * SIDE_PENALTY
                 return (0, d)
             if k in seen:
                 return (1, seen[k])

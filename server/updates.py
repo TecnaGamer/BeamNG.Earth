@@ -6,10 +6,17 @@ mod ('update' message), which says so once in game and on its settings page, wit
 
     newer("1.4.1-preview", "1.4.0-preview") -> True
     check(local_version, net) -> {"current", "latest", "url"} or None (up to date, offline, no VERSION there)
+
+Development builds (the user, 2026-10-30: "every push to dev would create a new pre-release"): the release workflow
+builds each push to the dev branch as the GitHub pre-release v<VERSION>.dev.<n> ("1.7.2-beta.dev.37": newer than
+1.7.2-beta, older than 1.7.3-beta). A copy that is one asks GitHub's releases list instead (pre-releases included),
+so it is told of the next development build or the next beta, whichever is newer.
 """
 import os
 import re
 import sys
+import threading
+import time
 
 import netfetch
 
@@ -33,12 +40,22 @@ def local_version(root=ROOT):
 
 def parse(v):
     """(major, minor, patch, release) of a version like "1.4.0-preview" ("-..." is a pre-release: below the same
-    numbers without it); None when it is not one."""
+    numbers without it; its dot-separated parts compared one by one, numbers as numbers, as semver: "beta" <
+    "beta.dev.9" < "beta.dev.10"); None when it is not one."""
     m = re.fullmatch(r"\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?\s*", str(v or ""))
     if not m:
         return None
     nums = tuple(int(g or 0) for g in m.groups()[:3])
-    return nums + ((0, m.group(4)) if m.group(4) else (1, ""),)
+    if not m.group(4):
+        return nums + ((1, ()),)
+    ids = tuple((0, int(x), "") if x.isdigit() else (1, 0, x) for x in m.group(4).split("."))
+    return nums + ((0, ids),)
+
+
+def is_dev(v):
+    """Is version v a development build (a pre-release of the dev branch: "...dev.<n>")?"""
+    p = parse(v)
+    return p is not None and any(i[2] == "dev" for i in p[3][1])
 
 
 def newer(latest, current):
@@ -52,6 +69,11 @@ def check(current, net=None):
     if not current:
         return None
     net = net if net is not None else netfetch.default_fetcher()
+    if is_dev(current):
+        rel = newest_release(net)
+        if rel is None or not newer(rel[0], current):
+            return None
+        return {"current": current, "latest": rel[0], "url": rel[1], "dev": is_dev(rel[0])}
     try:
         latest = net.get(VERSION_URL, kind="background").body.decode("utf-8", "replace").strip()
     except (netfetch.FetchError, OSError):
@@ -59,6 +81,45 @@ def check(current, net=None):
     if not newer(latest, current):
         return None
     return {"current": current, "latest": latest, "url": PAGE_URL}
+
+
+RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
+RELEASES_TTL_S = 3 * 3600.0     # the releases list kept this long (api.github.com: a few requests a day, netfetch)
+_releases = [0.0, None]
+_releases_lock = threading.Lock()
+
+
+def releases(net, fresh=False):
+    """GitHub's releases of the project (newest first, pre-releases included, drafts not), kept RELEASES_TTL_S; None
+    when GitHub did not answer."""
+    import json
+    with _releases_lock:
+        if not fresh and _releases[1] is not None and time.monotonic() - _releases[0] < RELEASES_TTL_S:
+            return _releases[1]
+    try:
+        r = net.get(RELEASES_API, kind="demand", headers={"Accept": "application/vnd.github+json"})
+        got = json.loads(r.body.decode("utf-8", "replace"))
+    except (netfetch.FetchError, OSError, ValueError):
+        return None
+    if not isinstance(got, list):
+        return None
+    got = [x for x in got if isinstance(x, dict) and not x.get("draft")]
+    with _releases_lock:
+        _releases[:] = [time.monotonic(), got]
+    return got
+
+
+def newest_release(net, fresh=False):
+    """(version, page url, release) of the newest release or pre-release on GitHub, or None."""
+    best = None
+    for x in releases(net, fresh) or ():
+        v = str(x.get("tag_name") or "").lstrip("v")
+        url = str(x.get("html_url") or "")
+        if parse(v) is None or not url.startswith(f"https://github.com/{REPO}/"):
+            continue
+        if best is None or newer(v, best[0]):
+            best = (v, url, x)
+    return best
 
 
 # The mod's update notice asks the server to open the releases page: the game's openWebBrowser does nothing in the

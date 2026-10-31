@@ -247,7 +247,37 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
   if M.centreAhead(px, py, vx, vy, cx, cy) then return nil end
   local tx, ty = M.target(px, py, vx, vy)
   if tx == cx and ty == cy then return nil end -- heading back towards the centre: nothing to gain
+  local r = M.preferReady(px, py, vx, vy, tx, ty, cx, cy, reach)
+  if r then return 'prepare', r[1], r[2] end
   return 'prepare', tx, ty
+end
+
+-- Blocks the server has built already ('terrain_ready_set': its cache round the player, prefetched): { ["cx_cy"] = {cx,
+-- cy} }. A request may take one of them instead of its own target (M.preferReady): at 500 mph the server's guess of the
+-- next request missed by a grid step or two half the time, and the block asked for was built from scratch (the game
+-- held the car for its ground, Indianapolis 2026-10-30).
+M.ready = {}
+M.READY_STEPS = 2       -- grid steps a ready block may be from the target (Chebyshev)
+function M.setReady(list)
+  local r = {}
+  for _, c in ipairs(list or {}) do
+    if type(c) == 'table' and tonumber(c[1]) and tonumber(c[2]) then r[c[1] .. '_' .. c[2]] = { tonumber(c[1]), tonumber(c[2]) } end
+  end
+  M.ready = r
+end
+-- Pure (but for M.ready): the ready centre to ask for instead of the target (tx, ty), or nil: within READY_STEPS grid
+-- steps of it, keeping the player within reach, not the current centre; the nearest to the target, then the one
+-- furthest along the way the player goes.
+function M.preferReady(px, py, vx, vy, tx, ty, cx, cy, reach)
+  local best, bd, ba = nil, math.huge, -math.huge
+  for _, c in pairs(M.ready) do
+    local d = M.cheb(c[1], c[2], tx, ty)
+    if d <= M.READY_STEPS * M.GRID and M.cheb(px, py, c[1], c[2]) <= reach and not (c[1] == cx and c[2] == cy) then
+      local along = (c[1] - px) * (vx or 0) + (c[2] - py) * (vy or 0)
+      if d < bd or (d == bd and along > ba) then best, bd, ba = c, d, along end
+    end
+  end
+  return best
 end
 
 -- Distances for the UI: to the prepare threshold and to the commit threshold (<= 0 = passed).

@@ -12,7 +12,7 @@ local M = {}
 
 M.WINDOW = 120          -- frames the target is taken over (~1-2 s)
 M.EVERY = 30            -- frames between recomputes
-M.PERCENTILE = 0.80
+M.PERCENTILE = 0.70     -- (0.80 held a city drive to 70.6 fps against 93.6 unpaced on a desktop, 2026-10-30)
 M.TARGET_ALPHA = 0.25
 M.MIN_MS, M.MAX_MS = 4.0, 33.4  -- the target's range (no pacing at all when the frames run slower than 30 fps)
 M.MIN_WAIT_MS = 0.3     -- a shorter wait is not done

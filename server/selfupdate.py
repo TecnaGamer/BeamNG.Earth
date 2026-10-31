@@ -2,7 +2,8 @@
 
 The in-game update notice (core.lua) has an "Update now" button for the packaged app (the Windows .exe, the Linux
 AppImage). The server then downloads that platform's file of GitHub's latest release next to the running one, under
-its own release name (BeamNG.Earth-<version>.exe / -x86_64.AppImage), checks it against the SHA-256 digest GitHub
+its own release name (BeamNG.Earth-<version>.exe / -x86_64.AppImage; a development build: the newest release or
+pre-release, updates.newest_release), checks it against the SHA-256 digest GitHub
 publishes for the release asset, and notes it in STAGED beside it. The running copy is left alone (Windows cannot
 replace a running .exe): the next time the old copy starts, the launcher hands over to the new file (staged()).
 
@@ -95,10 +96,16 @@ def download(net, current, path=None, progress=None):
     suffix = asset_suffix(path)
     if not suffix:
         raise UpdateError(f"not a packaged BeamNG.Earth file: {os.path.basename(path)}")
-    try:
-        release = _get_json(net, API_URL)
-    except (netfetch.FetchError, OSError, ValueError) as e:
-        raise UpdateError(f"GitHub did not answer ({e})") from e
+    if updates.is_dev(current):         # a development build: the newest release or pre-release (updates.py)
+        got = updates.newest_release(net, fresh=True)
+        if got is None:
+            raise UpdateError("GitHub did not answer")
+        release = got[2]
+    else:
+        try:
+            release = _get_json(net, API_URL)
+        except (netfetch.FetchError, OSError, ValueError) as e:
+            raise UpdateError(f"GitHub did not answer ({e})") from e
     got = pick(release, suffix)
     if got is None:
         raise UpdateError("the latest release has no download for this system")

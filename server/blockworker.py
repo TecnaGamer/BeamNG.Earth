@@ -251,6 +251,26 @@ def _warm_loop():
                 _s.want = [w for w in _s.want if w[1] != job[1]]
 
 
+
+def plan_ahead(g, frame, cx, cy, half):
+    """A thread planning the block's road cells (grading.Grader.prepare) while the block's builder samples its ground
+    and sea floor; None without a grader."""
+    if g is None or not hasattr(g, "prepare"):
+        return None
+    xs = cx + np.linspace(-half, half, 5)
+    ys = cy + np.linspace(-half, half, 5)
+    X, Y = np.meshgrid(xs, ys)
+    la, lo, _ = frame.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+
+    def run():
+        try:
+            g.prepare(np.asarray(la), np.asarray(lo))
+        except Exception as e:      # the builder plans them itself then
+            log.debug("plans ahead of block (%s, %s): %s: %s", cx, cy, type(e).__name__, e)
+    t = threading.Thread(target=run, daemon=True, name="block-plans")
+    t.start()
+    return t
+
 def ground(frame, la, lo, z):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
     the sea floor carved in (--sea on)."""
@@ -279,9 +299,15 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     frame = geodesy.EnuFrame(lat, lon)
     keep = {}
     grade_s = [0.0]
+    part_s = {"dem": 0.0, "sea": 0.0, "tunnels": 0.0}  # (the rest of "heights": the stages' log, 2026-10-30)
 
     def elev(la, lo):
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, hm_zoom))
+        t1 = time.perf_counter()
+        z = _s.dem.sample(la, lo, hm_zoom)
+        t2 = time.perf_counter()
+        z = ground(frame, la, lo, z)
+        part_s["dem"] += t2 - t1
+        part_s["sea"] += time.perf_counter() - t2
         if g is None:
             return z
         t1 = time.perf_counter()
@@ -289,10 +315,13 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         grade_s[0] += time.perf_counter() - t1
         return z
     import roads as roadsmod
+    plan_ahead(g, frame, cx, cy, size * heightmap.SQUARE / 2)
     raw = lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, hm_zoom))     # noqa: E731
     gen = elev
     if ter_name is not None and getattr(_s, "md", None) is not None:
+        t1 = time.perf_counter()
         tun = tunnel_profiles(aid, frame, elev, g)
+        part_s["tunnels"] += time.perf_counter() - t1
         half = size * heightmap.SQUARE / 2
         cell_fn = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
 
@@ -301,7 +330,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
                                              (cx - half, cy - half, cx + half, cy + half))
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
                               chunks=chunks)
-    stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0]}
+    stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s}
     idx = None
     if _s.surface is not None:
         t1 = time.perf_counter()
@@ -908,7 +937,11 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
     import pickle
     import roads as roadsmod
     names = geo_names(tile.key)
-    tmpdir = os.path.join(out_dir, f".rg_{tile.key}_{os.getpid()}_{threading.get_ident()}")
+    # (written aside in the staging folder, outside the game's user folder: in the session folder each of its files was
+    # created, written and deleted under the game's file watcher, "Handle error ... .rg_g17_..." in its log)
+    import staging
+    aside = staging.staging_dir(os.path.join(out_dir, "x")) or out_dir
+    tmpdir = os.path.join(aside, f".rg_{tile.key}_{os.getpid()}_{threading.get_ident()}")
     os.makedirs(tmpdir, exist_ok=True)
     try:
         # (roads.write_tile writes the shapes and the rows; its names are the anchor tile's: written aside, renamed)

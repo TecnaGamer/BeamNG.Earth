@@ -21,6 +21,7 @@ as the server, sys.executable --server) are made for one download to run.
 import argparse
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -57,12 +58,15 @@ def make_icons(work):
 
 
 def win_version(ver):
-    """'1.4.35-beta' -> (1, 4, 35, 0): the four numbers of a Windows version resource."""
+    """'1.4.35-beta' -> (1, 4, 35, 0): the four numbers of a Windows version resource (a development build's number
+    the fourth: '1.7.2-beta.dev.37' -> (1, 7, 2, 37))."""
     nums = []
-    for part in ver.split("-")[0].split(".")[:4]:
+    for part in ver.split("-")[0].split(".")[:3]:
         digits = "".join(c for c in part if c.isdigit())
         nums.append(min(int(digits or 0), 65535))
-    return tuple(nums + [0] * (4 - len(nums)))
+    nums += [0] * (3 - len(nums))
+    m = re.search(r"\.dev\.(\d+)$", ver)
+    return tuple(nums + [min(int(m.group(1)), 65535) if m else 0])
 
 
 def version_files(work, ver):

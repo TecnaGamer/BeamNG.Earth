@@ -542,28 +542,51 @@ fn bc1_pipe(gpu: &Gpu) -> &'static Bc1Pipe {
 
 /// BC1 blocks of several RGB images at once (each (w, h, rgb bytes)): their blocks' bytes, one Vec per image.
 pub fn bc1_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u8>>, String> {
-    let d = &gpu.device;
-    let mut levels: Vec<[u32; 8]> = Vec::new();
-    let mut pix: Vec<u32> = Vec::new();
-    let mut nblk = 0u32;
+    let mut texels: Vec<(usize, usize, Vec<u8>)> = Vec::with_capacity(imgs.len());
     for &(w, h, rgb) in imgs {
         if rgb.len() != w * h * 3 || w == 0 || h == 0 {
             return Err("bc1_encode: bad image".into());
         }
+        texels.push((w, h, rgb.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 0]).collect()));
+    }
+    let refs: Vec<(usize, usize, &[u8])> = texels.iter().map(|(w, h, b)| (*w, *h, b.as_slice())).collect();
+    let p = bc1_pipe(gpu);
+    encode_blocks(gpu, &p.layout, &p.pipe, &refs, 2)
+}
+
+/// BC7 (mode 6) blocks of several RGBA images at once (each (w, h, rgba bytes)), one Vec per image: bc7_encode's
+/// (lib.rs bc7_block) in float32 (a few blocks can differ from it).
+pub fn bc7_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u8>>, String> {
+    for &(w, h, rgba) in imgs {
+        if rgba.len() != w * h * 4 || w == 0 || h == 0 {
+            return Err("bc7_encode: bad image".into());
+        }
+    }
+    let p = bc7_pipe(gpu);
+    encode_blocks(gpu, &p.layout, &p.pipe, imgs, 4)     // (RGBA8 bytes are the shader's packed u32 texels)
+}
+
+/// One dispatch of a block encoder over the images' 4 x 4 blocks (texels packed RGBA8 in u32): wpb u32 words a block.
+fn encode_blocks(gpu: &Gpu, layout: &wgpu::BindGroupLayout, pipe: &wgpu::ComputePipeline,
+                 imgs: &[(usize, usize, &[u8])], wpb: u64) -> Result<Vec<Vec<u8>>, String> {
+    let d = &gpu.device;
+    let mut levels: Vec<[u32; 8]> = Vec::new();
+    let mut pix: Vec<u8> = Vec::with_capacity(imgs.iter().map(|(_, _, t)| t.len()).sum());
+    let mut nblk = 0u32;
+    for (w, h, t) in imgs {          // (texels: 4 bytes each, RGBA8 = a little-endian u32)
         let (nbx, nby) = (w.div_ceil(4) as u32, h.div_ceil(4) as u32);
-        levels.push([w as u32, h as u32, pix.len() as u32, nbx, nblk, nbx * nby, 0, 0]);
-        pix.extend(rgb.chunks_exact(3).map(|c| c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16));
+        levels.push([*w as u32, *h as u32, (pix.len() / 4) as u32, nbx, nblk, nbx * nby, 0, 0]);
+        pix.extend_from_slice(t);
         nblk += nbx * nby;
     }
-    let p = bc1_pipe(gpu);
     let st = wgpu::BufferUsages::STORAGE;
     let lvb = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("levels"), contents: bytemuck::cast_slice(&levels), usage: st,
     });
     let pixb = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("pix"), contents: bytemuck::cast_slice(&pix), usage: st,
+        label: Some("pix"), contents: &pix, usage: st,
     });
-    let nb = (nblk as u64) * 8;
+    let nb = (nblk as u64) * wpb * 4;
     let outb = d.create_buffer(&wgpu::BufferDescriptor {
         label: Some("blocks"), size: nb, usage: st | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
     });
@@ -572,7 +595,7 @@ pub fn bc1_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u
         usage: wgpu::BufferUsages::UNIFORM,
     });
     let bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None, layout: &p.layout,
+        label: None, layout,
         entries: &[wgpu::BindGroupEntry { binding: 0, resource: lvb.as_entire_binding() },
                    wgpu::BindGroupEntry { binding: 1, resource: pixb.as_entire_binding() },
                    wgpu::BindGroupEntry { binding: 2, resource: outb.as_entire_binding() },
@@ -585,7 +608,7 @@ pub fn bc1_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u
     let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-        pass.set_pipeline(&p.pipe);
+        pass.set_pipeline(pipe);
         pass.set_bind_group(0, &bg, &[]);
         pass.dispatch_workgroups(nblk.div_ceil(64), 1, 1);
     }
@@ -598,5 +621,162 @@ pub fn bc1_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u
     rx.recv().map_err(|e| format!("map: {e}"))?.map_err(|e| format!("map: {e:?}"))?;
     let all = slice.get_mapped_range().to_vec();
     rb.unmap();
-    Ok(levels.iter().map(|l| all[(l[4] as usize) * 8..((l[4] + l[5]) as usize) * 8].to_vec()).collect())
+    let bpb = (wpb * 4) as usize;
+    Ok(levels.iter().map(|l| all[(l[4] as usize) * bpb..((l[4] + l[5]) as usize) * bpb].to_vec()).collect())
+}
+
+// --- bc7 -------------------------------------------------------------------------------------------------------
+
+// earthfast.bc7_encode's block encoder (lib.rs bc7_block, mode 6) in float32, one invocation per 4 x 4 block of any of
+// the levels packed one after another: the endpoints at the block's extent along its principal axis (power iteration
+// from the widest channel), quantised to 7 bits + a p-bit, each texel the nearest of the 16 weights, index 0 < 8.
+const BC7_WGSL: &str = r#"
+struct Level { w: u32, h: u32, px: u32, nbx: u32, blk: u32, nblk: u32, _a: u32, _b: u32 };
+@group(0) @binding(0) var<storage, read> lv: array<Level>;
+@group(0) @binding(1) var<storage, read> pix: array<u32>;      // RGBA8 texels of every level
+@group(0) @binding(2) var<storage, read_write> outb: array<u32>; // 4 words per block
+@group(0) @binding(3) var<uniform> nlev: vec4<u32>;
+
+struct Q { q: vec4<i32>, p: i32 };
+var<private> bits: array<u32, 4>;
+
+fn put(v: u32, n: u32, pos: u32) {
+    let w = pos / 32u;
+    let s = pos % 32u;
+    bits[w] = bits[w] | (v << s);
+    if (s + n > 32u) { bits[w + 1u] = bits[w + 1u] | (v >> (32u - s)); }
+}
+
+fn quant(e: vec4<f32>, opaque: bool) -> Q {
+    var best = Q(vec4<i32>(0), 0);
+    var berr = 1e30;
+    for (var p = 0; p < 2; p++) {
+        let q = vec4<i32>(clamp(round((e - f32(p)) / 2.0), vec4<f32>(0.0), vec4<f32>(127.0)));
+        let r = vec4<f32>((q << vec4<u32>(1u)) | vec4<i32>(p));
+        let err = dot(abs(r - e), vec4<f32>(1.0));
+        if (err < berr) { berr = err; best = Q(q, p); }
+    }
+    if (opaque) {
+        var q = vec4<i32>(clamp(round((e - 1.0) / 2.0), vec4<f32>(0.0), vec4<f32>(127.0)));
+        q.w = 127;
+        best = Q(q, 1);
+    }
+    return best;
+}
+
+@compute @workgroup_size(64)
+fn bc7(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let g = gid.x;
+    var L = 0u;
+    var found = false;
+    for (var i = 0u; i < nlev.x; i++) {
+        if (g >= lv[i].blk && g < lv[i].blk + lv[i].nblk) { L = i; found = true; }
+    }
+    if (!found) { return; }
+    let l = lv[L];
+    let b = g - l.blk;
+    let by = b / l.nbx; let bx = b % l.nbx;
+    var t: array<vec4<f32>, 16>;
+    var opaque = true;
+    var mean = vec4<f32>(0.0);
+    for (var yy = 0u; yy < 4u; yy++) {
+        let y = min(by * 4u + yy, l.h - 1u);
+        for (var xx = 0u; xx < 4u; xx++) {
+            let x = min(bx * 4u + xx, l.w - 1u);
+            let v = pix[l.px + y * l.w + x];
+            let c = vec4<f32>(f32(v & 255u), f32((v >> 8u) & 255u), f32((v >> 16u) & 255u), f32(v >> 24u));
+            t[yy * 4u + xx] = c;
+            mean += c;
+            if ((v >> 24u) != 255u) { opaque = false; }
+        }
+    }
+    mean = mean / 16.0;
+    var cov = mat4x4<f32>(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+    for (var k = 0u; k < 16u; k++) {
+        let d = t[k] - mean;
+        cov[0] += d * d.x; cov[1] += d * d.y; cov[2] += d * d.z; cov[3] += d * d.w;
+    }
+    var m = 0u;
+    for (var i = 1u; i < 4u; i++) { if (cov[i][i] > cov[m][m]) { m = i; } }
+    var v = vec4<f32>(0.0);
+    v[m] = 1.0;
+    for (var it = 0; it < 4; it++) {
+        let w = cov * v;
+        v = w / max(length(w), 1e-9);
+    }
+    var pmin = 1e30; var pmax = -1e30;
+    for (var k = 0u; k < 16u; k++) {
+        let p = dot(t[k] - mean, v);
+        pmin = min(pmin, p); pmax = max(pmax, p);
+    }
+    let lo = clamp(mean + v * pmin, vec4<f32>(0.0), vec4<f32>(255.0));
+    let hi = clamp(mean + v * pmax, vec4<f32>(0.0), vec4<f32>(255.0));
+    var a0 = quant(lo, opaque);
+    var a1 = quant(hi, opaque);
+    let e0 = vec4<f32>((a0.q << vec4<u32>(1u)) | vec4<i32>(a0.p));
+    let e1 = vec4<f32>((a1.q << vec4<u32>(1u)) | vec4<i32>(a1.p));
+    let axis = e1 - e0;
+    let den = max(dot(axis, axis), 1e-9);
+    let W = array<f32, 16>(0.0, 4.0, 9.0, 13.0, 17.0, 21.0, 26.0, 30.0, 34.0, 38.0, 43.0, 47.0, 51.0, 55.0, 60.0, 64.0);
+    var idx: array<u32, 16>;
+    for (var k = 0u; k < 16u; k++) {
+        let f = dot(t[k] - e0, axis) / den * 64.0;
+        var bi = 0u; var be = 1e30;
+        for (var w = 0u; w < 16u; w++) {
+            let e = abs(f - W[w]);
+            if (e < be) { be = e; bi = w; }
+        }
+        idx[k] = bi;
+    }
+    if (idx[0] >= 8u) {
+        let s = a0; a0 = a1; a1 = s;
+        for (var k = 0u; k < 16u; k++) { idx[k] = 15u - idx[k]; }
+    }
+    bits = array<u32, 4>(1u << 6u, 0u, 0u, 0u);
+    var pos = 7u;
+    for (var c = 0u; c < 4u; c++) {
+        put(u32(a0.q[c]), 7u, pos); pos += 7u;
+        put(u32(a1.q[c]), 7u, pos); pos += 7u;
+    }
+    put(u32(a0.p), 1u, pos); pos += 1u;
+    put(u32(a1.p), 1u, pos); pos += 1u;
+    put(idx[0], 3u, pos); pos += 3u;
+    for (var k = 1u; k < 16u; k++) { put(idx[k], 4u, pos); pos += 4u; }
+    for (var w = 0u; w < 4u; w++) { outb[4u * g + w] = bits[w]; }
+}
+"#;
+
+pub struct Bc7Pipe {
+    layout: wgpu::BindGroupLayout,
+    pipe: wgpu::ComputePipeline,
+}
+
+static BC7: OnceLock<Bc7Pipe> = OnceLock::new();
+
+fn bc7_pipe(gpu: &Gpu) -> &'static Bc7Pipe {
+    BC7.get_or_init(|| {
+        let d = &gpu.device;
+        let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bc7"), source: wgpu::ShaderSource::Wgsl(BC7_WGSL.into()),
+        });
+        let entry = |b: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
+            binding: b, visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None }, count: None,
+        };
+        let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
+                       entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
+                       entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
+                       entry(3, wgpu::BufferBindingType::Uniform)],
+        });
+        let pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None, bind_group_layouts: &[&layout], push_constant_ranges: &[],
+        });
+        let pipe = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("bc7"), layout: Some(&pl), module: &module, entry_point: Some("bc7"),
+            compilation_options: Default::default(), cache: None,
+        });
+        Bc7Pipe { layout, pipe }
+    })
 }

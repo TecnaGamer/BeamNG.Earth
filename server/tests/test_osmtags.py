@@ -20,6 +20,29 @@ def tagged(lines, classes, records, tags):
 
 
 class JoinTest(unittest.TestCase):
+    def test_decoded_row_group_rows(self):
+        # a row group's table (OsmTags._decode's layout): texts as UTF-8 blobs, numbers NaN where missing
+        names = list(osmtags.COLUMNS)
+        t = {"id": np.array([7, 9], np.int64), "race": np.array([False, True]), "frn": np.array([100, 101], np.int64)}
+        for c in names:
+            if c in osmtags.TEXT_COLUMNS:
+                vals = ["Straße", None] if c == "name" else [None, None]
+                enc = [b"" if v is None else v.encode("utf-8") for v in vals]
+                t[c + "_ok"] = np.array([v is not None for v in vals])
+                t[c + "_off"] = np.concatenate([[0], np.cumsum([len(b) for b in enc])])
+                t[c] = np.frombuffer(b"".join(enc), np.uint8)
+            else:
+                t[c] = np.array([2.0 if c == "lanes" else np.nan, np.nan])
+        rows = osmtags._rows(t, [0, 1])
+        self.assertEqual(rows[0][:3], (7, False, 100))
+        got = dict(zip(names, rows[0][3:]))
+        self.assertEqual(got["name"], "Straße")
+        self.assertEqual(got["lanes"], 2)
+        self.assertIsInstance(got["lanes"], int)
+        self.assertIsNone(got["width"])
+        self.assertEqual(rows[1][:3], (9, True, 101))
+        self.assertTrue(all(v is None for v in rows[1][3:]))
+
     def test_way_id(self):
         self.assertEqual(osmtags.way_id("w1360453999@2"), 1360453999)
         self.assertIsNone(osmtags.way_id("n12@1"))

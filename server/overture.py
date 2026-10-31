@@ -23,6 +23,7 @@ polygons are clipped to the cell (an ocean or a national park would otherwise re
 outline in every cell); everything else is whole (a building or road segment that crosses the
 cell edge is listed in every cell it touches, `own` marks the one cell that owns it).
 """
+import hashlib
 import json
 import logging
 import os
@@ -37,6 +38,7 @@ import numpy as np
 import mapgeom as mg
 import netfetch
 import rangeread
+import xproc
 import staging
 
 log = logging.getLogger("earthd.mapdata")
@@ -51,7 +53,12 @@ REMOTE_FILES = 32               # open RemoteFiles kept (their blocks share rang
 # DuckDB's own prefetching reads whole row groups one after the other; Reader._plan fetches what the
 # query needs in parallel first, so DuckDB reads lazily from the block cache
 PARQUET_CONFIG = {"disable_parquet_prefetching": True}
-FETCH_THREADS = 4               # parallel range requests per Reader (the hosts allow 4 at once)
+RG_DIR = "rows"                 # the row groups' local copies (Reader._local_rows), beside a file's blocks
+RG_ROWS = 2048                  # rows a row group of a local copy: a cell's bbox filter skips the others by their stats
+RG_WAIT_S = 60.0                # a copy another process makes is waited for this long
+META_FILE = "rowgroups.json"     # a file's parsed row groups, beside its cached blocks (_meta_load)
+BOX_ROWS = 2_000_000           # row groups' bbox rows kept per Reader (_plan: ~16 B a row as float32)
+FETCH_THREADS = 8               # parallel range requests per Reader (Overture's hosts allow 8 at once each)
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
 MERGE_GAP = 64 * 1024           # column chunks closer than this are fetched in one range
 BASE_COLUMNS = {"id", "geometry", "bbox", "sources", "version"}
@@ -269,6 +276,11 @@ class StacIndex:
 META_FILES = 2048        # files whose parsed Parquet metadata Reader keeps (a few hundred row groups each)
 
 
+def _q(path):
+    """A path in a DuckDB string literal."""
+    return str(path).replace("'", "''")
+
+
 class Reader:
     """Overture layers per cell (see the module docstring). threads: DuckDB threads per query."""
 
@@ -282,6 +294,8 @@ class Reader:
         # files never change). Re-reading it for every cell was most of a map cell's CPU (the Deck's mapdata-layer
         # thread, 36 CPU-s of a teleport, 2026-10-23); osmtags._groups keeps its file's the same way.
         self._meta = OrderedDict()
+        self._boxes = OrderedDict()     # (path, row group) -> its rows' bbox (x0, x1, y0, y1) arrays (_plan)
+        self._box_rows = 0
 
     def close(self):
         self.pool.shutdown(wait=False)
@@ -298,6 +312,48 @@ class Reader:
                     self._remotes.popitem(last=False)
             self._remotes.move_to_end(key)
             return r
+
+    @staticmethod
+    def _meta_load(remote):
+        """A file's parsed row groups kept beside its blocks (_meta_save), or None. (0.15 s a file in each of the
+        server's processes, ~10-20 files a new place's layers.)"""
+        try:
+            with open(os.path.join(remote.cache_dir, META_FILE), encoding="utf-8") as f:
+                return {int(rg): {"first": g["first"], "n": g["n"],
+                                  "bbox": {k: tuple(v) for k, v in g["bbox"].items()},
+                                  "cols": {k: [tuple(r) for r in v] for k, v in g["cols"].items()}}
+                        for rg, g in json.load(f).items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    @staticmethod
+    def _meta_save(remote, pg):
+        try:
+            os.makedirs(remote.cache_dir, exist_ok=True)
+            path = os.path.join(remote.cache_dir, META_FILE)
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({str(rg): g for rg, g in pg.items()}, f)
+            os.replace(tmp, path)
+        except (OSError, TypeError, ValueError, AttributeError) as e:
+            log.debug("overture: row groups not saved: %s", e)
+
+    def _box_get(self, k):
+        with self._lock:
+            got = self._boxes.get(k)
+            if got is not None:
+                self._boxes.move_to_end(k)
+            return got
+
+    def _box_put(self, k, arrays):
+        with self._lock:
+            if k in self._boxes:
+                return
+            self._boxes[k] = arrays
+            self._box_rows += len(arrays[0])
+            while self._box_rows > BOX_ROWS and len(self._boxes) > 1:
+                _, old = self._boxes.popitem(last=False)
+                self._box_rows -= len(old[0])
 
     def _connect(self, files, kind):
         """A DuckDB connection whose filesystem serves `files` ({path: RemoteFile}) with `kind`."""
@@ -349,7 +405,7 @@ class Reader:
             if not rows:
                 return empty(layer), {}         # no row of these files lies in the cell
             t2 = time.perf_counter()
-            out = self._run(con, proto, paths, layer, spec, bounds, rows)
+            out = self._run(con, proto, paths, layer, spec, bounds, rows, files, kind)
             log.debug("mapdata %s %s: index %.2f s, plan %.2f s, query %.2f s", layer, cell, t1 - t0, t2 - t1,
                       time.perf_counter() - t2)
             return out
@@ -421,6 +477,12 @@ class Reader:
         uris = ", ".join(f"'{proto}://{p}'" for p in paths)
         with self._lock:
             new = [p for p in paths if p not in self._meta]
+        for p in list(new):             # parsed by another process or an earlier run (release files never change)
+            pg = self._meta_load(files[p])
+            if pg is not None:
+                with self._lock:
+                    self._meta[p] = pg
+                new.remove(p)
         if new:
             meta = con.execute(f"""SELECT file_name, row_group_id, row_group_num_rows, path_in_schema, stats_min,
                 stats_max, dictionary_page_offset, data_page_offset, total_compressed_size
@@ -443,6 +505,8 @@ class Reader:
                 g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
                 if top == "bbox":
                     g["bbox"][leaf] = (smin, smax)
+            for p in new:
+                self._meta_save(files[p], parsed.get(p, {}))
             with self._lock:
                 for p in new:
                     self._meta[p] = parsed.get(p, {})
@@ -469,26 +533,38 @@ class Reader:
         t1 = time.perf_counter()
         if not cand:
             return []
-        wanted = {}
-        for path, rg in cand:
-            wanted.setdefault(path, []).extend(groups[(path, rg)]["cols"].get("bbox", []))
-        self._fetch(files, wanted, kind)
-        bbox = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND "
-                f"bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}")
-        hits = con.execute(f"""SELECT DISTINCT filename, file_row_number FROM read_parquet([{uris}],
-            filename = true, file_row_number = true) WHERE {bbox}""").fetchall()
-        firsts = {}
-        for (path, rg), g in sorted(groups.items()):
-            firsts.setdefault(path, []).append((g["first"], rg))
-        rows_of = {}
-        for fname, row in hits:
-            rows_of.setdefault(fname, []).append(row)
+        # each row group's boxes decoded once (BOX_ROWS kept): a place's cells share their row groups (a fresh
+        # place's first block: 69 queries over 210 row groups of 19, 2026-10-30), and the bbox pass was ~13 s of its
+        # layer threads; compared in the column's own type, as DuckDB compares it
+        need = [k for k in cand if self._box_get(k) is None]
+        if need:
+            wanted = {}
+            for path, rg in need:
+                wanted.setdefault(path, []).extend(groups[(path, rg)]["cols"].get("bbox", []))
+            self._fetch(files, wanted, kind)
+            by_path = {}
+            for path, rg in need:
+                by_path.setdefault(path, []).append(rg)
+            for path, rgs in by_path.items():   # (a file at a time, by row number only: DuckDB skips the other row
+                # groups then; with the files' names in the filter it read every row group's boxes, block by block)
+                only = " OR ".join(f"file_row_number BETWEEN {groups[(path, rg)]['first']} AND "
+                                   f"{groups[(path, rg)]['first'] + groups[(path, rg)]['n'] - 1}" for rg in rgs)
+                got = con.execute(f"""SELECT file_row_number, bbox.xmin AS x0, bbox.xmax AS x1, bbox.ymin AS y0,
+                    bbox.ymax AS y1 FROM read_parquet('{proto}://{path}', file_row_number = true)
+                    WHERE {only}""").fetchnumpy()
+                fr = np.asarray(got["file_row_number"], np.int64)
+                cols = [np.ma.filled(np.ma.asarray(got[c]).astype(np.float64), np.nan).astype(np.asarray(got[c]).dtype)
+                        for c in ("x0", "x1", "y0", "y1")]
+                for rg in rgs:
+                    g = groups[(path, rg)]
+                    sel = (fr >= g["first"]) & (fr < g["first"] + g["n"])
+                    self._box_put((path, rg), tuple(c[sel] for c in cols))
         matched = set()
-        for fname, rows in rows_of.items():     # (each file's rows at once: one search per hit was ~0.1 s a cell)
-            path = fname.split("://", 1)[-1]
-            rgs = firsts[path]
-            ks = np.searchsorted(np.array([f for f, _ in rgs]), np.asarray(rows), side="right") - 1
-            matched.update((path, rgs[int(k)][1]) for k in np.unique(ks))
+        for k in cand:
+            x0, x1, y0, y1 = self._box_get(k)
+            t = x0.dtype.type
+            if np.any((x0 <= t(lon1)) & (x1 >= t(lon0)) & (y0 <= t(lat1)) & (y1 >= t(lat0))):
+                matched.add(k)
         used = set(re.findall(r"[A-Za-z_]+", spec["cols"] + " " + spec.get("extra", ""))) | BASE_COLUMNS
         wanted = {}
         for path, rg in sorted(matched):
@@ -507,7 +583,36 @@ class Reader:
             rows.append((f"{proto}://{path}", g["first"], g["first"] + g["n"] - 1))
         return rows
 
-    def _run(self, con, proto, paths, layer, spec, bounds, rows):
+    def _local_rows(self, con, layer, spec, rows, files, kind):
+        """Local copies of the row groups rows ([(uri, first row, last row)]): each one's columns the layer's query
+        reads, as one Parquet file beside the file's blocks (RG_DIR), made once (xproc: one process) and read by DuckDB
+        itself. A place's cells share their row groups (a fresh place's first block: 55 queries decoded 117 row groups
+        of 9 through the Python filesystem, 2026-10-30). Returns the files."""
+        extra = f", {spec['extra']}" if spec.get("extra") else ""
+        proj = (f"id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb, (bbox.xmin + bbox.xmax) / 2 AS cx, "
+                f"(bbox.ymin + bbox.ymax) / 2 AS cy, sources{extra}, bbox")
+        tag = hashlib.sha1(proj.encode()).hexdigest()[:12]
+        out = []
+        for u, a, b in rows:
+            path = u.split("://", 1)[-1]
+            d = os.path.join(files[path].cache_dir, RG_DIR)
+            f = os.path.join(d, f"{layer}_{tag}_{int(a)}_{int(b)}.parquet")
+            if not os.path.exists(f):
+                got, mine = xproc.once(f + ".lock", lambda f=f: f if os.path.exists(f) else None, RG_WAIT_S, kind)
+                if got is None:
+                    try:
+                        os.makedirs(d, exist_ok=True)
+                        tmp = f"{f}.{os.getpid()}.{threading.get_ident()}.tmp"
+                        con.execute(f"""COPY (SELECT {proj} FROM read_parquet('{_q(u)}', file_row_number = true)
+                            WHERE file_row_number BETWEEN {int(a)} AND {int(b)}) TO '{_q(tmp)}' (FORMAT parquet, ROW_GROUP_SIZE {RG_ROWS})""")
+                        os.replace(tmp, f)
+                    finally:
+                        if mine:
+                            xproc.release(f + ".lock")
+            out.append(f)
+        return out
+
+    def _run(self, con, proto, paths, layer, spec, bounds, rows, files=None, kind="demand"):
         lon0, lat0, lon1, lat1 = bounds
         src = ("read_parquet([" + ", ".join(f"'{proto}://{p}'" for p in paths) + "], filename = true, "
                "file_row_number = true)")
@@ -520,11 +625,22 @@ class Reader:
         # The scan first, the dedup (by id, highest version) and numbering from the copy: with the
         # window in the same statement DuckDB 1.5 stopped skipping row groups by their statistics and
         # read every row group of the file between the matches (12 MB more, 9 s, for a city cell).
-        con.execute(f"""CREATE TEMP TABLE s AS
-              SELECT id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb,
-                     (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
-                     sources{extra}
-              FROM {src} WHERE ({only}) AND {bbox}""")
+        local = None
+        if files is not None:
+            try:
+                local = self._local_rows(con, layer, spec, rows, files, kind)
+            except Exception as e:      # (a full disk, DuckDB's own errors: read from the files as before)
+                log.debug("mapdata %s: local row groups: %s: %s", layer, type(e).__name__, e)
+                local = None
+        if local:
+            con.execute(f"""CREATE TEMP TABLE s AS SELECT * EXCLUDE (bbox)
+                  FROM read_parquet([{", ".join(f"'{_q(f)}'" for f in local)}]) WHERE {bbox}""")
+        else:
+            con.execute(f"""CREATE TEMP TABLE s AS
+                  SELECT id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb,
+                         (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
+                         sources{extra}
+                  FROM {src} WHERE ({only}) AND {bbox}""")
         con.execute("""CREATE TEMP TABLE t AS
             SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * FROM (
               SELECT * EXCLUDE (version) FROM s

@@ -1405,3 +1405,31 @@ class RetainingWallTest(unittest.TestCase):
         self.assertTrue(step, "a cutting's step: a wall")
         bank = self._walls(lambda n: np.clip((n - edge + 1.0) / 3.0, 0.0, 1.0) * 3.0)
         self.assertFalse(bank, "a natural bank: no wall")
+
+
+class BatchedHelpersTest(unittest.TestCase):
+    """The blockers' segments made in one go (2026-10-25): the same arrays as the line-by-line loop they replace."""
+
+    @staticmethod
+    def lines(rng, n):
+        out = []
+        for _ in range(n):
+            k = int(rng.choice([0, 1, 2, 5, 9]))
+            ln = np.cumsum(rng.normal(0.0, 20.0, (k, 2)), 0) + rng.uniform(-100.0, 100.0, 2)
+            out.append((ln, float(rng.uniform(1.0, 8.0))))
+        return out
+
+    def test_blocker_segments(self):
+        rng = np.random.default_rng(2)
+        for _ in range(200):
+            blockers = self.lines(rng, int(rng.integers(0, 12)))
+            segs, starts, hws = [], [0], []
+            for line, hw in blockers:
+                if len(line) >= 2:
+                    segs.append(np.hstack([line[:-1, :2], line[1:, :2]]))
+                    starts.append(starts[-1] + len(line) - 1)
+                    hws.append(float(hw))
+            want = (np.vstack(segs) if segs else np.zeros((0, 4)), np.array(starts, np.int64), np.array(hws))
+            for got, w in zip(roads._blocker_segments(blockers), want):
+                np.testing.assert_array_equal(got, w)
+                self.assertEqual(got.dtype, w.dtype)
