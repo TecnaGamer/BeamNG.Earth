@@ -341,6 +341,9 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         road_feats, roads_complete = _s.surface.roads(keep["lat"], keep["lon"])
         stages["landcover"] = time.perf_counter() - t1
         t1 = time.perf_counter()
+        lots = _s.surface.lots(keep["lat"], keep["lon"]) if hasattr(_s.surface, "lots") else None
+        if lots:                        # farmland under the carriageways (a field does not cover the asphalt)
+            idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
         if road_feats:
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
@@ -364,8 +367,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
                 if over:
                     log.warning("block (%s, %s, %s): %d points of drawn roads in it (%d of them with ground parts) from "
                                 "%d cells, none painted", aid, cx, cy, over, n_ground, len(road_feats))
-        idx = (surfacemod.paint_lots(idx, keep["lat"], keep["lon"], _s.surface.lots(keep["lat"], keep["lon"]))
-            if hasattr(_s.surface, "lots") else idx)
+        idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
         if hasattr(_s.surface, "fuel_pads"):    # gas station forecourts (--gas-stations on)
             idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"], _s.surface.fuel_pads(keep["lat"], keep["lon"]))
         stages["roadPaint"] = time.perf_counter() - t1
@@ -696,14 +698,25 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     wires = [] if buildings else None
     park = [] if buildings else None
     items = town = None
+    wrows = []
     box = roadsmod.tile_bbox(tx, ty)
     side = roadsmod.tile_side(tx, ty)
     if buildings:
         import buildings as buildingsmod
+        # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
+        try:
+            import worldprops
+            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev)
+            skip = frozenset(skip) | frozenset(barn_ids)
+        except Exception as ex:
+            log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            wrows = []
         # (on the graded ground, the one the terrain is drawn with: on the raw elevation a building beside a road's
         # cutting stood over the cut; hashk014's PR #69)
         items = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
                                              skip=skip)
+        if wrows:
+            props.extend(wrows)
         town = buildingsmod.coverage(items, side) < buildingsmod.POLES_COVERAGE
     mark("items")
     rwalls = []
@@ -822,6 +835,25 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                               props, wires)
+        import fences
+        try:
+            props.extend(fences.rows(frame, infra_fn, box, elev))
+        except Exception as ex:
+            log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        import picnic
+        land_fn = lambda key: _s.md.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
+        bld_fn = lambda key: _s.md.cell(key, layers=("buildings",), kind="demand").layers.get("buildings")
+        osm = getattr(_s.md, "picnic_osm", None)
+        try:
+            props.extend(picnic.rows(frame, infra_fn, land_fn, box, elev,
+                                     osm.cells if osm is not None else None, bld_fn))
+        except Exception as ex:
+            log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        import shelters
+        try:
+            props.extend(shelters.rows(frame, infra_fn, box, elev, near_roads))
+        except Exception as ex:
+            log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import industry
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))

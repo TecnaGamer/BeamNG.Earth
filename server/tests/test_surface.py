@@ -576,5 +576,91 @@ class FuelPadTest(unittest.TestCase):
         self.assertEqual(int(m[10, 10]), 0)
 
 
+class FieldTest(unittest.TestCase):
+    def test_farmland_is_dirt(self):
+        lat0, lon0 = 40.0, -76.0
+        lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
+        lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
+        a, b = lon0 + 10 * 2.6e-5, lon0 + 20 * 2.6e-5
+        c, d = lat0 + 10 * 2e-5, lat0 + 20 * 2e-5
+        ring = np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])
+
+        class Fields:
+            kind = np.array([3, 3], np.uint8)
+            attrs = {"class": np.array(["farmland", "parking"], object)}
+
+            def __len__(self):
+                return 2
+
+            def parts(self, i):
+                return [[ring]]
+        idx = np.full((50, 50), sf.GRASS, np.uint8)
+        out = sf.paint_fields(idx, lat, lon, [Fields()])
+        self.assertEqual(out[15, 15], sf.DIRT)
+        self.assertEqual(out[40, 40], sf.GRASS)
+        self.assertTrue(np.array_equal(idx, np.full((50, 50), sf.GRASS, np.uint8)))
+
+    def test_photo_furrows_run_with_the_long_side(self):
+        import geodesy
+        frame = geodesy.EnuFrame(40.0, -76.0)
+        e = np.array([-30.0, 30.0, 30.0, -30.0, -30.0])
+        n = np.array([-10.0, -10.0, 10.0, 10.0, -10.0])
+        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(5))
+
+        class Field:
+            kind = np.array([3], np.uint8)
+            ids = np.array(["field-1"])
+            attrs = {"class": np.array(["farmland"], object)}
+
+            def __len__(self):
+                return 1
+
+            def parts(self, i):
+                return [[np.stack([lo, la], 1)]]
+        rgb = np.full((80, 80, 3), (40, 140, 50), np.uint8)
+        out = sf.photo_fields(rgb, frame, -40.0, -40.0, 80.0, [Field()])
+        self.assertTrue(np.array_equal(rgb[0, 0], [40, 140, 50]), "the input untouched, and outside the field")
+        # the field is the middle band: rows ~30-50, columns ~10-70 (longer east-west, so furrows run east-west)
+        window = out[32:48, 16:64].astype(np.int16)
+        base = rgb[32:48, 16:64].astype(np.int16)
+        delta = np.abs(window - base).sum(axis=2)
+        self.assertGreater(int(delta.sum()), 0, "furrows darken the field")
+        self.assertGreater(float(delta.mean(axis=1).std()), float(delta.mean(axis=0).std()) * 2,
+                           "the stripes run with the long side")
+        self.assertEqual(int(out[2, 2, 1]), 140, "outside the field the photo is unchanged")
+        soil = np.abs(window.astype(np.int16) - np.array(sf.FARM_SOIL)).sum(axis=2)
+        green = np.array([40, 140, 50], np.int16)
+        self.assertGreater(int((soil < 80).sum()), 0, "the furrows stay bare soil")
+        self.assertGreater(int(np.all(window == green, axis=2).sum()), 0, "the photo stays between the furrows")
+
+    def test_dirt_road_is_not_striped(self):
+        import geodesy
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import test_roads
+        frame = geodesy.EnuFrame(test_roads.LAT, test_roads.LON)
+        e = np.array([-30.0, 30.0, 30.0, -30.0, -30.0])
+        n = np.array([-10.0, -10.0, 10.0, 10.0, -10.0])
+        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(5))
+
+        class Field:
+            kind = np.array([3], np.uint8)
+            ids = np.array(["field-1"])
+            attrs = {"class": np.array(["farmland"], object)}
+
+            def __len__(self):
+                return 1
+
+            def parts(self, i):
+                return [[np.stack([lo, la], 1)]]
+        road = test_roads.features([[(0.0, -25.0), (0.0, 25.0)]], ["track"])
+        rgb = np.full((80, 80, 3), (40, 140, 50), np.uint8)
+        out = sf.photo_fields(rgb, frame, -40.0, -40.0, 80.0, [Field()], [road])
+        self.assertTrue(np.array_equal(out[30:50, 35:45], rgb[30:50, 35:45]),
+                        "furrows stop short of the dirt road")
+        off = np.abs(out[30:50, 8:24].astype(np.int16) - rgb[30:50, 8:24].astype(np.int16)).sum()
+        self.assertGreater(int(off), 0, "the field beside the road still has rows")
+        self.assertTrue(np.array_equal(rgb, np.full((80, 80, 3), (40, 140, 50), np.uint8)))
+
+
 if __name__ == "__main__":
     unittest.main()

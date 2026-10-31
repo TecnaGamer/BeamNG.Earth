@@ -15,6 +15,7 @@ player, kind "prefetch"); the blocks built after it arrives have the right surfa
 pure function of the cached land cover and the heights, so a block rebuilt from a complete cache is
 the same every time.
 """
+import hashlib
 import logging
 import math
 from collections import OrderedDict
@@ -785,15 +786,18 @@ def _square_lots(frame, x0, y0, size, surface):
 def paint_square(rgb, frame, x0, y0, size, surface, widths=None):
     """photo_roads for a ground photo over [x0, x0 + size]² of frame with the roads of surface's cached cells (a
     Surface; never waits); as it was when its texels are coarser than PHOTO_ROADS_MAX_TEXEL or no cell is cached.
-    Parking lots are painted first (photo_lots), then gas-station pads, then the carriageways over both."""
+    Crop rows are painted first (photo_fields: dirt furrows, the photo left between them; a dirt road is left bare,
+    since its paint is translucent), then parking lots, gas-station pads, then the carriageways over them."""
     if surface is None or size / max(rgb.shape[1], 1) > PHOTO_ROADS_MAX_TEXEL:
         return rgb
-    rgb = photo_lots(rgb, frame, x0, y0, size, _square_lots(frame, x0, y0, size, surface))
+    feats = _square_lots(frame, x0, y0, size, surface)
+    roads = _square_roads(frame, x0, y0, size, surface)
+    rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)
+    rgb = photo_lots(rgb, frame, x0, y0, size, feats)
     rgb = photo_pads(rgb, frame, x0, y0, size, _square_pads(frame, x0, y0, size, surface))     # (under the roads)
-    feats = _square_roads(frame, x0, y0, size, surface)
-    if not feats:
+    if not roads:
         return rgb
-    return photo_roads(rgb, frame, x0, y0, size, feats, surface.urban, widths)
+    return photo_roads(rgb, frame, x0, y0, size, roads, surface.urban, widths)
 
 
 def unghost_square(rgb, frame, x0, y0, size, surface, widths=None):
@@ -868,6 +872,19 @@ PLAZA_CLASSES = {"pedestrian", "plaza"}
 # Substations' yards (Overture infrastructure class substation; powerlines.py fills them with switchgear): crushed
 # stone, as West Coast USA's yard (the gravel layer), 2026-10-26
 YARD_CLASSES = {"substation"}
+# Crop rows (Overture land_use class farmland). The physics is one dirt polygon — a striped 2 m grid would rumble —
+# and the photo draws the furrows (photo_fields), under the lots and the carriageways.
+FARM_CLASSES = {"farmland"}
+FARM_ROW_M = 4.0            # metres from one furrow to the next, across the field's long axis
+FARM_FURROW_M = 2.3
+FARM_SOIL = (92.0, 68.0, 42.0)
+FARM_MIX = 0.62             # how far a furrow pixel moves from the photo toward bare soil
+FARM_ROAD_CLEAR_M = 4.0     # furrows stop this far short of a dirt road's edge
+
+
+def paint_fields(idx, lat, lon, feats_list):
+    """idx with farmland polygons drawn as dirt (the whole field: the furrows are only in the photo). Pure."""
+    return _paint(idx, lat, lon, feats_list, _farmland, DIRT)
 
 
 def paint_lots(idx, lat, lon, feats_list):
@@ -1037,6 +1054,146 @@ def lot_pads(feats_list):
 def photo_lots(rgb, frame, x0, y0, size, feats_list):
     """The photo with parking-lot polygons painted in the paved roads' colour (under the carriageways). Pure."""
     return photo_pads(rgb, frame, x0, y0, size, lot_pads(feats_list))
+
+
+def photo_fields(rgb, frame, x0, y0, size, feats_list, roads=None, urban_fn=None, widths=None):
+    """The photo with dirt furrows parallel to each field's long side. The photo stays between the furrows. A dirt
+    road is left as the photo (its paint is translucent, so a stripe under it would show through). The phase is
+    hashed from the feature id, so a field split across photo tiles lines up with the shrubs vegetation.farm_foliage
+    plants between the furrows. Pure: rgb is not changed."""
+    if rgb is None or size <= 0 or not feats_list:
+        return rgb
+    h, w = rgb.shape[:2]
+    if h == 0 or w == 0:
+        return rgb
+    px_x, px_y = w / float(size), h / float(size)
+    dirt = _dirt_road_mask(frame, x0, y0, size, h, w, roads or [], urban_fn, widths)
+    out = None
+    for feats in feats_list:
+        if feats is None or len(feats) == 0:
+            continue
+        sel = _farmland(feats)
+        if sel is None:
+            continue
+        ids = getattr(feats, "ids", None)
+        for i in np.flatnonzero(sel & (np.asarray(feats.kind) == 3)):
+            parts = feats.parts(int(i))
+            if not parts or not parts[0] or len(parts[0][0]) < 3:
+                continue
+            ring = np.asarray(parts[0][0], np.float64)
+            e, n = mapgeom.enu_xy(feats, frame, ring)
+            xy = np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)])
+            out = _stripe_field(rgb if out is None else out, out is None, xy, x0, y0, size, px_x, px_y,
+                                _field_phase(None if ids is None else ids[int(i)], xy), dirt)
+    return rgb if out is None else out
+
+
+def _dirt_road_mask(frame, x0, y0, size, h, w, feats_list, urban_fn, widths):
+    """Bool h x w: pixels on a dirt carriageway and FARM_ROAD_CLEAR_M to either side (roads.road_specs kind "dirt").
+    None when there is none. Furrows stop there, short of the road."""
+    if not feats_list:
+        return None
+    px_x, px_y = w / float(size), h / float(size)
+    im = draw = None
+    for feats in feats_list:
+        if feats is None or len(feats) == 0:
+            continue
+        specs = roadsmod.road_specs(feats, urban_fn, widths)
+        for i, sp in enumerate(specs):
+            if sp is None or sp.kind != "dirt":
+                continue
+            # one pixel over: PIL's stroke sits a pixel short of the asked width on one side
+            width_px = max(1, int(math.ceil((sp.width + 2 * PHOTO_ROAD_EDGE_M + 2 * FARM_ROAD_CLEAR_M)
+                                            * max(px_x, px_y))) + 1)
+            for ring in roadsmod.ground_parts(feats, i):
+                ring = np.asarray(ring, np.float64)
+                if len(ring) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                c = (np.asarray(e, np.float64) - x0) * px_x
+                r = (y0 + size - np.asarray(n, np.float64)) * px_y
+                if c.max() < -width_px or c.min() > w + width_px or r.max() < -width_px or r.min() > h + width_px:
+                    continue
+                if im is None:
+                    im = Image.new("L", (w, h), 0)
+                    draw = ImageDraw.Draw(im)
+                draw.line(list(zip(c.tolist(), r.tolist())), fill=255, width=width_px)
+    return None if im is None else np.asarray(im) > 0
+
+
+def _stripe_field(base, fresh, xy, x0, y0, size, px_x, px_y, phase, dirt=None):
+    """base with this field's dirt furrows, or base itself when the field misses it (fresh: the first copy).
+    dirt: pixels a dirt road covers, plus the clear strip beside it, left unpainted."""
+    h, w = base.shape[:2]
+    c = (xy[:, 0] - x0) * px_x
+    r = (y0 + size - xy[:, 1]) * px_y
+    if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
+        return None if fresh else base
+    c0, r0 = max(0, int(math.floor(c.min()))), max(0, int(math.floor(r.min())))
+    c1, r1 = min(w, int(math.ceil(c.max())) + 1), min(h, int(math.ceil(r.max())) + 1)
+    if c1 <= c0 or r1 <= r0:
+        return None if fresh else base
+    im = Image.new("L", (c1 - c0, r1 - r0), 0)
+    ImageDraw.Draw(im).polygon(list(zip((c - c0).tolist(), (r - r0).tolist())), fill=255)
+    mask = np.asarray(im) > 0
+    u = _long_axis(xy)
+    v0, v1 = -float(u[1]), float(u[0])
+    centre = xy.mean(axis=0)
+    ee = x0 + (np.arange(c0, c1) + 0.5) / px_x
+    nn = y0 + size - (np.arange(r0, r1) + 0.5) / px_y
+    across = (nn[:, None] - centre[1]) * v1 + (ee[None, :] - centre[0]) * v0
+    furrow = mask & (np.mod(across - phase, FARM_ROW_M) < FARM_FURROW_M)
+    if dirt is not None:
+        furrow = furrow & ~dirt[r0:r1, c0:c1]
+    if not furrow.any():
+        return None if fresh else base
+    out = base.copy() if fresh else base
+    sub = out[r0:r1, c0:c1]
+    soil = np.array(FARM_SOIL, np.float32)
+    mixed = sub[furrow].astype(np.float32) * (1.0 - FARM_MIX) + soil * FARM_MIX
+    sub[furrow] = np.clip(np.round(mixed), 0, 255).astype(np.uint8)
+    return out
+
+
+def _long_axis(xy):
+    """A unit axis along the ring's long side, pointing east, or north when it runs north-south."""
+    p = np.asarray(xy, np.float64)
+    if len(p) >= 2 and abs(p[0, 0] - p[-1, 0]) < 1e-6 and abs(p[0, 1] - p[-1, 1]) < 1e-6:
+        p = p[:-1]
+    if len(p) < 2:
+        return np.array([1.0, 0.0])
+    d = p - p.mean(axis=0)
+    cov = d.T @ d
+    tr = float(cov[0, 0] + cov[1, 1])
+    det = float(cov[0, 0] * cov[1, 1] - cov[0, 1] * cov[0, 1])
+    lam = tr / 2.0 + math.sqrt(max(tr * tr / 4.0 - det, 0.0))
+    if abs(float(cov[0, 1])) > 1e-8:
+        vx, vy = lam - float(cov[1, 1]), float(cov[0, 1])
+    elif float(cov[0, 0]) >= float(cov[1, 1]):
+        vx, vy = 1.0, 0.0
+    else:
+        vx, vy = 0.0, 1.0
+    n = math.hypot(vx, vy) or 1.0
+    u = np.array([vx / n, vy / n])
+    if u[0] < -1e-9 or (abs(u[0]) <= 1e-9 and u[1] < 0):
+        u = -u
+    return u
+
+
+def _field_phase(fid, xy):
+    """Metres of furrow shift, stable for one field across the tiles it crosses."""
+    if fid is not None and str(fid):
+        key = ("field", str(fid))
+    else:
+        c = np.asarray(xy, np.float64).mean(axis=0)
+        key = ("field", round(float(c[0]), 1), round(float(c[1]), 1))
+    h = hashlib.blake2b(repr(key).encode(), digest_size=8).digest()
+    return int.from_bytes(h, "little") / 2.0 ** 64 * FARM_ROW_M
+
+
+def _farmland(feats):
+    cls = feats.attrs.get("class")
+    return None if cls is None else np.isin(np.asarray(cls).astype(str), list(FARM_CLASSES))
 
 
 def lots_mask(frame, x0, y0, size, px, feats_list):

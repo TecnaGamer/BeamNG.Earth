@@ -1556,10 +1556,21 @@ class Server:
         wires = [] if self.buildings else None
         park = [] if self.buildings else None
         items = town = None
+        wrows = []
         if self.buildings:
+            # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
+            try:
+                import worldprops
+                wrows, barn_ids = worldprops.tile_props(anchor.frame, tx, ty, self.mapdata, elev)
+                skip = frozenset(skip) | frozenset(barn_ids)
+            except Exception as ex:
+                log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+                wrows = []
             # (on the graded ground, as blockworker.roads_tile)
             items = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
                                                  decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip)
+            if wrows:
+                props.extend(wrows)
             town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
         rwalls = []
         ctx = []
@@ -1665,6 +1676,25 @@ class Server:
             oil_wells = oilwells.tile_wells(anchor.frame, tx, ty, elev)     # (the mod's pump jacks)
             import powerlines
             powerlines.tile_lines(anchor.frame, tx, ty, self.mapdata, elev, props, wires)    # high-voltage lines
+            import fences
+            try:
+                props.extend(fences.rows(anchor.frame, infra_fn, box, elev))
+            except Exception as ex:
+                log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            import picnic
+            land_fn = lambda key: self.mapdata.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
+            bld_fn = lambda key: self.mapdata.cell(key, layers=("buildings",), kind="demand").layers.get("buildings")
+            osm = getattr(self.mapdata, "picnic_osm", None)
+            try:
+                props.extend(picnic.rows(anchor.frame, infra_fn, land_fn, box, elev,
+                                         osm.cells if osm is not None else None, bld_fn))
+            except Exception as ex:
+                log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            import shelters
+            try:
+                props.extend(shelters.rows(anchor.frame, infra_fn, box, elev, near_roads))
+            except Exception as ex:
+                log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
@@ -2068,12 +2098,14 @@ class Server:
             road_feats, roads_complete = self.surface.roads(keep["lat"], keep["lon"])
             stages["landcover"] = time.perf_counter() - t1
             t1 = time.perf_counter()
+            lots = (self.surface.lots(keep["lat"], keep["lon"]) if hasattr(self.surface, "lots") else None)
+            if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
+                idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
                                              blockworker._open_tunnels(g, keep))
-            idx = (surfacemod.paint_lots(idx, keep["lat"], keep["lon"], self.surface.lots(keep["lat"], keep["lon"]))
-                if hasattr(self.surface, "lots") else idx)
+            idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
             if hasattr(self.surface, "fuel_pads"):      # gas station forecourts (--gas-stations on)
                 idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"],
                                             self.surface.fuel_pads(keep["lat"], keep["lon"]))

@@ -251,6 +251,10 @@ class MapData:
         self.release = release
         self.raw_dir = os.path.join(cache_dir, "mapdata", "raw")
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
+        import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
+        self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
+        import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
+        self.billboard_osm = billboardsource.Source()
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None

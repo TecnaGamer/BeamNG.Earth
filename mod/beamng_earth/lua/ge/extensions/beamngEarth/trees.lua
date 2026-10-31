@@ -231,6 +231,38 @@ M.CATALOG.cable = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cable_bar
 M.GROUP_MAX_M.jersey = 4000
 M.GROUP_MAX_M.jersey_end = 4000
 M.GROUP_MAX_M.cable = 1500
+-- Mapped chain-link fences and noise walls (server fences.py): West Coast USA's chain-link panel (2.04 m along
+-- its x, the origin at the forward end) and its concrete noise blocker (4 m along its y).
+M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
+M.CATALOG.noisewall = { { WCA .. 'objects/s_concrete_noiseblocker', 2.4 } }
+M.GROUP_MAX_M.chainlink = 800
+M.GROUP_MAX_M.noisewall = 2000
+-- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
+-- Coast's grill. The table's materials live with Utah's buildings.
+M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
+M.CATALOG.picnicgrill = { { ECA .. 'buildings/eca_BBQ', 1.48 } }
+M.GROUP_MAX_M.picnictable = 400
+M.GROUP_MAX_M.picnicgrill = 400
+-- Bus shelters (server shelters.py): East Coast's glass stop. Its signed face is local +x, its long
+-- side local y, and it sits 0.2 m below its origin.
+M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_ecu', 2.90 } }
+M.GROUP_MAX_M.busshelter = 600
+-- Cell and water towers, shipping containers, the drag-strip billboard (poster included) and a stock barn
+-- (server worldprops.py).
+-- The height is the mesh's vertical size, so a row of that height is the model at 1:1.
+M.CATALOG.celltower = { { JV .. 'misc/celltower', 28.93 } }
+M.CATALOG.watertower = { { WCA .. 'objects/industrial_watertower', 26.16 } }
+M.CATALOG.container = {
+  { WCA .. 'objects/s_containers_20_white', 2.59 }, { WCA .. 'objects/s_containers_20_brown', 2.59 },
+  { WCA .. 'objects/s_containers_40_white', 2.59 }, { WCA .. 'objects/s_containers_40_brown', 2.59 },
+}
+M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
+M.CATALOG.barn = { { '/levels/hirochi_raceway/art/shapes/buildings/farm_barn', 8.41 } }
+M.GROUP_MAX_M.celltower = 2500
+M.GROUP_MAX_M.watertower = 2000
+M.GROUP_MAX_M.container = 500
+M.GROUP_MAX_M.billboard = 900
+M.GROUP_MAX_M.barn = 800
 -- Pure: whether a group is a road barrier's (guard rails, jersey and cable barriers): continuous runs, not thinned
 -- below the tile cap.
 function M.isBarrier(g)
@@ -250,7 +282,9 @@ local MATERIALS = {
   IT .. 'trees/trees_italy', IT .. 'trees', IT .. 'rocks', '/levels/automation_test_track/art/shapes/objects',
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
-  UT .. 'ut_roadsigns', '/levels/driver_training/art/shapes/race',
+  UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
+  JV .. 'misc',     -- the cell tower
+  '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
   '/art/shapes/objects/windows_doors_reflective',

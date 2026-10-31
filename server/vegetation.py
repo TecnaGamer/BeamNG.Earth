@@ -15,6 +15,9 @@ cell's map data and VERSION; its random choices (species, yaw, size, thinning ra
 - Rocks: a hashed scatter over bare / sparse land (WorldCover 60), thinner over shrubs and grass.
 - Groups: deciduous / conifer by a regional mix and height, shrub, rock (the mod maps groups to its
   stock shapes).
+- Orchards (land_use class orchard): trees in lines along the long side, and the canopy's trees
+  inside the orchard left out so the rows are not filled in at random.
+- Farmland: shrubs in a line down the gap between the dirt crop rows.
 """
 import logging
 import math
@@ -33,9 +36,12 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 18          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 22          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
-                      # 18: the rounded junction corners kept clear, roadcorners.py)
+                      # 18: the rounded junction corners kept clear, roadcorners.py; 19: orchard rows, canopy trees
+                      # inside an orchard left out; 20: denser orchard rows, foliage lines between crop rows;
+                      # 21: orchard rows tighter again, shrub lines on the closer crop rows; 22: shrub lines on the
+                      # doubled furrow spacing)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -382,8 +388,11 @@ class Vegetation:
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
-        # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays)
+        # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays).
+        # An orchard keeps its planted rows and loses the canopy's trees inside it.
         paved = np.zeros(h.shape, bool)
+        orchard = np.zeros(h.shape, bool)
+        lu = None
         try:
             cl = self.md.cell((mapcells.ZOOM, x, y), layers=("land_use", "infrastructure"))
             lu, inf = cl.layers.get("land_use"), cl.layers.get("infrastructure")
@@ -391,11 +400,17 @@ class Vegetation:
                 _mask_polys(lu, paved, chm, 0.0, select=lu.attrs["subtype"].astype(str) == "pedestrian")
             if inf is not None and len(inf) and inf.attrs.get("class") is not None:
                 _mask_polys(inf, paved, chm, 0.0, select=inf.attrs["class"].astype(str) == "parking")
+            if lu is not None and len(lu) and lu.attrs.get("class") is not None:
+                _mask_polys(lu, orchard, chm, 0.0, select=lu.attrs["class"].astype(str) == "orchard")
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
-        scatter = self._scatter(cd, lc, blocked | paved, chm, hs)
-        edge = self._edge(cd, lc, blocked, road, chm, hs)
-        return _concat(_concat(tree, scatter), edge)
+        if orchard.any():
+            tree = _drop_on_mask(tree, orchard, chm)
+        scatter = self._scatter(cd, lc, blocked | paved | orchard, chm, hs)
+        edge = self._edge(cd, lc, blocked | orchard, road, chm, hs)
+        planted = orchard_items(lu, chm, blocked, (lon0, lat0, lon1, lat1))
+        hedges = farm_foliage(lu, chm, blocked, (lon0, lat0, lon1, lat1))
+        return _concat(_concat(_concat(_concat(tree, scatter), edge), planted), hedges)
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -551,6 +566,274 @@ def _to4326(x, y):
     x = np.asarray(x, np.float64)
     y = np.asarray(y, np.float64)
     return np.degrees(x / R), np.degrees(2 * np.arctan(np.exp(y / R)) - np.pi / 2)
+
+
+# Planted rows (Overture land_use class orchard). Spacing grows, by whole steps, on a huge orchard so one
+# cell does not emit a forest of its own; the lattice is fixed in the world so a row continues across a
+# cell edge when both pieces share an axis.
+ORCHARD_ALONG_M = 2.5       # along a row
+ORCHARD_ACROSS_M = 3.0      # between rows
+ORCHARD_MIN_M2 = 600.0
+ORCHARD_POLY_MAX = 3500
+ORCHARD_CELL_MAX = 4500
+# Crop rows (surface.FARM_ROW_M): a line of shrubs down the middle of each gap between the dirt furrows.
+# Spacing along the row grows when a field would emit too many.
+FARM_BUSH_ALONG = 6.0
+FARM_BUSH_POLY = 500
+FARM_BUSH_CELL = 2000
+FARM_MIN_M2 = 800.0
+
+
+def _drop_on_mask(items, mask, chm):
+    """items whose position is not on a set pixel of mask (canopy trees inside an orchard)."""
+    if len(items) == 0 or mask is None or not np.any(mask):
+        return items
+    x, y = _to3857(items.lon, items.lat)
+    c = np.floor((x - chm.x0) / chm.dx).astype(np.int64)
+    r = np.floor((chm.y0 - y) / chm.dy).astype(np.int64)
+    n_r, n_c = mask.shape
+    inside = (r >= 0) & (r < n_r) & (c >= 0) & (c < n_c)
+    drop = np.zeros(len(items), bool)
+    drop[inside] = mask[r[inside], c[inside]]
+    return items.take(~drop)
+
+
+def _fid_key(fid):
+    x = 1469598103934665603
+    for b in str(fid).encode():
+        x ^= b
+        x = (x * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return x
+
+
+def orchard_items(feats, chm, blocked, bounds=None):
+    """Trees in lines on land_use class orchard: along the long side, one line every ORCHARD_ACROSS_M.
+    blocked is the canopy grid's buildings, roads and water. bounds (lon0, lat0, lon1, lat1) keeps a tree
+    in this cell. None of the random canopy."""
+    if feats is None or len(getattr(feats, "kind", ())) == 0 or feats.attrs.get("class") is None:
+        return _empty()
+    cls = np.asarray(feats.attrs["class"]).astype(str)
+    ids = getattr(feats, "ids", None)
+    xs, ys, hs, yaws, ranks, us = [], [], [], [], [], []
+    seen = set()
+    for i in np.flatnonzero((np.asarray(feats.kind) == 3) & (cls == "orchard")):
+        fid = ids[i] if ids is not None else i
+        if str(fid) in seen:
+            continue
+        seen.add(str(fid))
+        parts = feats.parts(int(i))
+        if not parts or not parts[0] or len(parts[0][0]) < 3:
+            continue
+        ring = np.asarray(parts[0][0], np.float64)
+        if len(ring) >= 2 and np.allclose(ring[0], ring[-1]):
+            ring = ring[:-1]
+        x, y = _to3857(ring[:, 0], ring[:, 1])
+        xy = np.column_stack([x, y])
+        area = abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+        if area < ORCHARD_MIN_M2:
+            continue
+        u = _orchard_axis(xy)
+        v = np.array([-u[1], u[0]])
+        span_a = float((xy @ u).max() - (xy @ u).min())
+        span_b = float((xy @ v).max() - (xy @ v).min())
+        along, across = ORCHARD_ALONG_M, ORCHARD_ACROSS_M
+        factor = 1
+        while factor < 16 and (area / (along * across) > ORCHARD_POLY_MAX or span_a / along > 300
+                               or span_b / across > 300):
+            factor += 1
+            along, across = ORCHARD_ALONG_M * factor, ORCHARD_ACROSS_M * factor
+        phase_a = float(_hash01(np.array([_fid_key(fid)], np.uint64), np.array([1], np.uint64), 11)[0]) * along
+        phase_b = float(_hash01(np.array([_fid_key(fid)], np.uint64), np.array([2], np.uint64), 11)[0]) * across
+        amin, amax = float((xy @ u).min()), float((xy @ u).max())
+        bmin, bmax = float((xy @ v).min()), float((xy @ v).max())
+        i0, i1 = math.floor((amin - phase_a) / along), math.ceil((amax - phase_a) / along)
+        j0, j1 = math.floor((bmin - phase_b) / across), math.ceil((bmax - phase_b) / across)
+        if i1 - i0 > 300 or j1 - j0 > 300:
+            continue
+        ii, jj = np.meshgrid(np.arange(i0, i1 + 1), np.arange(j0, j1 + 1), indexing="ij")
+        pts = (ii.ravel() * along + phase_a)[:, None] * u + (jj.ravel() * across + phase_b)[:, None] * v
+        from polygon import Path
+        inside = np.asarray(Path(xy).contains_points(pts), bool)
+        for hole in parts[0][1:]:
+            hole = np.asarray(hole, np.float64)
+            if len(hole) < 3:
+                continue
+            hx, hy = _to3857(hole[:, 0], hole[:, 1])
+            inside &= ~np.asarray(Path(np.column_stack([hx, hy])).contains_points(pts), bool)
+        pts = pts[inside]
+        if len(pts) == 0:
+            continue
+        key = np.uint64(_fid_key(fid))
+        jit_a = (_hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 3) - 0.5) * 0.6
+        jit_b = (_hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 4) - 0.5) * 0.3
+        pts = pts + jit_a[:, None] * u + jit_b[:, None] * v
+        if blocked is not None and np.any(blocked):
+            c = np.floor((pts[:, 0] - chm.x0) / chm.dx).astype(np.int64)
+            r = np.floor((chm.y0 - pts[:, 1]) / chm.dy).astype(np.int64)
+            n_r, n_c = blocked.shape
+            ok = (r >= 0) & (r < n_r) & (c >= 0) & (c < n_c)
+            bad = np.zeros(len(pts), bool)
+            bad[ok] = blocked[r[ok], c[ok]]
+            pts = pts[~bad]
+        if len(pts) == 0:
+            continue
+        if bounds is not None:
+            lon0, lat0, lon1, lat1 = bounds
+            ex0, ey0 = _to3857(lon0, lat0)
+            ex1, ey1 = _to3857(lon1, lat1)
+            pts = pts[(pts[:, 0] >= ex0) & (pts[:, 0] < ex1) & (pts[:, 1] > ey0) & (pts[:, 1] <= ey1)]
+        if len(pts) == 0:
+            continue
+        lon, lat = _to4326(pts[:, 0], pts[:, 1])
+        uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 5)
+        yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+        xs.append(lon)
+        ys.append(lat)
+        hs.append(4.2 + 2.3 * uh)
+        yaws.append(yaw0 + (uh - 0.5) * 24.0)
+        ranks.append(uh * 0.18)
+        us.append(uh)
+    if not xs:
+        return _empty()
+    lon, lat = np.concatenate(xs), np.concatenate(ys)
+    height = np.concatenate(hs).astype(np.float32)
+    yaw = np.concatenate(yaws).astype(np.float32)
+    rank = np.concatenate(ranks).astype(np.float32)
+    u = np.concatenate(us)
+    if len(lon) > ORCHARD_CELL_MAX:
+        keep = np.sort(np.argpartition(rank, ORCHARD_CELL_MAX - 1)[:ORCHARD_CELL_MAX])
+        lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
+    group = np.full(len(lon), G_DECIDUOUS, np.uint8)
+    group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
+    return Items(lon, lat, height, (0.12 * height + 1.0).astype(np.float32),
+                 np.full(len(lon), KIND_TREE, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+
+
+def farm_foliage(feats, chm, blocked, bounds=None):
+    """Shrubs in lines between the crop rows of land_use class farmland (surface.FARM_ROW_M): one line down
+    the middle of each gap between the dirt furrows. Roads (blocked) are left bare, so a dirt track through a
+    field is not planted. bounds (lon0, lat0, lon1, lat1) keeps a shrub in this cell."""
+    if feats is None or len(getattr(feats, "kind", ())) == 0 or feats.attrs.get("class") is None:
+        return _empty()
+    import geodesy
+    import surface as sf
+    from polygon import Path
+    cls = np.asarray(feats.attrs["class"]).astype(str)
+    ids = getattr(feats, "ids", None)
+    xs, ys, hs, yaws, ranks, us = [], [], [], [], [], []
+    seen = set()
+    row = sf.FARM_ROW_M
+    for i in np.flatnonzero((np.asarray(feats.kind) == 3) & (cls == "farmland")):
+        fid = ids[i] if ids is not None else i
+        if str(fid) in seen:
+            continue
+        seen.add(str(fid))
+        parts = feats.parts(int(i))
+        if not parts or not parts[0] or len(parts[0][0]) < 3:
+            continue
+        ring = np.asarray(parts[0][0], np.float64)
+        if len(ring) >= 2 and np.allclose(ring[0], ring[-1]):
+            ring = ring[:-1]
+        frame = geodesy.EnuFrame(float(np.mean(ring[:, 1])), float(np.mean(ring[:, 0])))
+        e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
+        xy = np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)])
+        area = abs(float(np.dot(xy[:, 0], np.roll(xy[:, 1], -1)) - np.dot(xy[:, 1], np.roll(xy[:, 0], -1)))) * 0.5
+        if area < FARM_MIN_M2:
+            continue
+        c = xy.mean(axis=0)
+        u = _orchard_axis(xy)
+        v = np.array([-float(u[1]), float(u[0])])
+        rel = xy - c
+        span_a = float((rel @ u).max() - (rel @ u).min())
+        span_b = float((rel @ v).max() - (rel @ v).min())
+        along = FARM_BUSH_ALONG
+        est = max(span_a, 1.0) / along * max(span_b, 1.0) / row
+        while est > FARM_BUSH_POLY and along < 24.0:
+            along += 4.0
+            est = max(span_a, 1.0) / along * max(span_b, 1.0) / row
+        phase = sf._field_phase(fid, xy)
+        target = (phase + 0.5 * (sf.FARM_FURROW_M + row)) % row
+        amin, amax = float((rel @ u).min()), float((rel @ u).max())
+        bmin, bmax = float((rel @ v).min()), float((rel @ v).max())
+        i0, i1 = math.floor(amin / along), math.ceil(amax / along)
+        j0, j1 = math.floor((bmin - target) / row), math.ceil((bmax - target) / row)
+        if i1 < i0 or j1 < j0 or i1 - i0 > 400 or j1 - j0 > 200:
+            continue
+        ii, jj = np.meshgrid(np.arange(i0, i1 + 1), np.arange(j0, j1 + 1), indexing="ij")
+        pts = c + (ii.ravel() * along)[:, None] * u + (target + jj.ravel() * row)[:, None] * v
+        inside = np.asarray(Path(xy).contains_points(pts), bool)
+        pts = pts[inside]
+        if len(pts) == 0:
+            continue
+        key = np.uint64(_fid_key(fid))
+        jit = (_hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 21) - 0.5) * 0.8
+        pts = pts + jit[:, None] * u
+        la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        if blocked is not None and np.any(blocked):
+            x, y = _to3857(lo, la)
+            cc = np.floor((x - chm.x0) / chm.dx).astype(np.int64)
+            rr = np.floor((chm.y0 - y) / chm.dy).astype(np.int64)
+            n_r, n_c = blocked.shape
+            ok = (rr >= 0) & (rr < n_r) & (cc >= 0) & (cc < n_c)
+            bad = np.zeros(len(pts), bool)
+            bad[ok] = blocked[rr[ok], cc[ok]]
+            la, lo = la[~bad], lo[~bad]
+        if len(la) == 0:
+            continue
+        if bounds is not None:
+            lon0, lat0, lon1, lat1 = bounds
+            keep = (lo >= lon0) & (lo < lon1) & (la > lat0) & (la <= lat1)
+            la, lo = la[keep], lo[keep]
+        if len(la) == 0:
+            continue
+        uh = _hash01(np.full(len(la), key), np.arange(len(la), dtype=np.uint64), 22)
+        yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+        xs.append(lo)
+        ys.append(la)
+        hs.append(1.3 + 0.7 * uh)
+        yaws.append(yaw0 + (uh - 0.5) * 16.0)
+        ranks.append(uh * 0.2)
+        us.append(uh)
+    if not xs:
+        return _empty()
+    lon, lat = np.concatenate(xs), np.concatenate(ys)
+    height = np.concatenate(hs).astype(np.float32)
+    yaw = np.concatenate(yaws).astype(np.float32)
+    rank = np.concatenate(ranks).astype(np.float32)
+    u = np.concatenate(us)
+    if len(lon) > FARM_BUSH_CELL:
+        keep = np.sort(np.argpartition(rank, FARM_BUSH_CELL - 1)[:FARM_BUSH_CELL])
+        lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
+    group = np.full(len(lon), G_SHRUB, np.uint8)
+    group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
+    return Items(lon, lat, height, (0.4 * height).astype(np.float32),
+                 np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+
+
+def _orchard_axis(xy):
+    """Unit long-side axis of a ring in metres, pointing east, or north when it runs north-south."""
+    p = np.asarray(xy, np.float64)
+    if len(p) >= 2 and np.allclose(p[0], p[-1]):
+        p = p[:-1]
+    d = p - p.mean(axis=0)
+    if len(d) < 2:
+        return np.array([1.0, 0.0])
+    cov = d.T @ d
+    tr = float(cov[0, 0] + cov[1, 1])
+    det = float(cov[0, 0] * cov[1, 1] - cov[0, 1] * cov[0, 1])
+    lam = tr / 2.0 + math.sqrt(max(tr * tr / 4.0 - det, 0.0))
+    if abs(float(cov[0, 1])) > 1e-8:
+        vx, vy = lam - float(cov[1, 1]), float(cov[0, 1])
+    elif float(cov[0, 0]) >= float(cov[1, 1]):
+        vx, vy = 1.0, 0.0
+    else:
+        vx, vy = 0.0, 1.0
+    nrm = math.hypot(vx, vy) or 1.0
+    u = np.array([vx / nrm, vy / nrm])
+    if u[0] < -1e-9 or (abs(u[0]) <= 1e-9 and u[1] < 0):
+        u = -u
+    return u
 
 
 def _mask_polys(f, mask, chm, grow_m, kind=3, select=None):

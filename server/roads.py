@@ -3969,7 +3969,7 @@ TILE_BUILDING_LAYERS = ("buildings", "building_parts", "water")   # a road tile'
 
 def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
     """The (cell, layer)s a road tile asks the map data for, nearest first (MapData.warm, before building it): the
-    roads and infrastructure (bridges) of the cells under it and their buildings (buildings on), the roads of the ring
+    roads and infrastructure (bridges) of the cells under it and their buildings and land use (buildings on), the roads of the ring
     around (grading's neighbours), the buildings of two rings around (widths on: roadwidth's walls) and the water of
     water_ring cells around (seacarve's rasters and river lines), and the roads of the second ring (gradesep's
     neighbours of the first)."""
@@ -3987,7 +3987,8 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
                if 0 <= y < n]
         return sorted(out, key=lambda k: (abs((k.x - cx + n / 2) % n - n / 2) + abs(k.y - cy), k))
     own = set(keys)
-    tile = ("roads", "infrastructure") + (TILE_BUILDING_LAYERS if buildings else ())
+    # land use: parks (picnic tables) and container yards / billboards (worldprops)
+    tile = ("roads", "infrastructure") + ((TILE_BUILDING_LAYERS + ("land_use",)) if buildings else ())
     needs = [(k, ly) for k in sorted(keys) for ly in tile]
     needs += [(k, "roads") for k in ring(1) if k not in own]
     # (and the ring past that: gradesep reads the neighbours of every cell whose level ranges are asked, the ring's too)

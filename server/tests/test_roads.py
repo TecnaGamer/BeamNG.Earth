@@ -1145,8 +1145,9 @@ class TileNeedsTest(unittest.TestCase):
         needs = roads.tile_needs(frame, 0, 0, buildings=True, widths=True, water_ring=3)
         self.assertEqual(len(needs), len(set(needs)), "no (cell, layer) twice")
         self.assertEqual({k for k, ly in needs if ly == "building_parts"}, own)   # the tile's own cells first
-        self.assertEqual({ly for k, ly in needs[:len(own) * 5]}, {"roads", "infrastructure", "buildings",
-                                                                    "building_parts", "water"})
+        self.assertEqual({ly for k, ly in needs[:len(own) * 6]}, {"roads", "infrastructure", "buildings",
+                                                                    "building_parts", "water", "land_use"})
+        self.assertEqual({k for k, ly in needs if ly == "land_use"}, own)
         xs = sorted({k.x for k in own})
         ring = {k for k, ly in needs if ly == "buildings"}
         self.assertEqual(sorted({k.x for k in ring}), list(range(xs[0] - 2, xs[-1] + 3)))
