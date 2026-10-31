@@ -177,6 +177,9 @@ local function makePhys(p, z)
   local o = createObject('WaterBlock')
   setGridSize(o, M.PHYS_SIZE)
   for _, f in ipairs(FIELDS) do o:setField(f[1], f[2], f[3]) end
+  -- the textures too, though it is never drawn: without them each move logged "Texture missing: " (an empty name)
+  -- twice (342 log errors in a 33 min drive, BeamNG 0.40.4, 2026-10-30)
+  for _, x in ipairs(TEXTURES) do o:setField(x[1], 0, exists(x[2]) and x[2] or x[3]) end
   o:setField('gridElementSize', 0, tostring(M.PHYS_SIZE / 16))
   o:setPosition(vec3(p.x, p.y, z))
   o:setScale(vec3(M.PHYS_SIZE, M.PHYS_SIZE, M.DEPTH_M))

@@ -55,6 +55,8 @@ T.check(car.nudged >= 1, 'a parked car inside a new tile is re-placed (its physi
 local pb = physBlock()
 T.check(pb and pb.renderEnabled == false and pb.pos.x == 100 and math.abs(pb.pos.z) < 0.01 and pb.scale.x == sea.PHYS_SIZE,
   'a physics block around the player at the level of its tile, not drawn')
+T.check(pb.fields.rippleTex and pb.fields.foamTex and pb.fields.depthGradientTex,
+  'the physics block has its textures (without, every move logged "Texture missing")')
 local made0 = sea.physMade
 sea.update(1, player)
 T.check(sea.physMade == made0 + 1, 'made again once the batch of new tiles is done')

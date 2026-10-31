@@ -427,6 +427,31 @@ T.check(info.size[1] * info.size[2] > 5.1e14 and info.size[1] * info.size[2] < 5
 T.check(li.placeId(li.PREFIX .. '12') == 12 and li.placeId(li.RANDOM) == nil and li.placeId(nil) == nil, 'placeId')
 T.check(not li.previewKey(-33.731908, 150.312007):find('[-.]'), 'preview keys: file-name safe')
 
+-- the big map's POI list: core_levels sees our level's spawn points less ours (no scene objects: an error each)
+do
+  local levelTable = { levelName = 'beamng_earth', spawnPoints = info.spawnPoints }
+  local seen, updates = nil, 0
+  local stock = function(id, elements)
+    seen = {}
+    for _, sp in ipairs(core_levels.getLevelByName(id).spawnPoints) do seen[#seen + 1] = sp.objectname end
+  end
+  core_levels = { onGetRawPoiListForLevel = stock, getLevelByName = function() return levelTable end }
+  local savedExt = extensions
+  extensions = { hookUpdate = function(n) if n == 'onGetRawPoiListForLevel' then updates = updates + 1 end end }
+  T.check(li.isOurs(li.RANDOM) and li.isOurs(li.PREFIX .. '3') and not li.isOurs(li.DEFAULT) and not li.isOurs(nil),
+    'isOurs: Random and the places, not the default start')
+  T.check(li.hookSpawnPois() and li.hookSpawnPois() and updates == 1, 'POIs: wrapped once, the hook cache dropped')
+  core_levels.onGetRawPoiListForLevel('beamng_earth', {})
+  T.check(#seen == 1 and seen[1] == li.DEFAULT, 'POIs: only the default start reaches core_levels in our level')
+  T.check(levelTable.spawnPoints == info.spawnPoints and #levelTable.spawnPoints == 2 + #l2,
+    'POIs: the level select keeps every spawn point')
+  core_levels.onGetRawPoiListForLevel('italy', {})
+  T.check(#seen == 2 + #l2, 'POIs: another level as stock')
+  li.unhookSpawnPois()
+  T.check(core_levels.onGetRawPoiListForLevel == stock and updates == 2, 'POIs: the stock function back')
+  core_levels, extensions = nil, savedExt
+end
+
 -- "Where you left off": the car's place, saved while driving (at most every POS_EVERY_S, once moved POS_MOVE_M), and
 -- at once on a teleport, level end and game close (force)
 local PF = places.POS_FILE

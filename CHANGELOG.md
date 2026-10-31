@@ -2,6 +2,14 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Fixed
+- **A quieter game log**: the hidden water block under the car (what makes the sea and lakes float things) now has
+  its textures, so moving no longer logs "Texture missing" each time (342 errors in a 33 minute drive), and the big
+  map's list no longer logs "Could not find spawnpoint object!" for Random and every saved place each time it is
+  gathered again (663 errors in the same drive). The level select still lists them all.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
