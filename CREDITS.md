@@ -10,6 +10,24 @@ Status: **in use** = used by the current main branch; **branch** = on a feature 
 yet; **planned** = in the roadmap, not used yet; **reference** = consulted for research or tuning
 only, nothing redistributed. Licence notes marked *(verify)* must be re-checked before any release.
 
+## Regional furniture experiment (bundled, opt-in)
+
+- `server/data/country_bounds.zip`: worldwide territorial countries/dependencies,
+  Overture Maps Foundation divisions release 2026-09-23.1. **© OpenStreetMap
+  contributors, Overture Maps Foundation.** Database under ODbL-1.0, separate
+  from the MIT code. Scope and rebuild: `server/data/country_bounds.NOTICE.md`.
+- `server/data/fr_town_signs.json.gz` and `fr_direction_signs.json.gz`: French
+  OpenStreetMap sign/settlement snapshots, 29 October 2026, via Overpass.
+  **© OpenStreetMap contributors.** ODbL-1.0; `server/data/fr_signs.NOTICE.md`.
+- DejaVu Sans Bold and its generated shared sign alphabet: Bitstream Vera font
+  licence, with DejaVu changes in the public domain. Full licence retained in
+  `tools/fonts/DejaVu-LICENSE.txt` and the regional-sign asset directory.
+  This is an approximate prototype typeface, not an official French road font.
+- New concrete/wood/lantern/marker geometry and procedural grain/European sidewalk textures are
+  original and follow the repository MIT licence. User-supplied street photographs
+  were silhouette references only; no photo pixels or other authors' models are
+  redistributed. The new kit uses country profiles, not named-village exceptions.
+
 ## Map data (downloaded at runtime by the companion server and cached on the player's disk)
 
 | Data | Provider | Used for | Licence / terms | Attribution | Status |
@@ -174,3 +192,17 @@ BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic 
 Dynamic Damage Particles, Dynamic Scratches, SparkMod: other authors' mods the project owner uses;
 BeamNG.Earth only coexists with them (e.g. the weather module backs off when BWM_Weather drives the
 weather). The pause-menu integration follows the pattern of the TAA Standalone mod.
+
+## European infrastructure experiment v4 (opt-in)
+
+- Original procedural European pole/delineator/chevron meshes and shared sign
+  renderer: see `tools/build_european_infrastructure.py` and `server/europeinfra.py`.
+  User-provided comparison maps/photos are visual references only; not redistributed.
+- European locality names: Overture Maps 2026-09-23.1, © OpenStreetMap contributors;
+  Esri Community Maps and Maps Entity Variant Names CC0 inputs. Derivative ODbL 1.0.
+  See `server/data/europe_places.NOTICE.md` for source, selection, licence and hashes.
+- Québec: Statistics Canada 2021 province cartographic boundaries, service
+  generalisation 10 m, adapted under Statistics Canada Open Licence. See
+  `server/data/quebec_bounds.NOTICE.md`. No Statistics Canada endorsement implied.
+- Expanded DejaVu Sans Bold atlas (Latin/Greek/Cyrillic/Armenian/Georgian): retains
+  `tools/fonts/DejaVu-LICENSE.txt`; white glyph atlas also used for ARRÊT and DUR.

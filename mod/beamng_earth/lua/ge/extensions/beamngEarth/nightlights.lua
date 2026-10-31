@@ -17,6 +17,7 @@ M.MATERIALS = {
   bne_bld_sky = { '1 1 1', 200 },
   -- the street lamps' lenses (furniture.py G_LENS; tools/build_lamp_lens.py): sodium-warm, bright
   bne_lamp_lens = { '1 0.66 0.33', 4000 },
+  bne_fr_glass = { '1 0.68 0.12', 900 },
 }
 
 -- The street lamps' light: a pool of LIGHTS_MAX spot lights (no shadows), every LIGHTS_S moved to the lamps nearest
@@ -42,6 +43,8 @@ M.MAKE_PER_STEP = 4
 -- their peak 2.25-3.75 heights along the road (medium): aimed tilt degrees toward the road (the lens row's yaw: the
 -- lamp's arm), a soft edge (inner .. outer); before, a hard-edged 50 m disc centred under the head.
 M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.66 0.33 1', drop = 0.12, tilt = 12 }
+
+M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
 
 local lastCheck = -1e9
 local lastLights = -1e9
@@ -82,12 +85,16 @@ end
 
 -- A road tile's furniture rows (roads.lua: { group index, x, y, z, yaw, ... } with its groups): its lenses.
 function M.onRows(key, items, groups)
-  local gi = nil
-  for i, g in ipairs(type(groups) == 'table' and groups or {}) do if g == 'lamplens' then gi = i - 1 end end
-  if gi == nil or type(items) ~= 'table' then lenses[key] = nil; return end
+  local groupsById = {}
+  for i, g in ipairs(type(groups) == 'table' and groups or {}) do
+    if g == 'lamplens' or g == 'fr_lantern_light' then groupsById[i - 1] = g end
+  end
+  if type(items) ~= 'table' then lenses[key] = nil; return end
   local out = {}
   for _, r in ipairs(items) do
-    if type(r) == 'table' and r[1] == gi and r[2] and r[3] and r[4] then out[#out + 1] = { r[2], r[3], r[4], r[5] } end
+    if type(r) == 'table' and groupsById[r[1]] and r[2] and r[3] and r[4] then
+      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light' }
+    end
   end
   lenses[key] = #out > 0 and out or nil
 end
@@ -146,15 +153,24 @@ local function place(e, l)
   local o = scenetree.findObjectById(e.id)
   if not o then return end
   if l then
+    local L = l[5] and M.LANTERN or M.LIGHT
+    -- Reapply on reuse: a light previously serving a lantern can serve a stock lamp.
+    if e.profile ~= L then
+      for field, value in pairs({ range = L.range, innerAngle = L.inner, outerAngle = L.outer,
+                                  brightness = L.brightness, color = L.color }) do
+        o:setField(field, 0, tostring(value))
+      end
+      e.profile = L
+    end
     if l[4] then                                        -- (its forward, local y: down, tilted toward the road)
-      local a, t = math.rad(l[4]), math.rad(M.LIGHT.tilt)
+      local a, t = math.rad(l[4]), math.rad(L.tilt)
       local c, s = math.cos(a), math.sin(a)
       local q = quatFromDir(vec3(c * math.sin(t), s * math.sin(t), -math.cos(t)), vec3(c, s, 0))
-      o:setPosRot(l[1], l[2], l[3] - M.LIGHT.drop, q.x, q.y, q.z, q.w)
+      o:setPosRot(l[1], l[2], l[3] - L.drop, q.x, q.y, q.z, q.w)
     else
       local m = MatrixF(true)
       m:setFromEuler(vec3(math.pi / 2, 0, 0))           -- (straight down: -pi/2 pointed it up)
-      m:setPosition(vec3(l[1], l[2], l[3] - M.LIGHT.drop))
+      m:setPosition(vec3(l[1], l[2], l[3] - L.drop))
       o:setTransform(m)
     end
   end

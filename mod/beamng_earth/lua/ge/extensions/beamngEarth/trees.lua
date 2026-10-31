@@ -31,7 +31,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
 M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
-  sub_transformer = 500, sub_fence = 200, lamplens = 800, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
+  sub_transformer = 500, sub_fence = 200, lamplens = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
@@ -50,7 +50,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -182,6 +182,18 @@ M.CATALOG = {
   polelamp = { { ECA .. 'buildings/electrical_pole_lamp', 1.1 } },
   streetlight = { { '/art/shapes/garage_and_dealership/Clutter/eca_lamppost', 9.0 } },
   pole = { { '/levels/automation_test_track/art/shapes/objects/s_powerpole_3wire', 9.2 } },
+  -- optional French demo (server poleprofiles.py): original mesh, three LODs, one lean collision hull
+  pole_concrete_recessed = { { '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/bne_pole_concrete_recessed', 8.5 } },
+  fr_wood_pole = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_wood_pole', 8.5 } },
+  eu_wood_pole = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_wood_neutral', 8.5 } },
+  fr_lantern = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_lantern', 5.4 } },
+  fr_j1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_j1', 1.3 } },
+  fr_j3 = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_j3', 1.3 } },
+  fr_j6 = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_j6', 1.05 } },
+  fr_j4_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_j4_l', 1.85 } },
+  fr_j4_r = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_j4_r', 1.85 } },
+  fr_signpost = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/bne_fr_signpost', 2.7 } },
+  fr_lantern_light = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_lens', 1.0 } },
   -- high-voltage lines' towers (server powerlines.py): the stock lattice tower (West Coast USA's is the same shape)
   pylon = { { '/levels/automation_test_track/art/shapes/objects/pylon', 35.8 } },
   -- substations (server powerlines.py): West Coast USA's switchgear (its yard's parts), the gantries the lines end at,
@@ -239,7 +251,17 @@ end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
+-- Data generated with the meshes; one shared catalog for render/collision/LODs.
+for group, a in pairs(require('beamngEarth/europeAssets')) do
+  M.CATALOG[group] = { { a[1], a[2] } }
+  M.GROUP_MAX_M[group] = a[3]
+  if a[4] then M.NO_COLLIDE[group] = true end
+end
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure',
+  '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles',
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture',
+  '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs',
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
   WCA .. 'trees/trees_conifer', WCA .. 'trees/trees_oak', WCA .. 'trees/trees_eucalyptus', WCA .. 'trees/trees_palm',

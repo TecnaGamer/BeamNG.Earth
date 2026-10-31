@@ -618,7 +618,7 @@ class Server:
                  colormatch="off", credits=None, cache=None, retex_rate=RETEX_RATE, surface=None,
                  mapdata=None, grading=False, road_widths=False, block_pools=(), sidewalks=True, buildings=False, traffic=False, far_pool=None,
                  road_pool=None, airports_db=None, sea=None, vegetation=None, leaf_on=True, season_mode="off",
-                 far_bld_pool=None, gas_stations=False):
+                 far_bld_pool=None, gas_stations=False, regional_poles="off"):
         """kfun: K(L) for every level (default: the layout's K table); near_radii: the min-level
         radii (default: the layout's); cells: 32 (v1.3.1) or 64 (M1, mesh mode only); tex: texture
         px per level from the finest (default: tex_near, tex_near, tex_far with 32 cells,
@@ -681,6 +681,17 @@ class Server:
         # runways graded in (--airports on: main() loads the OurAirports copy before the worker processes)
         self.airports = airportgrademod.AirportGrader(airports_db, self.dem) if airports_db is not None else None
         self.airports_db = airports_db  # (also the road rules' country: navgraph.country_near)
+        self.regional_poles = regional_poles
+        if regional_poles != "off":
+            import countrybounds
+            countrybounds.bundled()
+            if regional_poles in ("fr-varied", "europe"):
+                import townsigns
+                import directionsigns
+                townsigns.bundled()
+                directionsigns.bundled()    # fail visibly before generating tiles if the bundle is missing/corrupt
+            log.info("regional poles: %s (country polygons at each pole; data %s; other/unknown countries keep stock)",
+                     regional_poles, countrybounds.DATA_SHA256[:16])
         self.sea = sea              # seacarve.SeaCarver (--sea on): the sea floor carved, the water tiles
         self.veg = vegetation       # vegetation.Vegetation (--trees on): trees, bushes, rocks per cell
         if sea is not None and sea.dem is None:
@@ -1193,6 +1204,11 @@ class Server:
             anchor._lamp_region = v
         return v
 
+    def pole_profile(self, anchor=None):
+        """Mode/data token only; roads resolve country at each pole, not at the anchor."""
+        import poleprofiles
+        return poleprofiles.geographic_profile(getattr(self, "regional_poles", "off"))
+
     def mph(self, anchor):
         """Whether speed limits are posted in mph at the anchor (its country, navgraph.road_rules)."""
         v = getattr(anchor, "_mph", None)
@@ -1463,7 +1479,7 @@ class Server:
             blockworker.roads_geo, aid, anchor.lat, anchor.lon, anchor.zooms[0], gx, gy, gzoom, self.out_dir,
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
-            country, content, skin, exact)
+            country, content, skin, exact, Server.pole_profile(self))
         try:
             res = fut.result(timeout=ROAD_TILE_TIMEOUT_S)
         except concurrent.futures.TimeoutError:
@@ -1485,7 +1501,8 @@ class Server:
         import geotiles
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         return blockworker._geo_content_key(geotiles.geobox(gx, gy).key, gzoom, self.buildings, lh, mph,
-                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions())
+                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
+                                            pole_profile=Server.pole_profile(self))
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker, no network)? -> its key or None."""
@@ -1500,11 +1517,13 @@ class Server:
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         scratch = os.path.join(self.cache_dir, "areas", "scratch")
         return self.road_pool.submit(blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph,
-                                     self.gas_stations, buried, lamps, country).result(timeout=ROAD_TILE_TIMEOUT_S)
+                                     self.gas_stations, buried, lamps, country,
+                                     Server.pole_profile(self)).result(timeout=ROAD_TILE_TIMEOUT_S)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
         chunks) or None if the anchor is gone. Worker threads (fetches the map cells it lacks)."""
+        import poleprofiles
         anchor = self.anchors.get(aid)
         if anchor is None or self.mapdata is None:
             return None
@@ -1514,7 +1533,7 @@ class Server:
                 blockworker.roads_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                 self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
-                self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor))
+                self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor), Server.pole_profile(self, anchor))
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
@@ -1532,7 +1551,7 @@ class Server:
         self.mapdata.warm(roadsmod.tile_needs(anchor.frame, tx, ty, self.buildings, self.road_widths is not None,
                                               1 + seacarvemod.LINE_CELLS if self.sea is not None else 0))
         cells = [self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-                 for k in roadsmod.cells_of_tile(anchor.frame, tx, ty)]
+                 for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, 200 if poleprofiles.kit_enabled(Server.pole_profile(self, anchor)) else roadsmod.OVERLAP)]
         zoom = anchor.zooms[0]
         urban = self.surface.urban if self.surface is not None and hasattr(self.surface, "urban") else None
         g = self.grader_for(anchor)
@@ -1555,6 +1574,7 @@ class Server:
         lines = [] if self.buildings else None
         wires = [] if self.buildings else None
         park = [] if self.buildings else None
+        signs = [] if self.buildings and poleprofiles.kit_enabled(Server.pole_profile(self, anchor)) else None
         items = town = None
         if self.buildings:
             # (on the graded ground, as blockworker.roads_tile)
@@ -1576,7 +1596,7 @@ class Server:
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor), buried=self.buried(anchor),
-                                     lamp_region=self.lamp_region(anchor), country=self.country(anchor),
+                                     lamp_region=self.lamp_region(anchor), country=self.country(anchor), pole_profile=Server.pole_profile(self, anchor), signs=signs,
                                      structures=buildingsmod.centres(items, tx, ty) if items else (),
                                      tunnels=anchor.tunnels, walls=rwalls,
                                      ground=lambda x, y: roadmeshmod.drawn_ground(anchor.frame, drawn, np.c_[x, y],
@@ -1670,7 +1690,7 @@ class Server:
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
-                                   rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound, wells=oil_wells)
+                                   rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound, wells=oil_wells, signs=signs)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
@@ -1726,6 +1746,7 @@ class Server:
             "lift": float(DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0),
             "buildings": bool(self.buildings),
             "gas_stations": bool(self.gas_stations),
+            "pole_profile": Server.pole_profile(self),
             # every kind: the map data's versions (Overture release, layer versions, the weekly rail / lane builds)
             "md": md,
             # far tiles' geometry and texture (blockworker._far_key, far_tile): the layout (quality: cells, texture px)
@@ -5694,6 +5715,7 @@ async def main_async(args):
                     sidewalks=args.sidewalks == "on",
                     buildings=args.buildings == "on" and args.roads == "on",
                     gas_stations=args.gas_stations == "on" and args.roads == "on",
+                    regional_poles=args.regional_poles,
                     traffic=args.traffic == "on" and args.roads == "on",
                     block_pools=block_pools, far_pool=far_pool, road_pool=road_pool, airports_db=airports_db,
                     far_bld_pool=far_bld_pool,
@@ -6149,6 +6171,10 @@ def main():
     ap.add_argument("--buildings", choices=("on", "off"), default="off",
                     help="3D buildings from the Overture footprints with the road tiles (buildings.py; needs --roads "
                          "on): heights and roofs predicted where the data has none")
+    ap.add_argument("--regional-poles", choices=("off", "fr-demo", "fr-all", "fr-varied", "europe"), default="off",
+                    help="regional furniture: off=stock, fr-demo=50/50 poles, fr-all=concrete poles, "
+                         "fr-varied=French kit; europe=country-specific European scenery and Quebec/Turkish STOP lettering; "
+                         "worldwide country polygons at each object, French assets in FR only (default off)")
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")

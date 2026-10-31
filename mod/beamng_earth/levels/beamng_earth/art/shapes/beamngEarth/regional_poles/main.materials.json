@@ -1,0 +1,63 @@
+{
+  "bne_pole_concrete": {
+    "name": "bne_pole_concrete",
+    "mapTo": "bne_pole_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "54e4fff9-353b-557e-b575-a5fe42f40900",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.64,
+          0.63,
+          0.6,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/concrete_grain.png"
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_pole_steel": {
+    "name": "bne_pole_steel",
+    "mapTo": "bne_pole_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "982bc73e-3bb7-5739-9354-ca3ecd9f6275",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.35,
+          0.38,
+          0.39,
+          1.0
+        ],
+        "metallicFactor": 0.65,
+        "roughnessFactor": 0.65
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_pole_clamp": {
+    "name": "bne_pole_clamp",
+    "mapTo": "bne_pole_clamp",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c14c6f96-4d03-59bb-9939-75f10c24242b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.07,
+          0.075,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.65
+      }
+    ],
+    "doubleSided": false
+  }
+}

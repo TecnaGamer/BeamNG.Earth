@@ -31,6 +31,8 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/italy/art/shapes/buildings/main.materials.json',        -- italy_cobblestone (paving stones)
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
+  '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
@@ -289,6 +291,7 @@ local function dropTile(key)
   for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  if t.signs then deleteQ[#deleteQ + 1] = t.signs end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
   -- walkQ / held / createQ entries, which were then made for the new tile from pooled shape paths that had just been
   -- reported gone and refilled with another tile's shape: that tile's buildings drawn here at its ground height (houses
@@ -494,7 +497,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
+M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -632,7 +635,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
+        renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -821,7 +824,7 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+          renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
             or (t.parts.railcol ~= nil and what == 'rail') }
         walkQ[#walkQ + 1] = q
       end
@@ -955,7 +958,7 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
+  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail',
       'railcol', 'exits', 'mileposts', 'merges', 'speeds' }) do
     local sl = msgSlot(msg, what)
     if sl then
@@ -1002,6 +1005,9 @@ function M.onTile(msg, currentAnchor, a)
   if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
     require('beamngEarth/ambience').onSpaces(key, data.sound)
     tiles[key].sound = true
+  end
+  if type(data.signs) == 'table' and data.signs.shape and type(data.signs.pos) == 'table' then
+    walkQ[#walkQ + 1] = { key = key, walk = data.signs, what = 'signs', renderOnly = true, tile = tiles[key] }
   end
   if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
     walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
@@ -1426,7 +1432,7 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'railcol',
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'rail', 'railcol',
   'exits', 'mileposts', 'merges', 'speeds' }
 
 function M.transform(xf, geodesy)

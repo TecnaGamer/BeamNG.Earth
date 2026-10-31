@@ -55,6 +55,9 @@ local shape, sc = trees.pick('conifer', 20.0, 0.3)
 T.check(shape:find('douglasfir_large') ~= nil and sc > 0.9 and sc < 1.1, 'a 20 m conifer: a large fir near its size')
 shape, sc = trees.pick('rock', 0.6, 0.1)
 T.check(shape:find('rock') ~= nil and math.abs(sc - 0.6 / select(2, unpack({ shape, 0.6 })) * 1) < 2, 'a rock')
+shape, sc = trees.pick('pole_concrete_recessed', 8.5, 0)
+T.check(shape:find('/regional_poles/bne_pole_concrete_recessed', 1, true) ~= nil and sc == 1,
+        'regional pole: its own model at the authored height, not a fallback tree')
 
 -- a tile of 100 items with ranks 0 .. 0.99 at the player: all made; far away: a quarter
 local rows = {}
@@ -466,6 +469,28 @@ do
   T.check((trees.skipped or 0) == s0 + 2 and count() == 200, 'a new tile: a pass at once')
   trees.update(13, { x = 128 + trees.RECHECK_M + 1, y = 128 })
   T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
+end
+do -- roadside delineators stay traversable, even in the solid near-car pool
+  trees.clear()
+  files['/t/balises'] = '{ groups = { "fr_j1", "fr_j3", "fr_j6" }, items = { {0, 20, 20, 0, 0, 1, 1.3, 0}, {1, 30, 20, 0, 0, 1, 1.3, 0}, {2, 40, 20, 0, 0, 1, 1.05, 0} } }'
+  trees.onTile({ anchorId = 14, key = '0_0', path = '/t/balises', n = 3 }, 14)
+  for _ = 1, 4 do trees.update(14, { x = 30, y = 20 }) end
+  T.check(count() == 3 and solidCount() == 0, 'J1 J3 J6: visible but never solid near the car')
+  trees.update(14, { x = 30, y = 650 })
+  trees.update(14, { x = 30, y = 20 })
+  T.check(count() == 3 and solidCount() == 0, 'J1 J3 J6: a revisit never enables collisions')
+end
+do -- country-specific delineators use the same non-solid pools on revisit
+  trees.clear()
+  files['/t/eubalises'] = '{ groups = { "eu_marker_de", "eu_marker_pl", "eu_marker_gb" }, items = { {0, 20, 20, 0, 0, 1, 1.15, 0}, {1, 30, 20, 0, 0, 1, 1.15, 0}, {2, 40, 20, 0, 0, 1, 1.15, 0} } }'
+  trees.onTile({ anchorId = 15, key = '0_0', path = '/t/eubalises', n = 3 }, 15)
+  for _ = 1, 4 do trees.update(15, { x = 30, y = 20 }) end
+  T.check(count() == 3 and solidCount() == 0, 'European delineators are visible and never collidable')
+  trees.update(15, { x = 30, y = 650 })
+  trees.update(15, { x = 30, y = 20 })
+  T.check(count() == 3 and solidCount() == 0, 'European delineator revisit remains non-solid')
+  T.check(trees.CATALOG.stop_arret[1][1]:match('stop_arret$') ~= nil, 'Quebec uses the accented ARRET asset')
+  T.check(trees.CATALOG.stop_dur[1][1]:match('stop_dur$') ~= nil, 'Turkey uses the DUR asset')
 end
 -- geotiles (server --geo-tiles on): a tile in its own frame is made where its placement puts it in the anchor's
 -- world; a rebase moves its Forest (nothing made again) unless it must collide, then it is made again at the new

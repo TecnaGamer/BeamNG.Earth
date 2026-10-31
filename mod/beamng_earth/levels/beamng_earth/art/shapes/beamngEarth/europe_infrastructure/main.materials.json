@@ -1,0 +1,249 @@
+{
+  "bne_eui_white": {
+    "name": "bne_eui_white",
+    "mapTo": "bne_eui_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.89,
+          0.89,
+          0.86,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "3e840e80-316a-5958-8089-e2879b4bbf93",
+    "doubleSided": false
+  },
+  "bne_eui_black": {
+    "name": "bne_eui_black",
+    "mapTo": "bne_eui_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.018,
+          0.02,
+          0.022,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "persistentId": "8edce670-4986-5744-97fc-f832f304daac",
+    "doubleSided": false
+  },
+  "bne_eui_red": {
+    "name": "bne_eui_red",
+    "mapTo": "bne_eui_red",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.015,
+          0.02,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "be4bfa22-4c73-59ac-84cc-88082bccbe9f",
+    "doubleSided": false
+  },
+  "bne_eui_blue": {
+    "name": "bne_eui_blue",
+    "mapTo": "bne_eui_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.012,
+          0.09,
+          0.43,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "persistentId": "9cf7024a-17fb-5dd0-9600-94464a74dd81",
+    "doubleSided": false
+  },
+  "bne_eui_yellow": {
+    "name": "bne_eui_yellow",
+    "mapTo": "bne_eui_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.75,
+          0.015,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "239bd950-a4b2-59b9-ad74-2515c351dbf9",
+    "doubleSided": false
+  },
+  "bne_eui_orange": {
+    "name": "bne_eui_orange",
+    "mapTo": "bne_eui_orange",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.96,
+          0.27,
+          0.015,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "22695596-c7ee-57c2-a18a-9490da180c92",
+    "doubleSided": false
+  },
+  "bne_eui_steel": {
+    "name": "bne_eui_steel",
+    "mapTo": "bne_eui_steel",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.46,
+          0.49,
+          0.5,
+          1
+        ],
+        "metallicFactor": 0.65,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "persistentId": "db7e8cc8-ca63-53b1-9e82-ce50cbe19b37",
+    "doubleSided": false
+  },
+  "bne_eui_concrete": {
+    "name": "bne_eui_concrete",
+    "mapTo": "bne_eui_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.52,
+          0.51,
+          0.48,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/concrete_grain.png"
+      }
+    ],
+    "persistentId": "7984f1f1-cc99-5acb-a8e5-27cd384ca52a",
+    "doubleSided": false
+  },
+  "bne_eui_wood": {
+    "name": "bne_eui_wood",
+    "mapTo": "bne_eui_wood",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.42,
+          0.33,
+          0.22,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/wood_grain.png"
+      }
+    ],
+    "persistentId": "4d87527e-faf4-59e6-a2e0-cea2efc66146",
+    "doubleSided": false
+  },
+  "bne_eui_green": {
+    "name": "bne_eui_green",
+    "mapTo": "bne_eui_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.31,
+          0.1,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "persistentId": "f3e5464c-7a3c-5ba4-97f0-2fa7e5d2d546",
+    "doubleSided": false
+  },
+  "bne_eui_ceramic": {
+    "name": "bne_eui_ceramic",
+    "mapTo": "bne_eui_ceramic",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.13,
+          0.2,
+          0.17,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "persistentId": "21611882-2a9b-5280-af73-e190cbde0ffd",
+    "doubleSided": false
+  },
+  "bne_eui_reflect": {
+    "name": "bne_eui_reflect",
+    "mapTo": "bne_eui_reflect",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.91,
+          0.92,
+          0.88,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "persistentId": "87915989-94f1-50fb-8fe6-7c71e6b79af2",
+    "doubleSided": false
+  }
+}

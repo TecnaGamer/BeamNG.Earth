@@ -427,4 +427,15 @@ do
   for _, m in pairs(made) do m:delete() end
   roads.reset()
 end
+
+-- Dynamic sign text is one render-only mesh; resend/drop clean up the same way as wires.
+roads.reset(); gov.allow = nil
+files['/t/signs.json'] = '{ chunks = {}, signs = { shape = "/t/signs_3_0_0.cdae", pos = {0,0,0} } }'
+roads.onTile({anchorId=3,key='0_0',path='/t/signs.json',n=0},3)
+roads.update(gov,3)
+T.check(#statics() == 1 and statics()[1].fields.collisionType == 'None', 'sign faces render only (posts collide separately)')
+roads.onTile({anchorId=3,key='0_0',path='/t/signs.json',n=0},3); roads.update(gov,3)
+T.check(#statics() == 1, 'revisited signs do not duplicate')
+roads.onDrop({anchorId=3,key='0_0'}); roads.update(gov,3)
+T.check(#statics() == 0, 'sign mesh deleted with tile')
 T.done('test_roads')

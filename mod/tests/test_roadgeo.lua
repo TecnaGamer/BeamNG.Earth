@@ -58,6 +58,7 @@ local content = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h
   bldcol = { shape = "/s/rg_bldcol.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   bld = { shape = "/s/rg_bld.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   deck = { shape = "/s/rg_deck.cdae", pos = { -118, -118, 0 }, pivot = 12, relief = 2 },
+  signs = { shape = "/s/rg_signs.cdae", pos = { -118, -118, 0 }, pivot = 2, relief = 1 },
   colliders = { deck = { { -10, -10, 5, 10, 10, 15 } }, bldcol = { { 50, 50, 0, 60, 60, 30 } } },
   park = { { 10, 20, 3, 90 } }, wells = { { 30, 40, 3, 45 } },
   sound = { 1, 5, 6, 7, 20, 10, 5, 0.5 },
@@ -88,6 +89,8 @@ T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, fram
 run(1, A)
 local bc = objsWith('rg_bldcol')
 T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 1, 'its parts made once')
+local sign = objsWith('rg_signs')[1]
+T.check(sign ~= nil and sign.fields.collisionType == 'None', 'regional sign faces created without collision')
 local frame = geotile.frameOf({ frame = { clat, clon } })
 do
   local pl = geotile.placement(frame, A, 0, 0, 20)
@@ -131,6 +134,15 @@ run(2, B)
 T.check(n == 1, 'one geotile re-placed')
 T.check((S.calls['createObject_TSStatic'] or 0) == made0 and (S.calls['delete_TSStatic'] or 0) == del0,
   'no object made or deleted at the rebase')
+T.check(objsWith('rg_signs')[1] == sign, 'regional signs retained at the rebase')
+do
+  local pl = geotile.placement(frame, B, 0, 0, 2)
+  local xf = geodesy.transformOf(pl.r, pl.t)
+  local x, y, z = xf:apply(-118, -118, 0)
+  T.near(sign.pos.x, x, 1e-9, 'regional signs re-placed: x')
+  T.near(sign.pos.y, y, 1e-9, 'regional signs re-placed: y')
+  T.near(sign.pos.z, z, 1e-9, 'regional signs re-placed: z')
+end
 do
   local pl = geotile.placement(frame, B, 0, 0, 20)
   local xf = geodesy.transformOf(pl.r, pl.t)
@@ -191,6 +203,7 @@ run(1, B)
 T.check((S.calls['createObject_TSStatic'] or 0) == made1 and #objsWith('rg_bldcol') == 1,
   'same content hash after a restart: kept, nothing made again')
 T.check(roads.status().geoStats.kept == 1, 'counted as kept')
+T.check(objsWith('rg_signs')[1] == sign, 'regional signs kept after server restart')
 
 -- a drop goes for good
 roads.onDrop({ anchorId = 1, key = key })
