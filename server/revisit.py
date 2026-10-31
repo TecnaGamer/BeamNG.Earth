@@ -241,7 +241,7 @@ def swap(text, tokens):
     return text
 
 
-SHAPE_RE = re.compile(r'"shape":"([^"]+)"')
+SHAPE_RE = re.compile(r'"(?:shape|texture)":"([^"]+)"')   # (texture: a town sign's face, townsigns.write_face)
 
 
 def shapes_in(text, vfs_dir):
