@@ -32,6 +32,7 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',  -- dirt and gravel strips (server/roads.py)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json' }
@@ -148,6 +149,9 @@ end
 -- one road mesh the markings showed only while the engine happened to draw them after the asphalt; with
 -- many more translucent objects in view (buildings' windows, signals) they vanished. Opaque asphalt is
 -- drawn first, always, and the translucent lines, crossings and gutters over it.
+-- Dirt and gravel stay translucent on purpose (dirtroad.materials.json): an opacity map on their second
+-- uv feathers the sides and the ends into the ground. Asphalt and cobble stay opaque so the lines always
+-- draw over them.
 M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
 -- The opaque road surfaces cast no sun shadow (from Madderose's PR #41). Translucent, as the stock decal materials are,
 -- they drew none; made opaque (above) they joined the shadow pass: every road tile's mesh drawn into each shadow

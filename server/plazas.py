@@ -174,18 +174,28 @@ def mesh(frame, box, rings, elev, origin, cover=None):
 
 
 def merge(a, b):
-    """Two meshes (positions, tris, uvs, materials, tri material index; either None) as one."""
+    """Two meshes (positions, tris, uvs, materials, tri material index; either None) as one. A sixth element,
+    the dirt strip's fade uv, is kept when either mesh has it (the other side stays on the solid texel)."""
     if a is None:
         return b
     if b is None:
         return a
-    Pa, Ta, UVa, Ma, Ia = a
-    Pb, Tb, UVb, Mb, Ib = b
+    Pa, Ta, UVa, Ma, Ia = a[:5]
+    Pb, Tb, UVb, Mb, Ib = b[:5]
     mats = list(Ma)
     idx = []
     for m in Mb:
         if m not in mats:
             mats.append(m)
         idx.append(mats.index(m))
-    return (np.concatenate([Pa, Pb]), np.concatenate([Ta, np.asarray(Tb) + len(Pa)]), np.concatenate([UVa, UVb]),
-            mats, np.concatenate([Ia, np.asarray(idx, np.int64)[np.asarray(Ib)]]))
+    out = (np.concatenate([Pa, Pb]), np.concatenate([Ta, np.asarray(Tb) + len(Pa)]), np.concatenate([UVa, UVb]),
+           mats, np.concatenate([Ia, np.asarray(idx, np.int64)[np.asarray(Ib)]]))
+    Fa = a[5] if len(a) > 5 else None
+    Fb = b[5] if len(b) > 5 else None
+    if Fa is None and Fb is None:
+        return out
+    if Fa is None:
+        Fa = np.full((len(Pa), 2), 0.5)
+    if Fb is None:
+        Fb = np.full((len(Pb), 2), 0.5)
+    return out + (np.concatenate([np.asarray(Fa, np.float64), np.asarray(Fb, np.float64)]),)

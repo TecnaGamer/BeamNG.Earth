@@ -79,6 +79,17 @@ def ribbon_pairs(chunks):
     return [(r, c) for c in chunks for r in ribbons([c])]
 
 
+def _ribbon_v(s, c):
+    """v along a ribbon. s0/s1 are metres along the whole road to this chunk's ends (roads._surface_pieces).
+    Without them v restarts at every tile, and a dirt strip's ruts break. With them v is that distance over
+    the texture length, so the same point has the same v on both sides of a tile edge."""
+    tl = float(c.get("tl") or 10.0)
+    s0, s1 = c.get("s0"), c.get("s1")
+    if s0 is not None and s1 is not None and len(s) and float(s[-1]) > 1e-9:
+        return (float(s0) + (float(s1) - float(s0)) * (s / s[-1])) / tl
+    return (float(s0 or 0.0) + s) / tl
+
+
 def ribbons(chunks):
     """Per chunk: (left (k, 2), right (k, 2), v (k,), material, layer, z (k,) or None) in the anchor
     frame; z: the chunk's own heights where it is "fixed" (bridge decks), else None (draped). Pure. The draped and
@@ -96,7 +107,7 @@ def ribbons(chunks):
             if len(xy) < 2:
                 continue
             n = _normals(xy) * (float(c["w"]) / 2)
-            out[k] = (xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
+            out[k] = (xy + n, xy - n, _ribbon_v(s, c), c["m"], layer_of(c), z)
             continue
         batch.append(k)
         pts.append(p[:, :3])
@@ -111,7 +122,7 @@ def ribbons(chunks):
             if b - a < 2:
                 continue
             c = chunks[k]
-            out[k] = (L[a:b], R[a:b], S[a:b] / float(c.get("tl") or 10.0), c["m"], layer_of(c),
+            out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
                       Z[a:b] if c.get("fixed") else None)
     return [r for r in out if r is not None]
 
@@ -181,47 +192,132 @@ def trim_overlaps(rb, context=()):
     return out
 
 
-def _clip_tris(P, T, UV, M, box):
+# Dirt and gravel strips (a chunk's "slen": metres along the whole road). The opacity map
+# dirt_fade_o.data.png is sampled on UV1 (the shader's opacity is that map's red channel; vertex alpha
+# only tints the colour, defaultMat.hlsl). UV1.u is 0 and 1 on the road's edges and 0.5 down the solid
+# middle, across EDGE_FADE_M. UV1.v is 0 at the real start and 1 at the real end; the 0.25 and 0.75
+# lines are END_FADE_M in from those ends, and a tile cut in the middle stays at 0.5.
+EDGE_FADE_M = 1.2           # m of feather on each side
+EDGE_FADE_SHARE = 0.38      # ... and never more than this fraction of the width, so a narrow track keeps a centre
+END_FADE_M = 14.0           # m a real end takes to fade out
+END_FADE_SHARE = 0.3        # a short road fades over at most this share of its length, so the middle stays solid
+FADE_V_BAND = 0.25          # UV1.v from 0 to this (and from 1 - this to 1) is the end fade on the opacity map
+
+
+def _fade_v(v, tl, slen):
+    """UV1.v along a strip: 0 at a real start, 1 at a real end, 0.5 once END_FADE_M in from either (less on a
+    short road). v is distance along the road over tl (ribbons). A point past an end stays on that end, so the
+    reach past a tile does not wrap back into the solid middle. Pure."""
+    s = np.asarray(v, np.float64) * float(tl)
+    vv = np.full(len(s), 0.5)
+    fade = min(END_FADE_M, END_FADE_SHARE * float(slen))
+    if fade < 1e-3:
+        return vv
+    start = s <= fade
+    end = s >= float(slen) - fade
+    vv[start] = FADE_V_BAND * np.clip(s[start] / fade, 0.0, 1.0)
+    into = np.clip((s[end] - (float(slen) - fade)) / fade, 0.0, 1.0)
+    vv[end] = (1.0 - FADE_V_BAND) + FADE_V_BAND * into
+    return np.clip(vv, 0.0, 1.0)
+
+
+def _quads(base, k, row_a, row_b):
+    """Triangles of one band of a ribbon, row_a to its right row_b, each row k vertices from `base`. The same
+    winding as a two-edge ribbon: left to right, then along."""
+    i = np.arange(k - 1)
+    A, A1 = base + row_a * k + i, base + row_a * k + i + 1
+    B, B1 = base + row_b * k + i, base + row_b * k + i + 1
+    return np.concatenate([np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)])
+
+
+def _keep_up(tri, xy, base):
+    """tri with the triangles that face up kept (a mitre that folds over itself is dropped)."""
+    loc = tri - base
+    e1, e2 = xy[loc[:, 1]] - xy[loc[:, 0]], xy[loc[:, 2]] - xy[loc[:, 0]]
+    cz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+    return tri[cz * np.sign(np.median(cz) or 1.0) > 1e-6]
+
+
+def _clip_tris(P, T, UV, M, box, C=None):
     """The triangles (positions P (n, 3), T (m, 3), UV (n, 2), material per triangle M) cut to the box (x0, y0, x1, y1):
-    those inside kept, those outside dropped, those across its edges clipped (Sutherland-Hodgman, position and uv
-    interpolated) and fanned again. Pure."""
+    those inside kept, those outside dropped, those across its edges clipped (Sutherland-Hodgman, position, uv and
+    optional vertex colour C (n, 4) interpolated) and fanned again. With C, returns it too. Pure."""
     x0, y0, x1, y1 = box
     xy = P[T][:, :, :2]
     inside = ((xy[..., 0] >= x0) & (xy[..., 0] <= x1) & (xy[..., 1] >= y0) & (xy[..., 1] <= y1)).all(1)
     out_ = ((xy[..., 0] < x0).all(1) | (xy[..., 0] > x1).all(1) | (xy[..., 1] < y0).all(1) | (xy[..., 1] > y1).all(1))
     cut = ~inside & ~out_
+
+    def pack(P_, T_, UV_, M_, C_):
+        return (P_, T_, UV_, M_) if C is None else (P_, T_, UV_, M_, C_)
+
     if not cut.any():
-        return P, T[inside], UV, M[inside]
+        return pack(P, T[inside], UV, M[inside], C)
     planes = ((0, x0, 1.0), (0, x1, -1.0), (1, y0, 1.0), (1, y1, -1.0))     # keep sign * (coord - value) >= 0
-    newP, newUV, newT, newM = [], [], [], []
+    newP, newUV, newT, newM, newC = [], [], [], [], []
     n = len(P)
     for t, m in zip(T[cut], M[cut]):
-        poly = [(P[i], UV[i]) for i in t]
+        poly = [(P[i], UV[i], None if C is None else C[i]) for i in t]
         for ax, val, sg in planes:
             if not poly:
                 break
             res = []
             for j in range(len(poly)):
-                (pa, ua), (pb, ub) = poly[j], poly[(j + 1) % len(poly)]
+                pa, ua, ca = poly[j]
+                pb, ub, cb = poly[(j + 1) % len(poly)]
                 da, db = sg * (pa[ax] - val), sg * (pb[ax] - val)
                 if da >= 0:
-                    res.append((pa, ua))
+                    res.append((pa, ua, ca))
                 if (da >= 0) != (db >= 0):
                     f = da / (da - db)
-                    res.append((pa + (pb - pa) * f, ua + (ub - ua) * f))
+                    cc = None if ca is None else ca + (cb - ca) * f
+                    res.append((pa + (pb - pa) * f, ua + (ub - ua) * f, cc))
             poly = res
         if len(poly) < 3:
             continue
         base = n + sum(len(q) for q in newP)
         newP.append(np.array([q[0] for q in poly]))
         newUV.append(np.array([q[1] for q in poly]))
+        if C is not None:
+            newC.append(np.array([q[2] for q in poly], np.float64))
         k = len(poly)
         newT.append(np.array([(base, base + a, base + a + 1) for a in range(1, k - 1)], np.int64))
         newM.append(np.full(k - 2, m))
     if not newP:
-        return P, T[inside], UV, M[inside]
-    return (np.concatenate([P] + newP), np.concatenate([T[inside]] + newT), np.concatenate([UV] + newUV),
-            np.concatenate([M[inside]] + newM))
+        return pack(P, T[inside], UV, M[inside], C)
+    P2 = np.concatenate([P] + newP)
+    T2 = np.concatenate([T[inside]] + newT)
+    UV2 = np.concatenate([UV] + newUV)
+    M2 = np.concatenate([M[inside]] + newM)
+    C2 = None if C is None else np.concatenate([C] + newC)
+    return pack(P2, T2, UV2, M2, C2)
+
+
+def _bary_colors(P, C, T, fP, fT, src):
+    """Values (the fade UV) of follow_ground's cut (fP, fT, source triangle src) from the source triangles.
+    A new point takes the barycentric mix of the triangle it was cut from. Pure."""
+    out = np.full((len(fP), np.shape(C)[1]), 0.5, np.float64)
+    got = np.zeros(len(fP), bool)
+    Cf = np.asarray(C, np.float64)
+    for tri, s in zip(fT, src):
+        ia, ib, ic = (int(i) for i in T[s])
+        a, b, c = P[ia, :2], P[ib, :2], P[ic, :2]
+        v0, v1 = b - a, c - a
+        d00, d01, d11 = float(v0 @ v0), float(v0 @ v1), float(v1 @ v1)
+        denom = d00 * d11 - d01 * d01
+        for k in tri:
+            k = int(k)
+            if got[k]:
+                continue
+            got[k] = True
+            if abs(denom) < 1e-12:
+                out[k] = Cf[ia]
+                continue
+            v2 = fP[k, :2] - a
+            vv = (d11 * float(v0 @ v2) - d01 * float(v1 @ v2)) / denom
+            ww = (d00 * float(v1 @ v2) - d01 * float(v0 @ v2)) / denom
+            out[k] = (1.0 - vv - ww) * Cf[ia] + vv * Cf[ib] + ww * Cf[ic]
+    return out
 
 
 def _reach_past(c, box):
@@ -254,7 +350,15 @@ def _reach_past(c, box):
         n.insert(0, ends[0][None])
     if ends[1] is not None:
         n.append(ends[1][None])
-    return {**c, "n": np.concatenate(n).tolist()}
+    out = {**c, "n": np.concatenate(n).tolist()}
+    # The extra length is outside the tile. A dirt strip's s0/s1 are metres along the road to the
+    # chunk's old ends: shift them by the same reach, or v is stretched across the extension and the
+    # two tiles disagree at the seam (about 10 m on a 3.5 m track).
+    if ends[0] is not None and c.get("s0") is not None:
+        out["s0"] = float(c["s0"]) - reach
+    if ends[1] is not None and c.get("s1") is not None:
+        out["s1"] = float(c["s1"]) + reach
+    return out
 
 
 GRID_M = 2.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
@@ -328,17 +432,21 @@ def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M):
     return np.asarray(a), np.asarray(b), np.asarray(c), np.asarray(d)
 
 
-def _shared(P, UV, T):
-    """The mesh with its equal points (position and uv to 0.1 mm) made one."""
+def _shared(P, UV, T, C=None):
+    """The mesh with its equal points (position and uv to 0.1 mm) made one. C, when given, follows them."""
     key = np.round(np.c_[P, UV] * 1e4).astype(np.int64)
     _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    return P[first], UV[first], inv.reshape(-1)[T]
+    T2 = inv.reshape(-1)[T]
+    if C is None:
+        return P[first], UV[first], T2
+    return P[first], UV[first], T2, C[first]
 
 
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
           clip_poly=None):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions
-    relative to origin, tris, uvs, materials, tri material index), or None. elev(lat, lon) -> m (graded,
+    relative to origin, tris, uvs, materials, tri material index) or, when a dirt or gravel strip is in it, those
+    plus a second uv (n, 2) for the opacity map (the feather: EDGE_FADE_M, END_FADE_M), or None. elev(lat, lon) -> m (graded,
     as the physics block). One elev call. lift: m more for the draped surfaces (detail mode: the physics
     block is drawn, so the asphalt must sit over it, not in it; earthd DETAIL_ROAD_LIFT). clip: the tile's box
     (x0, y0, x1, y1): the ribbons (built roads.OVERLAP past it, no gap at the seam) cut exactly at its edges; two
@@ -353,14 +461,14 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     chunks = [c for c in chunks if not c.get("tube_only")]  # (twin tunnels' tube: no road surface, roads._tunnel_chunks)
     if clip is not None:
         chunks = [_reach_past(c, clip) for c in chunks]
-    rb = ribbons(chunks)                        # deck surfaces too: their asphalt over deck()'s concrete
-    if any(r[5] is not None for r in rb):       # (trimmed as deck() trims their slabs: context, the decks around)
+    pairs = ribbon_pairs(chunks)                # deck surfaces too: their asphalt over deck()'s concrete
+    if any(r[5] is not None for r, _c in pairs):    # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
-        rb = [r for r, _c in trim_overlaps(ribbon_pairs(chunks), ctx)]
+        pairs = trim_overlaps(pairs, ctx)
     polys = [c for c in chunks if c.get("poly")]
-    if not rb and not polys:
+    if not pairs and not polys:
         return None
-    draped = [r for r in rb if r[5] is None]
+    draped = [r for r, _c in pairs if r[5] is None]
     pv = [np.asarray(c["poly"], np.float64)[:, :2] for c in polys]
     if draped or pv:
         edges = np.concatenate([np.concatenate([l, r]) for l, r, _, _, _, _ in draped] + pv)
@@ -370,8 +478,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     mats = []
     P, UV, T, M = [], [], [], []
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
+    # UV1 only when a strip fades (slen). Anything else in the mesh samples the opacity map's solid middle.
+    C_parts = [] if any(c.get("slen") for _r, c in pairs) else None
     k0 = nverts = 0
-    for left, right, v, m, layer, fz in rb:
+    for (left, right, v, m, layer, fz), ch in pairs:
         k = len(left)
         if fz is None:
             z = u[k0:k0 + 2 * k] + LIFT[layer] + lift
@@ -381,23 +491,42 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         if m not in mats:
             mats.append(m)
         mi = mats.index(m)
-        P.append(np.c_[np.concatenate([left, right]), z])
-        UV.append(np.column_stack((np.concatenate((np.zeros(k), np.ones(k))), np.concatenate((v, v)))))
-        i = np.arange(k - 1)
-        A, A1, B, B1 = nverts + i, nverts + i + 1, nverts + k + i, nverts + k + i + 1
-        # left edge to the left of the direction: (A, B, B1) is counter-clockwise seen from above
-        tri = np.concatenate([np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)])
-        # where a ribbon folds over itself (a mitred joint at a sharp merge pulls its edges across: the user saw
-        # black triangles in President St, 2026-10-14) its triangles turn over: dropped, the neighbours cover it
-        xy = np.concatenate([left, right])[:, :2]
-        loc = tri - nverts
-        e1, e2 = xy[loc[:, 1]] - xy[loc[:, 0]], xy[loc[:, 2]] - xy[loc[:, 0]]
-        cz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
-        keep = cz * np.sign(np.median(cz) or 1.0) > 1e-6
-        T.append(tri[keep])
-        M.append(np.full(int(keep.sum()), mi))
-        TL.append(np.full(int(keep.sum()), np.nan if fz is not None else LIFT[layer] + lift))
-        nverts += 2 * k
+        w = float(ch.get("w") or 0.0)
+        feather = min(EDGE_FADE_M, EDGE_FADE_SHARE * w) if ch.get("slen") else 0.0
+        vend = _fade_v(v, float(ch.get("tl") or 10.0), float(ch["slen"])) if ch.get("slen") else None
+        if feather > 0.05 and w > 2.0 * feather:
+            fu = feather / w
+            rows = (left, left + (right - left) * fu, right + (left - right) * fu, right)
+            us = (0.0, fu, 1.0 - fu, 1.0)
+            zl, zr = z[:k], z[k:]
+            zs = (zl, (1.0 - fu) * zl + fu * zr, fu * zl + (1.0 - fu) * zr, zr)
+            # UV1.u: the outer edges sample the clear texels, the inner edges the solid middle. The colour
+            # uv above still runs 0..1 across the whole width, so the ruts keep their scale.
+            fade_u = (0.0, 0.5, 0.5, 1.0)
+            P.append(np.concatenate([np.c_[xy, zz] for xy, zz in zip(rows, zs)]))
+            UV.append(np.concatenate([np.column_stack((np.full(k, uu), v)) for uu in us]))
+            C_parts.append(np.concatenate([np.column_stack((np.full(k, fu2), vend)) for fu2 in fade_u]))
+            xy = np.concatenate(rows)
+            tri = np.concatenate([_keep_up(_quads(nverts, k, a, b), xy, nverts) for a, b in ((0, 1), (1, 2), (2, 3))])
+            nverts += 4 * k
+        else:
+            P.append(np.c_[np.concatenate([left, right]), z])
+            UV.append(np.column_stack((np.concatenate((np.zeros(k), np.ones(k))), np.concatenate((v, v)))))
+            if C_parts is not None:
+                if vend is None:
+                    C_parts.append(np.full((2 * k, 2), 0.5))
+                else:
+                    C_parts.append(np.column_stack((np.full(2 * k, 0.5), np.concatenate((vend, vend)))))
+            # left edge to the left of the direction: (A, B, B1) is counter-clockwise seen from above
+            tri = _quads(nverts, k, 0, 1)
+            # where a ribbon folds over itself (a mitred joint at a sharp merge pulls its edges across: the user saw
+            # black triangles in President St, 2026-10-14) its triangles turn over: dropped, the neighbours cover it
+            tri = _keep_up(tri, np.concatenate([left, right]), nverts)
+            nverts += 2 * k
+        if len(tri):
+            T.append(tri)
+            M.append(np.full(len(tri), mi))
+            TL.append(np.full(len(tri), np.nan if fz is not None else LIFT[layer] + lift))
     for c in polys:                             # filled polygons (corner asphalt): a fan from vertex 0
         pq = np.asarray(c["poly"], np.float64)
         k = len(pq)
@@ -408,6 +537,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         P.append(np.c_[pq[:, :2], z])
         UV.append(np.asarray(c["uvq"], np.float64) if c.get("uvq") is not None else       # (a decal sheet's cell:
                   np.c_[pq[:, 0] / 8.0, pq[:, 1] / float(c.get("tl") or 10.0)])          # markings.arrow_quad)
+        if C_parts is not None:
+            C_parts.append(np.full((k, 2), 0.5))
         fan = np.array([(nverts, nverts + a, nverts + a + 1) for a in range(1, k - 1)])
         pts = np.c_[pq[:, :2], z]
         nrm = np.cross(pts[fan[:, 1] - nverts] - pts[fan[:, 0] - nverts], pts[fan[:, 2] - nverts] - pts[fan[:, 0] - nverts])
@@ -417,23 +548,30 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         M.append(np.full(len(fan), mats.index(c["m"])))
         TL.append(np.full(len(fan), LIFT[layer_of(c)] + lift))
         nverts += k
+    if not T:
+        return None
     P, T, UV, M = np.concatenate(P), np.concatenate(T), np.concatenate(UV), np.concatenate(M)
+    C = np.concatenate(C_parts) if C_parts else None
     TL = np.concatenate(TL)
     tid = np.arange(len(T))
     if clip_poly is not None:
         import fast
         fast.require(104, "clip_tris_convex")
+        oldP, oldT = P, T
         P, UV, T, src = fast._ef.clip_tris_convex(np.ascontiguousarray(P[:, :3], np.float64),
                                                   np.ascontiguousarray(UV, np.float64),
                                                   np.ascontiguousarray(T, np.int64),
                                                   np.ascontiguousarray(np.asarray(clip_poly, np.float64)[:, :2]))
+        if C is not None and len(T):
+            C = _bary_colors(oldP, C, oldT, P, T, src)
         tid = tid[src]
-        if not len(T):
-            return None
     elif clip is not None:
-        P, T, UV, tid = _clip_tris(P, T, UV, tid, clip)
-        if not len(T):
-            return None
+        if C is None:
+            P, T, UV, tid = _clip_tris(P, T, UV, tid, clip)
+        else:
+            P, T, UV, tid, C = _clip_tris(P, T, UV, tid, clip, C)
+    if not len(T):
+        return None
     M, TL = M[tid], TL[tid]
     if follow:
         dr = np.isfinite(TL)
@@ -446,6 +584,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 for kk in range(3):
                     vl[fT[:, kk]] = lifts
                 fP[:, 2] += vl
+                if C is not None:
+                    C = np.concatenate([C, _bary_colors(P, C, T[dr], fP, fT, src)])
                 n0 = len(P)
                 P = np.concatenate([P, fP])
                 UV = np.concatenate([UV, fUV])
@@ -455,8 +595,14 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 T, M = T[~dr], M[~dr]
             if not len(T):
                 return None
-        P, UV, T = _shared(P, UV, T)
-    return P - np.asarray(origin, np.float64), T, UV, mats, M
+        if C is None:
+            P, UV, T = _shared(P, UV, T)
+        else:
+            P, UV, T, C = _shared(P, UV, T, C)
+    out = P - np.asarray(origin, np.float64), T, UV, mats, M
+    if C is None:
+        return out
+    return out + (np.asarray(C, np.float64),)
 
 
 DECK_DEPTH = 1.2        # m of deck slab under the surface
@@ -1384,5 +1530,10 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
 
 
 def write(path, mesh):
-    P, T, UV, mats, M = mesh
-    return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="road")
+    P, T, UV, mats, M = mesh[:5]
+    uvs2 = mesh[5] if len(mesh) > 5 else None
+    # A second uv lives in the extra vertex format, which also carries a colour. White, and the dirt
+    # materials leave vertColor off, so it does not tint. Opacity is the map on this uv.
+    colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
+    return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road",
+                      colors=colors)

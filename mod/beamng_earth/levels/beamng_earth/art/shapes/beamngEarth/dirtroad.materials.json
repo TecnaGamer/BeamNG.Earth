@@ -1,0 +1,134 @@
+{
+  "bne_dirt_variation_01": {
+    "name": "bne_dirt_variation_01",
+    "mapTo": "bne_dirt_variation_01",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d001-0001-4a11-9c01-000000000001",
+    "annotation": "NATURE",
+    "translucent": true,
+    "translucentZWrite": true,
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/decalroad/dirt/m_dirt_variation_01/t_dirt_variation_01_ao.data.png",
+        "baseColorMap": "/assets/materials/decalroad/dirt/m_dirt_variation_01/t_dirt_variation_01_b.color.png",
+        "normalMap": "/assets/materials/decalroad/dirt/m_dirt_variation_01/t_dirt_variation_01_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/dirt/m_dirt_variation_01/t_dirt_variation_01_r.data.png",
+        "detailNormalMap": "/assets/materials/decalroad/dirt/m_dirt_variation_01/t_dirt_tiretracks_normal_detail_nm.normal.png",
+        "detailNormalMapStrength": 5,
+        "detailScale": [2, 8],
+        "baseColorFactor": [0.722614, 0.711599, 0.636709, 1],
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dirt_variation_02": {
+    "name": "bne_dirt_variation_02",
+    "mapTo": "bne_dirt_variation_02",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d001-0002-4a11-9c01-000000000002",
+    "annotation": "NATURE",
+    "translucent": true,
+    "translucentZWrite": true,
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_variation_02_ao.data.png",
+        "baseColorMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_variation_02_b.color.png",
+        "normalMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_variation_02_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_variation_02_r.data.png",
+        "detailNormalMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_02/t_dirt_tiretracks_normal_detail_02_nm.normal.png",
+        "detailNormalMapStrength": 2,
+        "detailScale": [2, 8],
+        "baseColorFactor": [0.801963, 0.801955, 0.801955, 1],
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dirt_variation_03": {
+    "name": "bne_dirt_variation_03",
+    "mapTo": "bne_dirt_variation_03",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d001-0003-4a11-9c01-000000000003",
+    "annotation": "NATURE",
+    "translucent": true,
+    "translucentZWrite": true,
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_03/t_dirt_variation_03_ao.data.png",
+        "baseColorMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_03/t_dirt_variation_03_b.color.png",
+        "normalMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_03/t_dirt_variation_03_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/dirt/Dirt_road_variation_03/t_dirt_variation_03_r.data.png",
+        "detailNormalMap": "/assets/materials/decalroad/dirt/m_dirt_variation_01/t_dirt_tiretracks_normal_detail_nm.normal.png",
+        "detailNormalMapStrength": 1.5,
+        "detailScale": [2, 8],
+        "baseColorFactor": [0.497733, 0.497728, 0.497728, 1],
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dirt_variation_04": {
+    "name": "bne_dirt_variation_04",
+    "mapTo": "bne_dirt_variation_04",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d001-0004-4a11-9c01-000000000004",
+    "annotation": "NATURE",
+    "translucent": true,
+    "translucentZWrite": true,
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/decalroad/dirt/m_dirt_variation_04/t_dirt_variation_04_ao.data.png",
+        "baseColorMap": "/assets/materials/decalroad/dirt/m_dirt_variation_04/t_dirt_variation_04_b.color.png",
+        "normalMap": "/assets/materials/decalroad/dirt/m_dirt_variation_04/t_dirt_variation_04_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/dirt/m_dirt_variation_04/t_dirt_variation_04_r.data.png",
+        "detailNormalMap": "/assets/materials/decalroad/dirt/m_dirt_variation_01/t_dirt_tiretracks_normal_detail_nm.normal.png",
+        "detailNormalMapStrength": 1.5,
+        "detailScale": [2, 8],
+        "baseColorFactor": [0.885891, 0.879011, 0.813686, 1],
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_dirt_gravel": {
+    "name": "bne_dirt_gravel",
+    "mapTo": "bne_dirt_gravel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d001-0005-4a11-9c01-000000000005",
+    "annotation": "NATURE",
+    "translucent": true,
+    "translucentZWrite": true,
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/decalroad/dirt/m_dirt_road_gravels/t_dirt_road_gravels_ao.data.png",
+        "baseColorMap": "/assets/materials/decalroad/dirt/m_dirt_road_gravels/t_dirt_road_gravels_b.color.png",
+        "normalMap": "/assets/materials/decalroad/dirt/m_dirt_road_gravels/t_dirt_road_gravels_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/dirt/m_dirt_road_gravels/t_dirt_road_gravels_r.data.png",
+        "baseColorFactor": [0.921405, 0.875323, 0.817501, 1],
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

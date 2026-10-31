@@ -37,7 +37,7 @@ for tx, ty in sorted(tiles):
             dr.polygon(px(np.array(c['poly'])[:, :2]), outline=(255, 160, 0, 255))
             continue
         pts = np.array(c['n'])[:, :2]
-        if c['m'] in ('road_asphalt_2lane', 'italy_cobblestone', 'm_dirt_road'):
+        if c['m'] in ('road_asphalt_2lane', 'italy_cobblestone') or str(c['m']).startswith(('m_dirt_', 'bne_dirt_')):
             for s in (1, -1):               # carriageway edges in cyan
                 dr.line(px(roads.offset_polyline(np.c_[pts, np.zeros(len(pts))], s * c['w'] / 2)[:, :2]), fill=(0, 255, 255, 255), width=2)
         elif c['m'] == 'crossing_white':

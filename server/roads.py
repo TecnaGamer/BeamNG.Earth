@@ -88,15 +88,27 @@ UNPAVED = {"unpaved", "ground", "dirt", "earth", "mud", "grass", "grass_paver", 
            "clay", "shells", "woodchips"}
 # kinds with a hard, built surface: carriageway extras (parking, strips, sidewalks) apply
 BUILT = {"paved", "cobble"}
-# surface kind -> DecalRoad look (stock materials, loaded by the mod from the official levels)
+# surface kind -> DecalRoad look (stock materials, loaded by the mod from the official levels).
+# Dirt and gravel are the continuous road strips in /assets/materials/decalroad/dirt, the ones Johnson
+# Valley paints its dirt roads with (not the tyre-track and flow overlays, which are a few metres wide
+# and sit on top of a road). Each variation albedo is 16 times as long as it is wide (256 x 4096);
+# an 8 m road there uses textureLength 128, so one repeat stays square and the ruts run along the road.
+# m_dirt_road_gravels is the gravel strip (1024 x 2048): textureLength twice the width, as there.
+# "aspect" is that ratio (texture length per metre of width). "vary": one road keeps one of these for
+# its whole length (look_of), so the strip does not change material at a tile edge.
+# Copies of those strips (dirtroad.materials.json): the stock opacity maps are patchy, and vertex alpha
+# only tints the colour (it never changes opacity). Ours sample dirt_fade_o.data.png on UV1, which feathers
+# both sides (roadmesh EDGE_FADE_M) and fades a real end (END_FADE_M) without restarting at a tile edge.
+DIRT_VARIATIONS = ("bne_dirt_variation_01", "bne_dirt_variation_02",
+                   "bne_dirt_variation_03", "bne_dirt_variation_04")
 LOOK = {
     "paved": {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20},
     # Italy's cobblestone (a mesh material with groundType COBBLESTONE): a DecalRoad stretches its
     # texture across the whole width, so cobbled roads are drawn as parallel strips of about
     # "strip" m with a square texture repeat, which keeps the stones their size
     "cobble": {"m": "italy_cobblestone", "tl": 2.5, "p": 20, "strip": 2.5},
-    "gravel": {"m": "m_dirt_road", "tl": 88.0, "p": 21},
-    "dirt": {"m": "m_dirt_road", "tl": 88.0, "p": 21},
+    "gravel": {"m": "bne_dirt_gravel", "tl": 8.0, "p": 21, "aspect": 2.0},
+    "dirt": {"m": DIRT_VARIATIONS[0], "tl": 56.0, "p": 21, "aspect": 16.0, "vary": DIRT_VARIATIONS},
 }
 # a `surface=concrete` street is still a paved one (markings, widths, the tyres' asphalt feel) but is drawn with
 # gridmap v2's plain concrete instead of asphalt (the user, 2026-10-22: "for concrete road surfaces")
@@ -120,11 +132,27 @@ def surface_material_kind(spec):
     return terrain_surface(spec) or spec.kind
 
 
-def look_of(spec):
-    """A spec's road look: gridmap v2's concrete for a `surface=concrete` street, else its kind's (LOOK)."""
+def _variation(names, fid):
+    """One of `names`, stable for a road id (the same in every tile). None picks the first."""
+    if fid is None:
+        return names[0]
+    import hashlib
+    n = int.from_bytes(hashlib.blake2s(str(fid).encode(), digest_size=2).digest(), "little")
+    return names[n % len(names)]
+
+
+def look_of(spec, fid=None):
+    """A spec's road look: gridmap v2's concrete for a `surface=concrete` street, else its kind's (LOOK).
+    A dirt or gravel strip's texture length is its aspect times the width, and one road (fid) keeps one
+    dirt variation the whole way."""
     if spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
-    return LOOK[spec.kind]
+    look = LOOK[spec.kind]
+    if look.get("vary"):
+        look = {**look, "m": _variation(look["vary"], fid)}
+    if look.get("aspect"):
+        look = {**look, "tl": round(float(look["aspect"]) * float(spec.width), 2)}
+    return look
 Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides",
                   defaults=(False, 2.5, 0, None, None, None, None, None, False, None))   # median: m to the other carriageway's centre line
 # (sides: the sidewalk sides OpenStreetMap's sidewalk tag gives (_osm_sidewalks; walk_sides' +1 left / -1 right of the
@@ -174,9 +202,11 @@ LINK_M = {1: 6.0, 2: 9.0}
 LINK_LANE_M = 3.7       # a one-lane ramp's lane between its shoulders
 URBAN_ARTERIAL = {"trunk": 13.2}     # primaries in towns are often 2 lanes (Lancaster County's PA-340)
 LANE_M = 3.3            # m per lane when counting the lanes a carriageway holds
-# carriageways painted into the drawn ground instead of meshes (surface.photo_roads; the user, 2026-10-22: "I dont love
-# that we are applying a floating road texture over the normal terrain"; it also ended the white diamonds on the
-# Stelvio's hairpins, GitHub #135). BNGE_ROADS_IN_GROUND=0: the carriageway meshes as before
+# paved and cobble carriageways painted into the drawn ground instead of meshes (surface.photo_roads; the user,
+# 2026-10-22: "I dont love that we are applying a floating road texture over the normal terrain"; it also ended the
+# white diamonds on the Stelvio's hairpins, GitHub #135). Dirt and gravel keep their strip (LOOK): a terrain splat
+# is world-locked and does not follow the road, and the photo tint is a flat colour. BNGE_ROADS_IN_GROUND=0: every
+# carriageway mesh as before.
 ROADS_IN_GROUND = os.environ.get("BNGE_ROADS_IN_GROUND", "1") != "0"
 # m per driving lane by class when OpenStreetMap gives the lane count (osmtags.py; typical design widths)
 LANE_W = {"motorway": 3.6, "trunk": 3.5, "primary": 3.3, "secondary": 3.3, "tertiary": 3.1}
@@ -6746,6 +6776,49 @@ def _on_box(p, box, eps=1e-6):
     return abs(p[0] - x0) < eps or abs(p[0] - x1) < eps or abs(p[1] - y0) < eps or abs(p[1] - y1) < eps
 
 
+def _arc_lengths(pts):
+    """Metres along a polyline (k, D >= 2), from its first point. Pure."""
+    d = np.diff(np.asarray(pts, np.float64)[:, :2], axis=0)
+    return np.r_[0.0, np.cumsum(np.hypot(d[:, 0], d[:, 1]))]
+
+
+def _arc_at(pts, arc, p):
+    """Metres along pts (arc from _arc_lengths) of the closest point on it to p. Pure."""
+    P = np.asarray(pts, np.float64)
+    a, b = P[:-1, :2], P[1:, :2]
+    ab = b - a
+    L2 = np.maximum((ab * ab).sum(1), 1e-12)
+    t = np.clip(((np.asarray(p, np.float64)[:2] - a) * ab).sum(1) / L2, 0.0, 1.0)
+    i = int(np.argmin(np.hypot(*(a + t[:, None] * ab - np.asarray(p, np.float64)[:2]).T)))
+    return float(arc[i] + t[i] * (arc[i + 1] - arc[i]))
+
+
+def _surface_pieces(look, width, line, box):
+    """Carriageway chunks of `line` clipped to box. A look with "aspect" (a dirt or gravel strip) carries s0 and s1,
+    metres along `line` to the chunk's ends: the clipped piece's ends lie on `line`, and the chunk is placed by how
+    far it sits along that piece, so the same point of the road has the same distance in every tile (roadmesh ribbons
+    turn that into v). Pure."""
+    arc = _arc_lengths(line) if look.get("aspect") else None
+    out = []
+    for piece in clip_polyline(line, *box):
+        if arc is not None:
+            base, end = _arc_at(line, arc, piece[0]), _arc_at(line, arc, piece[-1])
+        simp = densify(simplify(piece))
+        sal = _arc_lengths(simp) if arc is not None else None
+        span = float(sal[-1]) if sal is not None else 0.0
+        for c in split(simp):
+            if len(c) < 2:
+                continue
+            ch = _chunk(look, width, c)
+            if arc is not None and span > 1e-6:
+                a, b = _arc_at(simp, sal, c[0]), _arc_at(simp, sal, c[-1])
+                ch["s0"] = round(base + (end - base) * (a / span), 2)
+                ch["s1"] = round(base + (end - base) * (b / span), 2)
+                ch["slen"] = round(float(arc[-1]), 2)   # the whole road: the strip fades at its real ends
+            out.append(ch)
+    return out
+
+
 def drains(run, side, caps, walk_w=None):
     """The storm drain chunks along a sidewalk run (k, 3) on `side` of its road: DRAIN_IN m before its
     end if that is a real end (caps: (start, end) real) and every DRAIN_EVERY m along it. Pure."""
@@ -6918,13 +6991,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     if len(c) >= 2:
                         cover_out.append(_chunk(look_of(spec), spec.width, c))
     for fid, spec, pts, _ in roads:
-        if ROADS_IN_GROUND:                     # the carriageway painted into the ground (surface.photo_roads)
+        # paved and cobble are the photo tint (surface.photo_roads). Dirt and gravel keep the strip.
+        if ROADS_IN_GROUND and spec.kind not in ("dirt", "gravel"):
             continue
         # no smooth ribbon over rough ground — but only where the ground layer will paint it (--surface on); with
         # the surface pass off there is no ROCK/GRASS mask, and the road would otherwise vanish entirely
         if terrain_paint and terrain_surface(spec):
             continue
-        look = look_of(spec)
+        look = look_of(spec, fid)
         lanes = [(0.0, spec.width)]
         if look.get("strip"):                   # parallel strips across the width (see LOOK)
             n = max(1, int(round(spec.width / look["strip"])))
@@ -6932,10 +7006,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             lanes = [((k + 0.5) * sw - spec.width / 2, sw) for k in range(n)]
         for off, lw in lanes:
             line = pts if off == 0.0 else offset_polyline(pts, off)
-            for piece in clip_polyline(line, *box):
-                for c in split(densify(simplify(piece))):
-                    if len(c) >= 2:
-                        chunks.append(_chunk(look, lw, c))
+            chunks.extend(_surface_pieces(look, lw, line, box))
     decks_near = []                             # (retaining_walls: none under a bridge)
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells):
         if ch.get("deck"):
