@@ -466,5 +466,151 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_lm_iron": {
+    "name": "bne_lm_iron",
+    "mapTo": "bne_lm_iron",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "768b8e23-153c-59b3-bd65-5eb1c8a83649",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_lm_stone": {
+    "name": "bne_lm_stone",
+    "mapTo": "bne_lm_stone",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3a92f128-2354-5380-96d6-967a6a84cc09",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.9,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_lm_lamp": {
+    "name": "bne_lm_lamp",
+    "mapTo": "bne_lm_lamp",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ed7fefc1-9103-5539-81b4-d89e616e65da",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.3,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "translucent": false
+  },
+  "bne_lm_floodlit": {
+    "name": "bne_lm_floodlit",
+    "mapTo": "bne_lm_floodlit",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ff1a0bba-4adb-525a-b371-6ceed6659dae",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.9,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_lm_dial": {
+    "name": "bne_lm_dial",
+    "mapTo": "bne_lm_dial",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6e998245-422b-5b9b-9aa5-46a41440c42c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.4,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }
