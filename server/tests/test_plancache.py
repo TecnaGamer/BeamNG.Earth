@@ -12,6 +12,7 @@ from unittest import mock
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import grading  # noqa: E402
 import plancache  # noqa: E402
 import xproc  # noqa: E402
@@ -132,6 +133,20 @@ class PlanCacheTest(unittest.TestCase):
             os.utime(os.path.join(root, d), (old, old))
         self.assertEqual(plancache.prune(root), 1)
         self.assertEqual(os.listdir(root), ["new"], "a run still writing (its newest folder) is kept")
+
+    def test_claim_timeout_falls_back_to_local_plan(self):
+        c = plancache.PlanCache(self.dir, "s")
+        lock = c._path(KEY) + ".lock"
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with open(lock, "w") as f:
+            f.write(f"{xproc.PRIORITY} 0\n")
+        with mock.patch.object(plancache, "WAIT_S", 0.1):
+            t0 = time.monotonic()
+            state, mine = c.claim(KEY)
+            dt = time.monotonic() - t0
+        self.assertEqual((state, mine), (None, False), "times out and plans itself locally")
+        self.assertLess(dt, 1.0)
+        self.assertEqual(c.stats["waited"], 1)
 
 
 class LockTest(unittest.TestCase):

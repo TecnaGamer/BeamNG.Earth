@@ -1995,7 +1995,7 @@ class _Planner:
         elevation downloads overlap: a fresh place's first block planned its 3-4 cells one after another, 27-35 s of
         its wait, 2026-10-22); the caller's urgent elevation lane (a teleport's first block) carried over."""
         with self.lock:
-            missing = [k for k in keys if k not in self.cells]
+            missing = sorted([k for k in keys if k not in self.cells], key=str)
         if len(missing) < 2:
             return
         dem = getattr(self, "dem", None)
@@ -2037,7 +2037,7 @@ class _Planner:
         if hit is not None:
             return hit
         got = {}
-        for key in keys:
+        for key in sorted(keys, key=str):
             for fid_part, p in self._cell_plans(key):
                 if roads_only and TUNNEL_TAG in fid_part:
                     continue

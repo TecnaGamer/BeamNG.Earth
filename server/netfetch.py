@@ -694,6 +694,7 @@ class Fetcher:
         self.policies = dict(POLICIES if policies is None else policies)
         self.default_policy = default_policy
         self.offline_flag = bool(offline)
+        self.on_circuit_closed = None
         self._hosts = {}
         self._chains = {}               # name -> hosts of a failover chain (imagery, dem)
         self._lock = threading.Lock()
@@ -990,6 +991,12 @@ class Fetcher:
     def _succeeded(self, h):
         if h.breaker.success():
             log.info("net: %s: circuit closed", h.name)
+            cb = getattr(self, "on_circuit_closed", None)
+            if cb is not None:
+                try:
+                    cb(h.name)
+                except Exception:
+                    log.exception("on_circuit_closed callback failed")
 
     @contextmanager
     def session(self, url, kind="demand"):

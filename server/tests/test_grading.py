@@ -394,6 +394,17 @@ class GraderTest(unittest.TestCase):
         b = g.plans(la2, lo2)
         self.assertEqual([id(p) for p in a], [id(p) for p in b])
 
+    def test_plan_missing_sorts_keys_before_planning(self):
+        f = features([[(-300, 20), (300, 20)]], ["residential"])
+        p = grading._Planner(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        order = []
+        orig = p._cell_plans
+        p._cell_plans = lambda k: [order.append(k), orig(k)][1]
+        keys = [(14, 500, 300), (14, 100, 200), (14, 400, 100)]
+        with unittest.mock.patch.object(grading, "PLAN_THREADS", 1):
+            p._plan_missing(keys)
+        self.assertEqual(order, sorted(keys, key=str))
+
     @unittest.mock.patch.object(grading, "SHARP_ON", False)        # (the profile's samples alone counted)
     def test_long_parts_planned_near_the_cell_only(self):
         # a 30 km straight track (one segment): its plan in a cell covers the cell and CLIP_MARGIN_M round it, not

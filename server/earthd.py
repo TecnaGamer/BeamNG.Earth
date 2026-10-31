@@ -725,6 +725,9 @@ class Server:
         # (anchorId, key) of cached tiles built with the palette because the imagery failed; shown in
         # the status note (re-texturing them once the host is back is a ROADMAP follow-up)
         self.degraded = set()
+        self.degraded_retries = {}
+        if hasattr(self.net, "on_circuit_closed") and self.net.on_circuit_closed is None:
+            self.net.on_circuit_closed = self._on_circuit_closed
         # Heightmap workers: with the block processes they mostly wait on a process, and with two a
         # request queued behind a prefetch and an earlier request (3.5 s at 90 m/s, 2026-10-12)
         self.hm_pool = ThreadPoolExecutor(HM_THREADS, thread_name_prefix="heightmap")
@@ -2600,6 +2603,44 @@ class Server:
             parts.append(weathermod.CREDIT)
         return "; ".join(parts + [ELEVATION_CREDIT])
 
+    def _on_circuit_closed(self, host_name):
+        loop = self.loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self.retry_degraded)
+        else:
+            self.retry_degraded()
+
+    def retry_degraded(self):
+        """Once imagery hosts are healthy (circuits closed), evict degraded tiles so they rebuild with imagery."""
+        if not self.degraded or self.imagery is None or self.net.offline:
+            return
+        if self.net.unavailable_hosts(optional=False):
+            return
+        to_retry = [ck for ck in list(self.degraded) if ck not in self.tile_inflight and self.degraded_retries.get(ck, 0) < 2]
+        for ck in to_retry:
+            self.degraded.discard(ck)
+            self.degraded_retries[ck] = self.degraded_retries.get(ck, 0) + 1
+            info = self.tiles.pop(ck, None)
+            if info is not None:
+                files = self.tile_files(self.tile_name(*ck), info.texture if info.rev else None, info.rev)
+                if info.shape is not None and not info.shape.startswith("slot_"):
+                    files.append(os.path.join(self.out_dir, info.shape))
+                self.queue_delete((p for p in files if os.path.exists(p)), ck)
+            for c in list(self.connections):
+                if ck in c.shown:
+                    c.send({"type": "far_remove", "anchorId": ck[0], "key": ck[1]})
+                    del c.shown[ck]
+                    c._retire([ck])
+                    c._regroup()
+                elif ck[1] in c.sent:
+                    c.send({"type": "far_remove", "anchorId": ck[0], "key": ck[1]})
+                    del c.sent[ck[1]]
+                    c._retire([ck])
+                    c._regroup()
+                c.wake.set()
+        if to_retry:
+            log.info("recovering %d degraded tiles after imagery host restored", len(to_retry))
+
     def net_note(self):
         """The network state for the status text: "" when all is well, "Offline - using cached data"
         (--offline, or every imagery / DEM host unreachable), else the unreachable hosts and the
@@ -2787,7 +2828,7 @@ class Server:
         prev: the tile's stale TileInfo (--colormatch): only its texture is rendered again.
         A global tile (farfield.GTile) is built in its own frame, the same for every anchor (ck (GLOBAL_AID, key));
         a piece (farfield.Piece) is its node's tile cut to its global tile's quad."""
-        if prev is not None:
+        if prev is not None and prev.material is not None:
             return self.retexture(anchor, tile, prev)
         t0 = time.perf_counter()
         lvl = tile.level
@@ -2864,6 +2905,7 @@ class Server:
             texture, tex_bytes, used = done
             material = self.matslots.take(ck)
             self.degraded.discard(ck)
+            self.degraded_retries.pop(ck, None)
             self.imagery_worker += 1
         elif part is not None and part.get("tex") is not None:      # the node's texture, another piece's
             texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
@@ -2873,6 +2915,7 @@ class Server:
                 pending |= set(was)
             material = self.matslots.take(ck)
             self.degraded.discard(ck)
+            self.degraded_retries.pop(ck, None)
         elif self.imagery is not None:
             try:
                 px = self.tex_size(lvl)
@@ -2901,6 +2944,7 @@ class Server:
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
                 material = self.matslots.take(ck)
                 self.degraded.discard(ck)
+                self.degraded_retries.pop(ck, None)
             except imagerymod.ImageryError as e:
                 # Network trouble: this tile keeps the palette look (the mod's static material).
                 self.degraded.add(ck)
@@ -3239,6 +3283,7 @@ class Server:
     def _evict_tile(self, ck):
         info = self.tiles.pop(ck)
         self.degraded.discard(ck)
+        self.degraded_retries.pop(ck, None)
         self.matslots.release(ck)
         # --colormatch: a later build must not reuse its texture's name (re-rendered, or rendered raw
         # for a region that may finish before the tile is built again: the listener misses it then)
@@ -3398,6 +3443,7 @@ class Server:
                 self.matslots.release(ck)
             for ck in [ck for ck in list(self.degraded) if ck[0] == aid]:     # list(): workers add meanwhile
                 self.degraded.discard(ck)
+                self.degraded_retries.pop(ck, None)
             for ck in [k for k in self.tex_rev if k[0] == aid]:
                 del self.tex_rev[ck]
             self.retex_todo = {ck for ck in self.retex_todo if ck[0] != aid}
@@ -5786,6 +5832,7 @@ async def main_async(args):
             await asyncio.sleep(SESSION_SWEEP_S)
             try:
                 await server.sweep_sessions_async()
+                server.retry_degraded()
             except Exception:           # a file-system error must not stop the sweeps (or the server)
                 log.exception("session sweep failed")
     sweeper = asyncio.create_task(sessions())
