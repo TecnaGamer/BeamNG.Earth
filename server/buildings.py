@@ -21,6 +21,7 @@ import numpy as np
 
 import fast
 import mapgeom
+import ships
 import staging
 
 FLOOR_M = 3.0               # m per storey (residential)
@@ -321,7 +322,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -459,6 +460,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     sid = attrs.get("seed_id")
     seed = look if look is not None else _hash01(sid, "plan") if sid is not None else \
         _hash01(round(float(c[0]) * 2), round(float(c[1]) * 2), round(area))
+    if attrs.get("ship"):           # a moored ship (ships.is_ship): a hull, not a building
+        return ships.spec(ring, attrs, seed)
+    if attrs.get("pier"):           # a quay structure alongside one (ships.pier_alongside): a low deck
+        return ships.pier_spec(ring, seed)
     style = region_style(lat, lon)
     _, _, hl, hw = oriented_box(ring)
     box_fill = area / max(4 * hl * hw, 1e-6)
@@ -1486,6 +1491,9 @@ def build(specs_and_ground, lite=False):
         if spec.cls in BRIDGE_CLASSES:
             _steel_frame(m, spec, gmin, mat_idx[spec.facade if spec.facade in LOOKS else STEEL], lite)
             continue
+        if spec.cls == "ship":
+            ships.draw(m, spec, gmin, gmax, mat_idx, lite)
+            continue
         ring = drawn_ring(spec)
         mh = spec.min_h or 0.0
         if spec.deck and not lite and _parking_deck(m, spec, gmin, gmax, mat_idx):
@@ -1578,7 +1586,7 @@ def collision_mesh(specs_and_ground):
             ring = ring[::-1]
         mh = spec.min_h or 0.0
         z0 = gmin - FOUNDATION_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
-        z1 = base_z(spec, gmin, gmax) + mh + spec.height
+        z1 = base_z(spec, gmin, gmax) + mh + (spec.floor_h if spec.cls == "ship" else spec.height)  # (a ship: its deck)
         for i in range(len(ring)):
             a, b = ring[i], ring[(i + 1) % len(ring)]
             m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), zero, zero, zero, zero, tok)
@@ -2255,6 +2263,43 @@ class _PartsOf:
         return out
 
 
+def _hulls_nearby(frame, layers, x0, y0, x1, y1, water_xy, reach=ships.PIER_REACH_M):
+    """Local rings of the moored ships (ships.is_ship) whose outline centres lie outside the tile but within reach of
+    it (a quay in this tile may lie alongside a ship the next tile draws)."""
+    out = []
+    for f in layers:
+        if f is None or len(f.kind) == 0:
+            continue
+        a = f.attrs
+        rows = range(len(f.kind))
+        if isinstance(f, mapgeom.Features):
+            cx_, cy_ = f.outer_centres(frame)
+            bx = f.boxes(frame)
+            big = np.maximum(bx[:, 2] - bx[:, 0], bx[:, 3] - bx[:, 1]) >= ships.MIN_L / math.sqrt(2)
+            rows = np.flatnonzero(big & (cx_ >= x0 - reach) & (cx_ < x1 + reach) & (cy_ >= y0 - reach)
+                                  & (cy_ < y1 + reach) & ~((cx_ >= x0) & (cx_ < x1) & (cy_ >= y0) & (cy_ < y1))
+                                  & (bx[:, 0] <= x1 + ships.PIER_GAP_M) & (bx[:, 2] >= x0 - ships.PIER_GAP_M)
+                                  & (bx[:, 1] <= y1 + ships.PIER_GAP_M) & (bx[:, 3] >= y0 - ships.PIER_GAP_M)).tolist()
+        for i in rows:
+            if "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap":
+                continue
+            if not water_xy and not ships.has_evidence({k: (a[k][i] if k in a else None)
+                                                        for k in ("class", "subtype", "name")}):
+                continue                        # (no water near and no ship's tags: cheaper than the outline)
+            parts = f.parts(i)
+            if not parts or not parts[0] or len(parts[0][0]) < 4:
+                continue
+            e, n = mapgeom.enu_xy(f, frame, np.asarray(parts[0][0], np.float64))
+            cx, cy = float(e[:-1].mean()), float(n[:-1].mean())
+            if (x0 <= cx < x1 and y0 <= cy < y1) or max(np.ptp(e), np.ptp(n)) < ships.MIN_L / math.sqrt(2):
+                continue                        # (the tile's own: tested already)
+            r = clean_ring(np.stack([e - x0, n - y0], 1))
+            at = {k: (a[k][i] if k in a else None) for k in ("class", "subtype", "name")}
+            if r is not None and ships.is_ship(r, at, lambda: ships.on_water(r.mean(0), water_xy)):
+                out.append(r)
+    return out
+
+
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None):
@@ -2312,7 +2357,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if h_ < min_size[0] and abs(float(np.dot(e[:-1], n[1:]) - np.dot(e[1:], n[:-1]))) / 2 < min_size[1]:
                     continue
             at = {k: (a[k][i] if k in a else None) for k in
-                  ("class", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
+                  ("class", "subtype", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
@@ -2321,6 +2366,17 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue                # a mapped area, not a building (the Golden Gate toll plaza's 0.01 m footprint
                                         # drew a slab with a rim round the booths, 2026-10-21)
             bparts = parts_of.get(str(key)) if key is not None else None
+            ship_parts = None
+            if bparts and "src_dataset" in a and str(a["src_dataset"][i]) == "OpenStreetMap":
+                # a ship mapped with parts (the Iowa's turrets, the Queen Mary's funnels): the hull, its parts on deck
+                ring_ = clean_ring(np.stack([e - x0, n - y0], 1))
+                if ring_ is not None and ships.is_ship(ring_, at, lambda: ships.on_water(ring_.mean(0), water_xy)):
+                    ship_parts = []     # (its ring, (own height, bottom) or None)
+                    for p in bparts:
+                        pr_ = clean_ring(p[0] - np.array([x0, y0]))
+                        if pr_ is not None:
+                            ship_parts.append((pr_, p[1]))
+                    bparts = None
             if bparts and any(p[1] is not None for p in bparts):
                 # drawn as its parts, with the building's class and one look for all of them; a part
                 # without a height takes the building's (else its lowest known part's)
@@ -2393,11 +2449,37 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 at = dict(at, bridge_part=on) if fm_ in STEEL_MATERIALS else dict(at, bridge_masonry=fm_)
             if is_ml:
                 at = dict(at, ml=True)          # (_ml_steep once its ground is known)
+            elif on is None and mh <= 0.5 and (ship_parts is not None or ships.is_ship(
+                    ring, at, lambda: ships.on_water(ring.mean(0), water_xy))):     # (the water test asked last)
+                at = dict(at, ship=True, ship_parts=ship_parts)
             attrs.append(at)
             looks.append(None)
             mins.append(mh)
     if not rings:
         return []
+    # a quay structure alongside a moored ship: a low deck (its scanned height is the ship's flank). The ship may be
+    # the next tile's: those are looked for only when this tile has water and a long thin candidate
+    piers = [k_ for k_, (r, at) in enumerate(zip(rings, attrs)) if not at.get("ship") and not at.get("ml")
+             and looks[k_] is None and mins[k_] <= 0.5 and ships.pier_shaped(r)] if water_xy else []
+    if piers:
+        hulls = [r for r, at in zip(rings, attrs) if at.get("ship")] +             _hulls_nearby(frame, layers, x0, y0, x1, y1, water_xy)
+        for k_ in piers:
+            if any(ships.pier_alongside(rings[k_], hr) for hr in hulls):
+                attrs[k_] = dict(attrs[k_], pier=True)
+    # what lies mostly on a ship's hull is the ship's (a second outline of it, machine-learned or a second OSM way): not
+    # a building as well. Its hull may be the next tile's (those tagged a ship: asking the water for every tile by the
+    # water cost a waterfront tile ~10 %)
+    if any(not at.get("ship") and not at.get("pier") for at in attrs):
+        hulls = [r for r, at in zip(rings, attrs) if at.get("ship")] + _hulls_nearby(frame, layers, x0, y0, x1, y1, None)
+        if hulls:
+            drop = {k_ for k_, (r, at) in enumerate(zip(rings, attrs)) if not at.get("ship") and not at.get("pier")
+                    and any(ships.on_hull(r, hr) for hr in hulls)}
+            if drop:
+                keep = [k_ for k_ in range(len(rings)) if k_ not in drop]
+                rings, attrs = [rings[k_] for k_ in keep], [attrs[k_] for k_ in keep]
+                looks, mins = [looks[k_] for k_ in keep], [mins[k_] for k_ in keep]
+                if not rings:
+                    return []
     if bridges_xy or decks:             # a road bridge through a building: a passage (Tower Bridge's towers and gate)
         def ground_at(c):
             la, lo, _ = frame.enu_to_geodetic(float(c[0]) + x0, float(c[1]) + y0, 0.0)
@@ -2443,7 +2525,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         g = up_all[i0:i1].copy()
         if at.get("ml") and ways_xy is not None and _ml_steep(ring, g, ways_xy):
             continue
-        if water is not None:
+        if water is not None and not at.get("ship"):
             c = ring.mean(0)
             cla, clo, _ = frame.enu_to_geodetic(c[0] + x0, c[1] + y0, 0.0)
             if water(float(cla), float(clo)):
@@ -2454,6 +2536,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if got[0]:              # over the deck's lanes: a vehicle, a booth on the road
                     continue
                 g = np.full(len(g), got[1])     # its floor on the deck (a pier's bait shop stood on the seabed)
+        if at.get("ship"):          # afloat: on the water's level, not on the ground under it
+            la_, lo_ = la_all[i0:i1], lo_all[i0:i1]
+            wl = ships.waterline(la_, lo_, g_all[i0:i1])
+            g = np.full(len(g), float(np.mean(frame.geodetic_to_enu(la_, lo_, np.full(len(g), wl))[2])))
         spec.gring = g              # the ground at each corner (door_ground: the door's, not the footprint's highest)
         out.append((spec, float(g.min()), float(g.max())))
     lines = roads_xy if roads_xy else ml_roads_xy

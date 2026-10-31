@@ -59,6 +59,8 @@ class _State:
             md.dem = self.dem       # (gradesep's ground)
         # the sea's and the lakes' floors carved in (--sea on)
         self.sea = seacarvemod.SeaCarver(md, cache_dir, dem=self.dem) if sea else None
+        import ships
+        ships.water_at = self.sea.water if self.sea is not None else None
         self.md = md if roads else None
         import fra
         self.fra = fra.Crossings(cache_dir, net) if roads else None     # (the US's level crossings' devices)
