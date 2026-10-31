@@ -298,6 +298,28 @@ class RailwayTest(unittest.TestCase):
         self.assertTrue(((piers[:, 2] < 7.0) & (piers[:, 0] > 100) & (piers[:, 0] < 150)).any(),
                         "a pier down to the stream bed")
 
+    def test_bridge_ends_down_a_cutting_take_the_tracks_level(self):
+        """The Abbey Line over the M1 near Bricket Wood (the user's screenshot, 2026-10-31): the track level on both
+        sides, the mapped bridge's ends part way down the motorway cutting's slopes. The deck at the track's level, not
+        laid between those low ends (it blocked the motorway)."""
+        def cutting(xy):            # the track at 10 m, the cutting 6 m deep: its floor 50 m wide, its slopes 15 m
+            return 10.0 - 6.0 * np.clip((40.0 - np.abs(xy[:, 0] - 125.0)) / 15.0, 0.0, 1.0)
+        f, x, z = self._line(cutting)                       # (the bridge from 100 to 150: its ends at 5 m)
+        deck = (x >= 100) & (x <= 150)
+        self.assertLess(cutting(np.array([[100.0, 100.0]]))[0], 5.5, "(the mapped ends down the slopes)")
+        self.assertGreater(float(z[deck].min()), 10.0 - railways.GRADE * railways.APPROACH_REACH_M, "the deck up")
+        self.assertLess(float(z.max()), 10.0 + 0.05, "not over the track's own level")
+        dz = np.abs(np.diff(z)) / np.maximum(np.diff(x), 1e-9)
+        self.assertLessEqual(dz[np.diff(x) > 0.5].max(), railways.GRADE + 1e-6, "no step at the deck's ends")
+
+    def test_a_hillside_on_from_the_bridge_does_not_raise_it(self):
+        """The ground rising on from a bridge's ends without levelling out (the line climbs a hillside there): no
+        level the track holds, the deck stays at its ends' ground."""
+        def valley(xy):             # 8 % slopes up from the bridge's ends, a dip under it
+            x = xy[:, 0]
+            return np.where(x < 100, 10.0 + 0.08 * (100 - x), np.where(x > 150, 10.0 + 0.08 * (x - 150), 7.0))
+        self.assertEqual(railways.approach_levels(np.array([[100.0, 100.0], [150.0, 100.0]]), valley), (None, None))
+
     def test_piers_stand_beside_a_road_under_the_bridge_on_the_ground(self):
         """A rail bridge over a road in a 5 m dip: no pier in the road's lanes, every pier's foot under the ground at
         all its corners (one stood in the lanes, one hung in the air, 2026-10-25)."""
