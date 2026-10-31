@@ -209,6 +209,13 @@ UNDER_FLAT_M = 12.0         # m either side of the crossing kept at the dip's fu
 UNDER_MAX_GRADE = 0.10      # a dip's ramp made steeper, up to this, to end inside its road part (under_dip)
 UNDER_JOINT_FLAT_M = 12.0   # at a junction, every road takes the deepest dip within this of it ...
 UNDER_JOINT_FADE_M = 20.0   # ... blended back to its own over this
+# Where the elevation is lidar, a deck (its ends' ground, as raised) standing less than this over the road crossing
+# under it is not at deck height in the data: the lidar has the road's own ground there, and the road keeps it (the deck
+# rises instead). Sassafras Way runs on level ground under Pittsburgh's 28th Street Bridge (Street View), the bridge's
+# mapped end 0.4 m under it in the lidar; dug 8 m to clear that, its dip ran on through 28th Street and lowered Liberty
+# Avenue 3 m into a walled trench (the user's report, 2026-10-29). (Not on the coarse models: no cutting there, BR-381.)
+UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
+UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # m around a cell's plans whose roads and spans its dips are solved on: the farthest a dip or a loose end reaches
 # (underpass_offsets: flat + the longest ramp, a junction's share) and a span's length; every cell sees the same
 UNDER_NEAR_M = 4 * VERTEX_STEP  # m past a cell's box its plans' dips are made (to their pieces' cut ends there)
@@ -1422,7 +1429,7 @@ class _Planner:
                     got[1] += self._end_raised(b[-1])
                 ez[j] = got
             return got
-        cands = []
+        cands, decks = [], []
         for i, cr in enumerate(crs):
             if not cr:
                 continue
@@ -1444,11 +1451,16 @@ class _Planner:
                 # UNDER_CLEAR_M dug the road out under a short overpass that sits lower)
                 clear = roadsmod.deck_road_clear(roadsmod.deck_depth(roadsmod.geom_span([b]))) + ROAD_LIFT
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
+                decks.append(deck)
         if not cands:
             return
         zc = self._under_ground(lines, [ground[g][1:] for g in gids], cands)
+        dem = getattr(self, "dem", None) or getattr(self.md, "dem", None)
+        lidar = UNDER_LIDAR_ON and not coarse and dem is not None and hasattr(dem, "coarse_at")
         requirements = []
-        for (i, sc, top), z in zip(cands, zc):
+        for (i, sc, top), deck, z in zip(cands, decks, zc):
+            if lidar and deck < z + UNDER_LIDAR_DECK_M:
+                continue                        # (the ends' ground is not the deck: the road keeps its own)
             target = max(top, z - UNDER_MAX_DROP_M)
             if target < z - 0.1:
                 requirements.append((i, sc, z - target))

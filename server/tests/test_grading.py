@@ -615,6 +615,31 @@ class UnderpassShortfallTest(unittest.TestCase):
                                                                   "residential", "residential"])
         self.assertAlmostEqual(float(off[0]), 10.0, delta=0.3, msg="BNE_UNDERPASS_ANY=off: as before")
 
+    def test_on_lidar_a_road_level_with_the_decks_ends_keeps_its_ground(self):
+        """Pittsburgh's 28th Street Bridge (the user's report, 2026-10-29): its mapped end lay level with Sassafras Way
+        under it in the lidar, which has the alley's own ground there; dug 8 m, the dip ran on into Liberty Avenue. On
+        lidar the road keeps its ground; on the coarse models (no cutting in them: BR-381) it still dips."""
+        mway = [(-300, 0), (300, 0)]
+        lines = [mway, [(0, -20), (0, 20)], [(0, -260), (0, -20)], [(0, 20), (0, 260)],
+                 [(-150, -26), (150, -26)], [(-150, 26), (150, 26)]]
+        classes = ["motorway", "tertiary", "tertiary", "tertiary", "residential", "residential"]
+
+        class Dem:
+            def __init__(self, coarse):
+                self.coarse = coarse
+
+            def coarse_at(self, lat, lon):
+                return self.coarse
+
+        def motorway_z(coarse):
+            g = grading.Grader(FRAME, FakeMD(features(lines, classes, flags=[(1, "is_bridge")])),
+                               lambda la, lo: np.full(np.shape(la), 10.0))
+            g.dem = Dem(coarse)
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
+            return float(g.apply(la, lo, np.full(1, 10.0))[0])
+        self.assertAlmostEqual(motorway_z(False), 10.0, delta=0.1, msg="lidar: the road under keeps its ground")
+        self.assertLess(motorway_z(True), 10.0 - 0.6 * grading.UNDER_CLEAR_M, "coarse: it dips as before")
+
 
 class RacewayKeepTest(unittest.TestCase):
     def test_track_surface_is_the_terrain(self):
