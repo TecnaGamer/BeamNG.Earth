@@ -92,6 +92,12 @@ M.RELOAD_WAIT_FRAMES = 3
 local reloadWaits = 0
 
 local newColliders = {}    -- { id, walkQ entry } of the colliders made since the last reloadCollision
+local CUSTOM_MATERIALS_PATH = '/levels/beamng_earth/art/shapes/beamngEarth/three_dmr.materials.json'
+local customMaterialsNeverLoaded = {}   -- sentinel: matches no readFile() result, so the very first spawnCustom always loads
+local customMaterialsContent = customMaterialsNeverLoaded   -- three_dmr.materials.json (3dmr custom meshes): its
+    -- own text as of the last load, re-loaded whenever it changes - the server keeps appending materials for
+    -- models baked later in the same session (another location, same game run), which a load-once flag missed
+
 local parked = {}          -- walkQ entries of colliders whose tile is not near enough yet
 local sinceCollideCheck = stopwatch.new()
 local held = {}            -- walkQ entries of colliding meshes held while the player is in their boxes
@@ -311,6 +317,11 @@ local function dropTile(key)
   for _, sl in pairs(t.oldPartSlot or {}) do slotDrop(sl) end
   t.oldSkin, t.oldPart, t.oldPartSlot = nil, nil, nil
   for _, id in ipairs(t.objs) do deleteQ[#deleteQ + 1] = id end
+  if t.custom then                      -- our 3dmr models of the old content (a re-sent tile left them in place:
+    for _, id in ipairs(t.custom) do      -- two bridges z-fighting on top of each other after a teleport/rebase)
+      deleteQ[#deleteQ + 1] = id
+    end
+  end
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
@@ -493,6 +504,31 @@ local function createWalk(walk, collide)
   end
   group():addObject(o)
   return o:getID()
+end
+
+-- A custom 3dmr mesh (server/threedmr.py, tile field "b3dmr" {shape, pos, col}): already at its correct ground
+-- height (pos z0 is 0), spawned at pos as-is like a bld / walk TSStatic. Colliding (the models stand in the
+-- way of driving, not just decoration), except a model bridge's own drawn mesh (col false: the car drives on
+-- its invisible "_deck" slab instead). Returns the object's id.
+local function spawnCustom(key, shape, pos, rot, col)
+  local t = tiles[key]
+  if not t then return end
+  local content = readFile(CUSTOM_MATERIALS_PATH)
+  if content ~= customMaterialsContent then
+    customMaterialsContent = content
+    local ok, err = pcall(loadJsonMaterialsFile, CUSTOM_MATERIALS_PATH)
+    if not ok then log('E', 'beamngEarth', 'roads: three_dmr materials load failed: ' .. tostring(err)) end
+  end
+  -- a "_deck" shape (an invisible collision-only plate: cdae collision_only) needs collisionType
+  -- 'Collision Mesh', not 'Visible Mesh Final' (which would collide with a drawn detail it has none of)
+  local collide = string.find(shape, '_deck', 1, true) and 'Collision Mesh' or col ~= false
+  local walk = { shape = shape, pos = pos }
+  if rot then walk.rot = rot end
+  local id = createWalk(walk, collide)
+  t.custom = t.custom or {}
+  t.custom[#t.custom + 1] = id
+  if collide then collisionDirty = true end
+  return id
 end
 
 local function createChunk(chunk)
@@ -750,6 +786,22 @@ function M.onGeoTile(msg, currentAnchor, a)
   M.placeGeoTile(t, a)
   tiles[key] = t
   sinceChange = stopwatch.new()
+  -- the tile's baked 3dmr.eu models: their pos is in the tile's own frame, transformed
+  -- into the current anchor's world exactly like the content parts (M.geoWalk's xf)
+  -- (only here: geoRows runs again at every rebase, and spawning there left a second, untransformed copy of every
+  -- model - the doubled objects and the flickering double bridge; M.replace moves these ones instead)
+  if type(data.b3dmr) == 'table' then
+    t.customAt = {}
+    for _, ci in ipairs(data.b3dmr) do
+      if type(ci) == 'table' and type(ci.shape) == 'string' and type(ci.pos) == 'table' then
+        local pp = t.pls.bld or t.rowPl
+        local pos = { ci.pos[1], ci.pos[2], ci.pos[3] or 0 }
+        local x, y, z = pp.xf:apply(pos[1], pos[2], pos[3])
+        local id = spawnCustom(key, ci.shape, { x, y, z }, pp.q, ci.col)
+        if id then t.customAt[#t.customAt + 1] = { id = id, pos = pos } end
+      end
+    end
+  end
   geoRows(key, t, data)
   queueGeoParts(key, t, data)
   M.geoStats.tiles = M.geoStats.tiles + 1
@@ -909,6 +961,16 @@ function M.replace(a, aid)
         for _, id in ipairs(t.objs) do deleteQ[#deleteQ + 1] = id end      -- (DecalRoads cannot turn)
         t.objs, t.queued = {}, 0
         sk.stale = true
+      end
+      if t.customAt then          -- its 3dmr models (onGeoTile): moved as its parts are
+        local pp = t.pls.bld or t.rowPl
+        for _, c in ipairs(t.customAt) do
+          local o = scenetree.findObjectById(c.id)
+          if o then
+            local x, y, z = pp.xf:apply(c.pos[1], c.pos[2], c.pos[3])
+            o:setPosRot(x, y, z, pp.q[1], pp.q[2], pp.q[3], pp.q[4])
+          end
+        end
       end
       if t.data then geoRows(key, t, t.data, true) end
       n = n + 1
