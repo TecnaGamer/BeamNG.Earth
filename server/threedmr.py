@@ -53,9 +53,14 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 26  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 27  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
-# deck, the one-sided materials)
+# deck, the one-sided materials) or a tile with a model bridge is built differently round it (27: the junction pads
+# and guard rails under it now take the author's lane-merge/split deck shift before being left out, not before it)
+# The settings page's "3D models from 3dmr.eu" switch (cpupin.apply_player_settings sets BNE_3DMR=off when it is off;
+# a BNE_ variable, so revisit.code_key keeps what was built with and without the models apart): off, search_ids
+# finds no model (the player's own local models stay)
+ENABLE_ENV = "BNE_3DMR"
 NO_YAW_ENV = "BNGE_3DMR_NO_YAW"  # set: skip osm_yaw's OSM lookup entirely, model placed as downloaded
 # (a fallback if OSM is unreachable from a session)
 MOD_MATERIALS_REL = (

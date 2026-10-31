@@ -255,7 +255,7 @@ class RealDataTest(unittest.TestCase):
         near = {}
         for k in keys[5:7]:
             t = geotiles.geobox(*k)
-            items = buildings.road_tile_items(t.frame, t, None, bw._s.md, raw)
+            items, _custom = buildings.road_tile_items(t.frame, t, None, bw._s.md, raw)
             near[k] = {s.seed for s, _a, _b in items}
             for i in near[k]:
                 self.assertIn(seen.get(i, k), (k,), "a road geotile's building in another key's far tile")

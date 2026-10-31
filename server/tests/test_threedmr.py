@@ -1858,8 +1858,8 @@ class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_26(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 26)
+    def test_version_is_27(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 27)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (
@@ -1879,6 +1879,10 @@ class FeatureVersionTest(unittest.TestCase):
             None,
         )
         self.assertNotEqual(revisit.key(*base, 0), revisit.key(*base, 1))
+
+    def test_blockworker_roads_key_includes_feature_version(self):
+        src = inspect.getsource(blockworker._roads_tile_cached)
+        self.assertIn("threedmr.FEATURE_VERSION", src)
 
 
 def _binary_stl(triangles):
