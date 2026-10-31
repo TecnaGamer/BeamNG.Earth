@@ -178,3 +178,24 @@ class PlayerSettingsTest(unittest.TestCase):
                 row = re.search(r'\{ id: "' + key + r'".*?options: \[([^\]]*)\]', page, re.S)
                 self.assertIsNotNone(row, "the page's row")
                 self.assertEqual(tuple(re.findall(r'value: "(\w+)"', row.group(1))), want)
+
+    def test_3dmr_models_switch(self):
+        # the page's "3D models from 3dmr.eu" (settings.lua models3dmr, on by default): off reaches the worker
+        # processes as BNE_3DMR=off (threedmr.enabled; a BNE_ variable, so in revisit's code key)
+        self.assertEqual(cpupin.player_settings(self.write({"models3dmr": False})), {"models3dmr": False})
+        self.assertEqual(cpupin.player_settings(self.write({"models3dmr": True})), {}, "on: the default")
+        env = {}
+        self.assertEqual(cpupin.apply_player_settings(self.write({"models3dmr": False}), 10, 10, env),
+                         (10, ["no 3dmr.eu models"]))
+        self.assertEqual(env, {"BNE_3DMR": "off"})
+        env = {"BNE_3DMR": "on"}                            # set by hand: it wins
+        cpupin.apply_player_settings(self.write({"models3dmr": False}), 10, 10, env)
+        self.assertEqual(env, {"BNE_3DMR": "on"})
+        import re
+        mod = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "mod",
+                           "beamng_earth")
+        with open(os.path.join(mod, "lua", "ge", "extensions", "beamngEarth", "settings.lua"), encoding="utf-8") as f:
+            self.assertRegex(f.read(), r"models3dmr = \{ kind = 'bool', default = true,")
+        with open(os.path.join(mod, "ui", "ui-vue", "mods", "beamngEarth", "earthSettingsStore.js"),
+                  encoding="utf-8") as f:
+            self.assertTrue(re.search(r'\{ id: "models3dmr", type: "bool", default: true,', f.read()), "the page's row")

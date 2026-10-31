@@ -417,6 +417,15 @@ do
   T.check(on.serverCores and on.serverPriority, 'both on the settings page')
 end
 
+-- the 3dmr.eu models' switch: on the page, on by default (server cpupin.player_settings reads it when it starts)
+do
+  local st = require('beamngEarth/settings')
+  T.check(st.SCHEMA.models3dmr.kind == 'bool' and st.SCHEMA.models3dmr.default == true, 'models3dmr: on by default')
+  local on = {}
+  for _, k in ipairs(st.ORDER) do on[k] = true end
+  T.check(on.models3dmr, 'models3dmr on the settings page')
+end
+
 -- the map holds off the car's controls (the user, 2026-10-21: the controller drove the car behind the map): the stock
 -- groups and every driving action by name
 do

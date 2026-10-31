@@ -201,13 +201,21 @@ def _cached_json(path, url, iface, timeout, what):
     return data
 
 
+def enabled():
+    """Are the 3dmr.eu models on (ENABLE_ENV not "off")?"""
+    return os.environ.get(ENABLE_ENV, "on") != "off"
+
+
 def search_ids(lat, lon, range_m, cache_dir, iface=None, timeout=30.0):
     """Model ids within range_m metres of (lat, lon) (https://3dmr.eu/api/search/<lat>/<lon>/<range>), cached
     per rounded (lat, lon, range) under <cache_dir>/threedmr_cache/search_<lat>_<lon>_<range>.json. [] on a
     network failure or a bad response (never raises through the tile build, and nothing is cached: the search
-    is retried, and the tile rebuilt, next visit - revisit.fault())."""
+    is retried, and the tile rebuilt, next visit - revisit.fault()); [] without a request when the models are
+    off (enabled)."""
     import revisit
 
+    if not enabled():
+        return []
     cache = os.path.join(cache_dir, "threedmr_cache")
     rlat, rlon, rrange = round(float(lat), 4), round(float(lon), 4), int(round(range_m))
     path = os.path.join(cache, f"search_{rlat}_{rlon}_{rrange}.json")
