@@ -166,7 +166,9 @@ function M.onMessage(msg, currentAnchor)
   if not M.enabled or msg.anchorId ~= currentAnchor then return false end
   local ok, g = pcall(jsonDecode, readFile(msg.path) or '')
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
+  -- cx, cy: the window's centre (server navgraph.py WINDOW_M around it): the car screens' map area (dashboard.lua)
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
+            cx = tonumber(msg.cx), cy = tonumber(msg.cy),
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil }
   dirty = true
   return true
@@ -688,6 +690,10 @@ end
 function M.onReloaded()
   if not ours and graph then foreign = true end
 end
+
+-- The server's last graph, unclipped ({anchor, serial, nodes, edges}; nil before one): the cars' navigation screens
+-- draw its roads (dashboard.lua), the whole ~1.1 km window rather than the block the AI gets. Read-only.
+function M.graph() return graph end
 
 -- How many times a graph went into the game's map (gps.lua: the map's node table stays the same table across them).
 function M.applies() return stats.applies end
