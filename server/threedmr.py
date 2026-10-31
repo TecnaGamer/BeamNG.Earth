@@ -429,6 +429,38 @@ def model_position(model_id, cache_dir, iface=None, timeout=30.0):
     return lat, lon, False
 
 
+_near_memo = {}  # (cache folder, info file name) -> (lat, lon) of its model (credited_near)
+
+
+def credited_near(lat, lon, range_m, cache_dir):
+    """Is a 3dmr.eu model within range_m metres of (lat, lon), as far as this cache knows (its info_<id>.json files,
+    at model_position's place)? Never a request: credits.feature_ids asks it every second (the overlay names the
+    library near a model; its CC BY 4.0 models ask for "3D Model Repository" as their attribution). False with the
+    models off."""
+    if not enabled() or not cache_dir:
+        return False
+    d = os.path.join(cache_dir, "threedmr_cache")
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return False
+    for name in names:
+        if not (name.startswith("info_") and name.endswith(".json")):
+            continue
+        ll = _near_memo.get((d, name))
+        if ll is None:
+            try:
+                with open(os.path.join(d, name)) as f:
+                    json.load(f)            # (a whole file: model_position below reads it, never fetches)
+                mlat, mlon, _corrected = model_position(int(name[5:-5]), cache_dir)
+            except Exception:
+                continue
+            ll = _near_memo[(d, name)] = (float(mlat), float(mlon))
+        if _latlon_dist_m(lat, lon, ll[0], ll[1]) <= range_m:
+            return True
+    return False
+
+
 # --- auto yaw from the OSM footprint --------------------------------------------------------
 # 3dmr.eu's own upload guide asks modellers to orient a model Z-towards-south, but not all of them do (the
 # user's report: the Eiffel Tower, id 4, stood rotated ~45 degrees though its position was right) - and
