@@ -785,6 +785,7 @@ function M.uiMapState()
     gps = require('beamngEarth/gps').status(),
     metric = require('beamngEarth/gps').metric(),     -- (the game's length unit with no GPS route: the Players list)
     weather = localWeatherBadge(),
+    roadsDriven = require('beamngEarth/roads_driven').uiState(),
   }
 end
 

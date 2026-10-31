@@ -55,6 +55,10 @@
         </g>
         <polyline v-for="r in areaRoutes" :key="'rt' + r.id" class="area-route" :class="r.cls" :points="r.points"
                   :style="{ strokeWidth: r.px + 'px' }" />
+        <g v-if="roadsDrivenOn">
+          <polyline v-for="(p, i) in drivenLines" :key="'rdg_' + i" class="driven-line-glow" :points="p" />
+          <polyline v-for="(p, i) in drivenLines" :key="'rd_' + i" class="driven-line" :points="p" />
+        </g>
         <polyline v-if="routeDone" class="route-done" :points="routeDone" />
         <polyline v-if="routeAhead" class="route-line-casing" :points="routeAhead" />
         <polyline v-if="routeAhead" class="route-line" :points="routeAhead" />
@@ -111,6 +115,13 @@
         <span v-if="weatherBadge.icon">{{ weatherBadge.icon }}</span>
         <span v-if="weatherBadge.temp != null">{{ weatherBadge.temp }}</span>
         <span v-if="weatherBadge.localTime">{{ weatherBadge.localTime }}</span>
+      </div>
+      <div v-if="state.roadsDriven && state.roadsDriven.totalKm > 0" class="odometer-badge" title="Exploration Odometer (Issue #365): Total distance driven on Earth">
+        <span class="odo-icon">🛣️</span>
+        <span class="odo-val">{{ (state.roadsDriven.totalKm || 0).toFixed(1) }} km</span>
+      </div>
+      <div v-if="view.z >= 13" class="zoom-level-badge" title="Street Level View">
+        <span>🔍 Street view (z{{ view.z.toFixed(0) }})</span>
       </div>
       <div class="search">
         <input
@@ -186,6 +197,8 @@
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
+          <label class="layer-opt"><input type="checkbox" v-model="roadsDrivenOn" /> Roads driven tracker
+            <span class="layer-hint" v-if="state.roadsDriven">({{ (state.roadsDriven.totalKm || 0).toFixed(1) }} km)</span></label>
         </div>
       </div>
       <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
@@ -391,7 +404,13 @@
 
     <!-- bottom: cursor position, scale, attribution -->
     <div class="map-bottom" :class="{ 'beside-panel': panelOpen }">
-      <span class="cursor-pos">{{ cursorText }}</span>
+      <div class="bottom-left-group">
+        <span class="cursor-pos">{{ cursorText }}</span>
+        <div class="scale-bar-wrap" title="Map Scale">
+          <div class="scale-bar" :style="{ width: scaleBar.px + 'px' }"></div>
+          <span class="scale-label">{{ scaleBar.label }}</span>
+        </div>
+      </div>
       <!-- two lines, the whole text on hover or a click (it grew to five lines over the Places panel, 2026-10-20) -->
       <span class="attribution" :class="{ full: creditsFull }" :title="attributionText"
             @click.stop="creditsFull = !creditsFull" @mousedown.stop>{{ attributionText }}</span>
@@ -471,8 +490,10 @@ const BASE_LAYERS = new Set(["sat", "map", "dark"])
 const storedBase = stored("beamngEarth.map.base", "sat")
 const baseLayer = ref(BASE_LAYERS.has(storedBase) ? storedBase : "sat")
 const labelsOn = ref(stored("beamngEarth.map.labels", "0") === "1")
+const roadsDrivenOn = ref(stored("beamngEarth.map.roadsDriven", "1") === "1")
 watch(baseLayer, v => store("beamngEarth.map.base", v))
 watch(labelsOn, on => store("beamngEarth.map.labels", on ? "1" : "0"))
+watch(roadsDrivenOn, on => store("beamngEarth.map.roadsDriven", on ? "1" : "0"))
 const layersPanel = ref(false)
 // "Dark" is not a tile source of its own: the "map" tiles (terrain-light, already hillshaded) through a CSS
 // filter (.tile-dark below) - the usual trick for a dark map without a dark-themed tile set of its own.
@@ -703,6 +724,43 @@ const cursorText = computed(() => {
   const c = cursor.value
   const z = `zoom ${view.value.z.toFixed(1)}`
   return c ? `${mm.fmtLatLon(c.lat, c.lon)}   ${z}` : z
+})
+
+// Roads Driven polylines (Issue #365): transformed into screen SVG polyline coords
+const drivenLines = computed(() => {
+  view.value; w.value; h.value
+  if (!roadsDrivenOn.value) return []
+  const polylines = state.value.roadsDriven?.polylines || []
+  const out = []
+  for (const line of polylines) {
+    if (!line || line.length < 2) continue
+    const pts = []
+    for (const pt of line) {
+      const lat = Number(pt[0]), lon = Number(pt[1])
+      if (!isFinite(lat) || !isFinite(lon)) continue
+      const p = screen(lat, lon)
+      pts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+    }
+    if (pts.length >= 2) out.push(pts.join(" "))
+  }
+  return out
+})
+
+// Dynamic Google Maps style scale bar: calculates real-world distance corresponding to ~100px
+const scaleBar = computed(() => {
+  const v = view.value
+  const latRad = (v.lat * Math.PI) / 180
+  const mPerPx = (156543.03392 * Math.cos(latRad)) / Math.pow(2, v.z)
+  const targetM = 100 * mPerPx
+  const steps = [
+    5, 10, 20, 50, 100, 200, 500,
+    1000, 2000, 5000, 10000, 20000, 50000,
+    100000, 200000, 500000, 1000000, 2000000
+  ]
+  const dist = steps.find(s => s >= targetM * 0.75) || steps[steps.length - 1]
+  const px = Math.min(180, Math.max(25, Math.round(dist / mPerPx)))
+  const label = dist >= 1000 ? `${dist / 1000} km` : `${dist} m`
+  return { px, label }
 })
 
 // ---- mouse ---------------------------------------------------------------------------------
@@ -2082,9 +2140,31 @@ const fmtLatLon = mm.fmtLatLon
 .gps-download-bar { width: 60px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.15); overflow: hidden; }
 .gps-download-fill { display: block; height: 100%; background: #36a3ff; transition: width 0.2s linear; }
 .map-grid polyline { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.map-grid .driven-line-glow { stroke: rgba(0, 210, 255, 0.4); stroke-width: 7; }
+.map-grid .driven-line { stroke: #00d2ff; stroke-width: 3.5; opacity: 0.95; }
 .map-grid .route-line-casing { stroke: rgba(10, 40, 80, 0.85); stroke-width: 8; }
 .map-grid .route-line { stroke: #3aa0ff; stroke-width: 5; }
 .map-grid .route-done { stroke: rgba(200, 200, 200, 0.6); stroke-width: 4; }
+.odometer-badge {
+  display: flex; gap: 6px; align-items: center; padding: 4px 10px;
+  background: rgba(0, 180, 240, 0.18); border: 1px solid rgba(0, 210, 255, 0.45);
+  border-radius: 4px; font-size: 12px; color: #7fe4ff; font-weight: 500;
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.15);
+}
+.zoom-level-badge {
+  display: flex; gap: 4px; align-items: center; padding: 4px 8px;
+  background: rgba(20, 30, 42, 0.85); border: 1px solid rgba(80, 150, 220, 0.35);
+  border-radius: 4px; font-size: 11px; color: #a8d0f8;
+}
+.bottom-left-group { display: flex; gap: 8px; align-items: flex-end; }
+.scale-bar-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  background: rgba(0, 0, 0, 0.65); padding: 3px 8px; border-radius: 4px; pointer-events: none;
+}
+.scale-bar {
+  height: 4px; border-left: 2px solid #fff; border-right: 2px solid #fff; border-bottom: 2px solid #fff;
+}
+.scale-label { font-size: 10px; color: #d0d7de; }
 .marker.gps { z-index: 3; }
 .marker.gps .flag {
   position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50% 50% 50% 0;

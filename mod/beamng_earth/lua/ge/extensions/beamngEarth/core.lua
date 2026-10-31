@@ -2011,7 +2011,10 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
-  if st.inOurLevel then gps.update(st.anchor, st.player) end
+  if st.inOurLevel then
+    gps.update(st.anchor, st.player)
+    if st.player then require('beamngEarth/roads_driven').update(dt, st.player) end
+  end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
