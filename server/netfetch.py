@@ -52,6 +52,8 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+import base64
+import urllib.request
 from urllib.parse import urlsplit
 
 log = logging.getLogger("earthd.net")
@@ -617,31 +619,119 @@ def windows_ssl_context():
 
 class HttpsTransport:
     """GET over one persistent HTTP(S) connection per thread and host (a fresh TLS handshake per tile
-    roughly doubled the latency). No redirects are followed."""
+    roughly doubled the latency). No redirects are followed. Honours HTTP_PROXY / HTTPS_PROXY / NO_PROXY
+    (and urllib.request.getproxies() as a fallback) so users behind a corporate proxy can reach the
+    data sources; SOCKS proxies are not supported (PySocks is not a dependency)."""
 
     def __init__(self):
         self._local = threading.local()
         self._tls_context = windows_ssl_context()
+
+    # --- proxy helpers ---------------------------------------------------------------
+    @staticmethod
+    def _resolve_proxy(scheme, host):
+        """Return (proxy_host, proxy_port, proxy_user, proxy_pass) or None when no proxy applies."""
+        # NO_PROXY / no_proxy: comma-separated list of hosts (or suffixes) to bypass.
+        no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+        if not no_proxy:
+            try:
+                no_proxy = urllib.request.getproxies().get("no", "")
+            except Exception:
+                no_proxy = ""
+        for entry in (e.strip() for e in no_proxy.split(",") if e.strip()):
+            if entry == "*" or host == entry or host.endswith("." + entry):
+                return None
+        # env first (higher priority), then urllib's view of the system proxy
+        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            val = os.environ.get(var)
+            if val:
+                break
+        else:
+            try:
+                val = urllib.request.getproxies().get(scheme) or urllib.request.getproxies().get("all")
+            except Exception:
+                val = None
+        if not val:
+            log.debug("net: no proxy for %s (no env var / system proxy)", host)
+            return None
+        val = val.strip()
+        if "://" in val:
+            val = val.split("://", 1)[1]
+        user = passw = None
+        if "@" in val:
+            creds, val = val.rsplit("@", 1)
+            if ":" in creds:
+                user, passw = creds.split(":", 1)
+            else:
+                user = creds
+        if ":" in val:
+            phost, pport = val.rsplit(":", 1)
+            try:
+                pport = int(pport)
+            except ValueError:
+                phost, pport = val, (443 if scheme == "https" else 80)
+        else:
+            phost, pport = val, (443 if scheme == "https" else 80)
+        if phost.lower().startswith("socks"):
+            log.warning("net: SOCKS proxies are not supported; ignoring %s", val)
+            return None
+        log.debug("net: proxy resolved for %s: %s:%d (user=%s)", host, phost, pport, user or "-")
+        return phost, pport, user, passw
 
     def request(self, url, headers, timeout):
         """(status, {lower-case header: value}, body)."""
         u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        key = (u.scheme, u.netloc)
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        if proxy is None:
+            key = (u.scheme, u.netloc, None)
+        else:
+            log.debug("net: %s -> proxy %s:%d", url, proxy[0], proxy[1])
+            key = (u.scheme, u.netloc, proxy[0], proxy[1])
         while True:
             conn = conns.get(key)
             reused = conn is not None
             if conn is None:
-                if u.scheme == "https":
+                if proxy is not None and u.scheme == "https":
+                    phost, pport, puser, ppass = proxy
                     kwargs = {"timeout": timeout}
                     if self._tls_context is not None:
                         kwargs["context"] = self._tls_context
-                    conn = conns[key] = http.client.HTTPSConnection(u.netloc, **kwargs)
+                    conn = http.client.HTTPSConnection(phost, pport, **kwargs)
+                    if puser is not None:
+                        creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
+                        conn.set_tunnel(u.hostname, u.port or 443,
+                                       headers={"Proxy-Authorization": f"Basic {creds}"})
+                    else:
+                        conn.set_tunnel(u.hostname, u.port or 443)
+                    conn = conns[key] = conn
+                elif proxy is not None:
+                    phost, pport, puser, ppass = proxy
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    if puser is not None:
+                        creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
+                        conn._proxy_auth = f"Basic {creds}"
+                    conn = conns[key] = conn
                 else:
-                    conn = conns[key] = http.client.HTTPConnection(u.netloc, timeout=timeout)
+                    if u.scheme == "https":
+                        kwargs = {"timeout": timeout}
+                        if self._tls_context is not None:
+                            kwargs["context"] = self._tls_context
+                        conn = conns[key] = http.client.HTTPSConnection(u.netloc, **kwargs)
+                    else:
+                        conn = conns[key] = http.client.HTTPConnection(u.netloc, timeout=timeout)
             try:
-                conn.request("GET", path, headers=dict(headers, Connection="keep-alive"))
+                req_headers = dict(headers, Connection="keep-alive")
+                if proxy is not None and u.scheme == "http":
+                    phost, pport, puser, ppass = proxy
+                    if getattr(conn, "_proxy_auth", None):
+                        req_headers["Proxy-Authorization"] = conn._proxy_auth
+                    # absolute URL for the proxy
+                    full_url = url
+                    conn.request("GET", full_url, headers=req_headers)
+                else:
+                    conn.request("GET", path, headers=req_headers)
                 r = conn.getresponse()
                 body = r.read()
                 return r.status, {k.lower(): v for k, v in r.getheaders()}, body

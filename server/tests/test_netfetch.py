@@ -310,7 +310,7 @@ class TransportTest(unittest.TestCase):
                 return b"ok"
 
         class Conn:
-            def __init__(self, netloc, timeout=None):
+            def __init__(self, netloc, timeout=None, **kwargs):
                 made.append(self)
                 self.sent = 0
 
@@ -328,6 +328,15 @@ class TransportTest(unittest.TestCase):
         patch = mock.patch.object(nf.http.client, "HTTPSConnection", Conn)
         patch.start()
         self.addCleanup(patch.stop)
+        # no system proxy in tests: the dev machine has one configured
+        gpatch = mock.patch("netfetch.urllib.request.getproxies", return_value={})
+        gpatch.start()
+        self.addCleanup(gpatch.stop)
+        # also clear env proxy vars (the dev machine has them set)
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+                    "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+            self.addCleanup(os.environ.pop, var, None)
+            os.environ.pop(var, None)
         return nf.HttpsTransport(), made
 
     def test_fresh_connection_failure_is_not_repeated(self):
@@ -930,6 +939,160 @@ class OfflineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProxyTransportTest(unittest.TestCase):
+    """HttpsTransport honours HTTP_PROXY / HTTPS_PROXY / NO_PROXY (system proxy via getproxies())."""
+
+    def _env(self, **kw):
+        saved = {k: os.environ.get(k) for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy",
+                                                "https_proxy", "ALL_PROXY", "all_proxy",
+                                                "NO_PROXY", "no_proxy")}
+        for k in saved:
+            os.environ.pop(k, None)
+        os.environ.update(kw)
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in kw])
+        self.addCleanup(lambda: [os.environ.__setitem__(k, v) for k, v in saved.items() if v is not None])
+
+    def test_no_proxy_direct(self):
+        self._env()
+        with mock.patch("netfetch.urllib.request.getproxies", return_value={}):
+            made = []
+
+            class Conn:
+                def __init__(self, netloc, timeout=None, **kw):
+                    made.append(self)
+                    self.sent = 0
+                    self.netloc = netloc
+
+                def request(self, method, path, headers=None):
+                    self.sent += 1
+
+                def getresponse(self):
+                    class R:
+                        status = 200
+                        def getheaders(self): return [("Content-Type", "image/jpeg")]
+                        def read(self): return b"ok"
+                    return R()
+
+                def close(self):
+                    pass
+
+            with mock.patch.object(nf.http.client, "HTTPSConnection", Conn):
+                tr = nf.HttpsTransport()
+                tr.request("https://example.com/path", {}, 20.0)
+                self.assertEqual(len(made), 1)
+                self.assertEqual(made[0].netloc, "example.com")
+
+    def test_https_proxy_uses_connect_tunnel(self):
+        self._env(HTTPS_PROXY="http://proxy:8080")
+        with mock.patch("netfetch.urllib.request.getproxies", return_value={}):
+            made = []
+
+            class Conn:
+                def __init__(self, host, port, timeout=None, context=None):
+                    made.append(self)
+                    self.host = host
+                    self.port = port
+                    self.tunnel_host = None
+                    self.tunnel_port = None
+                    self.sent = 0
+
+                def set_tunnel(self, host, port, headers=None):
+                    self.tunnel_host = host
+                    self.tunnel_port = port
+                    self.tunnel_headers = headers
+
+                def request(self, method, path, headers=None):
+                    self.sent += 1
+
+                def getresponse(self):
+                    class R:
+                        status = 200
+                        def getheaders(self): return [("Content-Type", "image/jpeg")]
+                        def read(self): return b"ok"
+                    return R()
+
+                def close(self):
+                    pass
+
+            with mock.patch.object(nf.http.client, "HTTPConnection", Conn):
+                with mock.patch.object(nf.http.client, "HTTPSConnection", Conn):
+                    tr = nf.HttpsTransport()
+                    tr.request("https://example.com/path", {}, 20.0)
+                    self.assertEqual(len(made), 1)
+                    self.assertEqual(made[0].host, "proxy")
+                    self.assertEqual(made[0].port, 8080)
+                    self.assertEqual(made[0].tunnel_host, "example.com")
+                    self.assertEqual(made[0].tunnel_port, 443)
+
+    def test_no_proxy_bypasses(self):
+        self._env(HTTPS_PROXY="http://proxy:8080", NO_PROXY="example.com")
+        with mock.patch("netfetch.urllib.request.getproxies", return_value={}):
+            made = []
+
+            class Conn:
+                def __init__(self, netloc, timeout=None, **kw):
+                    made.append(self)
+                    self.netloc = netloc
+                    self.sent = 0
+
+                def request(self, method, path, headers=None):
+                    self.sent += 1
+
+                def getresponse(self):
+                    class R:
+                        status = 200
+                        def getheaders(self): return [("Content-Type", "image/jpeg")]
+                        def read(self): return b"ok"
+                    return R()
+
+                def close(self):
+                    pass
+
+            with mock.patch.object(nf.http.client, "HTTPSConnection", Conn):
+                tr = nf.HttpsTransport()
+                tr.request("https://example.com/path", {}, 20.0)
+                self.assertEqual(len(made), 1)
+                self.assertEqual(made[0].netloc, "example.com")
+
+    def test_proxy_auth_header(self):
+        self._env(HTTPS_PROXY="http://user:pass@proxy:8080")
+        with mock.patch("netfetch.urllib.request.getproxies", return_value={}):
+            made = []
+
+            class Conn:
+                def __init__(self, host, port, timeout=None, context=None):
+                    made.append(self)
+                    self.host = host
+                    self.port = port
+                    self.tunnel_headers = None
+                    self.sent = 0
+
+                def set_tunnel(self, host, port, headers=None):
+                    self.tunnel_host = host
+                    self.tunnel_port = port
+                    self.tunnel_headers = headers
+
+                def request(self, method, path, headers=None):
+                    self.sent += 1
+
+                def getresponse(self):
+                    class R:
+                        status = 200
+                        def getheaders(self): return [("Content-Type", "image/jpeg")]
+                        def read(self): return b"ok"
+                    return R()
+
+                def close(self):
+                    pass
+
+            with mock.patch.object(nf.http.client, "HTTPSConnection", Conn):
+                tr = nf.HttpsTransport()
+                tr.request("https://example.com/path", {}, 20.0)
+                self.assertEqual(len(made), 1)
+                self.assertIn("Proxy-Authorization", made[0].tunnel_headers)
+                self.assertTrue(made[0].tunnel_headers["Proxy-Authorization"].startswith("Basic "))
 
 
 class RolesTest(unittest.TestCase):
