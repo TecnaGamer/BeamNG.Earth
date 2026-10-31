@@ -425,7 +425,10 @@ class LayoutTest(unittest.TestCase):
         # (a kiosk's height: a canopy is taller, ONE_BLD_MIN_H_M, so the one-building rule leaves it a shop)
         shop = rect("shop", 0.0, 13.0, 20.0, 10.0, height=3.5)          # 3 m between the road's edge and the shop
         st = gs.Station("st", 0.0, 13.0, "Shell", "Shell", ("p",), True)
-        self.assertIsNone(gs.layout(st, [shop], ROAD))
+        # (a terraced street: the neighbours either side, so no open ground anywhere near; the wider search would take
+        # an empty test world's)
+        terrace = [rect("w", -20.0, 25.0, 20.0, 34.0), rect("e", 20.0, 25.0, 20.0, 34.0)]
+        self.assertIsNone(gs.layout(st, [shop] + terrace, ROAD))
 
     def test_no_shop_pair_at_the_pin(self):
         # the Agip at Boschetsrieder Str. 162, Munich: the pin on the forecourt, no shop mapped, the road 22 m away
@@ -575,6 +578,162 @@ class LayoutTest(unittest.TestCase):
         self.assertIsNotNone(gs._one_building_site(gs.Station("en", 0.0, 17.0, "ENEOS", "ENEOS", ("p",), True, True),
                                                    [bld] + tight, ROAD))
 
+    def test_is_ev(self):
+        # (the user, 2026-10-27: "don't forget we are planning on adding ev chargers for phase 2") an EV charger filed as
+        # a gas station is no fuel station: kept out of the fuel layouts' wider search, for the EV part to use
+        for t in ("Shell Recharge", "Tesla Supercharger", "IONITY", "Electrify America", "ChargePoint", "EVgo",
+                  "Ladestation Stadtwerke", "Borne de recharge", "Punto de recarga", "EV Charging Station", "Allego",
+                  "Fastned", "BP Pulse", "Электрозарядная станция", "充電スタンド", "Recharge station"):
+            self.assertTrue(gs._is_ev(t), t)
+        for t in ("Shell", "BP", "Esso Express", "Tesla Motors service", "Charge's Garage", "ENEOS", "", None):
+            self.assertFalse(gs._is_ev(t), t)
+
+    def test_wide_pair_beside_the_shop(self):
+        # (coverage, 2026-10-27: 123 of the 131 real stations missed had a shop, no canopy, and no room for a pump pair
+        # straight between the shop and its nearest road) the forecourt beside the shop, the way to the road in front
+        # of it blocked by another building: the wider search finds the open ground
+        st = gs.Station("st", 0.0, 40.0, "Shell", "Shell", ("p",), True, True)
+        shop = rect("shop", 0.0, 40.0, 20.0, 18.0, cls="retail")
+        front = rect("front", 0.0, 15.0, 30.0, 14.0, cls="retail")             # (between the shop and the road)
+        blds = [shop, front]
+        self.assertIsNone(gs._pair_site(st, shop, blds, ROAD), "today: nothing")
+        self.assertIsNone(gs._pair_site(st, shop, blds, ROAD, at_pin=True))
+        site = gs._wide_pair_site(st, shop, blds, ROAD)
+        self.assertIsNotNone(site)
+        self.assertEqual(len(site.areas), 2)
+        for a in site.areas:
+            p = np.array([a["x"], a["y"]])
+            self.assertLessEqual(np.hypot(*(p - np.array([st.x, st.y]))), gs.WIDE_REACH_M + 1.0)
+            self.assertGreaterEqual(a["y"], 5.0 + gs.ROAD_CLEAR_M - 0.01, a)      # (the road's edge at 5)
+            for b in blds:
+                self.assertFalse(inside_box(b, a["x"], a["y"], pad=0.5), (a, b.id))
+
+    def test_wide_pair_never_across_a_road(self):
+        # the only open ground across a public road from the shop: no station there
+        st = gs.Station("st", 0.0, 40.0, "Shell", "Shell", ("p",), True, True)
+        shop = rect("shop", 0.0, 40.0, 20.0, 18.0, cls="retail")
+        blds = [shop, rect("front", 0.0, 15.0, 30.0, 14.0), rect("west", -25.0, 40.0, 20.0, 60.0),
+                rect("north", 0.0, 75.0, 60.0, 30.0)]
+        roads = ROAD + [(np.array([(18.0, -300.0), (18.0, 300.0)]), 5.0)]       # a street east of the shop
+        self.assertIsNone(gs._wide_pair_site(st, shop, blds, roads))
+
+    def test_wide_pair_reaches_its_road(self):
+        # pumps where a building stands between them and the road they face (a yard behind a block) are no forecourt
+        st = gs.Station("st", 0.0, 40.0, "Shell", "Shell", ("p",), True, True)
+        shop = rect("shop", 0.0, 40.0, 20.0, 18.0, cls="retail")
+        blds = [shop, rect("front", 0.0, 15.0, 110.0, 14.0), rect("west", -27.0, 50.0, 14.0, 30.0),
+                rect("east", 27.0, 50.0, 14.0, 30.0)]           # (open ground only behind the shop, walled from the road)
+        self.assertIsNone(gs._wide_pair_site(st, shop, blds, ROAD))
+
+    def test_wide_pair_gates(self):
+        # only a station that is trusted, fuel-named and no EV charger: the wider search reaches 40 m, so an office
+        # filed as a gas station or a charger would otherwise get pumps
+        shop = rect("shop", 0.0, 40.0, 20.0, 18.0, cls="retail")
+        blds = [shop, rect("front", 0.0, 15.0, 30.0, 14.0, cls="retail")]
+        for why, st in (("untrusted", gs.Station("a", 0.0, 40.0, "Shell", "Shell", ("p",), True, False)),
+                        ("no fuel name", gs.Station("b", 0.0, 40.0, "Ecotuned Technology", "", ("p",), True, True)),
+                        ("an EV charger", gs.Station("c", 0.0, 40.0, "Shell Recharge", "Shell", ("p",), True, True)),
+                        ("a convenience brand", gs.Station("d", 0.0, 40.0, "7-Eleven", "7-Eleven", ("p",), False, True))):
+            self.assertIsNone(gs._wide_pair_site(st, shop, blds, ROAD), why)
+
+    def test_wide_pair_not_behind_the_shop(self):
+        # (as _pair_site at the pin) a yard behind the shop's back wall is no forecourt: the only open ground there
+        st = gs.Station("st", 0.0, 13.0, "Shell", "Shell", ("p",), True, True)
+        shop = rect("shop", 0.0, 13.0, 20.0, 10.0, cls="retail")
+        blds = [shop, rect("w", -20.0, 13.0, 20.0, 10.0), rect("e", 20.0, 13.0, 20.0, 10.0)]   # (open only behind)
+        self.assertIsNone(gs._wide_pair_site(st, shop, blds, ROAD))
+
+    def test_layout_uses_the_wide_pair_last(self):
+        # every other layout first: the station's own canopy or outline before plain pumps found by the wider search
+        st = gs.Station("st", 0.0, 40.0, "Shell", "Shell", ("p",), True, True)
+        shop = rect("shop", 0.0, 40.0, 20.0, 18.0, cls="retail")
+        blds = [shop, rect("front", 0.0, 15.0, 30.0, 14.0, cls="retail")]
+        self.assertIsNone(gs._layout_core(st, blds, ROAD))
+        site = gs.layout(st, blds, ROAD)
+        self.assertIsNotNone(site, "the wider search, through layout")
+        self.assertEqual((site.drop_ids, site.shop_id), ((), "shop"))
+        self.assertIsNotNone(gs.layout(st, blds, ROAD, style="europe"), "Italy's set too")
+        self.assertIsNotNone(gs.layout(st, blds, ROAD, style="us_east"))
+        # a station mapped as one building keeps its canopy over that building (PR 1), though a pair would fit too
+        en = gs.Station("en", 0.0, 17.0, "ENEOS", "ENEOS", ("p",), True, True)
+        bld = rect("bld", 0.0, 17.0, 20.0, 15.0)
+        tight = [rect("w", -16.0, 25.0, 10.0, 30.0, cls="apartments"), rect("e", 16.0, 25.0, 10.0, 30.0, cls="apartments")]
+        self.assertEqual(gs.layout(en, [bld] + tight, ROAD).drop_ids, ("bld",))
+
+    def test_big_shop_by_its_wall(self):
+        # (the user, 2026-10-27: the Buc-ee's at Mount Crawford, Virginia, laid out as two small pump pairs) its pin on
+        # the forecourt, 39 m from the store's wall but 74 m from its centre (a 7672 m2 store): the shop is a building
+        # within SHOP_SEARCH_M of the pin by its nearest wall, not its centre
+        st = gs.Station("st", 0.0, 0.0, "Buc-ee's", "Buc-ee's", ("p",), True, True)
+        store = rect("store", 0.0, 74.0, 110.0, 70.0, cls="retail")            # its south wall at y = 39
+        self.assertIs(gs.find_shop(st, [store]), store)
+        # nearer centres still come first (a station that has a shop keeps it)
+        kiosk = rect("kiosk", 20.0, 0.0, 8.0, 6.0, cls="retail")
+        self.assertIs(gs.find_shop(st, [store, kiosk]), kiosk)
+        # (the 968-station comparison: 8 pin-only stations got a neighbour's ordinary building this way) only a travel
+        # centre's store, TRAVEL_STORE_M2 or more, by its wall
+        shed = rect("shed", 0.0, 74.0, 40.0, 70.0, cls="retail")              # 2800 m2, its wall at y = 39
+        small = rect("small", 0.0, 64.0, 30.0, 50.0, cls="retail")             # 1500 m2, its wall at y = 39
+        self.assertIsNone(gs.find_shop(st, [small]))
+        self.assertIs(gs.find_shop(st, [shed]), shed)
+
+    def test_pin_pair_inside_another_forecourt_dropped(self):
+        # (the Buc-ee's at Mount Crawford: a second pin 96 m from the first, out on the same forecourt, laid out as its
+        # own little pump pair in the travel centre's lot) a station laid out at its pin, with no shop of its own, whose
+        # pumps are on another station's forecourt is that station
+        big = gs.Station("big", 0.0, 0.0, "Buc-ee's", "Buc-ee's", ("a",), True, True)
+        small = gs.Station("small", 30.0, 0.0, "Buc-ee's", "Buc-ee's", ("b",), True, True)
+        pad = [np.array([(-60.0, -40.0), (60.0, -40.0), (60.0, 40.0), (-60.0, 40.0)])]
+        sb = gs.Site(big, [], [dict(x=0.0, y=0.0)], ("roof",), shop_id="store", pad=pad)
+        ss = gs.Site(small, [], [dict(x=30.0, y=0.0), dict(x=35.0, y=0.0)], (), shop_id="pin:small", pad=[])
+        kept = list(gs._one_per_shop([ss, sb]))
+        self.assertEqual([k.station.id for k in kept], ["big"])
+        # (the real one: the second pin 96 m from the first, its pumps 93 m off the travel centre's pad) the same lot
+        beside = gs.Site(gs.Station("small", 96.0, 0.0, "Buc-ee's", "Buc-ee's", ("b",), True, True), [],
+                         [dict(x=150.0, y=-50.0)], (), shop_id="pin:small", pad=[])
+        self.assertEqual([k.station.id for k in gs._one_per_shop([beside, sb])], ["big"])
+        # another brand beside it (a Shell across the street), or the same brand far off: kept
+        shell = gs.Site(gs.Station("shell", 85.0, 0.0, "Shell", "Shell", ("c",), True, True), [], [dict(x=85.0, y=0.0)],
+                        (), shop_id="pin:shell", pad=[])
+        self.assertEqual(sorted(k.station.id for k in gs._one_per_shop([shell, sb])), ["big", "shell"])
+        far = gs.Site(gs.Station("small", 300.0, 0.0, "Buc-ee's", "Buc-ee's", ("b",), True, True), [],
+                      [dict(x=300.0, y=0.0)], (), shop_id="pin:small", pad=[])
+        self.assertEqual(sorted(k.station.id for k in gs._one_per_shop([far, sb])), ["big", "small"])
+
+    def test_far_store_only_with_its_canopy(self):
+        # (the 968-station comparison: a pin-only station in Paris and one in Berlin re-keyed to a big city building whose
+        # wall was within 60 m) a store found by its wall is the shop only when the station's canopy is mapped beside it
+        st = gs.Station("st", 0.0, 20.0, "Total", "Total", ("p",), True, True)
+        store = rect("store", 0.0, 84.0, 100.0, 50.0, cls="retail")            # 5000 m2, its wall at y = 59
+        site = gs.layout(st, [store], ROAD)
+        self.assertIsNotNone(site)
+        self.assertTrue(site.shop_id.startswith("pin:"), site.shop_id)            # (as before: pumps at the pin)
+        roof = rect("roof", 0.0, 45.0, 30.0, 18.0, cls="roof")                  # its canopy, between the pin and the store
+        site = gs.layout(st, [store, roof], ROAD)
+        self.assertEqual((site.shop_id, site.drop_ids), ("store", ("roof",)))
+
+    def test_with_osm(self):
+        # (the OSM test, 2026-10-28: "lets test OSM if it is too laggy we will revert") OpenStreetMap's fuel stations
+        # (osmfuel.py) confirm a listing within OSM_CONFIRM_M and are stations themselves where nothing is listed
+        lone = gs.Station("lone", 0.0, 0.0, "Shell", "Shell", ("p",), True, False)            # a single old listing
+        shop = gs.Station("shop", 200.0, 0.0, "7-Eleven", "7-Eleven", ("q",), False, True)  # (the station's shop)
+        far = gs.Station("far", 600.0, 0.0, "BP", "BP", ("r",), True, False)
+        osm = [dict(id=11, x=20.0, y=5.0, name="Shell", brand="Shell"), dict(id=12, x=210.0, y=0.0, name="", brand="Exxon"),
+               dict(id=13, x=400.0, y=0.0, name="Liberty", brand="")]
+        got = {s.id: s for s in gs.with_osm([lone, shop, far], osm)}
+        self.assertTrue(got["lone"].trusted and got["lone"].osm, "confirmed by OSM")
+        self.assertTrue(got["shop"].confirmed and got["shop"].osm, "a convenience listing on OSM's fuel station")
+        self.assertFalse(got["far"].trusted or got["far"].osm, "nothing near: as it was")
+        extra = [s for s in got.values() if s.id.startswith("osm")]
+        self.assertEqual(len(extra), 1)
+        e = extra[0]
+        self.assertEqual((e.x, e.y, e.name, e.confirmed, e.trusted, e.osm), (400.0, 0.0, "Liberty", True, True, True))
+        self.assertEqual(gs.with_osm([lone], [])[0], lone, "no OSM: nothing changes")
+        # an OSM-confirmed station passes the wider search's name gate (OSM tagged it a fuel station)
+        st = gs.Station("o", 0.0, 40.0, "Liberty", "", ("p",), True, True, True)
+        shop_b = rect("shop", 0.0, 40.0, 20.0, 18.0, cls="retail")
+        self.assertIsNotNone(gs._wide_pair_site(st, shop_b, [shop_b, rect("front", 0.0, 15.0, 30.0, 14.0)], ROAD))
+
     def test_fuel_named(self):
         for t in ("Pemex", "BR", "Ipiranga", "Gasolineria San Jeronimo", "ENEOS Dr.Drive 梅田店", "Jx日鉱日石リテールサービス",
                   "北海道エネルギー 札幌大通Ss", "西新橋SS", "Agip Service-Station", "Esso", "Posto de Gasolina Ruckert"):
@@ -587,9 +746,13 @@ class LayoutTest(unittest.TestCase):
                   "Neste", "OKQ8", "Preem", "St1", "Uno-X", "Petrom", "Rompetrol", "Slovnaft", "Benzina", "INA",
                   "Petrol Ofisi", "Opet", "Tamoil", "WOG", "OKKO", "SOCAR", "čerpací stanice", "huoltoasema", "bensinstasjon",
                   "Πρατήριο καυσίμων", "akaryakıt istasyonu", "stacja paliw Lotos", "benzinkút", "ÖMV", "Q8", "Teboil",
-                  "Α.Π. Βενζινάδικο", "Jetoil", "Silkoil", "Elin", "Ελιν", "EKO", "Aegean", "Revoil", "PRIO", "Retitalia"):
+                  "Α.Π. Βενζινάδικο", "Jetoil", "Silkoil", "Elin", "Ελιν", "EKO", "Aegean", "Revoil", "PRIO", "Retitalia",
+                  # (coverage, 2026-10-27: real stations the wider search missed on their names alone)
+                  "IP", "IP API", "Keropetrol", "STOM", "Rubis", "Amoco", "Atlantsolía", "Turmöl", "OZ Energia", "PT",
+                  "ENEOSフロンティア Dr.Driveセルフ那の川店", "エザキ株式会社-セルフＲ153日進店", "123tanken.at"):
             self.assertTrue(gs._fuel_named(t), t)
-        for t in ("Почта России", "Molly's Pub", "Inazuma", "Circle Kitchen", "Renault", "Garagem Manique", "Neste Oyj headquarters office"[:4] + "rov"):
+        for t in ("Почта России", "Molly's Pub", "Inazuma", "Circle Kitchen", "Renault", "Garagem Manique", "Iptv Shop",
+                  "Apidae", "PTA Office", "Stomatology", "Neste Oyj headquarters office"[:4] + "rov"):
             self.assertFalse(gs._fuel_named(t), t)
 
     def test_no_shop_no_site(self):
@@ -1072,6 +1235,71 @@ class TileTest(unittest.TestCase):
         self.assertIn("b-roof", skip)
         self.assertTrue(any(p["shape"].endswith("eca_gastation_pumps.DAE") for p in recs[0]["props"]))     # (us_east)
         self.assertEqual(len(gs.service_lines(FRAME, [md.all["roads"]], 240.0, 100.0, 100.0)), 4)
+
+    def test_reach_of(self):
+        def st(name, brand=""):
+            return gs.Station("s", 0.0, 0.0, name, brand, (), True)
+        for name, brand in (("Buc-ee's", ""), ("Buc-ee’s", ""), ("Bucees", ""), ("Love's Travel Stop", ""),
+                            ("Pilot Travel Center", ""), ("", "Flying J"), ("TravelCenters of America", ""),
+                            ("Petro Stopping Center", ""), ("Sapp Bros.", "")):
+            self.assertEqual(gs.reach_of(st(name, brand)), gs.TRAVEL_REACH_M, name or brand)
+        for name in ("Sunoco", "Shell", "Pilots' Lounge", "Love Lane Gas", "Sheetz"):
+            self.assertEqual(gs.reach_of(st(name)), gs.REACH_M, name)
+
+    def test_travel_centre_reach(self):
+        # (the user, 2026-10-29: "bucees is cooked, one canopy spawns fine the second of the three spawns but the
+        # building draws over it and the third canopy is a building") a travel centre's canopies reach farther than
+        # REACH_M from its pin (Mount Crawford: 134 m): it is laid out with TRAVEL_REACH_M, and so is every road tile
+        # holding one of them (its outline left out there); another brand is as before
+        x0, _, x1, _ = roads.tile_bbox(0, 0)
+        def md_for(name):
+            places = feats("places", [("pla-1", (100.0, 130.0), {"basic_category": "gas_station", "name": name,
+                                                                 "operating_status": "open"})], mg.POINT)
+            rows = [("b-shop", box_ring(100.0, 100.0, 40.0, 30.0), {"class": "retail", "src_dataset": "OpenStreetMap"})]
+            for k, y in enumerate((140.0, 175.0, 210.0, 245.0, 280.0)):         # a chain of roofs 15 m apart
+                rows.append((f"b-roof{k}", box_ring(100.0, y, 30.0, 20.0), {"class": "roof", "src_dataset": "OpenStreetMap"}))
+            blds = feats("buildings", rows, mg.POLYGON)
+            rds = feats("roads", [("r-1", [(170.0, -200.0), (170.0, 600.0)], {"class": "secondary"})], mg.LINE)
+            return FakeMD({"places": places, "buildings": blds, "roads": rds})
+        far = "b-roof4"                                                      # (its centre 150 m from the pin, tile (0, 1))
+        _, skip_b = gs.tile_sites(FRAME, 0, 1, md_for("Buc-ee's"), flat)
+        self.assertIn(far, skip_b, "the travel centre's far canopy left out of its own tile's buildings")
+        recs, skip0 = gs.tile_sites(FRAME, 0, 0, md_for("Buc-ee's"), flat)
+        self.assertEqual(len(recs), 1)
+        self.assertIn(far, skip0)
+        _, skip_o = gs.tile_sites(FRAME, 0, 0, md_for("Sunoco"), flat)
+        self.assertNotIn(far, skip_o, "another brand: as before (beyond REACH_M)")
+        self.assertIn("b-roof3", skip_o)
+
+    def test_tile_sites_osm_only_station(self):
+        # (the OSM test) a fuel station OpenStreetMap has and no listing does: laid out from OSM's cached cell
+        # (MapData.osm_fuel_cached; None: not fetched yet, the tile goes on without it)
+        md = station_md()
+        md.all["places"] = feats("places", [], mg.POINT)
+        self.assertEqual(gs.tile_sites(FRAME, 0, 0, md, flat)[0], [], "no listing, no OSM: nothing")
+        la, lo, _ = FRAME.enu_to_geodetic(240.0, 100.0, 0.0)
+        row = {"id": 99, "brand": "Liberty", "name": "Liberty", "building": "",
+               "bbox": (float(lo) - 1e-5, float(la) - 1e-5, float(lo) + 1e-5, float(la) + 1e-5)}
+        md.osm_fuel_cached = lambda key: [row]
+        recs, skip = gs.tile_sites(FRAME, 0, 0, md, flat)
+        self.assertEqual([r["name"] for r in recs], ["Liberty"])
+        self.assertIn("b-roof", skip)
+        md.osm_fuel_cached = lambda key: None
+        self.assertEqual(gs.tile_sites(FRAME, 0, 0, md, flat)[0], [], "not fetched yet: as without OSM")
+
+    def test_tile_sites_unfetched_osm_cell_not_kept(self):
+        # a road tile built while one of its OSM cells is not fetched yet is not kept for the next visit (revisit.fault:
+        # it is built again when the cell comes, earthd Server.osm_fuel_want); with every cell fetched it is
+        import revisit
+        md = station_md()
+        md.osm_fuel_cached = lambda key: None
+        f0 = revisit.faults()
+        gs.tile_sites(FRAME, 0, 0, md, flat)
+        self.assertGreater(revisit.faults(), f0)
+        md.osm_fuel_cached = lambda key: []
+        f0 = revisit.faults()
+        gs.tile_sites(FRAME, 0, 0, md, flat)
+        self.assertEqual(revisit.faults(), f0)
 
     def test_no_places_layer_no_stations(self):
         self.assertEqual(gs.tile_sites(FRAME, 0, 0, station_md(fail=("places",)), flat), ([], frozenset()))

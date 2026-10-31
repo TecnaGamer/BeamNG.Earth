@@ -1023,6 +1023,10 @@ function M.onTile(msg, currentAnchor, a)
   local tx, ty = tostring(msg.key):match('^s?(%-?%d+)_(%-?%d+)$')
   tiles[key].cx = tx and (tonumber(tx) + 0.5) * M.TILE_M or nil
   tiles[key].cy = ty and (tonumber(ty) + 0.5) * M.TILE_M or nil
+  -- buildings on but none in this tile (server roads.write_tile bld_none: its only one a gas station's canopy outline,
+  -- left out; the user, 2026-10-29: "the third canopy is a building"): its far building tile, which has every outline,
+  -- is hidden as by a building mesh
+  tiles[key].bldNone = data.bldNone == true or nil
   -- a lean collision mesh ("bldcol", "walkcol", "railcol": server cdae collision_only) makes the drawn ones render-only
   -- (railcol: the track's bed and decks without its rails and sleepers, server railways.collision_mesh; mpsteppe's, from
   -- Madderose's PR #41)
@@ -1044,9 +1048,10 @@ function M.onTile(msg, currentAnchor, a)
 end
 
 -- Server message `bldfar_tile` {anchorId, key, path, n}: a far tile's buildings (render-only, the lite mesh);
--- shown only while the road tile of the same square has no building mesh of its own. `bldsky_tile` the same for a
--- skyline tile (server buildings.skyline_tile: SKY_UNIT x SKY_UNIT road tiles, key "ux_uy"), shown only while not all
--- of its squares' far tiles are here (they come as whole groups: no hole while they arrive, none left over after).
+-- shown only while the road tile of the same square has no building mesh of its own (nor says it has none:
+-- bldNone). `bldsky_tile` the same for a skyline tile (server buildings.skyline_tile: SKY_UNIT x SKY_UNIT road
+-- tiles, key "ux_uy"), shown only while not all of its squares' far tiles are here (they come as whole groups: no
+-- hole while they arrive, none left over after).
 M.SKY_UNIT = 4
 -- `brfar_tile` (kind 'B'): a far bridge tile's decks (server buildings.far_bridge_tile), shown only while the road
 -- tile of the same square has no deck or road mesh of its own.
@@ -1340,7 +1345,7 @@ local function updateFarOne(key, f)
       elseif M.geo then
         hide = f.ghost and (f.hidden or false) or geoSquareCovered(f, key, false)
       else
-        hide = tiles[key] ~= nil and tiles[key].bld ~= nil
+        hide = tiles[key] ~= nil and (tiles[key].bld ~= nil or tiles[key].bldNone == true)
       end
       if hide ~= (f.hidden or false) then
         local o = scenetree.findObjectById(f.id)

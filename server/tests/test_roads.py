@@ -773,6 +773,17 @@ class BuildTileTest(unittest.TestCase):
                 self.assertEqual(json.load(fh)["chunks"][0]["m"], "x")
 
 
+    def test_write_tile_no_buildings(self):
+        # (the user, 2026-10-29: "the third canopy is a building") a tile whose buildings are on but that has none (its
+        # only one a gas station's canopy outline, left out) says so: the mod then hides its far building tile, which
+        # still has every outline
+        ch = [{"m": "x", "w": 1, "tl": 1, "p": 1, "n": [[0, 0, 0], [1, 0, 0]]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            for bld_none, want in ((True, True), (False, None)):
+                roads.write_tile(tmp, "/v", 3, 1, 1, ch, bld_none=bld_none)
+                with open(os.path.join(tmp, "roads_3_1_1.json")) as fh:
+                    self.assertEqual(json.load(fh).get("bldNone"), want)
+
     def test_collider_boxes_deck(self):
         deck = {"deck": True, "w": 8, "n": [[0, 0, 10], [50, 0, 12]]}
         boxes = roads.collider_boxes(None, [deck, {"w": 6, "n": [[0, 0, 0], [5, 0, 0]]}])

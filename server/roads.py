@@ -7206,6 +7206,11 @@ class Tracker:
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
+    def again(self, keys):
+        """The sent tiles among keys built again at the next pose and sent again (no roads_drop: the mod replaces a
+        tile it has; the OSM test: a cell's OpenStreetMap fuel stations came after them, earthd Server.osm_fuel_want)."""
+        self.sent -= set(keys)
+
     def progress(self):
         """(done, wanted) of the road tiles round the car at the last pose: done = sent to the mod, empty, or failed
         and waiting for its retry (nothing more comes for it now). (0, 0) before a pose."""
@@ -7405,6 +7410,15 @@ class GeoTracker:
             if all(((a, b) in self.sent and (a, b) in self.skins) or (a, b) in self.retry for a, b, _ in ks):
                 out.add((tx, ty))
         return out
+
+    def again(self, keys):
+        """The sent geotiles among keys built again (content and this anchor's skin) at the next pose and sent again
+        (no roads_drop: the mod replaces a geotile whose content hash changed, roads.lua onGeoTile; earthd
+        Server.osm_fuel_want: a cell's OpenStreetMap fuel stations came after them)."""
+        for k in set(keys) & self.sent:
+            self.sent.discard(k)
+            self.skins.discard(k)
+            self.need = {nk: v for nk, v in self.need.items() if nk[0] != k}
 
     def _shown_err(self, key, what, part, frame):
         """m the part (pivot, relief) of tile key is off in frame's world as the mod shows it (its base shape, or the
@@ -7734,12 +7748,15 @@ def sound_boxes(chunks):
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
-               rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, decals=True):
+               rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, decals=True, bld_none=False):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
     shows it instead of a DecalRoad per chunk) and its bridge decks (deck_mesh: roadmesh.deck's result:
-    `deck_<a>_<tx>_<ty>.cdae`, "deck": {shape, pos}, colliding); returns (vfs path, number of chunks)."""
+    `deck_<a>_<tx>_<ty>.cdae`, "deck": {shape, pos}, colliding); returns (vfs path, number of chunks). bld_none: the
+    buildings are on and the tile has none ("bldNone": the mod hides its far building tile, which has every outline;
+    a gas station's canopy outlines are left out of the tile's buildings only, the user, 2026-10-29: "the third
+    canopy is a building"; an anchor tile's: a geotile's far tile hides on its parts, roads.lua nearShowsBuildings)."""
     import roadmesh
     import sidewalks
     name = f"roads_{aid}_{tx}_{ty}.json"
@@ -7806,6 +7823,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     boxes = collider_boxes(walks if data.get("walk") else None, chunks if data.get("deck") else None)
     if "walk" in boxes and data.get("walkcol"):
         boxes["walkcol"] = boxes["walk"]
+    if bld is None and bld_none:
+        data["bldNone"] = True
     if bld is not None:             # buildings.road_tile: the tile's buildings, colliding ("bld")
         import buildings
         x0, y0, _, _ = tile_bbox(tx, ty)
