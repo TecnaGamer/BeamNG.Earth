@@ -2536,6 +2536,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if got[0]:              # over the deck's lanes: a vehicle, a booth on the road
                     continue
                 g = np.full(len(g), got[1])     # its floor on the deck (a pier's bait shop stood on the seabed)
+        if at.get("ship"):          # afloat: on the water's level, not on the ground under it
+            la_, lo_ = la_all[i0:i1], lo_all[i0:i1]
+            wl = ships.waterline(la_, lo_, g_all[i0:i1])
+            g = np.full(len(g), float(np.mean(frame.geodetic_to_enu(la_, lo_, np.full(len(g), wl))[2])))
         spec.gring = g              # the ground at each corner (door_ground: the door's, not the footprint's highest)
         out.append((spec, float(g.min()), float(g.max())))
     lines = roads_xy if roads_xy else ml_roads_xy

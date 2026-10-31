@@ -146,6 +146,27 @@ def end_widths(r, c, u, hl):
     return out
 
 
+# The water's level at points (lat, lon arrays -> (depth, level): seacarve.SeaCarver.water), set once per process by
+# whoever holds the carver (blockworker). A ship floats on the water drawn, not on the ground under it (the user at
+# Hamburg, 2026-10-31: "They don't always sit at water level"; the highest ground under a hull is a bank or a carved bed).
+water_at = None
+RIVER_ABOVE_M = 0.25        # m: no carved level here (an uncarved river): its surface over the channel (riverlines.py)
+
+
+def waterline(lat, lon, ground):
+    """The height above the ellipsoid of the water a ship's outline (corners lat, lon; the ground at them) floats on:
+    the median level of the corners on water, else just over the lowest ground."""
+    if water_at is not None:
+        try:
+            lv = np.asarray(water_at(np.asarray(lat, np.float64), np.asarray(lon, np.float64))[1], np.float64)
+        except Exception:       # (the map data of the water not to be had: as without a carver)
+            lv = np.empty(0)
+        lv = lv[np.isfinite(lv)]
+        if lv.size:
+            return float(np.median(lv))
+    return float(np.min(ground)) + RIVER_ABOVE_M
+
+
 def on_water(c, water_xy):
     """Whether point c (local) lies on mapped water (buildings.water_rings), not on an island in it."""
     if not water_xy:
