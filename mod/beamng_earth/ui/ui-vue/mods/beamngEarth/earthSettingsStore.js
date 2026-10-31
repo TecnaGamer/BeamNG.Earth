@@ -51,6 +51,8 @@ export const settingsSchema = [
       { id: "realGravity", type: "bool", default: true, name: "Real gravity", desc: "Gravity as it really is where you are (it varies a little with latitude, height and the ground below). Off: the usual 9.81 m/s2." },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads, bridges and buildings near you from OpenStreetMap and Overture. Off: bare terrain only." },
       { id: "highwaySigns", type: "bool", default: true, name: "Highway signs", desc: "Exit and overhead destination signs, merge warnings and Interstate mile markers along US highways, from the signs mapped in OpenStreetMap. Needs Roads." },
+      { id: "models3dmr", type: "bool", default: true, name: "3D models from 3dmr.eu", desc: "Landmarks such as the Eiffel Tower or the Dragon Bridge in Da Nang as real 3D models from the open library 3dmr.eu, downloaded when you first drive near them. Off: the usual generated buildings and bridges there. Your own models (local_models.json) stay.",
+        note: "Takes effect the next time you start BeamNG.Earth." },
       { id: "rebaseDistance", type: "float", min: 2000, max: 16000, step: 100, default: 15000, name: "Rebase distance (m)", desc: "Advanced. How far you drive before the world quietly moves back under you (keeps the physics precise). 15 km keeps precision at about 1 mm." },
     ],
   },

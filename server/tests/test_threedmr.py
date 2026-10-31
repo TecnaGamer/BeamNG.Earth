@@ -978,6 +978,17 @@ class SearchIdsTest(unittest.TestCase):
             self.assertEqual(len(calls), 1)
 
 
+    def test_models_switched_off(self):
+        # the settings page's "3D models from 3dmr.eu" off (BNE_3DMR=off, cpupin.apply_player_settings): no request,
+        # no model anywhere
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"BNE_3DMR": "off"}), \
+                mock.patch("threedmr._urllib_fetch", side_effect=AssertionError("no request")):
+            self.assertFalse(threedmr.enabled())
+            self.assertEqual(threedmr.search_ids(1.0, 2.0, 100, d), [])
+        with mock.patch.dict(os.environ, {"BNE_3DMR": "on"}):
+            self.assertTrue(threedmr.enabled())
+
+
 class ModelInfoTest(unittest.TestCase):
     def test_failed_fetch_raises_without_caching(self):
         with tempfile.TemporaryDirectory() as d:
