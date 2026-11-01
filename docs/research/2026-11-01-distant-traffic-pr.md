@@ -175,3 +175,8 @@ and public PR remain unchanged. Evidence is in build/camera-stability/evening-*.
 At the user's selected 21:00, world actors decreased from 1664 to 1386 after settling. The user turned the camera
 during this interval, so in-frustum counts are not a controlled before/after comparison. The camera position,
 FOV and environment clock remained unchanged; no camera or time commands were issued.
+The user requested further reductions after the 70% and 60% previews. The 21:00 knot now uses 50% of peak;
+the same 18:00, 22:00 and overnight anchors remain. Live world counts were 1386 at 70%, 1184 at 60%, then 1008
+at 50%. These are successive live samples rather than a controlled frame-rate comparison. The 70% comparison
+above records the intermediate preview rather than the final density.
+The 50% variant passed 248 pure and 6781 renderer assertions; the installed density file matches source.

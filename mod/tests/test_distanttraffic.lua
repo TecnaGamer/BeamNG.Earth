@@ -42,7 +42,7 @@ T.near(dt.density(0), 0.08, 1e-12, 'midnight has a small fraction of peak traffi
 T.near(dt.density(4), 0.015, 1e-12, 'early morning roads are almost empty')
 T.near(dt.density(12), 0.65, 1e-12, 'daytime density is unchanged')
 T.near(dt.density(18), 0.9765625, 1e-12, 'evening rush density is unchanged')
-T.near(dt.density(21), 0.7, 1e-12, 'late evening eases after rush hour')
+T.near(dt.density(21), 0.5, 1e-12, 'late evening eases after rush hour')
 T.near(dt.density(22), 0.45, 1e-12, 'the agreed late-night decline is unchanged')
 T.near(dt.density(0), dt.density(24), 1e-12, 'midnight continuity')
 T.near(dt.density(-0.00001), dt.density(0.00001), 1e-8, 'the reduced night curve is continuous across midnight')
