@@ -103,7 +103,11 @@ state.anchor = geo.newAnchor(40, -75.995)
 frames(120)
 T.check(m.status().visible > 0 and m.status().planes <= m.MAX_CARS * 2, 'rebase re-places geotiles without duplicate planes')
 hour = 4; frames(220, nil, false)
-T.check(m.status().cars < m.MAX_CARS / 4 and m.status().visible < m.MAX_CARS / 4, 'quiet-hour density lowers the global population cap')
+T.check(m.status().cars > 0 and m.status().cars <= math.ceil(m.MAX_CARS * 0.015),
+  '04:00 retains only isolated cars within the overnight global cap')
+hour = 0; frames(220, nil, false)
+T.check(m.status().cars > 0 and m.status().cars <= math.ceil(m.MAX_CARS * 0.08),
+  'midnight remains sparse across the whole surrounding population')
 m.onMessage({ type = 'traffic_drop', key = 'a' }); frames(100)
 T.check(m.status().routes == 0 and m.status().visible == 0, 'last owner drop fades actors and frees paths')
 m.setEnabled(false)

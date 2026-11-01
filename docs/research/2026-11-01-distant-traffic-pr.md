@@ -144,3 +144,19 @@ The test restored the user's High/on settings; temporary metrics extensions were
 All 190 installed mod files matched source SHA256. The actual CEF runtime module cache exposed the new quality
 control with all three options. The game remained open throughout these checks; public PR/test archives still
 contain the preceding version until a separately approved publication.
+
+## Overnight density adjustment (2026-11-02)
+
+The user found the enlarged world population too busy at midnight and 04:00. The previous local-hour curve
+retained 40% and 12% of peak traffic respectively. These now use 8% and 1.5%, with smooth intermediate knots at
+02:00, 06:00 and 22:00. The 08:00–21:00 curve, including the accepted evening rush hour, is unchanged. This is
+an artistic density adjustment, without an extra per-frame mechanism or a change to camera-independent admission.
+
+The pure regression failed on the old midnight/04:00 values, then passed all 246 assertions, including preserved
+noon/18:00 values and midnight continuity. The live module received only the new density table; actors, elapsed
+motion, camera, FOV and environment time were preserved. At the user's fixed 00:00 view near 55.16418,50.51869,
+world actors fell from 794 to 148 and the in-frustum counter from 401 to 68. These counters do not measure occlusion.
+Source and installed curve hashes match. Live04:00 appearance remains for user feedback; its density and
+population limits are covered by the pure/renderer fixtures. Evidence is in build/camera-stability/night-*.
+The user confirmed the new night density was appropriate. Final renderer fixtures passed 6781 assertions,
+including positive but bounded 04:00/midnight populations. No game/companion restart or public update was needed.
