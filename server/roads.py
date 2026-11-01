@@ -3797,6 +3797,60 @@ TUNNEL_ROAD_CLEAR_M = 2.0
 TUNNEL_ROAD_MIN_SIN = 0.35
 TUNNEL_ROAD_REACH_M = 15.0
 
+# Only the mapped bore is covered. Its source road's ground ranges supply the approach, never a
+# straight extrapolation into an unrelated street. The cosine has zero grade at both ends.
+TUNNEL_APPROACH_GRADE = 0.08
+TUNNEL_APPROACH_M = TUNNEL_COVER * math.pi / (2 * TUNNEL_APPROACH_GRADE)
+TUNNEL_APPROACH_CONTEXT_M = (TUNNEL_APPROACH_M + TUNNEL_ROAD_REACH_M +
+                             (20.0 + TUNNEL_ROAD_CLEAR_M) / TUNNEL_ROAD_MIN_SIN)
+
+
+def _inferred_cover(kinds, mapped):
+    """Keep a newly inferred bore's adjoining roof one full-height section, including road reach."""
+    kinds = np.array(kinds, np.int64)
+    i = 0
+    while i < len(kinds):
+        if not kinds[i]:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(kinds) and kinds[j]:
+            j += 1
+        if np.any(mapped[i:j]):
+            kinds[i:j] = 2
+        i = j
+    return kinds
+
+
+def mapped_tunnel_floor(s, floor, kinds, mapped, crossings=()):
+    """Infer missing underground cover from a mapped bore crossed by a separate surface road.
+
+    A DEM measures the roof, not the carriageway. Its lower hull alone erased both Obor bores.
+    A crossing inside a mapped bore whose hull has no cover establishes that the bore is below
+    the surface. Keep that mapped run covered throughout, with bounded-depth cosine approaches
+    on the source road, rather than carving a dip or inventing portals at source-part joints.
+    Existing terrain-supported arches/open cuts are otherwise unchanged. Pure.
+    """
+    s = np.asarray(s, np.float64)
+    floor, kinds = np.array(floor, np.float64), np.array(kinds, np.int64)
+    mapped = np.asarray(mapped, bool)
+    lowering = np.zeros(len(floor), np.float64)
+    for lo, hi in crossings:
+        core = mapped & (s >= lo) & (s <= hi)
+        if not core.any() or (kinds[core] > 0).any():
+            continue
+        # The connected mapped run, not just the width of the road crossing its roof.
+        a, b = int(np.flatnonzero(core)[0]), int(np.flatnonzero(core)[-1])
+        while a > 0 and mapped[a - 1]:
+            a -= 1
+        while b + 1 < len(mapped) and mapped[b + 1]:
+            b += 1
+        distance = np.maximum(np.maximum(s[a] - s, s - s[b]), 0.0)
+        weight = 0.5 * (1 + np.cos(math.pi * np.clip(distance / TUNNEL_APPROACH_M, 0, 1)))
+        lowering = np.maximum(lowering, TUNNEL_COVER * weight)
+        kinds[a:b + 1] = 2
+    return floor - lowering, kinds
+
 
 PORTAL_SHALLOW_COVER_M = 1.5    # m: a major road's open end run with at least this much ground over its floor is covered
 
@@ -5603,6 +5657,124 @@ class TunnelProfiles(BridgeProfiles):
                                     # meets a full tunnel inside the hill (no hole, no portal face there)
         self._tls = threading.local()   # a thread's solved sections, kept with its parts (_commit) or dropped
         self._drowned = {}          # part id (fid.j) -> its chain has a part under water (drowned)
+        self.layouts = {}           # part key -> mapped bore arc interval in the source approach geometry
+        self.approach_owners = {}   # part id -> source road ids whose ground ranges carry its approach
+
+    def _cell_entries(self, key):
+        """Keep the source road's bounded ground approaches with its mapped bore.
+
+        Never extend across another off-ground range or off source-connected road geometry. Include
+        the exact mapped mouths before densification, so a source/cell split cannot move them.
+        """
+        parts, ground = super()._cell_entries(key)
+        cache = self.__dict__.setdefault("_tunnel_entries", {})
+        if str(key) in cache:
+            return cache[str(key)]
+        feats = self.cell_fn(key)
+        out = []
+        for k, value in parts:
+            i = feats.index(k[0])
+            ranges = level_ranges(feats, i)
+            bores = [(a, b) for a, b, kind in ranges if kind == "tunnel" and b - a > MIN_PART]
+            rings = [np.asarray(r, np.float64) for p in feats.parts(i) for r in p if len(r) >= 2]
+            ri, bi = divmod(k[1], len(bores)) if bores else (0, 0)
+            if not bores or ri >= len(rings):
+                out.append((k, value))
+                continue
+            ring = rings[ri]
+            e, n = mapgeom.enu_xy(feats, self.frame, ring)
+            length = float(np.hypot(*np.diff(np.c_[e, n], axis=0).T).sum())
+            a, b = bores[bi]
+            pad = TUNNEL_APPROACH_CONTEXT_M / max(length, 1e-9)
+            prev = max((y for x, y, _ in ranges if y <= a + 1e-9 and x < a), default=0.0)
+            nxt = min((x for x, y, _ in ranges if x >= b - 1e-9 and y > b), default=1.0)
+            lo, hi = max(prev, a - pad), min(nxt, b + pad)
+            pieces = [sub_polyline(ring, x, y) for x, y in ((lo, a), (a, b), (b, hi)) if y > x]
+            ll = np.concatenate([p if j == 0 else p[1:] for j, p in enumerate(pieces)])
+            e, n = mapgeom.enu_xy(feats, self.frame, ll)
+            xy = densify(_dedupe(np.c_[e, n]), DECK_STEP)
+            owners = {k[0]}
+            # A source segment can end before the approach does. Continue only at an identical
+            # source endpoint, along one unambiguous forward ground range (never a nearby road).
+            for at_start, boundary in ((True, lo == 0.0), (False, hi == 1.0)):
+                if not boundary:
+                    continue
+                bore_ll = sub_polyline(ring, a, b)
+                ee, nn = mapgeom.enu_xy(feats, self.frame, bore_ll)
+                end = np.array([ee[0 if at_start else -1], nn[0 if at_start else -1]])
+                reach = float(np.hypot(*(xy[0 if at_start else -1] - end)))
+                need = max(0.0, TUNNEL_APPROACH_CONTEXT_M - reach)
+                for _ in range(4):
+                    if need <= 1e-6:
+                        break
+                    p, nb = (xy[0], xy[1]) if at_start else (xy[-1], xy[-2])
+                    direction = p - nb
+                    direction /= max(float(np.hypot(*direction)), 1e-9)
+                    candidates = []
+                    for gk, lns in ground:
+                        if gk[1] != "g" or gk[0] in owners:
+                            continue
+                        for ln in lns:
+                            for seq in (ln, ln[::-1]):
+                                if len(seq) < 2 or not np.allclose(seq[0], p, atol=1e-6, rtol=0):
+                                    continue
+                                tangent = seq[1] - seq[0]
+                                cosine = float(tangent @ direction) / max(float(np.hypot(*tangent)), 1e-9)
+                                if cosine > 0.7:
+                                    candidates.append((gk[0], np.asarray(seq, np.float64)))
+                    if len(candidates) != 1:
+                        break
+                    owner, seq = candidates[0]
+                    arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(seq, axis=0).T))]
+                    length = min(need, float(arc[-1]))
+                    tail = np.array([np.interp(length, arc, seq[:, d]) for d in (0, 1)])
+                    extra = np.r_[seq[arc < length], tail[None]]
+                    xy = np.r_[extra[:0:-1], xy] if at_start else np.r_[xy, extra[1:]]
+                    owners.add(owner)
+                    need -= length
+            xy = densify(xy, DECK_STEP)
+            self.approach_owners[self._part_id(k)] = owners
+            # Arc positions use the same geometry as the solver, not rounded map fractions.
+            bore = sub_polyline(ring, a, b)
+            be, bn = mapgeom.enu_xy(feats, self.frame, bore)
+            arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            ends = [int(np.argmin(np.hypot(xy[:, 0] - x, xy[:, 1] - y))) for x, y in
+                    ((be[0], bn[0]), (be[-1], bn[-1]))]
+            self.layouts[k] = (float(arc[ends[0]]), float(arc[ends[1]]))
+            out.append((k, (value[0], xy, value[2], value[3], len(xy), *value[5:])))
+        cache[str(key)] = (out, ground)
+        return cache[str(key)]
+
+    def _resolve(self, start, pool, ground, loaded):
+        """Source-coincident tunnel ends only: crossing/nearby bores are not topology joins."""
+        def node(p):
+            return (round(float(p[0]), 6), round(float(p[1]), 6))
+        while True:
+            by_end = {}
+            for k, value in pool.items():
+                for p in (value[1][0], value[1][-1]):
+                    by_end.setdefault(node(p), []).append(k)
+            comp, todo = {start}, [start]
+            while todo:
+                k = todo.pop()
+                for p in (pool[k][1][0], pool[k][1][-1]):
+                    for other in by_end[node(p)]:
+                        if other not in comp:
+                            comp.add(other)
+                            todo.append(other)
+            grew = False
+            for k in sorted(comp):
+                for p in (pool[k][1][0], pool[k][1][-1]):
+                    if len(by_end[node(p)]) != 1:
+                        continue
+                    la, lo, _ = self.frame.enu_to_geodetic(p[0], p[1], 0.0)
+                    ck = mapcells.cell_of(float(la), float(lo))
+                    if str(ck) not in loaded and len(loaded) < CHAIN_CELLS:
+                        loaded.add(str(ck))
+                        self._load(ck, pool, ground)
+                        grew = True
+            if not grew:
+                return sorted(comp)
 
     def _raw_ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -5694,18 +5866,181 @@ class TunnelProfiles(BridgeProfiles):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         return self.frame.geodetic_to_enu(la, lo, np.asarray(self.ends(la, lo), np.float64))[2]
 
+    def _chain_profiles(self, comp, pool, ground):
+        """Solve each source-connected path once, then slice it back without adding portals."""
+        lines = [np.asarray(pool[k][1], np.float64) for k in comp]
+        endpoint = lambda p: (round(float(p[0]), 6), round(float(p[1]), 6))
+        ends = [(endpoint(ln[0]), endpoint(ln[-1])) for ln in lines]
+        by_end = {}
+        for i, pair in enumerate(ends):
+            for at, node in zip((0, -1), pair):
+                by_end.setdefault(node, []).append((i, at))
+        free = sorted(node for node, edges in by_end.items() if len(edges) == 1)
+        order = None
+        if len(free) == 2 and all(len(edges) <= 2 for edges in by_end.values()):
+            order, used, node = [], set(), free[0]
+            while len(used) < len(lines):
+                candidates = [(i, at) for i, at in by_end[node] if i not in used]
+                if not candidates:
+                    order = None
+                    break
+                i, at = candidates[0]
+                used.add(i)
+                reverse = at == -1
+                order.append((i, reverse))
+                node = ends[i][0 if reverse else 1]
+        paths = [order] if order is not None else [[(i, False)] for i in range(len(lines))]
+        branched = order is None
+        out, inferred = {}, set()
+        own = {source for k in comp for source in self.approach_owners.get(self._part_id(k), {k[0]})}
+        # The source approach is the same road, never a surface crossing over itself.
+        # Collinear overlaps have frame-dependent tiny determinants in crossing tests.
+        surface = {gk: lns for gk, lns in ground.items() if gk[0] not in own}
+        for order in paths:
+            points, maps, offset = [], {}, 0
+            for i, reverse in order:
+                ln = lines[i][::-1] if reverse else lines[i]
+                maps[i] = (offset, reverse, len(ln))
+                points.append(ln if not points else ln[1:])
+                offset += len(ln) - 1
+            xy = np.concatenate(points)
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            gfn = self._raw_ground if self.raw is not None else self._ground
+            g = np.array(gfn(xy), np.float64)
+            # Covered/open ownership is a raw-ground/source decision. Feeding already graded
+            # approach endpoints back into this hull moved the planner's portal relative to
+            # the road-tile portal, so its cover mask restored the roof over the open road.
+            floor, kinds = tunnel_sections(s, g)
+            kinds = portal_cover(kinds, g - floor, pool[comp[order[0][0]]][0])
+            mapped = np.zeros(len(xy), bool)
+            for i, reverse in order:
+                off, _, size = maps[i]
+                arc = s[off:off + size] - s[off]
+                lo, hi = self.layouts.get(comp[i], (0.0, float(arc[-1])))
+                if reverse:
+                    lo, hi = arc[-1] - hi, arc[-1] - lo
+                mapped[off:off + size] |= (arc >= lo - 1e-6) & (arc <= hi + 1e-6)
+            # Only a mapped bore can grow a roof. Its source's ground ranges stay approaches.
+            kinds[~mapped] = 0
+            crossings = []
+            for gk, lns in surface.items():
+                if gk not in self._hw:
+                    continue
+                for ln in lns:
+                    for _pi, arc, _point in _crossings([xy], [ln]):
+                        reach = (self._hw[gk] + TUNNEL_ROAD_CLEAR_M) / TUNNEL_ROAD_MIN_SIN
+                        crossings.append((arc - reach, arc + reach))
+            kinds = self._cover_roads(xy, s, kinds, surface)
+            old_floor = floor
+            floor, kinds = mapped_tunnel_floor(s, floor, kinds, mapped, crossings)
+            if np.any(old_floor - floor > 1e-6):
+                # Moving a portal to clear a surface carriageway moves the underground
+                # floor constraint with it. Growing only the roof exposed it above Perth's
+                # eastern road and left terrain triangles inside the covered tube.
+                kinds = self._cover_roads(xy, s, kinds, surface)
+                kinds = _inferred_cover(kinds, mapped & (old_floor - floor > 1e-6))
+                grown_floor, _ = mapped_tunnel_floor(s, old_floor, np.zeros(len(s), np.int64),
+                                                     kinds == 2, crossings)
+                floor = np.minimum(floor, grown_floor)
+            for i, reverse in order:
+                off, _, size = maps[i]
+                sl = slice(off, off + size)
+                vals = (g[sl].copy(), floor[sl].copy(), kinds[sl].copy())
+                out[comp[i]] = tuple(v[::-1].copy() for v in vals) if reverse else vals
+                if np.any(old_floor[sl] - floor[sl] > 1e-6):
+                    inferred.add(i)
+        if branched:
+            # A mapped fork is still one underground layer. Carry inference only through an
+            # identical mapped bore endpoint, not through ground approaches or crossing roads.
+            for _ in range(len(lines)):
+                changed = False
+                for edges in by_end.values():
+                    connected = []
+                    for i, at in edges:
+                        arc = np.r_[0., np.cumsum(np.hypot(*np.diff(lines[i], axis=0).T))]
+                        lo, hi = self.layouts.get(comp[i], (0., float(arc[-1])))
+                        if (at == 0 and lo < 1e-6) or (at == -1 and hi > arc[-1] - 1e-6):
+                            connected.append((i, arc, lo, hi))
+                    if not any(i in inferred for i, *_ in connected):
+                        continue
+                    for i, arc, lo, hi in connected:
+                        if i in inferred:
+                            continue
+                        g, floor, kinds = out[comp[i]]
+                        mapped = (arc >= lo - 1e-6) & (arc <= hi + 1e-6)
+                        kinds = self._cover_roads(lines[i], arc, np.where(mapped, 2, kinds), surface)
+                        kinds = _inferred_cover(kinds, mapped)
+                        floor, forced = mapped_tunnel_floor(arc, floor, np.zeros(len(arc), np.int64),
+                                                            kinds == 2, [(lo, hi)])
+                        kinds[mapped] = forced[mapped]
+                        out[comp[i]] = (g, floor, kinds)
+                        inferred.add(i)
+                        changed = True
+                if not changed:
+                    break
+            # Reconcile branch sample heights on the actual source graph. Shortest height
+            # envelopes enforce continuity and the approach grade without creating XY joins.
+            graph, heights, indices, nodes = [], [], [], {}
+            for i, ln in enumerate(lines):
+                ix = []
+                for j, p in enumerate(ln):
+                    key = endpoint(p) if j in (0, len(ln) - 1) else (i, j)
+                    if key not in nodes:
+                        nodes[key] = len(graph)
+                        graph.append([])
+                        heights.append(np.inf)
+                    node = nodes[key]
+                    ix.append(node)
+                    heights[node] = min(heights[node], float(out[comp[i]][1][j]))
+                indices.append(ix)
+                for a, b, distance in zip(ix[:-1], ix[1:], np.hypot(*np.diff(ln, axis=0).T)):
+                    graph[a].append((b, float(distance)))
+                    graph[b].append((a, float(distance)))
+            grade = TUNNEL_APPROACH_GRADE
+            for key, edges in by_end.items():
+                if len(edges) != 1:
+                    continue
+                pin = nodes[key]
+                distance = _dijkstra(graph, {pin: 0.0})
+                on = np.isfinite(distance) & (distance > 1e-6)
+                grade = max(grade, float(np.max((heights[pin] - np.asarray(heights)[on]) / distance[on],
+                                                initial=grade)))
+            graph = [[(b, distance * grade) for b, distance in row] for row in graph]
+            solved = _dijkstra(graph, dict(enumerate(heights)))
+            for i, ix in enumerate(indices):
+                g, _floor, kinds = out[comp[i]]
+                out[comp[i]] = (g, solved[ix], kinds)
+        # Match real surface-road end heights only after the layer boundary is fixed. Ease
+        # each free endpoint through its open approach, never change a covered floor or join.
+        for k, ln in zip(comp, lines):
+            g, floor, kinds = out[k]
+            arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(ln, axis=0), axis=1))]
+            covered = np.flatnonzero(kinds)
+            for at in (0, -1):
+                if kinds[at] or len(by_end[endpoint(ln[at])]) != 1:
+                    continue
+                distance = arc if at == 0 else arc[-1] - arc
+                reach = (arc[covered[0]] if at == 0 else arc[-1] - arc[covered[-1]]) if len(covered) else arc[-1] / 2
+                reach = min(TUNNEL_APPROACH_M, float(reach))
+                if reach <= 1e-6:
+                    continue
+                delta = float(self._ends_ground(ln[[at]])[0] - floor[at])
+                weight = 0.5 * (1 + np.cos(np.pi * np.clip(distance / reach, 0., 1.)))
+                floor = floor + delta * weight * (kinds == 0)
+            out[k] = (g, floor, kinds)
+        return out
+
     def _solve(self, comp, pool, ground):
-        """Per part: the floor (the hull of the ungraded ground, its ends at the roads' graded height at its portals,
-        where the approaches arrive) and its sections; a low arch's tube under the thin part of the cover over its
-        middle (a 20th percentile of the middle 60 %, less TUNNEL_SOIL_M; sized from the most, the ground came down
-        into it and was cut away, a bare stone vault), a full tunnel's roadmesh.TUNNEL_H."""
+        """Chain-coherent floors and covered/open sections from mapped bores, crossings and DEM.
+        Surveyed underground heights refine the inferred floor where available."""
         import roadmesh
         self._mark_drowned(comp, pool)
-        gfn = self._raw_ground if self.raw is not None else self._ground
+        profiles = self._chain_profiles(comp, pool, ground)
         out = []
         self._tls.staged = {}           # (committed by parts() right after, the rest dropped with the next solve)
-        nk = _EndJoin()                 # (the parts' ends another part of the chain goes on from: no portal there)
-        jends = {k: (nk(np.asarray(pool[k][1])[0]), nk(np.asarray(pool[k][1])[-1])) for k in comp
+        def node(p):
+            return (round(float(p[0]), 6), round(float(p[1]), 6))
+        jends = {k: (node(np.asarray(pool[k][1])[0]), node(np.asarray(pool[k][1])[-1])) for k in comp
                  if len(pool[k][1]) >= 2}
         jdeg = {}
         for a, b in jends.values():
@@ -5717,13 +6052,7 @@ class TunnelProfiles(BridgeProfiles):
                 out.append(np.full(len(xy), np.nan))
                 continue
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
-            g = np.asarray(gfn(xy), np.float64)
-            ge = np.asarray(self._ends_ground(xy[[0, -1]]), np.float64)
-            g = g.copy()
-            g[0], g[-1] = ge[0], ge[-1]
-            floor, kinds = tunnel_sections(s, g)
-            kinds = portal_cover(kinds, g - floor, pool[k][0])
-            kinds = self._cover_roads(xy, s, kinds, ground)
+            g, floor, kinds = profiles[k]
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -5761,7 +6090,9 @@ class TunnelProfiles(BridgeProfiles):
                 for near in (s[a:b + 1] <= s[a] + PORTAL_LOOK_M, s[a:b + 1] >= s[b] - PORTAL_LOOK_M):
                     cv = float(np.max(cover[a:b + 1][near])) if near.any() else th
                     ups.append(float(np.clip(cv + PORTAL_GROUND_M - th, PORTAL_UP_MIN, roadmesh.PORTAL_FRAME)))
-                mouths = (n == 0 or secs[n - 1][2] == 0, n == len(secs) - 1 or secs[n + 1][2] == 0)
+                mouths = ((n == 0 and jdeg[jends[k][0]] == 1) or (n > 0 and secs[n - 1][2] == 0),
+                          (n == len(secs) - 1 and jdeg[jends[k][1]] == 1) or
+                          (n + 1 < len(secs) and secs[n + 1][2] == 0))
                 caps = None
                 if kd == 1:
                     caps, ups = self._road_caps(xy[a:b + 1], floor[a:b + 1], th, ups, mouths, pool[k][0].width, ground)
@@ -5965,12 +6296,13 @@ class TunnelProfiles(BridgeProfiles):
         return {"sections": mine(self.sections), "heights": mine(self.heights), "ups": mine(self.ups),
                 "caps": mine(self.caps), "mouths": mine(self.mouths), "open": {o for o in self.open
                                                                                if o.split("#")[0] in pids},
-                "drowned": {k: v for k, v in self._drowned.items() if k in pids}}
+                "drowned": {k: v for k, v in self._drowned.items() if k in pids},
+                "approach_owners": mine(self.approach_owners)}
 
     def _adopt_take(self, extra):
         if not extra:
             return
-        for name in ("sections", "heights", "ups", "caps", "mouths"):
+        for name in ("sections", "heights", "ups", "caps", "mouths", "approach_owners"):
             for k, v in extra[name].items():
                 getattr(self, name).setdefault(k, v)
         self.open.update(extra["open"])
@@ -6227,7 +6559,7 @@ class ChainView:
 
     heights = property(lambda self: self._merged("heights"))
     mouths = property(lambda self: self._merged("mouths"))
-
+    approach_owners = property(lambda self: self._merged("approach_owners"))
     def _sub(self, method, fid, default):
         for st in self._stores():
             with st.lock:
@@ -6414,6 +6746,7 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square):
     half = u.shape[0] * square / 2
     try:
         parts = tunnels.parts(cells, (cx - half, cy - half, cx + half, cy + half))
+        keep["tunnel_open"] = tunnels.open_parts(cells, (cx - half, cy - half, cx + half, cy + half))
     except Exception as e:          # a chain's other cells not at hand (offline): no holes this time
         (log.debug if isinstance(e, OSError) else log.warning)("tunnel holes: %s: %s", type(e).__name__, e)
         return None
@@ -6422,7 +6755,8 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square):
     mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
                             getattr(tunnels, "mouths", None))
     if mask is not None and mask.any():
-        mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+        owners = getattr(tunnels, "approach_owners", None)
+        mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square, owners)
     return mask
 
 
@@ -6430,12 +6764,18 @@ HOLE_ROAD_MARGIN = 0.3      # m past another road's carriageway no tunnel hole i
 HOLE_JOIN_M = 3.0           # m: a road with an end this near a tunnel part's end is its approach (its mouth cut)
 
 
-def spare_carriageways(mask, parts, cells, frame, cx, cy, square):
+def spare_carriageways(mask, parts, cells, frame, cx, cy, square, approach_owners=None):
     """mask with the hole samples inside the carriageway of a ground road that is not the tunnel's (another feature, not
     an approach joined at a mouth) filled again: a portal's opening reaching into a road beside or over it left a hole in
     its lanes (GitHub #450, the A-7 near Málaga, a 2 m drop at the edge of a carriageway beside an underpass's mouth)."""
     import fast
-    own = {str(p[0]).split("#")[0] for p in parts}
+    # Profile IDs carry both the source-part suffix and the covered/open section suffix.
+    # Comparing "source.0" with the map's "source" restored our own approach's terrain
+    # cells inside its portal, turning the floor-to-roof lattice edge into a collider.
+    own = {str(p[0]).split("#")[0].rsplit(".", 1)[0] for p in parts} | {str(p[0]).split("#")[0] for p in parts}
+    if approach_owners:
+        for owners in approach_owners.values():
+            own.update(owners)
     ends = np.array([np.asarray(p[2], np.float64)[k, :2] for p in parts for k in (0, -1) if len(p[2])], np.float64)
     others = []
     for feats in cells:
@@ -7075,6 +7415,16 @@ def twin_tunnels(parts):
     return out
 
 
+def tunnel_nav_floors(tunnels, cells, box):
+    """Source-id keyed solved floor geometry for navigation, both covered bore and open approach."""
+    out = {}
+    for fid, _spec, xy, z, _lon in tunnels.parts(cells, box) + tunnels.open_parts(cells, box):
+        if np.isfinite(z).all():
+            source = fid.split("#")[0].rsplit(".", 1)[0]
+            out.setdefault(source, []).append((np.asarray(xy, np.float64), np.asarray(z, np.float64)))
+    return out
+
+
 def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     """The chunks of the tunnels crossing the tile box `exact`: the road surface ("deck", "tunnel": the tube is
     built around it, roadmesh.tunnel) and its lines, every one "fixed" at the floor's heights; a surface chunk
@@ -7107,10 +7457,10 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                          parts[i][1]))
     for n, (fid, spec, xy, z, lon) in enumerate(parts):
         pts = np.c_[xy, z]
-        look = _deck_look(spec) if not terrain_surface(spec) else None
-        if terrain_paint and terrain_surface(spec):
-            look = None                     # painted in the ground layer, as any other ground part
-        lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
+        # A covered bore needs an independent colliding floor even when the source road's
+        # surface normally lives in the terrain mask: that terrain is the roof, not its floor.
+        look = _deck_look(spec)
+        lines = [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
         for look, w, line in extras(spec, pts, lon):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))

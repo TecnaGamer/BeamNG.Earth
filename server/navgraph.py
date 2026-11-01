@@ -167,7 +167,7 @@ def _deck_z(decks, fid, x, y):
 
 
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, widths=None, left_hand=False,
-          mph=True, signals=None):
+          mph=True, signals=None, tunnel_floors=None):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
@@ -176,6 +176,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     bridge all along are in the graph (road_specs leaves them to the bridge builder). widths: the road tiles'
     measured street widths (roadwidth.py), so the AI's lanes are on the carriageway the road mesh draws. signals:
     the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them."""
+    # tunnel_floors has the same fid -> [(xy, z)] layout as decks, but its road is below
+    # the terrain. Source connector identities remain the only junction identities.
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
     carriage = []           # (half width, centreline (k, 2)) of every road and bridge here (the signal heads keep off them)
@@ -190,7 +192,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             continue
         rspecs = roads.road_specs(feats, urban_fn, widths, left_hand)      # the roads the road tiles (and their props) see
         bspecs = roads.bridge_specs(feats)
-        specs = [sp if sp is not None else bs for sp, bs in zip(rspecs, bspecs)]
+        tspecs = roads.tunnel_specs(feats) if tunnel_floors else [None] * len(feats)
+        specs = [sp if sp is not None else bs if bs is not None else ts
+                 for sp, bs, ts in zip(rspecs, bspecs, tspecs)]
         rules = feats.rules
         sub = rules.get("subclass")
         con = rules.get("connectors")
@@ -242,6 +246,11 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if con is not None:
                 for r in con.rows(i):
                     marks[round(float(con.start[r]) * L, 2)] = "c" + str(con.value[r])
+            for a_, b_ in tunnels:
+                for at in (a_, b_):
+                    sk = round(at * L, 2)
+                    if 0 < at < 1 and not any(abs(sk - m) < 0.01 for m in marks):
+                        marks[sk] = f"s{fid}_t{int(round(at * 1e6))}"
             w = driving_width(spec)
             # A narrow street gets the stock game's ~20 cm precision instead of a 60 cm corner cut.
             tolerance = min(SIMPLIFY_M, max(0.1, w * 0.035))
@@ -309,8 +318,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 a, b = names[j], names[j + 1]
                 if a == b:
                     continue
-                if tunnels and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnels):
-                    continue                # no ground over a tunnel: its stretch is left out
+                if tunnels and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnels) and \
+                        not (tunnel_floors and fid in tunnel_floors):
+                    continue                # no usable solved floor for this mapped bore
                 if direction < 0:
                     a, b = b, a
                 pa, pb = xy[j] if direction >= 0 else xy[j + 1], xy[j + 1] if direction >= 0 else xy[j]
@@ -357,9 +367,12 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         # ground by the Earth's curve, ~6 m 10 km from the anchor, ~18 m at the 15 km rebase (PR #112's finding,
         # measured in game 2026-10-24); the decks' heights (_deck_z) are already in this frame (roads.BridgeProfiles)
         Z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64).copy()
-        if decks:
+        if decks or tunnel_floors:
             for k, nm in enumerate(used):
-                dz = _deck_z(decks, node_fid.get(nm), X[k], Y[k])
+                fid = node_fid.get(nm)
+                dz = _deck_z(tunnel_floors or {}, fid, X[k], Y[k])
+                if dz is None:
+                    dz = _deck_z(decks or {}, fid, X[k], Y[k])
                 if dz is not None:
                     Z[k] = dz
         radius = {}

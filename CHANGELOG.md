@@ -2,6 +2,15 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Keep mapped underground road bores covered where their original elevation would collide with an
+  overlying road, with continuous floors and source-connected portal approaches. Preserve surface
+  roads above them and keep internal source-piece joins from becoming false tunnel mouths.
+- Keep planner and mesh portals in the same canonical source-chain frame, exclude a tunnel's own
+  approaches from crossing inference, and retain collision through portal lattice cells even with
+  fine ground disabled.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

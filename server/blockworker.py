@@ -463,8 +463,11 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     except Exception as e:          # no decks: the graph follows the ground under bridges
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
+    import roads as roadsmod
+    floors = roadsmod.tunnel_nav_floors(tunnel_profiles(aid, frame, elev, g), feats,
+                                       (x - w, y - w, x + w, y + w))
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, widths=_s.widths, left_hand=left_hand,
-                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys))
+                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys), tunnel_floors=floors)
     graph["rules"] = rules
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])

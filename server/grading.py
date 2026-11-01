@@ -1002,6 +1002,7 @@ class _Planner:
                     tplans.extend((fid, q) for q in (pieces if cl else [p]))
                 plans = kept
             secs = self._tunnel_sections(feats, key, [p for _f, p in tplans])
+            self._tunnel_approaches(plans, secs)
             plans.extend((fid + TUNNEL_TAG, Plan(xy, z, spec.width / 2 + shoulder(spec)))
                          for fid, spec, xy, z, k in secs if k == 0)
             plans.extend(self._mouth_plans(secs))
@@ -2018,80 +2019,75 @@ class _Planner:
         return self._chains_for().drowned(key, ring)
 
     def _tunnel_sections(self, feats, key=None, road_plans=()):
-        """[(fid, spec, xy, z, kind)] of the tunnels' sections (roads.tunnel_sections on the ungraded ground, its
-        ends graded by road_plans: the cell's road Plans, as roads.TunnelProfiles.ends grades them with the roads'
-        plans alone): kind 0 an open road at z, 1 a low arch, 2 a full tunnel."""
-        out = []
-        ts = roadsmod.tunnel_specs(feats)
-        pack = None                     # (the road plans packed once: per tunnel part, ~6 ms each, 0.9 s of 8 tiles)
-        over = None                     # (the ground roads near the tunnels, as roads.TunnelProfiles covers them)
-        for i in range(len(feats)):
-            if ts[i] is None:
-                continue
-            for j, ring in enumerate(roadsmod.tunnel_parts(feats, i)):
-                ring = self._longest(str(feats.ids[i]), j, ring, key)
-                ll = np.asarray(ring, np.float64)
-                if len(ll) < 2:
+        """The same chain solve used by tunnel meshes/physics, in this planner's frame.
+
+        Raw terrain alone cannot classify a mapped underground bore. Do not run a second,
+        per-cell DEM-hull classifier here: it dug Obor's surface crossing into the tunnel.
+        """
+        load = lambda ck: self.md.cell(ck, layers=("roads",), kind="demand").layers.get("roads")
+        ends = None
+        if road_plans:
+            pack = PlanPack(list(road_plans))
+
+            def ends(la, lo):
+                e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+                return grade_points(np.asarray(e), np.asarray(n), np.asarray(self.elev(la, lo)), pack)
+        def setup(tunnels):
+            tunnels.raw, tunnels.wet, tunnels.ends = self.elev, self.wet, ends
+
+        # A planning-region frame is not the chain's frame. Even the same source points
+        # densify differently there, and crossing-cover rounding moved Obor's mouth by two
+        # samples. Use exactly ChainStore's region and source-chain owner selection.
+        # This local store's endpoint callback uses the current uncommitted road plans,
+        # never Grader.apply: asking the production store here would re-enter cell planning.
+        chains = roadsmod.ChainStore(roadsmod.TunnelProfiles, load, self.elev, setup)
+        view = roadsmod.ChainView(chains, self.frame)
+        out, mouths, owners = [], {}, {}
+        for _region, (tunnels, todo) in sorted(view._todo([feats], (-np.inf, -np.inf, np.inf, np.inf)).items()):
+            whole = roadsmod.BridgeProfiles.parts_todo(tunnels, todo)
+            for fid, spec, xy, z, _lon in view._map(tunnels, whole):
+                if tunnels._drowned.get(fid) or not np.isfinite(z).all():
                     continue
-                E, N, _ = self.frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
-                xy, s = resample(np.stack([np.asarray(E), np.asarray(N)], axis=1), VERTEX_STEP)
-                if len(xy) < 2 or s[-1] <= 0:
-                    continue
-                la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
-                if self.wet is not None and \
-                        (np.asarray(self.wet(la, lo)) > 0.5).mean() > roadsmod.TUNNEL_WET_SHARE:
-                    continue
-                if self.wet is not None and self._drowned((str(feats.ids[i]), j), ring):
-                    continue            # (a dry piece of an underwater tunnel: left out with it, GitHub #128)
-                g = np.asarray(self.elev(la, lo), np.float64)
-                if road_plans:
-                    g = g.copy()
-                    pack = PlanPack(list(road_plans)) if pack is None else pack
-                    g[[0, -1]] = grade_points(xy[[0, -1], 0], xy[[0, -1], 1], g[[0, -1]], pack)
-                floor, kinds = roadsmod.tunnel_sections(s, g)
-                kinds = roadsmod.portal_cover(kinds, g - floor, ts[i])
-                if over is None:
-                    over = self._roads_over_tunnels(feats, ts)
-                kinds = roadsmod.cover_roads(xy, s, kinds, *over)
-                i0 = 0
-                while i0 < len(kinds):
-                    i1 = i0
-                    while i1 + 1 < len(kinds) and kinds[i1 + 1] == kinds[i0]:
-                        i1 += 1
-                    a = max(0, i0 - 1)          # sharing the end sample with the section before
-                    if i1 > a:
-                        out.append((str(feats.ids[i]), ts[i], xy[a:i1 + 1], floor[a:i1 + 1], int(kinds[i0])))
-                    i0 = i1 + 1
+                for n, (a, b, kind) in enumerate(tunnels.sections.get(fid, ())):
+                    if b <= a:
+                        continue
+                    px, pz = np.asarray(xy)[a:b + 1], np.asarray(z)[a:b + 1]
+                    # Plans store geodetic heights; mapped tube vertices store local up.
+                    pz = np.asarray(self.frame.enu_to_geodetic(px[:, 0], px[:, 1], pz)[2], np.float64)
+                    out.append((fid, spec, px, pz, kind))
+                    mouths[self._tunnel_section_key(fid, px)] = tunnels.mouth(f"{fid}#{n}") if kind else (False, False)
+            owners.update(tunnels.approach_owners)
+        with self.lock:
+            self.__dict__.setdefault("_tunnel_mouths", {}).update(mouths)
+            self.__dict__.setdefault("_tunnel_owners", {}).update(owners)
         return out
 
-    def _roads_over_tunnels(self, feats, ts):
-        """([ground lines (k, 2) in the frame], [carriageway half widths]) of the roads near feats' tunnels (ts:
-        tunnel_specs), as roads.TunnelProfiles._cover_roads has them."""
-        import mapgeom
-        tun = [i for i in range(len(feats)) if ts[i] is not None]
-        boxes = roadsmod._feature_boxes(feats)
-        if not tun:
-            return [], []
-        pad = (roadsmod.TUNNEL_ROAD_REACH_M + 40.0) / 111320.0      # (lon/lat degrees, generous at high latitudes)
-        tb = boxes[tun]
-        rs = roadsmod.road_specs(feats)
-        lines, halves = [], []
-        for i in range(len(feats)):
-            if rs[i] is None:
-                continue
-            b = boxes[i]
-            k = 1.0 / max(math.cos(math.radians(0.5 * (b[1] + b[3]))), 0.05)
-            if not ((tb[:, 0] - pad * k <= b[2]) & (tb[:, 2] + pad * k >= b[0]) & (tb[:, 1] - pad <= b[3]) &
-                    (tb[:, 3] + pad >= b[1])).any():
-                continue
-            for ring in roadsmod.ground_parts(feats, i):
-                e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                lines.append(np.stack([e, n], axis=1))
-                halves.append(rs[i].width / 2)
-        return lines, halves
-
     @staticmethod
-    def _mouth_plans(secs):
+    def _tunnel_section_key(fid, xy):
+        return (fid, tuple(np.asarray(xy)[0]), tuple(np.asarray(xy)[-1]))
+
+    def _tunnel_approaches(self, plans, secs):
+        """Put only source-owned ground plans on their solved path, including its covered road reach."""
+        with self.lock:
+            owners = dict(self.__dict__.get("_tunnel_owners", {}))
+        for fid, _spec, xy, z, kind in secs:
+            a, ab = xy[:-1], np.diff(xy, axis=0)
+            l2 = np.maximum((ab * ab).sum(1), 1e-12)
+            for source, plan in plans:
+                if source not in owners.get(fid, ()):
+                    continue
+                p = np.asarray(plan.xy)[:, :2]
+                t = np.clip(((p[:, None] - a) * ab).sum(2) / l2, 0, 1)
+                distance = np.linalg.norm(p[:, None] - (a + t[:, :, None] * ab), axis=2)
+                j = distance.argmin(1)
+                on = distance[np.arange(len(p)), j] < 0.05
+                if on.any():
+                    q = j[on]
+                    height = z[q] + t[np.flatnonzero(on), q] * (z[q + 1] - z[q])
+                    plan.z = np.array(plan.z, np.float64)
+                    plan.z[on] = np.minimum(plan.z[on], height)
+
+    def _mouth_plans(self, secs):
         """(fid, Plan) of the covered sections' mouths: the floor MOUTH_PLAN_M into the tube from a portal (where an
         open section or nothing comes before / after it): the ground at the portal graded to the road on both sides
         of it (the grading faded from the road's plan into the ungraded hill there, and the road tile and the
@@ -2104,7 +2100,11 @@ class _Planner:
             same = lambda m: 0 <= m < len(secs) and secs[m][0] == fid     # noqa: E731
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             hw = spec.width / 2 + shoulder(spec)
+            with self.lock:
+                mouths = self.__dict__.get("_tunnel_mouths", {}).get(self._tunnel_section_key(fid, xy), (True, True))
             for at_start in (True, False):
+                if not mouths[0 if at_start else 1]:
+                    continue
                 nb = n - 1 if at_start else n + 1
                 if same(nb) and secs[nb][4] != 0:
                     continue                    # inside the hill: a full tunnel goes on
