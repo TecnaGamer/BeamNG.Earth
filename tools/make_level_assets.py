@@ -163,6 +163,16 @@ for i, args in enumerate((
     name, gm, detail, dsize, macro, msize, *st = args
     SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{30 + i}", detail, dsize, macro, msize, *st))
 
+# Environment selects the grass assets through separate terrain masks, with the original physics
+# and detail appearance. Static definitions avoid slow runtime TerrainMaterial texture rebuilds.
+for i, (name, source) in enumerate((
+        ("bngEarthGroundGrassDry", "bngEarthGroundGrass"),
+        ("bngEarthGroundGrassLight", "bngEarthGroundGrass"),
+        ("bngEarthGroundDustyLight", "bngEarthGroundDusty"),
+        ("bngEarthGroundDustyLush", "bngEarthGroundDusty"))):
+    SURFACES[name] = dict(SURFACES[source], name=name, internalName=name,
+                          persistentId=f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{40 + i}")
+
 pretty(os.path.join(T, "main.materials.json"), {
     "beamngEarthDirt": {
         "name": "beamngEarthDirt",

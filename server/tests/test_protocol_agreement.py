@@ -178,7 +178,8 @@ TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squ
            "zBase": F(NUM), "maxHeight": F(NUM), "q": F(NUM),
            "layers": F(list, OPT), "materials": F(list, OPT),     # --surface on (surface.py)
            "base": F(str, OPT), "baseSize": F(NUM, OPT),           # --near-visual detail: the block's photo
-           "ter": F(str, OPT)}                                     # the block as a .ter (swapped in, no import)
+           "ter": F(str, OPT),                                    # the block as a .ter (swapped in, no import)
+           "grassRefresh": F(bool, OPT)}                           # invalidate retained cells after a palette update
 SERVER_TO_MOD = {
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT)},   # geocode.py (Photon)
@@ -268,7 +269,8 @@ SERVER_TO_MOD = {
     # real gravity at the player (gravity.py; additive, protocol 4): |g| in m/s^2 at (lat, lon, h m MSL)
     "gravity": {"v": F(int), "g": F(NUM), "lat": F(NUM), "lon": F(NUM), "h": F(NUM), "source": F(str)},
     # detail mode: a block's base photo rendered again once its NAIP tiles arrived (earthd base_refresh)
-    "block_base": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "base": F(str), "baseSize": F(NUM)},
+    "block_base": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "base": F(str), "baseSize": F(NUM),
+                   "terrain": F(dict, OPT)},     # matching .ter/masks/materials when the photo changes grass palette
     # the highest ground near the player's path (groundahead.py; the mod's altitude rule), z in the anchor's frame
     "ground_ahead": {"anchorId": F(int), "z": F(NUM)},
     # the water near the player (--sea on): tiles [key, x, y, z, size, nx, ny] (seatiles.py), rivers

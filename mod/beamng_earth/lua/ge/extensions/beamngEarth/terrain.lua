@@ -97,6 +97,12 @@ M.LOOKS = {
   bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
+-- Environment changes the GroundCover family, not physics or the terrain's detail appearance.
+-- All fields stay filled for the additional layers (empty texture slots are expensive).
+M.LOOKS.bngEarthGroundGrassDry = M.LOOKS.bngEarthGroundGrass
+M.LOOKS.bngEarthGroundGrassLight = M.LOOKS.bngEarthGroundGrass
+M.LOOKS.bngEarthGroundDustyLight = M.LOOKS.bngEarthGroundDusty
+M.LOOKS.bngEarthGroundDustyLush = M.LOOKS.bngEarthGroundDusty
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, size = '256' }
 
 M.square = 2.0   -- the block's square size (m per sample), from the last load
