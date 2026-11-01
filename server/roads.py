@@ -68,6 +68,10 @@ STYLE = {
     # width is mapped; no markings, sidewalks, furniture or traffic (not in those classes' sets nor navgraph.DRIVE),
     # and graded by the terrain alone (grading.UNGRADED: an oval's banking stays)
     "raceway": (12.0, True),
+    # pedestrian streets and promenades / deptaki (OpenStreetMap highway=pedestrian): a typical 5 m unless its
+    # width is mapped; defaults to cobble/paving stones (surface_kind), no markings or traffic, sidewalks not needed
+    # (the carriageway is the walkway itself)
+    "pedestrian": (5.0, True),
 }
 PAVED = {"paved", "asphalt", "concrete", "metal", "wood", "tar", "bitumen"}
 COBBLE = {"paving_stones", "sett", "cobblestone", "unhewn_cobblestone", "bricks",   # Overture: "paving_stones"
@@ -77,7 +81,7 @@ COBBLE = {"paving_stones", "sett", "cobblestone", "unhewn_cobblestone", "bricks"
 COBBLE_ALIASES = {"interlocking_pavers", "interlocking_stones", "pavers", "block_pavers", "paving_stone",
                   # OSM's surface=stone is mostly stone paving (flagstones, slabs), not a rock track (merge review of
                   # PR #119, 2026-10-22)
-                  "stone", "stones"}
+                  "stone", "stones", "flagstone", "flagstones", "tiles"}
 GRAVEL = {"gravel", "fine_gravel", "compacted", "pebblestone", "wbm", "laterite"}   # (water-bound macadam: PR #146)
 # ... and the values that do mean "no hard surface": an unrecognised one is not one of these (the class decides)
 UNPAVED = {"unpaved", "ground", "dirt", "earth", "mud", "grass", "grass_paver", "sand", "soil",
@@ -138,7 +142,7 @@ Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median l
 # (width = carriageway). One-way driving widths (Overture's divided roads are two one-way segments, each
 # drawn before as a full two-way street: 2026-10-11 orthophoto of Broadway, 14-15 m drawn for 8-9 m)
 ONEWAY_STYLE = {"primary": 6.5, "secondary": 6.5, "tertiary": 4.0, "residential": 3.5, "living_street": 3.5,
-                "unclassified": 3.5, "service": 3.5, "unknown": 3.5}
+                "unclassified": 3.5, "service": 3.5, "unknown": 3.5, "pedestrian": 3.5}
 
 # Sidewalks and markings (user 2026-10-11, after the first street-view comparison of Fells Point:
 # real streets have concrete sidewalks behind a curb and a double yellow centre line). Stock West
@@ -1298,6 +1302,8 @@ def surface_kind(cls, surface):
             return "gravel"
         if s in UNPAVED:
             return "dirt"
+    if cls == "pedestrian":
+        return "cobble"
     return "paved" if STYLE.get(cls, STYLE["unknown"])[1] else "dirt"
 
 
@@ -1321,7 +1327,7 @@ def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
         return URBAN_ARTERIAL[cls]          # four lanes, no parking (a walled street is measured instead)
     if urban and cls in PARKING_CLASSES:
         return w + (1 if oneway else 2) * PARKING_M
-    if not urban and cls != "service":
+    if not urban and cls not in ("service", "pedestrian"):
         if oneway and cls == "motorway":
             return MOTORWAY_RURAL_M + 2 * SHOULDER_M
         return w + 2 * EDGE_STRIP_CLASS_M.get(cls, EDGE_STRIP_M)
@@ -1336,7 +1342,7 @@ def rural_motorway(spec):
 def edge_margin(spec):
     """m of a drawn carriageway beside its driving lanes on each side, parking aside: a rural road's edge strip or
     a rural motorway's shoulder (carriageway), 0 in towns."""
-    if spec.urban or spec.kind not in BUILT or spec.cls == "service":
+    if spec.urban or spec.kind not in BUILT or spec.cls in ("service", "pedestrian"):
         return 0.0
     return motorway_shoulder(spec) if rural_motorway(spec) else EDGE_STRIP_CLASS_M.get(spec.cls, EDGE_STRIP_M)
 
@@ -1758,7 +1764,7 @@ def _measured_widths(feats, specs, widths):
         dflt = carriageway(sp.cls, sp.kind, True, None, sp.oneway, sp.lanes)
         # Historic streets can be one shared lane between close building fronts. Rejecting these measurements
         # kept a default carriageway wider than the street itself.
-        minimum = 3.0 if sp.cls in {"residential", "living_street", "unclassified", "tertiary"} else 0.6 * dflt
+        minimum = 3.0 if sp.cls in {"residential", "living_street", "unclassified", "tertiary", "pedestrian"} else 0.6 * dflt
         if m is not None and minimum <= m[0] <= MEASURE_MAX * dflt:
             out[j] = sp._replace(width=m[0], walk=m[1])
     return out

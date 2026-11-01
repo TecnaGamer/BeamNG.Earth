@@ -14,6 +14,11 @@ What changed in each release of BeamNG.Earth, newest first.
 
 Works with BeamNG.drive 0.40.4.
 
+### Pedestrian streets & deptaki
+- **Pedestrian streets and promenades (deptaki)**: streets mapped with `highway=pedestrian` (such as Jeziorna in Charzykowy) are now generated as cobblestone/paving stones (`surface=paving_stones`, `sett`, `cobblestone` or defaulting to cobble if unspecified), rendered in parallel stone strips with cobblestone physics and ground material.
+- **Appropriate widths**: pedestrian streets default to 5.0 m width (or explicit mapped OSM width) without car parking lanes, edge markings, or redundant sidewalks.
+- **Vegetation cleared**: trees and bushes are cleared across the pedestrian road corridor, keeping promenades free of foliage.
+
 ### Faster world building
 - **Much faster at very high speed**: above about 157 mph the next four terrain blocks along your path are built ahead
   (two at a time), their ground photos come once you get there, and the game picks a block that's already built when

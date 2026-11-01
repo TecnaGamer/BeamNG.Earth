@@ -55,7 +55,8 @@ DEM_ZOOM = 15
 # half-width is at most its distance to the nearest road's edge (on-ground pieces: a bridge passes over), less
 # ROAD_MARGIN_M, but never under RIVER_MIN_HALF_M.
 ROAD_HALF_M = {"motorway": 7.0, "trunk": 6.0, "primary": 5.5, "secondary": 5.0, "tertiary": 4.5,
-               "residential": 4.0, "unclassified": 3.5, "service": 3.0, "living_street": 3.0}
+               "residential": 4.0, "unclassified": 3.5, "service": 3.0, "living_street": 3.0,
+               "pedestrian": 2.5}
 ROAD_MARGIN_M = 1.0
 RIVER_MIN_HALF_M = 1.5
 CLEAR_GRID_M = 64.0

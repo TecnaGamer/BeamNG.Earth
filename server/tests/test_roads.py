@@ -100,6 +100,12 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(roads.surface_kind("unclassified", "laterite"), "gravel")
         self.assertEqual(roads.surface_kind("residential", "interlocking"), "cobble")
         self.assertEqual(roads.surface_kind("primary", "bitumen"), "paved")
+        # pedestrian deptaki default to cobblestone / paving stones, asphalt tag kept
+        self.assertEqual(roads.surface_kind("pedestrian", None), "cobble")
+        self.assertEqual(roads.surface_kind("pedestrian", "paving_stones"), "cobble")
+        self.assertEqual(roads.surface_kind("pedestrian", "asphalt"), "paved")
+        self.assertEqual(roads.surface_kind("pedestrian", "flagstone"), "cobble")
+        self.assertEqual(roads.surface_kind("pedestrian", "tiles"), "cobble")
 
     def test_surface_token(self):
         self.assertEqual(roads.surface_token("sett:pattern"), "sett")
@@ -681,6 +687,32 @@ class BuildTileTest(unittest.TestCase):
         self.assertTrue(all(abs(c["w"] - w / n) < 0.01 for c in cob))
         self.assertTrue(any(c["m"] == roads.SIDEWALK["m"] for c in chunks), "cobbled city streets keep sidewalks")
         self.assertFalse(any(c["m"].startswith("line_") for c in chunks), "no lines painted on cobbles")
+
+    def test_pedestrian_deptak_cobblestone_no_paint(self):
+        """Pedestrian streets / deptaki (e.g. Jeziorna in Charzykowy) are generated as cobblestone/paving stones
+        without road paint lines or separate sidewalks."""
+        f = features([[(-300, 50), (300, 50)]], ["pedestrian"], surfaces=[(0, "paving_stones")])
+        specs = roads.road_specs(f)
+        self.assertIsNotNone(specs[0])
+        self.assertEqual(specs[0].cls, "pedestrian")
+        self.assertEqual(specs[0].kind, "cobble")
+        self.assertEqual(specs[0].width, 5.0)
+
+        chunks = roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool))
+        cob = [c for c in chunks if c["m"] == roads.LOOK["cobble"]["m"]]
+        w = specs[0].width
+        n = max(1, int(round(w / roads.LOOK["cobble"]["strip"])))
+        self.assertEqual(len(cob), n, "parallel cobble strips across the 5 m width (2 x 2.5 m)")
+        self.assertTrue(all(abs(c["w"] - w / n) < 0.01 for c in cob))
+        self.assertFalse(any(c["m"].startswith("line_") for c in chunks), "no road markings on deptak")
+        self.assertFalse(any(c["m"] == roads.SIDEWALK["m"] for c in chunks), "no separate sidewalks on deptak")
+
+    def test_pedestrian_deptak_explicit_width(self):
+        """A pedestrian street with an explicit width tag uses it."""
+        f = features([[(-300, 50), (300, 50)]], ["pedestrian"], widths=[(0, 4.0)])
+        specs = roads.road_specs(f)
+        self.assertIsNotNone(specs[0])
+        self.assertEqual(specs[0].width, 4.0)
 
     def test_tower_passages_stay_bridge(self):
         """Tower Bridge: level 1 over 0.03-0.88, flags bridge / tunnel (through a tower, ~10 m) / bridge / tunnel /

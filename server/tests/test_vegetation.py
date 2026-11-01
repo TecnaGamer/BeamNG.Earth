@@ -136,6 +136,17 @@ class VegetationTest(unittest.TestCase):
         rlon, rlat = md.lonlat(100, 400)
         self.assertLess((np.hypot((trees.lon - rlon) * 85000, (trees.lat - rlat) * 111000)).min(), 4.0)
 
+    def test_pedestrian_deptak_clears_its_trees(self):
+        """Pedestrian streets / deptaki clear trees off their corridor."""
+        md = FakeMapData()
+        md.cd.layers["roads"].attrs["class"][:] = "pedestrian"
+        it = veg.Vegetation(md, None).cell(KEY)
+        trees = it.take(it.kind == veg.KIND_TREE)
+        rlon, rlat = md.lonlat(100, 400)
+        off = np.hypot((trees.lon - rlon) * 85000, (trees.lat - rlat) * 111000).min()
+        curb = veg.ROAD_HALF_WIDTH_M["pedestrian"] + veg.TREE_PIT_M + 0.6
+        self.assertGreater(off, curb - 1.0, "pedestrian deptak clears its trees off the paved way")
+
     def test_deterministic(self):
         a = veg.Vegetation(FakeMapData(), None).cell(KEY)
         b = veg.Vegetation(FakeMapData(), None).cell(KEY)
