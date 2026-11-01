@@ -1,7 +1,7 @@
 # Distant traffic: current dev integration and bridge check
 
-The current contract and code map are in [DISTANT_TRAFFIC.md](../DISTANT_TRAFFIC.md). Earlier dated notes record
-experiments, including superseded producer versions and exclusions.
+The contract and code map are in [DISTANT_TRAFFIC.md](../DISTANT_TRAFFIC.md). This note records the checks
+performed for this contribution and their limits.
 
 ## Source and review
 

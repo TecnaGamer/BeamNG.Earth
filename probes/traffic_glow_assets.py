@@ -1,4 +1,4 @@
-"""Build scratch assets for distant_traffic.lua (no game assets or files in the installed mod are changed)."""
+"""Generate distant traffic glow assets into an output directory; --production writes the mod's material names."""
 import json
 import sys
 from pathlib import Path

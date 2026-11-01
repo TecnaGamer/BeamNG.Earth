@@ -7,8 +7,8 @@ traffic** switch keeps the effect running when game traffic is off, using the sa
 switch still controls both modes. The population follows road length, class and local hour;
 it is an impression of traffic, not live traffic data. A quiet road does not receive a city's allocation.
 
-This is the current implementation guide. The dated `docs/research/*distant-traffic*` notes record experiments;
-their older limits and protocol versions are historical. The wire contract is in [server/README.md](../server/README.md).
+This is the implementation guide. The wire contract is in [server/README.md](../server/README.md), and the
+[verification note](research/2026-11-01-distant-traffic-pr.md) records the tested scope and remaining checks.
 
 ## Code map
 
@@ -144,8 +144,8 @@ luajit mod/tests/test_settings.lua
 
 The pure tests cover route ids, sides/speeds, relief, quotas, finite samples, ownership, saturation recovery and
 protocol gates. Engine fixtures cover pool limits, view return during slow scans, pause, rebase, traffic removal
-and cleanup. `probes/distant_routes.py` / `distant_stream.lua` are optional isolated cached-road diagnostics,
-not the production stream. `traffic_metrics.lua` samples module/frame costs without changing the scene.
+and cleanup. `probes/traffic_metrics.lua` samples module/frame costs without changing the scene;
+`probes/traffic_glow_assets.py --production` regenerates the original glow assets into a supplied output directory.
 
 In-game acceptance: compare the same camera/time with on/off; turn away and back after 3–5 seconds; remove and
 respawn physical traffic; toggle roads and the setting; pause/resume; drive across the physical-box boundary;
