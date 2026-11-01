@@ -53,9 +53,14 @@ MATERIALS = (
     ("bngEarthGroundMud", "MUD"),
     ("bngEarthGroundCobble", "COBBLESTONE"),      # roads with paving stones / setts (roads.py "cobble")
     ("bngEarthGroundLawn", "GRASS"),              # mown yards in towns (short grass only, groundcover.lua)
+    # Vegetation palettes retain the base surface's physics and texture look.
+    ("bngEarthGroundGrassDry", "GRASS"),
+    ("bngEarthGroundGrassLight", "GRASS"),
+    ("bngEarthGroundDustyLight", "DIRT_DUSTY"),
+    ("bngEarthGroundDustyLush", "DIRT_DUSTY"),
     ("beamngEarthDirt", "DIRT"),
 )
-ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, DIRT = range(len(MATERIALS))
+ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, GRASS_DRY, GRASS_LIGHT, DUSTY_LIGHT, DUSTY_LUSH, DIRT = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway

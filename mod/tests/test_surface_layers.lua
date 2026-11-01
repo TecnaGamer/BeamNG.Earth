@@ -71,20 +71,9 @@ do
   _G.flushGroundCoverGrids = function() flushes = flushes + 1 end
   T.check(gc.afterBlockChange() == false and flushes == 0, 'no grass objects: no rebuild')
   -- one items-file line per stock definition; jsonDecode stubbed by line
-  local lines, byLine = {}, {}
-  for _, d in ipairs(gc.DEFS) do
-    local line = '{"class":"GroundCover","name":"' .. d.src .. '"}'
-    lines[#lines + 1] = line
-    byLine[line] = { name = d.src, class = 'GroundCover', material = 'm_' .. d.src, maxElements = 1000,
-      useNewPlacement = true, useNewPlacementGpu = true, Types = { { layer = 'Grass', billboardUVs = { 0, 0, 1, 1 } } } }
-  end
   local realDecode = _G.jsonDecode
-  _G.jsonDecode = function(line) return byLine[line] end
   local realRead = _G.readFile
-  _G.readFile = function(p)
-    for _, src in pairs(gc.SOURCES) do if p == src.items then return table.concat(lines, '\n') end end
-    return realRead and realRead(p)
-  end
+  dofile(dir .. '/groundcover_fixture.lua')(gc)
   T.check(gc.ensure() == true, 'ensure makes the objects')
   local o = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src)
   T.check(o and o.fields.useNewPlacement == '1' and o.fields.useNewPlacementGpu == '0', 'CPU placement over the stock GPU setting')
@@ -101,13 +90,11 @@ do
   T.check(gc.afterBlockChange() == true and flushes == 1, 'a block change rebuilds the grass in the same tick')
   -- a GE Lua reload: the module starts over, the level's objects stay (here with an old field)
   o.fields.useNewPlacementGpu = '1'
-  local matLoads, realLoad = {}, _G.loadJsonMaterialsFile
-  _G.loadJsonMaterialsFile = function(p) matLoads[#matLoads + 1] = p end
   gc.reset()
   T.check(gc.ensure() == true, 'ensure after a module reload')
   -- the level started again: its stock grass materials went with the old one and are loaded again
-  T.check(#matLoads >= 1, 'the stock grass materials loaded again after a reset (' .. #matLoads .. ' files)')
-  _G.loadJsonMaterialsFile = realLoad
+  T.check(gc.status().materialsLoaded and o.fields.material:find(gc.PREFIX, 1, true) == 1,
+    'the stock grass materials registered under private names after a reset')
   local o2 = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src)
   T.check(o2 ~= o and o2.fields.useNewPlacementGpu == '0' and scenetree.findObjectById(o.id) == nil,
     'a leftover object is made again from the current definition')

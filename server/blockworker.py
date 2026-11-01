@@ -26,6 +26,8 @@ import furniture
 import geodesy
 import grading as gradingmod
 import heightmap
+import grass_exclusions
+import grass_imagery
 import mapdata as mapdatamod
 import netfetch
 import plancache
@@ -369,6 +371,9 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         if hasattr(_s.surface, "fuel_pads"):    # gas station forecourts (--gas-stations on)
             idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"], _s.surface.fuel_pads(keep["lat"], keep["lon"]))
         stages["roadPaint"] = time.perf_counter() - t1
+        eligible = (idx == surfacemod.GRASS) | (idx == surfacemod.DUSTY) | (idx == surfacemod.LAWN)
+        md = getattr(_s.surface, "md", None) or getattr(_s, "md", None)
+        idx[grass_exclusions.blocked(md, keep["lat"], keep["lon"], eligible)] = surfacemod.DIRT
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
         info["surfaceComplete"] = complete and roads_complete
         info["roadsComplete"] = roads_complete
@@ -1826,11 +1831,13 @@ def _imagery(tex):
     return _s.imagery[1]
 
 
-def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None):
+def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
+               with_grass=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
-    Returns (rgb, sources used, lazy tiles still to come), or None when an imagery tile it needs is not on disk (the
+    Returns (rgb, sources used, lazy tiles still to come), with a fourth grass-colour image when with_grass is on,
+    or None when an imagery tile it needs is not on disk (the
     server renders it, fetching what is missing). In the server process it ran 2 s alone but 8-11 s next to the
     rest of the world's threads on a Steam Deck (one interpreter lock), and the next block waited for it. fuel_pads:
     the gas station pads around it (_take_pads). px: the imagery's render size, out_px: the photo's (enlarged before
@@ -1845,8 +1852,12 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     pending = set()
+    colors = None
     try:
-        rgb, used = im.render(frame, x0, y0, size, px, pending)
+        if with_grass:
+            rgb, used, colors = grass_imagery.render_base(im, frame, x0, y0, size, px, pending)
+        else:
+            rgb, used = im.render(frame, x0, y0, size, px, pending)
     except imagerymod.ImageryError:
         return None
     rgb = np.asarray(rgb, np.uint8)
@@ -1886,7 +1897,7 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     staging.replace(tmp, path)
     user_dir, base_vfs, ao_vfs, ao_value = cache
     terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
-    return rgb, used, pending
+    return (rgb, used, pending, colors) if with_grass else (rgb, used, pending)
 
 
 def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):

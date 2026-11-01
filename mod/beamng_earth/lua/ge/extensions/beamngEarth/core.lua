@@ -726,6 +726,9 @@ local function commitTerrain(msg)
   net.send({ type = 'commit_terrain', anchorId = st.anchorId, cx = msg.cx, cy = msg.cy })
   st.lastFollowMs = sw()
   st.followCount = st.followCount + 1
+  -- The optional engine patch retains grass cells across terrain swaps. A new
+  -- environmental palette must invalidate those cells once, at this origin.
+  if msg.grassRefresh then groundcover.rebuild() end
   log('I', 'beamngEarth', string.format('terrain block now at (%d, %d), %.1f ms', msg.cx, msg.cy, st.lastFollowMs))
   return true
 end
@@ -1097,11 +1100,23 @@ local function onMessage(msg)
     -- in use takes it now, a ready one not committed yet takes it at its commit
     if nearVisual == 'detail' and msg.anchorId == st.anchorId and type(msg.base) == 'string' then
       local b, tp = st.block, st.terrainPending
+      local surface = type(msg.terrain) == 'table' and msg.terrain or nil
+      if surface and (surface.cx ~= msg.cx or surface.cy ~= msg.cy or surface.size ~= terrain.SIZE) then surface = nil end
+      if surface then surface.anchorId = msg.anchorId end
       if b and b.cx == msg.cx and b.cy == msg.cy and FS:fileExists(msg.base) then
-        terrain.setBase(msg.base, tonumber(msg.baseSize))
+        -- The late photo can also select new GroundCover layers. Re-read their
+        -- compact .ter material table together, before regenerating the grass.
+        if surface then
+          if windowMinimized() then st.deferredRefresh = surface else commitTerrain(surface) end
+        else
+          terrain.setBase(msg.base, tonumber(msg.baseSize))
+        end
         st.baseRefreshes = (st.baseRefreshes or 0) + 1
       end
-      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
+      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then
+        if surface then for k, v in pairs(surface) do tp.msg[k] = v end end
+        tp.msg.base = msg.base
+      end
     end
   elseif t == 'ground_ahead' then
     -- the highest ground near the player's path (server groundahead.py): the altitude rule (follow.lua)
