@@ -68,7 +68,21 @@ STYLE = {
     # width is mapped; no markings, sidewalks, furniture or traffic (not in those classes' sets nor navgraph.DRIVE),
     # and graded by the terrain alone (grading.UNGRADED: an oval's banking stays)
     "raceway": (12.0, True),
+    # pedestrian streets and promenades / deptaki (OpenStreetMap highway=pedestrian): a typical 5 m unless its
+    # width is mapped; defaults to cobble/paving stones (surface_kind), no markings or traffic, sidewalks not needed
+    # (the carriageway is the walkway itself)
+    "pedestrian": (5.0, True),
+    # footways, sidewalks and promenades (OpenStreetMap highway=footway, e.g. ul. Stroma in Charzykowy): 2.5 m default
+    # width, defaults to cobble / paving stones (surface_kind)
+    "footway": (2.5, True),
+    # paths (OpenStreetMap highway=path, e.g. Promenada along lakeshore): 2.5 m, defaults to dirt unless explicit surface
+    "path": (2.5, False),
+    # cycleways (OpenStreetMap highway=cycleway): 2.5 m, defaults to paved
+    "cycleway": (2.5, True),
+    # outdoor steps / stairways (OpenStreetMap highway=steps): 2.0 m, defaults to cobble
+    "steps": (2.0, True),
 }
+PEDESTRIAN_CLASSES = {"pedestrian", "footway", "path", "cycleway", "steps"}
 PAVED = {"paved", "asphalt", "concrete", "metal", "wood", "tar", "bitumen"}
 COBBLE = {"paving_stones", "sett", "cobblestone", "unhewn_cobblestone", "bricks",   # Overture: "paving_stones"
           "interlocking", "paver", "paver_blocks"}      # (South Asia's names, PR #146)
@@ -77,7 +91,7 @@ COBBLE = {"paving_stones", "sett", "cobblestone", "unhewn_cobblestone", "bricks"
 COBBLE_ALIASES = {"interlocking_pavers", "interlocking_stones", "pavers", "block_pavers", "paving_stone",
                   # OSM's surface=stone is mostly stone paving (flagstones, slabs), not a rock track (merge review of
                   # PR #119, 2026-10-22)
-                  "stone", "stones"}
+                  "stone", "stones", "flagstone", "flagstones", "tiles"}
 GRAVEL = {"gravel", "fine_gravel", "compacted", "pebblestone", "wbm", "laterite"}   # (water-bound macadam: PR #146)
 # ... and the values that do mean "no hard surface": an unrecognised one is not one of these (the class decides)
 UNPAVED = {"unpaved", "ground", "dirt", "earth", "mud", "grass", "grass_paver", "sand", "soil",
@@ -138,7 +152,7 @@ Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median l
 # (width = carriageway). One-way driving widths (Overture's divided roads are two one-way segments, each
 # drawn before as a full two-way street: 2026-10-11 orthophoto of Broadway, 14-15 m drawn for 8-9 m)
 ONEWAY_STYLE = {"primary": 6.5, "secondary": 6.5, "tertiary": 4.0, "residential": 3.5, "living_street": 3.5,
-                "unclassified": 3.5, "service": 3.5, "unknown": 3.5}
+                "unclassified": 3.5, "service": 3.5, "unknown": 3.5, "pedestrian": 3.5, "footway": 2.0, "path": 2.0, "cycleway": 2.0, "steps": 2.0}
 
 # Sidewalks and markings (user 2026-10-11, after the first street-view comparison of Fells Point:
 # real streets have concrete sidewalks behind a curb and a double yellow centre line). Stock West
@@ -160,7 +174,7 @@ EDGE_DECAL = {"m": "ECA_road_edge_dirt", "tl": 6.4, "p": 1, "w": 1.6, "layer": "
 EDGE_DECAL_AT = 0.95
 LADDER_LINE_W = 0.30            # a ladder crosswalk's side lines (MUTCD 3C.04: 6-24 in)
 EDGE_DECAL_GAP_M = 1.5          # ... none where another carriageway's edge is this near past the decal (gores, medians)
-MEASURE_SKIP = {"service"}      # classes not measured between buildings (lots, alleys: far walls)
+MEASURE_SKIP = {"service"} | PEDESTRIAN_CLASSES      # classes not measured between buildings (lots, alleys: far walls)
 MEASURE_MAX = 3.0               # a measured carriageway at most this times the class default
 SIDEWALK_CLASSES = {"residential", "tertiary", "secondary", "primary", "unclassified", "living_street"}
 CENTRE_CLASSES = {"primary", "secondary", "tertiary", "trunk"}
@@ -451,8 +465,11 @@ def _structure_width(feats, i):
     lanes = int(lanes) if lanes is not None else None
     kind = surface_kind(cls, _rule_value(rules.get("surface"), i))
     ow = _rule_value(rules.get("oneway"), i) is not None
-    if rule_w is None and _rule_value(rules.get("subclass"), i) == "link" and lanes is None:
+    subclass = _rule_value(rules.get("subclass"), i)
+    if rule_w is None and subclass == "link" and lanes is None:
         rule_w = LINK_M[1] if ow else LINK_M[2]
+    elif rule_w is None and subclass == "driveway" and lanes is None:
+        rule_w = 3.0 if ow else 3.5
     return carriageway(cls, kind, False, rule_w, ow, lanes)
 
 
@@ -1298,6 +1315,8 @@ def surface_kind(cls, surface):
             return "gravel"
         if s in UNPAVED:
             return "dirt"
+    if cls in ("pedestrian", "footway", "steps"):
+        return "cobble"
     return "paved" if STYLE.get(cls, STYLE["unknown"])[1] else "dirt"
 
 
@@ -1321,7 +1340,7 @@ def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
         return URBAN_ARTERIAL[cls]          # four lanes, no parking (a walled street is measured instead)
     if urban and cls in PARKING_CLASSES:
         return w + (1 if oneway else 2) * PARKING_M
-    if not urban and cls != "service":
+    if not urban and cls not in ({"service"} | PEDESTRIAN_CLASSES):
         if oneway and cls == "motorway":
             return MOTORWAY_RURAL_M + 2 * SHOULDER_M
         return w + 2 * EDGE_STRIP_CLASS_M.get(cls, EDGE_STRIP_M)
@@ -1336,7 +1355,7 @@ def rural_motorway(spec):
 def edge_margin(spec):
     """m of a drawn carriageway beside its driving lanes on each side, parking aside: a rural road's edge strip or
     a rural motorway's shoulder (carriageway), 0 in towns."""
-    if spec.urban or spec.kind not in BUILT or spec.cls == "service":
+    if spec.urban or spec.kind not in BUILT or spec.cls in ({"service"} | PEDESTRIAN_CLASSES):
         return 0.0
     return motorway_shoulder(spec) if rural_motorway(spec) else EDGE_STRIP_CLASS_M.get(spec.cls, EDGE_STRIP_M)
 
@@ -1609,9 +1628,12 @@ def _road_specs(feats, urban_fn, left_hand):
         surf = _rule_value(rules.get("surface"), i)
         kind = surface_kind(cls, surf)
         ow = _rule_value(rules.get("oneway"), i) is not None
-        link = _rule_value(rules.get("subclass"), i) == "link"
+        subclass = _rule_value(rules.get("subclass"), i)
+        link = subclass == "link"
         if rule_w is None and link and lanes is None:
             rule_w = LINK_M[1] if ow else LINK_M[2]
+        elif rule_w is None and subclass == "driveway" and lanes is None:
+            rule_w = 3.0 if ow else 3.5
         dk = _dir_kmh(feats, i, ncon, lens)
         if dk[1] is None:                       # OpenStreetMap's speed limit where Overture has none
             ms = _osm(feats, "maxspeed", i, 5.0, 200.0)
@@ -1758,7 +1780,7 @@ def _measured_widths(feats, specs, widths):
         dflt = carriageway(sp.cls, sp.kind, True, None, sp.oneway, sp.lanes)
         # Historic streets can be one shared lane between close building fronts. Rejecting these measurements
         # kept a default carriageway wider than the street itself.
-        minimum = 3.0 if sp.cls in {"residential", "living_street", "unclassified", "tertiary"} else 0.6 * dflt
+        minimum = 3.0 if sp.cls in ({"residential", "living_street", "unclassified", "tertiary"} | PEDESTRIAN_CLASSES) else 0.6 * dflt
         if m is not None and minimum <= m[0] <= MEASURE_MAX * dflt:
             out[j] = sp._replace(width=m[0], walk=m[1])
     return out
@@ -6080,7 +6102,7 @@ PARAPET_H = 0.6
 PARAPET_W = 0.45
 PARAPET_OFF_M = 0.2
 PARAPET_ROAD_GAP_M = 2.0
-NO_PARAPET_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "service", "track"}
+NO_PARAPET_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "service", "track"} | PEDESTRIAN_CLASSES
 CLIFF_MIN_CUT_M = 6.0   # a rural cut this deep: rock faces (cliff_rows), when CLIFF_WALLS_ON; else a dry-stone wall
 CLIFF_WALLS_ON = os.environ.get("BNE_CLIFF_WALLS", "off") == "on"
 

@@ -442,6 +442,14 @@ class DoorTest(unittest.TestCase):
         self.assertAlmostEqual(n[0, 1], 19.8, delta=0.3, msg="from the front wall")
         self.assertAlmostEqual(n[-1, 1], 10.1, delta=0.3, msg="to the road's edge")
 
+    def test_detached_house_driveway_to_the_road(self):
+        """Detached houses (is_house: spec.cls in HOUSE_CLASSES, pitched roof) get driveways to the road."""
+        spec = bld.plan(rect(0, 20, 12, 9), {"class": "house"}, 0, 53.7, 17.5)
+        drives = []
+        bld.doors([(spec, 0.0, 0.0)], [(np.array([(-50.0, 6.0), (2000.0, 6.0)]), 4.0, "residential", True)], 0.0, 0.0,
+                  drives)
+        self.assertEqual(len(drives), 1)
+
     def test_porches_on_the_front_of_some_houses(self):
         with_porch = 0
         for k in range(40):

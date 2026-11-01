@@ -123,7 +123,7 @@ RETRY_S = 60.0              # s before a cell whose road data failed is asked fo
 # Junctions: a side road's end takes the height of the road it joins (snap_junctions; mpsteppe's PR #290)
 JUNCTION_SNAP_ON = os.environ.get("BNE_JUNCTION_SNAP", "1") != "0"
 JUNCTION_RANK = {"motorway": 9, "trunk": 8, "primary": 7, "secondary": 6, "tertiary": 5, "unclassified": 4,
-                 "residential": 3, "living_street": 2, "service": 1}
+                 "residential": 3, "living_street": 2, "service": 1, "pedestrian": 2, "footway": 1, "path": 1, "cycleway": 1, "steps": 1}
 JUNCTION_REACH_M = 3.0      # m beyond the joined road's carriageway edge a side road's end still counts as joining it
 JUNCTION_END_M = 10.0       # m: a same-class road ending this close to the other's end continues it (no snap)
 JUNCTION_TAPER_M = 40.0     # m along the side road the height change is eased in over (half the road when shorter)

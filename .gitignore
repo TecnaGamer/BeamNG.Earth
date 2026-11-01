@@ -30,3 +30,5 @@ dist/
 native/earthfast/target/
 build/
 native/serverlist/target/
+BeamNG.Earth-*.exe
+BeamNG.Earth-*.zip
