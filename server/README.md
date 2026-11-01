@@ -130,7 +130,7 @@ tunnels remain excluded. Bounds: 128 routes / 8192 points per tile, 512 points p
 or zoom. Demand-based range shares, distance LOD and 2 Hz cached off-screen motion bound updates; hidden planes
 receive no transform uploads and newly revealed actors refresh immediately. Local routes fade out
 by 6 km and major routes by 10 km. No vehicles, lights or collision. The route planner is Rust
-(`native/earthfast/src/traffic.rs`, bundled native 132 on this base); Python marshals shared road rules and height samples. At capacity
+(`native/earthfast/src/traffic.rs`, bundled native 138 on this base); Python marshals shared road rules and height samples. At capacity
 the mod defers whole tiles by file descriptor and retries after ownership releases space, with bounded resync
 for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the code, limits and lifecycle.
 

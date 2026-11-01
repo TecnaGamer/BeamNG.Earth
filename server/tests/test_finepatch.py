@@ -123,12 +123,21 @@ class BlockFineTest(unittest.TestCase):
             self.assertIsNotNone(fine)
             self.assertTrue(holes.any())
             self.assertTrue(fine["parts"])
+            import cdae
             for p in fine["parts"]:
                 self.assertTrue(os.path.getsize(os.path.join(d, p["shape"])) > 0)
+                # (its collision in meshes of COL_CHUNK_M beside the drawn one: Windows' collision build per mesh)
+                self.assertEqual(p.get("collision"), "mesh")
+                s = cdae.read(os.path.join(d, p["shape"]))
+                cols = [n for n in s["names"] if n.startswith("Colmesh")]
+                self.assertTrue(cols, "collision meshes")
+                for m in s["meshes"][3::2]:      # (drawn, null; then each collision object's null and its own)
+                    v = cdae.mesh_arrays(m)["verts"]
+                    span = v.max(0) - v.min(0)
+                    self.assertLessEqual(max(span[0], span[1]), finepatch.COL_CHUNK_M + 2 * 2.0 + 1e-6)
             b = finepatch.bank(0.0, 0.0, size)
             name = finepatch.material_name(b, __import__('surface').DIRT)
-            # (and the rim's own, casting no shadow)
-            self.assertEqual(fine["materials"], [[name, "beamngEarthDirt"], [name + "r", "beamngEarthDirt", True]])
+            self.assertEqual(fine["materials"], [[name, "beamngEarthDirt"]])
         flat = heightmap.surface_u(frame, raw, xs, ys)
         with tempfile.TemporaryDirectory() as d:
             holes, fine = finepatch.block_fine(frame, raw, raw, {"u": flat}, 0.0, 0.0, size, d, "b_fine", 1)
@@ -187,6 +196,39 @@ class FineTinTest(unittest.TestCase):
         self.assertLess(float(np.max(err)), 0.20)
 
 
+class FineFilterTest(unittest.TestCase):
+    def test_slivers_levelled_shapes_kept(self):
+        """earthfast.fine_filter: a fin 0.75 m wide standing 1.4 m over a flat strip (grading's sliver between two
+        cores: spikes in the fine mesh, 2026-11-01) is levelled; a flat road, a 1:1 slope, its crest and a 3 m wall's
+        step come through as they are."""
+        k, sq = 8, 2.0
+        J, I = np.mgrid[0:20, 0:20]
+        ji = np.ascontiguousarray(np.c_[J.ravel(), I.ravel()], np.int64)
+        pts = np.asarray(fast._ef.fine_points(0.0, 0.0, sq, k, ji))
+        x = pts[:, 0]
+
+        def ground(x):
+            z = np.where(x < 10.0, 0.0, np.where(x < 16.0, x - 10.0, 6.0))         # road, slope, crest, top
+            z = np.where(x >= 30.0, 9.0, z)                                      # a wall's step
+            return z
+        fin = (x > 4.0) & (x < 4.75)
+        # (the block's samples round the cells: a margin of 3 cells, the patch at cells 3..22)
+        gx = np.arange(26) * sq - 3 * sq
+        U = np.ascontiguousarray(np.tile(ground(gx), (26, 1)))
+        U2 = np.ascontiguousarray(np.tile(1.5 * gx, (26, 1)))
+        ji = ji + 3
+        pts = pts + 3 * sq
+        z = ground(x) + np.where(fin, 1.4, 0.0)
+        out = np.asarray(fast._ef.fine_filter(ji, np.ascontiguousarray(z.reshape(len(ji), -1)), 3, U)).ravel()
+        self.assertLess(float(np.abs(out[fin]).max()), 0.01, "the fin levelled")
+        self.assertLess(float(np.abs(out - ground(x))[~fin].max()), 1e-3, "the rest as it was, by the edge too")
+        self.assertLess(float(np.abs(out[fin]).max()), 0.01)
+        # (a steep slope to the patch's edge: left as it is there, not raised by a window cut short)
+        zs = np.ascontiguousarray((1.5 * x).reshape(len(ji), -1))
+        out = np.asarray(fast._ef.fine_filter(ji, zs, 3, U2)).ravel()
+        self.assertLess(float(np.abs(out - 1.5 * x).max()), 1e-3)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -195,7 +237,7 @@ class BankTest(unittest.TestCase):
     def test_neighbours_never_share_a_bank(self):
         for size, g in ((512, 128.0), (1024, 256.0)):
             b = finepatch.bank(0.0, 0.0, size)
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
+            for dx in (-2, -1, 0, 1, 2):
+                for dy in (-2, -1, 0, 1, 2):
                     if dx or dy:
                         self.assertNotEqual(finepatch.bank(dx * g, dy * g, size), b)

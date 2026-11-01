@@ -1406,6 +1406,9 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     out.into_pyarray(py)
 }
 
+/// grade_points: a road's own rid of its rid (grading.PlanPack: a pass road's legs carry their leg in the bits from 44)
+const LEG_ROAD_MASK: i64 = (1i64 << 44) - 1;
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
@@ -1539,8 +1542,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         if d > far0 {
                             continue;       // (nothing below reaches this far: the box's corners)
                         }
-                        if d - rh[s] < cdeep[idx] || (d <= rh[s] && carz[idx].is_nan()) {
-                            cdeep[idx] = d - rh[s];
+                        // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
+                        // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
+                        let cr = if steep[s] != 0 { h[s] } else { rh[s] };
+                        if d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan()) {
+                            cdeep[idx] = d - cr;
                             carz[idx] = target;
                             carid[idx] = rid[s];
                         }
@@ -1613,7 +1619,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                     if carid[idx] >= 0 && carid[idx] != rid[s] {
                         yf = apart(target - carz[idx]);
                     }
-                    if bid[idx] >= 0 && bid[idx] != rid[s] {
+                    // (a cutting's band: another road's alone; a pass road's legs (grading.LEG_RID_SHIFT: the same road)
+                    // blend over each other's bands, the ground between them a slope: giving way there drew a 5 m step
+                    // along the band's edge, which notches at every vertex: spikes between a hairpin's legs, the user's
+                    // report 2026-11-01. On each other's lanes they still give way, above)
+                    if bid[idx] >= 0 && bid[idx] & LEG_ROAD_MASK != rid[s] & LEG_ROAD_MASK {
                         yf = yf.max(apart(target - bz[idx]));
                     }
                     yf *= smooth((d - rh[s]) / ramp);
@@ -5315,6 +5325,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(finepatch::fine_points, m)?)?;
     m.add_function(wrap_pyfunction!(finepatch::fine_tin, m)?)?;
     m.add_function(wrap_pyfunction!(finepatch::fine_rim_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(finepatch::fine_filter, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_flow, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_shifts, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_gaps, m)?)?;
@@ -5456,6 +5467,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
     m.add_class::<traffic::Routes>()?;
-    m.add("VERSION", 132)?;
+    m.add("VERSION", 138)?;
     Ok(())
 }

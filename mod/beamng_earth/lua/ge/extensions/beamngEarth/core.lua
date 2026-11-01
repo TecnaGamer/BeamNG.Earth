@@ -1045,7 +1045,7 @@ local function onMessage(msg)
       setStatus('Unexpected terrain_ready (size ' .. tostring(msg.size) .. ')')
       return
     end
-    p.ready, p.msg = true, msg -- committed by the distance rule in updateWorld()
+    p.ready, p.msg, p.readyAt = true, msg, st.clock -- committed by the distance rule in updateWorld()
     terrain.finePrepare(msg)      -- (its fine ground's pieces made ahead, a few a frame: terrain.fineStep)
     if p.sentAt then st.terrainLatency = st.clock - p.sentAt end
     st.terrainErrorAt = nil
@@ -1059,7 +1059,13 @@ local function onMessage(msg)
     if msg.anchorId ~= st.anchorId then
       st.refreshLater = msg
     elseif st.block and msg.cx == st.block.cx and msg.cy == st.block.cy and msg.size == terrain.SIZE then
-      if windowMinimized() then st.deferredRefresh = msg else commitTerrain(msg) end
+      if windowMinimized() then st.deferredRefresh = msg
+      elseif type(msg.fine) == 'table' then
+        -- (its fine ground's pieces made ahead first, a few a frame: made in the swap's frame they held it 1-3 s on the
+        -- Stelvio, 2026-11-01; committed by updateWorld once they are, or after 5 s)
+        terrain.finePrepare(msg, true)
+        st.refreshFine = { msg = msg, at = st.clock }
+      else commitTerrain(msg) end
     end
   elseif t == 'terrain_error' then
     local p = st.terrainPending
@@ -1542,10 +1548,23 @@ local function updateWorld(dt)
   end
   if held then return end
   terrain.fineStep()
+  local rf = st.refreshFine
+  if rf and (terrain.fineReady(rf.msg.ter, rf.msg.fine) or st.clock - rf.at > 5) then
+    st.refreshFine = nil         -- (a refresh waiting for its fine ground's pieces: 'terrain_refresh')
+    if st.block and rf.msg.cx == st.block.cx and rf.msg.cy == st.block.cy and rf.msg.anchorId == st.anchorId then
+      commitTerrain(rf.msg)
+    end
+  end
   local b = st.block
   -- commit gating: the far tiles of the strip the move uncovers must be live, and no coarse tile
-  -- may straddle the new block (design 2.3, farfield.uncoverReady)
-  local gate = b and function(ncx, ncy) return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) end
+  -- may straddle the new block (design 2.3, farfield.uncoverReady); its fine ground's pieces made ahead, for up to
+  -- 4 s after it was ready (the rest made in the swap's frame: 1.2 s when it came 2 s after, 2026-11-01)
+  local gate = b and function(ncx, ncy)
+    if not farfield.uncoverReady(b.cx, b.cy, ncx, ncy) then return false end
+    local tp = st.terrainPending
+    return not (tp and tp.msg) or terrain.fineReady(tp.msg.ter, tp.msg.fine)
+      or st.clock - (tp.readyAt or st.clock) > 4
+  end
   local fa, tx, ty = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
     st.clock, st.terrainRetryAt, gate, st.terrainLatency)
   if fa == 'prepare' then

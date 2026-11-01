@@ -26,7 +26,9 @@ GRADED_DZ_M = 0.5           # ... where the grading moved the ground this much a
 GROW = 2                    # cells round each sharp one drawn finely too (a slope's foot and top, the lanes beside; 1:
                             # the outline on a cutting's crest, its straight lattice edges drew 2 m stairs, 2026-11-01)
 K = 2                       # quads per cell side: 1 m (4 at 0.5 m: 4x the triangles, no visible gain)
-PIECE_M = 64.0              # m: a piece's square (at most 32 x 32 cells, 8192 triangles)
+# m: a piece's square. Each piece costs ~20-30 ms to make (its materials, one per surface layer in it): 128 m pieces
+# made a Stelvio block in 32 (0.9 s, spread a frame each) where 64 m ones took 93 (1.9 s), 2026-11-01
+PIECE_M = float(os.environ.get("BNE_FINE_PIECE_M", "128"))
 MAX_CELLS = 40000           # per block (a mountain's worth); more: the steepest kept
 EDGE_CELLS = 3              # cells at the block's edge left to the terrain (its edge holes, the next block's seam)
 RIM_LIFT_M = 0.01           # m the mesh lies over the terrain inside the rim cells (the terrain draws them, pale; 4 cm
@@ -34,7 +36,12 @@ RIM_LIFT_M = 0.01           # m the mesh lies over the terrain inside the rim ce
 TIN_K = 8                   # the fine cells' heights sampled every 1 / TIN_K cell (0.25 m) for fine_tin ...
 TIN_TOL_M = 0.02            # ... put in where the triangles are this far off them (4 cm: a quarter fewer triangles, but a
                             # cutting's face drawn in steps again, 2026-11-01)
-TIN_MAX_TRIS = 16384        # per piece (32 x 32 cells; the 1 m grid's were 8192)
+FILTER_R = 5                # samples (1 / TIN_K cell): ridges and notches narrower than 2 FILTER_R + 1 (2.75 m) levelled
+                            # (3: cones of a fin left on a pass road's shoulder)
+# m: a piece's collision in meshes of this square (_collisions). Windows, its static collision rebuilt with a Stelvio
+# block's fine ground (545k tris): one mesh a 64 m piece 1.0-1.1 s, 16 m 0.19 s, 8 m 0.10 s, 4 m 0.07 s (2026-11-01)
+COL_CHUNK_M = float(os.environ.get("BNE_FINE_COL_M", "8"))
+TIN_MAX_TRIS = int(16384 * (PIECE_M / 64.0) ** 2)    # per piece (16384 for 32 x 32 cells; the 1 m grid's were 8192)
 # fine_rim_mesh's centre rule: the renderer draws a terrain cell split north-west to south-east (its collision is
 # bilinear: rays at cells' quarter points, 2026-11-01): covers on the other split left white half squares, on the higher
 # diagonal they bulged up steep cells as pale stairs
@@ -84,6 +91,23 @@ def _normals(P, T, u, x0, y0, sq, cells):
     return N
 
 
+def _collisions(pos, tris, tri_mat, keep):
+    """A piece's collision (its triangles `keep`: not the rim's covers, the terrain under them collides) as meshes of
+    COL_CHUNK_M squares (by triangle centroid, piece-local), for cdae.encode collisions=: Windows builds a collision mesh
+    in time ~quadratic in its triangles (collision-engine-facts), a 64 m piece's 15k in one froze its swaps."""
+    k = np.flatnonzero(keep)
+    if not len(k):
+        return None
+    cen = pos[tris[k]].mean(1)
+    key = np.floor(cen[:, 0] / COL_CHUNK_M).astype(np.int64) * 1000 + np.floor(cen[:, 1] / COL_CHUNK_M).astype(np.int64)
+    out = []
+    for c in np.unique(key):
+        sel = k[key == c]
+        vi, inv = np.unique(tris[sel].ravel(), return_inverse=True)
+        out.append((pos[vi], inv.reshape(-1, 3), tri_mat[sel]))
+    return out
+
+
 def _cell_layers(layers, J, I, n, fallback):
     """Each cell's surface layer (cells J, I of a block's per-sample layers [j, i]): the one most of its four corner
     samples have (the south-west one's on a tie). The terrain blends its samples' layers across the cell; a cell drawn
@@ -104,10 +128,11 @@ def material_name(bank_, layer):
 
 
 def bank(cx, cy, size):
-    """A block's material bank, 0..3 by its centre's parity on the blocks' centre grid (size / 4 samples of the lattice):
-    a block and its neighbours (the next block, whose pieces are made while this one shows) never share one."""
+    """A block's material bank, 0..8 by its centre on the blocks' centre grid (size / 4 samples of the lattice) modulo
+    3 each way: a block and the next one shown (up to two grid steps away; its pieces are made while this one shows)
+    never share one (by parity, a block two steps on did, and its pieces were made in the swap: 3.2 s, 2026-11-01)."""
     g = size * heightmap.SQUARE / 8.0
-    return int(round(cx / g)) % 2 + 2 * (int(round(cy / g)) % 2)
+    return int(round(cx / g)) % 3 + 3 * (int(round(cy / g)) % 3)
 
 
 def block_fine(frame, gen, raw, keep, cx, cy, size, out_dir, stem, aid, layers=None):
@@ -153,18 +178,24 @@ def block_fine(frame, gen, raw, keep, cx, cy, size, out_dir, stem, aid, layers=N
     per = int(round(PIECE_M / sq))
 
     def heights(ji, k):
+        # (each point once: neighbouring cells share their sides' points, a fifth of them at k = 8)
         pts = np.asarray(fast._ef.fine_points(x0, y0, sq, k, ji))
-        la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+        a, b = np.divmod(np.arange((k + 1) ** 2), k + 1)
+        key = (ji[:, :1] * k + a[None, :]) * (1 << 24) + (ji[:, 1:] * k + b[None, :])
+        _, first, inv = np.unique(key.ravel(), return_index=True, return_inverse=True)
+        q = pts[first]
+        la, lo, _ = frame.enu_to_geodetic(q[:, 0], q[:, 1], np.zeros(len(q)))
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
         z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(gen(la, lo), np.float64))[2], np.float64)
-        return np.ascontiguousarray(z.reshape(len(ji), (k + 1) ** 2))
+        return np.ascontiguousarray(z[inv.reshape(-1)].reshape(len(ji), (k + 1) ** 2))
 
     # the fine cells: an adaptive triangulation of their ground (earthfast.fine_tin), not a grid
     ji = np.ascontiguousarray(np.c_[J, I], np.int64)
-    fast.require(127, "fine_tin")
+    fast.require(136, "fine_tin")         # (136: its inner corners its own heights)
     import time
     t0 = time.perf_counter()
-    zs = heights(ji, TIN_K)
+    fast.require(138, "fine_filter")       # (138: the terrain's ground beside the cells)
+    zs = np.asarray(fast._ef.fine_filter(ji, heights(ji, TIN_K), FILTER_R, ud))
     t1 = time.perf_counter()
     P, T, tcell, tpiece = fast._ef.fine_tin(x0, y0, sq, ji, zs, ud, cells8, per, TIN_TOL_M, TIN_MAX_TRIS)
     t2 = time.perf_counter()
@@ -178,11 +209,12 @@ def block_fine(frame, gen, raw, keep, cx, cy, size, out_dir, stem, aid, layers=N
         RP, RT = fast._ef.fine_rim_mesh(x0, y0, sq, rji, ud, RIM_LIFT_M, RIM_CENTRE)
         RP, RT = np.asarray(RP), np.asarray(RT)
         rcell = nfine + np.repeat(np.arange(len(RJ)), 4)          # (fine_rim_mesh: 4 triangles a cell)
-        rpiece = (RJ // per)[rcell - nfine] * 100000 + (RI // per)[rcell - nfine] + 10 ** 10
+        rpiece = (RJ // per)[rcell - nfine] * 100000 + (RI // per)[rcell - nfine]
         T = np.r_[T, RT + len(P)]
         P = np.r_[P, RP]
         tcell = np.r_[tcell, rcell]
         tpiece = np.r_[tpiece, rpiece]
+    is_rim_tri = tcell >= nfine
     J, I = np.r_[J, RJ], np.r_[I, RI]
     extent = size * sq                                  # (the block's photo covers it from its south-west corner)
     import surface as surfacemod
@@ -192,19 +224,19 @@ def block_fine(frame, gen, raw, keep, cx, cy, size, out_dir, stem, aid, layers=N
         lay = np.full(len(J), surfacemod.DIRT, np.int64)
     used = sorted(set(int(v) for v in np.unique(lay)))
     b = bank(cx, cy, size)
-    # (the rim's own materials, casting no shadow: material_name + "r")
-    mats = [material_name(b, k) for k in used] + [material_name(b, k) + "r" for k in used]
-    tri_layer = np.searchsorted(used, lay[tcell]) + np.where(tpiece >= 10 ** 10, len(used), 0)
-    # the pieces: PIECE_M squares from the block's corner (fine_tin's), the rim cells in pieces of their own, drawn
-    # only (the terrain under them collides; the mesh 4 cm over it made ridges across the lanes)
+    # (the rim's covers with the same materials: each material a piece lists costs its making ~10 ms, and covers
+    # 1 cm over the terrain cast no shadow to see)
+    mats = [material_name(b, k) for k in used]
+    tri_layer = np.searchsorted(used, lay[tcell])
+    # the pieces: PIECE_M squares from the block's corner (fine_tin's), the rim cells' covers in the same pieces (their
+    # own materials, casting no shadow): a new piece's making costs ~10 ms whatever its size, and pieces of their own
+    # doubled that (spawn stutter, the user 2026-11-01). They collide too, RIM_LIFT_M over the terrain: too little to feel
     parts = []
     t3 = time.perf_counter()
     for key in np.unique(tpiece):
         ti = np.flatnonzero(tpiece == key)
         vi, inv = np.unique(T[ti].ravel(), return_inverse=True)
-        rimp = key >= 10 ** 10
-        kk = int(key % 10 ** 10)
-        pj, pi = kk // 100000, kk % 100000
+        pj, pi = int(key) // 100000, int(key) % 100000
         ox, oy = x0 + pi * PIECE_M, y0 + pj * PIECE_M
         pos = P[vi] - [ox, oy, 0.0]
         # the terrain's own texture coordinates: its samples' (block-local, half a sample on: the engine's terrain
@@ -214,13 +246,13 @@ def block_fine(frame, gen, raw, keep, cx, cy, size, out_dir, stem, aid, layers=N
         uv = np.c_[sx * sq / extent, sy * sq / extent]
         uv2 = np.c_[sx * sq / DETAIL_M, 1.0 - sy * sq / DETAIL_M]
         tris = inv.reshape(-1, 3)
-        name = f"{stem}_{pi}_{pj}{'r' if rimp else ''}.cdae"
+        name = f"{stem}_{pi}_{pj}.cdae"
         # (tangents along the detail's coordinates: its normal map's relief lit as the terrain's; along the photo's,
         # whose v runs the other way, it was lit from the wrong side)
         cdae.write(os.path.join(out_dir, name), pos, tris, uvs=uv, uvs2=uv2, tangent_uvs=uv2, material=mats,
-                   normals=_normals(P[vi], tris, ud, x0, y0, sq, cells8), tri_materials=tri_layer[ti], object_name="fine")
-        parts.append({"shape": name, "pos": [round(ox, 3), round(oy, 3), 0.0]} | ({"collide": False} if rimp else {}))
+                   normals=_normals(P[vi], tris, ud, x0, y0, sq, cells8), tri_materials=tri_layer[ti], object_name="fine",
+                   collisions=_collisions(pos, tris, tri_layer[ti], ~is_rim_tri[ti]) if COL_CHUNK_M > 0 else None)
+        parts.append({"shape": name, "pos": [round(ox, 3), round(oy, 3), 0.0]} | ({"collision": "mesh"} if COL_CHUNK_M > 0 else {}))
     times = {"heights": round(t1 - t0, 2), "tin": round(t2 - t1, 2), "write": round(time.perf_counter() - t3, 2)}
-    return holes, {"times": times, "tris": int(len(T)), "materials": [[material_name(b, k), surfacemod.MATERIALS[k][0]] for k in used]
-                   + [[material_name(b, k) + "r", surfacemod.MATERIALS[k][0], True] for k in used], "bank": b,
+    return holes, {"times": times, "tris": int(len(T)), "materials": [[material_name(b, k), surfacemod.MATERIALS[k][0]] for k in used], "bank": b,
                    "parts": parts, "cells": int(nfine), "rim": int(len(RJ))}

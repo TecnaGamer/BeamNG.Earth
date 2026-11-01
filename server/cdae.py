@@ -430,7 +430,8 @@ LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) de
 
 
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
-           tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None):
+           tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
+           collisions=None):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -450,7 +451,12 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     detail whose size is at most the shape's projected size in pixels): a list of (size_px, dict of positions, tris
     and optional uvs / tri_materials / colors, same material list), sizes falling, the last one drawn down to
     LOD_TOP_SIZE px. The main mesh is drawn from lods[0]'s size up: lods=[(300, lite)] draws the full mesh while the
-    shape spans 300 px or more, the lite one below."""
+    shape spans 300 px or more, the lite one below.
+    collisions: the shape's collision as separate meshes beside the drawn one, [(positions, tris, tri_materials or
+    None)] (the same material list): objects "Colmesh<k>" in a "Collision-1" detail (each a null mesh in the drawn
+    detail), for a TSStatic with collisionType "Collision Mesh". Windows builds each collision mesh in time ~quadratic
+    in its triangles (collision-engine-facts: 51.2k tris 3.8 s, as 16 meshes 0.09 s): a big piece's collision in small
+    meshes. Not with collision_only or lods."""
     if collision_only:
         object_name = "Colmesh"
         lods = None
@@ -464,12 +470,17 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         for _size, d in (lods or []):
             if d.get("tri_materials") is not None:
                 used[np.unique(np.asarray(d["tri_materials"], np.int64))] = True
+        for _Pc, _Tc, TMc in (collisions or []):
+            if TMc is not None:
+                used[np.unique(np.asarray(TMc, np.int64))] = True
         if not used.all():
             new = np.cumsum(used) - 1
             materials = [m for m, u in zip(materials, used) if u]
             tri_materials = new[np.asarray(tri_materials, np.int64)]
             lods = [(size, dict(d, tri_materials=new[np.asarray(d["tri_materials"], np.int64)])
                      if d.get("tri_materials") is not None else d) for size, d in (lods or [])] or None
+            collisions = [(Pc, Tc, None if TMc is None else new[np.asarray(TMc, np.int64)])
+                          for Pc, Tc, TMc in (collisions or [])] or None
     nmat = len(materials)
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T, TM = _sorted_tris(tris, tri_materials, nmat)
@@ -481,6 +492,15 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         bl, lol, hil, ntl = _mesh_data(Pl, Tl, TMl, nmat, None, d.get("uvs"), None, None, d.get("colors"))
         lo, hi = np.minimum(lo, lol), np.maximum(hi, hil)
         levels.append((float(size), bl, ntl))
+    cols = []
+    for Pc, Tc, TMc in (collisions or []):
+        Pc = np.asarray(Pc, np.float64).reshape(-1, 3)
+        Tc, TMc = _sorted_tris(Tc, TMc, nmat)
+        bc, loc, hic, ntc = _mesh_data(Pc, Tc, TMc, nmat, None, None, None, None, None)
+        lo, hi = np.minimum(lo, loc), np.maximum(hi, hic)
+        cols.append((bc, ntc))
+    if cols and (collision_only or lods):
+        raise CdaeError("collisions: not with collision_only or lods")
     # each level is drawn from the next coarser level's size up: the finest from lods[0]'s size, the last from 2 px
     sizes = [float(lv[0]) for lv in levels[1:]] + [LOD_TOP_SIZE]
 
@@ -493,7 +513,14 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     # collision only: a visible detail "detail2" whose mesh is a null mesh (draws nothing), then "Collision-1": with the
     # collision detail alone the engine logged "Shape with invalid detail levels" for every such shape (2026-10-17;
     # the buildings' lean collision meshes filled players' logs)
-    if collision_only:
+    nobj = 1 + len(cols)
+    if cols:
+        # the drawn object, then the collision objects; the drawn detail, then the collision detail
+        names = [object_name] + [f"Colmesh{k}" for k in range(len(cols))] + [f"detail{int(sizes[0])}", "Collision-1"]
+        details = _vec(struct.pack("<3i3fi2i2IfI", nobj, 0, 0, sizes[0], -1.0, -1.0, levels[0][2], 0, 0, 0, 0, 0.0, 0)
+                       + struct.pack("<3i3fi2i2IfI", nobj + 1, 0, 1, -1.0, -1.0, -1.0, sum(n for _b, n in cols),
+                                     0, 0, 0, 0, 0.0, 0), 2, 52)
+    elif collision_only:
         names = [object_name, "detail2", "Collision-1"]
         details = (_vec(struct.pack("<3i3fi2i2IfI", 1, 0, 0, 2.0, -1.0, -1.0, 0, 0, 0, 0, 0, 0.0, 0)
                         + struct.pack("<3i3fi2i2IfI", 2, 0, 1, -1.0, -1.0, -1.0, ntri, 0, 0, 0, 0, 0.0, 0), 2, 52))
@@ -503,20 +530,21 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         # billboard dimension/detailLevel/equatorSteps/polarSteps/polarAngle/includePoles
         details = _vec(b"".join(struct.pack("<3i3fi2i2IfI", 1 + k, 0, k, sizes[k], -1.0, -1.0, levels[k][2],
                                             0, 0, 0, 0, 0.0, 0) for k in range(len(levels))), len(levels), 52)
-    nmesh = 2 if collision_only else len(levels)
+    nmesh = 2 if (collision_only or cols) else len(levels)
+    # object: name, numMeshes, startMeshIndex, node, nextSibling, firstDecal (each object a mesh per detail)
+    objects = b"".join(struct.pack("<6i", k, nmesh, k * nmesh, 0, k + 1 if k + 1 < nobj else -1, -1) for k in range(nobj))
     shape_vecs = {
         # node: name, parent, firstObject, firstChild, nextSibling
         "nodes": _vec(struct.pack("<5i", 0, -1, 0, -1, -1), 1, 20),
-        # object: name, numMeshes, startMeshIndex, node, nextSibling, firstDecal
-        "objects": _vec(struct.pack("<6i", 0, nmesh, 0, 0, -1, -1), 1, 24),
+        "objects": _vec(objects, nobj, 24),
         "subShapeFirstNode": _vec(struct.pack("<i", 0), 1, 4),
         "subShapeFirstObject": _vec(struct.pack("<i", 0), 1, 4),
         "subShapeNumNodes": _vec(struct.pack("<i", 1), 1, 4),
-        "subShapeNumObjects": _vec(struct.pack("<i", 1), 1, 4),
+        "subShapeNumObjects": _vec(struct.pack("<i", nobj), 1, 4),
         "defaultRotations": _vec(struct.pack("<4h", 0, 0, 0, 0x7FFF), 1, 8),     # identity Quat16
         "defaultTranslations": _vec(struct.pack("<3f", 0, 0, 0), 1, 12),
         # object state: visibility, frame, matFrame
-        "objectStates": _vec(struct.pack("<fii", 1.0, 0, 0), 1, 12),
+        "objectStates": _vec(struct.pack("<fii", 1.0, 0, 0) * nobj, nobj, 12),
         "details": details,
     }
     out = bytearray()
@@ -528,18 +556,27 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     _pack(out, len(names))
     for s_ in names:
         _pack(out, s_)
-    _pack(out, nmesh)                                      # meshes (collision only: first the null mesh, type 4)
-    if collision_only:
+    if cols:
+        _pack(out, nmesh * nobj)                           # meshes: the drawn one and a null one, then each collision
+        out += levels[0][1]                                # object's null one and its own
         _pack(out, 4)
-    for _, body, _ in levels:
-        out += body
+        for body, _n in cols:
+            _pack(out, 4)
+            out += body
+    else:
+        _pack(out, nmesh)                                  # meshes (collision only: first the null mesh, type 4)
+        if collision_only:
+            _pack(out, 4)
+        for _, body, _ in levels:
+            out += body
     _pack(out, 0)                                          # sequences
     _pack(out, len(materials))                             # materials
     for name in materials:
         for v in (name, MAT_S_WRAP | MAT_T_WRAP, 0, 0xFFFFFFFF, 0xFFFFFFFF, 1.0, 1.0):
             _pack(out, v)
 
-    header = packb({"info": INFO, "compression": False, "bodysize": len(out), "objectNames": [object_name]})
+    header = packb({"info": INFO, "compression": False, "bodysize": len(out),
+                    "objectNames": [object_name] + [f"Colmesh{k}" for k in range(len(cols))]})
     return struct.pack("<II", VERSION_WORD, len(header)) + header + bytes(out)
 
 

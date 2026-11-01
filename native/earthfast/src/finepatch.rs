@@ -416,10 +416,16 @@ pub fn fine_tin<'py>(py: Python<'py>, x0: f64, y0: f64, square: f64, cells: PyRe
         for &r in rows {
             let (j, i) = (c[[r, 0]], c[[r, 1]]);
             let (ju, iu) = (j as usize, i as usize);
-            let sw = vert(&mut tin, j, i, 0, 0, u[[ju, iu]]);
-            let se = vert(&mut tin, j, i, 0, K, u[[ju, iu + 1]]);
-            let ne = vert(&mut tin, j, i, K, K, u[[ju + 1, iu + 1]]);
-            let nw = vert(&mut tin, j, i, K, 0, u[[ju + 1, iu]]);
+            // (a corner on the outline (a cell round it not fine) the terrain's sample, to meet its edges; one inside
+            // the patch the cells' own (filtered) height: the samples there kept a sliver's height as cones 2 m apart,
+            // 2026-11-01)
+            let inner = |a: i64, b: i64| fine(a - 1, b - 1) && fine(a - 1, b) && fine(a, b - 1) && fine(a, b);
+            let corner = |a: usize, b: usize, uu: f64| if inner(j + a as i64 / K as i64, i + b as i64 / K as i64) {
+                z[[r, a * W + b]] } else { uu };
+            let sw = vert(&mut tin, j, i, 0, 0, corner(0, 0, u[[ju, iu]]));
+            let se = vert(&mut tin, j, i, 0, K, corner(0, K, u[[ju, iu + 1]]));
+            let ne = vert(&mut tin, j, i, K, K, corner(K, K, u[[ju + 1, iu + 1]]));
+            let nw = vert(&mut tin, j, i, K, 0, corner(K, 0, u[[ju + 1, iu]]));
             for v in [[sw, se, ne], [sw, ne, nw]] {
                 let t = tin.new_tri(v, [-1, -1, -1]);
                 for k in 0..3 {
@@ -622,4 +628,130 @@ pub fn fine_rim_mesh<'py>(py: Python<'py>, x0: f64, y0: f64, square: f64, cells:
     }
     (numpy::ndarray::Array2::from_shape_vec((n * 5, 3), pos).unwrap().into_pyarray(py),
      numpy::ndarray::Array2::from_shape_vec((n * 4, 3), tri).unwrap().into_pyarray(py))
+}
+
+/// One flat min (or max) pass of a square window 2r + 1 over a raster (w x h, NaN: no ground), rows then columns.
+fn morph(a: &[f32], w: usize, h: usize, r: usize, max: bool) -> Vec<f32> {
+    let pick = |x: f32, y: f32| -> f32 {
+        if x.is_nan() { y } else if y.is_nan() { x } else if max { x.max(y) } else { x.min(y) }
+    };
+    let mut t = vec![f32::NAN; w * h];
+    for j in 0..h {
+        for i in 0..w {
+            let mut v = f32::NAN;
+            for b in i.saturating_sub(r)..(i + r + 1).min(w) {
+                v = pick(v, a[j * w + b]);
+            }
+            t[j * w + i] = v;
+        }
+    }
+    let mut o = vec![f32::NAN; w * h];
+    for j in 0..h {
+        for i in 0..w {
+            if a[j * w + i].is_nan() {
+                continue;
+            }
+            let mut v = f32::NAN;
+            for c in j.saturating_sub(r)..(j + r + 1).min(h) {
+                v = pick(v, t[c * w + i]);
+            }
+            o[j * w + i] = v;
+        }
+    }
+    o
+}
+
+/// The fine cells' heights (z (n, (k + 1)²), fine_points' layout) without ridges and notches narrower than a window
+/// of 2 radius + 1 samples: an opening (min, then max) then a closing (max, then min) with a flat square window over
+/// the cells' points. A flat road, a plane, a crest or a wall's step wider than the window comes through as it is;
+/// a narrower one is levelled: grading's slivers between two cores (the natural ground standing up as a 1.4 m fin
+/// between a hairpin's legs) and the zigzag of a step's line, which the terrain's 2 m lattice never drew and the fine
+/// mesh did, as spikes (the user, 2026-11-01). Beside the cells the windows see the terrain's own ground (u, the
+/// block's samples, bilinear); a point whose windows reach past the block is left as it is.
+#[pyfunction]
+pub fn fine_filter<'py>(py: Python<'py>, cells: PyReadonlyArray2<'py, i64>, z: PyReadonlyArray2<'py, f64>,
+                        radius: i64, u: PyReadonlyArray2<'py, f64>) -> Bound<'py, PyArray2<f64>> {
+    let (c, z, u) = (cells.as_array(), z.as_array(), u.as_array());
+    let (uy, ux) = (u.nrows() as i64, u.ncols() as i64);
+    let n = c.nrows();
+    let wv = ((z.ncols() as f64).sqrt().round() as usize).max(2);
+    let k = wv - 1;
+    let r = radius.max(0) as usize;
+    let mut out = z.to_owned();
+    if n == 0 || r == 0 {
+        return out.into_pyarray(py);
+    }
+    let (mut j0, mut i0, mut j1, mut i1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    for row in 0..n {
+        j0 = j0.min(c[[row, 0]]); j1 = j1.max(c[[row, 0]]);
+        i0 = i0.min(c[[row, 1]]); i1 = i1.max(c[[row, 1]]);
+    }
+    // (in tiles of TILE cells, each with the four passes' reach of margin)
+    const TILE: i64 = 32;
+    let m = (4 * r).div_ceil(k) as i64 + 1;
+    let mut by_tile: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+    for row in 0..n {
+        by_tile.entry(((c[[row, 0]] - j0).div_euclid(TILE), (c[[row, 1]] - i0).div_euclid(TILE))).or_default().push(row);
+    }
+    let mut index: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+    for row in 0..n {
+        index.insert((c[[row, 0]], c[[row, 1]]), row);
+    }
+    for (&(tj, ti), rows) in by_tile.iter() {
+        let (cj0, ci0) = (j0 + tj * TILE - m, i0 + ti * TILE - m);
+        let cells_side = (TILE + 2 * m) as usize;
+        let w = cells_side * k + 1;
+        let mut a = vec![f32::NAN; w * w];
+        for cj in 0..cells_side as i64 {
+            for ci in 0..cells_side as i64 {
+                let (gj, gi) = (cj0 + cj, ci0 + ci);
+                if !index.contains_key(&(gj, gi)) && gj >= 0 && gi >= 0 && gj + 1 < uy && gi + 1 < ux {
+                    // (beside the cells: the terrain's own ground, its samples bilinear, so a window by the patch's
+                    // edge sees ground all round)
+                    let (gju, giu) = (gj as usize, gi as usize);
+                    let (u00, u10, u01, u11) = (u[[gju, giu]], u[[gju, giu + 1]], u[[gju + 1, giu]], u[[gju + 1, giu + 1]]);
+                    for aa in 0..wv {
+                        for bb in 0..wv {
+                            let (fy, fx) = (aa as f64 / k as f64, bb as f64 / k as f64);
+                            let v = (u00 * (1.0 - fx) + u10 * fx) * (1.0 - fy) + (u01 * (1.0 - fx) + u11 * fx) * fy;
+                            let q = (cj as usize * k + aa) * w + ci as usize * k + bb;
+                            if a[q].is_nan() {
+                                a[q] = v as f32;
+                            }
+                        }
+                    }
+                }
+                if let Some(&row) = index.get(&(gj, gi)) {
+                    for aa in 0..wv {
+                        for bb in 0..wv {
+                            a[(cj as usize * k + aa) * w + ci as usize * k + bb] = z[[row, aa * wv + bb]] as f32;
+                        }
+                    }
+                }
+            }
+        }
+        let opened = morph(&morph(&a, w, w, r, false), w, w, r, true);
+        let closed = morph(&morph(&opened, w, w, r, true), w, w, r, false);
+        // (only where the four passes saw ground all round: by the block's edge a window cut short raised or lowered
+        // a slope by up to its grade x the window: steps, 2026-11-01)
+        let have: Vec<f32> = a.iter().map(|v| if v.is_nan() { 0.0 } else { 1.0 }).collect();
+        let mut full = have.clone();
+        for _ in 0..4 {
+            full = morph(&full, w, w, r, false);
+        }
+        for &row in rows {
+            let (cj, ci) = ((c[[row, 0]] - cj0) as usize, (c[[row, 1]] - ci0) as usize);
+            for aa in 0..wv {
+                for bb in 0..wv {
+                    let q = (cj * k + aa) * w + ci * k + bb;
+                    let v = closed[q];
+                    let z0 = z[[row, aa * wv + bb]];
+                    if full[q] > 0.5 && !v.is_nan() && (v - z0 as f32).abs() > 1e-3 {     // (the rest at full precision)
+                        out[[row, aa * wv + bb]] = v as f64;
+                    }
+                }
+            }
+        }
+    }
+    out.into_pyarray(py)
 }

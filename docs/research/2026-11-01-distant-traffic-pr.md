@@ -180,3 +180,22 @@ the same 18:00, 22:00 and overnight anchors remain. Live world counts were 1386 
 at 50%. These are successive live samples rather than a controlled frame-rate comparison. The 70% comparison
 above records the intermediate preview rather than the final density.
 The 50% variant passed 248 pure and 6781 renderer assertions; the installed density file matches source.
+
+## dev.123 integration (2026-11-02)
+
+Merged the official dev.123 tag (`eefbb41549e1d0125169bb8537e815a508a3de9e`) after reading its complete source/test
+delta and current maintainer rules. Native registration retains both `TrafficRoutes` and the new fine-terrain
+APIs, including `fine_filter`. Both conflicted native artifacts were rebuilt as version 138 from the combined
+source; Linux targets glibc 2.35. No feature tuning changed during this integration.
+
+Windows checks passed: 27 feature tests; protocol agreement 32 run with one skip; 11 CDAE, 9 fine-terrain,
+46 grading, 85 roads, 13 plan-cache, 22 heightmap, one anchor test, 6 synthetic far-geotile tests with two real-data
+skips, and 74 building tests. Fresh isolated test caches were used. The first restricted test process stalled;
+its exact owned process tree was stopped, and the complete suite passed with the required local process access.
+LuaJIT checks passed: 248 paths, 6781 renderer, 282 core, 310 settings, 47 terrain-swap, 110 trees, 17 geotile and
+46 navigation-graph assertions. JavaScript syntax passed. Linux native/API/two-direction bridge-route smoke passed.
+
+The standalone Windows launcher was rebuilt with the project's source-built PyInstaller bootloader. An isolated
+offline launch negotiated protocol 4 / trafficVisuals 2. All 190 embedded mod files, the native binary and server
+code fingerprint matched source. These packaging checks are separate from actual game rendering and long-session
+memory testing. Evidence is in `build/dev123/`.

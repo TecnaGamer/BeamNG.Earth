@@ -681,7 +681,8 @@ def snap_junctions(plans, specs):
         plans[j].z = out[off[j]:off[j + 1]].copy()
 
 
-LEG_RID_SHIFT = 44           # PlanPack: a pass road's leg (between hairpins) as rid + leg << this (rids < 2^41)
+LEG_RID_SHIFT = 44           # PlanPack: a pass road's leg (between hairpins) as rid + leg << this (rids < 2^41; earthfast's
+                             # LEG_ROAD_MASK alike)
 HAIRPIN_FOLD_RATIO = 0.5      # hairpin_cores: a point of the road's own line this much nearer than along it is another leg
 
 
@@ -2695,7 +2696,9 @@ def grade_points(px, py, base, plans, lift=0.0):
         return out
     A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK = got
     import fast
-    fast.require(126, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126)
+    fast.require(134, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+                                             # legs blend over each other's bands: 133, a pass road's core
+                                             # given way to whole: 134)
     f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK,
