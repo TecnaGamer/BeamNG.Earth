@@ -15,8 +15,8 @@ This is the implementation guide. The wire contract is in [server/README.md](../
 | Part | Responsibility |
 |---|---|
 | `native/earthfast/src/traffic.rs` | Filter, deduplicate, split and rank road/deck pieces; reserve class quotas; build lane geometry; retain bends and relief; enforce producer limits. |
-| `server/distanttraffic.py` | Marshal shared road rules, projections, lane shifts and elevation samples to `TrafficRoutes`; write atomic tile JSON. Requires native 126; no Python algorithm fallback. |
-| `server/blockworker.py:traffic_geo` | Run the builder in the existing road-worker pool; share the far bridge slabs' profile store and normal map/height sources. |
+| `server/distanttraffic.py` | Marshal shared road rules, projections, lane shifts and elevation samples to `TrafficRoutes`; write atomic tile JSON. Uses the bundled native module (132 on this dev base); no Python algorithm fallback. |
+| `server/blockworker.py:traffic_geo` | Run the builder in the existing far-building worker pool; share the far bridge slabs' profile store and normal map/height sources. |
 | `server/earthd.py` | Negotiate the optional capability and own two existing geotile `Tracker`s per connection. |
 | `mod/.../beamngEarth/distanttraffic.lua` | Pure route validation, interpolation, ownership, density and view math; bounded incremental preparation. |
 | `mod/.../beamngEarth/trafficvisuals.lua` | Own the emissive-plane pool, view selection, motion, fades, file retries and cleanup. |

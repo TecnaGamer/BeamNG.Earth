@@ -10,6 +10,11 @@ upstream delta and current source rules were read before integration. New route 
 Python marshals shared road rules, projections, samples and bridge profiles. Both native artifacts were rebuilt
 from the combined source as version 126; no old binary was retained to resolve the merge.
 
+Updated integration: merged dev.116 (`ae96a16a41fd7ceefcddcd642531d77421c46bb3`) and rebuilt both artifacts as
+native132, preserving `TrafficRoutes` alongside the new fine-terrain APIs. The subsequent dev commit `a78df749`
+changes only fine-height sampling; a local merge-tree check found no conflicts with that current target. The
+feature's route, rendering and settings behavior did not change during this update.
+
 Independent Standards review found a duplicated resync readiness condition; execution and `hasWork()` now share
 one predicate. Independent Spec review found that inferred divided-carriageway direction was dropped. A failing
 regression reproduced two same-direction streams on opposite carriageways; the producer now forwards `Spec.dir`
@@ -40,6 +45,19 @@ lag; headway tests check ordering, variation, exact total length, wrap and cache
 not a car-following simulation.
 
 ## Verification
+
+Repeated on the dev.116 integration:
+
+- Windows: 27 feature, 85 road, 8 fine-terrain, 46 grading, 13 plan-cache, 22 heightmap, one anchor-quantum and
+  74 building tests passed. Protocol agreement: 32 run, 31 passed, one skipped. Synthetic far-geotile checks:
+  six run, four passed, two real-data tests skipped.
+- LuaJIT: 239 pure path, 1740 renderer, 282 core, 293 settings, 43 terrain-swap, 28 terrain-patch, four XXH64,
+  17 geotile, 31 road-geotile and 33 far-geotile assertions passed.
+- Both native132 artifacts were rebuilt from source. Windows API import and Linux bridge-route/API checks passed.
+  The updated mod was installed and the Windows game connected with capability 2. This fresh daytime scene did
+  not exercise nighttime movement; the moving-light and bridge observations below remain from the earlier build.
+
+Earlier feature acceptance and lifecycle checks:
 
 - Windows feature suite: 27 tests passed, including deck relief, missing/invalid profiles, stable bridge-part ids,
   the default profile-reader contract and divided carriageway directions.
