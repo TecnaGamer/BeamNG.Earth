@@ -2,6 +2,7 @@
 //! All coordinates are metres in the anchor's local frame, f64.
 mod gpu;
 mod finepatch;
+mod traffic;
 mod dsm;
 mod vegmask;
 mod roadgeom;
@@ -5409,6 +5410,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
-    m.add("VERSION", 125)?;
+    m.add_class::<traffic::Routes>()?;
+    m.add("VERSION", 126)?;
     Ok(())
 }

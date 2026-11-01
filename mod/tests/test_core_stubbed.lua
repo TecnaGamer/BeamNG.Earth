@@ -831,6 +831,22 @@ do -- the window gets its view only while it is shown: it is hidden by default (
   T.check(#views == 1 and type(views[1].connection) == 'string', 'shown window: its view built')
   ui.draw, ui.visible = draw, vis0
 end
+-- The connection survives a level reload; its negotiated capability must survive the scene reset too.
+do
+  local actual, seen = core._trafficvisuals, {}
+  core._trafficvisuals = { PROTO = 2,
+    session = function(id, available) seen.id, seen.available = id, available end,
+    reset = function() seen = {} end,
+    hasWork = function() return false end, update = function() end, onTeleport = function() end }
+  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
+  frames(3)
+  T.check(seen.available, 'hello negotiates distant traffic before the level reload')
+  core.onClientEndMission()
+  core.onClientStartMission()
+  T.check(seen.id == 'traffic-reload' and seen.available, 'level start restores the live connection capability')
+  core._trafficvisuals = actual
+end
 core.reconnect()
 T.check(core.cacheState() == nil and not core.cacheClear(), 'disconnected: numbers gone, no request sent')
 beamngEarth_settings = nil

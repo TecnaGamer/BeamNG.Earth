@@ -1591,6 +1591,16 @@ def _lamps_by_geotile(frame, lamps):
     return out
 
 
+def _far_bridges(frame, gzoom, raw):
+    """The distant road slabs and their visual traffic share the same anchor-free deck profiles."""
+    import roads as roadsmod
+
+    def setup(p):
+        sea = getattr(_s, "sea", None)
+        p.wet = sea.depth if sea is not None else None
+    return roadsmod.ChainView(_chain_store(f"far_bridges_{gzoom}", roadsmod.BridgeProfiles, raw, setup), frame)
+
+
 def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     """Far geotile tile's content written to out_dir: (JSON data, {what: file name} of its shapes, count) or None
     when its cells are not at hand (asked again later)."""
@@ -1628,12 +1638,8 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
             return None
         cells = [_s.md.cell(k, layers=("roads",), kind="background").layers.get("roads") for k in keys]
 
-        def far_setup(p):
-            sea = getattr(_s, "sea", None)
-            p.wet = sea.depth if sea is not None else None
         # (the raw ground's chains of this DEM zoom: the same deck whatever the anchor or the order of the asks)
-        bridges = roadsmod.ChainView(_chain_store(f"far_bridges_{gzoom}", roadsmod.BridgeProfiles, raw, far_setup),
-                                     frame)
+        bridges = _far_bridges(frame, gzoom, raw)
         parts = [(xy, z, float(spec.width)) for _fid, spec, xy, z, _lon in bridges.parts(cells, (x0, y0, x1, y1))]
         meshes = buildingsmod.bridge_slabs(parts, (x0, y0), owners=(frame, geotiles.FAR_Z, tile.z, tile.gx,
                                                                    tile.gy)) if parts else {}
@@ -1659,6 +1665,18 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     if by:
         data["lamps"] = by
     return data, shapes, n
+
+
+def traffic_geo(gx, gy, gzoom, out_dir, vfs_dir, left_hand=False, mph=True, far=False):
+    """Visual traffic routes, independent of the AI graph and of the far buildings (distanttraffic.py)."""
+    import distanttraffic
+    if _s.md is None:
+        return None
+    elev = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gzoom))
+    urban = _s.surface.urban if _s.surface is not None else None
+    data = distanttraffic.tile(_s.md, gx, gy, elev, urban, _s.widths, left_hand, mph, major_only=far,
+                               bridge_source=lambda frame: _far_bridges(frame, gzoom, elev))
+    return distanttraffic.write(out_dir, vfs_dir, data, "traffic_far" if far else "traffic") if data is not None else None
 
 
 def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):

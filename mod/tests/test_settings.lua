@@ -508,6 +508,23 @@ do
   settings.load()
 end
 
+-- #565: independent distant lights are opt-in and survive the settings round trip.
+do
+  local visual0, settingsFile0 = package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE]
+  local independent
+  package.loaded['beamngEarth/trafficvisuals'] = { setWithoutTraffic = function(v) independent = v end }
+  files[settings.FILE] = { version = 1 }
+  T.check(settings.load().distantTrafficWithoutTraffic == false, 'older settings retain traffic-following lights')
+  T.check(settings.set('distantTrafficWithoutTraffic', true).ok and independent == true,
+    'independent lights apply through the renderer')
+  T.check(files[settings.FILE].distantTrafficWithoutTraffic == true
+      and settings.load().distantTrafficWithoutTraffic == true, 'independent lights survive reload')
+  settings.set('distantTrafficWithoutTraffic', false)
+  T.check(independent == false, 'traffic-following lights can be restored')
+  package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE] = visual0, settingsFile0
+  settings.load()
+end
+
 
 -- presets: picking one sets its knobs; moving a knob makes it Custom (or the preset it now matches)
 local r = settings.setQuality('low')

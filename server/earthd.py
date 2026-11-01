@@ -61,6 +61,7 @@ import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import contextlib  # noqa: E402
 import glob  # noqa: E402
+import functools  # noqa: E402
 import itertools  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
@@ -90,6 +91,7 @@ import covermap as covermapmod  # noqa: E402
 import areas as areasmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
 import navgraph as navgraphmod  # noqa: E402
+import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
@@ -1498,6 +1500,22 @@ class Server:
             memo[(kind, gx, gy)] = got
         return got
 
+
+    def build_traffic_geo(self, gx, gy, far=False):
+        """One visual-road geotile, on the existing worker pool; session files survive anchor changes."""
+        if self.far_bld_pool is None or self.mapdata is None:
+            return None
+        memo = self.__dict__.setdefault("_traffic_geo_done", {})
+        got = memo.get((gx, gy, far))
+        if got is not None and os.path.exists(os.path.join(self.out_dir, os.path.basename(got[0]))):
+            return got
+        lh, mph, _buried, _lamps, _country, gzoom = self.geo_rules(gx, gy, distanttraffic.Z)
+        got = self.far_bld_pool.submit(blockworker.traffic_geo, gx, gy, gzoom, self.out_dir, self.vfs_dir, lh, mph, far).result()
+        if got is not None:
+            if len(memo) >= 512:
+                memo.clear()
+            memo[(gx, gy, far)] = got
+        return got
 
     def build_roads_geo(self, aid, gx, gy, content=True, skin=True, exact=None):
         """blockworker.roads_geo in a road process: geotile (gx, gy)'s content (once: kept by the mod across
@@ -3703,6 +3721,13 @@ class Connection:
         self.bldfar = self.bldsky = self.brfar = None
         self.make_far_trackers(False)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
+        self.traffic_visuals = False            # negotiated visual routes, requested only at night with traffic on
+        self.traffic_on = False
+        self.distant_traffic = vegetationmod.Tracker(distanttraffic.SEND_M, distanttraffic.DROP_M, 1, "traffic",
+                                                     geo=True, z=distanttraffic.Z)
+        self.distant_traffic_far = vegetationmod.Tracker(distanttraffic.FAR_SEND_M, distanttraffic.FAR_DROP_M, 1,
+                                                         "traffic_far", inner=(distanttraffic.FAR_SKIP_M, 1),
+                                                         geo=True, z=distanttraffic.Z)
         self.nav_wait = {}                      # anchor id -> monotonic time its first AI graph was wanted
         self.gravity = gravitymod.Tracker()     # real gravity: recompute rule, last message sent
         self.credits = creditsmod.Tracker()     # data credits: throttle, last message sent (--credits on)
@@ -4171,7 +4196,8 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, self.nav):
+            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, self.nav,
+                       self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
             self.s.drop_claims(self)
@@ -4247,7 +4273,13 @@ class Connection:
 
     def dispatch(self, msg):
         kind = msg["type"]
-        if kind == "hello":
+        if kind == "traffic_visuals":
+            self.traffic_on = self.traffic_visuals and msg.get("enabled") is True
+            if self.traffic_on and msg.get("reset") is True:
+                # The connection outlives levels; a reloaded client discarded its route cache.
+                self.distant_traffic.sent.clear()
+                self.distant_traffic_far.sent.clear()
+        elif kind == "hello":
             lay = self.s.layout
             fmt = msg.get("format", lay.format)
             if msg.get("protocol") != PROTOCOL:
@@ -4306,6 +4338,11 @@ class Connection:
                 self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, geo=geo)
             if geo:
                 m["geoTiles"] = geotiles.Z
+            self.traffic_visuals = (geo and msg.get("trafficVisuals") == distanttraffic.PROTO and self.s.traffic
+                                    and self.s.mapdata is not None and self.s.far_bld_pool is not None)
+            self.traffic_on = False
+            if self.traffic_visuals:
+                m["trafficVisuals"] = distanttraffic.PROTO
             # ... and the road tiles too when it places those (hello.roadGeo: roads.lua's ROAD_GEO; content kept across
             # rebases, a skin per anchor: roads.GeoTracker)
             road_geo = geo and msg.get("roadGeo") == roadsmod.ROAD_GEO and self.s.roads_geo_ok()
@@ -5006,6 +5043,14 @@ class Connection:
                                    view=self.view_at, frame=frame)
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
             self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
+        if self.traffic_on and aid == self.active and self.nav_may_start(aid):
+            self.distant_traffic.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_traffic_geo,
+                                         view=self.view_at, frame=self.s.anchors[aid].frame)
+            done, want = self.distant_traffic.progress()
+            if done >= want / 2:
+                self.distant_traffic_far.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
+                                                functools.partial(self.s.build_traffic_geo, far=True),
+                                                view=self.view_at, frame=self.s.anchors[aid].frame)
         if aid == self.active:
             self.send_progress(aid)
         self.refresh_status()
