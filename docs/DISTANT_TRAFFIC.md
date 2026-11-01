@@ -71,10 +71,14 @@ to 220 m residential, 500 m service and at least 1600 m unpaved / 3000 m track. 
 stable slots. Local-hour density thins those slots and the global ceiling. Visible demand shares the renderer
 between below 2.5 km, 2.5–6 km and beyond 6 km, reserving at least 20% for distant demand when present.
 
-Slot positions vary within 80% of their nominal spacing cell, retaining order and a minimum headway. The stable
-rank mixer decorrelates adjacent slot numbers before phase, density and pool thresholds; linear ranks produced
-repeating three-car groups on long bridges. No random numbers are drawn per frame. The count, speed and hard
-budgets are unchanged; toggling or looking away does not reshuffle the same route's slots.
+Headways form a stable renewal sequence rather than one car per equal spacing cell. Twenty percent of the
+route length reserves a minimum gap; the rest follows bounded exponential weights, normalized to the remaining
+length. Gaps stay ordered, including at wrap, because all slots share the route speed. At most 128 phase offsets
+are cached per prepared route and released with it; frames only sample existing offsets. The stable rank mixer
+decorrelates adjacent slot numbers before phase, density and pool thresholds; linear ranks produced repeating
+three-car groups on long bridges. Expected density, constant route speed and hard budgets are unchanged;
+individual fractional counts and selected identities can differ between versions. Looking away or toggling
+does not reshuffle the same route's slots.
 
 Tile admission is atomic at the point/tile limit. A rejected tile is not marked received by the route store.
 The renderer retains its current-session file descriptor and retries after capacity is released, at most one

@@ -31,9 +31,13 @@ are delivered/rendered object counts, not a claim that every object was an unobs
 The user then noticed repeated three-car groups. The former linear rank transformation correlated adjacent slot
 numbers before budget thinning (lag-one correlation about 0.28 in the fixed 64-road sample). Mixing those bits
 before the existing bounded modular multiplications reduced that sample's correlation to about 0.002. Position
-jitter now spans 80% of each spacing cell, preserving ordering and a minimum headway. Counts, constant route
-speed and work/object limits remain unchanged. The six deterministic phase/density/budget correlation regressions
-cover adjacent slots and a three-slot lag. This is cosmetic variation, not a car-following simulation.
+cell jitter was initially widened, but the tester still saw a regular pattern. The final sequence instead
+distributes 80% of the route over bounded exponential gap weights and reserves 20% for minimum headways. It is
+computed once, cached at no more than 128 offsets per route and released with that route. Expected density,
+constant route speed and work/object limits remain unchanged; fractional rounding and selected identities can
+differ between versions. Six deterministic rank-correlation regressions cover adjacent slots and a three-slot
+lag; headway tests check ordering, variation, exact total length, wrap and cache reuse. This is cosmetic variation,
+not a car-following simulation.
 
 ## Verification
 
@@ -41,12 +45,12 @@ cover adjacent slots and a three-slot lag. This is cosmetic variation, not a car
   the default profile-reader contract and divided carriageway directions.
 - Protocol agreement: 32 run, 31 passed, one skipped.
 - Adjacent roads: 83 passed; navigation graph: 13 passed; geotiles: 14 run, one skipped.
-- LuaJIT fixtures: 155 pure path assertions, 1740 renderer assertions, 282 core and 293 settings assertions passed.
+- LuaJIT fixtures: 239 pure path assertions, 1740 renderer assertions, 282 core and 293 settings assertions passed.
   The saturated camera-return fixture uses longer roads whose slots clear endpoint fades, so that it measures
   view restoration rather than intentional route-end dimming. Geotile 17 and navigation graph 46 also passed.
 - Renderer lifecycle regression repeatedly creates the full 512-car pool and checks zero retained engine objects,
   routes and pending points after reset. A separate 60-cycle stub-engine run, collected every 20 cycles, measured
-  about 1303/1308/1309 KiB of Lua heap. This finite result does not measure native renderer allocations or prove
+  about 2026/2079/2083 KiB of Lua heap with the final phase cache. This finite result does not measure native renderer allocations or prove
   absence of a long-session process-memory leak.
 - JavaScript syntax and Git whitespace checks passed. The Linux artifact has a native route/API smoke check;
   the live game and comprehensive suites above ran on Windows, not Linux BeamNG.

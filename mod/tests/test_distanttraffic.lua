@@ -88,11 +88,24 @@ busy.spacing = 3000
 T.check(dt.slots(busy) <= 2, 'dirt-road demand stays sparse')
 busy.spacing = 50
 local previous = dt.phase(busy, 1, 80)
+local first, low, high, sum = previous, math.huge, 0, 0
 for i = 2, 80 do
   local phase = dt.phase(busy, i, 80)
-  T.check(phase - previous >= 10 and phase - previous <= 90, 'varied headways stay ordered with a minimum gap')
+  local gap = phase - previous
+  T.check(gap >= 10 and phase < busy.length, 'varied headways stay ordered with a minimum gap')
+  low, high, sum = math.min(low, gap), math.max(high, gap), sum + gap
+  T.near(dt.phase(busy, i, 80), phase, 0, 'headways are stable between scans')
   previous = phase
 end
+local wrap = busy.length - previous + first
+T.check(wrap >= 10, 'minimum headway holds across the route loop')
+T.near(sum + wrap, busy.length, 1e-8, 'gaps span exactly one route')
+T.check(low < 30 and high > 90, 'renewal headways include close cars and long gaps, beyond equal-cell jitter')
+local phases = busy.phases
+dt.phase(busy, 1, 80)
+T.check(busy.phases == phases and #phases == 80, 'cached phases are bounded by the slot count and reused')
+dt.phase(busy, 1, 8)
+T.check(busy.phaseCount == 8 and #busy.phases == 8, 'a different slot count replaces its cached phases')
 local q = dt.bandQuotas({ 1000, 1000, 100 }, 256)
 T.check(q[1] + q[2] + q[3] == 256 and q[3] >= 51, 'distant demand retains a share of a saturated pool')
 q = dt.bandQuotas({ 0, 1, 0 }, 256)

@@ -30,7 +30,7 @@ function M.rank(id)
   for i = 1, #id do h = (h * 131 + id:byte(i)) % 2147483647 end
   -- Mix adjacent slot ids before thresholding: linear ranks made repeating groups on long roads.
   for _ = 1, 2 do h = (bit.bxor(h, bit.rshift(h, 16)) * 48271) % 2147483647 end
-  return bit.bxor(h, bit.rshift(h, 16)) / 2147483647
+  return bit.bxor(h, bit.rshift(h, 16)) / 2147483648
 end
 
 local function finite(v) return type(v) == 'number' and v == v and math.abs(v) < math.huge end
@@ -132,8 +132,7 @@ function M.viewEdge(x, y, z, view)
 end
 
 -- A stream's peak population scales with its length. Short quiet roads may have no car rather than receiving a
--- compulsory one each. Each slot gets a stable position within its cell, so headways vary without overtaking
--- or jumping when the clock changes. Density and pool selection thin these slots independently.
+-- compulsory one each. Density and pool selection thin the stable slots independently.
 function M.slots(path)
   local expected = path.length / (path.spacing or 180)
   local n = math.floor(expected)
@@ -142,7 +141,20 @@ function M.slots(path)
 end
 
 function M.phase(path, i, n)
-  return (i - 0.5 + (M.rank(path.id .. ':' .. i .. ':phase') - 0.5) * 0.8) * path.length / n
+  if path.phaseCount ~= n then
+    -- A bounded renewal sequence, not one car in each equal cell. Reserve a minimum gap, then distribute
+    -- the remaining length over stable exponential weights. Shared speed preserves those gaps, including wrap.
+    local gaps, total = {}, 0
+    for j = 1, n do
+      local w = math.min(4, -math.log(math.max(1e-6, M.rank(path.id .. ':' .. j .. ':phase'))))
+      gaps[j], total = w, total + w
+    end
+    for j = 1, n do gaps[j] = path.length * (0.2 / n + 0.8 * gaps[j] / math.max(1e-12, total)) end
+    local phases = { gaps[n] * M.rank(path.id .. ':origin') }
+    for j = 2, n do phases[j] = phases[j - 1] + gaps[j - 1] end
+    path.phases, path.phaseCount = phases, n
+  end
+  return path.phases[i]
 end
 
 -- Preserve a small angular footprint beyond the near probe's range, where texture minification erased the dots.
