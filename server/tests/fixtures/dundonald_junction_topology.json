@@ -1,0 +1,168 @@
+{
+  "provenance": {
+    "dataset": "Overture Maps transportation",
+    "release": "2026-09-23.1",
+    "license": "ODbL-1.0",
+    "source_url": "https://docs.overturemaps.org/attribution/",
+    "source_cell": "14/7926/5214",
+    "source_sha256": "b672ef04e5505f36a4ab15ed2fa39f98f47315c3aef5de916d7de2f78c384004",
+    "location": [
+      54.5945521,
+      -5.8412753
+    ],
+    "description": "Service-road endpoint 2.72 m from Upper Newtownards Road / Castleview Road junction, but with a different mapped connector. Captured geometry and connectors only. Heights used by the replay are deliberately controlled, NOT captured DEM or in-game measurements."
+  },
+  "roads": [
+    {
+      "fid": "5a9f61e3-b161-413f-84a5-2ef0bca2dd56",
+      "class": "service",
+      "name": "",
+      "line": [
+        [
+          -5.8412753,
+          54.5945521
+        ],
+        [
+          -5.8411836,
+          54.5946452
+        ],
+        [
+          -5.8411498,
+          54.5946726
+        ],
+        [
+          -5.8410275,
+          54.5947834
+        ],
+        [
+          -5.8409155,
+          54.5948395
+        ],
+        [
+          -5.8407547,
+          54.594861
+        ]
+      ],
+      "connectors": [
+        [
+          "a94590f6-0106-41cf-980d-61b82bea5b75",
+          0.0
+        ],
+        [
+          "7caa240f-2050-4208-b4d3-84afe51fcb8d",
+          1.0
+        ]
+      ]
+    },
+    {
+      "fid": "da1f33b6-5071-406e-9473-745bd40f4478",
+      "class": "trunk",
+      "name": "Upper Newtownards Road",
+      "line": [
+        [
+          -5.8413174,
+          54.5945515
+        ],
+        [
+          -5.8414542,
+          54.5945494
+        ],
+        [
+          -5.8415235,
+          54.5945484
+        ],
+        [
+          -5.8416011,
+          54.5945459
+        ],
+        [
+          -5.8419367,
+          54.5945352
+        ],
+        [
+          -5.8427137,
+          54.5945129
+        ],
+        [
+          -5.8428303,
+          54.5945088
+        ]
+      ],
+      "connectors": [
+        [
+          "53b34348-34aa-4a44-a0a9-8794527f0810",
+          0.0
+        ],
+        [
+          "1c4b0c74-99b2-4ab5-b3b7-da41a7aea5cc",
+          0.13610711693763733
+        ],
+        [
+          "869d4c62-e080-482d-96af-853d01654ec4",
+          1.0
+        ]
+      ]
+    },
+    {
+      "fid": "7c0cfd08-b948-4312-bb2a-7c26bf27233f",
+      "class": "residential",
+      "name": "Castleview Road",
+      "line": [
+        [
+          -5.840928,
+          54.593507
+        ],
+        [
+          -5.8410046,
+          54.5937545
+        ],
+        [
+          -5.8410736,
+          54.5939412
+        ],
+        [
+          -5.8411591,
+          54.5941722
+        ],
+        [
+          -5.8411782,
+          54.5942145
+        ],
+        [
+          -5.8412963,
+          54.5944763
+        ],
+        [
+          -5.8413022,
+          54.5944983
+        ],
+        [
+          -5.8413174,
+          54.5945515
+        ]
+      ],
+      "connectors": [
+        [
+          "ef26dcbc-59db-4d2f-8c3e-fa2bef0a31d7",
+          0.0
+        ],
+        [
+          "6ccaec47-054c-4dad-afe5-c3964db0a88b",
+          0.41376450657844543
+        ],
+        [
+          "cc2c657d-7ca1-49a3-abad-6c6bf0db0c0e",
+          0.675635814666748
+        ],
+        [
+          "3235edfd-bd12-403f-a4b2-ea6dbc03121f",
+          0.928741991519928
+        ],
+        [
+          "53b34348-34aa-4a44-a0a9-8794527f0810",
+          1.0
+        ]
+      ]
+    }
+  ]
+}

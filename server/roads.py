@@ -1142,7 +1142,7 @@ def _parts_by_level(feats, i, want):
     return list(got)
 
 
-def _parts_by_level_new(feats, i, want, rngs=None):
+def _parts_by_level_new(feats, i, want, rngs=None, *, with_source=False):
     rngs = level_ranges(feats, i) if rngs is None else rngs
     if want == "ground":
         pieces, at = [], 0.0
@@ -1162,7 +1162,7 @@ def _parts_by_level_new(feats, i, want, rngs=None):
             for a, b in pieces:
                 r = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
                 if len(r) >= 2:
-                    out.append(r)
+                    out.append((r, ring, a, b) if with_source else r)
     return out
 
 
@@ -1190,6 +1190,17 @@ def bridge_levels(feats, i):
 def ground_parts(feats, i):
     """The on-ground pieces of feature i (lon/lat polylines): its rings minus the bridge / tunnel ranges."""
     return _parts_by_level(feats, i, "ground")
+
+
+def ground_parts_with_source(feats, i):
+    """Ground pieces with their original ring and its start/end fractions, in ground_parts order."""
+    memo = feats.__dict__.setdefault("_parts_by_level", {})
+    key = (i, "ground_source")
+    got = memo.get(key)
+    if got is None:
+        got = memo[key] = _parts_by_level_new(feats, i, "ground", with_source=True)
+        memo.setdefault((i, "ground"), [part for part, _ring, _a, _b in got])
+    return list(got)
 
 
 def bridge_parts(feats, i):

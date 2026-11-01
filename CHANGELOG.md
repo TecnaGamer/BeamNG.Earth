@@ -2,6 +2,12 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Solve ground-road junction heights from mapped connections before grading terrain, keeping real
+  hills and separate bridge/tunnel levels. Preserve those connections through clipped and curved road
+  segments so adjoining carriageways do not acquire artificial height steps.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

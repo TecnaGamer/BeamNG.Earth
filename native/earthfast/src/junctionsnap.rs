@@ -1,225 +1,146 @@
-//! grading.snap_junctions: a side road's end at a junction takes the height of the road it joins, eased in along the
-//! side road (each road is smoothed on its own: a side road met the main road up to a metre off), and (coarse: the
-//! BNE_COARSE_EASE crossings, GitHub #414) a road running over a higher-ranked road's carriageway away from its ends
-//! takes that road's height there. Higher ranks first: a lower road meets its neighbour's already adjusted height.
-//! The numpy version's numbers (its pairwise sums, first minimum, operation order), bit for bit.
+//! Ease road profiles only at shared mapped connectors. Spatial proximity is not connectivity:
+//! a cul-de-sac, another turn of a hairpin, and a tunnel roof can be close to a road without joining it.
 
+use std::collections::BTreeMap;
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
-/// numpy's sum of a float64 array (pairwise: blocks of 8 accumulators up to 128 values, halves above).
-fn np_sum(a: &[f64]) -> f64 {
-    fn pw(a: &[f64]) -> f64 {
-        let n = a.len();
-        if n < 8 {
-            let mut r = 0.0;
-            for &x in a {
-                r += x;
-            }
-            r
-        } else if n <= 128 {
-            let mut r = [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]];
-            let mut i = 8;
-            while i < n - (n % 8) {
-                for j in 0..8 {
-                    r[j] += a[i + j];
-                }
-                i += 8;
-            }
-            let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
-            while i < n {
-                res += a[i];
-                i += 1;
-            }
-            res
-        } else {
-            let mut n2 = n / 2;
-            n2 -= n2 % 8;
-            pw(&a[..n2]) + pw(&a[n2..])
-        }
-    }
-    0.0 + pw(a)
-}
-
-/// The eased weight of the change at u (0 at the end, 1 TAPER away): 0.5 (1 + cos(pi u)) below 1, else 0.
 fn ease(u: f64) -> f64 {
-    if u < 1.0 {
-        0.5 * (1.0 + (std::f64::consts::PI * u.clamp(0.0, 1.0)).cos())
-    } else {
-        0.0
-    }
+    if u < 1.0 { 0.5 * (1.0 + (std::f64::consts::PI * u.max(0.0)).cos()) } else { 0.0 }
 }
 
-/// (distance, height, arc position from the nearer end) of the point of polyline xy / z nearest (x, y)
-/// (grading._nearest_on).
-fn nearest_on(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64, f64) {
-    let m = xy.len() - 1;
-    let mut seg = Vec::with_capacity(m);
-    let (mut bi, mut bd, mut bt) = (0usize, f64::INFINITY, 0.0);
-    for i in 0..m {
-        let (a, b) = (xy[i], xy[i + 1]);
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let ll = (0.0 + dx * dx + dy * dy).max(1e-12);
-        let t = (((x - a[0]) * dx + (y - a[1]) * dy) / ll).clamp(0.0, 1.0);
-        let (qx, qy) = (a[0] + dx * t, a[1] + dy * t);
-        let d = (qx - x).hypot(qy - y);
-        if d < bd || (i == 0 && d.is_nan()) {
-            bi = i;
-            bd = d;
-            bt = t;
-        }
-        seg.push(ll.sqrt());
-    }
-    let s = np_sum(&seg[..bi]) + seg[bi] * bt;
-    (bd, z[bi] + (z[bi + 1] - z[bi]) * bt, s.min(np_sum(&seg) - s))
+#[derive(Clone, Copy)]
+struct Node {
+    plan: usize,
+    end: i64,
+    segment: usize,
+    t: f64,
+    arc: f64,
+    point: [f64; 2],
 }
 
-/// New heights for the plans' vertices. xy (n, 2), z (n): every plan's vertices one after another, plan j's from
-/// off[j] to off[j + 1]; rank: its road rank; half: its carriageway's half width; abut (plans, 2): an end that is a
-/// bridge abutment (left as it is); bbox (plans, 4): its x0, y0, x1, y1. reach, end_m, taper, max_m: grading's
-/// JUNCTION_* constants; coarse: the crossings too (COARSE_EASE_ON). Returns (z, changed per plan). Pure.
+/// xy/z/off: concatenated plans. links: (plan, connector identity, end 0/1 or -1 for an interior connector).
+/// points: each link's mapped position on its own source geometry, NOT the other road's nearest point.
+/// rid gives deterministic feature ordering. No connectors means no snapping; no geometric fallback.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn snap_junctions<'py>(
     py: Python<'py>,
-    xy: PyReadonlyArray2<'py, f64>,
-    z: PyReadonlyArray1<'py, f64>,
-    off: PyReadonlyArray1<'py, i64>,
-    rank: PyReadonlyArray1<'py, i64>,
-    half: PyReadonlyArray1<'py, f64>,
-    abut: PyReadonlyArray2<'py, u8>,
-    bbox: PyReadonlyArray2<'py, f64>,
-    reach: f64,
-    end_m: f64,
-    taper_m: f64,
-    max_m: f64,
-    coarse: bool,
+    xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>, off: PyReadonlyArray1<'py, i64>,
+    rank: PyReadonlyArray1<'py, i64>, half: PyReadonlyArray1<'py, f64>, abut: PyReadonlyArray2<'py, u8>,
+    rid: PyReadonlyArray1<'py, i64>, links: PyReadonlyArray2<'py, i64>, points: PyReadonlyArray2<'py, f64>,
+    reach: f64, end_m: f64, taper_m: f64, max_m: f64, coarse: bool,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<u8>>)> {
-    let xa = xy.as_array();
-    let n = xa.nrows();
-    let pts: Vec<[f64; 2]> = (0..n).map(|i| [xa[[i, 0]], xa[[i, 1]]]).collect();
-    let mut zz: Vec<f64> = z.as_array().to_vec();
-    let off: Vec<usize> = off.as_array().iter().map(|&v| v.max(0) as usize).collect();
-    let rank: Vec<i64> = rank.as_array().to_vec();
-    let half: Vec<f64> = half.as_array().to_vec();
-    let ab = abut.as_array();
-    let bb = bbox.as_array();
+    let xy = xy.as_array();
+    let mut zz = z.as_array().to_vec();
+    let off = off.as_array();
+    let rank = rank.as_array();
+    let half = half.as_array();
+    let abut = abut.as_array();
+    let rid = rid.as_array();
+    let links = links.as_array();
+    let points = points.as_array();
     let np = rank.len();
-    if off.len() != np + 1 || zz.len() != n || half.len() != np || ab.nrows() != np || bb.nrows() != np
-        || off[np] > n
+    if xy.ncols() != 2 || zz.len() != xy.nrows() || off.len() != np + 1 || off[0] != 0
+        || off[np] != zz.len() as i64 || off.iter().any(|&x| x < 0)
+        || off.iter().zip(off.iter().skip(1)).any(|(a, b)| a > b)
+        || half.len() != np || rid.len() != np || abut.dim() != (np, 2)
+        || links.ncols() != 3 || points.dim() != (links.nrows(), 2)
     {
         return Err(pyo3::exceptions::PyValueError::new_err("snap_junctions: array sizes differ"));
     }
-    let boxes: Vec<[f64; 4]> = (0..np).map(|k| [bb[[k, 0]], bb[[k, 1]], bb[[k, 2]], bb[[k, 3]]]).collect();
-    let mut order: Vec<usize> = (0..np).collect();
-    order.sort_by_key(|&j| -rank[j]); // (stable, as Python's sorted)
+    let mut arcs = Vec::with_capacity(np);
+    for j in 0..np {
+        let (a, b) = (off[j] as usize, off[j + 1] as usize);
+        let mut s = vec![0.0; b - a];
+        for i in 1..s.len() {
+            s[i] = s[i - 1] + (xy[[a + i, 0]] - xy[[a + i - 1, 0]])
+                .hypot(xy[[a + i, 1]] - xy[[a + i - 1, 1]]);
+        }
+        arcs.push(s);
+    }
+    let mut groups: BTreeMap<i64, Vec<Node>> = BTreeMap::new();
+    for h in 0..links.nrows() {
+        let (j, node, end) = (links[[h, 0]], links[[h, 1]], links[[h, 2]]);
+        if j < 0 || j >= np as i64 || !(-1..=1).contains(&end) {
+            return Err(pyo3::exceptions::PyValueError::new_err("snap_junctions: invalid connector"));
+        }
+        let j = j as usize;
+        let a = off[j] as usize;
+        let s = &arcs[j];
+        if s.len() < 2 { continue; }
+        let point = [points[[h, 0]], points[[h, 1]]];
+        let (mut segment, mut t, mut distance) = (0, 0.0, f64::INFINITY);
+        if end >= 0 {
+            segment = if end == 0 { 0 } else { s.len() - 2 };
+            t = end as f64;
+            let i = a + if end == 0 { 0 } else { s.len() - 1 };
+            distance = (xy[[i, 0]] - point[0]).hypot(xy[[i, 1]] - point[1]);
+        } else {
+            for i in 0..s.len() - 1 {
+                let (dx, dy) = (xy[[a + i + 1, 0]] - xy[[a + i, 0]], xy[[a + i + 1, 1]] - xy[[a + i, 1]]);
+                let u = (((point[0] - xy[[a + i, 0]]) * dx + (point[1] - xy[[a + i, 1]]) * dy)
+                    / (dx * dx + dy * dy).max(1e-12)).clamp(0.0, 1.0);
+                let d = (xy[[a + i, 0]] + u * dx - point[0]).hypot(xy[[a + i, 1]] + u * dy - point[1]);
+                if d < distance { segment = i; t = u; distance = d; }
+            }
+        }
+        // junction_nodes established membership on the original ground/clipped source piece.
+        // A valid corner can be far from this plan's resampling chord: projection samples the
+        // proven participant, it does not discover a join or choose another road.
+        if !distance.is_finite() { continue; }
+        let arc = s[segment] + t * (s[segment + 1] - s[segment]);
+        groups.entry(node).or_default().push(Node { plan: j, end, segment, t, arc, point });
+    }
+    let compare_plans = |j: usize, k: usize| {
+        (-rank[j], rid[j]).cmp(&(-rank[k], rid[k]))
+            .then_with(|| xy[[off[j] as usize, 0]].total_cmp(&xy[[off[k] as usize, 0]]))
+            .then_with(|| xy[[off[j] as usize, 1]].total_cmp(&xy[[off[k] as usize, 1]]))
+            .then_with(|| xy[[off[j + 1] as usize - 1, 0]].total_cmp(&xy[[off[k + 1] as usize - 1, 0]]))
+            .then_with(|| xy[[off[j + 1] as usize - 1, 1]].total_cmp(&xy[[off[k + 1] as usize - 1, 1]]))
+    };
+    for members in groups.values_mut() {
+        members.sort_by(|a, b| compare_plans(a.plan, b.plan).then_with(|| a.arc.total_cmp(&b.arc)));
+    }
+    let mut incident = vec![Vec::new(); np];
+    for (node, members) in &groups {
+        for m in members { incident[m.plan].push((*node, *m)); }
+    }
+    let mut order: Vec<usize> = (0..np).filter(|&j| arcs[j].len() >= 2).collect();
+    order.sort_by(|&j, &k| compare_plans(j, k));
     let mut changed = vec![0u8; np];
-    for &j in &order {
-        let (o0, o1) = (off[j], off[j + 1]);
-        let len = o1 - o0;
-        if len < 2 {
-            continue;
+    for j in order {
+        let a = off[j] as usize;
+        let s = &arcs[j];
+        if s.len() < 2 { continue; }
+        let length = s[s.len() - 1];
+        let taper = taper_m.min(0.5 * length).max(1e-6);
+        let mut dz = vec![0.0; s.len()];
+        for (node, own) in &incident[j] {
+            if own.end >= 0 && abut[[j, own.end as usize]] != 0 { continue; }
+            let interior = own.end < 0;
+            if interior && (!coarse || own.arc <= end_m || own.arc >= length - end_m) { continue; }
+            let mut best: Option<(f64, i64, Node)> = None;
+            for other in &groups[node] {
+                let k = other.plan;
+                if k == j || rid[k] == rid[j] || rank[k] < rank[j] || (interior && rank[k] == rank[j]) { continue; }
+                let d = (own.point[0] - other.point[0]).hypot(own.point[1] - other.point[1]);
+                if d > half[k] + reach { continue; }
+                let sk = &arcs[k];
+                if rank[k] == rank[j] && other.arc.min(sk[sk.len() - 1] - other.arc) < end_m { continue; }
+                if best.map_or(true, |b| (d, rid[k]) < (b.0, b.1)) { best = Some((d, rid[k], *other)); }
+            }
+            let Some((_, _, other)) = best else { continue; };
+            let q = off[other.plan] as usize + other.segment;
+            let target = zz[q] + other.t * (zz[q + 1] - zz[q]);
+            let i = own.segment;
+            let current = zz[a + i] + dz[i] + own.t * (zz[a + i + 1] + dz[i + 1] - zz[a + i] - dz[i]);
+            let delta = target - current;
+            if delta.abs() > max_m { continue; }
+            for (i, &arc) in s.iter().enumerate() { dz[i] += delta * ease((arc - own.arc).abs() / taper); }
         }
-        let p = &pts[o0..o1];
-        let mut s = vec![0.0; len];
-        for i in 1..len {
-            s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).hypot(p[i][1] - p[i - 1][1]);
-        }
-        let length = s[len - 1];
-        let mut dz = vec![0.0; len];
-        for end in 0..2 {
-            if ab[[j, end]] != 0 {
-                continue; // a bridge abutment's end: the deck's height
-            }
-            let e = if end == 0 { 0 } else { len - 1 };
-            let (x, y) = (p[e][0], p[e][1]);
-            let mut best: Option<(f64, f64)> = None;
-            for k in 0..np {
-                let b = boxes[k];
-                if k == j || rank[k] < rank[j] || !(b[0] <= x && x <= b[2] && b[1] <= y && y <= b[3]) {
-                    continue;
-                }
-                let (q0, q1) = (off[k], off[k + 1]);
-                if q1 - q0 < 2 {
-                    continue; // (numpy: an empty argmin raised; plans have 2 points or more)
-                }
-                let (dist, zq, from_end) = nearest_on(&pts[q0..q1], &zz[q0..q1], x, y);
-                if dist > half[k] + reach {
-                    continue;
-                }
-                if rank[k] == rank[j] && from_end < end_m {
-                    continue; // the same class end to end: a road's continuation, not a junction
-                }
-                if best.map_or(true, |bst| dist < bst.0) {
-                    best = Some((dist, zq));
-                }
-            }
-            let Some((_, zq)) = best else { continue };
-            let delta = zq - zz[o0 + e];
-            if delta.abs() > max_m {
-                continue; // a ramp up to an overpass, or bad data: as it was
-            }
-            let taper = taper_m.min(0.5 * length).max(1e-6);
-            for i in 0..len {
-                let u = (if end == 0 { s[i] } else { length - s[i] }) / taper;
-                dz[i] += delta * ease(u);
-            }
-        }
-        if coarse {
-            let pb = boxes[j];
-            for k in 0..np {
-                let b = boxes[k];
-                if !(rank[k] > rank[j] && b[0] <= pb[2] && b[2] >= pb[0] && b[1] <= pb[3] && b[3] >= pb[1]) {
-                    continue;
-                }
-                let (q0, q1) = (off[k], off[k + 1]);
-                if q1 - q0 < 2 {
-                    continue;
-                }
-                let q = &pts[q0..q1];
-                let qz = &zz[q0..q1];
-                let inner: Vec<usize> = (0..len).filter(|&i| s[i] > end_m && s[i] < length - end_m).collect();
-                if inner.is_empty() {
-                    continue;
-                }
-                // per inner point: its nearest segment of the other road (first minimum), and the nearest hit overall
-                let mut pick: Option<(f64, usize, usize, f64)> = None; // (dmin, h, segment, t)
-                for (h, &i) in inner.iter().enumerate() {
-                    let (px, py) = (p[i][0], p[i][1]);
-                    let (mut sd, mut ss, mut st) = (f64::INFINITY, 0usize, 0.0);
-                    for g in 0..q.len() - 1 {
-                        let (a, bq) = (q[g], q[g + 1]);
-                        let (dx, dy) = (bq[0] - a[0], bq[1] - a[1]);
-                        let ll = (0.0 + dx * dx + dy * dy).max(1e-12);
-                        let t = (((px - a[0]) * dx + (py - a[1]) * dy) / ll).clamp(0.0, 1.0);
-                        let d = (a[0] + t * dx - px).hypot(a[1] + t * dy - py);
-                        if d < sd || (g == 0 && d.is_nan()) {
-                            sd = d;
-                            ss = g;
-                            st = t;
-                        }
-                    }
-                    if sd <= half[k] && pick.map_or(true, |pk| sd < pk.0) {
-                        pick = Some((sd, h, ss, st));
-                    }
-                }
-                let Some((_, h, sg, t)) = pick else { continue };
-                let i_ = inner[h];
-                let zq = qz[sg] + (qz[sg + 1] - qz[sg]) * t;
-                let delta = zq - (zz[o0 + i_] + dz[i_]);
-                if delta.abs() > max_m || delta.abs() < 0.05 {
-                    continue;
-                }
-                let taper = taper_m.min(0.5 * length).max(1e-6);
-                for i in 0..len {
-                    dz[i] += delta * ease((s[i] - s[i_]).abs() / taper);
-                }
-            }
-        }
-        if dz.iter().any(|&v| v != 0.0) {
-            for i in 0..len {
-                zz[o0 + i] += dz[i];
-            }
+        if dz.iter().any(|&d| d != 0.0) {
+            for (i, d) in dz.into_iter().enumerate() { zz[a + i] += d; }
             changed[j] = 1;
         }
     }

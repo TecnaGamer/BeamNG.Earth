@@ -435,6 +435,10 @@ class GraderTest(unittest.TestCase):
         self.assertEqual(grading.clip_polyline(np.array([[200.0, 0], [300, 0]]), (0, 0, 10, 10)), [])
         two = grading.clip_polyline(np.array([[-5.0, 5], [15, 5], [15, 7], [-5, 7]]), (0, 0, 10, 10))
         self.assertEqual(len(two), 2)
+        with_stations = np.array([[-5.0, 5, 0], [15, 5, 1], [15, 7, 2], [-5, 7, 3]])
+        pieces = grading.clip_polyline(with_stations, (0, 0, 10, 10))
+        np.testing.assert_allclose(pieces[0], [[0, 5, 0.25], [10, 5, 0.75]])
+        np.testing.assert_allclose(pieces[1], [[10, 7, 2.25], [0, 7, 2.75]])
 
 
 class ChainTest(unittest.TestCase):
@@ -715,7 +719,8 @@ class JunctionTest(unittest.TestCase):
         y = np.arange(0, 201, 4.0)
         side = grading.Plan(np.stack([0 * y + 50, y], 1), 11.8 + 0 * y, 3, road_half=3)   # 0.8 m over the main road
         grading.snap_junctions([main, side], [roads.Spec(8.0, "paved", False, "primary", False),
-                                              roads.Spec(6.0, "paved", False, "residential", False)])
+                                              roads.Spec(6.0, "paved", False, "residential", False)],
+                              [[("join", (50.0, 0.0), -1)], [("join", (50.0, 0.0), 0)]])
         self.assertAlmostEqual(side.z[0], 11.0, places=6)                  # at the main road's height where it joins
         self.assertAlmostEqual(side.z[-1], 11.8, places=6)                 # its own height past the taper
         self.assertTrue(np.all(np.diff(side.z[:12]) >= -1e-9))             # eased in, no bump
@@ -731,9 +736,10 @@ class JunctionTest(unittest.TestCase):
         y = np.arange(0, 101, 4.0)
         side = grading.Plan(np.stack([0 * y + 50, y], 1), 10.0 + 0 * y, 2, road_half=2)
         specs = [roads.Spec(8.0, "paved", False, "primary", False), roads.Spec(4.0, "paved", False, "service", False)]
-        grading.snap_junctions([main, side], specs)
+        nodes = [[("join", (50.0, 0.0), -1)], [("join", (50.0, 0.0), 0)]]
+        grading.snap_junctions([main, side], specs, nodes)
         main.z = main.z - 3.0 * np.exp(-((x - 60.0) / 40.0) ** 2)     # the dip, after the first snap
-        grading.snap_junctions([main, side], specs)
+        grading.snap_junctions([main, side], specs, nodes)
         zq = np.interp(50.0, x, main.z)        # (the main road's height where the side road meets it)
         self.assertAlmostEqual(side.z[0], zq, places=6)
         self.assertAlmostEqual(side.z[-1], 10.0, places=6)
@@ -752,7 +758,8 @@ class JunctionTest(unittest.TestCase):
         y = np.arange(-200, 201, 4.0)
         cross = grading.Plan(np.stack([0 * y + 20, y], 1), 14.0 + 0 * y, 3, road_half=2)
         grading.snap_junctions([main, cross], [roads.Spec(10.0, "paved", False, "primary", False),
-                                               roads.Spec(4.0, "paved", False, "service", False)])
+                                               roads.Spec(4.0, "paved", False, "service", False)],
+                              [[("join", (20.0, 0.0), -1)], [("join", (20.0, 0.0), -1)]])
         mid = int(np.argmin(np.abs(y)))
         self.assertAlmostEqual(cross.z[mid], 10.0, places=6)
         self.assertAlmostEqual(cross.z[0], 14.0, places=6)
@@ -764,7 +771,8 @@ class JunctionTest(unittest.TestCase):
         a = grading.Plan(np.stack([x, 0 * x], 1), 10 + 0 * x, 4, road_half=3)
         b = grading.Plan(np.stack([x + 200, 0 * x], 1), 11 + 0 * x, 4, road_half=3)
         res = roads.Spec(6.0, "paved", False, "residential", False)
-        grading.snap_junctions([a, b], [res, res])
+        grading.snap_junctions([a, b], [res, res],
+                              [[("join", (200.0, 0.0), 1)], [("join", (200.0, 0.0), 0)]])
         self.assertEqual((a.z[-1], b.z[0]), (10.0, 11.0))
 
 
