@@ -71,6 +71,11 @@ to 220 m residential, 500 m service and at least 1600 m unpaved / 3000 m track. 
 stable slots. Local-hour density thins those slots and the global ceiling. Visible demand shares the renderer
 between below 2.5 km, 2.5–6 km and beyond 6 km, reserving at least 20% for distant demand when present.
 
+Slot positions vary within 80% of their nominal spacing cell, retaining order and a minimum headway. The stable
+rank mixer decorrelates adjacent slot numbers before phase, density and pool thresholds; linear ranks produced
+repeating three-car groups on long bridges. No random numbers are drawn per frame. The count, speed and hard
+budgets are unchanged; toggling or looking away does not reshuffle the same route's slots.
+
 Tile admission is atomic at the point/tile limit. A rejected tile is not marked received by the route store.
 The renderer retains its current-session file descriptor and retries after capacity is released, at most one
 bounded tile read per 50 ms under the governor. Duplicate/dropped descriptors do not retain geometry. Descriptor
@@ -141,5 +146,5 @@ not the production stream. `traffic_metrics.lua` samples module/frame costs with
 In-game acceptance: compare the same camera/time with on/off; turn away and back after 3–5 seconds; remove and
 respawn physical traffic; toggle roads and the setting; pause/resume; drive across the physical-box boundary;
 then check a genuine driving rebase, teleport and reconnect. Record screenshots, counts and errors. Eligibility
-counts do not establish occlusion-visible pixels; Lua timings do not measure full CPU/GPU cost. The dated dev105
-verification note records the actual tested boundary rather than assuming all these cases passed.
+counts do not establish occlusion-visible pixels; Lua timings do not measure full CPU/GPU cost. The current
+[integration note](research/2026-11-01-distant-traffic-pr.md) records the tested boundary and remaining checks.

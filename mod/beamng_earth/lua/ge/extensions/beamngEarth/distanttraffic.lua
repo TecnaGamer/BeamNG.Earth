@@ -1,6 +1,7 @@
 -- Distant traffic's visual paths (GitHub #565): distance along a polyline, a local-hour density and smooth fades.
 -- Pure Lua: no vehicles, map changes or scene objects. The renderer and the source of the paths are separate.
 local M = {}
+local bit = require('bit')
 M.PROTO = 2
 
 M.END_FADE_M = 30
@@ -27,8 +28,9 @@ end
 function M.rank(id)
   local h = 1
   for i = 1, #id do h = (h * 131 + id:byte(i)) % 2147483647 end
-  for _ = 1, 2 do h = (h * 48271) % 2147483647 end
-  return h / 2147483647
+  -- Mix adjacent slot ids before thresholding: linear ranks made repeating groups on long roads.
+  for _ = 1, 2 do h = (bit.bxor(h, bit.rshift(h, 16)) * 48271) % 2147483647 end
+  return bit.bxor(h, bit.rshift(h, 16)) / 2147483647
 end
 
 local function finite(v) return type(v) == 'number' and v == v and math.abs(v) < math.huge end
@@ -130,7 +132,8 @@ function M.viewEdge(x, y, z, view)
 end
 
 -- A stream's peak population scales with its length. Short quiet roads may have no car rather than receiving a
--- compulsory one each; phases are evenly spaced with a little stable jitter, and do not jump when the clock changes.
+-- compulsory one each. Each slot gets a stable position within its cell, so headways vary without overtaking
+-- or jumping when the clock changes. Density and pool selection thin these slots independently.
 function M.slots(path)
   local expected = path.length / (path.spacing or 180)
   local n = math.floor(expected)
@@ -139,7 +142,7 @@ function M.slots(path)
 end
 
 function M.phase(path, i, n)
-  return (i - 0.5 + (M.rank(path.id .. ':' .. i .. ':phase') - 0.5) * 0.4) * path.length / n
+  return (i - 0.5 + (M.rank(path.id .. ':' .. i .. ':phase') - 0.5) * 0.8) * path.length / n
 end
 
 -- Preserve a small angular footprint beyond the near probe's range, where texture minification erased the dots.

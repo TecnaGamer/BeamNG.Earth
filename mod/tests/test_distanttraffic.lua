@@ -42,6 +42,22 @@ T.near(dt.density(0), dt.density(24), 1e-12, 'midnight continuity')
 T.near(dt.density(-3), dt.density(21), 1e-12, 'clock wraps')
 T.near(dt.rank('a:42'), dt.rank('a:42'), 0, 'stable seed')
 T.check(dt.rank('a:42') ~= dt.rank('a:43'), 'different identities')
+-- Repeating rank ramps become equally repeating groups when density/budget thresholds thin a road.
+for _, suffix in ipairs({ ':phase', ':density', ':budget' }) do
+  for _, lag in ipairs({ 1, 3 }) do
+    local n, sx, sy, xx, yy, xy = 0, 0, 0, 0, 0, 0
+    for road = 1, 32 do
+      local ranks = {}
+      for i = 1, 128 do ranks[i] = dt.rank('road-' .. road .. ':g0c0:1:' .. i .. suffix) end
+      for i = 1, #ranks - lag do
+        local a, b = ranks[i], ranks[i + lag]
+        n, sx, sy, xx, yy, xy = n + 1, sx + a, sy + b, xx + a * a, yy + b * b, xy + a * b
+      end
+    end
+    local correlation = (n * xy - sx * sy) / math.sqrt((n * xx - sx * sx) * (n * yy - sy * sy))
+    T.check(math.abs(correlation) < 0.08, suffix .. ' adjacent slots do not repeat rank ramps, lag ' .. lag)
+  end
+end
 T.near(dt.outside({ -100, -100, 100, 100 }, 0, 0), 0, 0, 'inside physical region')
 T.near(dt.outside({ -100, -100, 100, 100 }, 130, 140), 50, 1e-9, 'distance outside corner')
 T.near(dt.distanceFade(300, 400, 200, 2000, 400), 0, 0, 'near region excluded')
@@ -74,7 +90,7 @@ busy.spacing = 50
 local previous = dt.phase(busy, 1, 80)
 for i = 2, 80 do
   local phase = dt.phase(busy, i, 80)
-  T.check(phase - previous >= 30 and phase - previous <= 70, 'stable headways with bounded jitter')
+  T.check(phase - previous >= 10 and phase - previous <= 90, 'varied headways stay ordered with a minimum gap')
   previous = phase
 end
 local q = dt.bandQuotas({ 1000, 1000, 100 }, 256)

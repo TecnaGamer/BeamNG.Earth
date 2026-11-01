@@ -185,8 +185,8 @@ os.clockhp = function() workClock = workClock + 0.00001; return workClock end
 forward.x, forward.y = 1, 0
 local turnPaths = {}
 for i = 1, 64 do
-  turnPaths[#turnPaths + 1] = { id = 'turn-front' .. i, points = { { 1200, i, 10 }, { 2200, i, 10 } }, speed = 20, spacing = 100 }
-  turnPaths[#turnPaths + 1] = { id = 'turn-back' .. i, points = { { -1200, i, 10 }, { -2200, i, 10 } }, speed = 20, spacing = 100 }
+  turnPaths[#turnPaths + 1] = { id = 'turn-front' .. i, points = { { 1200, i, 10 }, { 4800, i, 10 } }, speed = 20, spacing = 300 }
+  turnPaths[#turnPaths + 1] = { id = 'turn-back' .. i, points = { { -1200, i, 10 }, { -4800, i, 10 } }, speed = 20, spacing = 300 }
 end
 m.session('turn-full', true)
 m.onMessage({ type = 'traffic_tile', key = 'turn-full', data = { v = m.PROTO, key = 'turn-full', frame = { 40, -76 }, pivot = 10, paths = turnPaths } })
