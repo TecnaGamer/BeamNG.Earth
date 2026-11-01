@@ -869,7 +869,7 @@ local function formatKnown(f)
   return false
 end
 
-local geocodeResults = {}       -- the world map's address search answers: id -> { results, error }
+local geocodeResults = {}       -- the world map's address search answers: id -> { results, error, text }
 local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, error }
 
 -- The pooled shape slots (far tiles, road / building tiles) let go since the last pose, for this server; nil if none.
@@ -1149,7 +1149,7 @@ local function onMessage(msg)
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
   elseif t == 'geocode_result' then
-    if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+    if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error, text = msg.text } end
   elseif t == 'areas' then
     -- the saved areas downloaded ahead (server areas.py): the list and progress; result answers an area_add / area_cmd
     M._areas = msg
