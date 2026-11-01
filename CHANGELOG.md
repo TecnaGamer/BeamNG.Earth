@@ -14,10 +14,12 @@ What changed in each release of BeamNG.Earth, newest first.
 
 Works with BeamNG.drive 0.40.4.
 
-### Pedestrian streets & deptaki
-- **Pedestrian streets and promenades (deptaki)**: streets mapped with `highway=pedestrian` (such as Jeziorna in Charzykowy) are now generated as cobblestone/paving stones (`surface=paving_stones`, `sett`, `cobblestone` or defaulting to cobble if unspecified), rendered in parallel stone strips with cobblestone physics and ground material.
-- **Appropriate widths**: pedestrian streets default to 5.0 m width (or explicit mapped OSM width) without car parking lanes, edge markings, or redundant sidewalks.
-- **Vegetation cleared**: trees and bushes are cleared across the pedestrian road corridor, keeping promenades free of foliage.
+### Pedestrian streets, walkways, paths & driveways (deptaki, chodniki, dojazdy)
+- **Pedestrian streets, promenades & walkways (deptaki i chodniki)**: streets and walkways mapped with `highway=pedestrian` (e.g. Jeziorna in Charzykowy), `highway=footway` (e.g. ulica Stroma in Charzykowy, urban sidewalks and lakeside promenades), `highway=path` (e.g. Promenada along the lake), `highway=cycleway` and `highway=steps` are now generated in the road network.
+- **Paving and surfaces**: walkways and deptaki with `paving_stones`, `cobblestone`, `sett`, `flagstone` or without an explicit surface tag default to cobblestone / paving stones (`cobble`, rendered in parallel stone strips with cobblestone ground physics and sound). Paths default to dirt unless mapped otherwise; cycleways default to paved. Explicit surface tags (e.g. asphalt, concrete, unpaved) are preserved.
+- **Appropriate widths & clean styling**: pedestrian streets default to 5.0 m, footways, paths and cycleways default to 2.5 m, outdoor steps default to 2.0 m (or exact mapped OSM width). No redundant markings, edge lines, rural edge strips, or parking lanes.
+- **Vegetation clearance**: all pedestrian corridors (pedestrian, footway, path, cycleway, steps) clear trees and bushes across their corridor, keeping paths and walkways completely open.
+- **Driveways (dojazdy do domów)**: mapped driveways (`class=service`, `subclass=driveway`) default to 3.5 m (3.0 m one-way) and support cobble/concrete paving. Detached residential houses now also receive procedural driveway connections to the street with matching gaps in front fences.
 
 ### Faster world building
 - **Much faster at very high speed**: above about 157 mph the next four terrain blocks along your path are built ahead

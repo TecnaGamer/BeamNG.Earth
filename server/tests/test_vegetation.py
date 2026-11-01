@@ -128,9 +128,19 @@ class VegetationTest(unittest.TestCase):
         off = np.hypot((trees.lon - rlon) * 85000, (trees.lat - rlat) * 111000).min()
         self.assertLess(off, 4.0 + veg.TREE_PIT_M + 0.6 + 4.0, "in a pit by the curb (whole CHM pixels), not past it")
 
-    def test_footway_keeps_its_tree(self):
+    def test_footway_clears_its_trees(self):
+        """Footways / chodniki (e.g. ul. Stroma in Charzykowy) clear trees off their corridor."""
         md = FakeMapData()
-        md.cd.layers["roads"].attrs["class"][:] = "footway"   # a sidewalk mapped as a line: street trees stand on it
+        md.cd.layers["roads"].attrs["class"][:] = "footway"
+        it = veg.Vegetation(md, None).cell(KEY)
+        trees = it.take(it.kind == veg.KIND_TREE)
+        rlon, rlat = md.lonlat(100, 400)
+        self.assertGreater((np.hypot((trees.lon - rlon) * 85000, (trees.lat - rlat) * 111000)).min(), 1.5)
+
+    def test_bridleway_keeps_its_tree(self):
+        """Equestrian bridleways are not drawn and keep trees on their line."""
+        md = FakeMapData()
+        md.cd.layers["roads"].attrs["class"][:] = "bridleway"
         it = veg.Vegetation(md, None).cell(KEY)
         trees = it.take(it.kind == veg.KIND_TREE)
         rlon, rlat = md.lonlat(100, 400)

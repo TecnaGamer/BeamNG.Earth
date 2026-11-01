@@ -25,7 +25,7 @@ import fast     # Rust kernels (earthfast)
 RADIUS = 5.0                    # m, curb return radius when the class is not listed in RADII
 # by the larger road's class (street-view study of Fells Point, 2026-10-11: city corners are tight)
 RADII = {"residential": 3.0, "living_street": 3.0, "unclassified": 3.0, "service": 3.0,
-         "tertiary": 4.5, "secondary": 6.0, "primary": 6.0, "trunk": 8.0, "pedestrian": 3.0}
+         "tertiary": 4.5, "secondary": 6.0, "primary": 6.0, "trunk": 8.0, "pedestrian": 3.0, "footway": 2.0, "path": 2.0, "cycleway": 2.0, "steps": 1.5}
 STOP_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.45}   # 1 m before the crosswalk
 STOP_GAP = 1.0
 BULB_M = 6.0                    # m a curb extension runs along the street past the corner

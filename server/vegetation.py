@@ -33,7 +33,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 19          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 20          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: pedestrian promenades and
                       # deptaki kept clear of trees and bushes)
@@ -49,11 +49,11 @@ ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width b
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
                             # row houses at the back of the sidewalk and all went; Mapillary: one every ~8 m, 2026-10-17)
-PATH_CLASSES = {"footway", "path", "steps", "cycleway", "bridleway"}   # no corridor: street trees
+PATH_CLASSES = {"bridleway"}   # bridleways kept out of corridor masking
                             # stand in the sidewalk (mapped as a footway: Boston Street's row sat on its line)
 ROAD_HALF_WIDTH_M = {"motorway": 7.0, "trunk": 6.0, "primary": 5.5, "secondary": 5.0, "tertiary": 4.5,
                      "residential": 4.0, "service": 3.0, "unclassified": 3.5, "living_street": 3.0,
-                     "pedestrian": 2.5}
+                     "pedestrian": 2.5, "footway": 1.5, "path": 1.5, "cycleway": 1.5, "steps": 1.2}
 ROAD_HALF_DEFAULT_M = 2.5
 SCATTER_CELL_M = 6.0        # the hashed scatter's grid (one candidate per cell)
 # class: (bush, rock). Tree cover (10) gets an understory (Columbia's photos: forest edges are thickets

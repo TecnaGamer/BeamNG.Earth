@@ -106,6 +106,15 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(roads.surface_kind("pedestrian", "asphalt"), "paved")
         self.assertEqual(roads.surface_kind("pedestrian", "flagstone"), "cobble")
         self.assertEqual(roads.surface_kind("pedestrian", "tiles"), "cobble")
+        # footways and outdoor steps default to cobble / paving stones
+        self.assertEqual(roads.surface_kind("footway", None), "cobble")
+        self.assertEqual(roads.surface_kind("footway", "paving_stones"), "cobble")
+        self.assertEqual(roads.surface_kind("footway", "asphalt"), "paved")
+        self.assertEqual(roads.surface_kind("steps", None), "cobble")
+        # paths default to dirt unless explicit surface like paving_stones or asphalt
+        self.assertEqual(roads.surface_kind("path", None), "dirt")
+        self.assertEqual(roads.surface_kind("path", "paving_stones"), "cobble")
+        self.assertEqual(roads.surface_kind("cycleway", None), "paved")
 
     def test_surface_token(self):
         self.assertEqual(roads.surface_token("sett:pattern"), "sett")
@@ -159,11 +168,12 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(roads.look_of(s[0])["tl"], roads.LOOK["paved"]["tl"], "the texture length is asphalt's")
 
     def test_specs_width_and_left_out(self):
-        f = features([[(0, 0), (10, 0)]] * 6, ["residential", "footway", "primary", "tertiary", "track", "secondary"],
+        f = features([[(0, 0), (10, 0)]] * 7, ["residential", "footway", "primary", "tertiary", "track", "secondary", "bridleway"],
                      surfaces=[(4, "gravel")], widths=[(2, 14.0)], levels=[(3, 1.0)], flags=[(5, "is_bridge")])
         s = roads.road_specs(f)
         self.assertEqual(s[0][:2], (roads.STYLE["residential"][0] + 2 * roads.EDGE_STRIP_M, "paved"), "rural: edge strips")
-        self.assertIsNone(s[1], "footways left out")
+        self.assertEqual(s[1][:2], (roads.STYLE["footway"][0], "cobble"), "footways drawn as cobble walkway")
+        self.assertIsNone(s[6], "bridleways left out")
         self.assertEqual(s[2][:2], (14.0, "paved"), "width rule")
         self.assertIsNone(s[3], "off ground level (bridge / tunnel) left out")
         self.assertEqual(s[4][:2], (roads.STYLE["track"][0], "gravel"))
@@ -713,6 +723,35 @@ class BuildTileTest(unittest.TestCase):
         specs = roads.road_specs(f)
         self.assertIsNotNone(specs[0])
         self.assertEqual(specs[0].width, 4.0)
+
+    def test_footway_stroma_deptak(self):
+        """ulica Stroma in Charzykowy (highway=footway, surface=paving_stones): drawn as cobble walkway without road markings."""
+        f = features([[(-300, 50), (300, 50)]], ["footway"], surfaces=[(0, "paving_stones")])
+        specs = roads.road_specs(f)
+        self.assertIsNotNone(specs[0])
+        self.assertEqual(specs[0].cls, "footway")
+        self.assertEqual(specs[0].kind, "cobble")
+        self.assertEqual(specs[0].width, 2.5)
+
+    def test_path_promenada_cobble(self):
+        """Promenada in Charzykowy (highway=path, surface=paving_stones): drawn as cobble walkway."""
+        f = features([[(-300, 50), (300, 50)]], ["path"], surfaces=[(0, "paving_stones")])
+        specs = roads.road_specs(f)
+        self.assertIsNotNone(specs[0])
+        self.assertEqual(specs[0].cls, "path")
+        self.assertEqual(specs[0].kind, "cobble")
+        self.assertEqual(specs[0].width, 2.5)
+
+    def test_service_driveway_width(self):
+        """Driveways to houses (class=service, subclass=driveway) use 3.0 m width default."""
+        sub = mapgeom.RuleTable(np.array([0], np.int32), np.array(["driveway"], "<U32"),
+                                np.array([0.0], np.float32), np.array([1.0], np.float32))
+        f = features([[(-300, 50), (300, 50)]], ["service"])
+        f.rules["subclass"] = sub
+        specs = roads.road_specs(f)
+        self.assertIsNotNone(specs[0])
+        self.assertEqual(specs[0].cls, "service")
+        self.assertEqual(specs[0].width, 3.5)
 
     def test_tower_passages_stay_bridge(self):
         """Tower Bridge: level 1 over 0.03-0.88, flags bridge / tunnel (through a tower, ~10 m) / bridge / tunnel /
