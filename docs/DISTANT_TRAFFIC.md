@@ -73,7 +73,8 @@ to 220 m residential, 500 m service and at least 1600 m unpaved / 3000 m track. 
 stable slots. Local-hour density thins those slots and the global ceiling. Demand around the player shares the
 population between below 2.5 km, 2.5–6 km and beyond 6 km, reserving at least 20% for distant demand when present.
 The local-hour curve interpolates smoothly between these fractions of peak traffic: 00:00 8%, 02:00 3.5%,
-04:00 1.5%, 06:00 14%, 08:00 70%, 12:00 65%, 17:00 100%, 21:00 85%, 22:00 45%, back to 8% at midnight.
+04:00 1.5%, 06:00 14%, 08:00 70%, 12:00 65%, 17:00 100%, 18:00 97.65625%, 21:00 70%, 22:00 45%,
+back to 8% at midnight. The 18:00 knot preserves the accepted rush-hour density while the later evening eases.
 The overnight minimum leaves isolated vehicles rather than a continuous highway stream; it is an artistic
 density curve, not measured traffic. Quality scales the same curve without changing the time of its peaks.
 The quality cap applies to that whole population, including roads behind the camera. Narrowing the field of view

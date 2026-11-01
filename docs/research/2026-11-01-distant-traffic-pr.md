@@ -160,3 +160,18 @@ Source and installed curve hashes match. Live04:00 appearance remains for user f
 population limits are covered by the pure/renderer fixtures. Evidence is in build/camera-stability/night-*.
 The user confirmed the new night density was appropriate. Final renderer fixtures passed 6781 assertions,
 including positive but bounded 04:00/midnight populations. No game/companion restart or public update was needed.
+
+## Late evening adjustment (2026-11-02)
+
+At the user's request, 21:00 density decreased from 85% to 70% of peak, about 18% fewer than the previous
+setting. An explicit 18:00 knot retains its accepted 97.65625% density while easing through the later evening.
+The previously agreed 22:00, midnight and 04:00 knots are unchanged. The curve remains an artistic impression,
+not local traffic measurements. This changes only the density table, without another runtime mechanism.
+
+The 21:00 regression failed at the previous 85%, then passed with the preserved 18:00 and overnight assertions:
+248 pure and 6781 renderer assertions passed. The installed density file matches source; the live table was
+replaced without resetting actors, elapsed motion, the user's camera or selected time. The server/native module
+and public PR remain unchanged. Evidence is in build/camera-stability/evening-*.
+At the user's selected 21:00, world actors decreased from 1664 to 1386 after settling. The user turned the camera
+during this interval, so in-frustum counts are not a controlled before/after comparison. The camera position,
+FOV and environment clock remained unchanged; no camera or time commands were issued.
