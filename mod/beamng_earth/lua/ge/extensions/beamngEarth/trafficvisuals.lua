@@ -94,6 +94,11 @@ function M.onMessage(msg)
   end
 end
 
+local function resendDue()
+  return resend and clock >= resendAt and deferredCount < paths.MAX_TILES
+    and store.tileCount < paths.MAX_TILES and store.points + store.pendingPoints < paths.MAX_ROUTE_POINTS
+end
+
 local function retryDeferred()
   if not retry and retryDirty and deferredCount > 0 then
     retry, retryAt, retryDirty = {}, 1, false
@@ -112,8 +117,7 @@ local function retryDeferred()
     end
     if retryAt > #retry then retry = nil end
   end
-  if resend and clock >= resendAt and deferredCount < paths.MAX_TILES
-      and store.tileCount < paths.MAX_TILES and store.points + store.pendingPoints < paths.MAX_ROUTE_POINTS then
+  if resendDue() then
     net.send({ type = 'traffic_visuals', enabled = true, reset = true })
     resend, resendAt = false, clock + 10
   end
@@ -454,9 +458,7 @@ end
 function M.hasWork()
   if not capable or not requested then return false end
   local retryDue = retry and clock >= retryIn or not retry and retryDirty and deferredCount > 0
-  local resendDue = resend and clock >= resendAt and deferredCount < paths.MAX_TILES
-    and store.tileCount < paths.MAX_TILES and store.points + store.pendingPoints < paths.MAX_ROUTE_POINTS
-  if dirty or scan or selectIn <= 0 or store:hasWork() or retryDue or resendDue then return true end
+  if dirty or scan or selectIn <= 0 or store:hasWork() or retryDue or resendDue() then return true end
   for key in pairs(selected) do if not actors[key] then return true end end
   return false
 end

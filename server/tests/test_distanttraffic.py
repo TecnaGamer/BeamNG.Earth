@@ -1,4 +1,4 @@
-"""Visual-road routes: shared road rules, ground-only heights, stable ownership and bounded payloads."""
+"""Visual-road routes: shared road rules, ground/deck heights, stable ownership and bounded payloads."""
 import json
 import asyncio
 import sys
@@ -49,6 +49,22 @@ class RoutesTest(unittest.TestCase):
                 xx = [p[0] for p in path["points"]]
                 self.assertTrue(max(xx) < 182 or min(xx) > 418, (flag, min(xx), max(xx)))
                 self.assertTrue(all(abs(p[2] - 10) < 0.1 for p in path["points"]))
+
+    def test_divided_carriageways_follow_shared_direction_rules(self):
+        f = features([[(0, 0), (600, 0)], [(0, 12), (600, 12)]], ["primary"] * 2)
+        f.attrs['name'] = np.array(['Avenue', 'Avenue'])
+        for left in (False, True):
+            specs = dt.roads.road_specs(f, left_hand=left)
+            self.assertEqual({sp.dir for sp in specs}, {1, -1})
+            paths = dt.build(FRAME, [f], flat, BOX, left_hand=left)
+            for i, sp in enumerate(specs):
+                path, = [p for p in paths if p['id'].startswith(str(f.ids[i]) + ':')]
+                self.assertEqual(int(path['id'].rsplit(':', 1)[1]), sp.dir)
+                dx = path['points'][-1][0] - path['points'][0][0]
+                self.assertGreater(dx * sp.dir, 0)
+        f.rules['oneway'] = rules([(0, -1.), (1, 1.)], 'float')
+        explicit = dt.build(FRAME, [f], flat, BOX)
+        self.assertEqual({p['id'] for p in explicit}, {'id000:g0c0:-1', 'id001:g0c0:1'})
 
     def test_bridge_uses_solved_deck_relief_not_water(self):
         f = features([[(0, 0), (600, 0)]], ["primary"], flags=[(0, "is_bridge", 0, 1)])

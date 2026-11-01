@@ -50,7 +50,7 @@ def build(frame, feats_list, elev, box, urban_fn=None, widths=None, left_hand=Fa
                      for part, ll in enumerate(roads.ground_parts(feats, i))]
             parts.extend(decks.get(str(feats.ids[i]), ()))
             ow = roads._rule_value(feats.rules.get("oneway"), i)
-            inputs.append((str(feats.ids[i]), sp.cls, sp.kind, bool(sp.oneway), float(ow or 0),
+            inputs.append((str(feats.ids[i]), sp.cls, sp.kind, bool(sp.oneway), float(ow or sp.dir or 0),
                            navgraph.driving_width(sp), navgraph.road_mph(feats, i, sp, mph),
                            roads._rule_value(feats.rules.get("subclass"), i) in navgraph.SKIP_SUBCLASSES, parts))
             sources.append((feats, i))
