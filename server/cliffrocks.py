@@ -513,12 +513,14 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
                 np.concatenate(out_n).astype(np.float32), tri_materials=np.concatenate(out_mat))
 
 
-def _fit_cut_toes(h, seed, allowed, dx, dy):
+def _fit_cut_toes(h, seed, allowed, dx, dy, *, fit_crest=False):
     """Finish a confirmed cut at its fine-resolution foot instead of a 4 m stair.
 
     Walk at most one detection-cell diagonal through safe, still-sloping ground.
     Flat benches stop the walk, so an upper lift cannot flow onto a lower one.
     This changes coverage on the existing mesh lattice, not its vertex density.
+    Crest fitting uses the steeper cut-edge threshold and the same bounded walk;
+    it cannot spill onto a gentle hill or cross a terrace bench.
     """
     gx = (np.diff(h, axis=1)[:-1]+np.diff(h, axis=1)[1:])/(2*dx)
     gy = (np.diff(h, axis=0)[:, :-1]+np.diff(h, axis=0)[:, 1:])/(2*dy)
@@ -544,9 +546,13 @@ def _fit_cut_toes(h, seed, allowed, dx, dy):
         if enclosed:
             steep[jj, ii] = True
     distance = np.where(seed & allowed & steep, 0., np.inf)
-    # A destination must have its source uphill. Sideways/uphill propagation
-    # would expand cliff ends and crests rather than just finish their feet.
+    # No lateral dilation: extend along the local gradient only. A crest walk
+    # must stay steep at both ends of each step and shares the toe distance
+    # budget, so alternating directions cannot walk indefinitely along a bank.
     neighbours = []
+    if fit_crest:
+        import cliffcuts
+        crest_slope = math.tan(math.radians(cliffcuts.EDGE_SLOPE_DEG))
     for oy, ox in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)):
         dst = (slice(max(0, -oy), min(seed.shape[0], seed.shape[0]-oy)),
                slice(max(0, -ox), min(seed.shape[1], seed.shape[1]-ox)))
@@ -554,6 +560,9 @@ def _fit_cut_toes(h, seed, allowed, dx, dy):
                slice(max(0, ox), min(seed.shape[1], seed.shape[1]+ox)))
         step = math.hypot(ox*dx, oy*dy)
         uphill = (gx[dst]*ox*dx+gy[dst]*oy*dy) >= TOE_DOWNHILL_COS*slope[dst]*step
+        if fit_crest:
+            downhill = (gx[dst]*ox*dx+gy[dst]*oy*dy) <= -TOE_DOWNHILL_COS*slope[dst]*step
+            uphill |= downhill & (slope[dst] >= crest_slope) & (slope[src] >= crest_slope)
         neighbours.append((dst, src, step, uphill))
     for _ in range(math.ceil(TOE_REACH_M/min(dx, dy))):
         old = distance.copy()
@@ -656,22 +665,17 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     keep = qualifying_cells(h, classes, blocked, step=step)
     cuts = np.zeros_like(keep)
     cut_domain = np.zeros_like(keep)
+    urban_domain = np.zeros_like(keep)
     road_clearance = None
-    rural = roads._Segs({str(k): (pts[:, :2], spec.width/2)
-                        for k, (_, spec, pts, _) in enumerate(road_list)
-                        if not spec.urban and spec.cls in ('motorway', 'trunk', 'primary', 'secondary', 'tertiary',
-                                                          'unclassified', 'residential')})
-    if len(rural.h):
+    groups = cliffcuts.road_groups(road_list, source_elev is not None)
+    if groups:
         vx, vy, _ = frame.geodetic_to_enu(yy/WORLD_M_PER_DEG, (xx/WORLD_M_PER_DEG+180)%360-180,
                                         np.zeros(h.shape))
-        labels = rural.near(np.c_[vx.ravel(), vy.ravel()], cliffcuts.ROAD_LABEL_MARGIN_M).reshape(h.shape)
-        highways = roads._Segs({str(k): (pts[:, :2], spec.width/2)
-                               for k, (_, spec, pts, _) in enumerate(road_list)
-                               if not spec.urban and spec.cls in cliffcuts.HIGHWAY_CLASSES})
-        highway_corridor = highways.near(np.c_[vx.ravel(), vy.ravel()], cliffcuts.REACH_M).reshape(h.shape)
+        vertices = np.c_[vx.ravel(), vy.ravel()]
         cut_blocked = road_segments.near(center_points.reshape(-1, 2),
                                          cliffcuts.SHOULDER_M+GRID_M/math.sqrt(2)).reshape(cx.shape)
         cut_blocked |= ~np.isfinite(centers)
+        backed = None
         if source_elev is not None:
             def road_height(xy):
                 la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
@@ -687,8 +691,8 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
             backed = cliffcuts.terrain_backed(source, h, *step)
             cut_blocked &= pavement | ~backed
             cut_blocked |= ~np.isfinite(centers)
-        cuts, cut_domain = cliffcuts.select(h, classes, xs, ys, scale, center_points, rural,
-                                           cut_blocked, labels, highway_corridor, with_domain=True)
+        cuts, cut_domain, urban_domain = cliffcuts.select_roads(h, classes, xs, ys, scale, center_points,
+            vertices, groups, cut_blocked, backed, refine_source=True)
         keep |= cuts
     if not keep.any():
         return None
@@ -734,9 +738,22 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
                 np.maximum.reduce(corners).ravel(), cliffcuts.SHOULDER_M+radius)
         else:
             road_blocked = road_segments.near(points, cliffcuts.SHOULDER_M+radius)
-        domain = cut_domain[np.ix_(cj, ci)] & ~road_blocked.reshape(fine_cuts.shape)
+        domain = cut_domain[np.ix_(cj, ci)].copy()
+        urban_land = urban_domain[np.ix_(cj, ci)]
+        if urban_land.any() and source_elev is not None:
+            source = np.asarray(source_elev(fy/WORLD_M_PER_DEG,
+                                (fx/WORLD_M_PER_DEG+180)%360-180), float)
+            # Source support is evaluated before the terrain envelope changes
+            # the geometry. Only already-confirmed cuts can grow into this land.
+            # Preserve support already established over a detection cell. The
+            # finer check adds rounded edges; it must not punch holes into a
+            # confirmed face when the source DEM has short, flatter samples.
+            supported = backed[np.ix_(cj, ci)] | cliffcuts.terrain_backed(source, h,
+                (xs[1]-xs[0])*scale, ys[1]-ys[0], min_slope_deg=TOE_SLOPE_DEG)
+            domain |= urban_land & supported
+        domain &= ~road_blocked.reshape(fine_cuts.shape)
         fitted = _fit_cut_toes(envelope, fine_cuts, domain,
-                               (xs[1]-xs[0])*scale, ys[1]-ys[0])
+                               (xs[1]-xs[0])*scale, ys[1]-ys[0], fit_crest=True)
         keep = (keep & ~fine_cuts) | fitted
         fine_cuts = fitted
         # Extend the chart through the final fitted footprint. Applying it

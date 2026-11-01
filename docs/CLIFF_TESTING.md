@@ -28,6 +28,12 @@ These controls disable client rendering; the server still prepares cliff geometr
 - Austin, South Capital of Texas Highway: `30.29941, -97.82788` and
   `30.30035, -97.82782`. Check terraced road cuts, low ends tapering toward road
   height, fitted bases, and cliff sections with a road above the crest.
+- Austin, North Capital of Texas Highway: `30.30705, -97.82551`. Check the
+  sustained roadside bank near the buildings and junction. A major road's urban
+  classification must not suppress a cut backed by the original terrain;
+  pavement and built-up crests must remain excluded. From `30.30565, -97.82529`,
+  check for exposed wedges along the rounded foot and crest. Keep the simulation
+  unpaused while waiting for newly streamed cliff meshes to appear.
 - Drive away until tiles unload and return. Repeat after restarting. Coverage and
   materials should be consistent; there should be no duplicate surfaces or flicker.
 - Approach a cliff slowly to check collision, then disable cliff faces and confirm
@@ -60,3 +66,23 @@ are copied and tinted from the user's installed BeamNG assets at runtime, not re
 The source checkout includes offline preparation instructions in
 `tools/assets/cliff/SCANS.md` and `tools/assets/roadcut_generated/RESTORATION.md`.
 These tools and source images are not required to run the packaged mod.
+
+## Detection regression tests
+
+Run the focused suite from the repository root (PowerShell):
+
+```powershell
+$env:BNGE_ROADGEO_REAL = '0'
+python -m unittest server.tests.test_cliffcuts server.tests.test_cliffrocks server.tests.test_cliffdecals server.tests.test_clifftalus server.tests.test_cdae server.tests.test_roadgeo
+```
+
+The deterministic fixtures cover coastal cliffs, terraces, upper roads, tapering
+ends, fitted toes, near-vertical faces, and pavement clearance. The North Capital
+scenario also tests the urban-road selection path, original terrain evidence,
+nearby buildings, and rejection of artificial fill, missing source data, and
+minor urban roads. Rounded-edge coverage is checked against exported triangles
+along an oblique urban bank; bounded crest fitting must stop at terrace benches,
+gentle hills, excluded land, and missing height samples. These tests run without
+downloading terrain or launching the game; use the locations above for visual
+checks. Add both a valid cliff case and
+nearby false-positive cases when refining detection.

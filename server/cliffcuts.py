@@ -1,4 +1,4 @@
-"""Conservative rock skins for sustained rural road cuttings.
+"""Conservative rock skins for sustained terrain-backed road cuttings.
 
 Road proximity alone is not evidence: a face must rise from the road bench,
 face the road, and break into gentler ground above it. All distances are metres.
@@ -33,6 +33,7 @@ ROAD_LABEL_MARGIN_M = 16.0
 # built-up guard; ordinary roads and natural cliffs retain the full city buffer.
 HIGHWAY_CITY_BUFFER_M = 16.0
 HIGHWAY_CLASSES = ('motorway', 'trunk', 'primary')
+RURAL_CLASSES = HIGHWAY_CLASSES + ('secondary', 'tertiary', 'unclassified', 'residential')
 PROFILE_DROP_M = 1.0  # do not look over a roof/back slope for a distant natural crest
 # Shorter profiles can finish an existing excavation, but cannot seed one.
 END_SLOPE_DEG = 20.0
@@ -53,7 +54,66 @@ SOURCE_MATCH_CORNERS = 3
 SOURCE_FACING_COS = 0.75
 
 
-def terrain_backed(source, drawn, dx, dy):
+def road_groups(ground_roads, has_source):
+    """Keep the urban-highway exception separate from ordinary rural cuts.
+
+    The urban flag describes land cover along a road, not the origin of a wall.
+    Only major ground roads may use this exception, and only with source DEM
+    evidence. The caller supplies ground parts, never bridge decks.
+    """
+    import roads
+    groups = []
+    for urban in (False, True):
+        if urban and not has_source:
+            continue
+        allowed = HIGHWAY_CLASSES if urban else RURAL_CLASSES
+        selected = [(k, spec, pts) for k, (_, spec, pts, _) in enumerate(ground_roads)
+                    if bool(spec.urban) == urban and spec.cls in allowed]
+        if not selected:
+            continue
+        segments = roads._Segs({str(k): (pts[:, :2], spec.width/2) for k, spec, pts in selected})
+        highways = roads._Segs({str(k): (pts[:, :2], spec.width/2) for k, spec, pts in selected
+                               if spec.cls in HIGHWAY_CLASSES})
+        groups.append((urban, segments, highways))
+    return groups
+
+
+def select_roads(h, classes, xs, ys, scale, centers, vertices, groups, blocked, backed=None,
+                 *, refine_source=False):
+    """Select each road group without letting rural evidence authorize urban fill.
+
+    Urban cuts retain every profile/land-cover test and additionally require
+    original terrain agreement throughout their footprint and toe-fit domain.
+    With refine_source, return separate rural/urban land domains so the caller
+    can check source agreement on the finer mesh grid instead of stair-stepping
+    that check on the detection grid. Urban land alone never authorizes fitting.
+    """
+    cuts = np.zeros_like(blocked, dtype=bool)
+    domain = np.zeros_like(cuts)
+    urban_domain = np.zeros_like(cuts)
+    for urban, segments, highways in groups:
+        if urban and (backed is None or not (backed & ~blocked).any()):
+            continue
+        labels = segments.near(vertices, ROAD_LABEL_MARGIN_M).reshape(h.shape)
+        corridor = highways.near(vertices, REACH_M).reshape(h.shape)
+        excluded = blocked | ~backed if urban else blocked
+        selected, land = select(h, classes, xs, ys, scale, centers, segments,
+                                excluded, labels, corridor, with_domain=True)
+        cuts |= selected
+        # An empty pass must not lend a permissive domain to another group.
+        if selected.any():
+            if urban:
+                urban_domain |= land
+            else:
+                domain |= land
+    if refine_source:
+        return cuts, domain, urban_domain
+    if backed is not None:
+        domain |= urban_domain & backed
+    return cuts, domain
+
+
+def terrain_backed(source, drawn, dx, dy, *, min_slope_deg=SOURCE_SLOPE_DEG):
     """Only relax road buffers where steep relief exists before road grading.
 
     Missing source data fails closed. This is additional evidence, never a seed:
@@ -72,7 +132,7 @@ def terrain_backed(source, drawn, dx, dy):
     # plus the original slope direction; unrelated fills cannot provide proof.
     matched = (corners <= SOURCE_HEIGHT_TOLERANCE_M).sum(axis=0) >= SOURCE_MATCH_CORNERS
     alignment = (gx*dgx+gy*dgy)/np.maximum(np.hypot(gx, gy)*np.hypot(dgx, dgy), 1e-12)
-    return ((np.hypot(gx, gy) >= math.tan(math.radians(SOURCE_SLOPE_DEG)))
+    return ((np.hypot(gx, gy) >= math.tan(math.radians(min_slope_deg)))
             & np.isfinite(corners).all(axis=0) & matched & (alignment >= SOURCE_FACING_COS))
 
 

@@ -260,7 +260,7 @@ class CliffRocksTest(unittest.TestCase):
         x = m.positions[m.tris, 0]
         self.assertTrue(((x.max(axis=1) <= 70) | (x.min(axis=1) >= 90)).all())
 
-    def test_roadcut_build_does_not_require_a_natural_cliff_or_allow_urban_roads(self):
+    def test_roadcut_build_requires_source_relief_for_urban_highways(self):
         frame = geodesy.EnuFrame(0, 0)
         def elev(lat, lon):
             x = np.asarray(lon)*cr.WORLD_M_PER_DEG
@@ -279,6 +279,14 @@ class CliffRocksTest(unittest.TestCase):
             self.assertTrue((m.positions[:, 0]-40 >= 8).all(), 'displaced skin clears carriageway and shoulder')
             spec.urban = True
             self.assertIsNone(cr.build(frame, (-40, -64, 80, 64), elev, Surface()))
+            urban = cr.build(frame, (-40, -64, 80, 64), elev, Surface(), source_elev=elev)
+            self.assertIsNotNone(urban, 'urban highway backed by original relief is a valid cut')
+            self.assertTrue((urban.tri_materials == 1).all())
+            self.assertTrue(np.isfinite(urban.positions).all())
+            self.assertTrue((urban.positions[:, 0]-40 >= 8).all(), 'urban cut clears pavement too')
+            self.assertIsNone(cr.build(frame, (-40, -64, 80, 64), elev, Surface(),
+                source_elev=lambda lat, lon: np.full(np.shape(lat), 20.)),
+                'the same graded wall on originally flat ground is artificial fill')
 
     def test_different_tile_frames_share_the_geographic_rock_lattice(self):
         class Surface:
@@ -299,6 +307,47 @@ class CliffRocksTest(unittest.TestCase):
         common = samples[0].keys() & samples[1].keys()
         self.assertGreater(len(common), 100)
         self.assertLess(max(abs(samples[0][k]-samples[1][k]) for k in common), 0.02)
+
+    def test_urban_oblique_rounded_cut_fits_beyond_coarse_source_mask(self):
+        # North Capital: rounded foot/crest straddle 4 m evidence cells. Keep
+        # the real selection, refinement and mesh path in this regression.
+        frame = geodesy.EnuFrame(0, 0)
+        def elev(lat, lon):
+            q = np.asarray(lon)*cr.WORLD_M_PER_DEG-.35*np.asarray(lat)*cr.WORLD_M_PER_DEG
+            return 20+24/(1+np.exp(-np.clip((q-20)/2.5, -100, 100)))
+        class Surface:
+            def classes(self, lat, lon):
+                q = lon*cr.WORLD_M_PER_DEG-.35*lat*cr.WORLD_M_PER_DEG
+                return np.where(q >= 65, 50, np.where(np.abs(q) <= 7, 50, 30)), True
+            def urban(self, lat, lon):
+                return np.ones(np.shape(lat), bool)
+        road = [('road', SimpleNamespace(width=10, urban=True, cls='trunk'),
+                 np.array(((-175, -500, 0), (175, 500, 0))), 0)]
+        with patch('surface._roads_list_enu', return_value=road):
+            m = cr.build(frame, (-40, -48, 80, 48), elev, Surface(), source_elev=elev)
+        self.assertIsNotNone(m)
+        # World coordinates recovered from the exported tile origin.
+        x, y = m.positions[:, 0]-40, m.positions[:, 1]-48
+        q = x-.35*y
+        self.assertGreater(q.min(), 8, 'road and shoulder remain clear')
+        self.assertLess(q.max(), 40, 'gentle plateau/buildings remain clear')
+        self.assertTrue((m.tri_materials == 1).all())
+        # Probe the actual exported triangles along both rounded edges. Bounds
+        # alone miss the alternating exposed wedges of the coarse source mask.
+        triangles = m.positions[m.tris, :2]-[40, 48]
+        a, b, c = triangles[:, 0], triangles[:, 1], triangles[:, 2]
+        v, w = b-a, c-a
+        def cross(u, v):
+            return u[..., 0]*v[..., 1]-u[..., 1]*v[..., 0]
+        determinant = cross(v, w)
+        valid = np.abs(determinant) > 1e-8
+        divisor = np.where(valid, determinant, np.inf)
+        for q in (13., 26.):
+            for y in np.arange(-30., 31.):
+                p = np.array([q+.35*y, y])-a
+                u, z = cross(p, w)/divisor, cross(v, p)/divisor
+                covered = valid & (u >= -1e-5) & (z >= -1e-5) & (u+z <= 1.00001)
+                self.assertTrue(covered.any(), f'exposed rounded edge at q={q}, y={y}')
 
     def test_narrow_coastal_face_uses_face_area_with_a_footprint_floor(self):
         x = np.arange(41)*4.0
@@ -419,6 +468,33 @@ class CliffRocksTest(unittest.TestCase):
         self.assertEqual(np.flatnonzero(full[20])[0], 40-int(cr.TOE_REACH_M/.4))
         part = cr._fit_cut_toes(h[8:57, 16:73], seed[8:56, 16:72], allowed[8:56, 16:72], .4, .5)
         np.testing.assert_array_equal(part[8:-8, 12:-12], full[16:48, 28:60])
+
+    def test_crest_fitting_covers_steep_edge_but_stops_at_bench_and_exclusions(self):
+        x = np.arange(97)*.5
+        # Two lifts separated by a flat terrace, then a gentle 17-degree hill.
+        h = np.broadcast_to(2*np.clip(x-4, 0, 12)+2*np.clip(x-20, 0, 8)
+                            +.3*np.maximum(x-28, 0), (33, len(x))).copy()
+        seed = np.zeros((32, len(x)-1), bool)
+        seed[:, 12:24] = True
+        allowed = np.ones_like(seed)
+        fitted = cr._fit_cut_toes(h, seed, allowed, .5, .5, fit_crest=True)
+        self.assertTrue(fitted[:, 24:32].all(), 'recover crest beyond coarse seed')
+        self.assertFalse(fitted[:, 32:].any(), 'cannot cross the bench into another lift')
+        upper_seed = np.zeros_like(seed)
+        upper_seed[:, 44:52] = True
+        upper = cr._fit_cut_toes(h, upper_seed, allowed, .5, .5, fit_crest=True)
+        self.assertTrue(upper[:, 52:56].all())
+        self.assertFalse(upper[:, 56:].any(), 'cannot climb onto the gentle hill above the crest')
+        allowed[:, 28] = False
+        fitted = cr._fit_cut_toes(h, seed, allowed, .5, .5, fit_crest=True)
+        self.assertFalse(fitted[:, 28:].any(), 'protected crest strip is a barrier')
+        allowed[:] = True
+        h[:, 28] = np.nan
+        self.assertFalse(cr._fit_cut_toes(h, seed, allowed, .5, .5, fit_crest=True)[:, 28:].any())
+        h = np.broadcast_to(x*2, h.shape)
+        fitted = cr._fit_cut_toes(h, seed, allowed, .5, .5, fit_crest=True)
+        self.assertEqual(np.flatnonzero(fitted[16])[-1], 23+int(cr.TOE_REACH_M/.5),
+                         'crest growth obeys the same physical distance cap as toes')
 
     def test_clipped_tile_seams_preserve_normals_and_texture_phase(self):
         left, right = self.make((0, 0, 83, 160)), self.make((83, 0, 160, 160))

@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -36,6 +37,76 @@ class RoadCutTests(unittest.TestCase):
         self.assertTrue(keep.any())
         self.assertFalse(keep[self.centers[..., 0] <= 10].any())
         self.assertFalse(keep[self.centers[..., 0] >= 30].any(), 'gentle hill stays terrain')
+
+    def urban_cut(self, source, road_class='trunk'):
+        spec = SimpleNamespace(urban=True, cls=road_class, width=10.)
+        road = [('urban-highway', spec, np.array([[0., -200, 0], [0, 200, 0]]), 0)]
+        groups = cuts.road_groups(road, source is not None)
+        backed = None if source is None else cuts.terrain_backed(source, self.h, 4., 4.)
+        return cuts.select_roads(self.h, self.classes, self.x, self.y, 1, self.centers,
+            np.c_[self.xx.ravel(), self.yy.ravel()], groups, self.blocked, backed)
+
+    def test_north_capital_urban_highway_cut_with_buildings_above(self):
+        # North Capital of Texas Hwy, 30.30705, -97.82551: the road's urban
+        # classification previously vetoed a sustained bank before slope tests.
+        # Reproduce the geometry/land-cover distinction without online DEM data.
+        self.classes[self.labels] = 50
+        self.classes[self.xx >= 68] = 50
+        selected, domain = self.urban_cut(self.h)
+        face = ((self.centers[..., 0] >= 14) & (self.centers[..., 0] <= 26)
+                & (np.abs(self.centers[..., 1]) < 40))
+        self.assertTrue(selected[face].all(), 'continuous steep bank must be covered')
+        self.assertFalse(selected[self.blocked].any(), 'pavement stays clear')
+        backed = cuts.terrain_backed(self.h, self.h, 4., 4.)
+        self.assertFalse(domain[~backed].any(), 'toe fitting cannot authorize urban fill')
+        self.assertFalse(selected[self.centers[..., 0] >= 48].any(), 'building plateau stays protected')
+
+    def test_urban_highway_requires_original_relief_not_graded_fill(self):
+        for source in (None, np.zeros_like(self.h), self.h+20, -self.h,
+                       np.full_like(self.h, np.nan)):
+            with self.subTest(source='missing' if source is None else float(source[0, 0])):
+                selected, domain = self.urban_cut(source)
+                self.assertFalse(selected.any())
+                self.assertFalse(domain.any())
+
+    def test_urban_edge_domain_requires_fine_source_check_and_retains_land_exclusions(self):
+        spec = SimpleNamespace(urban=True, cls='trunk', width=10.)
+        road = [('highway', spec, np.array([[0., -200, 0], [0, 200, 0]]), 0)]
+        self.classes[self.yy >= 80] = 40
+        backed = cuts.terrain_backed(self.h, self.h, 4., 4.)
+        args = (self.h, self.classes, self.x, self.y, 1, self.centers,
+                np.c_[self.xx.ravel(), self.yy.ravel()], cuts.road_groups(road, True),
+                self.blocked, backed)
+        selected, domain = cuts.select_roads(*args)
+        refined, rural, urban = cuts.select_roads(*args, refine_source=True)
+        np.testing.assert_array_equal(refined, selected)
+        self.assertFalse(rural.any())
+        self.assertTrue((urban & ~backed).any(), 'fine evidence can recover rounded edges')
+        np.testing.assert_array_equal(domain, urban & backed)
+        self.assertFalse(urban[self.centers[..., 1] >= 78].any(), 'cultivated land remains excluded')
+        empty = cuts.select_roads(*args[:-1], np.zeros_like(backed), refine_source=True)
+        self.assertFalse(any(mask.any() for mask in empty), 'no confirmed cut grants no edge domain')
+
+    def test_urban_minor_roads_and_built_up_crest_stay_excluded(self):
+        for cls in ('secondary', 'tertiary', 'residential', 'service', 'motorway_link'):
+            with self.subTest(road_class=cls):
+                self.assertFalse(self.urban_cut(self.h, cls)[0].any())
+        self.classes[self.xx >= 32] = 50
+        self.assertFalse(self.urban_cut(self.h)[0].any(), 'source relief cannot override a built-up crest')
+
+    def test_urban_exception_does_not_change_rural_selection(self):
+        spec = SimpleNamespace(urban=False, cls='trunk', width=10.)
+        road = [('rural-highway', spec, np.array([[0., -200, 0], [0, 200, 0]]), 0)]
+        vertices = np.c_[self.xx.ravel(), self.yy.ravel()]
+        expected = cuts.select(self.h, self.classes, self.x, self.y, 1, self.centers,
+            self.segs, self.blocked,
+            self.segs.near(vertices, cuts.ROAD_LABEL_MARGIN_M).reshape(self.h.shape),
+            self.segs.near(vertices, cuts.REACH_M).reshape(self.h.shape), with_domain=True)
+        for source_available in (False, True):
+            actual = cuts.select_roads(self.h, self.classes, self.x, self.y, 1, self.centers,
+                vertices, cuts.road_groups(road, source_available), self.blocked,
+                np.zeros_like(self.blocked) if source_available else None)
+            np.testing.assert_array_equal(actual, expected)
 
     def test_toe_domain_defers_road_clearance_but_retains_land_exclusions(self):
         self.classes[self.yy >= 80] = 40
