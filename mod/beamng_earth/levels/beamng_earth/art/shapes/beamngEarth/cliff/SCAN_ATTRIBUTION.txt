@@ -1,0 +1,28 @@
+Derived scanned rock asset. Code license does not replace asset licenses.
+
+coastal_cliff_01 by Rob Tuytel, Rico Cilliers
+https://polyhaven.com/a/coastal_cliff_01
+CC0-1.0 https://polyhaven.com/license
+Changes: projection, color correction, quilting, deformation and weathering.
+
+coastal_cliff_02 by Rob Tuytel
+https://polyhaven.com/a/coastal_cliff_02
+CC0-1.0 https://polyhaven.com/license
+Changes: projection, color correction, quilting, deformation and weathering.
+
+coastal_cliff_04 by Rob Tuytel, Rico Cilliers
+https://polyhaven.com/a/coastal_cliff_04
+CC0-1.0 https://polyhaven.com/license
+Changes: projection, color correction, quilting, deformation and weathering.
+
+rock_face_01 by Dario Barresi
+https://polyhaven.com/a/rock_face_01
+CC0-1.0 https://polyhaven.com/license
+Changes: projection, color correction, quilting, deformation and weathering.
+
+rock_face_02 by Dario Barresi, Rico Cilliers
+https://polyhaven.com/a/rock_face_02
+CC0-1.0 https://polyhaven.com/license
+Changes: projection, color correction, quilting, deformation and weathering.
+
+Runtime changes: periodic edge apron, relief scaling, flat-reference normal bake.

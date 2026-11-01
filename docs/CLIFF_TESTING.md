@@ -1,0 +1,62 @@
+# Cliff rocks testing
+
+This experimental feature adds terrain-fitted cliff faces, forest-instanced broken rocks,
+and terrain-projected transition decals. Natural cliffs and road cuts use different materials,
+with regional rock colors that avoid copying vegetation and satellite shadows directly.
+
+## Install and controls
+
+Use the installation steps in [QUICKSTART.md](QUICKSTART.md). Install both the mod and server
+from the same build. Restart the server and game after replacing an earlier testing build so
+loaded meshes and materials cannot mask a change. Normal driving streams cliffs automatically.
+
+In the existing **BeamNG.Earth settings** UI, switch these independently:
+
+- **Cliff faces**: fitted meshes and their near-vehicle collision.
+- **Scattered cliff rocks**: broken rock collections around steep cliff transitions.
+- **Cliff transition decals**: rock textures projected over the terrain at cliff edges.
+
+All three default to enabled and can be changed during play. The ordinary **Rocks** option
+controls the existing rock scatter separately. No launcher flag or environment variable is needed.
+These controls disable client rendering; the server still prepares cliff geometry for streamed tiles.
+
+## Suggested checks
+
+- California coast, Cowell-Purisima Trail: `37.41159, -122.43018` and
+  `37.41692, -122.43404`. Check continuous cliff coverage, nearly vertical faces,
+  terrain transitions, natural color, and broken-rock grounding.
+- Austin, South Capital of Texas Highway: `30.29941, -97.82788` and
+  `30.30035, -97.82782`. Check terraced road cuts, low ends tapering toward road
+  height, fitted bases, and cliff sections with a road above the crest.
+- Drive away until tiles unload and return. Repeat after restarting. Coverage and
+  materials should be consistent; there should be no duplicate surfaces or flicker.
+- Approach a cliff slowly to check collision, then disable cliff faces and confirm
+  the invisible mesh no longer blocks the vehicle. Roads and shoulders should remain clear.
+- Check flat cities, small isolated elevation spikes, bridges, and stacked interchanges.
+  A road elevation difference alone must not generate a rock wall. Road cuts require
+  supporting terrain profiles; natural cliffs require sustained steep terrain and area.
+
+Detection is heuristic. Please report missing cliffs as well as false positives, including
+coordinates, screenshots, build/commit, and whether they persist after restarting.
+
+## Performance comparison
+
+Keep the camera, resolution, graphics settings, and traffic identical. Wait for terrain and
+textures to finish streaming before each measurement. Compare all three cliff controls off,
+then enable each one alone, then all three together. Record CPU/GPU frame times and FPS;
+milliseconds are easier to compare across different baseline frame rates.
+
+Decals have distance and count limits and are created over multiple frames. Broken rocks use
+the forest system and asset LODs. Cliff collision is activated near the vehicle. These limits
+reduce costs but are not a guarantee of a particular frame rate. Include hardware and graphics
+settings with performance reports.
+
+## Assets and development
+
+Shipped scan-derived assets are CC0; the road-cut material uses an AI-restored source.
+See [CREDITS.md](../CREDITS.md) for provenance. Small-rock collections and decal textures
+are copied and tinted from the user's installed BeamNG assets at runtime, not redistributed.
+
+The source checkout includes offline preparation instructions in
+`tools/assets/cliff/SCANS.md` and `tools/assets/roadcut_generated/RESTORATION.md`.
+These tools and source images are not required to run the packaged mod.

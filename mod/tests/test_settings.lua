@@ -530,4 +530,22 @@ files[settings.FILE] = { version = 1, groundCover = false, rocks = false, trees 
 local v3 = settings.load()
 T.check(v3.quality == 'custom' or v3.quality == 'low', 'old knobs that match no preset stay theirs')
 files[settings.FILE] = nil
+settings.load()
+do
+  local roads=require('beamngEarth/roads')
+  local trees=require('beamngEarth/trees')
+  local decals=require('beamngEarth/cliffdecals')
+  for _,key in ipairs({'cliffFaces','cliffRocks','cliffDecals'}) do
+    T.check(settings.get(key)==true,'cliff component defaults on: '..key)
+    T.check(settings.set(key,false).ok,'cliff component accepts UI boolean: '..key)
+  end
+  T.check(not roads.cliffsEnabled and trees.groupOff.cliff_rock and not decals.enabled,'all three switches reach independent runtime owners')
+  T.check(settings.get('rocks')==true and not trees.groupOff.rock,'cliff switches leave world rocks on')
+  settings.load()
+  T.check(not settings.get('cliffFaces') and not settings.get('cliffRocks') and not settings.get('cliffDecals'),'cliff settings persist across reload')
+  settings.set('cliffFaces',true)
+  T.check(roads.cliffsEnabled and trees.groupOff.cliff_rock and not decals.enabled,'enabling faces leaves rubble and decals off')
+  settings.set('cliffRocks',true); settings.set('cliffDecals',true)
+end
+files[settings.FILE] = nil
 T.done('test_settings')

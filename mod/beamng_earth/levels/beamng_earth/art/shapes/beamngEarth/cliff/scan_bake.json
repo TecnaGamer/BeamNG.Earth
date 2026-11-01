@@ -1,0 +1,20 @@
+{
+  "source": "build/cliff-assembly",
+  "size": [
+    8192,
+    8192
+  ],
+  "span_m": [
+    91.44,
+    91.44
+  ],
+  "height_grid": [
+    256,
+    64
+  ],
+  "relief_m": 3.0,
+  "reference_slope": 3.0,
+  "normal_reference": "flat",
+  "normal": "OpenGL +Y tangent-space full relief against undisplaced plane",
+  "limitations": "Full relief can reinforce slopes already represented by geometry; the flat bake favors visible detail."
+}

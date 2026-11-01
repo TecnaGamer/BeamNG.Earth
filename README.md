@@ -31,6 +31,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes.
+- Terrain-fitted cliff faces and road cuts, with regional rock colors, broken rocks, and transition
+  decals. Each has its own in-game switch; see the [cliff testing guide](docs/CLIFF_TESTING.md).
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
   shrubs), autumn colours in season.
 - Forest and river sounds: the stock maps' wind in the trees (louder and fuller in dense, tall forest) and background

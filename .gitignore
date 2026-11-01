@@ -19,6 +19,7 @@ docs/research/*.jsonl
 
 # agent worktrees
 .claude/
+.codex-attachments/
 tools/gcpatch/build/
 docs/research/streetview/
 docs/research/ortho/

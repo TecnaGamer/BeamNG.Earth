@@ -1,0 +1,210 @@
+[
+  {
+    "id": "coastal_cliff_01",
+    "source": "https://polyhaven.com/a/coastal_cliff_01",
+    "license": "CC0-1.0",
+    "license_url": "https://polyhaven.com/license",
+    "authors": {
+      "Rob Tuytel": "Photography, processing",
+      "Rico Cilliers": "cleanup"
+    },
+    "dimensions_mm": [
+      91979.95376586914,
+      10966.708660125732,
+      10329.669952392578
+    ],
+    "files": {
+      "coastal_cliff_01_8k.gltf": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_01/coastal_cliff_01_8k.gltf",
+        "md5": "835245ee9e1f68f076b5d17e4bfb91e3",
+        "size": 2825
+      },
+      "textures/coastal_cliff_01_arm_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_01/coastal_cliff_01_arm_8k.jpg",
+        "md5": "4b3febf8239e04bd8b559ccdc72da89c",
+        "size": 29756229
+      },
+      "coastal_cliff_01.bin": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_01/coastal_cliff_01.bin",
+        "md5": "d9f1e368b18c018e158d06ab9d924646",
+        "size": 13179840
+      },
+      "textures/coastal_cliff_01_diff_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_01/coastal_cliff_01_diff_8k.jpg",
+        "md5": "3b973b9b78e3d2a52b8780b748ec3c79",
+        "size": 22839752
+      },
+      "textures/coastal_cliff_01_nor_gl_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_01/coastal_cliff_01_nor_gl_8k.jpg",
+        "md5": "c8a4e0708dad54e62d193e59799da245",
+        "size": 30669508
+      }
+    }
+  },
+  {
+    "id": "coastal_cliff_02",
+    "source": "https://polyhaven.com/a/coastal_cliff_02",
+    "license": "CC0-1.0",
+    "license_url": "https://polyhaven.com/license",
+    "authors": {
+      "Rob Tuytel": "All"
+    },
+    "dimensions_mm": [
+      40929.92401123047,
+      8652.921199798584,
+      10055.558755993843
+    ],
+    "files": {
+      "coastal_cliff_02_8k.gltf": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_02/coastal_cliff_02_8k.gltf",
+        "md5": "ef23af2599424fc700d61331650f48fe",
+        "size": 3220
+      },
+      "textures/coastal_cliff_02_diff_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_02/coastal_cliff_02_diff_8k.jpg",
+        "md5": "e995590b62cb60ce0c5a926efe8dda34",
+        "size": 25695269
+      },
+      "textures/coastal_cliff_02_nor_gl_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_02/coastal_cliff_02_nor_gl_8k.jpg",
+        "md5": "33dcc23e475d83b170006ff03a0d918d",
+        "size": 64028233
+      },
+      "textures/coastal_cliff_02_arm_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_02/coastal_cliff_02_arm_8k.jpg",
+        "md5": "db50b65b0c0b4e23fe28e9dc3212025a",
+        "size": 21818487
+      },
+      "coastal_cliff_02.bin": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_02/coastal_cliff_02.bin",
+        "md5": "e6324e54479fd0f9aefe707dfa9e728b",
+        "size": 26773008
+      }
+    }
+  },
+  {
+    "id": "coastal_cliff_04",
+    "source": "https://polyhaven.com/a/coastal_cliff_04",
+    "license": "CC0-1.0",
+    "license_url": "https://polyhaven.com/license",
+    "authors": {
+      "Rob Tuytel": "Photography, processing",
+      "Rico Cilliers": "cleanup"
+    },
+    "dimensions_mm": [
+      86773.23913574219,
+      24247.532844543457,
+      10999.708712100983
+    ],
+    "files": {
+      "coastal_cliff_04_8k.gltf": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_04/coastal_cliff_04_8k.gltf",
+        "md5": "35cfcf864448d72fcd62bc2152cc4979",
+        "size": 2828
+      },
+      "textures/coastal_cliff_04_diff_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_04/coastal_cliff_04_diff_8k.jpg",
+        "md5": "a667682c456577d5ea212aec5b38f50c",
+        "size": 26219382
+      },
+      "coastal_cliff_04.bin": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_04/coastal_cliff_04.bin",
+        "md5": "77612519fa9eb44129ba40943612c3c3",
+        "size": 43704136
+      },
+      "textures/coastal_cliff_04_arm_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_04/coastal_cliff_04_arm_8k.jpg",
+        "md5": "d55001abbbcd454a55c8c190109d23df",
+        "size": 34287435
+      },
+      "textures/coastal_cliff_04_nor_gl_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/coastal_cliff_04/coastal_cliff_04_nor_gl_8k.jpg",
+        "md5": "d4d0bc462ec275caecd7b26fb7696225",
+        "size": 56058459
+      }
+    }
+  },
+  {
+    "id": "rock_face_01",
+    "source": "https://polyhaven.com/a/rock_face_01",
+    "license": "CC0-1.0",
+    "license_url": "https://polyhaven.com/license",
+    "authors": {
+      "Dario Barresi": "All"
+    },
+    "dimensions_mm": [
+      7108.232021331787,
+      5624.304533004761,
+      4980.4371148347855
+    ],
+    "files": {
+      "rock_face_01_8k.gltf": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_face_01/rock_face_01_8k.gltf",
+        "md5": "faddde76b9adec13b8a228e7cbd738f6",
+        "size": 2793
+      },
+      "textures/rock_face_01_nor_gl_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/rock_face_01/rock_face_01_nor_gl_8k.jpg",
+        "md5": "55d4bbaa43f04f9c07f0d26d23ae900f",
+        "size": 54154057
+      },
+      "textures/rock_face_01_diff_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/rock_face_01/rock_face_01_diff_8k.jpg",
+        "md5": "82262c95e1f96ac79ae30df6afcce9df",
+        "size": 40200856
+      },
+      "rock_face_01.bin": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_face_01/rock_face_01.bin",
+        "md5": "06caed23e725af568b64f8cbee210c1c",
+        "size": 476436
+      },
+      "textures/rock_face_01_arm_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/rock_face_01/rock_face_01_arm_8k.jpg",
+        "md5": "fd4c33c682637aea653aaffb7f6a4792",
+        "size": 37915289
+      }
+    }
+  },
+  {
+    "id": "rock_face_02",
+    "source": "https://polyhaven.com/a/rock_face_02",
+    "license": "CC0-1.0",
+    "license_url": "https://polyhaven.com/license",
+    "authors": {
+      "Dario Barresi": "All",
+      "Rico Cilliers": "processing"
+    },
+    "dimensions_mm": [
+      4870.411515235901,
+      3472.859501838684,
+      4734.235167503357
+    ],
+    "files": {
+      "rock_face_02_8k.gltf": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_face_02/rock_face_02_8k.gltf",
+        "md5": "1aa0ef64589959331a781ca043bfa3ce",
+        "size": 2794
+      },
+      "textures/rock_face_02_nor_gl_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/rock_face_02/rock_face_02_nor_gl_8k.jpg",
+        "md5": "f166c2d53a7de4858f3b589fd7b35a36",
+        "size": 44675369
+      },
+      "textures/rock_face_02_diff_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/rock_face_02/rock_face_02_diff_8k.jpg",
+        "md5": "fa001b1c17f493b8ba3bcd30cf45d062",
+        "size": 41975717
+      },
+      "textures/rock_face_02_arm_8k.jpg": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/8k/rock_face_02/rock_face_02_arm_8k.jpg",
+        "md5": "1ef015ae530bdf2c448a32e6e3fe49c5",
+        "size": 38283960
+      },
+      "rock_face_02.bin": {
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_face_02/rock_face_02.bin",
+        "md5": "add01c9b573fdddd688acb6378c78c3b",
+        "size": 702068
+      }
+    }
+  }
+]

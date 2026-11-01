@@ -1,0 +1,9 @@
+{
+  "output_size": 4096,
+  "span_m": 91.44,
+  "normal_reference": "flat",
+  "source": "16 overlapping generative restorations of the approved limestone image",
+  "depth": "Approximate joint-guided shading; not measured depth",
+  "geometry": "Existing CPU height, UV scale and mesh density preserved",
+  "cpu_height_sha256": "deb047163e05a9be001a92f19940ea5f91af18a9545471d822bc509a9df98502"
+}

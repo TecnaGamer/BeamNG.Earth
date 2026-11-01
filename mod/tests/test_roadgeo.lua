@@ -58,9 +58,11 @@ local content = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h
   bldcol = { shape = "/s/rg_bldcol.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   bld = { shape = "/s/rg_bld.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   deck = { shape = "/s/rg_deck.cdae", pos = { -118, -118, 0 }, pivot = 12, relief = 2 },
+  cliff = { shape = "/s/rg_cliff.cdae", pos = { -118, -118, 0 }, pivot = 60, relief = 80 },
   colliders = { deck = { { -10, -10, 5, 10, 10, 15 } }, bldcol = { { 50, 50, 0, 60, 60, 30 } } },
   park = { { 10, 20, 3, 90 } }, wells = { { 30, 40, 3, 45 } },
   sound = { 1, 5, 6, 7, 20, 10, 5, 0.5 },
+  talus = { groups = { "talus_c0a080" }, items = { { 0, 10, 20, 3, 0, 1, .8, .1, 1,0,0, 0,1,0, 0,0,1 } } },
   props = { groups = { "lamp" }, items = { { 0, 1, 2, 3, 0, 1, 6, 0 } } } }]], key, clat, clon)
 files['/s/rg.json'] = content
 local skin = [[{ key = "]] .. key .. [[", anchorId = %d, q = 0.03125, pivot = { %f, %f, 10 },
@@ -88,6 +90,8 @@ T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, fram
 run(1, A)
 local bc = objsWith('rg_bldcol')
 T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 1, 'its parts made once')
+T.check(#objsWith('rg_cliff') == 1 and objsWith('rg_cliff')[1].fields.collisionType == 'Visible Mesh Final',
+  'nearby cliff rock content collides with its displaced surface')
 local frame = geotile.frameOf({ frame = { clat, clon } })
 do
   local pl = geotile.placement(frame, A, 0, 0, 20)
@@ -110,8 +114,10 @@ do
   T.check(math.abs(r[1] - ex) < 1e-3 and math.abs(r[2] - ey) < 1e-3 and math.abs(r[3] - ez) < 1e-3,
     'a parking spot mapped exactly (with the shear)')
 end
-T.check(#called('trees', 'onGeoRows') == 1 and #called('pumpjacks', 'onRows') == 1 and #called('ambience', 'onSpaces') == 1,
+T.check(#called('trees', 'onGeoRows') == 2 and #called('pumpjacks', 'onRows') == 1 and #called('ambience', 'onSpaces') == 1,
   'furniture, wells, sound handed on')
+local rubble = called('trees','onGeoRows')[1]
+T.check(rubble[3]=='t'..key and rubble[7]==17,'talus uses its own Forest tile and full orientation basis')
 
 -- its skin for A
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
@@ -160,6 +166,13 @@ roads.collisionRebuilt()
 T.check(roads.settledFor(2, car.x, car.y), 'settled again with the new skin')
 
 -- an exact variant for B, and back to the base
+roads.onExact({ type = 'roads_exact', anchorId = 2, key = key, parts = { cliff = '/s/rx_2_cliff.cdae' } }, 2)
+run(2, B)
+T.check(#objsWith('rx_2_cliff') == 1 and objsWith('rx_2_cliff')[1].fields.collisionType == 'Visible Mesh Final',
+  'exact cliff variant retains surface collision')
+roads.onExact({ type = 'roads_exact', anchorId = 2, key = key, parts = { cliff = false } }, 2)
+run(2, B)
+T.check(#objsWith('rx_2_cliff') == 0 and #objsWith('rg_cliff') == 1, 'cliff base restored')
 roads.onExact({ type = 'roads_exact', anchorId = 2, key = key, parts = { bldcol = '/s/rx_2_bldcol.cdae' } }, 2)
 run(2, B)
 T.check(#objsWith('rx_2_bldcol') == 1 and #objsWith('rg_bldcol') == 0, 'exact variant swapped in')
@@ -196,5 +209,8 @@ T.check(roads.status().geoStats.kept == 1, 'counted as kept')
 roads.onDrop({ anchorId = 1, key = key })
 run(1, B)
 T.check(#objsWith('rg_') == 0 and #objsWith('rs_') == 0, 'dropped: every part and skin gone')
+local droppedTalus = false
+for _, call in ipairs(called('trees','dropKey')) do if call[3]=='g:t'..key then droppedTalus=true end end
+T.check(droppedTalus,'dropping road content also removes its talus Forest instances')
 
 T.done('test_roadgeo')

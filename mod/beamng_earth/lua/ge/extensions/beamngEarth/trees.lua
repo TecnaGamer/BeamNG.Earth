@@ -8,6 +8,7 @@
 local M = {}
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
 local geotile = require('beamngEarth/geotile')
+local clifftalus = require('beamngEarth/clifftalus')
 -- Geotiles (server --geo-tiles on, hello.geoTiles): a tile keyed 'g17_x_y' holds its items in its own frame (msg.frame,
 -- msg.pivot); it belongs to no anchor. Its items are made where its placement into the current anchor puts them
 -- (geotile.placement); at a rebase its Forest takes the move from the old placement to the new one (rendering at once,
@@ -459,7 +460,9 @@ local function itemType(shape, solid)
     if not d then return nil end
     d:setField('shapeFile', 0, shape .. '.dae')
     d:setField('collidable', 0, solid and '1' or '0')
-    d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local rock = shape:find('cliff_talus_',1,true) ~= nil
+    d:setField('windScale', 0, rock and '0' or '0.4')
+    d:setField('branchAmp', 0, rock and '0' or '0.1'); d:setField('detailAmp', 0, rock and '0' or '0.2')
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end
@@ -471,6 +474,10 @@ end
 -- item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
+  if clifftalus.isGroup(group) then
+    local v = list[math.floor(rank * 7919) % #list + 1]
+    return v[1], math.max(0.3, math.min(1.0, h / v[2]))
+  end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
     for _, v in ipairs(list) do
@@ -638,6 +645,13 @@ end
 
 -- A tile's items as a flat array (STRIDE numbers each, or more: stride), shown from the next update on.
 local function addTile(anchorId, tileKey, flat, stride, groups, geo)
+  for _, group in ipairs(groups or {}) do
+    if clifftalus.isGroup(group) and not M.CATALOG[group] then
+      local ok, catalog = pcall(clifftalus.catalog,group)
+      if ok and catalog then M.CATALOG[group] = catalog; M.GROUP_MAX_M[group] = 350
+      else log('W','beamngEarth.trees','cliff rubble copy unavailable: '..tostring(catalog)) end
+    end
+  end
   local key = geo and ('g:' .. tostring(tileKey)) or (anchorId .. ':' .. tostring(tileKey))
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
@@ -1081,6 +1095,7 @@ function M.update(anchorId, player, view, frameMs)
           r = 2     -- this group is not shown this far out
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
+        if clifftalus.isGroup(g) and M.groupOff.cliff_rock then r = 2 end
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
         if g and not M.CATALOG[g] then
           r = 2

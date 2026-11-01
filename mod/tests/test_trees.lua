@@ -530,4 +530,33 @@ do
   T.check(count() == 0 and trees.status().tiles == 0, 'dropped')
   trees.RECHECK_S = 1.0
 end
+-- Private cliff collections have independent visibility and never receive vegetation wind.
+do
+  trees.clear(); trees.reset()
+  trees.FRAME_MS, trees.POOL_SPARE, trees.RECHECK_S = math.huge, 0, -1
+  local g='talus_b8ad99'
+  trees.CATALOG[g]={{'/temp/beamngEarth/shapes/cliff_talus_v2/test_collection',1.7}}
+  trees.GROUP_MAX_M[g]=350
+  trees.onRows(22,'t0_0',{{0,10,10,5,0,1,1.3,0}},{g},8)
+  trees.update(22,{x=10,y=10})
+  T.check(count()==1,'private cliff collection placed through Forest')
+  local item=next(items)
+  T.check(item and item.d.fields.windScale=='0' and item.d.fields.detailAmp=='0','rock cluster has no vegetation wind')
+  trees.setGroupEnabled({'rock'},false)
+  trees.update(22,{x=10,y=10})
+  T.check(count()==1,'general Rocks switch leaves cliff groups visible')
+  trees.setGroupEnabled({'cliff_rock'},false)
+  trees.update(22,{x=10,y=10})
+  T.check(count()==0,'cliff rock switch removes regional cliff groups')
+  trees.setGroupEnabled({'rock'},true)
+  trees.update(22,{x=10,y=10})
+  T.check(count()==0,'general Rocks switch cannot restore disabled cliff groups')
+  trees.setGroupEnabled({'cliff_rock'},true)
+  trees.update(22,{x=10,y=10})
+  T.check(count()==1,'cliff rock switch restores regional cliff groups')
+  trees.dropKey('22:t0_0')
+  trees.update(22,{x=10,y=10})
+  T.check(count()==0,'cliff collection removed with tile')
+  trees.CATALOG[g],trees.GROUP_MAX_M[g]=nil,nil
+end
 T.done('test_trees')

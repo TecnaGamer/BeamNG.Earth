@@ -44,6 +44,7 @@ function S.newObject(class)
   function o:getField(k) return self.fields[k] end
   function o:flush() S.count('flush_' .. class) end
   function o:reload() S.count('reload_' .. class) end
+  function o:postApply() S.count('postApply_' .. class) end
   function o:setPosition(p) self.pos = vec3(p.x, p.y, p.z) end
   function o:setScale(v) self.scale = vec3(v.x, v.y, v.z) end
   function o:setPosRot(x, y, z, qx, qy, qz, qw) S.count('setPosRot'); self.pos = vec3(x, y, z); self.rot = quat(qx, qy, qz, qw) end

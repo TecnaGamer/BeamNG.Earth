@@ -1,0 +1,9 @@
+{
+  "source": "Rock 06 / Rob Tuytel / Poly Haven, CC0",
+  "source_sha256": "68740ffff9f959196fc2f18f399191bcefef4862c291c7cb23906ab242a483e5",
+  "span_m": 1.2,
+  "filter_m": 0.035,
+  "strength": 0.7,
+  "size": 2048,
+  "relief": "High-pass scanned tangent slopes; no albedo-derived height"
+}

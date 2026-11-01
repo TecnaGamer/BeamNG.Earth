@@ -174,3 +174,17 @@ BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic 
 Dynamic Damage Particles, Dynamic Scratches, SparkMod: other authors' mods the project owner uses;
 BeamNG.Earth only coexists with them (e.g. the weather module backs off when BWM_Weather drives the
 weather). The pause-menu integration follows the pattern of the TAA Standalone mod.
+
+## Cliff materials
+
+- Coastal Cliff 01, 02, 04 and Rock Face 01, 02 from
+  [Poly Haven](https://polyhaven.com), CC0. Authors, source links and processing
+  notes are in `tools/assets/cliff/SCANS.md`; the downloader uses Poly Haven's API.
+- Rock 06 fine normal map by Rob Tuytel / [Poly Haven](https://polyhaven.com/a/rock_06), CC0.
+- Road-cut albedo authored and restored using generative AI. Source, prompts and
+  processing notes are in `tools/assets/roadcut_generated/RESTORATION.md`.
+  Reference photographs are not redistributed; inferred relief is approximate.
+- Runtime cliff-edge rubble, fine-grain maps and D0206 fallen-rock decals:
+  private copies from the player's installed BeamNG.drive assets. The mod changes
+  material bindings and tint; it does not distribute proprietary meshes or maps
+  or modify the original game assets.

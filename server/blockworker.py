@@ -793,6 +793,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("deck_mesh")
     P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
     mark("tunnel_mesh")
+    import cliffrocks
+    P.cliff = cliffrocks.tile_mesh(frame, box, drawn, _s.surface, cells, _s.widths, cache_dir=_s.cache_dir,
+                                  source_elev=lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)))
+    mark("cliff_rocks")
     import railways
     rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
     rground = railways.point_ground(frame, elev, rkey)
@@ -854,7 +858,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              wells=P.wells) + (P.fuel_pads,)
+                              wells=P.wells, cliff_mesh=P.cliff) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -920,11 +924,18 @@ def _shape_info(path, pos, what):
     import geotiles
     fast.require(geotiles.NEED_CONTENT, "cdae_zstats")
     with open(path, "rb") as f:
-        n, med, lo, hi = fast._ef.cdae_zstats(f.read())
+        data = f.read()
+    n, med, lo, hi = fast._ef.cdae_zstats(data)
     oz = float(pos[2])
     piv = oz + float(med) if n else oz
     rel = max(abs(oz + float(hi) - piv), abs(piv - oz - float(lo))) if n else 0.0
-    return {"pivot": round(piv, 3), "relief": round(rel, 3)}
+    info = {"pivot": round(piv, 3), "relief": round(rel, 3)}
+    if what == "cliff":
+        # Cliff normals/UVs can change without changing its height bounds. The
+        # client must replace the old mesh after reconnecting to an updated server.
+        import hashlib
+        info["meshHash"] = hashlib.sha1(data).hexdigest()[:16]
+    return info
 
 
 def _content_hash(text, vfs_dir):
@@ -952,7 +963,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         _, n = roadsmod.write_tile(tmpdir, vfs_dir, 0, tile, None, P.chunks, None, None, P.dmesh, P.bld, P.props,
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound, wells=P.wells,
-                                   decals=False)
+                                   decals=False, cliff_mesh=P.cliff)
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)

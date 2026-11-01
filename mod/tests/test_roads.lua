@@ -158,6 +158,66 @@ T.check(#statics() == 1 and statics()[1].fields.collisionType == 'Visible Mesh F
 roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 
+-- Cliff contacts use the displaced visible mesh and leave with their owning tile.
+files['/t/cliff.json'] = '{ chunks = {}, cliff = { shape = "/t/cliff.cdae", pos = { 0, 0, 0 } } }'
+roads.onTile({ anchorId = 2, key = '6_6', path = '/t/cliff.json', n = 0 }, 2)
+roads.update(gov, 2)
+T.check(#statics() == 1 and statics()[1].fields.collisionType == 'Visible Mesh Final', 'cliff collides with its displaced mesh')
+local cliff = statics()[1]
+do
+  local oldVehicle, oldCheck = getPlayerVehicle, roads.COLLIDE_CHECK_S
+  local centre = 6.5 * roads.TILE_M
+  local car = vec3(centre, centre, 0)
+  getPlayerVehicle = function() return { getPosition = function() return car end,
+    getVelocity = function() return vec3() end } end
+  roads.COLLIDE_CHECK_S = 0
+  local function move(distance)
+    car.x = centre + distance
+    roads.update(gov, 2)
+  end
+  move(roads.COLLIDE_M[1] + roads.TILE_M * .71 + 100)
+  T.check(cliff.fields.collisionType == 'Visible Mesh Final', 'cliff contact retained inside range hysteresis')
+  move(10000)
+  T.check(statics()[1] == cliff and not cliff.hidden and cliff.fields.collisionType == 'None',
+    'distant cliff remains visible with physics disabled')
+  local applies, reloads = S.calls.postApply_TSStatic, S.calls.reloadCollision
+  move(10000)
+  T.check(S.calls.postApply_TSStatic == applies and S.calls.reloadCollision == reloads,
+    'unchanged cliff range does not reapply or rebuild collision')
+  roads.setFoci({{x=centre,y=centre,r=100}})
+  move(10000)
+  T.check(cliff.fields.collisionType == 'Visible Mesh Final', 'another vehicle activates cliff contact')
+  roads.setFoci({})
+  move(10000)
+  roads.onTile({anchorId=2,key='7_6',path='/t/cliff.json',n=0},2)
+  roads.update(gov,2)
+  T.check(#statics()==2 and statics()[1].fields.collisionType=='None' and statics()[2].fields.collisionType=='None',
+    'new distant cliffs render without physics')
+  roads.onDrop({anchorId=2,key='7_6'})
+  move(0)
+  T.check(statics()[1] == cliff and cliff.fields.collisionType == 'Visible Mesh Final',
+    'approaching reactivates contact on the same cliff object')
+  getPlayerVehicle, roads.COLLIDE_CHECK_S = oldVehicle, oldCheck
+end
+roads.setCliffsEnabled(false)
+T.check(cliff.hidden and cliff.fields.decalType == 'None' and cliff.fields.collisionType == 'None',
+  'disabled cliff does not render, receive decals or collide')
+roads.setCliffsEnabled(true)
+T.check(not cliff.hidden and cliff.fields.decalType == 'Visible Mesh Final' and cliff.fields.collisionType == 'Visible Mesh Final',
+  'cliff restores drawing and collision without replacing its mesh')
+roads.setCliffsEnabled(false)
+roads.onTile({ anchorId = 2, key = '7_6', path = '/t/cliff.json', n = 0 }, 2)
+roads.update(gov,2)
+T.check(#statics()==2 and statics()[1].hidden and statics()[2].hidden, 'newly streamed cliffs respect off setting')
+T.check(statics()[1].fields.collisionType == 'None' and statics()[2].fields.collisionType == 'None',
+  'newly streamed disabled cliffs have no invisible collision')
+roads.onDrop({anchorId=2,key='7_6'})
+roads.update(gov,2)
+roads.setCliffsEnabled(true)
+roads.onDrop({ anchorId = 2, key = '6_6' })
+roads.update(gov, 2)
+T.check(#statics() == 0, 'cliff drops with its tile')
+
 -- pooled shape files (server/matslots.py): the slot paths replace the tile's own files; a slot is reported gone once
 -- its tile is dropped and its object deleted (one the tile cannot use: at once)
 gov.allow, gov.tries = nil, 0
@@ -426,5 +486,16 @@ do
   T.check(S.calls.reload_Material == 2, 'one reload a changed material')
   for _, m in pairs(made) do m:delete() end
   roads.reset()
+end
+-- Decals can be toggled back on after all road streaming has finished.
+-- Their pending queue must wake the governor or they never get creation tokens.
+do
+  local decals=require('beamngEarth/cliffdecals')
+  local hasWork=decals.hasWork
+  decals.hasWork=function() return true end
+  T.check(roads.hasWork(),'pending decals wake idle road streaming')
+  decals.hasWork=function() return false end
+  T.check(not roads.hasWork(),'completed decals allow idle road streaming')
+  decals.hasWork=hasWork
 end
 T.done('test_roads')

@@ -78,6 +78,9 @@ M.SCHEMA = {
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- the vegetation tiles' rocks and boulders (trees.lua groups rock, desert_rock; GitHub #5, after PR #321)
   rocks = { kind = 'bool', default = true, label = 'Rocks' },
+  cliffFaces = { kind = 'bool', default = true, label = 'Cliff faces' },
+  cliffRocks = { kind = 'bool', default = true, label = 'Scattered cliff rocks' },
+  cliffDecals = { kind = 'bool', default = true, label = 'Cliff transition decals' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
@@ -125,7 +128,8 @@ M.SCHEMA = {
 }
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'cliffFaces', 'cliffRocks', 'cliffDecals',
+  'roads', 'highwaySigns', 'dashboardSatellite',
   'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
@@ -460,6 +464,9 @@ M.APPLY = {
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
+  cliffFaces = function(v) require('beamngEarth/roads').setCliffsEnabled(v) end,
+  cliffRocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'cliff_rock' }, v) end,
+  cliffDecals = function(v) require('beamngEarth/cliffdecals').setEnabled(v) end,
   highwaySigns = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end

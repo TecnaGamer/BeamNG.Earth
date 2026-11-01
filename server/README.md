@@ -690,6 +690,52 @@ python3 server/airports.py --stats                                   # data-qual
 ```
 (`--cache-dir`, `--offline`, `--refresh`, `--all` for closed and estimated runways, `--px` m per preview pixel.)
 
+## Cliff rocks
+
+Cliff faces, scattered cliff rocks and cliff transition decals are independently
+controlled by the existing in-game BeamNG.Earth graphics settings. All three
+default to enabled. Road streaming and ground surfaces must be enabled to build
+cliffs. The switches change client visibility; the server still generates cliff
+data. Ordinary scattered world rocks have their own existing control.
+
+`cliffrocks.py` detects connected steep natural surfaces, with minimum area and
+relief requirements, city buffers, and road/building/water exclusions.
+`cliffcuts.py` separately checks roadside cross-sections for sustained cuts,
+crest breaks and raw-terrain backing. Connected cuts can extend across benches
+and taper toward road height. A road above a crest is allowed only with terrain
+evidence; elevation differences between artificial road decks alone do not qualify.
+These are geometric heuristics, not a geological classification.
+
+The fitted mesh samples drawn elevation on a 0.5 m lattice and uses the packaged
+CPU heightmaps for displacement. Fitted boundaries and outward clearance reduce
+stepping and terrain intersections. Natural and road-cut surfaces use separate
+materials, both spanning 91.44 by 91.44 m. The coastal 8K atlas combines five CC0
+scans; the road-cut 4K atlas uses the approved generatively restored limestone
+image. Normals are baked against a flat reference to preserve relief that the
+coarse mesh cannot represent. This approximation can reinforce some geometric
+slopes. Fine normal detail uses an independent 1.2 m repeat.
+
+`cliffcolors.py` samples cached exposed-ground imagery, rejecting vegetation,
+water and shadows and constraining tint, with biome/climate fallbacks. It does
+not modify the satellite imagery pipeline or trigger extra downloads.
+Rubble uses the forest system and private copies of installed Johnson Valley
+rock collections. D0206 transition decals project onto terrain near cliff edges;
+their active count, distance, overlap and per-frame creation are bounded.
+No proprietary game meshes or textures are distributed with the mod.
+
+Visible cliff faces participate in the existing nearby road-collision budget
+using final mesh collision and the ROCK ground model. Normal-map detail is visual
+only. Hiding cliff faces also disables their collision. Pooling, exact variants,
+rebases and revisit caching include cliff parts; code and CPU heightmap changes
+invalidate cached geometry. Restart the server after Python/heightmap changes and
+reconnect to rebuild streamed content. Replaced textures may require a game
+restart because of BeamNG's texture cache.
+
+See [the testing guide](../docs/CLIFF_TESTING.md) for locations, settings and
+performance comparisons, and [the asset pipeline](../tools/assets/cliff/SCANS.md)
+for sources and bake commands. Runtime generation and GPU cost still need testing
+across hardware and locations; coverage follows streamed road tiles.
+
 ## Tests
 
 ```sh
