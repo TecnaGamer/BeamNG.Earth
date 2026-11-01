@@ -325,7 +325,7 @@
 
         <div class="panel-sub">Latitude, longitude</div>
         <div class="panel-row">
-          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="36.5785, -118.2923" maxlength="80"
+          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="36.5785, -118.2923 or a map link" maxlength="400"
                  @keydown.enter.stop.prevent="goText" @keydown.esc.stop.prevent="coordText = ''" />
           <button class="map-btn primary" :disabled="!!state.cannotGo || !coordText.trim()" @click="goText">Go</button>
           <button class="map-btn" :disabled="!coordText.trim()" @click="saveText">Save</button>
@@ -1402,10 +1402,7 @@ const placesMsg = ref(""), placesMsgError = ref(false)
 let confirmTimer = null
 
 // an empty Lua table arrives as {} (an object), not []
-function toArray(v) {
-  if (Array.isArray(v)) return v
-  return v && typeof v === "object" ? Object.values(v) : []
-}
+function toArray(v) { return mm.luaList(v) }
 const placeList = computed(() => toArray(state.value.places))
 const recentList = computed(() => toArray(state.value.recent))
 
@@ -1648,8 +1645,7 @@ function fmtMiles(m) {
 
 // ---- search --------------------------------------------------------------------------------
 function allPlaces() {
-  const s = state.value
-  return [...(s.places || []), ...(s.recent || []).map(r => ({ ...r, name: r.name || r.text }))]
+  return mm.searchList(state.value.places, state.value.recent)
 }
 
 function goTo(lat, lon, name) {

@@ -45,3 +45,18 @@ console.log("mapmath fallback ok:", fb.length, "stand-ins for", tiles.length, "t
   assert.strictEqual(mm.creditsFor(imagery, "", bern), "Map imagery: Swiss; EOX")
   console.log("mapmath credits ok")
 }
+
+// the search box's places (GitHub #601: no saved places): an empty Lua list arrives as {}, and spreading it threw
+{
+  assert.deepEqual(mm.luaList({}), [])
+  assert.deepEqual(mm.luaList(null), [])
+  assert.deepEqual(mm.luaList({ 1: { name: "a" } }), [{ name: "a" }])
+  assert.deepEqual(mm.searchList({}, {}), [])
+  const got = mm.searchList({}, [{ text: "Fells Point", lat: 39.28, lon: -76.59 }])
+  assert.equal(got.length, 1)
+  assert.equal(got[0].name, "Fells Point")
+  assert.deepEqual(mm.searchPlaces(got, "fells").map(p => p.name), ["Fells Point"])
+  assert.deepEqual(mm.searchList([{ name: "Home" }], {}).map(p => p.name), ["Home"])
+  console.log("mapmath search list ok")
+}
+
