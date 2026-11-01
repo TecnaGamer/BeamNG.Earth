@@ -1212,16 +1212,24 @@ class AnchorQTest(unittest.TestCase):
         self.assertEqual(earthd.survey_q(f, d), 1 / 256)
         self.assertEqual(d.zoom, earthd.SURVEY_ZOOM)
         # the relief inside block-sized windows decides, not the whole survey's: a steady slope of
-        # 3000 m over 30 km is 200 m per window (5 samples, 2 km, for 1.5 blocks of 1024 m)
-        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 128)
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 64)      # 600 m per window
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 32)      # bigger blocks, bigger windows
+        # 3000 m over 30 km is 150 m per window (4 samples, 1.5 km, for a block of 1024 m and a survey step)
+        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 256)
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 64)      # 450 m per window
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (750 m)
+        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1500 m
 
-        class Peak(Dem):            # flat, with one 1200 m spike: the window over it decides
+        class Peak(Dem):            # flat, with one 1200 m spike: its few windows do not decide (its blocks are coarser)
             def sample(self, lat, lon, zoom, progress=None):
                 la, lo = np.asarray(lat), np.asarray(lon)
                 return 1000 + 1200 * np.exp(-(((la - LAT) * 111320) ** 2 + ((lo - LON) * 86000) ** 2) / 600.0 ** 2)
-        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 32)
+        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 128)     # (its foot, not its top: 1/32)
+        self.assertEqual(heightmap.block_params(1000.0, 2200.0, 1 / 256)[0], 1 / 32)
+
+        class Range(Dem):           # a mountain range over half the survey: it decides
+            def sample(self, lat, lon, zoom, progress=None):
+                lo = np.asarray(lon)
+                return 1000 + 1200 * (np.sin((lo - LON) * 86000 / 700.0) > 0) * (lo > LON)
+        self.assertEqual(earthd.survey_q(f, Range(0), 1024.0), 1 / 32)
 
 
 class PredictTest(unittest.TestCase):

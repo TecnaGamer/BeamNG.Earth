@@ -289,8 +289,8 @@ def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEF
              chunks=None):
     """Build the size² block centred at (cx, cy) with height quantum q and write it to path.
     groundZ is the terrain height at ground_at (None if that point is outside the block). keep (a
-    dict, optional) receives "lat", "lon" and "u" of the grid ([gy, gx], gy = north) and write_png's
-    "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added)."""
+    dict, optional) receives "lat", "lon" and "u" of the grid ([gy, gx], gy = north), write_png's
+    "qgrid" and its heights as stored ("drawn"). chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added)."""
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:
@@ -299,6 +299,7 @@ def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEF
     if keep is not None:
         keep["u"] = u
         keep["qgrid"] = qgrid
+        keep["drawn"] = heights(qgrid, z_base, max_height)     # (the terrain's own heights: the fine ground meets them)
     gz = height_at(qgrid, z_base, max_height, cx, cy, *ground_at) if ground_at else None
     return {"cx": cx, "cy": cy, "zBase": z_base, "maxHeight": max_height, "q": q,
             "groundZ": None if gz is None else round(gz, 3),

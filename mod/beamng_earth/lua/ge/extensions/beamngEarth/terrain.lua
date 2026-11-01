@@ -377,19 +377,66 @@ end
 M.fine = { ids = {}, fine = nil, bank = nil }
 local fineMade = 0
 
-local function fineTexture(m, base)
+-- The game's packed copy of the block photo (its terrain texture cache, sRGB BC7, written by the server:
+-- terraincache.base_entry; named by xxh64 of the photo's path three times and the layers' ao map's), or nil. The PBR
+-- material reads the photo's PNG as linear colour (the pieces washed out white, 2026-11-01); this file it decodes as the
+-- terrain does.
+local function fineDds(base, layer)
+  if type(base) ~= 'string' then return nil end
+  local tm = type(layer) == 'string' and scenetree.findObject(layer) or nil
+  local ok, ao = pcall(function() return tm:getField('aoBaseTex', 0) end)
+  if not ok or type(ao) ~= 'string' or ao == '' then return nil end
+  local p = '/temp/art/terrainmaterialcache/' .. require('beamngEarth/xxh64').hex(base .. base .. base .. ao) .. '.dds'
+  return FS:fileExists(p) and p or nil
+end
+
+local function fineTexture(m, base, layer)
   local satmat = require('beamngEarth/satmat')
-  if type(base) == 'string' and FS:fileExists(base) then
+  local dds = fineDds(base, layer)
+  if dds then
+    local layers = tostring(m:getField('activeLayers', 0))
+    m:setField('version', 0, '1.5')
+    satmat._setTexture(m, dds, false)
+    m:setField('baseColorMap', 1, dds)      -- (the macro layer's photo: fineMaterial)
+    if layers == '2' then m:setField('activeLayers', 0, '2') end     -- (_setTexture set one)
+  elseif type(base) == 'string' and FS:fileExists(base) then
+    m:setField('version', 0, '1')      -- (the PNG: the legacy material, which reads it as the terrain does)
     satmat._setTexture(m, base, false)
   else
     m:setField('diffuseColor', 0, satmat.FALLBACK_COLOR)
   end
 end
 
--- A fine material: the block's photo (colour map) with its surface layer's detail texture over it (layer: the
--- TerrainMaterial whose detail textures the terrain draws there, its size in samples: metres / 2), the terrain's look;
--- no layer: satmat's ground grain. The pieces' UV1 is world metres / 2 (finepatch.DETAIL_M).
-local function fineMaterial(name, layer, base)
+-- A fine material: the terrain's look (the engine's terrain shader, material/shadergen/terrainMat + terrain.h): the block's
+-- photo plus its surface layer's detail colour (2 x detail - 1, at the layer's near strength: the mesh shader adds
+-- its detail alike), the layer's detail normal, roughness and ao over the level's flat base maps, on the same
+-- texture coordinates (the server's UV1: block-local metres / 2 from half a sample on). The user, 2026-11-01: "make the
+-- texture of the finer mesh perfectly blend in and match with the normal terrain" (the satmat grain and a fixed
+-- normal strength drew it a shade off, in squares). No layer: satmat's ground grain. Not matched: the macro textures
+-- (subtle, 64 m) and the detail's fade with distance (the mesh's strengths are the terrain's at FINE_LOOK_M).
+M.FINE_ROUGHNESS_BASE = TERRAIN_DIR .. 'bngEarth_base_r.png'
+M.FINE_AO_BASE = TERRAIN_DIR .. 'bngEarth_base_ao.png'
+-- (a strength pair "near far" as the terrain shader takes it at FINE_LOOK_M from the camera with the layer's
+-- detailDistances "a b c d": near up to b, toward far by c, far from d: terrain.h's calculateStrenth)
+M.FINE_LOOK_M = 20
+M.FINE_MACRO = true
+local function nums(v)
+  local o = {}
+  for x in tostring(v or ''):gmatch('[%d%.%-]+') do o[#o + 1] = tonumber(x) end
+  return o
+end
+local function strengthAt(v, dist, default)
+  local s, d = nums(v), nums(dist)
+  if not s[1] then return default end
+  local nearS, farS = s[1], s[2] or s[1]
+  if #d < 4 then return nearS end
+  local x = M.FINE_LOOK_M
+  local sat = function(a) return math.max(0, math.min(1, a)) end
+  local mid = d[3] > d[2] and sat((x - d[2]) / (d[3] - d[2])) or 1
+  return nearS + (farS - nearS) * mid
+end
+
+local function fineMaterial(name, layer, base, rim)
   local satmat = require('beamngEarth/satmat')
   local m = scenetree.findObject(name)
   local fresh = not m
@@ -397,22 +444,64 @@ local function fineMaterial(name, layer, base)
     m = createObject('Material')
     m:setField('mapTo', 0, name)
   end
-  fineTexture(m, base)
+  -- (the PBR material, as the terrain's, with the photo's sRGB copy: the legacy one (version 1) adds its detail map at
+  -- full strength and in gamma space, the pieces a shade darker and grainier than the terrain beside them, 2026-11-01)
+  fineTexture(m, base, layer)
   if fresh then
     for _, f in ipairs(satmat.FIELDS) do m:setField(f[1], 0, f[2]) end
-    -- (the colour: satmat's neutral ground grain, mean 0.5 grey; the layers' own detail textures are lighter than
-    -- that and made the pieces pale grey blocks on the asphalt, 2026-11-01. Their relief: the layer's normal detail)
-    m:setField('detailMap', 0, satmat.DETAIL_MAP)
-    for _, f in ipairs(satmat.DETAIL_FIELDS) do m:setField(f[1], 0, f[2]) end
     local tm = type(layer) == 'string' and scenetree.findObject(layer) or nil
-    local ntex = tm and tm:getField('normalDetailTex', 0) or ''
-    if ntex ~= '' then
-      local size = tonumber(tm:getField('normalDetailTexSize', 0)) or 1
-      m:setField('detailNormalMap', 0, ntex)
-      m:setField('normalDetailMapUseUV', 0, '1')
-      m:setField('detailNormalMapStrength', 0, '0.6')
-      m:setField('detailScale', 0, string.format('%.4f %.4f', 1 / math.max(size, 0.25), 1 / math.max(size, 0.25)))
+    local get = function(f) local ok, v = pcall(function() return tm:getField(f, 0) end) return ok and v or '' end
+    local btex = tm and get('baseColorDetailTex') or ''
+    if btex ~= '' then
+      -- (detail sizes in samples: one repeat every size x square metres; UV1 is metres / 2)
+      local size = math.max(tonumber(get('baseColorDetailTexSize')) or 1, 0.25) * M.square
+      local sc = string.format('%.5f %.5f', 2 / size, 2 / size)
+      -- the macro texture (the terrain's large light and dark patches over 32-64 m) as a second layer at half opacity:
+      -- the mesh shader lerps its layers, so each one's strengths doubled sum to the terrain's detail + macro (the
+      -- user, 2026-11-01: "the mesh dose not have the fake shadow effect like the normal ground")
+      local mtex = get('baseColorMacroTex')
+      local k = (mtex ~= '' and M.FINE_MACRO) and 2 or 1
+      local function S(field, dflt) return tostring(k * strengthAt(get(field), get('detailDistances'), dflt)) end
+      m:setField('detailMap', 0, btex)
+      m:setField('detailBaseColorMapStrength', 0, S('baseColorDetailStrength', 0.25))
+      m:setField('detailMapUseUV', 0, '1')
+      m:setField('detailScale', 0, sc)
+      local ntex = get('normalDetailTex')
+      if ntex ~= '' then
+        m:setField('detailNormalMap', 0, ntex)
+        m:setField('normalDetailMapUseUV', 0, '1')
+        m:setField('detailNormalMapStrength', 0, S('normalDetailStrength', 1))
+      end
+      local rtex = get('roughnessDetailTex')
+      m:setField('roughnessFactor', 0, '1')
+      m:setField('roughnessMap', 0, M.FINE_ROUGHNESS_BASE)
+      if rtex ~= '' then
+        m:setField('roughnessDetailMap', 0, rtex)
+        m:setField('detailRoughnessMapStrength', 0, S('roughnessDetailStrength', 1))
+      end
+      local atex = get('aoDetailTex')
+      m:setField('ambientOcclusionMap', 0, M.FINE_AO_BASE)
+      if atex ~= '' then
+        m:setField('ambientOcclusionDetailMap', 0, atex)
+        m:setField('detailAoMapStrength', 0, S('aoDetailStrength', 0.8))
+      end
+      if k == 2 then
+        local msize = math.max(tonumber(get('baseColorMacroTexSize')) or 32, 1) * M.square
+        local ms = tostring(2 * strengthAt(get('baseColorMacroStrength'), get('macroDistances'), 0.12))
+        local f1 = { { 'opacityFactor', '0.5' }, { 'useAnisotropic', '1' }, { 'roughnessFactor', '1' },
+          { 'roughnessMap', M.FINE_ROUGHNESS_BASE }, { 'ambientOcclusionMap', M.FINE_AO_BASE },
+          { 'detailMap', mtex }, { 'detailBaseColorMapStrength', ms }, { 'detailMapUseUV', '1' },
+          { 'detailScale', string.format('%.5f %.5f', 2 / msize, 2 / msize) } }
+        for _, f in ipairs(f1) do m:setField(f[1], 1, f[2]) end
+        m:setField('activeLayers', 0, '2')
+      end
+    else
+      -- (satmat's neutral ground grain, mean 0.5 grey)
+      m:setField('detailMap', 0, satmat.DETAIL_MAP)
+      for _, f in ipairs(satmat.DETAIL_FIELDS) do m:setField(f[1], 0, f[2]) end
     end
+    -- (a rim piece: drawn 1 cm over the terrain's own pale squares; its edges cast lines of shadow on the road)
+    if rim then m:setField('castShadows', 0, '0') end
     m.canSave = false
     m:registerObject(name)
   else
@@ -425,7 +514,7 @@ end
 -- A block's fine materials ({{name, layer}, ...}) with its photo.
 local function fineMaterials(fine, base)
   for _, e in ipairs(type(fine) == 'table' and type(fine.materials) == 'table' and fine.materials or {}) do
-    if type(e) == 'table' and type(e[1]) == 'string' then fineMaterial(e[1], e[2], base) end
+    if type(e) == 'table' and type(e[1]) == 'string' then fineMaterial(e[1], e[2], base, e[3] == true) end
   end
 end
 

@@ -1510,7 +1510,8 @@ class MountainRoadTest(unittest.TestCase):
 
     def test_hairpins_widened(self):
         """Each hairpin's apex found; the road HAIRPIN_WIDEN_M wider there through its tapers, its legs as they were;
-        the grading's pads wider than the road's own core there."""
+        the grading's core of the road's own plan as much wider there (no plan of its own: its ends stepped the
+        lanes)."""
         import grading
         f = features([_zigzag(4)], ["secondary"])
         sp = roads.road_specs(f)[0]
@@ -1523,9 +1524,47 @@ class MountainRoadTest(unittest.TestCase):
         self.assertAlmostEqual(float(ws.min()), sp.width, delta=0.01)
         xy = np.c_[(ll[:, 0] - LON) * M_LON, (ll[:, 1] - LAT) * M_LAT]
         p = grading._plan(xy, np.zeros(len(xy)), sp)
-        pads = grading.hairpin_pads([("r", p)], [sp], FRAME)
-        self.assertEqual(len(pads), 4)
-        self.assertTrue(all(q.half > p.half + 1.0 for _f, q in pads))
+        self.assertEqual(grading.hairpin_cores([("r", p)], [sp], FRAME), 1)
+        self.assertAlmostEqual(float(p.widen.max()), roads.HAIRPIN_WIDEN_M / 2, delta=0.2)
+        self.assertEqual(float(p.widen.min()), 0.0, "the legs as they were")
+        pack = grading.PlanPack([p])
+        k = int(np.argmax(p.widen[:-1]))
+        self.assertGreater(pack.h[k], p.half + 1.5, "the core wider round the apex")
+        self.assertEqual(float(pack.h.min()), p.half)
+        # (a piece of it trimmed to a box keeps its widening there)
+        x0 = float(np.asarray(p.xy)[k, 0])
+        parts = grading.trim_plan(p, (x0 - 30.0, -1e9, x0 + 30.0, 1e9))
+        self.assertTrue(parts and all(q.widen is not None and len(q.widen) == len(q.xy) for q in parts))
+        self.assertGreater(max(float(q.widen.max()) for q in parts), 1.5)
+
+    def test_hairpin_legs_own_roads(self):
+        """A pass road's legs between its hairpins grade as roads of their own (grading.PlanPack: another rid each), so
+        one leg's ground gives way over the other's carriageway at another level (the leg below's wall strip stepped the
+        lane above 27 cm across the Stelvio's hairpins, 2026-11-01); a road without the flag stays one."""
+        import grading
+        f = features([_zigzag(3)], ["secondary"])
+        sp = roads.road_specs(f)[0]
+        ll = f.lonlat
+        xy = np.c_[(ll[:, 0] - LON) * M_LON, (ll[:, 1] - LAT) * M_LAT]
+        p = grading._plan(xy, np.zeros(len(xy)), sp)
+        self.assertTrue(p.steep)
+        self.assertEqual(len(set(grading.PlanPack([p]).rid.tolist())), 4)
+        q = grading._plan(xy, np.zeros(len(xy)), sp._replace(mountain=False))
+        self.assertEqual(len(set(grading.PlanPack([q]).rid.tolist())), 1)
+
+    def test_give_way_smooth(self):
+        """Beside a road, another road at another level gives way over its carriageway smoothly as their heights part
+        (grading.YIELD_RAMP_M), not at once where they are WALL_CUT_M apart: a step there (27 cm in a Stelvio hairpin's
+        lane, 2026-11-01)."""
+        import grading
+        x = np.arange(0.0, 200.1, 4.0)
+        a = grading.Plan(np.c_[x, np.zeros(len(x))], np.zeros(len(x)), 4.0, road_half=3.0)
+        b = grading.Plan(np.c_[x, np.full(len(x), 7.0)], -0.02 * x, 4.0, road_half=3.0)   # (parting from it)
+        a.rid, b.rid = 1, 2
+        px = np.arange(20.0, 180.0, 0.25)
+        py = np.full(len(px), 1.5)                  # (a's lane on b's side)
+        z = grading.grade_points(px, py, np.zeros(len(px)), [a, b])
+        self.assertLess(float(np.abs(np.diff(z)).max()), 0.01, "no step along the lane")
 
     def test_steep_sides_no_verge(self):
         """Graded across a 45-degree hillside: the pass road's fill side falls away within 2 m of its carriageway's

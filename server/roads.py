@@ -2091,13 +2091,21 @@ HAIRPIN_SPAN_M = 22.0
 def hairpin_apexes(lonlat):
     """The (lon, lat) of each hairpin's apex on a lon/lat polyline (k, 2): the middle point of each run of points in a
     MOUNTAIN_TURN_DEG turn within 2 x MOUNTAIN_SPAN_M (earthfast.tight_bends)."""
-    import fast
-    fast.require(42, "tight_bends")
     ll = np.asarray(lonlat, np.float64)
     if len(ll) < 3:
         return []
     kx = 111320.0 * math.cos(math.radians(float(ll[:, 1].mean())))
-    xy = np.ascontiguousarray(np.c_[(ll[:, 0] - ll[0, 0]) * kx, (ll[:, 1] - ll[0, 1]) * 111320.0])
+    xy = np.c_[(ll[:, 0] - ll[0, 0]) * kx, (ll[:, 1] - ll[0, 1]) * 111320.0]
+    return [(float(ll[k, 0]), float(ll[k, 1])) for k in hairpin_apex_rows(xy)]
+
+
+def hairpin_apex_rows(xy):
+    """hairpin_apexes on a polyline xy (k, 2) in metres: the index of each apex's point."""
+    import fast
+    fast.require(42, "tight_bends")
+    xy = np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2])
+    if len(xy) < 3:
+        return []
     m = np.asarray(fast._ef.tight_bends(xy, MOUNTAIN_SPAN_M, MOUNTAIN_TURN_DEG), bool)
     out, i = [], 0
     while i < len(m):
@@ -2107,8 +2115,7 @@ def hairpin_apexes(lonlat):
         j = i
         while j + 1 < len(m) and m[j + 1]:
             j += 1
-        k = (i + j) // 2
-        out.append((float(ll[k, 0]), float(ll[k, 1])))
+        out.append((i + j) // 2)
         i = j + 1
     return out
 

@@ -102,6 +102,8 @@ TUNNEL_KEEP_IN_M = 3.0      # (roads.LOW_HOLE_M: a low arch's mouths, flat at it
 TUNNEL_KEEP_M = 5.0         # m beside a covered tunnel's road where the ground over it is left ungraded ...
 OVER_TUNNEL_SMALL_M = 0.5   # ... but for a change smaller than this (a road crossing over it, graded flush)
 WALL_AHEAD_M = 2.5          # ... only beside a segment or this little past its end (a joint between two: VERTEX_STEP)
+YIELD_RAMP_M = 0.5          # m over which a road gives way to another's carriageway at another level (grade_points): in
+                            # height difference up to WALL_CUT_M and in distance past its own carriageway's edge
 # Roads at other heights beside a road's core (GitHub #92: a street in a cutting had its half under a service road on
 # the bank 7.5 m above it pulled 2-4 m up its slope; hairpins blended into each other; an upper road's edge dragged into
 # a pit by the road under it). Beside a point in a core, another road's segments outside their own core count less the
@@ -292,7 +294,7 @@ def resample(xy, step):
 class Plan:
     """One road's grading: vertices (n, 2) in the frame's ENU metres, their target heights, core half width; abut: does
     it lead onto a bridge at its (first, last) vertex (grade_points)."""
-    __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "max_wall", "bank", "steep")
+    __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "max_wall", "bank", "steep", "widen")
 
     def __init__(self, xy, z, half, abut=(False, False), cut=None, road_half=None):
         self.xy, self.z, self.half, self.abut = xy, z, float(half), (bool(abut[0]), bool(abut[1]))
@@ -304,6 +306,7 @@ class Plan:
         self.max_wall = WALL_MAX_H_M    # its cuttings' walls at most this tall (wall_max_h)
         self.bank = None                # (n,) its cross slope (m per m toward its left: a banked curve, bank) or None
         self.steep = False              # a mountain pass road's: steep sides (STEEP_RUN, roads._mountain_roads)
+        self.widen = None               # (n,) m its core and carriageway are wider each side there (hairpin_cores) or None
         pad = half + T_MAX
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
 
@@ -678,37 +681,52 @@ def snap_junctions(plans, specs):
         plans[j].z = out[off[j]:off[j + 1]].copy()
 
 
-def hairpin_pads(plans, specs, frame):
-    """[(fid, Plan)] of the widened hairpins of the pass roads among plans ([(fid, Plan)], specs alike): per hairpin
-    (roads.hairpin_apexes on the plan's line) a plan along the road within roads.HAIRPIN_SPAN_M of its apex, at its
-    heights, its core the road's width there at about its widest (roads.HAIRPIN_WIDEN_M more), so the ground under the
-    widened turn is graded with it."""
-    out = []
-    for (fid, p), sp in zip(plans, specs):
+LEG_RID_SHIFT = 44           # PlanPack: a pass road's leg (between hairpins) as rid + leg << this (rids < 2^41)
+HAIRPIN_FOLD_RATIO = 0.5      # hairpin_cores: a point of the road's own line this much nearer than along it is another leg
+
+
+def hairpin_cores(plans, specs, frame):
+    """The pass roads' plans among plans ([(fid, Plan)], specs alike) widened, in place, round their widened hairpins
+    (roads.hairpin_extra: the drawn road's own widening, on the plan's line): Plan.widen, their cuttings' walls and tops
+    moved out by as much. A plan of its own over each hairpin (wider all along it, its ends held at their heights)
+    reached the hairpin's other leg and stepped the lanes by up to 18 cm (the Stelvio; the user, 2026-11-01: "Fix the
+    bumps"). Returns how many were widened."""
+    n = 0
+    for (_fid, p), sp in zip(plans, specs):
         if sp is None or not getattr(sp, "mountain", False) or len(p.xy) < 3:
             continue
-        xy = np.asarray(p.xy, np.float64)[:, :2]
-        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
-        for alo, ala in roadsmod.hairpin_apexes(np.c_[np.asarray(lo), np.asarray(la)]):
-            e, n, _ = frame.geodetic_to_enu(np.array([ala]), np.array([alo]), np.zeros(1))
-            d = np.hypot(xy[:, 0] - float(np.asarray(e)[0]), xy[:, 1] - float(np.asarray(n)[0]))
-            # (the stretch round the apex alone: the legs above and below pass within metres of it)
-            a = b = int(np.argmin(d))
-            r = roadsmod.HAIRPIN_SPAN_M * 0.7
-            if d[a] > r:
-                continue
-            while a > 0 and d[a - 1] < r:
-                a -= 1
-            while b < len(d) - 1 and d[b + 1] < r:
-                b += 1
-            if b - a < 1:
-                continue
-            w = sp.width + roadsmod.HAIRPIN_WIDEN_M * 0.75
-            q = Plan(xy[a:b + 1].copy(), np.asarray(p.z, np.float64)[a:b + 1].copy(), w / 2 + shoulder(sp),
-                     road_half=w / 2)
-            q.rid, q.max_wall, q.steep = p.rid, p.max_wall, getattr(p, "steep", False)
-            out.append((f"{fid}:hairpin{a}", q))
-    return out
+        ex = roadsmod.hairpin_extra(frame, sp, np.asarray(p.xy, np.float64)[:, :2])
+        if ex is None or float(np.max(ex)) < 0.05:
+            continue
+        ex = np.maximum(np.asarray(ex, np.float64), 0.0)
+        # (never over half way to its own other leg: a point of the plan nearer than FOLD_RATIO of the way along to it,
+        # across a hairpin's narrow middle; there the wider cores met and blended the legs' heights, a 22 cm dip)
+        rows = np.nonzero(ex > 0.0)[0]
+        import fast
+        fast.require(126, "fold_clearance")
+        room = np.asarray(fast._ef.fold_clearance(np.ascontiguousarray(np.asarray(p.xy, np.float64)[:, :2]),
+                                                  rows.astype(np.int64), HAIRPIN_FOLD_RATIO)) / 2.0 - p.half
+        ex[rows] = np.minimum(ex[rows], np.maximum(room, 0.0))
+        if float(ex.max()) < 0.05:
+            continue
+        set_widen(p, ex)
+        if p.cut is not None:
+            seg = np.maximum(ex[:-1], ex[1:])
+            c = np.asarray(p.cut, np.float64).copy()
+            for col in (0, 2, 3, 5):        # (the walls' and the tops' offsets from the centre line)
+                c[:, col] += seg
+            p.cut = c
+        n += 1
+    return n
+
+
+def set_widen(p, widen):
+    """Plan p's widen (hairpin_cores; None: none), its box grown to reach as far."""
+    p.widen = widen
+    if widen is not None and len(widen):
+        pad = p.half + float(np.max(widen)) + T_MAX
+        xy = np.asarray(p.xy)
+        p.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
 
 
 def shoulder(spec):
@@ -951,10 +969,8 @@ class _Planner:
                 except Exception as e:
                     log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
             if plans:
-                try:            # a pass road's widened hairpins (roads.HAIRPIN_*): a wider core round each
-                    pads = hairpin_pads(plans, pspecs, self.frame)
-                    plans.extend(pads)
-                    pclip.extend([True] * len(pads))
+                try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
+                    hairpin_cores(plans, pspecs, self.frame)
                 except Exception as e:      # the road's own core rather than none
                     log.debug("grading: hairpins of %s: %s: %s", key, type(e).__name__, e)
             if CORNERS_ON and plans:
@@ -1449,6 +1465,7 @@ class _Planner:
                 np_ = Plan(p.xy, p.z + add, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
                 np_.steep = getattr(p, "steep", False)
+                set_widen(np_, getattr(p, "widen", None))
                 plans[i] = (fid, np_)
 
     def _lower_underpasses(self, key, plans):
@@ -1605,6 +1622,7 @@ class _Planner:
             np_ = Plan(p.xy, z1, p.half, p.abut, p.cut, p.road_half)
             np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
             np_.steep = getattr(p, "steep", False)
+            set_widen(np_, getattr(p, "widen", None))
             plans[n] = (fid, np_)
 
     def _under_ground(self, lines, smooth, cands):
@@ -2321,6 +2339,7 @@ def mapped_plan(p, fn):
     q = Plan(fn(p.xy), p.z, p.half, p.abut, p.cut, p.road_half)
     q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
     q.steep = getattr(p, "steep", False)
+    set_widen(q, getattr(p, "widen", None))
     return q
 
 
@@ -2527,6 +2546,9 @@ def trim_plan(p, box):
         pb = getattr(p, "bank", None)
         if pb is not None:
             pb = np.r_[pb[i] + (pb[i + 1] - pb[i]) * t0, pb[i + 1:j + 1], pb[j] + (pb[j + 1] - pb[j]) * t1]
+        pw = getattr(p, "widen", None)
+        if pw is not None:
+            pw = np.r_[pw[i] + (pw[i + 1] - pw[i]) * t0, pw[i + 1:j + 1], pw[j] + (pw[j + 1] - pw[j]) * t1]
         if np.hypot(*(pxy[-1] - pxy[0])) > 1e-6 or len(pxy) > 2:
             q = Plan(pxy, pz, p.half, (p.abut[0] and i == 0 and t0 == 0.0, p.abut[1] and j == n - 1 and t1 == 1.0),
                      None if p.cut is None else np.asarray(p.cut)[i:j + 1].copy(), p.road_half)
@@ -2534,6 +2556,7 @@ def trim_plan(p, box):
             q.max_wall = getattr(p, "max_wall", WALL_MAX_H_M)
             q.bank = pb
             q.steep = getattr(p, "steep", False)
+            set_widen(q, pw)
             out.append(q)
         i = j + 1
     return out
@@ -2570,10 +2593,27 @@ class PlanPack:
         self.ba, self.bb = np.ascontiguousarray(bk[ia]), np.ascontiguousarray(bk[ia + 1])
         self.h = np.repeat(np.array([p.half for _k, p in rows], f64), nseg)
         self.rh = np.repeat(np.array([getattr(p, "road_half", p.half) for _k, p in rows], f64), nseg)
+        # (a plan widened in places, Plan.widen: each segment by the more of its ends')
+        wd = np.concatenate([np.asarray(p.widen, f64) if getattr(p, "widen", None) is not None else np.zeros(len(p.xy))
+                             for _k, p in rows])
+        if wd.any():
+            ws = np.maximum(wd[ia], wd[ia + 1])
+            self.h = self.h + ws
+            self.rh = self.rh + ws
         rids = [getattr(p, "rid", -1) for _k, p in rows]
         self.rid = np.repeat(np.array([r if r is not None and r >= 0 else 2 ** 40 + k
                                        for (k, _p), r in zip(rows, rids)], np.int64), nseg)
         s0 = np.r_[0, np.cumsum(nseg)]
+        # a pass road's legs between its hairpins' apexes (roads.hairpin_apex_rows) count as roads of their own: the
+        # one leg's ground (its wall's strip, its sides) gives way over the other's carriageway at another level as
+        # another road's does (grade_points), not the same road's own (a leg's strip behind its wall reached the leg
+        # above's lane across a hairpin's narrow middle: a 30 cm step in it, the Stelvio, 2026-11-01)
+        for n, (_k, p) in enumerate(rows):
+            if getattr(p, "steep", False) and nseg[n] >= 2:
+                apex = roadsmod.hairpin_apex_rows(p.xy)
+                if apex:
+                    leg = np.searchsorted(np.asarray(apex), np.arange(nseg[n]), side="right")
+                    self.rid[s0[n]:s0[n + 1]] += leg.astype(np.int64) << LEG_RID_SHIFT
         ab = np.zeros(int(s0[-1]), bool)
         cut = np.full((int(s0[-1]), 6), np.nan)
         for n, (_k, p) in enumerate(rows):
@@ -2655,7 +2695,7 @@ def grade_points(px, py, base, plans, lift=0.0):
         return out
     A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK = got
     import fast
-    fast.require(125, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125)
+    fast.require(126, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126)
     f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK,
@@ -2663,7 +2703,7 @@ def grade_points(px, py, base, plans, lift=0.0):
                                  float(STEEP_T_MIN), float(BLEND_R), float(BUCKET),
                                  float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M), float(WALL_AHEAD_M),
                                  bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
-                                 float(SIDE_FADE_M), float(SHARP_STEP_M))
+                                 float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M))
 
 
 def bridge_chain(line, all_bridges):
