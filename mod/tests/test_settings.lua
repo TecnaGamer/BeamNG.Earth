@@ -526,6 +526,23 @@ do
 end
 
 
+do
+  local visual0, settingsFile0 = package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE]
+  local quality
+  package.loaded['beamngEarth/trafficvisuals'] = { setQuality = function(v) quality = v end }
+  files[settings.FILE] = { version = 1, quality = 'low' }
+  T.check(settings.load().distantTrafficQuality == 'low', 'an older Low preset gets the light traffic pool')
+  files[settings.FILE] = { version = 1, quality = 'custom' }
+  T.check(settings.load().distantTrafficQuality == 'high', 'Custom keeps the dense traffic default')
+  for _, v in ipairs({ 'low', 'medium', 'high' }) do
+    T.check(settings.set('distantTrafficQuality', v).ok and quality == v, 'traffic quality applies: ' .. v)
+    T.check(settings.load().distantTrafficQuality == v, 'traffic quality survives reload: ' .. v)
+  end
+  T.check(not settings.set('distantTrafficQuality', 'ultra').ok, 'unknown traffic quality is rejected')
+  package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE] = visual0, settingsFile0
+  settings.load()
+end
+
 -- presets: picking one sets its knobs; moving a knob makes it Custom (or the preset it now matches)
 local r = settings.setQuality('low')
 T.check(r.ok and settings.get('quality') == 'low' and settings.get('trees') == 'low' and settings.get('groundCover') == false,

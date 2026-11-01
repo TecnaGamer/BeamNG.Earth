@@ -184,7 +184,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   - **Object detail**: how far out objects keep their detailed models (Game setting = the game's Mesh Quality).
   - **Distant traffic lights**: moving headlights and taillights on distant roads (needs Roads and nighttime).
     **Distant lights without traffic** keeps them on even when game traffic is off; otherwise they follow traffic.
-    Density follows road class, length and local hour, with a bounded graphics pool; see [the implementation guide](docs/DISTANT_TRAFFIC.md).
+    Density follows road class, length and local hour. Cars persist around the player when turning or zooming;
+    **Distant traffic quality** offers Low, Medium and High populations; lower levels reduce resource use.
+    Off-screen motion updates less often. See [the implementation guide](docs/DISTANT_TRAFFIC.md) for bounds.
   - **Grass and shrubs**, **Grass draw distance**, **Rocks**, **Street lamp lights**, **View distance** (the real
     horizon or a fixed distance).
   - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose

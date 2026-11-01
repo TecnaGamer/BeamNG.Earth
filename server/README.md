@@ -125,10 +125,12 @@ The JSON is `{v:2,key,frame,pivot,paths}`; each path has a stable `id`, XYZ `poi
 `offset` (m right of travel; currently zero: heights are sampled in each lane). Stable 2 km pieces bound long ways;
 the client retains them across rebases. Bridge routes use the same solved deck profiles as far bridge slabs;
 tunnels remain excluded. Bounds: 128 routes / 8192 points per tile, 512 points per route; the client holds at most 384 tiles,
-8192 routes and 196608 prepared or pending points. It renders at most 512 cosmetic cars / 1024 planes, including
-those fading out, with demand-based range shares and slower placement updates at distance. Local routes fade out
+8192 routes and 196608 prepared or pending points. Client quality selects a world population of at most
+512/1024/2048 cosmetic cars (twice as many planes), including those fading out, independently of camera direction
+or zoom. Demand-based range shares, distance LOD and 2 Hz cached off-screen motion bound updates; hidden planes
+receive no transform uploads and newly revealed actors refresh immediately. Local routes fade out
 by 6 km and major routes by 10 km. No vehicles, lights or collision. The route planner is Rust
-(`native/earthfast/src/traffic.rs`, native 126); Python marshals shared road rules and height samples. At capacity
+(`native/earthfast/src/traffic.rs`, bundled native 132 on this base); Python marshals shared road rules and height samples. At capacity
 the mod defers whole tiles by file descriptor and retries after ownership releases space, with bounded resync
 for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the code, limits and lifecycle.
 

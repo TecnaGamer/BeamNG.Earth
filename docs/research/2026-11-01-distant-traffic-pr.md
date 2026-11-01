@@ -1,4 +1,4 @@
-# Distant traffic: current dev integration and bridge check
+# Distant traffic: integration and rendering checks
 
 The contract and code map are in [DISTANT_TRAFFIC.md](../DISTANT_TRAFFIC.md). This note records the checks
 performed for this contribution and their limits.
@@ -79,3 +79,68 @@ reappeared during companion reconnect, as it had before this integration. The ea
 while deleting gameplay traffic was not reproduced in the finite moving-traffic checks; its cause remains
 unestablished. Genuine driving rebases, long sessions and controlled full CPU/GPU comparisons remain additional
 acceptance work, rather than implied by these fixtures or mixed live timing counters.
+
+## Camera stability and quality (2026-11-02)
+
+The former view-dependent budget reproduced two visible problems: zooming added 235 planes to an already
+occupied central road, and a 45-degree turn initially revealed fewer cars than the settled view. Regression
+fixtures failed on that renderer. Admission now builds a stable population around the player, independently of
+camera position, orientation, FOV and aspect. Fixed slot phases prevent unrelated road populations changing when
+moving cars cross selection bands. Genuine additions fade in; revealing an established actor refreshes its
+cached pose immediately, even when the preparation governor is blocked.
+
+The first world-wide 512-car variant passed the transition checks but the user found it too sparse. They
+accepted the denser 2048-car variant's appearance and transitions, then reported a frame-rate cost. Low/Medium/High
+now cap the whole population at 512/1024/2048 cars, including retiring assignments. Hidden planes receive no
+transform/color uploads, off-screen motion is cached at 2 Hz, and an unchanged population avoids repeat scans.
+Quality reductions release excess native pairs incrementally. Producer ranges, road density, protocol and the
+dev.116/native132 server remain unchanged.
+
+A fixed-camera Windows comparison with the user's background frame-rate cap disabled sampled each phase for
+15 seconds. Camera position/orientation/FOV remained unchanged within each sample; time continued normally.
+
+| Phase | Mean FPS | Mean module time per frame | World cars at end | In-frustum count |
+|---|---:|---:|---:|---:|
+| Off, before | 53.4 | 0.03 ms | 0 | 0 |
+| High | 38.7 | 4.96 ms | 1932 | 660 |
+| Medium | 43.8 | 2.39 ms | 953 | 321 |
+| Low | 50.3 | 1.33 ms | 470 | 154 |
+| Off, after | 55.0 | 0.04 ms | 0 | 0 |
+
+These are short, scene-specific end-to-end samples, not a hardware-independent FPS promise or a separated GPU
+profile. Population/density continued changing slowly with the clock. The final small change skips native object
+lookups for already-hidden planes; the table predates that change and does not claim a measured gain from it.
+
+LuaJIT fixtures passed: 241 pure path assertions, 6780 renderer assertions, 310 settings assertions, 282 core,
+17 geotile and 46 navigation graph assertions, plus JS syntax and whitespace checks. They cover zoom/aspect/free
+camera movement, a first-frame 45-degree turn, moving off-screen poses, admission fades, quality migration,
+quality reductions and repeated full-pool reset. A separate 60-cycle full-2048-pool run also passed, with zero
+retained stub objects/routes/pending points after each reset. Collected Lua heap at cycles 20/40/60 was about
+1768/1787/1830 KiB; this is finite harness evidence with a small increase, not proof of zero native-memory leaks.
+
+Upstream conventions were refreshed through `eefbb41549e1d0125169bb8537e815a508a3de9e`; the instruction/workflow
+files were unchanged. That newer terrain work was inspected for conventions, not merged or executed in this test.
+
+A subsequent human-driven High test recorded 590 one-second samples over about ten minutes, with roughly 23 km
+of sampled movement within common anchor frames. Physical-follow commits increased from 130 to 188. Anchor ids
+changed from 2 through 3 to 4, with the driving rebase counter increasing from 2 to 3. Every sample's native group
+count equalled the renderer's pool count. Peaks were 2048 actors, 4096 planes, 336 tiles, 5379 prepared routes and
+87626 prepared plus pending points; no deferred tiles were needed. The route cache changed with travel rather
+than retaining all visited roads. No input, camera, weather or time commands were used to drive this test.
+
+Whole-game physical memory ranged from about 3674 to 5470 MiB and GE Lua heap from 261 to 360 MiB, with falls as
+well as rises. These include terrain, vegetation, other mods and the bounded telemetry itself; they cannot be
+attributed to this feature alone. Native-object equality, fixed ceilings and repeated cleanup provide finite
+resource evidence, not an assertion of leak freedom. The game logged a 359 ms world-loading hitch near a rebase
+(146.6 ms world work, 15.9 ms traffic module work); limits on work units are not hard frame-time guarantees.
+High still has a measurable rendering cost; weaker machines should use a lower quality or disable the effect.
+The user confirmed smooth operation and good camera/zoom transitions after this drive.
+
+An actual idle cleanup check then disabled the renderer and verified all 4096 native traffic planes disappeared
+in about 34.4 seconds, including the 30-second idle hold and incremental deletion. A global TSStatic shape scan
+found zero remaining traffic planes, agreeing with zero pool/group objects. Route data stayed cached as designed.
+The test restored the user's High/on settings; temporary metrics extensions were removed after verification.
+
+All 190 installed mod files matched source SHA256. The actual CEF runtime module cache exposed the new quality
+control with all three options. The game remained open throughout these checks; public PR/test archives still
+contain the preceding version until a separately approved publication.

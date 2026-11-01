@@ -35,6 +35,8 @@ export const settingsSchema = [
         options: [ { label: "Few", value: "few" }, { label: "Normal", value: "normal" }, { label: "Many", value: "many" } ] },
       { id: "distantTraffic", type: "bool", default: true, name: "Distant traffic lights", desc: "Moving headlights and taillights on distant roads at night. Follows game traffic unless Distant lights without traffic is on. Density follows the local time. Needs Roads." },
       { id: "distantTrafficWithoutTraffic", type: "bool", default: false, name: "Distant lights without traffic", desc: "Keep the distant headlights and taillights on at night even when game traffic is off. Needs Distant traffic lights and Roads.", showIf: c => c.distantTraffic !== false },
+      { id: "distantTrafficQuality", type: "select", default: "high", name: "Distant traffic quality", desc: "How many distant vehicles populate the surrounding roads. Lower levels reduce the number of lights and resource use. Turning and zooming preserve the same traffic.", showIf: c => c.distantTraffic !== false,
+        options: [ { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" } ] },
       { id: "viewDistanceMode", type: "select", default: "horizon", name: "View distance", desc: "Real horizon (the default): the land reaches the true horizon. Fixed: the view ends at the distance below (cheaper on weak hardware).",
         options: [ { label: "Real horizon", value: "horizon" }, { label: "Fixed distance", value: "fixed" } ] },
       { id: "viewDistanceKm", type: "float", min: 20, max: 1000, step: 10, default: 100, name: "Fixed view distance (km)", desc: "How far you can see with a fixed view distance.", showIf: c => c.viewDistanceMode === "fixed" },

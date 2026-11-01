@@ -122,13 +122,15 @@ function M.facing(dx, dy, vx, vy)
 end
 
 -- Normalized distance from the view centre to its rectangular edge (1 at an edge). Behind the camera is outside.
-function M.viewEdge(x, y, z, view)
+function M.viewEdge(x, y, z, view, padding)
   local dx, dy, dz = x - view.cam.x, y - view.cam.y, z - view.cam.z
   local f, r, u = view.forward, view.right, view.up
   local depth = dx * f.x + dy * f.y + dz * f.z
-  if depth <= 0 then return math.huge end
-  return max(math.abs(dx * r.x + dy * r.y + dz * r.z) / (depth * view.tanH),
-    math.abs(dx * u.x + dy * u.y + dz * u.z) / (depth * view.tanV))
+  local side, up = math.abs(dx * r.x + dy * r.y + dz * r.z), math.abs(dx * u.x + dy * u.y + dz * u.z)
+  local edge = depth > 0 and max(side / (depth * view.tanH), up / (depth * view.tanV)) or math.huge
+  if not padding or padding <= 0 then return edge, edge end
+  local far = depth + padding
+  return edge, far > 0 and max((side - padding) / (far * view.tanH), (up - padding) / (far * view.tanV)) or math.huge
 end
 
 -- A stream's peak population scales with its length. Short quiet roads may have no car rather than receiving a
@@ -162,7 +164,7 @@ function M.glowRadius(distance)
   return max(0.35, distance > 3500 and min(16, 6 + (distance - 3500) * 0.0015) or min(6, distance * 0.004))
 end
 
--- Share a bounded pool in proportion to visible demand, reserving some distant traffic where it exists.
+-- Share a bounded population in proportion to demand around the player, reserving some distant traffic where it exists.
 function M.bandQuotas(demand, limit)
   local total = demand[1] + demand[2] + demand[3]
   local target, q = min(limit, total), { 0, 0, 0 }
