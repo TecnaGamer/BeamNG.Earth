@@ -222,13 +222,16 @@ EDGE_STRIP_M = 1.0
 # narrow ones on secondaries
 EDGE_STRIP_CLASS_M = {"tertiary": 0.0, "unclassified": 0.0, "secondary": 0.25}
 URBAN_CLASS = 50                # ESA WorldCover "built-up"
-URBAN_SHARE = 0.5               # a road is urban when this share of its vertices is built-up ...
+URBAN_SAMPLE_M = 20.0          # uniform arc-length samples; OSM vertex density must not decide road treatment
+URBAN_SHARE = 0.5               # a road is urban when this share of its distance samples is built-up ...
 URBAN_BESIDE_M = 30.0           # ... and at least URBAN_BESIDE_SHARE of them have built-up land this far to one side:
-URBAN_BESIDE_SHARE = 0.2        # the land cover counts a wide road's own pavement as built-up, and the Eyre Highway
+URBAN_BESIDE_SHARE = float(os.environ.get("BNE_URBAN_BESIDE_SHARE", "0.35"))
+                                # sustained development beside at least 35% of length samples, rather than a few
+                                # school/pavement endpoints; the land cover counts wide pavement as built-up, and the Eyre Highway
                                 # through Eucla (centre 94 %, beside it 3 %) got a town's footpaths, bins and hydrants
                                 # across the Nullarbor (GitHub #267). Baltimore and Chicago keep every urban road.
 URBAN_BOTH_SHARE = 0.1          # a motorway or trunk needs built-up land on both
-                                # sides of this share of its vertices: a roadhouse beside the Eyre Highway (Eucla: one
+                                # sides of this share of its samples: a roadhouse beside the Eyre Highway (Eucla: one
                                 # side 33 %, the other 0 %) is no town
 
 
@@ -1511,17 +1514,18 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     k = (urban_fn, widths, bool(left_hand))     # a bound method equals another of the same object and function
     got = memo.get(k)
     if got is None:             # (the measured widths on the specs without them: those are asked for too, _bridge_reach)
+        import revisit
+        f0 = revisit.faults()
         extra = (widths is not None, bool(left_hand))
         if urban_fn is None:    # (the land cover's are the server's own: not shared, cell_facts)
             got = _specs_from(_facts_load(feats, "specs", extra), len(feats))
         if got is None:
-            import revisit
-            f0 = revisit.faults()
             got = (_road_specs(feats, urban_fn, left_hand) if widths is None else
                    _measured_widths(feats, road_specs(feats, urban_fn, None, left_hand), widths))
             if urban_fn is None and revisit.faults() == f0:
                 _facts_store(feats, "specs", extra, [None if sp is None else _spec_json(sp) for sp in got])
-        got = memo.setdefault(k, got)
+        if revisit.faults() == f0:
+            got = memo.setdefault(k, got)
     return list(got)
 
 
@@ -1583,10 +1587,30 @@ def unbuilt(feats, i):
     return share >= UNBUILT_SHARE
 
 
+def _urban_samples(lonlat):
+    """Sample the same road uniformly regardless of source-vertex clustering.
+
+    The endpoint-inclusive spacing is at most URBAN_SAMPLE_M; original vertices
+    are interpolated by cumulative distance, never counted as urban-context votes.
+    Geometry itself remains untouched for widths, banking, bridges and rendering.
+    """
+    ll = np.asarray(lonlat, np.float64)
+    if len(ll) < 2:
+        return ll
+    latitude = .5 * (float(ll[:, 1].min()) + float(ll[:, 1].max()))
+    scale = np.array([111320. * math.cos(math.radians(latitude)), 110540.])
+    distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(ll, axis=0) * scale, axis=1))]
+    if distance[-1] < 1e-8:
+        return ll[:1]
+    count = max(2, int(math.ceil(distance[-1] / URBAN_SAMPLE_M)) + 1)
+    stations = np.linspace(0., distance[-1], count)
+    return np.column_stack([np.interp(stations, distance, ll[:, axis]) for axis in (0, 1)])
+
+
 def _road_specs(feats, urban_fn, left_hand):
     out = []
     rules = feats.rules
-    ask = []                                    # (index in out, cls, kind, rule_w, coordinate range)
+    ask = []                                    # (index in out, cls, kind, samples, oneway, direction, lanes, surface, link, mapped width)
     developed_both = {}
     cr = rules.get("connectors")
     ncon = np.bincount(np.asarray(cr.feature), minlength=len(feats)) if cr is not None and len(cr.feature) else None
@@ -1617,31 +1641,33 @@ def _road_specs(feats, urban_fn, left_hand):
             ms = _osm(feats, "maxspeed", i, 5.0, 200.0)
             if ms is not None:
                 dk = (dk[0], ms, dk[2])
-        if urban_fn is not None and rule_w is None and kind in BUILT:
+        if urban_fn is not None and kind in BUILT:
             a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
             b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
             if b > a:
-                ask.append((len(out), cls, kind, a, b, ow, dk, lanes, surface_token(surf), link))
+                ask.append((len(out), cls, kind, _urban_samples(feats.lonlat[a:b]), ow, dk, lanes,
+                            surface_token(surf), link, rule_w))
                 out.append(None)
                 continue
         out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes), kind, False, cls, ow, 2.5, *dk,
                         lanes=lanes, surf=surface_token(surf), link=link))
     if ask:
-        ll = np.concatenate([feats.lonlat[a:b] for _, _, _, a, b, *_ in ask])
-        left, right = _beside(ll, [b - a for _, _, _, a, b, *_ in ask], URBAN_BESIDE_M)
+        ll = np.concatenate([samples for _, _, _, samples, *_ in ask])
+        left, right = _beside(ll, [len(samples) for _, _, _, samples, *_ in ask], URBAN_BESIDE_M)
         n = len(ll)
         pts = np.concatenate([ll, left, right])
         u_all = np.asarray(urban_fn(pts[:, 1], pts[:, 0]), bool)      # (one call: its cost is per call)
         u, by, both = u_all[:n], u_all[n:2 * n] | u_all[2 * n:], u_all[n:2 * n] & u_all[2 * n:]
         k = 0
-        for j, cls, kind, a, b, ow, dk, lanes, token, link in ask:
-            developed_both[j] = float(np.mean(both[k:k + (b - a)])) >= URBAN_BOTH_SHARE
-            urban = (float(np.mean(u[k:k + (b - a)])) >= URBAN_SHARE
-                     and float(np.mean(by[k:k + (b - a)])) >= URBAN_BESIDE_SHARE
+        for j, cls, kind, samples, ow, dk, lanes, token, link, rule_w in ask:
+            count = len(samples)
+            developed_both[j] = float(np.mean(both[k:k + count])) >= URBAN_BOTH_SHARE
+            urban = (float(np.mean(u[k:k + count])) >= URBAN_SHARE
+                     and float(np.mean(by[k:k + count])) >= URBAN_BESIDE_SHARE
                      and (cls not in ("motorway", "trunk")
-                          or float(np.mean(both[k:k + (b - a)])) >= URBAN_BOTH_SHARE))
-            k += b - a
-            out[j] = Spec(carriageway(cls, kind, urban, None, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
+                          or float(np.mean(both[k:k + count])) >= URBAN_BOTH_SHARE))
+            k += count
+            out[j] = Spec(carriageway(cls, kind, urban, rule_w, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token, link=link)
     out = _rings(feats, out)
     out = dual_carriageways(feats, out, left_hand)
