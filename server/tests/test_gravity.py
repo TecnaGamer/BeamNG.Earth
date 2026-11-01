@@ -463,5 +463,46 @@ class ServerGravityTest(test_server.ServerHarness):
         self.assertIsNone(self.conn().gravity.msg)
 
 
+class DownloadTlsTest(unittest.TestCase):
+    """GitHub #567: "certificate has expired" on the EGM2008 download on Windows. Its own urllib connections did not take
+    the system's certificate check the other requests use (netfetch.windows_ssl_context): now every attempt does."""
+
+    def test_every_attempt_uses_the_platform_tls_context(self):
+        import io
+        import hashlib
+        import gravity
+        import netfetch
+        body = b"egm" * 1000
+        seen = []
+
+        class Resp(io.BytesIO):
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def urlopen(req, timeout=None, context=None):
+            seen.append(context)
+            if len(seen) == 1:
+                raise OSError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate has expired")
+            return Resp(body)
+
+        ctx = object()
+        net = netfetch.Fetcher(transport=object(), sleep=lambda s: None)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(netfetch, "windows_ssl_context", return_value=ctx), \
+                mock.patch.object(gravity.urllib.request, "urlopen", urlopen), \
+                mock.patch.object(gravity.time, "sleep", lambda s: None):
+            dest = os.path.join(d, "egm.tar.bz2")
+            gravity._download("https://downloads.sourceforge.net/x", dest, hashlib.sha256(body).hexdigest(), len(body),
+                              log=lambda m: None, net=net)
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), body)
+        self.assertEqual(seen, [ctx, ctx], "the retry too")
+
+
 if __name__ == "__main__":
     unittest.main()
