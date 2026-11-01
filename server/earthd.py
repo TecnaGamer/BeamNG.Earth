@@ -877,10 +877,47 @@ class Server:
                 if producer is not None:
                     producer.disk = cache
 
+    def _empty_trash(self):
+        """What earlier runs left in the cache's trash (_rmtree_outside): a server ended with the game while it was
+        deleting a session moved there (the game closing ends the server's processes) left the rest of it for good, GBs
+        of tiles that no later run looked at (GitHub #599: 9 GB of old sessions). Deleted in a background thread (a
+        whole session is thousands of files; the start does not wait). An entry whose server still runs (its pid in its
+        name, xproc.alive) is that server's own delete under way and is left to it (a rename keeps the folder's old
+        time, so its age says nothing). Returns the thread, or None (nothing there)."""
+        cache = getattr(self, "cache_dir", None)
+        trash = os.path.join(cache, TRASH_DIR) if cache else None
+        try:
+            names = os.listdir(trash) if trash else []
+        except OSError:
+            return None
+        import xproc
+        old = []
+        for n in names:
+            parts = n.rsplit("_", 2)
+            pid = int(parts[1]) if len(parts) == 3 and parts[1].isdigit() else None
+            if pid is not None and pid != os.getpid() and xproc.alive(pid):
+                continue
+            old.append(os.path.join(trash, n))
+        if not old:
+            return None
+        log.info("trash: deleting %d folders earlier runs left in %s", len(old), trash)
+
+        def run():
+            for p in old:
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    self._remove(p)
+        t = threading.Thread(target=run, name="trash", daemon=True)
+        t.start()
+        return t
+
     def _scan_sessions(self):
         """Session folders left by earlier runs (only ones we marked): one whose marker is untouched
         for SESSION_STALE_S goes now, with the engine's .cdae caches of its shapes; a younger one is
-        kept as an orphan until a game claims it or sweep_sessions deletes it."""
+        kept as an orphan until a game claims it or sweep_sessions deletes it. And the trash earlier runs left
+        (_empty_trash)."""
+        self.trash_thread = self._empty_trash()
         wall, now = time.time(), time.monotonic()
         for d in glob.glob(os.path.join(self.root, "*", SESSION_MARKER)):
             sid = os.path.basename(os.path.dirname(d))

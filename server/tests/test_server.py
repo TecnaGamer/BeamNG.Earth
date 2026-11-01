@@ -1088,6 +1088,40 @@ class SessionCleanupTest(unittest.TestCase):
                 server.hm_pool.shutdown()
 
 
+class TrashLeftoversTest(unittest.TestCase):
+    """GitHub #599 (GBs of old sessions): a server ended mid-delete (the game closing ends it) left the rest of a session
+    in the cache's trash for good. The next start deletes it, but not a running server's own delete."""
+
+    def test_leftovers_deleted_at_start_a_live_servers_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trash = os.path.join(tmp, "cache", earthd.TRASH_DIR)
+            dead = os.path.join(trash, "20261028-204450-0eea_999999999_123")      # (no such pid)
+            live = os.path.join(trash, f"20261030-101010-beef_{os.getppid()}_456")  # a process that runs
+            odd = os.path.join(trash, "something-else")
+            for d in (dead, live, odd):
+                os.makedirs(os.path.join(d, "sub"))
+                open(os.path.join(d, "sub", "far_1_0_0_0.cdae"), "w").close()
+            server = earthd.Server(tmp, os.path.join(tmp, "cache"))
+            try:
+                self.assertIsNotNone(server.trash_thread)
+                server.trash_thread.join(10)
+                self.assertFalse(os.path.exists(dead), "left by a run that ended mid-delete")
+                self.assertFalse(os.path.exists(odd))
+                self.assertTrue(os.path.exists(live), "another server's delete under way")
+            finally:
+                server.tile_pool.shutdown()
+                server.hm_pool.shutdown()
+
+    def test_nothing_there(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = earthd.Server(tmp, os.path.join(tmp, "cache"))
+            try:
+                self.assertIsNone(server.trash_thread)
+            finally:
+                server.tile_pool.shutdown()
+                server.hm_pool.shutdown()
+
+
 class DeleteQueueTest(unittest.TestCase):
     """Rate-limited file deletes (P9: a burst of loaded files stalls the game): one file at a time,
     5 files/s in terrain mode whatever the backlog (the v1.2 rate); in mesh mode a long queue drains
