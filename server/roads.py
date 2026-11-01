@@ -1782,6 +1782,56 @@ def lane_flow(feats):
     return out
 
 
+def _lane_flow_rows(f):
+    """(attrs (n, 4), coordinate offsets (n + 1), lonlat) of layer f's features for earthfast.lane_flow: one-way sign,
+    mapped lanes (nan none), link 1/0, the class's one-way lanes (nan: not a LANE_FLOW_CLASSES road or not one-way).
+    Pure given f; remembered on f, so each cell reads its roads once and not once per cell of the 3 x 3 that sees
+    them (_lane_flow_local of nine cells read every road nine times: ~1.3 s of a Las Vegas build, 2026-11-01)."""
+    got = f.__dict__.get("_lane_flow_rows")
+    if got is not None:
+        return got
+    n = len(f)
+    attrs = np.zeros((n, 4))
+    attrs[:, 1] = np.nan
+    attrs[:, 3] = np.nan
+    starts = f.coord_off[f.ring_off[f.part_off[:-1]]]
+    stops = f.coord_off[f.ring_off[f.part_off[1:]]]
+    off = np.zeros(n + 1, np.int64)
+    off[1:] = np.cumsum(stops - starts)
+    lonlat = np.concatenate([f.lonlat[a:b] for a, b in zip(starts.tolist(), stops.tolist())]) if n else \
+        np.zeros((0, 2))
+    cls = f.attrs.get("class")
+    sub = f.attrs.get("subtype")
+    dflt = {}                           # class -> its one-way carriageway's lanes when the map gives none
+    for i in range(n):
+        if cls is None or str(cls[i]) not in LANE_FLOW_CLASSES or (sub is not None and str(sub[i]) != "road"):
+            continue
+        v = _rule_value(f.rules.get("oneway"), i)
+        if v is None:
+            continue
+        attrs[i, 0] = -1.0 if float(v) < 0 else 1.0
+        lanes = _osm(f, "lanes", i, *OSM_LANES)
+        if lanes is not None:
+            attrs[i, 1] = float(int(lanes))
+        attrs[i, 2] = 1.0 if _rule_value(f.rules.get("subclass"), i) == "link" else 0.0
+        c = str(cls[i])
+        if c not in dflt:
+            dflt[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved", False, c,
+                                       True))[1]
+        attrs[i, 3] = float(dflt[c])
+    got = f.__dict__["_lane_flow_rows"] = (attrs, off, lonlat)
+    return got
+
+
+def _rows_of(ll, off, idx):
+    """The coordinates ll[off[i]:off[i + 1]] of the features idx, end to end."""
+    if len(idx) == len(off) - 1:
+        return ll
+    lens = off[idx + 1] - off[idx]
+    first = np.repeat(off[idx] - (np.cumsum(lens) - lens), lens)
+    return ll[first + np.arange(int(lens.sum()))]
+
+
 def _lane_flow_local(feats):
     """lane_flow solved over this cell and the eight around it (mapdata's _bnge_neighbours), per feature of this
     cell. Remembered on feats."""
@@ -1797,48 +1847,30 @@ def _lane_flow_local(feats):
             layers += [f for f in hook() if f is not None and len(f)]
         except Exception as e:          # (this cell alone)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
-    seen, rows = set(), []              # (layer, feature) once per road id, this cell's first
+    seen, picks = set(), []             # (layer, its features' rows): each road id once, this cell's first
     for f in layers:
         ids = f.ids.tolist()
+        keep = []
         for i in range(len(f)):
             if ids[i] not in seen:
                 seen.add(ids[i])
-                rows.append((f, i))
-    n = len(rows)
+                keep.append(i)
+        if keep:
+            picks.append((f, np.asarray(keep, np.int64)))
     out = [None] * len(feats)
-    if n:
-        lonlat, off = [], np.zeros(n + 1, np.int64)
-        attrs = np.zeros((n, 4))
-        attrs[:, 1] = np.nan
-        attrs[:, 3] = np.nan
-        dflt = {}                       # class -> its one-way carriageway's lanes when the map gives none
-        for r, (f, i) in enumerate(rows):
-            a = f.coord_off[f.ring_off[f.part_off[i]]]
-            b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
-            lonlat.append(f.lonlat[a:b])
-            off[r + 1] = off[r] + (b - a)
-            cls = f.attrs.get("class")
-            sub = f.attrs.get("subtype")
-            if cls is None or str(cls[i]) not in LANE_FLOW_CLASSES or (sub is not None and str(sub[i]) != "road"):
-                continue
-            v = _rule_value(f.rules.get("oneway"), i)
-            if v is None:
-                continue
-            attrs[r, 0] = -1.0 if float(v) < 0 else 1.0
-            lanes = _osm(f, "lanes", i, *OSM_LANES)
-            if lanes is not None:
-                attrs[r, 1] = float(int(lanes))
-            attrs[r, 2] = 1.0 if _rule_value(f.rules.get("subclass"), i) == "link" else 0.0
-            c = str(cls[i])
-            if c not in dflt:
-                dflt[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved", False, c,
-                                           True))[1]
-            attrs[r, 3] = float(dflt[c])
+    if picks:
+        parts = [(f, idx, _lane_flow_rows(f)) for f, idx in picks]
+        attrs = np.concatenate([a[idx] for _, idx, (a, _, _) in parts])
+        lens = np.concatenate([(o[idx + 1] - o[idx]) for _, idx, (_, o, _) in parts])
+        off = np.zeros(len(attrs) + 1, np.int64)
+        off[1:] = np.cumsum(lens)
         if off[-1]:
-            got = np.asarray(fast._ef.lane_flow(np.ascontiguousarray(np.concatenate(lonlat), np.float64), off, attrs,
+            lonlat = np.concatenate([_rows_of(ll, o, idx) for _, idx, (_, o, ll) in parts])
+            got = np.asarray(fast._ef.lane_flow(np.ascontiguousarray(lonlat, np.float64), off, attrs,
                                                 float(LANE_FLOW_MAX)))
-            for r, (f, i) in enumerate(rows):
-                if f is feats:
+            f0, idx0, _ = parts[0]
+            if f0 is feats:             # (this cell's rows come first)
+                for r, i in enumerate(idx0.tolist()):
                     x = got[r]
                     out[i] = None if not np.isfinite(x) or attrs[r, 2] > 0.5 else int(x)
     feats.__dict__["_lane_flow"] = out

@@ -1206,6 +1206,18 @@ class RingWidthTest(unittest.TestCase):
         self.assertTrue(sp[2].urban)                    # a street beside it as before
 
 
+
+class RowsOfTest(unittest.TestCase):
+    """roads._rows_of: the chosen features' coordinates end to end (lane_flow's per-cell rows)."""
+
+    def test_rows(self):
+        ll = np.arange(20, dtype=float).reshape(10, 2)
+        off = np.array([0, 3, 4, 8, 10])
+        got = roads._rows_of(ll, off, np.array([0, 2]))
+        self.assertEqual(got.tolist(), np.concatenate([ll[0:3], ll[4:8]]).tolist())
+        self.assertIs(roads._rows_of(ll, off, np.arange(4)), ll)
+
+
 if __name__ == "__main__":
     unittest.main()
 
