@@ -216,7 +216,8 @@ class PlanCache:
         parts, prof = [], {}
         for m, ln in zip(meta["parts"], lines):
             key = tuple([m["key"][0]] + [float(v) for v in m["key"][1:]])
-            parts.append((key, ln, bool(m["br"]), m["cls"], m["fid"]))
+            parts.append((key, ln, bool(m["br"]), m["cls"], m["fid"], float(m.get("lv", 1.0 if m["br"] else 0.0)),
+                          float(m.get("half", 5.0))))
             if m["chain"] >= 0:
                 prof[key] = (cx[m["chain"]], cz[m["chain"]])
         return {"parts": parts, "prof": prof}
@@ -229,6 +230,8 @@ class PlanCache:
                 chains.append((xy, z))
         meta = {"parts": [{"key": list(q[0]), "br": bool(q[2]), "cls": q[3],
                            "fid": q[4] if isinstance(q[4], (str, int, type(None))) else str(q[4]),
+                           "lv": float(q[5]) if len(q) > 5 else (1.0 if q[2] else 0.0),
+                           "half": float(q[6]) if len(q) > 6 else 5.0,
                            "chain": idx[id(got["prof"][q[0]][0])] if q[0] in got["prof"] else -1}
                           for q in got["parts"]]}
         arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}

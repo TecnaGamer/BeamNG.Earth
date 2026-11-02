@@ -301,6 +301,18 @@ CW_HEADROOM_M = roadsmod.MIN_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN
 CW_NONFAM_HI = False    # other roads' decks over a carriageway bound it: off (their decks rise over it as before; from their
                         # ends' ground a deck read low and dipped the Mitchell Freeway ~1 m under each street bridge)
 CW_MIN_SIN = 0.3        # two carriageways crossing at a flatter angle are not a grade separation (lines along each other)
+CW_STACK_SIN = 0.03      # decks at different levels crossing more steeply than this (2 degrees) are separated
+CW_OVERLAP_MAX_M = 120.0  # m either side of a crossing two decks' clearance is held along at most
+CW_PIN_W = 1e5          # weight holding a chain's end to the kept (lower-level) chain it branches from
+
+
+def _cw_level(q):
+    """A carriageway part's level (its OSM layer; 1 for a bridge without one, 0 on the ground)."""
+    return float(q[5]) if len(q) > 5 else (1.0 if q[2] else 0.0)
+
+
+def _cw_half(q):
+    return float(q[6]) if len(q) > 6 else 5.0
 CW_MAX_DIG_M = 2.5      # m a carriageway is lowered at most under another road's deck (the deck is low for the rest)
 CW_UNDER_M = 10.0       # m from a deck's line the ground under it is not trusted, rising to trusted at twice that
 CW_MARGIN_M = 1200.0    # m past its home cell a cluster's chains reach (the farthest barely move the cell's)
@@ -2216,7 +2228,8 @@ class _Planner:
     # ---- carriageways (carriageways.py): a motorway's roads and decks as one profile ----
 
     def _cw_cell_parts(self, k):
-        """Cell k's parts of the motorway and trunk families: [(key, line (n, 2), is_bridge, cls)], each once."""
+        """Cell k's parts of the motorway and trunk families: [(key, line (n, 2), is_bridge, cls, feature id, level,
+        half width)], each once (level: a bridge's OSM layer, 1 without one; 0 on the ground)."""
         memo = self.__dict__.setdefault("_cw_cells", {})
         sk = str(k)
         with self.lock:
@@ -2225,10 +2238,13 @@ class _Planner:
             return got
         c = self._cell_enu(k)
         out, seen = [], set()
-        items = [(ln, False, cls, gid[0]) for (ln, _h, cls), gid in zip(c["ground"], c["ground_ids"])]
-        items += [(ln, True, cls, fid) for ln, cls, fid in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"])),
-                                                               c.get("bridge_ids", [None] * len(c["bridges"])))]
-        for ln, br, cls, fid in items:
+        nb = len(c["bridges"])
+        items = [(ln, False, cls, gid[0], 0.0, float(h)) for (ln, h, cls), gid in zip(c["ground"], c["ground_ids"])]
+        items += [(ln, True, cls, fid, float(lv), float(h))
+                  for ln, cls, fid, lv, h in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
+                                                 c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
+                                                 c.get("bridge_half", [4.0] * nb))]
+        for ln, br, cls, fid, lv, half in items:
             if _cw.family(cls) is None or len(ln) < 2:
                 continue
             ln = np.asarray(ln, np.float64)[:, :2]
@@ -2237,7 +2253,7 @@ class _Planner:
             if key in seen:
                 continue
             seen.add(key)
-            out.append((key, ln, br, str(cls), fid))
+            out.append((key, ln, br, str(cls), fid, lv, half))
         with self.lock:
             if len(memo) > 512:
                 memo.clear()
@@ -2489,28 +2505,75 @@ class _Planner:
                             continue            # (two roads on the ground: a junction, not a separation)
                         q = np.asarray(c[2], f64)
                         ua, ub = _xs.dir_at(pa[1], q), _xs.dir_at(pb[1], q)
-                        if abs(ua[0] * ub[1] - ua[1] * ub[0]) < CW_MIN_SIN:
-                            continue            # (lines lying along each other: a duplicate or a merge, no crossing)
-                        if True:
-                            if min(np.hypot(*(pa[1][0] - q)), np.hypot(*(pa[1][-1] - q)), np.hypot(*(pb[1][0] - q)),
-                                   np.hypot(*(pb[1][-1] - q))) < 2.0:
-                                continue        # (joined there)
-                            cross.append((na, ia, nb, ib, q))
-        if cross:
-            # who is over whom: the bridge over the ground; of two bridges, the higher in the solve without them
-            pre = _cw.solve(data, couplings)
-            for na, ia, nb, ib, q in cross:
-                pa, pb = chains[na][0][ia], chains[nb][0][ib]
-                ja, jb = nearest(na, ia, q), nearest(nb, ib, q)
-                if pa[2] and not pb[2]:
-                    up, lo_ = (na, ja, pa), (nb, jb)
-                elif pb[2] and not pa[2]:
-                    up, lo_ = (nb, jb, pb), (na, ja)
-                else:
-                    up, lo_ = ((na, ja, pa), (nb, jb)) if pre[na][ja] >= pre[nb][jb] else ((nb, jb, pb), (na, ja))
-                clear = CW_HEADROOM_M + roadsmod.deck_depth(roadsmod.geom_span([up[2][1]])) + ROAD_LIFT
-                couplings.append((up[0], up[1], lo_[0], lo_[1], "ge", clear))
-        zs = _cw.solve(data, couplings)
+                        sin = abs(ua[0] * ub[1] - ua[1] * ub[0])
+                        # (two decks mapped at different levels: a separation however shallow the angle, the ramps of a
+                        # stack cross at a few degrees; else lines lying along each other are a duplicate or a merge)
+                        stacked = pa[2] and pb[2] and _cw_level(pa) != _cw_level(pb)
+                        if sin < CW_MIN_SIN and not (stacked and sin >= CW_STACK_SIN):
+                            continue
+                        if min(np.hypot(*(pa[1][0] - q)), np.hypot(*(pa[1][-1] - q)), np.hypot(*(pb[1][0] - q)),
+                               np.hypot(*(pb[1][-1] - q))) < 2.0:
+                            continue            # (joined there)
+                        cross.append((na, ia, nb, ib, q, sin, ua))
+        # the interchange built from the ground up (OSM's layer the order, 2026-11-02): each chain's level is its
+        # highest part's (a bridge's layer, 1 without one; 0 for a chain all on the ground). The lowest level's chains
+        # are solved first, on the elevation, and kept; then each level up, over and joined to what is below and not
+        # moving it: a crossing of a kept chain is a bound (its height plus the clearance, wherever the two overlap),
+        # a branch point on one is a pin. Only two parts of one level crossing within a level are ordered by a
+        # solve of that level without them.
+        stage = [max(_cw_level(p_) for p_ in ch[0]) for ch in chains]
+        seps = []           # (upper chain, its sample, lower chain, its sample, clearance) per overlap sample; or a tie
+        ties = []           # (na, ia, nb, ib, q, sin, ua): one level's two parts, the order its solve's
+        for na, ia, nb, ib, q, sin, ua in cross:
+            pa, pb = chains[na][0][ia], chains[nb][0][ib]
+            if pa[2] and not pb[2]:
+                a_up = True
+            elif pb[2] and not pa[2]:
+                a_up = False
+            elif _cw_level(pa) != _cw_level(pb):
+                a_up = _cw_level(pa) > _cw_level(pb)
+            elif stage[na] != stage[nb]:
+                a_up = stage[na] > stage[nb]        # (one level's decks: the one of the higher-built chain over)
+            else:
+                ties.append((na, ia, nb, ib, q, sin, ua))
+                continue
+            seps += self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)
+        zs = [None] * len(chains)
+        for L in sorted(set(stage)):
+            idx = [n for n in range(len(chains)) if stage[n] == L]
+            loc = {n: m for m, n in enumerate(idx)}
+            d_ = [dict(data[n], t=data[n]["t"].copy(), w=data[n]["w"].copy(), lo=data[n]["lo"].copy(),
+                       hi=data[n]["hi"].copy()) for n in idx]
+            cp = []
+            for a_, i_, b_, j_, kind, v in couplings:          # (the branch points: "eq")
+                if a_ in loc and b_ in loc:
+                    cp.append((loc[a_], i_, loc[b_], j_, kind, v))
+                elif a_ in loc and zs[b_] is not None:
+                    d_[loc[a_]]["t"][i_], d_[loc[a_]]["w"][i_] = zs[b_][j_], CW_PIN_W
+                elif b_ in loc and zs[a_] is not None:
+                    d_[loc[b_]]["t"][j_], d_[loc[b_]]["w"][j_] = zs[a_][i_], CW_PIN_W
+
+            def bound(lst, cp_):
+                for nu, ju, nl, jl, clear in lst:
+                    if nu in loc and nl in loc:
+                        cp_.append((loc[nu], ju, loc[nl], jl, "ge", clear))
+                    elif nu in loc and zs[nl] is not None:      # (over a kept chain)
+                        d_[loc[nu]]["lo"][ju] = max(d_[loc[nu]]["lo"][ju], zs[nl][jl] + clear)
+                    elif nl in loc and zs[nu] is not None:      # (under a kept chain's deck)
+                        d_[loc[nl]]["hi"][jl] = min(d_[loc[nl]]["hi"][jl], zs[nu][ju] - clear)
+            bound(seps, cp)
+            mine = [t_ for t_ in ties if t_[0] in loc]
+            if mine:
+                pre = _cw.solve(d_, cp)
+                tie_seps = []
+                for na, ia, nb, ib, q, sin, ua in mine:
+                    a_up = pre[loc[na]][nearest(na, ia, q)] >= pre[loc[nb]][nearest(nb, ib, q)]
+                    tie_seps += self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)
+                bound(tie_seps, cp)
+            got = _cw.solve(d_, cp)
+            for n in idx:
+                zs[n] = got[loc[n]]
+        couplings = couplings + [(nu, ju, nl, jl, "ge", c_) for nu, ju, nl, jl, c_ in seps]
         if os.environ.get("BNE_CW_DUMP"):
             import pickle
             with open(os.environ["BNE_CW_DUMP"] + f".{len(chains)}.{len(couplings)}.pkl", "wb") as fh:
@@ -2533,6 +2596,30 @@ class _Planner:
                       n, chains[n][0][0][3], np.round(xy[j]), data[n]["t"][j], zs[n][j], raw[j], data[n]["w"][j],
                       np.round(data[n]["lo"][np.isfinite(data[n]["lo"])], 1)[:5],
                       np.round(data[n]["hi"][np.isfinite(data[n]["hi"])], 1)[:5], [(p_[2], len(p_[1])) for p_ in chains[n][0]])
+        return out
+
+    def _cw_overlap(self, chains, samples, nearest, x, a_up):
+        """The clearance couplings of crossing x = (na, ia, nb, ib, q, sin, ua), a over b when a_up: (upper chain, its
+        sample, lower chain, its sample, clearance), at the crossing and along the length the two decks overlap (at a
+        shallow angle tens of metres, a stack's ramps)."""
+        f64 = np.float64
+        na, ia, nb, ib, q, sin, ua = x
+        pa, pb = chains[na][0][ia], chains[nb][0][ib]
+        (nu, iu, pu), (nl, il, pl_) = ((na, ia, pa), (nb, ib, pb)) if a_up else ((nb, ib, pb), (na, ia, pa))
+        clear = CW_HEADROOM_M + roadsmod.deck_depth(roadsmod.geom_span([pu[1]])) + ROAD_LIFT
+        wide = _cw_half(pa) + _cw_half(pb)
+        run = min(CW_OVERLAP_MAX_M, wide / max(sin, 1e-3))
+        offs = [0.0] + [d for k in range(1, 64) for d in (k * _cw.STEP_M, -k * _cw.STEP_M) if k * _cw.STEP_M <= run]
+        out, seen = [], set()
+        for d in offs:
+            qd = q + d * np.asarray(ua, f64)
+            ju, jl = nearest(nu, iu, qd), nearest(nl, il, qd)
+            xu = samples[nu][0][ju]
+            if d and (np.hypot(*(xu - qd)) > 3.0 or _seg_dist(pl_[1], xu) > wide):
+                continue        # (past the overlap, or off these parts)
+            if (ju, jl) not in seen:
+                seen.add((ju, jl))
+                out.append((nu, ju, nl, jl, clear))
         return out
 
     def _cw_z_at(self, line, pts, fid=None):
@@ -2703,13 +2790,16 @@ class _Planner:
                 if bs[i] is None and rs[i] is None:
                     continue
                 fid = str(f.ids[i])
+                # (a bridge part's level: OSM's layer as Overture's level rules, 1 without one; stacked decks' order)
+                blv = roadsmod.bridge_levels(f, i) if bs[i] is not None else []
                 for kind, sp, ps in (("bridge", bs[i], roadsmod.bridge_parts(f, i) if bs[i] is not None else ()),
                                      ("ground", rs[i], roadsmod.ground_parts(f, i) if rs[i] is not None else ())):
                     for j, ring in enumerate(ps):
                         ring = np.asarray(ring, np.float64)
                         kk = (fid, kind, j)
+                        lv = float(blv[j]) if kind == "bridge" and j < len(blv) else 0.0
                         if len(ring) >= 2 and (kk not in parts or len(ring) > len(parts[kk][0])):
-                            parts[kk] = (ring, sp)
+                            parts[kk] = (ring, sp, lv)
         # the rail bridges (railways.DRAWN lines' bridge pieces): the roads under them dip as under a road overpass
         # (_lower_underpasses), nothing else (no ramps, no abutments: a line's deck is never raised for a road).
         # (GitHub #311 / #345 / #364: the track lay across the road under a rail bridge)
@@ -2727,14 +2817,14 @@ class _Planner:
                         # (and the tracks on the ground: a road bridge's approaches rise over them as over a road,
                         # GitHub #324)
                         rail_g += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
-        bridges, ground_l, ends, end_of, bcls, ground_ids, bids = [], [], [], [], [], [], []
+        bridges, ground_l, ends, end_of, bcls, ground_ids, bids, blevels, bhalf = [], [], [], [], [], [], [], [], []
         items = sorted(parts.items())
         if items:               # (the frame's conversion once for every part: it is per call)
-            allr = np.concatenate([ring for _k, (ring, _sp) in items])
+            allr = np.concatenate([ring for _k, (ring, _sp, _lv) in items])
             ae, an, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
             axy = np.stack([np.asarray(ae, np.float64), np.asarray(an, np.float64)], axis=1)
         k0 = 0
-        for (fid, kind, j), (ring, sp) in items:
+        for (fid, kind, j), (ring, sp, lv) in items:
             line = axy[k0:k0 + len(ring)]
             k0 += len(ring)
             if kind == "bridge":
@@ -2742,6 +2832,8 @@ class _Planner:
                 ends += [line[0], line[-1]]
                 bridges.append(line)
                 bids.append(fid)
+                blevels.append(lv)
+                bhalf.append(float(getattr(sp, "width", None) or 8.0) / 2)
                 cls = getattr(sp, "cls", None)
                 bcls.append(cls + "_link" if cls is not None and _is_link(sp) else cls)
             else:
@@ -2756,7 +2848,8 @@ class _Planner:
             for ring, out_ in [(r, rail_xy) for r in rail] + [(r, rail_gxy) for r in rail_g]:
                 out_.append(rxy[k0:k0 + len(ring)])
                 k0 += len(ring)
-        return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "ground": ground_l, "ground_ids": ground_ids,
+        return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
+                "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids,
                 "end_of": end_of,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy}
 
