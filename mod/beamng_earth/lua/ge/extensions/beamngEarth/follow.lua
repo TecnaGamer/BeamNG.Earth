@@ -21,6 +21,7 @@
 -- (server/tests/modsim.py lua_consts).
 
 local lattice = require('beamngEarth/lattice')
+local edgeguard = require('beamngEarth/edgeguard')
 
 local M = {}
 
@@ -194,6 +195,17 @@ function M.centreAhead(px, py, vx, vy, cx, cy)
   return (cx - px) * vx + (cy - py) * vy > 0 and M.cheb(px, py, cx, cy) <= M.MIN_LEAD + M.GRID
 end
 
+-- The hard commit distance at a speed: HARD_COMMIT_DIST, nearer where the edge guard would warn sooner (its warning
+-- distance grows with the braking distance; at 116 mph a ready block held by the gate waited past the warning, the
+-- user's Baltimore drive 2026-11-01): a ready, better block is taken COMMIT_MARGIN before the warning would show,
+-- never nearer than COMMIT_DIST.
+M.COMMIT_MARGIN = 10
+function M.hardCommitDist(vx, vy)
+  local sp = math.sqrt((vx or 0) ^ 2 + (vy or 0) ^ 2)
+  local edge = M.HALF - M.SQUARE_SIZE                 -- the collidable edge's distance from the centre (the nearer side)
+  return max(M.COMMIT_DIST, min(M.HARD_COMMIT_DIST, edge - edgeguard.warnDistance(sp) - M.COMMIT_MARGIN))
+end
+
 function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
   if not cx then return nil end
   local _, reach, ahead = mode(vx, vy)
@@ -218,7 +230,7 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
         and retargets(px, py, vx, vy, pending) then
         return 'discard'
       end
-      if d > M.HARD_COMMIT_DIST or not gate or gate(pending.cx, pending.cy) then return 'commit' end
+      if d > M.hardCommitDist(vx, vy) or not gate or gate(pending.cx, pending.cy) then return 'commit' end
       return nil -- better than the current block: wait for the uncovered strip's tiles, keep it
     end
     -- 512²: a ready block that is still no better than the current one where the

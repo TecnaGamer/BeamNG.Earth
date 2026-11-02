@@ -307,4 +307,20 @@ T.check(not f.altitudeHold(true, 500, -50, 0), 'a 50 m/s descent from 500 m resu
 T.check(not f.altitudeHold(false, 400, -20, 0), 'a 20 m/s descent at 400 m does not start holding')
 T.check(f.altitudeHold(false, 1400, 0, 1000), 'heights above the ground ahead, not above z = 0')
 
+-- the hard commit distance follows the edge guard's warning distance (braking distance): a ready block held by the
+-- uncover gate is taken before the warning would show (the user's 116 mph Baltimore drive, 2026-11-01)
+lattice.configure(1024, 1.0)
+f.configure()
+local eg = require('beamngEarth/edgeguard')
+T.check(f.hardCommitDist(0, 0) == f.HARD_COMMIT_DIST, 'at rest: the fixed hard commit distance')
+local v116 = 52
+local want = (f.HALF - f.SQUARE_SIZE) - eg.warnDistance(v116) - f.COMMIT_MARGIN
+T.check(math.abs(f.hardCommitDist(v116, 0) - want) < 1e-9 and want < f.HARD_COMMIT_DIST and want > f.COMMIT_DIST,
+  '116 mph: before the warning distance (' .. string.format('%.0f', want) .. ' m)')
+T.check(f.hardCommitDist(90, 0) == f.COMMIT_DIST, '200 mph: never nearer than the commit distance')
+local closed = function() return false end
+T.check(f.decide(want + 1, 0, v116, 0, 0, 0, { cx = 384, cy = 0, ready = true }, 0, 0, closed, 0.3) == 'commit',
+  'a gate-held ready block: committed past the speed\'s hard commit distance')
+T.check(f.decide(want - 1, 0, v116, 0, 0, 0, { cx = 384, cy = 0, ready = true }, 0, 0, closed, 0.3) == nil,
+  '... and still held before it')
 T.done('test_follow')

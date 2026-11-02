@@ -757,6 +757,8 @@ class Server:
         # blocks' (each holds a base-photo thread until its block process renders it; a teleport's photo waited
         # ~20 s behind the old place's on a Deck, 2026-10-23)
         self.urgent_base_pool = ThreadPoolExecutor(2, thread_name_prefix="base-urgent")
+        self.prov_pool = ThreadPoolExecutor(2, thread_name_prefix="provisional")    # follow blocks sent provisional
+        self.prov_info = {}             # (aid, cx, cy) -> a provisional follow block's info (until the graded one)
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
@@ -1295,14 +1297,14 @@ class Server:
 
     boost_full = False
 
-    def load_boost(self, on, why="", full_only=False):
+    def load_boost(self, on, why="", full_only=False, half_only=False):
         """The loading boost (cpupin.boosted): the server's processes also on half of the game's cores while the
         player waits after a teleport, back on their own when it moves or the far field is done. With the settings
         page's teleportPriority (cpupin.full_split): the server on every core and the game on two, until the far field
         and the roads round the car are done (moving does not end it); full_only: that alone (joining the world)."""
         if on and not self.boost_on:
             full = cpupin.full_split(self.server_cpus, getattr(self, "game_cpus", None)) \
-                if cpupin.player_settings(self.user_dir).get("teleport_full") else None
+                if not half_only and cpupin.player_settings(self.user_dir).get("teleport_full") else None
             if full:
                 try:
                     n = cpupin.pin_tree(full[0])
@@ -2009,8 +2011,8 @@ class Server:
         callback) build in the block process when there is one; the anchor's first block here, so its
         DEM download reports progress."""
         t0 = time.perf_counter()
-        if queued_at is not None and t0 - queued_at > 0.2:
-            log.debug("terrain %s waited %.2f s for a heightmap worker", (anchor.id, cx, cy), t0 - queued_at)
+        if queued_at is not None and t0 - queued_at > 0.5:
+            log.info("terrain %s waited %.2f s for a heightmap worker", (anchor.id, cx, cy), t0 - queued_at)
         q = self.anchor_q(anchor)
         fb, base = anchor.first_base, None
         if fb is not None and fb[0] == (cx, cy):        # the provisional first block's photo (make_provisional)
@@ -2029,10 +2031,13 @@ class Server:
         try:
             if pool is not None:
                 self.hm_stage[key] = "the block process"
+                submitted = time.time()
                 info = pool.submit(
                     blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
                     fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block)).result()
+                if "started" in info:   # (waiting for the lane's process: a block before it, its road plans ahead)
+                    info["stages"] = {"queue": max(0.0, info.pop("started") - submitted), **info.get("stages", {})}
                 self.hm_stage[key] = "its base photo"
                 return self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=lane == LANE_REQUEST, lane=lane)
             self.hm_stage[key] = "the build in the server's process"
@@ -2062,7 +2067,7 @@ class Server:
         with urgent() if urgent is not None else contextlib.nullcontext():
             info = self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base, provisional=True,
                                              ground_at=ground_at)
-        log.info("provisional first block %s in %.2f s (%s)", (anchor.id, cx, cy), time.perf_counter() - t0,
+        log.info("provisional block %s in %.2f s (%s)", (anchor.id, cx, cy), time.perf_counter() - t0,
                  " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
         return info
 
@@ -3569,6 +3574,10 @@ class Server:
 # instead of 15-60 s on a fresh place) and replaced by the graded one when that is built (terrain_refresh)
 PROVISIONAL_FIRST = os.environ.get("BNGE_PROVISIONAL", "1") != "0"
 PROVISIONAL_KEEP_S = 60.0   # the provisional .ter is deleted this long after its replacement was sent
+# A follow block the mod asked for and not built this soon (its road plans: a first visit's cells, 15-120 s; or the block
+# processes busy with them: requests queued 72-80 s in Chicago, the edge guard holding the car, 2026-11-01): sent
+# provisional (make_provisional, its own threads) and the graded one as terrain_refresh when built (refine_follow)
+PROVISIONAL_FOLLOW_S = float(os.environ.get("BNGE_PROVISIONAL_FOLLOW_S", "2.5"))
 PADS_REFRESH_MS = 5.0       # the block in use built again with its gas station pads only below this speed (m/s) ...
 PADS_SETTLE_S = 3.0         # ... and this long after the last new pad (Connection.pads_refresh)
 NAV_WAIT_S = 30.0           # s an anchor's first AI graph waits at most for the road tiles round the car (nav_may_start)
@@ -3577,6 +3586,13 @@ TELEPORT_PAUSE_MAX_S = 120.0  # ... at most this long (the mod may never commit 
 BOOST_MOVE_MS = 3.0         # the loading boost ends when the player moves faster than this (m/s) ...
 BOOST_MAX_S = 120.0         # ... or this long after the teleport
 BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at first)
+# While driving: the loading boost again when the world falls behind (the user's Manhattan drive 2026-11-01: the server
+# saturated its 2 cores (4 CPUs) with the PC half idle, blocks queued 5-16 s and the edge guard held the car): the next
+# block asked this long ago and not committed yet (still building, or its far tiles not live: the mod's gate), or the
+# roads round the car not built; off once caught up for CATCHUP_CALM_S
+CATCHUP_AFTER_S = 1.5
+CATCHUP_CALM_S = 3.0
+CATCHUP_MIN_MS = 8.0        # m/s: only while driving (a parked player's work waits as before)
 BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's teleportPriority) ends this long after at most
 
 ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph")
@@ -3638,6 +3654,9 @@ class Connection:
         self.block = None               # farfield.Block of the committed terrain
         self.pending_block = None       # the last prepare_terrain of the active anchor
         self.terrain_wait = 0           # prepare_terrain requests being built (roads.Tracker: the ground first)
+        self.pending_at = None          # when the pending block was asked (on_pose: the catch-up boost)
+        self.catchup = False            # the loading boost is on to catch up while driving (CATCHUP_*)
+        self.caught_up_at = None
         self.predicted_block = None     # the terrain the prefetch expects next
         self.predicted_chain = []       # ... and after it, a fast player's (PREFETCH_CHAIN; blocks)
         self.focus = (0.0, 0.0)         # player x, y in the active frame
@@ -4714,6 +4733,7 @@ class Connection:
         if aid == self.active and self.s.layout.block_at(cx, cy) != self.block:
             # The pending block's L0 tiles stream first, so the commit never waits (§2.3).
             self.pending_block = self.s.layout.block_at(cx, cy)
+            self.pending_at = time.monotonic()
             t1 = time.perf_counter()
             self.update_far()
             if time.perf_counter() - t1 > 0.1:
@@ -4722,6 +4742,14 @@ class Connection:
         self.terrain_wait += 1
         try:
             job = asyncio.ensure_future(self.s.terrain(anchor, cx, cy))
+            prov = await self.provisional_follow(anchor, cx, cy, job)
+            if prov is not None:
+                self.terrain_wait -= 1
+                key = (aid, cx, cy)
+                log.info("terrain_ready %s after %.0f ms (provisional: the graded block follows)", key,
+                         (time.perf_counter() - t0) * 1000)
+                self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, prov)})
+                return
             try:
                 info = await asyncio.wait_for(asyncio.shield(job), TERRAIN_STUCK_S)
             except asyncio.TimeoutError:
@@ -4744,6 +4772,50 @@ class Connection:
         self.s.hm_sent.append(key)
         log.info("terrain_ready %s after %.0f ms", key, (time.perf_counter() - t0) * 1000)
         self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info)})
+
+    async def provisional_follow(self, anchor, cx, cy, job):
+        """A follow block's provisional stand-in (PROVISIONAL_FOLLOW_S): None when the graded block came in time (or
+        provisional blocks are off), else the provisional block's info, the graded one sent as terrain_refresh when
+        built (refine_follow). One provisional build per block (Server.prov_info)."""
+        s = self.s
+        if PROVISIONAL_FOLLOW_S <= 0 or not PROVISIONAL_FIRST or not s.grading or anchor.id != self.active:
+            return None
+        key = (anchor.id, cx, cy)
+        info = s.prov_info.get(key)     # (asked again: its provisional block at once)
+        done, _ = await asyncio.wait({job}, timeout=0 if info is not None else PROVISIONAL_FOLLOW_S)
+        if done:
+            return None
+        if info is None:
+            prov = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.make_provisional, anchor, cx, cy, None)
+            done, _ = await asyncio.wait({job, prov}, return_when=asyncio.FIRST_COMPLETED)
+            if job in done:
+                return None
+            try:
+                info = prov.result()
+            except Exception:
+                log.exception("provisional block %s failed (the graded one is waited for)", key)
+                return None
+            s.prov_info[key] = info
+            self.spawn(self.refine_follow(anchor, cx, cy, job, info.get("ter")))
+        return info
+
+    async def refine_follow(self, anchor, cx, cy, job, provisional_ter):
+        """The graded follow block in place of its provisional one (as refine_first): sent as terrain_refresh, which the
+        mod takes for its committed block or the one it is about to commit."""
+        key = (anchor.id, cx, cy)
+        try:
+            info = await job
+        except Exception:
+            log.exception("graded block %s failed (the provisional one stays)", key)
+            return
+        finally:
+            self.s.prov_info.pop(key, None)
+        self.s.hm_sent.append(key)
+        log.info("graded block %s sent in place of its provisional one", key)
+        self.send({"type": "terrain_refresh", "anchorId": anchor.id, **self.terrain_msg(key, info)})
+        if provisional_ter and provisional_ter != info.get("ter"):
+            await asyncio.sleep(PROVISIONAL_KEEP_S)
+            self.s._remove(os.path.join(self.s.out_dir, provisional_ter))
 
     def commit_anchor(self, aid):
         if aid == self.active:
@@ -4818,6 +4890,40 @@ class Connection:
         self.s.hm_committed.append(key)
         self.s.evict_heightmaps()
 
+    def behind(self):
+        """Is the world behind the driving player? The next block asked CATCHUP_AFTER_S ago and not committed (building,
+        or the mod waiting for its far tiles), or the road tiles round the car not all built."""
+        if self.pending_block is not None and self.pending_block != self.block and self.pending_at is not None \
+                and time.monotonic() - self.pending_at > CATCHUP_AFTER_S:
+            return True
+        if self.s.mapdata is not None:
+            done, want = self.roads.progress()
+            return done < want
+        return False
+
+    def catch_up(self, speed):
+        """The loading boost (Server.load_boost: half of the game's cores lent) while the world is behind a driving
+        player, off CATCHUP_CALM_S after it caught up. Not over a teleport's own boost."""
+        if self.s.boost_on and not self.catchup:
+            return
+        behind = speed > CATCHUP_MIN_MS and self.behind()
+        now = time.monotonic()
+        if behind:
+            self.caught_up_at = None
+            if not self.catchup:
+                self.s.load_boost(True, "catching up", half_only=True)
+                self.catchup = self.s.boost_on
+                if self.catchup:
+                    log.info("catch-up boost on (%.0f mph; next block asked %.1f s ago)", speed * 2.237,
+                             now - self.pending_at if self.pending_at else -1)
+        elif self.catchup:
+            if self.caught_up_at is None:
+                self.caught_up_at = now
+            elif now - self.caught_up_at > CATCHUP_CALM_S:
+                self.s.load_boost(False, "caught up")
+                self.catchup = False
+                log.info("catch-up boost off (caught up)")
+
     def commit_terrain(self, msg):
         aid = msg.get("anchorId")
         cx, cy = self.s.snap(_num(msg, "cx")), self.s.snap(_num(msg, "cy"))
@@ -4890,7 +4996,8 @@ class Connection:
         if math.hypot(vx, vy) > FAST_BASE_V:
             self.s.fast_at = now
         self.s.fast = now - getattr(self.s, "fast_at", -1e9) < FAST_KEEP_S
-        if self.s.boost_on:
+        self.catch_up(math.hypot(vx, vy))
+        if self.s.boost_on and not self.catchup:
             since = time.monotonic() - getattr(self, "boost_t0", 0.0)
             moving = math.hypot(vx, vy) > BOOST_MOVE_MS and since > BOOST_GRACE_S     # (the car settling: not moving)
             if moving and self.s.mapdata is not None:

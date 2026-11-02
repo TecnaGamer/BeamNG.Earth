@@ -294,6 +294,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
     _take_pads(fuel_pads)
+    started = time.time()       # (the server's "queue" stage: from its submit to here, wall clock across processes)
     t0 = time.perf_counter()
     g, chunks = _s.anchor(aid, lat, lon)
     frame = geodesy.EnuFrame(lat, lon)
@@ -379,6 +380,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
             info["mats"] = mats
         stages["ter"] = time.perf_counter() - t1
     info["stages"] = stages
+    info["started"] = started
     return info
 
 
