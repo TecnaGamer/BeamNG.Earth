@@ -1206,6 +1206,22 @@ class RingWidthTest(unittest.TestCase):
         self.assertTrue(sp[2].urban)                    # a street beside it as before
 
 
+class NamelessCarriagewaysTest(unittest.TestCase):
+    def test_a_numbered_road_s_carriageways_do_not_overlap(self):
+        sp = roads.Spec(11.0, "paved", False, "trunk", True, 2.5, 1, 100.0)
+        f = features([[(0, 0), (0, 400)], [(7, 400), (7, 0)]], ["trunk", "trunk"], subtypes=["road", "road"])
+        f.attrs["name"] = np.array(["", ""], dtype=object)
+        got = roads.dual_carriageways(f, [sp, sp])
+        self.assertAlmostEqual(got[0].width, 6.4, 1)
+        self.assertAlmostEqual(got[1].width, 6.4, 1)
+
+    def test_a_wide_median_changes_nothing(self):
+        sp = roads.Spec(9.0, "paved", False, "trunk", True, 2.5, 1, 100.0)
+        f = features([[(0, 0), (0, 400)], [(20, 400), (20, 0)]], ["trunk", "trunk"], subtypes=["road", "road"])
+        f.attrs["name"] = np.array(["", ""], dtype=object)
+        self.assertEqual(roads.dual_carriageways(f, [sp, sp]), [sp, sp])
+
+
 if __name__ == "__main__":
     unittest.main()
 

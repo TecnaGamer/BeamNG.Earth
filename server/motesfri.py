@@ -33,8 +33,9 @@ import markings
 import medians
 
 COUNTRIES = {"SE"}
-CLASSES = {"trunk", "primary"}
-MIN_KMH = 80.0              # below this a 2 / 1 split is a town's or a junction's
+CLASSES = {"trunk", "primary", "secondary", "tertiary"}   # (väg 132, väg 100, O 650 ...: 25 of the 128 km are the last two)
+MIN_KMH = 80.0              # below this a 2 / 1 split is a town's or a junction's ...
+RURAL_MIN_KMH = 70.0        # ... outside a town this (E 20 and väg 69 have 2+1 stretches at 70)
 MIN_WAY_M = 200.0           # m of a way's 2 / 1 split that is a section: see above; VGU Krav 2022:001 7.1's shortest
                             # omkörningssträcka is 900 m, but OpenStreetMap ways are cut at bridges and junctions
 CONNECTOR_MAX_M = 1100.0    # m: the longest chain between two sections (väg 41's 15 gaps: 358-1095 m, then one of 1331)
@@ -76,10 +77,14 @@ def _has_turn_lanes(tags):
                for k, v in tags.items())
 
 
+def _fast(spec):
+    return spec.kmh is not None and spec.kmh >= (MIN_KMH if spec.urban else RURAL_MIN_KMH)
+
+
 def _base(spec):
-    """Is this road the kind a 2+1 road is: a paved two-way trunk / primary at MIN_KMH or more, no ramp."""
+    """Is this road the kind a 2+1 road is: a paved two-way main road, fast enough (_fast), no ramp."""
     return (spec is not None and spec.cls in CLASSES and spec.kind == "paved" and not spec.oneway and not spec.link
-            and spec.kmh is not None and spec.kmh >= MIN_KMH)
+            and _fast(spec))
 
 
 def is_section(spec, tags):
@@ -91,9 +96,16 @@ def is_section(spec, tags):
     return split == {1, 2} and not markings._count(tags.get("lanes:both_ways"))
 
 
+def _carriageway(spec):
+    """Is this one carriageway of a 2+1 road drawn as two one-way roads (OpenStreetMap's wiki, and 5200 km of Sweden's
+    against the 128 of a two-way way: the median barrier is medians.py's there, the lane drops still ours)?"""
+    return (spec is not None and spec.cls in CLASSES and spec.kind == "paved" and bool(spec.oneway) and not spec.link
+            and _fast(spec))
+
+
 def wanted(country, roads_near):
     """Can tile's ground carriageways roads_near hold such a road? (the tile's other work is not to be slowed)"""
-    return (country or "").upper() in COUNTRIES and any(_base(item[1]) for item in roads_near)
+    return (country or "").upper() in COUNTRIES and any(_base(item[1]) or _carriageway(item[1]) for item in roads_near)
 
 
 def _length(xy):
@@ -373,6 +385,10 @@ def lane_drops(ways):
         over = _overtaking(p.way) if p.section else None
         if over is not None:
             run.append((p.way, over[0], over[1]))
+    for w in ways:
+        if _carriageway(w.spec) and _lanes(w.spec, w.tags) == 2:    # the left lane ends: its middle, left of travel
+            travel = -1 if (w.spec.dir or 1) < 0 else 1
+            run.append((w, travel * w.spec.width / 4, travel))
     end = lambda r: r[0].xy[-1 if r[2] > 0 else 0, :2]      # noqa: E731
     start = lambda r: r[0].xy[0 if r[2] > 0 else -1, :2]    # noqa: E731
     out = []
@@ -380,10 +396,15 @@ def lane_drops(ways):
         e = end(r)
         if any(q is not r and _touches(e, start(q)) for q in run):
             continue                                        # the two lanes go on
-        if not any(w is not r[0] and (_touches(e, w.xy[0, :2]) or _touches(e, w.xy[-1, :2])) for w in ways):
+        if r[0].spec.oneway:                                # one lane on, not a fork, not a ring or a slip road
+            on = [w for w in ways if w is not r[0] and w.spec.oneway
+                  and _touches(e, w.xy[-1 if (w.spec.dir or 1) < 0 else 0, :2])]
+            if len(on) != 1 or not _carriageway(on[0].spec) or _lanes(on[0].spec, on[0].tags) != 1:
+                continue
+        elif not any(w is not r[0] and (_touches(e, w.xy[0, :2]) or _touches(e, w.xy[-1, :2])) for w in ways):
             continue                                        # (nothing read past it: don't guess)
         d, here = M20_FIRST_M, r
-        gaps = M20_GAPS_90 if (r[0].spec.kmh or 0) >= 90.0 else M20_GAPS_80
+        gaps = M20_GAPS_90 if (r[0].spec.kmh or 0) >= 90.0 else M20_GAPS_80    # (70 is table 12.14's 80 column too)
         for gap in (0.0, *gaps):
             d += gap
             while here is not None:

@@ -45,12 +45,16 @@ class WhichWaysTest(unittest.TestCase):
         self.assertTrue(motesfri.is_section(spec(), TWO))
         self.assertTrue(motesfri.is_section(spec(), ONE))
 
+    def test_a_section_at_70_outside_a_town(self):
+        self.assertTrue(motesfri.is_section(spec(kmh=70.0), TWO))
+
     def test_not_a_section(self):
         self.assertFalse(motesfri.is_section(spec(), {"lanes:forward": "2", "lanes:backward": "2"}))
         self.assertFalse(motesfri.is_section(spec(lanes=2), TWO))
-        self.assertFalse(motesfri.is_section(spec(kmh=70.0), TWO))              # below 80
+        self.assertFalse(motesfri.is_section(spec(kmh=60.0), TWO))              # below 70
+        self.assertFalse(motesfri.is_section(spec(kmh=70.0)._replace(urban=True), TWO))     # in town, below 80
         self.assertFalse(motesfri.is_section(spec(kmh=None), TWO))              # unknown limit: no guess
-        self.assertFalse(motesfri.is_section(spec(cls="secondary"), TWO))
+        self.assertFalse(motesfri.is_section(spec(cls="residential"), TWO))
         self.assertFalse(motesfri.is_section(spec(oneway=True), TWO))
         self.assertFalse(motesfri.is_section(spec(link=True), TWO))
 
@@ -275,6 +279,32 @@ class LaneDropTest(unittest.TestCase):
     def test_no_drop_where_the_two_lanes_go_on_and_arrows_past_a_joint(self):
         ways = [way("a", line(-500, -100), key="k"), way("b", line(-100, 0), key="k"), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
         self.assertEqual([round(-float(p[1]), 1) for p, _ in motesfri.lane_drops(ways)], [2.5, 27.5, 77.5, 152.5, 252.5])
+
+    def carriageway(self, fid, xy, lanes, kmh=100.0, link=False, dir_=1):
+        return way(fid, xy, {}, roads.Spec(9.0 if lanes == 2 else 4.5, "paved", False, "trunk", True, 2.5, dir_, kmh,
+                                           None, None, lanes, None, link))
+
+    def test_a_carriageway_of_two_lanes_narrowing_to_one(self):
+        got = motesfri.lane_drops([self.carriageway("a", line(-400, 0), 2), self.carriageway("b", line(0, 400), 1)])
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [2.5, 27.5, 77.5, 152.5, 252.5])
+        self.assertAlmostEqual(float(got[0][0][0]), -9.0 / 4, 6, "the left lane, heading north")
+
+    def test_a_carriageway_drawn_the_other_way(self):
+        xy = line(-400, 0)[::-1]
+        got = motesfri.lane_drops([self.carriageway("a", xy, 2, dir_=-1), self.carriageway("b", line(0, 400), 1)])
+        self.assertAlmostEqual(float(got[0][0][0]), -9.0 / 4, 6)
+        self.assertGreater(float(got[0][1][1]), 0.99, "heading north against the geometry's own start")
+
+    def test_a_carriageway_going_on_or_forking_or_into_a_ring_has_no_drop(self):
+        two, one = self.carriageway("a", line(-400, 0), 2), self.carriageway("b", line(0, 400), 1)
+        self.assertEqual([p for p, _ in motesfri.lane_drops([two, self.carriageway("c", line(0, 400), 2)]) if p[1] < 0
+                          and p[1] > -300], [], "two lanes on: nothing before the joint")
+        self.assertEqual(motesfri.lane_drops([two, one, self.carriageway("s", np.c_[np.linspace(0, 10, 9), np.linspace(0, 100, 9)], 1)]), [])
+        self.assertEqual(motesfri.lane_drops([two, self.carriageway("r", line(0, 100), 1, kmh=50.0)]), [])
+        self.assertEqual(motesfri.lane_drops([two, self.carriageway("x", line(0, 100), 1, link=True)]), [])
+
+    def test_wanted_by_a_carriageway_too(self):
+        self.assertTrue(motesfri.wanted("SE", [("a", self.carriageway("a", line(0, 9), 1).spec)]))
 
     def test_nothing_read_past_it_no_guess(self):
         self.assertEqual(motesfri.lane_drops([way("s", line(-400, 0))]), [])

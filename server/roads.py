@@ -1425,8 +1425,10 @@ def dual_carriageways(feats, specs, left_hand=False):
         nm = str(names[i] or "").strip()
         if nm and nm != "None":
             groups.setdefault((nm, sp.cls), []).append(i)
+        elif sp.oneway and not sp.link and sp.cls != "motorway":
+            groups.setdefault(("", sp.cls), []).append(i)   # (a numbered road has no name: Sweden's 2+1 roads, below)
     out = list(specs)
-    for idx in groups.values():
+    for (group_name, _), idx in groups.items():
         if len(idx) < 2:
             continue
         lines = {}
@@ -1456,6 +1458,9 @@ def dual_carriageways(feats, specs, left_hand=False):
             sp = out[i]
             # driving on the right the other carriageway is on the left
             gap = best[3]
+            if not group_name and gap >= sp.width:
+                continue                # (nameless: only so they don't overlap. Sweden's 2+1 carriageways are 6-8 m
+                                        # apart, and 11 m wide where no lane count came through: no room for a barrier)
             if sp.oneway:               # the map's own one-way carriageway: its direction stands
                 out[i] = sp._replace(median=gap, width=_dual_width(sp, sp.width, gap, feats, i))
                 continue
@@ -3605,10 +3610,13 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
             else st.edge
         epat = None if wide or barrier else st.edge_pattern
         travel_left = 1 if getattr(spec, "dir", 0) >= 0 else -1      # (dir < 0: one way against the line)
+        # (VGU 2024 table 12.5, mötesfri väg: left 0.30 m, right 0.20 m: a 2+1 road's carriageway, by its one or two lanes)
+        pair = sweden and spec.oneway and not motorway and not urban and (spec.lanes or 3) <= 2
         for side in (1, -1):
             inset = motorway_shoulder(spec) if rural_motorway(spec) else EDGE_LINE["inset"]
             mat = st.left_edge if (st.left_edge and spec.oneway and side == travel_left) else "line_white"
-            mark("edge", mat, ew, offset_polyline(pts, side * (w / 2 - inset)), epat, side=side)
+            mark("edge", mat, markings.MOTESFRI_EDGE_W if pair and side != travel_left else ew,
+                 offset_polyline(pts, side * (w / 2 - inset)), epat, side=side)
     return out
     if has_sidewalks(spec):
         for side in walk_sides(spec, left_hand):
