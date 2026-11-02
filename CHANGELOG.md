@@ -2,6 +2,30 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Dirt roads and off-road ground
+- **Dirt roads are worn now.** A gravel road used to follow the elevation data smoothed over 8 m, so it was as flat as
+  a country lane and the only rough surfaces in the world were the main roads' own gentle undulation. A dirt road now
+  has what a real one has: potholes (18-32 cm deep, 3-6 m wide), broken patches (a step of 12-22 cm with soft edges)
+  and the odd deep pit (30-50 cm), over a soft rise and fall of ±15 cm. They are placed from the road's own position,
+  so every process builds the same ones, and no step between two 2 m samples is steeper than 35 cm (56 cm on a
+  `highway=track`), so a hole's far side is a slope, not a wall.
+- **The main dirt roads stay much smoother**: a `motorway`..`tertiary` road mapped as gravel keeps a fifth of the
+  damage of a country lane, and a forest `track` gets two and a half times as much: "on a forest road you cannot even
+  get up to speed".
+- **A dirt road leans to one side.** It also has a random cross slope, so now the left wheel is in a hole, now the
+  right one, changing every 7 / 13 / 27 m, up to ±20 % (30-40 cm across a 3.5 m track). It fades out at the ends, so a
+  junction joins level across.
+- **The land off the roads is rougher**: a soft, world-locked value noise at 9 / 4.5 / 2.4 m, about 0.35 m standard
+  deviation, added wherever the ground is sampled (the physics block, the road tiles and the airfields alike). Driving
+  across a field is no longer like driving across a table; the roads themselves are graded as before, so they stay
+  what they were.
+- All of it is tunable: `BNE_DIRT_BUMP` (damage strength, 0 off), `BNE_DIRT_MAJOR` / `BNE_DIRT_TRACK` (the shares a
+  main road and a track get), `BNE_DIRT_TRACK_WAVE` (how much of the soft undulation a track keeps), `BNE_DIRT_BANK`
+  (the cross slope, 0 level), `BNE_DIRT_STEP` (the steepest step, m) and `BNE_TERRAIN_BUMP` (off-road roughness, m, 0
+  off).
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

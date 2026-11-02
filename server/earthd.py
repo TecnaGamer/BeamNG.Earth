@@ -1809,7 +1809,8 @@ class Server:
         return round(float(anchor.frame.geodetic_to_enu(la, lo, z)[2]), 3)
 
     def ground(self, frame, la, lo, z):
-        """blockworker.ground here: runways graded in, the sea floor carved."""
+        """blockworker.ground here: runways graded in, the sea floor carved, the land off the roads roughened."""
+        z = np.asarray(z, np.float64) + gradingmod.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
         if self.airports is not None:
             z = self.airports.apply(la, lo, z)
         if self.sea is not None:

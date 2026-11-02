@@ -57,7 +57,8 @@ class RoadsTileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             got = blockworker.roads_tile(1, LAT, LON, 15, 0, 0, a, "/temp/x", True, 0.05)
             cells = [md.cell(k).layers.get("roads") for k in keys]
-            elev = lambda la, lo: FakeDem().sample(la, lo, 15)      # noqa: E731
+            # the server's ground (blockworker.ground: the land off the roads roughened), not the bare DEM
+            elev = lambda la, lo: blockworker.ground(FRAME, la, lo, FakeDem().sample(la, lo, 15))   # noqa: E731
             walks = []
             bridges = roads.BridgeProfiles(FRAME, lambda k: md.cell(k).layers.get("roads"), elev)
             chunks = roads.build_tile(FRAME, 0, 0, cells, elev, None, walks=walks, bridges=bridges)
@@ -97,7 +98,7 @@ class NavgraphTest(unittest.TestCase):
                                                           rules)
             self.assertEqual(path, "/temp/x/navgraph_1_7.json")
             got = json.loads(Path(out, "navgraph_1_7.json").read_text())
-        elev = lambda la_, lo_: FakeDem().sample(la_, lo_, 15)      # noqa: E731
+        elev = lambda la_, lo_: blockworker.ground(FRAME, la_, lo_, FakeDem().sample(la_, lo_, 15))   # noqa: E731
         want = navgraph.build(FRAME, [md.cell(k).layers.get("roads") for k in keys], elev, (0.0, 0.0), None,
                               decks={}, widths=None, left_hand=False, mph=True)
         want["rules"] = rules

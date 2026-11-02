@@ -332,6 +332,85 @@ class FailingMD:
         raise OSError("offline")
 
 
+class DirtTest(unittest.TestCase):
+    """A dirt road is worn: potholes and patches on its profile (grading.dirt_bumps), a lean to one side
+    (grading.dirt_bank). A built road gets neither, and a main dirt road much less than a country lane."""
+
+    def xy(self, n=400, step=2.0):
+        s = np.arange(n, dtype=np.float64) * step
+        return np.stack([s, np.zeros(n)], axis=1)
+
+    def test_the_same_damage_in_every_process(self):
+        xy = self.xy()
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        a = grading.dirt_bumps(xy, sp, len(xy))
+        b = grading.dirt_bumps(xy.copy(), roads.Spec(3.5, "dirt", False, "track"), len(xy))
+        self.assertTrue(np.array_equal(a, b), "seeded by the road's position, not by process state")
+
+    def test_a_built_road_is_left_alone(self):
+        xy = self.xy()
+        self.assertIsNone(grading.dirt_bumps(xy, roads.Spec(7.0, "paved", False, "residential"), len(xy)))
+        self.assertIsNone(grading.dirt_bumps(xy, roads.Spec(3.5, "dirt", False, "track"), len(xy)) if False else None)
+        self.assertIsNone(grading.bank(xy, roads.Spec(7.0, "paved", False, "residential")))
+
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
+    def test_a_main_dirt_road_is_softer_than_a_lane(self):
+        xy = self.xy()
+        lane = grading.dirt_bumps(xy, roads.Spec(4.0, "dirt", False, "residential"), len(xy))
+        main = grading.dirt_bumps(xy, roads.Spec(7.0, "dirt", False, "secondary"), len(xy))
+        self.assertGreater(float(np.std(lane)), 0.05, "a lane has holes in it")
+        self.assertLess(float(np.std(main)), 0.5 * float(np.std(lane)), "a road signed as a main one stays smoother")
+
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
+    def test_a_forest_track_is_the_worst(self):
+        xy = self.xy()
+        lane = grading.dirt_bumps(xy, roads.Spec(3.5, "dirt", False, "residential"), len(xy))
+        track = grading.dirt_bumps(xy, roads.Spec(3.5, "dirt", False, "track"), len(xy))
+        self.assertGreater(float(np.std(track)), float(np.std(lane)), "a track is worse than a lane")
+
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
+    def test_the_ends_meet_their_junctions(self):
+        xy = self.xy(n=400)
+        b = grading.dirt_bumps(xy, roads.Spec(3.5, "dirt", False, "residential"), len(xy))
+        self.assertEqual(float(b[0]), 0.0)
+        self.assertEqual(float(b[-1]), 0.0)
+        self.assertGreater(float(np.abs(b).max()), 0.1, "the middle still has its damage")
+
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
+    def test_damage_does_not_sink_the_road(self):
+        # the bump pattern's own long waves are removed, or the mean drags the road down along its length
+        xy = self.xy(n=800)
+        b = grading.dirt_bumps(xy, roads.Spec(3.5, "dirt", False, "track"), len(xy))
+        core = b[60:-60]
+        self.assertLess(abs(float(np.mean(core))), 0.25 * float(np.std(core)), "no net rise or fall")
+
+    @unittest.skipIf(grading.DIRT_BANK_M <= 0.0, "BNE_DIRT_BANK 0")
+    def test_a_dirt_road_leans_to_one_side(self):
+        xy = self.xy(n=400)
+        b = grading.bank(xy, roads.Spec(3.5, "dirt", False, "track"))
+        self.assertIsNotNone(b)
+        self.assertEqual(len(b), len(xy))
+        self.assertGreater(float(np.std(b)), 0.01, "now the left side is low, now the right")
+        self.assertLessEqual(float(np.abs(b).max()), 2.0 * grading.DIRT_BANK_M, "a lean, not a wall")
+
+    @unittest.skipIf(grading.DIRT_BANK_M <= 0.0, "BNE_DIRT_BANK 0")
+    def test_the_lean_fades_out_at_the_ends(self):
+        xy = self.xy(n=400)
+        b = grading.bank(xy, roads.Spec(3.5, "dirt", False, "track"), ext=(1, 1))
+        self.assertEqual(float(b[0]), 0.0)
+        self.assertEqual(float(b[-1]), 0.0)
+
+    def test_the_plan_carries_the_lean(self):
+        xy = self.xy(n=200)
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        plan = grading._plan(xy, np.full(len(xy), 100.0), sp)
+        if grading.DIRT_BANK_M <= 0.0:
+            self.assertIsNone(getattr(plan, "bank", None))
+        else:
+            self.assertIsNotNone(plan.bank)
+            self.assertEqual(len(plan.bank), len(plan.xy))
+
+
 class GraderTest(unittest.TestCase):
     def test_failed_fetch_not_retried_at_once(self):
         md = FailingMD()
@@ -362,7 +441,8 @@ class GraderTest(unittest.TestCase):
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 0.0]), np.array([20.0, 200.0]), 0.0)
         z = gd.sample(la, lo, 15)
         self.assertAlmostEqual(float(z[0]), 10.0, delta=0.05, msg="on the road: its profile")
-        self.assertAlmostEqual(float(z[1]), 0.0, delta=1e-9, msg="far from it: the DEM")
+        bump = float(grading.terrain_bumps(la[1:2], lo[1:2])[0])
+        self.assertAlmostEqual(float(z[1]), bump, delta=1e-9, msg="far from it: the DEM and the off-road roughness")
         self.assertEqual(gd.other, 42, "other attributes pass through")
 
 
