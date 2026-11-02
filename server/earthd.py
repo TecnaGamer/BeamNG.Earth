@@ -259,6 +259,10 @@ BASE_FAST_WAIT_S = 0.15         # heights, then goes without it (block_base late
 # road paint (0.3 s alone) took 6-10 s and the blocks were ready 6-12 s after they were asked for, the edge guard
 # holding the car at 105-189 mph (2026-10-31, tools/perfmon.py). BNE_URGENT_ELSEWHERE=off: here, as before.
 URGENT_ELSEWHERE = os.environ.get("BNE_URGENT_ELSEWHERE", "on") != "off"
+# A process of its own for the requested blocks' photos and stand-ins (detail mode) on a machine with this many CPUs:
+# in the other lane's block process they queued behind its prefetch heights and photos, a stand-in made beside a
+# block 1.6-4 s late at 100-200 mph down Manhattan (nyc_speed.py, 2026-11-02); not on a small machine (memory)
+PHOTO_PROCESS_MIN_CPUS = 12
 QUICK_SYNC_MAX_V = 150.0        # m/s (335 mph): slower, a block built ahead gets its stand-in photo before it is ready (224 mph left a player at 230 mph with brown flashes)
 RECENT_FULL = 2                 # full ground photos kept for the stand-ins' overlap (write_quick_base)
 QUICK_MIN_COVER = 0.8          # share of a stand-in's texels real imagery must cover (else no stand-in)
@@ -825,6 +829,9 @@ class Server:
         self.base_stale = set()         # blocks whose base photo lacks lazy imagery (NAIP) still to come
         self.base_skipped = set()      # blocks built without their photo (a fast player's prefetch: base_refresh)
         self.quick_pool = ThreadPoolExecutor(1, thread_name_prefix="quick-base")   # stand-in photos (_quick_later)
+        self.quick_early = ThreadPoolExecutor(1, thread_name_prefix="quick-early")   # ... started with a block (fast)
+        self.quick_futs = {}            # (aid, cx, cy) -> a requested block's stand-in photo started with it (fast)
+        self.photo_pool = None          # requested blocks' photos and stand-ins (main(): PHOTO_PROCESS_MIN_CPUS)
         self.recent_full = collections.deque(maxlen=RECENT_FULL)    # (anchorId, cx, cy, rgb) of the last full photos
         self.base_lock = threading.Lock()
         self.pads_rebuild = set()       # blocks built without gas station pads that lie on them (pads_stale)
@@ -1166,6 +1173,10 @@ class Server:
         if anchor is None:
             return None
         zoom = anchor.zooms[0]
+        if self.road_pool is not None and self.mapdata is not None:
+            # (in a road tile process: here they took the server's one interpreter from the far textures and plans)
+            return self.road_pool.submit(blockworker.veg_geo, anchor.id, anchor.lat, anchor.lon, zoom, gx, gy,
+                                         self.out_dir, self.vfs_dir, flat).result()
         g = self.grader_for(anchor)
 
         def raw(la, lo):
@@ -2028,20 +2039,25 @@ class Server:
         elif self.near_visual == "detail" and self.imagery is not None:
             base = (self.urgent_base_pool if lane == LANE_REQUEST else self.base_pool).submit(
                 self._base_photo, anchor, cx, cy, self._base_process(lane), lane == LANE_REQUEST)
+            if lane == LANE_REQUEST and self.fast and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
+                # (its stand-in photo now, beside the heights, in the other lane's process: made after them it took
+                # 1.3-5 s more of every block at 100-200 mph down Manhattan, nyc_speed.py 2026-11-02)
+                self.quick_futs[(anchor.id, cx, cy)] = self.quick_early.submit(self._stand_in, anchor, cx, cy)
         pool = self.block_pools[lane][0] if self.block_pools and progress is None else None
         key = (anchor.id, cx, cy)
         try:
             if pool is not None:
                 self.hm_stage[key] = "the block process"
-                submitted = time.time()
+                submitted, submitted_pc = time.time(), time.perf_counter()
                 info = pool.submit(
                     blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
                     fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block)).result()
                 if "started" in info:   # (waiting for the lane's process: a block before it, its road plans ahead)
                     started, finished = info.pop("started"), info.pop("finished", None)
-                    info["stages"] = {"queue": max(0.0, started - submitted),
-                                      **({"work": finished - started} if finished else {}),
+                    info["stages"] = {"pre": submitted_pc - t0, "queue": max(0.0, started - submitted),
+                                      **({"work": finished - started, "back": max(0.0, time.time() - finished)}
+                                         if finished else {}),
                                       **info.get("stages", {})}
                 self.hm_stage[key] = "its base photo"
                 return self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=lane == LANE_REQUEST, lane=lane)
@@ -2244,6 +2260,8 @@ class Server:
             return None
         if (self.deshadow is not None or self.colormatch is not None) and not (URGENT_ELSEWHERE and lane == LANE_REQUEST):
             return None
+        if lane == LANE_REQUEST and self.photo_pool is not None and not self.fast:
+            return self.photo_pool      # (fast: the photo process makes its stand-in first, _stand_in)
         return self.block_pools[LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST][0]
 
     def _base_photo(self, anchor, cx, cy, pool=None, urgent=False, quick=False):
@@ -2319,7 +2337,15 @@ class Server:
                 # ground swapped twice (stand-in, then the photo) and flashed at each (the user at 57-124 mph, 2026-10-30)
                 concurrent.futures.wait([base], timeout=BASE_FAST_WAIT_S if self.fast else BASE_WAIT_S)
             quick = None
-            if not base.done() and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V and self.imagery is not None:
+            early = self.quick_futs.pop((anchor.id, cx, cy), None)
+            if not base.done() and early is not None:
+                try:
+                    quick = early.result()
+                except Exception as e:
+                    log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
+                info["stages"]["baseQuick"] = time.perf_counter() - t1
+            if not base.done() and not quick and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V \
+                    and self.imagery is not None:
                 quick = self._quick_elsewhere(anchor, cx, cy, lane) if lane == LANE_REQUEST else None
                 if not quick:
                     quick = self.write_quick_base(anchor, cx, cy)
@@ -2437,7 +2463,12 @@ class Server:
     def quick_base_name(self, key):
         return self.hm_name(key)[:-4] + "_base_q.png"
 
-    def _quick_elsewhere(self, anchor, cx, cy, lane):
+    def _stand_in(self, anchor, cx, cy):
+        """A requested block's stand-in photo made beside its heights (fast): in the prefetch lane's process, else
+        here; its file name or None."""
+        return self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH, self.photo_pool) or self.write_quick_base(anchor, cx, cy)
+
+    def _quick_elsewhere(self, anchor, cx, cy, lane, pool=None):
         """write_quick_base in the block's own lane process (idle once its heights are built: blockworker.base_photo
         quick), at FAST_BASE_V and over or when no recent full photo overlaps it (those pasted in need this process;
         at speed every block overlaps the last and the stand-in here took 5-7 s): the file name, or None
@@ -2457,7 +2488,7 @@ class Server:
                "season_mode": im.season_mode}
         t0 = time.perf_counter()
         try:
-            got = self.block_pools[lane][0].submit(
+            got = (pool or self.block_pools[lane][0]).submit(
                 blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                 cy - size / 2 - BASE_SHIFT_M, size, QUICK_BASE_PX, tex, False, anchor.zooms[0],
                 os.path.join(self.out_dir, name), (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px),
@@ -5906,7 +5937,7 @@ async def main_async(args):
     AHEAD_ON = args.download_ahead == "on"
     ROUTE_AHEAD_ON = args.route_prefetch == "on" and args.route_prefetch_km > 0
     ROUTE_AHEAD_MAX_M = args.route_prefetch_km * 1000.0
-    block_pools, far_pool = [], None
+    block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
         ctx = multiprocessing.get_context("spawn")
@@ -5919,6 +5950,15 @@ async def main_async(args):
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
                           roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on")), warm_q))
+        if args.near_visual == "detail" and (os.cpu_count() or 0) >= PHOTO_PROCESS_MIN_CPUS:
+            # requested blocks' photos and stand-ins in a process of their own (Server._base_process / _stand_in)
+            photo_pool = poolsmod.RespawningPool(
+                "photo", 1, mp_context=ctx, initializer=blockworker.init,
+                initargs=(args.cache_dir, args.offline, args.roads == "on",
+                          args.grading == "on" and args.roads == "on",
+                          args.road_widths == "on" and args.roads == "on", args.surface == "on", None,
+                          logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
+                          roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on"))
         far_pool = poolsmod.RespawningPool(
             "far tile", args.workers, mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, args.roads == "on",
@@ -6005,6 +6045,7 @@ async def main_async(args):
 
     server.game_cpus = getattr(args, "game_cpus", None)    # (cpupin.py: the game pinned at each hello)
     server.server_cpus = getattr(args, "server_cpus", None)
+    server.photo_pool = photo_pool
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)
 

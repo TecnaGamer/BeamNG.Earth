@@ -281,6 +281,39 @@ def ground(frame, la, lo, z):
     return z
 
 
+def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
+    """earthd.Server.build_veg_geo in this process (the road tiles' processes): geotile (gx, gy)'s trees, bushes and
+    rocks written to out_dir: (vfs path, n, frame (lat, lon), pivot) or None. In the server's process they were ~35
+    CPU-s of a Manhattan session's 250 on its one interpreter, beside the far textures, the road plans and the map
+    layers (the user, 2026-11-01: "trees, poles, sidewalks struggle to keep up")."""
+    import geotiles
+    import vegetation as vegetationmod
+    if _s.md is None:
+        return None
+    if getattr(_s, "veg", None) is None:
+        v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
+        v.dem = _s.dem
+        v.surface, v.widths = _s.surface, _s.widths
+        _s.veg = v
+    g, _ = _s.anchor(aid, lat, lon)
+
+    def raw(la, lo):
+        return ground(None, la, lo, _s.dem.sample(la, lo, zoom))
+
+    def elev(la, lo):
+        z = raw(la, lo)
+        return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    got = vegetationmod.geo_tile_items(gx, gy, _s.veg, lambda k: True, elev, _s.sea, as_json=True,
+                                       raw=raw if g is not None else None)
+    if got is None:
+        return None
+    rows, pivot = got
+    frame = geotiles.centre(gx, gy)
+    path, n = vegetationmod.write_tile(out_dir, vfs_dir, None, gx, gy, rows, flat=flat,
+                                       geo={"key": geotiles.key(gx, gy), "frame": frame, "pivot": pivot})
+    return path, n, frame, pivot
+
+
 def _take_pads(fuel_pads):
     """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
     only these (none when the server's gas stations are switched off)."""
