@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeamNG.Earth Viewer</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div id="panel" class="card">
+  <div class="title">BeamNG.Earth viewer</div>
+  <div id="conn" class="muted">Connecting...</div>
+  <div id="status" class="status"></div>
+  <form id="goto">
+    <input id="where" placeholder="lat, lon (e.g. 36.5785, -118.2923)" autocomplete="off">
+    <button>Go</button>
+  </form>
+  <dl id="info"></dl>
+  <details open>
+    <summary>Layers</summary>
+    <div id="layers"></div>
+  </details>
+  <details>
+    <summary>Controls</summary>
+    <div class="muted small">
+      Drag: look &middot; WASD: move &middot; E / Space: up &middot; Q / C: down<br>
+      Shift: x5 &middot; Ctrl: x0.2 &middot; Wheel: speed<br>
+      Click: inspect (an OSM way or node, or a shape)<br>
+      Minimap: click to teleport, drag to pan, wheel to zoom
+    </div>
+  </details>
+</div>
+
+<div id="pick" class="card hidden">
+  <div class="row"><span id="pickTitle" class="title"></span><button id="pickClose" class="x">&times;</button></div>
+  <dl id="pickBody"></dl>
+</div>
+
+<div id="mapbox" class="card">
+  <canvas id="minimap"></canvas>
+  <button id="centre" title="Follow the camera">&#9678;</button>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

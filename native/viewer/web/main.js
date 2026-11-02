@@ -1,0 +1,259 @@
+// The viewer page: the scene, the world (world.js: earthd's files as the game gets them), the OSM overlay,
+// the fly camera and the minimap.
+import * as THREE from 'three'
+import { Net } from './net.js'
+import { World, stats } from './world.js'
+import { Osm } from './osm.js'
+import { FlyControls } from './controls.js'
+import { Minimap } from './minimap.js'
+import { setWireframe } from './materials.js'
+
+const $ = id => document.getElementById(id)
+
+// --- scene ---
+const canvas = $('view')
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x8fb4d6)
+const camera = new THREE.PerspectiveCamera(60, 1, 0.5, 2e6)
+camera.up.set(0, 0, 1)
+camera.position.set(0, 0, 200)
+scene.add(new THREE.HemisphereLight(0xdfeeff, 0x4a4030, 1.3))
+const sun = new THREE.DirectionalLight(0xffffff, 1.6)
+sun.position.set(0.4, -0.6, 1)
+scene.add(sun)
+const root = new THREE.Group()
+scene.add(root)
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight
+  renderer.setSize(w, h, false)
+  camera.aspect = w / h
+  camera.updateProjectionMatrix()
+}
+window.addEventListener('resize', resize)
+resize()
+
+// --- world ---
+let world
+const net = new Net(msg => world.onMessage(msg))
+world = new World(net, root)
+const osm = new Osm(world, root)
+const controls = new FlyControls(camera, canvas, pick)
+const minimap = new Minimap($('minimap'), (lat, lon) => teleport(lat, lon))
+minimap.z = 3
+$('centre').onclick = () => minimap.centre()
+window.viewer = { camera, controls, world, osm, minimap, scene }      // (for the browser console)
+
+const LAST = 'bnge-viewer-last'
+function remember(lat, lon) { try { localStorage.setItem(LAST, JSON.stringify([lat, lon])) } catch (e) { /* none */ } }
+function lastPlace() {
+  const m = /^#(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/.exec(decodeURIComponent(location.hash))
+  if (m) return [+m[1], +m[2]]
+  try { const v = JSON.parse(localStorage.getItem(LAST)); return Array.isArray(v) ? v : null } catch (e) { return null }
+}
+
+function teleport(lat, lon) {
+  if (!world.hello) { world.status = 'Not connected to earthd'; return }
+  world.teleport(lat, lon)
+  minimap.pending = { lat, lon }
+  remember(lat, lon)
+}
+
+world.on((ev, d) => {
+  if (ev === 'hello') {
+    const p = lastPlace()
+    if (p && !world.aid) teleport(p[0], p[1])
+  } else if (ev === 'teleported') {
+    camera.position.set(d.x, d.y, d.z)
+    controls.apply()
+    minimap.pending = null
+    minimap.follow = true
+    if (minimap.z < 13) minimap.z = 15
+    osm.clear()
+    pick(null)
+  } else if (ev === 'rebased') {
+    camera.position.set(d.x, d.y, d.z)
+    controls.apply()
+    osm.dirty = true
+  } else if (ev === 'far_done' || ev === 'block' || ev === 'anchor') {
+    osm.dirty = true
+  }
+})
+
+$('goto').addEventListener('submit', e => {
+  e.preventDefault()
+  const m = /(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)/.exec($('where').value)
+  if (m) teleport(+m[1], +m[2])
+})
+
+// --- layers ---
+const LAYERS = [
+  ['Ground (far tiles + imagery)', () => world.layers.ground, true],
+  ['Physics block (heightmap)', () => world.layers.block, false],
+  ['Road surfaces and sidewalks', () => world.layers.roads, true],
+  ['Buildings, decks, wires', () => world.layers.content, true],
+  ['Far buildings and skyline', () => world.layers.farbld, true],
+  ['OSM ways', () => osm.ways, true],
+  ['OSM nodes (connectors)', () => osm.nodes, true],
+]
+for (const [label, get, on] of LAYERS) {
+  const l = document.createElement('label')
+  const cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.checked = on
+  get().visible = on
+  cb.onchange = () => { get().visible = cb.checked }
+  l.append(cb, label)
+  $('layers').append(l)
+}
+for (const [label, fn] of [['OSM drawn on top', on => osm.setOnTop(on)], ['Wireframe', on => setWireframe(on)]]) {
+  const l = document.createElement('label')
+  const cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.onchange = () => fn(cb.checked)
+  l.append(cb, label)
+  $('layers').append(l)
+}
+
+// --- inspecting ---
+const ray = new THREE.Raycaster()
+function showPick(title, rows) {
+  $('pickTitle').textContent = title
+  const dl = $('pickBody')
+  dl.textContent = ''
+  for (const [k, v] of rows) {
+    if (v == null || v === '') continue
+    const dt = document.createElement('dt'); dt.textContent = k
+    const dd = document.createElement('dd')
+    if (v instanceof Node) dd.append(v); else dd.textContent = typeof v === 'object' ? JSON.stringify(v) : String(v)
+    dl.append(dt, dd)
+  }
+  $('pick').classList.remove('hidden')
+}
+$('pickClose').onclick = () => pick(null)
+
+function placeRows(p) {
+  const a = world.anchor
+  if (!a || !p) return []
+  const [lat, lon] = a.worldToGeodetic(p.x, p.y, p.z)
+  return [['lat, lon', `${lat.toFixed(6)}, ${lon.toFixed(6)}`], ['world', `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`]]
+}
+
+function osmLink(rec) {
+  const m = /^([wnr])(\d+)/.exec(rec || '')
+  if (!m) return rec
+  const a = document.createElement('a')
+  a.href = `https://www.openstreetmap.org/${{ w: 'way', n: 'node', r: 'relation' }[m[1]]}/${m[2]}`
+  a.target = '_blank'
+  a.rel = 'noopener'
+  a.textContent = rec
+  a.style.color = 'var(--accent)'
+  return a
+}
+
+function pick(e) {
+  if (!e) { $('pick').classList.add('hidden'); osm.highlight(null); return }
+  const r = canvas.getBoundingClientRect()
+  const ndc = new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1)
+  ray.setFromCamera(ndc, camera)
+  const o = osm.pick(ray)
+  if (o && o.kind === 'way') {
+    const t = o.item.tags
+    osm.highlight(o.item)
+    const rows = [['class', t.class], ['subtype', t.subtype], ['name', t.name],
+      ['OSM', t.src_dataset === 'OpenStreetMap' ? osmLink(t.src_record) : t.src_record], ['Overture id', o.item.id]]
+    for (const [k, v] of Object.entries(t)) {
+      if (!['class', 'subtype', 'name', 'src_record', 'src_dataset'].includes(k)) rows.push([k, v])
+    }
+    for (const [k, v] of Object.entries(o.item.rules || {})) rows.push([`rule ${k}`, v])
+    rows.push(['vertices', o.item.g.reduce((s, p) => s + p.length / 2, 0)])
+    showPick(t.name || t.class || 'way', [...rows, ...placeRows(o.point)])
+    return
+  }
+  if (o && o.kind === 'node') {
+    osm.highlight(null)
+    showPick('connector', [['Overture id', o.item.id], ...placeRows(o.point)])
+    return
+  }
+  osm.highlight(null)
+  const targets = [world.layers.content, world.layers.roads, world.layers.farbld, world.layers.ground].filter(g => g.visible)
+  const hit = ray.intersectObjects(targets, true)[0]
+  if (!hit) { pick(null); return }
+  let obj = hit.object, kind = ''
+  while (obj && !kind) { kind = obj.userData.kind || ''; if (!kind) obj = obj.parent }
+  const mats = Array.isArray(hit.object.material) ? hit.object.material : [hit.object.material]
+  const mat = hit.face && mats[hit.face.materialIndex]
+  const g = hit.object.geometry
+  showPick(kind || hit.object.name || 'shape', [
+    ['object', obj?.name || hit.object.name], ['triangles', g.index ? g.index.count / 3 : ''],
+    ['material color', mat?.color ? `#${mat.color.getHexString()}` : ''], ['distance', `${hit.distance.toFixed(1)} m`],
+    ...placeRows(hit.point)])
+}
+
+// --- loop ---
+let last = performance.now(), slow = 0, slower = 0
+function frame(now) {
+  requestAnimationFrame(frame)
+  const dt = Math.min(0.1, (now - last) / 1000)
+  last = now
+  const p = camera.position
+  const ground = world.anchor ? world.heightAt(p.x, p.y) : null
+  const agl = ground == null ? null : p.z - ground
+  controls.update(dt, agl)
+  world.update(dt, camera)
+  // the near plane from the height above the ground (depth precision for the road markings up close)
+  const h = Math.max(1, Math.abs(agl ?? p.z))
+  camera.near = Math.min(50, Math.max(0.3, h / 200))
+  camera.far = Math.max(200000, h * 300)
+  camera.updateProjectionMatrix()
+  slow += dt
+  if (slow > 0.25) {
+    slow = 0
+    osm.update(p)
+    world.updateSeams()
+    ui(agl)
+  }
+  slower += dt
+  if (slower > 5 && world.lat != null) { slower = 0; remember(world.lat, world.lon) }
+  if (world.anchor) {
+    const [lat, lon] = world.anchor.worldToGeodetic(p.x, p.y, 0)
+    minimap.cam = { lat, lon, heading: controls.heading, fov: camera.fov * camera.aspect }
+    const b = world.block
+    minimap.block = b && b.aid === world.aid
+      ? [[b.x0, b.y0], [b.x0 + (b.N - 1) * b.s, b.y0], [b.x0 + (b.N - 1) * b.s, b.y0 + (b.N - 1) * b.s], [b.x0, b.y0 + (b.N - 1) * b.s]]
+        .map(([x, y]) => world.anchor.worldToGeodetic(x, y, 0).slice(0, 2))
+      : null
+  }
+  minimap.draw()
+  renderer.render(scene, camera)
+}
+requestAnimationFrame(frame)
+
+function ui(agl) {
+  $('conn').textContent = net.connected
+    ? `earthd ${world.hello ? `session ${world.sessionId}, ${world.hello.nearVisual || ''} mode` : 'connected'}`
+    : 'earthd not connected (start it: run_server.bat / start.py)'
+  $('status').textContent = world.status
+  const c = world.counts(), o = osm.counts(), p = camera.position
+  const rows = []
+  if (world.anchor) {
+    rows.push(['anchor', `${world.aid} (${world.anchor.lat.toFixed(4)}, ${world.anchor.lon.toFixed(4)})`])
+    if (minimap.cam) rows.push(['camera', `${minimap.cam.lat.toFixed(5)}, ${minimap.cam.lon.toFixed(5)}`])
+    rows.push(['height', `${p.z.toFixed(0)} m${agl != null ? `, ${agl.toFixed(0)} m above ground` : ''}`])
+  }
+  rows.push(['far tiles', `${c.far} shown, ${c.farLoading} loading, ${c.swaps} swaps waiting`])
+  rows.push(['road tiles', `${c.roads} (far: ${c.farGeo})`])
+  rows.push(['OSM', `${o.ways} ways in ${o.ok} cells${o.missing ? `, ${o.missing} not cached yet` : ''}`])
+  rows.push(['files', `${stats.shapes} shapes, ${(stats.bytes / 1e6).toFixed(1)} MB, ${c.queue} queued`])
+  if (stats.failed) rows.push(['failed', `${stats.failed}: ${stats.lastError}`])
+  rows.push(['speed', `x${controls.speedScale.toFixed(2)}`])
+  const dl = $('info')
+  dl.textContent = ''
+  for (const [k, v] of rows) {
+    const dt = document.createElement('dt'); dt.textContent = k
+    const dd = document.createElement('dd'); dd.textContent = v
+    dl.append(dt, dd)
+  }
+}
