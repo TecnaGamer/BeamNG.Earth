@@ -1970,6 +1970,14 @@ def _lane_flow_home(feats):
 _LANE_FLOW_DFLT = {}            # road class -> its one-way carriageway's lanes when the map gives none (_lane_flow_rows)
 
 
+def _lane_flow_ids(f):
+    """Layer f's road ids as a numpy str array (lane_flow's dedup), kept on it."""
+    got = f.__dict__.get("_lane_flow_ids")
+    if got is None:
+        got = f.__dict__["_lane_flow_ids"] = np.asarray([str(x) for x in f.ids.tolist()], dtype=str)
+    return got
+
+
 def _lane_flow_rows(f):
     """Layer f's rows for lane_flow, made once per layer (kept on it): (ids, first coordinate, end coordinate, attrs
     (n, 4): one-way sign or 0, the map's lanes or nan, link, the class's default lanes or nan). Each cell's solve
@@ -2022,11 +2030,19 @@ def _lane_flow_local(feats):
             layers += [f for f in hook() if f is not None and len(f)]
         except Exception as e:          # (this cell alone)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
-    seen = set()                        # each road id once, this cell's first
+    # each road id once, this cell's first (the first row of each id over the layers in order: np.unique's first
+    # index; a set over every row of the nine layers was 0.25 s of 6 Midtown cells' facts, 2026-11-02)
+    rows = [_lane_flow_rows(f) for f in layers]
+    id_arrays = [_lane_flow_ids(f) for f in layers]
+    keep = np.zeros(sum(len(a) for a in id_arrays), bool)
+    if len(keep):
+        _u, first = np.unique(np.concatenate(id_arrays), return_index=True)
+        keep[first] = True
     coords, lens, attrs, mine = [], [], [], None
-    for f in layers:
-        ids, starts, ends, at = _lane_flow_rows(f)
-        sel = np.fromiter((i for i, fid in enumerate(ids) if fid not in seen and not seen.add(fid)), np.int64)
+    base = 0
+    for f, (ids, starts, ends, at), ida in zip(layers, rows, id_arrays):
+        sel = np.flatnonzero(keep[base:base + len(ida)]).astype(np.int64)
+        base += len(ida)
         if f is feats and mine is None:
             mine = sel                  # (its rows first: rows 0 .. len(mine) - 1)
         if not len(sel):
