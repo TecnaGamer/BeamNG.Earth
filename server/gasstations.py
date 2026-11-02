@@ -110,6 +110,15 @@ def _candidates(f):
     got = f.__dict__.get("_fuel_candidates")
     if got is not None:
         return got
+    cid = f.__dict__.get("_bnge_cell")
+    import roads
+    mk = (cid, "fuel_candidates") if cid is not None else None
+    if mk is not None:          # (this process's, for another copy of the layer: the map data reloads them)
+        with roads._FACTS_LOCK:
+            got = roads._FACTS_MEM.get(mk)
+        if got is not None:
+            f.__dict__["_fuel_candidates"] = got
+            return got
     a = f.attrs
 
     def col(k, i):
@@ -127,6 +136,11 @@ def _candidates(f):
             conf = 1.0
         out.append((i, c, conf, col("name", i), col("brand_name", i), col("brand_wikidata", i), col("src_dataset", i)))
     f.__dict__["_fuel_candidates"] = out
+    if mk is not None:
+        with roads._FACTS_LOCK:
+            roads._FACTS_MEM[mk] = out
+            while len(roads._FACTS_MEM) > roads.FACTS_MEM_KEPT:
+                roads._FACTS_MEM.popitem(last=False)
     return out
 
 

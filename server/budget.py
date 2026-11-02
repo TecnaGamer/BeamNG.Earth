@@ -79,7 +79,7 @@ def small(gb=None):
     return gb is not None and gb < SMALL_GB
 
 
-SMALL_FACTS_CELLS = 48          # roads._FACTS_MEM's entries on a small machine (a Steam Deck: ~9 server processes)
+SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~24 cells; a Steam Deck: ~9 server processes)
 
 
 def apply(is_small=None):
