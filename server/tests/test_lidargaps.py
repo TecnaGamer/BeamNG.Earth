@@ -120,11 +120,12 @@ class RangesTest(unittest.TestCase):
     """A viaduct p0 (y -300..0) going on as a ground road p1 (y 0..200)."""
 
     def setUp(self):
-        self.old = roadz.PROVIDER, roads.LIDAR_GAPS_ON, os.environ.pop("BNGE_PLAN_RUN", None)
+        self.old = (roadz.PROVIDER, roads.LIDAR_GAPS_ON, os.environ.pop("BNGE_PLAN_RUN", None), revisit.CACHE_DIR)
+        revisit.CACHE_DIR = None            # (no cell facts on disk: another test's under the same cell id)
         roads._FACTS_MEM.clear()            # (each test's provider its own: no facts of another test's)
 
     def tearDown(self):
-        roadz.PROVIDER, roads.LIDAR_GAPS_ON, run = self.old
+        roadz.PROVIDER, roads.LIDAR_GAPS_ON, run, revisit.CACHE_DIR = self.old
         if run is not None:
             os.environ["BNGE_PLAN_RUN"] = run
         roads._FACTS_MEM.clear()

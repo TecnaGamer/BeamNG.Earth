@@ -34,6 +34,16 @@ sys.path.insert(0, HERE)
 import mcp  # noqa: E402
 
 LOG = os.path.expanduser("~/.cache/beamng-earth/logs/server.log")
+# another machine's game (BNGE_MCP_URL through a tunnel): its server log read over ssh (BNGE_LOG_SSH=user@host)
+LOG_SSH = os.environ.get("BNGE_LOG_SSH")
+
+
+def log_size():
+    if LOG_SSH:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH, "stat -c %s ~/.cache/beamng-earth/logs/server.log"],
+                           capture_output=True, text=True, timeout=30)
+        return int(r.stdout.strip() or 0)
+    return os.path.getsize(LOG)
 POLL_S = 1.0
 MPH = 0.44704
 GRID = 29.0             # Manhattan's avenues run 29 deg east of north
@@ -187,6 +197,11 @@ class Watch(threading.Thread):
 
 
 def log_lines(since_pos):
+    if LOG_SSH:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH,
+                            f"tail -c +{since_pos + 1} ~/.cache/beamng-earth/logs/server.log"],
+                           capture_output=True, timeout=60)
+        return r.stdout.decode("utf-8", "replace").splitlines()
     with open(LOG, "rb") as f:
         f.seek(since_pos)
         return f.read().decode("utf-8", "replace").splitlines()
@@ -292,7 +307,7 @@ def main():
             json.dump(prof, f)
         teleport(*path[0], heading_of(path), wait_s=60)
         print(f"{label}: route {prof['km']:.1f} km, {len(path)} points", flush=True)
-        pos = os.path.getsize(LOG)
+        pos = log_size()
         # (no vehicle-vehicle collisions during the run: traffic and parked cars on the route threw the car off)
         lua("be:setDynamicCollisionEnabled(false) return 1")
         w = Watch(os.path.join(d, "watch.jsonl"))
