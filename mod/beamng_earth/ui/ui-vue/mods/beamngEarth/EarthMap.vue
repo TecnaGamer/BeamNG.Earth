@@ -132,9 +132,10 @@
             <span class="result-name">{{ r.saved ? "★ " : "" }}{{ r.name }}</span>
             <span class="result-coords">{{ r.detail || fmtLatLon(r.lat, r.lon) }}</span>
           </div>
+          <div v-if="searchMsg" class="search-msg">{{ searchMsg }}</div>
           <div class="search-credit">Search: Photon by komoot, © OpenStreetMap contributors</div>
         </div>
-        <div v-if="searchMsg" class="search-msg">{{ searchMsg }}</div>
+        <div v-if="searchMsg && !results.length" class="search-msg">{{ searchMsg }}</div>
         <div v-else-if="searching && !results.length" class="search-msg">Searching…</div>
       </div>
       <button class="map-btn" @click="zoomBy(1)" title="Zoom in">+</button>
@@ -1682,7 +1683,11 @@ function liveSearch() {
   searching.value = true
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocode(${luaStr(text)}) or nil`, r => {
     if (seq !== searchSeq) return
-    if (!r || r.error || !r.id) { searching.value = false; if (r && r.error && !local.length) searchMsg.value = r.error; return }
+    if (!r || r.error || !r.id) {
+      searching.value = false
+      searchMsg.value = (r && r.error) || "Address search unavailable"
+      return
+    }
     let tries = 0
     const poll = () => {
       if (seq !== searchSeq) return
@@ -1690,13 +1695,14 @@ function liveSearch() {
         if (seq !== searchSeq) return
         if (!res) {
           if (++tries < 40) setTimeout(poll, 150)
-          else { searching.value = false; if (!local.length) searchMsg.value = "No answer from the address search" }
+          else { searching.value = false; searchMsg.value = "No answer from the address search" }
           return
         }
         searching.value = false
         const online = toArray(res.results)
         results.value = [...local, ...online]
-        if (!results.value.length) searchMsg.value = res.error ? "Address search unavailable (offline?)" : "Nothing found"
+        if (res.error) searchMsg.value = res.error
+        else if (!results.value.length) searchMsg.value = "Nothing found"
       })
     }
     setTimeout(poll, 150)
@@ -1717,7 +1723,8 @@ function onSearch() {
   // a typed latitude, longitude (places.lua parses every format the page accepts)
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
     if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")
-    else if (!searching.value) searchMsg.value = "Nothing found (try more of the address, or a latitude, longitude)"
+    else if (!searching.value && (!searchMsg.value || searchMsg.value === "Nothing found"))
+      searchMsg.value = "Nothing found (try more of the address, or a latitude, longitude)"
   })
 }
 

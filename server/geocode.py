@@ -4,14 +4,18 @@ places as you type, autocomplete style").
 Photon (https://photon.komoot.io, komoot; OpenStreetMap data, ODbL) is built for search-as-you-type; Nominatim's
 usage policy forbids autocomplete, and Google is not used (project rule). The mod sends the typed text and the
 player's position (a location bias: nearer results first); requests are debounced by the map (300 ms, 3+
-characters), limited and cached by netfetch (photon.komoot.io policy). The map credits OpenStreetMap / Photon.
+characters), limited by netfetch (the host's policy). The map credits OpenStreetMap / Photon.
 """
 import json
+import math
+import os
 import urllib.parse
 
 import netfetch
 
-PHOTON_URL = "https://photon.komoot.io/api/"
+# Set before starting the launcher/server; its children inherit it. A base may include a reverse-proxy path.
+PHOTON_BASE_ENV = "BNGE_PHOTON_BASE_URL"
+DEFAULT_PHOTON_BASE = "https://photon.komoot.io"
 LIMIT = 7
 MIN_CHARS = 3
 ATTRIBUTION = "Search: Photon by komoot, data (c) OpenStreetMap contributors (ODbL)"
@@ -22,6 +26,63 @@ LANG_OF_COUNTRY = {**dict.fromkeys(("DE", "AT", "CH", "LI"), "de"), **dict.fromk
                    **dict.fromkeys(("IT", "SM", "VA"), "it")}
 
 
+class InvalidEndpoint(ValueError):
+    """The configured Photon base cannot be used safely by the network transport."""
+
+
+def base_url():
+    """Photon-compatible HTTP(S) base, including any path prefix; never fall back on invalid configuration."""
+    base = os.environ.get(PHOTON_BASE_ENV, DEFAULT_PHOTON_BASE).strip()
+    try:
+        u = urllib.parse.urlsplit(base)
+        if (u.scheme not in ("http", "https") or not u.hostname or u.username is not None or u.password is not None
+                or "?" in base or "#" in base or any(c.isspace() for c in base)):
+            raise ValueError
+        _ = u.port  # force validation of the port, including malformed IPv6 authorities
+    except ValueError:
+        raise InvalidEndpoint(f"{PHOTON_BASE_ENV} must be an HTTP(S) base URL without credentials, query or fragment") from None
+    return urllib.parse.urlunsplit((u.scheme, u.netloc, u.path.rstrip("/"), "", ""))
+
+
+def error_text(error):
+    """A useful diagnostic without the request URL, query, credentials or exception text."""
+    if isinstance(error, InvalidEndpoint):
+        return (f"Geocoding endpoint is invalid: {PHOTON_BASE_ENV} must be an HTTP(S) base URL without "
+                "credentials, query or fragment.")
+    if isinstance(error, netfetch.Offline):
+        return "Geocoding unavailable: offline mode."
+    if isinstance(error, (netfetch.BadResponse, json.JSONDecodeError, UnicodeDecodeError)):
+        return "Geocoding service returned an invalid response."
+    if not isinstance(error, netfetch.FetchError):
+        return "Geocoding failed (unexpected error)."
+
+    status = error.status
+    if isinstance(status, int) and 300 <= status <= 599:
+        if status in (401, 403):
+            text = f"Geocoding service refused the request (HTTP {status})."
+        elif status == 429:
+            text = "Geocoding service rate limited the request (HTTP 429)."
+        else:
+            text = f"Geocoding service returned HTTP {status}."
+    elif isinstance(error, netfetch.RateLimited):
+        text = "Geocoding request temporarily limited by network policy."
+    elif isinstance(error, netfetch.HostUnavailable):
+        text = "Geocoding service temporarily unavailable (network circuit open)."
+    elif isinstance(error, netfetch.BudgetExceeded):
+        text = "Geocoding network request budget reached."
+    elif isinstance(error, netfetch.PolicyDenied):
+        text = "Geocoding request denied by network policy."
+    elif isinstance(error, netfetch.FetchFailed):
+        text = "Geocoding service could not be reached (network error)."
+    else:
+        text = "Geocoding request failed."
+    wait = error.retry_after
+    if (isinstance(error, (netfetch.RateLimited, netfetch.HostUnavailable)) and isinstance(wait, (int, float))
+            and math.isfinite(wait) and wait > 0):
+        text += f" Try again in {math.ceil(wait)} s."
+    return text
+
+
 def lang_for(country):
     """Photon's language for a player in country (ISO 3166 alpha-2; None: unknown): "en" where Photon has none of
     the country's. Pure."""
@@ -29,11 +90,14 @@ def lang_for(country):
 
 
 def url(q, lat=None, lon=None, limit=LIMIT, lang="en"):
-    """The Photon request for text q, biased toward (lat, lon) when given. Pure."""
+    """The Photon request for text q, biased toward (lat, lon) when given."""
     params = [("q", q.strip()), ("limit", str(int(limit))), ("lang", lang)]
     if lat is not None and lon is not None:
         params += [("lat", f"{float(lat):.4f}"), ("lon", f"{float(lon):.4f}")]
-    return PHOTON_URL + "?" + urllib.parse.urlencode(params)
+    base = base_url()
+    # Keep the original public URL/cache key; custom Photon-compatible services may require the documented /api.
+    path = "/api/" if base == DEFAULT_PHOTON_BASE else "/api"
+    return base + path + "?" + urllib.parse.urlencode(params)
 
 
 def label(props):
@@ -85,14 +149,13 @@ def search(q, lat=None, lon=None, net=None, country=None):
 # The status bar (the user, 2026-10-15: "location info like street, city, country"): the town, state and country
 # from Photon's reverse geocoding, asked with the position ROUNDED to REVERSE_ROUND decimals (~1 km: the bar needs the
 # town, not the house) and only when the mod's setting allows it; the street comes from our own map data (nearest_street).
-REVERSE_URL = "https://photon.komoot.io/reverse"
 REVERSE_ROUND = 2
 STREET_M = 40.0                 # the nearest named road within this is "the street"
 
 
 def reverse_url(lat, lon, lang="en"):
-    """The Photon reverse request for (lat, lon) rounded to REVERSE_ROUND decimals. Pure."""
-    return REVERSE_URL + "?" + urllib.parse.urlencode(
+    """The Photon reverse request for (lat, lon) rounded to REVERSE_ROUND decimals."""
+    return base_url() + "/reverse?" + urllib.parse.urlencode(
         [("lat", f"{round(float(lat), REVERSE_ROUND):.{REVERSE_ROUND}f}"),
          ("lon", f"{round(float(lon), REVERSE_ROUND):.{REVERSE_ROUND}f}"), ("lang", lang), ("limit", "1")])
 

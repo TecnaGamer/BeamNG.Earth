@@ -3934,6 +3934,7 @@ class Connection:
         self.loop = asyncio.get_running_loop()
         self.peer = writer.get_extra_info("peername")
         self.tasks = set()
+        self._geocode_problems = set()   # each lookup failure reported once, not on every position poll
         self.active = None              # committed anchor id
         self.block = None               # farfield.Block of the committed terrain
         self.pending_block = None       # the last prepare_terrain of the active anchor
@@ -4268,6 +4269,16 @@ class Connection:
                 log.info("random place: %s (%.5f, %.5f)", got[2], got[0], got[1])
         self.send(out)
 
+    def _geocode_problem(self, source, error):
+        """Log a changed failure only once per connection, without URLs or exception text."""
+        text = geocodemod.error_text(error)
+        status = getattr(error, "status", None)
+        key = (source, type(error), status if isinstance(status, int) else None)
+        if key not in self._geocode_problems:
+            self._geocode_problems.add(key)
+            log.info("%s: %s", source, text)
+        return text
+
     async def where(self, msg):
         """The status bar's location {"id", "lat", "lon", "online"} -> where_result {"id", "street", "place", "region",
         "country"}: the street from the cached map cells (never waits for a download), the town, state and country from
@@ -4296,8 +4307,8 @@ class Connection:
                                                        self.s.country_at(lat, lon))
                     self._where_place = (key, place)
                     cached = self._where_place
-                except Exception as e:  # offline, rate limited: the bar shows the street alone
-                    log.debug("where: place: %s: %s", type(e).__name__, e)
+                except Exception as e:  # offline, refused or rate limited: the bar shows the street alone
+                    self._geocode_problem("where", e)
             if cached is not None and cached[0] == key:
                 out.update(cached[1])
         self.send(out)
@@ -4311,9 +4322,9 @@ class Connection:
             out["results"] = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, geocodemod.search, q, lat, lon, self.s.net,
                 self.s.country_at(lat, lon) if lat is not None and lon is not None else None)
-        except Exception as e:          # offline, rate limited, a bad answer: the map says so
-            out["error"] = f"{type(e).__name__}: {e}"[:200]
-        log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
+        except Exception as e:          # offline, refused, rate limited, a bad answer: the map says so
+            out["error"] = self._geocode_problem("geocode", e)
+        log.debug("geocode: %d results%s", len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 
     async def cache_map(self, msg):

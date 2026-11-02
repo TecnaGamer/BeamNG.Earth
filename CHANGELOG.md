@@ -2,6 +2,13 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Allow a self-hosted or otherwise authorized Photon endpoint through `BNGE_PHOTON_BASE_URL`, including
+  endpoints behind a URL prefix. The default provider and its request policy are unchanged.
+- Show refused, rate-limited and offline geocoding failures in map search even when saved places
+  match, rather than silently presenting a failed remote search as an empty result.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
