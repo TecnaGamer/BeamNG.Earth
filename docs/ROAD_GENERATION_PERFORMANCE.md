@@ -1,16 +1,33 @@
 # Road generation performance audit — 2 November 2026
 
+## Consolidated performance PR — 3 November 2026
+
+[PR #3](https://github.com/PaperboyNZ/BeamNG.EarthBuildTest/pull/3) now combines
+the lane/bridge work at `739ceca8` with the map-loading/timing work from
+[PR #4](https://github.com/PaperboyNZ/BeamNG.EarthBuildTest/pull/4) at `7f04b931`.
+Both histories are retained, with one shared bridge endpoint cache. The combined
+scope includes endpoint-only lane inputs, no-op solve avoidance, lane-tag cache
+invalidation, concurrent decoded-layer reuse and corrected road-job diagnostics.
+See [the preparation notes](ROAD_PREPARATION_STAGE_ONE.md) for the map-loading
+and timing implementation and its historical evidence. The benchmark results
+below retain their original revisions; consolidation is not a new speedup or
+native driving acceptance claim.
+
+## Historical lane/bridge branch state before consolidation
+
 The PR now includes current upstream `dev`
 `b41b4b04edffab6083e78b0c2ef41982869287b2` and targets `dev` on the test fork.
 It contains no custom building-system or runtime-profiler commits.
 
 Upstream's `1a9b4e1f` single-file mapped mirror supersedes this PR's earlier
-small-array bundle. `server/mapdata.py` now matches upstream exactly; there is no
-competing mirror implementation in this PR. The retained mirror tests check the
+small-array bundle. Before consolidation, `server/mapdata.py` matched upstream
+exactly; the combined PR adds decoded-load sharing while preserving upstream's
+packed storage. The retained mirror tests check the
 new packed format, read-only large views, writable small copies, old per-array
 folders and damaged-cache recovery. Earlier small-bundle measurements below are
 historical; they are not measurements of upstream's new format. The current
-runtime diff is limited to lane-input and bridge-connection reuse.
+runtime diff of the original lane/bridge branch was limited to lane-input and
+bridge-connection reuse.
 
 The latest merge retains upstream's cached lane rows and NumPy assembly together
 with endpoint-only solver inputs, no-op solve avoidance and lane-tag invalidation.

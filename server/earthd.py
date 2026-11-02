@@ -1556,7 +1556,7 @@ class Server:
             blockworker.roads_geo, aid, anchor.lat, anchor.lon, anchor.zooms[0], gx, gy, gzoom, self.out_dir,
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
-            country, content, skin, exact)
+            country, content, skin, exact, submitted_at=time.perf_counter())
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
@@ -1568,8 +1568,11 @@ class Server:
                         st[k] = st.get(k, 0.0) + v
                 top = " ".join(f"{k} {v:.1f}" for k, v in sorted(st.items(), key=lambda kv: -kv[1])[:5])
                 tm = (res or {}).get("time") or {}
+                queue_s = ((res or {}).get("worker") or {}).get("queue_s")
+                if queue_s is None:
+                    queue_s = waited[0] if waited else 0.0
                 log.info("road geotile %d_%d in %.1f s (queue %.1f; content %.1f s %.1f cpu, skin %.1f s %.1f cpu): %s",
-                         gx, gy, took, waited[0] if waited else 0.0, tm.get("content_s", 0.0),
+                         gx, gy, took, queue_s, tm.get("content_s", 0.0),
                          tm.get("content_cpu", 0.0), tm.get("skin_s", 0.0), tm.get("skin_cpu", 0.0), top)
         except concurrent.futures.TimeoutError:
             fut.cancel()

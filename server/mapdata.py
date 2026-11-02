@@ -266,6 +266,8 @@ class MapData:
         self._mem = OrderedDict()           # (cell, layer) -> (decoded layer, provenance, bytes): cell()'s LRU
         self._mem_bytes = 0
         self._mem_lock = threading.Lock()
+        self._loading = {}                 # (cell, layer) -> shared Future, including decode; guarded by _mem_lock
+        self._cell_stats = dict(memory_hits=0, loads=0, coalesced=0, wait_s=0.0, load_s=0.0, decode_s=0.0)
         self._warm_ex = None
         self._warming = set()               # (cell, layer)s queued or building in warm()
 
@@ -603,6 +605,50 @@ class MapData:
         prune_mirror(self.cache_dir)
 
     # --- cells -----------------------------------------------------------------------------------
+    def cell_stats(self):
+        """Process-wide counters. Durations aggregate overlapping threads, not critical-path/CPU time."""
+        with self._mem_lock:
+            return dict(self._cell_stats)
+
+    def _decoded_layer(self, key, layer, kind, frame):
+        """Load and publish one decoded layer for all its callers. No neighbor discovery is run here:
+        hooks are attached only, and no cache lock is held across I/O, decoding or tag joins."""
+        k = (str(key), layer)
+        try:
+            t0 = time.perf_counter()
+            arrays, hit = self.layer_arrays(key, layer, kind)
+            t1 = time.perf_counter()
+            arrays = dict(arrays)
+            prov = json.loads(str(arrays.pop("provenance")))
+            en = arrays.pop("en.local", None)
+            if layer in VECTOR_LAYERS:
+                f = mapgeom.Features.from_arrays(layer, arrays, "")
+                if en is not None and len(en) == len(f.lonlat):
+                    f.en = en
+                else:
+                    f = f.localize(frame)
+                self._rails(key, layer, f)
+                self._lanes(key, layer, f)
+                if layer == "buildings":
+                    f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
+                if layer == "roads":
+                    f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
+                    f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
+                f.__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(), sort_keys=True))
+            else:
+                f = None if "missing" in arrays else _raster_from(arrays)
+            entry = (f, prov, _nbytes(arrays))
+            self._remember(k, entry)
+            with self._mem_lock:
+                self._cell_stats["load_s"] += t1 - t0
+                self._cell_stats["decode_s"] += time.perf_counter() - t1
+            return entry, hit, t1 - t0
+        finally:
+            # Errors are shared by current waiters; a later request can retry. An evicted result
+            # remains alive in its Future until every admitted caller has consumed it.
+            with self._mem_lock:
+                self._loading.pop(k, None)
+
     def cell(self, key, layers=LAYERS, kind="demand"):
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""
         key = _key(key)
@@ -611,25 +657,38 @@ class MapData:
         cd = CellData(key, key.bounds(), (lat_c, lon_c), frame, self.versions())
         provs = {}
 
-        def timed(layer):
-            t0 = time.perf_counter()
-            arrays, hit = self.layer_arrays(key, layer, kind)
-            return arrays, hit, time.perf_counter() - t0
-        mem = {}
+        mem, futs = {}, []
         with self._mem_lock:
             for layer in layers:
-                got = self._mem.get((str(key), layer))
+                k = (str(key), layer)
+                got = self._mem.get(k)
                 if got is not None:
-                    self._mem.move_to_end((str(key), layer))
+                    self._mem.move_to_end(k)
                     mem[layer] = got
-        futs = [(layer, self.pool.submit(timed, layer)) for layer in layers if layer not in mem]
+                    self._cell_stats["memory_hits"] += 1
+                else:
+                    fut = self._loading.get(k)
+                    shared = fut is not None
+                    if fut is None:
+                        fut = self.pool.submit(self._decoded_layer, key, layer, kind, frame)
+                        self._loading[k] = fut
+                        self._cell_stats["loads"] += 1
+                    else:
+                        self._cell_stats["coalesced"] += 1
+                    futs.append((layer, fut, shared))
         results = {}
         err = None
-        for layer, fut in futs:             # all finish before an error is raised (no stray fetches)
+        for layer, fut, shared in futs:     # all finish before an error is raised (no stray fetches)
+            start = time.perf_counter()
             try:
                 results[layer] = fut.result()
             except Exception as e:
                 err = err or e
+            finally:
+                waited = time.perf_counter() - start
+                cd.stats[layer] = {"wait_s": waited, "shared": shared}
+                with self._mem_lock:
+                    self._cell_stats["wait_s"] += waited
         if err is not None:
             revisit.fault()                 # (a build that goes on without it is not kept)
             raise err
@@ -640,33 +699,8 @@ class MapData:
                 self._rails(key, layer, cd.layers[layer])
                 self._lanes(key, layer, cd.layers[layer])
             else:
-                arrays, hit, dt = results[layer]
-                arrays = dict(arrays)
-                prov = json.loads(str(arrays.pop("provenance")))
-                en = arrays.pop("en.local", None)     # (the mirror's: this frame's, Features.localize)
-                if layer in VECTOR_LAYERS:
-                    f = mapgeom.Features.from_arrays(layer, arrays, "")
-                    if en is not None and len(en) == len(f.lonlat):
-                        f.en = en
-                        cd.layers[layer] = f
-                    else:
-                        cd.layers[layer] = f.localize(frame)
-                    # (which cell's layer: the per-cell facts the server's processes share, roads.cell_facts)
-                    self._rails(key, layer, cd.layers[layer])
-                    self._lanes(key, layer, cd.layers[layer])
-                    if layer == "buildings":    # (a "building" of a whole city's size: left out, GitHub #413)
-                        cd.layers[layer] = mapgeom.drop_huge(cd.layers[layer], BUILDING_MAX_M2)
-                    if layer == "roads":        # (the bridges the map lacks, found when its ranges are first asked)
-                        cd.layers[layer].__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
-                        # (its neighbours: a road crossing into one is counted the same in both, roads.lane_flow)
-                        cd.layers[layer].__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
-                    cd.layers[layer].__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(),
-                                                                                           sort_keys=True))
-                elif "missing" in arrays:
-                    cd.layers[layer] = None
-                else:
-                    cd.layers[layer] = _raster_from(arrays)
-                self._remember((str(key), layer), (cd.layers[layer], prov, _nbytes(arrays)))
+                entry, hit, dt = results[layer]
+                cd.layers[layer], prov, _ = entry
             if prov:
                 pid = prov["id"]
                 if pid in provs:            # roads + connectors: one transportation record
@@ -678,7 +712,7 @@ class MapData:
                                               for (a, b), n in sorted(merged.items())]
                 else:
                     provs[pid] = prov
-            cd.stats[layer] = {"s": dt, "hit": hit}
+            cd.stats.setdefault(layer, {"wait_s": 0.0, "shared": False}).update(s=dt, hit=hit)
         cd.provenance = [provs[k] for k in sorted(provs)]
         return cd
 
