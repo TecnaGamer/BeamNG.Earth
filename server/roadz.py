@@ -957,7 +957,7 @@ class RoadZ:
             if got is not ...:
                 if got is None:             # (each build that takes the rule from it is not kept either)
                     import revisit
-                    revisit.fault()
+                    revisit.fault(lidar=True)   # (the session's answer: roads._FACTS_MEM keeps the facts made on it)
                 out[key] = got
                 continue
             todo.append(key)
@@ -987,7 +987,7 @@ class RoadZ:
                 got = self._decide(key, done.get(str(key)))     # (not built in time: None, the rule)
                 if got is None:
                     import revisit
-                    revisit.fault()
+                    revisit.fault(lidar=True)
                 with self._lock:
                     self._off[("gapans", str(key))] = got
                 out[key] = got
