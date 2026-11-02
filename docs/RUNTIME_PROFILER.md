@@ -6,14 +6,15 @@ The profiler remains optional and off by default. World-generation features are
 reviewed separately; the generic pool hooks also cover upstream's photo process.
 
 Open **Pause menu → BeamNG.Earth → Interface → Detailed performance profiler**.
-The option defaults to off. Enabling it starts continuous collection and opens a
+The option starts off each session, including when an older settings file says it
+was enabled. Enabling it starts continuous collection and opens a
 resizable window while the Earth level is loaded. Drag its edges or corner to
 resize; charts and worker timelines follow the available width, and frame lanes
 grow with the window height. The window remembers its size and position.
 Closing it or choosing **Compact view** leaves a small status window while
 collection continues. **Open profiler** returns to the full view without resetting
-history. **Stop profiling** or turning the setting off stops collection and saves
-the disabled setting.
+history. **Stop profiling** or turning the setting off stops collection. The
+selected mode is remembered, but starting another session requires a fresh opt-in.
 Use matching mod and server sources. Older servers still allow game-frame timings;
 the window explains when worker telemetry is unavailable.
 

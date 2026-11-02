@@ -98,6 +98,21 @@ vals, warn = settings.load()
 T.check(vals.clouds == true and #warn == 1, 'load: a non-object file -> defaults + warning')
 files[settings.FILE] = nil
 
+-- A previous capture must never start automatically on a later session.
+files[settings.FILE] = { version = 1, runtimeProfiler = true, profilerMode = 'full' }
+vals, warn = settings.load()
+T.check(vals.runtimeProfiler == false and vals.profilerMode == 'full' and #warn == 0,
+  'load ignores a previously enabled profiler while retaining its preferred mode')
+settings.set('runtimeProfiler', true)
+T.check(settings.get('runtimeProfiler') == true and files[settings.FILE].runtimeProfiler == false,
+  'explicit opt-in starts this session but saves the disabled state')
+settings.set('clouds', false)
+T.check(settings.get('runtimeProfiler') == true and files[settings.FILE].runtimeProfiler == false,
+  'saving another setting does not persist the active capture')
+vals = settings.load()
+T.check(vals.runtimeProfiler == false, 'a new session starts with profiling off')
+files[settings.FILE] = nil
+
 ------------------------------------------------------------------------------------------
 -- set: validated, saved, applied through the owner
 

@@ -242,7 +242,7 @@ function M.load(path)
   if read and (not FS or not FS.fileExists or FS:fileExists(path or M.FILE)) then ok, data = pcall(read, path or M.FILE) end
   if ok and type(data) == 'table' then
     for k, v in pairs(data) do
-      if k ~= 'version' and not M.RETIRED[k] then
+      if k ~= 'version' and k ~= 'runtimeProfiler' and not M.RETIRED[k] then
         local val, err = M.validate(k, v)
         if val ~= nil then values[k] = val else warnings[#warnings + 1] = err end
       end
@@ -325,6 +325,8 @@ function M.save(path)
   if not write then return false end
   local out = { version = M.VERSION }
   for k, v in pairs(values) do out[k] = v end
+  -- Profiling requires a fresh opt-in after restarting/reloading the extension.
+  out.runtimeProfiler = false
   local ok, err = pcall(write, path or M.FILE, out, true)
   if not ok then log('W', 'beamngEarth', 'settings: write failed: ' .. tostring(err)) end
   return ok and err ~= false
