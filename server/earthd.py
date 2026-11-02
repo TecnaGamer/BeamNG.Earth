@@ -127,6 +127,7 @@ import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
 import routeahead as routeaheadmod  # noqa: E402
 import furniture as furnituremod  # noqa: E402
+import development as developmentmod  # noqa: E402
 import heightmap  # noqa: E402
 import staging  # noqa: E402
 import imagery as imagerymod  # noqa: E402
@@ -1484,8 +1485,10 @@ class Server:
             return None
         import geotiles
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
-        return blockworker._geo_content_key(geotiles.geobox(gx, gy).key, gzoom, self.buildings, lh, mph,
-                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions())
+        tile = geotiles.geobox(gx, gy)
+        return blockworker._geo_content_key(tile.key, gzoom, self.buildings, lh, mph,
+                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
+                                            development_key=developmentmod.cache_key(self.mapdata, tile.frame, tile, None))
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker, no network)? -> its key or None."""
@@ -1583,6 +1586,7 @@ class Server:
                                                                                   self.anchor_q(anchor)),
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
                                      roads_out=near_roads,
+                                     development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty),
                                      signals=furnituremod.signals_for(
                                          self.mapdata, anchor.frame,
                                          roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)))

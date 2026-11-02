@@ -21,6 +21,7 @@ import time
 import numpy as np
 
 import dem as demmod
+import development as developmentmod
 import farfield
 import furniture
 import geodesy
@@ -542,7 +543,8 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
     import revisit
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
-                    _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country)
+                    _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
+                    developmentmod.cache_key(_s.md, geodesy.EnuFrame(lat, lon), tx, ty))
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), md=_md_versions())
@@ -726,6 +728,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
+                                 development=developmentmod.for_tile(_s.md, frame, tx, ty),
                                  signals=furniture.signals_for(_s.md, frame,
                                                                roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
     mark("build_tile")
@@ -999,12 +1002,22 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None):
+def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None,
+                     development_key=None):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
-    check, earthd.Server.geo_prebuilt)."""
+    check, earthd.Server.geo_prebuilt). development_key: the scorer's optional cached inputs, computed by the server
+    for its check or here from the worker's map data. Arriving POIs must not reuse content built without them."""
     import revisit
+    if development_key is None and getattr(_s, "md", None) is not None:
+        import geotiles
+        parsed = geotiles.parse(key)
+        if parsed is not None:
+            z, x, y = parsed
+            tile = geotiles.geobox(x, y, z)
+            development_key = developmentmod.cache_key(_s.md, tile.frame, tile, None)
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
-                       _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M)
+                       _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
+                       development_key)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
