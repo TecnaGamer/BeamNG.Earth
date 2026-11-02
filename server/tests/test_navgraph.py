@@ -204,6 +204,12 @@ class RulesTest(unittest.TestCase):
         self.assertFalse(navgraph.road_rules("DE")["rightHandDrive"])
         self.assertTrue(navgraph.road_rules("JP")["rightHandDrive"])
         self.assertFalse(navgraph.road_rules(None)["rightHandDrive"], "unknown: US rules")
+        for cc in ("BS", "BZ", "AG", "LC", "PW", "MH"):         # mph outside the US and the UK
+            self.assertTrue(navgraph.road_rules(cc)["mph"], cc)
+        self.assertTrue(navgraph.road_rules("BS")["rightHandDrive"], "the Bahamas: mph, on the left")
+        self.assertFalse(navgraph.road_rules("BZ")["rightHandDrive"], "Belize: mph, on the right")
+        self.assertTrue(navgraph.road_rules("NF")["rightHandDrive"], "Norfolk Island drives on the left")
+        self.assertFalse(navgraph.road_rules("FR")["mph"])
 
 
 if __name__ == "__main__":

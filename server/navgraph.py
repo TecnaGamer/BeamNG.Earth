@@ -442,10 +442,14 @@ LEFT_HAND = {"GB", "IE", "IM", "JE", "GG", "MT", "CY", "IN", "PK", "BD", "LK", "
              "SG", "BN", "TH", "TL", "HK", "MO", "AU", "NZ", "PG", "FJ", "WS", "TO", "KI", "SB", "TV", "NR", "NU",
              "CK", "ZA", "NA", "BW", "ZW", "ZM", "MZ", "MW", "KE", "TZ", "UG", "LS", "SZ", "MU", "SC", "SH", "FK",
              "JM", "BS", "BB", "TT", "GY", "SR", "AG", "DM", "GD", "KN", "LC", "VC", "VG", "VI", "AI", "KY", "TC",
-             "BM", "MS", "PN"}
+             "BM", "MS", "PN", "NF", "CX", "CC"}     # (the last three: Australia's external territories)
 TURN_ON_RED = {"US", "CA"}
-# speed limits posted in mph (the rest: km/h); the US territories, the UK and its crown dependencies, Liberia, Myanmar
-MPH_COUNTRIES = {"US", "PR", "VI", "GU", "AS", "MP", "UM", "GB", "IM", "JE", "GG", "LR", "MM"}
+# speed limits posted in mph (the rest: km/h); the US territories, the UK and its crown dependencies, Liberia, Myanmar;
+# the Caribbean's mph countries and the US's former Pacific trust territories (Wikipedia "Miles per hour": Antigua and
+# Barbuda, the Bahamas, Belize, Dominica, Grenada, Saint Kitts and Nevis, Saint Lucia, Saint Vincent, the Marshall
+# Islands, Micronesia, Palau: their limits were drawn in km/h)
+MPH_COUNTRIES = {"US", "PR", "VI", "GU", "AS", "MP", "UM", "GB", "IM", "JE", "GG", "LR", "MM",
+                 "AG", "BS", "BZ", "DM", "GD", "KN", "LC", "VC", "MH", "FM", "PW"}
 RED_YELLOW = {"GB", "IE", "DE", "AT", "CH", "LI", "NL", "BE", "LU", "DK", "NO", "SE", "FI", "IS", "PL", "CZ", "SK",
               "HU", "SI", "HR", "BA", "RS", "ME", "MK", "AL", "RO", "BG", "LT", "LV", "EE", "UA", "BY", "RU", "IL"}
 
