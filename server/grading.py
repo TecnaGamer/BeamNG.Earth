@@ -2323,7 +2323,11 @@ class _Planner:
                 t = smooth_profile(median_profile(t, _cw.STEP_M, MEDIAN_M), _cw.STEP_M, SIGMA_MAJOR_M)
             else:
                 t = raw.copy()
-            w = _cw.weights(br, fe)
+            w = _cw.weights(br, fe) * _cw.GROUND_W
+            # (its ends, where it meets the rest of the network, on their ground: unless on a bridge, a joint of decks)
+            for e in (0, len(w) - 1):
+                if not br[e]:
+                    w[e] = _cw.ANCHOR_W
             if g.sum() < 2:
                 w = np.where(np.arange(len(w)) < 0, 0.0, 1e-3)      # (all bridge: held lightly to the ground)
             # the steepest of its parts' classes' limits (a chain is of one family; a link's limits are looser)

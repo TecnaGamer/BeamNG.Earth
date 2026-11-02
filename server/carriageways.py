@@ -12,14 +12,15 @@ Here the roads of the motorway and trunk families (their links too) are chains o
 end, between branch points (three or more parts meeting) and loose ends. A cluster of chains (joined at branch points,
 or crossing one another) is solved at once, for a height every STEP_M along each chain:
 
-    minimise   sum w_i (z_i - t_i)^2  +  LAMBDA * sum (z_{i-1} - 2 z_i + z_{i+1})^2
+    minimise   sum w_i (z_i - t_i)^2  +  LENGTH_BIAS * sum (z_{i+1} - z_i)^2  +  LAMBDA * sum (z_{i-1} - 2 z_i + z_{i+1})^2
     such that  |z_{i+1} - z_i| <= grade * STEP_M               (the class's steepest grade)
                |z_{i-1} - 2 z_i + z_{i+1}| <= STEP_M^2 / (K * 100)   (its vertical curves: K m per 1 % of change)
                z_upper - z_lower >= clearance                   (where one passes over another or over a track)
                the chains' ends at a branch point equal
 
-t: the elevation along it, filtered as a major road's plan; w: 1 on the ground, 0 on a bridge, rising from 0 at a
-bridge's end to 1 TRUST_M away (an abutment's slope, a cutting's edge are not the road's). Which of two crossing parts is
+t: the elevation along it, filtered as a major road's plan; w: ANCHOR_W at a chain's ends, elsewhere GROUND_W on the
+ground, 0 on a bridge, rising from 0 at a bridge's end to GROUND_W TRUST_M away (an abutment's slope, a cutting's edge
+are not the road's). The length term makes the road the shortest between the points that matter. Which of two crossing parts is
 over the other: the bridge over the ground; of two bridges, OSM's layer, else the one the elevation-only solve has
 higher. Streets under a deck are not bounds: grading's underpass dips lower them to clear it (measured from this
 profile), as the old rule did. Where the limits and the ground disagree, the ground gives way (its weight is finite);
@@ -29,6 +30,7 @@ The inequalities are met by an active set: violated ones become stiff quadratic 
 again (each chain's matrix is banded, the couplings between chains few: Cholesky per chain, Woodbury for the couplings).
 """
 import math
+import os
 
 import numpy as np
 
@@ -38,7 +40,17 @@ LAMBDA = 2.0e4          # smoothness (a curve of ~40 m per metre of bend where n
 MU = 1.0e6              # the stiffness of an active limit
 DENSE_N = 250           # chains up to this many samples solved densely (LAPACK), longer ones banded
 W_MIN = 1.0e-3          # the least weight of a sample's ground
-END_W = 50.0            # weight of a loose end's ground (held, not pinned)
+# The road's shape between the points whose heights matter (the user, 2026-11-02: "skip the earthworks calculation as
+# i think course dem means we are basing that of incorrect data. instead add a strong bias to the shortest path
+# possible between 2 points"): the elevation along a chain only weighs GROUND_W (a coarse DEM's bumps are not the
+# road's), its ends weigh ANCHOR_W (where it meets the rest of the network: a junction, a tunnel's portal, the edge of
+# what is solved), and every metre of rise and fall costs LENGTH_BIAS (sum of (dz)^2 per STEP_M: the shortest, straightest
+# road between those points that keeps to its grade and curve limits and its clearances). Tune with the environment:
+# BNE_CW_LENGTH, BNE_CW_GROUND, BNE_CW_ANCHOR (BNE_CW_LENGTH=0 BNE_CW_GROUND=1 is the earthworks fit as it was).
+LENGTH_BIAS = float(os.environ.get("BNE_CW_LENGTH", "200"))
+GROUND_W = float(os.environ.get("BNE_CW_GROUND", "0.2"))
+ANCHOR_W = float(os.environ.get("BNE_CW_ANCHOR", "5"))
+END_W = ANCHOR_W        # (the name before)
 ROUNDS = 40             # active-set rounds at most
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 FAMILY = ("motorway", "trunk")
@@ -154,6 +166,7 @@ class _Chain:
         self.n, self.h = n, h
         self.t, self.w = np.asarray(t, np.float64), np.asarray(w, np.float64)
         self.lam = lam
+        self.length = 0.0
         self.rows1 = {}     # k -> (target of z[k+1] - z[k])
         self.rows2 = {}     # k -> (target of z[k] - 2 z[k+1] + z[k+2])
         self.pins = {}      # i -> height
@@ -164,6 +177,12 @@ class _Chain:
         A1 = np.zeros(max(n - 1, 0))
         A2 = np.zeros(max(n - 2, 0))
         b = self.w * self.t
+        if n >= 2 and self.length > 0:
+            m = self.length
+            k = np.arange(n - 1)
+            np.add.at(A0, k, m)
+            np.add.at(A0, k + 1, m)
+            np.add.at(A1, k, -m)
         if n >= 3:
             lam = self.lam
             k = np.arange(n - 2)
@@ -248,13 +267,14 @@ class _Chain:
 
 def solve(chains, couplings=(), rounds=ROUNDS):
     """The cluster's profiles (see the module). chains: [dict(t (n,), w (n,), grade, K, lo (n,) or None, hi (n,) or
-    None, lam=LAMBDA, step=STEP_M)]; couplings: [(a, i, b, j, kind, value)]: kind "eq" (z_a[i] = z_b[j]) or "ge"
+    None, lam=LAMBDA, step=STEP_M, length=LENGTH_BIAS)]; couplings: [(a, i, b, j, kind, value)]: kind "eq" (z_a[i] = z_b[j]) or "ge"
     (z_a[i] - z_b[j] >= value). Returns [z (n,)]. Pure."""
     cs = []
     for c in chains:
         h = float(c.get("step", STEP_M))
         # (a little weight everywhere: a chain all on bridges or under them stays defined, near the ground's line)
         ch = _Chain(c["t"], np.maximum(np.asarray(c["w"], np.float64), W_MIN), float(c.get("lam", LAMBDA)), h)
+        ch.length = float(c.get("length", LENGTH_BIAS))
         ch.g = float(c["grade"]) * h
         ch.c = h * h / (float(c["K"]) * 100.0)
         ch.lo = None if c.get("lo") is None else np.asarray(c["lo"], np.float64)
