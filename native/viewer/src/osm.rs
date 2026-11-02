@@ -125,10 +125,12 @@ impl Pack {
     /// on Windows a mirror folder can be left without its `ok` marker (its old pack.bin was memory-mapped
     /// and could not be removed), and earthd then reads the .npz on every load.
     pub fn read_npz(path: &Path) -> Result<Pack, String> {
-        let zip = std::fs::read(path).map_err(|e| format!("npz: {e}"))?;
+        let mut f = std::fs::File::open(path).map_err(|e| format!("npz: {e}"))?;
         let mut arrays = BTreeMap::new();
         let mut data = Vec::new();
-        for (name, raw) in zip_entries(&zip)? {
+        for e in crate::zipfs::index(&mut f).map_err(|e| format!("npz: {e}"))? {
+            let raw = crate::zipfs::read(&mut f, &e).map_err(|err| format!("npz {}: {err}", e.name))?;
+            let name = e.name;
             let Some(name) = name.strip_suffix(".npy") else { continue };
             let (kind, shape, body) = match parse_npy(&raw) {
                 Ok(Some(v)) => v,
@@ -199,47 +201,6 @@ fn le16(b: &[u8], i: usize) -> Option<usize> {
 }
 fn le32(b: &[u8], i: usize) -> Option<usize> {
     b.get(i..i + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as usize)
-}
-
-/// The files of a zip (stored or deflated; no zip64, no encryption), from its central directory.
-fn zip_entries(z: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    use std::io::Read;
-    let eocd = (0..z.len().saturating_sub(21))
-        .rev()
-        .take(65557)
-        .find(|&i| z[i..].starts_with(b"PK\x05\x06"))
-        .ok_or("npz: no zip end record")?;
-    let n = le16(z, eocd + 10).ok_or("npz: short")?;
-    let mut at = le32(z, eocd + 16).ok_or("npz: short")?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        if !z.get(at..).is_some_and(|s| s.starts_with(b"PK\x01\x02")) {
-            return Err("npz: bad central directory".into());
-        }
-        let method = le16(z, at + 10).ok_or("npz: short")?;
-        let csize = le32(z, at + 20).ok_or("npz: short")?;
-        let usize_ = le32(z, at + 24).ok_or("npz: short")?;
-        let (nl, xl, cl) = (le16(z, at + 28).unwrap_or(0), le16(z, at + 30).unwrap_or(0), le16(z, at + 32).unwrap_or(0));
-        let local = le32(z, at + 42).ok_or("npz: short")?;
-        let name = String::from_utf8_lossy(z.get(at + 46..at + 46 + nl).ok_or("npz: short")?).into_owned();
-        at += 46 + nl + xl + cl;
-        if csize == 0xFFFF_FFFF || usize_ == 0xFFFF_FFFF {
-            return Err("npz: zip64 not supported".into());
-        }
-        let start = local + 30 + le16(z, local + 26).ok_or("npz: short")? + le16(z, local + 28).ok_or("npz: short")?;
-        let comp = z.get(start..start + csize).ok_or("npz: entry past the end")?;
-        let raw = match method {
-            0 => comp.to_vec(),
-            8 => {
-                let mut v = Vec::with_capacity(usize_);
-                flate2::read::DeflateDecoder::new(comp).read_to_end(&mut v).map_err(|e| format!("npz {name}: {e}"))?;
-                v
-            }
-            m => return Err(format!("npz {name}: compression method {m}")),
-        };
-        out.push((name, raw));
-    }
-    Ok(out)
 }
 
 /// A `.npy` file: (dtype, shape, data), None for a dtype not read here.

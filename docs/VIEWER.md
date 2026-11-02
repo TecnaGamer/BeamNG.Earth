@@ -23,8 +23,74 @@ The viewer does not generate anything. It is one more client of earthd (protocol
 - Pooled shape slots (`slot_<n>.cdae`, `server/matslots.py`) are reported gone in the next pose as
   soon as their file has been read, so the viewer never holds a slot the game might need.
 
-Not drawn: vegetation, street furniture rows, gas station props, signs. The game's materials are
-not loaded either: shapes are coloured by material name, and buildings keep their vertex colours.
+Not drawn: vegetation, gas station props.
+
+Materials: the mod's own definitions (every `*.materials.json` under its `levels/` folder, merged by
+`/api/materials`) are used as the game uses them wherever a material needs nothing outside the mod
+folder. That covers base colour, mod-folder textures (served by `/game/`), the opacity map with alpha
+test, and vertex colours. The signs' lettering is the mod's opacity atlas, `sign_letters_o.data.png`.
+Materials whose base colour texture is one of the game's (`/assets/...`: most building materials)
+are coloured by name instead, and buildings keep their vertex colours.
+
+As the mod does after every earthd `hello`, the viewer sends `gas_stations: on` and
+`highway_signs: on`, so earthd builds the same road tiles for it as for the game.
+
+## Highway signs
+
+Sign tiles (`roads_tile` with key `s<tx>_<ty>`, `server/signstream.py`) are drawn on their own
+layer, "Highway signs". Each has up to four render-only shapes in the anchor's world: `exits` (the
+green guide panels with their exit tabs), `mileposts`, `merges` and `speeds`. They use pooled slots
+like the other shapes. earthd builds them only where it finds a US state, except the speed limits,
+which it builds everywhere.
+
+### Known earthd bug: sign tiles stop after a late job for an old anchor
+
+Seen while testing the viewer: the layer panel shows "Highway signs … unavailable", and earthd logs
+a `KeyError: <anchor id>` from a sign worker. From then on that connection gets no more sign tiles.
+
+The cause is in `server/blockworker.py`, `BlockWorker.anchor()`. It keeps state for only the
+`ANCHORS_KEPT = 2` highest anchor ids. When a job asks for an anchor it doesn't have, it creates it,
+then deletes every anchor except the two highest (`sorted(self.chunks)[:-ANCHORS_KEPT]`). If the
+requested anchor is older than those two, it deletes the anchor it just made. The next line,
+`return self.graders[aid], self.chunks[aid]`, then raises `KeyError`.
+
+This happens when a job for an older anchor arrives after two newer anchors exist:
+
+- several viewer pages, or quick teleports, create anchors in rapid succession;
+- the game and the viewer are connected at once. They share one anchor counter, so each client's
+  anchors push the other's out.
+
+Workaround: restart earthd. Fix (server code, not applied): don't delete the anchor being requested,
+for example `for old in sorted(a for a in self.chunks if a != aid)[:-ANCHORS_KEPT]:`.
+
+## Props (street furniture and guard rails)
+
+The road tiles' `props` and `guardrails` rows (street lights, poles, hydrants, benches, bins, doors,
+fences, signals, stop and speed signs, substations, rail crossings, guard rails, jersey and cable
+barriers) are drawn as the mod's `trees.lua` makes them (`web/props.js`):
+
+- **Shapes:** each group maps to the game's own shapes (`CATALOG`). The variant is picked by the
+  row's height and rank (`pick`), and scaled to that height.
+- **Placement:**
+  - A geotile's rows go through its placement at the content's mean pivot (`roads.lua` `rowPivot`), and the
+    placement's turn is added to the yaw. Guard rails use the basis in their row.
+  - An anchor tile's rows sit in the anchor's world.
+- **Visibility:** the same rules as the mod at its "normal" quality and distance: the rank rings and
+  per-tile cap at the box distance from the camera, the per-group distance caps (`GROUP_MAX_M`), and
+  the lamps' glow off as in daytime.
+- **Where the shapes come from:** `/game/<path>.cdae` (`src/game.rs`) serves the compiled shape the
+  game loads, unchanged. It looks in the engine's compiled cache (`<user-dir>/temp/<path>`), then the
+  mod folder, then the game's content zips (`content/art_shapes.zip`, `content/levels/*.zip`; each
+  `.dae` there ships with its `.cdae`). The game install is found from the launcher's `gameDir` or
+  Steam's library folders (`--game-dir` to set it).
+- **Node trees:** stock shapes have them (each object under a node with a rotation and translation),
+  and the decoder applies them.
+- **Markers:** the mod's own shapes ship as `.dae` only. Until the game has compiled one (it does so
+  when it first loads it), that prop is drawn as a magenta marker of the item's height.
+
+Click a prop to see its group, shape, height, scale, yaw, rank and tile. The layer panel has two
+switches: "Street furniture (props)" for the `props` rows, and "Guard rails and barriers" for the
+`guardrails` rows (guard rails, jersey and cable barriers).
 
 ## OSM overlay
 

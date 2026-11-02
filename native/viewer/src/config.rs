@@ -11,15 +11,53 @@ pub struct Config {
     /// earthd's download cache (the map-data mirror: `<cache-dir>/mapdata-mirror/`).
     pub cache_dir: PathBuf,
     pub web_dir: PathBuf,
+    /// The BeamNG.drive install (its `content/` zips: the props' stock shapes), if found.
+    pub game_dir: Option<PathBuf>,
+    /// The mod's folder in this repository (its own shapes).
+    pub mod_dir: PathBuf,
 }
 
-const HELP: &str = "bnge-viewer [--earthd 127.0.0.1:47613] [--port 47700] [--user-dir DIR] [--cache-dir DIR] [--web DIR]
+/// The launcher's choice (app.json `gameDir`), else a Steam library that has BeamNG.drive.
+fn default_game_dir() -> Option<PathBuf> {
+    let ok = |p: &Path| p.join("content").join("art_shapes.zip").is_file();
+    if let Some(la) = std::env::var_os("LOCALAPPDATA") {
+        if let Some(p) = json_str(&PathBuf::from(la).join("beamng-earth").join("app.json"), "gameDir") {
+            let p = PathBuf::from(p);
+            if ok(&p) {
+                return Some(p);
+            }
+        }
+    }
+    let mut libs = vec![];
+    for steam in ["C:/Program Files (x86)/Steam", "C:/Program Files/Steam"]
+        .into_iter()
+        .map(PathBuf::from)
+        .chain(std::iter::once(home().join(".local/share/Steam")))
+        .chain(std::iter::once(home().join(".steam/steam")))
+    {
+        libs.push(steam.clone());
+        // libraryfolders.vdf: "path"  "N:\\Steam"
+        if let Ok(t) = std::fs::read_to_string(steam.join("steamapps").join("libraryfolders.vdf")) {
+            for line in t.lines() {
+                let l = line.trim();
+                if let Some(rest) = l.strip_prefix("\"path\"") {
+                    let v = rest.trim().trim_matches('"').replace("\\\\", "\\");
+                    libs.push(PathBuf::from(v));
+                }
+            }
+        }
+    }
+    libs.into_iter().map(|l| l.join("steamapps").join("common").join("BeamNG.drive")).find(|p| ok(p))
+}
+
+const HELP: &str = "bnge-viewer [--earthd 127.0.0.1:47613] [--port 47700] [--user-dir DIR] [--cache-dir DIR] [--game-dir DIR] [--web DIR]
 
   --earthd     earthd's address (python3 server/earthd.py / start.py; default 127.0.0.1:47613)
   --port       the viewer's HTTP port on 127.0.0.1 (default 47700)
   --user-dir   the BeamNG.drive user folder earthd writes into (its --user-dir; default: start.py's
                .beamng_earth.json, else the usual place of the game's folder)
   --cache-dir  earthd's download cache (its --cache-dir; default: the launcher's choice, else ~/.cache/beamng-earth)
+  --game-dir   the BeamNG.drive install (the props' stock shapes; default: the launcher's choice, else Steam's libraries)
   --web        the web app's folder (default: native/viewer/web)";
 
 fn home() -> PathBuf {
@@ -88,7 +126,7 @@ impl Config {
     pub fn from_args(args: Vec<String>) -> Result<Config, String> {
         let mut earthd: SocketAddr = "127.0.0.1:47613".parse().unwrap();
         let mut port = 47700u16;
-        let (mut user_dir, mut cache_dir, mut web_dir) = (None, None, None);
+        let (mut user_dir, mut cache_dir, mut web_dir, mut game_dir) = (None, None, None, None);
         let mut it = args.into_iter();
         while let Some(a) = it.next() {
             let mut val = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value\n\n{HELP}"));
@@ -102,6 +140,7 @@ impl Config {
                 "--user-dir" => user_dir = Some(PathBuf::from(val("--user-dir")?)),
                 "--cache-dir" => cache_dir = Some(PathBuf::from(val("--cache-dir")?)),
                 "--web" => web_dir = Some(PathBuf::from(val("--web")?)),
+                "--game-dir" => game_dir = Some(PathBuf::from(val("--game-dir")?)),
                 "-h" | "--help" => return Err(HELP.to_string()),
                 other => return Err(format!("unknown argument {other}\n\n{HELP}")),
             }
@@ -112,6 +151,8 @@ impl Config {
             user_dir: user_dir.unwrap_or_else(default_user_dir),
             cache_dir: cache_dir.unwrap_or_else(default_cache_dir),
             web_dir: web_dir.unwrap_or_else(default_web_dir),
+            game_dir: game_dir.or_else(default_game_dir),
+            mod_dir: repo_root().join("mod").join("beamng_earth"),
         })
     }
 }

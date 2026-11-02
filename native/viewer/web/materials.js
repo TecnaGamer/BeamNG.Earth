@@ -4,6 +4,17 @@
 import * as THREE from 'three'
 
 const RULES = [
+  // (the game's stock shapes, the props: trees, glass, signs, lamps)
+  [/leaves|leaf|foliage|needle|branch|bush|palm_frond|grass_card/i, 0x4f6b32, ''],
+  [/bark|trunk/i, 0x5a4636, ''],
+  [/glass|lens|window/i, 0xb9d3e0, ''],
+  [/glow|light_on|emissive/i, 0xfff2b0, ''],
+  [/trafficlight|signal/i, 0x2b2f33, ''],
+  [/sign_stop|stop/i, 0xb3261e, ''],
+  [/hydrant/i, 0xc9a227, ''],
+  [/chainlink|fence/i, 0x9a9a92, ''],
+  [/guardrail|barrier|jersey/i, 0xb5b8ba, ''],
+  [/wood/i, 0x8a6a48, ''],
   [/line_yellow|yellow/i, 0xe8c12c, 'mark'],
   [/line_white|marking|white|zebra|stop_?line|arrow/i, 0xf2f2f2, 'mark'],
   [/tactile/i, 0xd9b84a, 'mark'],
@@ -28,10 +39,71 @@ const RULES = [
 const cache = new Map()
 export const settings = { wireframe: false }
 
+// --- the mod's own materials (its *.materials.json, merged by /api/materials) ---------------------------------
+// Used as the game would where a material needs nothing outside the mod folder: its base colour (baseColorFactor,
+// linear; v1 materials: diffuseColor), its textures from the mod folder (base colour, opacity with alpha test),
+// vertex colours. A material whose base colour map lies elsewhere (the game's /assets/...) keeps the name rules.
+let modDefs = {}
+const MOD_PREFIX = '/levels/beamng_earth/'
+export const materialStats = { mod: 0, rules: 0 }
+
+export async function loadModMaterials() {
+  try {
+    const r = await fetch('/api/materials')
+    if (r.ok) modDefs = await r.json()
+  } catch (e) {
+    console.warn('mod materials:', e)
+  }
+  return Object.keys(modDefs).length
+}
+
+const texLoader = new THREE.TextureLoader()
+const texCache = new Map()
+function modTexture(path, color) {
+  const key = `${path}|${color ? 1 : 0}`
+  let t = texCache.get(key)
+  if (!t) {
+    t = texLoader.load(`/game${encodeURI(path)}`)
+    t.flipY = false                 // (the shapes' v is the engine's 1 - v: row 0 at v = 0)
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.anisotropy = 4
+    if (color) t.colorSpace = THREE.SRGBColorSpace
+    texCache.set(key, t)
+  }
+  return t
+}
+
+const isMod = p => typeof p === 'string' && p.startsWith(MOD_PREFIX)
+
+function fromDef(def, hasColors) {
+  const s = (def.Stages && def.Stages[0]) || {}
+  const colorMap = s.baseColorMap || s.colorMap
+  if (colorMap && !isMod(colorMap)) return null          // (a texture the viewer does not load: the name rules)
+  const m = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide, wireframe: settings.wireframe })
+  const f = Array.isArray(s.baseColorFactor) ? s.baseColorFactor : Array.isArray(s.diffuseColor) ? s.diffuseColor : null
+  if (f) m.color.setRGB(+f[0], +f[1], +f[2], THREE.LinearSRGBColorSpace)
+  if (colorMap) m.map = modTexture(colorMap, true)
+  if (isMod(s.opacityMap)) {
+    m.alphaMap = modTexture(s.opacityMap, false)
+    if (def.alphaTest) m.alphaTest = (+def.alphaRef || 1) / 255
+    else m.transparent = true
+  }
+  if (s.vertColor && hasColors) m.vertexColors = true
+  m.userData.shared = true
+  m.userData.mod = true
+  return m
+}
+
 export function forName(name, hasColors) {
   const key = `${name}|${hasColors ? 1 : 0}|${settings.wireframe ? 1 : 0}`
   let m = cache.get(key)
   if (m) return m
+  const def = modDefs[name]
+  if (def) {
+    m = fromDef(def, hasColors)
+    if (m) { materialStats.mod++; cache.set(key, m); return m }
+  }
+  materialStats.rules++
   let color = 0xc8c3b8, kind = ''
   for (const [re, c, k] of RULES) if (re.test(name)) { color = c; kind = k; break }
   m = new THREE.MeshLambertMaterial({

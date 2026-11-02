@@ -12,12 +12,16 @@
 //!   /api/config       what the page needs to know about this program
 //!   /api/osm?z&x&y    the OSM ways and Overture connectors of a map-data cell (osm.rs)
 //!   /tiles/...        earthd's map tiles (maptiles.py, port from its hello.mapPort)
+//!   /game/<path>      the game's own shapes for the props, the mod's textures (game.rs)
+//!   /api/materials    the mod's material definitions, merged (game.rs)
 
 mod bridge;
 mod config;
 mod files;
+mod game;
 mod osm;
 mod tiles;
+mod zipfs;
 
 use std::sync::{Arc, Mutex};
 
@@ -45,6 +49,10 @@ async fn main() {
     println!("  user dir    {}", cfg.user_dir.display());
     println!("  cache dir   {}", cfg.cache_dir.display());
     println!("  web app     {}", cfg.web_dir.display());
+    match &cfg.game_dir {
+        Some(g) => println!("  game        {}", g.display()),
+        None => println!("  game        not found: props drawn as markers (--game-dir)"),
+    }
     if !cfg.user_dir.join("temp").is_dir() {
         eprintln!("warning: {} has no temp folder: is it the BeamNG.drive user folder earthd writes into? (--user-dir)",
                   cfg.user_dir.display());
@@ -54,7 +62,9 @@ async fn main() {
         .route("/ws", get(bridge::ws))
         .route("/api/config", get(files::config))
         .route("/api/osm", get(osm::handler))
+        .route("/api/materials", get(game::materials))
         .route("/data/*path", get(files::data))
+        .route("/game/*path", get(game::shape))
         .route("/tiles/*path", get(tiles::proxy))
         .fallback(get(files::web))
         .with_state(app);

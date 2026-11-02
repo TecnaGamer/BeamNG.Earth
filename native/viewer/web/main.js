@@ -6,8 +6,9 @@ import { World, stats } from './world.js'
 import { Osm } from './osm.js'
 import { FlyControls } from './controls.js'
 import { Minimap } from './minimap.js'
-import { setWireframe } from './materials.js'
+import { setWireframe, loadModMaterials, materialStats } from './materials.js'
 import * as gc from './geocode.js'
+import { itemOf } from './props.js'
 
 const $ = id => document.getElementById(id)
 
@@ -37,6 +38,8 @@ window.addEventListener('resize', resize)
 resize()
 
 // --- world ---
+// (the mod's material definitions before any shape is made: the signs' lettering, the mod's colours)
+const modMaterialCount = await loadModMaterials()
 let world
 const net = new Net(msg => world.onMessage(msg))
 world = new World(net, root)
@@ -212,6 +215,9 @@ const LAYERS = [
   ['Road surfaces and sidewalks', () => world.layers.roads, true],
   ['Buildings, decks, wires', () => world.layers.content, true],
   ['Far buildings and skyline', () => world.layers.farbld, true],
+  ['Street furniture (props)', () => world.layers.props, true],
+  ['Guard rails and barriers', () => world.layers.rails, true],
+  ['Highway signs (exits, mileposts, merges, speed limits)', () => world.layers.signs, true],
   ['OSM ways', () => osm.ways, true],
   ['OSM nodes (connectors)', () => osm.nodes, true],
 ]
@@ -298,9 +304,18 @@ function pick(e) {
     return
   }
   osm.highlight(null)
-  const targets = [world.layers.content, world.layers.roads, world.layers.farbld, world.layers.ground].filter(g => g.visible)
+  const targets = [world.layers.signs, world.layers.props, world.layers.rails, world.layers.content, world.layers.roads, world.layers.farbld, world.layers.ground].filter(g => g.visible)
   const hit = ray.intersectObjects(targets, true)[0]
   if (!hit) { pick(null); return }
+  const prop = itemOf(hit)
+  if (prop && prop.row) {
+    const r = prop.row
+    showPick(r.g, [['shape', prop.shape + (hit.object.userData.marker ? ' (not compiled by the game yet: a marker)' : '.cdae')],
+      ['tile', prop.tile], ['height', `${r.h} m (shape ${r.h0} m, scale ${r.sc.toFixed(3)})`], ['yaw', `${r.yaw}°`],
+      ['rank', r.rank], ['row', `${r.x.toFixed(2)}, ${r.y.toFixed(2)}, ${r.z.toFixed(2)}`],
+      ['distance', `${hit.distance.toFixed(1)} m`], ...placeRows(hit.point)])
+    return
+  }
   let obj = hit.object, kind = ''
   while (obj && !kind) { kind = obj.userData.kind || ''; if (!kind) obj = obj.parent }
   const mats = Array.isArray(hit.object.material) ? hit.object.material : [hit.object.material]
@@ -333,6 +348,7 @@ function frame(now) {
     slow = 0
     osm.update(p)
     world.updateSeams()
+    if (world.anchor) world.props.update(p.x, p.y)
     ui(agl)
   }
   slower += dt
@@ -382,6 +398,12 @@ function ui(agl) {
   }
   rows.push(['far tiles', `${c.far} shown, ${c.farLoading} loading, ${c.swaps} swaps waiting`])
   rows.push(['road tiles', `${c.roads} (far: ${c.farGeo})`])
+  const ps = world.props.stats
+  rows.push(['props', `${ps.shown} of ${ps.items} shown in ${ps.tiles} tiles; ${ps.shapes} shapes${ps.missing.size ? `, ${ps.missing.size} as markers` : ''}`])
+  let signs = 0
+  world.layers.signs.traverse(o => { if (o.userData.kind?.endsWith(' signs')) signs++ })
+  rows.push(['signs', `${signs} sign shapes shown`])
+  rows.push(['materials', `${materialStats.mod} from the mod's definitions (${modMaterialCount} known), ${materialStats.rules} by name`])
   rows.push(['OSM', `${o.ways} ways in ${o.ok} cells${o.missing ? `, ${o.missing} not cached yet` : ''}`])
   rows.push(['files', `${stats.shapes} shapes, ${(stats.bytes / 1e6).toFixed(1)} MB, ${c.queue} queued`])
   if (stats.failed) rows.push(['failed', `${stats.failed}: ${stats.lastError}`])

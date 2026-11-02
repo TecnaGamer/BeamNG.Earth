@@ -11,6 +11,7 @@ import { decode, drawnMeshes } from './cdae.js'
 import { decodeGray } from './png16.js'
 import * as geo from './geodesy.js'
 import { meshesOf, dispose, farPalette, forName } from './materials.js'
+import { Props } from './props.js'
 
 const MOD_VERSION = 'viewer-0.1'
 const POSE_S = 0.5             // core.lua POSE_INTERVAL
@@ -101,8 +102,11 @@ export class World {
     this.lastPose = null
     this.listeners = []
     this.layers = { ground: new THREE.Group(), block: new THREE.Group(), roads: new THREE.Group(),
-      content: new THREE.Group(), farbld: new THREE.Group() }
+      content: new THREE.Group(), farbld: new THREE.Group(), props: new THREE.Group(), rails: new THREE.Group(),
+      signs: new THREE.Group() }
     for (const [name, g] of Object.entries(this.layers)) { g.name = name; root.add(g) }
+    // street furniture ('p' rows) and guard rails ('g' rows), each its own layer (props.js)
+    this.props = new Props(this, { props: this.layers.props, rails: this.layers.rails })
     this.layers.block.visible = false
     this.globalGroup = new THREE.Group()
     this.layers.ground.add(this.globalGroup)
@@ -213,6 +217,7 @@ export class World {
     for (const k of [...this.geoRoads.keys()]) this.dropGeoRoad(k)
     for (const k of [...this.anchorRoads.keys()]) this.dropAnchorRoad(k)
     for (const k of [...this.farGeo.keys()]) this.dropFarGeo(k)
+    this.props.dropAll()
     if (this.block?.obj) { this.block.obj.removeFromParent(); dispose(this.block.obj) }
     this.block = null
     for (const [aid, e] of this.anchors) {
@@ -249,6 +254,10 @@ export class World {
       case 'hello':
         this.hello = msg
         this.sessionId = msg.sessionId
+        // what the mod sends after every hello (core.lua), so earthd builds for the viewer what it builds for the
+        // game: gas stations on (without it the road tiles differ: canopies stay buildings), highway signs on
+        this.net.send({ type: 'gas_stations', on: true })
+        this.net.send({ type: 'highway_signs', on: true })
         this.emit('hello', msg)
         break
       case 'status':
@@ -605,7 +614,9 @@ export class World {
     this.anchorRoads.set(k, t)
     const groups = this.anchorGroups(msg.anchorId)
     const used = new Set()
-    for (const what of ['road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'wire', 'tunnel', 'rail']) {
+    // (a sign tile, key "s<tx>_<ty>": signstream.py's render-only exit / mile / merge / speed sign shapes)
+    for (const what of ['road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'wire', 'tunnel', 'rail',
+      ...World.SIGNS]) {
       const e = data[what]
       if (!e || !e.shape || !Array.isArray(e.pos) || what === 'walkcol') continue
       const sl = this.slotOf(msg, what)
@@ -613,7 +624,10 @@ export class World {
       this.partObject(sl ? sl.path : e.shape, sl?.gone).then(obj => {
         if (!obj || this.anchorRoads.get(k) !== t || !groups) { if (obj) dispose(obj); return }
         obj.position.set(e.pos[0], e.pos[1], e.pos[2])
-        ;(what === 'road' || what === 'walk' ? groups.roads : groups.content).add(obj)
+        obj.userData.kind = World.SIGNS.includes(what) ? `${what} signs` : what
+        obj.name = `${what} ${msg.key}`
+        const layer = World.SIGNS.includes(what) ? groups.signs : what === 'road' || what === 'walk' ? groups.roads : groups.content
+        layer.add(obj)
         t.objs.push(obj)
       })
     }
@@ -622,6 +636,9 @@ export class World {
       const obj = chunkRibbons(data.chunks)
       if (obj) { groups.roads.add(obj); t.objs.push(obj) }
     }
+    // street furniture and guard rails in the anchor's world (roads.lua onTile: trees.onRows 'p<key>' / 'g<key>')
+    this.props.add(`p${k}`, data.props, null, msg.anchorId)
+    this.props.add(`g${k}`, data.guardrails, null, msg.anchorId)
   }
 
   dropAnchorRoad(k) {
@@ -629,9 +646,12 @@ export class World {
     if (!t) return
     this.anchorRoads.delete(k)
     for (const o of t.objs) { o.removeFromParent(); dispose(o) }
+    this.props.drop(`p${k}`)
+    this.props.drop(`g${k}`)
   }
 
   static CONTENT = ['deck', 'bld', 'bld2', 'bld3', 'bld4', 'wire', 'tunnel', 'rail']
+  static SIGNS = ['exits', 'mileposts', 'merges', 'speeds']      // (roads.lua M.SIGN_WHATS)
 
   onGeoRoad(msg, data) {
     const old = this.geoRoads.get(msg.key)
@@ -643,17 +663,28 @@ export class World {
     const t = { gkey: msg.key, h: msg.h ?? data.h, frame, parts: {}, skin, dropped: false }
     this.geoRoads.set(msg.key, t)
     const used = new Set()
+    let pivots = 0, np = 0
     for (const what of World.CONTENT) {
       const e = data[what]
       if (!e || !e.shape || !Array.isArray(e.pos)) continue
       const p = { what, shape: e.shape, pos: e.pos, pivot: +e.pivot || 0, obj: null }
       t.parts[what] = p
+      pivots += p.pivot; np++
       const ex = msg.exact && msg.exact[what]
       const sl = this.slotOf(msg, ex ? `x:${what}` : what)
       if (sl) used.add(ex ? `x:${what}` : what)
       this.loadGeoPart(t, p, sl ? sl.path : ex || e.shape, sl?.gone)
     }
     this.releaseUnused(msg, used)
+    // its rows (street furniture 'p', guard rails 'g') in the tile's frame, placed at the content's mean pivot
+    // (roads.lua onGeoTile: t.rowPivot; the parts roads.lua counts are its CONTENT_WHATS, bldcol and railcol too)
+    for (const what of ['bldcol', 'railcol']) {
+      const e = data[what]
+      if (e && e.shape && Array.isArray(e.pos)) { pivots += +e.pivot || 0; np++ }
+    }
+    t.rowPivot = np ? pivots / np : 0
+    this.props.add(`p${msg.key}`, data.props, { frame, pivot: t.rowPivot })
+    this.props.add(`g${msg.key}`, data.guardrails, { frame, pivot: t.rowPivot })
   }
 
   loadGeoPart(t, p, path, slot) {
@@ -686,6 +717,7 @@ export class World {
     for (const t of this.far.values()) if (t.aid === 0 && t.obj) this.placeGlobal(t)
     for (const t of this.geoRoads.values()) for (const p of Object.values(t.parts)) this.placePart(t.frame, p)
     for (const f of this.farGeo.values()) for (const p of Object.values(f.parts)) this.placePart(f.frame, p)
+    this.props.placeAll()
   }
 
   onExact(msg) {
@@ -748,6 +780,8 @@ export class World {
     this.geoRoads.delete(gkey)
     for (const p of Object.values(t.parts)) if (p.obj) { p.obj.removeFromParent(); dispose(p.obj) }
     if (t.skin) for (const o of t.skin.objs) { o.removeFromParent(); dispose(o) }
+    this.props.drop(`p${gkey}`)
+    this.props.drop(`g${gkey}`)
   }
 
   // far buildings (F), skyline (S), far bridges (B): geotiles placed rigidly at their pivots (roads.lua onFarGeo)

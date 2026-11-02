@@ -109,14 +109,52 @@ export function decode(buf) {
   return out
 }
 
+// The shape's node transforms (column-major 4x4 arrays): each node's default rotation (Quat16, Torque's convention:
+// the conjugate of the usual one, as geodesy.lua's beamngQuat) and translation, under its parent's. Shapes earthd
+// writes have one node at the origin; the game's stock shapes (props) have a tree.
+export function nodeMatrices(shape) {
+  const n = shape.nodes.count
+  const nodes = typed(shape.nodes, Int32Array)         // nameIndex, parentIndex, firstObject, firstChild, nextSibling
+  const rots = typed(shape.defaultRotations, Int16Array)
+  const trans = typed(shape.defaultTranslations, Float32Array)
+  const local = []
+  for (let i = 0; i < n; i++) {
+    let x = -rots[i * 4] / 32767, y = -rots[i * 4 + 1] / 32767, z = -rots[i * 4 + 2] / 32767, w = rots[i * 4 + 3] / 32767
+    const l = Math.hypot(x, y, z, w) || 1
+    x /= l; y /= l; z /= l; w /= l
+    const [tx, ty, tz] = [trans[i * 3] || 0, trans[i * 3 + 1] || 0, trans[i * 3 + 2] || 0]
+    local.push([
+      1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
+      2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
+      2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
+      tx, ty, tz, 1])
+  }
+  const mul = (a, b) => {
+    const o = new Array(16).fill(0)
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) o[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k]
+    return o
+  }
+  const world = new Array(n)
+  const resolve = (i, depth = 0) => {
+    if (world[i]) return world[i]
+    const p = nodes[i * 5 + 1]
+    world[i] = p >= 0 && p < n && p !== i && depth < 64 ? mul(resolve(p, depth + 1), local[i]) : local[i]
+    return world[i]
+  }
+  for (let i = 0; i < n; i++) resolve(i)
+  return world
+}
+
 // The drawn meshes of a decoded shape (each object's finest detail; collision objects left out) as plain arrays:
-// { name, positions, normals, uv, uv2, colors, index, groups: [{ start, count, material }] }.
-// Triangles are stored with reversed winding (cdae.py): the index order is turned back here.
+// { name, positions, normals, uv, uv2, colors, index, groups: [{ start, count, material }], matrix }, matrix = the
+// object's node transform (null: identity). Triangles are stored with reversed winding (cdae.py): the index order is
+// turned back here.
 export function drawnMeshes(shape) {
   const objs = typed(shape.objects, Int32Array)
+  const mats = shape.nodes.count > 1 ? nodeMatrices(shape) : null
   const out = []
   for (let o = 0; o < shape.objects.count; o++) {
-    const [nameIndex, numMeshes, start] = [objs[o * 6], objs[o * 6 + 1], objs[o * 6 + 2]]
+    const [nameIndex, numMeshes, start, nodeIndex] = [objs[o * 6], objs[o * 6 + 1], objs[o * 6 + 2], objs[o * 6 + 3]]
     const name = shape.names[nameIndex] || ''
     if (/^colmesh|^collision/i.test(name)) continue
     let m = null
@@ -138,7 +176,7 @@ export function drawnMeshes(shape) {
       const ps = prims[p * 3], pc = prims[p * 3 + 1], mat = prims[p * 3 + 2]
       groups.push({ start: ps, count: pc, material: (mat & PRIM_NO_MATERIAL) ? -1 : (mat & PRIM_MATERIAL_MASK) })
     }
-    out.push({ name, positions, normals, uv, uv2, colors, index, groups })
+    out.push({ name, positions, normals, uv, uv2, colors, index, groups, matrix: mats && nodeIndex >= 0 ? mats[nodeIndex] : null })
   }
   return out
 }
