@@ -1,7 +1,7 @@
 # Road generation performance audit — 2 November 2026
 
 The PR now includes current upstream `dev`
-`50e41caca84b30bdc967cb84ad17dfc08d7a6cdc` and targets `dev` on the test fork.
+`11cc55572fd5b828f52a0cf0edf0cf449cba1ac0` and targets `dev` on the test fork.
 It contains no custom building-system or runtime-profiler commits.
 
 The historical benchmark baseline is upstream checkpoint
@@ -19,15 +19,19 @@ The user reported a successful native BeamNG playtest of `ea58fcba` on
 2 November 2026. The launcher verified the matching isolated client profile
 and exact server checkpoint. This is manual acceptance, not an FPS benchmark.
 
-After merging current dev, 501 Python tests passed across 25 road, collision,
+After merging dev at `50e41cac`, 501 Python tests passed across 25 road, collision,
 grading, lane-input and map-cache modules; three optional tests were skipped.
 The five additional worker tests pass with their process-owned revisit file
 descriptors closed before Windows temporary-directory cleanup. Without that
 test cleanup adapter, two cases fail during cleanup on both this branch and
 untouched upstream `50e41cac`; their assertions are unchanged.
 
-The latest upstream merge adds photo-process and vegetation-worker routing.
-That merge was checked automatically; the user's native playtest predates it.
+The upstream updates include photo/vegetation worker routing and newer terrain
+prefetch/planning behavior. The latest combined regression run against `11cc5557`
+passes all 136 selected Python modules; its counts are recorded in the PR body.
+Real localhost startup also passes with legacy and v2 building modes and both
+profiler modes. These integrations were checked automatically; the user's native
+playtest predates them. The performance branch itself remains independent.
 On the tested performance checkpoint, all 22 real-data Auckland worker meshes
 matched the original baseline, and three tiles completed with zero faults using
 the expanded offline fixture. This fixture includes supporting map manifests,
