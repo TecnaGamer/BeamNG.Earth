@@ -143,3 +143,98 @@ def plans_key(signature, cell):
 
 def facts_key(kind, extra, cell):
     return f"facts/{kind}/{json.dumps(extra)}/{cell}"
+
+
+# --- the data repo's packs (its "bake" release: index.json and one .bnge per region) ------------------------------
+RELEASE_URL = "https://github.com/TecnaGamer/BeamNG.Earth-data/releases/download/bake/"
+INDEX_TTL_S = 24 * 3600     # index.json read again after this long
+CHECK_S = 600.0             # a place's packs looked for at most this often ...
+CHECK_RETRY_S = 30.0        # ... sooner while the map data's versions are not all known yet
+NEAR_M = 5000.0             # a pack within this of the player is fetched
+_sync = {"at": -1e9, "busy": False}
+
+
+def _expect_for(md, signature):
+    import plancache
+    import roads
+    return {"bake_format": BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT, "facts_format": roads.FACTS_FORMAT,
+            "frames": plancache.FRAMES, "signature": signature,
+            "versions": json.loads(json.dumps(md.versions(), sort_keys=True))}
+
+
+def _get(net, url, path, cap):
+    import urllib.request
+    tmp = path + ".part"
+    with net.session(url, kind="demand") as s:
+        req = urllib.request.Request(url, headers=s.headers)
+        n = 0
+        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:
+            s.status = resp.status
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                n += len(chunk)
+                if n > cap:
+                    raise IOError(f"{url}: over {cap} bytes")
+                out.write(chunk)
+            s.nbytes = n
+    os.replace(tmp, path)
+
+
+def sync(cache_dir, net, md, lat, lon, signature, now=None):
+    """The data repo's packs near (lat, lon) that fit this server (_expect_for) into <cache>/bake, once (a background
+    thread's job: earthd calls it as the player moves). Returns the names fetched now."""
+    import math
+    import time as _t
+    now = _t.monotonic() if now is None else now
+    if _sync["busy"] or now - _sync["at"] < CHECK_S or net is None or md is None:
+        return []
+    expect = _expect_for(md, signature)
+    if any(v is None for v in (expect["versions"] or {}).values() if not isinstance(v, (list, dict))):
+        _sync["at"] = now - CHECK_S + CHECK_RETRY_S     # (the weekly tags' versions not known yet: soon again)
+        return []
+    _sync["at"], _sync["busy"] = now, True
+    got = []
+    try:
+        d = os.path.join(cache_dir, SUBDIR)
+        os.makedirs(d, exist_ok=True)
+        ip = os.path.join(d, "index.json")
+        if not os.path.exists(ip) or _t.time() - os.path.getmtime(ip) > INDEX_TTL_S:
+            _get(net, RELEASE_URL + "index.json", ip, 4 << 20)
+        index = json.load(open(ip, encoding="utf-8"))
+        for e in index.get("packs", []):
+            s, w, n, east = e["bbox"]
+            k = 111320.0 * math.cos(math.radians(lat))
+            dy = max(s - lat, 0.0, lat - n) * 110540.0
+            dx = max(w - lon, 0.0, lon - east) * k
+            if math.hypot(dx, dy) > NEAR_M or not _matches(_Meta(e.get("meta") or {}), expect):
+                continue
+            path = os.path.join(d, e["name"])
+            if os.path.exists(path) and os.path.getsize(path) == e.get("size"):
+                continue
+            _get(net, RELEASE_URL + e["name"], path, int(e.get("size", 0)) + (1 << 20))
+            log.info("bake pack %s fetched (%.1f MB)", e["name"], os.path.getsize(path) / 1e6)
+            got.append(e["name"])
+    except Exception as ex:          # (none there, offline, a rate limit: the server plans for itself, as before)
+        log.info("bake packs: %s: %s", type(ex).__name__, ex)
+    finally:
+        _sync["busy"] = False
+    return got
+
+
+class _Meta:
+    def __init__(self, meta):
+        self.meta = meta
+
+
+def index_of(folder):
+    """{"packs": [{name, size, bbox, meta}]} of the packs in folder (tools/bake_area.py --index: the release's
+    index.json)."""
+    out = []
+    for n in sorted(os.listdir(folder)):
+        if n.endswith(SUFFIX):
+            p = Pack(os.path.join(folder, n))
+            out.append({"name": n, "size": os.path.getsize(os.path.join(folder, n)), "bbox": p.meta.get("bbox"),
+                        "meta": {k: v for k, v in p.meta.items() if k not in ("bbox", "made")}, "items": len(p.items)})
+    return {"packs": out}

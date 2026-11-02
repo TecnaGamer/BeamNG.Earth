@@ -85,11 +85,18 @@ def _worker(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--bbox", required=True, help="S,W,N,E")
-    ap.add_argument("--cache", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--bbox", help="S,W,N,E")
+    ap.add_argument("--cache")
+    ap.add_argument("--out")
+    ap.add_argument("--index", help="a folder of packs: print their index.json (the release's) and stop")
     ap.add_argument("--procs", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     a = ap.parse_args()
+    if a.index:
+        import bakepack
+        print(json.dumps(bakepack.index_of(a.index), indent=1, sort_keys=True))
+        return
+    if not (a.bbox and a.cache and a.out):
+        ap.error("--bbox, --cache and --out (or --index)")
     import mapcells
     import plancache
     import bakepack

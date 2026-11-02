@@ -136,5 +136,46 @@ class PackTest(unittest.TestCase):
         self.assertGreater(b.shared.stats.get("baked", 0), 0, "read from the pack")
 
 
+class SyncTest(unittest.TestCase):
+    """bakepack.sync: the release's packs near the player and made for this server, fetched once."""
+
+    def test_near_and_matching_only(self):
+        from unittest import mock
+        src = tempfile.mkdtemp()
+        cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, src, True)
+        self.addCleanup(shutil.rmtree, cache, True)
+
+        class MD:
+            def versions(self):
+                return {"overture": "r1", "lanes": "l1"}
+        md = MD()
+        good = dict(bakepack._expect_for(md, "w1s1"))
+        packs = []
+        for name, bbox, meta in (("near.bnge", [40.7, -74.0, 40.8, -73.9], good),
+                                 ("far.bnge", [34.0, -118.5, 34.1, -118.4], good),
+                                 ("old.bnge", [40.7, -74.0, 40.8, -73.9], {**good, "plans_format": -1})):
+            w = bakepack.Writer(os.path.join(src, name))
+            w.add("x", b"y")
+            w.close({**meta, "bbox": bbox})
+            packs.append(name)
+        with open(os.path.join(src, "index.json"), "w") as fh:
+            json.dump(bakepack.index_of(src), fh)
+        fetched = []
+
+        def get(net, url, path, cap):
+            fetched.append(os.path.basename(url))
+            shutil.copy(os.path.join(src, os.path.basename(url)), path)
+        bakepack._sync.update(at=-1e9, busy=False)
+        with mock.patch.object(bakepack, "_get", get):
+            got = bakepack.sync(cache, object(), md, 40.75, -73.95, "w1s1", now=0.0)
+            self.assertEqual(got, ["near.bnge"])
+            self.assertEqual(bakepack.sync(cache, object(), md, 40.75, -73.95, "w1s1", now=1.0), [], "not again soon")
+            bakepack._sync["at"] = -1e9
+            self.assertEqual(bakepack.sync(cache, object(), md, 40.75, -73.95, "w1s1", now=0.0), [], "had it")
+        self.assertEqual(fetched, ["index.json", "near.bnge"])
+        self.assertEqual(bakepack.find(cache, "x", good), b"y")
+
+
 if __name__ == "__main__":
     unittest.main()

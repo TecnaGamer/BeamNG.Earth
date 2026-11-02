@@ -2073,6 +2073,20 @@ class Server:
                 self.warm_thread.start()
             self.warm_cv.notify()
 
+    def bake_sync(self, anchor, x, y):
+        """The data repo's baked packs near the player (bakepack.sync: road plans and cell facts made offline) fetched
+        in a thread of their own, as the player moves (at most every bakepack.CHECK_S)."""
+        if not BAKE_FETCH or self.mapdata is None or not self.grading or self.net is None:
+            return
+        import bakepack
+        now = time.monotonic()
+        if bakepack._sync["busy"] or now - bakepack._sync["at"] < bakepack.CHECK_S:
+            return
+        la, lo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
+        sig = f"w{int(self.road_widths is not None)}s{int(self.sea is not None)}"
+        pool = self.__dict__.setdefault("bake_pool", ThreadPoolExecutor(1, thread_name_prefix="bake-packs"))
+        pool.submit(bakepack.sync, self.cache_dir, self.net, self.mapdata, float(la), float(lo), sig)
+
     def download_ahead(self, anchor, x, y, vx, vy):
         """Fetch the elevation tiles (the blocks' zoom) and the road tiles' map cells along the player's straight
         path AHEAD_S s ahead into the disk caches (one round at a time, again every AHEAD_MOVE_M)."""
@@ -3873,6 +3887,7 @@ BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at firs
 # roads round the car not built; off once caught up for CATCHUP_CALM_S
 CATCHUP_AFTER_S = 1.5
 CATCHUP_CALM_S = 3.0
+BAKE_FETCH = os.environ.get("BNGE_BAKE_FETCH", "on") != "off"   # the data repo's baked packs (Server.bake_sync)
 CATCHUP_MORE_S = 10.0       # s behind all along before the catch-up boost lends half the game's cores
 HOLD_BOOST_CALM_S = 2.0     # s after an edge hold ends before its boost does (Connection.hold_boost)
 CATCHUP_LEND_SHARE = float(os.environ.get("BNGE_CATCHUP_LEND", "0.25"))     # of the game's cores (cpupin.boosted)
@@ -5404,6 +5419,7 @@ class Connection:
             self.s.warm_roads(self.s.anchors[aid], *self.focus, *self.vel)
             self.s.warm_imagery(self.s.anchors[aid], *self.focus, *self.vel)
             self.s.download_ahead(self.s.anchors[aid], *self.focus, *self.vel)
+            self.s.bake_sync(self.s.anchors[aid], *self.focus)
             self.base_refresh(aid)
             self.pads_refresh(aid)
             self.roads_refresh(aid)
