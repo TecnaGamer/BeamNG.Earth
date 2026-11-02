@@ -1,7 +1,9 @@
 """Speed-limit signs (speedsigns.py, earthfast speed_sign_place / speed_sign_mesh): where they stand and how they look."""
+import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -161,6 +163,36 @@ class GlueTest(unittest.TestCase):
         self.assertEqual(speedsigns.style("CA", False), speedsigns.STYLE_CANADA)
         self.assertEqual(speedsigns.style("GB", False), speedsigns.STYLE_VIENNA)
         self.assertEqual(speedsigns.style(None, False), speedsigns.STYLE_VIENNA)
+        self.assertEqual(speedsigns.style("se", False), speedsigns.STYLE_SWEDEN)
+
+    def test_swedish_values_are_the_legal_steps(self):
+        posted = lambda kmh: speedsigns.posted(kmh / 1.609344, False, speedsigns.STYLE_SWEDEN)  # noqa: E731
+        self.assertEqual([posted(v) for v in (30, 35, 44, 50, 65, 74, 80, 95, 110, 120)],
+                         [30, 40, 40, 50, 70, 70, 80, 100, 110, 120])
+        self.assertEqual(posted(130), 120)
+        self.assertEqual(posted(20), 0, "slower than any step: no sign rather than a number above the limit")
+
+    def test_c31_materials_are_in_the_mod(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "roadside", "exit.materials.json")
+        with open(path, encoding="utf-8") as f:
+            self.assertLessEqual(set(speedsigns.MATERIALS_C31), set(json.load(f)))
+
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= speedsigns.KERNEL, "earthfast with the speed-sign kernels")
+    def test_c31_mesh_has_swedish_sizes_and_colours(self):
+        class Frame:
+            enu_to_geodetic = staticmethod(lambda x, y, z: (y, x, x * 0))
+            geodetic_to_enu = staticmethod(lambda la, lo, h: (lo, la, h))
+        widths = {}
+        for size, want in ((1, 0.60), (2, 0.90), (3, 0.90)):
+            sign = np.array([[0.0, 0.0, 0.0, 1.0, 70.0, size, 5.0, 0.0, 0.0]])
+            with mock.patch.object(speedsigns, "place", return_value=sign):
+                p, _, _, mats, mi = speedsigns.build_tile(Frame, 0, 0, lambda la, lo: la * 0, None,
+                                                          face=speedsigns.STYLE_SWEDEN)
+            self.assertEqual(mats, speedsigns.MATERIALS_C31)
+            widths[size] = p[:, 0].max() - p[:, 0].min()
+            self.assertAlmostEqual(widths[size], want, places=2)
+            self.assertIn(1, set(mi.tolist()))
 
     def test_cell_specs_kept(self):
         class Feats:

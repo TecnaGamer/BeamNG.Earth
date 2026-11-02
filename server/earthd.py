@@ -1247,7 +1247,8 @@ class Server:
             log.debug("navgraph decks: %s: %s", type(e).__name__, e)
         graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, widths=self.road_widths,
                                   left_hand=self.left_hand(anchor), mph=self.mph(anchor),
-                                  signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys))
+                                  signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys),
+                                  country=self.country(anchor))
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
         graph["rules"] = navgraphmod.road_rules(navgraphmod.country_near(self.airports_db, float(cla), float(clo)))
         for old in glob.glob(os.path.join(self.out_dir, f"navgraph_{aid}_*.json")):    # one file at a time
