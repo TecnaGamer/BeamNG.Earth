@@ -293,7 +293,9 @@ def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEF
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:
-        u, _ = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
+        u, share = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
+        if keep is not None:
+            keep["new_share"] = share       # (the share of samples computed: the rest from earlier blocks' chunks)
     q, z_base, max_height, qgrid = write_png(path, u, q)
     if keep is not None:
         keep["u"] = u
