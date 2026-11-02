@@ -9,6 +9,9 @@ import { Minimap } from './minimap.js'
 import { setWireframe, loadModMaterials, materialStats } from './materials.js'
 import * as gc from './geocode.js'
 import { itemOf } from './props.js'
+import { NightLights } from './lighting.js'
+import { Sky } from './sky.js'
+import { daylightPanel } from './daylight_ui.js'
 
 const $ = id => document.getElementById(id)
 
@@ -21,7 +24,8 @@ scene.background = new THREE.Color(0x8fb4d6)
 const camera = new THREE.PerspectiveCamera(60, 1, 0.5, 2e6)
 camera.up.set(0, 0, 1)
 camera.position.set(0, 0, 200)
-scene.add(new THREE.HemisphereLight(0xdfeeff, 0x4a4030, 1.3))
+const hemi = new THREE.HemisphereLight(0xdfeeff, 0x4a4030, 1.3)
+scene.add(hemi)
 const sun = new THREE.DirectionalLight(0xffffff, 1.6)
 sun.position.set(0.4, -0.6, 1)
 scene.add(sun)
@@ -48,7 +52,11 @@ const controls = new FlyControls(camera, canvas, pick)
 const minimap = new Minimap($('minimap'), (lat, lon) => teleport(lat, lon))
 minimap.z = 3
 $('centre').onclick = () => minimap.centre()
-window.viewer = { camera, controls, world, osm, minimap, scene }      // (for the browser console)
+// night lighting (lighting.js: nightlights.lua's windows, lamp lenses, far glow and street lamp lights)
+// and the sun, sky and shadows (sky.js: the time of day)
+const lights = new NightLights(root, world.props)
+const sky = new Sky(scene, root, renderer, hemi, sun)
+window.viewer = { camera, controls, world, osm, minimap, scene, lights, sky }      // (for the browser console)
 
 const LAST = 'bnge-viewer-last'
 function remember(lat, lon) { try { localStorage.setItem(LAST, JSON.stringify([lat, lon])) } catch (e) { /* none */ } }
@@ -243,6 +251,9 @@ for (const [label, fn, on] of [['OSM drawn on top', on => osm.setOnTop(on)], ['W
   $('layers').append(l)
 }
 
+// the time of day, Night, shadows and lamp lights controls (daylight_ui.js)
+const daylight = daylightPanel({ sky, lights, minimap, parent: $('layers') })
+
 // --- inspecting ---
 const ray = new THREE.Raycaster()
 function showPick(title, rows) {
@@ -329,6 +340,7 @@ function pick(e) {
 
 // --- loop ---
 let last = performance.now(), slow = 0, slower = 0
+const drawSize = new THREE.Vector2()
 function frame(now) {
   requestAnimationFrame(frame)
   const dt = Math.min(0.1, (now - last) / 1000)
@@ -350,6 +362,7 @@ function frame(now) {
     world.updateSeams()
     if (world.anchor) world.props.update(p.x, p.y)
     ui(agl)
+    daylight.text()
   }
   slower += dt
   if (slower > 5 && world.lat != null) { slower = 0; remember(world.lat, world.lon) }
@@ -379,6 +392,13 @@ function frame(now) {
         .map(([x, y]) => world.anchor.worldToGeodetic(x, y, 0).slice(0, 2))
       : null
   }
+  {
+    const ll = world.anchor ? world.anchor.worldToGeodetic(p.x, p.y, 0) : [null, null]
+    const night = sky.update(now / 1000, camera, ll[0], ll[1], agl, ground)
+    lights.setNight(night)
+    if (sky.timeOfDay) daylight.night.checked = night
+  }
+  lights.update(now / 1000, camera, renderer.getDrawingBufferSize(drawSize).y)
   minimap.draw()
   renderer.render(scene, camera)
 }
@@ -403,6 +423,7 @@ function ui(agl) {
   let signs = 0
   world.layers.signs.traverse(o => { if (o.userData.kind?.endsWith(' signs')) signs++ })
   rows.push(['signs', `${signs} sign shapes shown`])
+  if (lights.night) rows.push(['night', `${lights.stats.lit} of ${lights.pool.length} lamp lights on; ${lights.stats.lenses} lamps in the road tiles`])
   rows.push(['materials', `${materialStats.mod} from the mod's definitions (${modMaterialCount} known), ${materialStats.rules} by name`])
   rows.push(['OSM', `${o.ways} ways in ${o.ok} cells${o.missing ? `, ${o.missing} not cached yet` : ''}`])
   rows.push(['files', `${stats.shapes} shapes, ${(stats.bytes / 1e6).toFixed(1)} MB, ${c.queue} queued`])

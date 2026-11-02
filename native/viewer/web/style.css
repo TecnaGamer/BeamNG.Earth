@@ -56,3 +56,9 @@ summary { cursor: pointer; color: var(--muted); margin-bottom: 4px; }
   #mapbox { width: 160px; height: 160px; }
   #pick { top: auto; bottom: 184px; width: calc(100% - 24px); }
 }
+
+.tod { margin: 2px 0 6px 22px; display: flex; flex-direction: column; gap: 4px; }
+.tod.hidden { display: none; }
+.todRow { display: flex; gap: 6px; align-items: center; }
+.tod input[type=range] { width: 100%; }
+.todText { font-size: 11px; opacity: 0.8; line-height: 1.35; }

@@ -94,6 +94,45 @@ function fromDef(def, hasColors) {
   return m
 }
 
+// --- night lighting (nightlights.lua M.MATERIALS): the materials with a night glow ------------------------------
+// The buildings' windows (their night emissive maps, tools/build_night_windows.py) and the street lamps' lenses: dark
+// by day (emissiveFactor 0 in the mod's materials), the glow colour after dusk. The game's brightness in nits becomes
+// three.js's emissive intensity over NITS_FULL (the windows' 200 nits: full), at most 1: the ratios between them kept,
+// the lens (4000 nits) at full.
+export const NIGHT_MATERIALS = {
+  bne_bld_facade: [[1, 1, 1], 200],
+  bne_bld_office: [[0.95, 0.97, 1], 70],
+  bne_bld_shop: [[1, 0.80, 0.58], 30],
+  bne_bld_sky: [[1, 1, 1], 200],
+  bne_lamp_lens: [[1, 0.66, 0.33], 4000],
+}
+const NITS_FULL = 200
+const nightMats = []
+let night = false
+
+function applyNight(m) {
+  const [c, nits] = m.userData.glow
+  if (night) m.emissive.setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace)
+  else m.emissive.setRGB(0, 0, 0)
+  m.emissiveIntensity = Math.min(1, nits / NITS_FULL)
+}
+
+function withNight(name, m) {
+  const glow = NIGHT_MATERIALS[name]
+  if (!glow || !m.emissive) return m
+  const s = (modDefs[name]?.Stages && modDefs[name].Stages[0]) || {}
+  if (isMod(s.emissiveMap)) m.emissiveMap = modTexture(s.emissiveMap, true)
+  m.userData.glow = glow
+  nightMats.push(m)
+  applyNight(m)
+  return m
+}
+
+export function setNight(on) {
+  night = !!on
+  for (const m of nightMats) applyNight(m)
+}
+
 export function forName(name, hasColors) {
   const key = `${name}|${hasColors ? 1 : 0}|${settings.wireframe ? 1 : 0}`
   let m = cache.get(key)
@@ -101,7 +140,7 @@ export function forName(name, hasColors) {
   const def = modDefs[name]
   if (def) {
     m = fromDef(def, hasColors)
-    if (m) { materialStats.mod++; cache.set(key, m); return m }
+    if (m) { materialStats.mod++; cache.set(key, withNight(name, m)); return m }
   }
   materialStats.rules++
   let color = 0xc8c3b8, kind = ''
@@ -111,7 +150,7 @@ export function forName(name, hasColors) {
   })
   if (kind === 'mark') { m.polygonOffset = true; m.polygonOffsetFactor = -2; m.polygonOffsetUnits = -4 }
   m.userData.shared = true
-  cache.set(key, m)
+  cache.set(key, withNight(name, m))
   return m
 }
 

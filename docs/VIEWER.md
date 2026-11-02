@@ -92,6 +92,31 @@ Click a prop to see its group, shape, height, scale, yaw, rank and tile. The lay
 switches: "Street furniture (props)" for the `props` rows, and "Guard rails and barriers" for the
 `guardrails` rows (guard rails, jersey and cable barriers).
 
+## Night lighting
+
+The game lights the night from its own time of day (`nightlights.lua`, switched by the stock environment's
+day / night). The viewer has a **Night** switch instead (in the layer panel, remembered), and does what the mod does
+after dusk (`web/lighting.js`):
+
+- **Windows and lamp lenses:** the mod's night materials (`NIGHT_MATERIALS`, as `nightlights.lua` `M.MATERIALS`) get
+  their glow colour: the buildings' facades, offices, shopfronts and skyline through their night emissive maps (from
+  the mod folder), and the lamp lenses. The game's nits become three.js's emissive intensity over 200 (the windows'
+  brightness: full), so the ratios between them are kept; the lenses are at full.
+- **Far glow:** the `lampglow` group (each street lamp's glow, and the far and skyline tiles' street lamps,
+  `lamps` in `bldfar_tile` / `bldsky_tile`, while the tile shows) is on at night only, as `trees.lua` / `roads.lua`
+  have it. Its shape's finest detail level is a speck, so the viewer draws its levels itself: the balls of
+  `tools/build_lamp_glow.py`, switched at the same distances, scaled to the screen's pixels per radian as the
+  engine's detail sizes are.
+- **Street lamp lights:** a pool of spot lights (no shadows), every 0.25 s moved to the lamps nearest the camera
+  (`nightlights.lua` `nearest`: within 60 m all round, out to 900 m within 65° of the heading), at each lens, pointing
+  down and tilted 12° toward the road, with the mod's range and cone angles. The pool is smaller than the mod's
+  (48 / 128 / 256): each spot light costs every lit pixel in a browser's forward renderer, so the panel offers
+  0 to 64, 32 by default. The brightness is chosen by eye (the engine's has no physical unit).
+- **Sky and ground:** the daylight is turned down to a dim blue moonlight, and the sky goes dark.
+
+Not lit: the gas stations' pump islands (the viewer does not draw gas station props) and the tunnels' lights
+(`ambience.lua`).
+
 ## OSM overlay
 
 `/api/osm?z=14&x=&y=` reads the cell straight from earthd's map-data mirror

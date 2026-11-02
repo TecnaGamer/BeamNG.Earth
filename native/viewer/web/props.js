@@ -9,6 +9,7 @@ import * as THREE from 'three'
 import { decode, drawnMeshes } from './cdae.js'
 import { forName } from './materials.js'
 import * as geo from './geodesy.js'
+import { GLOW_SHAPE, glowShape } from './lighting.js'
 
 const ECA = '/levels/east_coast_usa/art/shapes/'
 const WCA = '/levels/west_coast_usa/art/shapes/'
@@ -208,6 +209,8 @@ export class Props {
 
   shape(path) {
     let p = this.shapes.get(path)
+    // (the lamps' far glow: its detail levels drawn by lighting.js, the shape's finest level being a speck)
+    if (!p && path === GLOW_SHAPE) { p = Promise.resolve(glowShape()); this.shapes.set(path, p) }
     if (!p) {
       p = (async () => {
         const r = await fetch(`/game${encodeURI(path)}.cdae`)
@@ -292,6 +295,12 @@ export class Props {
     this.stats.tiles = this.tiles.size
   }
 
+  // trees.lua setGroupEnabled (nightlights.lua: the lamps' glow on after dusk); the tiles show it at the next update
+  setGroupEnabled(group, on) {
+    if (on) delete GROUP_OFF[group]
+    else GROUP_OFF[group] = true
+  }
+
   dropAll() { for (const k of [...this.tiles.keys()]) this.drop(k) }
 
   // the item matrices (world.js placeGeo: after every anchor change)
@@ -301,6 +310,7 @@ export class Props {
     const cur = this.world.anchor
     t.pl = t.geo && cur ? geo.placement(t.geo.frame, cur, 0, 0, t.geo.pivot) : null
     const yawAdd = t.pl ? Math.atan2(t.pl.r[3], t.pl.r[0]) * 180 / Math.PI : 0
+    t.yawAdd = yawAdd
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), s = new THREE.Vector3(), axis = new THREE.Vector3(0, 0, 1)
     for (const it of t.items) {
       if (it.skip) continue

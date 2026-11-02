@@ -795,7 +795,8 @@ export class World {
     if (old) this.dropFarGeo(key)
     const frame = geo.frameOf(msg.frame || data.frame, msg.key)
     if (!frame) return
-    const f = { kind, gkey: msg.key, h: data.h, frame, parts: {}, dropped: false }
+    const f = { kind, gkey: msg.key, h: data.h, frame, parts: {}, dropped: false,
+      lamps: data.lamps && typeof data.lamps === 'object' && Object.keys(data.lamps).length ? data.lamps : null }
     this.farGeo.set(key, f)
     const list = kind === 'B' ? Object.entries(data.parts || {})
       : typeof data.shape === 'string' ? [['shape', { shape: data.shape, pos: data.pos, pivot: data.pivot }]] : []
@@ -822,7 +823,27 @@ export class World {
     if (!f) return
     f.dropped = true
     this.farGeo.delete(key)
+    this.farGeoLamps(f, false)
     for (const p of Object.values(f.parts)) if (p.obj) { p.obj.removeFromParent(); dispose(p.obj) }
+  }
+
+  // A far geotile's street lamps (roads.lua farGeoLamps; server buildings.far_lamps): while the tile shows, each road
+  // geotile key's points the lampglow rows of a props tile 'FL<kind><key>' in that geotile's frame (shown at night only)
+  farGeoLamps(f, on) {
+    on = on && !!f.lamps && !!this.anchor
+    if (on === !!f.lampOn) return
+    f.lampOn = on
+    for (const [k17, g] of Object.entries(f.lamps || {})) {
+      const tk = `FL${f.kind}${k17}`
+      if (!on) { this.props.drop(tk); continue }
+      const rows = []
+      ;(Array.isArray(g?.rows) ? g.rows : []).forEach((pt, i) => {
+        if (!Array.isArray(pt) || ![0, 1, 2].every(j => Number.isFinite(+pt[j]))) return
+        rows.push([0, +pt[0], +pt[1], +pt[2], 0, 1, 1, (((i + 1) * 7919) % 997) / 997 * 0.19])     // (Lua's i from 1)
+      })
+      const frame = geo.frameOf(null, k17)
+      if (rows.length && frame) this.props.add(tk, { groups: ['lampglow'], items: rows }, { frame, pivot: +g.pivot || 0 })
+    }
   }
 
   // each building shown once at the near / far seam: a far part hides once its road geotile shows its own
@@ -841,14 +862,15 @@ export class World {
         const k = geo.parseKey(f.gkey)
         const covered = k && (farIn.get(`${k[1]}_${k[2]}`) || 0) >= 16
         for (const p of Object.values(f.parts)) if (p.obj) p.obj.visible = !covered
-        continue
+      } else {
+        for (const p of Object.values(f.parts)) {
+          if (!p.obj || !p.near) continue
+          const t = this.geoRoads.get(p.near)
+          const own = t && (f.kind === 'B' ? t.parts.deck : t.parts.bld)
+          p.obj.visible = !(own && own.obj)
+        }
       }
-      for (const p of Object.values(f.parts)) {
-        if (!p.obj || !p.near) continue
-        const t = this.geoRoads.get(p.near)
-        const own = t && (f.kind === 'B' ? t.parts.deck : t.parts.bld)
-        p.obj.visible = !(own && own.obj)
-      }
+      if (f.lamps) this.farGeoLamps(f, Object.values(f.parts).some(p => p.obj && p.obj.visible))
     }
   }
 
