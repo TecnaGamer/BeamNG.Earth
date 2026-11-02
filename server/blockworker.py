@@ -1398,7 +1398,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
     started = time.perf_counter()        # actual process entry, not Future.running() in the executor call queue
-    stats = getattr(_s.md, "cell_stats", lambda: {})
+    stats = getattr(getattr(_s, "md", None), "cell_stats", lambda: {})
     before = stats()
     watch = _stack_watch(f"road geotile {gx}_{gy}")
     try:

@@ -56,6 +56,15 @@ class TimingTest(unittest.TestCase):
         self.assertEqual(bw.last_tile_stages(), outer)
         self.assertEqual(set(outer), {"inputs"})
 
+    def test_optional_dependency_stats_preserve_build_failure_without_worker_state(self):
+        with patch.object(bw, "_s", None), \
+             patch.object(bw, "_stack_watch") as watch, \
+             patch.object(bw, "_geo_content", side_effect=RuntimeError("original build failure")):
+            with self.assertRaisesRegex(RuntimeError, "original build failure"):
+                bw.roads_geo(1, 0, 0, 15, 65536, 65536, 15, "unused", "/vfs", True, 0,
+                             True, False, False, 0, False, skin=False)
+            watch.return_value.cancel.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
