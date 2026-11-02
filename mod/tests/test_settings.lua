@@ -101,8 +101,8 @@ files[settings.FILE] = nil
 -- A previous capture must never start automatically on a later session.
 files[settings.FILE] = { version = 1, runtimeProfiler = true, profilerMode = 'full' }
 vals, warn = settings.load()
-T.check(vals.runtimeProfiler == false and vals.profilerMode == 'full' and #warn == 0,
-  'load ignores a previously enabled profiler while retaining its preferred mode')
+T.check(vals.runtimeProfiler == false and vals.profilerMode == 'essential' and #warn == 0,
+  'load always starts with profiling off and minimal Essential mode')
 settings.set('runtimeProfiler', true)
 T.check(settings.get('runtimeProfiler') == true and files[settings.FILE].runtimeProfiler == false,
   'explicit opt-in starts this session but saves the disabled state')

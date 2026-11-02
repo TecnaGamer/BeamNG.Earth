@@ -64,7 +64,7 @@ local shortHeight=surface.sizes['##history-cpu'].y
 surface.width,surface.height=1500,1000;P.draw(true)
 T.check(surface.sizes['##history-cpu'].x>narrow and surface.sizes['##history-cpu'].x<1500,'wide view resizes charts and reserves an inspector')
 T.check(surface.sizes['##history-cpu'].y>shortHeight,'chart lanes grow with available height before manual splitting')
-for _,tab in ipairs({'gpu','cpu','network','disk','all'}) do
+for _,tab in ipairs({'gpu','cpu','network','disk','server','all'}) do
   P.setPage(tab);surface.sizes={};P.draw(true)
   T.check(P.page==tab,'tab selected: '..tab)
   if tab=='gpu' then T.check(surface.sizes['##history-gpu'] and not surface.sizes['##history-network'],'GPU excludes unrelated resource charts') end

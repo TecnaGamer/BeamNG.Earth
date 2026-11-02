@@ -330,6 +330,31 @@ function M.body(im,view,ctl)
   local tab=ctl.page
   local width=im.GetContentRegionAvail().x
   local scale=im.GetFontSize()/16
+  if tab=='server' then
+    text(im,'World server')
+    local link=view.localLink or {}
+    local latency=view.latency or {}
+    text(im,(link.endpoint or 'Endpoint unavailable')..' | '..(link.state or 'unavailable'))
+    text(im,'Application round trip: '..ms(latency.avgMs)..' average | '..tostring(latency.count or 0)..' replies')
+    wrap(im,'Round trip includes game and server scheduling; it is not server CPU time.')
+    local data=view.server
+    if not data then wrap(im,'No server telemetry received. Connect to a compatible server to collect measurements.');return end
+    text(im,'Telemetry age at displayed snapshot: '..ms(view.serverAgeMs))
+    text(im,'Collection: '..tostring(data.collectionMode or view.mode))
+    if view.mode=='full' then
+      local running,queued,failed=0,0,0
+      for _,job in ipairs(data.active or {}) do
+        if job.worker then running=running+1 else queued=queued+1 end
+      end
+      for _,job in ipairs(data.recent or {}) do
+        if job.outcome=='error' or job.outcome=='cancelled' then failed=failed+1 end
+      end
+      text(im,string.format('Measured jobs: %d running | %d queued | %d recent failed/cancelled',running,queued,failed))
+      wrap(im,'Counts cover retained telemetry, not all server tasks. Recent history is bounded to 120 jobs.')
+    end
+    ctl.drawWorkers(im,view,width)
+    return
+  end
   metrics(im,view,tab,width)
   local available=im.GetContentRegionAvail()
   local layout=V.layout(width,available.y,scale)
@@ -356,6 +381,7 @@ function M.body(im,view,ctl)
   detail(im,view,ctl,tab,width)
 end
 local function footerLines(view,tab)
+  if tab=='server' then return {'Server worker timings are separate from game frames. Freeze holds the displayed server snapshot.'} end
   local lines={string.format('History: %d frames retained (bounded); blank time has no captured samples.',view.frames)}
   if tab=='gpu' or tab=='all' then lines[#lines+1]='GPU: delayed query; CPU and GPU overlap.' end
   if tab=='network' or tab=='disk' or tab=='all' then lines[#lines+1]='I/O: sampled intervals, arrival-aligned; sent bytes estimated; cache output is produced-file size.' end

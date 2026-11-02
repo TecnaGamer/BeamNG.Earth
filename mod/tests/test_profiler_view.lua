@@ -27,4 +27,5 @@ T.check(exported.presentation.tab=='disk' and exported.presentation.selectedFram
 T.check(exported.plot==nil and exported.frameDetail._layouts==nil and exported._presentation==nil,'export strips rendering caches')
 T.check(exported.presentation.units.network=='bytes/s','export states raw units')
 V.reset();T.check(V.current(view)==c,'new capture clears old selection')
+T.check(V.validTab('server') and V.tabs[#V.tabs][1]=='server' and V.tabs[#V.tabs-1][1]=='disk','Server tab follows Disk')
 T.done('profiler_view')

@@ -1,6 +1,6 @@
 -- Pure presentation model. Times are observation times, never CPU/GPU frame correlation.
 local M = {}
-M.tabs = {{'all','All'}, {'gpu','GPU'}, {'cpu','CPU'}, {'network','Network'}, {'disk','Disk'}}
+M.tabs = {{'all','All'}, {'gpu','GPU'}, {'cpu','CPU'}, {'network','Network'}, {'disk','Disk'}, {'server','Server'}}
 M.colors = {cpu={0.22,0.83,0.88}, gpu={0.70,0.49,0.94}, network={0.37,0.88,0.65},
   disk={0.96,0.72,0.22}, frame={0.91,0.93,0.96}, muted={0.48,0.52,0.59}}
 M.seconds, M.inspectorWidth, M.chartHeight = 10, 290, nil

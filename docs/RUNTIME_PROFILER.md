@@ -251,3 +251,9 @@ The profiler branch targets original upstream `TecnaGamer/BeamNG.Earth` dev
 `server/sitegen`. Its patch adds profiler files, timing decorators, thread/process
 and I/O instrumentation, opt-in settings and tests. The world-generation branch
 builds on it separately. The performance branch is independent of both.
+
+## Server overview and startup
+
+Server appears after Disk and shows the application connection, snapshot telemetry age, measured running/queued jobs and recent failures, plus worker timelines and statistics in Full mode. These timings are separate from game frames. Missing telemetry is explicitly unavailable.
+
+Every settings load starts profiling Off with Essential (minimal) collection selected, even if a previous session saved Full or enabled profiling. The window opens only after explicitly enabling profiling.
