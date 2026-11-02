@@ -257,10 +257,7 @@ class OsmTags:
         if t is None:
             try:
                 t = self._decode(con, uri, groups, rg, remote, kind)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
-                np.savez_compressed(tmp, **t)
-                os.replace(tmp, path)
+                self._save_table(path, t)
             finally:
                 if mine:
                     xproc.release(path + ".lock")
@@ -269,6 +266,26 @@ class OsmTags:
             while len(self._tables) > TABLE_MEM:
                 self._tables.pop(next(iter(self._tables)))
         return t
+
+    @staticmethod
+    def _save_table(path, t):
+        """Row group table t saved at path for the other processes; the decoded table is used whether or not that
+        works. A bare os.replace failed on Windows whenever another process had the file open (it loads it, or
+        decoded it too after waiting TABLE_WAIT_S): PermissionError (WinError 5), and the whole cell lost its OpenStreetMap
+        tags (lanes, widths: cached so for good) and decoded the row group again for each of its neighbours (GitHub #663:
+        16 times in a session, each before the road workers "may be stuck")."""
+        import staging
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            np.savez_compressed(tmp, **t)
+            staging.replace_cached(tmp, path)       # (Windows: retried; a copy there and in use is kept)
+        except OSError as e:
+            log.debug("osmtags: row group table %s not saved: %s: %s", os.path.basename(path), type(e).__name__, e)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     def _decode(self, con, uri, groups, rg, remote, kind):
         g = groups[rg]

@@ -478,6 +478,11 @@ NET_TICK_S = 60.0           # the network summary line in the log and the netsta
 # touched (a live server touches its own, and its adopted ones, every SESSION_HEARTBEAT_S).
 SESSION_STALE_S = 86400.0
 SESSION_ORPHAN_S = 600.0
+# A geotile every game dropped (roads_drop, bldfar_drop, ...): its session files deleted this long after, unless one
+# is sent it again meanwhile (geo_dropped). Before (GitHub #599, 2026-10-31) they stayed until the server stopped: the
+# geotiles are anchor-free, so prune never took them, and two days' driving left 9 GB in the session folder.
+GEO_FILES_GRACE_S = 120.0
+GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
 # Live retexture (--colormatch / --deshadow): when a region a shown tile was rendered without becomes
@@ -971,10 +976,47 @@ class Server:
                 if producer is not None:
                     producer.disk = cache
 
+    def _empty_trash(self):
+        """What earlier runs left in the cache's trash (_rmtree_outside): a server ended with the game while it was
+        deleting a session moved there (the game closing ends the server's processes) left the rest of it for good, GBs
+        of tiles that no later run looked at (GitHub #599: 9 GB of old sessions). Deleted in a background thread (a
+        whole session is thousands of files; the start does not wait). An entry whose server still runs (its pid in its
+        name, xproc.alive) is that server's own delete under way and is left to it (a rename keeps the folder's old
+        time, so its age says nothing). Returns the thread, or None (nothing there)."""
+        cache = getattr(self, "cache_dir", None)
+        trash = os.path.join(cache, TRASH_DIR) if cache else None
+        try:
+            names = os.listdir(trash) if trash else []
+        except OSError:
+            return None
+        import xproc
+        old = []
+        for n in names:
+            parts = n.rsplit("_", 2)
+            pid = int(parts[1]) if len(parts) == 3 and parts[1].isdigit() else None
+            if pid is not None and pid != os.getpid() and xproc.alive(pid):
+                continue
+            old.append(os.path.join(trash, n))
+        if not old:
+            return None
+        log.info("trash: deleting %d folders earlier runs left in %s", len(old), trash)
+
+        def run():
+            for p in old:
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    self._remove(p)
+        t = threading.Thread(target=run, name="trash", daemon=True)
+        t.start()
+        return t
+
     def _scan_sessions(self):
         """Session folders left by earlier runs (only ones we marked): one whose marker is untouched
         for SESSION_STALE_S goes now, with the engine's .cdae caches of its shapes; a younger one is
-        kept as an orphan until a game claims it or sweep_sessions deletes it."""
+        kept as an orphan until a game claims it or sweep_sessions deletes it. And the trash earlier runs left
+        (_empty_trash)."""
+        self.trash_thread = self._empty_trash()
         wall, now = time.time(), time.monotonic()
         for d in glob.glob(os.path.join(self.root, "*", SESSION_MARKER)):
             sid = os.path.basename(os.path.dirname(d))
@@ -1154,12 +1196,60 @@ class Server:
 
     def _delete_one(self):
         path, ck = self.delete_queue.popleft()
-        # an evicted tile built again since (same file name) keeps its new file
-        if ck is None or (ck not in self.tiles and ck not in self.tile_inflight):
+        # an evicted tile built again since (same file name) keeps its new file; ck callable: kept while it says so
+        if callable(ck):
+            if ck():
+                return
+            self._remove(path)
+        elif ck is None or (ck not in self.tiles and ck not in self.tile_inflight):
             if os.path.isdir(path):     # a released session's folder, queued after its files
                 shutil.rmtree(path, ignore_errors=True)
             else:
                 self._remove(path)
+
+    def geo_held(self, kind, k):
+        """Does some connection's tracker of kind (GEO_TRACKERS) have geotile k (gx, gy) sent or building?"""
+        attr = GEO_TRACKERS.get(kind)
+        for c in list(self.connections):
+            t = getattr(c, attr, None) if attr else None
+            if t is not None and getattr(t, "geo", False) and (k in t.sent or k in t.building):
+                return True
+        return False
+
+    def geo_files(self, kind, key):
+        """The session files of geotile key (geotiles.key) of kind: a road geotile's content (rg_), every anchor's skin
+        (rs_) and exact variants (rx_); a far geotile's json, shape and pieces (blockworker.FAR_GEO prefixes)."""
+        if kind == "roads":
+            pat = re.compile(rf"(rg_{re.escape(key)}([._].*)?|r[sx]_\d+_{re.escape(key)}([._].*)?)")
+            stems = ("rg_", "rs_", "rx_")
+        else:
+            pre = blockworker.FAR_GEO.get(kind)
+            if pre is None:
+                return []
+            pat = re.compile(rf"{pre}_{re.escape(key)}([._].*)?")
+            stems = (f"{pre}_",)
+        out = []
+        for stem in stems:
+            out += [p for p in glob.glob(os.path.join(self.out_dir, f"{stem}*{key}*"))
+                    if pat.fullmatch(os.path.basename(p))]
+        return sorted(set(out))
+
+    def geo_dropped(self, kind, k, key, grace=None):
+        """A connection dropped geotile k (gx, gy; key its geotiles.key) of kind: its session files are deleted after
+        GEO_FILES_GRACE_S unless some connection has it (sent or building) by then or when each file's turn comes
+        (geo_held: one built again writes the same names). Event loop (the trackers' on_pose)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def run():
+            if self.geo_held(kind, k):
+                return
+            files = self.geo_files(kind, key)
+            if files:
+                self.queue_delete(files, lambda: self.geo_held(kind, k))
+        loop.call_later(GEO_FILES_GRACE_S if grace is None else grace, run)
 
     def queue_delete(self, paths, ck=None):
         """Delete files gradually (one at a time, delete_gap() apart) so the game's file watcher
@@ -3897,7 +3987,10 @@ CATCHUP_LEND_SHARE = float(os.environ.get("BNGE_CATCHUP_LEND", "0.25"))     # of
 CATCHUP_MIN_MS = 8.0        # m/s: only while driving (a parked player's work waits as before)
 BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's teleportPriority) ends this long after at most
 
-ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph")
+# (rs / rx: the road geotiles' skins and exact variants of the anchor; rail / railcol / tunnel: its road tiles' rail and
+# tunnel shapes. Left out until 2026-11-02: kept until the server stopped, GitHub #599's 9 GB session folder)
+ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
+                     "rs", "rx", "rail", "railcol", "tunnel")
 
 
 class _BoundedLru:
@@ -4314,8 +4407,9 @@ class Connection:
                                                        self.s.country_at(lat, lon))
                     self._where_place = (key, place)
                     cached = self._where_place
-                except Exception as e:  # offline, rate limited: the bar shows the street alone
+                except Exception as e:  # offline, rate limited, refused: the bar shows the street alone
                     log.debug("where: place: %s: %s", type(e).__name__, e)
+                    geocodemod.error_text(e)        # (a refusal kept: the search box says it too, GitHub #602)
             if cached is not None and cached[0] == key:
                 out.update(cached[1])
         self.send(out)
@@ -4329,8 +4423,14 @@ class Connection:
             out["results"] = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, geocodemod.search, q, lat, lon, self.s.net,
                 self.s.country_at(lat, lon) if lat is not None and lon is not None else None)
-        except Exception as e:          # offline, rate limited, a bad answer: the map says so
+        except Exception as e:          # offline, rate limited, refused, a bad answer: the map says which (GitHub #602)
             out["error"] = f"{type(e).__name__}: {e}"[:200]
+            out["text"] = geocodemod.error_text(e)
+            if out["text"] != getattr(self.s, "_geocode_said", None):     # once per change, not per keystroke
+                self.s._geocode_said = out["text"]
+                log.warning("address search: %s (%s)", out["text"], out["error"])
+        else:
+            self.s._geocode_said = None
         log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 

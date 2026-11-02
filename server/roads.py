@@ -8701,6 +8701,9 @@ class GeoTracker:
             self.shown.pop(k, None)
             self.need = {nk: v for nk, v in self.need.items() if nk[0] != k}
             conn.send({"type": "roads_drop", "anchorId": aid, "key": geotiles.key(*k)})
+            gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
+            if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
+                gone("roads", k, geotiles.key(*k))
         if self.retry:
             self.retry = {k: t for k, t in self.retry.items() if t > now}
 

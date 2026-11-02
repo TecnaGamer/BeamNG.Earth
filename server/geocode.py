@@ -71,6 +71,42 @@ def parse(data):
     return out
 
 
+# What the map's search box says when the search has no answer (the user's "Address search unavailable (offline?)" for
+# every failure: photon.komoot.io answered 403 to the app's User-Agent and the player was told to check their
+# connection, GitHub #602). A refusal opens the host's circuit breaker after a few tries, and the requests after it
+# fail without a status (HostUnavailable): the last refusal is kept so they still say why.
+REFUSED_KEEP_S = 600.0
+_refused = {}                   # "status" -> (HTTP status, time.monotonic() it came)
+
+
+def error_text(e, now=None):
+    """The search box's words for e, the exception search() or reverse() raised (netfetch's errors; anything else: a
+    bad answer). Pure but for the last refusal it remembers."""
+    import time
+    now = time.monotonic() if now is None else now
+    status = getattr(e, "status", None)
+    if isinstance(e, netfetch.FetchFailed) and status in (401, 403, 451):
+        _refused["status"] = (status, now)
+    if isinstance(e, netfetch.Offline):
+        return "Address search unavailable (offline mode)"
+    if isinstance(e, netfetch.RateLimited):
+        return "Address search busy (too many requests): try again in a minute"
+    if isinstance(e, netfetch.BudgetExceeded):
+        return "Address search limit for today reached"
+    held = _refused.get("status")
+    if isinstance(e, netfetch.HostUnavailable):
+        if held is not None and now - held[1] < REFUSED_KEEP_S:
+            return f"Address search service refused the request (HTTP {held[0]})"
+        return "Address search service not answering: try again in a minute"
+    if isinstance(e, netfetch.FetchFailed) and status in (401, 403, 451):
+        return f"Address search service refused the request (HTTP {status})"
+    if isinstance(e, netfetch.FetchFailed) and status is not None:
+        return f"Address search service error (HTTP {status})"
+    if isinstance(e, netfetch.FetchError):
+        return "Address search unavailable (offline?)"
+    return "Address search gave an answer the map cannot read"
+
+
 def search(q, lat=None, lon=None, net=None, country=None):
     """Results for q (blocking; [] for a short query), names in country's language (lang_for). Raises
     netfetch.FetchError on network trouble."""

@@ -60,7 +60,9 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 1
+PLANS_FORMAT = 2
+
+
 def plans_format():
     """The plans' revisit key format: PLANS_FORMAT and the road facts' (roads.FACTS_FORMAT: the plans are made from
     them), "<plans>.<facts>"."""

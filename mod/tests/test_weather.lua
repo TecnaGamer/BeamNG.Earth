@@ -396,8 +396,16 @@ run(W.MISSION_SETUP_S - 0.5)
 check(W.getMode() == 'real' and env.calls.fog == fogCalls and #toasts == nToasts, 'a change: writes wait, not switched yet')
 W.onEnvironmentChanged({ fogDensity = 30 })        -- the slider moves on
 env.fog = 0.03
+local logged, oldLog = {}, log
+log = function(lvl, _, msg) logged[#logged + 1] = lvl .. ' ' .. tostring(msg) end
 run(1)
+log = oldLog
 check(W.getMode() == 'manual', 'a change: manual')
+local warned = false
+for _, l in ipairs(logged) do
+  if l:find('^W weather: changed by someone else: fogDensity=25') then warned = true end
+end
+check(warned, 'what changed is in a warning (GitHub #418: the reports carried the warnings alone)')
 check(#saved == 1 and saved[1] == 'weatherMode=manual', 'manual saved as the setting')
 check(#toasts == nToasts + 1 and toasts[#toasts][2].title == 'BeamNG.Earth weather'
   and toasts[#toasts][2].msg:find('Manual', 1, true) and not toasts[#toasts][2].msg:find('BWM', 1, true), 'one toast')

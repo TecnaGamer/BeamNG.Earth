@@ -36,6 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 import mapcells
+import railways as railwaysmod
 import roads as roadsmod
 import seatiles
 
@@ -256,6 +257,19 @@ UNDER_REACH_M = UNDER_FLAT_M + UNDER_MAX_DROP_M * math.pi / UNDER_GRADE + 2 * UN
 # road's bridge whose ramps the frontage roads at both ends held down sat ~1 m over the motorway; the 30 m elevation
 # data has no cutting under it, and the AI car drove into its abutment wall, 2026-10-25)
 UNDER_ANY_ON = os.environ.get("BNE_UNDERPASS_ANY", "on") != "off"
+# ... but on coarse elevation (dem.coarse_at: the 30 m global model) a street's dip stays on the street: an overpass's
+# embankments are smeared away there and its ramps, held down by the streets beside them, leave the whole clearance to
+# the road under; spread along every street joined to it (underpass_offsets: by distance, at half grade), the 7.2 m dip
+# under Ташкентская улица's bridge sank Демократическая улица and the streets round it 4-6 m for ~200 m while the ground
+# between them stayed: walled trenches, humps of untouched ground between the streets and side roads standing as walls
+# (Samara, 2026-11-02; the same trench Perm's rail bridge dug, GitHub #414, where railways.py now raises the track).
+# There the dip runs along the street's own pieces (street_runs: carried on through every node where only its next
+# piece joins it) and is back up by its junctions at up to UNDER_MAX_GRADE, as deep as fits: rather a lower bridge than
+# a sunken neighbourhood (Samara: 3.2-3.8 m under the girders, 6-7 m before). A motorway's or trunk's dip (no
+# junctions at grade: APPROACH_SKIP) spreads as before, and so does one whose street has room for less than
+# UNDER_RUN_MIN_M (a junction right by the bridge is part of the underpass) or is a ring.
+UNDER_RUN_ON = os.environ.get("BNE_UNDERPASS_RUN", "on") != "off"
+UNDER_RUN_MIN_M = 2.0
 ABUT_NEAR_M = 14.0          # m from the bridge end the road is checked ...
 ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
 ABUT_STEEP = 0.15           # a fall this much steeper than that grade, near the end: the valley's side, not the road
@@ -1512,7 +1526,7 @@ class _Planner:
                     continue
                 got = ground.get((fid, j))      # (the longest copy of a part, as each cell has it)
                 if got is None or len(line) > len(got[0]):
-                    ground[(fid, j)] = (line, sg, med)
+                    ground[(fid, j)] = (line, sg, med, cls)
         if not bridges or not ground:
             return
         # (single spans: neither end continues into another bridge part; deduplicated across cells)
@@ -1534,21 +1548,28 @@ class _Planner:
             d = np.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
             if rail or not (d < 0.75).any():
-                spans.append((b, L, fixed))
+                spans.append((b, L, fixed, rail))
         if not spans:
             return
         gids = sorted(ground)
         lines = [ground[g][0] for g in gids]
-        crs = roadsmod._crossings_by([b for b, _L, _f in spans], lines)
+        crs = roadsmod._crossings_by([b for b, _L, _f, _r in spans], lines)
         ez, raised = {}, set()
 
         def deck_ends(j):           # (an overpass's abutments' ground, raised when it is: as high as its ramps could
             got = ez.get(j)         # take them; asked only for one a road crosses under: every span's took 2 s a
             if got is None:         # Canton cell, 2026-10-25)
-                b, _L, fixed = spans[j]
+                b, _L, fixed, rail = spans[j]
                 ends = np.array([b[0], b[-1]], f64)
                 ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
                 got = np.asarray(self.elev(np.asarray(ela), np.asarray(elo)), f64).reshape(2).copy()
+                if rail:            # (the track's level beyond its ends, as railways.profile lays the deck)
+                    def ground_xy(q):
+                        qla, qlo, _ = self.frame.enu_to_geodetic(q[:, 0], q[:, 1], 0.0)
+                        return np.asarray(self.elev(np.asarray(qla), np.asarray(qlo)), f64)
+                    for e, lv in enumerate(railwaysmod.approach_levels(b[:, :2], ground_xy)):
+                        if lv is not None:
+                            got[e] = max(got[e], lv[0])
                 if not fixed:
                     got[0] += self._end_raised(b[0])
                     got[1] += self._end_raised(b[-1])
@@ -1563,7 +1584,7 @@ class _Planner:
             ab = np.diff(xy, axis=0)
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], f64)
-                b, L, fixed = spans[bi]
+                b, L, fixed, rail = spans[bi]
                 if arc_b < APPROACH_MIN_CROSS_M or arc_b > L - APPROACH_MIN_CROSS_M:
                     continue                    # a junction at the bridge's end
                 ze = deck_ends(bi)
@@ -1574,19 +1595,23 @@ class _Planner:
                 j = int(np.argmin(np.linalg.norm(xy[:-1] + t[:, None] * ab - pt, axis=1)))
                 # (the deck's own clearance: its depth scales with its span, roads.deck_depth; the full-depth
                 # UNDER_CLEAR_M dug the road out under a short overpass that sits lower)
-                clear = roadsmod.deck_road_clear(roadsmod.deck_depth(roadsmod.geom_span([b]))) + ROAD_LIFT
+                # (a rail deck's height is its bed: its own depth under the ballast's top, railways.DECK_D)
+                depth = railwaysmod.DECK_D - railwaysmod.BALLAST_H if rail else \
+                    roadsmod.deck_depth(roadsmod.geom_span([b]))
+                clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
-                decks.append(deck)
+                decks.append((deck, fixed))
         if not cands:
             return
-        zc = self._under_ground(lines, [ground[g][1:] for g in gids], cands)
+        zc = self._under_ground(lines, [ground[g][1:3] for g in gids], cands)
         dem = getattr(self, "dem", None) or getattr(self.md, "dem", None)
         lidar = UNDER_LIDAR_ON and not coarse and dem is not None and hasattr(dem, "coarse_at")
         requirements = []
         floor = seatiles.SEA_E + UNDER_SEA_M
-        for (i, sc, top), deck, z in zip(cands, decks, zc):
-            if lidar and deck < z + UNDER_LIDAR_DECK_M:
-                continue                        # (the ends' ground is not the deck: the road keeps its own)
+        for (i, sc, top), (deck, fixed), z in zip(cands, decks, zc):
+            if lidar and not fixed and deck < z + UNDER_LIDAR_DECK_M:
+                continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
+                                                # rises; a never-raised deck, a railway's or a motorway's, cannot)
             target = max(top, z - UNDER_MAX_DROP_M)
             if UNDER_SEA_ON and z >= floor:
                 target = max(target, floor)     # (not under the sea's surface: its water tiles would flood it)
@@ -1613,7 +1638,20 @@ class _Planner:
             inside.append(near)
         if not queries:
             return
-        for n, near, got in zip(which, inside, underpass_offsets(lines, requirements, queries)):
+        # on coarse elevation a street's dip stays on its run (UNDER_RUN_*: street_runs), each run alone. (Every cell
+        # sees the same runs: a dip reaches at most UNDER_FLAT_M + its longest ramp (~221 m) along its street, so the
+        # street's nodes it can depend on lie within UNDER_REACH_M of every cell's box the dip reaches, as do all the
+        # lines meeting there)
+        net, runs = requirements, []
+        if coarse and UNDER_RUN_ON:
+            net, runs = street_runs(lines, [ground[g][3] for g in gids], requirements)
+        offsets = underpass_offsets(lines, net, queries)
+        for rxy, members, reqs in runs:
+            on = [k for k, (ln, _q) in enumerate(queries) if ln in members]
+            if on:
+                for k, got in zip(on, underpass_offsets([rxy], reqs, [(0, queries[k][1]) for k in on])):
+                    offsets[k] = np.minimum(offsets[k], got)
+        for n, near, got in zip(which, inside, offsets):
             if not np.any(got < -1e-8):
                 continue
             fid, p = plans[n]
@@ -2877,6 +2915,77 @@ def underpass_offsets(lines, requirements, queries=None):
                     UNDER_JOINT_FADE_M, 0.5], f64)
     out = fast._ef.underpass_offsets(xy, starts, req, qxy, qline, prm)
     return np.split(out, np.cumsum([len(q) for q in qs])[:-1])
+
+
+def street_runs(lines, classes, requirements):
+    """UNDER_RUN_* (coarse elevation): requirements [(line, arc m, depth m)] on the ground roads lines [(k, 2)] (classes:
+    each one's road class) split into (those spread along the joined roads as before: [(line, arc, depth)], those kept
+    on their street: [(run xy (k, 2), {its lines}, [(0, arc m along the run, depth m)])]). A run: a line carried on
+    through every node where only its next piece joins it (the map splits a road at more than its junctions) to its
+    junctions (3+ lines) and loose ends; underpass_offsets on a run alone lays each dip inside it (flat, then ramps up
+    to UNDER_MAX_GRADE, as deep as fits). Kept on its run: a street's dip (not a motorway's or trunk's: APPROACH_SKIP)
+    whose run has room for UNDER_RUN_MIN_M of it (or all of it, when shallower) and is no ring. Pure."""
+    if not requirements:
+        return list(requirements), []
+    pts = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
+    nodes, edges, _adj = roadsmod._chain_graph(pts)
+    inc = [[] for _ in nodes]
+    for l, (a, b, _s) in enumerate(edges):
+        inc[a].append(l)
+        inc[b].append(l)
+    memo = {}
+
+    def run_of(i):
+        """(xy, its arc lengths, {line: (arc of its start in the run, reversed, its own length)}, ring), the same for
+        every line of the run."""
+        got = memo.get(i)
+        if got is not None:
+            return got
+        seq, ring = [(i, False)], False
+        for ahead in (True, False):
+            l, rev = i, False
+            while True:
+                a, b, _s = edges[l]
+                end = (a if rev else b) if ahead else (b if rev else a)
+                if len(inc[end]) != 2:
+                    break
+                m = inc[end][1] if inc[end][0] == l else inc[end][0]
+                if any(m == k for k, _r in seq):
+                    ring = True
+                    break
+                ma, mb, _s = edges[m]
+                rev = (ma != end) if ahead else (mb != end)
+                if ahead:
+                    seq.append((m, rev))
+                else:
+                    seq.insert(0, (m, rev))
+                l = m
+        xy, first = [], []
+        for m, rev in seq:
+            p = pts[m][::-1] if rev else pts[m]
+            first.append(sum(len(q) for q in xy) - (1 if xy else 0))
+            xy.append(p if not xy else p[1:])
+        xy = np.vstack(xy)
+        sx = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+        got = (xy, sx, {m: (float(sx[k]), rev, float(edges[m][2][-1])) for (m, rev), k in zip(seq, first)}, ring)
+        for m, _rev in seq:
+            memo[m] = got
+        return got
+    net, runs = [], {}
+    for i, sc, depth in requirements:
+        i = int(i)
+        if classes[i] in APPROACH_SKIP:
+            net.append((i, sc, depth))
+            continue
+        xy, sx, at, ring = run_of(i)
+        s0, rev, length = at[i]
+        arc = float(np.clip(s0 + (length - sc if rev else sc), 0.0, sx[-1]))
+        fit = max(0.0, min(arc, float(sx[-1]) - arc) - UNDER_FLAT_M) * 2.0 * UNDER_MAX_GRADE / math.pi
+        if ring or fit < min(depth, UNDER_RUN_MIN_M):
+            net.append((i, sc, depth))
+            continue
+        runs.setdefault(id(xy), (xy, set(at), []))[2].append((0, arc, depth))
+    return net, list(runs.values())
 
 
 def under_dip(d, depth, room=(math.inf, math.inf)):
