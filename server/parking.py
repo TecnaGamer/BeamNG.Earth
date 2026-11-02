@@ -273,15 +273,28 @@ def aisle_spots(roads, aisles, box, blockers=(), lots=()):
         for side in (1.0, -1.0):
             n = np.stack([-D[:, 1], D[:, 0]], 1) * side
             Q = P[:, :2] + n * (spec.width / 2 + LOT_SPOT_D_M / 2)
-            for q, nn, p in zip(Q, n, P):
+            hit = _hits(paths, Q)
+            for q, nn, p, h in zip(Q, n, P, hit):
                 if not (_owns(box, q[0], q[1])):
                     continue
                 if not furniture._clear(np.array([q[0], q[1], p[2]]), others, fid):
                     continue
-                if _hit(paths, q):
+                if h:
                     continue
                 out.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                             round(math.degrees(math.atan2(nn[1], nn[0])) % 360.0, 1), 1])
+    return out
+
+
+def _hits(paths, pts):
+    """Per point of pts (k, 2): does it lie in any of the polygons (_hit for every point at once: one point at a time it
+    was ~0.36 s of a Manhattan tile set, 2026-11-02)?"""
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    out = np.zeros(len(pts), bool)
+    for pa in paths or ():
+        if not len(pts):
+            break
+        out |= np.asarray(pa.contains_points(pts), bool).reshape(-1)
     return out
 
 
@@ -524,6 +537,7 @@ def aisle_markings(roads, aisles, box, blockers=(), lots=()):
             n = np.stack([-D[:, 1], D[:, 0]], 1) * side
             Q = P[:, :2] + n * (spec.width / 2 + LOT_SPOT_D_M / 2)
             keep = np.ones(len(st), bool)
+            hit = _hits(paths, Q)
             for i, (q, p) in enumerate(zip(Q, P)):
                 if not (ex0 <= q[0] < ex1 and ey0 <= q[1] < ey1):
                     keep[i] = False
@@ -531,7 +545,7 @@ def aisle_markings(roads, aisles, box, blockers=(), lots=()):
                 if not furniture._clear(np.array([q[0], q[1], p[2]]), others, fid):
                     keep[i] = False
                     continue
-                if _hit(paths, q):
+                if hit[i]:
                     keep[i] = False
             room = LOT_MAX_PER_TILE - n_stalls
             if int(keep.sum()) > room:

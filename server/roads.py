@@ -1839,15 +1839,33 @@ def joint_desc(copies, fn):
     return tuple(out[k] for k in sorted(out))
 
 
-def copies_of(cells):
-    """{road id: [(feats, i)]}: every copy of each road in cells (joint_desc)."""
-    where = {}
-    for f in cells or ():
-        if f is None:
-            continue
+def _id_rows(f):
+    """{road id: [rows]} of a layer, made once (kept on it)."""
+    got = f.__dict__.get("_id_rows")
+    if got is None:
+        got = {}
         for i, fid in enumerate(f.ids.tolist()):
-            where.setdefault(str(fid), []).append((f, i))
-    return where
+            got.setdefault(str(fid), []).append(i)
+        f.__dict__["_id_rows"] = got
+    return got
+
+
+class _Copies:
+    """copies_of's answer: get(road id, default) -> [(feats, i)] of every copy, in the cells' order, from each layer's
+    own index (_id_rows: a dict of every road of the cells made at each call was ~0.4 s of a Manhattan tile set)."""
+
+    def __init__(self, cells):
+        self.cells = [f for f in (cells or ()) if f is not None]
+
+    def get(self, fid, default=None):
+        fid = str(fid)
+        out = [(f, i) for f in self.cells for i in _id_rows(f).get(fid, ())]
+        return out if out else default
+
+
+def copies_of(cells):
+    """{road id: [(feats, i)]} (a _Copies, read with .get): every copy of each road in cells (joint_desc)."""
+    return _Copies(cells)
 
 
 def deck_tapers(feats):
@@ -7683,6 +7701,29 @@ def _deck_frame(spec, walk):
     return float(spec.width) + wm * len(sides), wm / 2 * float(sum(sides))
 
 
+def _end_nodes(feats):
+    """(rounded end point -> [(feature, 0 | 1)], (feature, 0 | 1) -> its end point) of a layer's features' first-to-last
+    coordinates, made once (kept on it): deck_walks made them for the whole layer at each deck, ~0.5 s of a Manhattan
+    tile set (2026-11-02). Pure given feats."""
+    got = feats.__dict__.get("_end_nodes")
+    if got is not None:
+        return got
+    nodes = {}                                  # rounded end point -> [(feature, 0 | 1)]
+    for j in range(len(feats)):
+        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
+        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
+        if b - a < 2:
+            continue
+        for e, k in ((0, a), (1, b - 1)):
+            nodes.setdefault((round(float(feats.lonlat[k, 0]), 6), round(float(feats.lonlat[k, 1]), 6)), []).append((j, e))
+    ends = {}
+    for key, lst in nodes.items():
+        for j, e in lst:
+            ends[(j, e)] = key
+    got = feats.__dict__["_end_nodes"] = (nodes, ends)
+    return got
+
+
 def deck_walks(feats, i, ground_specs, left_hand=False):
     """(sidewalk width m, sides) a deck of feature i carries, or None: its own ground part's (ground_specs[i]: the
     tile's road_specs, land cover and all) where that has sidewalks, else those of the nearest road of its class with
@@ -7696,18 +7737,7 @@ def deck_walks(feats, i, ground_specs, left_hand=False):
     if bridge[i] is None:
         return None
     cls = bridge[i].cls
-    nodes = {}                                  # rounded end point -> [(feature, 0 | 1)]
-    for j in range(len(feats)):
-        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
-        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
-        if b - a < 2:
-            continue
-        for e, k in ((0, a), (1, b - 1)):
-            nodes.setdefault((round(float(feats.lonlat[k, 0]), 6), round(float(feats.lonlat[k, 1]), 6)), []).append((j, e))
-    ends = {}
-    for key, lst in nodes.items():
-        for j, e in lst:
-            ends[(j, e)] = key
+    nodes, ends = _end_nodes(feats)
     seen, frontier = {i}, [(i, False)]          # (feature, whether its direction runs against i's)
     for _ in range(DECK_WALK_CHAIN):
         nxt, best = [], None
