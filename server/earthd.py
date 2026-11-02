@@ -763,7 +763,6 @@ class Server:
         self.urgent_base_pool = ThreadPoolExecutor(2, thread_name_prefix="base-urgent")
         self.prov_pool = ThreadPoolExecutor(2, thread_name_prefix="provisional")    # follow blocks sent provisional
         self.prov_info = {}             # (aid, cx, cy) -> a provisional follow block's info (until the graded one)
-        self.follow_s = deque(maxlen=PROVISIONAL_RECENT)   # how long the last graded follow blocks took (s)
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
@@ -829,7 +828,7 @@ class Server:
         self.base_stale = set()         # blocks whose base photo lacks lazy imagery (NAIP) still to come
         self.base_skipped = set()      # blocks built without their photo (a fast player's prefetch: base_refresh)
         self.quick_pool = ThreadPoolExecutor(1, thread_name_prefix="quick-base")   # stand-in photos (_quick_later)
-        self.quick_early = ThreadPoolExecutor(1, thread_name_prefix="quick-early")   # ... started with a block (fast)
+        self.quick_early = ThreadPoolExecutor(2, thread_name_prefix="quick-early")   # ... started with a block (fast)
         self.quick_futs = {}            # (aid, cx, cy) -> a requested block's stand-in photo started with it (fast)
         self.photo_pool = None          # requested blocks' photos and stand-ins (main(): PHOTO_PROCESS_MIN_CPUS)
         self.recent_full = collections.deque(maxlen=RECENT_FULL)    # (anchorId, cx, cy, rgb) of the last full photos
@@ -2036,6 +2035,10 @@ class Server:
             # (500 mph, 2026-10-30)
             self.base_stale.add((anchor.id, cx, cy))
             self.base_skipped.add((anchor.id, cx, cy))
+            if getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
+                # (its stand-in beside the heights too: made after them it was 2-8 s more of every prefetched block,
+                # which a request for it then waited out; nyc_speed.py 2026-11-02)
+                self.quick_futs[(anchor.id, cx, cy)] = self.quick_early.submit(self._stand_in, anchor, cx, cy)
         elif self.near_visual == "detail" and self.imagery is not None:
             base = (self.urgent_base_pool if lane == LANE_REQUEST else self.base_pool).submit(
                 self._base_photo, anchor, cx, cy, self._base_process(lane), lane == LANE_REQUEST)
@@ -2068,6 +2071,23 @@ class Server:
                 return self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base)
         finally:
             self.hm_stage.pop(key, None)
+
+    def block_planned(self, anchor, cx, cy):
+        """Are the road plans of every map cell under block (cx, cy) made (here, or on disk: this run's plan cache, the
+        revisit cache)? Then its graded build is quick and a provisional block only doubles the work."""
+        g = self.grader_for(anchor)
+        if g is None or not hasattr(g, "store"):
+            return True
+        half = self.layout.block * heightmap.SQUARE / 2
+        X, Y = np.meshgrid(cx + np.linspace(-half, half, 5), cy + np.linspace(-half, half, 5))
+        la, lo, _ = anchor.frame.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        for pl, idx in g.store.planners_of(la, lo):
+            for k in pl._keys(la[idx], lo[idx]):
+                sh = getattr(pl, "shared", None)
+                if not (pl.planned(k) or (sh is not None and sh.has(k))):
+                    return False
+        return True
 
     def make_provisional(self, anchor, cx, cy, progress, ground_at=(0.0, 0.0)):
         """Worker thread: a teleport's first block before its road plans (the user, 2026-10-22: "place the car as
@@ -2378,7 +2398,15 @@ class Server:
             # player at 170 mph: road, brown, green, road again; 2026-10-30). Its own photo: base_refresh. Faster than
             # QUICK_SYNC_MAX_V: after it (on its own thread): made before it, the prefetch fell behind at 500 mph (the car
             # held 40 s of 90 against none); at 170 mph no hold, roads 1.2 km ahead.
-            if getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
+            early = self.quick_futs.pop((anchor.id, cx, cy), None)
+            if early is not None:
+                t1 = time.perf_counter()
+                try:
+                    info["base"] = early.result()
+                except Exception as e:
+                    log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
+                info.setdefault("stages", {})["standIn"] = time.perf_counter() - t1
+            elif getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
                 # (in the block's own process when it can: just done with its heights; here it took 2-6 s, 2026-10-31)
                 info["base"] = (self._quick_elsewhere(anchor, cx, cy, lane) if lane is not None else None) \
                     or self.write_quick_base(anchor, cx, cy)
@@ -3610,14 +3638,11 @@ class Server:
 # instead of 15-60 s on a fresh place) and replaced by the graded one when that is built (terrain_refresh)
 PROVISIONAL_FIRST = os.environ.get("BNGE_PROVISIONAL", "1") != "0"
 PROVISIONAL_KEEP_S = 60.0   # the provisional .ter is deleted this long after its replacement was sent
-# A follow block the mod asked for and not built this soon (its road plans: a first visit's cells, 15-120 s; or the block
-# processes busy with them: requests queued 72-80 s in Chicago, the edge guard holding the car, 2026-11-01): sent
-# provisional (make_provisional, its own threads) and the graded one as terrain_refresh when built (refine_follow)
+# A follow block the mod asked for whose road plans are not made yet (a first visit's cells, 15-120 s: requests queued
+# 72-80 s in Chicago, the edge guard holding the car, 2026-11-01): sent provisional at once (make_provisional, its own
+# threads) and the graded one as terrain_refresh when built (refine_follow); BNGE_PROVISIONAL_FOLLOW_S=0: never
 PROVISIONAL_FOLLOW_S = float(os.environ.get("BNGE_PROVISIONAL_FOLLOW_S", "2.5"))
-# ... at once (no wait) while the graded follow blocks have been this slow (the median of the last ones: a first
-# visit's cells, the block processes busy), where waiting only made the provisional one later too
-PROVISIONAL_SLOW_S = 4.0
-PROVISIONAL_RECENT = 5
+
 PADS_REFRESH_MS = 5.0       # the block in use built again with its gas station pads only below this speed (m/s) ...
 PADS_SETTLE_S = 3.0         # ... and this long after the last new pad (Connection.pads_refresh)
 NAV_WAIT_S = 30.0           # s an anchor's first AI graph waits at most for the road tiles round the car (nav_may_start)
@@ -4822,11 +4847,18 @@ class Connection:
             return None
         key = (anchor.id, cx, cy)
         info = s.prov_info.get(key)     # (asked again: its provisional block at once)
-        t0 = time.perf_counter()
-        job.add_done_callback(lambda f: f.cancelled() or f.exception() or s.follow_s.append(time.perf_counter() - t0))
-        recent = sorted(s.follow_s)
-        slow = len(recent) >= 2 and recent[len(recent) // 2] > PROVISIONAL_SLOW_S
-        done, _ = await asyncio.wait({job}, timeout=0 if info is not None or slow else PROVISIONAL_FOLLOW_S)
+        if info is None:
+            # only where its road plans are not made yet (a first visit's cells: 15-120 s of planning); planned, the
+            # graded block is quick and a provisional one (in this process, 4-8 s beside the rest at 200 mph) came
+            # after it, only doubling the work (nyc_speed.py down Midtown, 2026-11-02)
+            try:
+                planned = await asyncio.get_running_loop().run_in_executor(s.prov_pool, s.block_planned, anchor, cx, cy)
+            except Exception:
+                planned = True
+            if planned:
+                return None
+        # (not planned: the graded block is 15 s and more away, the provisional one starts at once)
+        done, _ = await asyncio.wait({job}, timeout=0)
         if done:
             return None
         if info is None:
