@@ -7472,6 +7472,31 @@ def _deck_frame(spec, walk):
     return float(spec.width) + wm * len(sides), wm / 2 * float(sum(sides))
 
 
+def _deck_walk_graph(feats):
+    """Endpoint adjacency shared by bridge sidewalk lookups on an immutable decoded cell.
+
+    Only geometry is cached: widths, land cover and driving side still come from
+    each call's specs. The graph dies with the cell, like its other source caches.
+    Publish after construction so concurrent readers never see a partial graph.
+    """
+    got = feats.__dict__.get("_deck_walk_graph")
+    if got is not None:
+        return got
+    nodes = {}                                  # rounded end point -> [(feature, 0 | 1)]
+    for j in range(len(feats)):
+        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
+        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
+        if b - a < 2:
+            continue
+        for e, k in ((0, a), (1, b - 1)):
+            nodes.setdefault((round(float(feats.lonlat[k, 0]), 6), round(float(feats.lonlat[k, 1]), 6)), []).append((j, e))
+    ends = {}
+    for key, lst in nodes.items():
+        for j, e in lst:
+            ends[(j, e)] = key
+    return feats.__dict__.setdefault("_deck_walk_graph", (nodes, ends))
+
+
 def deck_walks(feats, i, ground_specs, left_hand=False):
     """(sidewalk width m, sides) a deck of feature i carries, or None: its own ground part's (ground_specs[i]: the
     tile's road_specs, land cover and all) where that has sidewalks, else those of the nearest road of its class with
@@ -7485,18 +7510,7 @@ def deck_walks(feats, i, ground_specs, left_hand=False):
     if bridge[i] is None:
         return None
     cls = bridge[i].cls
-    nodes = {}                                  # rounded end point -> [(feature, 0 | 1)]
-    for j in range(len(feats)):
-        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
-        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
-        if b - a < 2:
-            continue
-        for e, k in ((0, a), (1, b - 1)):
-            nodes.setdefault((round(float(feats.lonlat[k, 0]), 6), round(float(feats.lonlat[k, 1]), 6)), []).append((j, e))
-    ends = {}
-    for key, lst in nodes.items():
-        for j, e in lst:
-            ends[(j, e)] = key
+    nodes, ends = _deck_walk_graph(feats)
     seen, frontier = {i}, [(i, False)]          # (feature, whether its direction runs against i's)
     for _ in range(DECK_WALK_CHAIN):
         nxt, best = [], None

@@ -1,0 +1,1512 @@
+{
+  "baseline": "9f4739d213caab307a85cb292e4306029bf2a984",
+  "date": "2026-11-02",
+  "runtime_change": "Cache deck_walks endpoint adjacency on immutable decoded Features",
+  "scope": "Offline controlled road geometry on flat 10m terrain with all-urban classification and local bridge fallback. No FPS claim.",
+  "source": {
+    "baseline_roads_git_blob": "f039f8d7a85ed7f289e581cf7f8900278667e104",
+    "patched_roads_git_blob": "f63aeea852614d1c4dc7daded3fdb03ceec20059"
+  },
+  "summary": {
+    "auckland": {
+      "features": 4273,
+      "total_before": 0.772698799999489,
+      "total_after": 0.3609809999998106,
+      "total_reduction": 0.5328309038398282,
+      "builder_reduction": 0.6060287599750407,
+      "graph_bytes": 2956964,
+      "lookups_profiled": 657
+    },
+    "tokyo": {
+      "features": 5277,
+      "total_before": 0.8387492000001657,
+      "total_after": 0.5803190999995422,
+      "total_reduction": 0.30811367689003155,
+      "builder_reduction": 0.3634415508155181,
+      "graph_bytes": 3259124,
+      "lookups_profiled": 252
+    }
+  },
+  "geometry": {
+    "auckland": {
+      "baseline": {
+        "scope": "Offline road geometry benchmark using existing decoded map-cell files.\n\nMeasures the road builder and draped mesh separately, with flat 10 m terrain.\nThis deliberately excludes network, grading, buildings, process queues and game\nimports. The input cache is read only; profiles and JSON go to --out.\n",
+        "at": [
+          -36.85325222344017,
+          174.759521484375
+        ],
+        "anchor_tiles": false,
+        "profiled": false,
+        "python": "3.14.7",
+        "numpy": "2.5.4",
+        "native_version": 140,
+        "sources": {
+          "14/16145/9998": {
+            "sha256": "e493153a08914871dee17779ee5f952e7fbe675eadbe421899a2f7e8a2a090a2",
+            "features": 4273
+          }
+        },
+        "rows": [
+          {
+            "repeat": 0,
+            "key": "g17_129163_79987",
+            "build_s": 1.2868947999995726,
+            "mesh_s": 0.15507700000125624,
+            "cpu_s": 1.40625,
+            "chunks": 155,
+            "walks": 7,
+            "digest": "e028616b2a9faff8a0ae2cd0ef5a4c2e666677e67fcf3d494dfc10d753c2b099"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129163_79988",
+            "build_s": 0.6427349999994476,
+            "mesh_s": 0.13444200000049022,
+            "cpu_s": 0.765625,
+            "chunks": 254,
+            "walks": 15,
+            "digest": "a000780967b4b19a2d5fd630c018ad2a5daa40b99433fdd4b76fb26ce06a51a3"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129163_79989",
+            "build_s": 0.6405462999991869,
+            "mesh_s": 0.08500380000077712,
+            "cpu_s": 0.703125,
+            "chunks": 179,
+            "walks": 35,
+            "digest": "369d563f66c4cd83d9189f34048ea7cf6c3ff2348a6cddb9f836ad61077dc070"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129164_79987",
+            "build_s": 0.6054955999989033,
+            "mesh_s": 0.08140350000030594,
+            "cpu_s": 0.65625,
+            "chunks": 169,
+            "walks": 26,
+            "digest": "2ca20a433afc2f5a3f92c87d4681f39c4b31079d6190e02f16094721b8381fd7"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129164_79988",
+            "build_s": 0.617059899999731,
+            "mesh_s": 0.07763929999964603,
+            "cpu_s": 0.6875,
+            "chunks": 126,
+            "walks": 33,
+            "digest": "f48c826bff9d1580a6dda9b0358f5a783bfa9edb262ee7b4a1383e29eb421382"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129164_79989",
+            "build_s": 0.6095608000014181,
+            "mesh_s": 0.06731089999993856,
+            "cpu_s": 0.671875,
+            "chunks": 91,
+            "walks": 22,
+            "digest": "5982c37880ddf2bfd2cf7c67b1901019cfee908903f3236d14b49cbd876774e5"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129165_79987",
+            "build_s": 0.6805370999991283,
+            "mesh_s": 0.06864409999980126,
+            "cpu_s": 0.75,
+            "chunks": 88,
+            "walks": 38,
+            "digest": "052cf253188a72fc52641b1a804df6899f7886d339e222d5c70ec3dbf0c1e2dc"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129165_79988",
+            "build_s": 0.7929604000000836,
+            "mesh_s": 0.10116600000037579,
+            "cpu_s": 0.875,
+            "chunks": 198,
+            "walks": 74,
+            "digest": "2b40618446291fedd3ff375cdb44cf41f4ae25b489e5b4d6d0a43763993e5941"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129165_79989",
+            "build_s": 0.7854974000001675,
+            "mesh_s": 0.07350410000071861,
+            "cpu_s": 0.859375,
+            "chunks": 115,
+            "walks": 48,
+            "digest": "bdb6eb6bfb3139388623dd934dc34e096e85ce7d496ed04039ac7e81aa3a0022"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129163_79987",
+            "build_s": 0.6081118000001879,
+            "mesh_s": 0.15439449999939825,
+            "cpu_s": 0.765625,
+            "chunks": 155,
+            "walks": 7,
+            "digest": "e028616b2a9faff8a0ae2cd0ef5a4c2e666677e67fcf3d494dfc10d753c2b099"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129163_79988",
+            "build_s": 0.6835814999994909,
+            "mesh_s": 0.15653410000049917,
+            "cpu_s": 0.84375,
+            "chunks": 254,
+            "walks": 15,
+            "digest": "a000780967b4b19a2d5fd630c018ad2a5daa40b99433fdd4b76fb26ce06a51a3"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129163_79989",
+            "build_s": 0.7226922000008926,
+            "mesh_s": 0.08634369999890623,
+            "cpu_s": 0.78125,
+            "chunks": 179,
+            "walks": 35,
+            "digest": "369d563f66c4cd83d9189f34048ea7cf6c3ff2348a6cddb9f836ad61077dc070"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129164_79987",
+            "build_s": 0.7039299999996729,
+            "mesh_s": 0.08551100000113365,
+            "cpu_s": 0.78125,
+            "chunks": 169,
+            "walks": 26,
+            "digest": "2ca20a433afc2f5a3f92c87d4681f39c4b31079d6190e02f16094721b8381fd7"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129164_79988",
+            "build_s": 0.6149734999999055,
+            "mesh_s": 0.07334509999964212,
+            "cpu_s": 0.6875,
+            "chunks": 126,
+            "walks": 33,
+            "digest": "f48c826bff9d1580a6dda9b0358f5a783bfa9edb262ee7b4a1383e29eb421382"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129164_79989",
+            "build_s": 0.5914066000004823,
+            "mesh_s": 0.06698499999947671,
+            "cpu_s": 0.65625,
+            "chunks": 91,
+            "walks": 22,
+            "digest": "5982c37880ddf2bfd2cf7c67b1901019cfee908903f3236d14b49cbd876774e5"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129165_79987",
+            "build_s": 0.6125405000002502,
+            "mesh_s": 0.06366799999887007,
+            "cpu_s": 0.671875,
+            "chunks": 88,
+            "walks": 38,
+            "digest": "052cf253188a72fc52641b1a804df6899f7886d339e222d5c70ec3dbf0c1e2dc"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129165_79988",
+            "build_s": 0.712797899999714,
+            "mesh_s": 0.09048989999973855,
+            "cpu_s": 0.765625,
+            "chunks": 198,
+            "walks": 74,
+            "digest": "2b40618446291fedd3ff375cdb44cf41f4ae25b489e5b4d6d0a43763993e5941"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129165_79989",
+            "build_s": 0.6920525000005,
+            "mesh_s": 0.07148369999958959,
+            "cpu_s": 0.765625,
+            "chunks": 115,
+            "walks": 48,
+            "digest": "bdb6eb6bfb3139388623dd934dc34e096e85ce7d496ed04039ac7e81aa3a0022"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129163_79987",
+            "build_s": 0.6424052999991545,
+            "mesh_s": 0.1793881000012334,
+            "cpu_s": 0.828125,
+            "chunks": 155,
+            "walks": 7,
+            "digest": "e028616b2a9faff8a0ae2cd0ef5a4c2e666677e67fcf3d494dfc10d753c2b099"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129163_79988",
+            "build_s": 0.7592187999998714,
+            "mesh_s": 0.16159069999957865,
+            "cpu_s": 0.890625,
+            "chunks": 254,
+            "walks": 15,
+            "digest": "a000780967b4b19a2d5fd630c018ad2a5daa40b99433fdd4b76fb26ce06a51a3"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129163_79989",
+            "build_s": 0.7110259000000951,
+            "mesh_s": 0.09082349999880535,
+            "cpu_s": 0.8125,
+            "chunks": 179,
+            "walks": 35,
+            "digest": "369d563f66c4cd83d9189f34048ea7cf6c3ff2348a6cddb9f836ad61077dc070"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129164_79987",
+            "build_s": 0.6289895999998407,
+            "mesh_s": 0.08055439999952796,
+            "cpu_s": 0.671875,
+            "chunks": 169,
+            "walks": 26,
+            "digest": "2ca20a433afc2f5a3f92c87d4681f39c4b31079d6190e02f16094721b8381fd7"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129164_79988",
+            "build_s": 0.7521420000011858,
+            "mesh_s": 0.07684369999878982,
+            "cpu_s": 0.828125,
+            "chunks": 126,
+            "walks": 33,
+            "digest": "f48c826bff9d1580a6dda9b0358f5a783bfa9edb262ee7b4a1383e29eb421382"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129164_79989",
+            "build_s": 0.6966045000008307,
+            "mesh_s": 0.07609429999865824,
+            "cpu_s": 0.734375,
+            "chunks": 91,
+            "walks": 22,
+            "digest": "5982c37880ddf2bfd2cf7c67b1901019cfee908903f3236d14b49cbd876774e5"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129165_79987",
+            "build_s": 0.6470112999995763,
+            "mesh_s": 0.07369850000031875,
+            "cpu_s": 0.71875,
+            "chunks": 88,
+            "walks": 38,
+            "digest": "052cf253188a72fc52641b1a804df6899f7886d339e222d5c70ec3dbf0c1e2dc"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129165_79988",
+            "build_s": 0.7372919999997976,
+            "mesh_s": 0.08965340000031574,
+            "cpu_s": 0.8125,
+            "chunks": 198,
+            "walks": 74,
+            "digest": "2b40618446291fedd3ff375cdb44cf41f4ae25b489e5b4d6d0a43763993e5941"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129165_79989",
+            "build_s": 0.6818781999991188,
+            "mesh_s": 0.07283650000135822,
+            "cpu_s": 0.75,
+            "chunks": 115,
+            "walks": 48,
+            "digest": "bdb6eb6bfb3139388623dd934dc34e096e85ce7d496ed04039ac7e81aa3a0022"
+          }
+        ],
+        "commit": "9f4739d213caab307a85cb292e4306029bf2a984",
+        "median_s": {
+          "build_s": 0.6818781999991188,
+          "mesh_s": 0.08140350000030594,
+          "cpu_s": 0.765625
+        },
+        "country": "NZ",
+        "left_hand": true,
+        "source_state": "See top-level source blob IDs"
+      },
+      "patched": {
+        "scope": "Offline road geometry benchmark using existing decoded map-cell files.\n\nMeasures the road builder and draped mesh separately, with flat 10 m terrain.\nThis deliberately excludes network, grading, buildings, process queues and game\nimports. The input cache is read only; profiles and JSON go to --out.\n",
+        "at": [
+          -36.85325222344017,
+          174.759521484375
+        ],
+        "anchor_tiles": false,
+        "profiled": false,
+        "python": "3.14.7",
+        "numpy": "2.5.4",
+        "native_version": 140,
+        "sources": {
+          "14/16145/9998": {
+            "sha256": "e493153a08914871dee17779ee5f952e7fbe675eadbe421899a2f7e8a2a090a2",
+            "features": 4273
+          }
+        },
+        "rows": [
+          {
+            "repeat": 0,
+            "key": "g17_129163_79987",
+            "build_s": 0.9401505000005272,
+            "mesh_s": 0.15637389999938023,
+            "cpu_s": 1.03125,
+            "chunks": 155,
+            "walks": 7,
+            "digest": "e028616b2a9faff8a0ae2cd0ef5a4c2e666677e67fcf3d494dfc10d753c2b099"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129163_79988",
+            "build_s": 0.273532699999123,
+            "mesh_s": 0.13006839999980002,
+            "cpu_s": 0.390625,
+            "chunks": 254,
+            "walks": 15,
+            "digest": "a000780967b4b19a2d5fd630c018ad2a5daa40b99433fdd4b76fb26ce06a51a3"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129163_79989",
+            "build_s": 0.2755851000001712,
+            "mesh_s": 0.08539589999963937,
+            "cpu_s": 0.328125,
+            "chunks": 179,
+            "walks": 35,
+            "digest": "369d563f66c4cd83d9189f34048ea7cf6c3ff2348a6cddb9f836ad61077dc070"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129164_79987",
+            "build_s": 0.25448580000011134,
+            "mesh_s": 0.07607119999920542,
+            "cpu_s": 0.328125,
+            "chunks": 169,
+            "walks": 26,
+            "digest": "2ca20a433afc2f5a3f92c87d4681f39c4b31079d6190e02f16094721b8381fd7"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129164_79988",
+            "build_s": 0.2627517999990232,
+            "mesh_s": 0.08010439999998198,
+            "cpu_s": 0.328125,
+            "chunks": 126,
+            "walks": 33,
+            "digest": "f48c826bff9d1580a6dda9b0358f5a783bfa9edb262ee7b4a1383e29eb421382"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129164_79989",
+            "build_s": 0.2343603000008443,
+            "mesh_s": 0.0642701999986457,
+            "cpu_s": 0.28125,
+            "chunks": 91,
+            "walks": 22,
+            "digest": "5982c37880ddf2bfd2cf7c67b1901019cfee908903f3236d14b49cbd876774e5"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129165_79987",
+            "build_s": 0.257305200000701,
+            "mesh_s": 0.0693489999994199,
+            "cpu_s": 0.328125,
+            "chunks": 88,
+            "walks": 38,
+            "digest": "052cf253188a72fc52641b1a804df6899f7886d339e222d5c70ec3dbf0c1e2dc"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129165_79988",
+            "build_s": 0.3459184000003006,
+            "mesh_s": 0.08834380000007513,
+            "cpu_s": 0.4375,
+            "chunks": 198,
+            "walks": 74,
+            "digest": "2b40618446291fedd3ff375cdb44cf41f4ae25b489e5b4d6d0a43763993e5941"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_129165_79989",
+            "build_s": 0.3281642000001739,
+            "mesh_s": 0.06962190000012924,
+            "cpu_s": 0.40625,
+            "chunks": 115,
+            "walks": 48,
+            "digest": "bdb6eb6bfb3139388623dd934dc34e096e85ce7d496ed04039ac7e81aa3a0022"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129163_79987",
+            "build_s": 0.221787199998289,
+            "mesh_s": 0.15024059999996098,
+            "cpu_s": 0.375,
+            "chunks": 155,
+            "walks": 7,
+            "digest": "e028616b2a9faff8a0ae2cd0ef5a4c2e666677e67fcf3d494dfc10d753c2b099"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129163_79988",
+            "build_s": 0.26732520000041404,
+            "mesh_s": 0.13271889999850828,
+            "cpu_s": 0.40625,
+            "chunks": 254,
+            "walks": 15,
+            "digest": "a000780967b4b19a2d5fd630c018ad2a5daa40b99433fdd4b76fb26ce06a51a3"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129163_79989",
+            "build_s": 0.26994809999996505,
+            "mesh_s": 0.08410940000067058,
+            "cpu_s": 0.359375,
+            "chunks": 179,
+            "walks": 35,
+            "digest": "369d563f66c4cd83d9189f34048ea7cf6c3ff2348a6cddb9f836ad61077dc070"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129164_79987",
+            "build_s": 0.25583629999891855,
+            "mesh_s": 0.07782989999941492,
+            "cpu_s": 0.328125,
+            "chunks": 169,
+            "walks": 26,
+            "digest": "2ca20a433afc2f5a3f92c87d4681f39c4b31079d6190e02f16094721b8381fd7"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129164_79988",
+            "build_s": 0.2750986000010016,
+            "mesh_s": 0.07631959999889659,
+            "cpu_s": 0.359375,
+            "chunks": 126,
+            "walks": 33,
+            "digest": "f48c826bff9d1580a6dda9b0358f5a783bfa9edb262ee7b4a1383e29eb421382"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129164_79989",
+            "build_s": 0.2617035000002943,
+            "mesh_s": 0.0666417000011279,
+            "cpu_s": 0.328125,
+            "chunks": 91,
+            "walks": 22,
+            "digest": "5982c37880ddf2bfd2cf7c67b1901019cfee908903f3236d14b49cbd876774e5"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129165_79987",
+            "build_s": 0.26864039999964007,
+            "mesh_s": 0.06532469999910973,
+            "cpu_s": 0.34375,
+            "chunks": 88,
+            "walks": 38,
+            "digest": "052cf253188a72fc52641b1a804df6899f7886d339e222d5c70ec3dbf0c1e2dc"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129165_79988",
+            "build_s": 0.35501380000096106,
+            "mesh_s": 0.08991219999916211,
+            "cpu_s": 0.4375,
+            "chunks": 198,
+            "walks": 74,
+            "digest": "2b40618446291fedd3ff375cdb44cf41f4ae25b489e5b4d6d0a43763993e5941"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_129165_79989",
+            "build_s": 0.3345496000001731,
+            "mesh_s": 0.06973069999912695,
+            "cpu_s": 0.390625,
+            "chunks": 115,
+            "walks": 48,
+            "digest": "bdb6eb6bfb3139388623dd934dc34e096e85ce7d496ed04039ac7e81aa3a0022"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129163_79987",
+            "build_s": 0.21832150000045658,
+            "mesh_s": 0.1460209999986546,
+            "cpu_s": 0.359375,
+            "chunks": 155,
+            "walks": 7,
+            "digest": "e028616b2a9faff8a0ae2cd0ef5a4c2e666677e67fcf3d494dfc10d753c2b099"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129163_79988",
+            "build_s": 0.2762440999995306,
+            "mesh_s": 0.13135150000016438,
+            "cpu_s": 0.40625,
+            "chunks": 254,
+            "walks": 15,
+            "digest": "a000780967b4b19a2d5fd630c018ad2a5daa40b99433fdd4b76fb26ce06a51a3"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129163_79989",
+            "build_s": 0.2757141000001866,
+            "mesh_s": 0.08769779999965976,
+            "cpu_s": 0.359375,
+            "chunks": 179,
+            "walks": 35,
+            "digest": "369d563f66c4cd83d9189f34048ea7cf6c3ff2348a6cddb9f836ad61077dc070"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129164_79987",
+            "build_s": 0.26223879999997735,
+            "mesh_s": 0.07775670000046375,
+            "cpu_s": 0.328125,
+            "chunks": 169,
+            "walks": 26,
+            "digest": "2ca20a433afc2f5a3f92c87d4681f39c4b31079d6190e02f16094721b8381fd7"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129164_79988",
+            "build_s": 0.25368650000018533,
+            "mesh_s": 0.07528140000067651,
+            "cpu_s": 0.328125,
+            "chunks": 126,
+            "walks": 33,
+            "digest": "f48c826bff9d1580a6dda9b0358f5a783bfa9edb262ee7b4a1383e29eb421382"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129164_79989",
+            "build_s": 0.23974420000013197,
+            "mesh_s": 0.06852369999978691,
+            "cpu_s": 0.3125,
+            "chunks": 91,
+            "walks": 22,
+            "digest": "5982c37880ddf2bfd2cf7c67b1901019cfee908903f3236d14b49cbd876774e5"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129165_79987",
+            "build_s": 0.26785370000106923,
+            "mesh_s": 0.06924589999835007,
+            "cpu_s": 0.328125,
+            "chunks": 88,
+            "walks": 38,
+            "digest": "052cf253188a72fc52641b1a804df6899f7886d339e222d5c70ec3dbf0c1e2dc"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129165_79988",
+            "build_s": 0.3566290000017034,
+            "mesh_s": 0.08658759999889298,
+            "cpu_s": 0.4375,
+            "chunks": 198,
+            "walks": 74,
+            "digest": "2b40618446291fedd3ff375cdb44cf41f4ae25b489e5b4d6d0a43763993e5941"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_129165_79989",
+            "build_s": 0.3264726999987033,
+            "mesh_s": 0.06898650000039197,
+            "cpu_s": 0.375,
+            "chunks": 115,
+            "walks": 48,
+            "digest": "bdb6eb6bfb3139388623dd934dc34e096e85ce7d496ed04039ac7e81aa3a0022"
+          }
+        ],
+        "commit": "9f4739d213caab307a85cb292e4306029bf2a984",
+        "median_s": {
+          "build_s": 0.26864039999964007,
+          "mesh_s": 0.07782989999941492,
+          "cpu_s": 0.359375
+        },
+        "country": "NZ",
+        "left_hand": true,
+        "source_state": "See top-level source blob IDs"
+      }
+    },
+    "tokyo": {
+      "baseline": {
+        "scope": "Offline road geometry benchmark using existing decoded map-cell files.\n\nMeasures the road builder and draped mesh separately, with flat 10 m terrain.\nThis deliberately excludes network, grading, buildings, process queues and game\nimports. The input cache is read only; profiles and JSON go to --out.\n",
+        "at": [
+          35.701916732853384,
+          139.779052734375
+        ],
+        "anchor_tiles": false,
+        "profiled": false,
+        "python": "3.14.7",
+        "numpy": "2.5.4",
+        "native_version": 140,
+        "sources": {
+          "14/14553/6450": {
+            "sha256": "b650cebaecb0453801b9131fd4e0170c3f35b49b6a8d066bbc0c3988b1cf371f",
+            "features": 5277
+          }
+        },
+        "rows": [
+          {
+            "repeat": 0,
+            "key": "g17_116427_51603",
+            "build_s": 1.6463198000001285,
+            "mesh_s": 0.11731839999993099,
+            "cpu_s": 1.71875,
+            "chunks": 349,
+            "walks": 130,
+            "digest": "f571113aa60f7ea6094b1927de0f6bf45b1af9bcd2e3843fcd1850391a9b9c2a"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116427_51604",
+            "build_s": 0.5187160000004951,
+            "mesh_s": 0.09476039999935892,
+            "cpu_s": 0.59375,
+            "chunks": 206,
+            "walks": 26,
+            "digest": "3275657791f2c9099183166dcf6e5813de670e427ec06f0b2d64b7b7105eabc0"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116427_51605",
+            "build_s": 0.4473517999995238,
+            "mesh_s": 0.08994480000001204,
+            "cpu_s": 0.546875,
+            "chunks": 197,
+            "walks": 52,
+            "digest": "f1b247eac209961f95234c2a90062a83ac5b92fb7bdf1dee6f404679ee380783"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116428_51603",
+            "build_s": 0.9060200999992958,
+            "mesh_s": 0.12516069999946922,
+            "cpu_s": 1.0,
+            "chunks": 396,
+            "walks": 118,
+            "digest": "c0f5c80ea9ecc239fb247ca5fe3c4199e6b5b64f065a7d8387b95b82e01abcb7"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116428_51604",
+            "build_s": 0.6238850999998249,
+            "mesh_s": 0.09528359999967506,
+            "cpu_s": 0.703125,
+            "chunks": 239,
+            "walks": 42,
+            "digest": "eefe230a692c296e0aab5ecb88587086542d4751c313d985ab08b071f0673289"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116428_51605",
+            "build_s": 0.856893800000762,
+            "mesh_s": 0.09164469999996072,
+            "cpu_s": 0.9375,
+            "chunks": 257,
+            "walks": 76,
+            "digest": "65059585b106c75f0879157aeeec3df94c00692b338d09652c2af8eedb2e25c2"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116429_51603",
+            "build_s": 0.751917700001286,
+            "mesh_s": 0.09921500000018568,
+            "cpu_s": 0.828125,
+            "chunks": 301,
+            "walks": 91,
+            "digest": "b1dc72f86729aff8a4d9f598f7e124126033495ff5ea5ae799c24881c97526df"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116429_51604",
+            "build_s": 0.5838068000011845,
+            "mesh_s": 0.0934770000003482,
+            "cpu_s": 0.671875,
+            "chunks": 242,
+            "walks": 83,
+            "digest": "75c0f735569e602edd17ee3a6d87a7568ee32d07bf63f8517e76296a791aa588"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116429_51605",
+            "build_s": 0.9233748000006017,
+            "mesh_s": 0.11599200000091514,
+            "cpu_s": 1.015625,
+            "chunks": 337,
+            "walks": 119,
+            "digest": "36f08debc1a0cdf60387150219f8d0e289399e0046263d7919bc687ba0988bb4"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116427_51603",
+            "build_s": 0.7519804000003205,
+            "mesh_s": 0.1042634999994334,
+            "cpu_s": 0.84375,
+            "chunks": 349,
+            "walks": 130,
+            "digest": "f571113aa60f7ea6094b1927de0f6bf45b1af9bcd2e3843fcd1850391a9b9c2a"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116427_51604",
+            "build_s": 0.5048905000003288,
+            "mesh_s": 0.09270980000110285,
+            "cpu_s": 0.59375,
+            "chunks": 206,
+            "walks": 26,
+            "digest": "3275657791f2c9099183166dcf6e5813de670e427ec06f0b2d64b7b7105eabc0"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116427_51605",
+            "build_s": 0.45227060000070196,
+            "mesh_s": 0.09066079999865906,
+            "cpu_s": 0.53125,
+            "chunks": 197,
+            "walks": 52,
+            "digest": "f1b247eac209961f95234c2a90062a83ac5b92fb7bdf1dee6f404679ee380783"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116428_51603",
+            "build_s": 0.9044236000008823,
+            "mesh_s": 0.11423049999939394,
+            "cpu_s": 0.984375,
+            "chunks": 396,
+            "walks": 118,
+            "digest": "c0f5c80ea9ecc239fb247ca5fe3c4199e6b5b64f065a7d8387b95b82e01abcb7"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116428_51604",
+            "build_s": 0.5855467999990651,
+            "mesh_s": 0.09869570000046224,
+            "cpu_s": 0.65625,
+            "chunks": 239,
+            "walks": 42,
+            "digest": "eefe230a692c296e0aab5ecb88587086542d4751c313d985ab08b071f0673289"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116428_51605",
+            "build_s": 0.8570944000002783,
+            "mesh_s": 0.09177479999925708,
+            "cpu_s": 0.9375,
+            "chunks": 257,
+            "walks": 76,
+            "digest": "65059585b106c75f0879157aeeec3df94c00692b338d09652c2af8eedb2e25c2"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116429_51603",
+            "build_s": 0.7464665999996214,
+            "mesh_s": 0.09838130000025558,
+            "cpu_s": 0.8125,
+            "chunks": 301,
+            "walks": 91,
+            "digest": "b1dc72f86729aff8a4d9f598f7e124126033495ff5ea5ae799c24881c97526df"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116429_51604",
+            "build_s": 0.593820300000516,
+            "mesh_s": 0.09193819999927655,
+            "cpu_s": 0.65625,
+            "chunks": 242,
+            "walks": 83,
+            "digest": "75c0f735569e602edd17ee3a6d87a7568ee32d07bf63f8517e76296a791aa588"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116429_51605",
+            "build_s": 0.8980655999985174,
+            "mesh_s": 0.105925700001535,
+            "cpu_s": 1.0,
+            "chunks": 337,
+            "walks": 119,
+            "digest": "36f08debc1a0cdf60387150219f8d0e289399e0046263d7919bc687ba0988bb4"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116427_51603",
+            "build_s": 0.7051566999998613,
+            "mesh_s": 0.11123659999975644,
+            "cpu_s": 0.796875,
+            "chunks": 349,
+            "walks": 130,
+            "digest": "f571113aa60f7ea6094b1927de0f6bf45b1af9bcd2e3843fcd1850391a9b9c2a"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116427_51604",
+            "build_s": 0.5056093999992299,
+            "mesh_s": 0.08744599999954517,
+            "cpu_s": 0.578125,
+            "chunks": 206,
+            "walks": 26,
+            "digest": "3275657791f2c9099183166dcf6e5813de670e427ec06f0b2d64b7b7105eabc0"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116427_51605",
+            "build_s": 0.4613835000000108,
+            "mesh_s": 0.08964379999997618,
+            "cpu_s": 0.53125,
+            "chunks": 197,
+            "walks": 52,
+            "digest": "f1b247eac209961f95234c2a90062a83ac5b92fb7bdf1dee6f404679ee380783"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116428_51603",
+            "build_s": 0.8625816999992821,
+            "mesh_s": 0.116787300001306,
+            "cpu_s": 0.96875,
+            "chunks": 396,
+            "walks": 118,
+            "digest": "c0f5c80ea9ecc239fb247ca5fe3c4199e6b5b64f065a7d8387b95b82e01abcb7"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116428_51604",
+            "build_s": 0.5917481000014959,
+            "mesh_s": 0.09074839999993856,
+            "cpu_s": 0.671875,
+            "chunks": 239,
+            "walks": 42,
+            "digest": "eefe230a692c296e0aab5ecb88587086542d4751c313d985ab08b071f0673289"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116428_51605",
+            "build_s": 0.8560180000004038,
+            "mesh_s": 0.09303749999889988,
+            "cpu_s": 0.9375,
+            "chunks": 257,
+            "walks": 76,
+            "digest": "65059585b106c75f0879157aeeec3df94c00692b338d09652c2af8eedb2e25c2"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116429_51603",
+            "build_s": 0.7364644999997836,
+            "mesh_s": 0.10228470000038214,
+            "cpu_s": 0.8125,
+            "chunks": 301,
+            "walks": 91,
+            "digest": "b1dc72f86729aff8a4d9f598f7e124126033495ff5ea5ae799c24881c97526df"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116429_51604",
+            "build_s": 0.6120307999990473,
+            "mesh_s": 0.09564700000009907,
+            "cpu_s": 0.6875,
+            "chunks": 242,
+            "walks": 83,
+            "digest": "75c0f735569e602edd17ee3a6d87a7568ee32d07bf63f8517e76296a791aa588"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116429_51605",
+            "build_s": 0.9707049999997253,
+            "mesh_s": 0.11096010000073875,
+            "cpu_s": 1.0625,
+            "chunks": 337,
+            "walks": 119,
+            "digest": "36f08debc1a0cdf60387150219f8d0e289399e0046263d7919bc687ba0988bb4"
+          }
+        ],
+        "commit": "9f4739d213caab307a85cb292e4306029bf2a984",
+        "median_s": {
+          "build_s": 0.7364644999997836,
+          "mesh_s": 0.09564700000009907,
+          "cpu_s": 0.8125
+        },
+        "country": "JP",
+        "left_hand": true,
+        "source_state": "See top-level source blob IDs"
+      },
+      "patched": {
+        "scope": "Offline road geometry benchmark using existing decoded map-cell files.\n\nMeasures the road builder and draped mesh separately, with flat 10 m terrain.\nThis deliberately excludes network, grading, buildings, process queues and game\nimports. The input cache is read only; profiles and JSON go to --out.\n",
+        "at": [
+          35.701916732853384,
+          139.779052734375
+        ],
+        "anchor_tiles": false,
+        "profiled": false,
+        "python": "3.14.7",
+        "numpy": "2.5.4",
+        "native_version": 140,
+        "sources": {
+          "14/14553/6450": {
+            "sha256": "b650cebaecb0453801b9131fd4e0170c3f35b49b6a8d066bbc0c3988b1cf371f",
+            "features": 5277
+          }
+        },
+        "rows": [
+          {
+            "repeat": 0,
+            "key": "g17_116427_51603",
+            "build_s": 1.4336562000007689,
+            "mesh_s": 0.11049069999899075,
+            "cpu_s": 1.484375,
+            "chunks": 349,
+            "walks": 130,
+            "digest": "f571113aa60f7ea6094b1927de0f6bf45b1af9bcd2e3843fcd1850391a9b9c2a"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116427_51604",
+            "build_s": 0.26138170000012906,
+            "mesh_s": 0.09044920000087586,
+            "cpu_s": 0.34375,
+            "chunks": 206,
+            "walks": 26,
+            "digest": "3275657791f2c9099183166dcf6e5813de670e427ec06f0b2d64b7b7105eabc0"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116427_51605",
+            "build_s": 0.20433070000035514,
+            "mesh_s": 0.09392130000014731,
+            "cpu_s": 0.3125,
+            "chunks": 197,
+            "walks": 52,
+            "digest": "f1b247eac209961f95234c2a90062a83ac5b92fb7bdf1dee6f404679ee380783"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116428_51603",
+            "build_s": 0.6206365999987611,
+            "mesh_s": 0.11797500000102445,
+            "cpu_s": 0.71875,
+            "chunks": 396,
+            "walks": 118,
+            "digest": "c0f5c80ea9ecc239fb247ca5fe3c4199e6b5b64f065a7d8387b95b82e01abcb7"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116428_51604",
+            "build_s": 0.3417981000002328,
+            "mesh_s": 0.09850189999997383,
+            "cpu_s": 0.4375,
+            "chunks": 239,
+            "walks": 42,
+            "digest": "eefe230a692c296e0aab5ecb88587086542d4751c313d985ab08b071f0673289"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116428_51605",
+            "build_s": 0.6240281999998842,
+            "mesh_s": 0.09720559999914258,
+            "cpu_s": 0.640625,
+            "chunks": 257,
+            "walks": 76,
+            "digest": "65059585b106c75f0879157aeeec3df94c00692b338d09652c2af8eedb2e25c2"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116429_51603",
+            "build_s": 0.4959694999997737,
+            "mesh_s": 0.10053359999983513,
+            "cpu_s": 0.578125,
+            "chunks": 301,
+            "walks": 91,
+            "digest": "b1dc72f86729aff8a4d9f598f7e124126033495ff5ea5ae799c24881c97526df"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116429_51604",
+            "build_s": 0.3519691999990755,
+            "mesh_s": 0.09233900000072026,
+            "cpu_s": 0.4375,
+            "chunks": 242,
+            "walks": 83,
+            "digest": "75c0f735569e602edd17ee3a6d87a7568ee32d07bf63f8517e76296a791aa588"
+          },
+          {
+            "repeat": 0,
+            "key": "g17_116429_51605",
+            "build_s": 0.6448739999996178,
+            "mesh_s": 0.10436320000007981,
+            "cpu_s": 0.75,
+            "chunks": 337,
+            "walks": 119,
+            "digest": "36f08debc1a0cdf60387150219f8d0e289399e0046263d7919bc687ba0988bb4"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116427_51603",
+            "build_s": 0.4683810000005906,
+            "mesh_s": 0.11159819999920728,
+            "cpu_s": 0.578125,
+            "chunks": 349,
+            "walks": 130,
+            "digest": "f571113aa60f7ea6094b1927de0f6bf45b1af9bcd2e3843fcd1850391a9b9c2a"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116427_51604",
+            "build_s": 0.28941110000050685,
+            "mesh_s": 0.09445860000050743,
+            "cpu_s": 0.390625,
+            "chunks": 206,
+            "walks": 26,
+            "digest": "3275657791f2c9099183166dcf6e5813de670e427ec06f0b2d64b7b7105eabc0"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116427_51605",
+            "build_s": 0.21842539999852306,
+            "mesh_s": 0.09330980000049749,
+            "cpu_s": 0.3125,
+            "chunks": 197,
+            "walks": 52,
+            "digest": "f1b247eac209961f95234c2a90062a83ac5b92fb7bdf1dee6f404679ee380783"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116428_51603",
+            "build_s": 0.6539389999998093,
+            "mesh_s": 0.11732450000090466,
+            "cpu_s": 0.75,
+            "chunks": 396,
+            "walks": 118,
+            "digest": "c0f5c80ea9ecc239fb247ca5fe3c4199e6b5b64f065a7d8387b95b82e01abcb7"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116428_51604",
+            "build_s": 0.33091419999982463,
+            "mesh_s": 0.09297440000045754,
+            "cpu_s": 0.421875,
+            "chunks": 239,
+            "walks": 42,
+            "digest": "eefe230a692c296e0aab5ecb88587086542d4751c313d985ab08b071f0673289"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116428_51605",
+            "build_s": 0.5978830999993079,
+            "mesh_s": 0.09354200000052515,
+            "cpu_s": 0.671875,
+            "chunks": 257,
+            "walks": 76,
+            "digest": "65059585b106c75f0879157aeeec3df94c00692b338d09652c2af8eedb2e25c2"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116429_51603",
+            "build_s": 0.5053736999998364,
+            "mesh_s": 0.10303530000055616,
+            "cpu_s": 0.609375,
+            "chunks": 301,
+            "walks": 91,
+            "digest": "b1dc72f86729aff8a4d9f598f7e124126033495ff5ea5ae799c24881c97526df"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116429_51604",
+            "build_s": 0.36723610000080953,
+            "mesh_s": 0.09094240000013087,
+            "cpu_s": 0.453125,
+            "chunks": 242,
+            "walks": 83,
+            "digest": "75c0f735569e602edd17ee3a6d87a7568ee32d07bf63f8517e76296a791aa588"
+          },
+          {
+            "repeat": 1,
+            "key": "g17_116429_51605",
+            "build_s": 0.6510103000000527,
+            "mesh_s": 0.10306179999861342,
+            "cpu_s": 0.75,
+            "chunks": 337,
+            "walks": 119,
+            "digest": "36f08debc1a0cdf60387150219f8d0e289399e0046263d7919bc687ba0988bb4"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116427_51603",
+            "build_s": 0.46880269999928714,
+            "mesh_s": 0.11151640000025509,
+            "cpu_s": 0.5625,
+            "chunks": 349,
+            "walks": 130,
+            "digest": "f571113aa60f7ea6094b1927de0f6bf45b1af9bcd2e3843fcd1850391a9b9c2a"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116427_51604",
+            "build_s": 0.28314789999967616,
+            "mesh_s": 0.08924819999992906,
+            "cpu_s": 0.359375,
+            "chunks": 206,
+            "walks": 26,
+            "digest": "3275657791f2c9099183166dcf6e5813de670e427ec06f0b2d64b7b7105eabc0"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116427_51605",
+            "build_s": 0.21374020000075689,
+            "mesh_s": 0.0896997999989253,
+            "cpu_s": 0.296875,
+            "chunks": 197,
+            "walks": 52,
+            "digest": "f1b247eac209961f95234c2a90062a83ac5b92fb7bdf1dee6f404679ee380783"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116428_51603",
+            "build_s": 0.6119202999998379,
+            "mesh_s": 0.1145609000013792,
+            "cpu_s": 0.703125,
+            "chunks": 396,
+            "walks": 118,
+            "digest": "c0f5c80ea9ecc239fb247ca5fe3c4199e6b5b64f065a7d8387b95b82e01abcb7"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116428_51604",
+            "build_s": 0.3344347000002017,
+            "mesh_s": 0.09283189999950991,
+            "cpu_s": 0.4375,
+            "chunks": 239,
+            "walks": 42,
+            "digest": "eefe230a692c296e0aab5ecb88587086542d4751c313d985ab08b071f0673289"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116428_51605",
+            "build_s": 0.6004795999997441,
+            "mesh_s": 0.09368799999901967,
+            "cpu_s": 0.703125,
+            "chunks": 257,
+            "walks": 76,
+            "digest": "65059585b106c75f0879157aeeec3df94c00692b338d09652c2af8eedb2e25c2"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116429_51603",
+            "build_s": 0.49685780000072555,
+            "mesh_s": 0.10151039999982459,
+            "cpu_s": 0.578125,
+            "chunks": 301,
+            "walks": 91,
+            "digest": "b1dc72f86729aff8a4d9f598f7e124126033495ff5ea5ae799c24881c97526df"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116429_51604",
+            "build_s": 0.3545131999999285,
+            "mesh_s": 0.09440309999990859,
+            "cpu_s": 0.4375,
+            "chunks": 242,
+            "walks": 83,
+            "digest": "75c0f735569e602edd17ee3a6d87a7568ee32d07bf63f8517e76296a791aa588"
+          },
+          {
+            "repeat": 2,
+            "key": "g17_116429_51605",
+            "build_s": 0.6855117999984941,
+            "mesh_s": 0.10364930000105232,
+            "cpu_s": 0.734375,
+            "chunks": 337,
+            "walks": 119,
+            "digest": "36f08debc1a0cdf60387150219f8d0e289399e0046263d7919bc687ba0988bb4"
+          }
+        ],
+        "commit": "9f4739d213caab307a85cb292e4306029bf2a984",
+        "median_s": {
+          "build_s": 0.46880269999928714,
+          "mesh_s": 0.09720559999914258,
+          "cpu_s": 0.578125
+        },
+        "country": "JP",
+        "left_hand": true,
+        "source_state": "See top-level source blob IDs"
+      }
+    }
+  },
+  "diagnostics": {
+    "cache_hit_stages": {
+      "old_tile_work": 12.5
+    },
+    "concurrent_cell_reads_share_features": false,
+    "scope": "deterministic reproductions, no network and no runtime performance estimate"
+  },
+  "cold_worker": {
+    "baseline": [
+      {
+        "key": "g17_129164_79988",
+        "wall_s": 42.84765580000021,
+        "time": {
+          "content_s": 42.598500799998874,
+          "content_cpu": 30.09375,
+          "skin_s": 0.24883080000108748,
+          "skin_cpu": 0.25,
+          "exact_s": 0.0001142999990406679
+        },
+        "stages": {
+          "content": {
+            "warm": 0.016387600000598468,
+            "anchor": 0.44865740000022925,
+            "profiles": 0.00020179999955871608,
+            "fuel": 0.1957626999992499,
+            "items": 39.47716480000054,
+            "build_tile": 1.202823300000091,
+            "rails": 0.011011999999027466,
+            "airports": 2.200000380980782e-06,
+            "doors_park": 0.02840509999987262,
+            "markings": 0.7770693000002211,
+            "guardrails": 0.04957199999989825,
+            "medians": 0.002701100000194856,
+            "deck_mesh": 0.017997299999478855,
+            "tunnel_mesh": 3.170000127283856e-05,
+            "railways": 0.00753189999886672,
+            "bld": 0.025826000000961358,
+            "powerlines": 0.18890169999940554,
+            "write": 0.11567740000100457
+          },
+          "skin": {
+            "inputs": 6.70000008540228e-06,
+            "map": 0.009131400000114809,
+            "mesh": 0.1923919000000751,
+            "plazas": 0.018740899999102112,
+            "drape": 0.02327310000146099,
+            "walks": 0.0002382000002398854,
+            "write": 0.003824099998382735
+          }
+        },
+        "faults": 7
+      },
+      {
+        "key": "g17_129165_79988",
+        "wall_s": 2.3059971000002406,
+        "time": {
+          "content_s": 2.003093399998761,
+          "content_cpu": 1.8125,
+          "skin_s": 0.30255229999966105,
+          "skin_cpu": 0.296875,
+          "exact_s": 0.00011200000153621659
+        },
+        "stages": {
+          "content": {
+            "warm": 0.004164600000876817,
+            "anchor": 0.00018249999993713573,
+            "profiles": 1.3199998647905886e-05,
+            "fuel": 0.031877800000074785,
+            "items": 0.08916630000021541,
+            "build_tile": 1.2649006999999983,
+            "rails": 0.012429600001269137,
+            "airports": 2.1999985619913787e-06,
+            "doors_park": 0.032564700000875746,
+            "markings": 0.20101210000029823,
+            "guardrails": 0.04635959999905026,
+            "medians": 0.00043120000009366777,
+            "deck_mesh": 0.01946219999990717,
+            "tunnel_mesh": 0.0015326000011555152,
+            "railways": 0.0077028999985486735,
+            "bld": 0.041485200001261546,
+            "powerlines": 0.18716259999928297,
+            "write": 0.06166739999935089
+          },
+          "skin": {
+            "inputs": 5.199999577598646e-06,
+            "map": 0.003901199999745586,
+            "mesh": 0.151095000001078,
+            "plazas": 0.02432289999887871,
+            "drape": 0.10103809999964142,
+            "walks": 0.0020463000000745524,
+            "write": 0.018636599999808823
+          }
+        },
+        "faults": 0
+      },
+      {
+        "key": "g17_129164_79989",
+        "wall_s": 1.682651299999634,
+        "time": {
+          "content_s": 1.471850899999481,
+          "content_cpu": 1.296875,
+          "skin_s": 0.21046530000057828,
+          "skin_cpu": 0.203125,
+          "exact_s": 0.00010999999904015567
+        },
+        "stages": {
+          "content": {
+            "warm": 0.004239699999743607,
+            "anchor": 0.0001771000006556278,
+            "profiles": 9.399998816661537e-06,
+            "fuel": 0.019675600000482518,
+            "items": 0.04133600000022852,
+            "build_tile": 0.7151448000004166,
+            "rails": 0.015456099999937578,
+            "airports": 1.7999991541728377e-06,
+            "doors_park": 0.027476400000523427,
+            "markings": 0.2564892999998847,
+            "guardrails": 0.09483650000038324,
+            "medians": 0.00044439999874157365,
+            "deck_mesh": 0.008999100000437465,
+            "tunnel_mesh": 0.002235800000562449,
+            "railways": 0.006980799998927978,
+            "bld": 0.03610750000007101,
+            "powerlines": 0.1725709000002098,
+            "write": 0.06939489999967918
+          },
+          "skin": {
+            "inputs": 4.499999704421498e-06,
+            "map": 0.0037735999994765734,
+            "mesh": 0.14551399999982095,
+            "plazas": 0.014709600000060163,
+            "drape": 0.03835679999974673,
+            "walks": 0.0005393999999796506,
+            "write": 0.0063265000007959316
+          }
+        },
+        "faults": 0
+      }
+    ],
+    "patched": [
+      {
+        "key": "g17_129164_79988",
+        "wall_s": 40.09671579999849,
+        "time": {
+          "content_s": 39.85922899999969,
+          "content_cpu": 27.296875,
+          "skin_s": 0.23714830000062648,
+          "skin_cpu": 0.234375,
+          "exact_s": 0.00011049999920942355
+        },
+        "stages": {
+          "content": {
+            "warm": 0.020131100000071456,
+            "anchor": 0.4372300999984873,
+            "profiles": 3.130000004603062e-05,
+            "fuel": 0.19425480000063544,
+            "items": 37.23989170000095,
+            "build_tile": 0.7945776999986265,
+            "rails": 0.011788800000431365,
+            "airports": 1.7000002117129043e-06,
+            "doors_park": 0.024459500000375556,
+            "markings": 0.7517256999999518,
+            "guardrails": 0.04710659999909694,
+            "medians": 0.0024931999996624654,
+            "deck_mesh": 0.016950300001553842,
+            "tunnel_mesh": 2.809999932651408e-05,
+            "railways": 0.007262099999934435,
+            "bld": 0.02784369999972114,
+            "powerlines": 0.18469650000042748,
+            "write": 0.061511399999290006
+          },
+          "skin": {
+            "inputs": 5.799998689326458e-06,
+            "map": 0.006459000000177184,
+            "mesh": 0.1805744000012055,
+            "plazas": 0.019995399999970687,
+            "drape": 0.024249699999927543,
+            "walks": 0.0002386999985901639,
+            "write": 0.0043048000006820075
+          }
+        },
+        "faults": 7
+      },
+      {
+        "key": "g17_129165_79988",
+        "wall_s": 1.7622461000009935,
+        "time": {
+          "content_s": 1.463431500000297,
+          "content_cpu": 1.296875,
+          "skin_s": 0.29842029999963415,
+          "skin_cpu": 0.28125,
+          "exact_s": 0.00017350000052829273
+        },
+        "stages": {
+          "content": {
+            "warm": 0.003850199998851167,
+            "anchor": 0.00017120000120485201,
+            "profiles": 1.1399999493733048e-05,
+            "fuel": 0.031206999999994878,
+            "items": 0.07905550000032235,
+            "build_tile": 0.7414960999994946,
+            "rails": 0.01320070000110718,
+            "airports": 2.399998265900649e-06,
+            "doors_park": 0.025702800001454307,
+            "markings": 0.187793099999908,
+            "guardrails": 0.05010489999949641,
+            "medians": 0.00045850000060454477,
+            "deck_mesh": 0.018888299999161973,
+            "tunnel_mesh": 0.0015156999997998355,
+            "railways": 0.007340199999816832,
+            "bld": 0.04141470000104164,
+            "powerlines": 0.19707519999974465,
+            "write": 0.06311619999905815
+          },
+          "skin": {
+            "inputs": 5.700001565855928e-06,
+            "map": 0.004116299998713657,
+            "mesh": 0.14789870000095107,
+            "plazas": 0.02285940000001574,
+            "drape": 0.10041040000032808,
+            "walks": 0.0023750999989715638,
+            "write": 0.019202200001018355
+          }
+        },
+        "faults": 0
+      },
+      {
+        "key": "g17_129164_79989",
+        "wall_s": 1.2742686000001413,
+        "time": {
+          "content_s": 1.0685368000013113,
+          "content_cpu": 0.890625,
+          "skin_s": 0.20539809999900172,
+          "skin_cpu": 0.203125,
+          "exact_s": 0.00012650000098801684
+        },
+        "stages": {
+          "content": {
+            "warm": 0.004109400000743335,
+            "anchor": 0.00024280000070575625,
+            "profiles": 1.3799999578623101e-05,
+            "fuel": 0.019517499998983112,
+            "items": 0.0388903000002756,
+            "build_tile": 0.30380760000116425,
+            "rails": 0.012141399998654379,
+            "airports": 2.1000014385208488e-06,
+            "doors_park": 0.0300864000000729,
+            "markings": 0.2573730999993131,
+            "guardrails": 0.0984705999999278,
+            "medians": 0.0005168000006960938,
+            "deck_mesh": 0.009500299998762785,
+            "tunnel_mesh": 0.0022559999997611158,
+            "railways": 0.007530000000770087,
+            "bld": 0.03997290000006615,
+            "powerlines": 0.17752440000003844,
+            "write": 0.06631609999931243
+          },
+          "skin": {
+            "inputs": 4.399998942972161e-06,
+            "map": 0.003442400000494672,
+            "mesh": 0.1396208000005572,
+            "plazas": 0.014910799998688162,
+            "drape": 0.038884300000063377,
+            "walks": 0.0005965000000287546,
+            "write": 0.006401700000424171
+          }
+        },
+        "faults": 0
+      }
+    ],
+    "scope": "One sequential three-tile run per version, fresh independent raw-data snapshots, no cProfile, offline, seven faults on each first tile. Diagnostic only; no complete-world acceptance.",
+    "raw_input_files": 2177,
+    "raw_input_bytes": 206844913
+  },
+  "validation": {
+    "tests_run": 175,
+    "passed": 173,
+    "skipped": 2,
+    "game_acceptance": "not run"
+  }
+}

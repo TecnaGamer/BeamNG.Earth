@@ -210,6 +210,30 @@ class DeckSidewalkScenarios(unittest.TestCase):
         self.assertEqual(roads._deck_frame(spec, (2.0, (-1,))), (12.0, -1.0))
         self.assertEqual(roads._deck_frame(spec, None), (10.0, 0.0))
 
+    def test_shared_endpoints_keep_each_calls_width_and_sides(self):
+        # Two decks, one reversed: the graph is shared but its walk decisions
+        # must use the current specs, including changed widths and no-walk roads.
+        f = features([[(-100, 0), (0, 0)], [(60, 0), (0, 0)], [(60, 0), (120, 0)]],
+                     ["residential"] * 3, flags=[(1, "is_bridge"), (2, "is_bridge")])
+        specs = roads.road_specs(f, urban)
+        specs[0] = specs[0]._replace(walk=1.25, sides=(1,))
+        self.assertEqual(roads.deck_walks(f, 1, specs), (1.25, (-1,)))
+        self.assertEqual(roads.deck_walks(f, 2, specs), (1.25, (1,)))
+        specs[0] = specs[0]._replace(walk=3.0, sides=(-1,))
+        self.assertEqual(roads.deck_walks(f, 1, specs, True), (3.0, (1,)))
+        self.assertEqual(roads.deck_walks(f, 2, specs, True), (3.0, (-1,)))
+        specs[0] = specs[0]._replace(urban=False, sides=())
+        self.assertIsNone(roads.deck_walks(f, 2, specs))
+
+    def test_replacement_cell_does_not_keep_old_connections(self):
+        def cell(start):
+            return features([[(-100, 0), (0, 0)], [(start, 0), (100, 0)]],
+                            ["residential"] * 2, flags=[(1, "is_bridge")])
+        original = cell(0)
+        self.assertIsNotNone(roads.deck_walks(original, 1, roads.road_specs(original, urban)))
+        replacement = cell(20)
+        self.assertIsNone(roads.deck_walks(replacement, 1, roads.road_specs(replacement, urban)))
+
 
 class LaneFlowScenarios(unittest.TestCase):
     """One-way pieces the map gives no lane count take theirs from what flows in or out (I-95 by the Middle Branch: a
