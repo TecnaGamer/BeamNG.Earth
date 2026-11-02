@@ -18,7 +18,7 @@ This is the implementation guide. The wire contract is in [server/README.md](../
 | Part | Responsibility |
 |---|---|
 | `native/earthfast/src/traffic.rs` | Filter, deduplicate, split and rank road/deck pieces; reserve class quotas; build lane geometry; retain bends and relief; enforce producer limits. |
-| `server/distanttraffic.py` | Marshal shared road rules, projections, lane shifts and elevation samples to `TrafficRoutes`; write atomic tile JSON. Uses the bundled native module (138 on this dev base); no Python algorithm fallback. |
+| `server/distanttraffic.py` | Marshal shared road rules, projections, lane shifts and elevation samples to `TrafficRoutes`; write atomic tile JSON. Uses the bundled native module (139 on this dev base); no Python algorithm fallback. |
 | `server/blockworker.py:traffic_geo` | Run the builder in the existing far-building worker pool; share the far bridge slabs' profile store and normal map/height sources. |
 | `server/earthd.py` | Negotiate the optional capability and own two existing geotile `Tracker`s per connection. |
 | `mod/.../beamngEarth/distanttraffic.lua` | Pure route validation, interpolation, ownership, density and view math; bounded incremental preparation. |
@@ -35,6 +35,8 @@ The effect creates no AI nodes, collision, shadows or real light sources and nev
 The near Z14 tracker covers 5.5 km, including minor/unpaved roads. A major-road tracker covers 11 km with a
 4.5 km inner skip. Both use the existing worker pool with one job per tracker in flight. Missing map cells are
 prefetched; the job returns without waiting for a download. Disabling the feature stops new requests.
+These two trackers disable the shared tracker's rebuild-history diagnostics: visited keys are not retained after
+their tiles drop. Existing terrain/building/vegetation tracker defaults are unchanged.
 
 The builder reuses `roads.road_specs`, `ground_parts`, `lane_shifts`, driving widths, handedness and speed rules.
 Rust splits long parts into stable 2 km chunks. Ids are `feature:gPARTcCHUNK:DIRECTION` for ground and

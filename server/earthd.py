@@ -3728,10 +3728,10 @@ class Connection:
         self.traffic_visuals = False            # negotiated visual routes, requested only at night with traffic on
         self.traffic_on = False
         self.distant_traffic = vegetationmod.Tracker(distanttraffic.SEND_M, distanttraffic.DROP_M, 1, "traffic",
-                                                     geo=True, z=distanttraffic.Z)
+                                                     geo=True, z=distanttraffic.Z, rebuild_history=False)
         self.distant_traffic_far = vegetationmod.Tracker(distanttraffic.FAR_SEND_M, distanttraffic.FAR_DROP_M, 1,
                                                          "traffic_far", inner=(distanttraffic.FAR_SKIP_M, 1),
-                                                         geo=True, z=distanttraffic.Z)
+                                                         geo=True, z=distanttraffic.Z, rebuild_history=False)
         self.nav_wait = {}                      # anchor id -> monotonic time its first AI graph was wanted
         self.gravity = gravitymod.Tracker()     # real gravity: recompute rule, last message sent
         self.credits = creditsmod.Tracker()     # data credits: throttle, last message sent (--credits on)

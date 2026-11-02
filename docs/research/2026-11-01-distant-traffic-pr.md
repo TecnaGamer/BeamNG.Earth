@@ -199,3 +199,22 @@ The standalone Windows launcher was rebuilt with the project's source-built PyIn
 offline launch negotiated protocol 4 / trafficVisuals 2. All 190 embedded mod files, the native binary and server
 code fingerprint matched source. These packaging checks are separate from actual game rendering and long-session
 memory testing. Evidence is in `build/dev123/`.
+
+The final review found two issues and confirmed their fixes. The combined native API now uses version 139,
+coordinated with `fast.MIN_VERSION` and the traffic caller, plus an explicit `TrafficRoutes` capability check.
+This supersedes the initial native138 artifacts above. Import regressions reject an older module and a newer
+stock module missing this branch's class with a useful `NativeMissing` message. Both native139 artifacts and
+the standalone EXE were rebuilt; the Linux API/bridge-route smoke check passed again.
+
+The two new traffic trackers now opt out of the shared tracker's ever-visited diagnostic set. A 10,000-tile
+build/drop regression leaves no sent tiles or diagnostic history; existing trackers keep their default rebuild
+diagnostics. The final feature suite has 31 tests. Protocol agreement passed again (32 run, one skip), together
+with 21 vegetation tests and synthetic far-geotile checks (6 run, two real-data skips). Both review axes reported
+their findings resolved, with no further actionable source findings.
+
+Fresh Windows startup did encounter `OSError: [WinError 6]` / `BrokenProcessPool` in a terrain worker; the
+provisional first block stayed in place and later road-worker delay warnings were observed. The far field then
+reported ready with 939 tiles, no backlog and no missing shape files at the checkpoint. The final server
+negotiated capability 2 and delivered a live nighttime stream (270 routes, 34 cosmetic cars in the sampled rural
+scene at 00:00). This records an unresolved startup condition rather than claiming error-free world loading or
+attributing its cause to this feature. The broader game's worker recovery still needs investigation separately.

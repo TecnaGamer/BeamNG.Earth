@@ -22,7 +22,10 @@ DROP_M = 6500.0
 FAR_SEND_M = 11000.0
 FAR_DROP_M = 13000.0
 FAR_SKIP_M = 4500.0
-fast.require(126, "distant traffic routes")
+fast.require(139, "distant traffic routes")
+if not hasattr(fast._ef, "TrafficRoutes"):
+    raise fast.NativeMissing("distant traffic routes needs this branch's native module with TrafficRoutes: "
+                             "rebuild it with python3 tools/build_native.py, or use the matching test build")
 _KERNEL = fast._ef.TrafficRoutes
 MAX_PATHS, MAX_POINTS, MAX_TILE_POINTS, CHUNK_M, STEP_M, MIN_LENGTH_M = _KERNEL.limits()
 

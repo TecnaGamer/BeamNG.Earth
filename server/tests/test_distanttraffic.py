@@ -3,6 +3,9 @@ import json
 import asyncio
 import sys
 import tempfile
+import importlib.util
+from concurrent.futures import Future
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -16,6 +19,48 @@ from test_roads import FRAME, features, flat, rules
 import test_server
 
 BOX = (-1000, -1000, 1000, 1000)
+
+
+class NativeContractTest(unittest.TestCase):
+    def load(self, native):
+        spec = importlib.util.spec_from_file_location("traffic_native_check", dt.__file__)
+        module = importlib.util.module_from_spec(spec)
+        with patch.object(dt.fast, "_ef", native):
+            spec.loader.exec_module(module)
+        return module
+
+    def test_rejects_older_native(self):
+        with self.assertRaisesRegex(dt.fast.NativeMissing, "139"):
+            self.load(SimpleNamespace(VERSION=138, TrafficRoutes=dt._KERNEL))
+
+    def test_rejects_newer_native_without_routes(self):
+        with self.assertRaisesRegex(dt.fast.NativeMissing, "TrafficRoutes"):
+            self.load(SimpleNamespace(VERSION=140))
+
+    def test_accepts_matching_native(self):
+        module = self.load(SimpleNamespace(VERSION=139, TrafficRoutes=dt._KERNEL))
+        self.assertIs(module._KERNEL, dt._KERNEL)
+
+
+class TrackerHistoryTest(unittest.TestCase):
+    def test_dropped_tiles_retain_no_diagnostic_history(self):
+        import vegetation
+        conn = SimpleNamespace(s=None, send=lambda _m: None)
+        tracker = vegetation.Tracker(geo=True, z=dt.Z, rebuild_history=False)
+        future = Future()
+        future.set_result(("/traffic.json", 0, (0, 0), 0))
+        for i in range(10000):
+            key = (i, 0)
+            tracker._built_geo(conn, key, future)
+            tracker.sent.discard(key)
+        self.assertFalse(tracker.sent or tracker.ever)
+        tracker.close()
+        # Existing trackers still report repeated builds when their diagnostics are enabled.
+        tracker = vegetation.Tracker(geo=True, z=dt.Z)
+        for _ in range(2):
+            tracker._built_geo(conn, (0, 0), future)
+        self.assertEqual(tracker.rebuilt, 1)
+        tracker.close()
 
 
 class RoutesTest(unittest.TestCase):
@@ -274,6 +319,8 @@ class NegotiationTest(test_server.ServerHarness):
         self.assertNotIn("trafficVisuals", old)
         c = self.conn()
         self.assertEqual(c.distant_traffic_far.inner, (dt.FAR_SKIP_M, 1))
+        self.assertIsNone(c.distant_traffic.ever)
+        self.assertIsNone(c.distant_traffic_far.ever)
         c.dispatch({"type": "traffic_visuals", "enabled": True})
         self.assertFalse(c.traffic_on, "an old client cannot enable the stream")
         self.c.send(dict(hello, trafficVisuals=dt.PROTO))
