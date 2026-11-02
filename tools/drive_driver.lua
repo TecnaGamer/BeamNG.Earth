@@ -297,9 +297,14 @@ function D.tick(dtReal, dtSim)
   local p = veh:getPosition()
   if place and s.frame - (s.rebaseFrame or -1e9) > D.REBASE_GRACE
     and (p.x - s.x) ^ 2 + (p.y - s.y) ^ 2 > D.JUMP_M * D.JUMP_M then
-    s.done, s.reason, s.endMs = true, 'jump', now - s.installMs
-    record(ms, flags + D.FLAG_SKIP, nil)
-    return
+    -- on a path: back onto it where the car was set down (the edge guard's rescue at a late block), on from there
+    local back = s.path and D.nearestS(s.path, p.x, p.y, s.s)
+    if not back then
+      s.done, s.reason, s.endMs = true, 'jump', now - s.installMs
+      record(ms, flags + D.FLAG_SKIP, nil)
+      return
+    end
+    s.s, s.x, s.y, s.jumps = back, p.x, p.y, s.jumps + 1
   end
 
   -- advance along the profile (also in a rebase frame: the car keeps moving at its velocity)
@@ -427,6 +432,20 @@ function D.pathAt(path, s)
   return path.la[k] + f * (path.la[k + 1] - path.la[k]), path.lo[k] + f * (path.lo[k + 1] - path.lo[k])
 end
 
+-- The path's arc length nearest (x, y), searched within NEAR_SEARCH_M of s (every 4 m), or nil (too far off it).
+D.NEAR_SEARCH_M = 600
+D.NEAR_MAX_M = 80
+function D.nearestS(path, x, y, s)
+  local best, bd = nil, D.NEAR_MAX_M * D.NEAR_MAX_M
+  for t = math.max(0, s - D.NEAR_SEARCH_M), s + D.NEAR_SEARCH_M, 4 do
+    local px, py = D.pathXY(path, t)
+    if not px then return nil end
+    local d = (px - x) ^ 2 + (py - y) ^ 2
+    if d < bd then best, bd = t, d end
+  end
+  return best
+end
+
 -- World x, y (the mod's current anchor) of the path at s.
 function D.pathXY(path, s)
   local st = rawget(_G, 'beamngEarth_core') and beamngEarth_core._state()
@@ -465,7 +484,7 @@ function D.install(cfg)
     prof = prof, km = tonumber(cfg.km), x = sx, y = sy, z = p.z, s = 0, t = 0, path = path,
     ground = g, base = g, clearance = tonumber(cfg.clearance) or max(0.05, min(5, p.z - g)),
     cmd = h0, hOff = 0, frame = 0, lastTick = D.clock(), installMs = D.clock(), lastPoll = D.clock(),
-    falls = 0, resets = 0, rebases = 0, resyncs = 0, vSum = 0, vProfSum = 0, vN = 0, placed = 0, lastSpeed = 0,
+    falls = 0, resets = 0, rebases = 0, resyncs = 0, jumps = 0, vSum = 0, vProfSum = 0, vN = 0, placed = 0, lastSpeed = 0,
     vehId = veh:getID(), done = false, reason = nil, skip = false, rebaseFrame = nil,
   }
   -- from here on uninstall() undoes every step, also when one of them fails
@@ -519,7 +538,7 @@ function D.pollTable()
     wallMs = D.clock and s.installMs and (D.clock() - s.installMs) or 0,
     frames = { ms = f.ms, flags = f.flags, under = f.under, dropped = f.dropped },
     drive = { s = s.s, t = s.t, x = s.x, y = s.y, z = s.z, heading = s.cmd, done = s.done, reason = s.reason,
-      error = s.error, endMs = s.endMs, falls = s.falls, resets = s.resets, rebases = s.rebases, resyncs = s.resyncs,
+      error = s.error, endMs = s.endMs, falls = s.falls, resets = s.resets, rebases = s.rebases, resyncs = s.resyncs, jumps = s.jumps,
       vSum = s.vSum, vProfSum = s.vProfSum, vN = s.vN },
   }
   local core = rawget(_G, 'beamngEarth_core')

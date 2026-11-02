@@ -124,7 +124,9 @@ MOD_TO_SERVER = {
              # pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)
              "slotsGone": F((list, dict), OPT),
              # other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)
-             "foci": F((list, dict), OPT)},
+             "foci": F((list, dict), OPT),
+             # the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)
+             "guardHold": F(bool, OPT)},
     # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
     # neither (fresh usage numbers); always answered with a 'cache'
     "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},

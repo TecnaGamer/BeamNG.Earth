@@ -1424,6 +1424,10 @@ class Server:
         on = bool(on) and bool(self.boost_cpus)
         if on == self.boost_on:
             return
+        if getattr(self, "split_on", False):
+            self.boost_on = on          # (an edge hold's split in force: its end pins by this, split_boost)
+            log.info("load boost %s (%s) after the edge hold", "on" if on else "off", why)
+            return
         cpus = ((getattr(self, "catchup_cpus", None) or self.boost_cpus) if half_only else self.boost_cpus) if on \
             else self.server_cpus
         if not cpus:
@@ -1436,6 +1440,39 @@ class Server:
         self.boost_on = on
         log.info("load boost %s (%s): %d threads on CPUs %s", "on" if on else "off", why, n,
                  ",".join(map(str, sorted(cpus))))
+
+    def split_boost(self, on, why):
+        """The full priority split (cpupin.full_split: the server on every CPU, the game on its first cores) on, or off
+        back to the boost in force before (Server.load_boost's state is left as it was). True when on. Not over full
+        priority loading (boost_full: that is the same split already)."""
+        if on:
+            if self.boost_full or getattr(self, "split_on", False):
+                return False
+            full = cpupin.full_split(self.server_cpus, getattr(self, "game_cpus", None))
+            if not full:
+                return False
+            try:
+                n = cpupin.pin_tree(full[0])
+                g = cpupin.pin_game(full[1])
+            except OSError as e:
+                log.warning("%s boost: %s", why, e)
+                return False
+            self.split_on = True
+            log.info("%s: every core (%d server threads on CPUs %s, the game's %d on %s)", why, n,
+                     ",".join(map(str, sorted(full[0]))), g, ",".join(map(str, sorted(full[1]))))
+            return True
+        if not getattr(self, "split_on", False):
+            return False
+        self.split_on = False
+        if self.boost_full:
+            return False                # (full priority loading came meanwhile: its split stays)
+        try:
+            cpupin.pin_tree(self.boost_cpus if self.boost_on and self.boost_cpus else self.server_cpus)
+            cpupin.pin_game(getattr(self, "game_cpus", None))
+        except OSError as e:
+            log.warning("%s: %s", why, e)
+        log.info("%s: the cores back as before", why)
+        return False
 
     def build_far_bld_tile(self, aid, tx, ty):
         """buildings.far_tile: a far (render-only) building tile of anchor aid, or None. Worker threads."""
@@ -3836,6 +3873,8 @@ BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at firs
 # roads round the car not built; off once caught up for CATCHUP_CALM_S
 CATCHUP_AFTER_S = 1.5
 CATCHUP_CALM_S = 3.0
+CATCHUP_MORE_S = 10.0       # s behind all along before the catch-up boost lends half the game's cores
+HOLD_BOOST_CALM_S = 2.0     # s after an edge hold ends before its boost does (Connection.hold_boost)
 CATCHUP_LEND_SHARE = float(os.environ.get("BNGE_CATCHUP_LEND", "0.25"))     # of the game's cores (cpupin.boosted)
 CATCHUP_MIN_MS = 8.0        # m/s: only while driving (a parked player's work waits as before)
 BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's teleportPriority) ends this long after at most
@@ -5163,6 +5202,20 @@ class Connection:
             return done < want
         return False
 
+    def hold_boost(self, holding):
+        """While the edge guard holds the car for its ground (pose.guardHold), the server on every core and the game on
+        its few (Server.split_boost, the full priority split): the game is paused then, and the block it waits for
+        came 36 s after a first visit's start at 100 mph with the server's own cores, ~8 s with every core
+        (nyc_speed.py --cold 2026-11-02). Back as before HOLD_BOOST_CALM_S after the hold ends."""
+        now = time.monotonic()
+        if holding:
+            self.hold_seen = now
+            if not getattr(self, "hold_split", False):
+                self.hold_split = self.s.split_boost(True, "edge hold")
+        elif getattr(self, "hold_split", False) and now - getattr(self, "hold_seen", 0.0) > HOLD_BOOST_CALM_S:
+            self.s.split_boost(False, "hold over")
+            self.hold_split = False
+
     def catch_up(self, speed):
         """The loading boost (Server.load_boost: half of the game's cores lent) while the world is behind a driving
         player, off CATCHUP_CALM_S after it caught up. Not over a teleport's own boost."""
@@ -5179,15 +5232,28 @@ class Connection:
             if not self.catchup:
                 self.s.load_boost(True, "catching up", half_only=True)
                 self.catchup = self.s.boost_on
+                self.catchup_since, self.catchup_more = now, False
                 if self.catchup:
                     log.info("catch-up boost on (%.0f mph; next block asked %.1f s ago)", speed * 2.237,
                              now - self.pending_at if self.pending_at else -1)
+            elif not getattr(self, "catchup_more", False) and now - getattr(self, "catchup_since", now) > CATCHUP_MORE_S \
+                    and self.s.boost_cpus and not getattr(self.s, "split_on", False):
+                # (behind all along: the larger lend, cpupin.boosted's half. A first visit at 100 mph on one core more:
+                # the road tiles were never ahead of the car, 216 of 232 polls, nyc_speed.py 2026-11-02)
+                try:
+                    cpupin.pin_tree(self.s.boost_cpus)
+                    self.catchup_more = True
+                    log.info("catch-up boost: more cores (behind for %.0f s): CPUs %s", now - self.catchup_since,
+                             ",".join(map(str, sorted(self.s.boost_cpus))))
+                except OSError as e:
+                    log.warning("catch-up boost: %s", e)
+                    self.catchup_more = True
         elif self.catchup:
             if self.caught_up_at is None:
                 self.caught_up_at = now
             elif now - self.caught_up_at > CATCHUP_CALM_S:
                 self.s.load_boost(False, "caught up")
-                self.catchup = False
+                self.catchup, self.catchup_more = False, False
                 log.info("catch-up boost off (caught up)")
 
     def commit_terrain(self, msg):
@@ -5262,6 +5328,7 @@ class Connection:
         if math.hypot(vx, vy) > FAST_BASE_V:
             self.s.fast_at = now
         self.s.fast = now - getattr(self.s, "fast_at", -1e9) < FAST_KEEP_S
+        self.hold_boost(msg.get("guardHold") is True)
         self.catch_up(math.hypot(vx, vy))
         if self.s.boost_on and not self.catchup:
             since = time.monotonic() - getattr(self, "boost_t0", 0.0)

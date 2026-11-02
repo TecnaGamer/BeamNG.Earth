@@ -114,17 +114,24 @@ def gps_path(start, end):
     return [(lat0 + y / 110540.0, pts[0][1] + x / kx) for x, y in xy]
 
 
-def profile(path, mph, km=None):
-    """drive.py's profile following path at a constant speed (km: at most this far)."""
+def profile(path, mph, km=None, accel=0.0):
+    """drive.py's profile following path at a constant speed (km: at most this far); accel (m/s^2): from a near standstill
+    up to it first, as a player sets off (a cold 200 mph start had nothing built yet and ended at once)."""
     total = 0.0
     kx = 111320.0 * math.cos(math.radians(path[0][0]))
     for (la0, lo0), (la1, lo1) in zip(path, path[1:]):
         total += math.hypot((lo1 - lo0) * kx, (la1 - la0) * 110540.0)
     km_ = total / 1000.0 if not km else min(km, total / 1000.0)
     v = mph * MPH
+    pts = [{"s": 0, "speed": v}, {"s": total, "speed": v}]
+    if accel > 0:
+        v0 = min(v, 5.0)
+        ramp = min(total, (v * v - v0 * v0) / (2 * accel))
+        # (piecewise linear in distance: speed^2 linear in distance is constant acceleration; a few knots of it)
+        pts = [{"s": round(ramp * k / 8, 1), "speed": math.sqrt(v0 * v0 + (v * v - v0 * v0) * k / 8)} for k in range(9)]
+        pts.append({"s": total, "speed": v})
     # (clearance: the ride height kept over the ground; measured at install it took a tree or an awning the car stood on)
-    return {"points": [{"s": 0, "speed": v}, {"s": total, "speed": v}], "km": km_, "path": [list(p) for p in path],
-            "clearance": 0.5}
+    return {"points": pts, "km": km_, "path": [list(p) for p in path], "clearance": 0.5}
 
 
 def heading_of(path):
@@ -229,7 +236,7 @@ def summarize(rows, lines, drive):
     }
     if drive:
         out["drive"] = {k: drive.get(k) for k in ("reason", "error", "km", "wallS", "effectiveRatio", "fpsMean", "p50",
-                                                  "p99", "maxMs", "over50", "rebases", "commitFrameMaxMs")}
+                                                  "p99", "maxMs", "over50", "rebases", "commitFrameMaxMs", "pathJumps")}
     return out
 
 
@@ -258,6 +265,7 @@ def main():
     ap.add_argument("--restart", action="store_true", help="restart the session (warm cache) first")
     ap.add_argument("--warm-first", action="store_true", help="drive the route once at 40 mph first (untimed)")
     ap.add_argument("--label", default=None)
+    ap.add_argument("--accel", type=float, default=0.0, help="m/s^2: set off from a near standstill (0: at speed at once)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     if a.cold:
@@ -279,7 +287,7 @@ def main():
         print(f"{label}: teleport to {start}", flush=True)
         teleport(*start, 0.0)
         path = gps_path(start, end)
-        prof = profile(path, mph, a.km)
+        prof = profile(path, mph, a.km, a.accel)
         with open(os.path.join(d, "profile.json"), "w") as f:
             json.dump(prof, f)
         teleport(*path[0], heading_of(path), wait_s=60)
