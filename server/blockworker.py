@@ -733,7 +733,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes)
     mark("build_tile")
-    chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
+    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
     mark("rails")
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)

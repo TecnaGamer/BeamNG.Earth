@@ -7181,9 +7181,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     zebras = []                                 # ... and its crossings, which a road's lines stop at (crossings.place)
     crosswalk_look = junctions.CROSSWALK
     priority = None if nodes is None else nodes["priority"]
+    trams = []                                  # ... and what no raised sidewalk or median runs over (rails.tram_lines)
     if str(country or "").upper() == "SE":
         import furniture
         import markings as _gw
+        import rails
+        trams = rails.tram_lines(frame, tx, ty, cells)
         stops = []
         if nodes is not None and walks is not None:
             import crossings as _cx
@@ -7320,10 +7323,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                           (s2.width / 2 + (islands.ENTRY_CLEAR_M if f2 in ring_dir else 0.0)
                            if (fid, f2) in cornered or f2 in ring_dir
                            else sidewalk_stop(spec, fid, s2, f2)))
-                         for f2, s2, p2, _ in roads if f2 != fid] + list(walk_cuts)
+                         for f2, s2, p2, _ in roads if f2 != fid] + list(walk_cuts) + trams
         # a median's band stops at the other carriageways' curbs only (their sidewalk is on their far side: it cut
         # one carriageway's half of Boston Street's median away)
-        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid]
+        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid] + trams
         for look, w, line in ex:
             walk = look["m"] == SIDEWALK["m"]
             side = look.get("side")
