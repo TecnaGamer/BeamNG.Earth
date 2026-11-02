@@ -58,6 +58,7 @@ class MirrorTest(unittest.TestCase):
         self.assertFalse(result["large"].flags.owndata)
         base = result["large"]
         while getattr(base, 'base', None) is not None:base = base.base
+        if isinstance(base, memoryview):base = base.obj
         self.assertIsInstance(base, mmap.mmap)
         self.assert_arrays(self.reader()._mirror_load(str(self.path)))
         self.assertEqual({p.name for p in self.directory.iterdir()}, {"ok", mapdata.PACK_FILE})
