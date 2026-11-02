@@ -2260,7 +2260,7 @@ class Server:
             return None
         if (self.deshadow is not None or self.colormatch is not None) and not (URGENT_ELSEWHERE and lane == LANE_REQUEST):
             return None
-        if lane == LANE_REQUEST and self.photo_pool is not None and not self.fast:
+        if lane == LANE_REQUEST and getattr(self, "photo_pool", None) is not None and not getattr(self, "fast", False):
             return self.photo_pool      # (fast: the photo process makes its stand-in first, _stand_in)
         return self.block_pools[LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST][0]
 
