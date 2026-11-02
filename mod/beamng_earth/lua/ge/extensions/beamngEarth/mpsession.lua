@@ -835,9 +835,16 @@ function M.onShareInfo(msg)
 end
 
 -- A share message of our world server for the group ("*") or one member, through the plugin.
+-- (never a message BeamMP's launcher aborts on: over 500 bytes with "Zp" in it, its Network/GlobalHandler.cpp; the
+-- app's base64 has none, this is the guard)
 function M.shareOut(msg)
   if rawget(_G, 'TriggerServerEvent') and type(msg.d) == 'string' then
-    TriggerServerEvent('bngeShare', tostring(msg.to or '*') .. '|' .. msg.d)
+    local data = tostring(msg.to or '*') .. '|' .. msg.d
+    if #data > 400 and data:find('Zp', 1, true) then
+      stats.shareRefused = (stats.shareRefused or 0) + 1
+      return
+    end
+    TriggerServerEvent('bngeShare', data)
     stats.shareOut = (stats.shareOut or 0) + 1
   end
 end

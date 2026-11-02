@@ -46,6 +46,29 @@ WANT_BATCH = 48                 # items per want message (the plugin takes 64)
 _KEY = re.compile(r"plans/(w[01]s[01])/(\d{1,2})_(\d{1,7})_(\d{1,7})")
 
 
+# BeamMP's launcher (2.8.1, Network/GlobalHandler.cpp ServerSend) aborts on any message from the game over 500 bytes
+# with "Zp" in it (found 2026-11-02: the first upload took the launcher down, "Connection Terminated"). Our base64
+# has "-" for "Z": never "Zp". The plugin's G.b64 is the same.
+def b64e(data):
+    return base64.b64encode(data).replace(b"Z", b"-").decode("ascii")
+
+
+def b64d(text):
+    if not isinstance(text, str) or "Z" in text:
+        raise ValueError("not our base64")
+    return base64.b64decode(text.replace("-", "Z"), validate=True)
+
+
+def _inflate(data):
+    """zlib-inflated data, ITEM_MAX at most (a small item that inflates to gigabytes is refused)."""
+    import zlib
+    d = zlib.decompressobj()
+    out = d.decompress(data, ITEM_MAX + 1)
+    if len(out) > ITEM_MAX or d.unconsumed_tail or not d.eof:
+        raise ValueError("over the cap or truncated")
+    return out
+
+
 def expect_code(expect):
     """The code of an expect (16 hex): what a pack's meta and the plugin's store are matched by."""
     return hashlib.sha1(json.dumps(expect, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -225,9 +248,11 @@ class Hub:
         return n
 
     def send_item(self, key, data):
-        """data (bytes) as the plugin's item key (an upload), in chunks."""
+        """data (bytes) as the plugin's item key (an upload), zlib-compressed (plans: ~1.6x), in chunks."""
+        import zlib
         if self.code is None or len(data) > ITEM_MAX:
             return
+        data = zlib.compress(data, 6)
         iid = item_id(self.code, key)
         with self.lock:
             self.seq += 1
@@ -235,7 +260,7 @@ class Hub:
         n = max(1, math.ceil(len(data) / CHUNK))
         for i in range(n):
             self._queue({"t": "c", "id": sid, "i": i, "n": n, "iid": iid, "key": key, "c": self.code, "k": "plans",
-                         "d": base64.b64encode(data[i * CHUNK:(i + 1) * CHUNK]).decode("ascii")})
+                         "z": 1, "d": b64e(data[i * CHUNK:(i + 1) * CHUNK])})
         self.stats["items_out"] += 1
         self.stats["bytes_out"] += len(data)
 
@@ -273,13 +298,22 @@ class Hub:
         self.stats["asked"] += len(items)
         return len(items)
 
+    STATS_S = 30.0
+
     def tick(self, lat, lon, vx=0.0, vy=0.0):
-        """Every few seconds (Connection.share_pump): hello, uploads, prefetch."""
+        """Every few seconds (Connection.share_pump): hello, uploads, prefetch; the counts in the log now and then."""
         if not self.hello():
             return
         self.upload_built()
         if lat is not None and lon is not None:
             self.prefetch(lat, lon, vx, vy)
+        now = time.monotonic()
+        if now - getattr(self, "_stats_at", 0.0) >= self.STATS_S:
+            self._stats_at = now
+            st = self.stats
+            log.info("share: sent %d plans (%.0f KB), asked %d, got %d (%.0f KB), missed %d, refused %d, queue %d",
+                     st["items_out"], st["bytes_out"] / 1024, st["asked"], st["kept"], st["bytes_in"] / 1024,
+                     st["missed"], st["refused"], len(self.out))
 
     # --- receiving ---------------------------------------------------------------------------------------------
     def on_data(self, data):
@@ -312,7 +346,7 @@ class Hub:
             return
         try:
             i, n = int(msg.get("i")), int(msg.get("n"))
-            part = base64.b64decode(msg.get("d") or "", validate=True)
+            part = b64d(msg.get("d") or "")
         except (TypeError, ValueError):
             self.stats["dropped"] += 1
             return
@@ -324,14 +358,22 @@ class Hub:
         with self.lock:
             for old in [x for x, v in self.parts.items() if now - v["at"] > ASSEMBLE_S]:
                 self.parts.pop(old, None)
-            st = self.parts.setdefault(k, {"n": n, "at": now, "chunks": {}, "iid": iid})
+            st = self.parts.setdefault(k, {"n": n, "at": now, "chunks": {}, "iid": iid, "z": msg.get("z") == 1})
             if st["n"] != n or st["iid"] != iid:
                 return
             st["chunks"][i] = part
             if len(st["chunks"]) < n:
                 return
             self.parts.pop(k, None)
-        self.on_item(iid, b"".join(st["chunks"][j] for j in range(n)))
+        data = b"".join(st["chunks"][j] for j in range(n))
+        if st["z"]:
+            try:
+                data = _inflate(data)
+            except Exception:
+                self.wanted.pop(iid, None)
+                self.stats["refused"] += 1
+                return
+        self.on_item(iid, data)
 
     def on_item(self, iid, data):
         """A wanted item: checked, then kept in the revisit cache where the road processes read it."""

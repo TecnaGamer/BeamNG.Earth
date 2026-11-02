@@ -67,6 +67,11 @@ G.onPose(2, { v = G.PROTO, aLat = 40.75, aLon = -73.98, lat = 40.76, lon = -73.9
 G.onPose(3, { v = G.PROTO, aLat = 45.4, aLon = 11.9, lat = 45.4, lon = 11.9 }, 'c')   -- (far away)
 hello(1, CODE); hello(2, CODE); hello(3, CODE)
 T.check(G.sh.seen[1] and G.sh.seen[1].codes.plans == CODE, 'hello: the codes and expects noted')
+-- our base64: "-" for "Z" (BeamMP's launcher aborts on "Zp" in a message over 500 bytes)
+local all = {}
+for c = 0, 255 do all[#all + 1] = string.char(c) end
+local enc = G.b64(string.rep(table.concat(all), 4))
+T.check(not enc:find('Z', 1, true) and enc:find('-', 1, true) and G.b64len(enc) == 1024, 'b64: no Z, "-" for it')
 
 -- an upload: 60 KB (3 chunks) kept in the store under its id; the store's index counts it
 local data = string.rep('plans-npz-bytes-', 3840)        -- (61440 bytes)
@@ -163,6 +168,17 @@ G.clock = 100
 upload(1, iid(10), 'plans/w1s1/14_6_6', string.rep('r', 100000))
 T.check(G.storeIndex()[iid(10)] ~= nil and G.sh.total <= 0.2 * 1024 * 1024, 'trimmed under the cap, the new one kept')
 T.check(G.storeIndex()[iid(1)] == nil and files[G.storePath(iid(1))] == nil, 'an old one gone')
+
+-- a compressed upload (z) is served with its z
+G.SHARE_STORE_MB = 2048
+upload(1, iid(12), 'plans/w1s1/14_8_8', 'zipped')
+local hd = J.decode(files[G.storePath(iid(12))]:match('^[^\n]+'))
+T.check(hd.z == nil, 'not compressed: no z')
+G.onShare(1, 'S|' .. J.encode({ t = 'c', id = 'zz', i = 0, n = 1, iid = iid(13), key = 'plans/w1s1/14_8_9', c = CODE,
+  z = 1, d = G.b64('compressed') }))
+G.onShare(2, 'S|' .. J.encode({ t = 'w', items = { { iid = iid(13), key = 'plans/w1s1/14_8_9', c = CODE } } }))
+got = msgs(sends(), 2)
+T.check(#got == 1 and got[1].z == 1, 'served with its z')
 
 -- a player leaving: its uploads in progress and queue go
 G.onShare(1, 'S|' .. J.encode({ t = 'c', id = 'half', i = 0, n = 2, iid = iid(11), key = 'plans/w1s1/14_7_7', c = CODE,

@@ -206,7 +206,9 @@ G.sh = { up = {}, out = {}, outHead = 1, queued = {}, index = nil, total = 0, pa
          seq = 0, stats = { items_in = 0, items_out = 0, served_store = 0, served_pack = 0, missed = 0, dropped = 0,
          relayed = 0 } }
 
-local B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+-- (our base64: "-" for "Z". BeamMP's launcher aborts on a message over 500 bytes from the game with "Zp" in it, its
+-- Network/GlobalHandler.cpp ServerSend: the apps' uploads must never hold it; the same alphabet here)
+local B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXY-abcdefghijklmnopqrstuvwxyz0123456789+/'
 local B64I = {}
 for i = 1, 64 do B64I[B64:byte(i)] = i - 1 end
 
@@ -226,7 +228,7 @@ end
 
 -- Pure: the decoded length of a base64 string, nil when it is no base64.
 function G.b64len(s)
-  if type(s) ~= 'string' or #s % 4 ~= 0 or s:find('[^A-Za-z0-9+/=]') then return nil end
+  if type(s) ~= 'string' or #s % 4 ~= 0 or s:find('[^A-Ya-z0-9+/=%-]') then return nil end
   local pad = s:sub(-2) == '==' and 2 or (s:sub(-1) == '=' and 1 or 0)
   return #s / 4 * 3 - pad
 end
@@ -327,12 +329,12 @@ local function queueOut(pid, payload)
 end
 
 -- An item's chunks (base64 strings) to player pid.
-local function sendChunks(pid, iid, key, code, kind, chunks)
+local function sendChunks(pid, iid, key, code, kind, chunks, z)
   G.sh.seq = G.sh.seq + 1
   local sid = 's' .. G.sh.seq
   for i, d in ipairs(chunks) do
     queueOut(pid, 'S|' .. G.json.encode({ t = 'c', id = sid, i = i - 1, n = #chunks, k = kind, key = key, iid = iid,
-      c = code, d = d }))
+      c = code, z = z, d = d }))
   end
   G.sh.stats.items_out = G.sh.stats.items_out + 1
 end
@@ -345,11 +347,11 @@ function G.serve(pid, it)
   if text then
     local chunks = {}
     for line in text:gmatch('[^\n]+') do chunks[#chunks + 1] = line end
-    table.remove(chunks, 1)                 -- (the header line)
+    local okH, head = pcall(G.json.decode, table.remove(chunks, 1) or '')     -- (the header line)
     if #chunks > 0 then
       local e = G.storeIndex()[it.iid]
       if e then e.t = G.clock end
-      sendChunks(pid, it.iid, it.key, it.c, kind, chunks)
+      sendChunks(pid, it.iid, it.key, it.c, kind, chunks, okH and type(head) == 'table' and head.z == 1 and 1 or nil)
       G.sh.stats.served_store = G.sh.stats.served_store + 1
       return true
     end
@@ -389,7 +391,7 @@ local function upload(pid, m)
   local k = tostring(pid) .. ':' .. tostring(m.id)
   local u = G.sh.up[k]
   if not u then
-    u = { n = n, iid = m.iid, key = m.key, c = m.c, chunks = {}, got = 0, t = G.clock }
+    u = { n = n, iid = m.iid, key = m.key, c = m.c, z = m.z == 1 and 1 or nil, chunks = {}, got = 0, t = G.clock }
     G.sh.up[k] = u
   end
   if u.n ~= n or u.iid ~= m.iid then return end
@@ -399,7 +401,7 @@ local function upload(pid, m)
   G.sh.up[k] = nil
   local index = G.storeIndex()
   if index[u.iid] then return end            -- (had it: the first one stays)
-  local text = G.json.encode({ iid = u.iid, key = u.key, c = u.c, n = n }) .. '\n' .. table.concat(u.chunks, '\n')
+  local text = G.json.encode({ iid = u.iid, key = u.key, c = u.c, n = n, z = u.z }) .. '\n' .. table.concat(u.chunks, '\n')
   G.fs.mkdir(G.SHARE_DIR .. '/store/' .. u.iid:sub(1, 2))
   if G.fs.write(G.storePath(u.iid), text) then
     index[u.iid] = { size = #text, t = G.clock }

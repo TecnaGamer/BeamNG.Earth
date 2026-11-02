@@ -1,7 +1,6 @@
 """mpshare.py (BeamMP shared world generation v2, a player's app's side): hello, the uploads of what the road processes
 kept, the prefetch of what is not here, and what comes in kept where the road processes read it, the checks an
 untrusted server or player cannot pass. The plugin is a fake here (its own tests: mod/tests/test_beammp_share.lua)."""
-import base64
 import io
 import json
 import os
@@ -46,17 +45,19 @@ class FakePlugin:
                 u = self.ups.setdefault(d["id"], {})
                 u[d["i"]] = d
                 if len(u) == d["n"]:
-                    self.store[d["iid"]] = [u[i]["d"] for i in range(d["n"])]
+                    self.store[d["iid"]] = ([u[i]["d"] for i in range(d["n"])], d.get("z"))
             elif d["t"] == "w":
                 missed = []
                 for it in d["items"]:
-                    chunks = self.store.get(it["iid"])
-                    if chunks is None:
+                    got = self.store.get(it["iid"])
+                    if got is None:
                         missed.append(it["iid"])
                         continue
+                    chunks, z = got
                     for i, c in enumerate(chunks):
                         hub.on_data("S|" + json.dumps({"t": "c", "id": "s" + it["iid"][:6], "i": i, "n": len(chunks),
-                                                       "iid": it["iid"], "key": it["key"], "c": it["c"], "d": c}))
+                                                       "iid": it["iid"], "key": it["key"], "c": it["c"], "z": z,
+                                                       "d": c}))
                 if missed:
                     hub.on_data("S|" + json.dumps({"t": "m", "items": missed}))
 
@@ -80,6 +81,8 @@ class HubTest(unittest.TestCase):
             h.tokens = mpshare.BURST
             h.pump()
         msgs, self.wire[n][:] = list(self.wire[n]), []
+        for m in msgs:          # (BeamMP's launcher aborts on "Zp" in a message over 500 bytes)
+            self.assertNotIn("Zp", m["to"] + "|" + m["d"])
         self.plugin.take(h, msgs)
 
     def build(self, n, cell):
@@ -157,11 +160,11 @@ class HubTest(unittest.TestCase):
         key = "plans/w1s1/14_4824_6159"
         iid = mpshare.item_id(b.code, key)
 
-        def offer(data, wanted=True, key_=key):
+        def offer(data, wanted=True, key_=key, z=None):
             if wanted:
                 b.wanted[iid] = (key_, cell, time.monotonic())
             b.on_data("S|" + json.dumps({"t": "c", "id": "x" + str(len(data)), "i": 0, "n": 1, "iid": iid, "key": key,
-                                         "c": b.code, "d": base64.b64encode(data).decode()}))
+                                         "c": b.code, "z": z, "d": mpshare.b64e(data)}))
         good = self.build(0, cell)
         offer(good, wanted=False)
         self.assertEqual(b.stats["unasked"], 1, "not asked for: not taken")
@@ -172,7 +175,9 @@ class HubTest(unittest.TestCase):
         offer(bad.getvalue())
         offer(pickle.dumps({"plans": []}))
         offer(good, key_="plans/w0s1/14_4824_6159")      # (another signature than ours)
-        self.assertEqual(b.stats["refused"], 4)
+        import zlib
+        offer(zlib.compress(b"\0" * (mpshare.ITEM_MAX + 10)), z=1)     # (a bomb: a little that inflates past the cap)
+        self.assertEqual(b.stats["refused"], 5)
         self.assertIsNone(plan_store(self.dirs[1])._kept(cell))
         offer(good)
         self.assertIsNotNone(plan_store(self.dirs[1])._kept(cell), "and the real one is")
