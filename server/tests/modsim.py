@@ -224,6 +224,23 @@ def follow_centre_ahead(px, py, vx, vy, cx, cy, size=1024):
     return (cx - px) * vx + (cy - py) * vy > 0 and cheb(px, py, cx, cy) <= lead + T["GRID"]
 
 
+def follow_warn_cap(size=1024):
+    """follow.warnCap: the edge guard's warning distance with a healthy server (WARN_LATE_M past the commit distance)."""
+    n, sq, _w, _t = _block(size)
+    return n * sq / 2 - sq - follow_table(size)["COMMIT_DIST"] - FOLLOW["WARN_LATE_M"]
+
+
+def follow_hard_commit_dist(vx, vy, size=1024):
+    """follow.hardCommitDist: a ready, better block is taken COMMIT_MARGIN before the warning would show (at most
+    HARD_COMMIT_DIST, never nearer than COMMIT_DIST)."""
+    T = follow_table(size)
+    n, sq, _w, _t = _block(size)
+    sp = math.sqrt((vx or 0) ** 2 + (vy or 0) ** 2)
+    edge = n * sq / 2 - sq
+    return max(T["COMMIT_DIST"], min(T["HARD_COMMIT_DIST"], edge - EdgeGuard.warn_distance(sp, follow_warn_cap(size))
+                                     - FOLLOW["COMMIT_MARGIN"]))
+
+
 def follow_decide(px, py, vx, vy, cx, cy, pending, now=0.0, retry_at=0.0, gate=None, latency=None, size=1024):
     """follow.decide: ('prepare', tx, ty) | ('commit',) | ('discard',) | None."""
     if cx is None:
@@ -243,7 +260,7 @@ def follow_decide(px, py, vx, vy, cx, cy, pending, now=0.0, retry_at=0.0, gate=N
                     + FOLLOW["RECHECK_SLACK_S"]
                     and _retargets(px, py, vx, vy, pending, size)):
                 return ("discard",)
-            if d > T["HARD_COMMIT_DIST"] or gate is None or gate(pending["cx"], pending["cy"]):
+            if d > follow_hard_commit_dist(vx, vy, size) or gate is None or gate(pending["cx"], pending["cy"]):
                 return ("commit",)
             return None
         if pending.get("ready") and T["RECHECK_S"] > 0 and pd >= d:
@@ -541,8 +558,12 @@ class EdgeGuard:
         return -min(EDGE["PULL_MAX"], EDGE["PULL"] * (EDGE["STOP_M"] - d))
 
     @staticmethod
-    def warn_distance(speed):
-        return max(EDGE["WARN_M"], EDGE["STOP_M"] + speed * speed / (2 * EDGE["DECEL"]) + EDGE["WARN_LEAD"])
+    def warn_distance(speed, cap=None):
+        """edgeguard.warnDistance: the braking distance and a lead; cap (follow.warnCap, a healthy server) at most."""
+        w = max(EDGE["WARN_M"], EDGE["STOP_M"] + speed * speed / (2 * EDGE["DECEL"]) + EDGE["WARN_LEAD"])
+        if cap is not None:
+            w = min(w, max(EDGE["WARN_M"], cap))
+        return w
 
     @staticmethod
     def soon(d_edge, s):

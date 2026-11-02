@@ -564,16 +564,17 @@ def drop_covered(chunks, rings):
     paths = [Path(np.asarray(r, np.float64)) for r in rings if len(np.asarray(r)) >= 3]
     if not paths:
         return list(chunks or [])
-    kept = []
+    cand, mids = [], []
     for ch in chunks or ():
         n = ch.get("n") or []
         if len(n) < 2:
             continue
-        mid = ((n[0][0] + n[1][0]) / 2.0, (n[0][1] + n[1][1]) / 2.0)
-        if _hit(paths, mid):
-            continue
-        kept.append(ch)
-    return kept
+        cand.append(ch)
+        mids.append(((n[0][0] + n[1][0]) / 2.0, (n[0][1] + n[1][1]) / 2.0))
+    if not cand:
+        return []
+    hit = _hits(paths, mids)            # (every midpoint at once: one at a time ~0.37 s of a Manhattan tile set)
+    return [ch for ch, h in zip(cand, hit) if not h]
 
 
 def finish_markings(frame, tx, ty, md, elev, items=None, marks=()):
