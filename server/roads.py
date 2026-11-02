@@ -1099,16 +1099,22 @@ def _parts_by_level(feats, i, want):
     return list(got)
 
 
+def ground_ranges(rngs):
+    """The on-ground (start, end) fractions of a feature with level_ranges rngs."""
+    pieces, at = [], 0.0
+    for a, b, _ in rngs:
+        if a - at > MIN_PART:
+            pieces.append((at, a))
+        at = max(at, b)
+    if 1.0 - at > MIN_PART:
+        pieces.append((at, 1.0))
+    return pieces
+
+
 def _parts_by_level_new(feats, i, want, rngs=None):
     rngs = level_ranges(feats, i) if rngs is None else rngs
     if want == "ground":
-        pieces, at = [], 0.0
-        for a, b, _ in rngs:
-            if a - at > MIN_PART:
-                pieces.append((at, a))
-            at = max(at, b)
-        if 1.0 - at > MIN_PART:
-            pieces.append((at, 1.0))
+        pieces = ground_ranges(rngs)
     else:
         pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
     out = []
@@ -4028,6 +4034,19 @@ def lane_tags(feats, i):
         if col is not None and col[i] is not None:
             out[k] = col[i]
     return out or None
+
+
+def lane_tag_parts(feats, i):
+    """Feature i's stretches of OpenStreetMap's lane tags: [(start, end, way id or None, tags or None)] fractions along
+    it, one stretch whole unless it was made from several ways (Overture merges the ways between two junctions; each has
+    its own lane tags, a 2+1 road's alternate along one segment). Tags hold the way's own "lanes" where the way has lane
+    tags; lane_tags(feats, i) is the way covering most of the feature."""
+    import railtags
+    parts = feats.attrs.get(railtags.LANE_PARTS)
+    if parts is not None and parts[i]:
+        return [(a, b, w, t or None) for a, b, w, t in parts[i]]
+    rec = feats.attrs.get("src_record")
+    return [(0.0, 1.0, railtags.way_id(str(rec[i])) if rec is not None else None, lane_tags(feats, i))]
 
 
 def _chunk(look, w, c):

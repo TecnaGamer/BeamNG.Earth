@@ -177,6 +177,9 @@ LANE_COLUMNS = ("turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn
                 "junction")     # (roundabout rings: roads._rings, attrs osm_junction)
 
 
+LANE_PARTS = "osm_lane_parts"   # per road feature of several ways: [(start, end, way id, its tags)], else None
+
+
 def lane_attr(key):
     return "osm_" + key.replace(":", "_")
 
@@ -209,6 +212,15 @@ class LaneTags(Shards):
                             cols[c][i] = t[c]
         for c in LANE_COLUMNS:
             feats.attrs[lane_attr(c)] = cols[c]
+        # (the columns above hold the way covering most of a feature; a feature of several ways keeps each one's tags)
+        table = feats.rules.get("src_ways")
+        parts = np.full(len(feats), None, object)
+        if table is not None and len(table):
+            for i in road:
+                rows = table.for_feature(int(i))
+                if rows:
+                    parts[i] = [(a, b, way_id(r), dict(ways.get(way_id(r)) or {})) for r, a, b in rows]
+        feats.attrs[LANE_PARTS] = parts
 
 
 SIGNS_ON = os.environ.get("BNE_SIGNTAGS", "on") != "off"

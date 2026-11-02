@@ -595,6 +595,10 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(len(speed.for_feature(0)), 1)
         self.assertAlmostEqual(speed.for_feature(1)[0][0], 50.0)
         self.assertEqual([v for v, a, b in r.rules["connectors"].for_feature(0)], ["con-a", "con-b"])
+        # each segment's OpenStreetMap way, past a numbered road's relation; of several the one covering most of it
+        self.assertEqual(r.attrs["src_record"].tolist()[:5], ["w1@1", "w3@1", "w1@1", "w4@1", "r67531@98"])
+        self.assertEqual(r.rules["src_ways"].for_feature(1), [("w2@1", 0.0, 0.25), ("w3@1", 0.25, 1.0)])
+        self.assertEqual(r.rules["src_ways"].for_feature(3), [], "one way: src_record says it all")
         # geometry: lon/lat and local metres (north-south line ~0.6 of the cell long)
         line = r.parts(0, r.en)[0][0]
         self.assertAlmostEqual(abs(line[1, 1] - line[0, 1]), 0.6 * mf.CELL.size_m()[1], delta=15)
@@ -990,7 +994,7 @@ class ProvenanceTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(tr["attribution"], "© OpenStreetMap contributors, Overture Maps Foundation")
         self.assertEqual(tr["release"], mf.RELEASE)
         self.assertIn("Open Database License", tr["licence"])
-        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 8}])
+        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 11}])
         bl = next(p for p in cd.provenance if p["id"] == "overture:buildings")
         self.assertIn({"dataset": "Microsoft ML Buildings", "license": "ODbL-1.0", "features": 1}, bl["datasets"])
         wc = next(p for p in cd.provenance if p["id"] == "esa-worldcover")
