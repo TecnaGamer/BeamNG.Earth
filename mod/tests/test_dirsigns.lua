@@ -15,6 +15,8 @@ local a = scenetree.findObject('bne_dir_a')
 T.check(a ~= nil and a.fields.mapTo == 'bne_dir_a', 'a Material with mapTo = the mesh\'s material name')
 T.check(a.fields.colorMap == '/t/a.color.png', 'its picture is the colour map')
 T.check(a.canSave == false, 'never saved with the level')
+local metal = scenetree.findObject('bne_dir_metal')
+T.check(metal ~= nil and metal.fields.mapTo == 'bne_dir_metal', 'the metal Material of the backs and posts exists')
 
 local made = dirsigns.count
 T.check(dirsigns.register({ bne_dir_a = '/t/a.color.png' }) == 0, 'a name seen again is not made again')

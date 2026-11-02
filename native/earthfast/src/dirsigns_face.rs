@@ -272,12 +272,29 @@ pub fn dirsign_face(rows: Vec<Row>, style: Vec<f64>, plates: Vec<Vec<f64>>, px_p
         }
         y += rh;
     }
-    // encode
-    let mut raw = Vec::with_capacity(wpx * hpx * 3);
-    for v in &cv.px { raw.push((v * 255.0 + 0.5).clamp(0.0, 255.0) as u8); }
+    // The engine's texture cooker takes only power-of-two sizes (in game 2026-11-02: "Size must be a power of two", the
+    // board stayed IMPORT FAILED): the picture stretched up to the next ones (bilinear), the mesh's UV 0..1 stretches
+    // it back to the board's own proportions.
+    let (tw_px, th_px) = (wpx.next_power_of_two().max(16), hpx.next_power_of_two().max(16));
+    let mut raw = Vec::with_capacity(tw_px * th_px * 3);
+    for y in 0..th_px {
+        let sy = ((y as f32 + 0.5) * hpx as f32 / th_px as f32 - 0.5).clamp(0.0, hpx as f32 - 1.0);
+        let (y0, fy) = (sy.floor() as usize, sy.fract());
+        let y1 = (y0 + 1).min(hpx - 1);
+        for x in 0..tw_px {
+            let sx = ((x as f32 + 0.5) * wpx as f32 / tw_px as f32 - 0.5).clamp(0.0, wpx as f32 - 1.0);
+            let (x0, fx) = (sx.floor() as usize, sx.fract());
+            let x1 = (x0 + 1).min(wpx - 1);
+            for k in 0..3 {
+                let p = |xx: usize, yy: usize| cv.px[(yy * wpx + xx) * 3 + k];
+                let v = (p(x0, y0) * (1.0 - fx) + p(x1, y0) * fx) * (1.0 - fy) + (p(x0, y1) * (1.0 - fx) + p(x1, y1) * fx) * fy;
+                raw.push((v * 255.0 + 0.5).clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
     let mut out = Vec::new();
     {
-        let mut enc = png::Encoder::new(&mut out, wpx as u32, hpx as u32);
+        let mut enc = png::Encoder::new(&mut out, tw_px as u32, th_px as u32);
         enc.set_color(png::ColorType::Rgb);
         enc.set_depth(png::BitDepth::Eight);
         let mut w = enc.write_header().map_err(|e| PyValueError::new_err(e.to_string()))?;

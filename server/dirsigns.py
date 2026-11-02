@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import re
-import struct
 
 import numpy as np
 
@@ -236,12 +235,6 @@ def _row_content(style, row, table, pl, factor, rounding, show_en):
     return turn, marks, dests
 
 
-def _png_size(path):
-    with open(path, "rb") as f:
-        head = f.read(24)
-    return struct.unpack(">II", head[16:24])
-
-
 def _face(out_dir, vfs_dir, style, plate_keys, kind, content, face):
     """(material name, vfs texture path, width m, height m) of a board's face: drawn once (by its hash)."""
     plates = [style["plates"][k] for k in plate_keys]
@@ -253,16 +246,15 @@ def _face(out_dir, vfs_dir, style, plate_keys, kind, content, face):
                                 ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
     name = f"bne_dir_{h}"
     png = os.path.join(out_dir, name + ".color.png")
-    ppm = face["px_per_m"]
+    spec = [[float(p[0]), *map(float, p[1]), *map(float, p[2]), *map(float, p[3])] for p in plates]
+    # (drawn every time, written once: the board's size in m is the drawing's, the picture a power-of-two stretch of it)
+    data, w_m, h_m = fast._ef.dirsign_face(rows, flat, spec, float(face["px_per_m"]))
     if not os.path.exists(png):
-        spec = [[float(p[0]), *map(float, p[1]), *map(float, p[2]), *map(float, p[3])] for p in plates]
-        data, _, _ = fast._ef.dirsign_face(rows, flat, spec, float(ppm))
         tmp = staging.tmp_for(png)
         with open(tmp, "wb") as f:
             f.write(bytes(data))
         staging.replace(tmp, png)
-    wpx, hpx = _png_size(png)
-    return name, f"{vfs_dir}/{name}.color.png", wpx / ppm, hpx / ppm
+    return name, f"{vfs_dir}/{name}.color.png", w_m, h_m
 
 
 def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True):

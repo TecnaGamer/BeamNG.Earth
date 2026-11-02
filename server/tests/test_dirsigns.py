@@ -3,6 +3,7 @@ they name, how a face is drawn."""
 import json
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
@@ -230,6 +231,10 @@ class FaceTest(unittest.TestCase):
             self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
         self.assertEqual(tex, f"vfs/{name}.color.png")
         self.assertTrue(2.0 <= w <= 6.0 and 0.5 < h < 3.0, (w, h))
+        wpx, hpx = struct.unpack(">II", open(path, "rb").read(24)[16:24])
+        self.assertTrue(wpx & (wpx - 1) == 0 and hpx & (hpx - 1) == 0 and min(wpx, hpx) >= 16,
+                        f"the engine's texture cooker takes only power-of-two sizes: {wpx}x{hpx}")
+        self.assertGreaterEqual(wpx, w * self.face["px_per_m"] - 1, "stretched up, never down")
         again = self.make(content)
         self.assertEqual(again[0], name, "the same content, the same file")
         self.assertNotEqual(self.make([(0, [], [("Ковель", "", "65")])])[0], name)

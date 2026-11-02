@@ -51,9 +51,25 @@ local function make(name, texture)
   M.count = M.count + 1
 end
 
+-- The bare metal of the boards' backs and posts (the server's mesh material 0, dirsigns.METAL): one Material, made once
+-- (in game 2026-11-02: "Unable to find material mapping to: bne_dir_metal", the back drew as IMPORT FAILED).
+M.METAL = 'bne_dir_metal'
+local function ensureMetal()
+  if scenetree.findObject(M.METAL) then return end
+  local m = createObject('Material')
+  m:setField('mapTo', 0, M.METAL)
+  m:setField('diffuseColor', 0, '0.55 0.57 0.58 1')
+  m:setField('specular', 0, '0.5 0.5 0.5 1')
+  m:setField('specularPower', 0, '24')
+  m:setField('pixelSpecular', 0, '1')
+  m.canSave = false
+  m:registerObject(M.METAL)
+end
+
 -- The tile's boards' Materials. Returns how many names it took.
 function M.register(faces)
   if not M.valid(faces) then return 0 end
+  ensureMetal()
   local n = 0
   for name, texture in pairs(faces) do
     local got = mats[name]
