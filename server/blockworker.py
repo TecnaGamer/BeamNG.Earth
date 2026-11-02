@@ -785,6 +785,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                                    tx, ty, deck_parts)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
                                                      country, guardrail_rows, tx, ty)
+    guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
     mark("medians")
     P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(box), ctx, bridges.beams_in(box), ground=cover,
                                parapets=parapets, low_parapet_decks=low_parapet_decks, pads=pads)
@@ -1381,6 +1382,16 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
         return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
+    """Sweden's roadside posts' Forest rows of a road tile (kantstolpar.tile_rows), [] if they fail (logged)."""
+    import kantstolpar
+    try:
+        return kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
+    except Exception as ex:
+        log.warning("kantstolpar: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []
 
 

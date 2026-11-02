@@ -8,6 +8,10 @@ up from the ground at its origin: a galvanised I-section post at its middle (sun
 its top) and four steel ropes the module's length (high-tension cable barriers: four ropes 0.48-0.96 m up, posts
 about every 3 m). Two levels of detail (the far one the posts and ropes as single quads) and a collision box the
 ropes' height.
+
+Also Sweden's kantstolpe (bne_kantstolpe.dae, server kantstolpar.py), as VGU 2024 12.2.2.1 (TRVINFRA-00396, remiss version
+0.9): white, 1.05 m high, 0.10 m wide, a 0.25 m black band round its 0.80 m high reflectors: facing the traffic on its
+right a 45 x 160 mm one, on the other face two of 60 mm, 100 mm apart. Nothing to hit: it gives way (K237854).
 """
 import json
 import os
@@ -23,6 +27,8 @@ HALF_L = 1.5
 COLOURS = {
     "bne_cable_steel": ((0.58, 0.59, 0.60), 0.85, 0.5),      # galvanised
     "bne_cable_reflector": ((0.92, 0.92, 0.90), 0.0, 0.3),   # its white reflective band
+    "bne_post_white": ((0.86, 0.87, 0.85), 0.0, 0.55),
+    "bne_post_black": ((0.02, 0.02, 0.02), 0.0, 0.55),
 }
 
 
@@ -58,6 +64,19 @@ def collision():
     return m
 
 
+def post(near):
+    """A kantstolpe: Z up from the ground, the traffic it faces coming along +X (its reflectors' face -X)."""
+    m = Mesh(4)
+    for z0, z1, mat in ((-POST_SINK, 0.675, "bne_post_white"), (0.675, 0.925, "bne_post_black"),
+                        (0.925, 1.05, "bne_post_white")):
+        m.box(mat, (0.0, 0.0, (z0 + z1) / 2), (0.025, 0.05, (z1 - z0) / 2))
+    if near:
+        m.box("bne_cable_reflector", (-0.026, 0.0, 0.80), (0.001, 0.0225, 0.08))
+        for z in (0.72, 0.88):
+            m.box("bne_cable_reflector", (0.026, 0.0, z), (0.001, 0.03, 0.03))
+    return m
+
+
 def materials():
     out = {}
     pid = lambda n: str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth/" + n))
@@ -75,6 +94,9 @@ def main():
     lods = [(48, module(True)), (6, module(False))]
     write_dae(path, "bne_cable_barrier", lods, collision())
     print(path, os.path.getsize(path), "bytes", sum(len(t) for t in lods[0][1].tri.values()), "triangles")
+    path = os.path.join(OUT, "bne_kantstolpe.dae")
+    write_dae(path, "bne_kantstolpe", [(24, post(True)), (4, post(False))], Mesh(4))
+    print(path, os.path.getsize(path), "bytes")
 
 
 if __name__ == "__main__":

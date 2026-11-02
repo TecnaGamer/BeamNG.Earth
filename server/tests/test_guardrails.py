@@ -135,7 +135,7 @@ class GuardrailForestTest(unittest.TestCase):
         self.assertEqual(data["guardrails"], {"items": rows,
                                                "groups": ["guardrail", "guardrail_start", "guardrail_end",
                                                           "guardrail_back", "guardrail_back_start", "guardrail_back_end",
-                                                          "jersey", "jersey_end", "cable"]})
+                                                          "jersey", "jersey_end", "cable", "kantstolpe"]})
         self.assertNotIn("guardrail", roads.shape_files(7, 1, 2))
 
     def test_stock_guardrail_rows_follow_ground_and_have_full_orientation(self):

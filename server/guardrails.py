@@ -23,9 +23,9 @@ BBOX_PAD_M = 2.0
 
 # The Forest groups of the rows (trees.lua's CATALOG): Italy's rail, its caps and the reverse-facing three; the stock
 # jersey barrier and its sloped end (they run along their model's y axis: the rows' first two columns swapped); the
-# mod's cable barrier (tools/build_median_props.py). medians.py's rows use the same groups.
+# mod's cable barrier and Sweden's roadside post (tools/build_median_props.py). medians.py's rows use the same groups.
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
-          "guardrail_back_end", "jersey", "jersey_end", "cable")
+          "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe")
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
