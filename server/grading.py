@@ -306,6 +306,7 @@ CW_UNDER_M = 10.0       # m from a deck's line the ground under it is not truste
 CW_MARGIN_M = 1200.0    # m past its home cell a cluster's chains reach (the farthest barely move the cell's)
 CW_CLUSTER_M = 30000.0  # m of carriageways solved together at most (the far ones barely move the near)
 XS_ON = _xs.ON
+
 XS_FIXED_GRADE = 0.03   # a solved motorway's or trunk's ramps rise at this (_lift_approaches)
 XS_FLOOR_M = 150.0      # m round a solved crossing no road is dug under its target (_lower_underpasses)
 ABUT_NEAR_M = 14.0          # m from the bridge end the road is checked ...
@@ -2260,6 +2261,37 @@ class _Planner:
             got = memo.get(hk)
         if got is not None:
             return got
+        # (the run's other processes: the first to need a region solves it, the rest read it; each road-tile process
+        # solving the same regions for itself, a worker's tiles waited past earthd's 300 s, 2026-11-02)
+        sh, mine = self.shared, False
+        hkey = (int(home.z), int(home.x), int(home.y)) if hasattr(home, "z") else None
+        tag = f"{float(self.frame.lat0):.6f}_{float(self.frame.lon0):.6f}"
+        if sh is not None and hkey is not None and hasattr(sh, "region_claim"):
+            try:
+                got, mine = sh.region_claim(tag, hkey)
+            except Exception as e:      # (no shared copy: solved here)
+                log.debug("grading: carriageways of %s: shared: %s: %s", hk, type(e).__name__, e)
+                got, mine = None, False
+            if got is not None:
+                with self.lock:
+                    if len(memo) > 64:
+                        memo.clear()
+                    memo[hk] = got
+                return got
+        try:
+            got = self._cw_region_calc(home, hk)
+            if mine and not got.get("failed"):
+                sh.region_store(tag, hkey, got)
+        finally:
+            if mine:
+                sh.region_release(tag, hkey)
+        with self.lock:
+            if len(memo) > 64:
+                memo.clear()
+            memo[hk] = got
+        return got
+
+    def _cw_region_calc(self, home, hk):
         f64 = np.float64
         lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
         ce, cn, _ = self.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]),
@@ -2276,7 +2308,7 @@ class _Planner:
             cell_parts = [self._cw_cell_parts(k) for k in keys]
         except Exception as e:      # (a cell that cannot be read: no carriageways here, the rules as before)
             log.debug("grading: carriageways of %s: %s: %s", hk, type(e).__name__, e)
-            return {"parts": [], "prof": {}}
+            return {"parts": [], "prof": {}, "failed": True}
         for cp in cell_parts:
             for q in cp:
                 if q[0] in seen:
@@ -2296,12 +2328,7 @@ class _Planner:
         except Exception as e:      # the rules as before rather than no grading
             log.debug("grading: carriageways of %s: %s: %s", hk, type(e).__name__, e)
             prof = {}
-        got = {"parts": parts, "prof": prof}
-        with self.lock:
-            if len(memo) > 64:
-                memo.clear()
-            memo[hk] = got
-        return got
+        return {"parts": parts, "prof": prof}
 
     def _cw_cluster_solve(self, chains):
         f64 = np.float64
@@ -2368,21 +2395,35 @@ class _Planner:
             xy, s, pi, br, raw = samples[n]
             cand = np.flatnonzero(pi == part_i)
             return int(cand[np.argmin(np.hypot(*(xy[cand] - q).T))])
+        # (bounding boxes: a deck meets only the streets and tracks near it, a scan of them all at each crossing was
+        # most of a region's time: 43 s of a Perth cell's 110, 2026-11-02)
+        def boxes_of(ls):
+            if not ls:
+                return np.zeros((0, 2)), np.zeros((0, 2))
+            return np.array([l_.min(0) for l_ in ls]), np.array([l_.max(0) for l_ in ls])
+        st_lo, st_hi = boxes_of([st[0] for st in streets])
+        rl_lo, rl_hi = boxes_of(rails)
+
+        def near_of(lo_, hi_, line, pad=2.0):
+            a, b_ = line.min(0) - pad, line.max(0) + pad
+            return np.flatnonzero(((lo_ <= b_) & (hi_ >= a)).all(1))
         for n, ch in enumerate(chains):
             parts = ch[0]
             for i, p_ in enumerate(parts):
                 clear = CW_HEADROOM_M + roadsmod.deck_depth(roadsmod.geom_span([p_[1]])) + ROAD_LIFT
-                if p_[2] and rails:
-                    for c in roadsmod._crossings([p_[1]], rails):
+                rails_n = [rails[m] for m in near_of(rl_lo, rl_hi, p_[1])] if p_[2] and rails else []
+                streets_n = [streets[m] for m in near_of(st_lo, st_hi, p_[1])] if p_[2] and streets else []
+                if p_[2] and rails_n:
+                    for c in roadsmod._crossings([p_[1]], rails_n):
                         j = nearest(n, i, np.asarray(c[2], f64))
                         data[n]["lo"][j] = max(data[n]["lo"][j], zraw(c[2]) + clear)
-                if p_[2] and streets:
-                    for c in roadsmod._crossings([p_[1]], [st[0] for st in streets]):
+                if p_[2] and streets_n:
+                    for c in roadsmod._crossings([p_[1]], [st[0] for st in streets_n]):
                         L = float(np.hypot(*np.diff(p_[1], axis=0).T).sum())
                         if c[1] < APPROACH_MIN_CROSS_M or c[1] > L - APPROACH_MIN_CROSS_M:
                             continue
                         q = np.asarray(c[2], f64)
-                        sl = min(streets, key=lambda st: _seg_dist(st[0], q))[0]
+                        sl = min(streets_n, key=lambda st: _seg_dist(st[0], q))[0]
                         tl = _xs.trusted_under(q, _xs.dir_at(sl, q), 8.0, zat)
                         if tl is None or tl >= seatiles.SEA_E + _xs.LOW_M:
                             continue

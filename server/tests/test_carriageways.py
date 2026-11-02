@@ -42,3 +42,24 @@ class ProfileTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RegionCacheTest(unittest.TestCase):
+    def test_a_region_reads_back_as_written(self):
+        import tempfile
+        import plancache
+        xy = np.array([[0.0, 0.0], [4.0, 0.0], [8.0, 0.0]])
+        z = np.array([1.0, 1.5, 2.0])
+        k1, k2 = ("g", 0.0, 0.0, 4.0, 0.0), ("b", 4.0, 0.0, 8.0, 0.0)
+        got = {"parts": [(k1, xy[:2], False, "motorway", "w1"), (k2, xy[1:], True, "motorway", "w2"),
+                         (("g", 9.0, 9.0, 9.5, 9.0), np.array([[9.0, 9.0], [9.5, 9.0]]), False, "trunk", None)],
+               "prof": {k1: (xy, z), k2: (xy, z)}}
+        with tempfile.TemporaryDirectory() as d:
+            pc = plancache.PlanCache(d, "t")
+            self.assertTrue(pc.region_store("f", (14, 1, 2), got))
+            back = pc.region_load("f", (14, 1, 2))
+        self.assertEqual([q[0] for q in back["parts"]], [q[0] for q in got["parts"]])
+        self.assertEqual([q[2:] for q in back["parts"]], [q[2:] for q in got["parts"]])
+        self.assertEqual(set(back["prof"]), {k1, k2})
+        np.testing.assert_array_equal(back["prof"][k2][1], z)
+        np.testing.assert_array_equal(back["parts"][1][1], xy[1:])

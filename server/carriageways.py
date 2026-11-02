@@ -29,10 +29,14 @@ where the limits disagree with each other, the clearance gives way last.
 The inequalities are met by an active set: violated ones become stiff quadratic penalties and the problem is solved
 again (each chain's matrix is banded, the couplings between chains few: Cholesky per chain, Woodbury for the couplings).
 """
+import logging
 import math
 import os
+import time
 
 import numpy as np
+
+log = logging.getLogger("earthd.grading")
 
 STEP_M = 4.0            # m between profile samples
 TRUST_M = 40.0          # m from a bridge's end over which the ground's weight rises from 0 to 1
@@ -52,6 +56,9 @@ GROUND_W = float(os.environ.get("BNE_CW_GROUND", "0.2"))
 ANCHOR_W = float(os.environ.get("BNE_CW_ANCHOR", "5"))
 END_W = ANCHOR_W        # (the name before)
 ROUNDS = 40             # active-set rounds at most
+# s one solve may take at most: past it, the last round's profiles (a limit or two may stay broken). A worker past
+# earthd's road-tile timeout (300 s) is restarted, its work lost, and the tile built again from the start.
+BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 FAMILY = ("motorway", "trunk")
 # per class: steepest grade, K (m of vertical curve per 1 % of grade change: crest and sag alike)
@@ -170,8 +177,12 @@ class _Chain:
         self.rows1 = {}     # k -> (target of z[k+1] - z[k])
         self.rows2 = {}     # k -> (target of z[k] - 2 z[k+1] + z[k+2])
         self.pins = {}      # i -> height
+        self.dirty = True   # (rows changed since the last factorisation)
 
     def assemble(self):
+        if not self.dirty:
+            return
+        self.dirty = False
         n = self.n
         A0 = self.w.copy()
         A1 = np.zeros(max(n - 1, 0))
@@ -222,7 +233,7 @@ class _Chain:
                 A += np.diag(A1, 1) + np.diag(A1, -1)
             if n > 2:
                 A += np.diag(A2, 2) + np.diag(A2, -2)
-            self.A = A
+            self.A = np.linalg.inv(A)    # (each round solves many right-hand sides: one inverse, then products)
             return
         self.A = None
         l0, l1, l2 = np.zeros(n), np.zeros(n), np.zeros(n)
@@ -234,35 +245,42 @@ class _Chain:
             if i >= 1:
                 L1[i] = (a1[i - 1] - (L2[i] * L1[i - 1] if i >= 2 else 0.0)) / L0[i - 1]
             L0[i] = math.sqrt(max(a0[i] - L1[i] * L1[i] - L2[i] * L2[i], 1e-12))
-        self.l0, self.l1, self.l2 = np.array(L0), np.array(L1), np.array(L2)
+        self.L0, self.L1, self.L2 = L0, L1, L2      # (lists: the sweeps read them as floats)
 
     def solve(self, r):
         """B^-1 r for r (n,) or (n, m): one LAPACK call for a short chain, the banded Cholesky's two sweeps (every
         right-hand side at once) for a long one."""
         r = np.asarray(r, np.float64)
         if self.A is not None:
-            return np.linalg.solve(self.A, r)
+            return self.A @ r
         one = r.ndim == 1
         r = r.reshape(self.n, -1)
-        l0, l1, l2 = self.l0, self.l1, self.l2
+        # (plain floats, a column at a time: numpy's per-row operations on a few values were most of a large
+        # interchange's solve, 2026-11-02)
+        l0, l1, l2 = self.L0, self.L1, self.L2
         n = self.n
-        y = np.empty_like(r)
-        for i in range(n):
-            acc = r[i]
-            if i >= 1:
-                acc = acc - l1[i] * y[i - 1]
-            if i >= 2:
-                acc = acc - l2[i] * y[i - 2]
-            y[i] = acc / l0[i]
-        z = np.empty_like(r)
-        for i in range(n - 1, -1, -1):
-            acc = y[i]
-            if i + 1 < n:
-                acc = acc - l1[i + 1] * z[i + 1]
-            if i + 2 < n:
-                acc = acc - l2[i + 2] * z[i + 2]
-            z[i] = acc / l0[i]
-        return z[:, 0] if one else z
+        out = np.empty_like(r)
+        for col in range(r.shape[1]):
+            rr = r[:, col].tolist()
+            y = [0.0] * n
+            y1 = y2 = 0.0           # y[i-1], y[i-2]
+            for i in range(n):
+                y0 = (rr[i] - l1[i] * y1 - l2[i] * y2) / l0[i]
+                y[i] = y0
+                y2, y1 = y1, y0
+            z = [0.0] * n
+            z1 = z2 = 0.0           # z[i+1], z[i+2]
+            for i in range(n - 1, -1, -1):
+                z0 = y[i]
+                if i + 1 < n:
+                    z0 -= l1[i + 1] * z1
+                if i + 2 < n:
+                    z0 -= l2[i + 2] * z2
+                z0 /= l0[i]
+                z[i] = z0
+                z2, z1 = z1, z0
+            out[:, col] = z
+        return out[:, 0] if one else out
 
 
 def solve(chains, couplings=(), rounds=ROUNDS):
@@ -285,7 +303,14 @@ def solve(chains, couplings=(), rounds=ROUNDS):
     ges = [(a, i, b, j, float(v)) for a, i, b, j, kind, v in couplings if kind == "ge"]
     active_ge = set()
     zs = None
+    BU = z0 = prev_r = None
+    t_end = time.monotonic() + BUDGET_S
     for _round in range(rounds):
+        if zs is not None and time.monotonic() > t_end:
+            log.warning("carriageways: %d chains, %d couplings: stopped after %d rounds (%.0f s budget)",
+                        len(cs), len(couplings), _round, BUDGET_S)
+            break
+        refit = [c.dirty for c in cs]
         for c in cs:
             c.assemble()
         cols = [(a, i, b, j, v) for a, i, b, j, v in eqs] + [ges[k] for k in sorted(active_ge)]
@@ -294,21 +319,44 @@ def solve(chains, couplings=(), rounds=ROUNDS):
         for a, i, b, j, v in cols:
             r[a][i] += MU * v
             r[b][j] -= MU * v
-        z0 = [c.solve(rr) for c, rr in zip(cs, r)]
+        # (a chain neither refactored nor coupled differently: its solve as last round)
+        z0 = [z0[n] if z0 is not None and not refit[n] and np.array_equal(r[n], prev_r[n]) else cs[n].solve(r[n])
+              for n in range(len(cs))]
+        prev_r = r
         if cols:
             k = len(cols)
-            E = [np.zeros((c.n, k)) for c in cs]
+            # each chain's own columns only (a dense (n, k) block per chain was gigabytes at a large interchange):
+            # its B^-1 U on them, kept while its factor and its columns stay
+            touch = [[] for _ in cs]
             for m, (a, i, b, j, v) in enumerate(cols):
-                E[a][i, m] += 1.0
-                E[b][j, m] -= 1.0
-            BU = [cs[n].solve(E[n]) if E[n].any() else E[n] for n in range(len(cs))]
+                touch[a].append((m, i, 1.0))
+                touch[b].append((m, j, -1.0))
+            BUs = []
+            for n, c in enumerate(cs):
+                sig = tuple(touch[n])
+                if not sig:
+                    BUs.append(None)
+                    continue
+                if BU is not None and BU[n] is not None and not refit[n] and BU[n][0] == sig:
+                    BUs.append(BU[n])
+                    continue
+                cidx = sorted({m for m, _r, _s in sig})
+                pos = {m: q for q, m in enumerate(cidx)}
+                En = np.zeros((c.n, len(cidx)))
+                for m, row, sg in sig:
+                    En[row, pos[m]] += sg
+                BUs.append((sig, np.asarray(cidx, int), c.solve(En)))
+            BU = BUs
             UtBU = np.zeros((k, k))
             Utz = np.zeros(k)
             for m, (a, i, b, j, v) in enumerate(cols):
-                UtBU[m] = BU[a][i] - BU[b][j]
+                _s, ca, Ba = BU[a]
+                _s, cb, Bb = BU[b]
+                UtBU[m, ca] += Ba[i]
+                UtBU[m, cb] -= Bb[j]
                 Utz[m] = z0[a][i] - z0[b][j]
             y = np.linalg.solve(np.eye(k) / MU + UtBU, Utz)
-            zs = [z0[n] - BU[n] @ y for n in range(len(cs))]
+            zs = [z0[n] if BU[n] is None else z0[n] - BU[n][2] @ y[BU[n][1]] for n in range(len(cs))]
         else:
             zs = z0
         changed = False
@@ -318,18 +366,18 @@ def solve(chains, couplings=(), rounds=ROUNDS):
             d1 = np.diff(z)
             for k in [k for k, y in c.rows1.items() if (d1[k] - y) * np.sign(y) < -1e-7]:
                 del c.rows1[k]
-                changed = True
+                changed = c.dirty = True
             if c.n >= 3:
                 d2 = z[:-2] - 2 * z[1:-1] + z[2:]
                 for k in [k for k, y in c.rows2.items() if (d2[k] - y) * np.sign(y) < -1e-9]:
                     del c.rows2[k]
-                    changed = True
+                    changed = c.dirty = True
             for i in list(c.pins):
                 y = c.pins[i]
                 if (c.lo is not None and np.isfinite(c.lo[i]) and y == c.lo[i] and z[i] > y + 1e-6) or \
                         (c.hi is not None and np.isfinite(c.hi[i]) and y == c.hi[i] and z[i] < y - 1e-6):
                     del c.pins[i]
-                    changed = True
+                    changed = c.dirty = True
         for m in [m for m in active_ge if zs[ges[m][0]][ges[m][1]] - zs[ges[m][2]][ges[m][3]] > ges[m][4] + 1e-6]:
             active_ge.discard(m)
             changed = True
@@ -338,23 +386,23 @@ def solve(chains, couplings=(), rounds=ROUNDS):
             for k in np.flatnonzero(np.abs(d1) > c.g * 1.02 + 1e-3):
                 if k not in c.rows1:
                     c.rows1[int(k)] = float(np.sign(d1[k]) * c.g)
-                    changed = True
+                    changed = c.dirty = True
             if c.n >= 3:
                 d2 = z[:-2] - 2 * z[1:-1] + z[2:]
                 for k in np.flatnonzero(np.abs(d2) > c.c * 1.05 + 1e-4):
                     if k not in c.rows2:
                         c.rows2[int(k)] = float(np.sign(d2[k]) * c.c)
-                        changed = True
+                        changed = c.dirty = True
             if c.lo is not None:
                 for i in np.flatnonzero(z < c.lo - 0.02):
                     if int(i) not in c.pins:
                         c.pins[int(i)] = float(c.lo[i])
-                        changed = True
+                        changed = c.dirty = True
             if c.hi is not None:
                 for i in np.flatnonzero(z > c.hi + 0.02):
                     if int(i) not in c.pins:
                         c.pins[int(i)] = float(c.hi[i])
-                        changed = True
+                        changed = c.dirty = True
         for m, (a, i, b, j, v) in enumerate(ges):
             if m not in active_ge and zs[a][i] - zs[b][j] < v - 0.02:
                 active_ge.add(m)
