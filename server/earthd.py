@@ -112,6 +112,7 @@ import pacer  # noqa: E402
 import peerwork as peerworkmod  # noqa: E402
 import deshadow as deshadowmod  # noqa: E402
 import farfield  # noqa: E402
+import bc7  # noqa: E402
 import terraincache  # noqa: E402
 import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
@@ -263,9 +264,14 @@ URGENT_ELSEWHERE = os.environ.get("BNE_URGENT_ELSEWHERE", "on") != "off"
 # in the other lane's block process they queued behind its prefetch heights and photos, a stand-in made beside a
 # block 1.6-4 s late at 100-200 mph down Manhattan (nyc_speed.py, 2026-11-02); not on a small machine (memory)
 PHOTO_PROCESS_MIN_CPUS = 12
+# A block waits at most this long for its stand-in photo started beside it (cold: the photo process queued behind
+# imagery downloads and a block built in 1.4 s waited 99.5 s for it, nyc_speed.py --cold 2026-11-02)
+STANDIN_WAIT_S = 1.0
 QUICK_SYNC_MAX_V = 150.0        # m/s (335 mph): slower, a block built ahead gets its stand-in photo before it is ready (224 mph left a player at 230 mph with brown flashes)
 RECENT_FULL = 2                 # full ground photos kept for the stand-ins' overlap (write_quick_base)
 QUICK_MIN_COVER = 0.8          # share of a stand-in's texels real imagery must cover (else no stand-in)
+QUICK_SHARE_WAIT_S = 30.0       # Server._quick_once: a caller waits this long for the stand-in being made
+QUICK_MADE_KEPT = 256           # blocks whose stand-in file names _quick_once remembers
 QUICK_BASE_PX = 512             # a block's stand-in photo (write_quick_base): the imagery alone, 2 m texels
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
@@ -327,11 +333,13 @@ HM_KEEP_SENT = 2            # terrains handed to the mod but maybe not committed
 # and a pose needs ~300 tiles instead of ~811 (docs/V1_4_SPEC.md §3.1).
 TILE_CACHE = {32: 6000, 64: 2500}
 HM_THREADS = 4
+HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they wait on its block process)
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
 # up at 2 min would be built and given up again for good; BNGE_ROAD_TILE_TIMEOUT=<s> to change it
+ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (queue and build)
 ROAD_TILE_TIMEOUT_S = float(os.environ.get("BNGE_ROAD_TILE_TIMEOUT", "") or 300.0)
 WORKERS = 3                     # far-tile workers (--workers)
 TRACE_S = 60.0                  # BNGE_TRACEMALLOC: seconds between the memory reports ...
@@ -753,6 +761,10 @@ class Server:
         # Heightmap workers: with the block processes they mostly wait on a process, and with two a
         # request queued behind a prefetch and an earlier request (3.5 s at 90 m/s, 2026-10-12)
         self.hm_pool = ThreadPoolExecutor(HM_THREADS, thread_name_prefix="heightmap")
+        # the blocks the mod asks for (the request lane): their own threads, never behind the prefetch's and the
+        # rebuilds' (a first visit's requested blocks waited 20-38 s for a heightmap thread, nyc_speed.py --cold
+        # down Uptown at 100 mph, 2026-11-02)
+        self.hm_req_pool = ThreadPoolExecutor(HM_REQUEST_THREADS, thread_name_prefix="heightmap-req")
         self.hm_here, self.hm_here_lock = 0, threading.Lock()  # blocks building in this process (far tiles wait)
         # a block's base photo rendered beside its heights (they do not depend on each other): after them it added
         # 2.3 s to a 12 s Baltimore block on a Steam Deck (2026-10-20)
@@ -829,6 +841,8 @@ class Server:
         self.base_skipped = set()      # blocks built without their photo (a fast player's prefetch: base_refresh)
         self.quick_pool = ThreadPoolExecutor(1, thread_name_prefix="quick-base")   # stand-in photos (_quick_later)
         self.quick_early = ThreadPoolExecutor(2, thread_name_prefix="quick-early")   # ... started with a block (fast)
+        self.quick_lock = threading.Lock()  # (_quick_once: a block's stand-in made once)
+        self.quick_made, self.quick_running = {}, {}
         self.quick_futs = {}            # (aid, cx, cy) -> a requested block's stand-in photo started with it (fast)
         self.photo_pool = None          # requested blocks' photos and stand-ins (main(): PHOTO_PROCESS_MIN_CPUS)
         self.recent_full = collections.deque(maxlen=RECENT_FULL)    # (anchorId, cx, cy, rgb) of the last full photos
@@ -1174,8 +1188,15 @@ class Server:
         zoom = anchor.zooms[0]
         if self.road_pool is not None and self.mapdata is not None:
             # (in a road tile process: here they took the server's one interpreter from the far textures and plans)
-            return self.road_pool.submit(blockworker.veg_geo, anchor.id, anchor.lat, anchor.lon, zoom, gx, gy,
-                                         self.out_dir, self.vfs_dir, flat).result()
+            t0, waited = time.perf_counter(), []
+            # (after the road tiles: RespawningPool.submit_low)
+            submit = getattr(self.road_pool, "submit_low", self.road_pool.submit)
+            got = poolsmod.result_running(submit(blockworker.veg_geo, anchor.id, anchor.lat, anchor.lon, zoom, gx, gy,
+                                                 self.out_dir, self.vfs_dir, flat), None, waited)
+            if time.perf_counter() - t0 > ROAD_GEO_SLOW_S:
+                log.info("trees geotile %d_%d in %.1f s (queue %.1f)", gx, gy, time.perf_counter() - t0,
+                         waited[0] if waited else 0.0)
+            return got
         g = self.grader_for(anchor)
 
         def raw(la, lo):
@@ -1381,9 +1402,9 @@ class Server:
             return None
         source.version()            # (the sign data's build, learnt here off the event loop: Connection.on_pose)
         if self.sign_pool is not None:
-            return self.sign_pool.submit(blockworker.signs_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty,
-                                         self.out_dir, self.vfs_dir, self.left_hand(anchor),
-                                         self.mph(anchor), self.country(anchor)).result(timeout=ROAD_TILE_TIMEOUT_S)
+            return poolsmod.result_running(self.sign_pool.submit(
+                blockworker.signs_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
+                self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor)), ROAD_TILE_TIMEOUT_S)
         g = self.grader_for(anchor)
         zoom = anchor.zooms[0]
 
@@ -1536,8 +1557,20 @@ class Server:
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
             country, content, skin, exact)
+        t0, waited = time.perf_counter(), []
         try:
-            res = fut.result(timeout=ROAD_TILE_TIMEOUT_S)
+            res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
+            took = time.perf_counter() - t0
+            if took > ROAD_GEO_SLOW_S:      # (nyc_speed.py's road lead: queue against build)
+                st = {}
+                for part in ((res or {}).get("stages") or {}).values():
+                    for k, v in (part or {}).items():
+                        st[k] = st.get(k, 0.0) + v
+                top = " ".join(f"{k} {v:.1f}" for k, v in sorted(st.items(), key=lambda kv: -kv[1])[:5])
+                tm = (res or {}).get("time") or {}
+                log.info("road geotile %d_%d in %.1f s (queue %.1f; content %.1f s %.1f cpu, skin %.1f s %.1f cpu): %s",
+                         gx, gy, took, waited[0] if waited else 0.0, tm.get("content_s", 0.0),
+                         tm.get("content_cpu", 0.0), tm.get("skin_s", 0.0), tm.get("skin_cpu", 0.0), top)
         except concurrent.futures.TimeoutError:
             fut.cancel()
             log.warning("road geotile %d_%d: no answer from its worker in %.0f s: built again", gx, gy,
@@ -1571,8 +1604,9 @@ class Server:
             return None
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         scratch = os.path.join(self.cache_dir, "areas", "scratch")
-        return self.road_pool.submit(blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph,
-                                     self.gas_stations, buried, lamps, country).result(timeout=ROAD_TILE_TIMEOUT_S)
+        return poolsmod.result_running(getattr(self.road_pool, "submit_low", self.road_pool.submit)(
+            blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
+            lamps, country), ROAD_TILE_TIMEOUT_S)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -1590,7 +1624,7 @@ class Server:
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
-                res = fut.result(timeout=ROAD_TILE_TIMEOUT_S)
+                res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S)
             except concurrent.futures.TimeoutError:
                 fut.cancel()
                 log.warning("road tile %d_%d of anchor %d: no answer from its worker in %.0f s: built again",
@@ -2089,6 +2123,36 @@ class Server:
                     return False
         return True
 
+    def make_provisional_follow(self, anchor, cx, cy):
+        """A follow block's provisional stand-in (Connection.provisional_follow) in a worker process (blockworker.build
+        provisional: the DEM's ground, no road plans, sea floor or tunnels, the cached roads painted), its stand-in
+        photo started beside it (at most STANDIN_WAIT_S; else none, the photo later). Built here (make_provisional) it
+        took 11-33 s of a first visit beside the rest of this process's work (nyc_speed.py --cold, 2026-11-02)."""
+        pool = self.photo_pool or (self.block_pools[LANE_PREFETCH][0] if self.block_pools else None)
+        if pool is None:
+            return self.make_provisional(anchor, cx, cy, None)
+        t0 = time.perf_counter()
+        key = (anchor.id, cx, cy)
+        early = (self.quick_early.submit(self._stand_in, anchor, cx, cy)
+                 if self.near_visual == "detail" and self.imagery is not None else None)
+        info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, self.anchor_q(anchor),
+                           cx, cy, self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
+                           provisional=True).result()
+        info.pop("started", None)
+        info.pop("finished", None)
+        if early is not None:
+            try:
+                info["base"] = early.result(timeout=STANDIN_WAIT_S)
+            except Exception:
+                info["base"] = None
+            if not info.get("base"):
+                self.quick_pool.submit(self._quick_later, anchor, cx, cy)
+        info["seconds"] = time.perf_counter() - t0
+        info["zoom"] = anchor.hm_zoom
+        log.info("provisional block %s in %.2f s in a worker (%s)", key, info["seconds"],
+                 " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
+        return info
+
     def make_provisional(self, anchor, cx, cy, progress, ground_at=(0.0, 0.0)):
         """Worker thread: a teleport's first block before its road plans (the user, 2026-10-22: "place the car as
         soon as possible"): the DEM's ground with the runways (no road grading, tunnels, arches or sea floor, which
@@ -2360,15 +2424,17 @@ class Server:
             early = self.quick_futs.pop((anchor.id, cx, cy), None)
             if not base.done() and early is not None:
                 try:
-                    quick = early.result()
+                    quick = early.result(timeout=STANDIN_WAIT_S)
+                except concurrent.futures.TimeoutError:
+                    quick = None        # (the block goes without it: _quick_later / the photo when done)
                 except Exception as e:
                     log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
                 info["stages"]["baseQuick"] = time.perf_counter() - t1
-            if not base.done() and not quick and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V \
-                    and self.imagery is not None:
-                quick = self._quick_elsewhere(anchor, cx, cy, lane) if lane == LANE_REQUEST else None
-                if not quick:
-                    quick = self.write_quick_base(anchor, cx, cy)
+            if not base.done() and not quick and early is None and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V \
+                    and self.imagery is not None:     # (an early one tried: not again here, _quick_later)
+                quick = self._quick_once(anchor, cx, cy, lambda: (
+                    self._quick_elsewhere(anchor, cx, cy, lane) if lane == LANE_REQUEST else None)
+                    or self.write_quick_base(anchor, cx, cy))
                 info["stages"]["baseQuick"] = time.perf_counter() - t1
                 if not quick and not self.fast:
                     base.result()       # (no stand-in to show: slower, the photo is waited for, as before)
@@ -2402,14 +2468,17 @@ class Server:
             if early is not None:
                 t1 = time.perf_counter()
                 try:
-                    info["base"] = early.result()
+                    info["base"] = early.result(timeout=STANDIN_WAIT_S)
+                except concurrent.futures.TimeoutError:
+                    self.quick_pool.submit(self._quick_later, anchor, cx, cy)
                 except Exception as e:
                     log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
                 info.setdefault("stages", {})["standIn"] = time.perf_counter() - t1
             elif getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
                 # (in the block's own process when it can: just done with its heights; here it took 2-6 s, 2026-10-31)
-                info["base"] = (self._quick_elsewhere(anchor, cx, cy, lane) if lane is not None else None) \
-                    or self.write_quick_base(anchor, cx, cy)
+                info["base"] = self._quick_once(anchor, cx, cy, lambda: (
+                    self._quick_elsewhere(anchor, cx, cy, lane) if lane is not None else None)
+                    or self.write_quick_base(anchor, cx, cy))
             else:
                 self.quick_pool.submit(self._quick_later, anchor, cx, cy)
         info["seconds"] = time.perf_counter() - t0
@@ -2430,7 +2499,8 @@ class Server:
         info = self.hm.get(key)
         if info is not None and info.get("base"):
             return                              # (its own photo came while this waited its turn)
-        name = self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH) or self.write_quick_base(anchor, cx, cy)
+        name = self._quick_once(anchor, cx, cy, lambda: self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH)
+                                or self.write_quick_base(anchor, cx, cy))
         conns = [c for c in list(self.connections) if getattr(c, "loop", None) is not None]
         if not name or not conns:
             return
@@ -2494,7 +2564,44 @@ class Server:
     def _stand_in(self, anchor, cx, cy):
         """A requested block's stand-in photo made beside its heights (fast): in the prefetch lane's process, else
         here; its file name or None."""
-        return self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH, self.photo_pool) or self.write_quick_base(anchor, cx, cy)
+        return self._quick_once(anchor, cx, cy, lambda: self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH,
+                                                                              self.photo_pool)
+                                or self.write_quick_base(anchor, cx, cy))
+
+    def _quick_once(self, anchor, cx, cy, make):
+        """make() (a block's stand-in photo: its file name or None) once per block: a caller while it is being made
+        waits for it (QUICK_SHARE_WAIT_S at most), one after takes the file made. The early stand-in, the provisional
+        block's, the finished block's and _quick_later each made their own: up to 5 of one block, two at once, ~100
+        stand-ins at 2-9 s for 26 blocks of a 6 min drive (nyc_speed.py --cold, 2026-11-02)."""
+        key = (anchor.id, cx, cy)
+        with self.quick_lock:
+            name = self.quick_made.get(key)
+            if name and os.path.exists(os.path.join(self.out_dir, name)):
+                return name
+            fut = self.quick_running.get(key)
+            mine = fut is None
+            if mine:
+                fut = self.quick_running[key] = concurrent.futures.Future()
+        if not mine:
+            try:
+                return fut.result(timeout=QUICK_SHARE_WAIT_S)
+            except Exception:
+                return None
+        try:
+            name = make()
+        except BaseException as e:
+            fut.set_exception(e)
+            raise
+        else:
+            fut.set_result(name)
+            return name
+        finally:
+            with self.quick_lock:
+                self.quick_running.pop(key, None)
+                if fut.done() and not fut.exception() and fut.result():
+                    if len(self.quick_made) >= QUICK_MADE_KEPT:
+                        self.quick_made.clear()
+                    self.quick_made[key] = fut.result()
 
     def _quick_elsewhere(self, anchor, cx, cy, lane, pool=None):
         """write_quick_base in the block's own lane process (idle once its heights are built: blockworker.base_photo
@@ -2593,8 +2700,9 @@ class Server:
             staging.replace(tmp, path)
             tq.append(("png", time.perf_counter()))
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
-            pool = self.block_pools[LANE_PREFETCH][0] if (URGENT_ELSEWHERE and self.block_pools) else None
-            if pool is not None:        # (the BC7 encode on a block process's core: ~1 s here beside the rest)
+            pool = self.block_pools[LANE_PREFETCH][0] if (URGENT_ELSEWHERE and self.block_pools and
+                                                          not bc7.gpu_ok()) else None
+            if pool is not None:        # (the CPU's BC7 encode on a block process's core: ~1 s here beside the rest)
                 pool.submit(blockworker.base_entry, *args).result()
             else:
                 terraincache.base_entry(*args)
@@ -2683,7 +2791,7 @@ class Server:
         t2 = time.perf_counter()
         try:            # after the photo: the cache entry must be the newer file
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
-            if pool is not None:            # the BC7 encode on the block process's core
+            if pool is not None and not bc7.gpu_ok():   # the CPU's BC7 encode on the block process's core
                 pool.submit(blockworker.base_entry, *args).result()
             else:
                 terraincache.base_entry(*args)
@@ -2726,8 +2834,9 @@ class Server:
         fut = self.hm_inflight.get(key)
         if fut is None:
             loop = asyncio.get_running_loop()
+            pool = self.hm_req_pool if lane == LANE_REQUEST and progress is None and self.block_pools else self.hm_pool
             fut = self.hm_inflight[key] = loop.run_in_executor(
-                self.hm_pool, self.make_heightmap, anchor, cx, cy, progress, lane, time.perf_counter())
+                pool, self.make_heightmap, anchor, cx, cy, progress, lane, time.perf_counter())
             fut.add_done_callback(lambda f: self._hm_done(key, f))
         return await asyncio.shield(fut)
 
@@ -4847,22 +4956,21 @@ class Connection:
             return None
         key = (anchor.id, cx, cy)
         info = s.prov_info.get(key)     # (asked again: its provisional block at once)
+        wait = 0.0
         if info is None:
-            # only where its road plans are not made yet (a first visit's cells: 15-120 s of planning); planned, the
-            # graded block is quick and a provisional one (in this process, 4-8 s beside the rest at 200 mph) came
-            # after it, only doubling the work (nyc_speed.py down Midtown, 2026-11-02)
+            # at once where the block's road plans are not made yet (a first visit's cells: 15-120 s of planning);
+            # planned, after PROVISIONAL_FOLLOW_S: the graded block is usually quick then, but a first visit's map data
+            # (its roads round the block, read on demand) still held one 84 s (nyc_speed.py --cold, 2026-11-02)
             try:
                 planned = await asyncio.get_running_loop().run_in_executor(s.prov_pool, s.block_planned, anchor, cx, cy)
             except Exception:
                 planned = True
-            if planned:
-                return None
-        # (not planned: the graded block is 15 s and more away, the provisional one starts at once)
-        done, _ = await asyncio.wait({job}, timeout=0)
+            wait = PROVISIONAL_FOLLOW_S if planned else 0.0
+        done, _ = await asyncio.wait({job}, timeout=wait)
         if done:
             return None
         if info is None:
-            prov = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.make_provisional, anchor, cx, cy, None)
+            prov = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.make_provisional_follow, anchor, cx, cy)
             done, _ = await asyncio.wait({job, prov}, return_when=asyncio.FIRST_COMPLETED)
             if job in done:
                 return None

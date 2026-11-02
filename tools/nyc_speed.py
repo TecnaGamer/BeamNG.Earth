@@ -198,6 +198,12 @@ def summarize(rows, lines, drive):
         a = sorted(a)
         return round(a[min(len(a) - 1, int(p * len(a)))], 2) if a else None
     lead = [r["arrived"] for r in moving if r.get("arrived") is not None]
+    geo = {}                    # slow road / trees geotiles (earthd ROAD_GEO_SLOW_S): build time and queue
+    for l in lines:
+        m = re.search(r"(road|trees) geotile \S+ in ([\d.]+) s \(queue ([\d.]+)[);]", l)
+        if m:
+            geo.setdefault(m.group(1), []).append((float(m.group(2)), float(m.group(3))))
+    stand_ins = sum(1 for l in lines if "quick base photo" in l and " in " in l and "not in" not in l)
     out = {
         "polls_moving": len(moving), "guard_polls": modes, "guard_share": round(
             sum(v for k, v in modes.items() if k in ("warn", "hold")) / max(1, len(moving)), 3), "holds": holds,
@@ -207,6 +213,10 @@ def summarize(rows, lines, drive):
         "stages_p90_s": {k: pct(v, 0.9) for k, v in stages.items()},
         "catchup_boosts": boosts,
         "road_lead_m": {"p10": pct(lead, 0.1), "median": pct(lead, 0.5), "zero_polls": sum(1 for x in lead if x == 0)},
+        "slow_geotiles": {k: {"n": len(v), "s_median": pct([a for a, _ in v], 0.5), "s_max": max(a for a, _ in v),
+                              "queue_median": pct([q for _, q in v], 0.5), "queue_max": max(q for _, q in v)}
+                          for k, v in geo.items()},
+        "stand_in_photos": stand_ins,
     }
     if drive:
         out["drive"] = {k: drive.get(k) for k in ("reason", "error", "km", "wallS", "effectiveRatio", "fpsMean", "p50",
@@ -230,6 +240,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True)
     ap.add_argument("--route", choices=sorted(ROUTES), default="uptown")
+    ap.add_argument("--from", dest="start", default=None, help="LAT,LON: another route's start (with --to; e.g. an "
+                    "interstate for 200+ mph, GitHub #664)")
+    ap.add_argument("--to", dest="end", default=None, help="LAT,LON: that route's end")
     ap.add_argument("--speeds", default="100", help="mph, comma-separated: one run each")
     ap.add_argument("--km", type=float, default=None, help="cap each run's distance")
     ap.add_argument("--cold", action="store_true", help="restart the session on a new, empty cache folder first")
@@ -249,10 +262,11 @@ def main():
     if a.warm_first:
         speeds = [40.0] + speeds
     for i, mph in enumerate(speeds):
-        label = f"{a.route}_{int(mph)}mph" + ("_warmup" if a.warm_first and i == 0 else "")
+        label = f"{'custom' if a.start else a.route}_{int(mph)}mph" + ("_warmup" if a.warm_first and i == 0 else "")
         d = os.path.join(a.out, label)
         os.makedirs(d, exist_ok=True)
-        start, end = ROUTES[a.route]
+        start, end = ROUTES.get(a.route) if not a.start else (
+            tuple(map(float, a.start.split(","))), tuple(map(float, a.end.split(","))))
         print(f"{label}: teleport to {start}", flush=True)
         teleport(*start, 0.0)
         path = gps_path(start, end)

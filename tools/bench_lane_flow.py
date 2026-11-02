@@ -64,9 +64,18 @@ def main():
         answers = {str(k): roads.lane_flow(cells[k]) for k in wanted}
         wall, cpu = time.perf_counter()-start, time.process_time()-cpu
         caches = [f.__dict__['_lane_flow_inputs'][1] for f in cells.values() if '_lane_flow_inputs' in f.__dict__]
-        retained = sum(v.nbytes for cache in caches for v in cache)
+        # Upstream rows retain offsets too; attrs are shared with endpoint inputs.
+        # Count each retained array once, including layers with rows but no solve.
+        arrays = {id(v): v for cache in caches for v in cache}
+        row_cells = 0
+        for f in cells.values():
+            rows = f.__dict__.get('_lane_flow_rows')
+            if rows is not None:
+                row_cells += 1
+                arrays.update((id(v), v) for v in rows if hasattr(v, 'nbytes'))
+        retained = sum(v.nbytes for v in arrays.values())
         row = {'repeat': repeat+1, 'wall_s': wall, 'cpu_s': cpu, **volume,
-               'retained_array_bytes': retained, 'prepared_cells': len(caches),
+               'retained_array_bytes': retained, 'prepared_cells': len(caches), 'row_cells': row_cells,
                'digest': hashlib.sha256(json.dumps(answers, sort_keys=True).encode()).hexdigest()}
         rows.append(row)
         print(json.dumps(row), flush=True)

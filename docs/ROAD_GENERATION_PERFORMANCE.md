@@ -1,8 +1,18 @@
 # Road generation performance audit — 2 November 2026
 
 The PR now includes current upstream `dev`
-`11cc55572fd5b828f52a0cf0edf0cf449cba1ac0` and targets `dev` on the test fork.
+`0c790738f3ab0ddc2bb7330ee3be23cd875caaf7` and targets `dev` on the test fork.
 It contains no custom building-system or runtime-profiler commits.
+
+The latest merge retains upstream's cached lane rows and NumPy assembly together
+with endpoint-only solver inputs, no-op solve avoidance and lane-tag invalidation.
+An offline comparison with exact upstream matches all 16,480 decisions across
+nine Auckland cells (49 source cells). The benchmark now counts retained upstream
+row arrays as well as endpoint arrays, counting their shared attributes once.
+These checks establish decision equivalence, not game FPS or a new speedup claim.
+Upstream now measures road timeouts after queueing and gives vegetation work a
+lower-priority queue; the earlier watchdog finding below is historical and that
+part has been addressed upstream. Obsolete running jobs can still consume work.
 
 The historical benchmark baseline is upstream checkpoint
 `9f4739d213caab307a85cb292e4306029bf2a984`. The measurements below retain their
