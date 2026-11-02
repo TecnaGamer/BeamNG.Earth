@@ -335,6 +335,14 @@ class FailingMD:
 
 
 class GraderTest(unittest.TestCase):
+    def setUp(self):
+        # (no measured road heights' provider: a test that made a Server (test_areas, test_fargeo) left one set, and
+        # the far-apart points read a cell more, 31 of 30, in the full suite only)
+        import roadz
+        p = unittest.mock.patch.object(roadz, "PROVIDER", None)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_failed_fetch_not_retried_at_once(self):
         md = FailingMD()
         g = grading.Grader(FRAME, md, lambda la, lo: np.zeros(np.shape(la)))

@@ -106,6 +106,10 @@ class AreasTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        import revisit
+        import roadz            # (a Server sets both for the process: put back, the later tests' own)
+        self.addCleanup(setattr, roadz, "PROVIDER", roadz.PROVIDER)
+        self.addCleanup(setattr, revisit, "CACHE_DIR", revisit.CACHE_DIR)
         for name, v in (("IDLE_WAIT_S", 0.02), ("DEFER_WAIT_S", 0.01), ("STATUS_S", 0.0)):
             p = mock.patch.object(areas, name, v)
             p.start()
