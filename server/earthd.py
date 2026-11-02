@@ -1189,9 +1189,10 @@ class Server:
         if self.road_pool is not None and self.mapdata is not None:
             # (in a road tile process: here they took the server's one interpreter from the far textures and plans)
             t0, waited = time.perf_counter(), []
-            got = poolsmod.result_running(self.road_pool.submit(blockworker.veg_geo, anchor.id, anchor.lat, anchor.lon,
-                                                                zoom, gx, gy, self.out_dir, self.vfs_dir, flat),
-                                          None, waited)
+            # (after the road tiles: RespawningPool.submit_low)
+            submit = getattr(self.road_pool, "submit_low", self.road_pool.submit)
+            got = poolsmod.result_running(submit(blockworker.veg_geo, anchor.id, anchor.lat, anchor.lon, zoom, gx, gy,
+                                                 self.out_dir, self.vfs_dir, flat), None, waited)
             if time.perf_counter() - t0 > ROAD_GEO_SLOW_S:
                 log.info("trees geotile %d_%d in %.1f s (queue %.1f)", gx, gy, time.perf_counter() - t0,
                          waited[0] if waited else 0.0)
@@ -1561,7 +1562,15 @@ class Server:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
             took = time.perf_counter() - t0
             if took > ROAD_GEO_SLOW_S:      # (nyc_speed.py's road lead: queue against build)
-                log.info("road geotile %d_%d in %.1f s (queue %.1f)", gx, gy, took, waited[0] if waited else 0.0)
+                st = {}
+                for part in ((res or {}).get("stages") or {}).values():
+                    for k, v in (part or {}).items():
+                        st[k] = st.get(k, 0.0) + v
+                top = " ".join(f"{k} {v:.1f}" for k, v in sorted(st.items(), key=lambda kv: -kv[1])[:5])
+                tm = (res or {}).get("time") or {}
+                log.info("road geotile %d_%d in %.1f s (queue %.1f; content %.1f s %.1f cpu, skin %.1f s %.1f cpu): %s",
+                         gx, gy, took, waited[0] if waited else 0.0, tm.get("content_s", 0.0),
+                         tm.get("content_cpu", 0.0), tm.get("skin_s", 0.0), tm.get("skin_cpu", 0.0), top)
         except concurrent.futures.TimeoutError:
             fut.cancel()
             log.warning("road geotile %d_%d: no answer from its worker in %.0f s: built again", gx, gy,
@@ -1595,7 +1604,7 @@ class Server:
             return None
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         scratch = os.path.join(self.cache_dir, "areas", "scratch")
-        return poolsmod.result_running(self.road_pool.submit(
+        return poolsmod.result_running(getattr(self.road_pool, "submit_low", self.road_pool.submit)(
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
             lamps, country), ROAD_TILE_TIMEOUT_S)
 

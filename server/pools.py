@@ -5,6 +5,7 @@ every later submit raises BrokenProcessPool. The road pool broken that way left 
 tile while the terrain and the far buildings went on loading. RespawningPool makes the pool again at the next submit
 (at most every RESPAWN_S: a pool whose processes cannot even start does not spawn without end) and logs it.
 """
+import collections
 import concurrent.futures
 import logging
 import threading
@@ -47,6 +48,13 @@ class RespawningPool:
         self.inflight = 0           # jobs submitted and not done (Server.live_busy: the saved areas' downloads wait)
         # (its own lock: a future cancelled by _renew's shutdown runs _done in that thread, under self._lock)
         self._count_lock = threading.Lock()
+        self.workers = getattr(self._pool, "_max_workers", None) or 1
+        # submit_low's jobs: given to the processes only while fewer than `workers` jobs are in flight, or when none of
+        # them is (one at a time beside the rest); a thread of its own hands them over (the done callbacks may run
+        # under self._lock: _renew)
+        self._low, self._low_active = collections.deque(), 0
+        self._low_cv = threading.Condition()
+        self._low_thread = None
 
     def submit(self, fn, *args, **kwargs):
         with self._lock:
@@ -63,6 +71,53 @@ class RespawningPool:
     def _done(self, _fut):
         with self._count_lock:
             self.inflight = max(0, self.inflight - 1)
+        if self._low:
+            with self._low_cv:
+                self._low_cv.notify()
+
+    def submit_low(self, fn, *args, **kwargs):
+        """submit for work that may wait for the rest (the road processes' trees beside their road tiles: first come
+        first served, ~120 trees geotiles of ~11 s took the four road processes from ~50 road geotiles, and on a first
+        visit the roads were never ahead of a car at 100 mph, nyc_speed.py --cold 2026-11-02): the job goes to the
+        processes when one is free of the other jobs, or when no low job runs (never starved). Its future is running
+        once handed over (result_running)."""
+        outer = concurrent.futures.Future()
+        with self._low_cv:
+            self._low.append((outer, fn, args, kwargs))
+            if self._low_thread is None:
+                self._low_thread = threading.Thread(target=self._low_loop, daemon=True, name=f"{self.name}-low")
+                self._low_thread.start()
+            self._low_cv.notify()
+        return outer
+
+    def _low_loop(self):
+        while True:
+            with self._low_cv:
+                while not (self._low and (self.inflight < self.workers or self._low_active == 0)):
+                    self._low_cv.wait(timeout=1.0)
+                outer, fn, args, kwargs = self._low.popleft()
+                if not outer.set_running_or_notify_cancel():
+                    continue                # (cancelled while it waited)
+                self._low_active += 1
+            try:
+                inner = self.submit(fn, *args, **kwargs)
+            except BaseException as e:
+                with self._low_cv:
+                    self._low_active -= 1
+                outer.set_exception(e)
+                continue
+            inner.add_done_callback(lambda f, o=outer: self._low_done(f, o))
+
+    def _low_done(self, inner, outer):
+        with self._low_cv:
+            self._low_active -= 1
+            self._low_cv.notify()
+        if inner.cancelled():
+            outer.set_exception(concurrent.futures.CancelledError())
+        elif inner.exception() is not None:
+            outer.set_exception(inner.exception())
+        else:
+            outer.set_result(inner.result())
 
     def _renew(self, broken):
         with self._lock:

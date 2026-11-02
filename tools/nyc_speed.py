@@ -200,7 +200,7 @@ def summarize(rows, lines, drive):
     lead = [r["arrived"] for r in moving if r.get("arrived") is not None]
     geo = {}                    # slow road / trees geotiles (earthd ROAD_GEO_SLOW_S): build time and queue
     for l in lines:
-        m = re.search(r"(road|trees) geotile \S+ in ([\d.]+) s \(queue ([\d.]+)\)", l)
+        m = re.search(r"(road|trees) geotile \S+ in ([\d.]+) s \(queue ([\d.]+)[);]", l)
         if m:
             geo.setdefault(m.group(1), []).append((float(m.group(2)), float(m.group(3))))
     stand_ins = sum(1 for l in lines if "quick base photo" in l and " in " in l and "not in" not in l)

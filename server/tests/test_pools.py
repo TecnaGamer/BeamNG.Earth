@@ -70,6 +70,26 @@ class RespawnTest(unittest.TestCase):
         finally:
             p.shutdown()
 
+    def test_low_jobs_wait_for_the_rest(self):
+        """submit_low: handed over while a process is free of the other jobs, else one at a time beside them; the
+        other jobs go first (trees geotiles after the road tiles, 2026-11-02)."""
+        import time
+        p = pools.RespawningPool("test", 2)
+        try:
+            busy = [p.submit(time.sleep, 1.0) for _ in range(4)]
+            low = [p.submit_low(abs, -i) for i in range(1, 4)]
+            time.sleep(0.3)
+            self.assertEqual(sum(f.running() or f.done() for f in low), 1)     # (one beside them)
+            later = p.submit(abs, -9)
+            self.assertEqual(later.result(timeout=30), 9)
+            self.assertEqual([f.result(timeout=30) for f in low], [1, 2, 3])     # (one at a time: never starved)
+            cancelled = p.submit_low(time.sleep, 0)
+            self.assertIn(cancelled.cancel(), (True, False))
+            with self.assertRaises(ZeroDivisionError):
+                p.submit_low(divmod, 1, 0).result(timeout=30)
+        finally:
+            p.shutdown()
+
     def test_jobs_in_flight_are_counted(self):
         """inflight (Server.live_busy: the saved areas' downloads wait for it): up at a submit, down when the job ends,
         fails or is cancelled, also when a pool made again cancels its futures (its own lock: no deadlock)."""
