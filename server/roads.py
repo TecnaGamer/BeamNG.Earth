@@ -2200,18 +2200,36 @@ def unbuilt(feats, i):
     Overture's is_under_construction flag over most of it)? Not drawn, as on the stock map views (GitHub #184). (The
     Gotthard road tunnel's second bore, highway=construction until ~2029, was built beside the real one, its portal in
     the A2's lanes: Layercake leaves construction ways out, and the join took the open tunnel's tags, 2026-10-28.)"""
+    got = feats.__dict__.get("_unbuilt")
+    if got is None:
+        got = feats.__dict__["_unbuilt"] = _unbuilt_all(feats)
+    return bool(got[i])
+
+
+def _unbuilt_all(feats):
+    """unbuilt for every feature of a layer at once (105k calls in two cells' planning, 2026-11-02): each feature's
+    construction share summed over its flag rows in their order, as one at a time did."""
+    n = len(feats)
+    out = np.zeros(n, bool)
     col = feats.attrs.get("osm_highway")
-    if col is not None and str(col[i]) in ("construction", "proposed"):
-        return True
+    if col is not None:
+        out |= np.isin(np.asarray([str(v) for v in col.tolist()] if hasattr(col, "tolist") else
+                                  [str(v) for v in col], dtype=object), ["construction", "proposed"])
     t = feats.rules.get("flags")
-    if t is None or len(t.feature) == 0:
-        return False
-    share = 0.0
-    for j in t.rows(i):
-        if "is_under_construction" in str(t.value[j]):
-            a, b = float(t.start[j]), float(t.end[j])
-            share += (b - a) if b > a else 1.0      # (no range: the whole feature)
-    return share >= UNBUILT_SHARE
+    if t is not None and len(t.feature):
+        vals = t.value.tolist() if hasattr(t.value, "tolist") else list(t.value)
+        uc = np.fromiter(("is_under_construction" in str(v) for v in vals), bool, len(vals))
+        if uc.any():
+            share = np.zeros(n)
+            st = np.asarray(t.start, np.float64)
+            en = np.asarray(t.end, np.float64)
+            for j in np.flatnonzero(uc).tolist():       # (rows in order: the same sums as before)
+                i = int(t.feature[j])
+                if 0 <= i < n:
+                    a, b = float(st[j]), float(en[j])
+                    share[i] += (b - a) if b > a else 1.0      # (no range: the whole feature)
+            out |= share >= UNBUILT_SHARE
+    return out
 
 
 def _road_specs(feats, urban_fn, left_hand):
