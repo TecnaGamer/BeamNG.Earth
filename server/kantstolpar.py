@@ -21,6 +21,7 @@ TIGHT_M, SPACING_M = 25.0, 100.0    # the grid, and the spacing on straights: a 
 TIGHT_RADIUS_M = 700.0
 HEIGHT_M = 1.05
 CLEAR_M = 1.5                       # m from a mapped barrier
+PAVEMENT_M = 0.5                    # m past a carriageway of its own class beside it
 GROUP = guardrails.GROUPS.index("kantstolpe")
 
 
@@ -60,6 +61,8 @@ def tile_rows(frame, near_roads, box, elev, country, mapped=()):
             continue
         others = [(p2[:, :2], s2.width / 2 + medians.OPENING_M) for f2, s2, p2, *_ in near_roads
                   if f2 != fid and s2.cls != spec.cls and s2.cls in motesfri.OPEN_CLASSES and len(p2) >= 2]
+        others += [(p2[:, :2], s2.width / 2 + PAVEMENT_M) for f2, s2, p2, *_ in near_roads      # the other carriageway
+                   if f2 != fid and s2.cls == spec.cls and len(p2) >= 2]
         p, t = stations(np.asarray(pts, np.float64)[:, :2])
         for side in (1.0, -1.0):        # (+1 left of the geometry)
             q = p + np.c_[-t[:, 1], t[:, 0]] * side * (spec.width / 2 + OUT_M)

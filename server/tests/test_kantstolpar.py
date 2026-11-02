@@ -68,5 +68,16 @@ class PlaceTest(unittest.TestCase):
         self.assertEqual(sorted(map(tuple, whole[:, 1:3].tolist())), sorted(tuple(r[1:3]) for r in parts))
 
 
+class CarriagewayTest(unittest.TestCase):
+    def test_no_post_on_the_other_carriageway(self):
+        sp = roads.Spec(4.5, "paved", False, "trunk", True, 2.5, 1, 100.0)
+        a = np.array([[0.0, -500.0, 0.0], [0.0, 500.0, 0.0]])
+        b = np.array([[6.0, 500.0, 0.0], [6.0, -500.0, 0.0]])
+        rows = kantstolpar.tile_rows(Frame(), [("a", sp, a), ("b", sp._replace(dir=1), b)], (-128, -128, 128, 128),
+                                     lambda la, lo: 0.0 * la, "SE")
+        xs = sorted({round(float(r[1]), 2) for r in rows})
+        self.assertEqual(xs, [-3.25, 9.25], "outside the two carriageways alone")
+
+
 if __name__ == "__main__":
     unittest.main()
