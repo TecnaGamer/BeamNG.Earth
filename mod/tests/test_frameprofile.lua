@@ -72,6 +72,20 @@ pressure=false
 for _,o in ipairs(summary.observations) do if o.kind=='gpu' and o.text:find('candidate') then pressure=true end end
 T.check(pressure,'sustained GPU pressure observation requires meaningful GPU cost')
 T.check(summary.series.gpu[1].name=='ShadowMapPass','largest GPU pass ranks first')
+-- Frozen snapshots retain at most one geometry per lane through repeated resizes.
+local graphSize
+local im={TreeNodeFlags_DefaultOpen=1,
+  TextUnformatted=function() end,PushTextWrapPos=function() end,PopTextWrapPos=function() end,
+  Button=function() return false end,SameLine=function() end,CollapsingHeader1=function() return true end,
+  ImVec2=function(x,y) return {x=x,y=y} end,ImVec4=function() return {} end,
+  GetColorU322=function() return 1 end,GetCursorScreenPos=function() return {x=0,y=0} end,
+  GetWindowDrawList=function() return {} end,ImDrawList_AddRectFilled=function() end,ImDrawList_AddText1=function() end,
+  InvisibleButton=function(id,size) if id=='##earth-frame-stack-cpu' then graphSize=size end end}
+for i=1,100 do UI.draw(im,summary,500+i,90+i) end
+local cached=0;for _ in pairs(summary._layouts) do cached=cached+1 end
+T.check(cached==3 and graphSize.x==600 and graphSize.y==190,'resizing all lanes keeps geometry bounded and follows both dimensions')
+local resized=summary._layouts.cpu.layout
+T.check(UI.hit(resized,599).id==summary.history[#summary.history].id,'resized graph hit testing still reaches latest frame')
 F.reset()
 T.check(F.analyze().count==0 and #F.analyze().observations==0,'empty capture has no invented observations')
 T.done('frameprofile')

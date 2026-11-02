@@ -1,6 +1,6 @@
 -- Opt-in live profiler. Core supplies the previous completed frame's wall time and marks.
 -- All history is bounded; no frame samples, UI allocations or network requests while off.
-local M = { enabled = false, mode = 'essential', page = 'frames' }
+local M = { enabled = false, mode = 'essential', page = 'frames', compact = false }
 local frameProfile = require('beamngEarth/frameprofile')
 local frameUI = require('beamngEarth/frameprofile_ui')
 local ioUI = require('beamngEarth/ioprofile_ui')
@@ -10,7 +10,8 @@ local frames, frameAt, frameN = {}, 0, 0
 local server, supported, receivedAt, sentAt = nil, nil, nil, -math.huge
 local frozen, wasInLevel, lastSend, openPtr, message = false, false, nil, nil, nil
 local view, refreshedAt = nil, -math.huge
-local FRAME_KEEP, WIDTH = 600, 610
+local FRAME_KEEP = 600
+local startedAt, captured = 0, 0
 local supportedVersion, probe, pending, rtt = nil, 0, {}, { count = 0, sum = 0, timeouts = 0, samples = {} }
 
 function M.reset()
@@ -19,6 +20,7 @@ function M.reset()
   frames, frameAt, frameN = {}, 0, 0
   server, receivedAt, view, message = nil, nil, nil, nil
   refreshedAt = -math.huge
+  startedAt, captured, frozen = clock(), 0, false
   pending, rtt = {}, { count = 0, sum = 0, timeouts = 0, samples = {} }
 end
 
@@ -40,6 +42,17 @@ function M.setPage(page)
   return false
 end
 
+function M.setFrozen(on)
+  on = on == true
+  if on == frozen then return end
+  if on then view = view or M.snapshot() else view = nil end
+  frozen = on
+end
+
+function M.setCompact(on)
+  M.compact = on == true
+end
+
 function M.pong(msg)
   local started = pending[msg.probe]
   if not started or not M.enabled then return end
@@ -54,7 +67,7 @@ end
 
 function M.setEnabled(on)
   on = on == true
-  if on ~= M.enabled then M.reset(); frozen = false; sentAt = -math.huge end
+  if on ~= M.enabled then M.reset(); M.compact = false; sentAt = -math.huge end
   M.enabled = on
   if transport.setProfiling then transport.setProfiling(on) end
   if on and frameProfile.mode ~= M.mode then frameProfile.setMode(M.mode) end
@@ -71,7 +84,7 @@ end
 function M.receive(data)
   if not M.enabled or type(data) ~= 'table' or not data.enabled then return end
   receivedAt = clock()
-  if not frozen then server = data; view = nil end
+  server = data
 end
 
 function M.update(ms, marks, inLevel, connected, send)
@@ -88,8 +101,9 @@ function M.update(ms, marks, inLevel, connected, send)
   end
   for id, started in pairs(pending) do if now-started>5000 then pending[id]=nil;rtt.timeouts=rtt.timeouts+1 end end
   if not connected then server, receivedAt, supported = nil, nil, nil end
-  if not inLevel or frozen or type(ms) ~= 'number' or ms <= 0 or ms ~= ms then return end
+  if not inLevel or type(ms) ~= 'number' or ms <= 0 or ms ~= ms or ms == math.huge then return end
   frameProfile.add(ms, marks)
+  captured = captured + 1
   frameAt = frameAt % FRAME_KEEP + 1
   local sample = { ms = ms, marks = {} }
   if M.mode == 'full' then for k, v in pairs(marks or {}) do sample.marks[k] = v end end
@@ -173,7 +187,8 @@ function M.snapshot()
     for _,v in ipairs(times) do variance=variance+(v-mean)^2 end
     latency.jitterMs=math.sqrt(variance/#times)
   end
-  return { mode = M.mode, frames = frameN, avgMs = frameN > 0 and sum / frameN or 0, fps = sum > 0 and frameN * 1000 / sum or 0,
+  return { mode = M.mode, capturedFrames = captured, elapsedMs = math.max(0, clock() - startedAt),
+    frames = frameN, avgMs = frameN > 0 and sum / frameN or 0, fps = sum > 0 and frameN * 1000 / sum or 0,
     p95 = percentile(frameTimes, 0.95), maxMs = frameTimes[#frameTimes] or 0,
     parts = ordered(parts), pools = ordered(pools), stages = ordered(stages), server = server, plot = plot,
     frameDetail = frameProfile.analyze(), feedback = feedback, localLink = link, latency = latency }
@@ -186,16 +201,16 @@ local function color(im, r, g, b) return im.GetColorU322(im.ImVec4(r, g, b, 1)) 
 local function rect(im, dl, x, y, w, h, c)
   im.ImDrawList_AddRectFilled(dl, im.ImVec2(x, y), im.ImVec2(x + w, y + h), c)
 end
-local function bar(im, id, fraction, label)
+local function bar(im, width, id, fraction, label)
   local pos = im.GetCursorScreenPos()
-  im.InvisibleButton('##profile-' .. id, im.ImVec2(WIDTH, 19))
+  im.InvisibleButton('##profile-' .. id, im.ImVec2(width, 19))
   local dl = im.GetWindowDrawList()
-  rect(im, dl, pos.x, pos.y, WIDTH, 19, color(im, 0.12, 0.14, 0.17))
-  rect(im, dl, pos.x, pos.y, math.min(1, math.max(0, fraction)) * WIDTH, 19, color(im, 0.12, 0.42, 0.57))
+  rect(im, dl, pos.x, pos.y, width, 19, color(im, 0.12, 0.14, 0.17))
+  rect(im, dl, pos.x, pos.y, math.min(1, math.max(0, fraction)) * width, 19, color(im, 0.12, 0.42, 0.57))
   im.ImDrawList_AddText1(dl, im.ImVec2(pos.x + 4, pos.y + 1), color(im, 0.95, 0.96, 0.98), label, nil)
 end
 
-local function timeline(im, data)
+local function timeline(im, data, width)
   local lanes, order = {}, {}
   local function add(job)
     if not job.worker then return end
@@ -213,13 +228,13 @@ local function timeline(im, data)
     if visible then
       text(im, key)
       local pos = im.GetCursorScreenPos()
-      im.InvisibleButton('##lane-' .. key, im.ImVec2(WIDTH, 13))
+      im.InvisibleButton('##lane-' .. key, im.ImVec2(width, 13))
       local dl = im.GetWindowDrawList()
-      rect(im, dl, pos.x, pos.y, WIDTH, 13, color(im, 0.12, 0.14, 0.17))
+      rect(im, dl, pos.x, pos.y, width, 13, color(im, 0.12, 0.14, 0.17))
       local function span(a, b, c, y, h)
         a, b = math.max(now - 10000, a), math.min(now, b)
-        if b > a then rect(im, dl, pos.x + (a - now + 10000) * WIDTH / 10000, pos.y + y,
-          math.max(1, (b - a) * WIDTH / 10000), h, c) end
+        if b > a then rect(im, dl, pos.x + (a - now + 10000) * width / 10000, pos.y + y,
+          math.max(1, (b - a) * width / 10000), h, c) end
       end
       for _, job in ipairs(lanes[key]) do
         local start = job.startOffsetMs
@@ -233,18 +248,49 @@ local function timeline(im, data)
   if #order == 0 then text(im, 'Waiting for measured jobs. Already running jobs are captured on their next submission.') end
 end
 
+local function stop()
+  M.setEnabled(false)
+  local settings = require('beamngEarth/settings')
+  if settings.SCHEMA and settings.SCHEMA.runtimeProfiler then settings.set('runtimeProfiler', false) end
+end
+
+local function refresh(now)
+  if not view or (not frozen and now - refreshedAt >= (M.mode=='essential' and 250 or 100)) then
+    view, refreshedAt = M.snapshot(), now
+  end
+end
+
+local function summary(im)
+  wrapped(im, string.format('%.1f FPS | frame avg %.2f ms | p95 %.2f ms | worst %.2f ms (%d recent frames)',
+    view.fps, view.avgMs, view.p95, view.maxMs, view.frames))
+end
+
 function M.draw(inLevel)
   if not M.enabled or not inLevel then return end
   local im = rawget(_G, 'ui_imgui')
   if not im then return end
   local now = clock()
-  if not view or (not frozen and now - refreshedAt >= (M.mode=='essential' and 500 or 100)) then view = M.snapshot(); refreshedAt = now end
+  if M.compact then
+    im.SetNextWindowSize(im.ImVec2(420, 145), im.Cond_FirstUseEver)
+    if im.Begin('Earth profiler / collecting') then
+      refresh(now)
+      summary(im)
+      wrapped(im, frozen and 'Display frozen; collection continues.' or 'Live / continuous collection')
+      if im.Button('Open profiler') then M.setCompact(false) end
+      im.SameLine()
+      if im.Button('Stop profiling') then stop() end
+    end
+    im.End()
+    return
+  end
   openPtr = openPtr or im.BoolPtr(true)
   openPtr[0] = true
   im.SetNextWindowSize(im.ImVec2(740, 680), im.Cond_FirstUseEver)
+  if im.SetNextWindowSizeConstraints then im.SetNextWindowSizeConstraints(im.ImVec2(560, 360), im.ImVec2(10000, 10000)) end
   if im.Begin('BeamNG.Earth performance profiler', openPtr) then
-    text(im, string.format('%.1f FPS | frame avg %.2f ms | p95 %.2f ms | worst %.2f ms (%d frames)',
-      view.fps, view.avgMs, view.p95, view.maxMs, view.frames))
+    local available = im.GetContentRegionAvail()
+    local width = math.max(1, available.x)
+    local graphHeight = math.max(90, math.min(240, (im.GetWindowSize().y - 340) / 3))
     for _, mode in ipairs({'essential','full'}) do
       if im.Button((mode=='essential' and 'Essential' or 'Full')..(M.mode==mode and ' [selected]' or '')) then
         local settings = require('beamngEarth/settings')
@@ -258,27 +304,38 @@ function M.draw(inLevel)
       im.SameLine()
     end
     text(im,'')
-    if im.Button(frozen and 'Resume display' or 'Freeze display') then frozen = not frozen end
+    if im.Button(frozen and 'Resume display' or 'Freeze display') then M.setFrozen(not frozen) end
     im.SameLine()
+    refresh(now)
     if im.Button('Save snapshot') then
       local ok, result = pcall(function()
-        local capture = M.snapshot()
-        capture.plot = nil -- zero-based ImGui array is a view cache, not JSON data
+        -- Export exactly what is being inspected, including a frozen display.
+        local capture = {}
+        for k, v in pairs(view) do if k ~= 'plot' then capture[k] = v end end
+        capture.frameDetail = {}
+        for k, v in pairs(view.frameDetail) do if k ~= '_layouts' then capture.frameDetail[k] = v end end
         return jsonWriteFile('/settings/beamngEarth-profiler.json', capture, true)
       end)
       message = ok and result ~= false and 'Saved /settings/beamngEarth-profiler.json' or 'Snapshot could not be saved'
     end
+    im.SameLine()
+    if im.Button('Compact view') then M.setCompact(true) end
+    im.SameLine()
+    if im.Button('Stop profiling') then stop(); im.End(); return end
+    summary(im)
+    wrapped(im, string.format('%s | collecting %.1f s | %d frames sampled | history limit %d',
+      frozen and 'DISPLAY FROZEN' or 'LIVE', math.max(0, now-startedAt)/1000, captured, FRAME_KEEP))
     if message then text(im, message) end
-    if frozen then text(im, 'Display frozen; worker collection continues.') end
+    if frozen then wrapped(im, 'Display frozen; frame, worker and network collection continues. Resume display to catch up.') end
     if supported == false then wrapped(im, 'This server does not support worker profiling. Update the server to see worker timings.')
     elseif not receivedAt or now - receivedAt > 3000 then text(im, 'Worker feed unavailable or stale; waiting for server telemetry.') end
     wrapped(im, 'Blue: execution (includes I/O and waits). Amber: queue wait. CPU is the executing thread only. Parallel jobs and nested stages overlap; do not add their times together.')
     if M.page=='frames' and im.CollapsingHeader1('Per-frame CPU / GPU history', im.TreeNodeFlags_DefaultOpen) then
-      if view.frames > 0 then im.PlotLines1('##earth-profiler-frames', view.plot, view.frames, 0, 'Frame wall time (ms)', 0, nil, im.ImVec2(WIDTH, 55)) end
-      frameUI.draw(im, view.frameDetail, WIDTH)
+      if view.frames > 0 then im.PlotLines1('##earth-profiler-frames', view.plot, view.frames, 0, 'Frame wall time (ms)', 0, nil, im.ImVec2(width, 55)) end
+      frameUI.draw(im, view.frameDetail, width, graphHeight)
     end
     local data = view.server
-    if M.page=='io' then ioUI.draw(im,data and data.io,view.localLink,view.latency,M.mode,WIDTH) end
+    if M.page=='io' then ioUI.draw(im,data and data.io,view.localLink,view.latency,M.mode,width) end
     if data and data.collectionMode and data.collectionMode~=M.mode then wrapped(im,'Shared server collection is Full because another client requested it.') end
     if M.page=='workers' and M.mode=='essential' then wrapped(im,'Detailed worker timers, stage checks and timelines are disabled in Essential mode. Select Full to collect them.') end
     if M.page=='workers' and M.mode=='full' and data then
@@ -286,7 +343,7 @@ function M.draw(inLevel)
         for _, line in ipairs(view.feedback) do wrapped(im, line) end
       end
       if (data.skipped or 0) > 0 then text(im, string.format('%d jobs omitted at the telemetry capacity limit', data.skipped)) end
-      if im.CollapsingHeader1('Worker timeline / last 10 seconds', im.TreeNodeFlags_DefaultOpen) then timeline(im, data) end
+      if im.CollapsingHeader1('Worker timeline / last 10 seconds', im.TreeNodeFlags_DefaultOpen) then timeline(im, data, width) end
       if im.CollapsingHeader1('Running and queued jobs', im.TreeNodeFlags_DefaultOpen) then
         local active = data.active or {}
         for _, job in ipairs(active) do
@@ -299,7 +356,7 @@ function M.draw(inLevel)
         local max = view.pools[1] and view.pools[1].totalMs or 1
         for _, p in ipairs(view.pools) do
           local n = math.max(1, p.count)
-          bar(im, 'pool-' .. p.name, p.totalMs / math.max(1, max), string.format('%s | %d jobs | avg %.1f | p95 %.1f | queue %.1f | CPU %.1f ms',
+          bar(im, width, 'pool-' .. p.name, p.totalMs / math.max(1, max), string.format('%s | %d jobs | avg %.1f | p95 %.1f | queue %.1f | CPU %.1f ms',
             p.name, p.count, p.totalMs / n, p.p95, p.queueMs / n, p.cpuMs / n))
           if p.failed + p.incomplete > 0 then text(im, string.format('  %d failed/cancelled; %d incomplete timing records', p.failed, p.incomplete)) end
         end
@@ -307,7 +364,7 @@ function M.draw(inLevel)
       if #view.stages > 0 and im.CollapsingHeader1('Active generation steps / last 5 s, inclusive wall time') then
         local max = view.stages[1] and view.stages[1].totalMs or 1
         for _, s in ipairs(view.stages) do
-          bar(im, 'stage-' .. s.name, s.totalMs / math.max(1, max), string.format('%s | %d calls | avg %.1f | max %.1f ms',
+          bar(im, width, 'stage-' .. s.name, s.totalMs / math.max(1, max), string.format('%s | %d calls | avg %.1f | max %.1f ms',
             s.name, s.count, s.totalMs / math.max(1, s.count), s.maxMs))
         end
       end
@@ -318,7 +375,7 @@ function M.draw(inLevel)
           if im.CollapsingHeader1(j.pool .. ' / ' .. j.name .. ' / ' .. (j.outcome or '?') .. '##' .. j.id) then
             text(im, string.format('Queue %s | execution %s | CPU %s | %s', duration(j.queueMs), duration(j.runMs), duration(j.cpuMs), j.worker or 'worker not observed'))
             if j.incomplete or (j.dropped or 0) > 0 then text(im, 'Telemetry incomplete; missing values are unknown.') end
-            for _, s in ipairs(j.steps or {}) do bar(im, j.id .. s.name, s.totalMs / math.max(1, j.runMs or 1),
+            for _, s in ipairs(j.steps or {}) do bar(im, width, j.id .. s.name, s.totalMs / math.max(1, j.runMs or 1),
               string.format('%s | %.1f ms wall | %.1f ms CPU | %d calls', s.name, s.totalMs, s.cpuMs, s.count)) end
           end
         end
@@ -326,11 +383,7 @@ function M.draw(inLevel)
     end
   end
   im.End()
-  if not openPtr[0] then
-    M.setEnabled(false)
-    local settings = require('beamngEarth/settings')
-    if settings.SCHEMA and settings.SCHEMA.runtimeProfiler then settings.set('runtimeProfiler', false) end
-  end
+  if not openPtr[0] then M.setCompact(true) end
 end
 
 return M

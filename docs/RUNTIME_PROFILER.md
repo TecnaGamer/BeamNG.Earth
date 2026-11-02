@@ -1,10 +1,31 @@
 # Live performance profiler
 
+This PR includes upstream dev `50e41caca84b30bdc967cb84ad17dfc08d7a6cdc`
+(2 November 2026) and the latest continuous, resizable and compact-view work.
+The profiler remains optional and off by default. World-generation features are
+reviewed separately; the generic pool hooks also cover upstream's photo process.
+
 Open **Pause menu → BeamNG.Earth → Interface → Detailed performance profiler**.
-The option defaults to off. Enabling it opens a separate window while the Earth
-level is loaded; closing that window switches the option off and saves the change.
+The option defaults to off. Enabling it starts continuous collection and opens a
+resizable window while the Earth level is loaded. Drag its edges or corner to
+resize; charts and worker timelines follow the available width, and frame lanes
+grow with the window height. The window remembers its size and position.
+Closing it or choosing **Compact view** leaves a small status window while
+collection continues. **Open profiler** returns to the full view without resetting
+history. **Stop profiling** or turning the setting off stops collection and saves
+the disabled setting.
 Use matching mod and server sources. Older servers still allow game-frame timings;
 the window explains when worker telemetry is unavailable.
+
+Collection has no time limit. Frame history rolls over at its capacity instead of
+ending the capture. Live frame feedback refreshes every 250 ms in Essential and
+100 ms in Full; the server feed retains its one-second / half-second cadence.
+The window shows the elapsed capture time and total frames sampled separately
+from the bounded recent history. Collapsing the window keeps collection running.
+**Freeze display** holds the displayed frames, worker and I/O data while all
+collection continues; **Resume display** immediately catches up to recent data.
+**Save snapshot** exports the displayed data, including the held snapshot when
+frozen. Changing collection mode, level or server session starts a fresh history.
 
 Choose **Essential** (the default) or **Full** beside the toggle or inside the
 window. Switching modes starts a fresh capture. Essential keeps frame/FPS history,

@@ -67,18 +67,22 @@ function M.hit(layout, x)
   for _, c in ipairs(layout.columns) do if x >= c.x and x < c.x+c.width then return c.frame end end
 end
 
-local function drawGraph(im, snapshot, lane, title, width, scale)
+local function drawGraph(im, snapshot, lane, title, width, scale, height)
   text(im, title .. string.format(' | %.1f ms full scale', scale))
-  local height = 115
+  height = height or 115
   local p = im.GetCursorScreenPos()
   im.InvisibleButton('##earth-frame-stack-'..lane, im.ImVec2(width,height))
   local hovered = im.IsItemHovered and im.IsItemHovered()
   local clicked = im.IsItemClicked and im.IsItemClicked(0)
   local dl = im.GetWindowDrawList()
   local layouts = snapshot._layouts or {}; snapshot._layouts = layouts
-  local key = lane..':'..width..':'..scale..':'..visible
-  local layout = layouts[key]
-  if not layout then layout=M.layout(snapshot.history,lane,width,height,scale); layouts[key]=layout end
+  local key = width..':'..height..':'..scale..':'..visible
+  local cached = layouts[lane]
+  if not cached or cached.key ~= key then
+    cached = { key=key, layout=M.layout(snapshot.history,lane,width,height,scale) }
+    layouts[lane] = cached -- Only one geometry per lane, even while resizing a frozen display.
+  end
+  local layout = cached.layout
   rect(im,dl,p.x,p.y,width,height,col(im,0.075,0.09,0.12))
   for _, b in ipairs(layout.bars) do rect(im,dl,p.x+b.x,p.y+b.y,b.width,b.height,u32(im,b.name)) end
   for _, c in ipairs(layout.columns) do
@@ -134,7 +138,7 @@ local function breakdown(im, values, lane, width)
   end
 end
 
-function M.draw(im, snapshot, width)
+function M.draw(im, snapshot, width, graphHeight)
   if snapshot.count==0 then text(im,'Collecting frame history...'); return end
   width=width or 610
   for _,n in ipairs(snapshot.mode=='essential' and {180} or {180,300,600}) do
@@ -145,7 +149,6 @@ function M.draw(im, snapshot, width)
   if im.Button('Follow latest frame') then selected=nil end
   im.SameLine()
   if im.Button('Inspect worst frame') then selected=snapshot.worst end
-  im.SameLine()
   if im.Button('60 FPS budget') then frames.BUDGET_MS=1000/60 end
   im.SameLine()
   if im.Button('120 FPS budget') then frames.BUDGET_MS=1000/120 end
@@ -160,13 +163,13 @@ function M.draw(im, snapshot, width)
     scale=scale*1.05
   end
   wrap(im,'Each column is one captured frame, oldest to newest. CPU and GPU run in parallel: separate lanes use the same scale. White line = frame budget; red cap = off-scale spike. Hover for timings; click to inspect.')
-  if #snapshot.series.cpu>0 then drawGraph(im,snapshot,'cpu',snapshot.mode=='essential' and 'CPU work total' or 'CPU engine phases (includes waits)',width,scale)
+  if #snapshot.series.cpu>0 then drawGraph(im,snapshot,'cpu',snapshot.mode=='essential' and 'CPU work total' or 'CPU engine phases (includes waits)',width,scale,graphHeight)
   else wrap(im,'CPU phase timings are unavailable; the wall-frame history remains available.') end
   if snapshot.gpuSamples>0 then
-    drawGraph(im,snapshot,'gpu',snapshot.mode=='essential' and 'GPU total' or 'GPU passes / latest completed query',width,scale)
+    drawGraph(im,snapshot,'gpu',snapshot.mode=='essential' and 'GPU total' or 'GPU passes / latest completed query',width,scale,graphHeight)
     wrap(im,'GPU query results arrive later than CPU phases. These lanes share observation order; exact CPU/GPU frame association is unavailable from this API.')
   else wrap(im,'GPU pass timings are unavailable on this renderer/driver. GPU steps are hidden; totals are retained when reported.') end
-  if #snapshot.series.mod>0 then drawGraph(im,snapshot,'mod','Earth Lua scopes (inside CPU Lua; do not add)',width,scale) end
+  if #snapshot.series.mod>0 then drawGraph(im,snapshot,'mod','Earth Lua scopes (inside CPU Lua; do not add)',width,scale,graphHeight) end
   if im.CollapsingHeader1('Focused observations',im.TreeNodeFlags_DefaultOpen) then
     for i,o in ipairs(snapshot.observations) do
       wrap(im,o.text)
@@ -177,7 +180,7 @@ function M.draw(im, snapshot, width)
     wrap(im,'Observations report measured costs and coincidence with slow frames, not proof that a worker caused a stall.')
   end
   local f=selected or snapshot.history[#snapshot.history]
-  text(im,string.format('%s frame #%d | interval %.2f ms | CPU work %s | GPU %s | GPU wait %s',
+  wrap(im,string.format('%s frame #%d | interval %.2f ms | CPU work %s | GPU %s | GPU wait %s',
     selected and 'Selected' or 'Latest',f.id,f.ms,ms(f.cpuMs),ms(f.gpuMs),ms(f.waitMs)))
   if im.CollapsingHeader1('Selected frame / CPU steps',im.TreeNodeFlags_DefaultOpen) then breakdown(im,f.cpu,'CPU',width) end
   if next(f.gpu) and im.CollapsingHeader1('Selected observation / GPU passes') then breakdown(im,f.gpu,'GPU',width) end

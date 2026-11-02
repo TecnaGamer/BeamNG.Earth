@@ -2,10 +2,14 @@ local dir=(arg[0]:match('^(.*)[/\\]') or '.')
 local T=dofile(dir..'/testlib.lua')
 local IO=require('beamngEarth/ioprofile_ui')
 local texts,plots={},{}
+local expectedWidth=610
 local im={TextUnformatted=function(s) texts[#texts+1]=s end,PushTextWrapPos=function() end,PopTextWrapPos=function() end,
  Button=function() return false end,SameLine=function() end,CollapsingHeader1=function(s) texts[#texts+1]=s;return true end,
  TreeNodeFlags_DefaultOpen=1,ImVec2=function(x,y) return {x=x,y=y} end,
- PlotLines1=function(id,values,n) T.check(n>0 and values[0]~=nil,'I/O plot has measured samples');plots[#plots+1]=id end}
+ PlotLines1=function(id,values,n,_,_,_,_,size)
+   T.check(n>0 and values[0]~=nil,'I/O plot has measured samples')
+   T.check(size.x==expectedWidth,'I/O plot fills resized content width');plots[#plots+1]=id
+ end}
 local data={receivedBytes=2048,sentBytes=10,omitted=0,services={{endpoint='https://service.example',health='reachable',
  responseAvgMs=15,requestAvgMs=20,responseP95Ms=18,jitterMs=2,receivedBytes=2048,sentBytes=10,
  requests=2,responses=2,inflight=0,ageS=1,failures=0,failureShare=0,httpErrors=0,rateLimited=0,lastStatus=200,
@@ -31,4 +35,6 @@ T.check(essentialText:find('Essential:',1,true)~=nil,'Essential omissions explai
 local details=false
 for _,id in ipairs(plots) do if id:find('process-',1,true) or id:find('service-',1,true) then details=true end end
 T.check(not details,'Essential does not draw disabled process or per-service distribution graphs')
+expectedWidth=960
+IO.draw(im,data,link,rtt,'full',expectedWidth)
 T.done('ioprofile_ui')
