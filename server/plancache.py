@@ -136,6 +136,15 @@ class PlanCache:
         except Exception:
             return None
 
+    def has(self, key):
+        """Are cell key's plans on disk (this run's, or the revisit cache's copy)? A stat or two, nothing read."""
+        if os.path.exists(self._path(key)):
+            return True
+        if self.persist is None:
+            return False
+        import revisit
+        return os.path.exists(revisit._path(self.persist[0], "plans", self._revisit_key(key)))
+
     def _kept(self, key):
         """The revisit cache's copy of cell key's plans (a file-like npz), or None."""
         if self.persist is None:
