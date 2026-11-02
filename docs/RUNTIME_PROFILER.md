@@ -1,6 +1,6 @@
 # Live performance profiler
 
-This PR includes upstream dev `0c790738f3ab0ddc2bb7330ee3be23cd875caaf7`
+This PR includes upstream dev `b41b4b04edffab6083e78b0c2ef41982869287b2`
 (2 November 2026) and a resizable, tabbed native ImGui interface.
 The profiler remains optional and off by default. World-generation features are
 reviewed separately; the generic pool hooks also cover upstream's photo process.
