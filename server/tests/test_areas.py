@@ -346,6 +346,48 @@ class AreasTest(unittest.TestCase):
         self.assertTrue(b.command(aid, "delete"))
         self.assertEqual(areas.pinned_world(self.tmp.name), set(), "deleted: unpinned")
 
+    def test_world_mode_reads_the_road_lidar_first(self):
+        # the road builds wait only seconds for the lidar: without it on disk a cold area stored no geotile at all
+        # (downtown Portland, 2026-10-31: 0 of 72, every pass until a restart)
+        class Provider:
+            def __init__(self):
+                self.have, self.read, self.fail = set(), [], 0
+
+            def lidar_wanted(self, key):
+                return key[1] % 2 == 0          # (only some cells lie in lidar's country)
+
+            def lidar_on_disk(self, key):
+                return tuple(key) in self.have
+
+            def lines(self, src, key):
+                self.read.append((src, tuple(key)))
+                if self.fail:
+                    self.fail -= 1
+                    return None
+                self.have.add(tuple(key))
+                return object()
+
+        prov = Provider()
+        with mock.patch.object(areas.roadz, "PROVIDER", prov):
+            a, s = self.make(start=True)
+            steps = a.phase_steps("world", BOX)
+            lidar = [st for st in steps if st[0] == "lidar"]
+            self.assertTrue(lidar)
+            self.assertTrue(all(st[2] % 2 == 0 for st in lidar), "only where it is wanted")
+            self.assertEqual(steps[:len(lidar)], lidar, "before every geotile")
+            self.assertEqual(a.phase_steps("data", BOX), a.steps(BOX), "data areas read none")
+            prov.fail = 1                       # one failed read: the area says so, the next pass reads it
+            with mock.patch.object(areas, "PASS_RETRY_S", 0.01):
+                ok, aid = a.add(*BOX, name="Harbour", mode="world")
+                self.assertTrue(ok, aid)
+                self.assertTrue(wait_for(lambda: "1 items failed" in a.message()["areas"][0]["msg"]))
+                time.sleep(0.02)
+                a.wake.set()
+                self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done"))
+            self.assertEqual({("lidar", st[1:]) for st in lidar}, {(src, k) for src, k in prov.read})
+            self.assertEqual(len(prov.read), len(lidar) + 1, "each read once, the failed one twice")
+            a.close()
+
     def test_a_damaged_store_is_no_list(self):
         os.makedirs(os.path.join(self.tmp.name, areas.SUBDIR))
         with open(os.path.join(self.tmp.name, areas.SUBDIR, areas.STORE), "w") as f:
