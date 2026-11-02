@@ -227,7 +227,11 @@ class RealDataTest(unittest.TestCase):
         # (both put back after: left off, every later test in the run had no revisit cache, and test_grading /
         # test_plancache / test_revisit failed in the full suite only)
         import railways
+        import roadz
         self.addCleanup(setattr, revisit, "ON", revisit.ON)
+        # (_State sets the measured road heights' provider: left set, test_grading's far-apart points read a cell more
+        # in the full suite only, 31 of 30)
+        self.addCleanup(setattr, roadz, "PROVIDER", roadz.PROVIDER)
         self.addCleanup(setattr, revisit, "CACHE_DIR", revisit.CACHE_DIR)      # (_State points it at CACHE)
         self.addCleanup(setattr, railways, "COARSE_AT", railways.COARSE_AT)
         self.addCleanup(setattr, bw, "_s", getattr(bw, "_s", None))
