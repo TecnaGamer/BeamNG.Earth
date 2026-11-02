@@ -281,6 +281,51 @@ def gores(roads_):
     return out
 
 
+# Sweden's give-way line M14: "ska utföras där märke B1, väjningsplikt, är uppsatt", triangles 0.70 m high on a base of
+# 0.50 m, 0.50 m apart (TSFS 2010:171 4 kap. 5, 7 §§), at least 1.0 m from the crossing road's edge (VGU 2024 12.2.1.4.2)
+M14_H, M14_BASE, M14_GAP, M14_KERB_M = 0.70, 0.50, 0.50, 1.0
+M14_LOOK_M = 40.0       # m along an arm a crosswalk moves the line
+M14_CROSSWALK_M = 1.0   # m it stands before a crosswalk (junctions.STOP_GAP, the stop line's)
+
+
+def give_way_lines(arms, crosswalks, left_hand=False):
+    """(triangles [(3, 3) array], indices of the crosswalks rows that go) of arms [(fid, spec, centreline from the
+    junction, half the crossing road's width)] (furniture.give_way_arms): across the lanes coming in, points to the
+    drivers; past a crosswalk on the arm, and in place of its stop line (M13 is for B2 and signals: 4 kap. 1, 3 §§)."""
+    teeth, gone = [], set()
+    pitch = M14_BASE + M14_GAP
+    for _, spec, line, wide in arms:
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        if s[-1] < 1.0:
+            continue
+        st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
+        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        at = wide + M14_KERB_M
+        for j, cw in enumerate(crosswalks):
+            d = np.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
+            i = int(np.argmin(d))
+            if d[i] < spec.width / 2 + 1.0:
+                if cw.get("stop"):
+                    gone.add(j)
+                    at = max(at, float(st[i]))
+                else:
+                    at = max(at, float(st[i]) + cw["w"] / 2 + M14_CROSSWALK_M)
+        if at + M14_H + 2.0 > s[-1]:
+            continue                        # (a stub: nowhere to stop)
+        c = np.array([np.interp(at, s, line[:, k]) for k in range(3)])
+        q = np.array([np.interp(at + 1.0, s, line[:, k]) for k in range(2)])
+        t = (c[:2] - q) / max(float(np.hypot(*(c[:2] - q))), 1e-6)  # the way in
+        n = np.array([t[1], -t[0]]) * (-1.0 if left_hand else 1.0)  # its kerb side
+        half = spec.width / 2
+        lo, hi = (0.3 - half, half - 0.3) if spec.oneway else (0.2, half - 0.3)
+        count = int((hi - lo + M14_GAP) // pitch)
+        for k in range(count):
+            mid = c[:2] + n * ((lo + hi) / 2 + (k - (count - 1) / 2) * pitch)
+            tri = [mid + n * M14_BASE / 2, mid - n * M14_BASE / 2, mid - t * M14_H]
+            teeth.append(np.c_[np.array(tri), np.full(3, c[2])])
+    return teeth, gone
+
+
 # Turn arrows (MUTCD 3B.20: two per turn lane, near the start of the full lane and before the stop line) from
 # OpenStreetMap's turn:lanes, drawn with West Coast USA's road-marking decal sheet (roadmarkings1, 4 x 4 cells:
 # row 0 left, right and straight arrows; cell rows from the top: arrow_quad turns them into the shape's V)

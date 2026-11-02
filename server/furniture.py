@@ -323,7 +323,8 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     if str(country or "").upper() == "SE":
         # the two highest arms are the main road through; a lower one gives way, a road of its own class does not
         ranks = sorted((_SE_RANK.get(a[1].cls, 0) for a in arms), reverse=True)
-        return [(a, G_YIELD) for a in arms if a[1].cls in _SE_RANK and _SE_RANK[a[1].cls] < ranks[1]]
+        return [(a, G_YIELD) for a in arms if a[1].cls in _SE_RANK and _SE_RANK[a[1].cls] < ranks[1]
+                and not _outbound(a)]
     if major:
         return [(a, G_STOP) for a in minor]
     if len(arms) == 3:
@@ -389,6 +390,20 @@ def signal_spot(c, u, right, wide, half, lines):
     c = np.asarray(c, np.float64)[:2]
     near = [(h, ln) for h, ln in lines if len(ln) >= 2 and np.hypot(*(ln - c).T).min() < 80.0]
     return _off_carriageways(c, u, right, wide + 2.5, half + 1.0, near)
+
+
+def give_way_arms(roads, signals=None, country=None):
+    """[(fid, spec, centreline from the junction, half the widest arm's width)] of the paved arms that give way
+    (junction_controls), for their line on the road (markings.give_way_lines)."""
+    import islands
+    ring, lines, out = islands.ring_fids(roads), {fid: pts for fid, _, pts, _ in roads}, []
+    for k, arms in _arms(roads).items():
+        if len(arms) >= 3:
+            wide = max(a[1].width for a in arms) / 2
+            out.extend((a[0], a[1], np.asarray(lines[a[0]] if a[4] else lines[a[0]][::-1], np.float64), wide)
+                       for a, what in junction_controls(arms, k, None, ring, signals, country)
+                       if what == G_YIELD and a[1].kind == "paved")
+    return out
 
 
 def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None, country=None):

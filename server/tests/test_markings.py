@@ -132,6 +132,41 @@ class AiLanesTest(unittest.TestCase):
             self.assertAlmostEqual(navgraph.driving_width(sp), roads.lane_layout(sp)[0])
 
 
+class GiveWayLineTest(unittest.TestCase):
+    """M14, TSFS 2010:171 4 kap. 7 §: triangles 0.70 m high on a 0.50 m base, 0.50 m apart."""
+
+    def arm(self, width=8.0, oneway=False, wide=5.0):
+        spec = roads.Spec(width, "paved", True, "residential", oneway)
+        return ("a", spec, np.array([[0.0, 0.0, 3.0], [0.0, 60.0, 3.0]]), wide)    # the road runs north from the junction
+
+    def test_triangles_across_the_lanes_coming_in(self):
+        teeth, gone = markings.give_way_lines([self.arm()], [])
+        self.assertEqual(gone, set())
+        self.assertEqual(len(teeth), 4, "3.5 m of lane: four teeth at 1 m")
+        pts = np.concatenate(teeth)
+        self.assertTrue((pts[:, 0] < 0).all(), "traffic heading south keeps to the west half")
+        self.assertAlmostEqual(pts[:, 1].min(), 6.0, 3, "1 m back from the crossing road's edge")
+        self.assertAlmostEqual(pts[:, 1].max(), 6.7, 3, "0.70 m high")
+        self.assertAlmostEqual(np.ptp(teeth[0][:2, 0]), 0.5, 6, "on a 0.50 m base")
+        self.assertAlmostEqual(teeth[0][2, 1], 6.7, 3, "pointing at the drivers")
+        self.assertTrue(np.allclose(np.diff(sorted(t[:, 0].mean() for t in teeth)), 1.0), "0.50 m apart")
+        self.assertTrue((pts[:, 2] == 3.0).all())
+
+    def test_left_hand_and_one_way(self):
+        self.assertTrue((np.concatenate(markings.give_way_lines([self.arm()], [], True)[0])[:, 0] > 0).all())
+        self.assertEqual(len(markings.give_way_lines([self.arm(oneway=True)], [])[0]), 7, "the whole width")
+
+    def test_it_takes_the_place_of_a_stop_line_behind_a_crosswalk(self):
+        at = lambda y, w, **kw: {"a": np.array([-4.0, y, 3.0]), "b": np.array([4.0, y, 3.0]), "w": w, **kw}
+        teeth, gone = markings.give_way_lines([self.arm()], [at(9.0, 3.0), at(12.0, 0.45, stop=True)])
+        self.assertEqual(gone, {1})
+        self.assertGreaterEqual(np.concatenate(teeth)[:, 1].min(), 11.5)
+
+    def test_a_stub_has_no_line(self):
+        fid, spec, _, wide = self.arm()
+        self.assertEqual(markings.give_way_lines([(fid, spec, np.array([[0.0, 0.0, 0.0], [0.0, 6.0, 0.0]]), wide)], [])[0], [])
+
+
 if __name__ == "__main__":
     unittest.main()
 

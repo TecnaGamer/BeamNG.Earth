@@ -195,6 +195,16 @@ class RuralTeeTest(unittest.TestCase):
             return roads.build_tile(FRAME, 0, 0, [tee()], flat, walks=[], country=country) + \
                 roads.build_tile(FRAME, -1, 0, [tee()], flat, walks=[], country=country)
 
+    def test_sweden_paints_a_give_way_line_on_the_lesser_road(self):
+        f = features([[(-100, 0), (0, 0)], [(0, 0), (100, 0)], [(0, 0), (0, 100)]], ["primary", "primary", "residential"])
+        def teeth(country):
+            return [c for t in (0, -1) for c in roads.build_tile(FRAME, t, 0, [f], flat, walks=[], country=country)
+                    if c.get("layer") == "mark" and len(c.get("poly") or ()) == 3]
+        got = teeth("SE")
+        self.assertTrue(got, "M14's triangles")
+        self.assertTrue(all(q[1] > 5.0 for c in got for q in c["poly"]), "on the side road, back from the main road")
+        self.assertEqual(teeth("DE"), [])
+
     def test_one_fill_per_corner_and_lines_along_each_arc(self):
         chunks = self.build("DE")
         self.assertEqual(sum(bool(c.get("poly")) for c in chunks), 2)

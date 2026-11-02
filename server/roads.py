@@ -7031,6 +7031,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
         junctions.find(roads, has_sidewalks, None)
+    teeth = []                                  # Sweden's give-way lines (markings.give_way_lines)
+    if str(country or "").upper() == "SE":
+        import furniture
+        import markings as _gw
+        teeth, gone = _gw.give_way_lines(furniture.give_way_arms(roads, signals, country), crosswalks, left_hand)
+        crosswalks = [cw for j, cw in enumerate(crosswalks) if j not in gone]
     # (no curb extensions: they were on every town street with parking, after Fells Point's, and most streets have none:
     # the corners stuck out into the road in Tustin's suburbs, GitHub #208)
     # small road loops (roundabouts, turnaround loops): no sidewalks facing their inside, a curbed island instead
@@ -7103,6 +7109,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 chunks.append({"m": markings.ARROW_MATERIAL, "w": 0.0, "tl": 4.0, "p": CENTRE["p"], "layer": "mark",
                                "poly": [[round(float(v), 3) for v in q] for q in corners],
                                "uvq": uv.tolist(), "n": []})
+    for tri in teeth:
+        if skin_own(*tri[:2].mean(0)[:2]):
+            chunks.append({"m": "line_white", "w": 0.0, "tl": EDGE_LINE["tl"], "p": CENTRE["p"], "layer": "mark",
+                           "poly": [[round(float(v), 3) for v in q] for q in tri], "uvq": [[0.5, 0.5]] * 3, "n": []})
     gore_look = {"m": "line_white", "tl": EDGE_LINE["tl"], "p": CENTRE["p"]}
     for kind_, gw, gl in markings.gores(roads):     # ramp gores: channelizing lines and stripes (MUTCD 3B.08 / 3B.25)
         if kind_ == "fill":
