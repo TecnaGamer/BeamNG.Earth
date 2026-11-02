@@ -573,6 +573,47 @@ class UnderpassTest(unittest.TestCase):
         self.assertLess(float(np.abs(np.diff(grade)).max()), 0.01, "no kink")
         self.assertAlmostEqual(float(out[2]), 10.0, delta=0.1, msg="another road untouched")
 
+    def _dip_at(self, ground):
+        f = features([[(-200, 0), (200, 0)], [(0, -20), (0, 20)]], ["residential", "motorway"],
+                     flags=[(1, "is_bridge")])
+        g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), ground))
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
+        return float(g.apply(la, lo, np.full(1, ground))[0])
+
+    def test_dip_stays_above_the_sea(self):
+        """Low ground by the sea (Perth's freeways by the Swan River, GitHub #515, #518): the dip stops
+        UNDER_SEA_M over the sea's surface, whose water tiles flood any ground under it; higher up it is as deep as
+        before, and ground already under the sea (a polder) is dug as before."""
+        floor = grading.seatiles.SEA_E + grading.UNDER_SEA_M
+        self.assertGreater(min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M), 3.0 - floor, "(the case digs)")
+        self.assertAlmostEqual(self._dip_at(3.0), floor, delta=0.1, msg="by the sea: dug to the floor, not under it")
+        self.assertLess(self._dip_at(3.0), 3.0 - 1.0, "still dug where there is room")
+        deep = 30.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
+        self.assertAlmostEqual(self._dip_at(30.0), deep, delta=0.3, msg="high ground: as deep as before")
+        polder = -4.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
+        self.assertAlmostEqual(self._dip_at(-4.0), polder, delta=0.3, msg="a polder: as before")
+        with unittest.mock.patch.object(grading, "UNDER_SEA_ON", False):
+            self.assertLess(self._dip_at(3.0), grading.seatiles.SEA_E, "(off: under the sea, the reported bug)")
+
+    def test_dip_from_a_low_bank_stays_above_the_sea_beside_it(self):
+        """The crossing on a river bank under the floor (#515's interchange by the Swan River): its dip's flat and
+        ramps reach the dry ground beside, which stays over the sea too; the bank itself is not lowered."""
+        f = features([[(-200, 0), (200, 0)], [(0, -20), (0, 20)]], ["residential", "motorway"],
+                     flags=[(1, "is_bridge")])
+
+        def elev(la, lo):
+            e, _, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
+            return np.where(np.abs(np.asarray(e)) < 20.0, 0.3, 3.0)
+        xs = np.arange(-120.0, 120.1, 2.0)
+        la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+        base = elev(la, lo)
+        floor = grading.seatiles.SEA_E + grading.UNDER_SEA_M
+        z = grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, base)
+        self.assertGreaterEqual(float((z - np.minimum(base, floor)).min()), -0.1, "nowhere under the floor")
+        with unittest.mock.patch.object(grading, "UNDER_SEA_ON", False):
+            z = grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, base)
+        self.assertLess(float(z[np.abs(xs) >= 30].min()), grading.seatiles.SEA_E, "(off: the dry ground under the sea)")
+
 
 class UnderDipTest(unittest.TestCase):
     def test_a_dip_ends_inside_its_road_part(self):
@@ -614,6 +655,31 @@ class UnderpassShortfallTest(unittest.TestCase):
             off = motorway_z([mway, bridge] + ramps + frontage, ["motorway", "tertiary", "tertiary", "tertiary",
                                                                   "residential", "residential"])
         self.assertAlmostEqual(float(off[0]), 10.0, delta=0.3, msg="BNE_UNDERPASS_ANY=off: as before")
+
+    def test_on_lidar_a_road_level_with_the_decks_ends_keeps_its_ground(self):
+        """Pittsburgh's 28th Street Bridge (the user's report, 2026-10-29): its mapped end lay level with Sassafras Way
+        under it in the lidar, which has the alley's own ground there; dug 8 m, the dip ran on into Liberty Avenue. On
+        lidar the road keeps its ground; on the coarse models (no cutting in them: BR-381) it still dips."""
+        mway = [(-300, 0), (300, 0)]
+        lines = [mway, [(0, -20), (0, 20)], [(0, -260), (0, -20)], [(0, 20), (0, 260)],
+                 [(-150, -26), (150, -26)], [(-150, 26), (150, 26)]]
+        classes = ["motorway", "tertiary", "tertiary", "tertiary", "residential", "residential"]
+
+        class Dem:
+            def __init__(self, coarse):
+                self.coarse = coarse
+
+            def coarse_at(self, lat, lon):
+                return self.coarse
+
+        def motorway_z(coarse):
+            g = grading.Grader(FRAME, FakeMD(features(lines, classes, flags=[(1, "is_bridge")])),
+                               lambda la, lo: np.full(np.shape(la), 10.0))
+            g.dem = Dem(coarse)
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
+            return float(g.apply(la, lo, np.full(1, 10.0))[0])
+        self.assertAlmostEqual(motorway_z(False), 10.0, delta=0.1, msg="lidar: the road under keeps its ground")
+        self.assertLess(motorway_z(True), 10.0 - 0.6 * grading.UNDER_CLEAR_M, "coarse: it dips as before")
 
 
 class RacewayKeepTest(unittest.TestCase):
@@ -668,7 +734,7 @@ class JunctionTest(unittest.TestCase):
         grading.snap_junctions([main, side], specs)
         main.z = main.z - 3.0 * np.exp(-((x - 60.0) / 40.0) ** 2)     # the dip, after the first snap
         grading.snap_junctions([main, side], specs)
-        _d, zq, _e = grading._nearest_on(main, 50.0, 0.0)
+        zq = np.interp(50.0, x, main.z)        # (the main road's height where the side road meets it)
         self.assertAlmostEqual(side.z[0], zq, places=6)
         self.assertAlmostEqual(side.z[-1], 10.0, places=6)
 

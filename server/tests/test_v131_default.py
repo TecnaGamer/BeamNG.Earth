@@ -113,12 +113,17 @@ def compute(server_dir):
             (t0, b0), (t1, b1) = built["-2_3_-5"], built["-1_1_-3"]
             out["deltas_near"] = [_r(v) for v in ff.group_deltas(([(t0, b0.grid)], [(t1, b1.grid)]))]
             p = os.path.join(tmp, "hm.png")
+            # The v1.3.1 block: 1024² at 2 m. Since 2026-11-01 the block lattice is 1 m (heightmap.SQUARE): the same
+            # 2 km is the 2048² block, and its every second sample (odd rows from the north, even columns) is the
+            # v1.3.1 sample, bit for bit.
+            sub = int(round(2.0 / getattr(heightmap, "SQUARE", 2.0)))
             info = heightmap.generate(frame, lambda la, lo: dem.sample(la, lo, 15), p, 256.0, -512.0, (300.0, -400.0),
-                                      1 / 64)
+                                      1 / 64, **({"size": 1024 * sub} if sub > 1 else {}))
             out["heightmap"] = {k: _r(v) for k, v in sorted(info.items()) if k != "seconds"}
             from PIL import Image
             with Image.open(p) as im:
-                out["heightmap_png"] = [im.size[0], im.mode, _h(np.asarray(im).tobytes())]
+                px = np.asarray(im)[sub - 1::sub, ::sub]
+                out["heightmap_png"] = [px.shape[1], im.mode, _h(px.tobytes())]
         finally:
             s.hm_pool.shutdown(wait=True)
             s.tile_pool.shutdown(wait=True)

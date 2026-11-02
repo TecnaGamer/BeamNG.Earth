@@ -56,6 +56,17 @@
         @update:modelValue="val => onSliderChange(item, val)"
         :with-input="true"
       />
+      <div v-else-if="item.type === 'number'" class="earth-inline">
+        <BngInput
+          class="earth-number-input"
+          :modelValue="numberText[item.id] ?? String(config[item.id] ?? '')"
+          @update:modelValue="val => (numberText[item.id] = val)"
+          @focus="typing(true)"
+          @blur="typing(false); applyNumber(item)"
+          @keydown.enter.stop.prevent="applyNumber(item)"
+        />
+        <span v-if="item.unit" class="earth-value">{{ item.unit }}</span>
+      </div>
       <BngSwitch
         v-else-if="item.type === 'dev'"
         :modelValue="dev.on[item.id] === true"
@@ -105,12 +116,13 @@
 </template>
 
 <script setup>
-import { computed } from "vue"
+import { computed, reactive } from "vue"
 import { BngButton, BngSwitch, BngSlider, BngInput, BngSelect, BngRow, BngCardHeading, ACCENTS } from "@/common/components/base"
 import {
   config, dev, help, qualityPresets, devPresets, presetLine, detectedPick, optionConfig, categoryNamed, visibleItems,
   cacheConfirm, cacheBusy, cacheResult, pathText, pathBusy, pathPick, pathMsg,
-  setQuality, presetName, valueOf, selectOption, onSwitchChange, onSliderChange, onDevChange, infoValue, openFeedback,
+  setQuality, presetName, valueOf, selectOption, onSwitchChange, onSliderChange, onNumberEnter, onDevChange, infoValue,
+  openFeedback,
   confirmClearCache, askClearCache, usePath, sendPath, pathNote, typing, applyDevPreset,
 } from "./earthSettingsStore.js"
 
@@ -123,10 +135,19 @@ const rows = computed(() => visibleItems(category.value))
 
 function setHelp(item) { help.value = item }
 function cancelClearCache() { cacheConfirm.value = false }
+// typed numbers (type "number"): the text being typed per setting, until Enter or leaving the box applies it
+const numberText = reactive({})
+function applyNumber(item) {
+  const t = numberText[item.id]
+  if (t === undefined) return
+  onNumberEnter(item, t)
+  delete numberText[item.id]          // (shows the value in use again: the clamped one, or the old one after a bad entry)
+}
 </script>
 
 <style scoped lang="scss">
 /* Only spacing: the cards, rows and controls are the game's own */
+.earth-number-input { width: 7em; }
 .earth-main {
   display: flex;
   flex-direction: column;

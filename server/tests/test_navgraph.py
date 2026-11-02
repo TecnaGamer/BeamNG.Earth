@@ -77,6 +77,23 @@ class GraphTest(unittest.TestCase):
             lo, li = navgraph._lanes(w, False)
             self.assertEqual(lo, li, cls)
 
+    def test_mountain_road_inside_its_edges(self):
+        """A switchback pass road (roads._mountain_roads): the AI's half width MOUNTAIN_EDGE_M inside its edge lines
+        (a wall and a parapet right at the edge), wider round its widened hairpins; an ordinary rural secondary at its
+        lanes' edge."""
+        from test_roads import _zigzag
+        g = graph([_zigzag(4)], ["secondary"])
+        radii = {round(e[7], 2) for e in g["edges"]}
+        sp = roads.road_specs(__import__("test_roads").features([_zigzag(4)], ["secondary"]))[0]
+        self.assertTrue(sp.mountain)
+        leg = round(navgraph.driving_width(sp) / 2 - navgraph.MOUNTAIN_EDGE_M, 2)
+        self.assertEqual(min(radii), leg, "the legs: inside the edge lines")
+        self.assertGreater(max(radii), leg + 1.0, "round the hairpins: wider (roads.HAIRPIN_WIDEN_M)")
+        self.assertLessEqual(max(radii), leg + roads.HAIRPIN_WIDEN_M / 2 + 0.01)
+        flat_ = graph([[(0, 0), (300, 0)]], ["secondary"])
+        sp2 = roads.road_specs(__import__("test_roads").features([[(0, 0), (300, 0)]], ["secondary"]))[0]
+        self.assertEqual({round(e[7], 2) for e in flat_["edges"]}, {round(navgraph.driving_width(sp2) / 2, 2)})
+
     def test_rural_motorway_two_lanes(self):
         import roads
         for urban, n in ((False, 2), (True, 3)):

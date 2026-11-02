@@ -54,6 +54,10 @@ const css = `
 
 const strip = name => String(name || "").replace(/\^[0-9a-frlmnop*]/gi, "")
 
+// "a,b" as BeamMP's own list shows tags (beammpState formatServerTags; its colour themes left out)
+const tagsList = tags => String(tags || "").split(",").map(t => t.trim()).filter(Boolean)
+  .map(raw => { const parts = raw.split(":"); return { raw, text: parts[1] || raw, prefix: parts[0], theme: null } })
+
 // One server of our list (serverlist.lua toServers) in the shape BeamMP's list holds (beammpState normalizeServer).
 // The official ones sort first: BeamMP's views order by sortName.
 function toBeamMP(s, i) {
@@ -64,9 +68,12 @@ function toBeamMP(s, i) {
     ip: s.ip, port: s.port, sname: name, name, strippedName: stripped,
     sortName: (s.official ? "0 " : "1 ") + stripped.toLowerCase(),
     map: "BeamNG.Earth", mapName: "BeamNG.Earth",
-    players: s.players, maxplayers: s.maxPlayers, playerslist: "",
+    players: s.players, maxplayers: s.maxPlayers, playerslist: s.playerslist || "",
     version: s.version || "", location: s.location || "", owner: "",
-    sdesc: s.place ? `The world around ${s.place}` : "", tags: "", tagsList: [], modlist: "", modstotalsize: 0,
+    // the server's own description (ServerConfig.toml), else where its players are
+    sdesc: s.desc || (s.place ? `The world around ${s.place}` : ""),
+    tags: s.tags || "", tagsList: tagsList(s.tags), modlist: s.modlist || "", modstotalsize: s.modstotalsize || 0,
+    modstotal: s.modstotal || 0, pass: !!s.pass,
     endpoint, id: `${endpoint}#bnge${i}`, bngeEarth: true, bngeOfficial: !!s.official,
   }
 }

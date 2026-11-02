@@ -70,6 +70,21 @@ class LampTest(unittest.TestCase):
         self.assertGreaterEqual(groups.count(furniture.G_POLELAMP), 2)
         self.assertTrue(wires)
 
+    def test_no_poles_along_a_mountain_pass_road(self):
+        """A pass road (roads.Spec.mountain, the Stelvio): no utility poles nor wires, as a road in the hills
+        without the flag has them."""
+        fid, spec, pts, lon = road("m", "secondary", False)
+        rows, wires = [], []
+        for sp in (spec, spec._replace(mountain=True)):
+            got, w = [], []
+            for side in (1, -1):
+                got += furniture.place([(fid, sp, pts, lon)], self.walks((fid, sp, pts, lon), side), (0, 0, 256, 256),
+                                       wires=w, town=True)
+            rows.append([x[0] for x in got].count(furniture.G_POLE))
+            wires.append(len(w))
+        self.assertGreater(rows[0], 0)
+        self.assertEqual((rows[1], wires[1]), (0, 0))
+
     def test_hydrants_on_town_streets(self):
         r = road("h", "residential", True, x0=-300, x1=900)
         rows = []
@@ -331,3 +346,18 @@ class SignClearance(unittest.TestCase):
         big = (40.0, np.array([[-100.0, 0.0], [100.0, 0.0]]))
         self.assertIsNone(furniture._off_carriageways(np.zeros(2), np.array([0.0, 1.0]), np.array([1.0, 0.0]),
                                                       2.0, 4.0, [big]))
+
+
+class StreetTreesOffBuildings(unittest.TestCase):
+    def test_tree_in_a_rowhouse_goes_others_stay(self):
+        """A sidewalk run a metre into a rowhouse row (Canton, Baltimore): its street tree goes, one clear of the
+        walls stays, and a lamp in the same footprint is not this rule's."""
+        from types import SimpleNamespace
+        house = SimpleNamespace(ring=np.array([[10.0, 10.0], [30.0, 10.0], [30.0, 25.0], [10.0, 25.0]]))   # (tile-local)
+        rows = [[furniture.G_STREET_TREE, 120.0, 211.0, 0.0, 0.0, 1.0, 7.0, 0.5],     # 1 m into the house
+                [furniture.G_STREET_TREE, 120.0, 209.5, 0.0, 0.0, 1.0, 7.0, 0.5],     # 0.5 m from its wall
+                [furniture.G_STREET_TREE, 145.0, 205.0, 0.0, 0.0, 1.0, 7.0, 0.5],     # clear
+                [furniture.G_LAMP, 115.0, 215.0, 0.0, 0.0, 1.0, 9.0, 0.0]]
+        out = furniture.off_buildings(rows, [house.ring + [100.0, 200.0]])
+        self.assertEqual([(r[0], r[1], r[2]) for r in out],
+                         [(furniture.G_STREET_TREE, 145.0, 205.0), (furniture.G_LAMP, 115.0, 215.0)])

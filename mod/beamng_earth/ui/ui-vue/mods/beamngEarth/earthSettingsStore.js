@@ -12,6 +12,7 @@ export const settingsSchema = [
     presets: true,
     intro: "Pick a preset, then fine-tune the settings below if you like. Each change applies at once (the ground photo resolution at the next level load).",
     items: [
+      { id: "framePacing", type: "bool", default: true, name: "Even frame pacing", desc: "Keeps the time between frames steady, so the game's speed doesn't pulse while the world loads around you. Costs about a seventh of the frame rate while the world loads. Turn it off for the highest frame rate." },
       { id: "terrainDetail", type: "select", default: "normal", name: "Terrain detail", desc: "How detailed the distant ground is: how far out each finer level of the land's shape reaches, out to the horizon. Low: coarser hills sooner (fewer pieces to build and draw: about 20 % less). High, Ultra and Extreme: sharper mountains and coastlines far away; Extreme builds about twice as many pieces of distant ground, so new places take longer to fill in. Applies at once.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Ultra", value: "ultra" }, { label: "Extreme", value: "extreme" } ] },
       { id: "groundPhoto", type: "select", default: "2048", name: "Ground photo", desc: "The sharpness of the aerial photo and the painted roads on the ground around you (each 1 km square). 1024: 1 m a pixel, the lightest (handhelds). 2048: 0.5 m, the default. 4096: 0.25 m, the crispest road edges and markings in the ground, but each square takes 1-3 s longer to make on a fast PC (much longer on a handheld) and uses 4 times the video memory.",
@@ -78,10 +79,24 @@ export const settingsSchema = [
     name: "Storage",
     items: [
       { id: "cacheUsage", type: "info", name: "Download cache", desc: "Elevation, imagery and map data kept on disk so places you visited load without downloading again: the space in use, the limit and the number of files." },
-      { id: "cacheCapGb", type: "select", default: "20", name: "Cache size limit", desc: "The most the download cache may use. Over the limit the files used longest ago are removed (never what this session used in the last hour).",
-        options: [ { label: "5 GB", value: "5" }, { label: "10 GB", value: "10" }, { label: "20 GB", value: "20" }, { label: "50 GB", value: "50" }, { label: "Unlimited", value: "unlimited" } ] },
+      { id: "cacheCapGb", type: "number", default: 20, min: 0, unit: "GB", name: "Cache size limit (GB)", desc: "The most the download cache may use, in GB: type a number and press Enter (0: no limit). Over the limit the files used longest ago are removed (never what this session used in the last hour), and pre-cached areas and routes are kept." },
+      { id: "routeDownload", type: "select", default: "ahead", name: "Download along the GPS route", desc: "When you plan a GPS route, its elevation and road and building data are downloaded ahead in the background, so the drive loads faster. Ahead: the next 12 miles. Whole route: all of it (up to 300 miles). To keep a route for good, with its aerial photos, use Pre-cache route on the map's GPS box.",
+        options: [ { label: "Off", value: "off" }, { label: "Ahead (12 miles)", value: "ahead" }, { label: "Whole route", value: "route" } ] },
       { id: "cacheDir", type: "path", what: "cache", name: "Cache folder", placeholder: "Folder for the download cache, or default", desc: "Where the download cache is kept, e.g. on another drive. Change... opens your system's folder window (it may open behind the game: Alt+Tab to it); or type or paste a folder below and press Use (default: .cache/beamng-earth in your home folder). Used from the next start of the app; move the old folder's contents there first to keep what is downloaded." },
       { id: "cacheClear", type: "action", name: "Clear cache", desc: "Deletes the downloaded elevation and imagery. What this session used and the gravity model stay. Places are downloaded again when you visit them." },
+    ],
+  },
+  {
+    name: "Performance",
+    intro: "How much of your CPU the BeamNG.Earth app may use to build the world around you. Takes effect the next time you start BeamNG.Earth.",
+    items: [
+      { id: "serverCores", type: "select", default: "auto", name: "World server CPU cores", desc: "The CPU cores the app builds the map on; the game keeps the others. Auto: a quarter of your cores (one on a 4-core CPU). On an older CPU where the map loads slowly or pauses while you drive, 2 can load it much faster, at a few frames per second. The app never takes more than half your cores.",
+        note: "Takes effect the next time you start BeamNG.Earth.",
+        options: [ { label: "Auto", value: "auto" }, { label: "1", value: "1" }, { label: "2", value: "2" }, { label: "3", value: "3" }, { label: "4", value: "4" }, { label: "6", value: "6" }, { label: "8", value: "8" } ] },
+      { id: "serverPriority", type: "select", default: "low", name: "World server priority", desc: "Low (the default): the game always comes first, the map can take longer to load. Normal: the app gets its fair share, so the map loads faster on a busy CPU, at a few frames per second.",
+        note: "Takes effect the next time you start BeamNG.Earth.",
+        options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" } ] },
+      { id: "teleportPriority", type: "bool", default: false, name: "Full priority loading", desc: "When you join the world and after a teleport, the app builds the place on every CPU core and the game keeps only two, until the place around you has finished loading. The new place loads much faster; the game runs at a lower frame rate meanwhile. Takes effect at your next teleport or the next time you join." },
     ],
   },
   {
@@ -316,6 +331,15 @@ export function updateSetting(key) {
 export function resetSetting(item) {
   config.value[item.id] = item.default
   updateSetting(item.id)
+}
+
+// A typed number (type "number"): applied on Enter or when the box loses focus; anything else puts the value back.
+export function onNumberEnter(item, text) {
+  const n = Number(String(text).trim())
+  if (String(text).trim() === "" || !Number.isFinite(n)) return false
+  config.value[item.id] = Math.max(item.min ?? -Infinity, Math.min(item.max ?? Infinity, n))
+  updateSetting(item.id)
+  return true
 }
 
 export function onSliderChange(item, val) {

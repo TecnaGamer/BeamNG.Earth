@@ -252,9 +252,11 @@ T.check(res.rebaseDistance == rebase.DEFAULT_DISTANCE and files[settings.FILE].r
 ------------------------------------------------------------------------------------------
 -- the download cache (server cache.py): the cap setting, the usage line, the clear button
 
-T.check(settings.defaults().cacheCapGb == '20' and settings.cacheCapGb() == 20, 'cache cap: 20 GB by default')
-T.check(settings.validate('cacheCapGb', 'unlimited') == 'unlimited' and settings.validate('cacheCapGb', '7') == nil,
-  'cache cap: the page\'s values only')
+T.check(settings.defaults().cacheCapGb == 20 and settings.cacheCapGb() == 20, 'cache cap: 20 GB by default')
+T.check(settings.validate('cacheCapGb', '7') == 7 and settings.validate('cacheCapGb', 12.5) == 12.5
+  and settings.validate('cacheCapGb', 'unlimited') == 0 and settings.validate('cacheCapGb', -3) == 0
+  and settings.validate('cacheCapGb', 'lots') == nil,
+  'cache cap: any number of GB typed (the old choices and "unlimited" (0) still read)')
 local capsSent, clears, queries, connected = {}, 0, 0, true
 local cacheInfo = nil
 beamngEarth_core = { _state = function() return stTbl end,
@@ -264,7 +266,7 @@ beamngEarth_core = { _state = function() return stTbl end,
   cacheState = function() return cacheInfo end }
 settings.uiSet('cacheCapGb', '50')
 settings.uiSet('cacheCapGb', 'unlimited')
-T.check(capsSent[1] == 50 and capsSent[2] == 0 and files[settings.FILE].cacheCapGb == 'unlimited',
+T.check(capsSent[1] == 50 and capsSent[2] == 0 and files[settings.FILE].cacheCapGb == 0,
   'cache cap: saved, sent to the server in GB (unlimited = 0)')
 settings.applyAll()
 T.check(capsSent[3] == 0, 'cache cap: applied with the rest (the level start)')
@@ -299,7 +301,7 @@ beamngEarth_core = nil
 r = settings.uiCacheClear()
 T.check(not r.ok and r.error == 'mod not loaded', 'uiCacheClear: no core')
 settings.uiReset()
-T.check(settings.get('cacheCapGb') == '20', 'uiReset: the cap back to 20 GB')
+T.check(settings.get('cacheCapGb') == 20, 'uiReset: the cap back to 20 GB')
 
 ------------------------------------------------------------------------------------------
 -- the compact HUD draws (permissive imgui stub)
@@ -404,6 +406,17 @@ do
   T.check(st.HIDDEN.updateDismissed, 'updateDismissed: not on the settings page')
 end
 
+-- the world server's share of the CPU (GitHub #529): on the page, the defaults as before (server cpupin.player_settings)
+do
+  local st = require('beamngEarth/settings')
+  T.check(st.SCHEMA.serverCores.kind == 'enum' and st.SCHEMA.serverCores.default == 'auto', 'serverCores: auto by default')
+  T.check(st.SCHEMA.serverPriority.kind == 'enum' and st.SCHEMA.serverPriority.default == 'low', 'serverPriority: low by default')
+  T.check(st.validate('serverCores', '2') == '2' and st.validate('serverPriority', 'normal') == 'normal', 'the choices')
+  local on = {}
+  for _, k in ipairs(st.ORDER) do on[k] = true end
+  T.check(on.serverCores and on.serverPriority, 'both on the settings page')
+end
+
 -- the map holds off the car's controls (the user, 2026-10-21: the controller drove the car behind the map): the stock
 -- groups and every driving action by name
 do
@@ -463,6 +476,21 @@ do
   os.clock = saved.clock
   saved.clock = nil
   for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
+-- The map's other players in a BeamMP session: none is nil, not an empty table (it reaches EarthMap.vue as {}, not
+-- [], and the map's .map() threw every second: the map stopped drawing in multiplayer; PR #509 by Astel123457).
+do
+  local b0, m0 = package.loaded['beamngEarth/beammp'], package.loaded['beamngEarth/mpsession']
+  local others = {}
+  package.loaded['beamngEarth/beammp'] = { inSession = function() return true end }
+  package.loaded['beamngEarth/mpsession'] = { others = function() return others end }
+  local ok, st = pcall(settings.uiMapState)
+  T.check(ok and st.others == nil, 'map in a session, no other players: others nil')
+  others = { { name = 'a', lat = 1, lon = 2 } }
+  ok, st = pcall(settings.uiMapState)
+  T.check(ok and type(st.others) == 'table' and #st.others == 1, 'map in a session, one other player: listed')
+  package.loaded['beamngEarth/beammp'], package.loaded['beamngEarth/mpsession'] = b0, m0
 end
 
 -- #44: dashboard visibility is a persisted player setting.

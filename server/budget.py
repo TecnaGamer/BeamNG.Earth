@@ -27,7 +27,7 @@ SMALL_ROAD_PROCESSES = 2    # road-tile processes (earthd ROAD_PROCESSES; with o
 ROAD_PROCESSES_BY_CPU = ((12, 24.0, 4), (8, 16.0, 3))     # (threads at least, GB at least, processes)
 SMALL_FAR_K = 0.8           # the far field's refinement factors (farfield.K_TABLE) times this: 204 tiles for 332
 SMALL_FAR_TEX = 256         # px of the far tiles' textures at every level (512 from L2 on a desktop)
-ARENA_MAX = 2               # glibc malloc arenas a process (small profile): one per thread kept freed memory ...
+ARENA_MAX = 2               # glibc malloc arenas a process (every profile): one per thread kept freed memory ...
 TRIM_S = 20.0               # ... and every TRIM_S the freed memory is given back (malloc_trim): a worker held ~1 GB
                             # for ~0.3 GB of Python and numpy objects (traced, a Steam Deck 2026-10-20)
 SMALL_FAR_WORKERS = 2       # far-tile worker processes (earthd --workers)
@@ -79,6 +79,9 @@ def small(gb=None):
     return gb is not None and gb < SMALL_GB
 
 
+SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~24 cells; a Steam Deck: ~9 server processes)
+
+
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
@@ -90,6 +93,8 @@ def apply(is_small=None):
         dem.MEM_TILES = SMALL_DEM_TILES
         mapdata.MEM_MB = SMALL_MAPDATA_MB
         roadwidth.WALL_CELLS = SMALL_WALL_CELLS
+        import roads
+        roads.FACTS_MEM_KEPT = SMALL_FACTS_CELLS   # (~0.5 MB a city cell's facts, in each process)
         import imagery
         gb = total_gb() or 16.0
         imagery.MEM_FINISHED_MB = int(min(imagery.MEM_FINISHED_MB, max(SMALL_FIN_MB, round(FIN_MB_PER_GB * gb))))
@@ -98,7 +103,9 @@ def apply(is_small=None):
             farfield.K_TABLE[cells] = {lvl: k * SMALL_FAR_K for lvl, k in table.items()}
         for cells, tex in farfield.TEX_DEFAULT.items():
             farfield.TEX_DEFAULT[cells] = tuple(min(t, SMALL_FAR_TEX) for t in tex)
-        _malloc_small()
+    # every machine: a desktop's server held 13-17 GB in its eleven processes (1-1.5 GB a worker, mostly freed memory
+    # its 40-65 threads' arenas kept), next to the game; a 32 GB PC with 4 cores swapped (GitHub #496, 2026-10-30)
+    _malloc_small()
     return is_small
 
 

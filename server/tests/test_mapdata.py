@@ -387,6 +387,14 @@ class RangeTest(SmallBlocks, unittest.TestCase):
         self.assertEqual(r3.read(48000, 50000), self.data[48000:])
         self.assertEqual(r3.size, len(self.data))
 
+    def test_mirrors_take_turns(self):
+        # Overture's AWS and Azure copies: reads spread over both (twice the connections), the same bytes
+        r = self.remote()
+        b = rangeread.BLOCK
+        self.assertEqual(r.read(0, 10), self.data[:10])
+        self.assertEqual(r.read(3 * b, 3 * b + 10), self.data[3 * b:3 * b + 10])
+        self.assertEqual({u for u, _ in self.t.log}, {self.URL, self.MIRROR})
+
     def test_mirror_failover(self):
         self.t.fail[netfetch.host_of(self.URL)] = 503
         r = self.remote()
@@ -887,6 +895,32 @@ class CacheTest(Sources, SmallBlocks, unittest.TestCase):
         left = [d for d, _, f in os.walk(root) if "ok" in f]
         self.assertEqual(left, [])
 
+    def test_old_mirror_folders_are_read_and_packed(self):
+        """A mirror folder from before the pack (one .npy per array) is still read, the same arrays, and on Linux
+        packed into one file for the next read (mapdata.PACK_FILE)."""
+        cache = os.path.join(self.tmp, "cache")
+        md, _ = self.mapdata(cache=cache)
+        digest = md.cell(mf.CELL).digest()
+        p = md.path(mf.CELL, "roads")
+        d = md._mirror_dir(p)
+        packed = md._mirror_load(p)
+        self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)))
+        for n in os.listdir(d):             # the folder as an older version wrote it
+            os.remove(os.path.join(d, n))
+        for n, a in packed.items():
+            np.save(os.path.join(d, n + ".npy"), np.asarray(a), allow_pickle=False)
+        with open(os.path.join(d, "ok"), "w") as fh:
+            fh.write(md._stamp(p) + "\n" + "\n".join(packed) + "\n")
+        old = md._mirror_load(p)
+        self.assertEqual(sorted(old), sorted(packed))
+        for n in packed:
+            self.assertEqual(old[n].dtype, packed[n].dtype)
+            self.assertEqual(np.asarray(old[n]).tobytes(), np.asarray(packed[n]).tobytes())
+        if os.name != "nt":
+            self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)), "packed again")
+        md2, _ = self.mapdata(cache=cache)
+        self.assertEqual(md2.cell(mf.CELL).digest(), digest)
+
     def test_corrupt_layer_files_are_rebuilt(self):
         """A damaged layer file (truncated, a flipped byte in the deflate stream, an old layout without
         provenance) is a miss: rebuilt from the raw blocks, same digest, not a permanent error."""
@@ -960,8 +994,10 @@ class KindsTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(len(cd.layers["roads"]), 6)
 
     def test_policies(self):
-        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com", "overturemapswestus2.blob.core.windows.net",
-                  "esa-worldcover.s3.eu-central-1.amazonaws.com", "dataforgood-fb-data.s3.amazonaws.com"):
+        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com", "overturemapswestus2.blob.core.windows.net"):
+            p = netfetch.POLICIES[h]
+            self.assertEqual((p.rate, p.burst, p.max_conc, p.allow_prefetch, p.miss_ttl), (40.0, 80.0, 8, True, None))
+        for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com", "dataforgood-fb-data.s3.amazonaws.com"):
             p = netfetch.POLICIES[h]
             self.assertEqual((p.rate, p.burst, p.max_conc, p.allow_prefetch, p.miss_ttl), (20.0, 40.0, 4, True, None))
         self.assertTrue(netfetch.POLICIES["stac.overturemaps.org"].allow_prefetch)

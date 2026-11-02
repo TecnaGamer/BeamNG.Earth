@@ -317,6 +317,23 @@ class RockSinkTest(unittest.TestCase):
         self.assertTrue(np.allclose(flat, 0.0, atol=0.02), "no sinking on flat ground")
 
 
+class GradedFaceTest(unittest.TestCase):
+    def test_no_tree_on_a_cutting_rocks_stay(self):
+        """A road cut 3 m into a slope (Mount Washington, Pittsburgh): the tree and the bush on its face go, a tree
+        0.5 m off the DEM stays, and a rock on the face stays (sunk into it)."""
+        g = np.array([veg.G_DECIDUOUS, veg.G_SHRUB, veg.G_CONIFER, veg.G_ROCK], np.uint8)
+        it = veg.Items(np.zeros(4), np.arange(4.0), np.full(4, 10.0), np.ones(4), np.zeros(4, np.uint8), g,
+                       np.zeros(4), np.zeros(4), np.ones(4))
+        zg = np.array([97.0, 98.0, 99.5, 97.0])        # graded
+        raw = lambda la, lo: np.full(np.size(la), 100.0)    # noqa: E731
+        it2, e2, n2, z2 = veg._off_graded(it, np.arange(4.0), np.zeros(4), zg, raw)
+        self.assertEqual(list(it2.group), [veg.G_CONIFER, veg.G_ROCK])
+        self.assertEqual(list(e2), [2.0, 3.0])
+        self.assertEqual(list(z2), [99.5, 97.0])
+        same = veg._off_graded(it, np.arange(4.0), np.zeros(4), zg, None)
+        self.assertEqual(len(same[0]), 4, "no raw ground: all kept")
+
+
 class FlatTileTest(unittest.TestCase):
     """A vegetation tile as one flat array (the mod's hello.vegFlat): no table per item in the game's Lua (trees.lua)."""
 

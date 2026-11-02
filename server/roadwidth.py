@@ -21,6 +21,7 @@ import logging
 import os
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -51,6 +52,9 @@ WALL_CELLS = 48          # cells of building walls kept per process (budget.py: 
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
 # process, the road processes and the server each did it again (7.4 s of a 15 s Baltimore block, 2026-10-20)
 WALLS_VERSION = 2         # (2: a cell's own buildings only, 2026-10-27)
+
+PREFETCH_THREADS = 8    # cells' walls built at once (prefetch)
+
 
 class Walls:
     """Building wall segments (metres, a local frame) with a bucket index for ray casts."""
@@ -334,6 +338,17 @@ class RoadWidths:
                 self.walls.popitem(last=False)
             return got
 
+    def prefetch(self, keys):
+        """The walls of the cells of keys not at hand yet, built side by side (one after another, a road near a cell
+        corner waited for each cell's buildings in turn: a fresh place's first block, 2026-10-30)."""
+        with self.lock:
+            missing = [k for k in keys if str(k) not in self.walls]
+        if len(missing) > 1:
+            with ThreadPoolExecutor(min(len(missing), PREFETCH_THREADS), thread_name_prefix="walls") as ex:
+                list(ex.map(self._walls, missing))
+        elif missing:
+            self._walls(missing[0])
+
     def _near_walls(self, ll):
         """(frame, Walls) of the buildings in the cells within NEAR_M of the road (lon/lat (k, 2)): its own cell's,
         or, near a cell's edge, those of the cells there in the first one's frame (kept for the COMBOS last used).
@@ -349,6 +364,7 @@ class RoadWidths:
         keys = sorted(mapcells.cells_near_points(lat, lon, dlat, dlon), key=str)
         if len(keys) == 1:
             return self._walls(keys[0])
+        self.prefetch(keys)
         ck = tuple(str(k) for k in keys)
         with self.lock:
             got = self.combos.get(ck)

@@ -169,3 +169,32 @@ console.log("mapmath ok")
   assert.equal(m.fmtRes(30, false), "98 ft")
   console.log("mapmath cache view ok")
 }
+
+// the Players list and its Show all: great-circle distances, and a view fitting everyone (the antimeridian, one player)
+{
+  near(m.distanceM(0, 0, 0, 1), 111195, 1, "a degree of the equator")
+  near(m.distanceM(51.5074, -0.1278, 40.7128, -74.006), 5570e3, 5e3, "London - New York")
+  near(m.distanceM(0, 179.5, 0, -179.5), m.distanceM(0, 0, 0, 1), 1e-6, "across the antimeridian: the short way")
+  assert.equal(m.distanceM(36.6, -118, 36.6, -118), 0)
+  const one = m.fitView([{ lat: 36.6, lon: -118 }], 1280, 720, 60, 12)
+  assert.deepEqual([Math.round(one.lat * 1e6) / 1e6, one.lon, one.z], [36.6, -118, 12], "one player: on them, at maxZ")
+  // Fiji and Samoa (either side of 180): side by side round 180, zoomed in, not the whole world between them
+  const pac = m.fitView([{ lat: -17.7, lon: 178 }, { lat: -13.8, lon: -172 }], 1280, 720, 60, 12)
+  near(Math.abs(pac.lon), 177, 1e-9, "centred on the antimeridian side")
+  assert.ok(pac.z > 4, `zoomed in on the Pacific: z ${pac.z}`)
+  for (const p of [{ lat: -17.7, lon: 178 }, { lat: -13.8, lon: -172 }]) {
+    const s = m.toScreen(p.lat, p.lon, pac.lat, pac.lon, pac.z, 1280, 720)
+    assert.ok(s.x >= 59.99 && s.x <= 1220.01 && s.y >= 59.99 && s.y <= 660.01, `inside the padded view: ${s.x}, ${s.y}`)
+  }
+  // players round the world: zoomed out, all of them still on screen
+  const spread = [{ lat: 50, lon: 0 }, { lat: -30, lon: 120 }, { lat: 10, lon: -120 }]
+  const world = m.fitView(spread, 1280, 720, 60, 12)
+  assert.ok(world.z < 3, `zoomed out: z ${world.z}`)
+  for (const p of spread) {
+    const s = m.toScreen(p.lat, p.lon, world.lat, world.lon, world.z, 1280, 720)
+    assert.ok(s.x >= 59.99 && s.x <= 1220.01 && s.y >= 59.99 && s.y <= 660.01, `round the world, on screen: ${s.x}, ${s.y}`)
+  }
+  // more than the map's widest view holds: at MIN_Z, not past it
+  assert.equal(m.fitView([{ lat: 80, lon: 0 }, { lat: -80, lon: 0 }], 1280, 720, 60, 12).z, m.MIN_Z)
+  console.log("mapmath players ok")
+}

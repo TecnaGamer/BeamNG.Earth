@@ -13,6 +13,7 @@ whose tiles came 19-47 s late. BNGE_SERVER_CORES=<n> sets how many physical core
     pin_self(server_cpus)                          # the server (its threads and worker processes inherit it)
     pin_game(game_cpus)                            # every thread of the running game
 """
+import json
 import os
 import sys
 
@@ -55,6 +56,59 @@ def split(share=SERVER_SHARE):
     server = {c for _, cpus in cores[-k:] for c in cpus}
     game = {c for _, cpus in cores[:-k] for c in cpus}
     return server, game
+
+
+# The settings page's Performance section (GitHub #529: an i5-3470's map loading paused 10-20 s with the server on one of
+# its four cores at low priority; on two at normal priority, BNGE_SERVER_CORES=2 and --nice 0 in run_server.bat, a few
+# seconds): the mod writes them to its settings file in the game's user folder (settings.lua M.FILE, as bmplaunch reads
+# beammpOnLaunch), read when the server starts. "auto" / "low": the defaults above.
+MOD_SETTINGS = ("settings", "beamngEarth.json")
+CORE_CHOICES = ("1", "2", "3", "4", "6", "8")
+PRIORITIES = ("low", "normal")
+
+
+def player_settings(user_dir):
+    """{"cores": n, "priority": "normal"} of the player's choices on the settings page (absent: "auto" / "low", or no
+    settings file). The game writes its file names in lower case on Linux (settings/beamngearth.json)."""
+    out = {}
+    if not user_dir:
+        return out
+    d = None
+    for name in (MOD_SETTINGS[1], MOD_SETTINGS[1].lower()):
+        try:
+            with open(os.path.join(user_dir, MOD_SETTINGS[0], name), encoding="utf-8") as f:
+                d = json.load(f)
+            break
+        except (OSError, ValueError):
+            continue
+    if not isinstance(d, dict):
+        return out
+    cores = str(d.get("serverCores", "auto"))
+    if cores in CORE_CHOICES:
+        out["cores"] = int(cores)
+    if str(d.get("serverPriority", "low")) == "normal":
+        out["priority"] = "normal"
+    if d.get("teleportPriority") is True:
+        out["teleport_full"] = True
+    env = os.environ.get("BNGE_TELEPORT_FULL")      # (tests: the setting either way for this run)
+    if env in ("0", "1"):
+        out["teleport_full"] = env == "1"
+    return out
+
+
+def apply_player_settings(user_dir, nice, default_nice, environ=None):
+    """The settings page's choices (player_settings) applied where the player set nothing by hand: the cores as
+    BNGE_SERVER_CORES in environ (default os.environ; split reads it), "normal" priority as niceness 0 when nice is
+    still default_nice (a --nice given wins). Returns (the niceness to use, [what changed] for the log)."""
+    environ = os.environ if environ is None else environ
+    chosen, notes = player_settings(user_dir), []
+    if chosen.get("cores") and not environ.get("BNGE_SERVER_CORES"):
+        environ["BNGE_SERVER_CORES"] = str(chosen["cores"])
+        notes.append(f"{chosen['cores']} cores")
+    if chosen.get("priority") == "normal" and nice == default_nice:
+        nice = 0
+        notes.append("normal priority")
+    return nice, notes
 
 
 def pin_self(cpus):
@@ -116,6 +170,22 @@ def pin_game(cpus):
 # server's processes may also run on half of the game's cores (the last ones); they keep their idle scheduling, so a
 # game thread that wants a CPU still gets it. Then they go back to their own cores.
 LEND_SHARE = 0.5            # of the game's physical cores
+
+
+FULL_GAME_CORES = 2         # physical cores the game keeps while the server loads at full priority (full_split)
+
+
+def full_split(server_cpus, game_cpus, keep=FULL_GAME_CORES):
+    """(server CPUs, game CPUs) while the server loads at full priority after a teleport (the settings page's
+    teleportPriority; the user, 2026-10-31: "after teleport the server takes full priority until it can finish
+    loading"): the server on every CPU of the split, the game on its first `keep` physical cores (with their
+    hyperthread siblings) alone; None when there is no split or too few cores to leave the game."""
+    if not server_cpus or not game_cpus:
+        return None
+    cores = [cpus for _, cpus in _siblings(sorted(set(game_cpus)))]
+    if len(cores) <= keep:
+        return None
+    return set(server_cpus) | set(game_cpus), {c for cpus in cores[:keep] for c in cpus}
 
 
 def boosted(server_cpus, game_cpus, share=LEND_SHARE):

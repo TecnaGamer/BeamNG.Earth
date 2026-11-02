@@ -669,7 +669,10 @@ class Dem:
                      and now - Dem._mirror_pruned >= MIRROR_PRUNE_S)
             if prune:
                 Dem._mirror_written, Dem._mirror_pruned = 0, now
-        if prune:       # (beside the read that wrote it: the walk is seconds on a Steam Deck)
+        # (only in the server's own process: every worker walked the mirror at its first write, several at once on a
+        # first visit, on the server's few CPUs while the world loaded, 2026-10-30; earthd prunes it at its start too)
+        import multiprocessing
+        if prune and multiprocessing.current_process().name == "MainProcess":
             threading.Thread(target=self._mirror_prune, daemon=True, name="dem-mirror-prune").start()
         return self._mirror_get(key)
 

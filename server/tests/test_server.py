@@ -2,8 +2,9 @@
 imagery (no network): anchors, terrain-follow, far-field swap groups, rebase, in terrain
 near-visual mode with imagery off (the v1.2 behaviour) and in mesh mode with imagery, the mesh
 mode with both tile layouts (docs/V1_4_SPEC.md §3.1 M1: 32 cells = v1.3.1, FORMAT 3, the default;
-64 cells = FORMAT 4 with hello.cells and far_tile.tex), with the M4 512² terrain block (§3.5:
---block 512, hello.blockSize, terrain.size 512 on a 128 m grid, the 512 follow table's prefetch), and
+64 cells = FORMAT 4 with hello.cells and far_tile.tex), with the 1 km terrain block (§3.5 M4; 1024² at 1 m
+since 2026-11-01: hello.blockSize / squareSize, terrain.size 1024 on a 128 m grid, the 1 km follow table's
+prefetch), and
 with the M1h horizon (§3.6: --horizon, hello.horizon, status.radius, the disc to the line-of-sight
 horizon with L10 tiles, a bigger grid for a climbing eye, a grid per anchor)."""
 import asyncio
@@ -90,7 +91,7 @@ class ServerHarness(unittest.TestCase):
     near_visual = "terrain"
     with_imagery = False
     cells = 32
-    block = 1024
+    block = None                # (the server's: 1 km; terrain mode its frozen 2 km block)
     horizon = False
     MOD_FORMAT = 4              # the mod's hello.format (core.lua FORMAT: the newest it reads)
 
@@ -99,6 +100,7 @@ class ServerHarness(unittest.TestCase):
         self.server = earthd.Server(self.tmp.name, os.path.join(self.tmp.name, "cache"), tile_workers=3,
                                     far_format=self.far_format, imagery=None, near_visual=self.near_visual,
                                     cells=self.cells, block=self.block, horizon=self.horizon)
+        self.block = self.server.layout.block
         self.layout = self.server.layout
         if self.with_imagery:
             self.server.imagery = FakeImagery(os.path.join(self.tmp.name, "cache", "imagery"))
@@ -152,7 +154,8 @@ class ServerHarness(unittest.TestCase):
         self.assertEqual((m["protocol"], m["format"]), (4, {32: 3, 64: 4}[self.cells]))
         # M1: hello.cells with FORMAT 4 only (a FORMAT 3 hello is exactly v1.3.1's)
         self.assertEqual(m.get("cells"), 64 if self.cells == 64 else None)
-        self.assertEqual(m.get("blockSize"), None if self.block == 1024 else self.block)     # M4: --block 512 only
+        # the terrain block, always (2026-11-01): samples per edge and their spacing
+        self.assertEqual((m["blockSize"], m["squareSize"]), (self.block, heightmap.SQUARE))
         self.assertEqual(m.get("horizon"), True if self.horizon else None)                 # M1h: --horizon only
         self.assertEqual(m["sessionId"], self.server.sid)
         self.assertEqual(m["farFormat"], self.far_format)
@@ -185,7 +188,7 @@ class ServerHarness(unittest.TestCase):
     def check_terrain(self, t, cx, cy):
         self.assertEqual(set(t), {"cx", "cy", "heightmap", "size", "squareSize", "zBase", "maxHeight", "q", "ter"})
         self.assertEqual((t["cx"], t["cy"]), (cx, cy))
-        self.assertEqual((t["size"], t["squareSize"]), (self.block, 2.0))
+        self.assertEqual((t["size"], t["squareSize"]), (self.block, heightmap.SQUARE))
         self.assertEqual(t["maxHeight"], t["q"] * 65536)
         self.assertEqual(t["zBase"] % t["q"], 0)
         with Image.open(self.fs(t["heightmap"])) as im:
@@ -240,7 +243,7 @@ class ServerHarness(unittest.TestCase):
 
     def check_cover(self, far, aid, px, py, blocks, radius=ff.RADIUS):
         """The shown tiles tile the radius square exactly once (checked on 64 m cells), with all
-        L0 under the blocks."""
+        L0 under the blocks (4 x 4 L0 tiles under a 1 km block on the 256 m grid, 5 x 5 off it)."""
         tiles = {k: ff.tile_of(k) for k in far.keys(aid)}
         c = cells(tiles, 64.0)
         n = sum(int(t.size // 64) ** 2 for t in tiles.values())
@@ -250,9 +253,11 @@ class ServerHarness(unittest.TestCase):
         want = {(i, j) for i in range(x0, x1) for j in range(y0, y1)}
         self.assertFalse(want - c, "uncovered cells")
         for b in blocks:
-            bb = ff.Block(*b).bbox
+            bb = ff.Block(*b, self.block).bbox
             under = [t for t in tiles.values() if overlaps(t.bbox, bb)]
-            self.assertEqual(len(under), 64)
+            l0 = ff.level_size(0)
+            self.assertEqual(len(under), (math.ceil(bb[2] / l0) - math.floor(bb[0] / l0))
+                             * (math.ceil(bb[3] / l0) - math.floor(bb[1] / l0)))
             self.assertTrue(all(t.level == 0 for t in under))
 
 
@@ -273,7 +278,7 @@ class ServerTest(ServerHarness):
         h = self.check_terrain(a1["terrain"], 0.0, 0.0)
         self.assertEqual(a1["terrain"]["q"], 1 / 64)                  # 600 m relief
         self.assertEqual(a1["terrain"]["heightmap"], f"/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0.png")
-        self.assertAlmostEqual(a1["groundZ"], h[512, 512], delta=0.001)     # sample (512, 512) = (0, 0)
+        self.assertAlmostEqual(a1["groundZ"], h[1024, 1024], delta=0.001)   # sample (1024, 1024) = (0, 0)
 
         c.send({"type": "commit_anchor", "anchorId": aid})
         c.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
@@ -283,7 +288,7 @@ class ServerTest(ServerHarness):
         print(f"\n  initial far set: {done['count']} tiles in {time.monotonic() - t0:.2f} s (synthetic DEM, "
               f"build median {1000 * sorted(self.server.build_stats)[len(self.server.build_stats) // 2]:.1f} ms)",
               file=sys.stderr)
-        want, _ = ff.select(0.0, 0.0, [ff.Block(0.0, 0.0).bbox])
+        want, _ = ff.select(0.0, 0.0, [ff.Block(0.0, 0.0, self.block).bbox])
         self.assertEqual(far.keys(aid), set(want))
         self.assertEqual(done["count"], len(want))
         self.assertFalse(far.held)
@@ -294,8 +299,8 @@ class ServerTest(ServerHarness):
         self.check_cover(far, aid, 0, 0, [(0, 0)])
         # The initial set is one-sided groups (nothing to replace).
         self.assertTrue(all(not s["remove"] for s in far.swaps))
-        # The 64 L0 tiles under the committed block come first, then nearest-first.
-        under = [m for m in tiles if overlaps(ff.tile_of(m["key"]).bbox, ff.Block(0, 0).bbox)]
+        # The 64 L0 tiles under the committed (2 km) block come first, then nearest-first.
+        under = [m for m in tiles if overlaps(ff.tile_of(m["key"]).bbox, ff.Block(0, 0, self.block).bbox)]
         # Builds run tile_workers at a time, so the last of them may finish after a tile that
         # started alongside it (seen under CPU load): allow that much slack.
         first = {m["key"] for m in tiles[:64 + self.server.tile_workers - 1]}
@@ -329,7 +334,7 @@ class ServerTest(ServerHarness):
         self.assertTrue(any(m["add"] and m["remove"] for m in swaps))
         conn = self.conn()
         self.assertEqual(far.keys(aid), set(conn.desired))
-        self.assertEqual(conn.predicted_block, ff.Block(512.0, 0.0))     # 600 m out: the next block is forced too
+        self.assertEqual(conn.predicted_block, ff.Block(512.0, 0.0, self.block))     # 600 m out: the next block is forced too
         self.check_cover(far, aid, 600, 0, [(0, 0), (512, 0)])
         self.assertFalse(far.held)
         # Every tile shown later was sent before its swap.
@@ -347,13 +352,13 @@ class ServerTest(ServerHarness):
         self.assertEqual((tr["requestId"], tr["anchorId"]), (5, aid))
         h2 = self.check_terrain({k: tr[k] for k in tr if k not in ("type", "requestId", "anchorId")}, 512.0, 0.0)
         # Same anchor frame and quantum: the overlap is bit-identical (§1.8). Block 2 sample
-        # (gx, gy) is block 1 sample (gx + 256, gy).
-        self.assertTrue((h2[:, :768] == h[:, 256:]).all())
+        # (gx, gy) is block 1 sample (gx + 512, gy) (1 m samples).
+        self.assertTrue((h2[:, :1536] == h[:, 512:]).all())
         c.send({"type": "commit_terrain", "anchorId": aid, "cx": 512, "cy": 0})
         quiet = c.drain(0.5)
         far.apply(quiet)
         self.assertFalse([m for m in quiet if m["type"].startswith("far_")], "a commit changed far tiles")
-        self.assertEqual(self.conn().block, ff.Block(512.0, 0.0))
+        self.assertEqual(self.conn().block, ff.Block(512.0, 0.0, self.block))
 
         # --- prefetch: driving east at 30 m/s from x = 900 predicts a block at 1024 ---
         self.pose(aid, 900, 0, vx=30)
@@ -454,10 +459,10 @@ class ServerTest(ServerHarness):
         c.send({"type": "commit_anchor", "anchorId": aid})
         self.pose(aid, 0, 0)
         self.stream_until_done(far, aid)
-        # A block 3 km away (beyond the L0 range of the K rule): its 64 L0 tiles are new.
+        # A block 3 km away (beyond the L0 range of the K rule): its 64 L0 tiles (2 km) are new.
         c.send({"type": "prepare_terrain", "requestId": 2, "anchorId": aid, "cx": 3072, "cy": 3072})
         _, seen = self.stream_until_done(far, aid)
-        bb = ff.Block(3072, 3072).bbox
+        bb = ff.Block(3072, 3072, self.block).bbox
         tiles = [m["key"] for m in seen if m["type"] == "far_tile"]
         l0 = [k for k in tiles if ff.tile_of(k).level == 0 and overlaps(ff.tile_of(k).bbox, bb)]
         self.assertEqual(len(l0), 64)
@@ -487,7 +492,7 @@ class ServerTest(ServerHarness):
         far.switch(aid2)
         c.send({"type": "commit_terrain", "anchorId": aid2, "cx": 0, "cy": 0})
         done, seen = self.stream_until_done(far, aid2)
-        want, _ = ff.select(0.0, 0.0, [ff.Block(0.0, 0.0).bbox])
+        want, _ = ff.select(0.0, 0.0, [ff.Block(0.0, 0.0, self.block).bbox])
         adds = [k for m in seen if m["type"] == "far_swap" and m["anchorId"] == aid2 for k in m["add"]]
         self.assertEqual(sorted(adds), sorted(want))
         self.assertEqual(far.keys(aid2), set(want))
@@ -504,6 +509,7 @@ class ServerTest(ServerHarness):
             return self.conn().focus
         self.assertEqual(asyncio.run_coroutine_threadsafe(commit(), self.loop).result(10), (12288.0, -4096.0))
 
+    @mock.patch.object(earthd, "HM_CACHE", 6)     # (the eviction rule, at the cache size it was written for)
     def test_fresh_terrain_survives_eviction_after_rebase(self):
         """Regression (integration drive, 2026-10-10): after a rebase the protected heightmaps (the
         last three committed, the last two sent, every recent anchor's first terrain) outnumbered
@@ -561,14 +567,15 @@ class ServerTest(ServerHarness):
         c.send({"type": "prepare_terrain", "requestId": 2, "anchorId": aid, "cx": 512, "cy": 0})
         c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
         self.pose(aid, 760, 0, vx=30)
-        want = ff.Block(*earthd.predict_request(760, 0, 30, 0, 512, 0))
-        self.assertEqual(want, ff.Block(1024.0, 0.0))
-        self.assertNotEqual(want, ff.Block(*earthd.predict_request(760, 0, 30, 0, 0, 0)))
+        rule = self.server.follow                       # terrain mode's 2 km table
+        want = ff.Block(*earthd.predict_request(760, 0, 30, 0, 512, 0, rule), self.block)
+        self.assertEqual(want, ff.Block(1024.0, 0.0, self.block))
+        self.assertNotEqual(want, ff.Block(*earthd.predict_request(760, 0, 30, 0, 0, 0, rule), self.block))
         end = time.monotonic() + 10
         while self.conn().predicted_block != want and time.monotonic() < end:
             time.sleep(0.02)
         self.assertEqual(self.conn().predicted_block, want)
-        self.assertEqual(self.conn().pending_block, ff.Block(512.0, 0.0))
+        self.assertEqual(self.conn().pending_block, ff.Block(512.0, 0.0, self.block))
 
     def test_retired_tiles_survive_cache_eviction(self):
         """A tile swapped out (or evicted from the held set) stays on disk for retired_keep: the mod
@@ -605,6 +612,7 @@ class ServerTest(ServerHarness):
                    and not os.path.exists(os.path.join(self.server.out_dir, os.path.basename(m["shape"])))]
         self.assertEqual(missing, [])
 
+    @mock.patch.object(earthd, "HM_CACHE", 6)     # (the eviction rule, at the cache size it was written for)
     def test_heightmap_cleanup_and_errors(self):
         c = self.c
         self.hello()
@@ -743,7 +751,9 @@ class MeshServerTest(ServerHarness):
         cone = ff.view_cone({"x": 0, "y": -8, "fx": 0, "fy": 1, "fovDeg": 60})
         vd = sorted(ff.view_distance(ff.tile_of(k), cone, 0, 0) for k in want)
         slack = self.server.tile_workers
-        self.assertTrue(all(ff.view_distance(ff.tile_of(m["key"]), cone, 0, 0) <= vd[8 + slack] for m in tiles[:8]))
+        ranks = [sum(1 for v in vd if v < ff.view_distance(ff.tile_of(m["key"]), cone, 0, 0)) for m in tiles[:8]]
+        self.assertTrue(all(ff.view_distance(ff.tile_of(m["key"]), cone, 0, 0) <= vd[8 + slack] for m in tiles[:8]),
+                        f"the first 8 sent ranked {ranks} by view distance (slack {slack})")
         self.assertEqual(tiles[0]["level"], ex)
         # textures: DXT1 with mips, the layout's size per level (32 cells: TEX_NEAR for the two
         # finest levels, TEX_FAR beyond; 64: 256 px to L1, 512 from L2); shapes name the material
@@ -848,35 +858,33 @@ class MeshServer64Test(MeshServerTest):
         h, _ = self.c.until(lambda m: m["type"] == "hello", timeout=10)
         self.assertEqual((h["format"], h["cells"]), (4, 64))
 
-
-class MeshServer64Block512Test(MeshServer64Test):
-    """The same with --block 512 (docs/V1_4_SPEC.md §3.5, M4): hello.blockSize, a 512² physics block
-    on a 128 m grid, and the prefetch predicting the mod's 512 follow table (with its fast mode)."""
-    block = 512
-
-    def test_block_512_terrain_and_prefetch(self):
+    # (MeshServer64Block512Test ran this with --block 512 (M4); since 2026-11-01 the 1 km block, 1024² at 1 m, is
+    # the default. The 2 km one, --block 2048: LayoutServerTest.test_block_sizes and test_protocol_agreement.)
+    def test_block_1km_terrain_and_prefetch(self):
+        """The 1 km block (docs/V1_4_SPEC.md §3.5, M4): a 1024² physics block on a 128 m grid, and the prefetch
+        predicting the mod's 1 km follow table (with its fast mode)."""
         far, aid, _, _, _ = self.start()
         c, conn = self.c, self.conn()
-        self.assertEqual(conn.block, ff.Block(0.0, 0.0, 512))
-        # a request snaps to the 128 m grid; the heightmap is 512² and shares the lattice
+        self.assertEqual(conn.block, ff.Block(0.0, 0.0, 1024))
+        # a request snaps to the 128 m grid; the heightmap is 1024² and shares the lattice
         c.send({"type": "prepare_terrain", "requestId": 7, "anchorId": aid, "cx": 130.0, "cy": -190.0})
         tr, _ = c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
-        self.assertEqual((tr["cx"], tr["cy"], tr["size"]), (128.0, -128.0, 512))
+        self.assertEqual((tr["cx"], tr["cy"], tr["size"]), (128.0, -128.0, 1024))
         h = self.check_terrain({k: tr[k] for k in ("cx", "cy", "heightmap", "size", "squareSize", "zBase",
                                                    "maxHeight", "q", "ter")}, 128.0, -128.0)
-        self.assertEqual(h.shape, (512, 512))
-        self.assertEqual(conn.pending_block, ff.Block(128.0, -128.0, 512))
+        self.assertEqual(h.shape, (1024, 1024))
+        self.assertEqual(conn.pending_block, ff.Block(128.0, -128.0, 1024))
         self.assertEqual(conn.pending_block.bbox, (-384.0, -640.0, 640.0, 384.0))
         c.send({"type": "commit_terrain", "anchorId": aid, "cx": 128.0, "cy": -128.0})
         t0 = time.monotonic()
-        while conn.block != ff.Block(128.0, -128.0, 512) and time.monotonic() - t0 < 10:
+        while conn.block != ff.Block(128.0, -128.0, 1024) and time.monotonic() - t0 < 10:
             time.sleep(0.01)
-        self.assertEqual((conn.block, conn.pending_block), (ff.Block(128.0, -128.0, 512), None))
-        rule = earthd.FOLLOW_RULES[512]
-        # normal mode: the prefetch starts 100 m out and predicts the mod's 512 target
+        self.assertEqual((conn.block, conn.pending_block), (ff.Block(128.0, -128.0, 1024), None))
+        rule = earthd.FOLLOW_RULES[1024.0]
+        # normal mode: the prefetch starts 100 m out and predicts the mod's 1 km target
         for (x, y, vx, vy) in ((228.0 + 0.5, -128.0, 30.0, 0.0), (128.0, -10.0, 0.0, 90.0)):
             self.pose(aid, x, y, vx, vy)
-            want = ff.Block(*earthd.predict_request(x, y, vx, vy, 128.0, -128.0, rule), 512)
+            want = ff.Block(*earthd.predict_request(x, y, vx, vy, 128.0, -128.0, rule), 1024)
             end = time.monotonic() + 10
             while conn.predicted_block != want and time.monotonic() < end:
                 time.sleep(0.01)
@@ -890,7 +898,7 @@ class MeshServer64Block512Test(MeshServer64Test):
         self.assertIsNone(conn.predicted_block)
         # fast mode (200 m/s): the mod tests a point 0.75 s ahead, so the prefetch starts at the centre
         self.pose(aid, 128.0, -128.0, 200.0, 0.0)
-        want = ff.Block(512.0, -128.0, 512)                      # 128 + 600 -> 768, within 420 m: 512
+        want = ff.Block(512.0, -128.0, 1024)                     # 128 + 600 -> 768, within 420 m: 512
         end = time.monotonic() + 10
         while conn.predicted_block != want and time.monotonic() < end:
             time.sleep(0.01)
@@ -1035,21 +1043,25 @@ class LayoutServerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.make(cells=48)
 
-    def test_block_512(self):
-        """M4 (docs/V1_4_SPEC.md §3.5): --block 512 (mesh mode only) with either cell count; the
-        default stays 1024 (BLOCK_DEFAULT) until the in-game probes pass."""
+    def test_block_sizes(self):
+        """The block (docs/V1_4_SPEC.md §3.5): 1024² at 1 m (1 km, on a 128 m grid; BLOCK_DEFAULT) in mesh and
+        detail mode; 2048² (2 km, on a 256 m grid) with either cell count, terrain mode's only block."""
         self.assertEqual(earthd.BLOCK_DEFAULT, 1024)
-        self.assertEqual((self.make().layout.block, self.make().follow), (1024, earthd.FOLLOW_RULES[1024]))
+        s = self.make()
+        self.assertEqual((s.layout.block, s.layout.grid, s.follow), (1024, 128.0, earthd.FOLLOW_RULES[1024.0]))
+        self.assertEqual((s.snap(63.9), s.snap(64.0), s.snap(-64.1)), (0.0, 128.0, -128.0))
+        self.assertEqual(s.layout.block_at(128.0, 0.0).bbox, (-384.0, -512.0, 640.0, 512.0))
         for cells in (32, 64):
-            s = self.make(cells=cells, block=512)
-            self.assertEqual((s.layout.block, s.layout.grid, s.follow), (512, 128.0, earthd.FOLLOW_RULES[512]))
-            self.assertEqual((s.snap(63.9), s.snap(64.0), s.snap(-64.1)), (0.0, 128.0, -128.0))
-            self.assertEqual(s.layout.block_at(128.0, 0.0).bbox, (-384.0, -512.0, 640.0, 512.0))
-        self.assertEqual(self.make().snap(64.0), 0.0)                   # 1024: the 256 m grid
+            s = self.make(cells=cells, block=2048)
+            self.assertEqual((s.layout.block, s.layout.grid, s.follow), (2048, 256.0, earthd.FOLLOW_RULES[2048.0]))
+            self.assertEqual((s.snap(127.9), s.snap(128.0)), (0.0, 256.0))             # 2048: the 256 m grid
+            self.assertEqual(s.layout.block_at(256.0, 0.0).bbox, (-768.0, -1024.0, 1280.0, 1024.0))
+        t = self.make(near_visual="terrain")                         # terrain mode: its frozen 2 km block
+        self.assertEqual((t.layout.block, t.layout.grid), (earthd.TERRAIN_BLOCK, 256.0))
         with self.assertRaises(ValueError):
-            self.make(block=512, near_visual="terrain")             # terrain mode is frozen at 1024
+            self.make(block=1024, near_visual="terrain")             # terrain mode is frozen at 2048 (2 km at 1 m)
         with self.assertRaises(ValueError):
-            self.make(block=2048)
+            self.make(block=512)
 
 
 class SessionCleanupTest(unittest.TestCase):
@@ -1073,6 +1085,11 @@ class SessionCleanupTest(unittest.TestCase):
                 self.assertFalse(os.path.exists(old))
                 self.assertFalse(os.path.exists(cache))
                 self.assertTrue(os.path.exists(foreign))
+                # moved out of the game's folder before the delete (one notification for its file watcher, not one a
+                # file), and gone from the trash too
+                trash = os.path.join(tmp, "cache", earthd.TRASH_DIR)
+                self.assertTrue(os.path.isdir(trash))
+                self.assertEqual(os.listdir(trash), [])
                 self.assertEqual(server.cdae_dir, os.path.join(tmp, "temp", "temp", "beamngearth", server.sid.lower()))
             finally:
                 server.tile_pool.shutdown()
@@ -1178,11 +1195,11 @@ class FlagsTest(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 2)
         self.assertIn("--cells 64 needs --near-visual mesh", r.stderr)
-        r = subprocess.run([sys.executable, str(Path(earthd.__file__)), "--block", "512", "--near-visual", "terrain"],
+        r = subprocess.run([sys.executable, str(Path(earthd.__file__)), "--block", "1024", "--near-visual", "terrain"],
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 2)
-        self.assertIn("--block 512 needs --near-visual mesh", r.stderr)
-        r = subprocess.run([sys.executable, str(Path(earthd.__file__)), "--block", "2048"],
+        self.assertIn("--block 1024 needs --near-visual mesh", r.stderr)
+        r = subprocess.run([sys.executable, str(Path(earthd.__file__)), "--block", "512"],
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 2)
 
@@ -1203,16 +1220,24 @@ class AnchorQTest(unittest.TestCase):
         self.assertEqual(earthd.survey_q(f, d), 1 / 256)
         self.assertEqual(d.zoom, earthd.SURVEY_ZOOM)
         # the relief inside block-sized windows decides, not the whole survey's: a steady slope of
-        # 3000 m over 30 km is 200 m per window (5 samples, 2 km, for 1.5 blocks of 1024 m)
-        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 128)
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 64)      # 600 m per window
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 32)      # bigger blocks, bigger windows
+        # 3000 m over 30 km is 150 m per window (4 samples, 1.5 km, for a block of 1024 m and a survey step)
+        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 256)
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 64)      # 450 m per window
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (750 m)
+        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1500 m
 
-        class Peak(Dem):            # flat, with one 1200 m spike: the window over it decides
+        class Peak(Dem):            # flat, with one 1200 m spike: its few windows do not decide (its blocks are coarser)
             def sample(self, lat, lon, zoom, progress=None):
                 la, lo = np.asarray(lat), np.asarray(lon)
                 return 1000 + 1200 * np.exp(-(((la - LAT) * 111320) ** 2 + ((lo - LON) * 86000) ** 2) / 600.0 ** 2)
-        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 32)
+        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 128)     # (its foot, not its top: 1/32)
+        self.assertEqual(heightmap.block_params(1000.0, 2200.0, 1 / 256)[0], 1 / 32)
+
+        class Range(Dem):           # a mountain range over half the survey: it decides
+            def sample(self, lat, lon, zoom, progress=None):
+                lo = np.asarray(lon)
+                return 1000 + 1200 * (np.sin((lo - LON) * 86000 / 700.0) > 0) * (lo > LON)
+        self.assertEqual(earthd.survey_q(f, Range(0), 1024.0), 1 / 32)
 
 
 class PredictTest(unittest.TestCase):
@@ -1246,15 +1271,15 @@ class PredictTest(unittest.TestCase):
                     self.assertEqual(earthd.predict_request(px, py, vx, vy, cx, cy),
                                      mod_request(px, py, vx, vy, cx, cy), (cx, cy, vx, vy, t))
 
-    def test_predict_request_matches_mod_512(self):
-        """M4: the same against the mod's 512 rule (modsim's port of follow.decide, checked against
-        follow.lua by test_modsim), normal and fast mode, from 100 m out (the 512 prefetch start;
+    def test_predict_request_matches_mod_1km(self):
+        """M4: the same against the mod's 1 km rule (modsim's port of follow.decide, checked against
+        follow.lua by test_modsim), normal and fast mode, from 100 m out (the 1 km prefetch start;
         fast mode: the test point 0.75 s ahead)."""
-        rule = earthd.FOLLOW_RULES[512]
+        rule = earthd.FOLLOW_RULES[1024.0]
 
         def mod_request(px, py, vx, vy, cx, cy, dt=0.05):
             while True:
-                a = modsim.follow_decide(px, py, vx, vy, cx, cy, None, size=512)
+                a = modsim.follow_decide(px, py, vx, vy, cx, cy, None, size=1024)
                 if a:
                     return a[1:]
                 px, py = px + vx * dt, py + vy * dt

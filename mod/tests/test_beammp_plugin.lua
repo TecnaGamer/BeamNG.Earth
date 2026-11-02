@@ -89,6 +89,19 @@ local key = '3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'
 T.check(G.validKey(key) and not G.validKey(zeros) and not G.validKey('') and not G.validKey(nil) and not G.validKey('abc'),
   'validKey: a key, not the placeholder or junk')
 T.check(G.readConfig('AuthKey = "' .. key .. '"').authKey == key, 'readConfig: the key')
+T.check(G.readConfig('Description = "Drive # anywhere" # c').desc == 'Drive # anywhere', 'readConfig: the description')
+T.check(G.announcement({ port = 1, desc = 'd' }, {}).desc == 'd', 'announcement: the description')
+local hc = G.readConfig('Tags = "Freeroam,Drift"\nMap = "/levels/beamngEarth/info.json"\nPassword = "hunter2"\n')
+T.check(hc.tags == 'Freeroam,Drift' and hc.map == '/levels/beamngEarth/info.json' and hc.pass == true,
+  'readConfig: tags, map, has a password')
+local full = G.announcement(hc, {}, { version = '3.9.0', names = { 'a', 'b' }, mods = { names = { 'm1', 'm2' }, size = 7, count = 2 } })
+T.check(full.version == '3.9.0' and full.players == 2 and full.playerslist == 'a;b;' and full.modlist == '/m1;/m2;'
+  and full.modstotal == 2 and full.modstotalsize == 7 and full.pass == true and full.tags == 'Freeroam,Drift',
+  'announcement: what BeamMP\'s heartbeat sends')
+local leak = false
+for _, v in pairs(full) do if tostring(v):find('hunter2', 1, true) then leak = true end end
+T.check(not leak, 'announcement: never the password')
+T.check(G.readConfig('Password = ""').pass == false, 'readConfig: no password')
 T.check(G.listable({ private = false, authKey = key }), 'listable: public with a key')
 T.check(not G.listable({ private = true, authKey = key }), 'listable: Private = true: direct connect only')
 T.check(not G.listable({ private = false, authKey = zeros }), 'listable: no key: direct connect only')

@@ -310,7 +310,7 @@ class ServerSurfaceTest(unittest.TestCase):
     def make(self, **kw):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=512, **kw)
+        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=1024, **kw)
         self.addCleanup(s.hm_pool.shutdown)
         self.addCleanup(s.tile_pool.shutdown)
         s.dem = self.Dem()
@@ -357,7 +357,7 @@ class ServerSurfaceTest(unittest.TestCase):
         self.assertTrue(info["surfaceComplete"])
         grass = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.GRASS])))
         dirt = np.array(Image.open(os.path.join(s.out_dir, info["layers"][sf.DIRT])))
-        self.assertEqual(grass.shape, (512, 512))
+        self.assertEqual(grass.shape, (1024, 1024))         # one mask pixel per block sample
         self.assertTrue((grass[:200] == 255).all() and (grass[-200:] == 0).all(), "row 0 is north (grass)")
         self.assertTrue((dirt[-200:] == 255).all())
         conn = earthd.Connection.__new__(earthd.Connection)
@@ -449,6 +449,32 @@ class LotTest(unittest.TestCase):
         m = sf.lots_mask(frame, -32.0, -32.0, 64.0, 64, [Lots()])
         self.assertEqual(int(m[32, 32]), 255)
         self.assertEqual(int(m[2, 2]), 0)
+
+    def test_pad_coverage(self):
+        """A pad's coverage is the share of each pixel's 2 x 2 sub-pixel centres inside it (earthfast.pad_cover):
+        whole pixels 1, a pixel the edge halves 0.5, overlapping pads counted once; photo_pads blends by it."""
+        import geodesy
+        frame = geodesy.EnuFrame(40.0, -76.0)
+
+        def pad(e0, e1, n0, n1):
+            la, lo, _ = frame.enu_to_geodetic(np.array([e0, e1, e1, e0]), np.array([n0, n0, n1, n1]), np.zeros(4))
+            return np.asarray(la), np.asarray(lo)
+        # a 64 m photo of 64 px over [-32, 32]²: column = e + 32, row = 32 - n
+        a = sf._pads_px(frame, -32.0, -32.0, 64.0, 64, 64, [pad(-20.5, 20.0, -15.0, 15.0), pad(0.0, 20.0, -5.0, 5.0)])
+        self.assertEqual(a.dtype, np.float32)
+        self.assertAlmostEqual(float(a[30, 30]), 1.0, places=6)           # inside both: still 1
+        self.assertAlmostEqual(float(a[30, 11]), 0.5, places=6)           # its west edge at column 11.5
+        self.assertAlmostEqual(float(a[30, 12]), 1.0, places=6)
+        self.assertEqual(float(a[30, 52]), 0.0)                           # east edge at column 52: outside
+        self.assertEqual(float(a[2, 2]), 0.0)
+        self.assertAlmostEqual(float(a.sum()), 40.5 * 30, places=3)       # the union's area in pixels
+        self.assertIsNone(sf._pads_px(frame, -32.0, -32.0, 64.0, 64, 64, [pad(100.0, 120.0, 0.0, 10.0)]))
+        rgb = np.full((64, 64, 3), 200, np.uint8)
+        out = sf.photo_pads(rgb, frame, -32.0, -32.0, 64.0, [pad(-20.5, 20.0, -15.0, 15.0)])
+        paved = np.array(sf.PHOTO_ROAD_RGBA["paved"][:3])
+        self.assertTrue(np.array_equal(out[30, 30], paved))
+        self.assertTrue(np.array_equal(out[30, 11], np.round((200 + paved) / 2)))   # half covered
+        self.assertTrue(np.array_equal(out[2, 2], [200, 200, 200]) and np.array_equal(rgb[30, 30], [200, 200, 200]))
 
 
     def test_square_painted_paving(self):

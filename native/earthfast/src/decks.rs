@@ -426,9 +426,152 @@ pub fn deck_end_on<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, poff: 
     numpy::ndarray::Array2::from_shape_vec((2 * n, 2), out).expect("ends").into_pyarray(py)
 }
 
+/// The paved pad round a junction on a bridge (roads.deck_pads): the convex hull of the carriageways' footprints
+/// within `reach` of the joint, each part a line (rows a..b of pts with heights z, starting at the joint) of half
+/// width half[k], sampled every `step` m (its two edges). Between the parts the map leaves open ground under the
+/// joint: a right turn's corner, the wedge where a ramp leaves, a narrower street's edge meeting a wider deck (Charles
+/// Street over I-83 in Baltimore: the AI cut the corner to the station's road over the cut, 2026-10-29). The hull's
+/// vertices (k, 3) counter-clockwise, each at the height of the edge point it is; empty when degenerate.
+pub fn pad_hull(parts: &[(Vec<[f64; 2]>, Vec<f64>, f64)], reach: f64, step: f64) -> Vec<[f64; 3]> {
+    let mut pts: Vec<[f64; 3]> = Vec::new();
+    for (line, z, half) in parts {
+        let n = line.len();
+        if n < 2 {
+            continue;
+        }
+        let mut s = vec![0.0f64; n];
+        for v in 1..n {
+            s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).hypot(line[v][1] - line[v - 1][1]);
+        }
+        let end = s[n - 1].min(reach);
+        let mut t = 0.0;
+        loop {
+            let v = s.partition_point(|&x| x < t).clamp(1, n - 1);
+            let seg = (s[v] - s[v - 1]).max(1e-9);
+            let u = ((t - s[v - 1]) / seg).clamp(0.0, 1.0);
+            let (dx, dy) = ((line[v][0] - line[v - 1][0]) / seg, (line[v][1] - line[v - 1][1]) / seg);
+            let p = [line[v - 1][0] + u * (line[v][0] - line[v - 1][0]), line[v - 1][1] + u * (line[v][1] - line[v - 1][1])];
+            let zz = z[v - 1] + u * (z[v] - z[v - 1]);
+            pts.push([p[0] - dy * half, p[1] + dx * half, zz]);
+            pts.push([p[0] + dy * half, p[1] - dx * half, zz]);
+            if t >= end {
+                break;
+            }
+            t = (t + step).min(end);
+        }
+    }
+    if pts.len() < 3 {
+        return Vec::new();
+    }
+    // Andrew's monotone chain (x, then y; ties: the lower index first: deterministic)
+    let mut idx: Vec<usize> = (0..pts.len()).collect();
+    idx.sort_by(|&a, &b| pts[a][0].partial_cmp(&pts[b][0]).unwrap_or(std::cmp::Ordering::Equal)
+        .then(pts[a][1].partial_cmp(&pts[b][1]).unwrap_or(std::cmp::Ordering::Equal)).then(a.cmp(&b)));
+    let cross = |o: [f64; 3], a: [f64; 3], b: [f64; 3]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut hull: Vec<[f64; 3]> = Vec::new();
+    for pass in 0..2 {
+        let start = hull.len();
+        let order: Vec<usize> = if pass == 0 { idx.clone() } else { idx.iter().rev().cloned().collect() };
+        for &i in &order {
+            let p = pts[i];
+            while hull.len() >= start + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 1e-9 {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    if hull.len() < 3 { Vec::new() } else { hull }
+}
+
+/// pad_hull for Python: pts (N, 2), z (N,), off (n + 1,) the parts' rows (each starting at the joint), half (n,),
+/// reach, step. (k, 3) the hull, counter-clockwise.
+#[pyfunction]
+pub fn deck_pad<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
+                     off: PyReadonlyArray1<'py, i64>, half: PyReadonlyArray1<'py, f64>, reach: f64, step: f64)
+                     -> Bound<'py, PyArray2<f64>> {
+    let (pts, z, off, half) = (pts.as_array(), z.as_array(), off.as_array(), half.as_array());
+    let mut parts = Vec::new();
+    for k in 0..off.len().saturating_sub(1) {
+        let (a, b) = (off[k] as usize, off[k + 1] as usize);
+        parts.push(((a..b).map(|v| [pts[[v, 0]], pts[[v, 1]]]).collect::<Vec<_>>(), (a..b).map(|v| z[v]).collect::<Vec<_>>(),
+                    half[k]));
+    }
+    let hull = pad_hull(&parts, reach, step.max(0.5));
+    let flat: Vec<f64> = hull.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+    numpy::ndarray::Array2::from_shape_vec((hull.len(), 3), flat).expect("hull").into_pyarray(py)
+}
+
+/// A junction pad's rim (ring (k, 3), counter-clockwise) sampled every `step` m: per sample x, y, z, the outward unit
+/// normal, and whether a carriageway leaves the pad there (open: within its half width + open_m of one of the lines,
+/// rows off[j]..off[j + 1] of pts, half widths half[j]): its railing goes round the rest (roads.deck_pads). Pure.
+pub fn rim_samples(ring: &[[f64; 3]], lines: &[(Vec<[f64; 2]>, f64)], step: f64, open_m: f64) -> Vec<[f64; 6]> {
+    let k = ring.len();
+    let mut out = Vec::new();
+    if k < 3 {
+        return out;
+    }
+    for i in 0..k {
+        let (a, b) = (ring[i], ring[(i + 1) % k]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len = dx.hypot(dy);
+        if len < 1e-9 {
+            continue;
+        }
+        let (nx, ny) = (dy / len, -dx / len);      // (counter-clockwise: the right of the edge is outside)
+        let n = (len / step).ceil().max(1.0) as usize;
+        for j in 0..n {
+            let u = j as f64 / n as f64;
+            let p = [a[0] + u * dx, a[1] + u * dy, a[2] + u * (b[2] - a[2])];
+            let open = lines.iter().any(|(line, half)| {
+                line.windows(2).any(|w| {
+                    let (sx, sy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
+                    let l2 = (sx * sx + sy * sy).max(1e-12);
+                    let t = (((p[0] - w[0][0]) * sx + (p[1] - w[0][1]) * sy) / l2).clamp(0.0, 1.0);
+                    (p[0] - (w[0][0] + t * sx)).hypot(p[1] - (w[0][1] + t * sy)) <= half + open_m
+                })
+            });
+            out.push([p[0], p[1], p[2], nx, ny, if open { 1.0 } else { 0.0 }]);
+        }
+    }
+    out
+}
+
+/// rim_samples for Python: ring (k, 3), pts (N, 2), off (n + 1,), half (n,), step, open_m. (m, 6).
+#[pyfunction]
+pub fn deck_pad_rim<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, pts: PyReadonlyArray2<'py, f64>,
+                         off: PyReadonlyArray1<'py, i64>, half: PyReadonlyArray1<'py, f64>, step: f64, open_m: f64)
+                         -> Bound<'py, PyArray2<f64>> {
+    let (ring, pts, off, half) = (ring.as_array(), pts.as_array(), off.as_array(), half.as_array());
+    let r: Vec<[f64; 3]> = (0..ring.nrows()).map(|i| [ring[[i, 0]], ring[[i, 1]], ring[[i, 2]]]).collect();
+    let lines: Vec<(Vec<[f64; 2]>, f64)> = (0..off.len().saturating_sub(1)).map(|j| {
+        ((off[j] as usize..off[j + 1] as usize).map(|v| [pts[[v, 0]], pts[[v, 1]]]).collect(), half[j])
+    }).collect();
+    let got = rim_samples(&r, &lines, step.max(0.25), open_m);
+    let flat: Vec<f64> = got.iter().flat_map(|s| s.iter().cloned()).collect();
+    numpy::ndarray::Array2::from_shape_vec((got.len(), 6), flat).expect("rim").into_pyarray(py)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::fill_gaps;
+    use super::{fill_gaps, pad_hull};
+
+    #[test]
+    fn pad_covers_the_corner() {
+        // a street north (half 5) and a ramp leaving north-east (half 1.75) from a joint at 10 m
+        let north = (vec![[0.0, 0.0], [0.0, 20.0]], vec![10.0, 10.0], 5.0);
+        let ne = (vec![[0.0, 0.0], [14.0, 14.0]], vec![10.0, 10.0], 1.75);
+        let south = (vec![[0.0, 0.0], [0.0, -20.0]], vec![10.0, 10.0], 4.0);
+        let hull = pad_hull(&[north, ne, south], 12.0, 2.0);
+        assert!(hull.len() >= 4);
+        let inside = |x: f64, y: f64| (0..hull.len()).all(|i| {
+            let (a, b) = (hull[i], hull[(i + 1) % hull.len()]);
+            (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]) >= -1e-9
+        });
+        assert!(inside(6.0, 3.0), "the corner between the street's edge and the ramp");
+        assert!(!inside(20.0, 0.0));
+        assert!(hull.iter().all(|p| (p[2] - 10.0).abs() < 1e-9));
+    }
 
     #[test]
     fn a_short_gap_between_decks_is_deck() {

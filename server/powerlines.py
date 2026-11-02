@@ -23,6 +23,9 @@ DEDUPE_M = 6.0
 TOWER_ROAD_CLEAR_M = 6.0    # m off a public road's carriageway edge a tower's centre stands (its base ~10 m square):
                             # a line's mapped tower node a few metres off put a pylon on a highway's shoulder, in the way
                             # (TGForever Discord, 2026-10-28)
+CLEAR_SEARCH_M = 60.0       # m round a tower's mapped spot a clear one is looked for when moving it straight off the
+CLEAR_STEP_M = 2.0          # nearest road puts it on another (GitHub #550: a tower 0.8 m off one of the D1's
+CLEAR_DIRS = 24             # carriageways and 12 m off the other, pushed from one onto the other and back)
 WIRE_R = 0.022              # the conductors' half width (West Coast USA's read about twice a street wire's)
 # The yards: West Coast USA's substation yard (-238, 20) as a kit, in its parts' own frame (its forest4 files'
 # rotationMatrix rows are the parts' axes; read across, every part sat turned 90 degrees and the busbars ended in the
@@ -116,11 +119,26 @@ def _near(frame, ring, box):
     return out
 
 
+def _margin(pts, lines):
+    """Per point (k, 2) its distance to the nearest road's carriageway edge (drive_lines' (centreline, half width))
+    less TOWER_ROAD_CLEAR_M: negative too close to some road."""
+    out = np.full(len(pts), np.inf)
+    for line, hw in lines:
+        a, ab = line[:-1], line[1:] - line[:-1]
+        ap = pts[:, None, :] - a[None]
+        t = np.clip((ap * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-12), 0.0, 1.0)
+        d = np.hypot(*(ap - t[..., None] * ab).transpose(2, 0, 1)).min(1)
+        out = np.minimum(out, d - hw - TOWER_ROAD_CLEAR_M)
+    return out
+
+
 def _off_roads(frame, md, e, n, ll):
     """The line vertices (e, n: frame m; ll: their lon/lat) moved off the public roads' carriageways: one closer than
-    half the carriageway + TOWER_ROAD_CLEAR_M to a road's centreline goes straight away from it to that distance (up
-    to three roads in turn). Each vertex reads the roads of its own map cell and the 8 around it, so every road tile
-    (and every process) moves it alike: the same towers and wires on both sides of a tile edge."""
+    half the carriageway + TOWER_ROAD_CLEAR_M to a road's centreline goes straight away from the nearest to that
+    distance; where that is too close to another road (between a dual carriageway's two, in a junction's corner), to
+    the nearest spot within CLEAR_SEARCH_M clear of them all (rings CLEAR_STEP_M apart, CLEAR_DIRS spots each), else
+    to the one farthest off them. Each vertex reads the roads of its own map cell and the 8 around it, so every road
+    tile (and every process) moves it alike: the same towers and wires on both sides of a tile edge."""
     import gasstations
     import mapcells
     e, n = e.copy(), n.copy()
@@ -137,28 +155,32 @@ def _off_roads(frame, md, e, n, ll):
                     got.append(None)
             layers[key] = got
         return got
+    ang = 2.0 * np.pi * np.arange(CLEAR_DIRS) / CLEAR_DIRS
+    rings = np.arange(CLEAR_STEP_M, CLEAR_SEARCH_M + 1e-6, CLEAR_STEP_M)
+    around = (rings[:, None, None] * np.stack([np.cos(ang), np.sin(ang)], -1)[None]).reshape(-1, 2)
     for i in range(len(e)):
         lines = gasstations.drive_lines(frame, roads_of(mapcells.cell_of(float(ll[i, 1]), float(ll[i, 0]))),
-                                        float(e[i]), float(n[i]), 30.0)
-        for _ in range(3):
-            moved = False
-            p = np.array([e[i], n[i]])
-            for line, hw in lines:
-                a, b = line[:-1], line[1:]
-                ab = b - a
-                t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-                foot = a + t[:, None] * ab
-                d = np.hypot(*(p - foot).T)
-                k = int(np.argmin(d))
-                need = hw + TOWER_ROAD_CLEAR_M
-                if d[k] < need:
-                    away = (p - foot[k]) / d[k] if d[k] > 1e-6 else np.array([-ab[k, 1], ab[k, 0]]) / max(
-                        float(np.hypot(*ab[k])), 1e-9)
-                    p = foot[k] + away * need
-                    moved = True
-            e[i], n[i] = p
-            if not moved:
-                break
+                                        float(e[i]), float(n[i]), 30.0 + CLEAR_SEARCH_M)
+        p = np.array([e[i], n[i]])
+        if not lines or _margin(p[None], lines)[0] >= 0.0:
+            continue
+        # straight away from the nearest road
+        best = None
+        for line, hw in lines:
+            a, b = line[:-1], line[1:]
+            ab = b - a
+            t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+            foot = a + t[:, None] * ab
+            d = np.hypot(*(p - foot).T)
+            k = int(np.argmin(d))
+            if best is None or d[k] - hw < best[0]:
+                away = (p - foot[k]) / d[k] if d[k] > 1e-6 else np.array([-ab[k, 1], ab[k, 0]]) / max(
+                    float(np.hypot(*ab[k])), 1e-9)
+                best = (d[k] - hw, foot[k] + away * (hw + TOWER_ROAD_CLEAR_M))
+        cand = np.vstack([best[1][None], p + around])
+        m = _margin(cand, lines)
+        ok = np.flatnonzero(m >= -1e-6)
+        e[i], n[i] = cand[ok[0] if len(ok) else int(np.argmax(m))]
     return e, n
 
 

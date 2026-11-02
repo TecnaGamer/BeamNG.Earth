@@ -728,6 +728,8 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
     Steam applies them itself): variables for the game's environment, a command that wraps it (gamemoderun,
     mangohud), the game's own options after %command%."""
     steam_env, wrapper, steam_opts = steam_args
+    # (dev: BNGE_GAME_WRAPPER="perf record ... --" profiles the game alone, Linux direct start)
+    wrapper = os.environ.get("BNGE_GAME_WRAPPER", "").split() + list(wrapper or [])
     win_args = ["-gfx", GFX_ARG.get(gfx, gfx)] if gfx else []
     extra = os.environ.get("BNGE_GAME_ARGS", "").split()     # (tests: e.g. "-bngetest car,damage")
     win_args += extra

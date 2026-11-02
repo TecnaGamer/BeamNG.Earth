@@ -120,33 +120,41 @@ EDGE = lua_consts("edgeguard.lua")
 
 
 # --- follow.lua / rebase.lua / core.lua rebaseHint ----------------------------------------
-# The block size (docs/V1_4_SPEC.md §3.5 M4): the mod's lattice.configure / follow.configure /
-# rebase.configure(size) pick flat *_1024 / *_512 constants; here every rule takes `size` (default
-# 1024, the tables the Lua modules start with) and reads the same constants through these.
-def lattice_table(size=1024):
-    """lattice.configure(size): N, HALF, VALID_W, COVER_W, GRID."""
-    n = 512 if size == 512 else 1024
-    half = n * LATTICE["SQUARE"] / 2
-    return {"N": n, "HALF": half, "VALID_W": (n - 1) * LATTICE["SQUARE"], "COVER_W": 2 * half,
-            "GRID": LATTICE["GRID_512"] if n == 512 else LATTICE["GRID_1024"]}
+# The block (hello.blockSize / squareSize): the mod's lattice.configure(size, square) / follow.configure() /
+# rebase.configure(width) pick flat *_1024 (2 km) / *_512 (1 km) constants by the block's width; here every rule takes
+# `size` and `square` (default: 1024 at lattice.lua's SQUARE, 1 m: the 1 km block the Lua modules start with).
+def _block(size=1024, square=None):
+    """(samples, square, width, table suffix) as lattice.configure picks them (anything unsupported: 1024 x 1 m)."""
+    square = LATTICE["SQUARE"] if square is None else square
+    w = size * square
+    if not (size in (512, 1024, 2048) and w in (1024, 2048)):
+        size, square, w = 1024, 1.0, 1024.0
+    return size, square, w, ("_1024" if w >= 2048 else "_512")
 
 
-def follow_table(size=1024):
-    """follow.configure(size): the active table."""
-    n = 512 if size == 512 else 1024
-    t = f"_{n}"
+def lattice_table(size=1024, square=None):
+    """lattice.configure(size, square): N, HALF, VALID_W, COVER_W, GRID."""
+    n, sq, w, t = _block(size, square)
+    half = n * sq / 2
+    return {"N": n, "HALF": half, "VALID_W": (n - 1) * sq, "COVER_W": 2 * half, "GRID": LATTICE["GRID" + t]}
+
+
+def follow_table(size=1024, square=None):
+    """follow.configure() after lattice.configure(size, square): the active table."""
+    n, sq, w, t = _block(size, square)
     F = FOLLOW
-    return {"SIZE": n, "HALF": n * F["SQUARE_SIZE"] / 2, "GRID": F["GRID" + t], "PREPARE_DIST": F["PREPARE_DIST" + t],
+    return {"SIZE": n, "HALF": n * sq / 2, "GRID": F["GRID" + t], "PREPARE_DIST": F["PREPARE_DIST" + t],
             "COMMIT_DIST": F["COMMIT_DIST" + t], "HARD_COMMIT_DIST": F["HARD_COMMIT_DIST" + t],
             "MIN_LEAD": F["MIN_LEAD" + t],
             "EDGE_MARGIN": F["EDGE_MARGIN" + t], "REACH": F["REACH" + t], "LOOKAHEAD_S": F["LOOKAHEAD_S" + t],
             "RECHECK_S": F["RECHECK_S" + t], "FAST_MODE_V": F["FAST_V" + t]}
 
 
-def rebase_table(size=1024):
-    """rebase.configure(size): STALE_DIST and KEEP_EDGE (the stale-anchor rule, 0 = off)."""
-    t = "_512" if size == 512 else "_1024"
+def rebase_table(size=1024, square=None):
+    """rebase.configure(width): STALE_DIST and KEEP_EDGE (the stale-anchor rule, 0 = off)."""
+    n, sq, w, t = _block(size, square)
     return {"STALE_DIST": REBASE["STALE_DIST" + t], "KEEP_EDGE": REBASE["KEEP_EDGE" + t]}
+
 
 
 def follow_mode(vx, vy, size=1024):
@@ -495,7 +503,7 @@ def set_cells(n):
 
 def exact_level_for(cells):
     """farfield.exactLevelFor: the level whose tile is `cells` lattice squares wide."""
-    return math.floor(math.log((cells or 32) * LATTICE["SQUARE"] / LATTICE["L0"]) / math.log(2) + 0.5)
+    return math.floor(math.log((cells or 32) * LATTICE["FAR_SQUARE"] / LATTICE["L0"]) / math.log(2) + 0.5)
 
 
 def tex_kind(px):

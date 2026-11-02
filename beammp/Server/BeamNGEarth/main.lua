@@ -204,7 +204,8 @@ function G.config()
   return { time = G.timeConfig(G.TIME, G.TIME_SPEED, G.started), weather = G.WEATHERS[w] and w or nil }
 end
 
--- Pure: the server's name, port and player cap from ServerConfig.toml's text.
+-- Pure: the server's name, description, tags, map, port, player cap, resource folder and whether it has a password
+-- (pass: never the password itself) from ServerConfig.toml's text.
 function G.readConfig(text)
   local cfg = {}
   for line in tostring(text or ''):gmatch('[^\r\n]+') do
@@ -213,6 +214,11 @@ function G.readConfig(text)
       local str = v:match('^"(.-)"')        -- (a string first: a # inside it is not a comment)
       v = v:gsub('%s*#.*$', '')
       if k == 'Name' and str then cfg.name = str
+      elseif k == 'Description' and str then cfg.desc = str
+      elseif k == 'Tags' and str then cfg.tags = str
+      elseif k == 'Map' and str then cfg.map = str
+      elseif k == 'ResourceFolder' and str then cfg.resources = str
+      elseif k == 'Password' then cfg.pass = (str or '') ~= ''
       elseif k == 'Port' then cfg.port = tonumber(v)
       elseif k == 'MaxPlayers' then cfg.maxPlayers = tonumber(v)
       elseif k == 'Private' then cfg.private = v == 'true'
@@ -232,16 +238,27 @@ function G.listable(cfg)
   return G.LISTED ~= false and cfg.private == false and G.validKey(cfg.authKey)
 end
 
--- Pure: what the list shows of this server: { port, name, players, maxPlayers, place } (place: where the players are,
--- to a tenth of a degree, from the longest-joined player; nil when no one is on).
-function G.announcement(cfg, players)
+-- Pure: what the list shows of this server: what BeamMP's own heartbeat sends its list (BeamMP-Server
+-- THeartbeatThread: name, desc, tags, map, players, maxplayers, port, version, modlist, modstotalsize, modstotal,
+-- playerslist, pass; not its key, address or private flag: the list takes the address the announce comes from) and
+-- place (where the players are, to a tenth of a degree, from the longest-joined player; nil when no one is on).
+-- info (optional): { version = BeamMP server version, names = { connected players' names }, mods = { names = {...},
+-- size = bytes, count = n } } (the server's, gathered by serverInfo).
+function G.announcement(cfg, players, info)
+  info = info or {}
   local first = nil
   for _, p in pairs(players) do
     if not first or (p.joinedAt or 0) < (first.joinedAt or 0) then first = p end
   end
   local n = 0
   for _ in pairs(players) do n = n + 1 end
-  return { port = cfg.port, name = cfg.name, players = n, maxPlayers = cfg.maxPlayers,
+  local names, mods = info.names, info.mods or {}
+  local modlist = {}
+  for _, m in ipairs(mods.names or {}) do modlist[#modlist + 1] = '/' .. m .. ';' end
+  return { port = cfg.port, name = cfg.name, desc = cfg.desc, tags = cfg.tags, map = cfg.map, pass = cfg.pass == true,
+    players = names and #names or n, maxPlayers = cfg.maxPlayers, version = info.version,
+    playerslist = names and (table.concat(names, ';') .. (#names > 0 and ';' or '')) or nil,
+    modlist = table.concat(modlist), modstotalsize = mods.size or 0, modstotal = mods.count or #(mods.names or {}),
     place = first and string.format('%.1f, %.1f', first.lat, first.lon) or nil }
 end
 
@@ -308,6 +325,38 @@ if MP and MP.RegisterEvent then
 
   for _, line in ipairs(G.supportNotice()) do print('[BeamNG.Earth] ' .. line) end
 
+  -- what BeamMP's heartbeat sends its list besides the config (G.announcement's info): the server version, the
+  -- connected players' names and the client mods (<ResourceFolder>/Client/*.zip, as BeamMP's TResourceManager counts)
+  function G.serverInfo(cfg)
+    local info = {}
+    local ok, a, b, c = pcall(MP.GetServerVersion)
+    if ok and a then info.version = string.format('%s.%s.%s', tostring(a), tostring(b or 0), tostring(c or 0)) end
+    local okP, list = pcall(MP.GetPlayers)
+    if okP and type(list) == 'table' then
+      local names = {}
+      for _, name in pairs(list) do names[#names + 1] = tostring(name) end
+      table.sort(names)
+      info.names = names
+    end
+    local dir = (cfg.resources or 'Resources') .. '/Client'
+    local okF, files = pcall(FS.ListFiles, dir)
+    if okF and type(files) == 'table' then
+      local mods = { names = {}, size = 0, count = 0 }
+      for _, f in ipairs(files) do
+        local base = tostring(f):match('([^/\\]+)%.zip$')
+        if base then
+          mods.names[#mods.names + 1] = base
+          mods.count = mods.count + 1
+          local h = io.open(dir .. '/' .. base .. '.zip', 'rb')
+          if h then mods.size = mods.size + (h:seek('end') or 0); h:close() end
+        end
+      end
+      table.sort(mods.names)
+      info.mods = mods
+    end
+    return info
+  end
+
   -- a public server with its key goes on our list and off BeamMP's (its Private setting on while it runs: BeamMP's
   -- heartbeat sends it each time); otherwise direct connect only
   local startCfg = serverConfig()
@@ -326,7 +375,7 @@ if MP and MP.RegisterEvent then
     if not cfg.port or not G.listable(cfg) then return end
     local out = io.open(G.ANNOUNCE_FILE, 'w')
     if not out then return end
-    out:write(encode(G.announcement(cfg, G.live())))
+    out:write(encode(G.announcement(cfg, G.live(), G.serverInfo(cfg))))
     out:close()
     os.execute(G.announceCmd(G.LIST_URL, G.ANNOUNCE_FILE, package.config:sub(1, 1) == '\\'))
   end

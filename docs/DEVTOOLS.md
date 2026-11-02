@@ -255,7 +255,7 @@ level after a console teleport).
   Go / Rename (inline field, OK / Cancel) / Delete (the button reads "Confirm" for 4 s), and the
   recent places (name or lat/lon, "level start" tag) with Go / Save (Go sends the row's lat/lon
   with its index, so a double click cannot land on the row that moved up). Go is disabled with a note
-  ("Companion server not connected", "No player vehicle") when it cannot teleport; errors and
+  ("Companion server not connected", "Load the BeamNG.Earth level first") when it cannot teleport; errors and
   "Going to ..." show in a line at the top. BngInput fields (`v-bng-text-input`, so typing does not
   drive the car), BngButton text buttons, no glyphs, no ::before / ::after. The 2 s poll also
   refreshes the lists (`uiPlaces`), so a teleport from the console or the level start shows up.

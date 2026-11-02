@@ -430,6 +430,10 @@ STREET_TREE_CLASSES = {"residential", "tertiary", "secondary", "living_street"}
 STREET_TREE_SHARE = 0.5         # streets with a row of trees (hashed per street)
 STREET_TREE_SPACING = 11.0
 STREET_TREE_CURB_M = 0.9
+# no street tree with its trunk in a building's footprint or this near its wall: the map's sidewalk runs a metre or two
+# into a rowhouse row where its street's line is off (Baltimore's Canton, 2026-10-31: a tree's crown through the roofs,
+# "floating trees" from the street; .claude/devtools/floattrees.py counts them)
+STREET_TREE_WALL_M = 1.0
 G_POLELAMP = "polelamp"     # a cobra-head arm on a utility pole (East Coast USA's electrical_pole_lamp)
 # The share of a country's low-voltage lines that are underground (the user, 2026-10-26: "Currently we've been placing
 # them almost everywhere"): the European Commission's "Overview of the Potential for Undergrounding the Electricity
@@ -579,6 +583,37 @@ def under_decks(rows, decks, wires=None):
     return out
 
 
+def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M):
+    """rows (place's) without the ones of groups whose spot is in a building's footprint or within clear m of its
+    wall. rings: footprints (k, 2) in the rows' frame (buildings.near_rings: every building near the tile, its own
+    and its neighbours': a tree by the tile's edge in a house the next tile owns)."""
+    if not rows or not rings:
+        return rows
+    import fast
+    fast.require(0, "polyline_dist")
+    pick = [i for i, r in enumerate(rows) if r[0] in groups]
+    if not pick:
+        return rows
+    pts = np.array([rows[i][1:3] for i in pick], np.float64)
+    bad = np.zeros(len(pick), bool)
+    for ring in rings:
+        ring = np.asarray(ring, np.float64)[:, :2]
+        if len(ring) < 3:
+            continue
+        lo, hi = ring.min(0) - clear, ring.max(0) + clear
+        m = ~bad & (pts[:, 0] >= lo[0]) & (pts[:, 0] <= hi[0]) & (pts[:, 1] >= lo[1]) & (pts[:, 1] <= hi[1])
+        if not m.any():
+            continue
+        q = np.ascontiguousarray(pts[m])
+        closed = np.ascontiguousarray(np.vstack([ring, ring[:1]]))
+        hit = np.asarray(fast._ef.points_inside(closed, q)) | (np.asarray(fast._ef.polyline_dist(closed, q)) < clear)
+        bad[np.flatnonzero(m)[hit]] = True
+    if not bad.any():
+        return rows
+    drop = {pick[j] for j in np.flatnonzero(bad)}
+    return [r for i, r in enumerate(rows) if i not in drop]
+
+
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
@@ -618,7 +653,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
                                  round(yaw_fn(out), 1), 1.0, height, 0.0])
         rule = spacing_of.get(spec.cls)
-        if town and spec.cls in TOWN_POLE_CLASSES and overhead(fid):
+        # (none along a mountain pass road: no line follows the Stelvio's hairpins, Mapillary 2026-10-31; nor the
+        # country roads' below)
+        if town and spec.cls in TOWN_POLE_CLASSES and overhead(fid) and not getattr(spec, "mountain", False):
             # towns and suburbs: wooden utility poles along one side, wired, a cobra-head lamp on every other
             pole_side = 1 if _h01(fid, "side") < 0.5 else -1
             if side == pole_side:
@@ -680,7 +717,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         lamps = lighting.get(fid) != "no" and (highway or lighting.get(fid) == "yes"
                                                 or (spec.urban and spec.cls in TOWN_POLE_CLASSES))
         highway = highway and lamps
-        poles = not highway and overhead(fid) and (lamps or (not spec.urban and spec.cls in POLE_CLASSES))
+        poles = not highway and overhead(fid) and (lamps or (not spec.urban and spec.cls in POLE_CLASSES)) \
+            and not getattr(spec, "mountain", False)        # (a pass road's: none, as in town above)
         if not (lamps or poles):
             continue
         side = 1 if _h01(fid, "pside") < 0.5 else -1

@@ -13,9 +13,10 @@ docs/V1_2_DESIGN.md §7 as amended by §12; server/README.md documents the same 
   - the tile layouts (docs/V1_4_SPEC.md §3.1 M1): FORMAT 3 (32 cells) and 4 (64 cells) on both
     sides, hello.cells and far_tile.tex with FORMAT 4 only, crossover.defaultErr (under luajit) and
     the exact level for both cell counts, the governor kind of every texture size;
-  - the terrain block sizes (docs/V1_4_SPEC.md §3.5 M4): both follow tables (1024 and 512, with the
-    fast mode) and the staleness distances on both sides, hello.blockSize with --block 512 only,
-    terrain.size the session's, the mod's layer / flat maps per size, setBlockSize first in hello;
+  - the terrain block sizes (docs/V1_4_SPEC.md §3.5 M4): both follow tables by the block's width (2 km
+    and 1 km, with the fast mode) and the staleness distances on both sides, hello.blockSize and
+    squareSize always, the mod accepting both, terrain.size the session's, the mod's layer / flat maps
+    per size, setBlockSize first in hello;
   - the horizon (docs/V1_4_SPEC.md §3.6 M1h): hello.horizon and status.radius with --horizon only, the
     mod's visibleDistance margin and the sky's planet radius against the server's (horizon.lua), the
     mod reacting to both (core.lua);
@@ -102,7 +103,9 @@ MOD_TO_SERVER = {
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
-              "globalFar": F(int, OPT)},
+              "globalFar": F(int, OPT),
+              # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
+              "readySet": F(int, OPT)},
     "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
                        # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
                        "px": F(NUM, OPT), "py": F(NUM, OPT),
@@ -121,7 +124,9 @@ MOD_TO_SERVER = {
              # pooled far-tile slots whose far_tile's object is gone: [[slot, serial], ...] (matslots.py)
              "slotsGone": F((list, dict), OPT),
              # other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)
-             "foci": F((list, dict), OPT)},
+             "foci": F((list, dict), OPT),
+             # the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)
+             "guardHold": F(bool, OPT)},
     # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
     # neither (fresh usage numbers); always answered with a 'cache'
     "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},
@@ -151,12 +156,16 @@ MOD_TO_SERVER = {
     # imagery / mapdata (world: not asked by the map yet)
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
                   "mode": F(str, OPT)},
-    # saved areas (areas.py; additive): a picked box's estimate, a new area, pause / resume / delete one
-    "area_plan": {"id": F(int), "s": F(NUM), "w": F(NUM), "n": F(NUM), "e": F(NUM)},
-    "area_add": {"id": F(int), "s": F(NUM), "w": F(NUM), "n": F(NUM), "e": F(NUM), "name": F(str, OPT)},
+    # saved areas (areas.py; additive): a picked box's estimate, a new area, pause / resume / delete one; a saved
+    # route: route "current" (the last planned GPS route) and half (its corridor's half width, m) instead of the box
+    "area_plan": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
+                  "route": F(str, OPT), "half": F(NUM, OPT), "mode": F(str, OPT)},
+    "area_add": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
+                 "route": F(str, OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT)},
     "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
-              "bearing": F(NUM, OPT)},   # the GPS (routing.py); bearing: the car's heading, the route starts that way
+              "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
+              "download": F(str, OPT)},  # the "Download along route" setting: off / ahead / route (route_download)
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
     "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # the update notice's button: the server opens the releases page (updates.open_page; additive)
@@ -184,14 +193,18 @@ SERVER_TO_MOD = {
     "area_plan_result": {"id": F(int), "ok": F(bool), "km2": F(NUM, OPT), "items": F(int, OPT),
                          "missing": F(int, OPT), "downloadBytes": F(int, OPT), "diskBytes": F(int, OPT),
                          "seconds": F(int, OPT), "days": F(NUM, OPT), "hosts": F(list, OPT),
-                         "excluded": F(list, OPT), "error": F(str, OPT)},
-    # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode}] after hello, a change and while one downloads
+                         "excluded": F(list, OPT), "km": F(NUM, OPT), "worldTiles": F(int, OPT),
+                         "worldMissing": F(int, OPT), "error": F(str, OPT)},
+    # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, route?}] after hello, a change and while one downloads
     # (at most every areas.STATUS_S); result: the answer to an area_add / area_cmd
     "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT)},
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
                       "elev": F((list, dict), OPT)},  # OSRM; elev: the map's profile (routing.resample, dem.sample)
-    "route_download": {"total": F(int), "done": F(int), "active": F(bool)},  # routeahead.py: the route's corridor
-    "update": {"current": F(str), "latest": F(str), "url": F(str)},   # a newer version on GitHub (updates.py)
+    "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
+    # the blocks built already round the player (follow.preferReady takes one instead of its own target)
+    "terrain_ready_set": {"anchorId": F(int), "centres": F(list)},  # routeahead.py: the route's corridor
+    "update": {"current": F(str), "latest": F(str), "url": F(str),   # a newer version on GitHub (updates.py)
+               "dev": F(bool, OPT)},        # (a development build's check: whether the newer one is one too)
     "update_status": {"state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT),
                       "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
@@ -203,7 +216,8 @@ SERVER_TO_MOD = {
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
-              "blockSize": F(int, OPT),         # v1.4 M4: terrain block size, only when not 1024 (--block 512)
+              "blockSize": F(int),              # the terrain block: samples per edge (always since 2026-11-01) ...
+              "squareSize": F(NUM),             # ... and their spacing, m (1 m; without both the mod takes 1024 x 2 m)
               "horizon": F(bool, OPT),          # v1.4 M1h: true with --horizon only
               "geoTiles": F(int, OPT),          # geotiles: the zoom of the tiles it sends (hello.geoTiles, --geo-tiles on)
               "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
@@ -337,6 +351,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
+                       "terrain_ready_set",                          # only to a fast player's mod that says readySet
                        "server_list"}                                # only when the BeamMP tab asks (online)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}
@@ -460,10 +475,13 @@ class SessionsAgreementTest(test_server.ServerHarness):
     def test_mod_side(self):
         core = (LUA / "core.lua").read_text(encoding="utf-8")
         far = (LUA / "farfield.lua").read_text(encoding="utf-8")
+        roads_lua = (LUA / "roads.lua").read_text(encoding="utf-8")
         for kind in ("hello", "pose"):
             t = next(lua_tables(core, m.end() - 1) for m in re.finditer(r"net\.send\(\{", core)
                      if f"type = '{kind}'" in lua_tables(core, m.end() - 1))
-            self.assertIn("sessions = farfield.heldSessions()", t, kind)
+            self.assertIn("sessions = roads.allHeldSessions()", t, kind)
+        # (the far field's folders and the road tiles' kept across a server restart: their buildings, 2026-10-31)
+        self.assertIn("require('beamngEarth/farfield').heldSessions(), M.heldSessions()", roads_lua)
         self.assertIn("'^/temp/beamngEarth/([^/]+)/'", far)
         self.assertEqual(self.server.vfs_dir, f"/temp/beamngEarth/{self.server.sid}")
         self.assertEqual(modsim.folder_of(self.server.vfs_dir + "/far_1_0_0_0.cdae"), self.server.sid)
@@ -526,15 +544,16 @@ class CacheAgreementTest(unittest.TestCase):
         self.assertIn("cacheInfo = nil", on_msg[on_msg.index("t == '_disconnected'"):on_msg.index("t == 'hello'")])
         self.assertIn("cacheInfo = { usedBytes = tonumber(msg.usedBytes)", on_msg[on_msg.index("t == 'cache'"):])
         settings = (LUA / "settings.lua").read_text(encoding="utf-8")
-        m = re.search(r"cacheCapGb = \{ kind = 'enum', default = '(\w+)', values = \{ ([^}]*) \}", settings)
-        values = re.findall(r"'(\w+)'", m.group(2))
-        self.assertEqual((m.group(1), values), ("20", ["5", "10", "20", "50", "unlimited"]))
+        # (a number of GB typed on the page since 2026-10-29, 0: no limit; the old choices still read: MIGRATE)
+        m = re.search(r"cacheCapGb = \{ kind = 'number', default = (\d+), min = 0,", settings)
+        self.assertIsNotNone(m, "cacheCapGb: a number setting")
         self.assertEqual(float(m.group(1)), cachemod.DEFAULT_CAP_GB, "the page's default is the server's")
+        self.assertIn("cacheCapGb = { unlimited = 0 }", settings)
         # (the settings pages' schema and state: earthSettingsStore.js, since the pause-menu tab, 2026-10-28)
         page = (LUA.parents[3] / "ui" / "ui-vue" / "mods" / "beamngEarth" / "earthSettingsStore.js").read_text(encoding="utf-8")
-        row = re.search(r'\{ id: "cacheCapGb", type: "select", default: "(\w+)".*?options: \[(.*?)\] \}', page, re.S)
+        row = re.search(r'\{ id: "cacheCapGb", type: "number", default: (\d+), min: 0,', page)
+        self.assertIsNotNone(row, "the page's cacheCapGb: a number box")
         self.assertEqual(row.group(1), m.group(1))
-        self.assertEqual(re.findall(r'value: "(\w+)"', row.group(2)), values)
         self.assertIn("beamngEarth_settings.uiCacheClear()", page)
 
 
@@ -581,32 +600,35 @@ class ConstantsTest(unittest.TestCase):
         L = modsim.LATTICE
         self.assertEqual((L["N"], L["SQUARE"], L["HALF"], L["GRID"]),
                          (heightmap.SIZE, heightmap.SQUARE, heightmap.HALF, heightmap.GRID))
-        self.assertEqual(L["VALID_W"], heightmap.VALID)                     # 2046 m (§12 P1)
+        self.assertEqual(L["VALID_W"], heightmap.VALID)                     # 1023 m (§12 P1)
         self.assertEqual(tuple(L["Q_LADDER"]), heightmap.Q_LADDER)
         for q in heightmap.Q_LADDER:
             self.assertEqual(heightmap.block_params(1000.0, 1100.0, q)[2], q * L["Q_SCALE"])
         self.assertEqual(L["L0"], ff.BASE)
-        self.assertEqual(2 * L["HALF"], 8 * ff.BASE)                        # a block sits on 8 x 8 L0 tiles
-        # M4: lattice.configure(size) against the server's per-size geometry
+        self.assertEqual(2 * L["HALF"], 4 * ff.BASE)                        # a 1 km block sits on 4 x 4 L0 tiles
+        self.assertEqual(L["FAR_SQUARE"], heightmap.FAR_SQUARE)
+        # M4: lattice.configure(size, square) (hello.blockSize / squareSize) against the server's per-size geometry
         for size in ff.BLOCK_SIZES:
-            t = modsim.lattice_table(size)
-            self.assertEqual((t["N"], t["HALF"], t["VALID_W"], t["GRID"]),
-                             (size, heightmap.half_extent(size), heightmap.valid(size), heightmap.grid(size)))
-            self.assertEqual(ff.Layout(64, size).grid, t["GRID"])
-            # the SW corner of a block on its grid is an even lattice index (Torque diagonal parity)
-            self.assertEqual((t["GRID"] - t["HALF"]) / heightmap.SQUARE % 2, 0)
+            with self.subTest(size=size):
+                t = modsim.lattice_table(size, heightmap.SQUARE)
+                self.assertEqual((t["N"], t["HALF"], t["VALID_W"], t["GRID"]),
+                                 (size, heightmap.half_extent(size), heightmap.valid(size), heightmap.grid(size)))
+                self.assertEqual(ff.Layout(64, size).grid, t["GRID"])
+                # the SW corner of a block on its grid is an even lattice index (Torque diagonal parity)
+                self.assertEqual((t["GRID"] - t["HALF"]) / heightmap.SQUARE % 2, 0)
         self.assertEqual(modsim.XO["CELLS"], ff.V131.cells)             # without hello.cells (FORMAT 3)
         self.assertLess(modsim.FAR["EDGE_BAND"], ff.BASE)                   # the edge ring is one L0 tile deep
 
     def test_exact_level(self):
         """The mod's exactMiss metric (farfield.lua, V1_4_SPEC 3.0 M0): the exact level is the finest
-        mesh level, whose vertices are the physics lattice, and the lookup reaches the coarsest
+        mesh level, whose vertices are the far field's 2 m lattice (every second physics sample), and the lookup
+        reaches the coarsest
         level. (M1: the 64-cell layout makes L-1 exact; the mod's setExactLevel(-1) from hello.cells.)"""
         self.assertEqual(modsim.FAR["EXACT_LEVEL"], ff.MESH_MIN_LEVEL[32])
         self.assertEqual(modsim.FAR["MAX_LEVEL"], ff.MAX_LEVEL)
         for cells in ff.CELL_COUNTS:
             lay = ff.Layout(cells)
-            self.assertEqual(ff.level_size(lay.exact_level), cells * heightmap.SQUARE)
+            self.assertEqual(ff.level_size(lay.exact_level), cells * heightmap.FAR_SQUARE)
             self.assertEqual(modsim.exact_level_for(cells), lay.exact_level)      # farfield.exactLevelFor
             self.assertEqual(lay.exact_level, lay.min_level)
         far = (LUA / "farfield.lua").read_text(encoding="utf-8")
@@ -648,72 +670,86 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(len(rows), 2 * 13 + 1)
 
     def test_terrain_follow_rule(self):
-        F = modsim.FOLLOW
-        self.assertEqual((F["PREPARE_DIST"], F["LOOKAHEAD_S"], F["REACH"]),
+        F, T = modsim.FOLLOW, modsim.follow_table()         # T: the default block's (follow.lua configures it at load)
+        # the 2 km table is v1.3.1's (the server's FOLLOW_* constants)
+        self.assertEqual((F["PREPARE_DIST_1024"], F["LOOKAHEAD_S_1024"], F["REACH_1024"]),
                          (earthd.FOLLOW_PREPARE, earthd.FOLLOW_LEAD, earthd.FOLLOW_REACH))
-        # the player stays >= EDGE_MARGIN inside the collidable [cx-1024, cx+1022] on both sides
-        self.assertLessEqual(F["REACH"], L_VALID_EDGE - F["EDGE_MARGIN"])
+        rule = earthd.FOLLOW_RULES[heightmap.SIZE * heightmap.SQUARE]
+        self.assertEqual((T["PREPARE_DIST"], T["LOOKAHEAD_S"], T["REACH"]), (rule.prepare, rule.lead, rule.reach))
+        # the player stays >= EDGE_MARGIN inside the collidable [cx-512, cx+511] on both sides
+        self.assertLessEqual(T["REACH"], L_VALID_EDGE - T["EDGE_MARGIN"])
         self.assertLessEqual(earthd.ANCHOR_CENTRE_MAX, modsim.REBASE["MAX_DISTANCE"] + 5000)
+        # (the server skips a prefetch the mod would replace with a built block: Connection.ready_will_do)
+        self.assertEqual(earthd.READY_STEPS, F["READY_STEPS"])
 
     def test_follow_tables_per_block_size(self):
-        """M4 (docs/V1_4_SPEC.md §3.5): the server's predicted follow rule per block size is the mod's
-        table (flat *_1024 / *_512 constants) on both sides, including the 512 fast mode; each table
-        keeps the player EDGE_MARGIN inside the collidable edge; the default stays 1024."""
+        """M4 (docs/V1_4_SPEC.md §3.5): the server's predicted follow rule per block width is the mod's
+        table (flat *_1024 (2 km) / *_512 (1 km) constants) on both sides, including the 1 km fast mode; each
+        table keeps the player EDGE_MARGIN inside the collidable edge; the default stays 1024 samples."""
         F = modsim.FOLLOW
-        self.assertEqual(set(earthd.FOLLOW_RULES), set(ff.BLOCK_SIZES))
+        self.assertEqual(set(earthd.FOLLOW_RULES), {size * heightmap.SQUARE for size in ff.BLOCK_SIZES})
+        self.assertEqual(earthd.BLOCK_SIZES, ff.BLOCK_SIZES)
         self.assertEqual(earthd.BLOCK_DEFAULT, heightmap.SIZE)
-        self.assertEqual(earthd.FOLLOW_RULES[1024], earthd.FollowRule(256.0, earthd.FOLLOW_PREPARE, earthd.FOLLOW_LEAD,
-                                                                     earthd.FOLLOW_REACH, earthd.PREFETCH_START))
-        for size, rule in earthd.FOLLOW_RULES.items():
-            T = modsim.follow_table(size)
+        self.assertEqual(earthd.FOLLOW_RULES[2048.0], earthd.FollowRule(256.0, earthd.FOLLOW_PREPARE,
+                                                                       earthd.FOLLOW_LEAD, earthd.FOLLOW_REACH,
+                                                                       earthd.PREFETCH_START))
+        for width, rule in earthd.FOLLOW_RULES.items():
+            size = int(width / heightmap.SQUARE)
+            T = modsim.follow_table(1024, width / 1024)     # the mod's table of that width (1024 samples)
             self.assertEqual((rule.grid, rule.prepare, rule.lead, rule.reach),
-                             (T["GRID"], T["PREPARE_DIST"], T["LOOKAHEAD_S"], T["REACH"]), size)
+                             (T["GRID"], T["PREPARE_DIST"], T["LOOKAHEAD_S"], T["REACH"]), width)
             self.assertEqual(rule.grid, heightmap.grid(size))
-            self.assertEqual((rule.min_lead, rule.min_lead_v), (T["MIN_LEAD"], F["MIN_LEAD_V"]), size)
-            edge = heightmap.valid(size) - heightmap.half_extent(size)            # +1022 / +510 m
+            self.assertEqual((rule.min_lead, rule.min_lead_v), (T["MIN_LEAD"], F["MIN_LEAD_V"]), width)
+            edge = heightmap.valid(size) - heightmap.half_extent(size)            # +511 / +1023 m
             self.assertLessEqual(T["REACH"], edge - T["EDGE_MARGIN"])
             self.assertEqual(rule.fast_v, math.inf if T["FAST_MODE_V"] >= 1e9 else T["FAST_MODE_V"])
             self.assertLess(rule.prefetch_start, rule.prepare)
             self.assertLessEqual(T["PREPARE_DIST"], T["COMMIT_DIST"])
             self.assertLess(T["COMMIT_DIST"], T["HARD_COMMIT_DIST"])
-        fast = earthd.FOLLOW_RULES[512]
+        fast = earthd.FOLLOW_RULES[1024.0]
         self.assertEqual((fast.fast_v, fast.fast_lead, fast.fast_reach, fast.fast_ahead),
                          (F["FAST_V"], F["LOOKAHEAD_FAST_S"], F["REACH_FAST"], F["PREP_AHEAD_FAST_S"]))
-        self.assertLessEqual(F["REACH_FAST"], 510 - F["EDGE_MARGIN_FAST"])
-        self.assertEqual(earthd.FOLLOW_RULES[512].prefetch_start, earthd.FOLLOW_RULES[512].prepare - 28)
-        # the predicted request is the mod's target at the prepare point (both modes), 512 table
+        self.assertLessEqual(F["REACH_FAST"], L_VALID_EDGE - F["EDGE_MARGIN_FAST"])
+        self.assertEqual(fast.prefetch_start, fast.prepare - 28)
+        # the predicted request is the mod's target at the prepare point (both modes), 1 km table
         for vx, vy, px, py in ((30.0, 0.0, 129.0, 0.0), (134.0, 0.0, 129.0, 0.0), (200.0, 0.0, 0.0, 0.0),
                                (-90.0, 60.0, -140.0, 40.0), (170.0, 120.0, 10.0, -20.0)):
-            want = modsim.follow_decide(px, py, vx, vy, 0.0, 0.0, None, size=512)
+            want = modsim.follow_decide(px, py, vx, vy, 0.0, 0.0, None, size=1024)
             self.assertEqual(want[0], "prepare", (vx, vy))
             self.assertEqual(earthd.predict_centre(px, py, vx, vy, *fast.mode(vx, vy)[:2], fast.grid, fast.min_lead,
                                                    fast.min_lead_v), want[1:])
 
     def test_stale_dist_per_block_size(self):
-        """rebase.lua STALE_DIST per block size equals that table's commit distance (a rebase never
-        commits a block the follow rule would already replace), and the stale-anchor rule is 512² only."""
-        for size in ff.BLOCK_SIZES:
-            self.assertEqual(modsim.rebase_table(size)["STALE_DIST"], modsim.follow_table(size)["COMMIT_DIST"])
-        self.assertEqual(modsim.REBASE["STALE_DIST"], modsim.REBASE["STALE_DIST_1024"])      # the default
-        self.assertEqual((modsim.rebase_table(1024)["KEEP_EDGE"], modsim.rebase_table(512)["KEEP_EDGE"]), (0, 150))
+        """rebase.lua STALE_DIST per block width equals that table's commit distance (a rebase never
+        commits a block the follow rule would already replace), and the stale-anchor rule is the 1 km block's only."""
+        for square in (1.0, 2.0):                           # 1024 samples: the 1 km and the 2 km block
+            self.assertEqual(modsim.rebase_table(1024, square)["STALE_DIST"],
+                             modsim.follow_table(1024, square)["COMMIT_DIST"])
+        # the default: the 1 km block's (rebase.lua configures it at load)
+        self.assertEqual(modsim.rebase_table()["STALE_DIST"], modsim.REBASE["STALE_DIST_512"])
+        self.assertEqual((modsim.rebase_table(1024, 2.0)["KEEP_EDGE"], modsim.rebase_table(1024, 1.0)["KEEP_EDGE"]),
+                         (0, 150))
 
     def test_block_size_in_the_mod(self):
-        """core.lua sets the block size from hello.blockSize before anything reads the lattice, every
-        module's configure is called, and the mod ships the layer / flat maps of each size."""
+        """core.lua sets the block from hello.blockSize / squareSize before anything reads the lattice (a server
+        without them: the v1.3.1 1024² at 2 m), every module's configure is called, and the mod ships the layer /
+        flat maps of each size."""
         core = (LUA / "core.lua").read_text(encoding="utf-8")
         on_msg = lua_function(core, "onMessage")
         hello = on_msg[on_msg.index("t == 'hello'"):]
-        self.assertLess(hello.index("M.setBlockSize(msg.blockSize or 1024)"), hello.index("requestAnchor("))
+        self.assertLess(hello.index("M.setBlockSize(msg.blockSize or 1024, msg.squareSize or 2.0)"),
+                        hello.index("requestAnchor("))
         setter = lua_function(core, "setBlockSize")
-        for call in ("lattice.configure(", "follow.configure(n)", "terrain.configure(n)", "rebase.configure(n)"):
+        for call in ("lattice.configure(", "follow.configure()", "terrain.configure(n)", "rebase.configure(width)"):
             self.assertIn(call, setter)
         terrain = (LUA / "terrain.lua").read_text(encoding="utf-8")
         for size in ff.BLOCK_SIZES:
             for kind, mode in (("layer", "RGB"), ("flat", "I;16")):
-                name = f"beamngEarth_{kind}_{size}.png"
-                self.assertIn(f"[{size}] = TERRAIN_DIR .. '{name}'", terrain)
-                with Image.open(modsim.MOD_ROOT / "levels" / "beamng_earth" / "art" / "terrains" / name) as im:
-                    self.assertEqual((im.size, im.mode), ((size, size), mode))
+                with self.subTest(size=size, kind=kind):
+                    name = f"beamngEarth_{kind}_{size}.png"
+                    self.assertIn(f"[{size}] = TERRAIN_DIR .. '{name}'", terrain)
+                    with Image.open(modsim.MOD_ROOT / "levels" / "beamng_earth" / "art" / "terrains" / name) as im:
+                        self.assertEqual((im.size, im.mode), ((size, size), mode))
 
     def test_material(self):
         name = modsim.lua_string("farfield.lua", "MATERIAL")
@@ -813,7 +849,7 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(modsim.tex_kind(None), "cdaeTex")
 
 
-L_VALID_EDGE = modsim.LATTICE["VALID_W"] - modsim.LATTICE["HALF"]      # +1022 m from the centre
+L_VALID_EDGE = modsim.LATTICE["VALID_W"] - modsim.LATTICE["HALF"]      # +511 m from the centre (the 1 km block)
 
 
 class ServerMessagesTest(test_server.ServerHarness):
@@ -872,7 +908,7 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertRegex(t["heightmap"], HM_RE)
             # M4: the session's block size (hello.blockSize), on its grid
             self.assertEqual((t["size"], t["squareSize"]), (self.server.layout.block, modsim.LATTICE["SQUARE"]))
-            grid = modsim.lattice_table(t["size"])["GRID"]
+            grid = modsim.lattice_table(t["size"], t["squareSize"])["GRID"]
             self.assertEqual((t["cx"] % grid, t["cy"] % grid), (0, 0))
             self.assertEqual(t["maxHeight"], t["q"] * modsim.LATTICE["Q_SCALE"])
             self.assertEqual(t["zBase"] % t["q"], 0)
@@ -923,7 +959,9 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertEqual(m["format"], self.server.layout.format)
             self.assertIn(m["format"], modsim.CORE["FORMATS"])
             self.assertEqual(m.get("cells"), 64 if self.cells == 64 else None)
-            self.assertEqual(m.get("blockSize"), None if self.block == 1024 else self.block)       # M4
+            # the block, always (2026-11-01), and one the mod's lattice.configure takes as it is
+            self.assertEqual((m["blockSize"], m["squareSize"]), (self.block, heightmap.SQUARE))
+            self.assertEqual(modsim.lattice_table(m["blockSize"], m["squareSize"])["N"], m["blockSize"])
             self.assertEqual(m.get("horizon"), True if self.horizon else None)                    # M1h
             self.assertEqual(m["material"], modsim.lua_string("farfield.lua", "MATERIAL"))
             self.assertIn(m["farFormat"], ff.FORMATS)
@@ -1122,10 +1160,10 @@ class MeshImagery64MessagesTest(MeshImageryMessagesTest):
     cells = 64
 
 
-class MeshImagery64Block512MessagesTest(MeshImagery64MessagesTest):
-    """The same with --block 512 (docs/V1_4_SPEC.md §3.5 M4): hello.blockSize, terrain.size 512 on the
-    128 m grid."""
-    block = 512
+class MeshImagery64Block2kmMessagesTest(MeshImagery64MessagesTest):
+    """The same with --block 2048 (the 2 km block at 1 m): hello.blockSize 2048, terrain.size 2048 on the
+    256 m grid."""
+    block = 2048
 
 
 

@@ -52,6 +52,8 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+import base64
+import urllib.request
 from urllib.parse import urlsplit
 
 log = logging.getLogger("earthd.net")
@@ -159,7 +161,9 @@ POLICIES = {
                                     allow_prefetch=True, offline_ok=True, miss_ttl=30 * DAY,
                                     binary=True, timeout=60.0, max_attempts=2, base_delay=2.0,
                                     breaker_threshold=6, breaker_window=120.0),
-    "tiles.maps.eox.at": HostPolicy(rate=10.0, burst=40.0, max_conc=6, daily_budget=30000,
+    # (20/s, 12 at once: the user's OK 2026-10-30; at 10/s a first visit's far field outside the US took ~4 min, 761
+    # tiles in 241 s at Canterbury; s2maps-tiles.eu, EOX's other domain, refuses us: no mirror)
+    "tiles.maps.eox.at": HostPolicy(rate=20.0, burst=80.0, max_conc=12, daily_budget=30000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # (a tile not in Cloudflare's edge cache takes ~1 s before its first byte: requests in flight set the rate)
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
@@ -181,11 +185,15 @@ POLICIES = {
     # range reads of immutable release files, kept forever; the STAC index is small JSON on CloudFront
     "stac.overturemaps.org": HostPolicy(rate=5.0, burst=10.0, max_conc=2, daily_budget=5000,
                                         allow_prefetch=True, offline_ok=True, timeout=20.0),
-    **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
+    # Overture's two copies of each release (AWS, Azure: rangeread spreads the reads over both): 8 at once each (the
+    # user, 2026-10-30: a fresh place's road cells waited on our 4; one connection gave ~5-27 MB/s, 8 ~40-50)
+    **{h: HostPolicy(rate=40.0, burst=80.0, max_conc=8, daily_budget=None, allow_prefetch=True,
                      offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com",
-                 "overturemapswestus2.blob.core.windows.net",
-                 "esa-worldcover.s3.eu-central-1.amazonaws.com",
+                 "overturemapswestus2.blob.core.windows.net")},
+    **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
+                     offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
+       for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com",
                  "dataforgood-fb-data.s3.amazonaws.com",
                  "copernicus-dem-30m.s3.amazonaws.com")},      # the polar caps' DEM (polardem.py)
     # British Columbia's lidar DEMs (lidarbc.py): range reads of the Province's open bucket; optional
@@ -225,7 +233,9 @@ POLICIES = {
                              timeout=60.0, max_attempts=1, optional=True),
     # OSM US Layercake (osmtags.py): the OSM highways GeoParquet on Cloudflare, read in ranges (the footer once, a few
     # MB per new area); optional: without it roads keep their width guesses
-    "data.openstreetmap.us": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=5000, allow_prefetch=True,
+    # (4 at once: ~1-5 MB/s a connection, uncached at Cloudflare's edge; a fresh place's first graded block waited ~20 s
+    # on 2, the user's OK 2026-10-30; no mirror of the file exists)
+    "data.openstreetmap.us": HostPolicy(rate=8.0, burst=16.0, max_conc=4, daily_budget=5000, allow_prefetch=True,
                                         offline_ok=True, miss_ttl=None, binary=True, timeout=30.0, optional=True),
     # USGS 3DEP lidar point clouds (roadz.py: the US bridge decks, BNE_LIDAR_DECKS): EPT metadata (kept on disk) and
     # ~0.3 MB LAZ nodes along a cell's bridges once (the decks made from them are kept); optional (the inference)
@@ -609,31 +619,119 @@ def windows_ssl_context():
 
 class HttpsTransport:
     """GET over one persistent HTTP(S) connection per thread and host (a fresh TLS handshake per tile
-    roughly doubled the latency). No redirects are followed."""
+    roughly doubled the latency). No redirects are followed. Honours HTTP_PROXY / HTTPS_PROXY / NO_PROXY
+    (and urllib.request.getproxies() as a fallback) so users behind a corporate proxy can reach the
+    data sources; SOCKS proxies are not supported (PySocks is not a dependency)."""
 
     def __init__(self):
         self._local = threading.local()
         self._tls_context = windows_ssl_context()
+
+    # --- proxy helpers ---------------------------------------------------------------
+    @staticmethod
+    def _resolve_proxy(scheme, host):
+        """Return (proxy_host, proxy_port, proxy_user, proxy_pass) or None when no proxy applies."""
+        # NO_PROXY / no_proxy: comma-separated list of hosts (or suffixes) to bypass.
+        no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+        if not no_proxy:
+            try:
+                no_proxy = urllib.request.getproxies().get("no", "")
+            except Exception:
+                no_proxy = ""
+        for entry in (e.strip() for e in no_proxy.split(",") if e.strip()):
+            if entry == "*" or host == entry or host.endswith("." + entry):
+                return None
+        # env first (higher priority), then urllib's view of the system proxy
+        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            val = os.environ.get(var)
+            if val:
+                break
+        else:
+            try:
+                val = urllib.request.getproxies().get(scheme) or urllib.request.getproxies().get("all")
+            except Exception:
+                val = None
+        if not val:
+            log.debug("net: no proxy for %s (no env var / system proxy)", host)
+            return None
+        val = val.strip()
+        if "://" in val:
+            val = val.split("://", 1)[1]
+        user = passw = None
+        if "@" in val:
+            creds, val = val.rsplit("@", 1)
+            if ":" in creds:
+                user, passw = creds.split(":", 1)
+            else:
+                user = creds
+        if ":" in val:
+            phost, pport = val.rsplit(":", 1)
+            try:
+                pport = int(pport)
+            except ValueError:
+                phost, pport = val, (443 if scheme == "https" else 80)
+        else:
+            phost, pport = val, (443 if scheme == "https" else 80)
+        if phost.lower().startswith("socks"):
+            log.warning("net: SOCKS proxies are not supported; ignoring %s", val)
+            return None
+        log.debug("net: proxy resolved for %s: %s:%d (user=%s)", host, phost, pport, user or "-")
+        return phost, pport, user, passw
 
     def request(self, url, headers, timeout):
         """(status, {lower-case header: value}, body)."""
         u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        key = (u.scheme, u.netloc)
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        if proxy is None:
+            key = (u.scheme, u.netloc, None)
+        else:
+            log.debug("net: %s -> proxy %s:%d", url, proxy[0], proxy[1])
+            key = (u.scheme, u.netloc, proxy[0], proxy[1])
         while True:
             conn = conns.get(key)
             reused = conn is not None
             if conn is None:
-                if u.scheme == "https":
+                if proxy is not None and u.scheme == "https":
+                    phost, pport, puser, ppass = proxy
                     kwargs = {"timeout": timeout}
                     if self._tls_context is not None:
                         kwargs["context"] = self._tls_context
-                    conn = conns[key] = http.client.HTTPSConnection(u.netloc, **kwargs)
+                    conn = http.client.HTTPSConnection(phost, pport, **kwargs)
+                    if puser is not None:
+                        creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
+                        conn.set_tunnel(u.hostname, u.port or 443,
+                                       headers={"Proxy-Authorization": f"Basic {creds}"})
+                    else:
+                        conn.set_tunnel(u.hostname, u.port or 443)
+                    conn = conns[key] = conn
+                elif proxy is not None:
+                    phost, pport, puser, ppass = proxy
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    if puser is not None:
+                        creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
+                        conn._proxy_auth = f"Basic {creds}"
+                    conn = conns[key] = conn
                 else:
-                    conn = conns[key] = http.client.HTTPConnection(u.netloc, timeout=timeout)
+                    if u.scheme == "https":
+                        kwargs = {"timeout": timeout}
+                        if self._tls_context is not None:
+                            kwargs["context"] = self._tls_context
+                        conn = conns[key] = http.client.HTTPSConnection(u.netloc, **kwargs)
+                    else:
+                        conn = conns[key] = http.client.HTTPConnection(u.netloc, timeout=timeout)
             try:
-                conn.request("GET", path, headers=dict(headers, Connection="keep-alive"))
+                req_headers = dict(headers, Connection="keep-alive")
+                if proxy is not None and u.scheme == "http":
+                    phost, pport, puser, ppass = proxy
+                    if getattr(conn, "_proxy_auth", None):
+                        req_headers["Proxy-Authorization"] = conn._proxy_auth
+                    # absolute URL for the proxy
+                    full_url = url
+                    conn.request("GET", full_url, headers=req_headers)
+                else:
+                    conn.request("GET", path, headers=req_headers)
                 r = conn.getresponse()
                 body = r.read()
                 return r.status, {k.lower(): v for k, v in r.getheaders()}, body

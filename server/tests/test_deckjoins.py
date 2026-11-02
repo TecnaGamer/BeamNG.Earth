@@ -231,5 +231,77 @@ class PinnedJointTest(unittest.TestCase):
         np.testing.assert_allclose(gfn(np.array(ends)), 0.0, atol=1e-9, err_msg="the ground at the joint itself")
 
 
+
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 110, "earthfast 110 (deck_pad)")
+class JunctionPadTest(unittest.TestCase):
+    """A street (ground, half 5.2 m) going north onto a bridge: a deck north (half 6.85) and a one-lane deck leaving
+    north-east (half 1.75) from the joint (North Charles Street over I-83: the AI cut the corner onto the station's
+    road over the motorway's cut)."""
+
+    def pads(self, ne=True, box=(-50.0, -50.0, 50.0, 50.0), ground_z=22.0):
+        Spec = type("S", (), {})
+        def spec(w):
+            s = Spec()
+            s.width = w
+            return s
+        decks = [("north", spec(13.7), np.c_[np.zeros(11), np.linspace(0, 40, 11)], np.full(11, 22.0))]
+        if ne:
+            decks.append(("ne", spec(3.5), np.c_[np.linspace(0, 24, 11), np.linspace(0, 36, 11)], np.full(11, 22.0)))
+        ground = [("street", spec(10.4), np.c_[np.zeros(11), np.linspace(-60, 0, 11)], None)]
+        return roads.deck_pads(decks, ground, box, lambda xy: np.full(len(xy), ground_z))
+
+    @staticmethod
+    def inside(ring, x, y):
+        k = len(ring)
+        return all((ring[(i + 1) % k][0] - ring[i][0]) * (y - ring[i][1]) -
+                   (ring[(i + 1) % k][1] - ring[i][1]) * (x - ring[i][0]) >= -1e-9 for i in range(k))
+
+    def test_corner_paved(self):
+        pads = self.pads()
+        self.assertEqual(len(pads), 1)
+        ring, centre = pads[0][:2]
+        self.assertTrue(self.inside(ring, 6.0, 3.0), "the right turn's corner, outside both carriageways")
+        self.assertTrue(self.inside(ring, 5.0, 8.0), "the wedge where the ramp leaves")
+        self.assertFalse(self.inside(ring, 20.0, 0.0))
+        np.testing.assert_allclose(centre, [0.0, 0.0, 22.0], atol=1e-9)
+
+    def test_straight_joint_none(self):
+        self.assertEqual(self.pads(ne=False), [], "a deck going on straight from the street: its abutment")
+
+    def test_owned_by_one_tile(self):
+        self.assertEqual(self.pads(box=(10.0, 10.0, 60.0, 60.0)), [])
+
+    def test_mesh_faces_up_and_collides(self):
+        import roadmesh
+        ring, centre = self.pads()[0][:2]
+        got = roadmesh.deck([], (0.0, 0.0, 0.0), pads=[(ring, centre)])
+        P, T = got[0], got[1]
+        top = T[: len(ring)]
+        nrm = np.cross(P[top[:, 1]] - P[top[:, 0]], P[top[:, 2]] - P[top[:, 0]])
+        self.assertTrue((nrm[:, 2] > 0).all(), "the top faces up")
+        self.assertAlmostEqual(float(P[top[0, 0], 2]), 22.0 - roadmesh.PAD_DROP, places=6)
+
+    def test_no_parapet_in_the_turn(self):
+        """The decks' edges inside the pad get no parapet (the station road's began at the joint, in the turn's path,
+        and the AI clipped its end); the pad reaches PAD_MARGIN_M past every carriageway."""
+        pad = self.pads()[0]
+        ne_right = np.c_[np.linspace(0, 6, 4), np.linspace(0, 9, 4)] + [1.75 * 0.832, -1.75 * 0.555]
+        self.assertTrue(roads.pad_inside([pad], ne_right).all(), "the ramp's outer edge near the joint")
+        self.assertFalse(roads.pad_inside([pad], np.array([[0.0, 40.0]])).any())
+        ring = np.asarray(pad[0])[:, :2]
+        d_street = np.abs(ring[:, 0])[ring[:, 1] < -2.0]       # (the street's arm: x from its line)
+        self.assertGreaterEqual(float(d_street.min()), 5.2 + roads.PAD_MARGIN_M - 0.01)
+
+    def test_rim_railing_over_a_drop_only(self):
+        walls = self.pads(ground_z=15.0)[0][2]
+        self.assertTrue(walls, "over the cut: a railing round the rim")
+        pts = np.concatenate([w[0] for w in walls])
+        # never across a carriageway leaving the pad
+        for x, y in pts[:, :2]:
+            self.assertFalse(abs(x) < 6.85 and y > 0 and y < 12, "not across the deck going north")
+            self.assertFalse(abs(x) < 5.2 and y < 0, "not across the street")
+        self.assertEqual(self.pads(ground_z=22.0)[0][2], [], "on level ground: none")
+
+
 if __name__ == "__main__":
     unittest.main()

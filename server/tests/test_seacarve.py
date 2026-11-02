@@ -492,5 +492,34 @@ class PlanAgainTest(unittest.TestCase):
         c.sea_tiles(1, 10.0 + seatiles.PLAN_SQUARE, 10.0)
         self.assertEqual(c.started, [1], "another square: planned")
 
+
+class UndergroundLinesTest(unittest.TestCase):
+    """The beds of rivers piped underground are not carved (riverlines.underground)."""
+
+    def test_no_bed_along_a_piped_river(self):
+        import riverlines
+        carved = []
+
+        class Lines:
+            def __init__(self):
+                self.ids = np.array(["open", "piped"])
+                self.kind = np.full(2, 2, np.uint8)
+                self.attrs = {"subtype": np.array(["river", "river"]), "class": np.array(["river", "river"]),
+                              "is_intermittent": np.zeros(2, bool),
+                              "tags": np.array(['{"waterway":"river"}', '{"waterway":"river","tunnel":"yes"}'],
+                                               object)}
+
+            def parts(self, i):
+                return [[np.array([(RIV_LON, RIV_LAT + i * 0.001), (RIV_LON + L, RIV_LAT + i * 0.001)])]]
+
+        sc = seacarve.SeaCarver(RiverMapData(), None, dem=RiverDem())
+        sc._water = lambda key: Lines()
+        sc._line_runs = lambda pts, n, px: carved.append(len(pts)) or []     # (one call a ring of a line kept)
+        n = 8
+        sc._carve_lines(0, 0, 0.0, 0.0, n, 1.0, np.zeros((n, n)), np.full((n, n), np.nan), np.zeros((n, n), bool))
+        self.assertEqual(len(carved), 1, "the open river once (one cell's lines seen once), the piped one never")
+        self.assertTrue(riverlines.underground(Lines(), 1))
+
+
 if __name__ == "__main__":
     unittest.main()

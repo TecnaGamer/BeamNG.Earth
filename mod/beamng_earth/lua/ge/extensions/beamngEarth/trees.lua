@@ -62,7 +62,8 @@ M.SHAPE_ITEMS_PER_FRAME = 4000
 -- (2026-10-26, a Fells Point drive: 119 tree frames of 8 ms or more, 24.8 ms on average, two thirds of it
 -- making Forests). More while the world loads (core: the governor's loading mode, a teleport or the car standing), none
 -- in the governor's heavy frames.
-M.FRAME_MS = 4.0
+M.FRAME_MS = 4.0          -- (2.5 for an evening, 2026-10-29: no steadier game time, and the trees, poles and
+                          -- signs fell 2,000+ items behind at 70-120 mph, their collision late)
 M.LOADING_FRAME_MS = 12.0
 local CHECK_ROWS = 256
 -- Registering a new Forest costs ~9 ms (in-game 2026-10-26: 8-10 ms each, named or not, whatever its data file), and
@@ -70,6 +71,10 @@ local CHECK_ROWS = 256
 -- pool, made one in a tree frame that changes no item.
 M.FORESTS_PER_FRAME = 1
 M.POOL_SPARE = 4
+-- ... and up to POOL_SPARE_CALM while the world loads or the car stands (the tree frames' LOADING_FRAME_MS: a teleport,
+-- the level's start, a stop): a drive through town took ~20 new Forests a minute, a ~9 ms frame every 3 s (the game's
+-- time then ran unevenly, 2026-10-29); while driving none is made for the pool, only one a tile needs at once.
+M.POOL_SPARE_CALM = 32
 -- The engine tells shapes apart by their path, so a tile's items use one of SHAPE_VARIANTS spellings of each shape's
 -- path ('dir/./name', 'dir/././name', ...: the same file, a shape of its own), which splits the big populations (one
 -- beech ~7.7k items: a frame touching it cost ~4-9 ms). A variant's first items cost one ~12 ms frame (its load).
@@ -384,6 +389,11 @@ function M.setGroupEnabled(groups, on)
 end
 
 -- Pure: the n-th pool Forest's name.
+-- (tests: .claude/devtools/floattrees.py reads the tiles' made items and their Forests' transforms)
+function M.debugTiles() return tiles end
+-- Does geotile tileKey (onGeoRows' key: 'p' / 'g' .. its geotile key) have its rows here?
+function M.hasGeo(tileKey) return tiles['g:' .. tostring(tileKey)] ~= nil end
+
 function M.forestName(n)
   return M.FOREST_NAME .. '_' .. tostring(n)
 end
@@ -952,6 +962,13 @@ M.RECHECK_S = 1.0
 -- player looks at, the colliding items stay round the car (the user, 2026-10-20: "the LODs still all follow the car").
 -- frameMs: this frame's Lua time for the tree work (default FRAME_MS); 0: none this frame (core: the governor's heavy
 -- frame or the quiet frames round it), the batch waits for the next frame.
+-- Spare Forests wanted in the pool now: POOL_SPARE_CALM while calm (the loading frame budget), none while driving (a
+-- frame budget below it); POOL_SPARE without one (no governor: tools, tests).
+function M.spareWanted(frameMs)
+  if frameMs == nil then return M.POOL_SPARE end
+  return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or 0
+end
+
 function M.update(anchorId, player, view, frameMs)
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
@@ -965,8 +982,8 @@ function M.update(anchorId, player, view, frameMs)
       and lastPass.clock() < M.RECHECK_S * 1000 then
     M.skipped = (M.skipped or 0) + 1      -- (diagnostics)
     -- nothing to change: a spare Forest made for the pool (its ~9 ms alone, not in a frame of items), as a pass that
-    -- changed nothing does below
-    if #pool < M.POOL_SPARE then pool[#pool + 1] = newForest():getID() end
+    -- changed nothing does below; only while calm (spareWanted)
+    if #pool < M.spareWanted(frameMs) then pool[#pool + 1] = newForest():getID() end
     return
   end
   dirty = false                           -- (set again below by anything this pass leaves undone)
@@ -1059,8 +1076,10 @@ function M.update(anchorId, player, view, frameMs)
     local want = tileThreshold(o[2], t)
     local band = groupBand(t, o[2])
     local near = o[3] <= M.SOLID_M or (t.near and o[3] <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
-    if near and t.moved then
-      -- a moved geotile that must collide: its items made again at its placement first (the first loop, next pass)
+    if t.moved then
+      -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
+      -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
+      -- left whole tiles of rocks and shrubs floating over the valley as specks (the user, 2026-11-01)
       t.flush = true
       dirty = true
       goto nexttile
@@ -1141,7 +1160,7 @@ function M.update(anchorId, player, view, frameMs)
   end
   finish()
   -- nothing changed this frame: a spare Forest made for the pool (its ~9 ms alone, not in a frame of items)
-  if budget == M.PER_FRAME * M.EVERY_N and newForests == 0 and #pool < M.POOL_SPARE then
+  if budget == M.PER_FRAME * M.EVERY_N and newForests == 0 and #pool < M.spareWanted(frameMs) then
     pool[#pool + 1] = newForest():getID()
   end
 end

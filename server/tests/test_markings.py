@@ -115,5 +115,8 @@ class ArrowTest(unittest.TestCase):
     def test_quad_uv_is_one_cell(self):
         corners, uv = markings.arrow_quad(np.zeros(3), np.array([1.0, 0.0]), "right")
         self.assertAlmostEqual(float(corners[0][0]), 2.0)
-        self.assertEqual(uv.min(0).tolist(), [0.25, 0.0])
-        self.assertEqual(uv.max(0).tolist(), [0.5, 0.25])
+        # the sheet's top row (the shape's V runs up from the bottom: 0.75 .. 1), the tip (corners 0, 1) at its top; the
+        # bottom row is the game 0.40 sheet's "EXIT" (it showed upside down where straight arrows belong, 2026-10-29)
+        self.assertEqual(uv.min(0).tolist(), [0.25, 0.75])
+        self.assertEqual(uv.max(0).tolist(), [0.5, 1.0])
+        self.assertEqual(uv[0][1], 1.0)

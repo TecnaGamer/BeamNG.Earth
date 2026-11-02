@@ -401,6 +401,48 @@ class GuardrailForestTest(unittest.TestCase):
         for row in rows:
             self.assertAlmostEqual(row[3], 12.0, delta=0.1)
 
+    def road(self, xy, width=12.0):
+        spec = roads.Spec(width=width, kind="paved", urban=False, cls="motorway", oneway=True)
+        return ("road", spec, np.array(xy, np.float64), 0.0)
+
+    def test_a_bridge_rail_mapped_off_its_deck_does_not_stand_across_the_road_under_it(self):
+        """GitHub #463 (Stanley Street over CT 9, New Britain): the bridge's rail mapped 8 m past the drawn deck's edge,
+        related to no deck, was laid on the ground across the motorway under the bridge. Not across its lanes now;
+        the rest of the rail stands as before."""
+        decks, parapets = self.deck_fixture()
+        under = [self.road([[50.0, -60.0], [50.0, 60.0]])]
+        f = self.features("guard_rail", tags={"layer": "1"}, xy=[[10.0, 12.0], [90.0, 12.0]])
+
+        def rows(roads_near):
+            return guardrails.forest_rows(self.frame, lambda _k: f, self.BOX,
+                                          lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64),
+                                          decks=decks, parapets=parapets, roads=roads_near)
+        # (any part of a 3 m module, MODULE_LENGTH_M, in the 12 m carriageway)
+        lanes = lambda rs: [r for r in rs if abs(r[1] - 50.0) < 6.0 + guardrails.MODULE_LENGTH_M / 2]
+        self.assertTrue(lanes(rows(())), "(without the roads: across the motorway, the reported bug)")
+        got = rows(under)
+        self.assertEqual(lanes(got), [], "none across the motorway's lanes")
+        clear = 6.0 + guardrails.RAIL_CLEAR_M + guardrails.MODULE_LENGTH_M / 2 + 0.1
+        far = lambda rs: [r for r in rs if abs(r[1] - 50.0) > clear]
+        self.assertEqual(len(far(got)), len(far(rows(()))), "the rest of the rail kept")
+
+    def test_rails_beside_a_road_stay_and_none_across_it(self):
+        """A rail along a road's edge is real: kept. One across a road's lanes is not, even at its end (a road split
+        at a bridge, its lower part not among the ground roads, ends there but goes on: CT 72 under High Street)."""
+        beside = self.rows_for([[10.0, 8.0], [90.0, 8.0]], 12.0, [])
+        f = self.features("guard_rail", xy=[[10.0, 8.0], [90.0, 8.0]])
+        kept = guardrails.forest_rows(self.frame, lambda _k: f, self.BOX,
+                                      lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64),
+                                      roads=[self.road([[0.0, 0.0], [100.0, 0.0]])])
+        self.assertEqual(len(kept), len(beside), "along the road's edge")
+        f = self.features("guard_rail", xy=[[50.0, -15.0], [50.0, 15.0]])
+        at_end = guardrails.forest_rows(self.frame, lambda _k: f, self.BOX,
+                                        lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64),
+                                        roads=[self.road([[-50.0, 0.0], [49.0, 0.0]])])
+        self.assertTrue(at_end, "(the rail past the road's sides)")
+        self.assertEqual([r for r in at_end if abs(r[2]) < 6.0 + guardrails.MODULE_LENGTH_M / 2], [],
+                         "none across the road's end")
+
 
 class BridgeRailTest(unittest.TestCase):
     def runs(self, z1=20.0):

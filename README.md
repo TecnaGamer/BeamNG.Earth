@@ -4,7 +4,7 @@ A 1:1 scale, streamed Earth for [BeamNG.drive](https://www.beamng.com/): drive a
 planet on real elevation data and satellite imagery, with distance-based level of detail and the
 real curvature of the Earth.
 
-Status: beta (see VERSION). Tested on BeamNG.drive 0.40.3 on Linux (Vulkan) and the Steam Deck. See
+Status: beta (see VERSION). Tested on BeamNG.drive 0.40.4 on Linux (Vulkan) and 0.40.3 on the Steam Deck. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for what is coming.
 
 **Community:** join the TGForever Discord, **[discord.gg/tgf](https://discord.gg/tgf)**, and head to the
@@ -50,7 +50,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
   traffic islands, roundabouts, rural motorways with shoulders and toll booths; the ground graded under them, with
   retaining walls where a road is cut into a hill (dry stone in the mountains and towns, concrete along major roads)
-  and stone parapets along mountain roads' drops; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
+  and stone parapets along mountain roads' drops; switchback mountain pass roads (the Stelvio) narrow, between their
+  walls and parapets; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
   barriers down divided highways (concrete walls, cable barriers or steel rails by the median's width and the
   country's practice, open at crossovers and ramps); street lights, utility poles with wires, traffic signals,
   stop signs, traffic lights and sidewalks where OpenStreetMap maps them;
@@ -92,19 +93,25 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 **Driving and traffic**
 - Drive anywhere: the physics ground follows the car at 100+ mph, the world origin moves with you
   (floating origin), and the world streams ahead of you; you never fall out of the world.
+- The ground around the car is a 1 km terrain block at 1 m (3 ft) resolution, the stock maps' own detail, so road
+  edges, ditches and the ground at walls follow the map closely.
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
 - Real bridge and tunnel heights where open data measures them: in the US, bridge decks follow the USGS 3DEP lidar
-  measured along each bridge; in France (IGN BD TOPO) and Norway (NVDB), bridges and tunnels follow the national road
+  measured along each bridge, and so do the roads leading onto them up to where they are back on the ground
+  (`BNE_APPROACH_LIDAR=off` turns that part off); in France (IGN BD TOPO) and Norway (NVDB), bridges and tunnels follow the national road
   databases' heights, and so do roads where the terrain data is coarse. Elsewhere, or where a source has nothing,
   the heights are estimated as before. The environment variables `BNE_ROADZ=off` (all of it) and
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
 - Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
-  2 to 4 road pieces at once, by your computer's CPU threads and memory.
+  2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
+  behind, it borrows a quarter of the game's cores until it has caught up (`BNGE_CATCHUP_LEND=0` turns that off,
+  `0.5` borrows half).
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
-  `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off).
+  `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
+  update changes how that part of the world is built.
 - **AI support**: the mod builds BeamNG's road graph (the AI's map) from the real roads around you, with
   lanes, one-way streets, speed limits (mapped, or the country's defaults), the country's driving side and
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the
@@ -126,18 +133,25 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   laid out like the stock map.
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
-  route's map data and elevation download ahead while you drive, with a progress bar on the map.
+  route's map data and elevation download ahead while you drive, with a progress bar on the map (Settings >
+  Storage > Download along the GPS route: off, the next 12 miles, or the whole route up to 300 miles).
+  **Pre-cache route** on the GPS box keeps the whole route's data (a quarter mile to 2 miles each side, aerial photos
+  included) like a pre-cached area below.
   The map shows the route's elevation profile under the GPS box and the local time and weather, has a Dark base
   map, and its right-click menu copies a spot's coordinates.
 - A **Cache** overlay on the map (Layers > Cache, or LB / RB on a controller) shows what is downloaded on your
   computer and at what detail: a summary (some data / the far view / ready to drive), or the elevation, imagery or
-  map data alone.
-- **Download an area ahead**: the map's **Area** button (or Shift + drag; on a controller A, A, then X) picks a box
+  map data alone, or **World built** (the terrain, far view, roads and buildings already generated and kept).
+- **Pre-cache an area**: the map's **Pre-cache area** button (or Shift + drag; on a controller A, A, then X) picks a box
   of up to 965 square miles; the confirm box shows its size, the download, the disk space and the time it takes
   (some hosts' daily limits stretch big areas over days). Its map data, elevation and imagery then download in the
   background, slower while you drive and never while the world around you loads, and carry on after a restart.
-  Saved areas (Places panel) show their progress, can be paused or deleted, and their data is kept when the cache
-  is full or cleared. The world itself (roads, buildings) is still built when you get there.
+  Pre-cached areas (Places panel) show their progress, can be paused or deleted, and their data is kept when the cache
+  is full or cleared. Tick **Build the world too** (areas and routes up to 155 square miles) to have the roads,
+  sidewalks, bridges, buildings and street furniture built ahead as well, so they load at once when you arrive;
+  otherwise the world itself is built when you get there.
+- In multiplayer the map has a **Players** list: follow a player, show everyone, or set the GPS to them. Teleport
+  works without a car too (the free camera goes there).
 - **Autodrive**: the car drives itself along the GPS route (in lane, legal speed, minding traffic).
 - Saved places and recent places; "Where you left off" in the level select puts you back where you last drove (it
   is saved as you drive, at teleports and when the game closes).
@@ -160,6 +174,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
   out to the real horizon, for the strongest PCs (it is never picked for you). The Graphics page's settings:
+  - **Even frame pacing** (on): keeps the time between frames steady so the game's speed doesn't pulse while the
+    world loads around you; costs about a seventh of the frame rate while the world loads (a city drive: 81
+    fps against 94), and stays off below 30 fps.
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
@@ -175,6 +192,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Uses your graphics card for some of the world server's work (colour matching of the photos, compressing the distant
   textures) when it can, so the server needs less of your CPU; without a usable one the CPU does it as before.
 - Offline play from the download cache (with a size cap and "clear cache").
+- **Performance** settings page: the world server's CPU cores (Auto: a quarter of your cores, at most half) and its
+  priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
+  **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
+  and the game keeps two until it has loaded.
+- Works behind a proxy: the app's downloads use the HTTP/HTTPS proxy set on your computer (HTTPS_PROXY, HTTP_PROXY,
+  NO_PROXY or the system's proxy setting; SOCKS proxies are not supported).
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;
   with the downloaded app (.exe / AppImage), **Update now** downloads it next to your copy, checks it against
   GitHub's checksum, and the next time you start BeamNG.Earth the new version starts (your old file and shortcut
@@ -193,7 +216,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 
 ## Install and play
 **You need:** BeamNG.drive (tested with 0.40.x) on Steam, free disk space for the map download cache (it grows
-as you visit places, up to 20 GB by default; settings page > "Download cache size" sets 5-50 GB), and an internet
+as you visit places, up to 20 GB by default; Settings > Storage > "Cache size limit" takes any size in GB, 0 for no limit), and an internet
 connection (the map is downloaded while you play).
 
 1. **Download** the file for your system from the [Releases](https://github.com/TecnaGamer/BeamNG.Earth/releases)
@@ -224,6 +247,14 @@ double-click `run_server.bat` (Windows) or run `python3 install.py` (Linux). The
 
 **Updating:** the mod tells you in game when a newer version is on GitHub. Download the new file and run it (from
 the source: unzip it over the old folder and run the installer again).
+
+**Development builds (pre-releases):** every change pushed to the `dev` branch is built automatically and published
+as a GitHub **pre-release** named after the beta it follows, with a build number (for example
+`1.7.2-beta.dev.37`). They have the newest fixes and features, but they are **built from the development branch
+and not thoroughly tested**: expect bugs, and things may change or break from one build to the next. The beta
+releases are the tested ones. A development build says so in game, and its update check offers the next development
+build (or the next beta, if that is newer); a beta only ever offers betas. Only the newest three development builds
+are kept on the releases page.
 
 **Uninstalling:** delete the `beamng_earth` folder in `<BeamNG user folder>/current/mods/unpacked/` and the
 downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your home folder (`~/.cache/beamng-earth` on Linux,

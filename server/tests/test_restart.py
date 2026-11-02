@@ -13,7 +13,7 @@ SessionAdoptionTest (earthd.Server's session folders, no streaming):
   - main_async's sweep removes the folders off the event loop; a folder with the new session's own id
     is never an orphan.
 
-RestartDriveTest (fault injection with the mod simulator, modsim): a 64-cell, 512² mesh-mode session;
+RestartDriveTest (fault injection with the mod simulator, modsim): a 64-cell, 1024² (1 m) mesh-mode session;
 the mod teleports twice (its anchor 2) or once (its anchor 1: the new server's resync anchor id too, so
 no pose or terrain request may name it until the resync commits, core.lua anchorKnown; the resync
 commit waits the governor's CALM_TIMEOUT so poses go out meanwhile), drives east, then the server is
@@ -49,7 +49,7 @@ from test_integration_drive import near_holes  # noqa: E402
 
 LAT, LON = test_server.LAT, test_server.LON
 MOD_VERSION = "0.4.0"
-SIZE = 512
+SIZE = 1024                     # the 1 km block (1024² at 1 m; it was 512² at 2 m)
 DT = 1 / 60
 SPEED = 30.0
 PACE = 1.5                      # simulated seconds per wall second while a server streams
@@ -237,7 +237,7 @@ class SessionAdoptionTest(unittest.TestCase):
 
 
 class _Running:
-    """An in-process server (mesh mode, 64 cells, 512² block, synthetic DEM and imagery) on its own loop."""
+    """An in-process server (mesh mode, 64 cells, 1024² block at 1 m, synthetic DEM and imagery) on its own loop."""
 
     def __init__(self, user_dir):
         s = earthd.Server(user_dir, os.path.join(user_dir, "cache"), tile_workers=3, imagery=None, near_visual="mesh",

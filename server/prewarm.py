@@ -49,7 +49,7 @@ def materials():
         for name, v in vars(mod).items():
             if name.isupper():
                 _marks(v, out)
-    for name in ("DECK_SIDE", "TRUSS_STEEL", "TUNNEL_INNER", "TUNNEL_STONE", "TUNNEL_STONE_IN", "TUNNEL_SOIL",
+    for name in ("DECK_SIDE", "TRUSS_STEEL", "TUNNEL_INNER", "TUNNEL_STONE", "TUNNEL_STONE_IN", "TUNNEL_SOIL", "WALL_SCREE",
                  "TUNNEL_LIGHT"):
         out.add(getattr(roadmesh, name))
     return sorted(out)

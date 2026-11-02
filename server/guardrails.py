@@ -432,6 +432,62 @@ def _deck_segments(decks):
     return {key: np.concatenate(val) for key, val in cols.items()}
 
 
+# A rail placed on the ground never stands across a ground road's lanes (GitHub #463): a bridge's rail mapped farther
+# off its deck than the deck as drawn (Stanley Street over CT 9 in New Britain: barrier=guard_rail, layer=1, 7-9 m
+# past the 8 m deck's edge, the bridge wider than its carriageway), or by a bridge not drawn at all (the CTfastrak
+# busway's), was related to no deck and laid on the ground, a wall across the motorway under it (rebuilt offline
+# 2026-10-30: 242 of 794 modules round downtown, none left). Real rails cross no carriageway. The whole module is
+# checked (CROSS_SAMPLES points along it, against the carriageway's outline round its bends): its middle alone left the
+# ends of 65 modules up to 1.5 m and more in the lanes. No rail across a road's end is kept either: where a road is
+# split at a bridge (CT 72 under High Street, its lower part layer=-1 and not among the ground roads) its piece's end
+# looks like a dead end, and two modules stood in its lanes.
+RAIL_CLEAR_M = 0.25             # m a rail across a road's line keeps clear of its carriageway's edge
+CROSS_SAMPLES = 7               # points along a module checked
+
+
+def _road_segments(roads):
+    """Ground carriageway segments (build_tile roads_out: (fid, spec, centreline (k, >= 2), ...)): start, unit,
+    length, half width."""
+    cols = {"a": [], "unit": [], "len": [], "half": []}
+    for item in roads or ():
+        spec, line = item[1], np.asarray(item[2], np.float64)
+        if spec is None or line.ndim != 2 or len(line) < 2:
+            continue
+        a, d = line[:-1, :2], np.diff(line[:, :2], axis=0)
+        length = np.hypot(d[:, 0], d[:, 1])
+        keep = length > 1e-6
+        if not keep.any():
+            continue
+        cols["a"].append(a[keep])
+        cols["unit"].append(d[keep] / length[keep, None])
+        cols["len"].append(length[keep])
+        cols["half"].append(np.full(int(keep.sum()), float(spec.width) / 2.0))
+    if not cols["a"]:
+        return None
+    return {key: np.concatenate(val) for key, val in cols.items()}
+
+
+def _across_road(a, b, rsegs):
+    """Whether a rail module (from a to b) reaches across a ground carriageway's lanes: any of CROSS_SAMPLES points
+    along it within the carriageway's half width + RAIL_CLEAR_M of a segment it is not parallel to."""
+    if rsegs is None:
+        return False
+    a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+    direction = b - a
+    tangent_len = float(np.hypot(direction[0], direction[1]))
+    if tangent_len < 1e-6:
+        return False
+    across = np.abs(rsegs["unit"] @ (direction / tangent_len)) < PARAPET_PARALLEL_DOT
+    if not across.any():
+        return False
+    sa, su, sl, sh = rsegs["a"][across], rsegs["unit"][across], rsegs["len"][across], rsegs["half"][across]
+    pts = a + np.linspace(0.0, 1.0, CROSS_SAMPLES)[:, None] * direction           # (s, 2)
+    v = pts[:, None, :] - sa[None]                                              # (s, m, 2)
+    along = np.clip(np.sum(v * su[None], axis=2), 0.0, sl[None])               # (on the segment: round its ends)
+    d = np.hypot(*(v - along[..., None] * su[None]).transpose(2, 0, 1))
+    return bool(np.any(d < sh[None] + RAIL_CLEAR_M))
+
+
 def _relate(mid, segs, direction=None):
     """Relate a rail module to a nearby deck only when it runs along that deck.
 
@@ -602,7 +658,7 @@ def _self_doubles(rows, dist=0.9, dot=0.8, dz=1.5):
 
 
 def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
-                supported_decks_out=None):
+                supported_decks_out=None, roads=()):
     """Return Forest-item rows for the stock Italy guardrail model.
 
     Row layout matches trees.lua:
@@ -617,6 +673,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
     ground level, and perpendicular crossings are not treated as bridge rails. Rails hanging far under a deck
     are dropped, and aligned approach rails join the bridge over JOIN_LENGTH_M.
     When supplied, supported_decks_out receives the indices of decks supported by mapped rails.
+    roads: the ground carriageways near the tile (build_tile roads_out): no rail on the ground stands across their lanes.
     """
     if supported_decks_out is not None:
         supported_decks_out.clear()
@@ -626,6 +683,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
     if infra_fn is None:
         return []
     segs = _deck_segments(decks)
+    rsegs = _road_segments(roads)
     ends = _deck_ends(decks)
     parapet_segments = _parapet_segments(parapets, decks)
     support_segments = [_parapet_segments([run], decks) for run in parapets] if bridge_rails else []
@@ -767,6 +825,8 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                             shifts = _join_module(source_a, source_b, ends, direction)
                             if shifts is not None:
                                 mode = "join"
+                    if mode not in ("deck", "median") and _across_road(source_a, source_b, rsegs):
+                        continue                               # across a road's lanes: no real rail stands there
                     parapet_xy_match = _overlaps_bridge_parapet(source_a, source_b, parapet_segments)
                     if not parapet_xy_match:
                         parapet_xy_match = _overlaps_bridge_parapet(

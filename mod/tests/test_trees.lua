@@ -388,6 +388,11 @@ do
   trees.POOL_SPARE = 0
   trees.clear()
 end
+-- spares only while calm (the governor's loading budget: a teleport, the level's start, the car standing), none while
+-- driving (a ~9 ms Forest every 3 s of a town drive made the game's time run unevenly, 2026-10-29)
+T.check(trees.spareWanted(FRAME_MS) == 0, 'driving (the real frame budget): no spare Forests made')
+T.check(trees.spareWanted(trees.LOADING_FRAME_MS) == trees.POOL_SPARE_CALM, 'calm: a bigger pool made ready')
+T.check(trees.spareWanted(nil) == trees.POOL_SPARE, 'no governor: POOL_SPARE')
 
 -- the row cap (ROWS_PER_FRAME) leaves a tile's refresh (navgraph's signal heads: M.suppress) for a later frame; it
 -- dropped it, and the tile kept its static signal under the switchable one
@@ -474,8 +479,8 @@ do
   T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
 end
 -- geotiles (server --geo-tiles on): a tile in its own frame is made where its placement puts it in the anchor's
--- world; a rebase moves its Forest (nothing made again) unless it must collide, then it is made again at the new
--- placement; it is no ghost and needs nothing from the server again
+-- world; a rebase moves its Forest at once, then it is made again at the new placement (far too: the engine draws
+-- far impostors without the Forest's transform); it is no ghost and needs nothing from the server again
 do
   local gd = require('beamngEarth/geodesy')
   local gt = require('beamngEarth/geotile')
@@ -518,16 +523,21 @@ do
   trees.transform(xf, gd, B)
   T.check(trees.status().tiles == 1 and count() == 35, 'kept across the rebase, no ghost')
   T.check(trees.geoMoved == 1, 'placed again')
-  -- as far from the player in the new world: drawn moved, nothing made again
-  trees.update(21, { x = 1000, y = 0 })
-  T.check(trees.made == made and count() == 35, 'far: its Forest moved, no item made again')
+  -- its Forest takes the move at once (drawn in place near); far as well as near its items are made again at the
+  -- new placement and the Forest goes back to the origin (the engine draws far items' impostors without the Forest's
+  -- transform: whole tiles floated 767 m off, 2026-11-01)
   local f
   for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and math.abs(o.pos.x) > 1 then f = o end end
   T.check(f ~= nil, 'its Forest took the move')
-  -- the player at it: it must collide, made again at its placement in the new world
+  for _ = 1, 4 do trees.update(21, { x = 1000, y = 0 }) end
+  T.check(trees.geoFlushed == 1 and trees.made == made + 35 and count() == 35,
+    'far: made again (once) at the new placement: ' .. tostring(trees.geoFlushed) .. ' ' .. (trees.made - made))
+  f = nil
+  for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and math.abs(o.pos.x) > 1 then f = o end end
+  T.check(f == nil, 'its Forest back at the origin')
+  -- the player at it: it collides, its higher ranks made too, not made again
   for _ = 1, 4 do trees.update(21, { x = 0, y = 0 }) end
-  T.check(trees.geoFlushed == 1 and trees.made == made + 50 and count() == 50,
-    'near: made again (once) at the new placement: ' .. tostring(trees.geoFlushed) .. ' ' .. (trees.made - made))
+  T.check(trees.geoFlushed == 1 and count() == 50, 'near: its higher ranks added, no second flush')
   w = off(gt.placement(tf, B, 0, 0, 60))
   T.check(w < 1e-6, 'at the new placement: ' .. w)
   -- its drop by key, whatever the anchor

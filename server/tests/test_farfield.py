@@ -37,7 +37,7 @@ class RoughDem:
 
 class VValleyDem:
     """A sharp V-shaped valley (x = 100 m east of the anchor): its floor falls between L0
-    vertices, so the 8 m tile bridges it above the 2 m terrain."""
+    vertices (and between the far tiles' 2 m lattice samples), so the 8 m tile bridges it above the 1 m terrain."""
 
     def __init__(self, frame):
         self.frame = frame
@@ -104,10 +104,10 @@ class SelectionTest(unittest.TestCase):
             if t.level < ff.MAX_LEVEL:
                 parent = ff.Tile(t.level + 1, t.i // 2, t.j // 2)
                 self.assertIn(parent.node, refined)
-        # Under every forced block: exactly its 8 x 8 L0 tiles.
+        # Under every forced block: exactly its L0 tiles (4 x 4 for the 1 km block on the 256 m L0 grid).
         for b in forced:
             under = [t for t in tiles.values() if ff.overlaps(t.bbox, b)]
-            self.assertEqual(len(under), 64)
+            self.assertEqual(len(under), int((b[2] - b[0]) // 256) * int((b[3] - b[1]) // 256))
             self.assertTrue(all(t.level == 0 for t in under))
         return tiles, refined
 
@@ -275,19 +275,21 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual([ff.Layout(64, tex=(128, 256)).tex_size(lvl) for lvl in (-1, 0, 5)], [128, 256, 256])
         self.assertEqual([ff.Layout(32, mesh=False, tex=(512, 512, 256)).tex_size(lvl) for lvl in (0, 1, 2)],
                          [512, 512, 256])
-        # M4 (docs/V1_4_SPEC.md §3.5): the 512² block, mesh mode only, on a 128 m grid
-        b = ff.Layout(64, 512)
-        self.assertEqual((b.block, b.grid, b.block_at(128.0, 0.0).bbox), (512, 128.0, (-384.0, -512.0, 640.0, 512.0)))
-        self.assertEqual((m.grid, m.block_at(0.0, 0.0)), (256.0, ff.Block(0.0, 0.0)))
-        for bad in (dict(cells=48), dict(cells=64, mesh=False), dict(block=2048), dict(block=512, mesh=False),
+        # The 1 km block (1024² at 1 m) on a 128 m grid; the 2 km one (2048²) on a 256 m grid, mesh mode only
+        b = ff.Layout(64, 2048)
+        self.assertEqual((b.block, b.grid, b.block_at(256.0, 0.0).bbox),
+                         (2048, 256.0, (-768.0, -1024.0, 1280.0, 1024.0)))
+        self.assertEqual((m.grid, m.block_at(128.0, 0.0)), (128.0, ff.Block(128.0, 0.0)))
+        self.assertEqual(m.block_at(128.0, 0.0).bbox, (-384.0, -512.0, 640.0, 512.0))
+        for bad in (dict(cells=48), dict(cells=64, mesh=False), dict(block=512), dict(block=1024, mesh=False),
                     dict(tex=())):
             with self.assertRaises(ValueError, msg=bad):
                 ff.Layout(**bad)
         with self.assertRaises(Exception):
             v.cells = 64                                    # frozen
-        # the exact level's tile is `cells` physics lattice squares wide
+        # the exact level's tile is `cells` far-lattice squares wide (2 m: every second 1 m block sample)
         for lay in (v, m):
-            self.assertEqual(ff.level_size(lay.exact_level), lay.cells * heightmap.SQUARE)
+            self.assertEqual(ff.level_size(lay.exact_level), lay.cells * heightmap.FAR_SQUARE)
 
     def test_switch_distances_shift_one_level(self):
         """64 cells: level L splits where the v1.3.1 layout split level L - 1, so the vertex spacing
@@ -383,29 +385,30 @@ class TileGeometryTest(unittest.TestCase):
 
     def test_l0_on_terrain_lattice(self):
         """§1.4: L0 vertices are Q-rounded terrain samples, bit-identical to the heightmap's (every
-        4th sample with 32 cells, every 2nd with 64)."""
+        8th 1 m sample with 32 cells, every 4th with 64)."""
         q = 1 / 64
         zoom = 15
-        tile = ff.Tile(0, 1, -2)        # x 256..512, y -512..-256: inside the block at (0, 0)
+        tile = ff.Tile(0, 1, -2)        # x 256..512, y -512..-256: inside the 2 km block at (0, 0)
         b, pos, _ = self.build(tile, RoughDem(), q=q, zoom=zoom)
-        u = heightmap.grid_u(self.frame, lambda la, lo: RoughDem().sample(la, lo, zoom), 0.0, 0.0)
+        u = heightmap.grid_u(self.frame, lambda la, lo: RoughDem().sample(la, lo, zoom), 0.0, 0.0, 2048)
         hq = heightmap.quantise(u, q) * q
-        # Block sample gx = (x + 1024) / 2; the tile's vertices are every (128 / cells)-th sample.
-        gx0, gy0 = (256 + 1024) // 2, (-512 + 1024) // 2
-        st, m = 128 // self.n, self.n + 1
-        expect = hq[gy0:gy0 + 129:st, gx0:gx0 + 129:st]
+        # Block sample gx = (x + 1024) / 1; the tile's vertices are every (256 / cells)-th sample.
+        gx0, gy0 = (256 + 1024) // 1, (-512 + 1024) // 1
+        st, m = 256 // self.n, self.n + 1
+        expect = hq[gy0:gy0 + 257:st, gx0:gx0 + 257:st]
         self.assertEqual(expect.shape, (m, m))
         self.assertTrue((b.grid.astype(np.float64) == expect.astype(np.float32).astype(np.float64)).all())
         rel = b.positions[:m * m, 2].reshape(m, m) + pos[2]
         np.testing.assert_allclose(rel, expect, atol=1e-9)
 
     def test_sink_v_valley(self):
-        """§2.8: L0 sink >= max(tile - lattice) on a synthetic V-valley."""
+        """§2.8: L0 sink >= max(tile - lattice) on a synthetic V-valley, on the far lattice (FAR_SQUARE: every second 1 m
+        block sample; build_tile does not measure the odd metres, a trade-off for the near tiles' build time)."""
         dem = VValleyDem(self.frame)
         q = 1 / 64
         tile = ff.Tile(0, 0, 0)             # x 0..256: the valley floor at x = 101 (between vertices 96 and 104)
         b, pos, _ = self.build(tile, dem, q=q, zoom=15)
-        lat = heightmap.lattice_coords(0, 129)
+        lat = np.arange(129) * heightmap.FAR_SQUARE  # the far lattice's samples over the tile (2 m)
         u = heightmap.surface_u(self.frame, lambda la, lo: dem.sample(la, lo, 15), lat, lat)
         terrain = heightmap.quantise(u, q) * q
         X, Y = np.meshgrid(lat, lat)

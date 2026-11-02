@@ -91,6 +91,33 @@ export function zoomAt(clat, clon, z, z2, sx, sy, w, h) {
   return { lat: clampLat(r.lat), lon: r.lon, z: z2 }
 }
 
+// Great-circle distance in metres (the Players list: the other players can be anywhere on Earth)
+export function distanceM(lat1, lon1, lat2, lon2) {
+  const r = Math.PI / 180
+  const a = Math.sin((lat2 - lat1) * r / 2) ** 2 +
+    Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin((lon2 - lon1) * r / 2) ** 2
+  return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(a)))
+}
+
+// The view showing every point of `points` ([{ lat, lon }], at least one) in a w x h view with pad px round them,
+// at most maxZ (a single point: maxZ) and at least MIN_Z (the world can be taller than the view). The widest gap
+// between their longitudes is the part of the world left out, so points either side of the antimeridian are shown
+// side by side, not a world apart.
+export function fitView(points, w, h, pad = 60, maxZ = 12) {
+  const lons = points.map(p => ((p.lon % 360) + 360) % 360).sort((a, b) => a - b)
+  let gap = lons[0] + 360 - lons[lons.length - 1], west = lons[0]      // (the gap across 0 / 360 first)
+  for (let i = 1; i < lons.length; i++) {
+    if (lons[i] - lons[i - 1] > gap) { gap = lons[i] - lons[i - 1]; west = lons[i] }
+  }
+  const span = 360 - gap
+  const ys = points.map(p => project(p.lat, 0, 0).y)
+  const y0 = Math.min(...ys), y1 = Math.max(...ys)
+  // (a zero span is an infinite zoom: maxZ)
+  const zx = Math.log2(Math.max(1, w - 2 * pad) / (span / 360 * TILE))
+  const zy = Math.log2(Math.max(1, h - 2 * pad) / (y1 - y0))
+  return { lat: unproject(0, (y0 + y1) / 2, 0).lat, lon: wrapLon(west + span / 2), z: Math.max(MIN_Z, Math.min(maxZ, zx, zy)) }
+}
+
 // Places whose name contains every word of the query (case-insensitive), best (name starts with
 // the query) first; at most `limit`.
 export function searchPlaces(list, query, limit = 8) {
@@ -324,8 +351,9 @@ export function creditsFor(imagery, other, box) {
 export const CACHE_MIN_Z = 6, CACHE_MAX_Z = 16       // covermap.GRID_MIN_Z / GRID_MAX_Z
 export const CACHE_MAX_CELLS = 16384                 // covermap.MAX_CELLS
 export const CACHE_PARTIAL = 0x80                    // cachemap.rs PARTIAL: the detail covers less than half the cell
-export const CACHE_MODES = ["summary", "elevation", "imagery", "mapdata"]
-export const CACHE_MODE_NAMES = { summary: "Summary", elevation: "Elevation", imagery: "Imagery", mapdata: "Map data" }
+export const CACHE_MODES = ["summary", "elevation", "imagery", "mapdata", "world"]
+export const CACHE_MODE_NAMES = { summary: "Summary", elevation: "Elevation", imagery: "Imagery", mapdata: "Map data",
+  world: "World built" }
 
 // the grid's zoom for a view zoom: about 8 cells a map tile
 export function cacheGridZoom(z) { return Math.max(CACHE_MIN_Z, Math.min(CACHE_MAX_Z, Math.round(z) + 3)) }
@@ -376,6 +404,14 @@ export const CACHE_CLASSES = {
   mapdata: [
     { id: 1, name: "Some layers", rgb: [255, 196, 60] },
     { id: 2, name: "Every layer", rgb: [61, 220, 132] },
+  ],
+  // the generated world kept on disk (covermap "world": the revisit cache's places); older: built by an earlier version
+  // or other settings (built again when used)
+  world: [
+    { id: 1, name: "Terrain and far view, older", rgb: [110, 120, 135] },
+    { id: 2, name: "Terrain and far view", rgb: [58, 160, 255] },
+    { id: 3, name: "Roads and buildings, older", rgb: [190, 150, 60] },
+    { id: 4, name: "Roads and buildings", rgb: [61, 220, 132] },
   ],
 }
 export function cacheLegend(mode) { return CACHE_CLASSES[mode === "elevation" || mode === "imagery" ? "detail" : mode] || [] }

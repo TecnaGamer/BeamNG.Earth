@@ -18,6 +18,7 @@ import netfetch  # noqa: E402
 import pacer  # noqa: E402
 
 BOX = (39.27, -76.62, 39.30, -76.58)        # ~3.4 km x 3.3 km round Baltimore's harbour (a benchmark place)
+ROUTE = ([39.2834, 39.2900, 39.3000, 39.3076], [-76.5934, -76.6000, -76.6100, -76.6157])  # ~4 km through it
 
 
 class StubDem:
@@ -74,6 +75,19 @@ class StubServer:
 
     def live_busy(self):
         return self.busy
+
+    # the world phase (earthd.Server.geo_prebuilt / prebuild_geo): a geotile's content "built" once
+    built = None
+
+    def geo_prebuilt(self, gx, gy):
+        return f"k{gx}_{gy}" if self.built is not None and (gx, gy) in self.built else None
+
+    def prebuild_geo(self, gx, gy):
+        if self.built is None:
+            self.built = set()
+        self.built.add((gx, gy))
+        self.prebuilds = getattr(self, "prebuilds", 0) + 1
+        return f"k{gx}_{gy}"
 
     def driving(self):
         return False
@@ -157,11 +171,12 @@ class AreasTest(unittest.TestCase):
         self.assertEqual(len(s.mapdata.got), n_cells)
         m = a.message()["areas"][0]
         self.assertEqual((m["name"], m["done"], m["total"]), ("Harbour", len(a.steps(BOX)), len(a.steps(BOX))))
-        # the job is its mode's phases (only "data" so far; a "world" phase comes later)
+        # the job is its mode's phases ("data": the downloads; "world": them, then the road geotiles: test_world_mode)
         self.assertEqual(m["mode"], "data")
         self.assertEqual(a.steps(BOX, "data"), a.phase_steps("data", BOX))
+        self.assertEqual(a.steps(BOX, "world"), a.phase_steps("data", BOX) + a.phase_steps("world", BOX))
         with self.assertRaises(ValueError):
-            a.phase_steps("world", BOX)
+            a.phase_steps("nope", BOX)
         import json
         with open(os.path.join(self.tmp.name, areas.SUBDIR, areas.STORE)) as f:
             self.assertEqual(json.load(f)["areas"][0]["mode"], "data")
@@ -254,6 +269,83 @@ class AreasTest(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("at most", why)
 
+    def test_routes(self):
+        # a corridor: the route's points and a half width; its plan walks the corridor's tiles in order along it
+        lats, lons = list(ROUTE[0]), list(ROUTE[1])
+        self.assertEqual(areas.check_route(lats, lons, 800), (lats, lons, 800.0))
+        for bad in (([39.0], [-76.6], 800), (lats, lons[:1], 800), (lats, lons, 50), (lats, lons, 9000),
+                    ([39.0, 99.0], lons, 800), ([39.0, float("nan")], lons, 800), (lats, lons, "x")):
+            with self.assertRaises(ValueError, msg=bad):
+                areas.check_route(*bad)
+        with self.assertRaisesRegex(ValueError, "square miles"):
+            areas.check_route([30.0, 45.0], [-100.0, -80.0], 5000)     # ~2,400 km long, 10 km wide
+        a, s = self.make(server=StubServer(cap=20e9, keys=["dem/mapterhorn/16/18823/24979.webp",
+                                                           "dem/mapterhorn/16/1/1.webp"]), start=True)
+        route = {"lat": lats, "lon": lons, "half": 800.0}
+        box = areas.route_bounds(route)
+        steps = a.steps(box, route=route)
+        self.assertEqual(steps, a.steps(box, route=route))
+        self.assertEqual([st[0] for st in steps], sorted((st[0] for st in steps), key=["cell", "dem", "img"].index))
+        cells = [st[1:4] for st in steps if st[0] == "cell"]
+        ring = (2 * areas.CELL_RING + 1) ** 2      # (the start's ring tiles share its place along the route)
+        self.assertIn((14,) + fast._ef.corridor_tiles(lats[:1], lons[:1], 0.0, 14, 0)[0][:2],
+                      list(dict.fromkeys(cells))[:ring], "the route's start first")
+        # a corridor has fewer cells than its bounds' box (the route is diagonal)
+        self.assertLess(len(set(cells)), len(fast._ef.area_tiles(*box, 14, areas.CELL_RING)))
+        p = a.plan_route(lats, lons, 800)
+        self.assertTrue(p["ok"], p)
+        self.assertAlmostEqual(p["km"], fast._ef.corridor_size(lats, lons, 800)[0] / 1000, delta=0.01)
+        self.assertFalse(a.plan_route(lats[:1], lons[:1], 800)["ok"])
+        ok, aid = a.add_route(lats, lons, 800, name="Commute")
+        self.assertTrue(ok, aid)
+        self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done"))
+        m = a.message()["areas"][0]
+        self.assertEqual((m["name"], m["total"]), ("Commute", len(steps)))
+        self.assertEqual(m["route"][0], [round(lats[0], 6), round(lons[0], 6)])
+        self.assertEqual(m["route"][-1], [round(lats[-1], 6), round(lons[-1], 6)])
+        # pins: a key under the corridor's cells, not one far off; a DEM tile containing them (an ancestor) too
+        x, y = fast._ef.corridor_tiles(lats[:1], lons[:1], 0.0, 16, 0)[0][:2]
+        self.assertEqual(a.pinned([f"dem/mapterhorn/16/{x}/{y}.webp", "dem/mapterhorn/16/1/1.webp",
+                                   f"dem/mapterhorn/10/{x >> 6}/{y >> 6}.webp", "mapdata/raw/x.blk"]),
+                         [True, False, True, False])
+        a.close()
+        # the store keeps the route
+        b, _ = self.make(server=s)
+        self.assertEqual(b.areas[0]["route"], route)
+        self.assertEqual(b.message()["areas"][0]["state"], "done")
+        self.assertFalse(b.add_route(lats, lons, 20, "")[0])
+
+    def test_world_mode(self):
+        # "world": the downloads, then every road geotile's content built ahead (z17 tiles of the box), listed in
+        # <id>.world (pinned_world), none built twice
+        a, s = self.make(start=True)
+        p = a.plan(*BOX, mode="world")
+        self.assertTrue(p["ok"], p)
+        n17 = len(fast._ef.area_tiles(*BOX, areas.WORLD_Z, 0))
+        self.assertEqual((p["worldTiles"], p["worldMissing"]), (n17, n17))
+        self.assertGreater(p["diskBytes"], a.plan(*BOX)["diskBytes"] + 0.9 * n17 * areas.WORLD_TILE_BYTES - 1)
+        self.assertEqual(a.plan(*BOX)["worldTiles"], 0, "data only: no world tiles")
+        self.assertFalse(a.plan(*BOX, mode="nope")["ok"])
+        ok, aid = a.add(*BOX, name="Harbour", mode="world")
+        self.assertTrue(ok, aid)
+        self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done"))
+        self.assertEqual(s.prebuilds, n17)
+        self.assertEqual(a.message()["areas"][0]["mode"], "world")
+        self.assertEqual(len(areas.pinned_world(self.tmp.name)), n17)
+        a.close()
+        b, _ = self.make(server=s, start=True)          # a restart: done, nothing built again
+        self.assertTrue(b.command(aid, "resume"))
+        self.assertTrue(wait_for(lambda: b.message()["areas"][0]["state"] == "done"))
+        self.assertEqual(s.prebuilds, n17)
+        self.assertEqual(len(areas.pinned_world(self.tmp.name)), n17, "the list rewritten, the same keys")
+        # a route can build its world too; too large an area cannot
+        lats, lons = list(ROUTE[0]), list(ROUTE[1])
+        self.assertGreater(b.plan_route(lats, lons, 800, "world")["worldTiles"], 0)
+        with mock.patch.object(areas, "MAX_WORLD_KM2", 1.0):
+            self.assertIn("too large", b.plan(*BOX, mode="world")["error"])
+        self.assertTrue(b.command(aid, "delete"))
+        self.assertEqual(areas.pinned_world(self.tmp.name), set(), "deleted: unpinned")
+
     def test_a_damaged_store_is_no_list(self):
         os.makedirs(os.path.join(self.tmp.name, areas.SUBDIR))
         with open(os.path.join(self.tmp.name, areas.SUBDIR, areas.STORE), "w") as f:
@@ -340,6 +432,11 @@ class AreaMessagesTest(test_server.ServerHarness):
         self.c.send({"type": "area_add", "id": 4, "s": 10, "w": 0, "n": 9, "e": 1})
         m, _ = self.c.until(lambda m: m["type"] == "areas" and (m.get("result") or {}).get("id") == 4, timeout=10)
         self.assertFalse(m["result"]["ok"])
+        # a saved route: the session's last planned GPS route (none planned here: an error)
+        self.c.send({"type": "area_plan", "id": 6, "route": "current", "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_plan_result" and m["id"] == 6, timeout=10)
+        self.assertFalse(m["ok"])
+        self.assertIn("no route", m["error"])
         self.c.send({"type": "area_cmd", "id": 5, "area": aid, "op": "delete"})
         m, _ = self.c.until(lambda m: m["type"] == "areas" and (m.get("result") or {}).get("id") == 5, timeout=10)
         self.assertEqual((m["result"]["ok"], m["areas"]), (True, []))

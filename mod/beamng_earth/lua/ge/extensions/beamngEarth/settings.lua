@@ -98,24 +98,41 @@ M.SCHEMA = {
   creditsCorner = { kind = 'enum', default = 'bottom-left', values = credits.CORNERS, label = 'Data credits corner' },
   creditsSize = { kind = 'enum', default = 'small', values = { 'small', 'normal' }, label = 'Data credits size' },
   -- the server's download cache (server cache.py): its size cap in GB, sent on every hello and change
-  cacheCapGb = { kind = 'enum', default = '20', values = { '5', '10', '20', '50', 'unlimited' },
-    label = 'Download cache size' },
+  -- (typed on the page since 2026-10-29, the user: "change the cache limit setting to be a text box"; 0: unlimited.
+  -- The old choices '5' .. '50' read as numbers, 'unlimited' as 0: MIGRATE)
+  cacheCapGb = { kind = 'number', default = 20, min = 0, max = 100000, label = 'Download cache size (GB, 0: unlimited)' },
+  -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily
+  framePacing = { kind = 'bool', default = true, label = 'Even frame pacing' },
+  -- the world server's share of the CPU (server cpupin.player_settings reads them from this file when it starts;
+  -- GitHub #529: an i5-3470 loaded the map in a few seconds instead of 10-20 with 2 of its 4 cores at normal priority)
+  serverCores = { kind = 'enum', default = 'auto', values = { 'auto', '1', '2', '3', '4', '6', '8' },
+    label = 'World server CPU cores' },
+  serverPriority = { kind = 'enum', default = 'low', values = { 'low', 'normal' }, label = 'World server priority' },
+  -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
+  -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
+  teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles
+  -- (20 km), or the whole route (up to 300 miles)
+  routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
+    label = 'Download along the GPS route' },
   devOutlineKm = { kind = 'number', default = 3, min = 0.5, max = 20, label = 'Dev outlines radius (km)' },
   devMapKm = { kind = 'number', default = 10, min = 1, max = 80, label = 'Dev mini-map radius (km)' },
   -- not on the page (not in ORDER): the welcome version last shown (EarthWelcome.vue)
   welcomeSeen = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Welcome page seen (version)' },
   -- not on the page: the newer version whose update notice the player dismissed (core.lua drawUpdateNotice)
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
+  devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
   'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'devOutlineKm', 'devMapKm' }
+  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
+  'devMapKm' }
 
 -- Stored but not on the settings page
-M.HIDDEN = { welcomeSeen = true, updateDismissed = true, qualityDetected = true }
+M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true }
 
 -- The quality presets: each sets these knobs at once ('high' = the defaults before presets existed, 2026-10-28). A
 -- Steam Deck on Handheld in a forest (Patapsco, 2026-10-28): low 37.0 fps, high 31.5, ultra 30.9; 'medium' (its first-run
@@ -169,7 +186,7 @@ end
 -- Old values that still load (and set) as their replacement, without a warning: 'auto' weather
 -- (real unless BWM_Weather was changing the weather) is Real now, which switches itself to Manual
 -- when anyone changes the weather.
-M.MIGRATE = { weatherMode = { auto = 'real' } }
+M.MIGRATE = { weatherMode = { auto = 'real' }, cacheCapGb = { unlimited = 0 } }
 
 local values = {}       -- the settings in use (always complete and valid)
 local cachePolls = 0    -- uiState calls (the cache usage is asked every CACHE_POLL-th)
@@ -195,6 +212,7 @@ function M.validate(key, v)
   local s = M.SCHEMA[key]
   if not s then return nil, 'unknown setting ' .. tostring(key) end
   if s.kind == 'number' then
+    if M.MIGRATE[key] and M.MIGRATE[key][v] ~= nil then v = M.MIGRATE[key][v] end
     local n = tonumber(v)
     if not n or n ~= n or n == math.huge or n == -math.huge then return nil, key .. ': not a number' end
     return math.max(s.min, math.min(s.max, n))
@@ -313,7 +331,7 @@ end
 function M.get(key) return values[key] end
 
 -- The download cache's cap for the server: GB, 0 = unlimited.
-function M.cacheCapGb() return tonumber(values.cacheCapGb) or 0 end
+function M.cacheCapGb() return math.max(0, tonumber(values.cacheCapGb) or 0) end
 
 -- bytes as the page shows them: "350 MB", "1.2 GB", "20 GB" (decimal units, as the cap)
 local function size(b, whole)
@@ -731,12 +749,14 @@ function M.mapTiles(list)
 end
 
 -- What the map polls every second: the player, the places, the tile endpoint, the credits.
--- The other players of a BeamMP session for the map's arrows ({ { name, lat, lon, h } }), nil outside one.
+-- The other players of a BeamMP session for the map's arrows and its Players list ({ { pid, name, lat, lon, h } },
+-- mpsession.others()), nil outside one.
 local function otherPlayers()
   local okB, inMP = pcall(function() return require('beamngEarth/beammp').inSession() end)
   if not okB or not inMP then return nil end
   local ok, list = pcall(function() return require('beamngEarth/mpsession').others() end)
-  return ok and list or nil
+  -- (none: nil, an empty Lua table reaches the map as {} and not [])
+  return ok and type(list) == 'table' and next(list) ~= nil and list or nil
 end
 
 -- The map's weather + local-time badge (the player's spot): sky.lua's real local clock for the lat/lon, and the
@@ -773,6 +793,7 @@ function M.uiMapState()
     attribution = core and core.attribution and core.attribution() or '',
     creditsByArea = core and core.creditsByArea and core.creditsByArea() or nil,
     gps = require('beamngEarth/gps').status(),
+    metric = require('beamngEarth/gps').metric(),     -- (the game's length unit with no GPS route: the Players list)
     weather = localWeatherBadge(),
   }
 end
@@ -847,15 +868,24 @@ local function areaSend(fn, ...)
   if not core[fn](areaId, ...) then return { error = 'Companion server not connected' } end
   return { id = areaId }
 end
-function M.uiAreaPlan(s, w, n, e)
-  return areaSend('requestAreaPlan', tonumber(s), tonumber(w), tonumber(n), tonumber(e))
+-- mode: 'data' (the downloads) or 'world' (them, then the roads, buildings etc. built ahead: server areas.py)
+local function areaMode(mode) return mode == 'world' and 'world' or 'data' end
+function M.uiAreaPlan(s, w, n, e, mode)
+  return areaSend('requestAreaPlan', tonumber(s), tonumber(w), tonumber(n), tonumber(e), areaMode(mode))
 end
 function M.uiAreaPlanResult(id)
   local core = ext('beamngEarth_core')
   return core and core.takeAreaPlan and core.takeAreaPlan(tonumber(id)) or nil
 end
-function M.uiAreaAdd(s, w, n, e, name)
-  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''))
+function M.uiAreaAdd(s, w, n, e, name, mode)
+  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode))
+end
+-- A saved route: the GPS's planned route with half m each side (the estimate, then the download, as an area's).
+function M.uiRoutePlan(half, mode)
+  return areaSend('requestRoutePlan', tonumber(half), areaMode(mode))
+end
+function M.uiRouteAdd(half, name, mode)
+  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode))
 end
 function M.uiAreaCmd(area, op)
   return areaSend('areaCmd', tostring(area or ''), tostring(op or ''))

@@ -45,7 +45,8 @@ import mapcells
 
 log = logging.getLogger("earthd.roadz")
 
-VERSION = 2                 # (2: the lidar cells carry the ground stretches found elevated: <y>.npz.gaps.json)
+VERSION = 3                 # (2: the lidar cells carry the ground stretches found elevated: <y>.npz.gaps.json;
+                            # 3: and the approaches' measured surfaces, level 0)
 NATIVE = 102                # earthfast.VERSION of the kernels below
 ON = os.environ.get("BNE_ROADZ", "on") != "off"
 LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
@@ -108,6 +109,16 @@ LIDAR_GAP_MISS = 1
 LIDAR_GAP_MIN_M = 8.0
 LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
 GAP_NATIVE = 107            # earthfast.VERSION of lidar_gap_stretch
+# The approaches (the user, 2026-10-31: "use the lidar data to improve how ramps connect"): every drawn road going on
+# from a measured deck end (the gap candidates) is measured too, from that end while its surface starts within
+# APPROACH_END_TOL_M of the deck's measured end, up to where it is back on our DTM (APPROACH_REJOIN_M, two stations
+# running); kept (a ground line, level 0) when it stands APPROACH_MIN_DEV_M or more off the DTM somewhere. The grader
+# takes it for those roads' heights (Grader._obs: on lidar terrain too): an approach's embankment, narrower than a
+# road, our DTM smooths away (abutments 2-4 m under their decks' measured ends at Springfield, Dallas, Houston,
+# approachlidar.py), and the inferred ramp (a cosine at APPROACH_GRADE) ran 100 m and more where the real one falls in 30.
+APPROACH_END_TOL_M = 1.0
+APPROACH_REJOIN_M = 0.3
+APPROACH_MIN_DEV_M = 0.5
 SESSION_ENV = "BNGE_ROADZ_SESSION"      # (not BNE_: those are part of the revisit cache's code key)
 SESSION_KEEP_S = 86400.0
 
@@ -743,11 +754,13 @@ class RoadZ:
         cls = np.ascontiguousarray(cls, np.uint8)
         rows, ends = self._decks(frame, parts[:nb], local[:nb], pts, cls)
         gaps, extra = [], 0
-        # the stretches from an elevated deck end only, their nodes the decks' read had not
+        # the stretches from an elevated deck end, their nodes the decks' read had not; the approaches from any
+        # measured deck end (read with them)
         todo = [n_ for n_ in range(nb, len(parts)) if self._elevated_end(frame, ends, local[n_][0][0])]
-        if todo:
+        appr = [n_ for n_ in range(nb, len(parts)) if np.isfinite(self._end_z(ends, local[n_][0][0]))]
+        if appr:
             fast.require(GAP_NATIVE, "roadz lidar gaps")
-            cb = self._boxes(frame, [parts[n_] for n_ in todo], [local[n_] for n_ in todo])
+            cb = self._boxes(frame, [parts[n_] for n_ in appr], [local[n_] for n_ in appr])
             had = set(nodes)
             more = [k for k in ept.nodes(cb, depth) if k not in had]
             if len(more) + len(nodes) <= LIDAR_NODES_MAX:
@@ -761,6 +774,7 @@ class RoadZ:
                 r2, gaps = self._stretches(frame, [parts[n_] for n_ in todo], [local[n_] for n_ in todo],
                                            [fids[n_ - nb] for n_ in todo], pts, cls, ends)
                 rows += r2
+                rows += self._approaches(frame, [parts[n_] for n_ in appr], [local[n_] for n_ in appr], pts, cls, ends)
         log.debug("roadz lidar %s %s: depth %d, %d + %d nodes, %d points, %d decks, %d of %d stretches elevated, datum "
                   "%.3f x - %.2f", name, key, depth, len(nodes), extra, len(pts), nb, len(gaps), len(parts) - nb, scale,
                   off)
@@ -836,6 +850,33 @@ class RoadZ:
             gaps.append((str(fid), (float(ring[0, 0]), float(ring[0, 1])), (float(elo[0]), float(ela[0]))))
         return rows, gaps
 
+    def _approaches(self, frame, parts, local, pts, cls, ends):
+        """Lines.build rows (level 0) of the approaches parts (drawn roads from a deck end, as the gap candidates): each
+        measured from its deck's measured end to where it is back on our DTM (APPROACH_*); none where it never stands
+        APPROACH_MIN_DEV_M off it (the DTM is right) or starts off the deck's end (another surface: a deck over it)."""
+        rows = []
+        for (ring, half), (xy, _h) in zip(parts, local):
+            z_end = self._end_z(ends, xy[0])
+            got = self._profile(frame, xy, half, pts, cls) if np.isfinite(z_end) else None
+            if got is None:
+                continue
+            s, z, sx, sy, sla, slo, _arc = got
+            ok = np.flatnonzero(np.isfinite(z))
+            if not len(ok) or s[ok[0]] > 2.0 * LIDAR_STEP_M or abs(float(z[ok[0]]) - z_end) > APPROACH_END_TOL_M:
+                continue
+            dev = np.abs(z - np.asarray(self._dem_raw(sla, slo), np.float64))
+            on = np.isfinite(dev) & (dev < APPROACH_REJOIN_M)
+            stop = len(s)
+            for k in range(int(ok[0]) + 1, len(s) - 1):
+                if on[k] and on[k + 1]:
+                    stop = k + 2
+                    break
+            if not (np.isfinite(dev[:stop]) & (dev[:stop] >= APPROACH_MIN_DEV_M)).any():
+                continue
+            keep = np.arange(len(s)) < stop
+            rows.append((np.stack([slo, sla], 1)[keep], z[keep], 0, "", ""))
+        return rows
+
     def _measure(self, frame, parts, local, nb, fids, pts, cls):
         """(rows, gaps): _decks of parts[:nb], then _stretches of the rest (of the features fids) that go on from an
         elevated measured deck end, all from the points pts (n, 3) in frame (heights on our DEM's datum), cls (n,)."""
@@ -843,7 +884,8 @@ class RoadZ:
         todo = [n_ for n_ in range(nb, len(parts)) if self._elevated_end(frame, ends, local[n_][0][0])]
         r2, gaps = self._stretches(frame, [parts[n_] for n_ in todo], [local[n_] for n_ in todo],
                                    [fids[n_ - nb] for n_ in todo], pts, cls, ends)
-        return rows + r2, gaps
+        r3 = self._approaches(frame, parts[nb:], local[nb:], pts, cls, ends)
+        return rows + r2 + r3, gaps
 
     # ---- the elevated ground stretches, one answer per cell and session ----
     def _session_dir(self):
@@ -915,7 +957,7 @@ class RoadZ:
             if got is not ...:
                 if got is None:             # (each build that takes the rule from it is not kept either)
                     import revisit
-                    revisit.fault()
+                    revisit.fault(lidar=True)   # (the session's answer: roads._FACTS_MEM keeps the facts made on it)
                 out[key] = got
                 continue
             todo.append(key)
@@ -945,7 +987,7 @@ class RoadZ:
                 got = self._decide(key, done.get(str(key)))     # (not built in time: None, the rule)
                 if got is None:
                     import revisit
-                    revisit.fault()
+                    revisit.fault(lidar=True)
                 with self._lock:
                     self._off[("gapans", str(key))] = got
                 out[key] = got
@@ -1001,7 +1043,7 @@ class RoadZ:
                 self._enu.popitem(last=False)
         return got
 
-    def observed(self, frame, xy, half, level, name="", info=None):
+    def observed(self, frame, xy, half, level, name="", info=None, lidar_ground=False):
         """Heights (m, geodetic like dem.sample: on our DEM's datum) at the points xy (k, 2) of a map road part in the
         anchor frame, its carriageway half width `half`, level > 0 a bridge, 0 ground, < 0 a tunnel, `name` its map
         name: NaN where no source knows; None when none covers MIN_COVER of it (or it is off). info: a dict the
@@ -1014,7 +1056,12 @@ class RoadZ:
         la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
         mid = len(xy) // 2
-        srcs = [s for s in sources_at(float(la[mid]), float(lo[mid]), self.lidar) if s != "lidar" or level > 0]
+        # (the lidar's ground lines are the approaches alone: asked for those (lidar_ground), any share of the part;
+        # lidar_ground alone asks no vector source either)
+        srcs = [s for s in sources_at(float(la[mid]), float(lo[mid]), self.lidar)
+                if (s == "lidar") == bool(lidar_ground) or (s == "lidar" and level > 0)]
+        if lidar_ground:
+            srcs = [s for s in srcs if s == "lidar"]
         if not srcs:
             return None
         pad = (half + MATCH_REACH_M) / 111320.0
@@ -1061,7 +1108,7 @@ class RoadZ:
             cover = float(np.isfinite(zc).mean())
             if info is not None:
                 info.update(source=src, cover=cover, offset=off, matched=float(np.isfinite(z).mean()))
-            if cover < MIN_COVER:
+            if cover < (0.0 if (lidar_ground and level == 0) else MIN_COVER) or not np.isfinite(zc).any():
                 return None
             return zc
         return None
