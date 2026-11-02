@@ -171,6 +171,10 @@ function M.blockOrigin(cx, cy) return lattice.blockOrigin(cx, cy) end
 
 -- True when the target for this pose is not the pending block (a re-request would ask for another one).
 local function retargets(px, py, vx, vy, pending)
+  -- (a block taken from the server's ready set instead of the target, M.preferReady: never a "better" target, or the
+  -- re-check dropped it, the next frame took it again, and so on every 0.1-0.3 s with the block never committed:
+  -- nyc_speed.py down Midtown at 200 mph, 2026-11-02)
+  if pending.preferred then return false end
   local tx, ty = M.target(px, py, vx, vy)
   return tx ~= pending.cx or ty ~= pending.cy
 end
@@ -200,10 +204,16 @@ end
 -- user's Baltimore drive 2026-11-01): a ready, better block is taken COMMIT_MARGIN before the warning would show,
 -- never nearer than COMMIT_DIST.
 M.COMMIT_MARGIN = 10
+-- The edge guard's warning distance with a healthy server (edgeguard.warnDistance's cap): the car this far from the
+-- edge is WARN_LATE_M past the commit distance, so the next block is late; nearer it is on time, however fast.
+M.WARN_LATE_M = 30
+function M.warnCap()
+  return M.HALF - M.SQUARE_SIZE - M.COMMIT_DIST - M.WARN_LATE_M
+end
 function M.hardCommitDist(vx, vy)
   local sp = math.sqrt((vx or 0) ^ 2 + (vy or 0) ^ 2)
   local edge = M.HALF - M.SQUARE_SIZE                 -- the collidable edge's distance from the centre (the nearer side)
-  return max(M.COMMIT_DIST, min(M.HARD_COMMIT_DIST, edge - edgeguard.warnDistance(sp) - M.COMMIT_MARGIN))
+  return max(M.COMMIT_DIST, min(M.HARD_COMMIT_DIST, edge - edgeguard.warnDistance(sp, M.warnCap()) - M.COMMIT_MARGIN))
 end
 
 function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
@@ -262,7 +272,7 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
   local tx, ty = M.target(px, py, vx, vy)
   if tx == cx and ty == cy then return nil end -- heading back towards the centre: nothing to gain
   local r = M.preferReady(px, py, vx, vy, tx, ty, cx, cy, reach)
-  if r then return 'prepare', r[1], r[2] end
+  if r then return 'prepare', r[1], r[2], true end      -- (preferred: see retargets)
   return 'prepare', tx, ty
 end
 

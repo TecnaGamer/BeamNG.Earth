@@ -79,6 +79,20 @@ end
 -- the pause at the edge (the user, 2026-10-18: the game's own pause instead of the soft wall)
 
 T.check(edgeguard.warnDistance(0) == edgeguard.WARN_M and edgeguard.warnDistance(60) > 300, 'warn distance grows with speed')
+-- a healthy server's cap (follow.warnCap): no farther than an on-time block leaves the car (150 mph down Midtown warned
+-- on every block, 2026-11-02); below the cap, and at low speed, as before
+T.check(edgeguard.warnDistance(67, 289) == 289 and edgeguard.warnDistance(67) > 400, '150 mph: capped when healthy')
+T.check(edgeguard.warnDistance(20, 289) == edgeguard.warnDistance(20), 'slow: the cap changes nothing')
+T.check(edgeguard.warnDistance(0, 50) == edgeguard.WARN_M, 'never below WARN_M')
+do
+  local g = edgeguard.new()
+  local inp = { clock = 0, x = BOX[3] - 350, y = 0, z = GROUND_Z, vx = 67, vy = 0, box = BOX, ground = 0.5 }
+  T.check(edgeguard.step(g, inp) == 'warn', '150 mph, 350 m from the edge, no cap: warned')
+  inp.warnCap = 289
+  T.check(edgeguard.step(g, inp) == 'clear', '... with the healthy cap: clear (the next block is on time there)')
+  inp.x = BOX[3] - 250
+  T.check(edgeguard.step(g, inp) == 'warn', '... 250 m from the edge: warned (the block is late)')
+end
 
 local veh = newVeh(0, 0, GROUND_Z + 0.5, 30, 0)
 local r = drive(veh, 60 * 40, 1 / 60)

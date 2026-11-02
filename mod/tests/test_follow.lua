@@ -317,10 +317,31 @@ local v116 = 52
 local want = (f.HALF - f.SQUARE_SIZE) - eg.warnDistance(v116) - f.COMMIT_MARGIN
 T.check(math.abs(f.hardCommitDist(v116, 0) - want) < 1e-9 and want < f.HARD_COMMIT_DIST and want > f.COMMIT_DIST,
   '116 mph: before the warning distance (' .. string.format('%.0f', want) .. ' m)')
-T.check(f.hardCommitDist(90, 0) == f.COMMIT_DIST, '200 mph: never nearer than the commit distance')
+local want200 = (f.HALF - f.SQUARE_SIZE) - f.warnCap() - f.COMMIT_MARGIN
+T.check(math.abs(f.hardCommitDist(90, 0) - want200) < 1e-9 and want200 >= f.COMMIT_DIST,
+  '200 mph: before the healthy warning cap, never nearer than the commit distance (' .. string.format('%.0f', want200) .. ' m)')
+T.check(f.warnCap() == f.HALF - f.SQUARE_SIZE - f.COMMIT_DIST - f.WARN_LATE_M and f.warnCap() > eg.WARN_M,
+  'the warning cap: WARN_LATE_M past the commit distance')
 local closed = function() return false end
 T.check(f.decide(want + 1, 0, v116, 0, 0, 0, { cx = 384, cy = 0, ready = true }, 0, 0, closed, 0.3) == 'commit',
   'a gate-held ready block: committed past the speed\'s hard commit distance')
 T.check(f.decide(want - 1, 0, v116, 0, 0, 0, { cx = 384, cy = 0, ready = true }, 0, 0, closed, 0.3) == nil,
   '... and still held before it')
+-- a block taken from the server's ready set (preferReady) is never re-checked away for not being the target: the
+-- re-check dropped it and the next frame took it again, every 0.1-0.3 s, never committed (Midtown, 200 mph, 2026-11-02)
+lattice.configure(512, 2.0)
+f.configure()
+do
+  local vx37, vy37 = 134 * math.cos(math.rad(37)), 134 * math.sin(math.rad(37))
+  local pend = { cx = 4480, cy = 3456, ready = true }
+  T.check(f.decide(4671.3, 3520.1, vx37, vy37, 4480, 3328, pend, 0, 0, nil, 0.3) == 'discard', 'a target: re-checked')
+  pend.preferred = true
+  T.check(f.decide(4671.3, 3520.1, vx37, vy37, 4480, 3328, pend, 0, 0, nil, 0.3) == 'commit',
+    'the same block taken from the ready set: committed')
+  f.setReady({ { 384, 128 } })
+  local a, tx, ty, preferred = f.decide(200, 0, 40, 0, 0, 0, nil, 0, 0)
+  T.check(a == 'prepare' and tx == 384 and ty == 128 and preferred == true, 'prepare marks a ready block as preferred: '
+    .. tostring(a) .. ' ' .. tostring(tx) .. ' ' .. tostring(preferred))
+  f.setReady({})
+end
 T.done('test_follow')
