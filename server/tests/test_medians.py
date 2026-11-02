@@ -167,6 +167,19 @@ class MedianTest(unittest.TestCase):
     def test_style_regions(self):
         self.assertIs(medians.style("us"), medians.STYLES["na"])
         self.assertIs(medians.style(None), medians.STYLES["default"])
+
+    def test_sweden_has_cable_along_a_2_plus_1_road_and_steel_on_a_motorway(self):
+        rural_trunk, rural_motorway = 4, 1
+        for row in medians.style("SE"):
+            self.assertEqual(row[rural_trunk], medians.CABLE)
+            self.assertEqual(row[rural_motorway], medians.STEEL)
+
+    def test_a_fast_rural_primary_is_a_candidate_in_sweden_alone(self):
+        sp = roads.Spec(4.5, "paved", False, "primary", True, 2.5, 1, 100.0)
+        self.assertEqual(medians.flags_of(sp) & 1, 0)
+        self.assertEqual(medians.flags_of(sp, False, "SE") & 1, 1)
+        self.assertEqual(medians.flags_of(sp._replace(kmh=50.0), False, "SE") & 1, 0)
+        self.assertEqual(medians.flags_of(sp._replace(urban=True), False, "SE") & 1, 0)
         for rows in medians.STYLES.values():
             widths = [r[0] for r in rows]
             self.assertEqual(widths, sorted(widths))

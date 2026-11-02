@@ -58,6 +58,10 @@ STYLES = {
            (20.0, NONE, NONE, JERSEY, NONE, NONE)),
     "north": ((4.0, STEEL, JERSEY, JERSEY, STEEL, JERSEY),
               (12.0, STEEL, STEEL, STEEL, STEEL, NONE)),
+    # Sweden: "north", but the cable of its 2+1 roads where it isn't a motorway. OpenStreetMap draws most of those as two
+    # one-way carriageways (Overpass, 2026-11-02: 5200 km of them, 128 km of two-way ways: motesfri.py)
+    "se": ((4.0, STEEL, JERSEY, JERSEY, CABLE, JERSEY),
+           (12.0, STEEL, STEEL, STEEL, CABLE, NONE)),
     "fr": ((4.0, JERSEY, JERSEY, JERSEY, JERSEY, JERSEY),
            (12.0, RAILS, JERSEY, RAILS, RAILS, NONE)),
     "es": ((3.0, JERSEY, JERSEY, JERSEY, JERSEY, JERSEY),
@@ -72,7 +76,8 @@ STYLES = {
 }
 REGIONS = {c: r for r, cs in (
     ("na", "US CA PR"),
-    ("north", "DE NL BE LU AT CH LI DK SE NO FI IS PL CZ SK HU SI EE LV LT GB IE IM JE GG"),
+    ("north", "DE NL BE LU AT CH LI DK NO FI IS PL CZ SK HU SI EE LV LT GB IE IM JE GG"),
+    ("se", "SE"),
     ("fr", "FR MC"),
     ("es", "ES PT AD GI"),
     ("it", "IT SM VA MT GR CY"),
@@ -104,12 +109,19 @@ def _mapped_segments(rows):
     return np.asarray(out, np.float64).reshape(-1, 4)
 
 
-def flags_of(spec, deck=False):
+SE_KMH = 70.0            # Sweden: a rural primary, secondary or tertiary at this or more is a 2+1 road's carriageway
+                         # too (Overpass, 2026-11-02: 1590 km of primary and 480 km of the other two, by 1 / 2 lanes)
+
+
+def flags_of(spec, deck=False, country=None):
     """medians.rs's flags of a carriageway: bit 0 a candidate (a motorway / trunk one-way carriageway that is no ramp
-    and no street with sidewalks), 1 a ramp, 2 travel against its geometry, 3 urban, 4 WIDE_LANES or more, 5 a
-    motorway, 6 a bridge deck."""
+    and no street with sidewalks; in Sweden a fast rural primary, secondary or tertiary too), 1 a ramp, 2 travel against its
+    geometry, 3 urban, 4 WIDE_LANES or more, 5 a motorway, 6 a bridge deck."""
     import roads as roadsmod
-    cand = (spec.cls in ("motorway", "trunk") and bool(spec.oneway) and not spec.link
+    classes = ("motorway", "trunk")
+    if (country or "").upper() == "SE" and not spec.urban and (spec.kmh or 0.0) >= SE_KMH:
+        classes += ("primary", "secondary", "tertiary")
+    cand = (spec.cls in classes and bool(spec.oneway) and not spec.link
             and spec.kind in roadsmod.BUILT and not roadsmod.has_sidewalks(spec))
     wide = spec.lanes >= WIDE_LANES if spec.lanes else float(spec.width) >= WIDE_M
     return ((1 if cand else 0) | (2 if spec.link else 0) | (4 if (spec.dir or 1) < 0 else 0) |
@@ -128,7 +140,7 @@ def modules(roads_near, box, left_hand=False, country=None, mapped_rows=(), deck
     for fid, spec, xy, z in lines:
         if len(xy) < 2 or spec is None:
             continue
-        f = flags_of(spec, z is not None)
+        f = flags_of(spec, z is not None, country)
         pts.append(xy)
         zs.append(np.zeros(len(xy)) if z is None else z.reshape(-1))
         off.append(off[-1] + len(xy))
