@@ -38,7 +38,22 @@ LOG = os.path.expanduser("~/.cache/beamng-earth/logs/server.log")
 LOG_SSH = os.environ.get("BNGE_LOG_SSH")
 
 
+# a Windows machine (BNGE_LOG_WIN=1 with BNGE_LOG_SSH): its log at %LOCALAPPDATA%\beamng-earth\logs, read with PowerShell
+LOG_WIN = os.environ.get("BNGE_LOG_WIN") == "1"
+WIN_LOG = "$env:LOCALAPPDATA\\beamng-earth\\logs\\server.log"
+
+
+def _win(script, timeout=60):
+    import base64
+    enc = base64.b64encode(script.encode("utf-16-le")).decode()
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH, f"powershell -NoProfile -EncodedCommand {enc}"],
+                          capture_output=True, timeout=timeout)
+
+
 def log_size():
+    if LOG_SSH and LOG_WIN:
+        r = _win(f"(Get-Item {WIN_LOG}).Length", 30)
+        return int(r.stdout.decode().strip() or 0)
     if LOG_SSH:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH, "stat -c %s ~/.cache/beamng-earth/logs/server.log"],
                            capture_output=True, text=True, timeout=30)
@@ -197,6 +212,11 @@ class Watch(threading.Thread):
 
 
 def log_lines(since_pos):
+    if LOG_SSH and LOG_WIN:     # (shared read: the server has it open)
+        r = _win(f"$f = [IO.File]::Open(\"{WIN_LOG}\".Replace('$env:LOCALAPPDATA', $env:LOCALAPPDATA), 'Open', 'Read', "
+                 f"'ReadWrite'); $null = $f.Seek({int(since_pos)}, 0); $r = New-Object IO.StreamReader($f); "
+                 "[Console]::Out.Write($r.ReadToEnd()); $r.Close()")
+        return r.stdout.decode("utf-8", "replace").splitlines()
     if LOG_SSH:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH,
                             f"tail -c +{since_pos + 1} ~/.cache/beamng-earth/logs/server.log"],
