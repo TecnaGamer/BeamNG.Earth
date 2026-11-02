@@ -1233,6 +1233,14 @@ def _tag_rule_rows(t, name):
 _KIND_NAMES = {1: "bridge", 2: "tunnel"}
 
 
+def _tag_ranges_list(feats):
+    """Every feature's tag_level_ranges (the lists themselves: callers must not change them), kept on feats."""
+    got = feats.__dict__.get("_tag_ranges")
+    if got is None:
+        got = feats.__dict__["_tag_ranges"] = _tag_ranges_all(feats)
+    return got
+
+
 def _tag_ranges_all(feats):
     import fast
     fast.require(142, "tag_level_ranges")
@@ -2200,10 +2208,15 @@ def unbuilt(feats, i):
     Overture's is_under_construction flag over most of it)? Not drawn, as on the stock map views (GitHub #184). (The
     Gotthard road tunnel's second bore, highway=construction until ~2029, was built beside the real one, its portal in
     the A2's lanes: Layercake leaves construction ways out, and the join took the open tunnel's tags, 2026-10-28.)"""
+    return bool(unbuilt_mask(feats)[i])
+
+
+def unbuilt_mask(feats):
+    """unbuilt of every feature of a layer (n,) bool, kept on it."""
     got = feats.__dict__.get("_unbuilt")
     if got is None:
         got = feats.__dict__["_unbuilt"] = _unbuilt_all(feats)
-    return bool(got[i])
+    return got
 
 
 def _unbuilt_all(feats):

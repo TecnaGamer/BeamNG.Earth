@@ -193,14 +193,34 @@ def _layer_rows(f):
         kinds, halves = np.full(n, -1, np.int64), np.zeros(n)
         poff, pk, pa, pb = [0], [], [], []
         if "subtype" in f.attrs:
+            # (_kind_half for the whole layer: a road's style by its class, unbuilt as an array; the few railways one at
+            # a time. _row per feature was 1.5 s of two cells' planning, 2026-11-02)
+            def strs(col):
+                return [str(v) for v in (col.tolist() if hasattr(col, "tolist") else col)]
+            subs = strs(f.attrs["subtype"])
+            clss = strs(f.attrs["class"]) if "class" in f.attrs else ["unknown"] * n
+            unb = roads.unbuilt_mask(f)
             for i in range(n):
-                kind, half, pieces = _row(f, i)
-                if kind is not None:
-                    kinds[i], halves[i] = kind, half
-                    for k, a, b, deck in pieces:
-                        pk.append(-1 if deck else k)
-                        pa.append(a)
-                        pb.append(b)
+                if subs[i] == "road":
+                    st = roads.STYLE.get(clss[i])
+                    if st is None or unb[i]:
+                        continue
+                    kinds[i], halves[i] = 0, st[0] / 2.0
+                elif subs[i] == "rail" and railways.drawn(f, i) is not None:
+                    kinds[i], halves[i] = 1, RAIL_HALF_M
+            tags = roads._tag_ranges_list(f)
+            for i in range(n):
+                k = int(kinds[i])
+                if k >= 0:
+                    if not tags[i]:             # (no level range: the whole line, as _pieces makes it)
+                        pk.append(k)
+                        pa.append(0.0)
+                        pb.append(1.0)
+                    else:
+                        for kk, a, b, deck in _pieces(f, i, k):
+                            pk.append(-1 if deck else kk)
+                            pa.append(a)
+                            pb.append(b)
                 poff.append(len(pk))
         else:
             poff += [0] * n
