@@ -38,6 +38,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   rivers and streams, waves along coasts and large lakes, the stock tunnel, under-bridge and parking garage echo, refinery
   machinery and power plants, and rain you can hear.
 - Pump jacks at oil wells (OpenStreetMap), animated, with their sounds.
+- Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
 - High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations.
 - The satellite map on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),

@@ -101,6 +101,8 @@ MOD_TO_SERVER = {
               "roadGeo": F(int, OPT),
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
+              # mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads
+              "turbineGeo": F(int, OPT),
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
               "globalFar": F(int, OPT),
               # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
@@ -218,6 +220,7 @@ SERVER_TO_MOD = {
               "geoTiles": F(int, OPT),          # geotiles: the zoom of the tiles it sends (hello.geoTiles, --geo-tiles on)
               "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
               "farGeo": F(int, OPT),            # far buildings / skyline / far bridges as geotiles (hello.farGeo)
+              "turbineGeo": F(int, OPT),        # mapped turbine geotiles (zoom 15; native stock shapes)
               "globalFar": F(int, OPT),         # far levels >= 3 as global tiles (hello.globalFar, --global-far)
               "deshadow": F(str, OPT),          # --deshadow lambert|full only (the settings page shows it)
               "colormatch": F(str, OPT),        # --colormatch s2 only (likewise)
@@ -297,6 +300,9 @@ SERVER_TO_MOD = {
     "veg_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
                  "frame": F(list, OPT), "pivot": F(NUM, OPT)},
     "veg_drop": {"anchorId": F(int), "key": F(str)},
+    "turbines_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
+                      "data": F(dict, OPT), "frame": F(list), "pivot": F(NUM)},
+    "turbines_drop": {"anchorId": F(int), "key": F(str)},
     # far buildings (buildings.far_tile, --buildings on): a JSON file naming a render-only mesh
     # (a geotile, key "g17_x_y", hello.farGeo: frame [lat, lon] of its centre and pivot, m in that frame: the mod
     # places it and keeps it across rebases; the skyline's and far bridges' keys "g15_x_y")
@@ -338,6 +344,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "block_base",                                 # a lazy imagery source (test_detail)
                        "sea",                                        # --sea on: needs map data (test_seacarve)
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
+                       "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data

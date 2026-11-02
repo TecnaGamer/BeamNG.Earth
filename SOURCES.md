@@ -83,6 +83,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
+| OpenStreetMap wind turbines, distributed by GMWID / Geomermaids | Bundled index; no gameplay requests | Mapped individual turbines worldwide, with installed stock animated shapes. OSM snapshot 2026-10-31; source, license and refresh details in `server/wind_turbines.provenance.json`. | Gameplay uses the bundled copy offline. If the index is missing or damaged, only the verified Happy Jack fallback remains and the server logs a warning. | no runtime host |
 | BeamNG.Earth's weekly data (GitHub Pages) | `tecnagamer.github.io` | Built every week from the whole OpenStreetMap planet by this project: railway details (track gauge, electrification, disused and abandoned lines, level crossings and their barriers) and, in the US, the Federal Railroad Administration's list of the gates, lights and crossbucks at each level crossing. | Railways keep their basic class; level crossings get equipment by road size. | optional |
 | OurAirports | `davidmegginson.github.io` | Airports and their runways (position, length, width, surface), for paved runways and levelled airfields. Fetched about once a week. | The copy on disk is used. | named |
 

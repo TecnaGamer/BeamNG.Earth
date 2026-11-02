@@ -2,6 +2,12 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Wind turbines worldwide at individually mapped OpenStreetMap positions, using the installed ETK turbine with
+  animated blades. Turbines stream farther than roadside objects, share one instance across near/far tiles, and
+  use mapped dimensions when available. Farm polygons alone do not generate turbines.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

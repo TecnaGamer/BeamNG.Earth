@@ -826,9 +826,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
         mark("powerlines")
+    import windturbines
+    turbine_rows = windturbines.tile_turbines(frame, tx, ty, elev)
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
+    P.turbines = turbine_rows
     return P
 
 
@@ -850,7 +853,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              wells=P.wells) + (P.fuel_pads,)
+                              wells=P.wells, turbines=P.turbines) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -930,7 +933,7 @@ def _content_hash(text, vfs_dir):
 
 def _write_geo_content(out_dir, vfs_dir, tile, P):
     """A geotile's content written to the session folder: its shapes (rg_<key>_<what>.cdae, each with its pivot and
-    relief), its rows (props, guard rails, parking, stations, wells, sound) and colliders in its own frame, and the
+    relief), its rows (props, guard rails, parking, stations, wells, turbines, sound) and colliders in its own frame, and the
     skin's inputs (rg_<key>.skin.pkl: the chunks, their deck context and the sidewalk pieces). Returns (vfs path of
     the JSON, chunk count, its info for the tracker: {"h", "parts": {what: {pivot, relief, col}}})."""
     import json
@@ -948,6 +951,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         _, n = roadsmod.write_tile(tmpdir, vfs_dir, 0, tile, None, P.chunks, None, None, P.dmesh, P.bld, P.props,
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound, wells=P.wells,
+                                   turbines=P.turbines,
                                    decals=False)
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
