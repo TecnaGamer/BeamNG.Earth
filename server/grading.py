@@ -2522,6 +2522,27 @@ class _Planner:
         # a branch point on one is a pin. Only two parts of one level crossing within a level are ordered by a
         # solve of that level without them.
         stage = [max(_cw_level(p_) for p_ in ch[0]) for ch in chains]
+        # (one road through a branch point: the chains either side continuing the same way (its parts there of one
+        # feature) are built at one level, together: Graham Farmer's ground beyond its deck, solved first and kept,
+        # made the deck dive to it)
+        par = list(range(len(chains)))
+
+        def root(n):
+            while par[n] != n:
+                par[n] = par[par[n]]
+                n = par[n]
+            return n
+        for a_, i_, b_, j_, kind, _v in couplings:
+            if kind != "eq":
+                continue
+            pa_ = chains[a_][0][int(samples[a_][2][i_])]
+            pb_ = chains[b_][0][int(samples[b_][2][j_])]
+            if pa_[4] is not None and pa_[4] == pb_[4]:
+                par[root(a_)] = root(b_)
+        top = {}
+        for n in range(len(chains)):
+            top[root(n)] = max(top.get(root(n), 0.0), stage[n])
+        stage = [top[root(n)] for n in range(len(chains))]
         seps = []           # (upper chain, its sample, lower chain, its sample, clearance) per overlap sample; or a tie
         ties = []           # (na, ia, nb, ib, q, sin, ua): one level's two parts, the order its solve's
         for na, ia, nb, ib, q, sin, ua in cross:
