@@ -7497,10 +7497,12 @@ def _deck_frame(spec, walk):
 
 
 def _deck_walk_graph(feats):
-    """Reuse the decoded cell's endpoint adjacency (PR #3 on the test fork).
-    Only source geometry is cached; widths, sidewalks and driving side remain per call.
-    The existing endpoint construction/order is unchanged. Publish a complete graph,
-    whose lifetime follows the Features object, without retaining cells globally."""
+    """Endpoint adjacency shared by bridge sidewalk lookups on an immutable decoded cell.
+
+    Only geometry is cached: widths, land cover and driving side still come from
+    each call's specs. The graph dies with the cell, like its other source caches.
+    Publish after construction so concurrent readers never see a partial graph.
+    """
     got = feats.__dict__.get("_deck_walk_graph")
     if got is not None:
         return got
