@@ -437,7 +437,7 @@ function engineLua(script, cb) {
 function poll() {
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapState and beamngEarth_settings.uiMapState() or nil", s => {
     if (!s) { state.value = { places: [], recent: [], missing: true }; return }
-    state.value = { places: [], recent: [], ...s }
+    state.value = { ...s, places: toArray(s.places), recent: toArray(s.recent) }
     if (!s.others && playersPanel.value) closePlayers()   // (out of the session: not open again by itself in the next)
     if (followingPlayer()) {
       const o = followedPlayer.value
@@ -1428,7 +1428,7 @@ function recentDetail(r) {
 function placesCall(script, okText, onOk) {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiPlaces and beamngEarth_settings.${script} or nil`, res => {
     if (!res) { placesMsg.value = "BeamNG.Earth is not loaded"; placesMsgError.value = true; return }
-    state.value = { ...state.value, places: res.places, recent: res.recent, cannotGo: res.cannotGo }
+    state.value = { ...state.value, places: toArray(res.places), recent: toArray(res.recent), cannotGo: res.cannotGo }
     if (res.ok === false && res.error) { placesMsg.value = res.error; placesMsgError.value = true }
     else if (okText !== undefined) { placesMsg.value = okText; placesMsgError.value = false }
     if (res.ok && onOk) onOk()
