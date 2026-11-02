@@ -57,6 +57,9 @@ def start_run(cache_dir):
     os.environ[RUN_ENV] = f"{os.getpid()}_{int(time.time())}"
 
 
+# The plans' output format for baked packs (bakepack.py: read without the code hash). Bump it whenever a change makes
+# other plans; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
+PLANS_FORMAT = 1
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
 
 
@@ -94,6 +97,8 @@ class PlanCache:
             src = self._path(key)
             if not os.path.exists(src):
                 src = self._kept(key)
+                if src is None:
+                    src = self._baked(key)
                 if src is None:
                     return None
             with np.load(src, allow_pickle=False) as f:
@@ -143,7 +148,30 @@ class PlanCache:
         if self.persist is None:
             return False
         import revisit
-        return os.path.exists(revisit._path(self.persist[0], "plans", self._revisit_key(key)))
+        if os.path.exists(revisit._path(self.persist[0], "plans", self._revisit_key(key))):
+            return True
+        import bakepack
+        k = bakepack.plans_key(self.signature, key)
+        return any(k in p.items and bakepack._matches(p, self._bake_expect()) for p in bakepack.packs(self.persist[0]))
+
+    def _bake_expect(self):
+        import bakepack
+        return {"bake_format": bakepack.BAKE_FORMAT, "plans_format": PLANS_FORMAT, "frames": FRAMES,
+                "signature": self.signature,
+                "versions": json.loads(json.dumps(self.persist[1][2], sort_keys=True))}
+
+    def _baked(self, key):
+        """A baked pack's plans of cell key (bakepack.py: made offline for this map data and signature), or None."""
+        if self.persist is None:
+            return None
+        import io
+        import bakepack
+        got = bakepack.find(self.persist[0], bakepack.plans_key(self.signature, key), self._bake_expect())
+        if got is None:
+            return None
+        with self._lock:
+            self.stats["baked"] = self.stats.get("baked", 0) + 1
+        return io.BytesIO(got)
 
     def _kept(self, key):
         """The revisit cache's copy of cell key's plans (a file-like npz), or None."""

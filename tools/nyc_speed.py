@@ -280,12 +280,17 @@ def main():
     ap.add_argument("--restart", action="store_true", help="restart the session (warm cache) first")
     ap.add_argument("--warm-first", action="store_true", help="drive the route once at 40 mph first (untimed)")
     ap.add_argument("--label", default=None)
+    ap.add_argument("--bake", action="append", help="with --cold: a baked pack (.bnge) put in the fresh cache first")
     ap.add_argument("--accel", type=float, default=0.0, help="m/s^2: set off from a near standstill (0: at speed at once)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     if a.cold:
         cache = os.path.join(os.path.abspath(a.out), "cache")
         os.makedirs(cache, exist_ok=True)
+        for pk in a.bake or ():          # (baked packs in the fresh cache: server/bakepack.py)
+            import shutil
+            os.makedirs(os.path.join(cache, "bake"), exist_ok=True)
+            shutil.copy(pk, os.path.join(cache, "bake", os.path.basename(pk)))
         session(a.label or "nyccold", cache)
     elif a.restart:
         session(a.label or "nycwarm")
