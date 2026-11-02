@@ -3887,7 +3887,8 @@ BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at firs
 # roads round the car not built; off once caught up for CATCHUP_CALM_S
 CATCHUP_AFTER_S = 1.5
 CATCHUP_CALM_S = 3.0
-BAKE_FETCH = os.environ.get("BNGE_BAKE_FETCH", "on") != "off"   # the data repo's baked packs (Server.bake_sync)
+BAKE_FETCH = os.environ.get("BNGE_BAKE_FETCH", "off") == "on"   # the data repo's packs (Server.bake_sync): off until
+# there are any (the user, 2026-11-02: no cloud baking while world gen changes daily; local packs, BeamMP servers, later)
 CATCHUP_MORE_S = 10.0       # s behind all along before the catch-up boost lends half the game's cores
 HOLD_BOOST_CALM_S = 2.0     # s after an edge hold ends before its boost does (Connection.hold_boost)
 CATCHUP_LEND_SHARE = float(os.environ.get("BNGE_CATCHUP_LEND", "0.25"))     # of the game's cores (cpupin.boosted)
