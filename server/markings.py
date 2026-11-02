@@ -287,6 +287,68 @@ def gores(roads_):
 M14_H, M14_BASE, M14_GAP, M14_KERB_M = 0.70, 0.50, 0.50, 1.0
 M14_LOOK_M = 40.0       # m along an arm a crosswalk moves the line
 M14_CROSSWALK_M = 1.0   # m it stands before a crosswalk (junctions.STOP_GAP, the stop line's)
+CAR_ROOM_M = 5.0        # m from the line to a crossing behind it, for a car between them: with less the line goes before
+                        # the crossing (VGU 2024 12.2.1.4.1, 12.2.1.4.2 råd, both lines)
+# M13: 0.40 m wide (TSFS 2010:171 4 kap. 4 §), at signals at least 2.0 m before a crossing (VGU 2024 K237740)
+M13_W, M13_SIGNAL_CROSSWALK_M = 0.40, 2.0
+
+
+def _way_in(line, s, at, spec, left_hand):
+    """(point on the centreline, unit vector of the way in, unit vector to its kerb, (lo, hi) m along that from the
+    centreline of the half of the road coming in) at m along an arm's centreline line (s: its stations)."""
+    c = np.array([np.interp(at, s, line[:, k]) for k in range(3)])
+    q = np.array([np.interp(at + 1.0, s, line[:, k]) for k in range(2)])
+    t = (c[:2] - q) / max(float(np.hypot(*(c[:2] - q))), 1e-6)
+    n = np.array([t[1], -t[0]]) * (-1.0 if left_hand else 1.0)
+    half = spec.width / 2
+    return c, t, n, ((0.3 - half, half - 0.3) if spec.oneway else (0.2, half - 0.3))
+
+
+def _past_crossing(along, st, crosswalks, spec, at, gap, room):
+    """at moved past the crosswalks on an arm (along, st: its points and stations up to M14_LOOK_M) that have less than
+    room m between them and the line, to gap m past them."""
+    start = at
+    for cw in crosswalks:
+        if cw.get("stop"):
+            continue
+        d = np.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
+        i = int(np.argmin(d))
+        if d[i] < spec.width / 2 + 1.0 and float(st[i]) - cw["w"] / 2 - start < room:
+            at = max(at, float(st[i]) + cw["w"] / 2 + gap)
+    return at
+
+
+def stop_lines(arms, crosswalks, mapped=None, left_hand=False):
+    """(stop lines [{"a", "b", "w", "stop": True}], line cuts {fid: [(junction point, u, m along)]}) of arms [(fid, spec,
+    centreline from the junction, half the crossing road's width, what)] (furniture.give_way_arms): M13 across the lanes
+    coming in, where the map has it (mapped: (n, 2), crossings.nodes) or else at least 1.0 m from the crossing road's
+    edge (VGU 2024 12.2.1.4.1), and at signals before any crossing. The road's lines end at it."""
+    import furniture
+    out, cuts = [], {}
+    for fid, spec, line, wide, what in arms:
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        if s[-1] < 1.0:
+            continue
+        st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
+        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        at = wide + M14_KERB_M
+        if mapped is not None and len(mapped):      # (within half the arm: further up it is the next junction's)
+            d = np.hypot(along[:, None, 0] - mapped[:, 0], along[:, None, 1] - mapped[:, 1])
+            on = d.min(0) < spec.width / 2
+            near = st[d[:, on].argmin(0)] if on.any() else st[:0]
+            near = near[near <= min(s[-1] / 2, wide + furniture.SIGNAL_NEAR_M)]
+            if len(near):
+                at = max(at, float(near.min()))
+        signal = what == furniture.G_SIGNAL
+        at = _past_crossing(along, st, crosswalks, spec, at, M13_SIGNAL_CROSSWALK_M if signal else M14_CROSSWALK_M,
+                            float("inf") if signal else CAR_ROOM_M)
+        if at + 2.0 > s[-1]:
+            continue                        # (a stub: nowhere to stop)
+        c, _, n, (lo, hi) = _way_in(line, s, at, spec, left_hand)
+        out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": M13_W, "stop": True})
+        u = (along[1, :2] - along[0, :2]) if len(along) > 1 else line[1, :2] - line[0, :2]
+        cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(np.hypot(*u)), 1e-6), at))
+    return out, cuts
 
 
 def give_way_lines(arms, crosswalks, left_hand=False):
@@ -305,20 +367,13 @@ def give_way_lines(arms, crosswalks, left_hand=False):
         for j, cw in enumerate(crosswalks):
             d = np.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
             i = int(np.argmin(d))
-            if d[i] < spec.width / 2 + 1.0:
-                if cw.get("stop"):
-                    gone.add(j)
-                    at = max(at, float(st[i]))
-                else:
-                    at = max(at, float(st[i]) + cw["w"] / 2 + M14_CROSSWALK_M)
+            if cw.get("stop") and d[i] < spec.width / 2 + 1.0:
+                gone.add(j)
+                at = max(at, float(st[i]))
+        at = _past_crossing(along, st, crosswalks, spec, at, M14_CROSSWALK_M, CAR_ROOM_M)
         if at + M14_H + 2.0 > s[-1]:
             continue                        # (a stub: nowhere to stop)
-        c = np.array([np.interp(at, s, line[:, k]) for k in range(3)])
-        q = np.array([np.interp(at + 1.0, s, line[:, k]) for k in range(2)])
-        t = (c[:2] - q) / max(float(np.hypot(*(c[:2] - q))), 1e-6)  # the way in
-        n = np.array([t[1], -t[0]]) * (-1.0 if left_hand else 1.0)  # its kerb side
-        half = spec.width / 2
-        lo, hi = (0.3 - half, half - 0.3) if spec.oneway else (0.2, half - 0.3)
+        c, t, n, (lo, hi) = _way_in(line, s, at, spec, left_hand)
         count = int((hi - lo + M14_GAP) // pitch)
         for k in range(count):
             mid = c[:2] + n * ((lo + hi) / 2 + (k - (count - 1) / 2) * pitch)

@@ -7029,7 +7029,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None, country=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None):
+               signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -7177,12 +7177,24 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
         junctions.find(roads, has_sidewalks, None)
-    teeth = []                                  # Sweden's give-way lines (markings.give_way_lines)
+    teeth = []                                  # Sweden's give-way lines (markings.give_way_lines), M16's squares
+    zebras = []                                 # ... and its crossings, which a road's lines stop at (crossings.place)
+    crosswalk_look = junctions.CROSSWALK
+    priority = None if nodes is None else nodes["priority"]
     if str(country or "").upper() == "SE":
         import furniture
         import markings as _gw
-        teeth, gone = _gw.give_way_lines(furniture.give_way_arms(roads, signals, country), crosswalks, left_hand)
-        crosswalks = [cw for j, cw in enumerate(crosswalks) if j not in gone]
+        stops = []
+        if nodes is not None and walks is not None:
+            import crossings as _cx
+            crosswalk_look = _cx.M15_LOOK
+            crosswalks, teeth, jramps = _cx.place(roads, nodes)
+            zebras = [(np.array([cw["a"], cw["b"]])[:, :2], cw["w"] / 2) for cw in crosswalks]
+            stops, jlines = _gw.stop_lines(furniture.give_way_arms(roads, signals, country, priority, stops=True),
+                                           crosswalks, nodes["stop_lines"], left_hand)
+        m14, gone = _gw.give_way_lines(furniture.give_way_arms(roads, signals, country, priority), crosswalks, left_hand)
+        teeth = teeth + m14
+        crosswalks = [cw for j, cw in enumerate(crosswalks) if j not in gone] + stops
     # (no curb extensions: they were on every town street with parking, after Fells Point's, and most streets have none:
     # the corners stuck out into the road in Tustin's suburbs, GitHub #208)
     # small road loops (roundabouts, turnaround loops): no sidewalks facing their inside, a curbed island instead
@@ -7233,8 +7245,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         ladder = _mk.style(country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
         for cw in crosswalks:                   # crosswalks and stop lines
             mid = 0.5 * (cw["a"] + cw["b"])
-            if skin_own(mid[0], mid[1]):
-                look = junctions.STOP_LINE if cw.get("stop") else junctions.CROSSWALK
+            if skin_own(mid[0], mid[1]) and cw.get("paint", True):
+                look = junctions.STOP_LINE if cw.get("stop") else crosswalk_look
                 ab = np.array([cw["a"], cw["b"]])
                 chunks.append(_chunk(look, cw["w"], ab))
                 if ladder and not cw.get("stop"):
@@ -7297,9 +7309,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country)
         blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid]
         edge_blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads
-                         if f2 != fid and (fid, f2) not in straight]
+                         if f2 != fid and (fid, f2) not in straight] + zebras
         centre_blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads
-                           if f2 != fid and (fid, f2) not in straight and (fid, f2) not in stems]
+                           if f2 != fid and (fid, f2) not in straight and (fid, f2) not in stems] + zebras
         decal_blockers = [(p2[:, :2], s2.width / 2 + (CUT_MARGIN if (fid, f2) in going_on else
                                                       EDGE_DECAL["w"] + EDGE_DECAL_GAP_M))
                           for f2, s2, p2, _ in roads if f2 != fid and s2.kind in BUILT]
@@ -7392,6 +7404,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         decks = [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in chunks if ch.get("deck")]
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
                                      decks=decks, signals=signals, buried=buried, region=lamp_region, country=country,
+                                     priority=priority,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     aisles = {fid for fid, (f, i, sp) in seen.items()

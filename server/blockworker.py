@@ -20,6 +20,7 @@ import time
 
 import numpy as np
 
+import crossings
 import dem as demmod
 import farfield
 import furniture
@@ -461,8 +462,10 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     except Exception as e:          # no decks: the graph follows the ground under bridges
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
+    nodes = crossings.read(_s.md, frame, keys) if str(rules.get("country") or "").upper() == "SE" else None
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, widths=_s.widths, left_hand=left_hand,
-                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"))
+                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
+                              priority=None if nodes is None else nodes["priority"])
     graph["rules"] = rules
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])
@@ -717,6 +720,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
+    near_cells = roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)
+    nodes = crossings.read(_s.md, frame, near_cells) if str(country or "").upper() == "SE" else None
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
@@ -726,8 +731,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
-                                 signals=furniture.signals_for(_s.md, frame,
-                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+                                 signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes)
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
     mark("rails")
