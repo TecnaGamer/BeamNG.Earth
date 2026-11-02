@@ -406,4 +406,19 @@ for _, bad in ipairs({ vec3(0 / 0, 0, 0), vec3(-math.huge, 0, 0), vec3(500, 0, 0
   D.uninstall()
 end
 
+-- path mode (tools/nyc_speed.py): the metres along a lat/lon path, the point at a distance, clamped at its ends
+do
+  local path = D.makePath({ { 40.0, -74.0 }, { 40.001, -74.0 }, { 40.001, -73.999 } })
+  T.check(path and #path.cum == 3, 'a path of three points')
+  T.near(path.cum[2], 110.54, 1e-6, 'north 0.001 deg: 110.54 m')
+  T.near(path.cum[3] - path.cum[2], 111320 * math.cos(math.rad(40.0)) * 0.001, 1e-6, 'east 0.001 deg at 40 N')
+  local la, lo = D.pathAt(path, 55.27)
+  T.near(la, 40.0005, 1e-9, 'half way up the first leg (lat)')
+  T.near(lo, -74.0, 1e-12, '... (lon)')
+  la, lo = D.pathAt(path, path.cum[3] + 50)
+  T.check(la == 40.001 and math.abs(lo + 73.999) < 1e-12, 'past the end: its last point')
+  la, lo = D.pathAt(path, 10)
+  T.near(la, 40.0 + 10 / 110540, 1e-12, 'back on the first leg after a later point (the search walks back)')
+  T.check(D.makePath({ { 40, -74 } }) == nil, 'one point: no path')
+end
 T.done('test_drive_driver')

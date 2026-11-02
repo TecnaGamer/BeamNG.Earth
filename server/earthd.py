@@ -759,6 +759,7 @@ class Server:
         self.urgent_base_pool = ThreadPoolExecutor(2, thread_name_prefix="base-urgent")
         self.prov_pool = ThreadPoolExecutor(2, thread_name_prefix="provisional")    # follow blocks sent provisional
         self.prov_info = {}             # (aid, cx, cy) -> a provisional follow block's info (until the graded one)
+        self.follow_s = deque(maxlen=PROVISIONAL_RECENT)   # how long the last graded follow blocks took (s)
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
@@ -2017,7 +2018,8 @@ class Server:
         fb, base = anchor.first_base, None
         if fb is not None and fb[0] == (cx, cy):        # the provisional first block's photo (make_provisional)
             anchor.first_base, base = None, fb[1]
-        elif self.near_visual == "detail" and self.imagery is not None and lane == LANE_PREFETCH and self.fast:
+        elif self.near_visual == "detail" and self.imagery is not None and lane == LANE_PREFETCH and self.fast \
+                and (anchor.id, cx, cy) not in self.hm_committed:     # (a rebuild of the block in use keeps its photo)
             # a fast player's prefetched block: its photo only once the mod has it (base_refresh: a stale base); a
             # 3-8 s photo for every guessed block, half of them never asked for, took the CPU the road tiles needed
             # (500 mph, 2026-10-30)
@@ -2037,7 +2039,10 @@ class Server:
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
                     fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block)).result()
                 if "started" in info:   # (waiting for the lane's process: a block before it, its road plans ahead)
-                    info["stages"] = {"queue": max(0.0, info.pop("started") - submitted), **info.get("stages", {})}
+                    started, finished = info.pop("started"), info.pop("finished", None)
+                    info["stages"] = {"queue": max(0.0, started - submitted),
+                                      **({"work": finished - started} if finished else {}),
+                                      **info.get("stages", {})}
                 self.hm_stage[key] = "its base photo"
                 return self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=lane == LANE_REQUEST, lane=lane)
             self.hm_stage[key] = "the build in the server's process"
@@ -3578,6 +3583,10 @@ PROVISIONAL_KEEP_S = 60.0   # the provisional .ter is deleted this long after it
 # processes busy with them: requests queued 72-80 s in Chicago, the edge guard holding the car, 2026-11-01): sent
 # provisional (make_provisional, its own threads) and the graded one as terrain_refresh when built (refine_follow)
 PROVISIONAL_FOLLOW_S = float(os.environ.get("BNGE_PROVISIONAL_FOLLOW_S", "2.5"))
+# ... at once (no wait) while the graded follow blocks have been this slow (the median of the last ones: a first
+# visit's cells, the block processes busy), where waiting only made the provisional one later too
+PROVISIONAL_SLOW_S = 4.0
+PROVISIONAL_RECENT = 5
 PADS_REFRESH_MS = 5.0       # the block in use built again with its gas station pads only below this speed (m/s) ...
 PADS_SETTLE_S = 3.0         # ... and this long after the last new pad (Connection.pads_refresh)
 NAV_WAIT_S = 30.0           # s an anchor's first AI graph waits at most for the road tiles round the car (nav_may_start)
@@ -4782,7 +4791,11 @@ class Connection:
             return None
         key = (anchor.id, cx, cy)
         info = s.prov_info.get(key)     # (asked again: its provisional block at once)
-        done, _ = await asyncio.wait({job}, timeout=0 if info is not None else PROVISIONAL_FOLLOW_S)
+        t0 = time.perf_counter()
+        job.add_done_callback(lambda f: f.cancelled() or f.exception() or s.follow_s.append(time.perf_counter() - t0))
+        recent = sorted(s.follow_s)
+        slow = len(recent) >= 2 and recent[len(recent) // 2] > PROVISIONAL_SLOW_S
+        done, _ = await asyncio.wait({job}, timeout=0 if info is not None or slow else PROVISIONAL_FOLLOW_S)
         if done:
             return None
         if info is None:
@@ -5209,7 +5222,9 @@ class Connection:
         async def run():
             old = s.hm.pop(key, None)
             try:
-                info = await s.terrain(anchor, key[1], key[2])
+                # (the prefetch lane's process: a correction of the block in use must not hold up the next one the
+                # mod asks for, a first visit's rebuilds queued the follow requests, 2026-11-01)
+                info = await s.terrain(anchor, key[1], key[2], lane=LANE_PREFETCH)
             except Exception:
                 log.exception("block %s again with its roads (the old one stays)", key)
                 if old is not None:
@@ -5247,7 +5262,9 @@ class Connection:
         async def run():
             old = s.hm.pop(key, None)
             try:
-                info = await s.terrain(anchor, key[1], key[2])
+                # (the prefetch lane's process: a correction of the block in use must not hold up the next one the
+                # mod asks for, a first visit's rebuilds queued the follow requests, 2026-11-01)
+                info = await s.terrain(anchor, key[1], key[2], lane=LANE_PREFETCH)
             except Exception:
                 log.exception("block %s again with its gas station pads (the old one stays)", key)
                 if old is not None:

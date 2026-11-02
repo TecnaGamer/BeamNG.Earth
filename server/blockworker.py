@@ -380,7 +380,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
             info["mats"] = mats
         stages["ter"] = time.perf_counter() - t1
     info["stages"] = stages
-    info["started"] = started
+    info["started"], info["finished"] = started, time.time()
     return info
 
 
