@@ -1,12 +1,12 @@
 # Swedish roads
 
-Branch `sweden-next`, off `sweden-roads`, off `main` at 1.7.3-beta.
+Branch `sweden-roads`, off `main` at 1.7.3-beta.
 
 ## What this covers
 
-This page covers the Swedish road work on `sweden-next`: sidewalks and medians on 2+1 roads, the C31 speed limit and B1 give-way signs, road markings, road types, and city crossings, stop lines and priority signs. For each fix it gives the problem seen, the cause, the change, where it is in the code and what was measured.
+This page covers the Swedish road work on this branch: sidewalks and medians on 2+1 roads, the C31 speed limit and B1 give-way signs, road markings, road types, and city crossings, stop lines and priority signs. For each fix it gives the problem seen, the cause, the change, where it is in the code and what was measured.
 
-None of the fixes has been tested in game. The one exception is the user's confirmation that the 2+1 centre barrier works, which is not one of the fixes below.
+The branch's author checked the final code in game on 2026-11-02. The measurements below come from tiles built offline.
 
 ## Measuring on real tiles
 
@@ -134,9 +134,8 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 
 ## Known limits
 
-- **Not tested in game.** None of the fixes has been tested in game. The user confirmed that the 2+1 centre barrier works, which is not one of the fixes above.
-- **Test suite.** Full run on these commits: 148 of 153 modules pass. The five that fail are on the list of those failing on clean code: test_advance_sign_layout (fontTools missing), test_fargeo and test_roadgeo (real-data tests), test_e2e and test_integration_drive (far tiles).
-- **Sign artwork.** Transportstyrelsen's pages state no reuse terms for the artwork. This must be flagged in the PR.
+- **Test suite.** Full run on the final code: 147 of 153 modules pass. Five of the six that fail also fail on clean 1.7.3-beta: test_advance_sign_layout (fontTools missing), test_fargeo and test_roadgeo (real-data tests), test_e2e and test_integration_drive (far tiles). The sixth, test_server, fails now and then on clean code too, on its "first 8 sent ranked" order check.
+- **Sign artwork.** Transportstyrelsen's pages state no reuse terms for the artwork. The signs themselves are set out in Vägmärkesförordningen (2007:90).
 - **Flat tiles.** Tiles are built on flat ground, so the measurements do not include terrain slope.
 - **Height steps.** 66 of 620 loaded tiles have at least 15 m² of road mesh steeper than 20%. One spot was examined: (57.6696, 13.0284), a track beside a bridge embankment. The rest are unexplained.
 - **Samples.** Fix 3 was measured on 60 tiles and fix 5 on 300, both around Boras. The surface statistics cover seven regions and only rural roads with a surface tag.
