@@ -1147,7 +1147,7 @@ class TileNeedsTest(unittest.TestCase):
         needs = roads.tile_needs(frame, 0, 0, buildings=True, widths=True, water_ring=3)
         self.assertEqual(len(needs), len(set(needs)), "no (cell, layer) twice")
         self.assertEqual({k for k, ly in needs if ly == "building_parts"}, own)   # the tile's own cells first
-        self.assertEqual({ly for k, ly in needs[:len(own) * 5]}, {"roads", "infrastructure", "buildings",
+        self.assertEqual({ly for k, ly in needs[:len(own) * 6]}, {"roads", "infrastructure", "land_use", "buildings",
                                                                     "building_parts", "water"})
         xs = sorted({k.x for k in own})
         ring = {k for k, ly in needs if ly == "buildings"}
@@ -1157,7 +1157,7 @@ class TileNeedsTest(unittest.TestCase):
         far = [i for i, (k, ly) in enumerate(needs) if ly == "water" and k not in own]
         self.assertEqual(far, list(range(far[0], len(needs))), "the water ring last")
         bare = roads.tile_needs(frame, 0, 0, buildings=False, widths=False, water_ring=0)
-        self.assertEqual({ly for _, ly in bare}, {"roads", "infrastructure"})
+        self.assertEqual({ly for _, ly in bare}, {"roads", "infrastructure", "land_use"})
         import gradesep
         r = 2 if gradesep.ON else 1     # (grading's ring of roads; gradesep's neighbours of those when it is on)
         self.assertEqual(sorted({k.x for k, ly in bare if ly == "roads"}), list(range(xs[0] - r, xs[-1] + r + 1)))
