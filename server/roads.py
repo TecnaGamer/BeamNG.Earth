@@ -1182,73 +1182,53 @@ def _level_ranges(feats, i):
 
 
 def tag_level_ranges(feats, i):
-    """Feature i's off-ground ranges as the map's flags and level rules have them (level_ranges, before gradesep)."""
-    got = {"flags": [], "level": []}
-    for name in ("flags", "level"):
-        t = feats.rules.get(name)
-        if t is None or len(t.feature) == 0:
-            continue
-        for j in t.rows(i):
-            v = t.value[j]
-            if name == "flags":
-                kind = "tunnel" if "is_tunnel" in str(v) else "bridge" if "is_bridge" in str(v) else None
-            else:
-                try:
-                    lv = float(v)
-                except (TypeError, ValueError):
-                    lv = 0.0
-                kind = "bridge" if lv > 0 else "tunnel" if lv < 0 else None
-            if kind is not None and t.end[j] > t.start[j]:
-                got[name].append((float(t.start[j]), float(t.end[j]), kind))
-    # the flags first; a level range only where no flag says otherwise (Tower Bridge: level 1 over 0.03-0.88 of its
-    # segment, flags bridge / tunnel (through a tower) / bridge / tunnel / bridge: merged, tunnel winning, the whole
-    # bridge was a tunnel, under water for most of it, and left out, 2026-10-18)
-    out = sorted(got["flags"])
-    for a, b, k in sorted(got["level"]):
-        for fa, fb, _ in out[:]:
-            if fb <= a or fa >= b:
-                continue
-            if fa > a:
-                out.append((a, fa, k))
-            a = max(a, fb)
-            if a >= b:
-                break
-        if a < b:
-            out.append((a, b, k))
-    out.sort()
-    merged = []                                 # overlapping ranges merged (a tunnel wins over a bridge); touching
-    for a, b, k in out:                         # ones of the same kind joined, of different kinds kept apart
-        if merged and (a < merged[-1][1] - 1e-9 or (a <= merged[-1][1] + 1e-9 and k == merged[-1][2])):
-            pa, pb, pk = merged[-1]
-            merged[-1] = (pa, max(pb, b), "tunnel" if "tunnel" in (pk, k) else "bridge")
+    """Feature i's off-ground ranges as the map's flags and level rules have them (level_ranges, before gradesep):
+    the flags first, a level range only where no flag says otherwise (Tower Bridge: level 1 over 0.03-0.88 of its
+    segment, flags bridge / tunnel (through a tower) / bridge / tunnel / bridge: merged, tunnel winning, the whole
+    bridge was a tunnel, under water for most of it, and left out, 2026-10-18); overlapping ranges merged (a tunnel
+    wins over a bridge), touching ones of the same kind joined; a tunnel shorter than PASSAGE_M between two bridge
+    ranges is a passage through a bridge's tower (the bridge goes on); a segment's tunnel ranges closer than
+    TUNNEL_GAP_M are one tunnel (Overture splits a tunnel's range: 0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort McHenry
+    Tunnel's segment). Every feature of the layer at once (earthfast.tag_level_ranges), kept on feats."""
+    got = feats.__dict__.get("_tag_ranges")
+    if got is None:
+        got = feats.__dict__["_tag_ranges"] = _tag_ranges_all(feats)
+    return list(got[i])
+
+
+def _tag_rule_rows(t, name):
+    """(feature, start, end, kind) arrays of a flags / level rule table (kind 1 bridge, 2 tunnel, 0 neither)."""
+    if t is None or len(t.feature) == 0:
+        return (np.zeros(0, np.int64), np.zeros(0), np.zeros(0), np.zeros(0, np.int8))
+    kind = np.zeros(len(t.feature), np.int8)
+    for j, v in enumerate(t.value.tolist() if hasattr(t.value, "tolist") else t.value):
+        if name == "flags":
+            v = str(v)
+            kind[j] = 2 if "is_tunnel" in v else 1 if "is_bridge" in v else 0
         else:
-            merged.append((a, b, k))
-    if len(merged) >= 3:                        # a short tunnel between two bridge ranges: a passage through a
-        L = _feature_length_m(feats, i)         # bridge's tower (Tower Bridge's): the bridge goes on
-        for n in range(1, len(merged) - 1):
-            a, b, k = merged[n]
-            if k == "tunnel" and (b - a) * L < PASSAGE_M and merged[n - 1][2] == "bridge" and \
-                    merged[n + 1][2] == "bridge" and abs(merged[n - 1][1] - a) < 1e-6 and abs(b - merged[n + 1][0]) < 1e-6:
-                merged[n] = (a, b, "bridge")
-        joined = []
-        for a, b, k in merged:
-            if joined and k == joined[-1][2] and a <= joined[-1][1] + 1e-9:
-                joined[-1] = (joined[-1][0], b, k)
-            else:
-                joined.append((a, b, k))
-        merged = joined
-    if sum(1 for _, _, k in merged if k == "tunnel") > 1:
-        # one tunnel, not several: Overture splits a tunnel's range (0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort
-        # McHenry Tunnel's segment), and each gap would be a few metres of ground road inside the mountain
-        L = _feature_length_m(feats, i)
-        joined = []
-        for a, b, k in merged:
-            if joined and k == "tunnel" and joined[-1][2] == "tunnel" and (a - joined[-1][1]) * L < TUNNEL_GAP_M:
-                joined[-1] = (joined[-1][0], b, "tunnel")
-            else:
-                joined.append((a, b, k))
-        merged = joined
-    return merged
+            try:
+                lv = float(v)
+            except (TypeError, ValueError):
+                lv = 0.0
+            kind[j] = 1 if lv > 0 else 2 if lv < 0 else 0
+    return (np.ascontiguousarray(t.feature, np.int64), np.ascontiguousarray(t.start, np.float64),
+            np.ascontiguousarray(t.end, np.float64), kind)
+
+
+_KIND_NAMES = {1: "bridge", 2: "tunnel"}
+
+
+def _tag_ranges_all(feats):
+    import fast
+    fast.require(142, "tag_level_ranges")
+    ll = np.asarray(feats.lonlat, np.float64)
+    off, rng, kinds = fast._ef.tag_level_ranges(
+        len(feats), *_tag_rule_rows(feats.rules.get("flags"), "flags"),
+        *_tag_rule_rows(feats.rules.get("level"), "level"), np.ascontiguousarray(ll),
+        np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
+        np.ascontiguousarray(feats.part_off, np.int64), PASSAGE_M, TUNNEL_GAP_M)
+    rl, kl, ol = rng.tolist(), kinds.tolist(), off.tolist()
+    return [[(rl[r][0], rl[r][1], _KIND_NAMES[kl[r]]) for r in range(ol[i], ol[i + 1])] for i in range(len(feats))]
 
 
 PASSAGE_M = 40.0        # m: a tunnel range this short between two bridge ranges is a passage through a tower

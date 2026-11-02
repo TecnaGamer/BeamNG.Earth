@@ -15,6 +15,7 @@ mod tunnelcover;
 mod gradesep;
 mod lamps;
 mod decks;
+mod levels;
 mod tapers;
 mod islands;
 mod ribbons;
@@ -5321,6 +5322,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tapers::lane_shifts, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_gaps, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_tents, m)?)?;
+    m.add_function(wrap_pyfunction!(levels::tag_level_ranges, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::gradesep_gather, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
@@ -5461,6 +5464,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
-    m.add("VERSION", 141)?;
+    m.add("VERSION", 142)?;
     Ok(())
 }
