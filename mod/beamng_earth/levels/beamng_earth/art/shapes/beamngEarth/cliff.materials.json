@@ -10,9 +10,9 @@
         "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_flat.normal.png",
         "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_roughness.data.png",
         "baseColorFactor": [
-          2,
-          2,
-          2,
+          1.3,
+          1.4,
+          1.5,
           1
         ],
         "metallicFactor": 0,
@@ -22,8 +22,8 @@
         "useAnisotropic": true,
         "roughnessMapUseUV": 0,
         "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds",
-        "detailNormalMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.normal.dds",
-        "detailNormalMapStrength": 0.22,
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_restored_micro_v1.normal.png",
+        "detailNormalMapStrength": 0.3,
         "detailScale": [
           76.2,
           76.2
@@ -61,6 +61,43 @@
         "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds",
         "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_restored_micro_v1.normal.png",
         "detailNormalMapStrength": 0.7,
+        "detailScale": [
+          76.2,
+          76.2
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_cliff_roadcut_arid": {
+    "name": "bne_cliff_roadcut_arid",
+    "mapTo": "bne_cliff_roadcut_arid",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_base.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_roughness.data.png",
+        "baseColorFactor": [
+          1.4,
+          1.45,
+          1.55,
+          1
+        ],
+        "metallicFactor": 0,
+        "vertColor": true,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_ao.data.png",
+        "roughnessFactor": 1.0,
+        "useAnisotropic": true,
+        "roughnessMapUseUV": 0,
+        "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds",
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_restored_micro_v1.normal.png",
+        "detailNormalMapStrength": 0.3,
         "detailScale": [
           76.2,
           76.2

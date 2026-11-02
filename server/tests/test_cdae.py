@@ -209,3 +209,48 @@ class LodTest(unittest.TestCase):
         self.assertEqual([(s[2], s[3], s[6]) for s in sizes], [(0, 300.0, 2), (1, 2.0, 1)])
         self.assertEqual(len(d["meshes"]), 2)
         self.assertEqual(d["bounds"][3:5], [2.0, 2.0], "the bounds cover every detail")
+
+
+class BoundedMeshTest(unittest.TestCase):
+    def test_split_preserves_triangles_materials_attributes_and_object_links(self):
+        from unittest.mock import patch
+        pos, uv, tri = dae.grid(5, 1.0)
+        pos, uv, tri = np.asarray(pos).reshape(-1, 3), np.asarray(uv).reshape(-1, 2), np.asarray(tri).reshape(-1, 3)
+        colors = np.arange(len(pos)*4, dtype=np.uint8).reshape(-1, 4)
+        normals = cdae.face_normal_sum(pos, tri)
+        tm = np.arange(len(tri)) % 3
+        with patch.object(cdae, 'RENDER_VERTEX_LIMIT', 12):
+            blob = cdae.encode(pos, tri, normals=normals, uvs=uv, colors=colors,
+                               material=['natural', 'limestone', 'arid'], tri_materials=tm, split_meshes=True)
+            self.assertEqual(blob, cdae.encode(pos, tri, normals=normals, uvs=uv, colors=colors,
+                               material=['natural', 'limestone', 'arid'], tri_materials=tm, split_meshes=True))
+        shape = cdae.decode(blob)
+        objects = np.frombuffer(shape['objects'][2], '<i4').reshape(-1, 6)
+        self.assertEqual(len(objects), len(shape['meshes']))
+        self.assertGreater(len(objects), 1)
+        self.assertEqual(shape['details'][0], 1, 'chunks must render simultaneously')
+        self.assertEqual(shape['objectStates'][0], len(objects))
+        self.assertEqual(int.from_bytes(shape['subShapeNumObjects'][2], 'little'), len(objects))
+        source = {tuple(p): i for i, p in enumerate(pos)}
+        actual = []
+        for k, (obj, mesh) in enumerate(zip(objects, shape['meshes'])):
+            self.assertEqual(tuple(obj[1:]), (1, k, 0, k+1 if k+1 < len(objects) else -1, -1))
+            self.assertEqual(shape['names'][obj[0]], shape['header']['objectNames'][k])
+            a = cdae.mesh_arrays(mesh)
+            self.assertLessEqual(len(a['verts']), 12)
+            original = np.array([source[tuple(v)] for v in a['verts']])
+            np.testing.assert_array_equal(a['norms'], normals[original].astype(np.float32))
+            expected_uv = uv[original].astype(np.float32); expected_uv[:, 1] = 1-expected_uv[:, 1]
+            np.testing.assert_array_equal(a['tverts'], expected_uv)
+            np.testing.assert_array_equal(np.frombuffer(mesh['colors'][2], np.uint8).reshape(-1, 4), colors[original])
+            decoded = original[a['indices'].reshape(-1, 3)[:, ::-1]]
+            for start, count, mat in a['primitives']:
+                actual.extend((tuple(t), mat & cdae.PRIM_MATERIAL_MASK)
+                              for t in decoded[start//3:(start+count)//3])
+        self.assertCountEqual(actual, [(tuple(t), int(m)) for t, m in zip(tri, tm)])
+
+    def test_small_split_export_is_byte_identical_and_unsupported_modes_fail(self):
+        pos, uv, tri = dae.grid(2, 1.)
+        self.assertEqual(cdae.encode(pos, tri, uvs=uv), cdae.encode(pos, tri, uvs=uv, split_meshes=True))
+        with self.assertRaises(cdae.CdaeError):
+            cdae.encode(pos, tri, split_meshes=True, collision_only=True)

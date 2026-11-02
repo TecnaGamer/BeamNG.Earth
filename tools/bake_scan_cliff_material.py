@@ -157,12 +157,13 @@ def main(argv=None):
     # A normal-only comparison preserves the material's current detail settings.
     detail_root = '/temp/beamngEarth/shapes/cliff_talus_v2/'
     if not args.normals_only:
-        stage['baseColorFactor'] = [2, 2, 2, 1]  # linear headroom for regional vertex tint
+        # Match road-cut brightness and temper the scans' warm cast; vertex tint supplies local color.
+        stage['baseColorFactor'] = [1.3, 1.4, 1.5, 1]
         for key in list(stage):
             if 'detail' in key.lower():
                 del stage[key]
-        stage.update(detailMap=detail_root+'detail.data.dds', detailNormalMap=detail_root+'detail.normal.dds',
-                     detailNormalMapStrength=.22, detailScale=[cm.WIDTH_M/1.2, cm.HEIGHT_M/1.2])
+        stage.update(detailMap=detail_root+'detail.data.dds', detailNormalMap=base+'cut_restored_micro_v1.normal.png',
+                     detailNormalMapStrength=.3, detailScale=[cm.WIDTH_M/1.2, cm.HEIGHT_M/1.2])
     material_path.write_text(json.dumps(material,indent=2)+'\n')
     meta = dict(source='build/cliff-assembly', size=size, span_m=[cm.WIDTH_M,cm.HEIGHT_M],
                 height_grid=cm.HEIGHT_SIZE, relief_m=cm.RELIEF_M, reference_slope=cm.REFERENCE_SLOPE,

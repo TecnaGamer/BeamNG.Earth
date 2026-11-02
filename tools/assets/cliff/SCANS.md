@@ -50,6 +50,17 @@ mesh, but can reinforce slopes already represented by geometry. The offline
 review renderer instead subtracts its dense mesh's relief. Undisplaced UVs keep
 the height and texture phase aligned. Fine detail repeats independently at 1.2 m.
 
+## Natural material calibration (2026-11-01)
+
+The natural scan material uses RGB base factors (1.3, 1.4, 1.5), replacing
+(2, 2, 2) to reduce bright orange outcrops beside the arid road cuts and terrain.
+It shares the packaged Rock 06 micro normal with arid cuts at strength 0.3 and
+1.2 m detail scale. Regional vertex tint remains active; the scanned macro
+normal, albedo atlas, roughness, AO, and CPU displacement are unchanged.
+This is the shared natural material, so the calibration applies in all climates.
+The bake script preserves these defaults. Live review: El Paso at
+31.87931, -106.49860, with natural outcrops, cuts, and terrain in the same view.
+
 ## Road-cut bake
 
 The approved limestone image was restored in sixteen overlapping generative

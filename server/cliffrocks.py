@@ -379,7 +379,17 @@ def displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale=1.0, cuts=
             cut_weight[oy:oy+cuts.shape[0], ox:ox+cuts.shape[1]] += cuts
         cut_weight /= np.maximum(touches, 1)
         cut_relief = cliffmaterial.sample(across/cliffmaterial.WIDTH_M, h/cliffmaterial.HEIGHT_M, roadcut=True)
-        relief = relief*(1-cut_weight)+cut_relief*cut_weight
+        arid = cuts & (cliffmaterial.cut_family(biomes) == cliffmaterial.ARID_CUT)
+        arid_weight = np.zeros(h.shape, float)
+        for oy, ox in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            arid_weight[oy:oy+cuts.shape[0], ox:ox+cuts.shape[1]] += arid
+        arid_weight /= np.maximum(touches, 1)
+        if arid.any():
+            arid_relief = cliffmaterial.sample(across/cliffmaterial.WIDTH_M, h/cliffmaterial.HEIGHT_M,
+                                              family=cliffmaterial.ARID_CUT)
+            relief = relief*(1-cut_weight)+cut_relief*(cut_weight-arid_weight)+arid_relief*arid_weight
+        else:
+            relief = relief*(1-cut_weight)+cut_relief*cut_weight
     fade = _surface_fade(h, touches, dx*horizontal_scale, dy)
     terrain_normal = np.stack((-gx, -gy, np.ones_like(h)), axis=-1)/norm[..., None]
     offset = (CLEARANCE_M + relief)*fade
@@ -470,9 +480,11 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     out_p, out_t, out_uv, out_c, out_n = [], [], [], [], []
     out_mat = []
     cut_cells = np.zeros(len(j), bool) if cuts is None else cuts[j, i]
+    families = np.where(cut_cells, cliffmaterial.cut_family(biomes[j, i]), cliffmaterial.NATURAL)
     count = 0
-    for use_y, cut_material in ((False, False), (True, False), (False, True), (True, True)):
-        selected = tris[np.repeat((axis == use_y) & (cut_cells == cut_material), 2)]
+    for family, use_y in ((f, a) for f in range(len(cliffmaterial.MATERIALS)) for a in (False, True)):
+        cut_material = family != cliffmaterial.NATURAL
+        selected = tris[np.repeat((axis == use_y) & (families == family), 2)]
         if not len(selected):
             continue
         u = (yy if use_y else xx) / cliffmaterial.WIDTH_M + cliffmaterial.UV_OFFSET[0]
@@ -503,7 +515,7 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
         nn /= np.linalg.norm(nn, axis=1, keepdims=True)
         out_p.append(pp[used] - np.asarray(origin))
         out_t.append(inverse.reshape(-1, 3) + count)
-        out_mat.append(np.full(len(tt), int(cut_material), np.int32))
+        out_mat.append(np.full(len(tt), family, np.int32))
         out_uv.append(attrs[:, :2]); out_n.append(nn); out_c.append(attrs[:, 5:9])
         count += len(used)
     if not out_t:
@@ -795,5 +807,5 @@ def write(path, rock):
     """Write the rock skin with vertex tint through the existing compiled-mesh path."""
     import cdae
     return cdae.write(path, rock.positions, rock.tris, uvs=rock.uvs,
-                      material=[MATERIAL, cliffmaterial.ROAD_CUT_MATERIAL] if rock.tri_materials is not None else MATERIAL,
-                      tri_materials=rock.tri_materials, colors=rock.colors, normals=rock.normals, object_name="cliff")
+                      material=list(cliffmaterial.MATERIALS) if rock.tri_materials is not None else MATERIAL,
+                      tri_materials=rock.tri_materials, colors=rock.colors, normals=rock.normals, object_name="cliff", split_meshes=True)

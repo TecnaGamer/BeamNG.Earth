@@ -27,6 +27,112 @@ class CliffRocksTest(unittest.TestCase):
         return cr.mesh(self.h, keep, self.x, self.x, np.full(keep.shape, biome),
                        box, (0, 0, 0))
 
+
+    def test_large_divided_mountain_cut_export_has_no_cross_road_sheets(self):
+        # El Paso: dense opposing walls exceed the renderer's 16-bit vertex
+        # range even though the file stores uint32 indices. Exercise clipping,
+        # both projection charts, both materials and pavement subdivision.
+        import cliffcuts
+        x = np.arange(-82, 82.5, .5)
+        xx, yy = np.meshgrid(x, x)
+        center = 20*np.sin(yy/12)
+        distance = np.abs(xx-center)
+        h = np.maximum(distance-15, 0)*2.5
+        keep = (distance[:-1, :-1] > 15) & (distance[:-1, :-1] < 76)
+        cuts = keep & (yy[:-1, :-1] < 15)
+        road_y = np.arange(-100, 101, 2.)
+        segs = roads._Segs({str(i): (np.c_[20*np.sin(road_y/12)+offset, road_y], 5.)
+                           for i, offset in enumerate((-6, 6))})
+        clearance = cliffcuts.RoadClearance(segs, lambda xy: np.zeros(len(xy)))
+        for rotated in (False, True):
+            with self.subTest(rotated=rotated), tempfile.TemporaryDirectory() as tmp:
+                project = (lambda p: p[:, [1, 0, 2]]) if rotated else None
+                # Rotate inputs together so clearance remains in projected space.
+                rs = roads._Segs({str(i): (np.c_[road_y, 20*np.sin(road_y/12)+offset], 5.)
+                                 for i, offset in enumerate((-6, 6))}) if rotated else segs
+                rc = cliffcuts.RoadClearance(rs, lambda xy: np.zeros(len(xy))) if rotated else clearance
+                rock = cr.mesh(h, keep, x, x, np.zeros(keep.shape, int),
+                               (-79.7, -79.7, 79.7, 79.7), (0, 0, 0),
+                               cuts=cuts, road_segments=rs, road_clearance=rc, project=project)
+                self.assertGreater(len(rock.positions), 65535)
+                self.assertEqual(set(rock.tri_materials), {0, 1})
+                path = Path(tmp)/'mountain.cdae'
+                cr.write(str(path), rock)
+                shape = cdae.read(path)
+                count = 0
+                for m in shape['meshes']:
+                    a = cdae.mesh_arrays(m)
+                    self.assertLessEqual(len(a['verts']), 65535)
+                    ids = a['indices'].reshape(-1, 3)
+                    self.assertLess(int(ids.max()), len(a['verts']))
+                    tri = a['verts'][ids]
+                    self.assertTrue(np.isfinite(tri).all())
+                    self.assertLess(np.linalg.norm(tri-np.roll(tri, 1, axis=1), axis=2).max(), 8)
+                    count += len(ids)
+                self.assertEqual(count, len(rock.tris), 'splitting must preserve every triangle')
+
+    def test_arid_family_preserves_austin_and_mixed_material_exports(self):
+        import cliffmaterial as cm
+        import climate
+        # Actual bundled climate lookup; selecting by environment, not place.
+        for lat, lon, expected in ((31.87810, -106.49561, cm.ARID_CUT),
+                                   (30.29941, -97.82788, cm.LIMESTONE_CUT)):
+            biome = cr.biome_at(climate.koppen_at(lat, lon), np.array([30]))
+            self.assertEqual(int(cm.cut_family(biome)[0]), expected)
+        keep = np.ones((20, 20), bool)
+        cuts = keep.copy(); cuts[:5] = False
+        biomes = np.zeros(keep.shape, int); biomes[10:] = 1
+        rock = cr.mesh(self.h, keep, self.x, self.x, biomes, (0, 0, 160, 160), (0, 0, 0), cuts=cuts)
+        self.assertEqual(set(rock.tri_materials), {cm.NATURAL, cm.LIMESTONE_CUT, cm.ARID_CUT})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp)/'mixed.cdae'); cr.write(path, rock)
+            self.assertEqual([m['name'] for m in cdae.read(path)['materials']], list(cm.MATERIALS))
+        # Neighboring tile generation and order must not alter material phase.
+        def tile(box):
+            return cr.mesh(self.h, keep, self.x, self.x, biomes, box, (0, 0, 0), cuts=cuts)
+        left = tile((0, 0, 80, 160)); right = tile((80, 0, 160, 160)); again = tile((0, 0, 80, 160))
+        np.testing.assert_array_equal(left.positions, again.positions)
+        np.testing.assert_array_equal(left.uvs, again.uvs)
+        np.testing.assert_array_equal(left.tri_materials, again.tri_materials)
+        self.assertGreater(len(right.tris), 0)
+
+    def test_arid_height_and_pbr_assets_share_scale_and_periodic_chart(self):
+        import cliffmaterial as cm
+        from PIL import Image
+        u, v = np.meshgrid(np.arange(cm.HEIGHT_SIZE[0]), np.arange(cm.HEIGHT_SIZE[1]))
+        u = (u+.5)/cm.HEIGHT_SIZE[0]; v = (v+.5)/cm.HEIGHT_SIZE[1]
+        with Image.open(cm.ARID_CUT_HEIGHT_PATH) as im:
+            self.assertEqual(im.size, cm.HEIGHT_SIZE)
+            expected = np.flipud(np.asarray(im, float))/65535*cm.ROAD_CUT_RELIEF_M
+        actual = cm.sample(u, v, family=cm.ARID_CUT)
+        np.testing.assert_allclose(actual, expected, atol=1e-7)
+        np.testing.assert_allclose(actual, cm.sample(u+3, v-2, family=cm.ARID_CUT), atol=1e-7)
+        self.assertGreater(float(np.ptp(actual)), .01)
+        self.assertFalse(np.allclose(actual, cm.sample(u, v, roadcut=True)))
+        root = Path(__file__).resolve().parents[2]
+        mats = json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        stage = mats[cm.ARID_CUT_MATERIAL]['Stages'][0]
+        self.assertTrue(stage['vertColor'])
+        for key in ('baseColorMap', 'normalMap', 'roughnessMap', 'ambientOcclusionMap'):
+            self.assertNotEqual(stage[key], mats[cm.ROAD_CUT_MATERIAL]['Stages'][0][key])
+            with Image.open(root/'mod/beamng_earth'/stage[key].lstrip('/')) as im:
+                self.assertEqual(im.size, (4096, 4096))
+        self.assertIn('cliff_arid_cut_height.png', (root/'tools/build_app.py').read_text())
+        self.assertEqual((cm.WIDTH_M, cm.HEIGHT_M), (91.44, 91.44))
+
+    def test_arid_cpu_height_change_invalidates_revisit_geometry(self):
+        import revisit
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder/'cliffrocks.py').write_text('geometry')
+            height = folder/'cliff_arid_cut_height.png'
+            height.write_bytes(b'first height')
+            with patch.object(revisit, '__file__', str(folder/'revisit.py')), patch.object(revisit, '_code', []):
+                before = revisit.code_key()
+                height.write_bytes(b'changed height')
+                revisit._code.clear()
+                self.assertNotEqual(before, revisit.code_key())
+
     def test_flat_and_single_tall_spike_do_not_qualify(self):
         for h in (np.zeros_like(self.h), self.h * 0.1):
             self.assertFalse(cr.qualifying_cells(h, self.c, step=8).any())

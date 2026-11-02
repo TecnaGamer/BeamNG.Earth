@@ -86,3 +86,32 @@ gentle hills, excluded land, and missing height samples. These tests run without
 downloading terrain or launching the game; use the locations above for visual
 checks. Add both a valid cliff case and
 nearby false-positive cases when refining detection.
+
+## El Paso divided mountain cut regression
+
+At `31.87810, -106.49561`, Woodrow Bean Transmountain Drive / TX-375, check both
+opposing faces and the divided highway below. Dense cliff exports previously
+exceeded the runtime 16-bit vertex index range, producing giant sheets across
+the road despite valid uint32 indices in the CDAE file. The loaded offending
+shapes had 102,738 and 251,511 vertices. Re-exporting those exact triangles as
+simultaneous objects of at most 65,535 vertices removed the sheets in-game on
+2026-11-01. No cliff detection/road exclusion thresholds were changed.
+
+The writer preserves all triangles, material assignments, normals, UVs and
+vertex colors across chunk boundaries. Small shapes retain the previous byte
+layout; splitting is enabled only by cliff exports, and chunks are not LODs.
+Dense shapes add a few draw objects and duplicate boundary vertices.
+
+Arid road cuts now select their own angular fractured 4K PBR family through the
+existing climate biome. Austin retains its restored limestone. Both use the
+same 300 ft world scale and regional tint. The arid relief is an approximation
+from generated texture features, not measured depth. It adds four 4K maps and
+a small CPU height resource. Server code and height changes invalidate revisit
+geometry; restart the development server to use them, and reload materials or
+restart the game for an existing session.
+
+Tests cover tall opposing curved cuts, tile clipping, rotated geometry, both
+projection charts and material groups; they require bounded local indices,
+finite geometry, short edges and no triangle loss. Export tests also verify
+object links and per-vertex attributes. Climate selection, arid pixel-center
+sampling, periodicity, resource packaging and cache invalidation are covered.

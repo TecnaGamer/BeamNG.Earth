@@ -17,7 +17,8 @@ metallicFactor is zero and needs no metallic texture.
 
 `cut_restored_micro_v1.normal.png` filters tangent slopes from Rock 06 by
 Rob Tuytel / Poly Haven, CC0 1.0, retaining fine grain with a 3.5 cm high-pass
-filter and material strength 0.7. The unmodified source is retained offline at
+filter. Material strength is 0.7 for limestone road cuts and 0.3 for natural
+cliffs and arid road cuts. The unmodified source is retained offline at
 `tools/assets/cliff/rock_06_nor_gl_2k.png`.
 https://polyhaven.com/a/rock_06
 https://creativecommons.org/publicdomain/zero/1.0/
@@ -27,3 +28,12 @@ Rebuild with `tools/restore_roadcut_material.py --detail --install`.
 Additional fine grain, rubble and transition decals are copied privately from
 the player's BeamNG installation at runtime. Proprietary game assets are not
 included in this directory or the distribution.
+
+Arid road-cut `cut_arid_v1_*` maps use an original AI-generated interpretation
+of two user-supplied TX-375 El Paso photographs, reconstructed in sixteen
+overlapping detail crops at 4096 square. See
+`tools/assets/arid_roadcut_generated/RESTORATION.md` and `generation.json` for
+provenance, exact prompts and reproduction. Height and PBR relief are inferred,
+not measured. The separate `server/cliff_arid_cut_height.png` shares the atlas
+chart. World scale is 91.44 m; regional vertex color remains active. The shared
+Rock 06 fine normal above retains its existing attribution and license.

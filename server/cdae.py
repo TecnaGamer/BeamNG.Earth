@@ -54,6 +54,7 @@ PRIM_TRIANGLES = 0x00000000
 PRIM_INDEXED = 0x20000000
 PRIM_NO_MATERIAL = 0x10000000
 PRIM_MATERIAL_MASK = 0x0FFFFFFF
+RENDER_VERTEX_LIMIT = 65535  # runtime mesh indices, despite uint32 CDAE storage
 # TSMaterialList flags.
 MAT_S_WRAP, MAT_T_WRAP = 0x1, 0x2
 
@@ -412,6 +413,33 @@ def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
     return bytes(out), lo, hi, ntri
 
 
+def _bounded_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
+    """Partition a dense surface into simultaneous objects with local indices.
+
+    Preserve supplied normals at shared boundaries; derive missing normals on
+    the complete surface before splitting so chunk seams do not affect lighting.
+    Material sorting and first-use ordering remain local to each output mesh.
+    """
+    N = face_normal_sum(P, T) if normals is None else np.asarray(normals)
+    attributes = (N, uvs, uvs2, tangent_uvs, colors)
+    start, used = 0, set()
+    spans = []
+    for end, tri in enumerate(T.tolist()):
+        added = set(tri)-used
+        if len(used)+len(added) > RENDER_VERTEX_LIMIT:
+            spans.append((start, end))
+            start, used = end, set(tri)
+        else:
+            used.update(added)
+    spans.append((start, len(T)))
+    parts = []
+    for start, end in spans:
+        vertices, inverse = np.unique(T[start:end], return_inverse=True)
+        attrs = [None if a is None else np.asarray(a)[vertices] for a in attributes]
+        parts.append(_mesh_data(P[vertices], inverse.reshape(-1, 3), TM[start:end], nmat, *attrs))
+    return parts
+
+
 def _sorted_tris(tris, tri_materials, nmat):
     T = np.asarray(tris, np.int64).reshape(-1, 3)
     if len(T) == 0:
@@ -430,7 +458,7 @@ LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) de
 
 
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
-           tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None):
+           tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None, split_meshes=False):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -438,6 +466,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     Collada / dae.py convention), normals (n,3) (None: computed like the engine does),
     uvs (n,2) and optional uvs2 (n,2) in Collada convention (v up), tangent_uvs (n,2) the
     parametrisation the tangents follow (default: uvs).
+    split_meshes: partition dense single-detail scenery at RENDER_VERTEX_LIMIT;
+    all chunks are simultaneous objects in the same shape, not distance LODs.
     Several materials: material a list of names and tri_materials (m,) each triangle's index in
     it; the triangles are grouped into one primitive per material (in list order). colors (n, 4)
     uint8 RGBA per vertex (materials with vertColor multiply their base colour by it).
@@ -451,6 +481,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     and optional uvs / tri_materials / colors, same material list), sizes falling, the last one drawn down to
     LOD_TOP_SIZE px. The main mesh is drawn from lods[0]'s size up: lods=[(300, lite)] draws the full mesh while the
     shape spans 300 px or more, the lite one below."""
+    if split_meshes and (collision_only or lods):
+        raise CdaeError("split_meshes currently supports a single visible detail only")
     if collision_only:
         object_name = "Colmesh"
         lods = None
@@ -473,7 +505,13 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     nmat = len(materials)
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T, TM = _sorted_tris(tris, tri_materials, nmat)
-    body0, lo, hi, ntri = _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)
+    parts = (_bounded_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)
+             if split_meshes and len(np.unique(T)) > RENDER_VERTEX_LIMIT else
+             [_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)])
+    body0 = parts[0][0]
+    lo = np.minimum.reduce([p[1] for p in parts])
+    hi = np.maximum.reduce([p[2] for p in parts])
+    ntri = sum(p[3] for p in parts)
     levels = [(None, body0, ntri)]
     for size, d in (lods or []):
         Pl = np.asarray(d["positions"], np.float64).reshape(-1, 3)
@@ -503,20 +541,25 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         # billboard dimension/detailLevel/equatorSteps/polarSteps/polarAngle/includePoles
         details = _vec(b"".join(struct.pack("<3i3fi2i2IfI", 1 + k, 0, k, sizes[k], -1.0, -1.0, levels[k][2],
                                             0, 0, 0, 0, 0.0, 0) for k in range(len(levels))), len(levels), 52)
-    nmesh = 2 if collision_only else len(levels)
+    object_names = [object_name]+[f"{object_name}_part{k}" for k in range(1, len(parts))]
+    object_name_ids = [0]+list(range(len(names), len(names)+len(parts)-1))
+    names += object_names[1:]
+    nobjects = len(parts)
+    nmesh = 2 if collision_only else len(levels)+nobjects-1
     shape_vecs = {
         # node: name, parent, firstObject, firstChild, nextSibling
         "nodes": _vec(struct.pack("<5i", 0, -1, 0, -1, -1), 1, 20),
         # object: name, numMeshes, startMeshIndex, node, nextSibling, firstDecal
-        "objects": _vec(struct.pack("<6i", 0, nmesh, 0, 0, -1, -1), 1, 24),
+        "objects": _vec(b"".join(struct.pack("<6i", name_id, nmesh if nobjects == 1 else 1,
+            k, 0, k+1 if k+1 < nobjects else -1, -1) for k, name_id in enumerate(object_name_ids)), nobjects, 24),
         "subShapeFirstNode": _vec(struct.pack("<i", 0), 1, 4),
         "subShapeFirstObject": _vec(struct.pack("<i", 0), 1, 4),
         "subShapeNumNodes": _vec(struct.pack("<i", 1), 1, 4),
-        "subShapeNumObjects": _vec(struct.pack("<i", 1), 1, 4),
+        "subShapeNumObjects": _vec(struct.pack("<i", nobjects), 1, 4),
         "defaultRotations": _vec(struct.pack("<4h", 0, 0, 0, 0x7FFF), 1, 8),     # identity Quat16
         "defaultTranslations": _vec(struct.pack("<3f", 0, 0, 0), 1, 12),
         # object state: visibility, frame, matFrame
-        "objectStates": _vec(struct.pack("<fii", 1.0, 0, 0), 1, 12),
+        "objectStates": _vec(struct.pack("<fii", 1.0, 0, 0)*nobjects, nobjects, 12),
         "details": details,
     }
     out = bytearray()
@@ -533,13 +576,15 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         _pack(out, 4)
     for _, body, _ in levels:
         out += body
+    for body, _, _, _ in parts[1:]:
+        out += body
     _pack(out, 0)                                          # sequences
     _pack(out, len(materials))                             # materials
     for name in materials:
         for v in (name, MAT_S_WRAP | MAT_T_WRAP, 0, 0xFFFFFFFF, 0xFFFFFFFF, 1.0, 1.0):
             _pack(out, v)
 
-    header = packb({"info": INFO, "compression": False, "bodysize": len(out), "objectNames": [object_name]})
+    header = packb({"info": INFO, "compression": False, "bodysize": len(out), "objectNames": object_names})
     return struct.pack("<II", VERSION_WORD, len(header)) + header + bytes(out)
 
 

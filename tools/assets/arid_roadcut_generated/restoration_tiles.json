@@ -1,0 +1,226 @@
+[
+  {
+    "name": "r0c0",
+    "bounds": [
+      -28,
+      -28,
+      342,
+      342
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "3bcdf4b4858c5c0aac0f541f25d4508c135a1d0d14b93cdd2512575302bfe476"
+  },
+  {
+    "name": "r0c1",
+    "bounds": [
+      286,
+      -28,
+      655,
+      342
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "2064b8cf059e83f52a4a1bded05a0a8b343f8ce43768cec10651ee5edb7de613"
+  },
+  {
+    "name": "r0c2",
+    "bounds": [
+      599,
+      -28,
+      968,
+      342
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "ac4a70276820641517521869b6421e36ac713cd899e2646587e1d802fe012925"
+  },
+  {
+    "name": "r0c3",
+    "bounds": [
+      912,
+      -28,
+      1282,
+      342
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "73629e7200e44d8f46796ebee9fcd8bf63a8356ed16ab6044a25cb85ea2c2953"
+  },
+  {
+    "name": "r1c0",
+    "bounds": [
+      -28,
+      286,
+      342,
+      655
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "0e0a911f4272eaed369e34be1162094c1c80e1714fd8e75137a617750c32b6a9"
+  },
+  {
+    "name": "r1c1",
+    "bounds": [
+      286,
+      286,
+      655,
+      655
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "40f9874a7501fe2799540214dbf2c1a90d8c7209245c27d438c693f646820631"
+  },
+  {
+    "name": "r1c2",
+    "bounds": [
+      599,
+      286,
+      968,
+      655
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "3c8805a0bd7c8756cef348f3eeab9509395edd7e6742d087b5bc1eb856c01a57"
+  },
+  {
+    "name": "r1c3",
+    "bounds": [
+      912,
+      286,
+      1282,
+      655
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "cc09d9aa223df732d3c2ac1f27d5a7822de6182628a2c108f4d76f50a32611fe"
+  },
+  {
+    "name": "r2c0",
+    "bounds": [
+      -28,
+      599,
+      342,
+      968
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "e25f2b79e30d37ead041b3cd0e256c03267d565bef4ae2852af168b2a2c65684"
+  },
+  {
+    "name": "r2c1",
+    "bounds": [
+      286,
+      599,
+      655,
+      968
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "710c9704f55fc4f5803b97658d87658a7d2651ce3491fea8b7d2e69f6d0d9892"
+  },
+  {
+    "name": "r2c2",
+    "bounds": [
+      599,
+      599,
+      968,
+      968
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "804872f37a474ada20497f161d3715db44a0aa958fb8bacb6218ec873165a17c"
+  },
+  {
+    "name": "r2c3",
+    "bounds": [
+      912,
+      599,
+      1282,
+      968
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "8a350704cf65d465b2de592be5aef44aed041e9cd694bf0cf996852b510bf187"
+  },
+  {
+    "name": "r3c0",
+    "bounds": [
+      -28,
+      912,
+      342,
+      1282
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "5ad9ac912b1c3d189c25bc93c8b9edf03fb51ef4ff1eac4b4c7b10e277e11cd8"
+  },
+  {
+    "name": "r3c1",
+    "bounds": [
+      286,
+      912,
+      655,
+      1282
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "736957bae1a21b6a9c83551c8444650c6e14371ab55030e56d6a3dfb511adea7"
+  },
+  {
+    "name": "r3c2",
+    "bounds": [
+      599,
+      912,
+      968,
+      1282
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "68ae363b408a952f362b880d7211120b8e34f01397485a81083942c4b8629bc7"
+  },
+  {
+    "name": "r3c3",
+    "bounds": [
+      912,
+      912,
+      1282,
+      1282
+    ],
+    "generated_size": [
+      1254,
+      1254
+    ],
+    "sha256": "4eeabea372e02eb08b52ac2790a0808089adb7aaaa03c9b307044470be339ea8"
+  }
+]
