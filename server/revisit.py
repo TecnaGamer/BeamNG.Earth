@@ -54,6 +54,8 @@ def fault(lidar=False):
     _faults[0] += 1
     if not lidar:
         _tl.n = getattr(_tl, "n", 0) + 1
+    else:
+        _tl.lidar = getattr(_tl, "lidar", 0) + 1
 
 
 def faults():
@@ -63,6 +65,11 @@ def faults():
 def thread_faults():
     """This thread's faults (fault): what a computation done in this thread alone read short (roads._cell_ranges)."""
     return getattr(_tl, "n", 0)
+
+
+def thread_lidar_faults():
+    """This thread's lidar rule faults (fault(lidar=True)): built on the rule for want of the lidar."""
+    return getattr(_tl, "lidar", 0)
 
 
 _PRODUCES = re.compile(r"\brevisit\.(?:key|load|store)\(|\b_revisit_tile\(")

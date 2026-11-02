@@ -17,6 +17,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+PASSES = 3                  # planning passes: cells short of something in one are planned again in the next
 SERVER = os.path.join(os.path.dirname(HERE), "server")
 sys.path.insert(0, SERVER)
 
@@ -109,14 +110,35 @@ def main():
     os.environ.setdefault("BNE_LIDAR_GAPS_WAIT", "120")
     work = os.path.join(a.cache, "bake_work")
     os.makedirs(work, exist_ok=True)
-    jobs = [(a.cache, cells[i::a.procs], os.path.join(work, f"w{i}.jsonl"), i) for i in range(a.procs)]
-    for j in jobs:
-        if os.path.exists(j[2]):
-            os.remove(j[2])
+    for n_ in os.listdir(work):
+        os.remove(os.path.join(work, n_))
     t0 = time.time()
-    with multiprocessing.get_context("spawn").Pool(a.procs) as pool:
-        versions = pool.map(_worker, [j for j in jobs if j[1]])
-    print(f"planned in {time.time() - t0:.0f} s", flush=True)
+    todo, versions, jobs = cells, [], []
+    for pass_ in range(PASSES):
+        # (a cell short of something in a pass (a download that failed, the lidar late) is planned again in the next,
+        # in a run of its own: its incomplete plans in the last run's folder would be read instead)
+        if pass_:
+            plancache.start_run(a.cache)
+        pj = [(a.cache, todo[i::a.procs], os.path.join(work, f"p{pass_}w{i}.jsonl"), i) for i in range(a.procs)]
+        pj = [j for j in pj if j[1]]
+        with multiprocessing.get_context("spawn").Pool(len(pj)) as pool:
+            versions += pool.map(_worker, pj)
+        jobs += pj
+        have = set()
+        for j in jobs:
+            if os.path.exists(j[2]):
+                for line in open(j[2]):
+                    r = json.loads(line)
+                    if "plans" in r:
+                        have.add(tuple(r["plans"]))
+        todo = [c for c in cells if (c[0], c[1], c[2]) not in have]
+        print(f"pass {pass_ + 1}: {len(cells) - len(todo)}/{len(cells)} cells' plans complete, "
+              f"{time.time() - t0:.0f} s", flush=True)
+        if not todo:
+            break
+    if todo:
+        print("cells without complete plans (the client plans them): " +
+              " ".join(f"{z}/{x}/{y}" for z, x, y, _la, _lo in todo), flush=True)
     if len({json.dumps(v, sort_keys=True) for v in versions}) != 1:
         raise SystemExit(f"the workers' map data versions differ: {versions}")
     wr = bakepack.Writer(a.out)

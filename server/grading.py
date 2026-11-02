@@ -857,12 +857,15 @@ class _Planner:
         shared, mine = (self.shared.claim(key) if self.shared is not None else (None, False))
         try:
             import revisit
-            f0 = revisit.faults()
+            # (this thread's faults: the planning threads of a process plan cells side by side, and another's fault
+            # kept this one's complete plans from later visits and baked packs: 2026-11-02)
+            f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
             got = shared if shared is not None else self._make_cell(key)
             if got is None:
                 return []
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
-                self.shared.store(key, *got, persist=revisit.faults() == f0)
+                self.shared.store(key, *got, persist=revisit.thread_faults() == f0
+                                  and revisit.thread_lidar_faults() == l0)
         finally:
             if mine:
                 self.shared.release(key)
