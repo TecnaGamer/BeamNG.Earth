@@ -385,6 +385,16 @@ class BuildTileTest(unittest.TestCase):
         got = self._centre_covered([[(-300, 100), (500, 100)], [(120, 100), (120, 400)]], ["primary", "service"])
         self.assertGreater(got, 240, "a drive the map does not split the road at")
 
+    def test_edge_dashes_survive_a_second_road_in_the_tile(self):
+        def dashes(geom, classes):
+            chunks = roads.build_tile(FRAME, 0, 0, [features(geom, classes)], flat, None, walks=[], country="SE")
+            return [c for c in chunks if c["m"] == "line_white" and abs(abs(c["n"][0][1] - 100) - 3) < 2
+                    and roads._length(np.array(c["n"])) < 1.5]
+        alone = dashes([[(-300, 100), (500, 100)]], ["primary"])
+        near = dashes([[(-300, 100), (500, 100)], [(-300, 200), (500, 200)]], ["primary", "residential"])
+        self.assertGreater(len(alone), 100, "edge dashes every 3 m, both sides")
+        self.assertEqual(len(near), len(alone), "a second road in the tile takes none of them away")
+
     def test_centre_line_stops_at_a_crossing(self):
         got = self._centre_covered([[(-300, 100), (500, 100)], [(120, -300), (120, 500)]], ["primary", "primary"])
         self.assertLess(got, 248)

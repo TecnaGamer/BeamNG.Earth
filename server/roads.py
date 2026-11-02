@@ -201,6 +201,7 @@ def _osm(feats, name, i, lo=None, hi=None):
 LANE_LINE = {"m": "line_dashed_long", "tl": 12.0, "p": 6, "w": 0.12}     # West Coast USA's 3 m dash, 9 m gap
 CUT_MARGIN = 0.5                # m: a sidewalk / line stops this far outside a crossing road's carriageway
 MIN_PIECE_M = 3.0               # shorter sidewalk / line pieces are dropped
+DASH_MIN_M = 0.3                # ... but a broken line's dash is kept down to this
 WALK_STEP_M = 1.0               # m the ground under a sidewalk may lie off the road's level: further, a cutting's wall or
                                 # a drop is there and the sidewalk stops (it was draped up a wall, Munich's McGraw-Graben)
 NEAR_M = 40.0                   # roads this far outside the tile still cut its sidewalks / lines
@@ -3316,9 +3317,14 @@ def _seg_dist(p, a, b):
     return np.hypot(p[:, None, 0] - q[..., 0], p[:, None, 1] - q[..., 1])
 
 
-def cut_outside(pts, blockers, spacing=2.0):
+def _length(pts):
+    """m along a polyline (k, >= 2). Pure."""
+    return float(np.sum(np.hypot(*np.diff(np.asarray(pts)[:, :2], axis=0).T)))
+
+
+def cut_outside(pts, blockers, spacing=2.0, min_piece=None):
     """The pieces of a polyline (k, 3) outside every blocker (centreline xy (m, 2), half width): densified
-    to `spacing`, points inside a blocker removed, runs of at least MIN_PIECE_M kept. Pure."""
+    to `spacing`, points inside a blocker removed, runs of at least min_piece (default MIN_PIECE_M) kept. Pure."""
     if not blockers:
         return [pts]
     d = densify(np.asarray(pts, np.float64), spacing)
@@ -3326,7 +3332,7 @@ def cut_outside(pts, blockers, spacing=2.0):
     fast.require(0, "inside_blockers")      # the Rust test (712 calls a tile set, ~1 s of numpy)
     segs, starts, hws = _blocker_segments(blockers)
     inside = np.asarray(fast._ef.inside_blockers(np.ascontiguousarray(d[:, :2]), segs, starts, hws))
-    return _runs_outside(d, inside)
+    return _runs_outside(d, inside, MIN_PIECE_M if min_piece is None else min_piece)
 
 
 _BLOCKERS = ()                  # ((blockers list, its segment arrays), ...): the last few lists (a tile alternates
@@ -3373,7 +3379,7 @@ def _on_level(frame, elev, run):
     return [run] if not off.any() else _runs_outside(run, off)
 
 
-def _runs_outside(d, inside):
+def _runs_outside(d, inside, min_piece=MIN_PIECE_M):
     out, start = [], None
     for k in range(len(d) + 1):
         if k < len(d) and not inside[k]:
@@ -3381,7 +3387,7 @@ def _runs_outside(d, inside):
                 start = k
         elif start is not None:
             run = d[start:k]
-            if len(run) >= 2 and float(np.sum(np.hypot(*np.diff(run[:, :2], axis=0).T))) >= MIN_PIECE_M:
+            if len(run) >= 2 and float(np.sum(np.hypot(*np.diff(run[:, :2], axis=0).T))) >= min_piece:
                 out.append(run)
             start = None
     return out
@@ -3533,7 +3539,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
             out.append((look, width, along))
             return
         for piece in markings.dashes(along, pattern):
-            look = {"m": mat, "tl": max(1.0, pattern[0]), "p": CENTRE["p"], "kind": kind_}
+            look = {"m": mat, "tl": max(1.0, pattern[0]), "p": CENTRE["p"], "kind": kind_, "dash": True}
             if side is not None:
                 look["side"] = side
             out.append((look, width, piece))
@@ -7295,7 +7301,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             lines_by = centre_blockers if look.get("kind") in ("centre", "lane") else \
                 edge_blockers if look.get("kind") == "edge" else blockers
             for piece in pieces:
-                for run in cut_outside(piece, wb if walk else lines_by, 0.5 if walk else 2.0):
+                # (a dash, or a line's end in this tile, is short by nature: dropped as a stub, the 1 m dashes of a
+                # Swedish edge line went from every tile with a second road, and a dash from every tile border)
+                keep_m = None if walk or not look.get("kind") else \
+                    DASH_MIN_M if look.get("dash") else min(MIN_PIECE_M, _length(piece) * 0.9)
+                for run in cut_outside(piece, wb if walk else lines_by, 0.5 if walk or look.get("dash") else 2.0, keep_m):
                     for c in split(densify(simplify(run))):
                         if len(c) >= 2:
                             chunks.append(_chunk(look, w, c))
