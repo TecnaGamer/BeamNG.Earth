@@ -35,8 +35,9 @@ T.check(queries.cpu==1 and queries.gpu==1,'Full enables detailed timing APIs')
 T.check(F.history()[1].cpu.Render==5 and F.history()[1].gpu.ShadowMapPass==7,'Full restores phase details')
 T.check(F.history()[1].mod.roads==5,'Full restores mod stage details')
 T.check(F.KEEP==600 and P.snapshot().frames==1,'mode switch resets history and adjusts bounds')
-T.check(P.setPage('io') and P.page=='io','Network & Disk page is navigable')
-T.check(P.setPage('workers') and P.setPage('frames'),'other pages remain navigable')
+T.check(P.setPage('io') and P.page=='network','legacy I/O page opens Network')
+T.check(P.setPage('workers') and P.page=='cpu' and P.setPage('frames') and P.page=='all','legacy page aliases remain navigable')
+for _,tab in ipairs({'all','gpu','cpu','network','disk'}) do T.check(P.setPage(tab) and P.page==tab,'resource tab '..tab..' is navigable') end
 T.check(not P.setPage('invalid'),'invalid page rejected')
 local rows={{endpoint='https://a',responseAvgMs=20,receivedBytes=200,inflight=0,health='idle'},
  {endpoint='https://b',responseAvgMs=90,receivedBytes=10,inflight=1,health='active'},

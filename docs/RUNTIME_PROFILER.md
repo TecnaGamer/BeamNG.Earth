@@ -1,7 +1,7 @@
 # Live performance profiler
 
 This PR includes upstream dev `11cc55572fd5b828f52a0cf0edf0cf449cba1ac0`
-(2 November 2026) and the latest continuous, resizable and compact-view work.
+(2 November 2026) and a resizable, tabbed native ImGui interface.
 The profiler remains optional and off by default. World-generation features are
 reviewed separately; the generic pool hooks also cover upstream's photo process.
 
@@ -9,8 +9,13 @@ Open **Pause menu → BeamNG.Earth → Interface → Detailed performance profil
 The option starts off each session, including when an older settings file says it
 was enabled. Enabling it starts continuous collection and opens a
 resizable window while the Earth level is loaded. Drag its edges or corner to
-resize; charts and worker timelines follow the available width, and frame lanes
-grow with the window height. The window remembers its size and position.
+resize. The minimum size is 560 x 480 logical pixels, adjusted for the game font
+scale. Wide windows put a selected-frame inspector beside the charts; narrower
+windows move it into **Selection details** below the charts. Drag the vertical
+and horizontal dividers to redistribute space. The window remembers its size and
+position; tab, history range and divider positions are saved separately in
+`/settings/beamngEarth-profiler-layout.json`. Short windows scroll the content
+while retaining tabs, capture controls and metric-scope notes.
 Closing it or choosing **Compact view** leaves a small status window while
 collection continues. **Open profiler** returns to the full view without resetting
 history. **Stop profiling** or turning the setting off stops collection. The
@@ -37,13 +42,37 @@ history is capped at 180 frames, versus 600 in Full; server updates arrive once
 per second instead of twice. These checks are disabled during collection, not
 merely hidden. No performance improvement is claimed without a native benchmark.
 
-Navigate between **Frames**, **Workers**, and **Network & Disk**. Full adds:
+The tabs are **All**, **GPU**, **CPU**, **Network**, and **Disk**, in that order.
+All is the initial default; the last selected tab is remembered thereafter.
+
+- **All:** separate CPU, GPU, network and cache history lanes, a shared time
+  cursor, capture metrics, measured-work table and live worker queue counts.
+- **GPU:** reported GPU total, asynchronous render-pass history and ranked pass
+  costs for the selected observation.
+- **CPU:** CPU work, wall-frame interval, GPU wait, engine phases and Earth Lua
+  scopes. **World generation / server workers** preserves the existing worker
+  timeline, active/queued jobs, pool statistics and nested stage details.
+- **Network:** received payload and estimated sent bytes, local application RTT,
+  filterable service rows with response averages/p95, failures and details.
+- **Disk:** instrumented cache reads, produced-file output, read latency,
+  misses/errors, cache quota, volume capacity and optional process-I/O details.
+
+Click a chart or **Inspect worst** to freeze the displayed capture and inspect a
+frame. The selected frame persists across tabs. **Follow live** clears selection
+and catches up to the ongoing capture. History cycles through 5, 10 and 30 seconds;
+the frame ring remains bounded at 180/600 samples, so a selected time window can
+contain less frame coverage at high frame rates. Empty time is not stretched or
+filled with invented samples. **Target** switches between 60 and 120 FPS budgets.
+CPU/GPU lanes share a millisecond scale; network/cache lanes use separate MiB/s
+scales. The white CPU-lane trace is wall-frame interval, not CPU work.
+
+Full adds:
 
 - Frame wall time, FPS, p95/p99, worst frame and history of the last 600 frames.
 - Stacked columns for every captured frame: engine CPU phases, GPU passes and
   Earth Lua scopes in separate lanes. Hover to read costs, click to select a frame,
-  or jump straight to the worst frame. Choose 180/300/600 visible frames, fit spikes
-  or use the detail scale, and compare against 60/120 FPS budgets.
+  or jump straight to the worst displayed frame. The scale fits captured spikes
+  and shows 60/120 FPS budget guides.
 - Focused observations showing expensive phases, peaks, slow-frame occurrences,
   intentional pacing, missing timing data and possible GPU pressure. Workload
   observations distinguish a long worker queue from long execution.
@@ -59,7 +88,7 @@ Navigate between **Frames**, **Workers**, and **Network & Disk**. Full adds:
 
 ## Network and storage
 
-Network & Disk shows the local game/world-server application round trip, bytes
+Network shows the local game/world-server application round trip, bytes
 sent/received, socket errors and expired RTT probes. External service rows group
 observed HTTP/HTTPS and helper TCP operations by scheme, hostname and port. Each
 row shows average time to response headers, average complete-request/session
@@ -93,6 +122,19 @@ Each process retains at most 128 service records, evicting inactive records firs
 and at most 64 recent latency samples per service in Full. The collector retains
 at most 128 reporting processes; history graphs retain 120 rate observations.
 Missing counters remain unavailable rather than appearing as zero.
+
+The server sends monotonic `observedAt`, per-sample `at` and `intervalS` fields.
+The client aligns that relative history with its packet-arrival timestamp. This
+is approximate observation-time alignment, not clock synchronization or proof of
+causation. An I/O rate describes a sampled interval, not an individual frame or
+file operation. Older servers without timestamp fields can still show I/O
+aggregates/details, but cannot populate the shared aligned chart. Service and
+storage totals describe the displayed capture snapshot; they are not historical
+per-frame records. The observed-work table labels averages and completed queries
+separately and does not invent individual disk events.
+
+Snapshot export retains raw bytes/s, milliseconds, frame observation timestamps,
+selected frame/tab, time range and data-scope metadata. UI caches are omitted.
 
 ## Reading the timings
 
@@ -170,6 +212,13 @@ spawned-process pickling continues to work. Prefer useful phase boundaries over
 per-vertex timers.
 
 ## Validation
+
+The tabbed interface passed 181 Python cases (175 passed, 6 optional skips) and
+the Lua profiler regression suites. Coverage includes timestamp fields over the
+actual client/server protocol, tab isolation, shared selection, frozen exports,
+responsive panel geometry and six hours of bounded continuous capture. A temporary
+isolated-module smoke test received live engine and server telemetry in BeamNG
+without Lua errors; full visual and mouse-interaction acceptance remains pending.
 
 Run `python -B tools/check_runtime_profiler.py` with the server dependencies and
 the existing optional LuaJIT-backed `lupa` runtime available. This covers threads,

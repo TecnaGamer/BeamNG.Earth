@@ -88,7 +88,7 @@ function M.setMode(mode)
   return true
 end
 
-function M.add(ms, marks, metrics)
+function M.add(ms, marks, metrics, observedAtMs)
   ms = number(ms)
   if not ms or ms <= 0 then return end
   metrics = metrics or M.capture()
@@ -101,7 +101,7 @@ function M.add(ms, marks, metrics)
   if M.mode == 'full' and next(cpu) and cpuResidual > 0.01 then cpu['Unattributed'] = cpuResidual end
   local gpuMs = number(metrics.gpuMs)
   if next(gpu) and gpuMs and gpuMs - gpuSum > 0.01 then gpu['Unattributed GPU'] = gpuMs - gpuSum end
-  frames[at] = { id = serial, ms = ms, cpu = cpu, gpu = gpu, mod = mod, cpuSumMs = cpuSum, gpuSumMs = gpuSum,
+  frames[at] = { id = serial, ms = ms, observedAtMs = number(observedAtMs), cpu = cpu, gpu = gpu, mod = mod, cpuSumMs = cpuSum, gpuSumMs = gpuSum,
     modMs = modSum, cpuMs = number(metrics.cpuMs), gpuMs = gpuMs, waitMs = number(metrics.waitMs),
     focused = metrics.focused, gpuTiming = metrics.gpuTiming,
     phaseOverrun = cpuSum > ms * 1.1 + 0.5, gpuOverrun = gpuMs and gpuSum > gpuMs * 1.1 + 0.5 or false }

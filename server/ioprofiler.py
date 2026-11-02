@@ -452,7 +452,8 @@ class View:
             for key,value in [('rxBps',rx),('txBps',tx),('cacheReadBps',disk['readBytes']),('cacheOutputBps',disk['outputBytes'])]:
                 rates[key]=max(0,value-old[key])/dt
         self.previous=(now,dict(rxBps=rx,txBps=tx,cacheReadBps=disk['readBytes'],cacheOutputBps=disk['outputBytes']))
-        record=dict(rates,processReadBps=sum(p['readBps'] or 0 for p in processes) if any(p['readBps'] is not None for p in processes) else None,
+        record=dict(rates,at=now,intervalS=dt if self.history else None,
+                    processReadBps=sum(p['readBps'] or 0 for p in processes) if any(p['readBps'] is not None for p in processes) else None,
                     processWriteBps=sum(p['writeBps'] or 0 for p in processes) if any(p['writeBps'] is not None for p in processes) else None)
         self.history.append(record)
         if server is not None and now-self.volume_at >= 5:
@@ -467,6 +468,6 @@ class View:
             self.volumes,self.volume_at=volumes,now
         cache=getattr(server,'cache',None) if server is not None else None
         cache_usage=cache.message() if cache is not None else None
-        return dict(mode=mode, services=rows, disk=disk, processes=processes, rates=rates,
+        return dict(mode=mode, observedAt=now, services=rows, disk=disk, processes=processes, rates=rates,
                     volumes=self.volumes,cache=cache_usage,history=list(self.history),
                     receivedBytes=rx,sentBytes=tx,omitted=sum(s.get('omitted',0) for s in sources))

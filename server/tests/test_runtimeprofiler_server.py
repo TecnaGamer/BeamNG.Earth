@@ -21,6 +21,9 @@ class LiveProfilerTest(ServerHarness):
             self.c.send({"type": "runtime_profiler", "enabled": True})
             state, _ = self.c.until(lambda m: m["type"] == "runtime_profiler", timeout=10)
             self.assertTrue(state["profile"]["enabled"])
+            io=state['profile']['io']
+            self.assertEqual(io['history'][-1]['at'],io['observedAt'])
+            self.assertIn('intervalS',io['history'][-1])
             points, tris = [[0, 0, 0], [1, 0, 0], [0, 1, 0]], [[0, 1, 2]]
             self.c.send({"type": "runtime_profiler", "enabled": True})
             got = self.server.hm_pool.submit(cdae.encode, points, tris).result(timeout=10)
@@ -55,4 +58,7 @@ class LiveProfilerTest(ServerHarness):
             self.assertEqual(state['profile']['recent'],[])
             self.assertIn('services',state['profile']['io'])
             self.assertEqual(state['profile']['io']['processes'],[])
+            io=state['profile']['io']
+            self.assertEqual(io['history'][-1]['at'],io['observedAt'])
+            self.assertIn('intervalS',io['history'][-1])
         finally: publisher.cancel()

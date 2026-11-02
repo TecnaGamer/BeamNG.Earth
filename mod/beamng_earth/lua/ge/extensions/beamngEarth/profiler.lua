@@ -1,9 +1,9 @@
 -- Opt-in live profiler. Core supplies the previous completed frame's wall time and marks.
 -- All history is bounded; no frame samples, UI allocations or network requests while off.
-local M = { enabled = false, mode = 'essential', page = 'frames', compact = false }
+local M = { enabled = false, mode = 'essential', page = 'all', compact = false }
 local frameProfile = require('beamngEarth/frameprofile')
-local frameUI = require('beamngEarth/frameprofile_ui')
-local ioUI = require('beamngEarth/ioprofile_ui')
+local presentation = require('beamngEarth/profiler_view')
+local ui = require('beamngEarth/profiler_ui')
 local transport = require('beamngEarth/net')
 local clock = require('beamngEarth/stopwatch').clock()
 local frames, frameAt, frameN = {}, 0, 0
@@ -16,7 +16,7 @@ local supportedVersion, probe, pending, rtt = nil, 0, {}, { count = 0, sum = 0, 
 
 function M.reset()
   frameProfile.reset()
-  frameUI.reset()
+  presentation.reset()
   frames, frameAt, frameN = {}, 0, 0
   server, receivedAt, view, message = nil, nil, nil, nil
   refreshedAt = -math.huge
@@ -38,14 +38,16 @@ function M.setMode(mode)
 end
 
 function M.setPage(page)
-  if page == 'frames' or page == 'workers' or page == 'io' then M.page = page; return true end
+  local aliases = {frames='all',workers='cpu',io='network'}
+  page = aliases[page] or page
+  if presentation.validTab(page) then M.page, M.tabRequest = page, page; return true end
   return false
 end
 
 function M.setFrozen(on)
   on = on == true
   if on == frozen then return end
-  if on then view = view or M.snapshot() else view = nil end
+  if on then view = view or M.snapshot() else view = nil; presentation.select(nil) end
   frozen = on
 end
 
@@ -102,7 +104,7 @@ function M.update(ms, marks, inLevel, connected, send)
   for id, started in pairs(pending) do if now-started>5000 then pending[id]=nil;rtt.timeouts=rtt.timeouts+1 end end
   if not connected then server, receivedAt, supported = nil, nil, nil end
   if not inLevel or type(ms) ~= 'number' or ms <= 0 or ms ~= ms or ms == math.huge then return end
-  frameProfile.add(ms, marks)
+  frameProfile.add(ms, marks, nil, math.max(0, now-startedAt))
   captured = captured + 1
   frameAt = frameAt % FRAME_KEEP + 1
   local sample = { ms = ms, marks = {} }
@@ -191,7 +193,9 @@ function M.snapshot()
     frames = frameN, avgMs = frameN > 0 and sum / frameN or 0, fps = sum > 0 and frameN * 1000 / sum or 0,
     p95 = percentile(frameTimes, 0.95), maxMs = frameTimes[#frameTimes] or 0,
     parts = ordered(parts), pools = ordered(pools), stages = ordered(stages), server = server, plot = plot,
-    frameDetail = frameProfile.analyze(), feedback = feedback, localLink = link, latency = latency }
+    frameDetail = frameProfile.analyze(), feedback = feedback, localLink = link, latency = latency,
+    ioHistory = presentation.ioHistory(server and server.io, receivedAt and receivedAt-startedAt),
+    serverAgeMs = receivedAt and math.max(0,clock()-receivedAt) or nil }
 end
 
 local function text(im, s) im.TextUnformatted(tostring(s)) end
@@ -265,81 +269,28 @@ local function summary(im)
     view.fps, view.avgMs, view.p95, view.maxMs, view.frames))
 end
 
-function M.draw(inLevel)
-  if not M.enabled or not inLevel then return end
-  local im = rawget(_G, 'ui_imgui')
-  if not im then return end
-  local now = clock()
-  if M.compact then
-    im.SetNextWindowSize(im.ImVec2(420, 145), im.Cond_FirstUseEver)
-    if im.Begin('Earth profiler / collecting') then
-      refresh(now)
-      summary(im)
-      wrapped(im, frozen and 'Display frozen; collection continues.' or 'Live / continuous collection')
-      if im.Button('Open profiler') then M.setCompact(false) end
-      im.SameLine()
-      if im.Button('Stop profiling') then stop() end
-    end
-    im.End()
-    return
-  end
-  openPtr = openPtr or im.BoolPtr(true)
-  openPtr[0] = true
-  im.SetNextWindowSize(im.ImVec2(740, 680), im.Cond_FirstUseEver)
-  if im.SetNextWindowSizeConstraints then im.SetNextWindowSizeConstraints(im.ImVec2(560, 360), im.ImVec2(10000, 10000)) end
-  if im.Begin('BeamNG.Earth performance profiler', openPtr) then
-    local available = im.GetContentRegionAvail()
-    local width = math.max(1, available.x)
-    local graphHeight = math.max(90, math.min(240, (im.GetWindowSize().y - 340) / 3))
-    for _, mode in ipairs({'essential','full'}) do
-      if im.Button((mode=='essential' and 'Essential' or 'Full')..(M.mode==mode and ' [selected]' or '')) then
-        local settings = require('beamngEarth/settings')
-        if settings.SCHEMA and settings.SCHEMA.profilerMode then settings.set('profilerMode',mode) else M.setMode(mode) end
-      end
-      im.SameLine()
-    end
-    text(im,'Collection mode')
-    for _, page in ipairs({{'frames','Frames'},{'workers','Workers'},{'io','Network & Disk'}}) do
-      if im.Button(page[2]..(M.page==page[1] and ' [open]' or '')) then M.setPage(page[1]) end
-      im.SameLine()
-    end
-    text(im,'')
-    if im.Button(frozen and 'Resume display' or 'Freeze display') then M.setFrozen(not frozen) end
-    im.SameLine()
-    refresh(now)
-    if im.Button('Save snapshot') then
-      local ok, result = pcall(function()
-        -- Export exactly what is being inspected, including a frozen display.
-        local capture = {}
-        for k, v in pairs(view) do if k ~= 'plot' then capture[k] = v end end
-        capture.frameDetail = {}
-        for k, v in pairs(view.frameDetail) do if k ~= '_layouts' then capture.frameDetail[k] = v end end
-        return jsonWriteFile('/settings/beamngEarth-profiler.json', capture, true)
-      end)
-      message = ok and result ~= false and 'Saved /settings/beamngEarth-profiler.json' or 'Snapshot could not be saved'
-    end
-    im.SameLine()
-    if im.Button('Compact view') then M.setCompact(true) end
-    im.SameLine()
-    if im.Button('Stop profiling') then stop(); im.End(); return end
-    summary(im)
-    wrapped(im, string.format('%s | collecting %.1f s | %d frames sampled | history limit %d',
-      frozen and 'DISPLAY FROZEN' or 'LIVE', math.max(0, now-startedAt)/1000, captured, FRAME_KEEP))
-    if message then text(im, message) end
-    if frozen then wrapped(im, 'Display frozen; frame, worker and network collection continues. Resume display to catch up.') end
-    if supported == false then wrapped(im, 'This server does not support worker profiling. Update the server to see worker timings.')
-    elseif not receivedAt or now - receivedAt > 3000 then text(im, 'Worker feed unavailable or stale; waiting for server telemetry.') end
-    wrapped(im, 'Blue: execution (includes I/O and waits). Amber: queue wait. CPU is the executing thread only. Parallel jobs and nested stages overlap; do not add their times together.')
-    if M.page=='frames' and im.CollapsingHeader1('Per-frame CPU / GPU history', im.TreeNodeFlags_DefaultOpen) then
-      if view.frames > 0 then im.PlotLines1('##earth-profiler-frames', view.plot, view.frames, 0, 'Frame wall time (ms)', 0, nil, im.ImVec2(width, 55)) end
-      frameUI.draw(im, view.frameDetail, width, graphHeight)
-    end
-    local data = view.server
-    if M.page=='io' then ioUI.draw(im,data and data.io,view.localLink,view.latency,M.mode,width) end
-    if data and data.collectionMode and data.collectionMode~=M.mode then wrapped(im,'Shared server collection is Full because another client requested it.') end
-    if M.page=='workers' and M.mode=='essential' then wrapped(im,'Detailed worker timers, stage checks and timelines are disabled in Essential mode. Select Full to collect them.') end
-    if M.page=='workers' and M.mode=='full' and data then
-      if #view.feedback > 0 and im.CollapsingHeader1('Significant worker workloads', im.TreeNodeFlags_DefaultOpen) then
+function M.chooseMode(mode)
+  local settings = require('beamngEarth/settings')
+  if settings.SCHEMA and settings.SCHEMA.profilerMode then settings.set('profilerMode',mode) else M.setMode(mode) end
+end
+M.stop = stop
+function M.toggleBudget()
+  frameProfile.BUDGET_MS = frameProfile.BUDGET_MS > 10 and 1000/120 or 1000/60
+  if view then view.frameDetail.budgetMs = frameProfile.BUDGET_MS end
+end
+function M.saveSnapshot()
+  refresh(clock())
+  local ok, result = pcall(function()
+    return jsonWriteFile('/settings/beamngEarth-profiler.json', presentation.export(view,M.page), true)
+  end)
+  message = ok and result ~= false and 'Saved /settings/beamngEarth-profiler.json' or 'Snapshot could not be saved'
+end
+function M.drawWorkers(im,view,width)
+  local data=view.server
+  if view.mode~='full' then wrapped(im,'Detailed worker timelines require Full mode.');return end
+  if not data then wrapped(im,'Waiting for server worker telemetry.');return end
+  wrapped(im,'Worker wall time includes I/O and waits. Parallel jobs and inclusive stages overlap; do not add them to game-frame time.')
+  if #view.feedback > 0 and im.CollapsingHeader1('Significant worker workloads', im.TreeNodeFlags_DefaultOpen) then
         for _, line in ipairs(view.feedback) do wrapped(im, line) end
       end
       if (data.skipped or 0) > 0 then text(im, string.format('%d jobs omitted at the telemetry capacity limit', data.skipped)) end
@@ -380,9 +331,74 @@ function M.draw(inLevel)
           end
         end
       end
+end
+
+local preferencesLoaded, preferenceKey = false, nil
+local preferencePath = '/settings/beamngEarth-profiler-layout.json'
+local function preferences(load)
+  if load and not preferencesLoaded then
+    preferencesLoaded=true
+    if rawget(_G,'jsonReadFile') then
+      local ok,p=pcall(jsonReadFile,preferencePath)
+      if ok and type(p)=='table' then
+        if presentation.validTab(p.tab) then M.setPage(p.tab) end
+        if p.seconds==5 or p.seconds==10 or p.seconds==30 then presentation.seconds=p.seconds end
+        if type(p.inspectorWidth)=='number' then presentation.inspectorWidth=math.max(230,math.min(600,p.inspectorWidth)) end
+        if type(p.chartHeight)=='number' then presentation.chartHeight=math.max(180,math.min(2000,p.chartHeight)) end
+      end
+    end
+  elseif not load and rawget(_G,'jsonWriteFile') then
+    local key=string.format('%s:%d:%.0f:%.0f',M.page,presentation.seconds,presentation.inspectorWidth,presentation.chartHeight or 0)
+    if key~=preferenceKey then
+      local ok,result=pcall(jsonWriteFile,preferencePath,{tab=M.page,seconds=presentation.seconds,
+        inspectorWidth=presentation.inspectorWidth,chartHeight=presentation.chartHeight},true)
+      if ok and result~=false then preferenceKey=key end
+    end
+  end
+end
+
+function M.draw(inLevel)
+  if not M.enabled or not inLevel then return end
+  local im = rawget(_G, 'ui_imgui')
+  if not im then return end
+  local now = clock()
+  if M.compact then
+    im.SetNextWindowSize(im.ImVec2(420,145),im.Cond_FirstUseEver)
+    if im.Begin('Earth profiler / collecting') then
+      refresh(now);summary(im)
+      wrapped(im,frozen and 'Display frozen; collection continues.' or 'Live / continuous collection')
+      if im.Button('Open profiler') then M.setCompact(false) end
+      im.SameLine()
+      if im.Button('Stop profiling') then stop() end
+    end
+    im.End();return
+  end
+  preferences(true)
+  local styleCount=ui.pushStyle(im)
+  openPtr = openPtr or im.BoolPtr(true)
+  openPtr[0]=true
+  local scale=im.GetFontSize()/16
+  im.SetNextWindowSize(im.ImVec2(1180*scale,820*scale),im.Cond_FirstUseEver)
+  im.SetNextWindowSizeConstraints(im.ImVec2(560*scale,480*scale),im.ImVec2(10000,10000))
+  if im.Begin('BeamNG.Earth | Profiler###earth-performance-profiler',openPtr) then
+    refresh(now)
+    ui.tabs(im,M)
+    ui.toolbar(im,M,frozen,view)
+    if M.enabled then
+      refresh(now)
+      if message then wrapped(im,message) end
+      if supported==false then wrapped(im,'This server cannot provide worker or I/O telemetry.')
+      elseif not view.serverAgeMs or view.serverAgeMs>3000 then wrapped(im,'Server telemetry unavailable or stale; retained values are not live.') end
+      if view.server and view.server.collectionMode and view.server.collectionMode~=M.mode then wrapped(im,'Another client is keeping shared server collection in Full mode.') end
+      local footerHeight=ui.footerHeight(im,view,M.page,im.GetContentRegionAvail().x)
+      if im.BeginChild1('##profiler-content',im.ImVec2(0,-footerHeight),false) then ui.body(im,view,M) end
+      im.EndChild()
+      ui.footer(im,view,M.page)
+      if not im.IsMouseDown(0) then preferences(false) end
     end
   end
   im.End()
+  im.PopStyleColor(styleCount)
   if not openPtr[0] then M.setCompact(true) end
 end
 

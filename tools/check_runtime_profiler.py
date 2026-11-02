@@ -28,7 +28,7 @@ def main():
     ok = result.wasSuccessful()
     report = {"python": {"run": result.testsRun, "failures": len(result.failures),
                          "errors": len(result.errors), "skipped": len(result.skipped)}, "lua": {}}
-    for name in ("profiler", "profiler_modes", "net_profile", "ioprofile_ui", "frameprofile", "settings", "core_stubbed", "core_robustness"):
+    for name in ("profiler", "profiler_view", "profiler_modes", "net_profile", "ioprofile_ui", "frameprofile", "settings", "core_stubbed", "core_robustness"):
         code = (f"import sys;sys.path.insert(0,{args.lua_runtime!r});from lupa.luajit21 import LuaRuntime;"
                 f"LuaRuntime().execute(\"arg={{[0]='mod/tests/test_{name}.lua'}};dofile(arg[0])\")")
         proc = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True)

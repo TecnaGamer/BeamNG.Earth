@@ -131,6 +131,19 @@ class IOTest(unittest.TestCase):
         for _ in range(140): view.snapshot([],'essential')
         self.assertEqual(len(view.history),120)
 
+    def test_rate_intervals_preserve_monotonic_observation_time(self):
+        view=io.View()
+        with patch.object(io.time,'perf_counter',return_value=100.0):
+            first=view.snapshot([], 'essential')
+        with patch.object(io.time,'perf_counter',return_value=101.75):
+            second=view.snapshot([], 'essential')
+        self.assertEqual(first['observedAt'],100.0)
+        self.assertEqual(first['history'][0]['at'],100.0)
+        self.assertIsNone(first['history'][0]['intervalS'])
+        self.assertEqual(second['history'][-1]['intervalS'],1.75)
+        self.assertEqual(second['history'][-1]['at'],second['observedAt'])
+        self.assertEqual(first['history'],second['history'][:1])
+
     def test_real_http_response_header_and_body_measurements(self):
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):

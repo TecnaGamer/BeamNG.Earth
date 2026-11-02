@@ -35,7 +35,7 @@ local function plot(im,id,history,key,label,width)
   if n>0 then im.PlotLines1('##io-'..id,values,n,0,label,0,nil,im.ImVec2(width,52)) end
 end
 
-function M.draw(im, data, localLink, rtt, mode, width)
+function M.drawNetwork(im, data, localLink, rtt, mode, width)
   width=width or 610
   text(im,'Game / world-server connection')
   text(im,localLink.endpoint or 'Endpoint unavailable')
@@ -81,6 +81,11 @@ function M.draw(im, data, localLink, rtt, mode, width)
   wrap(im,'Passive observations only: no pings or extra downloads. Response latency includes connection setup and service work. Session time also includes body transfer and caller work inside the download session. HTTP errors are separate from transport failures. Sent bytes are an estimate; TLS/TCP overhead and redirect-hop timings are not measured.')
   if (data.omitted or 0)>0 then text(im,tostring(data.omitted)..' old endpoint records omitted at the capacity limit.') end
 
+end
+
+function M.drawDisk(im, data, mode, width)
+  width=width or 610
+  if not data then wrap(im,'Disk telemetry needs the matching server; no measurements have arrived yet.');return end
   if im.CollapsingHeader1('Disk space and cache usage',im.TreeNodeFlags_DefaultOpen) then
     for _,v in ipairs(data.volumes or {}) do
       text(im,v.label..' / '..v.path)
@@ -113,4 +118,8 @@ function M.draw(im, data, localLink, rtt, mode, width)
   end
 end
 
+function M.draw(im, data, localLink, rtt, mode, width)
+  M.drawNetwork(im,data,localLink,rtt,mode,width)
+  M.drawDisk(im,data,mode,width)
+end
 return M
