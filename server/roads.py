@@ -2411,21 +2411,41 @@ def _measured_widths(feats, specs, widths):
     return out
 
 
+def _cell_memo(feats, name, make):
+    """make() of a layer, remembered on it and in _FACTS_MEM by its cell (another copy of the layer, after the map
+    data's memory cache reloaded it, takes it: 2026-11-02) when made with no fault of this thread."""
+    st = feats.__dict__
+    got = st.get(name)
+    if got is not None:
+        return got
+    mk = _ranges_mem_key(st)
+    mk = None if mk is None else mk[:1] + (name,) + mk[2:]
+    if mk is not None:
+        with _FACTS_LOCK:
+            got = _FACTS_MEM.get(mk)
+        if got is not None and len(got) == len(feats):
+            st[name] = got
+            return got
+    import revisit
+    f0 = revisit.thread_faults()
+    got = st[name] = make()
+    if mk is not None and revisit.thread_faults() == f0:
+        with _FACTS_LOCK:
+            _FACTS_MEM[mk] = got
+            while len(_FACTS_MEM) > FACTS_MEM_KEPT:
+                _FACTS_MEM.popitem(last=False)
+    return got
+
+
 def bridge_specs(feats):
     """Per feature: the Spec of a road bridge (flag is_bridge, or level above ground; not a tunnel), else
     None. No parking widths on bridges (urban False). Pure."""
-    got = feats.__dict__.get("_bridge_specs")      # remembered: cells stay decoded (mapdata)
-    if got is None:
-        got = feats.__dict__["_bridge_specs"] = _bridge_specs(feats)
-    return list(got)
+    return list(_cell_memo(feats, "_bridge_specs", lambda: _bridge_specs(feats)))  # (cells stay decoded: mapdata)
 
 
 def tunnel_specs(feats):
     """Per feature: the Spec of a road with a tunnel range, else None (as bridge_specs). Pure."""
-    got = feats.__dict__.get("_tunnel_specs")
-    if got is None:
-        got = feats.__dict__["_tunnel_specs"] = _bridge_specs(feats, "tunnel")
-    return list(got)
+    return list(_cell_memo(feats, "_tunnel_specs", lambda: _bridge_specs(feats, "tunnel")))
 
 
 def _bridge_specs(feats, want="bridge"):
