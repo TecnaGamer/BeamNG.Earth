@@ -263,6 +263,9 @@ URGENT_ELSEWHERE = os.environ.get("BNE_URGENT_ELSEWHERE", "on") != "off"
 # in the other lane's block process they queued behind its prefetch heights and photos, a stand-in made beside a
 # block 1.6-4 s late at 100-200 mph down Manhattan (nyc_speed.py, 2026-11-02); not on a small machine (memory)
 PHOTO_PROCESS_MIN_CPUS = 12
+# A block waits at most this long for its stand-in photo started beside it (cold: the photo process queued behind
+# imagery downloads and a block built in 1.4 s waited 99.5 s for it, nyc_speed.py --cold 2026-11-02)
+STANDIN_WAIT_S = 1.0
 QUICK_SYNC_MAX_V = 150.0        # m/s (335 mph): slower, a block built ahead gets its stand-in photo before it is ready (224 mph left a player at 230 mph with brown flashes)
 RECENT_FULL = 2                 # full ground photos kept for the stand-ins' overlap (write_quick_base)
 QUICK_MIN_COVER = 0.8          # share of a stand-in's texels real imagery must cover (else no stand-in)
@@ -2089,6 +2092,36 @@ class Server:
                     return False
         return True
 
+    def make_provisional_follow(self, anchor, cx, cy):
+        """A follow block's provisional stand-in (Connection.provisional_follow) in a worker process (blockworker.build
+        provisional: the DEM's ground, no road plans, sea floor or tunnels, the cached roads painted), its stand-in
+        photo started beside it (at most STANDIN_WAIT_S; else none, the photo later). Built here (make_provisional) it
+        took 11-33 s of a first visit beside the rest of this process's work (nyc_speed.py --cold, 2026-11-02)."""
+        pool = self.photo_pool or (self.block_pools[LANE_PREFETCH][0] if self.block_pools else None)
+        if pool is None:
+            return self.make_provisional(anchor, cx, cy, None)
+        t0 = time.perf_counter()
+        key = (anchor.id, cx, cy)
+        early = (self.quick_early.submit(self._stand_in, anchor, cx, cy)
+                 if self.near_visual == "detail" and self.imagery is not None else None)
+        info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, self.anchor_q(anchor),
+                           cx, cy, self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
+                           provisional=True).result()
+        info.pop("started", None)
+        info.pop("finished", None)
+        if early is not None:
+            try:
+                info["base"] = early.result(timeout=STANDIN_WAIT_S)
+            except Exception:
+                info["base"] = None
+            if not info.get("base"):
+                self.quick_pool.submit(self._quick_later, anchor, cx, cy)
+        info["seconds"] = time.perf_counter() - t0
+        info["zoom"] = anchor.hm_zoom
+        log.info("provisional block %s in %.2f s in a worker (%s)", key, info["seconds"],
+                 " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
+        return info
+
     def make_provisional(self, anchor, cx, cy, progress, ground_at=(0.0, 0.0)):
         """Worker thread: a teleport's first block before its road plans (the user, 2026-10-22: "place the car as
         soon as possible"): the DEM's ground with the runways (no road grading, tunnels, arches or sea floor, which
@@ -2360,12 +2393,14 @@ class Server:
             early = self.quick_futs.pop((anchor.id, cx, cy), None)
             if not base.done() and early is not None:
                 try:
-                    quick = early.result()
+                    quick = early.result(timeout=STANDIN_WAIT_S)
+                except concurrent.futures.TimeoutError:
+                    quick = None        # (the block goes without it: _quick_later / the photo when done)
                 except Exception as e:
                     log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
                 info["stages"]["baseQuick"] = time.perf_counter() - t1
-            if not base.done() and not quick and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V \
-                    and self.imagery is not None:
+            if not base.done() and not quick and early is None and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V \
+                    and self.imagery is not None:     # (an early one tried: not again here, _quick_later)
                 quick = self._quick_elsewhere(anchor, cx, cy, lane) if lane == LANE_REQUEST else None
                 if not quick:
                     quick = self.write_quick_base(anchor, cx, cy)
@@ -2402,7 +2437,9 @@ class Server:
             if early is not None:
                 t1 = time.perf_counter()
                 try:
-                    info["base"] = early.result()
+                    info["base"] = early.result(timeout=STANDIN_WAIT_S)
+                except concurrent.futures.TimeoutError:
+                    self.quick_pool.submit(self._quick_later, anchor, cx, cy)
                 except Exception as e:
                     log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
                 info.setdefault("stages", {})["standIn"] = time.perf_counter() - t1
@@ -4862,7 +4899,7 @@ class Connection:
         if done:
             return None
         if info is None:
-            prov = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.make_provisional, anchor, cx, cy, None)
+            prov = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.make_provisional_follow, anchor, cx, cy)
             done, _ = await asyncio.wait({job, prov}, return_when=asyncio.FIRST_COMPLETED)
             if job in done:
                 return None

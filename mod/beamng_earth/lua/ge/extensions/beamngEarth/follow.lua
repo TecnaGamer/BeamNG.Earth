@@ -171,6 +171,10 @@ function M.blockOrigin(cx, cy) return lattice.blockOrigin(cx, cy) end
 
 -- True when the target for this pose is not the pending block (a re-request would ask for another one).
 local function retargets(px, py, vx, vy, pending)
+  -- (a block taken from the server's ready set instead of the target, M.preferReady: never a "better" target, or the
+  -- re-check dropped it, the next frame took it again, and so on every 0.1-0.3 s with the block never committed:
+  -- nyc_speed.py down Midtown at 200 mph, 2026-11-02)
+  if pending.preferred then return false end
   local tx, ty = M.target(px, py, vx, vy)
   return tx ~= pending.cx or ty ~= pending.cy
 end
@@ -262,7 +266,7 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
   local tx, ty = M.target(px, py, vx, vy)
   if tx == cx and ty == cy then return nil end -- heading back towards the centre: nothing to gain
   local r = M.preferReady(px, py, vx, vy, tx, ty, cx, cy, reach)
-  if r then return 'prepare', r[1], r[2] end
+  if r then return 'prepare', r[1], r[2], true end      -- (preferred: see retargets)
   return 'prepare', tx, ty
 end
 

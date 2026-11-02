@@ -322,7 +322,7 @@ def _take_pads(fuel_pads):
         _s.surface.add_fuel_pads(fuel_pads or ())
 
 
-def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None):
+def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -330,6 +330,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     started = time.time()       # (the server's "queue" stage: from its submit to here, wall clock across processes)
     t0 = time.perf_counter()
     g, chunks = _s.anchor(aid, lat, lon)
+    if provisional:             # (earthd.Server.make_provisional's ground: no road plans, tunnels, arches or sea floor)
+        g, chunks = None, None
     frame = geodesy.EnuFrame(lat, lon)
     keep = {}
     grade_s = [0.0]
@@ -339,6 +341,9 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         t1 = time.perf_counter()
         z = _s.dem.sample(la, lo, hm_zoom)
         t2 = time.perf_counter()
+        if provisional:
+            part_s["dem"] += t2 - t1
+            return _s.airports.apply(la, lo, z) if _s.airports is not None else z
         z = ground(frame, la, lo, z)
         part_s["dem"] += t2 - t1
         part_s["sea"] += time.perf_counter() - t2
@@ -351,7 +356,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     import roads as roadsmod
     plan_ahead(g, frame, cx, cy, size * heightmap.SQUARE / 2)
     gen = elev
-    if ter_name is not None and getattr(_s, "md", None) is not None:
+    if ter_name is not None and getattr(_s, "md", None) is not None and not provisional:
         t1 = time.perf_counter()
         tun = tunnel_profiles(aid, frame, elev, g)
         part_s["tunnels"] += time.perf_counter() - t1
@@ -369,7 +374,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         t1 = time.perf_counter()
         classes, complete = _s.surface.classes(keep["lat"], keep["lon"])
         idx = surfacemod.classify(classes, keep["u"], heightmap.SQUARE, keep["lat"], keep["lon"])
-        if _s.sea is not None:          # under water: the bed (no grass growing through the surface)
+        if _s.sea is not None and not provisional:  # under water: the bed (no grass growing through the surface)
             idx[_s.sea.depth(keep["lat"], keep["lon"]) > WATER_BED_M] = surfacemod.MUD
         road_feats, roads_complete = _s.surface.roads(keep["lat"], keep["lon"])
         stages["landcover"] = time.perf_counter() - t1
@@ -377,7 +382,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         if road_feats:
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
-                                         _s.surface.urban, _s.widths, _open_tunnels(g, keep))
+                                         _s.surface.urban, None if provisional else _s.widths, _open_tunnels(g, keep))
             if not (idx != before).any():   # (drawn roads over it, none painted: Discord's gravel mountain roads)
                 import roads as roadsmod
                 la0, la1 = float(np.min(keep["lat"])), float(np.max(keep["lat"]))
@@ -407,7 +412,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         info["roadsComplete"] = roads_complete
     if ter_name is not None:
         t1 = time.perf_counter()
-        idx = _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g)
+        if not provisional:
+            idx = _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g)
         info["ter"], mats = surfacemod.write_ter(out_dir, ter_name, keep["qgrid"], idx)
         if mats is not None:          # the .ter's own material list (MATERIALS indices)
             info["mats"] = mats
