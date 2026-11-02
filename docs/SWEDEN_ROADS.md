@@ -4,7 +4,7 @@ Branch `sweden-next`, off `sweden-roads`, off `main` at 1.7.3-beta.
 
 ## What this covers
 
-This page covers the Swedish road work on `sweden-next`: sidewalks and medians on 2+1 roads, the C31 speed limit and B1 give-way signs, road markings, and findings on road types that are being turned into rules. For each fix it gives the problem seen, the cause, the change, where it is in the code and what was measured.
+This page covers the Swedish road work on `sweden-next`: sidewalks and medians on 2+1 roads, the C31 speed limit and B1 give-way signs, road markings, road types, and city crossings, stop lines and priority signs. For each fix it gives the problem seen, the cause, the change, where it is in the code and what was measured.
 
 None of the fixes has been tested in game. The one exception is the user's confirmation that the 2+1 centre barrier works, which is not one of the fixes below.
 
@@ -47,9 +47,49 @@ Not covered by the table above. Listed by subject from `git log`.
 - `4a37734a` Give-way line M14 (TSFS 2010:171 4 kap. 5, 7 §§) where a B1 stands.
 - `8e75d5e6` Lane drops on 2+1 roads: M20 arrows in the overtaking lane before it ends (VGU 2024 12.2.1.5.3, table 12.14).
 
+## City data: crossings, stop lines and signs
+
+Commit `25610804`. Before it, `junctions.find` drew a crosswalk on every arm with corners and a stop line behind it, as on a West Coast US street. A Swedish street is painted by rule (TSFS 2010:171): M15 only where a B3 stands or signals are (4 kap. 8 §), M13 only at a B2 or at signals (3 kap. 1, 3 §§). So a junction under the right-hand rule has nothing painted unless one of those stands there.
+
+`server/crossings.py` reads OpenStreetMap's nodes through Overture's infrastructure layer. M15 and M16 come from `crossing:markings`. Tallied 2026-11-02 within 1.5 km of the middle of Borås, Göteborg, Stockholm, Malmö and Umeå: 7427 crossings, 95% within 2 m of a road's centreline. Mid-block crossings are included, kerbs are lowered at unpainted ones, and a node on a junction is left out.
+
+**Assumption:** a crossing with no word on its paint counts as painted. This is the tags' majority, not a certainty: 614 of 722 signal crossings that say have a zebra, and 296 of 492 unsignalled crossings that say are marked.
+
+### Sizes
+
+| Marking | Dimension | Value | Source |
+|---|---|---|---|
+| M15 bars | Width, gap | 0.50 m, 0.50 m | TSFS 2010:171 4 kap. 9 § |
+| M15 bars | Length | at least 2.5 m at 60 km/h or less; at least 4.0 m above | 4 kap. 9 § |
+| M16 squares | Side, gap | 0.50 m, 0.50 m | 4 kap. 10 § |
+| M16 rows | Spacing | 2.5 m apart | VGU 2024 råd for a two-way cycle crossing (9.3.8.1) |
+| M13 | Width | 0.40 m | 4 kap. 4 § |
+| M13 | Distance from the crossing road | 1.0 m | VGU 12.2.1.4.1 råd |
+| M13 at signals | Distance before the crossing | at least 2.0 m | VGU K237740 |
+| M13 at a stop sign, M14 | Car between line and crossing | 5.0 m råd: if a car fits, the line stays at the junction; otherwise it goes before the crossing | VGU 2024 12.2.1.4.1, 12.2.1.4.2 |
+
+The stock crosswalk texture has 0.60 m bars; M15 is drawn with 0.50 m bars.
+
+### Results
+
+Before -> after, 40 tiles each:
+
+- Central Borås: zebras 118 -> 36, stop lines 102 -> 4.
+- Göteborg: zebras 156 -> 187 (more, because mid-block crossings now exist), stop lines 136 -> 81.
+
+Mapped give-way and stop nodes add to the rank guess, for props and the AI: 47 more give-way arms at 42 of 1286 junctions in Borås, Göteborg and Stockholm.
+
+### Limits
+
+- Not tested in game.
+- Which side of a crossing the cycle crossing lies on is not in the tags, so it follows the road's own direction.
+- Stop lines at mid-block signal crossings are not drawn, because no signal prop stands there.
+- B3 signs are not placed yet.
+- If the tags cannot be read, the tile falls back to the old guess.
+
 ## Road type detection
 
-Findings only. The rules that will use them are in progress.
+Findings, and the rules built on them, which shipped in `0fbe4bbb`. The commit message says what the rules do.
 
 Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overture), km paved and km unpaved over seven regions sampled (Boras, Skåne, Mälardalen, Jämtland, Umeå, Norrbotten, Småland), 2026-11-02:
 
@@ -72,8 +112,10 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 | Road surface tag | OpenStreetMap tags, as delivered through Overture | Surface statistics under Road type detection |
 | C31 and B1 artwork | Transportstyrelsen's own artwork (`bne_se_signs.png`) | Sign textures for fix 2. No reuse terms stated on its pages |
 | Sign sizes and lower edge | TSFS 2019:74 (4 kap. 1 §, 3 kap. 1 §, 1 kap. 13 §) | Sign sizes for fix 2 |
-| Minimum lane line clearance | VGU 2024 K233046 | `markings.MIN_LANE_M` (2.75 m) |
+| Minimum lane width | VGU 2024 K233046 | `markings.MIN_LANE_M` (2.75 m) |
 | Road meshes loaded by the game | `rs_*_road.cdae` files | Height-step checks on loaded tiles |
+| Crossing, stop-line and give-way nodes | OpenStreetMap nodes via Overture's infrastructure layer | `server/crossings.py`: paint, lowered kerbs, stop lines, priority signs |
+| Crossing and stop-line rules | TSFS 2010:171 (3 kap. 1, 3 §§; 4 kap. 4, 8, 9, 10 §§); VGU 2024 (9.3.8.1, 12.2.1.4.1); VGU K237740 | Marking sizes and positions in the City data section |
 
 ## Known limits
 
@@ -83,5 +125,5 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 - **Flat tiles.** Tiles are built on flat ground, so the measurements do not include terrain slope.
 - **Height steps.** 66 of 620 loaded tiles have at least 15 m² of road mesh steeper than 20%. One spot was examined: (57.6696, 13.0284), a track beside a bridge embankment. The rest are unexplained.
 - **Samples.** Fix 3 was measured on 60 tiles and fix 5 on 300, both around Boras. The surface statistics cover seven regions and only rural roads with a surface tag.
-- **Road types.** The rules are in progress. Class "unknown" roads have no OpenStreetMap tags to work from.
+- **Road types.** Class "unknown" roads have no OpenStreetMap tags to work from.
 - **Widths of gravel and private roads.** No official width was found for gravel or private roads, so the repo's existing STYLE values stay.
