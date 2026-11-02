@@ -92,6 +92,32 @@ export function today() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// The environment the game's PBR materials reflect (materials.js; metals are black without one): a sky over a ground,
+// prefiltered once (three.js PMREM), scaled with the day's light (envIntensity)
+function skyEnvironment(renderer) {
+  const g = new THREE.SphereGeometry(100, 32, 16)
+  const pos = g.attributes.position, col = new Float32Array(pos.count * 3)
+  const top = new THREE.Color(0x8fb4e0), hor = new THREE.Color(0xd7dde4), gnd = new THREE.Color(0x5a5246), c = new THREE.Color()
+  for (let i = 0; i < pos.count; i++) {
+    const z = pos.getZ(i) / 100            // (the world's up: +z)
+    if (z >= 0) c.copy(hor).lerp(top, Math.pow(z, 0.6)); else c.copy(hor).lerp(gnd, Math.min(1, -z * 6))
+    col.set([c.r, c.g, c.b], i * 3)
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3))
+  const s = new THREE.Scene()
+  s.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })))
+  const pm = new THREE.PMREMGenerator(renderer)
+  const env = pm.fromScene(s, 0, 0.1, 1000).texture
+  pm.dispose()
+  return env
+}
+// the environment's strength by the hemisphere light's (the day's 1.3: ENV_DAY, the night's 0.35: ENV_NIGHT)
+const ENV_DAY = 0.8, ENV_NIGHT = 0.04
+function envIntensity(hemi) {
+  const t = Math.max(0, Math.min(1, (hemi - 0.35) / (1.3 - 0.35)))
+  return ENV_NIGHT + (ENV_DAY - ENV_NIGHT) * t
+}
+
 export class Sky {
   constructor(scene, root, renderer, hemi, sun) {
     this.scene = scene
@@ -114,6 +140,7 @@ export class Sky {
     sun.shadow.normalBias = 0.4
     sun.shadow.camera.near = 1
     sun.shadow.camera.far = SHADOW_FAR
+    scene.environment = skyEnvironment(renderer)
   }
 
   // the instant (UTC ms) of the date and local mean solar time at longitude lon
@@ -181,6 +208,7 @@ export class Sky {
       up = !night
     }
     this.state.night = night
+    this.scene.environmentIntensity = envIntensity(hemi.intensity)
 
     // the light's place: toward the sun from the shadow box's centre (on the ground, ahead of the camera)
     const h = Math.max(0, agl ?? 0)

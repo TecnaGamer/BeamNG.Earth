@@ -6,7 +6,8 @@ import { World, stats } from './world.js'
 import { Osm } from './osm.js'
 import { FlyControls } from './controls.js'
 import { Minimap } from './minimap.js'
-import { setWireframe, loadModMaterials, materialStats } from './materials.js'
+import { setWireframe, loadModMaterials, materialStats, setGameMaterials, settings as matSettings } from './materials.js'
+import { setRenderer, textureStats } from './textures.js'
 import * as gc from './geocode.js'
 import { itemOf } from './props.js'
 import { NightLights } from './lighting.js'
@@ -19,6 +20,7 @@ const $ = id => document.getElementById(id)
 const canvas = $('view')
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
+setRenderer(renderer)       // (textures.js: the compressed formats this WebGL takes)
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x8fb4d6)
 const camera = new THREE.PerspectiveCamera(60, 1, 0.5, 2e6)
@@ -240,6 +242,7 @@ for (const [label, get, on] of LAYERS) {
   $('layers').append(l)
 }
 for (const [label, fn, on] of [['OSM drawn on top', on => osm.setOnTop(on)], ['Wireframe', on => setWireframe(on)],
+  ["Game materials (the game's textures; off: flat colours by kind)", setGameMaterials, matSettings.game],
   ['Place names online (Photon)', on => { where.online = on; where.reset(); if (!on) $('location').textContent = '' }, true],
   ['Geocode in the viewer (debug: Photon from this page, not earthd)', setGeoDirect, geoDirect]]) {
   const l = document.createElement('label')
@@ -424,7 +427,11 @@ function ui(agl) {
   world.layers.signs.traverse(o => { if (o.userData.kind?.endsWith(' signs')) signs++ })
   rows.push(['signs', `${signs} sign shapes shown`])
   if (lights.night) rows.push(['night', `${lights.stats.lit} of ${lights.pool.length} lamp lights on; ${lights.stats.lenses} lamps in the road tiles`])
-  rows.push(['materials', `${materialStats.mod} from the mod's definitions (${modMaterialCount} known), ${materialStats.rules} by name`])
+  const ts = textureStats
+  rows.push(['materials', `${materialStats.game} from the game's definitions (${modMaterialCount} in the mod), ${materialStats.rules} by name` +
+    `${materialStats.pending ? `, ${materialStats.pending} textures loading` : ''}`])
+  rows.push(['textures', `${ts.loaded} (${(ts.bytes / 1e6).toFixed(0)} MB; ${Object.entries(ts.formats).map(([k, v]) => `${k} ${v}`).join(', ')})` +
+    `${ts.failed ? `, ${ts.failed} missing` : ''}${ts.unsupported ? `, ${ts.unsupported} in formats this browser lacks` : ''}`])
   rows.push(['OSM', `${o.ways} ways in ${o.ok} cells${o.missing ? `, ${o.missing} not cached yet` : ''}`])
   rows.push(['files', `${stats.shapes} shapes, ${(stats.bytes / 1e6).toFixed(1)} MB, ${c.queue} queued`])
   if (stats.failed) rows.push(['failed', `${stats.failed}: ${stats.lastError}`])

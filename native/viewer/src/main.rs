@@ -63,6 +63,7 @@ async fn main() {
         .route("/api/config", get(files::config))
         .route("/api/osm", get(osm::handler))
         .route("/api/materials", get(game::materials))
+        .route("/api/material", get(game::material))
         .route("/data/*path", get(files::data))
         .route("/game/*path", get(game::shape))
         .route("/tiles/*path", get(tiles::proxy))

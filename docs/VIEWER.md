@@ -25,12 +25,33 @@ The viewer does not generate anything. It is one more client of earthd (protocol
 
 Not drawn: vegetation, gas station props.
 
-Materials: the mod's own definitions (every `*.materials.json` under its `levels/` folder, merged by
-`/api/materials`) are used as the game uses them wherever a material needs nothing outside the mod
-folder. That covers base colour, mod-folder textures (served by `/game/`), the opacity map with alpha
-test, and vertex colours. The signs' lettering is the mod's opacity atlas, `sign_letters_o.data.png`.
-Materials whose base colour texture is one of the game's (`/assets/...`: most building materials)
-are coloured by name instead, and buildings keep their vertex colours.
+## Materials
+
+Every shape's material names get the game's own materials (`web/materials.js`, `web/textures.js`):
+
+- **Definitions:** `/api/material?name=&near=` (`src/game.rs`) reads every `*.materials.json` in the mod and in the
+  game's content zips (`art_shapes.zip`, the level zips, `assets/materials/*.zip`, `assets/meshes.zip`; the engine's
+  trailing commas allowed), and gives a name the definition the engine would: the mod's first (its level's), else
+  the one in the shape's folder or the nearest folder above it, else the common `/art/` and `/assets/` ones.
+- **Textures:** `/game/<path>` resolves a material's texture path as the engine does: the mod folder, then the zips,
+  following `.link` redirects (the level zips' links into `content/assets`) and finding a named `.png` as its
+  `.dds`. The page decodes the DDS files as GPU-compressed textures: BC7 colour maps, BC5 normal maps, BC4 data maps
+  and DXT1/3/5, from their mipmaps (at most 1024 px: the 2048 and 4096 px levels are left out to save GPU memory).
+  three.js r170 does not upload BC4, so each BC4 block is sent as a BC5 block with red and green the same.
+- **Shading:** three.js's PBR material from the definition's first stage: base colour factor and map, vertex
+  colours (`vertColor`: the buildings' facade tint), normal, roughness, metallic and ambient occlusion maps and
+  factors, the opacity map with `alphaTest` / `alphaRef` (with alpha-to-coverage) or `translucent` (its blend op and
+  z write), emissive, `doubleSided`, and `...MapUseUV` (the second UV set). The data maps are read from red, the
+  normal's z is rebuilt from its two channels, and green is negated: the game's normal maps are OpenGL-style (green
+  up the image), while the viewer's v runs down it. The sky's light is reflected from an environment map, so metals
+  are not black.
+- **Not used:** the definitions' further stages (layers), detail maps, palette and instance colours, and the
+  engine's own LOD and impostors (the shapes' finest detail is drawn at every distance, so alpha-tested leaves thin
+  out from about 100 m).
+
+The **Game materials** switch turns all of this off, back to flat colours by kind (`RULES`). It also applies to the
+names a definition or texture has not arrived for yet, or has none. The info panel counts the materials and
+textures, by format.
 
 As the mod does after every earthd `hello`, the viewer sends `gas_stations: on` and
 `highway_signs: on`, so earthd builds the same road tiles for it as for the game.
@@ -95,7 +116,7 @@ switches: "Street furniture (props)" for the `props` rows, and "Guard rails and 
 ## Night lighting
 
 The game lights the night from its own time of day (`nightlights.lua`, switched by the stock environment's
-day / night). The viewer has a **Night** switch instead (in the layer panel, remembered), and does what the mod does
+day / night). The viewer has a **Night** switch instead, or its time of day (below), and does what the mod does
 after dusk (`web/lighting.js`):
 
 - **Windows and lamp lenses:** the mod's night materials (`NIGHT_MATERIALS`, as `nightlights.lua` `M.MATERIALS`) get
@@ -116,6 +137,23 @@ after dusk (`web/lighting.js`):
 
 Not lit: the gas stations' pump islands (the viewer does not draw gas station props) and the tunnels' lights
 (`ambience.lua`).
+
+## Time of day and shadows
+
+Both are optional switches in the layer panel (`web/sky.js`, the controls in `web/daylight_ui.js`, remembered in
+the browser):
+
+- **Time of day:** a date, a time slider and a "Now" button. The sun stands where it does from the camera's place at
+  that instant: NOAA's solar position algorithm (Meeus), with atmospheric refraction. The slider is the local mean
+  solar time at the camera's longitude (12:00 is the sun's mean noon there; its UTC is shown) because the viewer
+  has no time zone data. The line under it shows the sun's elevation and azimuth. The sunlight's colour and
+  strength, the sky's colour and the ambient light follow the sun's elevation, through sunset and twilight. Night
+  (see above) comes on once the sun is 4° under the horizon (between sunset and civil dusk, about when street lights
+  come on); the Night switch then follows it. Under the horizon the directional light is a dim moonlight.
+  Off: the fixed day light, or the night by the Night switch.
+- **Shadows:** the sun's (or the fixed day light's), in one shadow map (4096²) over a box around the ground ahead of
+  the camera, 240 m across near the ground, growing with the height to 3 km. Every mesh casts and receives them
+  except the lamps' glow balls, which only receive. No shadows once the sun is down.
 
 ## OSM overlay
 

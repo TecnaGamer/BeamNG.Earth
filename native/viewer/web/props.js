@@ -225,10 +225,11 @@ export class Props {
           g.setAttribute('position', new THREE.BufferAttribute(d.positions, 3))
           if (d.normals) g.setAttribute('normal', new THREE.BufferAttribute(d.normals, 3))
           if (d.uv) g.setAttribute('uv', new THREE.BufferAttribute(d.uv, 2))
+          if (d.uv2) g.setAttribute('uv1', new THREE.BufferAttribute(d.uv2, 2))
           if (d.colors) g.setAttribute('color', new THREE.BufferAttribute(d.colors, 4, true))
           g.setIndex(new THREE.BufferAttribute(d.index, 1))
           const mats = []
-          d.groups.forEach((gr, k) => { g.addGroup(gr.start, gr.count, k); mats.push(forName(gr.material >= 0 ? names[gr.material] || '' : '', !!d.colors)) })
+          d.groups.forEach((gr, k) => { g.addGroup(gr.start, gr.count, k); mats.push(forName(gr.material >= 0 ? names[gr.material] || '' : '', !!d.colors, path)) })
           if (!d.normals) g.computeVertexNormals()
           if (d.matrix) g.applyMatrix4(new THREE.Matrix4().fromArray(d.matrix))
           g.computeBoundingSphere()
