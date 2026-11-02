@@ -366,7 +366,8 @@ def _facts_key(feats, kind, extra):
     import revisit
     if cid is None or not revisit.ON or revisit.CACHE_DIR is None:
         return None
-    return revisit.key("cellfacts", kind, cid, extra)
+    # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions)
+    return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra)
 
 
 def _facts_load(feats, kind, extra):
@@ -386,8 +387,10 @@ def _facts_load(feats, kind, extra):
         return None
 
 
-# The facts' output format for baked packs (bakepack.py: read without the code hash). Bump it whenever a change makes
-# other facts; tests/test_bake_formats.py fails until it is bumped.
+# The facts' output format: their key in the revisit cache (kept across updates: _facts_key) and in baked packs
+# (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
+# change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
+# the old ones; tests/test_bake_formats.py fails until it is bumped.
 FACTS_FORMAT = 1
 
 

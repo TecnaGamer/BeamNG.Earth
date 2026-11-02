@@ -57,9 +57,17 @@ def start_run(cache_dir):
     os.environ[RUN_ENV] = f"{os.getpid()}_{int(time.time())}"
 
 
-# The plans' output format for baked packs (bakepack.py: read without the code hash). Bump it whenever a change makes
-# other plans; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
+# The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
+# place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
+# old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
 PLANS_FORMAT = 1
+def plans_format():
+    """The plans' revisit key format: PLANS_FORMAT and the road facts' (roads.FACTS_FORMAT: the plans are made from
+    them), "<plans>.<facts>"."""
+    import roads
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}"
+
+
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
 
 
@@ -127,7 +135,9 @@ class PlanCache:
 
     def _revisit_key(self, key):
         import revisit
-        return revisit.key("plans", *self.persist[1], (int(key[0]), int(key[1]), int(key[2])))
+        # (by PLANS_FORMAT, not the code: kept across updates, the user, 2026-11-02)
+        return revisit.format_key("plans", plans_format(), *self.persist[1],
+                                  (int(key[0]), int(key[1]), int(key[2])))
 
     def _where(self, key):
         """revisit.where of cell key's plans (the map's cache view), or None."""
@@ -215,7 +225,7 @@ class PlanCache:
                 import revisit
                 with open(p, "rb") as fh:
                     revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()},
-                                  where=self._where(key))
+                                  where=self._where(key), code=revisit.format_marker("plans", plans_format()))
         except (OSError, ValueError, TypeError):
             return False
         with self._lock:

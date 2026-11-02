@@ -151,6 +151,47 @@ def key(kind, *parts):
     return hashlib.sha1(repr((kind, code_key(), parts)).encode()).hexdigest()
 
 
+# Items kept across code changes (the user, 2026-11-02: road plans and cell facts survive updates): keyed by their
+# output's format number instead of the code (plancache.PLANS_FORMAT, roads.FACTS_FORMAT: bumped whenever a change
+# makes other output; tests/test_bake_formats.py fails on its fixture until they are), with the build switches still.
+_formats = {}               # kind -> its current format marker (format_marker), for the map's cache view
+
+
+def switches_key():
+    """A hash of the build switches (BNE_*) alone, once per process: code_key's without the code."""
+    with _lock:
+        if not _switches:
+            h = hashlib.sha1()
+            for k in sorted(os.environ):
+                if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP"):
+                    h.update(f"{k}={os.environ[k]}".encode())
+            _switches.append(h.hexdigest()[:16])
+        return _switches[0]
+
+
+_switches = []
+
+
+def format_marker(kind, fmt):
+    """What a format-keyed item's sidecar line holds in place of the code key ("fmt:<kind>:<n>:<switches>")."""
+    m = f"fmt:{kind}:{fmt}:{switches_key()}"
+    _formats[kind] = m
+    return m
+
+
+def format_key(kind, fmt, *parts):
+    """key() for an item kept across code changes: its kind, its output format fmt and what it was built from."""
+    return hashlib.sha1(repr((kind, format_marker(kind, fmt), parts)).encode()).hexdigest()
+
+
+def current_codes():
+    """The sidecar code values of items this server reads: its code_key and the format markers (the plans' always:
+    they are stored by the road processes, the map's cache view asks in the main one)."""
+    import plancache
+    format_marker("plans", plancache.plans_format())
+    return {code_key(), *_formats.values()}
+
+
 def _path(cache_dir, kind, k):
     return os.path.join(cache_dir, SUBDIR, kind, k[:2], k + ".zip")
 
@@ -182,11 +223,11 @@ def where(lat, lon, s, w, n, e, settings):
     return (float(lat), float(lon), float(s), float(w), float(n), float(e), settings)
 
 
-def _note(cache_dir, kind, k, wh):
+def _note(cache_dir, kind, k, wh, code=None):
     """One sidecar line for item k (never raises)."""
     try:
         lat, lon, s, w, n, e, settings = wh
-        line = (f"{code_key()}\t{settings}\t{kind}\t{k}\t{lat:.7f}\t{lon:.7f}\t{s:.6f}\t{w:.6f}\t{n:.6f}\t{e:.6f}\n")
+        line = (f"{code or code_key()}\t{settings}\t{kind}\t{k}\t{lat:.7f}\t{lon:.7f}\t{s:.6f}\t{w:.6f}\t{n:.6f}\t{e:.6f}\n")
         fd = _where.get(cache_dir)
         if fd is None:
             with _lock:
@@ -259,9 +300,10 @@ def compact(cache_dir, before=None):
         COMPACTED.set()
 
 
-def store(cache_dir, kind, k, blobs, extra=None, where=None):
+def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
     """Keep an item under key k: blobs {name: bytes}, extra JSON data; where (where()): the place it stands, for the
-    map's cache view (a sidecar line). Never raises; False when not kept."""
+    map's cache view (a sidecar line; code: its code value there, format_marker's for a format-keyed item, else
+    code_key). Never raises; False when not kept."""
     if not ON or kind in SKIP:
         return False
     path = _path(cache_dir, kind, k)
@@ -274,7 +316,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None):
             z.writestr("meta.json", json.dumps({"names": list(blobs), "extra": extra}))
         os.replace(tmp, path)
         if where is not None:
-            _note(cache_dir, kind, k, where)
+            _note(cache_dir, kind, k, where, code)
         return True
     except Exception:
         try:
