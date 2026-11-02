@@ -69,10 +69,10 @@ def main():
         arrays = {id(v): v for cache in caches for v in cache}
         row_cells = 0
         for f in cells.values():
-            rows = f.__dict__.get('_lane_flow_rows')
-            if rows is not None:
+            lane_rows = f.__dict__.get('_lane_flow_rows')
+            if lane_rows is not None:
                 row_cells += 1
-                arrays.update((id(v), v) for v in rows if hasattr(v, 'nbytes'))
+                arrays.update((id(v), v) for v in lane_rows if hasattr(v, 'nbytes'))
         retained = sum(v.nbytes for v in arrays.values())
         row = {'repeat': repeat+1, 'wall_s': wall, 'cpu_s': cpu, **volume,
                'retained_array_bytes': retained, 'prepared_cells': len(caches), 'row_cells': row_cells,
