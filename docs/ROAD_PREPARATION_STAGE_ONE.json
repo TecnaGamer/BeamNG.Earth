@@ -1,0 +1,202 @@
+{
+  "baseline_commit": "b41b4b04edffab6083e78b0c2ef41982869287b2",
+  "status": "Paused after one exploratory A/B pair; final telemetry-only edits have not been benchmarked.",
+  "environment": {
+    "python": "3.14.7",
+    "numpy": "2.5.4",
+    "native_api": 140,
+    "native_sha256": "d42fb769cee459cd68a362614baf71be7bfdc4d9a92436932b195b78bc338db2"
+  },
+  "input_manifest": {
+    "sha256": "4299f7a1cd2017983176190a53230f44996002b9feb888a8e5ae5fb85acec210",
+    "files": 2506,
+    "bytes": 460161897
+  },
+  "rows": [
+    {
+      "tile": "g17_129164_79988",
+      "baseline_s": 19.56910710000011,
+      "candidate_s": 18.643590100000438,
+      "reduction_pct": 4.7294799669202465,
+      "baseline_faults": 0,
+      "candidate_faults": 0
+    },
+    {
+      "tile": "g17_129165_79988",
+      "baseline_s": 2.076456999999209,
+      "candidate_s": 1.563262699997722,
+      "reduction_pct": 24.714901392211953,
+      "baseline_faults": 0,
+      "candidate_faults": 0
+    },
+    {
+      "tile": "g17_129164_79989",
+      "baseline_s": 1.5953559999979916,
+      "candidate_s": 1.1019091000016488,
+      "reduction_pct": 30.930206173228047,
+      "baseline_faults": 0,
+      "candidate_faults": 0
+    }
+  ],
+  "geometry_files": 28,
+  "geometry_equal": true,
+  "geometry_sha256": {
+    "rg_g17_129164_79988.json": "268038d94be31b45066d9380806ecaada3c6da3754f5b3a1ed197e9f4f03dbad",
+    "rg_g17_129164_79988_bld.cdae": "a055fb2aaf3f7fc7f6743be1be036554391812bf638898f706e7dbfcf0c08f2e",
+    "rg_g17_129164_79988_bldcol.cdae": "bcf0d4f6e5cad1c0c21688f735e20eb8035f9c693c79deebc7781d8311d2c516",
+    "rg_g17_129164_79988_deck.cdae": "f84710c725eb443e35fcc7bf7db5f2532efb68d64fc1727f977a434f7113cde7",
+    "rg_g17_129164_79988_wire.cdae": "22b8538bdd64f51d65ccaf5e46bc9953e0f9b6721dd471107b54db28b7dd028f",
+    "rg_g17_129164_79989.json": "e3fab50d86a2ec8c80adf2787177faf1338f74d2a782952bcf6394bd3b5b8650",
+    "rg_g17_129164_79989_bld.cdae": "377685920eb86ec0a67e4491acf9c80cb9f5794899fefa4f298d5acb6cdadd0b",
+    "rg_g17_129164_79989_bldcol.cdae": "89945a3e16372b596f068e3f56d98604a4d77bd2dfb7cb0360437ddc275a424d",
+    "rg_g17_129164_79989_deck.cdae": "0259f1a63da1d93194effd8d1b79f62355dff53a721a222fd674608eec5fab95",
+    "rg_g17_129164_79989_tunnel.cdae": "9c1ca4047d9dbf8130c59e63793959dd870eb86e9b04b5b11c51077eaf44c7e7",
+    "rg_g17_129164_79989_wire.cdae": "29829c2ca2faee718e32352e7d6adda3c401bcf9749bf1c2400e648e33f758b6",
+    "rg_g17_129165_79988.json": "576b4a31714326c609d5ad0f82f0d4cc837adc8e4a179f28d0403cb3f6a4679d",
+    "rg_g17_129165_79988_bld.cdae": "25b22ee661bca0e9d6ca114319d9111a7f2a05fca1fe801426ebce9efdbab851",
+    "rg_g17_129165_79988_bldcol.cdae": "59b9aaf57fc00b6a5b8abfb1a4fcd4b3d6b40b0a4d10f0a5a58586d750db59b3",
+    "rg_g17_129165_79988_deck.cdae": "a622ff2623b5e48b12e7068f47585d26a397fcb9defbf1fc02731afd15c0a33b",
+    "rg_g17_129165_79988_tunnel.cdae": "5c35a1b92214e01f446e010f69f5c6a5d3eef3f4cd6dac3530508c431e0e40d3",
+    "rs_1_g17_129164_79988.json": "9d6d95fd43035d7cf0648f93510e65be4c51e73dffa61e841107c0b15788208e",
+    "rs_1_g17_129164_79988_road.cdae": "07f1022f1b1437ff77935cccd2eac3cc1530414240894257b1a09b53c50c12b4",
+    "rs_1_g17_129164_79988_walk.cdae": "c300d474a176b61347244c2e58af98ac86e6cff00bf59fe259cd33317d9d1d17",
+    "rs_1_g17_129164_79988_walkcol.cdae": "1c99b0b03977311f0722114f585094d60389f1e241f5bb123b528669b4446634",
+    "rs_1_g17_129164_79989.json": "dc5eb3a29ef75d3ad964eec899b6a96afbbf4fb7464ecdb52dbe97a427e2431b",
+    "rs_1_g17_129164_79989_road.cdae": "a050baf76c784c0f47fc4271ef12b4a49a6a56e9ca4822860b740bb88eeea2cf",
+    "rs_1_g17_129164_79989_walk.cdae": "6d0ec7939eba3730f303dda901539c2a57cabf4121206c8f03741ca4ca5830da",
+    "rs_1_g17_129164_79989_walkcol.cdae": "855ebe3eaf3083c02c2fbf83d8ef3b64fae110ca6b509f47aa8ac1c2c890c1be",
+    "rs_1_g17_129165_79988.json": "4b48cae8ceb696861e8afb47cfd26e66996ee560f94651b0305296744e198fce",
+    "rs_1_g17_129165_79988_road.cdae": "ef5cd120266c1fd5646d51e09477df589fe3ca8ace77be77cc765a57111cfea2",
+    "rs_1_g17_129165_79988_walk.cdae": "fb3ed9f96af3b6035480db44cecc1b804f487a266fb2adbc70b18bce71f9306a",
+    "rs_1_g17_129165_79988_walkcol.cdae": "d05d5bace3727c14a03af7e717b9f7c2c5ac15fbc52475ce8a60c223d0bbe338"
+  },
+  "skin_inputs": 3,
+  "skin_inputs_equal": true,
+  "terrain": {
+    "sha256": {
+      "g17_129164_79988": "35e00c764d04ce4cd155532f578552756e3c041a211138ff16b8bf38730d6715",
+      "g17_129165_79988": "ffbe9078dca68e1a58b0ccfa577162c86deb40b41d34ce4c69f901237f25697f",
+      "g17_129164_79989": "c219f137a4180fcbdc3f29401d1f85d357119e15d38c9bd4b702f3685d09cdc8"
+    },
+    "points": 12675,
+    "faults": 0
+  },
+  "terrain_equal": true,
+  "inputs_equal": true,
+  "observed_coalesced": 0,
+  "measured_sources": {
+    "mapdata.py": {
+      "baseline": "ade239e8d39c828fb7b177a105bc8b6eac5ce5666facb0c1c1b5f6b10c05c1d1",
+      "candidate": "b022277124e84e74097c5f9cc6989e62b158fdaa22de7e3c3cefbe4b07841530"
+    },
+    "roads.py": {
+      "baseline": "9520c5dd7a97d0e84cc8133108d6eb878bb9fad5de8ab71a9592e289c9323820",
+      "candidate": "6ee3b12654ee8837baf378d78497ebf1dd5856a445982468bf18cd8a538f50f7"
+    },
+    "blockworker.py": {
+      "baseline": "96d68fb1624b5aa5170428d99d852fce84fb55b8cace7eaf7c71f158d6e8a269",
+      "candidate": "f1453a7efb588b769ace6f5bcefc8786b6cce9352c95f245f0921c7273e0928c"
+    },
+    "earthd.py": {
+      "baseline": "338360a78225fbe3994093ac370dfbcda0269ac8518dd7f2358f6a3cbdc7aed7",
+      "candidate": "1a962aea6012e0cef339d620c3be9abeb2a03d28a69ba41804a712d520dd8d80"
+    }
+  },
+  "regression_modules": [
+    {
+      "module": "test_bridge_clearance",
+      "tests": 17,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_bridge_scenarios",
+      "tests": 38,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_bridgeprofile",
+      "tests": 10,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_geotiles",
+      "tests": 14,
+      "skipped": 1,
+      "passed": true
+    },
+    {
+      "module": "test_grading",
+      "tests": 46,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_mapdata",
+      "tests": 63,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_mapdata_singleflight",
+      "tests": 5,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_plancache",
+      "tests": 14,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_pools",
+      "tests": 6,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_protocol_agreement",
+      "tests": 32,
+      "skipped": 1,
+      "passed": true
+    },
+    {
+      "module": "test_railtags",
+      "tests": 4,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_road_job_timing",
+      "tests": 4,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_roadgeo",
+      "tests": 9,
+      "skipped": 2,
+      "passed": true
+    },
+    {
+      "module": "test_roadmesh",
+      "tests": 39,
+      "skipped": 0,
+      "passed": true
+    },
+    {
+      "module": "test_roads",
+      "tests": 85,
+      "skipped": 0,
+      "passed": true
+    }
+  ],
+  "tests_run": 386,
+  "skipped": 4,
+  "total_baseline_s": 23.24092009999731,
+  "total_candidate_s": 21.30876189999981,
+  "total_reduction_pct": 8.313604589164802
+}

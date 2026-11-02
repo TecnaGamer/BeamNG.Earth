@@ -205,6 +205,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   elevation, imagery and map data, builds terrain, roads, buildings and the rest in a local flat frame around a
   moving origin, and streams them to the game over a local socket. The game's Lua cannot reach the internet, so the
   server is required.
+- Road preparation reuses decoded map layers between concurrent requests and shares each cell's bridge endpoint
+  index. Road-job diagnostics separate queueing, dependency preparation and revisit-cache restoration; see
+  [the stage-one performance notes](docs/ROAD_PREPARATION_STAGE_ONE.md) for scope and reproducible comparisons.
 - The **mod** (`mod/beamng_earth/`) loads the tiles as meshes, keeps an invisible physics terrain
   under the car, moves the world origin as you drive (floating origin), and blends level-of-detail
   changes so nothing pops.
