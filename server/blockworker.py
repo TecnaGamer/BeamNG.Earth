@@ -330,6 +330,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     started = time.time()       # (the server's "queue" stage: from its submit to here, wall clock across processes)
     t0 = time.perf_counter()
     g, chunks = _s.anchor(aid, lat, lon)
+    anchor_s = time.perf_counter() - t0
     if provisional:             # (earthd.Server.make_provisional's ground: no road plans, tunnels, arches or sea floor)
         g, chunks = None, None
     frame = geodesy.EnuFrame(lat, lon)
@@ -354,7 +355,9 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         grade_s[0] += time.perf_counter() - t1
         return z
     import roads as roadsmod
+    t1 = time.perf_counter()
     plan_ahead(g, frame, cx, cy, size * heightmap.SQUARE / 2)
+    plan_s = time.perf_counter() - t1
     gen = elev
     if ter_name is not None and getattr(_s, "md", None) is not None and not provisional:
         t1 = time.perf_counter()
@@ -364,11 +367,14 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         cell_fn = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
 
         def gen(la, lo):        # the ground over the low arches raised over their vaults (roads.arch_raise)
-            return roadsmod.block_arch_raise(tun, cell_fn, frame, la, lo, elev(la, lo),
-                                             (cx - half, cy - half, cx + half, cy + half))
+            z = elev(la, lo)
+            t1 = time.perf_counter()
+            z = roadsmod.block_arch_raise(tun, cell_fn, frame, la, lo, z, (cx - half, cy - half, cx + half, cy + half))
+            part_s["arch"] = part_s.get("arch", 0.0) + time.perf_counter() - t1
+            return z
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
                               chunks=chunks)
-    stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s}
+    stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s}
     idx = None
     if _s.surface is not None:
         t1 = time.perf_counter()

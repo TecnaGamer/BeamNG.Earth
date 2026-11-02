@@ -54,6 +54,22 @@ class RespawnTest(unittest.TestCase):
         finally:
             p.shutdown()
 
+    def test_timeout_counted_from_its_start(self):
+        """result_running: a job queued behind slow ones is not timed out for its wait (GitHub #663: road tiles in a
+        backlog taken for hung workers), one that runs too long is."""
+        import concurrent.futures
+        import time
+        p = pools.RespawningPool("test", 1)
+        try:
+            slow = [p.submit(time.sleep, 0.8) for _ in range(3)]
+            last = p.submit(abs, -7)        # 2.4 s behind them, more than its 1.5 s
+            self.assertEqual(pools.result_running(last, 1.5), 7)
+            self.assertTrue(all(f.done() for f in slow))
+            with self.assertRaises(concurrent.futures.TimeoutError):
+                pools.result_running(p.submit(time.sleep, 3), 0.5)
+        finally:
+            p.shutdown()
+
     def test_jobs_in_flight_are_counted(self):
         """inflight (Server.live_busy: the saved areas' downloads wait for it): up at a submit, down when the job ends,
         fails or is cancelled, also when a pool made again cancels its futures (its own lock: no deadlock)."""

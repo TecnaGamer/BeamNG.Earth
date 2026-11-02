@@ -5,6 +5,7 @@ every later submit raises BrokenProcessPool. The road pool broken that way left 
 tile while the terrain and the far buildings went on loading. RespawningPool makes the pool again at the next submit
 (at most every RESPAWN_S: a pool whose processes cannot even start does not spawn without end) and logs it.
 """
+import concurrent.futures
 import logging
 import threading
 import time
@@ -14,6 +15,24 @@ from concurrent.futures.process import BrokenProcessPool
 log = logging.getLogger("earthd.pools")
 
 RESPAWN_S = 10.0
+QUEUED_POLL_S = 1.0
+
+
+def result_running(fut, timeout, waited=None):
+    """fut's result, its timeout counted from when it left the pool's queue (running: in the executor's call queue,
+    at most the pool's size + 1 jobs before the worker takes it), not from its submit: a road tile behind a long
+    queue (a first visit's backlog, a slow machine) was taken for a hung worker after 300 s of waiting and the pool
+    restarted, failing every tile in flight (GitHub #663). TimeoutError (concurrent.futures') when it runs longer.
+    waited (a list): its time in the queue appended (to QUEUED_POLL_S) when it ran past it."""
+    t0 = time.perf_counter()
+    while not fut.running() and not fut.done():
+        try:
+            return fut.result(timeout=QUEUED_POLL_S)
+        except concurrent.futures.TimeoutError:
+            continue
+    if waited is not None:          # (the caller's log: its time in the queue)
+        waited.append(time.perf_counter() - t0)
+    return fut.result(timeout=timeout)
 
 
 class RespawningPool:
