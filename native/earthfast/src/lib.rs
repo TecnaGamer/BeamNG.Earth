@@ -24,6 +24,8 @@ mod ribbons;
 mod groundpaint;
 mod medians;
 mod speedsigns;
+mod dirsigns;
+mod dirsigns_face;
 mod cachemap;
 mod areacover;
 mod geotiles;
@@ -5295,6 +5297,10 @@ pub(crate) fn rtin_core(hv: &[f64], n: usize, max_err: f64) -> (Vec<[i64; 3]>, V
 
 #[pymodule]
 fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(dirsigns::dirsign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
@@ -5470,6 +5476,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
     m.add_class::<traffic::Routes>()?;
-    m.add("VERSION", 145)?;
+    m.add("VERSION", 146)?;
     Ok(())
 }
