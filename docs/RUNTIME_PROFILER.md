@@ -1,6 +1,6 @@
 # Live performance profiler
 
-This PR includes upstream dev `50e41caca84b30bdc967cb84ad17dfc08d7a6cdc`
+This PR includes upstream dev `11cc55572fd5b828f52a0cf0edf0cf449cba1ac0`
 (2 November 2026) and the latest continuous, resizable and compact-view work.
 The profiler remains optional and off by default. World-generation features are
 reviewed separately; the generic pool hooks also cover upstream's photo process.
@@ -176,9 +176,17 @@ spawned processes, nested worker threads, queue waits, original results/errors,
 cancellation, process crashes, limits, subscription expiry/backpressure, protocol
 agreement, settings persistence and stubbed game-loop integration.
 
-The older `test_blockworker` module has a road-output expectation mismatch and
-Windows cleanup errors from open revisit-cache sidecars; these reproduce against
-the unchanged r6 sources. They are separate from the focused profiler checks.
+The isolated profiler check at dev `50e41cac` ran 180 Python cases (174 passed,
+6 optional skips) and passed 814 Lua assertions. The later combined check at dev
+`11cc5557` ran 1,804 Python cases across 136 selected modules (1,794 passed,
+10 optional skips), with no failures or errors. Matching CLI startup and both
+profiler modes passed in legacy and v2 configurations. These runs overlap and
+should not be added together as unique coverage.
+
+On Windows, two worker tests encounter temporary-file cleanup errors from open
+revisit-cache sidecars, also reproduced on untouched upstream at `50e41cac`.
+All five worker tests pass with a test-only cleanup adapter that closes those
+handles before deleting temporary folders; production code is unchanged.
 
 Native BeamNG acceptance is still required: verify window sizing/readability,
 live generation activity during a drive and teleport, closing/reopening, export,
@@ -188,9 +196,8 @@ capture remains available separately.
 
 ## Independent upstream build
 
-The profiler also targets original upstream `TecnaGamer/BeamNG.Earth` dev commit
-`7baa76bf` (dev fetched 2 November 2026). That checkout contains
-neither `server/buildgen` nor `server/sitegen`. Its patch adds profiler files,
-timing decorators, thread/process and I/O instrumentation, opt-in settings and tests.
-The original upstream generation code is retained. Both source trees pass the
-same profiler, real client/server transport, protocol and Lua integration checks.
+The profiler branch targets original upstream `TecnaGamer/BeamNG.Earth` dev
+`11cc5557` (fetched 2 November 2026). It contains neither `server/buildgen` nor
+`server/sitegen`. Its patch adds profiler files, timing decorators, thread/process
+and I/O instrumentation, opt-in settings and tests. The world-generation branch
+builds on it separately. The performance branch is independent of both.
