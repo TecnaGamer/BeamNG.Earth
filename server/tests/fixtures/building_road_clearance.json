@@ -1,0 +1,261 @@
+{
+  "release": "2026-09-23.1",
+  "upstream": "8b0e9b04",
+  "provenance": "Overture MapData v2 source cells 14/8661/5462 and 14/8096/5291, retrieved 2026-11-01. Full source coordinates and attributes retained; baseline projection metrics are diagnostic only. Flat terrain isolates footprint/width geometry from elevation providers. OpenStreetMap ODbL, https://www.openstreetmap.org/copyright; Overture attribution https://docs.overturemaps.org/attribution/.",
+  "cases": [
+    {
+      "issue": 571,
+      "location": [
+        51.31355,
+        10.314557
+      ],
+      "building_id": "70062208-2173-4ecd-bbb9-988ad9e47c87",
+      "building_lonlat": [
+        [
+          10.3146955,
+          51.3135418
+        ],
+        [
+          10.3146821,
+          51.3134713
+        ],
+        [
+          10.314788,
+          51.3134613
+        ],
+        [
+          10.3148162,
+          51.313556
+        ],
+        [
+          10.3146955,
+          51.3135418
+        ]
+      ],
+      "building_attrs": {
+        "class": "",
+        "cx": 10.314749240875244,
+        "cy": 51.31350517272949,
+        "facade_color": "",
+        "facade_material": "",
+        "has_parts": false,
+        "height": NaN,
+        "height_src": "",
+        "is_underground": false,
+        "level": NaN,
+        "min_floor": NaN,
+        "min_height": NaN,
+        "name": "",
+        "num_floors": NaN,
+        "num_floors_underground": NaN,
+        "roof_color": "",
+        "roof_direction": NaN,
+        "roof_height": NaN,
+        "roof_material": "",
+        "roof_orientation": "",
+        "roof_shape": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w845057958@2",
+        "subtype": ""
+      },
+      "road_id": "12106bd6-dd1d-4725-84f3-4b4411dd7c5d",
+      "road_lonlat": [
+        [
+          10.31520437302881,
+          51.313683789824
+        ],
+        [
+          10.3150353,
+          51.31362
+        ],
+        [
+          10.3144388,
+          51.3135268
+        ],
+        [
+          10.3143908,
+          51.3135046
+        ],
+        [
+          10.3143672,
+          51.3134619
+        ]
+      ],
+      "road_attrs": {
+        "class": "residential",
+        "cx": 10.314918994903564,
+        "cy": 51.313594818115234,
+        "name": "Torstraße",
+        "osm_highway": "",
+        "osm_lanes": NaN,
+        "osm_layer": NaN,
+        "osm_lit": "",
+        "osm_maxspeed": 30.0,
+        "osm_oneway": "",
+        "osm_sidewalk": "",
+        "osm_smoothness": "",
+        "osm_surface": "",
+        "osm_width": NaN,
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w440219632@3",
+        "subclass": "",
+        "subtype": "road",
+        "osm_railway": null,
+        "osm_gauge": null,
+        "osm_electrified": null,
+        "osm_service": null,
+        "osm_usage": null,
+        "osm_turn_lanes": null,
+        "osm_turn_lanes_forward": null,
+        "osm_turn_lanes_backward": null,
+        "osm_turn_lanes_both_ways": null,
+        "osm_change_lanes": null,
+        "osm_change_lanes_forward": null,
+        "osm_change_lanes_backward": null,
+        "osm_placement": null,
+        "osm_placement_forward": null,
+        "osm_placement_backward": null,
+        "osm_lanes_forward": null,
+        "osm_lanes_backward": null,
+        "osm_lanes_both_ways": null,
+        "osm_overtaking": null,
+        "osm_overtaking_forward": null,
+        "osm_overtaking_backward": null,
+        "osm_divider": null,
+        "osm_lane_markings": null,
+        "osm_bus_lanes": null,
+        "osm_busway": null,
+        "osm_hov_lanes": null,
+        "osm_junction": null
+      },
+      "width_m": 8.0,
+      "penetration_m": 3.889959439861423,
+      "trim_share": 0.2364078496853207
+    },
+    {
+      "issue": 543,
+      "location": [
+        53.600361,
+        -2.09975
+      ],
+      "building_id": "f410183d-c069-4f16-b51a-9a629fcd1dac",
+      "building_lonlat": [
+        [
+          -2.0982874,
+          53.5998841
+        ],
+        [
+          -2.0982454,
+          53.5998651
+        ],
+        [
+          -2.0981276,
+          53.599957
+        ],
+        [
+          -2.0982047,
+          53.5999917
+        ],
+        [
+          -2.0982694,
+          53.599941
+        ],
+        [
+          -2.0982874,
+          53.5998841
+        ]
+      ],
+      "building_attrs": {
+        "class": "",
+        "cx": -2.098207473754883,
+        "cy": 53.599931716918945,
+        "facade_color": "",
+        "facade_material": "",
+        "has_parts": false,
+        "height": NaN,
+        "height_src": "",
+        "is_underground": false,
+        "level": NaN,
+        "min_floor": NaN,
+        "min_height": NaN,
+        "name": "",
+        "num_floors": 2.0,
+        "num_floors_underground": NaN,
+        "roof_color": "#778899",
+        "roof_direction": NaN,
+        "roof_height": NaN,
+        "roof_material": "",
+        "roof_orientation": "across",
+        "roof_shape": "gabled",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w1257228254@1",
+        "subtype": ""
+      },
+      "road_id": "e0a31ce3-b238-4efa-aa97-54dcea973378",
+      "road_lonlat": [
+        [
+          -2.0984547,
+          53.5996826
+        ],
+        [
+          -2.0983716,
+          53.599871
+        ],
+        [
+          -2.0981973,
+          53.6000889
+        ]
+      ],
+      "road_attrs": {
+        "class": "residential",
+        "cx": -2.0983259677886963,
+        "cy": 53.59988594055176,
+        "name": "Cedar Lane",
+        "osm_highway": "",
+        "osm_lanes": NaN,
+        "osm_layer": NaN,
+        "osm_lit": "",
+        "osm_maxspeed": 32.18688,
+        "osm_oneway": "",
+        "osm_sidewalk": "",
+        "osm_smoothness": "",
+        "osm_surface": "",
+        "osm_width": NaN,
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w185380882@4",
+        "subclass": "",
+        "subtype": "road",
+        "osm_railway": null,
+        "osm_gauge": null,
+        "osm_electrified": null,
+        "osm_service": null,
+        "osm_usage": null,
+        "osm_turn_lanes": null,
+        "osm_turn_lanes_forward": null,
+        "osm_turn_lanes_backward": null,
+        "osm_turn_lanes_both_ways": null,
+        "osm_change_lanes": null,
+        "osm_change_lanes_forward": null,
+        "osm_change_lanes_backward": null,
+        "osm_placement": null,
+        "osm_placement_forward": null,
+        "osm_placement_backward": null,
+        "osm_lanes_forward": null,
+        "osm_lanes_backward": null,
+        "osm_lanes_both_ways": null,
+        "osm_overtaking": null,
+        "osm_overtaking_forward": null,
+        "osm_overtaking_backward": null,
+        "osm_divider": null,
+        "osm_lane_markings": null,
+        "osm_bus_lanes": null,
+        "osm_busway": null,
+        "osm_hov_lanes": null,
+        "osm_junction": null
+      },
+      "width_m": 8.0,
+      "penetration_m": 2.423211089826163,
+      "trim_share": 0.1780388887623897
+    }
+  ]
+}

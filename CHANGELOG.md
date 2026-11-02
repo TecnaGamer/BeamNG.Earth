@@ -2,6 +2,12 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Keep grounded roadside building walls out of intersecting carriageways, using the development branch's
+  tapered road widths consistently for visible, distant, and collision meshes. Preserve elevated crossings,
+  ships, piers, and footprints that cannot be corrected without a destructive cut.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

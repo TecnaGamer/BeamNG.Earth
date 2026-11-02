@@ -750,7 +750,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # (on the graded ground, the one the terrain is drawn with: on the raw elevation a building beside a road's
         # cutting stood over the cut; hashk014's PR #69)
         items = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
-                                             skip=skip)
+                                             skip=skip, urban_fn=urban, widths=_s.widths, left_hand=left_hand)
         town = buildingsmod.coverage(items, side) < buildingsmod.POLES_COVERAGE
     mark("items")
     rwalls = []
@@ -1525,18 +1525,20 @@ def tunnel_profiles(aid, frame, elev, g=None):
     return roadsmod.ChainView(_chain_store("tunnels", roadsmod.TunnelProfiles, elev, setup), frame)
 
 
-def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_region=None):
+def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_region=None, left_hand=False):
     """earthd.Server.build_far_bld_tile here (road-tile pool): buildings.far_tile (from the revisit cache when built in
     this anchor's place before)."""
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
     k = revisit.key("bldfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
-                    _s.md.versions() if _s.md is not None else None, lamp_region)
+                    _s.md.versions() if _s.md is not None else None, lamp_region, bool(left_hand))
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
                                                        lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                                       out_dir, vfs_dir, aid, lamp_region),
+                                                       out_dir, vfs_dir, aid, lamp_region,
+                                                       urban_fn=_s.surface.urban if _s.surface is not None else None,
+                                                       widths=_s.widths, left_hand=left_hand),
                          lambda res: {"n": int(res[1])},
                          lambda path, extra: (path, int(extra.get("n", 0))),
                          _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty), md=_md_versions()))
@@ -1651,7 +1653,9 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     names = far_geo_names(kind, tile.key)
     shapes = {}
     if kind == "bldfar":
-        items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region)
+        items, lamps, _box = buildingsmod.far_items(
+            frame, tile, None, _s.md, raw, lamp_region,
+            urban_fn=_s.surface.urban if _s.surface is not None else None, widths=_s.widths)
         mesh = buildingsmod.build(items, lite=True)
         n = len(items)
     elif kind == "bldsky":
