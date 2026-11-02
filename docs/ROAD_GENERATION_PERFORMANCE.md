@@ -1,17 +1,37 @@
 # Road generation performance audit — 2 November 2026
 
-Baseline: original `TecnaGamer/BeamNG.Earth` dev checkpoint
-`9f4739d213caab307a85cb292e4306029bf2a984`, fetched for this audit. This includes
-the newer GPU, provisional-terrain, and high-speed-drive work after `7baa76bf`.
-The audit branch starts directly at that checkpoint. It contains no custom
-building-system or runtime-profiler commits. The separate PR targets the frozen
-`audit/upstream-dev-9f4739d2` branch on the test fork; existing PRs #1 and #2 and
-their branches are unchanged.
+The PR now includes current upstream `dev`
+`50e41caca84b30bdc967cb84ad17dfc08d7a6cdc` and targets `dev` on the test fork.
+It contains no custom building-system or runtime-profiler commits.
+
+The historical benchmark baseline is upstream checkpoint
+`9f4739d213caab307a85cb292e4306029bf2a984`. The measurements below retain their
+original baselines; merging current dev does not remeasure their speedups.
 
 The packed-mirror follow-up continued from checkpoint `35e2e38e` and was saved
 as `df2cb877`. The lane-preparation follow-up starts from that latest performance
-checkpoint. The original-dev base remains the one above; no custom-build
-changes have been pulled into this branch.
+checkpoint and was saved as `ea58fcba`. No custom-build changes have been pulled
+into this branch.
+
+## Current integration and playtest
+
+The user reported a successful native BeamNG playtest of `ea58fcba` on
+2 November 2026. The launcher verified the matching isolated client profile
+and exact server checkpoint. This is manual acceptance, not an FPS benchmark.
+
+After merging current dev, 501 Python tests passed across 25 road, collision,
+grading, lane-input and map-cache modules; three optional tests were skipped.
+The five additional worker tests pass with their process-owned revisit file
+descriptors closed before Windows temporary-directory cleanup. Without that
+test cleanup adapter, two cases fail during cleanup on both this branch and
+untouched upstream `50e41cac`; their assertions are unchanged.
+
+The latest upstream merge adds photo-process and vegetation-worker routing.
+That merge was checked automatically; the user's native playtest predates it.
+On the tested performance checkpoint, all 22 real-data Auckland worker meshes
+matched the original baseline, and three tiles completed with zero faults using
+the expanded offline fixture. This fixture includes supporting map manifests,
+elevation coverage and sea-depth rasters omitted from the historical benchmark.
 
 ## Findings and priority
 
