@@ -278,41 +278,14 @@
     "alphaRef": 64,
     "translucent": false
   },
-  "bne_c31_yellow": {
-    "name": "bne_c31_yellow",
-    "mapTo": "bne_c31_yellow",
+  "bne_se_signs": {
+    "name": "bne_se_signs",
+    "mapTo": "bne_se_signs",
     "class": "Material",
     "version": 1.5,
     "Stages": [
       {
-        "baseColorFactor": [
-          1.0,
-          0.645,
-          0.001,
-          1
-        ],
-        "roughnessFactor": 0.65,
-        "metallicFactor": 0.0
-      },
-      {},
-      {},
-      {}
-    ],
-    "castShadows": false
-  },
-  "bne_c31_red": {
-    "name": "bne_c31_red",
-    "mapTo": "bne_c31_red",
-    "class": "Material",
-    "version": 1.5,
-    "Stages": [
-      {
-        "baseColorFactor": [
-          0.855,
-          0.042,
-          0.054,
-          1
-        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_se_signs.png",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },

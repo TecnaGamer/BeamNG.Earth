@@ -86,49 +86,5 @@
       {},
       {}
     ]
-  },
-  "bne_b1_yellow": {
-    "name": "bne_b1_yellow",
-    "mapTo": "bne_b1_yellow",
-    "class": "Material",
-    "version": 1.5,
-    "persistentId": "33e1be6a-7751-5951-acc8-201f3e8a33fe",
-    "Stages": [
-      {
-        "baseColorFactor": [
-          1.0,
-          0.645,
-          0.001,
-          1.0
-        ],
-        "metallicFactor": 0.0,
-        "roughnessFactor": 0.45
-      },
-      {},
-      {},
-      {}
-    ]
-  },
-  "bne_b1_red": {
-    "name": "bne_b1_red",
-    "mapTo": "bne_b1_red",
-    "class": "Material",
-    "version": 1.5,
-    "persistentId": "4c56bb2d-3eb6-5a75-8548-503c09140214",
-    "Stages": [
-      {
-        "baseColorFactor": [
-          0.855,
-          0.042,
-          0.054,
-          1.0
-        ],
-        "metallicFactor": 0.0,
-        "roughnessFactor": 0.45
-      },
-      {},
-      {},
-      {}
-    ]
   }
 }

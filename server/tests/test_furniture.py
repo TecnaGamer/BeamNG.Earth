@@ -276,7 +276,25 @@ class JunctionTest(unittest.TestCase):
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
         import build_median_props as props
         self.assertAlmostEqual(furniture.B1_TOP, props.B1_TOP, 2)
-        self.assertAlmostEqual(props.B1_S - props.B1_CUT, 0.90, 2, "S1 is measured across the rounded corners")
+        edge = props.b1_outline(8)
+        self.assertAlmostEqual(max(x for x, _ in edge) - min(x for x, _ in edge), props.B1_W, 3,
+                               "S1 is measured across the rounded corners")
+        self.assertAlmostEqual(max(z for _, z in edge) - min(z for _, z in edge), props.B1_TOP - props.B1_LOW, 3)
+        self.assertGreaterEqual(props.B1_LOW, 1.0)      # TSFS 2019:74 1 kap. 13 §: 1.0-2.0 m up
+        self.assertLessEqual(props.B1_LOW, 2.0)
+
+    def test_b1_face_is_on_the_sheet(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import build_median_props as props
+        from PIL import Image
+        sheet = np.asarray(Image.open(Path(props.OUT) / "bne_se_signs.png").convert("RGB")).astype(int)
+        px = lambda x, z: sheet[int(props.B1_CELL[1] - z * props.B1_PX), int(props.B1_CELL[0] + x * props.B1_PX)]  # noqa: E731
+        r, g, b = px(0.0, 0.05)
+        self.assertTrue(r > 200 and g > 170 and b < 60, "the middle is yellow")
+        for x, z in props.b1_outline(2):
+            r, g, b = px(x * 0.97, z * 0.97)
+            self.assertTrue(r > 200 and g < 110, "the edge is the border's red")
+        self.assertEqual(max(abs(z) for _, z in props.b1_outline(6)) * props.B1_PX // 1, 107.0, "405 px of 458 at 244")
 
 
 

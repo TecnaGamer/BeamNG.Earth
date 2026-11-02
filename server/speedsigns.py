@@ -2,7 +2,8 @@
 missing data"): the glue of the native kernels earthfast.speed_sign_place (where they stand: changes of the limit,
 past major junctions, past motorway entrances, reminders on long stretches) and speed_sign_mesh (MUTCD R2-1 in the
 US, Rb-1 in Canada, the Vienna Convention's red ring elsewhere); the rules and their sources are there
-(native/earthfast/src/speedsigns.rs). Sweden's C31 is the Vienna mesh with its own colours and sizes.
+(native/earthfast/src/speedsigns.rs). Sweden's C31 stands where the Vienna signs do but is drawn here (sweden_mesh):
+the agency's own artwork of the sign on a disc.
 
 The value is the AI's (navgraph.road_mph: OpenStreetMap's / Overture's limit, else the class default the traffic
 drives), in the units posted there (mph rounded to 5, km/h rounded to 5). Built in the sign tiles (signstream.py,
@@ -28,12 +29,19 @@ CELL_FRAMES = 4                 # anchors a cell keeps its rows for
 STYLE_MUTCD, STYLE_VIENNA, STYLE_CANADA, STYLE_SWEDEN = 0, 1, 2, 3     # (the kernels draw STYLE_SWEDEN as STYLE_VIENNA)
 # speed_sign_mesh's material indices: white, red, metal, lettering, black (exit.materials.json's)
 MATERIALS = ['bne_exit_white', 'bne_guide_red', 'bne_exit_metal', 'bne_guide_letters_black', 'bne_guide_black']
-# C31's yellow and red, in place of the white and red: Transportstyrelsen's artwork of the sign (c31-3.png, 2026-11-02:
-# #FFD204, #EE3A42; TSFS 2019:74 and the law give no colour figures)
-MATERIALS_C31 = ['bne_c31_yellow', 'bne_c31_red', *MATERIALS[2:]]
-# size class -> the one drawn in Sweden: TSFS 2019:74 4 kap. 1 § has discs of 0.45, 0.60, 0.90, >= 1.20 m, at least
-# normal (0.60) on ordinary roads and stor (0.90) on motorways, so no 0.75
-SIZES_C31 = np.array([0, 0, 2, 3], np.float64)
+# C31 (sweden_mesh): Transportstyrelsen's artwork of the sign, tools/build_swedish_signs.py's sheet of 4 x 4 cells of
+# 256 px of 1024, 30 km/h first; the disc's radius 122 px
+MATERIALS_C31 = ['bne_se_signs', 'bne_exit_metal']
+C31_CELL, C31_R, C31_SHEET = 256.0, 122.0, 1024.0
+C31_SEGS = 32
+C31_DEPTH = 0.02                # m: the plate's folded edge
+C31_POLE = 0.03                 # m: as the Vienna mesh's, whose pole stands 0.05 m behind the face
+C31_POLE_X = -0.05
+# size class -> disc: TSFS 2019:74 4 kap. 1 § has 0.45, 0.60, 0.90, >= 1.20 m, at least normal (0.60) on ordinary roads
+# and stor (0.90) on motorways, so no 0.75
+C31_D = (0.60, 0.60, 0.90, 0.90)
+# m from the road to the lower edge: the Vienna mesh's mount(), within 1.0-2.0 m (TSFS 2019:74 1 kap. 13 §)
+C31_MOUNT_RURAL, C31_MOUNT_TOWN, C31_MIN_GROUND = 1.52, 2.0, 1.2
 _lock = threading.Lock()
 
 
@@ -202,6 +210,69 @@ def _glyphs():
             float(data['capHeight']))
 
 
+def c31_uv(value, cos, sin):
+    """Where on the sheet a point of the sign of value km/h is, (cos, sin) of the disc's radius from its centre, seen
+    from the front; v up, as cdae.encode's."""
+    k = int(value) // 10 - 3
+    u = ((k % 4) + 0.5) * C31_CELL + cos * C31_R
+    v = ((k // 4) + 0.5) * C31_CELL - sin * C31_R
+    return u / C31_SHEET, 1.0 - v / C31_SHEET
+
+
+def sweden_mesh(table, origin):
+    """(positions, triangles, uvs, materials, material of each triangle) of C31 signs, or None: rows as
+    speed_sign_mesh's (x, y, ground z, road z, travel x, travel y, value, size class, urban). In a sign's frame, as
+    the kernel's: x towards the driver, y to the driver's right, z up."""
+    ang = np.arange(C31_SEGS) * 2.0 * np.pi / C31_SEGS
+    cos, sin = np.cos(ang), np.sin(ang)
+    P, T, UV, M = [], [], [], []
+    n = 0
+
+    def add(pts, uvs, tris, mat, row):
+        nonlocal n
+        pts = np.asarray(pts, np.float64)
+        x, y, zg, tx, ty = row
+        world = np.column_stack([x - origin[0] - tx * pts[:, 0] + ty * pts[:, 1],
+                                 y - origin[1] - ty * pts[:, 0] - tx * pts[:, 1], zg - origin[2] + pts[:, 2]])
+        P.append(world)
+        UV.append(uvs)
+        T.append(np.asarray(tris, np.int64) + n)
+        M.append(np.full(len(tris), mat, np.int64))
+        n += len(pts)
+
+    for x, y, zg, zr, tx, ty, value, size, urban in table:
+        value = int(round(value))
+        if not (30 <= value <= 120 and np.isfinite([x, y, zg, zr]).all()):
+            continue
+        tl = max(np.hypot(tx, ty), 1e-9)
+        row = (x, y, zg, tx / tl, ty / tl)
+        size = int(np.clip(size, 0, 3))
+        d = C31_D[size]
+        r = d / 2.0
+        mount = C31_MOUNT_TOWN if urban or size >= 2 else C31_MOUNT_RURAL
+        zc = max(zr + mount, zg + C31_MIN_GROUND) - zg + r
+        ring = np.column_stack([np.zeros(C31_SEGS), r * cos, zc + r * sin])
+        fan = [(0, k, k + 1) for k in range(1, C31_SEGS - 1)]
+        none = np.zeros((C31_SEGS, 2))
+        add(ring, np.column_stack(c31_uv(value, cos, sin)), fan, 0, row)
+        back = ring + (-C31_DEPTH, 0.0, 0.0)
+        add(back, none, [(a, c, b) for a, b, c in fan], 1, row)
+        quads = np.zeros((C31_SEGS * 4, 3))         # the edge, each facet its own corners
+        nxt = (np.arange(C31_SEGS) + 1) % C31_SEGS
+        quads[0::4], quads[1::4], quads[2::4], quads[3::4] = back, back[nxt], ring[nxt], ring
+        add(quads, np.zeros((C31_SEGS * 4, 2)), [(i, j, k + 4 * q) for q in range(C31_SEGS)
+                                                 for i, j, k in ((4 * q, 4 * q + 1, 2), (4 * q, 4 * q + 2, 3))], 1, row)
+        a = np.arange(9) * np.pi / 4.0
+        around = np.column_stack([C31_POLE_X + C31_POLE * np.cos(a), C31_POLE * np.sin(a)])
+        top = zc + r - 0.05
+        pole = np.vstack([[(px, py, -0.3), (px, py, top)] for px, py in around])
+        add(pole, np.zeros((18, 2)), [t for k in range(8) for t in ((2 * k, 2 * k + 2, 2 * k + 3),
+                                                                    (2 * k, 2 * k + 3, 2 * k + 1))], 1, row)
+    if not n:
+        return None
+    return np.vstack(P), np.vstack(T), np.vstack(UV), MATERIALS_C31, np.concatenate(M)
+
+
 def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s speed-limit signs, or None (none)."""
     box = roads.tile_bbox(tx, ty)
@@ -217,10 +288,10 @@ def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True
     n = len(signs)
     table = np.column_stack([signs[:, 0:2], z[:n], z[n:], signs[:, 2:4], signs[:, 4:6], signs[:, 8]])
     if face == STYLE_SWEDEN:
-        table[:, 7] = SIZES_C31[table[:, 7].astype(np.int64).clip(0, 3)]
+        return sweden_mesh(table, (float(box[0]), float(box[1]), 0.0))
     cp, glyph, cap = _glyphs()
     p, t, uv, mi = fast._ef.speed_sign_mesh(np.ascontiguousarray(table), _kernel_style(face), cp, glyph, cap,
                                             [float(box[0]), float(box[1]), 0.0])
     if not len(t):
         return None
-    return p, t, uv, MATERIALS_C31 if face == STYLE_SWEDEN else MATERIALS, mi
+    return p, t, uv, MATERIALS, mi

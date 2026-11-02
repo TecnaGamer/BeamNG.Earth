@@ -199,7 +199,7 @@ def wire_mesh(lines, origin):
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}
 MINOR = {"residential", "unclassified", "living_street"}
 G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
-G_B1, B1_TOP = "giveway_b1", 2.28       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
+G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
 JUNCTION_SNAP_M = 1.0       # road ends this close are one junction

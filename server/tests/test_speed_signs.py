@@ -194,6 +194,40 @@ class GlueTest(unittest.TestCase):
             self.assertAlmostEqual(widths[size], want, places=2)
             self.assertIn(1, set(mi.tolist()))
 
+    def test_c31_face_is_the_artwork_the_right_way_round(self):
+        table = np.array([[0.0, 0.0, 10.0, 10.5, 0.0, 1.0, 70.0, 1.0, 0.0]])       # driving north
+        p, t, uv, mats, mi = speedsigns.sweden_mesh(table, (0.0, 0.0, 0.0))
+        face = t[mi == 0]
+        a, b, c = p[face[:, 0]], p[face[:, 1]], p[face[:, 2]]
+        self.assertTrue((np.cross(b - a, c - a)[:, 1] < 0).all(), "the face towards the driver")
+        used = np.unique(face)
+        for axis, along in ((0, 0), (2, 1)):                                        # east is the driver's right, up is up
+            self.assertGreater(np.corrcoef(p[used, axis], uv[used, along])[0, 1], 0.999)
+        low = p[used, 2].min()
+        self.assertAlmostEqual(low, 10.5 + 1.52, places=2)
+        self.assertGreater(p[:, 2].max() - p[:, 2].min(), 2.0, "with a pole to the ground and below it")
+        self.assertLess(p[:, 2].min(), 10.0)
+
+    def test_c31_cells_hold_their_signs(self):
+        from PIL import Image
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "bne_se_signs.png")
+        sheet = np.asarray(Image.open(path).convert("RGB")).astype(int)
+        self.assertEqual(sheet.shape[:2], (int(speedsigns.C31_SHEET),) * 2)
+        at = lambda value, c, s: sheet[(lambda uv: (int((1 - uv[1]) * 1024), int(uv[0] * 1024)))(   # noqa: E731
+            speedsigns.c31_uv(value, c, s))]
+        faces = set()
+        for value in range(30, 130, 10):
+            r, g, b = at(value, 0.92, 0.0)
+            self.assertTrue(r > 200 and g < 100 and b < 100, f"{value}: the red ring")
+            r, g, b = at(value, 0.0, 0.72)
+            self.assertTrue(r > 200 and g > 170 and b < 60, f"{value}: yellow inside it")
+            k = value // 10 - 3
+            cell = sheet[(k // 4) * 256: (k // 4) * 256 + 256, (k % 4) * 256: (k % 4) * 256 + 256]
+            faces.add(cell.tobytes())
+            self.assertLess(cell.sum(2).min(), 90, f"{value}: black digits")
+        self.assertEqual(len(faces), 10)
+
     def test_cell_specs_kept(self):
         class Feats:
             calls = 0
