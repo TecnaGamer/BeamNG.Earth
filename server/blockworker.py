@@ -783,6 +783,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("guardrails")
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts)
+    guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
+                                                     country, guardrail_rows, tx, ty)
     mark("medians")
     P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(box), ctx, bridges.beams_in(box), ground=cover,
                                parapets=parapets, low_parapet_decks=low_parapet_decks, pads=pads)
@@ -1379,6 +1381,20 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
         return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_hand, country, mapped, tx, ty):
+    """The centre barriers' Forest rows of a road tile on Sweden's 2+1 roads (motesfri.tile_rows; only there are the
+    wider cells read), [] if they fail (logged: the tile goes on without them)."""
+    import motesfri
+    try:
+        if not motesfri.wanted(country, near_roads):
+            return []
+        cells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, motesfri.REACH_M)]
+        return motesfri.tile_rows(frame, cells, box, elev, urban, widths, left_hand, mapped)
+    except Exception as ex:
+        log.warning("2+1 centre barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []
 
 
