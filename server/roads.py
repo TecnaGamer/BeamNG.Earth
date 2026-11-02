@@ -931,9 +931,12 @@ def _first_ring_ends(feats):
 def _deck_gaps(feats, i, rngs):
     """rngs (feature i's level ranges) with its short ground gaps between decks made bridge (GAP_DECK_*;
     earthfast.deck_gaps). A road with a tunnel range keeps its own. Pure given feats."""
-    if not GAP_DECK_ON or any(k == "tunnel" for _, _, k in rngs):
+    if not GAP_DECK_ON:
         return rngs
-    if not any(k == "bridge" for _, _, k in rngs):
+    kinds = [r[2] for r in rngs] if rngs else ()   # (most roads have no range: 127k calls in two cells' planning)
+    if "tunnel" in kinds:
+        return rngs
+    if "bridge" not in kinds:
         near = _near_bridge_ends(feats)
         if near is not None and not near[i]:
             return rngs                         # (no bridge of its own, none ending at it)
