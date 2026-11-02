@@ -105,10 +105,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
 - Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
-  2 to 4 road pieces at once, by your computer's CPU threads and memory.
+  2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
+  behind, it borrows a quarter of the game's cores until it has caught up (`BNGE_CATCHUP_LEND=0` turns that off,
+  `0.5` borrows half).
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
-  `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off).
+  `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
+  update changes how that part of the world is built.
 - **AI support**: the mod builds BeamNG's road graph (the AI's map) from the real roads around you, with
   lanes, one-way streets, speed limits (mapped, or the country's defaults), the country's driving side and
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the
