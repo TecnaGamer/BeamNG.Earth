@@ -1,9 +1,15 @@
 # Live performance profiler
 
-This PR includes upstream dev `11cc55572fd5b828f52a0cf0edf0cf449cba1ac0`
+This PR includes upstream dev `0c790738f3ab0ddc2bb7330ee3be23cd875caaf7`
 (2 November 2026) and a resizable, tabbed native ImGui interface.
 The profiler remains optional and off by default. World-generation features are
 reviewed separately; the generic pool hooks also cover upstream's photo process.
+
+The current audit retains the responsive resource-tab UI from `ddfc3e0c` and
+checks both the independent profiler and the combined world-generation build.
+Upstream's process-pool timeout starts at executor admission rather than confirmed
+worker execution. Its timing regression fails on unchanged upstream in this
+Windows environment and is reported separately from profiler regressions.
 
 Open **Pause menu → BeamNG.Earth → Interface → Detailed performance profiler**.
 The option starts off each session, including when an older settings file says it
