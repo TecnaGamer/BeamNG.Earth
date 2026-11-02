@@ -634,7 +634,7 @@ serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, blockSize = 5
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nA + 1 end, 10), '512: resync requested on hello')
 T.check(lattice.N == 512 and lattice.HALF == 512 and follow.GRID == 128 and follow.REACH == 260 and follow.PREPARE_DIST == 128
-  and rebase.STALE_DIST == 256, 'hello.blockSize 512: lattice, follow table and staleness rule switched')
+  and rebase.STALE_DIST == 192, 'hello.blockSize 512: lattice, follow table and staleness rule switched')
 local rq = last('prepare_anchor')
 T.check(rq.cx % 128 == 0 and rq.cy % 128 == 0 and math.abs(rq.cx - veh.pos.x) <= follow.MIN_LEAD + 64, 'resync hint on the 128 m grid (at most MIN_LEAD ahead)')
 local imp512 = calls.importMaps
