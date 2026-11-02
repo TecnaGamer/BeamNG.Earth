@@ -119,6 +119,38 @@ def note_built(cache_dir, signature, cell):
         pass
 
 
+COMING_WAIT_S = float(os.environ.get("BNGE_SHARE_WAIT_S", 3.0))   # a road process waits this long for a cell coming
+COMING_MAX_AGE_S = 30.0         # a coming mark this old is stale (its answer lost)
+
+
+def _coming_path(cache_dir, signature, cell):
+    z, x, y = (int(v) for v in cell)
+    return os.path.join(cache_dir, SUBDIR, "coming", f"{signature}_{z}_{x}_{y}")
+
+
+def coming(cache_dir, signature, cell):
+    """Has the hub asked the server for cell's plans, no answer yet (a road process then waits COMING_WAIT_S for them
+    before planning the cell itself)?"""
+    if not active(cache_dir):
+        return False
+    try:
+        return time.time() - os.path.getmtime(_coming_path(cache_dir, signature, cell)) < COMING_MAX_AGE_S
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _mark(cache_dir, signature, cell, on):
+    try:
+        p = _coming_path(cache_dir, signature, cell)
+        if on:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            open(p, "w").close()
+        else:
+            os.remove(p)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
 def valid_plans(data):
     """Are data a plans npz we can read (no pickles; its meta's plans list)?"""
     if not isinstance(data, (bytes, bytearray)) or not 0 < len(data) <= ITEM_MAX:
@@ -290,11 +322,14 @@ class Hub:
             key = f"plans/{pc.signature}/{cell[0]}_{cell[1]}_{cell[2]}"
             iid = item_id(self.code, key)
             self.wanted[iid] = (key, cell, now)
+            _mark(self.cache_dir, pc.signature, cell, True)
             items.append({"iid": iid, "key": key, "c": self.code})
         for i in range(0, len(items), WANT_BATCH):
             self._queue({"t": "w", "items": items[i:i + WANT_BATCH]})
         for iid in [i for i, v in self.wanted.items() if now - v[2] > ASSEMBLE_S]:
-            self.wanted.pop(iid, None)      # (no answer for a minute: asked again by the next round)
+            w = self.wanted.pop(iid, None)  # (no answer for a minute: asked again by the next round)
+            if w is not None:
+                _mark(self.cache_dir, pc.signature, w[1], False)
         self.stats["asked"] += len(items)
         return len(items)
 
@@ -338,6 +373,9 @@ class Hub:
                 if w is not None:
                     self.missed[w[1]] = now
                     self.stats["missed"] += 1
+                    pc = self.store()
+                    if pc is not None:
+                        _mark(self.cache_dir, pc.signature, w[1], False)
 
     def _chunk(self, msg):
         iid = msg.get("iid")
@@ -381,6 +419,12 @@ class Hub:
         pc = self.store()
         if key is None or pc is None:
             return
+        try:
+            self._keep(pc, key, cell, data)
+        finally:
+            _mark(self.cache_dir, pc.signature, cell, False)
+
+    def _keep(self, pc, key, cell, data):
         m = _KEY.fullmatch(key)
         if not m or m.group(1) != pc.signature or not valid_plans(data):
             self.stats["refused"] += 1

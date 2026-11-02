@@ -182,6 +182,33 @@ class HubTest(unittest.TestCase):
         offer(good)
         self.assertIsNotNone(plan_store(self.dirs[1])._kept(cell), "and the real one is")
 
+    def test_a_road_process_waits_a_little_for_a_cell_coming(self):
+        import threading
+        b = self.hubs[1]
+        b.hello()
+        cell = (14, 4824, 6159)
+        data = self.build(0, cell)
+        la, lo = __import__("mapcells").CellKey(*cell).center()
+        b.prefetch(la, lo)
+        self.assertTrue(mpshare.coming(self.dirs[1], "w1s1", cell), "asked: coming")
+        iid = mpshare.item_id(b.code, "plans/w1s1/14_4824_6159")
+        msg = "S|" + json.dumps({"t": "c", "id": "late", "i": 0, "n": 1, "iid": iid, "key": "plans/w1s1/14_4824_6159",
+                                 "c": b.code, "d": mpshare.b64e(data)})
+        threading.Timer(0.5, b.on_data, (msg,)).start()          # (the server's answer, half a second later)
+        t0 = time.monotonic()
+        got, mine = plan_store(self.dirs[1], run="worker").claim(cell)
+        self.assertIsNotNone(got, "the road process took the server's plans")
+        self.assertFalse(mine)
+        self.assertLess(time.monotonic() - t0, mpshare.COMING_WAIT_S)
+        self.assertFalse(mpshare.coming(self.dirs[1], "w1s1", cell), "arrived: no longer coming")
+        other = (14, 4824, 6160)                                  # (missed: planned here at once)
+        b.on_data("S|" + json.dumps({"t": "m", "items": [mpshare.item_id(b.code, "plans/w1s1/14_4824_6160")]}))
+        self.assertFalse(mpshare.coming(self.dirs[1], "w1s1", other))
+        t0 = time.monotonic()
+        got, mine = plan_store(self.dirs[1], run="worker").claim(other)
+        self.assertTrue(mine and got is None)
+        self.assertLess(time.monotonic() - t0, 0.5)
+
     def test_not_noted_outside_a_session(self):
         self.hubs[0].close()
         self.build(0, (14, 1, 2))

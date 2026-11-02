@@ -241,6 +241,19 @@ class PlanCache:
         waited); (None, True) when this process plans it (call release after store); (None, False) when it plans it
         without the lock (xproc.once)."""
         t0 = time.monotonic()
+        if self.persist is not None:
+            import mpshare      # (a BeamMP session: the server is sending this cell's plans; waited for a little)
+            if mpshare.coming(self.persist[0], self.signature, key):
+                while time.monotonic() - t0 < mpshare.COMING_WAIT_S:
+                    if self.has(key):
+                        got = self.load(key)
+                        if got is not None:
+                            with self._lock:
+                                self.stats["shared"] = self.stats.get("shared", 0) + 1
+                            return got, False
+                    if not mpshare.coming(self.persist[0], self.signature, key):
+                        break   # (missed: planned here)
+                    time.sleep(0.1)
 
         def waiting():
             with self._lock:
