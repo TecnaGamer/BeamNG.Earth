@@ -1001,8 +1001,10 @@ local function onMessage(msg)
     if msg.radius ~= nil then M.setFarRadius(msg.radius) end
   elseif t == 'load_progress' then      -- the loading line's counts (server Connection.send_progress)
     st.loadProgress = msg
-  -- elseif t == 'share' then           -- our world server serving our BeamMP group (shared world building,
-  --   pcall(mpsession.onShare, msg)    -- commented out 2026-10-27: mpsession.lua, peerwork.py)
+  elseif t == 'share_info' then        -- BeamMP shared generation v2: our share code and weight (mpsession poses)
+    pcall(mpsession.onShareInfo, msg)
+  elseif t == 'share_out' then         -- a share message for the group, through the plugin (mpshare.py)
+    pcall(mpsession.shareOut, msg)
   elseif t == 'terrain_patch' then
     pcall(terrainpatch.onPatch, msg)
   elseif t == 'anchor_ready' then

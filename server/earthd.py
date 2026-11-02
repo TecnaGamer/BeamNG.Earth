@@ -850,6 +850,10 @@ class Server:
         revisitmod.CACHE_DIR = cache_dir
         self.refetched = 0              # far textures whose missing photo tiles were fetched here (make_tile)
         # self.share_lock, self.group_helper = threading.Lock(), None    # (share_start: shared world building, commented out)
+        try:                            # (BeamMP sharing v2: a session's mark left by an earlier run; share_hub sets it)
+            os.remove(os.path.join(cache_dir, "share", "active"))
+        except (OSError, TypeError):
+            pass
         self.tile_pool = ThreadPoolExecutor(tile_workers + (peerworkmod.MAX_SLOTS if hasattr(far_pool, "remote_slots")
                                                             else 0), thread_name_prefix="far")
         # Road plans (grading) of the map cells ahead of the player, made before a block needs them: a
@@ -3241,7 +3245,38 @@ class Server:
             px = self.tex_size(tile.level)
             self.imagery.prefetch(frame, *imagerymod.gutter_square(x0, y0, size, px), px, soon=True)
 
-    # (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
+    # --- BeamMP shared world generation v2 (mpshare.py, .claude/work/mp_share_v2.md) --------------------------------
+    def share_parts(self):
+        """What the shared items' keys are made of (plans: their format, the signature's widths / sea; cell facts: theirs;
+        the build switches; the map data's versions): equal for two apps, their items have the same keys."""
+        md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
+        return {"plans": plancachemod.plans_format(), "facts": roadsmod.FACTS_FORMAT,
+                "sw": revisitmod.switches_key(), "md": md, "widths": self.road_widths is not None,
+                "sea": self.sea is not None}
+
+    def share_store(self):
+        """A PlanCache of this server's plans signature and map data (the hub's has / _kept / _revisit_key / expect: the
+        road processes' own, plancache.for_grader)."""
+        sig = f"w{int(self.road_widths is not None)}s{int(self.sea is not None)}"
+        md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
+        pc = plancachemod.PlanCache(os.path.join(self.cache_dir, "plans",
+                                                 os.environ.get(plancachemod.RUN_ENV) or "share"), sig)
+        pc.persist = (self.cache_dir, (plancachemod.FRAMES, sig, md))
+        return pc
+
+    def share_hub(self, send):
+        """The BeamMP sharing hub (one per server: the session's mod connection sends through it; a new connection takes
+        it over). -> (hub, created now)."""
+        import mpshare
+        hub = getattr(self, "_share_hub", None)
+        if hub is None:
+            hub = self._share_hub = mpshare.Hub(send, self.cache_dir, self.share_store)
+            log.info("share: hub up (BeamMP session: plans shared through the server)")
+            return hub, True
+        hub.send_mod = send
+        return hub, False
+
+    # (shared world building v1, commented out 2026-10-27 (off since 2026-10-23); replaced by share_hub above)
     # def share_start(self, port=None):
     #     """Compute sharing in a BeamMP group: our GroupHelper listening (started once) on port (the BeamMP server's
     #     setting, its plugin's SHARE_PORT; BNGE_SHARE_PORT on this machine wins; else peerwork.SHARE_PORT). -> {port,
@@ -4665,6 +4700,28 @@ class Connection:
         """Server.build_veg_geo in this mod's format (veg_flat): the geotile tracker's worker threads."""
         return self.s.build_veg_geo(gx, gy, flat=self.veg_flat, aid=self.active)
 
+    SHARE_TICK_S = 2.0
+
+    async def share_pump(self, hub):
+        """The sharing hub's paced sending (mpshare.Hub.pump) and, every SHARE_TICK_S, its hello / uploads / prefetch
+        around our player (Hub.tick, in the UI pool: it stats files), for the server's life."""
+        tick_at = 0.0
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                now = time.monotonic()
+                if now >= tick_at:
+                    tick_at = now + self.SHARE_TICK_S
+                    ll = getattr(self, "pose_ll", None)
+                    vx, vy = getattr(self, "vel", (0.0, 0.0))
+                    await loop.run_in_executor(self.s.ui_pool, hub.tick, ll[0] if ll else None,
+                                               ll[1] if ll else None, vx, vy)
+                wait = hub.pump()
+            except Exception as e:          # (never the connection's loop)
+                log.warning("share: %s: %s", type(e).__name__, e)
+                wait = 1.0
+            await asyncio.sleep(min(wait if wait is not None else 0.05, max(0.005, tick_at - time.monotonic())))
+
     def spawn(self, coro):
         t = asyncio.create_task(coro)
         self.tasks.add(t)
@@ -4779,7 +4836,25 @@ class Connection:
             self.spawn(self.prepare_anchor(msg))
         elif kind == "server_list":             # the BeamNG.Earth servers for the tab in BeamMP's browser
             self.spawn(self.server_list())
-        # (shared world building, commented out 2026-10-27: the mod sends neither any more)
+        elif kind == "share_hello":             # a BeamMP session (mpsession): our share code and weight for the plugin
+            import mpshare
+            hub, new = self.s.share_hub(self.send)
+            self.send({"type": "share_info", "code": mpshare.share_code(self.s.share_parts()),
+                       "weight": peerworkmod.share_weight()})
+            if new:
+                self.spawn(self.share_pump(hub))
+        elif kind == "share_group":             # the plugin's bngeGroup: the players near us that share our code
+            hub = getattr(self.s, "_share_hub", None)
+            if hub is not None:
+                try:
+                    hub.set_group(json.loads(msg.get("d") or "{}"))
+                except ValueError:
+                    pass
+        elif kind == "share_in":                # a member's message through the plugin ("<from>|<json>")
+            hub = getattr(self.s, "_share_hub", None)
+            if hub is not None:
+                hub.on_data(msg.get("d"))
+        # (shared world building v1, commented out 2026-10-27: the mod sends neither any more)
         # elif kind == "share":                   # a BeamMP session: serve our group (peerwork.GroupHelper)
         #     self.send(dict(self.s.share_start(msg.get("port")), type="share"))
         # elif kind == "peers":                   # the players on our anchor (the BeamMP plugin, through mpsession)
@@ -5421,6 +5496,8 @@ class Connection:
             self.held = {int(a) for a in held if isinstance(a, (int, float)) and not isinstance(a, bool)}
         self.s.claim_sessions(self, msg.get("sessions"))   # earlier runs' folders still in use (or released)
         self.weather.on_pose(self, msg.get("lat"), msg.get("lon"))
+        if isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
+            self.pose_ll = (float(msg["lat"]), float(msg["lon"]))     # (the BeamMP share hub's prefetch)
         if self.s.surface is not None and isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
             self.s.surface.prefetch(float(msg["lat"]), float(msg["lon"]))
         aid = msg.get("anchorId")

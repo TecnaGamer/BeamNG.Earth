@@ -228,6 +228,8 @@ class PlanCache:
                 with open(p, "rb") as fh:
                     revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()},
                                   where=self._where(key), code=revisit.format_marker("plans", plans_format()))
+                import mpshare          # (a BeamMP session shares them: the hub sends them to the server)
+                mpshare.note_built(self.persist[0], self.signature, key)
         except (OSError, ValueError, TypeError):
             return False
         with self._lock:
