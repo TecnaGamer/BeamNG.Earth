@@ -109,6 +109,7 @@ import roadmesh as roadmeshmod  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
 import revisit as revisitmod  # noqa: E402
 import signstream  # noqa: E402
+import dirsigns as dirsignsmod  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
@@ -1040,6 +1041,7 @@ class Server:
             self.osm_fuel = ThreadPoolExecutor(OSM_FUEL_THREADS, thread_name_prefix="osm-fuel")
             self.osm_fuel_done, self.osm_fuel_wait = set(), {}
             self.osm_fuel.submit(self._osm_fuel_warm)
+        self.dirs_on = False        # the settings page's Direction signs (dirsigns.enabled; BNE_DIRSIGNS=on forces it)
         if self.gas_stations and surface is not None and hasattr(surface, "gas_pads"):
             surface.gas_pads = True     # their forecourts painted asphalt (surface.Surface.fuel_pads)
         self.traffic = bool(traffic) and mapdata is not None   # the AI road graph around the player (navgraph.py)
@@ -1771,7 +1773,8 @@ class Server:
         if self.sign_pool is not None:
             return poolsmod.result_running(self.sign_pool.submit(
                 blockworker.signs_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
-                self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor)), ROAD_TILE_TIMEOUT_S)
+                self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor), dirsignsmod.enabled(self)),
+                ROAD_TILE_TIMEOUT_S)
         g = self.grader_for(anchor)
         zoom = anchor.zooms[0]
 
@@ -1781,7 +1784,7 @@ class Server:
         urban = self.surface.urban if self.surface is not None and hasattr(self.surface, "urban") else None
         return signstream.build_tile(self.mapdata, anchor.frame, aid, tx, ty, elev, self.out_dir, self.vfs_dir,
                                      urban, self.road_widths, self.left_hand(anchor), self.mph(anchor),
-                                     self.country(anchor))
+                                     self.country(anchor), dirsignsmod.enabled(self))
 
     def build_sky_tile(self, aid, ux, uy):
         """buildings.skyline_tile: a skyline (render-only) tile of anchor aid, or None (its cells not at hand: asked
@@ -2224,6 +2227,13 @@ class Server:
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings))
+
+    def set_dirs(self, on):
+        """The settings page's Direction signs switch (message direction_signs): True when it changed."""
+        on = bool(on)
+        changed = on != self.dirs_on
+        self.dirs_on = on
+        return changed
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
@@ -5343,6 +5353,9 @@ class Connection:
             self.signs = signstream.Tracker()
         elif kind == "highway_signs":           # the settings page's switch: no sign tiles built while it is off
             self.signs_on = bool(msg.get("on", True))
+        elif kind == "direction_signs":         # the settings page's switch: the sign tiles again, with or without
+            if self.s.set_dirs(msg.get("on")):
+                self.signs.refresh()
         elif kind == "graphics":                # the settings page's graphics knobs (set_graphics)
             self.set_graphics(msg)
         elif kind == "gas_stations":            # the settings page's switch: the road tiles again, with or without

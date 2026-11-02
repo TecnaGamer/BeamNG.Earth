@@ -42,7 +42,7 @@ M.enabled = true
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
-M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds' }
+M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -1055,7 +1055,7 @@ function M.onTile(msg, currentAnchor, a)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
   for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
-      'railcol', 'exits', 'mileposts', 'merges', 'speeds' }) do
+      'railcol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1108,6 +1108,9 @@ function M.onTile(msg, currentAnchor, a)
   -- a sign tile (key "s<tx>_<ty>"): its render-only sign shapes, kept in signData for setSignsEnabled
   tiles[key].signOnly = tostring(msg.key):match('^s%-?%d+_') ~= nil
   tiles[key].signData = {}
+  if type(data.dirs_faces) == 'table' then       -- the direction boards' Materials, before their shape (dirsigns.lua)
+    require('beamngEarth/dirsigns').register(data.dirs_faces)
+  end
   for _, what in ipairs(M.SIGN_WHATS) do
     local sign = data[what]
     if type(sign) == 'table' and sign.shape and type(sign.pos) == 'table' then
@@ -1553,7 +1556,7 @@ M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
 local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'railcol',
-  'exits', 'mileposts', 'merges', 'speeds' }
+  'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
