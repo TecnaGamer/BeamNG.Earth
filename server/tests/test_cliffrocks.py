@@ -762,10 +762,11 @@ class CliffRocksTest(unittest.TestCase):
         art = root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth'
         material = json.loads((art/'cliff.materials.json').read_text())[cr.MATERIAL]['Stages'][0]
         self.assertEqual(material['metallicFactor'], 0)
-        self.assertIn('/temp/beamngEarth/shapes/cliff_talus_', material['detailNormalMap'])
         self.assertLessEqual(material['detailNormalMapStrength'], .3)
         self.assertGreater(material['detailScale'][0], 50)  # sub-2 m detail; macro scale unchanged
-        for key in ('baseColorMap', 'normalMap', 'roughnessMap', 'ambientOcclusionMap'):
+        # Fine normals are packaged alongside the macro maps, so a clean install
+        # must resolve and decode them without runtime game-asset extraction.
+        for key in ('baseColorMap', 'normalMap', 'roughnessMap', 'ambientOcclusionMap', 'detailNormalMap'):
             path = root/'mod/beamng_earth'/material[key].lstrip('/')
             with Image.open(path) as im:
                 self.assertTrue(all(n & (n-1) == 0 for n in im.size), (key, im.size))
