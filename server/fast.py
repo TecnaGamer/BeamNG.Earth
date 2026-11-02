@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 139 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 140 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -89,10 +89,10 @@ def gpu():
     """The GPU's name when the kernels can run there (earthfast gpu.rs: Vulkan / DX12 / Metal), else None (none, an old
     module, or BNGE_GPU=0): the callers keep their CPU path. Found once (~0.4 s, the first call)."""
     global _GPU
-    if _GPU is None and sys.platform == "win32" and os.environ.get("BNGE_GPU") != "1":
-        # Windows: off unless BNGE_GPU=1 (2026-10-23). 1.6.0's players on Windows saw the game freeze for seconds in new
-        # places (none on Linux or a Steam Deck); a long compute dispatch from the server can hold the GPU the game draws
-        # with, and Windows often cannot preempt it. The CPU path is 1.5.5's.
+    # (on Windows too since 2026-11-01, the user: "Gpu should be used where possible on both". It was off there from
+    # 2026-10-23: 1.6.0's Windows players saw the game freeze in new places, a long compute dispatch possibly holding the
+    # GPU the game draws with; the kernels now run in short submissions, each waited for: gpu.rs encode_blocks)
+    if _GPU is None and os.environ.get("BNGE_GPU") == "0":
         _GPU = ""
     if _GPU is None:
         try:

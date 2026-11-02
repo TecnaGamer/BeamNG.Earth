@@ -126,13 +126,18 @@ class FastTest(unittest.TestCase):
 
 
 class GpuDefaultTest(unittest.TestCase):
-    def test_windows_off_unless_asked(self):
-        # Windows players saw the game freeze in new places with 1.6.0's GPU kernels: the CPU path unless BNGE_GPU=1
+    def test_same_on_every_platform(self):
+        # the GPU wherever there is one, Windows too (the user, 2026-11-01); BNGE_GPU=0 turns it off everywhere
         import fast
-        with mock.patch.object(fast.sys, "platform", "win32"), mock.patch.object(fast, "_GPU", None), \
-                mock.patch.dict(fast.os.environ, {}, clear=False):
-            fast.os.environ.pop("BNGE_GPU", None)
-            self.assertIsNone(fast.gpu())
+        for plat in ("win32", "linux"):
+            with mock.patch.object(fast.sys, "platform", plat), mock.patch.object(fast, "_GPU", None), \
+                    mock.patch.dict(fast.os.environ, {"BNGE_GPU": "0"}, clear=False):
+                self.assertIsNone(fast.gpu(), plat)
+            with mock.patch.object(fast.sys, "platform", plat), mock.patch.object(fast, "_GPU", None), \
+                    mock.patch.object(fast._ef, "gpu_name", lambda: "Test GPU (Vulkan)"), \
+                    mock.patch.dict(fast.os.environ, {}, clear=False):
+                fast.os.environ.pop("BNGE_GPU", None)
+                self.assertEqual(fast.gpu(), "Test GPU (Vulkan)", plat)
 
 
 if __name__ == "__main__":
