@@ -49,6 +49,7 @@ ROUTES = {
     "downtown": ((40.7831, -73.9785), (40.7075, -74.0113)),
 }
 CHAIKIN = 3
+CORNER_M = 40.0             # m either side of a corner the rounding stays within (gps_path)
 ROUTE_WAIT_S = 120
 
 WATCH_LUA = r"""
@@ -96,6 +97,14 @@ def gps_path(start, end):
     lat0 = pts[0][0]
     kx = 111320.0 * math.cos(math.radians(lat0))
     xy = [((lo - pts[0][1]) * kx, (la - lat0) * 110540.0) for la, lo in pts]
+    # (points CORNER_M either side of each corner first: Chaikin cuts a quarter of each segment, and on a route of a few
+    # long avenues that cut the corners by hundreds of metres, through the blocks: the car went unstable at 150 mph)
+    dense = [xy[0]]
+    for (x0, y0), (x1, y1) in zip(xy, xy[1:]):
+        ln = math.hypot(x1 - x0, y1 - y0)
+        f = min(0.5, CORNER_M / ln) if ln > 0 else 0.5
+        dense += [(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f), (x1 - (x1 - x0) * f, y1 - (y1 - y0) * f), (x1, y1)]
+    xy = dense
     for _ in range(CHAIKIN):        # corners cut at 1/4 and 3/4 of each segment; the ends kept
         out = [xy[0]]
         for (x0, y0), (x1, y1) in zip(xy, xy[1:]):

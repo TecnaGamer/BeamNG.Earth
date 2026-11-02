@@ -250,6 +250,7 @@ ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long bef
 # (70 m/s until 2026-10-31: at 130-157 mph each block waited 2.5 s for its photo, then its stand-in, the edge guard
 # holding the car; the user: "lower it or do whatever you need to do to get high speed driving viable". The stand-in
 # has the roads painted in and the last photos' overlap now, so the swap to the photo shows less)
+PHOTO_SKIP_V = 55.0             # m/s (123 mph): faster, a requested block goes with its stand-in photo too (make_heightmap)
 FAST_BASE_V = 40.0              # m/s (89 mph): faster, a block waits at most BASE_FAST_WAIT_S for its photo after its
 SMALL_FAST_BASE_V = 35.0        # m/s (78 mph): FAST_BASE_V on a small machine (budget.small: a Steam Deck)
 BASE_FAST_WAIT_S = 0.15         # heights, then goes without it (block_base later): blocks took 0.6-3 s at 600 mph on a
@@ -356,6 +357,7 @@ PREFETCH_START = 200.0      # m (Chebyshev) from the block centre before prefetc
 # 500 mph the next block was asked for ~1.3 s before it was needed and took 0.5-3 s, so the game held its car for its
 # ground half the time (Indianapolis 2026-10-30); one predicted block was not enough
 PREFETCH_CHAIN = 4
+READY_STEPS = 2             # grid steps a built block may be from the mod's target and still be taken (follow.lua)
 PREFETCH_PARALLEL = 2
 READY_SET_M = 3000.0        # m: the built blocks round the player the mod is told of (terrain_ready_set)
 # The mod's terrain-follow rule (mod follow.lua): it asks once the player is more than
@@ -568,7 +570,7 @@ def predict_centre(px, py, vx, vy, lead, reach=FOLLOW_REACH, grid=heightmap.GRID
     return tuple(out)
 
 
-def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0]):
+def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     """The centre the mod will ask for (V1_1_SPEC 4 prefetch): where a player moving
     straight at (vx, vy) leaves the FOLLOW_PREPARE box around the block centre, then the
     mod's own target rule there. (Spec 4 suggests snap256(p + v*6 s); predicting the mod's
@@ -588,23 +590,80 @@ def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0]):
         exits = [((c + math.copysign(rule.prepare, v)) - q) / v
                  for q, v, c in ((qx, vx, cx), (qy, vy, cy)) if abs(v) > 0.5]
         t = min(exits) + FRAME_S if exits else 0.0
+    if at is not None:          # (the player where it asks: READY_STEPS, Connection.maybe_prefetch)
+        at.append((px + vx * t, py + vy * t))
     return predict_centre(px + vx * t, py + vy * t, vx, vy, lead, reach, rule.grid, rule.min_lead, rule.min_lead_v)
 
 
-def predict_chain(px, py, vx, vy, cx, cy, rule, n):
+def predict_chain(px, py, vx, vy, cx, cy, rule, n, at=None):
     """The next n centres the mod will ask for (predict_request, chained): after each, the player where its path passes
-    nearest that centre, the next request from there. Fewer when the chain stops (no move, a repeat)."""
+    nearest that centre, the next request from there. Fewer when the chain stops (no move, a repeat). at: a dict
+    filled with each centre's request point (the player where it asks)."""
     out = []
     v2 = vx * vx + vy * vy
     if v2 < 1.0:
         return out
     for _ in range(n):
-        c = predict_request(px, py, vx, vy, cx, cy, rule)
+        where = []
+        c = predict_request(px, py, vx, vy, cx, cy, rule, where)
         if c == (cx, cy) or c in out:
             break
         out.append(c)
+        if at is not None:
+            at[c] = where[0]
         t = max(0.0, ((c[0] - px) * vx + (c[1] - py) * vy) / v2)
         px, py, (cx, cy) = px + vx * t, py + vy * t, c
+    return out
+
+
+# A fast player on their GPS route: the blocks ahead predicted along it, not along a straight line (predict_chain): at
+# each turn of a route through Manhattan at 150 mph the straight chain's blocks were never asked for, ~40 % of the
+# blocks built, and the ones asked for after the turn queued behind them (nyc_speed.py 2026-11-02).
+ROUTE_NEAR_M = 40.0         # m: the player this near the route's line ...
+ROUTE_ALIGN = 0.7           # ... and heading along it (cos of the angle) is on it
+ROUTE_STEP_M = 16.0         # m between the route points the mod's follow rule is tried at
+ROUTE_AHEAD_S = 20.0        # s of driving along the route looked at, at most ...
+ROUTE_AHEAD_MAX_M = 3000.0  # ... and this far
+
+
+def predict_route_chain(xy, px, py, vx, vy, cx, cy, rule, n, at=None):
+    """The next n centres the mod will ask for while the player at (px, py) moving (vx, vy) drives along the route
+    polyline xy ((k, 2) in the anchor frame), or None when the player is not on it (ROUTE_NEAR_M, ROUTE_ALIGN). The
+    mod's rule (predict_request) tried every ROUTE_STEP_M along the route with the route's own heading there."""
+    sp = math.hypot(vx, vy)
+    if sp < 1.0 or xy is None or len(xy) < 2:
+        return None
+    a, b = xy[:-1], xy[1:]
+    d = b - a
+    ln2 = np.maximum((d * d).sum(1), 1e-9)
+    t = np.clip(((px - a[:, 0]) * d[:, 0] + (py - a[:, 1]) * d[:, 1]) / ln2, 0.0, 1.0)
+    q = a + d * t[:, None]
+    dist = np.hypot(q[:, 0] - px, q[:, 1] - py)
+    j = int(np.argmin(dist))
+    seg = float(np.sqrt(ln2[j]))
+    if dist[j] > ROUTE_NEAR_M or ((d[j, 0] * vx + d[j, 1] * vy) / (seg * sp)) < ROUTE_ALIGN:
+        return None
+    reach = min(ROUTE_AHEAD_MAX_M, sp * ROUTE_AHEAD_S)
+    out, gone, x, y, k = [], 0.0, float(q[j, 0]), float(q[j, 1]), j
+    while gone < reach and k < len(d) and len(out) < n:
+        ux, uy = d[k, 0] / math.sqrt(ln2[k]), d[k, 1] / math.sqrt(ln2[k])
+        bx, by = float(b[k, 0]), float(b[k, 1])
+        left = math.hypot(bx - x, by - y)
+        step = min(ROUTE_STEP_M, left)
+        if left <= 1e-6:
+            k += 1
+            continue
+        x, y, gone = x + ux * step, y + uy * step, gone + step
+        lvx, lvy = ux * sp, uy * sp
+        _lead, _reach, ahead = rule.mode(lvx, lvy)
+        if max(abs(x + lvx * ahead - cx), abs(y + lvy * ahead - cy)) > rule.prepare:
+            where = []
+            c = predict_request(x, y, lvx, lvy, cx, cy, rule, where)
+            if c != (cx, cy) and c not in out:
+                out.append(c)
+                if at is not None:
+                    at[c] = where[0]
+                cx, cy = c
     return out
 
 
@@ -761,6 +820,7 @@ class Server:
         # Heightmap workers: with the block processes they mostly wait on a process, and with two a
         # request queued behind a prefetch and an earlier request (3.5 s at 90 m/s, 2026-10-12)
         self.hm_pool = ThreadPoolExecutor(HM_THREADS, thread_name_prefix="heightmap")
+        self.hm_proc = {}               # (aid, cx, cy) -> its build's future in a block process (provisional_follow)
         # the blocks the mod asks for (the request lane): their own threads, never behind the prefetch's and the
         # rebuilds' (a first visit's requested blocks waited 20-38 s for a heightmap thread, nyc_speed.py --cold
         # down Uptown at 100 mph, 2026-11-02)
@@ -1364,7 +1424,8 @@ class Server:
         on = bool(on) and bool(self.boost_cpus)
         if on == self.boost_on:
             return
-        cpus = self.boost_cpus if on else self.server_cpus
+        cpus = ((getattr(self, "catchup_cpus", None) or self.boost_cpus) if half_only else self.boost_cpus) if on \
+            else self.server_cpus
         if not cpus:
             return
         try:
@@ -2062,8 +2123,12 @@ class Server:
         fb, base = anchor.first_base, None
         if fb is not None and fb[0] == (cx, cy):        # the provisional first block's photo (make_provisional)
             anchor.first_base, base = None, fb[1]
-        elif self.near_visual == "detail" and self.imagery is not None and lane == LANE_PREFETCH and self.fast \
+        elif self.near_visual == "detail" and self.imagery is not None and self.fast \
+                and (lane == LANE_PREFETCH or (progress is None and getattr(self, "speed", 0.0) >= PHOTO_SKIP_V)) \
                 and (anchor.id, cx, cy) not in self.hm_committed:     # (a rebuild of the block in use keeps its photo)
+            # (and faster than PHOTO_SKIP_V a requested one too: in use 2-3 s at 150 mph, its 3-7 s photo came after
+            # the car had left it, 36 photos for 28 blocks of a 3 mile drive, two of the server's four CPUs;
+            # base_refresh draws the block in use's, one at a time, and the stand-ins after it take its overlap)
             # a fast player's prefetched block: its photo only once the mod has it (base_refresh: a stale base); a
             # 3-8 s photo for every guessed block, half of them never asked for, took the CPU the road tiles needed
             # (500 mph, 2026-10-30)
@@ -2086,10 +2151,14 @@ class Server:
             if pool is not None:
                 self.hm_stage[key] = "the block process"
                 submitted, submitted_pc = time.time(), time.perf_counter()
-                info = pool.submit(
+                pfut = self.hm_proc[key] = pool.submit(
                     blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
-                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block)).result()
+                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block))
+                try:
+                    info = pfut.result()
+                finally:
+                    self.hm_proc.pop(key, None)
                 if "started" in info:   # (waiting for the lane's process: a block before it, its road plans ahead)
                     started, finished = info.pop("started"), info.pop("finished", None)
                     info["stages"] = {"pre": submitted_pc - t0, "queue": max(0.0, started - submitted),
@@ -3751,6 +3820,7 @@ PROVISIONAL_KEEP_S = 60.0   # the provisional .ter is deleted this long after it
 # 72-80 s in Chicago, the edge guard holding the car, 2026-11-01): sent provisional at once (make_provisional, its own
 # threads) and the graded one as terrain_refresh when built (refine_follow); BNGE_PROVISIONAL_FOLLOW_S=0: never
 PROVISIONAL_FOLLOW_S = float(os.environ.get("BNGE_PROVISIONAL_FOLLOW_S", "2.5"))
+PROVISIONAL_RUNNING_S = 7.0     # s: a planned block already building in its process gets this long before a provisional
 
 PADS_REFRESH_MS = 5.0       # the block in use built again with its gas station pads only below this speed (m/s) ...
 PADS_SETTLE_S = 3.0         # ... and this long after the last new pad (Connection.pads_refresh)
@@ -3766,6 +3836,7 @@ BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at firs
 # roads round the car not built; off once caught up for CATCHUP_CALM_S
 CATCHUP_AFTER_S = 1.5
 CATCHUP_CALM_S = 3.0
+CATCHUP_LEND_SHARE = float(os.environ.get("BNGE_CATCHUP_LEND", "0.25"))     # of the game's cores (cpupin.boosted)
 CATCHUP_MIN_MS = 8.0        # m/s: only while driving (a parked player's work waits as before)
 BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's teleportPriority) ends this long after at most
 
@@ -4969,6 +5040,13 @@ class Connection:
         done, _ = await asyncio.wait({job}, timeout=wait)
         if done:
             return None
+        pf = s.hm_proc.get(key) if info is None and wait > 0 else None
+        if pf is not None and pf.running() and PROVISIONAL_RUNNING_S > wait:
+            # (planned and building already: a provisional block beside it took the CPU it needed, finished after it,
+            # 150 mph down Midtown on a warm cache 2026-11-02; only if it runs long, a first visit's map data)
+            done, _ = await asyncio.wait({job}, timeout=PROVISIONAL_RUNNING_S - wait)
+            if done:
+                return None
         if info is None:
             prov = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.make_provisional_follow, anchor, cx, cy)
             done, _ = await asyncio.wait({job, prov}, return_when=asyncio.FIRST_COMPLETED)
@@ -5088,6 +5166,10 @@ class Connection:
     def catch_up(self, speed):
         """The loading boost (Server.load_boost: half of the game's cores lent) while the world is behind a driving
         player, off CATCHUP_CALM_S after it caught up. Not over a teleport's own boost."""
+        if CATCHUP_LEND_SHARE <= 0:         # (BNGE_CATCHUP_LEND=0: none)
+            return
+        if self.catchup and not self.s.boost_on:
+            self.catchup = False            # (ended elsewhere: free to start again)
         if self.s.boost_on and not self.catchup:
             return
         behind = speed > CATCHUP_MIN_MS and self.behind()
@@ -5222,14 +5304,26 @@ class Connection:
             rule = self.s.follow
             ahead = rule.mode(*self.vel)[2]         # M4 fast mode: the mod tests a point ahead
             qx, qy = px + self.vel[0] * ahead, py + self.vel[1] * ahead
+            at = self.predicted_at = {}     # (centre -> the player where the mod asks for it: maybe_prefetch)
             if max(abs(qx - base.cx), abs(qy - base.cy)) >= rule.prefetch_start:
-                c = predict_request(px, py, *self.vel, base.cx, base.cy, rule)
+                where = []
+                c = predict_request(px, py, *self.vel, base.cx, base.cy, rule, where)
                 if c != (base.cx, base.cy) and self.s.layout.block_at(*c) != self.block:
                     self.predicted_block = self.s.layout.block_at(*c)
+                    at[c] = where[0]
             self.predicted_chain = []
             if math.hypot(*self.vel) > FAST_BASE_V:
-                self.predicted_chain = [self.s.layout.block_at(*c) for c in
-                                        predict_chain(px, py, *self.vel, base.cx, base.cy, rule, PREFETCH_CHAIN)]
+                route_at = {}
+                cs = predict_route_chain(self.route_xy(aid), px, py, *self.vel, base.cx, base.cy, rule,
+                                         PREFETCH_CHAIN + 1, route_at)
+                if cs:              # (on the GPS route: along it; its first is the next block, as predicted_block)
+                    at.update(route_at)
+                    if self.predicted_block is not None:
+                        self.predicted_block = self.s.layout.block_at(*cs[0])
+                    cs = cs[1:]
+                else:
+                    cs = predict_chain(px, py, *self.vel, base.cx, base.cy, rule, PREFETCH_CHAIN, at)
+                self.predicted_chain = [self.s.layout.block_at(*c) for c in cs]
         self.update_far()
         if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
             self.teleport_pending = False   # the mod never committed it (it stayed): the old place's work goes on
@@ -5309,6 +5403,21 @@ class Connection:
                 del self.nav_wait[k]
         done, wanted = self.roads.progress() if self.roads is not None else (0, 0)
         return (wanted > 0 and done * 2 >= wanted) or time.monotonic() - t0 >= NAV_WAIT_S
+
+    def route_xy(self, aid):
+        """The last planned GPS route's line in anchor aid's frame ((k, 2), kept per route and anchor), or None."""
+        pts = self.route_points
+        anchor = self.s.anchors.get(aid)
+        if not pts or anchor is None or len(pts) < 2:
+            return None
+        got = getattr(self, "_route_xy", None)
+        if got is not None and got[0] == aid and got[1] is pts:
+            return got[2]
+        ll = np.asarray(pts, np.float64)
+        e, n_, _ = anchor.frame.geodetic_to_enu(ll[:, 0], ll[:, 1], 0.0)
+        xy = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], 1)
+        self._route_xy = (aid, pts, xy)
+        return xy
 
     def camera_away(self, cam):
         """The camera's (x, y) from a pose's cam when it is more than VIEW_AWAY_M from the car (a free camera, a far
@@ -5642,11 +5751,14 @@ class Connection:
         busy = getattr(self, "prefetch_busy", None)
         if busy is None:
             busy = self.prefetch_busy = set()
+        at = getattr(self, "predicted_at", {})
         for b in want:
             if len(busy) >= PREFETCH_PARALLEL:
                 return
             key = (anchor.id, b.cx, b.cy)
             if key in busy or self.s.terrain_cached(key):
+                continue
+            if self.ready_will_do(anchor, b, at.get((b.cx, b.cy)), busy):
                 continue
             busy.add(key)
             self.prefetching = True
@@ -5661,6 +5773,25 @@ class Connection:
                     busy.discard(key)
                     self.prefetching = bool(busy)
             self.spawn(run())
+
+    def ready_will_do(self, anchor, b, where, busy):
+        """Would the mod take a block built (or being built) already instead of predicted block b (follow.lua
+        preferReady: within READY_STEPS grid steps of its target, the player within reach of it where it asks)? Then b
+        is not built: each pose's prediction a grid step off the last built another block, 55 built for 24 asked for
+        at 150 mph down Midtown (nyc_speed.py 2026-11-02)."""
+        if where is None:
+            return False
+        rule = self.s.follow
+        _lead, reach, _ahead = rule.mode(*self.vel)
+        lim = READY_STEPS * rule.grid
+        cur = (self.block.cx, self.block.cy) if self.block is not None else None
+        keys = [k for k in list(self.s.hm) + list(self.s.hm_inflight) + list(busy) if k[0] == anchor.id]
+        for _a, kx, ky in keys:
+            if (kx, ky) == (b.cx, b.cy) or (kx, ky) == cur:
+                continue
+            if max(abs(kx - b.cx), abs(ky - b.cy)) <= lim and max(abs(where[0] - kx), abs(where[1] - ky)) <= reach:
+                return True
+        return False
 
     # --- far field ----------------------------------------------------------
     def forced(self):
@@ -5967,7 +6098,9 @@ class Connection:
                 n = sum(1 for k in self.desired if self.ck(k) in self.shown)
                 self.send({"type": "far_done", "anchorId": anchor.id, "count": n})
                 self.far_done_at = time.monotonic()
-                if not self.s.boost_full:       # (full priority: the roads too, on_pose)
+                # (full priority: the roads too, on_pose; a catch-up boost is ended by catch_up only: ended here, it
+                # stayed off for the rest of a 150 mph drive, its flag still on, 2026-11-02)
+                if not self.s.boost_full and not self.catchup:
                     self.s.load_boost(False, "far field done")
                 self.status(f"Far field ready ({n} tiles)")
                 bs = sorted(self.s.build_stats)
@@ -6188,6 +6321,10 @@ async def main_async(args):
     server.photo_pool = photo_pool
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)
+    # (a driving player's catch-up lends less: half the game's cores for the whole of a 150 mph drive took its frame
+    # rate from ~52 to ~40 fps, nyc_speed.py 2026-11-02)
+    server.catchup_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus, CATCHUP_LEND_SHARE)
+                           if server.boost_cpus else None) or server.boost_cpus
 
     async def net_log():
         while True:

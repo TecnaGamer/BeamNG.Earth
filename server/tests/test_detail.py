@@ -244,12 +244,15 @@ class DetailFastPhotoLaterTest(ServerHarness):
 
     def test_stand_in_follows_when_faster(self):
         """Faster: sent without a photo, a stand-in right after it (the imagery alone, write_quick_base; the level's
-        green base was GitHub #548), then its own photo."""
+        green base was GitHub #548), then its own photo: faster than PHOTO_SKIP_V drawn by base_refresh for the block
+        in use at the next pose (not at its request: at 150 mph it came after the car had left the block)."""
         aid, tr = self._slow_block(earthd.QUICK_SYNC_MAX_V + 10)
         self.assertNotIn("base", tr, "sent without its photo")
         q, _ = self.c.until(lambda m: m["type"] == "block_base", timeout=30)
         self.assertTrue(q["base"].endswith("_base_q.png"), "a stand-in first")
         self.assertTrue(os.path.exists(self.fs(q["base"])))
+        self.assertIn((aid, 512.0, 0.0), self.server.base_skipped, "its own photo not drawn at the request")
+        self.pose(aid, 512.0, 0.0)
         self._own_photo_follows(aid)
 
 
