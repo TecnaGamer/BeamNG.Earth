@@ -1,8 +1,16 @@
 # Road generation performance audit — 2 November 2026
 
 The PR now includes current upstream `dev`
-`0c790738f3ab0ddc2bb7330ee3be23cd875caaf7` and targets `dev` on the test fork.
+`b41b4b04edffab6083e78b0c2ef41982869287b2` and targets `dev` on the test fork.
 It contains no custom building-system or runtime-profiler commits.
+
+Upstream's `1a9b4e1f` single-file mapped mirror supersedes this PR's earlier
+small-array bundle. `server/mapdata.py` now matches upstream exactly; there is no
+competing mirror implementation in this PR. The retained mirror tests check the
+new packed format, read-only large views, writable small copies, old per-array
+folders and damaged-cache recovery. Earlier small-bundle measurements below are
+historical; they are not measurements of upstream's new format. The current
+runtime diff is limited to lane-input and bridge-connection reuse.
 
 The latest merge retains upstream's cached lane rows and NumPy assembly together
 with endpoint-only solver inputs, no-op solve avoidance and lane-tag invalidation.

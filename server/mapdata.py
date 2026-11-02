@@ -53,7 +53,6 @@ import os
 import sys
 import threading
 import time
-import zipfile
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -168,8 +167,7 @@ def digest_arrays(arrays):
     return h.hexdigest()
 
 
-# The layer files' arrays uncompressed (<cache>/mapdata-mirror/...: large .npy arrays and a small-array bundle),
-# large arrays memory-mapped read-only:
+# The layer files' arrays uncompressed (<cache>/mapdata-mirror/...: one .npy each and a marker), memory-mapped read-only:
 # every server process decompressed and kept its own copy of the cells it read (each one's largest allocation after
 # the walls, ~90-160 MB, 2026-10-20); a mirrored layer is decompressed once per machine and its pages shared, dropped
 # instead of swapped under memory pressure. At most MIRROR_MB on disk (the least recently read go first); the vector
@@ -178,7 +176,6 @@ BUILD_WAIT_S = 180.0        # a cell layer another process is building is waited
 MIRROR_MB = 2048
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_SMALL = 65536    # bytes: an array this small is read into memory (no mapping)
-MIRROR_VERSION = 2      # small arrays share one uncompressed NPZ; old builds keep their own mirror layout
 MEM_MB = 192        # decoded cell layers kept in memory per process (a road tile reads its ~4 cells, each read by
                     # its neighbours too: ~8 ms of decompression and a coordinate transform each time, 2026-10-15).
                     # A road tile's layers of Baltimore's 4 cells are ~124 MB by _nbytes (the infrastructure 65):
@@ -495,7 +492,7 @@ class MapData:
     # --- the uncompressed mirror (MIRROR_MB) ---------------------------------------------------
     def _mirror_dir(self, path):
         rel = os.path.relpath(path, os.path.join(self.cache_dir, "mapdata"))
-        return os.path.join(self.cache_dir, "mapdata-mirror", f"v{MIRROR_VERSION}", rel[:-4])
+        return os.path.join(self.cache_dir, "mapdata-mirror", rel[:-4])
 
     @staticmethod
     def _stamp(path):
@@ -512,20 +509,39 @@ class MapData:
                 stamp, names = fh.readline().rstrip("\n"), fh.read().split("\n")
             if stamp != self._stamp(path):
                 return None
-            with open(os.path.join(d, "small.npz"), "rb") as fh:
-                with np.load(fh, allow_pickle=False) as archive:
-                    small = {n: archive[n] for n in archive.files}
-            out = {}
-            for n in names:
-                if not n:
-                    continue
-                a = small[n] if n in small else np.load(os.path.join(d, n + ".npy"),
-                                                        mmap_mode="r", allow_pickle=False)
-                out[n] = np.asarray(a)          # (a plain view of the mapping: np.memmap's Python hooks ran on every slice)
+            if names and names[0] == PACK_MARK:
+                out = _unpack(os.path.join(d, PACK_FILE), json.loads(names[1]))
+            else:                   # (a mirror written before the pack: one .npy per array)
+                out = {}
+                for n in names:
+                    if not n:
+                        continue
+                    f = os.path.join(d, n + ".npy")
+                    big = os.path.getsize(f) > MIRROR_SMALL
+                    a = np.load(f, mmap_mode="r" if big else None, allow_pickle=False)
+                    out[n] = np.asarray(a)      # (a plain view of the mapping: np.memmap's Python hooks ran on every slice)
+                if os.name != "nt":     # packed for the next read (Windows: files mapped by another process stay)
+                    self._repack(d, stamp, out)
+                    return out
             os.utime(os.path.join(d, "ok"))         # (read: the last to go)
             return out
-        except (OSError, ValueError, EOFError, zipfile.BadZipFile):
+        except (OSError, ValueError, EOFError, KeyError, IndexError, TypeError):
             return None
+
+    def _repack(self, d, stamp, arrays):
+        """An old mirror folder (one .npy per array) written again as a pack (PACK_FILE), in place."""
+        tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
+        import shutil
+        try:
+            os.makedirs(tmp, exist_ok=True)
+            header, _ = _pack(os.path.join(tmp, PACK_FILE), arrays)
+            with open(os.path.join(tmp, "ok"), "w") as fh:
+                fh.write(stamp + "\n" + PACK_MARK + "\n" + json.dumps(header) + "\n")
+            shutil.rmtree(d, ignore_errors=True)
+            os.rename(tmp, d)
+        except (OSError, ValueError) as e:
+            log.debug("mapdata mirror %s: not packed: %s", d, e)
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def _mirrored(self, key, layer, path, arrays):
         """arrays written to the mirror and read back from it (memory-mapped), or as they are when it cannot be."""
@@ -541,21 +557,9 @@ class MapData:
             stamp = self._stamp(path)
             tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
             os.makedirs(tmp, exist_ok=True)
-            size = 0
-            # A city road layer has many tiny rule/tag arrays. Separate files for
-            # them made cold bridge/grading plans spend seconds in filesystem I/O
-            # on Windows. Bundle only the small arrays; large ones stay mmap-able.
-            with zipfile.ZipFile(os.path.join(tmp, "small.npz"), "w", compression=zipfile.ZIP_STORED) as archive:
-                for n, a in full.items():
-                    a = np.asarray(a)
-                    if a.nbytes <= MIRROR_SMALL:
-                        with archive.open(n + ".npy", "w") as fh:
-                            np.save(fh, a, allow_pickle=False)
-                    else:
-                        np.save(os.path.join(tmp, n + ".npy"), a, allow_pickle=False)
-                    size += a.nbytes
+            header, size = _pack(os.path.join(tmp, PACK_FILE), full)
             with open(os.path.join(tmp, "ok"), "w") as fh:
-                fh.write(stamp + "\n" + "\n".join(full) + "\n")
+                fh.write(stamp + "\n" + PACK_MARK + "\n" + json.dumps(header) + "\n")
             try:
                 if os.path.isdir(d):            # (stale: another file's; or another process's, the same)
                     import shutil
@@ -761,6 +765,58 @@ class MapData:
         except DEFERRED:
             return False
 
+
+
+# A mirrored layer's arrays in one file (PACK_FILE, each at a PACK_ALIGN offset; the "ok" marker's header: name, dtype,
+# shape, offset), mapped once: one .npy per array (~30 a layer) was an open, a stat and a mapping each, ~11 s of a road
+# process's 4 Manhattan geotiles (2026-11-02), and ~30x the files for prune_mirror's walk.
+PACK_FILE = "pack.bin"
+PACK_MARK = "#pack1"
+PACK_ALIGN = 64
+
+
+def _pack(path, arrays):
+    """arrays written to path (PACK_*): (header, bytes of the arrays)."""
+    header, off = [], 0
+    with open(path, "wb") as fh:
+        for n, a in arrays.items():
+            a = np.asarray(a)
+            if not a.flags.c_contiguous:    # (not ascontiguousarray: it makes a 0-d array 1-d)
+                a = a.copy(order="C")
+            if a.dtype.hasobject:
+                raise ValueError(f"mapdata mirror: {n} holds objects")
+            pad = (-off) % PACK_ALIGN
+            if pad:
+                fh.write(b"\0" * pad)
+                off += pad
+            header.append([n, np.lib.format.dtype_to_descr(a.dtype), list(a.shape), off])
+            fh.write(a.tobytes())
+            off += a.nbytes
+    return header, off
+
+
+def _unpack(path, header):
+    """{name: array} of a PACK_FILE (its header): views of one read-only mapping, the small ones (MIRROR_SMALL)
+    copied into memory as a plain load gave them (writable)."""
+    import mmap
+    with open(path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) if size else None
+    out = {}
+    for n, descr, shape, off in header:
+        dt = np.lib.format.descr_to_dtype(descr if isinstance(descr, str) else [tuple(x) for x in descr])
+        count = int(np.prod(shape)) if shape else 1
+        nbytes = count * dt.itemsize
+        if off + nbytes > size:
+            raise ValueError(f"mapdata mirror: {n} past the end of {path}")
+        if nbytes == 0 or mm is None:
+            a = np.empty(shape, dt)
+        else:
+            a = np.frombuffer(mm, dt, count, off).reshape(shape)
+            if nbytes <= MIRROR_SMALL:
+                a = a.copy()
+        out[n] = a
+    return out
 
 
 def prune_mirror(cache_dir):

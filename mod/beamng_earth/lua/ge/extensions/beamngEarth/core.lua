@@ -1620,6 +1620,7 @@ local function updateGuard()
   -- if the next block is late (a first visit, a busy server) the car is paused at the edge of the collidable ground
   -- instead of driving off it; normally the block follows long before (the pause needs the edge within PAUSE_LEAD_S).
   g.healthy = serverHealthy()
+  g.warnCap = g.healthy and follow.warnCap() or nil    -- (the block follows: warned only when it is late)
   if not g.pausedByUs and (guardFailed or st.placeFrames or st.paused) then
     g.mode = 'off'
     return

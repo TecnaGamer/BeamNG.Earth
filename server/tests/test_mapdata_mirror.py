@@ -1,11 +1,12 @@
 """Disk-mirror format and recovery, using local arrays and no network sources."""
 import os
+import json
+import mmap
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest import mock
-import zipfile
 
 import numpy as np
 
@@ -55,22 +56,24 @@ class MirrorTest(unittest.TestCase):
         self.assert_arrays(result)
         self.assertFalse(result["large"].flags.writeable)
         self.assertFalse(result["large"].flags.owndata)
-        self.assertIsInstance(result["large"].base, np.memmap)
+        base = result["large"]
+        while getattr(base, 'base', None) is not None:base = base.base
+        self.assertIsInstance(base, mmap.mmap)
         self.assert_arrays(self.reader()._mirror_load(str(self.path)))
-        self.assertEqual({p.name for p in self.directory.iterdir()}, {"ok", "small.npz", "large.npy"})
-        with zipfile.ZipFile(self.directory / "small.npz") as archive:
-            self.assertEqual(set(archive.namelist()), {n + ".npy" for n in self.arrays if n != "large"})
-            self.assertTrue(all(i.compress_type == zipfile.ZIP_STORED for i in archive.infolist()))
+        self.assertEqual({p.name for p in self.directory.iterdir()}, {"ok", mapdata.PACK_FILE})
+        header = json.loads((self.directory / 'ok').read_text().splitlines()[2])
+        self.assertTrue(all(row[3] % mapdata.PACK_ALIGN == 0 for row in header))
+        self.assertTrue(result['scalar'].flags.writeable)
 
     def test_many_small_fields_need_only_one_bundle_and_marker(self):
         self.arrays = {"provenance": np.array("null"), **{f"rule.{i}": np.array(i) for i in range(80)}}
         np.savez_compressed(self.path, **self.arrays)
         self.assert_arrays(self.build())
-        self.assertEqual({p.name for p in self.directory.iterdir()}, {"ok", "small.npz"})
+        self.assertEqual({p.name for p in self.directory.iterdir()}, {"ok", mapdata.PACK_FILE})
 
     def test_missing_or_truncated_bundle_is_rebuilt_from_source(self):
         self.build()
-        bundle = self.directory / "small.npz"
+        bundle = self.directory / mapdata.PACK_FILE
         for damaged in (None, b"PK\x03\x04truncated"):
             with self.subTest(damaged=damaged):
                 if damaged is None:
@@ -82,16 +85,18 @@ class MirrorTest(unittest.TestCase):
                 self.assert_arrays(self.md._mirrored(None, "landcover", str(self.path), raw))
                 self.assert_arrays(self.md._mirror_load(str(self.path)))
 
-    def test_missing_member_is_a_cache_miss(self):
+    def test_invalid_packed_bounds_is_a_cache_miss(self):
         self.build()
-        with zipfile.ZipFile(self.directory / "small.npz", "w") as archive:
-            with archive.open("provenance.npy", "w") as fh:
-                np.save(fh, self.arrays["provenance"], allow_pickle=False)
+        marker = self.directory / 'ok'
+        rows = marker.read_text().splitlines()
+        header = json.loads(rows[2]);header[-1][3] += 1_000_000
+        marker.write_text('\n'.join(rows[:2]+[json.dumps(header)])+'\n')
         self.assertIsNone(self.md._mirror_load(str(self.path)))
 
     def test_missing_large_array_is_a_cache_miss(self):
         self.build()
-        (self.directory / "large.npy").unlink()
+        pack = self.directory / mapdata.PACK_FILE
+        pack.write_bytes(pack.read_bytes()[:-1])
         self.assertIsNone(self.md._mirror_load(str(self.path)))
 
     def test_source_replacement_invalidates_and_rebuilds_mirror(self):
@@ -103,14 +108,15 @@ class MirrorTest(unittest.TestCase):
         self.assertIsNone(self.md._mirror_load(str(self.path)))
         self.assert_arrays(self.build())
 
-    def test_old_build_mirror_is_left_available(self):
-        legacy = Path(self.tmp.name) / "mapdata-mirror/v2/test/landcover"
-        legacy.mkdir(parents=True)
-        marker = legacy / "ok"
-        marker.write_text("old build's layout")
-        self.assert_arrays(self.build())
-        self.assertNotEqual(legacy, self.directory)
-        self.assertEqual(marker.read_text(), "old build's layout")
+    def test_old_per_array_mirror_remains_readable(self):
+        self.directory.mkdir(parents=True)
+        for name, array in self.arrays.items():np.save(self.directory/(name+'.npy'), array, allow_pickle=False)
+        marker = self.directory / 'ok'
+        legacy = self.md._stamp(self.path)+'\n'+'\n'.join(self.arrays)+'\n'
+        marker.write_text(legacy)
+        self.assert_arrays(self.md._mirror_load(str(self.path)))
+        if os.name == 'nt':self.assertEqual(marker.read_text(), legacy)
+        else:self.assertIn(mapdata.PACK_MARK, marker.read_text())
 
     def test_disabled_mirror_returns_source_without_writing(self):
         with mock.patch.object(mapdata, "MIRROR_MB", 0):
