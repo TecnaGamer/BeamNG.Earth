@@ -25,7 +25,7 @@ while retaining tabs, capture controls and metric-scope notes.
 Closing it or choosing **Compact view** leaves a small status window while
 collection continues. **Open profiler** returns to the full view without resetting
 history. **Stop profiling** or turning the setting off stops collection. The
-selected mode is remembered, but starting another session requires a fresh opt-in.
+mode resets to Essential at settings load, and starting another session requires a fresh opt-in.
 Use matching mod and server sources. Older servers still allow game-frame timings;
 the window explains when worker telemetry is unavailable.
 
@@ -48,7 +48,7 @@ history is capped at 180 frames, versus 600 in Full; server updates arrive once
 per second instead of twice. These checks are disabled during collection, not
 merely hidden. No performance improvement is claimed without a native benchmark.
 
-The tabs are **All**, **GPU**, **CPU**, **Network**, and **Disk**, in that order.
+The tabs are **All**, **GPU**, **CPU**, **Network**, **Disk**, and **Server**, in that order.
 All is the initial default; the last selected tab is remembered thereafter.
 
 - **All:** separate CPU, GPU, network and cache history lanes, a shared time
@@ -62,6 +62,8 @@ All is the initial default; the last selected tab is remembered thereafter.
   filterable service rows with response averages/p95, failures and details.
 - **Disk:** instrumented cache reads, produced-file output, read latency,
   misses/errors, cache quota, volume capacity and optional process-I/O details.
+- **Server:** connection and application round trip, snapshot telemetry age,
+  measured jobs and recent failures, with worker timelines in Full mode.
 
 Click a chart or **Inspect worst** to freeze the displayed capture and inspect a
 frame. The selected frame persists across tabs. **Follow live** clears selection
