@@ -53,21 +53,72 @@ def faults():
     return _faults[0]
 
 
+_PRODUCES = re.compile(r"\brevisit\.(?:key|load|store)\(|\b_revisit_tile\(")
+_IMPORT = re.compile(r"^[ \t]*(?:from[ \t]+([A-Za-z_]\w*)[\w.]*[ \t]+import\b|import[ \t]+([^#\n]+))", re.M)
+
+
+def source_closure(here):
+    """The server modules (file names) whose code the cached items depend on: the ones that make or read them (a
+    revisit.key / load / store or _revisit_tile call), and every server module they import, anywhere in their code (a
+    function's own imports too), and so on. The rest (earthd, its pools and schedulers, the UI's helpers: ~25 of 118
+    modules) changes nothing the cache keeps: an update of those alone kept every place's cache, where any change
+    of any module made every place a first visit again (a dev build each push; 2026-11-02)."""
+    srcs = {}
+    for name in os.listdir(here):
+        if name.endswith(".py"):
+            try:
+                with open(os.path.join(here, name), encoding="utf-8") as f:
+                    srcs[name[:-3]] = f.read()
+            except (OSError, UnicodeDecodeError):
+                pass
+    todo = [m for m, src in srcs.items() if m != "revisit" and _PRODUCES.search(src)]
+    seen = set()
+    while todo:
+        m = todo.pop()
+        if m in seen or m not in srcs:
+            continue
+        seen.add(m)
+        for a, b in _IMPORT.findall(srcs[m]):
+            for n in ([a] if a else [p.strip().split(" ")[0].split(".")[0] for p in b.split(",")]):
+                if n in srcs and n not in seen:
+                    todo.append(n)
+    seen.add("revisit")
+    return sorted(f"{m}.py" for m in seen)
+
+
+def source_id(here):
+    """The fingerprint of source_closure's files and the native module (a packaged app's REVISIT_ID, tools/build_app.py)."""
+    h = hashlib.sha1()
+    names = source_closure(here) + sorted(n for n in os.listdir(here) if n.startswith("earthfast"))
+    for name in names:
+        try:
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read())
+        except OSError:
+            pass
+    return h.hexdigest()
+
+
 def code_key():
-    """A hash of the server's source files and native module (once per process)."""
+    """A hash of the code the cached items depend on (source_id; a packaged app's REVISIT_ID, written by its build) and
+    the build switches (BNE_*), once per process."""
     with _lock:
         if not _code:
             here = os.path.dirname(os.path.abspath(__file__))
             h = hashlib.sha1()
-            for name in sorted(os.listdir(here)):
-                # (a packaged app's modules are in its archive, not beside __file__: the build's CODE_ID, their
-                # fingerprint, is; without it a Python-only update reused the older build's items. From PR #368)
-                if name == "CODE_ID" or name.endswith(".py") or name.startswith("earthfast"):
-                    try:
-                        with open(os.path.join(here, name), "rb") as f:
-                            h.update(name.encode() + b"\0" + f.read())
-                    except OSError:
-                        pass
+            got = None
+            # (a packaged app's modules are in its archive, not beside __file__: the build's fingerprint is; without one
+            # a Python-only update reused the older build's items. From PR #368. An older build's CODE_ID: all of it)
+            for name in ("REVISIT_ID", "CODE_ID"):
+                try:
+                    with open(os.path.join(here, name), "rb") as f:
+                        got = name.encode() + b"\0" + f.read()
+                    break
+                except OSError:
+                    pass
+            if got is None or any(n.endswith(".py") for n in os.listdir(here)):
+                got = source_id(here).encode()      # (from the sources beside it: a dev tree, a source install)
+            h.update(got)
             for k in sorted(os.environ):                # (the build switches: BNE_*)
                 if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP"):
                     h.update(f"{k}={os.environ[k]}".encode())

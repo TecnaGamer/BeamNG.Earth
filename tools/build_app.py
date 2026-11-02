@@ -171,6 +171,12 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     with open(os.path.join(work, "CODE_ID"), "w", encoding="ascii") as f:
         f.write(peerwork.source_id(server))
     cmd += ["--add-data", f"{os.path.join(work, 'CODE_ID')}{SEP}."]
+    # (the revisit cache's own fingerprint: only the modules its items are made with, revisit.source_id; an update of
+    # the rest keeps every place's cache)
+    import revisit
+    with open(os.path.join(work, "REVISIT_ID"), "w", encoding="ascii") as f:
+        f.write(revisit.source_id(server))
+    cmd += ["--add-data", f"{os.path.join(work, 'REVISIT_ID')}{SEP}."]
     cmd += ["--onefile"] if onefile else ["--onedir"]
     if IS_WIN:
         vf, mf = version_files(work, ver)
