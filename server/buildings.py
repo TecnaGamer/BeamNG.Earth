@@ -13,6 +13,7 @@ on red brick), m_highrise_metal's are office curtain wall and a shopfront; each 
 its windows a whole number of bays along every wall (no window cut at a corner). Pure functions of the
 footprints and a ground-height function; no game state.
 """
+from runtimeprofiler import step as profile_step
 import os
 import hashlib
 import math
@@ -445,6 +446,7 @@ def tree_line_m(lat):
     return max(0.0, 3600.0 - 110.0 * max(0.0, abs(float(lat)) - 32.0))
 
 
+@profile_step('Building plan')
 def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, dense=False, west_town=False,
          alpine=False):
     """The Spec of a footprint (local ring (n, 2) in metres, counter-clockwise) from its Overture attributes
@@ -1199,6 +1201,7 @@ def _concat(meshes):
             meshes[0][4], np.concatenate([m[5] for m in meshes]))
 
 
+@profile_step('Building mesh assembly')
 def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
@@ -2300,6 +2303,7 @@ def _hulls_nearby(frame, layers, x0, y0, x1, y1, water_xy, reach=ships.PIER_REAC
     return out
 
 
+@profile_step('Building site selection')
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None):

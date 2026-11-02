@@ -702,7 +702,7 @@ class RoadZ:
             keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
                         ((p[:, 0] - bb[0]) // MASK_M).astype(int).clip(0, nx - 1)]
             return p[keep], c[keep]
-        from concurrent.futures import ThreadPoolExecutor
+        from runtimeprofiler import ThreadPoolExecutor
         with ThreadPoolExecutor(LIDAR_FETCH_THREADS, thread_name_prefix="roadz-ept") as pool:
             got = list(pool.map(read, nodes))           # (in node order: the same points whichever came first)
         xyz = [p for p, _c in got if len(p)]

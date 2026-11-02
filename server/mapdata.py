@@ -54,7 +54,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 

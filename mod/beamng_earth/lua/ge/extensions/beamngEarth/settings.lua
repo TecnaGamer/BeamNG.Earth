@@ -87,6 +87,8 @@ M.SCHEMA = {
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
+  profilerMode = { kind = 'enum', default = 'essential', values = { 'essential', 'full' }, label = 'Profiler mode' },
+  runtimeProfiler = { kind = 'bool', default = false, label = 'Detailed performance profiler' },
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
   placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar (online)' },
@@ -126,7 +128,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
-  'hudVisible', 'statusBar',
+  'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
   'devMapKm' }
@@ -476,6 +478,8 @@ M.APPLY = {
     if M.pageExists() then ui.visible = v end
   end,
   creditsVisible = function(v) credits.setEnabled(v) end,
+  profilerMode = function(v) require('beamngEarth/profiler').setMode(v) end,
+  runtimeProfiler = function(v) require('beamngEarth/profiler').setEnabled(v) end,
   statusBar = function(v) require('beamngEarth/statusbar').enabled = v and true or false end,
   creditsCorner = function(v) credits.setCorner(v) end,
   creditsSize = function(v) credits.setSize(v) end,

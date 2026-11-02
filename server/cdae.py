@@ -35,6 +35,7 @@ Geometry conventions of the engine's Collada import (verified against golden pai
   - one primitive per material, indexed triangle list (matIndex | 0x20000000);
   - tangents are xyz + w (handedness), 16 bytes per vertex.
 """
+from runtimeprofiler import step as profile_step
 import os
 import struct
 
@@ -429,6 +430,7 @@ def _sorted_tris(tris, tri_materials, nmat):
 LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) detail level, as the engine's own files
 
 
+@profile_step('Native shape encoding')
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
            tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
            collisions=None):

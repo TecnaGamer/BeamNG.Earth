@@ -40,6 +40,7 @@ One User-Agent for the whole project (USER_AGENT): the app, its version and the 
 user name, e-mail, machine name, location or session id is ever sent.
 """
 import collections
+import ioprofiler
 import email.utils
 import http.client
 import json
@@ -733,6 +734,7 @@ class HttpsTransport:
                 else:
                     conn.request("GET", path, headers=req_headers)
                 r = conn.getresponse()
+                ioprofiler.headers_received()
                 body = r.read()
                 return r.status, {k.lower(): v for k, v in r.getheaders()}, body
             except (http.client.HTTPException, OSError):
@@ -1003,7 +1005,7 @@ class Fetcher:
                     self._count(h, "requests")
                     t0 = self.clock()
                     try:
-                        status, rh, body = self.transport.request(url, hd, p.timeout)
+                        status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
                         self._failed(h)
@@ -1081,6 +1083,7 @@ class Fetcher:
         if h.breaker.success():
             log.info("net: %s: circuit closed", h.name)
 
+    @ioprofiler.session_request
     @contextmanager
     def session(self, url, kind="demand"):
         """For a caller that does its own HTTP (gravity.py's resumable download through urllib, which

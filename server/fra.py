@@ -38,7 +38,7 @@ class Crossings:
 
     def prefetch(self, keys):
         """Start reading cells keys in the background (a road tile's at its start: alongside its other fetches)."""
-        from concurrent.futures import ThreadPoolExecutor
+        from runtimeprofiler import ThreadPoolExecutor
         with self.lock:
             if self.pool is None:
                 self.pool = ThreadPoolExecutor(1, thread_name_prefix="fra")

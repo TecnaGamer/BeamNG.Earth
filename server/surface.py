@@ -15,6 +15,7 @@ player, kind "prefetch"); the blocks built after it arrives have the right surfa
 pure function of the cached land cover and the heights, so a block rebuilt from a complete cache is
 the same every time.
 """
+from runtimeprofiler import step as profile_step
 import logging
 import math
 from collections import OrderedDict
@@ -22,7 +23,7 @@ import os
 import struct
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -215,6 +216,7 @@ ROAD_EDGE_M = 0.5    # m past a carriageway's edge its material reaches: a squar
                      # inside a 9 m road's edge was on dirt; the grain beyond lies under the edge decal, roads.EDGE_DECAL)
 
 
+@profile_step('Surface road paint')
 def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, extra=()):
     """idx (material per sample, [row, col], as classify gives it) with the roads of feats_list (the
     "roads" Features of the cells around) drawn in at their width: ROAD_MATERIAL by surface kind.
@@ -756,6 +758,7 @@ def _square_lots(frame, x0, y0, size, surface):
     return surface.lots(la, lo)
 
 
+@profile_step('Photo road paint')
 def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False):
     """photo_roads for a ground photo over [x0, x0 + size]² of frame with the roads of surface's cached cells (a
     Surface; never waits); as it was when its texels are coarser than PHOTO_ROADS_MAX_TEXEL or no cell is cached.
@@ -1275,6 +1278,7 @@ class Surface:
             time.sleep(0.05)
         return False
 
+    @profile_step('Surface road data')
     def roads(self, lat, lon):
         """(the "roads" Features of the cells around the points that are cached, complete). Never waits:
         missing cells are fetched in the background."""
@@ -1364,6 +1368,7 @@ class Surface:
         read as not built-up."""
         return self.classes(lat, lon)[0] == roadsmod.URBAN_CLASS
 
+    @profile_step('Land cover')
     def classes(self, lat, lon):
         """(WorldCover class per point, complete): 0 (no data) where the cell is not cached yet. The
         land cover is read at the warped points (warp: organic borders)."""

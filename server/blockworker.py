@@ -12,6 +12,7 @@ init(...) runs once in the process (ProcessPoolExecutor initializer); build(...)
 far_geometry(...) (the far-tile workers, the same state) are its jobs. warm_q (a multiprocessing queue) carries the road cells to plan ahead of the player: (anchor id, lat,
 lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
+from runtimeprofiler import step as profile_step
 import logging
 import os
 import queue
@@ -252,6 +253,7 @@ def _warm_loop():
 
 
 
+@profile_step('Road plans ahead')
 def plan_ahead(g, frame, cx, cy, half):
     """A thread planning the block's road cells (grading.Grader.prepare) while the block's builder samples its ground
     and sea floor; None without a grader."""
@@ -653,6 +655,7 @@ class _Parts:
     the meshes and rows of everything else."""
 
 
+@profile_step('Road tile assembly')
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                 q, rkey, centre, skin_margin=0.0, walks_raw=None):
     """A road tile's parts in frame: tile (tx, ty) of an anchor, or a geotiles.GeoBox (its own frame, no anchor in
@@ -929,6 +932,7 @@ def _content_hash(text, vfs_dir):
     return hashlib.sha1(text.replace(f"{vfs_dir}/", "@V@/").encode("utf-8")).hexdigest()[:16]
 
 
+@profile_step('Geometry serialization')
 def _write_geo_content(out_dir, vfs_dir, tile, P):
     """A geotile's content written to the session folder: its shapes (rg_<key>_<what>.cdae, each with its pivot and
     relief), its rows (props, guard rails, parking, stations, wells, sound) and colliders in its own frame, and the
@@ -1035,6 +1039,7 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     return k if os.path.exists(path) else None
 
 
+@profile_step('Road geometry')
 def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried, lamp_region,
                  country):
     """Geotile (gx, gy)'s content (_write_geo_content), from the revisit cache (kind "roadsg": its key, settings and

@@ -991,7 +991,7 @@ class Tracker:
                 f.cancel()                  # the old anchor's that have not started
             self.aid, self.sent, self.building, self.futs = aid, set(), set(), {}
         if self.pool is None:
-            from concurrent.futures import ThreadPoolExecutor
+            from runtimeprofiler import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-tile")
         spots = [(x, y)] + ([tuple(view)] if view else [])
         skip = {k for p in spots for k in roadsmod.tiles_near(*p, self.skip_m)} if self.skip_m else ()
@@ -1038,7 +1038,7 @@ class Tracker:
             self.aid, self.frame = aid, frame
             self._quads = {k: v for k, v in self._quads.items() if k[0] == aid}
         if self.pool is None:
-            from concurrent.futures import ThreadPoolExecutor
+            from runtimeprofiler import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-geo")
         z = self.z or geotiles.Z
         spots = [(x, y)] + ([tuple(view)] if view else [])

@@ -34,6 +34,7 @@ import http.client
 import json
 import math
 import os
+import ioprofiler
 import struct
 import sys
 import tarfile
@@ -467,6 +468,7 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                     if have:
                         req.add_header("Range", f"bytes={have}-")
                     with urllib.request.urlopen(req, timeout=30) as resp:
+                        ioprofiler.headers_received()
                         s.status = resp.status
                         mode = "ab" if have and resp.status == 206 else "wb"
                         with open(part, mode) as f:
@@ -477,6 +479,7 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                                     break
                                 f.write(chunk)
                                 got += len(chunk)
+                                ioprofiler.received_bytes(len(chunk))
                                 s.nbytes = got
                                 dt = time.monotonic() - t0
                                 if dt > 20 and got / dt < min_rate:   # a stalled mirror: try another
@@ -633,7 +636,7 @@ class Provider:
 
     def __init__(self, cache_dir=CACHE_DIR, model=None, nmax=None, download=True, log=None, net=None):
         import logging
-        from concurrent.futures import ThreadPoolExecutor
+        from runtimeprofiler import ThreadPoolExecutor
         self.cache_dir = cache_dir
         self.nmax = nmax or int(os.environ.get("BNGE_GRAVITY_NMAX", DEFAULT_NMAX))
         self.model = model

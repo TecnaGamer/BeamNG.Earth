@@ -15,6 +15,7 @@ materials render on a mesh (probe 2026-10-11: they are translucent with zwrite, 
 ribbons in one mesh draw in a fixed order and do not flicker). No collision: the tyres stay on the
 terrain, whose surface masks carry the asphalt / dirt ground models. Pure given elev.
 """
+from runtimeprofiler import step as profile_step
 import math
 
 import numpy as np
@@ -340,6 +341,7 @@ def _shared(P, UV, T):
     return P[first], UV[first], inv.reshape(-1)[T]
 
 
+@profile_step('Road mesh generation')
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
           clip_poly=None):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions

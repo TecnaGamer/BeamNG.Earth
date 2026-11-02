@@ -521,7 +521,7 @@ class Tracker:
         self.serial += 1
         serial = self.serial
         if self.pool is None:
-            from concurrent.futures import ThreadPoolExecutor
+            from runtimeprofiler import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(1, thread_name_prefix="navgraph")
         fut = loop.run_in_executor(self.pool, build, aid, x, y, serial)
         fut.add_done_callback(lambda f: self._built(conn, aid, (x, y), serial, f))

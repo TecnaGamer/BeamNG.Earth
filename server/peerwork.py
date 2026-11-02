@@ -40,6 +40,7 @@ import json
 import logging
 import math
 import os
+import ioprofiler
 import queue
 import socket
 import socketserver
@@ -47,7 +48,8 @@ import struct
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
@@ -132,6 +134,7 @@ def _recv_exact(sock, n):
         if not chunk:
             raise ConnectionError("closed")
         buf += chunk
+        ioprofiler.peer_received(len(chunk))
     return bytes(buf)
 
 
@@ -144,7 +147,9 @@ def encode_msg(header, blobs=()):
 
 
 def send_msg(sock, header, blobs=()):
-    sock.sendall(encode_msg(header, blobs))
+    data = encode_msg(header, blobs)
+    sock.sendall(data)
+    ioprofiler.peer_sent(len(data))
 
 
 class _Bytes:
@@ -170,6 +175,7 @@ def recv_msg(sock):
     if n > MAX_HEADER:
         raise ValueError("header too large")
     header = json.loads(_recv_exact(sock, n).decode())
+    ioprofiler.peer_headers()
     if not isinstance(header, dict):
         raise ValueError("bad header")
     k = struct.unpack("<H", _recv_exact(sock, 2))[0]
@@ -614,6 +620,7 @@ class _Conn:
         self.host, self.port = host, port
         self.sock = None
 
+    @ioprofiler.peer_operation
     def open(self):
         s = socket.create_connection((self.host, self.port), timeout=CONNECT_S)
         s.settimeout(JOB_TIMEOUT_S)
@@ -627,6 +634,7 @@ class _Conn:
         self.sock = s
         return int(h.get("workers") or 1)
 
+    @ioprofiler.peer_operation
     def call(self, header):
         if self.sock is None:
             self.open()

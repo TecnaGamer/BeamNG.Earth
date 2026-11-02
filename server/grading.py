@@ -25,13 +25,14 @@ planner reads a neighbouring region's cells mapped into its own frame (_Planner.
 GradedDem(dem, grader) is a drop-in for dem.Dem where only sample() is graded; use it for the block
 and the levels <= 0 tiles only (coarser tiles sink under the block and cover far more ground).
 """
+from runtimeprofiler import step as profile_step
 import logging
 import math
 import os
 import threading
 from collections import OrderedDict
 import time
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
@@ -2234,6 +2235,7 @@ class _Planner:
                 memo[mk] = out
         return out
 
+    @profile_step('Road grading')
     def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
         """base (the ungraded heights at the points) graded under the roads. Same shape as base.
         lift: m added under the roads (tapering with the grading's weight): the physics block and the
@@ -2481,6 +2483,7 @@ class Grader:
             for k in keys:
                 pl._cell_plans(k)
 
+    @profile_step('Road grading')
     def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
         """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base."""
         lat = np.asarray(lat, np.float64)
