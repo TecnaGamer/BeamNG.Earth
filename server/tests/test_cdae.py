@@ -254,3 +254,31 @@ class BoundedMeshTest(unittest.TestCase):
         self.assertEqual(cdae.encode(pos, tri, uvs=uv), cdae.encode(pos, tri, uvs=uv, split_meshes=True))
         with self.assertRaises(cdae.CdaeError):
             cdae.encode(pos, tri, split_meshes=True, collision_only=True)
+
+
+class SplitLodTest(unittest.TestCase):
+    def test_object_detail_layout_and_bounded_indices(self):
+        from unittest.mock import patch
+        p,uv,t=dae.grid(8,1.)
+        p,uv,t=np.asarray(p).reshape(-1,3),np.asarray(uv).reshape(-1,2),np.asarray(t).reshape(-1,3)
+        lo=dict(positions=p[:3],tris=[[0,1,2]],uvs=uv[:3],normals=np.tile((0,0,1),(3,1)))
+        with patch.object(cdae,'RENDER_VERTEX_LIMIT',16):
+            shape=cdae.decode(cdae.encode(p,t,uvs=uv,split_meshes=True,lods=[(600,lo)]))
+        objects=np.frombuffer(shape['objects'][2],'<i4').reshape(-1,6)
+        self.assertGreater(len(objects),1)
+        self.assertEqual(len(shape['meshes']),len(objects)*2)
+        totals=[0,0]
+        for k,obj in enumerate(objects):
+            self.assertEqual(tuple(obj[1:3]),(2,k*2))
+            for level in range(2):
+                mesh=shape['meshes'][k*2+level]
+                if mesh['type']==4:
+                    self.assertEqual(level,1)
+                    continue
+                a=cdae.mesh_arrays(mesh)
+                self.assertLessEqual(len(a['verts']),16)
+                self.assertLess(int(a['indices'].max()),len(a['verts']))
+                totals[level]+=len(a['indices'])//3
+        self.assertEqual(totals,[len(t),1])
+        dets=[struct.unpack_from('<3i3fi',shape['details'][2],i*52) for i in range(2)]
+        self.assertEqual([(d[2],d[3],d[6]) for d in dets],[(0,600.,len(t)),(1,2.,1)])

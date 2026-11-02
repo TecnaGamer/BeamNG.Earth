@@ -35,6 +35,7 @@ Geometry conventions of the engine's Collada import (verified against golden pai
   - one primitive per material, indexed triangle list (matIndex | 0x20000000);
   - tangents are xyz + w (handedness), 16 bytes per vertex.
 """
+import math
 import os
 import struct
 
@@ -466,8 +467,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     Collada / dae.py convention), normals (n,3) (None: computed like the engine does),
     uvs (n,2) and optional uvs2 (n,2) in Collada convention (v up), tangent_uvs (n,2) the
     parametrisation the tangents follow (default: uvs).
-    split_meshes: partition dense single-detail scenery at RENDER_VERTEX_LIMIT;
-    all chunks are simultaneous objects in the same shape, not distance LODs.
+    split_meshes: partition every visible detail at RENDER_VERTEX_LIMIT;
+    chunks render together within each camera-selected detail level.
     Several materials: material a list of names and tri_materials (m,) each triangle's index in
     it; the triangles are grouped into one primitive per material (in list order). colors (n, 4)
     uint8 RGBA per vertex (materials with vertColor multiply their base colour by it).
@@ -481,8 +482,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     and optional uvs / tri_materials / colors, same material list), sizes falling, the last one drawn down to
     LOD_TOP_SIZE px. The main mesh is drawn from lods[0]'s size up: lods=[(300, lite)] draws the full mesh while the
     shape spans 300 px or more, the lite one below."""
-    if split_meshes and (collision_only or lods):
-        raise CdaeError("split_meshes currently supports a single visible detail only")
+    if split_meshes and collision_only:
+        raise CdaeError("split_meshes does not support collision-only shapes")
     if collision_only:
         object_name = "Colmesh"
         lods = None
@@ -505,20 +506,22 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     nmat = len(materials)
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T, TM = _sorted_tris(tris, tri_materials, nmat)
-    parts = (_bounded_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)
-             if split_meshes and len(np.unique(T)) > RENDER_VERTEX_LIMIT else
-             [_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)])
-    body0 = parts[0][0]
-    lo = np.minimum.reduce([p[1] for p in parts])
-    hi = np.maximum.reduce([p[2] for p in parts])
-    ntri = sum(p[3] for p in parts)
-    levels = [(None, body0, ntri)]
+    def encode_level(p, t, tm, ns=None, uv=None, uv2=None, tuv=None, cs=None):
+        if split_meshes and len(np.unique(t)) > RENDER_VERTEX_LIMIT:
+            return _bounded_mesh_data(p, t, tm, nmat, ns, uv, uv2, tuv, cs)
+        return [_mesh_data(p, t, tm, nmat, ns, uv, uv2, tuv, cs)]
+
+    parts = encode_level(P, T, TM, normals, uvs, uvs2, tangent_uvs, colors)
+    levels = [(None, parts, sum(p[3] for p in parts))]
     for size, d in (lods or []):
         Pl = np.asarray(d["positions"], np.float64).reshape(-1, 3)
         Tl, TMl = _sorted_tris(d["tris"], d.get("tri_materials"), nmat)
-        bl, lol, hil, ntl = _mesh_data(Pl, Tl, TMl, nmat, None, d.get("uvs"), None, None, d.get("colors"))
-        lo, hi = np.minimum(lo, lol), np.maximum(hi, hil)
-        levels.append((float(size), bl, ntl))
+        chunks = encode_level(Pl, Tl, TMl, d.get("normals"), d.get("uvs"),
+                              d.get("uvs2"), d.get("tangent_uvs"), d.get("colors"))
+        levels.append((float(size), chunks, sum(p[3] for p in chunks)))
+    lo = np.minimum.reduce([p[1] for _, chunks, _ in levels for p in chunks])
+    hi = np.maximum.reduce([p[2] for _, chunks, _ in levels for p in chunks])
+    ntri = levels[0][2]
     # each level is drawn from the next coarser level's size up: the finest from lods[0]'s size, the last from 2 px
     sizes = [float(lv[0]) for lv in levels[1:]] + [LOD_TOP_SIZE]
 
@@ -541,17 +544,18 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         # billboard dimension/detailLevel/equatorSteps/polarSteps/polarAngle/includePoles
         details = _vec(b"".join(struct.pack("<3i3fi2i2IfI", 1 + k, 0, k, sizes[k], -1.0, -1.0, levels[k][2],
                                             0, 0, 0, 0, 0.0, 0) for k in range(len(levels))), len(levels), 52)
-    object_names = [object_name]+[f"{object_name}_part{k}" for k in range(1, len(parts))]
-    object_name_ids = [0]+list(range(len(names), len(names)+len(parts)-1))
+    nobjects = max(len(chunks) for _, chunks, _ in levels)
+    object_names = [object_name]+[f"{object_name}_part{k}" for k in range(1, nobjects)]
+    object_name_ids = [0]+list(range(len(names), len(names)+nobjects-1))
     names += object_names[1:]
-    nobjects = len(parts)
-    nmesh = 2 if collision_only else len(levels)+nobjects-1
+    per_object = 2 if collision_only else len(levels)
+    nmesh = per_object*nobjects
     shape_vecs = {
         # node: name, parent, firstObject, firstChild, nextSibling
         "nodes": _vec(struct.pack("<5i", 0, -1, 0, -1, -1), 1, 20),
         # object: name, numMeshes, startMeshIndex, node, nextSibling, firstDecal
-        "objects": _vec(b"".join(struct.pack("<6i", name_id, nmesh if nobjects == 1 else 1,
-            k, 0, k+1 if k+1 < nobjects else -1, -1) for k, name_id in enumerate(object_name_ids)), nobjects, 24),
+        "objects": _vec(b"".join(struct.pack("<6i", name_id, per_object,
+            k*per_object, 0, k+1 if k+1 < nobjects else -1, -1) for k, name_id in enumerate(object_name_ids)), nobjects, 24),
         "subShapeFirstNode": _vec(struct.pack("<i", 0), 1, 4),
         "subShapeFirstObject": _vec(struct.pack("<i", 0), 1, 4),
         "subShapeNumNodes": _vec(struct.pack("<i", 1), 1, 4),
@@ -574,10 +578,15 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     _pack(out, nmesh)                                      # meshes (collision only: first the null mesh, type 4)
     if collision_only:
         _pack(out, 4)
-    for _, body, _ in levels:
-        out += body
-    for body, _, _, _ in parts[1:]:
-        out += body
+    # TSShape stores all levels for object 0, then all levels for object 1.
+    # Missing coarse chunks are explicit null meshes; objectDetail still indexes
+    # the same camera-selected level on every object.
+    for k in range(nobjects):
+        for _, chunks, _ in levels:
+            if k < len(chunks):
+                out += chunks[k][0]
+            else:
+                _pack(out, 4)
     _pack(out, 0)                                          # sequences
     _pack(out, len(materials))                             # materials
     for name in materials:
@@ -626,3 +635,49 @@ def engine_version(user_dir, limit=20):
                 if sum(seen.values()) >= limit:
                     return max(seen, key=seen.get)
     return max(seen, key=seen.get) if seen else None
+
+
+
+def scale_lod_thresholds(data, scale):
+    """Copy a generated CDAE with scaled visible LOD thresholds, before loading.
+
+    Only size floats in the detail table change. Keep the smallest visible size,
+    collision details, every mesh byte and object index unchanged. No native
+    TSShapeConstructor edits are safe on a live streamed shape.
+    """
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("LOD scale must be finite and positive")
+    if scale == 1:
+        return data
+    if len(data) < 8:
+        raise CdaeError("file too short")
+    version, hsize = struct.unpack_from("<II", data)
+    header, end = unpack_one(data, 8)
+    if (version & 0xFF != SHAPE_VERSION or end != 8 + hsize
+            or not isinstance(header, dict) or header.get("compression")
+            or header.get("bodysize") != len(data) - end):
+        raise CdaeError("unsupported LOD shape header")
+    stream = _Stream(data, end)
+    for _ in range(6):  # scalar bounds/radius fields precede the shape vectors
+        stream.next()
+    for name in SHAPE_VECTORS:
+        count, stride, raw = stream.vector()
+        if name == "details":
+            break
+    if stride != SHAPE_VECTOR_ELEM["details"]:
+        raise CdaeError("unsupported detail record size")
+    size_offset = 12  # three int32 fields precede the pixel size float
+    visible = [(i, struct.unpack_from("<f", raw, i*stride + size_offset)[0]) for i in range(count)]
+    visible = [(i, size) for i, size in visible if size > 0]
+    if len(visible) < 2:
+        return data  # legacy single-detail shapes and collision-only shapes
+    if any(a[1] <= b[1] for a, b in zip(visible, visible[1:])):
+        raise CdaeError("visible details must be strictly descending")
+    out = bytearray(data)
+    offset = stream.i - len(raw)
+    lower = visible[-1][1]
+    for i, size in reversed(visible[:-1]):
+        adjusted = max(lower + 1, math.floor(size / scale + .5))
+        struct.pack_into("<f", out, offset + i*stride + size_offset, adjusted)
+        lower = adjusted
+    return bytes(out)

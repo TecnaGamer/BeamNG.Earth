@@ -73,7 +73,7 @@ Run the focused suite from the repository root (PowerShell):
 
 ```powershell
 $env:BNGE_ROADGEO_REAL = '0'
-python -m unittest server.tests.test_cliffcuts server.tests.test_cliffrocks server.tests.test_cliffdecals server.tests.test_clifftalus server.tests.test_cdae server.tests.test_roadgeo
+python -m unittest server.tests.test_cliffcuts server.tests.test_cliffrocks server.tests.test_clifflod server.tests.test_cliffdecals server.tests.test_clifftalus server.tests.test_cdae server.tests.test_roadgeo
 ```
 
 The deterministic fixtures cover coastal cliffs, terraces, upper roads, tapering
@@ -115,3 +115,52 @@ projection charts and material groups; they require bounded local indices,
 finite geometry, short edges and no triangle loss. Export tests also verify
 object links and per-vertex attributes. Climate selection, arid pixel-center
 sampling, periodicity, resource packaging and cache invalidation are covered.
+
+
+## Cliff detail and camera LODs
+
+**Graphics > Cliff detail** controls natural cliff faces and both road-cut
+families together. Low and Medium simplify earlier; High and Extreme retain
+fine geometry farther away. Presets Low / Medium / High / Ultra / Extreme map
+to cliff Low / Medium / Normal / High / Extreme respectively. Existing saved
+presets inherit the new setting; manual changes mark the preset Custom.
+Scattered rocks retain their authored asset LODs and separate visibility switch.
+
+Cliff shapes contain the original mesh and up to three progressively clustered
+levels (1.5, 3 and 6 m cells). Open edges, holes, tile outlines, UV chart edges,
+and material boundaries are pinned. Connected clustering rejects folded faces
+and nonmanifold edges; small or difficult shapes can retain fewer levels.
+The original finest mesh and collision surface remain intact. Every detail is
+split within the 65,535-vertex limit; absent coarse objects use null meshes.
+
+Normal thresholds are 1200 / 600 / 240 pixels with a final 2-pixel cull size.
+The engine uses camera projected size, including FOV and its global Object detail
+setting. Cliff detail scales only cliff thresholds (0.55 / 0.75 / 1 / 1.5 / 2
+reach factors). The server writes thresholds into a private copy at a fresh,
+unheld shape slot before the game loads it. Cached sources and already-loaded
+shapes remain unchanged. Changes apply as cliffs load; reload the level to update
+cliffs already in view. Updating from a build without cliff LODs requires a
+server/game restart; the server code fingerprint invalidates old meshes.
+
+Do not use TSShapeConstructor.setDetailLevelSize on streamed shapes. The first
+implementation passed isolated native tests but crashed during streaming inside
+that C method (2026-11-01, beamng.1.log). Lua pcall cannot catch a native crash.
+The replacement sends cliffDetail with graphics settings and never edits a
+loaded native shape.
+
+Validation: a retained real cliff reduced from 40,090 triangles to 21,744,
+16,142 and 14,730 (about 63% fewer at the coarsest level). The dense native-loader
+fixture combines three copies, exercises split objects and null padding, and
+loads separate quality-adjusted files in BeamNG. All 65 sampled native
+collision rays matched the full-detail-only shape exactly. These are geometry
+and collision checks, not an FPS benchmark; coarse outlines should still be
+reviewed while driving and from a free camera in varied terrain.
+
+Additional Lua regressions:
+
+```powershell
+luajit mod/tests/test_clifflod.lua
+luajit mod/tests/test_graphics.lua
+luajit mod/tests/test_settings.lua
+luajit mod/tests/test_roads.lua
+```

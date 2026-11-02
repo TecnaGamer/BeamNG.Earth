@@ -60,7 +60,10 @@ class CliffRocksTest(unittest.TestCase):
                 cr.write(str(path), rock)
                 shape = cdae.read(path)
                 count = 0
-                for m in shape['meshes']:
+                objects = np.frombuffer(shape['objects'][2], '<i4').reshape(-1, 6)
+                for obj in objects:
+                    # The finest detail must retain all original geometry.
+                    m = shape['meshes'][obj[2]]
                     a = cdae.mesh_arrays(m)
                     self.assertLessEqual(len(a['verts']), 65535)
                     ids = a['indices'].reshape(-1, 3)

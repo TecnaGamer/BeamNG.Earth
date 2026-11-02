@@ -78,6 +78,8 @@ M.SCHEMA = {
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
   -- the vegetation tiles' rocks and boulders (trees.lua groups rock, desert_rock; GitHub #5, after PR #321)
   rocks = { kind = 'bool', default = true, label = 'Rocks' },
+  cliffDetail = { kind = 'enum', default = 'normal', values = { 'low', 'medium', 'normal', 'high', 'extreme' },
+    label = 'Cliff detail' },
   cliffFaces = { kind = 'bool', default = true, label = 'Cliff faces' },
   cliffRocks = { kind = 'bool', default = true, label = 'Scattered cliff rocks' },
   cliffDecals = { kind = 'bool', default = true, label = 'Cliff transition decals' },
@@ -128,7 +130,7 @@ M.SCHEMA = {
 }
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'cliffFaces', 'cliffRocks', 'cliffDecals',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'cliffDetail', 'cliffFaces', 'cliffRocks', 'cliffDecals',
   'roads', 'highwaySigns', 'dashboardSatellite',
   'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
@@ -144,21 +146,21 @@ M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, q
 -- quality setting that puts everything at max quality to the real horizon"): every knob at its most, never picked by
 -- the first run (M.detectQuality).
 M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights',
-  'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail' }
+  'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail', 'cliffDetail' }
 M.PRESETS = {
-  low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
+  low = { cliffDetail = 'low', trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
     buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game' },
-  medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
+  medium = { cliffDetail = 'medium', trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game' },
-  high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
+  high = { cliffDetail = 'normal', trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game' },
-  ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
+  ultra = { cliffDetail = 'high', trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
     buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game' },
-  extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
+  extreme = { cliffDetail = 'extreme', trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme' },
 }
@@ -394,12 +396,13 @@ local function applyViewDistance()
   appliedView = m
 end
 
--- The server's graphics knobs now ({ lodScale, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
+-- The server's graphics knobs now ({ lodScale, treeScale, buildingScale, photoPx, viewM, cliffDetail }: core.sendGraphics). photoPx: the
 -- ground photo size of the block in the level now, or of the next one (terrain.photoSize).
 function M.serverGraphics()
   local okT, trees = pcall(require, 'beamngEarth/trees')
   local okR, terrain = pcall(require, 'beamngEarth/terrain')
   return {
+    cliffDetail = values.cliffDetail,
     lodScale = M.TERRAIN_DETAIL[values.terrainDetail] or 1.0,
     treeScale = okT and trees.distanceScale and trees.distanceScale(values.treeDistance) or 1.0,
     buildingScale = M.BUILDING_DISTANCE[values.buildingDistance] or 1.0,
@@ -464,6 +467,7 @@ M.APPLY = {
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
+  cliffDetail = sendGraphics,
   cliffFaces = function(v) require('beamngEarth/roads').setCliffsEnabled(v) end,
   cliffRocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'cliff_rock' }, v) end,
   cliffDecals = function(v) require('beamngEarth/cliffdecals').setEnabled(v) end,

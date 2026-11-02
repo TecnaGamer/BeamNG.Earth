@@ -84,6 +84,7 @@ from PIL import Image  # noqa: E402
 import blockworker  # noqa: E402
 import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
+import clifflod  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
 import credits as creditsmod  # noqa: E402
 import covermap as covermapmod  # noqa: E402
@@ -3313,7 +3314,8 @@ class Server:
 
     def pool_shapes(self, conn, files):
         """Event loop: the road / building tile's shape files ({what: file name in the session folder}) as pooled ones
-        (matslots.py; the far tiles' slots): each a hard link at a slot path, held by conn until the mod reports it
+        (matslots.py; the far tiles' slots): each a hard link (quality-adjusted copy for cliffs) at a slot path,
+        held by conn until the mod reports it
         gone (pose.slotsGone). Returns {what: [vfs path, serial]} for the message's `slots` (files that do not exist
         are left out; a slot that cannot be placed too: the mod then loads the tile's own file)."""
         out = {}
@@ -3327,8 +3329,14 @@ class Server:
             name = self.matslots.take(owner)
             slot = matslotsmod.MatSlots.file(name)
             try:
-                matslotsmod.place(src, os.path.join(self.out_dir, slot))
-            except OSError as e:
+                dst = os.path.join(self.out_dir, slot)
+                detail = getattr(conn, "cliff_detail", "normal")
+                if what in ("cliff", "x:cliff") and detail != "normal":
+                    # Only a fresh, unheld slot: never edit a shape the renderer uses.
+                    clifflod.place(src, dst, detail)
+                else:
+                    matslotsmod.place(src, dst)
+            except (OSError, cdae.CdaeError) as e:
                 log.debug("pooled shape %s: %s", fname, e)
                 self.matslots.release(owner)
                 continue
@@ -3726,6 +3734,7 @@ class Connection:
         # field's detail (lodScale times the layout's K: the distance a level splits at), the tree tiles' reach
         # (treeScale) and the far buildings', skyline's and far bridges' (buildingScale); 1 = the defaults
         self.lod_scale = self.tree_scale = self.building_scale = 1.0
+        self.cliff_detail = "normal"
         self.view_cap = None                    # the far field's radius at most (m): the mod's fixed view distance
 
     async def map_tiles(self, msg):
@@ -4425,14 +4434,15 @@ class Connection:
 
     def set_graphics(self, msg):
         """The settings page's graphics (the user, 2026-10-28: "give player much more control in the graphics settings
-        (view distance, LOD quality, ETC."), message 'graphics' {lodScale, treeScale, buildingScale, photoPx}, each
+        (view distance, LOD quality, ETC."), message 'graphics' {lodScale, treeScale, buildingScale, photoPx, cliffDetail}, each
         optional (viewM: the fixed view distance in m, the far field's radius at most; 0 = the real horizon):
         lodScale times the K table (the far field's terrain detail: >1 splits each level farther out, finer
         ground to the horizon; Baltimore's first selection, 64 cells: 0.75 -> 0.78x the tiles, 1.3 -> ~1.3x, 2 ->
         2.1x), treeScale the tree tiles' reach (vegetation.SEND_M times it), buildingScale the far buildings', the
         skyline's and the far bridges' (buildings.FAR_SEND_M / SKY_SEND_M / BRIDGE_FAR_SEND_M times it), photoPx the
         ground photo's size (Server.set_base_px). Scales are clamped to GRAPHICS_SCALE; the far field is selected
-        again at once, the trackers send and drop by their new reach at the next pose."""
+        again at once, the trackers send and drop by their new reach at the next pose. Cliff detail applies
+        to new shape slots only; loaded shapes are never mutated."""
         def scale(name, cur):
             v = msg.get(name)
             if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
@@ -4440,6 +4450,9 @@ class Connection:
             return min(GRAPHICS_SCALE[1], max(GRAPHICS_SCALE[0], float(v)))
         lod, tree, bld = (scale("lodScale", self.lod_scale), scale("treeScale", self.tree_scale),
                           scale("buildingScale", self.building_scale))
+        cliff = msg.get("cliffDetail")
+        if isinstance(cliff, str) and cliff in clifflod.SCALES:
+            self.cliff_detail = cliff
         far = lod != self.lod_scale
         self.lod_scale = lod
         if tree != self.tree_scale:

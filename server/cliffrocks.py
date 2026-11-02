@@ -806,6 +806,8 @@ def tile_mesh(*args, **kwargs):
 def write(path, rock):
     """Write the rock skin with vertex tint through the existing compiled-mesh path."""
     import cdae
+    import clifflod
     return cdae.write(path, rock.positions, rock.tris, uvs=rock.uvs,
                       material=list(cliffmaterial.MATERIALS) if rock.tri_materials is not None else MATERIAL,
-                      tri_materials=rock.tri_materials, colors=rock.colors, normals=rock.normals, object_name="cliff", split_meshes=True)
+                      tri_materials=rock.tri_materials, colors=rock.colors, normals=rock.normals, object_name="cliff",
+                      split_meshes=True, lods=clifflod.levels(rock))

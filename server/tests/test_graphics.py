@@ -59,6 +59,17 @@ class GraphicsMessageTest(unittest.TestCase):
         self.assertEqual((c.veg.send_m, c.bldfar.send_m), (vegetation.SEND_M, buildings.FAR_SEND_M))
         self.assertEqual(self.s.base_px, earthd.BASE_PX)
 
+    def test_cliff_detail_is_validated_and_retained(self):
+        self.assertEqual(self.conn([]).cliff_detail, "normal")
+        for level in ("low", "medium", "normal", "high", "extreme"):
+            c = self.conn([{"type": "graphics", "cliffDetail": level},
+                           {"type": "graphics", "lodScale": 1.5}])
+            self.assertEqual(c.cliff_detail, level)
+        for invalid in (None, [], {}, True, 3, "bogus"):
+            c = self.conn([{"type": "graphics", "cliffDetail": "high"},
+                           {"type": "graphics", "cliffDetail": invalid}])
+            self.assertEqual(c.cliff_detail, "high")
+
     def test_scales(self):
         c = self.conn([{"type": "graphics", "lodScale": 2.0, "treeScale": 2.2, "buildingScale": 1.5, "photoPx": 4096}])
         self.assertEqual(c.kfun()(1), 2.0 * self.s.kfun(1))

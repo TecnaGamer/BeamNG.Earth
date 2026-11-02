@@ -189,6 +189,43 @@ class ServerTest(unittest.TestCase):
         earthd.Connection.slots_gone(c, [[n, serial]])
         self.assertEqual(self.s.matslots.stats()["free"], 1)
 
+    def test_cliff_quality_never_rewrites_a_held_shape_or_shared_source(self):
+        import cdae
+        import clifflod
+        import numpy as np
+        import struct
+        from pathlib import Path
+        p = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]])
+        t = np.array([[0, 1, 2]])
+        coarse = dict(positions=p, tris=t)
+        data = cdae.encode(p, t, material="rock", split_meshes=True,
+                           lods=[(1200, coarse), (600, coarse), (240, coarse)])
+        src = Path(self.s.out_dir)/"cliff.cdae"
+        src.write_bytes(data)
+        c = Conn()
+        c.s = self.s
+        self.s.connections.add(c)
+        held = {}
+        for level in ("low", "extreme", "medium", "high", "normal"):
+            c.cliff_detail = level
+            slots = self.s.pool_shapes(c, {"cliff": src.name, "x:cliff": src.name, "road": src.name})
+            self.assertEqual(len(slots), 3)
+            for what, (path, serial) in slots.items():
+                disk = Path(self.s.out_dir)/path.rsplit("/", 1)[-1]
+                self.assertNotIn(disk, held)
+                actual = disk.read_bytes()
+                if what == "road":
+                    self.assertEqual(actual, data)
+                else:
+                    shape = cdae.decode(actual)
+                    sizes = [v[3] for v in struct.iter_unpack("<3i3fi2i2IfI", shape["details"][2])]
+                    expected = [round(v/clifflod.SCALES[level]) for v in (1200,600,240)]+[2]
+                    self.assertEqual(sizes, expected)
+                held[disk] = actual
+            self.assertEqual(src.read_bytes(), data, "source remains reusable for every connection")
+            for disk, previous in held.items():
+                self.assertEqual(disk.read_bytes(), previous, "previously loaded slot is immutable")
+
     def test_eviction_and_prune_free_names(self):
         ck, name = self.add("0_0_0")
         self.s._evict_tile(ck)
