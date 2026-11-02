@@ -1782,6 +1782,54 @@ def lane_flow(feats):
     return out
 
 
+def _lane_flow_inputs(feats):
+    """Immutable per-cell endpoints, point counts (0/1/2) and lane attributes for the native solver.
+
+    Neighbourhoods overlap: each home-cell solve used to parse the same rules
+    and copy whole polylines again. The solver reads endpoints only; retain
+    short-feature counts so they still cannot connect/block nodes.
+    Publish complete arrays and keep their lifetime with the decoded source cell.
+    """
+    got = feats.__dict__.get("_lane_flow_inputs")
+    lane_column = feats.attrs.get("osm_lanes")
+    if got is not None and got[0] is lane_column:
+        return got[1]
+    n = len(feats)
+    bounds = feats.coord_off[feats.ring_off[feats.part_off]]
+    counts = np.minimum(np.diff(bounds), 2).astype(np.int64)
+    ends = np.zeros((n, 2, 2), np.float64)
+    nonempty, lines = counts > 0, counts == 2
+    ends[nonempty, 0] = feats.lonlat[bounds[:-1][nonempty]]
+    ends[lines, 1] = feats.lonlat[bounds[1:][lines] - 1]
+    attrs = np.zeros((n, 4))
+    attrs[:, 1] = np.nan
+    attrs[:, 3] = np.nan
+    cls, sub = feats.attrs.get("class"), feats.attrs.get("subtype")
+    dflt = {}
+    for i in range(n):
+        if cls is None or str(cls[i]) not in LANE_FLOW_CLASSES or (sub is not None and str(sub[i]) != "road"):
+            continue
+        v = _rule_value(feats.rules.get("oneway"), i)
+        if v is None:
+            continue
+        attrs[i, 0] = -1.0 if float(v) < 0 else 1.0
+        lanes = _osm(feats, "lanes", i, *OSM_LANES)
+        if lanes is not None:
+            attrs[i, 1] = float(int(lanes))
+        attrs[i, 2] = 1.0 if _rule_value(feats.rules.get("subclass"), i) == "link" else 0.0
+        c = str(cls[i])
+        if c not in dflt:
+            dflt[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved", False, c, True))[1]
+        attrs[i, 3] = float(dflt[c])
+    for a in (ends, counts, attrs):
+        a.flags.writeable = False
+    got = (ends, counts, attrs)
+    # LaneTags.join may replace the column after a neighbour's inputs were
+    # prepared but before its first solve. Geometry and rules stay immutable.
+    feats.__dict__["_lane_flow_inputs"] = (lane_column, got)
+    return got
+
+
 def _lane_flow_local(feats):
     """lane_flow solved over this cell and the eight around it (mapdata's _bnge_neighbours), per feature of this
     cell. Remembered on feats."""
@@ -1790,6 +1838,14 @@ def _lane_flow_local(feats):
         return got
     import fast
     fast.require(118, "lane_flow")
+    _, size, at = _lane_flow_inputs(feats)
+    # Known counts, ramps, excluded roads and short features always return None
+    # from this solve. No neighbouring geometry can change those answers.
+    needs = (size == 2) & (at[:, 0] != 0) & ~np.isfinite(at[:, 1]) & (at[:, 2] <= 0.5)
+    if not needs.any():
+        out = [None] * len(feats)
+        feats.__dict__["_lane_flow"] = out
+        return out
     layers = [feats]
     hook = feats.__dict__.get("_bnge_neighbours")
     if hook is not None:
@@ -1797,50 +1853,37 @@ def _lane_flow_local(feats):
             layers += [f for f in hook() if f is not None and len(f)]
         except Exception as e:          # (this cell alone)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
-    seen, rows = set(), []              # (layer, feature) once per road id, this cell's first
+    seen, rows = set(), []              # (layer, indices) once per road id, this cell's first
+    points, counts, attributes = [], [], []
     for f in layers:
-        ids = f.ids.tolist()
-        for i in range(len(f)):
-            if ids[i] not in seen:
-                seen.add(ids[i])
-                rows.append((f, i))
-    n = len(rows)
+        selected = []
+        for i, fid in enumerate(f.ids.tolist()):
+            if fid not in seen:
+                seen.add(fid)
+                selected.append(i)
+        if not selected:
+            continue
+        idx = np.asarray(selected, np.int64)
+        ends, size, at = _lane_flow_inputs(f)
+        size = size[idx]
+        points.append(ends[idx][np.arange(2) < size[:, None]])
+        counts.append(size)
+        attributes.append(at[idx])
+        rows.append((f, idx))
     out = [None] * len(feats)
-    if n:
-        lonlat, off = [], np.zeros(n + 1, np.int64)
-        attrs = np.zeros((n, 4))
-        attrs[:, 1] = np.nan
-        attrs[:, 3] = np.nan
-        dflt = {}                       # class -> its one-way carriageway's lanes when the map gives none
-        for r, (f, i) in enumerate(rows):
-            a = f.coord_off[f.ring_off[f.part_off[i]]]
-            b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
-            lonlat.append(f.lonlat[a:b])
-            off[r + 1] = off[r] + (b - a)
-            cls = f.attrs.get("class")
-            sub = f.attrs.get("subtype")
-            if cls is None or str(cls[i]) not in LANE_FLOW_CLASSES or (sub is not None and str(sub[i]) != "road"):
-                continue
-            v = _rule_value(f.rules.get("oneway"), i)
-            if v is None:
-                continue
-            attrs[r, 0] = -1.0 if float(v) < 0 else 1.0
-            lanes = _osm(f, "lanes", i, *OSM_LANES)
-            if lanes is not None:
-                attrs[r, 1] = float(int(lanes))
-            attrs[r, 2] = 1.0 if _rule_value(f.rules.get("subclass"), i) == "link" else 0.0
-            c = str(cls[i])
-            if c not in dflt:
-                dflt[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved", False, c,
-                                           True))[1]
-            attrs[r, 3] = float(dflt[c])
+    if rows:
+        off = np.r_[np.int64(0), np.cumsum(np.concatenate(counts), dtype=np.int64)]
+        attrs = np.concatenate(attributes)
         if off[-1]:
-            got = np.asarray(fast._ef.lane_flow(np.ascontiguousarray(np.concatenate(lonlat), np.float64), off, attrs,
+            got = np.asarray(fast._ef.lane_flow(np.concatenate(points), off, attrs,
                                                 float(LANE_FLOW_MAX)))
-            for r, (f, i) in enumerate(rows):
+            r = 0
+            for f, idx in rows:
                 if f is feats:
-                    x = got[r]
-                    out[i] = None if not np.isfinite(x) or attrs[r, 2] > 0.5 else int(x)
+                    for j, i in enumerate(idx):
+                        x = got[r + j]
+                        out[i] = None if not np.isfinite(x) or attrs[r + j, 2] > 0.5 else int(x)
+                r += len(idx)
     feats.__dict__["_lane_flow"] = out
     return out
 

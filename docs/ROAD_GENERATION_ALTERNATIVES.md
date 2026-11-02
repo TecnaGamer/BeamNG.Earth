@@ -1,9 +1,10 @@
 # Road calculation alternatives and GPU assessment
 
 Investigated 2 November 2026 against original dev `9f4739d2`, continuing the
-isolated performance PR from checkpoint `35e2e38e`. These are research findings
-and proposed experiments, not implemented speedups. The measured cache-format
-fix and reproduction steps are in [the performance audit](ROAD_GENERATION_PERFORMANCE.md).
+isolated performance PR from checkpoint `35e2e38e`. The endpoint-preparation
+experiment below has now been implemented in a follow-up from `df2cb877`;
+the other calculation and GPU options remain proposals. Measurements and
+reproduction steps are in [the performance audit](ROAD_GENERATION_PERFORMANCE.md).
 
 ## What the measurement says
 
@@ -30,17 +31,24 @@ include waiting; they must not be added or interpreted as CPU time.
 
 ## Alternatives worth testing, in order
 
-1. **Prepare lane inputs once per source cell, and pass endpoints only.**
-   `_lane_flow_local` currently loops over and repacks overlapping neighbourhoods
-   on each uncached solve. The native solver in `native/earthfast/src/tapers.rs`
-   only uses each feature's first/last coordinates, point count and four
-   attributes. Cache immutable per-cell endpoints and attributes, then select
-   and concatenate the first-occurrence IDs for the canonical neighbourhood.
-   This is an inference from the source and trace, not an external benchmark.
-   Preserve home-cell selection, zero/one-point handling, excluded roads that
-   block a node, feature order, endpoint rounding and source invalidation.
-   Combine this with coalescing duplicate concurrent cell decoding so prepared
-   arrays are actually shared. Measure cache memory as well as latency.
+1. **Prepared lane inputs: implemented and measured.**
+   `_lane_flow_inputs` caches endpoints, short-feature counts and four attributes
+   per decoded source cell. Neighbourhood assembly retains the first occurrence
+   of each ID and the canonical home-cell decision. A local solve with no
+   unknown eligible mainline count skips neighbour reads; those neighbours
+   cannot change its answers. Replacing the OSM lane column invalidates prepared
+   inputs, including when a new tag shard arrives before the cell's first solve.
+   Eight regression cases cover connectivity, duplicate precedence, home cells,
+   excluded/short features, reuse and replacement tags/cells.
+
+   In the isolated nine-cell benchmark, lane preparation and solving drop from
+   about 0.90 to 0.30 s, with matching answers. The earlier 10.535 s trace includes
+   neighbour reads and waits; it is not ten seconds of replaceable calculations.
+   The matched full-worker median improves 27.07 → 26.34 s (2.7%); keep this
+   separate from the isolated improvement. Retained
+   prepared arrays cost 72 bytes per feature (about 3.71 MiB across 40 decoded
+   cells in this sample), plus small Python/array headers. Coalescing duplicate
+   concurrent cell decoding remains a separate follow-up.
 
 2. **Use a worklist for lane propagation if solver time becomes material.**
    The current Rust solver scans all features for up to 16 passes in each of
@@ -107,7 +115,7 @@ needs explicit tolerances and seam, bridge-clearance, grading and collision
 checks, including multiple GPU vendors. No road GPU kernel or new dependency
 is added by this PR, and no GPU speedup is claimed.
 
-The next experiment should therefore cache endpoint/attribute preparation and
-coalesce cell decoding, then repeat the same cold benchmark and collect a live
-driving trace. GPU point grading remains a concrete later option if that trace
+The next experiment should coalesce cell decoding and measure remaining
+neighbour-read and wall-preparation costs, then collect a live driving trace.
+GPU point grading remains a concrete later option if that trace
 shows enough arithmetic work to amortize dispatch and transfer costs.

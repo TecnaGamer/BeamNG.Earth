@@ -8,17 +8,17 @@ building-system or runtime-profiler commits. The separate PR targets the frozen
 `audit/upstream-dev-9f4739d2` branch on the test fork; existing PRs #1 and #2 and
 their branches are unchanged.
 
-Cold-start follow-up continues from performance checkpoint `35e2e38e`, the
-existing PR head. It changes only the map-array mirror format and adds benchmark
-and regression coverage. The latest original-dev checkpoint remains the base
-above; no custom-build changes have been pulled into this branch.
+The packed-mirror follow-up continued from checkpoint `35e2e38e` and was saved
+as `df2cb877`. The lane-preparation follow-up starts from that latest performance
+checkpoint. The original-dev base remains the one above; no custom-build
+changes have been pulled into this branch.
 
 ## Findings and priority
 
 | Priority | Finding | Evidence and consequence | Next action |
 |---|---|---|---|
 | P1, fixed here | Bridge sidewalk lookup rebuilds a whole-cell endpoint graph for every bridge on every tile. | `roads.deck_walks`: 657 calls over nine Auckland tiles; 4.88 s of 10.75 s profiled geometry time. Tokyo: 252 calls, 3.27 s of 11.48 s. | Share the immutable endpoint graph on its decoded source cell; keep width, sidewalk, and driving-side decisions per call. |
-| P1, reduced here | First road content waits for expensive shared planning and thousands of map-array file operations. | Three matched cold runs: median first tile 43.54 → 29.04 s, 33.3% less time. Mirror files fall from 5,340 to 907. Bridge-deck planning, rather than building placement, dominates `items`. | Small arrays now share one uncompressed archive per layer; large arrays remain mapped. Remaining work: deduplicate cell decoding and reuse prepared lane inputs before considering numerical-kernel changes. |
+| P1, reduced here | First road content waits for expensive shared planning and thousands of map-array file operations. | Packed-mirror comparison: median first tile 43.54 → 29.04 s, 33.3% less time. Mirror files fall from 5,340 to 907. Bridge-deck planning, rather than building placement, dominates `items`. | Small arrays share one uncompressed archive per layer; large arrays remain mapped. Lane inputs are now reused too (separate comparison below). Next: deduplicate cell decoding and measure remaining neighbour/wall preparation. |
 | P2, reproduced | Concurrent cold map-cell readers get separate decoded `Features` objects. | Two synchronized calls to `MapData.cell` for the same key return different objects. Each can acquire its own expensive geometry/spec/lane-flow caches; the final `_remember` overwrites the previous entry. | Coalesce decoding per cell/layer, rechecking the memory cache after waiting. Keep recursive neighbour/geometry work outside the admission lock to avoid deadlocks. |
 | P2, code-confirmed risk | The road watchdog counts process queue time as build time, and stale work survives cancellation. | `Server.build_roads_geo` starts its 300 s timeout immediately after `submit`; a timeout recycles the whole road pool. `GeoTracker` cancels wrapper futures on rebase, but a running build thread/process continues. | Record submitted/started/finished timestamps, queue age and anchor generation. Discard obsolete jobs before expensive work; recycle based on execution liveness. Validate with queued jobs and teleport scenarios. |
 | P2, reproduced | Revisit hits can report the previous tile's stage timings. | `_geo_content` returns on a cache hit before `_stage_clock` resets thread-local state. A hit following a synthetic 12.5 s stage reports that old stage unchanged through `last_tile_stages()`. | Reset stage state at job entry and explicitly report cache hit/miss plus restore time. Check the legacy cached tile path as well. |
@@ -147,6 +147,52 @@ Further delay multipliers visible in the original code:
   urgent rules and a terrain-swap quiet window. That is an intentional readiness
   tradeoff, not evidence of six seconds of server generation work.
 
+## Prepared lane endpoints and attributes
+
+This follow-up continues from `df2cb877`, including its packed mirror. Each
+decoded source cell now prepares float64 endpoints and lane attributes once.
+The native solver consumes only first/last coordinates; zero- and one-point
+features retain their short counts. Neighbourhood assembly keeps source order,
+first-ID precedence, excluded roads that block nodes, and canonical home-cell
+selection. Lane-tag column replacement refreshes the prepared inputs before a
+first solve. Local solves with no unknown eligible mainline count skip their
+neighbour reads because none can change the returned lane answers.
+
+Three fresh sequential A/B pairs, using the same raw snapshot and settings as
+above, compare this change directly with `df2cb877`:
+
+| Unprofiled result | Checkpoint `df2cb877` | Prepared inputs |
+|---|---:|---:|
+| Cold first tile, pair 1 | 26.94 s | 26.34 s |
+| Cold first tile, pair 2 | 29.12 s | 27.04 s |
+| Cold first tile, pair 3 | 27.07 s | 24.94 s |
+| Cold first tile, median | 27.07 s | 26.34 s |
+| First tile `items`, median | 24.61 s | 23.57 s |
+| First tile process CPU, median | 24.52 s | 23.06 s |
+
+The difference between version medians is **0.72 s (2.7%)**. Each paired run
+improves by 0.60–2.13 s; three pairs do not establish a universal latency bound.
+All 66 paired mesh files match, all source/native/input hashes were checked,
+and fault counts remain 7 / 0 / 0. The previous section's 29.04 s after-mirror
+median was recorded in an earlier measurement batch: use this batch's matched
+27.07 s baseline to attribute the lane change, rather than subtracting unrelated
+run medians. No network-download or game/FPS improvement is claimed.
+
+With raw input reads excluded, three passes over nine neighbouring cells show
+lane preparation plus native solving at **0.896 → 0.301 s median (66.4% less)**.
+Lane-answer hashes match in every pass. Native calls drop from 22 to 14;
+coordinate points supplied drop from 1,825,823 to 356,688, and input arrays from
+39,865,584 to 12,840,880 bytes. These figures describe cumulative input volume,
+not peak memory or GPU transfer. Prepared arrays retain 72 bytes per feature:
+3,893,976 bytes (3.71 MiB) across 40 decoded cells in this sample, plus headers.
+They hold no neighbour references and are released with their source cells.
+
+This explains the modest whole-job gain: much of the previously traced
+`_lane_flow_local` time was waiting for neighbour data, not preparing or solving
+lane inputs. Coalescing duplicate cell decodes and measuring remaining
+neighbour/wall preparation are the next targets. No native algorithm, solver
+pass order, precision, collision readiness or GPU path changes here.
+
 ## Validation and reproduction
 
 `docs/ROAD_GENERATION_PERFORMANCE.json` records the benchmark rows, input hashes,
@@ -188,17 +234,34 @@ the source cache. Its defaults reproduce the Auckland case above. Use `--at`,
 source and native-library hashes, fault counts and output-mesh hashes. `--trace`
 is diagnostic and must be excluded from performance comparisons.
 
+For lane-input comparisons, use `df2cb877` as the baseline server in the cold
+worker command above. To measure preparation and solving independently of I/O:
+
+```powershell
+python tools/bench_lane_flow.py --cache-dir '<raw-cache>' --server-dir '<checkpoint-df2cb877>/server' --out build/lane-before.json
+python tools/bench_lane_flow.py --cache-dir '<raw-cache>' --out build/lane-after.json
+```
+
+Each pass starts with new decoded Features and caches, then solves nine cells
+using their canonical neighbourhoods. Raw NPZ reads happen before timing, and
+missing outer cells stay absent. Output includes source hashes, lane-answer
+hashes, native input volume and retained array bytes. It does not measure disk
+I/O or full road generation.
+
 Current regression commands (from `server/tests`, real-data integration tests disabled):
 
 ```powershell
 $env:BNGE_ROADGEO_REAL='0'
 $env:PYTHONPATH='..'
-python -B -m unittest test_mapdata_mirror test_mapdata test_roads test_roadmesh test_bridge_scenarios test_roadwidth test_roadgeo
+python -B -m unittest test_lane_flow_inputs test_mapdata_mirror test_mapdata test_roads test_roadmesh test_bridge_scenarios test_roadwidth test_roadgeo
 python -B -m unittest test_grading
 ```
 
-The cache/road suite runs 245 tests: 243 passed, two optional real-data cases
-skipped. Grading runs separately: all 46 passed. Eight new mirror regressions
+The lane/cache/road suite runs 253 tests: 251 passed, two optional real-data
+cases skipped. Grading runs separately: all 46 passed. Eight lane regressions
+cover reversed/curved endpoints, short and excluded features, duplicate IDs,
+canonical home-cell decisions, shared preparation, replaced cells/tags, and
+skipping neighbour reads when no lane count can change. Eight mirror regressions
 cover exact array bytes/dtypes, the 64 KiB boundary, mapped large arrays,
 independent readers, many small fields, stale source stamps, missing/corrupt
 files, coexistence with the old layout and disabled mirrors. Existing cache
@@ -206,7 +269,7 @@ tests cover localized coordinates, concurrent builders and pruning. The initial
 graph-fix scenarios cover reversed bridge chains, different width/side settings
 and replacement-cell connectivity.
 
-Running all modules in one process produces one pre-existing order-dependent
+Earlier combined-process runs exposed one pre-existing order-dependent
 grading failure: `GraderTest.test_points_far_apart_plan_only_their_cells` counts
 31 fake cell reads against its limit of 30. The same assertion and count
 reproduce on untouched `35e2e38e`; its isolated test passes there too. No grading
@@ -220,5 +283,5 @@ Before claiming an end-to-end improvement, capture original and patched builds
 at cold launch, warm drive, fast corridor travel and teleport/rebase. Record
 queue/execute/restore/send/import/collision timestamps, first-road latency,
 P50/P95 tile latency, road lead distance and frame-time percentiles. Prioritize
-lane-input preparation and decoding deduplication next; retain the custom
+decoding deduplication and remaining neighbour/wall preparation next; retain the custom
 build as a separate integration and acceptance exercise.
