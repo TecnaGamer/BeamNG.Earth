@@ -204,10 +204,16 @@ end
 -- user's Baltimore drive 2026-11-01): a ready, better block is taken COMMIT_MARGIN before the warning would show,
 -- never nearer than COMMIT_DIST.
 M.COMMIT_MARGIN = 10
+-- The edge guard's warning distance with a healthy server (edgeguard.warnDistance's cap): the car this far from the
+-- edge is WARN_LATE_M past the commit distance, so the next block is late; nearer it is on time, however fast.
+M.WARN_LATE_M = 30
+function M.warnCap()
+  return M.HALF - M.SQUARE_SIZE - M.COMMIT_DIST - M.WARN_LATE_M
+end
 function M.hardCommitDist(vx, vy)
   local sp = math.sqrt((vx or 0) ^ 2 + (vy or 0) ^ 2)
   local edge = M.HALF - M.SQUARE_SIZE                 -- the collidable edge's distance from the centre (the nearer side)
-  return max(M.COMMIT_DIST, min(M.HARD_COMMIT_DIST, edge - edgeguard.warnDistance(sp) - M.COMMIT_MARGIN))
+  return max(M.COMMIT_DIST, min(M.HARD_COMMIT_DIST, edge - edgeguard.warnDistance(sp, M.warnCap()) - M.COMMIT_MARGIN))
 end
 
 function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
