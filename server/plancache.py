@@ -59,7 +59,7 @@ def start_run(cache_dir):
 
 # The plans' output format for baked packs (bakepack.py: read without the code hash). Bump it whenever a change makes
 # other plans; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 1
+PLANS_FORMAT = 2
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
 
 
