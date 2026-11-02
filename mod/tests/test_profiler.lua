@@ -51,12 +51,12 @@ jsonWriteFile=function(path,data)
 end
 P.draw(true)
 T.check(P.page=='all' and surface.sizes['##history-cpu'] and surface.sizes['##history-gpu'] and surface.sizes['##history-network'] and surface.sizes['##history-disk'],'All renders all four resource lanes')
-surface.clicked='Save snapshot';P.draw(true)
+surface.popup='##profiler-options';surface.clicked='Export';P.draw(true)
 T.check(saved and saved.data.frames==3,'snapshot exports real capture')
 surface.clicked='Freeze display';P.draw(true)
 now=1000;P.update(1000,{},true,true,send)
 P.receive({enabled=true,active={},recent={}})
-surface.clicked='Save snapshot';P.draw(true)
+surface.popup='##profiler-options';surface.clicked='Export';P.draw(true)
 T.check(saved.data.frames==3 and #saved.data.server.recent==1,'frozen export retains inspected frame and worker history')
 T.check(P.snapshot().frames==4,'freezing the view keeps collecting')
 local narrow=surface.sizes['##history-cpu'].x
@@ -73,19 +73,19 @@ end
 surface.clicked='Inspect worst';P.draw(true)
 T.check(V.selection() and V.selection().ms==30,'inspect worst selects displayed capture, not background frames')
 P.setPage('gpu');P.draw(true)
-surface.clicked='Save snapshot';P.draw(true)
+surface.popup='##profiler-options';surface.clicked='Export';P.draw(true)
 T.check(saved.data.presentation.selectedFrame.ms==30 and saved.data.presentation.tab=='gpu','selection follows tab changes and export')
 T.check(saved.data.plot==nil and saved.data.frameDetail._layouts==nil,'export omits geometry caches')
 surface.clicked='Follow live';P.draw(true)
-surface.clicked='Save snapshot';P.draw(true)
+surface.popup='##profiler-options';surface.clicked='Export';P.draw(true)
 T.check(saved.data.frames==4 and V.selection()==nil,'Follow live resumes display and clears selection')
 surface.hover='##history-gpu';surface.pick=true;P.draw(true);surface.pick=false;surface.hover=nil
 T.check(V.selection()~=nil,'clicking a real chart selects a frame')
 surface.clicked='Resume display';P.draw(true)
 T.check(V.selection()==nil,'resume clears held selection')
-now=1050;P.update(15,{},true,true,send);surface.clicked='Save snapshot';P.draw(true)
+now=1050;P.update(15,{},true,true,send);surface.popup='##profiler-options';surface.clicked='Export';P.draw(true)
 T.check(saved.data.frames==4,'live view respects refresh cadence')
-now=1100;surface.clicked='Save snapshot';P.draw(true)
+now=1100;surface.popup='##profiler-options';surface.clicked='Export';P.draw(true)
 T.check(saved.data.frames==5,'live refresh does not require a server packet')
 local settingsWrites={}
 package.loaded['beamngEarth/settings']={SCHEMA={runtimeProfiler=true,profilerMode=true},set=function(key,value)
@@ -101,11 +101,11 @@ surface.clicked='Open profiler';P.draw(true)
 T.check(not P.compact and P.enabled,'reopen preserves capture')
 surface.collapsed=true;now=2100;P.update(11,{},true,true,send);P.draw(true);surface.collapsed=false
 T.check(P.snapshot().capturedFrames==before+2,'collapsed window keeps collecting')
-surface.clicked='Essential';P.draw(true)
+surface.popup='##profiler-options';surface.clicked='Essential';P.draw(true)
 T.check(P.mode=='essential' and P.snapshot().frames==0,'mode switch starts fresh capture')
 surface.clicked='Full';P.draw(true)
 T.check(P.mode=='full','Full mode restored')
-T.check(surface.begin==surface.finish and surface.children==0 and surface.tables==0 and surface.styles==0,'balanced ImGui windows, children, tables and styles')
+T.check(surface.begin==surface.finish and surface.children==0 and surface.tables==0 and surface.styles==0 and surface.vars==0,'balanced ImGui windows, children, tables and styles')
 
 ui_imgui = nil
 for i = 1, 1000 do now = now + 1; P.update(i, {}, true, true, send) end
@@ -130,10 +130,8 @@ P.update(10, {}, true, true, send)
 T.check(#sent == sentBefore, 'old server receives no profiler request')
 P.serverHello(1)
 T.check(P.snapshot().frames == 0, 'reconnect resets history')
-ui_imgui = { BoolPtr=function(v) return {[0]=v} end, ImVec2=function(x,y) return {x=x,y=y} end,
-  SetNextWindowSize=function() end, Begin=function() return true end, End=function() end,
-  PushTextWrapPos=function() end, PopTextWrapPos=function() end, TextUnformatted=function() end,
-  SameLine=function() end, Button=function(label) return label=='Stop profiling' end }
+ui_imgui=im
+surface.clicked='Stop profiling'
 P.setCompact(true);P.draw(true)
 T.check(sent[#sent].enabled == false, 'disabling unsubscribes')
 T.check(P.snapshot().frames == 0, 'disabling clears samples')

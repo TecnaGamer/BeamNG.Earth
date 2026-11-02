@@ -4,10 +4,11 @@ M.tabs = {{'all','All'}, {'gpu','GPU'}, {'cpu','CPU'}, {'network','Network'}, {'
 M.colors = {cpu={0.22,0.83,0.88}, gpu={0.70,0.49,0.94}, network={0.37,0.88,0.65},
   disk={0.96,0.72,0.22}, frame={0.91,0.93,0.96}, muted={0.48,0.52,0.59}}
 M.seconds, M.inspectorWidth, M.chartHeight = 10, 290, nil
-local selected
+local selected, rangeEnd
 local phaseCache=setmetatable({},{__mode='k'})
-function M.reset() selected = nil;phaseCache=setmetatable({},{__mode='k'}) end
+function M.reset() selected = nil;rangeEnd=nil;phaseCache=setmetatable({},{__mode='k'}) end
 function M.select(frame) selected = frame end
+function M.follow() selected=nil;rangeEnd=nil end
 function M.selection() return selected end
 function M.validTab(tab)
   for _,v in ipairs(M.tabs) do if v[1] == tab then return true end end
@@ -15,24 +16,60 @@ function M.validTab(tab)
 end
 function M.layout(width, height, scale)
   scale = scale or 1
-  local wide = width >= 1000 * scale
+  local wide = width >= 960 * scale
   local inspector = wide and math.min(width*0.36, math.max(230*scale, M.inspectorWidth*scale)) or 0
   return {wide=wide, compact=width<800*scale, width=width, inspector=inspector,
     chartWidth=math.max(1,width-inspector-(wide and 12*scale or 0)),
-    chartHeight=math.max(180*scale, math.min(M.chartHeight or height*0.56, math.max(180*scale,height-90*scale)))}
+    chartHeight=math.max(160*scale, math.min((M.chartHeight or height*0.60/scale)*scale, math.max(160*scale,height-65*scale)))}
 end
 function M.range(view)
-  local finish = view.elapsedMs or 0
+  local finish = math.min(rangeEnd or math.huge,view.elapsedMs or 0)
   return math.max(0, finish-M.seconds*1000), math.max(1,finish)
 end
+function M.setRange(view,first,last)
+  local finish=math.max(1,view.elapsedMs or 0)
+  last=math.max(1,math.min(finish,last))
+  first=math.max(0,math.min(first,last-250))
+  M.seconds=math.max(0.25,math.min(30,(last-first)/1000))
+  rangeEnd=last
+end
+function M.metricLayout(width,count,font)
+  local columns=math.max(1,math.min(count,math.floor(width/(font*8.7))))
+  return columns,math.floor((count+columns-1)/columns),width/columns
+end
+-- Coalesce sub-pixel observations without averaging away a short stall.
+-- Keep the highest-cost frame in each horizontal pixel; raw export stays intact.
+function M.columns(view,width,kind)
+  local history=M.history(view)
+  local cache=view._presentation.columns or {}
+  view._presentation.columns=cache
+  local pixels=math.max(1,math.floor(width))
+  if cache[kind] and cache[kind].pixels==pixels then return cache[kind].frames end
+  local first,last=M.range(view)
+  local buckets,out={},{}
+  for _,f in ipairs(history) do
+    local index=math.min(pixels-1,math.floor((f.observedAtMs-first)/(last-first)*pixels))
+    -- The wall-frame trace is drawn separately from raw observations, so a long
+    -- idle frame must not displace a neighbouring CPU-work peak in this column.
+    local cost=kind=='cpu' and M.total(f.cpu) or math.max(f.gpuMs or 0,M.total(f.gpu))
+    if not buckets[index] or cost>buckets[index].cost then buckets[index]={frame=f,cost=cost} end
+  end
+  for index=0,pixels-1 do if buckets[index] then out[#out+1]=buckets[index].frame end end
+  cache[kind]={pixels=pixels,frames=out}
+  return out
+end
+function M.matches(row,query)
+  if not query or query=='' then return true end
+  return table.concat(row,' '):lower():find(query:lower(),1,true)~=nil
+end
 function M.history(view)
-  if view._presentation and view._presentation.seconds==M.seconds then return view._presentation.history end
+  if view._presentation and view._presentation.seconds==M.seconds and view._presentation.rangeEnd==rangeEnd then return view._presentation.history end
   local first, last = M.range(view)
   local out = {}
   for _,f in ipairs(view.frameDetail.history) do
     if f.observedAtMs and f.observedAtMs>=first and f.observedAtMs<=last then out[#out+1]=f end
   end
-  view._presentation={seconds=M.seconds,history=out}
+  view._presentation={seconds=M.seconds,rangeEnd=rangeEnd,history=out}
   return out
 end
 function M.phases(values)

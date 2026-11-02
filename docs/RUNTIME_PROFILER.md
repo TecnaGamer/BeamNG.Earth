@@ -17,12 +17,12 @@ was enabled. Enabling it starts continuous collection and opens a
 resizable window while the Earth level is loaded. Drag its edges or corner to
 resize. The minimum size is 560 x 480 logical pixels, adjusted for the game font
 scale. Wide windows put a selected-frame inspector beside the charts; narrower
-windows move it into **Selection details** below the charts. Drag the vertical
+windows move it into **Selected frame / Details** below the charts. Drag the vertical
 and horizontal dividers to redistribute space. The window remembers its size and
 position; tab, history range and divider positions are saved separately in
 `/settings/beamngEarth-profiler-layout.json`. Short windows scroll the content
 while retaining tabs, capture controls and metric-scope notes.
-Closing it or choosing **Compact view** leaves a small status window while
+Closing it or choosing **More... > Status overlay** leaves a small status window while
 collection continues. **Open profiler** returns to the full view without resetting
 history. **Stop profiling** or turning the setting off stops collection. The
 mode resets to Essential at settings load, and starting another session requires a fresh opt-in.
@@ -36,7 +36,7 @@ The window shows the elapsed capture time and total frames sampled separately
 from the bounded recent history. Collapsing the window keeps collection running.
 **Freeze display** holds the displayed frames, worker and I/O data while all
 collection continues; **Resume display** immediately catches up to recent data.
-**Save snapshot** exports the displayed data, including the held snapshot when
+**Export** exports the displayed data, including the held snapshot when
 frozen. Changing collection mode, level or server session starts a fresh history.
 
 Choose **Essential** (the default) or **Full** beside the toggle or inside the
@@ -91,7 +91,7 @@ Full adds:
 - Count, average, p95, queue wait and thread CPU time per pool over the last five
   seconds (at most 120 completed jobs), plus incomplete records and failures.
 - Generation steps and an expandable breakdown of the most recent 20 jobs.
-- **Freeze display** and **Save snapshot**. Export writes
+- **Freeze display** and **Export**. Export writes
   `/settings/beamngEarth-profiler.json` in the game's user directory.
 
 ## Network and storage
@@ -265,3 +265,49 @@ builds on it separately. The performance branch is independent of both.
 Server appears after Disk and shows the application connection, snapshot telemetry age, measured running/queued jobs and recent failures, plus worker timelines and statistics in Full mode. These timings are separate from game frames. Missing telemetry is explicitly unavailable.
 
 Every settings load starts profiling Off with Essential (minimal) collection selected, even if a previous session saved Full or enabled profiling. The window opens only after explicitly enabling profiling.
+
+## BeamNG menu styling and responsive layout (3 November 2026)
+
+The floating profiler now follows the 0.39 menu references: charcoal surfaces,
+orange active-tab underlines, inset arrow selectors, orange Export, muted blue
+secondary actions and a matching status overlay. All six resource tabs remain.
+The native window keeps its drag, resize, collapse and close behavior; it does
+not become a full-screen menu. Theme overrides are scoped to this window.
+
+At narrow widths, **More...** contains collection mode, history duration, frame
+target and Export. The main toolbar always exposes Freeze/Resume display.
+The expanded toolbar shows these controls directly. Mode changes still start a
+fresh capture; freezing still holds only the display, not collection.
+
+Metric cards wrap into rows and retain the game's font size. Frame/CPU/GPU
+averages describe the visible history; I/O values describe the latest displayed
+server interval. Sparklines use measured timestamps and leave missing intervals
+blank. CPU, GPU, network and cache charts share the time cursor and a single
+relative-time axis. Sub-pixel CPU/GPU observations are coalesced by the largest
+cost in each lane/pixel, retaining spikes instead of averaging them away. Raw
+frame history and exported measurements are unchanged.
+
+At 960 logical content pixels, the inspector sits beside the charts. Below that,
+selected-frame details and observed work become collapsed disclosures. The
+four history lanes remain; short windows scroll rather than reduce text size.
+Breakpoints, divider widths and saved chart height follow the game's font scale.
+
+Wide layouts include an overview of the last 30 seconds (with blank space where
+bounded capture has no data). Drag its handles to select a 0.25–30 second range,
+or drag inside it to pan. This freezes the displayed snapshot. **Follow live**
+clears the held time/frame and returns to current data. Selection and zoom range
+follow resource tabs and are recorded in Export. The range duration persists;
+an old capture's absolute time selection does not persist between sessions.
+
+**Filter activity** matches literal, case-insensitive text across the observed
+work table. Its rows retain their measurement scope: selected Earth scopes,
+delayed GPU queries, service averages and measured cache-read averages. No
+synthetic activity, bandwidth or event timings are introduced. Hover the footer
+for timing/interval interpretation and bounded-history notes.
+
+Refresh validation: 957 Lua assertions passed across ten suites, including
+capture lifecycle, frozen export, tab selection, controls, range bounds,
+independent CPU/GPU spike retention, filtering and reflow at four font scales.
+All 102 ImGui symbols used by the presentation module were checked against the
+installed BeamNG Lua bindings. These are offline checks; native visual and mouse
+acceptance will be performed when the separately requested playtest is updated.

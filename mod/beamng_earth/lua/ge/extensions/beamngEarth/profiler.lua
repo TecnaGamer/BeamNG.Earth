@@ -47,7 +47,7 @@ end
 function M.setFrozen(on)
   on = on == true
   if on == frozen then return end
-  if on then view = view or M.snapshot() else view = nil; presentation.select(nil) end
+  if on then view = view or M.snapshot() else view = nil; presentation.follow() end
   frozen = on
 end
 
@@ -342,13 +342,13 @@ local function preferences(load)
       local ok,p=pcall(jsonReadFile,preferencePath)
       if ok and type(p)=='table' then
         if presentation.validTab(p.tab) then M.setPage(p.tab) end
-        if p.seconds==5 or p.seconds==10 or p.seconds==30 then presentation.seconds=p.seconds end
+        if type(p.seconds)=='number' and p.seconds>=0.25 and p.seconds<=30 then presentation.seconds=p.seconds end
         if type(p.inspectorWidth)=='number' then presentation.inspectorWidth=math.max(230,math.min(600,p.inspectorWidth)) end
         if type(p.chartHeight)=='number' then presentation.chartHeight=math.max(180,math.min(2000,p.chartHeight)) end
       end
     end
   elseif not load and rawget(_G,'jsonWriteFile') then
-    local key=string.format('%s:%d:%.0f:%.0f',M.page,presentation.seconds,presentation.inspectorWidth,presentation.chartHeight or 0)
+    local key=string.format('%s:%.3f:%.0f:%.0f',M.page,presentation.seconds,presentation.inspectorWidth,presentation.chartHeight or 0)
     if key~=preferenceKey then
       local ok,result=pcall(jsonWriteFile,preferencePath,{tab=M.page,seconds=presentation.seconds,
         inspectorWidth=presentation.inspectorWidth,chartHeight=presentation.chartHeight},true)
@@ -362,6 +362,7 @@ function M.draw(inLevel)
   local im = rawget(_G, 'ui_imgui')
   if not im then return end
   local now = clock()
+  local styleCount,styleVars=ui.pushStyle(im)
   if M.compact then
     im.SetNextWindowSize(im.ImVec2(420,145),im.Cond_FirstUseEver)
     if im.Begin('Earth profiler / collecting') then
@@ -371,10 +372,9 @@ function M.draw(inLevel)
       im.SameLine()
       if im.Button('Stop profiling') then stop() end
     end
-    im.End();return
+    im.End();im.PopStyleVar(styleVars);im.PopStyleColor(styleCount);return
   end
   preferences(true)
-  local styleCount=ui.pushStyle(im)
   openPtr = openPtr or im.BoolPtr(true)
   openPtr[0]=true
   local scale=im.GetFontSize()/16
@@ -398,6 +398,7 @@ function M.draw(inLevel)
     end
   end
   im.End()
+  im.PopStyleVar(styleVars)
   im.PopStyleColor(styleCount)
   if not openPtr[0] then M.setCompact(true) end
 end

@@ -28,4 +28,43 @@ T.check(exported.plot==nil and exported.frameDetail._layouts==nil and exported._
 T.check(exported.presentation.units.network=='bytes/s','export states raw units')
 V.reset();T.check(V.current(view)==c,'new capture clears old selection')
 T.check(V.validTab('server') and V.tabs[#V.tabs][1]=='server' and V.tabs[#V.tabs-1][1]=='disk','Server tab follows Disk')
+V.setRange(view,8000,10000)
+local first,last=V.range(view)
+T.check(first==8000 and last==10000 and #V.history(view)==1,'zoom/pan uses observation timestamps and invalidates cached history')
+V.select(b)
+T.check(V.export(view,'cpu').presentation.endMs==10000,'export preserves the held zoom range')
+V.follow()
+T.check(V.selection()==nil and select(2,V.range(view))==12000,'follow clears time hold and frame selection together')
+V.setRange(view,-10000,999999)
+first,last=V.range(view)
+T.check(first==0 and last==12000,'range handles cannot escape captured elapsed time')
+V.setRange(view,9000,9000)
+T.check(V.seconds>=0.25,'collapsed handles retain a usable minimum time range')
+V.reset();V.seconds=10
+local dense={elapsedMs=10000,frameDetail={history={}}}
+for i=1,600 do dense.frameDetail.history[i]={id=i,observedAtMs=9000+i,ms=10,cpu={Render=8},gpu={Pass=4}} end
+dense.frameDetail.history[321].ms=90
+dense.frameDetail.history[321].cpu.Render=75
+dense.frameDetail.history[320].gpu.Pass=55
+dense.frameDetail.history[319].ms=150 -- Long wall interval must not hide CPU work in the same pixel.
+local cpu,gpu=V.columns(dense,10,'cpu'),V.columns(dense,10,'gpu')
+local cpuPeak,gpuPeak=false,false
+for _,f in ipairs(cpu) do if f.id==321 then cpuPeak=true end end
+for _,f in ipairs(gpu) do if f.id==320 then gpuPeak=true end end
+T.check(#cpu<=10 and #gpu<=10 and cpuPeak and gpuPeak,'pixel-density reduction preserves each lane peak independently')
+T.check(#V.export(dense,'all').frameDetail.history==600,'density reduction never removes raw exported observations')
+for _,font in ipairs({12,16,24,32}) do
+  local s=font/16
+  for _,width in ipairs({540,800,960,1500}) do
+    local columns,rows,cell=V.metricLayout(width*s,5,font)
+    T.check(columns*cell<=width*s+0.01 and columns*rows>=5 and cell>=font*8,'metrics reflow without reducing type size')
+    local layout=V.layout(width*s,700*s,s)
+    T.check(layout.chartWidth>0 and layout.chartWidth+layout.inspector<=width*s,'scaled panels fit their parent')
+  end
+end
+V.chartHeight=300
+T.check(V.layout(2400,1800,2).chartHeight==600,'manual chart height persists in logical units across font changes')
+V.chartHeight=nil
+T.check(V.matches({'CPU','Building upload','18 ms'},'BUILDING') and not V.matches({'CPU','Building upload'},'terrain'),'activity filtering is case insensitive')
+T.check(V.matches({'Disk','cache[1]','5% completed'},'[1]') and V.matches({'Disk','5% completed'},'%'),'activity filter treats patterns as literal input')
 T.done('profiler_view')
