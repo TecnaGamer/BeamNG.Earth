@@ -411,7 +411,7 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
         wide = max(x[1].width for x in a) / 2
         jx, jy, jz = nodes[name][:3]
         app = []
-        for arm, _ in put:
+        for arm, what in put:
             full = next(x for x in a if x[0] == arm[0] and x[2] is arm[2])
             fid, spec, u, _, end, *_ = full
             nb, incoming = approaches.get((name, fid, end), (None, False))
@@ -426,9 +426,10 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
             phase = 0 if abs(float(u @ axis)) > 0.7 else 1
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none
             # where no spot is clear of the carriageways (no prop there either)
-            pp = furniture.signal_spot(np.array([jx, jy]), u, right, wide, spec.width / 2, lines)
+            side, yaw = furniture.approach_pose(u, what, left_hand)
+            pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines)
             head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(jz + 0.15, 2),
-                                                  round(furniture._yaw(right[0], right[1]), 1)]
+                                                  yaw]
             app.append([nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
                         round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head)
         if app:

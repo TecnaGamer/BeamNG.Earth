@@ -155,6 +155,33 @@ class SignalsTest(unittest.TestCase):
         self.assertEqual(got, {"s1", "cW", "cE"}, "the 8 m link from the next connector gets no stop")
 
 
+    def test_left_hand_signal_heads_stand_as_the_props(self):
+        """The switchable heads stand where furniture.junction_props stands the static booms, turned the same way: in
+        left-hand traffic too (GitHub #595: they faced away from the drivers), the stop points on the left half."""
+        import furniture
+        import roads
+        sp = roads.Spec(10.0, "paved", True, "tertiary", False)
+        nodes = {"cJ": [0.0, 0.0, 0.0, 4], "cN": [0.0, 40.0, 0.0, 2], "cS": [0.0, -40.0, 0.0, 2],
+                 "cW": [-40.0, 0.0, 0.0, 2], "cE": [40.0, 0.0, 0.0, 2]}
+        arms = {"cJ": [("n", sp, np.array([0.0, 1.0]), 0.0, 1), ("s", sp, np.array([0.0, -1.0]), 0.0, 0),
+                       ("w", sp, np.array([-1.0, 0.0]), 0.0, 1), ("e", sp, np.array([1.0, 0.0]), 0.0, 0)]}
+        approaches = {("cJ", "n", 1): ("cN", True), ("cJ", "s", 0): ("cS", True), ("cJ", "w", 1): ("cW", True),
+                      ("cJ", "e", 0): ("cE", True)}
+        orig = furniture.junction_controls
+        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None: [(x, furniture.G_SIGNAL)
+                                                                                          for x in a]
+        try:
+            rh = {ap[0]: ap for ap in navgraph._signals(arms, approaches, nodes)[0]["app"]}
+            lh = {ap[0]: ap for ap in navgraph._signals(arms, approaches, nodes, left_hand=True)[0]["app"]}
+        finally:
+            furniture.junction_controls = orig
+        self.assertEqual(set(rh), {"cN", "cS", "cW", "cE"})
+        for nb in rh:
+            self.assertEqual(lh[nb][7:11], rh[nb][7:11], f"{nb}: the head's transform")
+        self.assertLess(lh["cS"][1], 0.0, "northbound stop point on the west (left) half")
+        self.assertGreater(rh["cS"][1], 0.0, "and on the east half for right-hand traffic")
+
+
 class RulesTest(unittest.TestCase):
     def test_default_speeds_by_country(self):
         class F:            # a feature without a mapped limit
