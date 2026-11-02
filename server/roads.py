@@ -3595,8 +3595,6 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
     # rural Interstate, GitHub #43) and its lanes (OpenStreetMap's count where known)
     parked = urban and spec.parking and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
     drive, lanes = lane_layout(spec)
-    if lanes > 1 and w / lanes < markings.MIN_LANE_M:   # (a count the road has no room for: a tag, or a way of a stretch)
-        lanes = max(1, int(w // markings.MIN_LANE_M))
     plan = markings.lane_plan(osm, not spec.oneway, drive, lanes, left_hand) \
         if kind == "paved" and (cls in CENTRE_CLASSES or cls in LANE_CLASSES) else None
     if plan is not None and not spec.oneway and w - (2 * PARKING_M if parked else 0.0) < st.min_centre_m:
@@ -4133,6 +4131,9 @@ def lane_layout(spec):
     parked = spec.urban and spec.parking and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
     drive = w - ((PARKING_M if spec.oneway else 2 * PARKING_M) if parked else 2 * edge_margin(spec))
     lanes = int(spec.lanes) if spec.lanes else int(drive // LANE_M)
+    import markings
+    if lanes > 1 and w / lanes < markings.MIN_LANE_M:   # (a count the road has no room for: a tag, or a way of a stretch)
+        lanes = int(w // markings.MIN_LANE_M)
     return drive, max(1, lanes)
 
 

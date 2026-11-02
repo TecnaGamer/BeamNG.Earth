@@ -82,5 +82,12 @@ class WidthTest(unittest.TestCase):
         self.assertEqual(spec("residential", urban=True, widths=[(0, 9.0)]).width, 9.0)
 
 
+class LaneFitTest(unittest.TestCase):
+    def test_the_ai_gets_the_lanes_the_road_has_room_for(self):
+        sp = roads.Spec(4.5, "paved", True, "residential", True, lanes=2, parking=False)
+        self.assertEqual(roads.lane_layout(sp)[1], 1)
+        self.assertEqual(roads.lane_layout(sp._replace(width=8.0))[1], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
