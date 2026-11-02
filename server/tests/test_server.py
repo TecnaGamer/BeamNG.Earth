@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -1148,6 +1149,77 @@ class DeleteQueueTest(unittest.TestCase):
         self.assertLess(len(times), 2.0 * earthd.DELETE_MAX_RATE + 5)
         dt = np.diff(times)
         self.assertGreater(float(np.median(dt)), 0.5 / earthd.DELETE_MAX_RATE)
+
+
+class _GeoConn:
+    def __init__(self, roads):
+        self.roads = roads
+
+
+class GeoFilesTest(unittest.TestCase):
+    """GitHub #599: a geotile every game dropped loses its session files after GEO_FILES_GRACE_S (a road geotile's
+    content, skins and exact variants; a far geotile's json, shape and pieces), unless one has it again; an anchor's
+    pruned files include its geotile skins (rs_ / rx_) and its rail and tunnel shapes."""
+
+    def make(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), near_visual="mesh", imagery=None)
+        self.addCleanup(server.tile_pool.shutdown)
+        self.addCleanup(server.hm_pool.shutdown)
+        os.makedirs(server.out_dir, exist_ok=True)
+        return server
+
+    def touch(self, server, *names):
+        for n in names:
+            open(os.path.join(server.out_dir, n), "w").close()
+
+    def test_files_of_a_geotile(self):
+        s = self.make()
+        mine = ["rg_g17_5_7.json", "rg_g17_5_7.skin.pkl", "rg_g17_5_7_bld.cdae", "rs_1_g17_5_7.json",
+                "rs_12_g17_5_7_road.cdae", "rx_3_g17_5_7_deck.cdae"]
+        others = ["rg_g17_5_77.json", "rg_g17_55_7_bld.cdae", "rs_1_g17_5_70_road.cdae", "bf_g17_5_7.json"]
+        self.touch(s, *mine, *others)
+        self.assertEqual([os.path.basename(p) for p in s.geo_files("roads", "g17_5_7")], sorted(mine))
+        self.touch(s, "bb_g15_2_3.json", "bb_g15_2_3_g17_8_12.cdae", "bb_g15_2_33.json")
+        self.assertEqual([os.path.basename(p) for p in s.geo_files("brfar", "g15_2_3")],
+                         ["bb_g15_2_3.json", "bb_g15_2_3_g17_8_12.cdae"])
+        self.assertEqual(s.geo_files("veg", "g15_2_3"), [])
+
+    def test_dropped_then_deleted_unless_held(self):
+        s = self.make()
+        gone = ["rg_g17_5_7.json", "rg_g17_5_7_road.cdae"]
+        held = ["rg_g17_6_7.json"]
+        self.touch(s, *gone, *held)
+        s.connections.add(_GeoConn(types.SimpleNamespace(geo=True, sent={(6, 7)}, building=set())))
+
+        async def run():
+            s.geo_dropped("roads", (5, 7), "g17_5_7", grace=0.05)
+            s.geo_dropped("roads", (6, 7), "g17_6_7", grace=0.05)      # (another game still has it)
+            await asyncio.sleep(1.0)
+        asyncio.run(run())
+        for n in gone:
+            self.assertFalse(os.path.exists(os.path.join(s.out_dir, n)), n)
+        self.assertTrue(os.path.exists(os.path.join(s.out_dir, held[0])))
+
+    def test_sent_again_before_its_turn_keeps_its_files(self):
+        s = self.make()
+        self.touch(s, "rg_g17_5_7.json")
+        tracker = types.SimpleNamespace(geo=True, sent=set(), building=set())
+        s.connections.add(_GeoConn(tracker))
+        s.delete_queue.extend([("x", None)] * 5)        # (a queue ahead of it)
+
+        async def run():
+            s.geo_dropped("roads", (5, 7), "g17_5_7", grace=0.01)
+            await asyncio.sleep(0.05)
+            tracker.building.add((5, 7))                    # requested again meanwhile
+            await asyncio.sleep(1.5)
+        asyncio.run(run())
+        self.assertTrue(os.path.exists(os.path.join(s.out_dir, "rg_g17_5_7.json")))
+
+    def test_prune_takes_the_anchors_skins_and_rails(self):
+        for stem in ("rs", "rx", "rail", "railcol", "tunnel"):
+            self.assertIn(stem, earthd.ANCHOR_TILE_FILES)
 
 
 class WarmPlaceTest(unittest.TestCase):

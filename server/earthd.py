@@ -478,6 +478,11 @@ NET_TICK_S = 60.0           # the network summary line in the log and the netsta
 # touched (a live server touches its own, and its adopted ones, every SESSION_HEARTBEAT_S).
 SESSION_STALE_S = 86400.0
 SESSION_ORPHAN_S = 600.0
+# A geotile every game dropped (roads_drop, bldfar_drop, ...): its session files deleted this long after, unless one
+# is sent it again meanwhile (geo_dropped). Before (GitHub #599, 2026-10-31) they stayed until the server stopped: the
+# geotiles are anchor-free, so prune never took them, and two days' driving left 9 GB in the session folder.
+GEO_FILES_GRACE_S = 120.0
+GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
 # Live retexture (--colormatch / --deshadow): when a region a shown tile was rendered without becomes
@@ -1154,12 +1159,60 @@ class Server:
 
     def _delete_one(self):
         path, ck = self.delete_queue.popleft()
-        # an evicted tile built again since (same file name) keeps its new file
-        if ck is None or (ck not in self.tiles and ck not in self.tile_inflight):
+        # an evicted tile built again since (same file name) keeps its new file; ck callable: kept while it says so
+        if callable(ck):
+            if ck():
+                return
+            self._remove(path)
+        elif ck is None or (ck not in self.tiles and ck not in self.tile_inflight):
             if os.path.isdir(path):     # a released session's folder, queued after its files
                 shutil.rmtree(path, ignore_errors=True)
             else:
                 self._remove(path)
+
+    def geo_held(self, kind, k):
+        """Does some connection's tracker of kind (GEO_TRACKERS) have geotile k (gx, gy) sent or building?"""
+        attr = GEO_TRACKERS.get(kind)
+        for c in list(self.connections):
+            t = getattr(c, attr, None) if attr else None
+            if t is not None and getattr(t, "geo", False) and (k in t.sent or k in t.building):
+                return True
+        return False
+
+    def geo_files(self, kind, key):
+        """The session files of geotile key (geotiles.key) of kind: a road geotile's content (rg_), every anchor's skin
+        (rs_) and exact variants (rx_); a far geotile's json, shape and pieces (blockworker.FAR_GEO prefixes)."""
+        if kind == "roads":
+            pat = re.compile(rf"(rg_{re.escape(key)}([._].*)?|r[sx]_\d+_{re.escape(key)}([._].*)?)")
+            stems = ("rg_", "rs_", "rx_")
+        else:
+            pre = blockworker.FAR_GEO.get(kind)
+            if pre is None:
+                return []
+            pat = re.compile(rf"{pre}_{re.escape(key)}([._].*)?")
+            stems = (f"{pre}_",)
+        out = []
+        for stem in stems:
+            out += [p for p in glob.glob(os.path.join(self.out_dir, f"{stem}*{key}*"))
+                    if pat.fullmatch(os.path.basename(p))]
+        return sorted(set(out))
+
+    def geo_dropped(self, kind, k, key, grace=None):
+        """A connection dropped geotile k (gx, gy; key its geotiles.key) of kind: its session files are deleted after
+        GEO_FILES_GRACE_S unless some connection has it (sent or building) by then or when each file's turn comes
+        (geo_held: one built again writes the same names). Event loop (the trackers' on_pose)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def run():
+            if self.geo_held(kind, k):
+                return
+            files = self.geo_files(kind, key)
+            if files:
+                self.queue_delete(files, lambda: self.geo_held(kind, k))
+        loop.call_later(GEO_FILES_GRACE_S if grace is None else grace, run)
 
     def queue_delete(self, paths, ck=None):
         """Delete files gradually (one at a time, delete_gap() apart) so the game's file watcher
@@ -3895,7 +3948,10 @@ CATCHUP_LEND_SHARE = float(os.environ.get("BNGE_CATCHUP_LEND", "0.25"))     # of
 CATCHUP_MIN_MS = 8.0        # m/s: only while driving (a parked player's work waits as before)
 BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's teleportPriority) ends this long after at most
 
-ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph")
+# (rs / rx: the road geotiles' skins and exact variants of the anchor; rail / railcol / tunnel: its road tiles' rail and
+# tunnel shapes. Left out until 2026-11-02: kept until the server stopped, GitHub #599's 9 GB session folder)
+ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
+                     "rs", "rx", "rail", "railcol", "tunnel")
 
 
 class _BoundedLru:
