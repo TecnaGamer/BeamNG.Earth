@@ -681,6 +681,22 @@ class UnderpassShortfallTest(unittest.TestCase):
         self.assertAlmostEqual(motorway_z(False), 10.0, delta=0.1, msg="lidar: the road under keeps its ground")
         self.assertLess(motorway_z(True), 10.0 - 0.6 * grading.UNDER_CLEAR_M, "coarse: it dips as before")
 
+    def test_on_lidar_a_never_raised_deck_level_with_the_road_still_clears_it(self):
+        """As above, but the deck is a motorway's (never raised, APPROACH_SKIP): it cannot rise, so the road under it
+        still dips, on lidar too (the deck sat on the road: cars drove into it, 2026-10-31)."""
+        lines = [[(-300, 0), (300, 0)], [(0, -20), (0, 20)], [(0, -260), (0, -20)], [(0, 20), (0, 260)]]
+        classes = ["residential", "motorway", "motorway", "motorway"]
+
+        class Dem:
+            def coarse_at(self, lat, lon):
+                return False
+        g = grading.Grader(FRAME, FakeMD(features(lines, classes, flags=[(1, "is_bridge")])),
+                           lambda la, lo: np.full(np.shape(la), 10.0))
+        g.dem = Dem()
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
+        self.assertLess(float(g.apply(la, lo, np.full(1, 10.0))[0]), 10.0 - 0.6 * grading.UNDER_CLEAR_M,
+                        "lidar, a motorway's deck: the road under dips")
+
 
 class RacewayKeepTest(unittest.TestCase):
     def test_track_surface_is_the_terrain(self):
