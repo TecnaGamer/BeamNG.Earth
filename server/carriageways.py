@@ -283,7 +283,7 @@ class _Chain:
         return out[:, 0] if one else out
 
 
-def solve(chains, couplings=(), rounds=ROUNDS):
+def solve(chains, couplings=(), rounds=ROUNDS, deadline=None):
     """The cluster's profiles (see the module). chains: [dict(t (n,), w (n,), grade, K, lo (n,) or None, hi (n,) or
     None, lam=LAMBDA, step=STEP_M, length=LENGTH_BIAS)]; couplings: [(a, i, b, j, kind, value)]: kind "eq" (z_a[i] = z_b[j]) or "ge"
     (z_a[i] - z_b[j] >= value). Returns [z (n,)]. Pure."""
@@ -304,7 +304,7 @@ def solve(chains, couplings=(), rounds=ROUNDS):
     active_ge = set()
     zs = None
     BU = z0 = prev_r = None
-    t_end = time.monotonic() + BUDGET_S
+    t_end = time.monotonic() + BUDGET_S if deadline is None else deadline
     for _round in range(rounds):
         if zs is not None and time.monotonic() > t_end:
             log.warning("carriageways: %d chains, %d couplings: stopped after %d rounds (%.0f s budget)",

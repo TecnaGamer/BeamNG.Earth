@@ -303,6 +303,7 @@ CW_NONFAM_HI = False    # other roads' decks over a carriageway bound it: off (t
 CW_MIN_SIN = 0.3        # two carriageways crossing at a flatter angle are not a grade separation (lines along each other)
 CW_STACK_SIN = 0.03      # decks at different levels crossing more steeply than this (2 degrees) are separated
 CW_OVERLAP_MAX_M = 120.0  # m either side of a crossing two decks' clearance is held along at most
+CW_OVERLAP_STEP_M = 12.0  # m between the points two overlapping decks' clearance is held at
 CW_PIN_W = 1e5          # weight holding a chain's end to the kept (lower-level) chain it branches from
 
 
@@ -2560,6 +2561,9 @@ class _Planner:
                 continue
             seps += self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)
         zs = [None] * len(chains)
+        # (one budget for the whole region, every level's solves: per solve, the High Five's six levels' took minutes
+        # and every process needing the region waited on it, 2026-11-02)
+        deadline = time.monotonic() + _cw.BUDGET_S
         for L in sorted(set(stage)):
             idx = [n for n in range(len(chains)) if stage[n] == L]
             loc = {n: m for m, n in enumerate(idx)}
@@ -2585,13 +2589,13 @@ class _Planner:
             bound(seps, cp)
             mine = [t_ for t_ in ties if t_[0] in loc]
             if mine:
-                pre = _cw.solve(d_, cp)
+                pre = _cw.solve(d_, cp, deadline=deadline)
                 tie_seps = []
                 for na, ia, nb, ib, q, sin, ua in mine:
                     a_up = pre[loc[na]][nearest(na, ia, q)] >= pre[loc[nb]][nearest(nb, ib, q)]
                     tie_seps += self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)
                 bound(tie_seps, cp)
-            got = _cw.solve(d_, cp)
+            got = _cw.solve(d_, cp, deadline=deadline)
             for n in idx:
                 zs[n] = got[loc[n]]
         couplings = couplings + [(nu, ju, nl, jl, "ge", c_) for nu, ju, nl, jl, c_ in seps]
@@ -2630,7 +2634,8 @@ class _Planner:
         clear = CW_HEADROOM_M + roadsmod.deck_depth(roadsmod.geom_span([pu[1]])) + ROAD_LIFT
         wide = _cw_half(pa) + _cw_half(pb)
         run = min(CW_OVERLAP_MAX_M, wide / max(sin, 1e-3))
-        offs = [0.0] + [d for k in range(1, 64) for d in (k * _cw.STEP_M, -k * _cw.STEP_M) if k * _cw.STEP_M <= run]
+        st = CW_OVERLAP_STEP_M      # (between them the curve limits keep the deck smooth: fewer couplings)
+        offs = [0.0] + [d for k in range(1, 64) for d in (k * st, -k * st) if k * st <= run]
         out, seen = [], set()
         for d in offs:
             qd = q + d * np.asarray(ua, f64)
