@@ -39,8 +39,7 @@ M.FAST_V_1024 = 1e9                          -- no fast mode
 -- 512² (M4)
 M.GRID_512 = 128
 M.PREPARE_DIST_512 = 128
-M.COMMIT_DIST_512 = 256    -- (192 at 2 m: the 1 m block (2026-11-01) takes ~4x as long to build; 128 m of travel
-                           -- between asking and needing it instead of 64, the hard commit and edge unchanged)
+M.COMMIT_DIST_512 = 192
 -- The next block's centre at least MIN_LEAD ahead of a moving player (M.target): at town speeds LOOKAHEAD_S put it one
 -- grid step ahead, a move every 128 m, each a ~50 ms frame and a redraw of the sun's shadow map on a Steam Deck
 -- (2026-10-23, 17 of 21 such redraws on a Baltimore drive); 256 m halves the moves at 16-67 mph, the player still

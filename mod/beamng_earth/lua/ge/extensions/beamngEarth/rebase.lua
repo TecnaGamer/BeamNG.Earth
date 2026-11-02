@@ -23,8 +23,8 @@ M.distance = M.DEFAULT_DISTANCE -- switch anchors at or beyond this horizontal d
 M.PREFETCH_MARGIN = 300  -- prepare_anchor this much earlier, so the anchor is ready by `distance`
 M.STALE_DIST = 450       -- a prepared anchor whose terrain centre is this far (Chebyshev, new
                          -- frame) from the player would not help: re-request
-M.STALE_DIST_1024 = 450  -- per block size (flat: modsim reads these); 1 km: a commit at 256 m leaves
-M.STALE_DIST_512 = 256   -- 254 m to the collidable edge, as the follow table's commit distance does
+M.STALE_DIST_1024 = 450  -- per block size (flat: modsim reads these); 512: a commit at 192 m leaves
+M.STALE_DIST_512 = 192   -- 318 m to the collidable edge, as the follow table's commit distance does
 M.KEEP_EDGE = 0          -- stale but >= this far inside every edge of its valid area: commit (0 = off)
 M.KEEP_EDGE_1024 = 0
 M.KEEP_EDGE_512 = 150

@@ -286,3 +286,113 @@ pub fn value_noises<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRe
     });
     outs.into_iter().map(|v| v.into_pyarray(py)).collect()
 }
+
+/// The 2 x 2 sub-pixel centres (p + 0.25, p + 0.75 along each axis) of an h x w photo inside any of pads (each a
+/// closed ring as (cols, rows) in photo pixels, even-odd within a ring, the union over rings): one bit per sub-pixel
+/// (bit 2 * row + col) over the pads' clipped bounding box. Returns (r0, c0, rows, cols, bits) or None.
+fn pad_bits(h: usize, w: usize, pads: &[(Vec<f64>, Vec<f64>)]) -> Option<(usize, usize, usize, usize, Vec<u8>)> {
+    let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (cs, rs) in pads {
+        for (&c, &r) in cs.iter().zip(rs) {
+            c0 = c0.min(c); c1 = c1.max(c); r0 = r0.min(r); r1 = r1.max(r);
+        }
+    }
+    let bc0 = (c0.floor().max(0.0)) as usize;
+    let br0 = (r0.floor().max(0.0)) as usize;
+    let bc1 = ((c1.ceil() + 1.0).min(w as f64).max(0.0)) as usize;
+    let br1 = ((r1.ceil() + 1.0).min(h as f64).max(0.0)) as usize;
+    if !(c1 >= c0) || bc1 <= bc0 || br1 <= br0 {
+        return None;
+    }
+    let (nr, nc) = (br1 - br0, bc1 - bc0);
+    let mut bits = vec![0u8; nr * nc];
+    let mut xs: Vec<f64> = Vec::new();
+    for (cs, rs) in pads {
+        let n = cs.len().min(rs.len());
+        if n < 3 { continue; }
+        let (mut pr0, mut pr1) = (f64::INFINITY, f64::NEG_INFINITY);
+        for &r in &rs[..n] { pr0 = pr0.min(r); pr1 = pr1.max(r); }
+        let sr0 = (((pr0 - br0 as f64) * 2.0 - 0.5).floor().max(0.0)) as usize;
+        let sr1 = ((((pr1 - br0 as f64) * 2.0 - 0.5).ceil() + 1.0).min((2 * nr) as f64).max(0.0)) as usize;
+        for sr in sr0..sr1 {
+            let ty = br0 as f64 + (sr as f64 + 0.5) / 2.0;          // the sub-row's centre in photo rows
+            xs.clear();
+            for k in 0..n {
+                let (xa, ya) = (cs[k], rs[k]);
+                let (xb, yb) = if k + 1 < n { (cs[k + 1], rs[k + 1]) } else { (cs[0], rs[0]) };
+                if (ya >= ty) != (yb >= ty) {
+                    xs.push(xa + (ty - ya) * (xb - xa) / (yb - ya));
+                }
+            }
+            if xs.len() < 2 { continue; }
+            xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let row = sr / 2;
+            let bit_row = (sr % 2) * 2;
+            for pair in xs.chunks(2) {
+                if pair.len() < 2 { break; }
+                // sub-columns whose centre (q + 0.5) / 2 lies in [xa, xb) (photo columns, from bc0)
+                let qa = ((pair[0] - bc0 as f64) * 2.0 - 0.5).ceil().max(0.0) as usize;
+                let qb = (((pair[1] - bc0 as f64) * 2.0 - 0.5).ceil().max(0.0) as usize).min(2 * nc);
+                for q in qa..qb {
+                    bits[row * nc + q / 2] |= 1 << (bit_row + q % 2);
+                }
+            }
+        }
+    }
+    Some((br0, bc0, nr, nc, bits))
+}
+
+fn pads_of(pads: &[(PyReadonlyArray1<'_, f64>, PyReadonlyArray1<'_, f64>)]) -> Vec<(Vec<f64>, Vec<f64>)> {
+    pads.iter().map(|(c, r)| (c.as_array().to_vec(), r.as_array().to_vec())).collect()
+}
+
+/// surface._pads_px's coverage: an h x w uint8 of the 2 x 2 sub-pixels each photo pixel has inside the pads
+/// (0..4), or None when none is in the photo.
+#[pyfunction]
+pub fn pad_cover<'py>(py: Python<'py>, h: usize, w: usize, pads: Vec<(PyReadonlyArray1<'py, f64>, PyReadonlyArray1<'py, f64>)>)
+                      -> Option<Bound<'py, numpy::PyArray2<u8>>> {
+    use numpy::IntoPyArray;
+    let pv = pads_of(&pads);
+    let out = py.allow_threads(|| {
+        let (r0, c0, nr, nc, bits) = pad_bits(h, w, &pv)?;
+        let mut out = vec![0u8; h * w];
+        let mut any = false;
+        for r in 0..nr {
+            for c in 0..nc {
+                let b = bits[r * nc + c];
+                if b != 0 { out[(r0 + r) * w + c0 + c] = b.count_ones() as u8; any = true; }
+            }
+        }
+        if any { Some(out) } else { None }
+    })?;
+    Some(numpy::ndarray::Array2::from_shape_vec((h, w), out).unwrap().into_pyarray(py))
+}
+
+/// surface.photo_pads's blend in place: each photo pixel the pads cover (a = its covered sub-pixels / 4) becomes
+/// round(rgb * (1 - a op) + colour * a op) in float32, ties to even (numpy's). Returns the pixels changed.
+#[pyfunction]
+pub fn paint_pads(py: Python<'_>, mut rgb: numpy::PyReadwriteArray3<'_, u8>,
+                  pads: Vec<(PyReadonlyArray1<'_, f64>, PyReadonlyArray1<'_, f64>)>, colour: [f32; 3], op: f32) -> usize {
+    let pv = pads_of(&pads);
+    let mut img = rgb.as_array_mut();
+    let (h, w) = (img.shape()[0], img.shape()[1]);
+    py.allow_threads(|| {
+        let Some((r0, c0, nr, nc, bits)) = pad_bits(h, w, &pv) else { return 0 };
+        let mut n = 0usize;
+        for r in 0..nr {
+            for c in 0..nc {
+                let b = bits[r * nc + c];
+                if b == 0 { continue; }
+                let a = b.count_ones() as f32 * 255.0 / 4.0 / 255.0;     // (the Python's mean of 0 / 255 samples)
+                let sub = a * op;
+                for k in 0..3 {
+                    let px = &mut img[[r0 + r, c0 + c, k]];
+                    let v = (*px as f32 * (1.0 - sub) + colour[k] * sub).round_ties_even();
+                    *px = v.clamp(0.0, 255.0) as u8;
+                }
+                n += 1;
+            }
+        }
+        n
+    })
+}

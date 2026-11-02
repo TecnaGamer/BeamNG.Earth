@@ -382,7 +382,9 @@ pub fn seam_detect(gpu: &Gpu, src: &[f32], h: usize, w: usize, n_ang: usize, hal
                 pass.dispatch_workgroups(gw.div_ceil(16) as u32, gh.div_ceil(16) as u32, 1);
             }
         }
-        gpu.queue.submit(Some(enc.finish()));
+        // one angle at a time on the GPU (all 36 queued at once held it for a region's whole pass; see encode_blocks)
+        let sub = gpu.queue.submit(Some(enc.finish()));
+        d.poll(wgpu::PollType::WaitForSubmissionIndex(sub)).map_err(|e| format!("poll: {e:?}"))?;
     }
     // read back
     let n_out = 5 * h * w;
@@ -426,7 +428,7 @@ fn rgb565(x: u32) -> vec3<i32> {
 
 @compute @workgroup_size(64)
 fn bc1(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let g = gid.x;
+    let g = gid.x + nlev.y;                 // (this submission's first block: encode_blocks' chunks)
     var L = 0u;
     var found = false;
     for (var i = 0u; i < nlev.x; i++) {
@@ -567,6 +569,9 @@ pub fn bc7_encode(gpu: &Gpu, imgs: &[(usize, usize, &[u8])]) -> Result<Vec<Vec<u
 }
 
 /// One dispatch of a block encoder over the images' 4 x 4 blocks (texels packed RGBA8 in u32): wpb u32 words a block.
+/// Blocks per GPU submission (encode_blocks): 512 workgroups of 64, a few ms of a mid-range GPU's time.
+const CHUNK_BLOCKS: u32 = 32768;
+
 fn encode_blocks(gpu: &Gpu, layout: &wgpu::BindGroupLayout, pipe: &wgpu::ComputePipeline,
                  imgs: &[(usize, usize, &[u8])], wpb: u64) -> Result<Vec<Vec<u8>>, String> {
     let d = &gpu.device;
@@ -592,7 +597,7 @@ fn encode_blocks(gpu: &Gpu, layout: &wgpu::BindGroupLayout, pipe: &wgpu::Compute
     });
     let nl = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("n"), contents: bytemuck::cast_slice(&[levels.len() as u32, 0, 0, 0]),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let bg = d.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None, layout,
@@ -605,13 +610,25 @@ fn encode_blocks(gpu: &Gpu, layout: &wgpu::BindGroupLayout, pipe: &wgpu::Compute
         label: Some("rb"), size: nb, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    {
-        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-        pass.set_pipeline(pipe);
-        pass.set_bind_group(0, &bg, &[]);
-        pass.dispatch_workgroups(nblk.div_ceil(64), 1, 1);
+    // in short submissions, each waited for before the next: one dispatch of a 4096² photo's ~1.4M blocks held the GPU
+    // the game draws with for tens of ms, which Windows often cannot preempt (the game froze, 1.6.0); between ours,
+    // the game's frames get the GPU
+    let mut base = 0u32;
+    while base < nblk {
+        let n = (nblk - base).min(CHUNK_BLOCKS);
+        gpu.queue.write_buffer(&nl, 0, bytemuck::cast_slice(&[levels.len() as u32, base, 0, 0]));
+        let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(pipe);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(n.div_ceil(64), 1, 1);
+        }
+        let sub = gpu.queue.submit(Some(enc.finish()));
+        d.poll(wgpu::PollType::WaitForSubmissionIndex(sub)).map_err(|e| format!("poll: {e:?}"))?;
+        base += n;
     }
+    let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     enc.copy_buffer_to_buffer(&outb, 0, &rb, 0, nb);
     let sub = gpu.queue.submit(Some(enc.finish()));
     let slice = rb.slice(..);
@@ -666,7 +683,7 @@ fn quant(e: vec4<f32>, opaque: bool) -> Q {
 
 @compute @workgroup_size(64)
 fn bc7(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let g = gid.x;
+    let g = gid.x + nlev.y;                 // (this submission's first block: encode_blocks' chunks)
     var L = 0u;
     var found = false;
     for (var i = 0u; i < nlev.x; i++) {

@@ -450,6 +450,32 @@ class LotTest(unittest.TestCase):
         self.assertEqual(int(m[32, 32]), 255)
         self.assertEqual(int(m[2, 2]), 0)
 
+    def test_pad_coverage(self):
+        """A pad's coverage is the share of each pixel's 2 x 2 sub-pixel centres inside it (earthfast.pad_cover):
+        whole pixels 1, a pixel the edge halves 0.5, overlapping pads counted once; photo_pads blends by it."""
+        import geodesy
+        frame = geodesy.EnuFrame(40.0, -76.0)
+
+        def pad(e0, e1, n0, n1):
+            la, lo, _ = frame.enu_to_geodetic(np.array([e0, e1, e1, e0]), np.array([n0, n0, n1, n1]), np.zeros(4))
+            return np.asarray(la), np.asarray(lo)
+        # a 64 m photo of 64 px over [-32, 32]²: column = e + 32, row = 32 - n
+        a = sf._pads_px(frame, -32.0, -32.0, 64.0, 64, 64, [pad(-20.5, 20.0, -15.0, 15.0), pad(0.0, 20.0, -5.0, 5.0)])
+        self.assertEqual(a.dtype, np.float32)
+        self.assertAlmostEqual(float(a[30, 30]), 1.0, places=6)           # inside both: still 1
+        self.assertAlmostEqual(float(a[30, 11]), 0.5, places=6)           # its west edge at column 11.5
+        self.assertAlmostEqual(float(a[30, 12]), 1.0, places=6)
+        self.assertEqual(float(a[30, 52]), 0.0)                           # east edge at column 52: outside
+        self.assertEqual(float(a[2, 2]), 0.0)
+        self.assertAlmostEqual(float(a.sum()), 40.5 * 30, places=3)       # the union's area in pixels
+        self.assertIsNone(sf._pads_px(frame, -32.0, -32.0, 64.0, 64, 64, [pad(100.0, 120.0, 0.0, 10.0)]))
+        rgb = np.full((64, 64, 3), 200, np.uint8)
+        out = sf.photo_pads(rgb, frame, -32.0, -32.0, 64.0, [pad(-20.5, 20.0, -15.0, 15.0)])
+        paved = np.array(sf.PHOTO_ROAD_RGBA["paved"][:3])
+        self.assertTrue(np.array_equal(out[30, 30], paved))
+        self.assertTrue(np.array_equal(out[30, 11], np.round((200 + paved) / 2)))   # half covered
+        self.assertTrue(np.array_equal(out[2, 2], [200, 200, 200]) and np.array_equal(rgb[30, 30], [200, 200, 200]))
+
 
     def test_square_painted_paving(self):
         """A land-use square (subtype pedestrian) is paving (the Zocalo read as dirt); a park is not."""

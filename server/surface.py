@@ -881,38 +881,31 @@ def paint_pads(idx, lat, lon, pads):
     return out
 
 
-def _pads_px(frame, x0, y0, size, w, h, pads):
-    """A w x h coverage (float 0..1, 2x supersampled edges) of the pads in a photo over [x0, x0 + size]² of frame
-    (row 0 north), or None when none is in it. Drawn only over the pads' bounding box (most tiles have none: no image
-    is made for them)."""
-    if not pads:
-        return None
-    k = 2
-    px_m = w * k / size
-    polys = []
+def _pads_photo_px(frame, x0, y0, size, w, h, pads):
+    """The pads as (cols, rows) rings in a w x h photo over [x0, x0 + size]² of frame (row 0 north): those that reach
+    into it."""
+    out = []
     for la, lo in pads:
         e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(len(la)))
-        c = (np.asarray(e) - x0) * px_m
-        r = (y0 + size - np.asarray(n)) * px_m
-        if c.max() < 0 or c.min() > w * k or r.max() < 0 or r.min() > h * k:
+        c = (np.asarray(e, np.float64) - x0) * (w / size)
+        r = (y0 + size - np.asarray(n, np.float64)) * (h / size)
+        if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
             continue
-        polys.append((c, r))
+        out.append((np.ascontiguousarray(c), np.ascontiguousarray(r)))
+    return out
+
+
+def _pads_px(frame, x0, y0, size, w, h, pads):
+    """A w x h coverage (float 0..1: the share of each pixel's 2 x 2 sub-pixel centres inside a pad) of the pads in a
+    photo over [x0, x0 + size]² of frame (row 0 north), or None when none is in it (earthfast.pad_cover: PIL drew
+    the whole 2x image over the lots' common box, most of a 4096 px block photo, 1.1 s of its 1.5 s of roads,
+    2026-11-01)."""
+    polys = _pads_photo_px(frame, x0, y0, size, w, h, pads) if pads else []
     if not polys:
         return None
-    c0 = max(0, int(min(c.min() for c, _ in polys)) // k * k)
-    r0 = max(0, int(min(r.min() for _, r in polys)) // k * k)
-    c1 = min(w * k, -(-int(max(c.max() for c, _ in polys) + 1) // k) * k)
-    r1 = min(h * k, -(-int(max(r.max() for _, r in polys) + 1) // k) * k)
-    if c1 <= c0 or r1 <= r0:
-        return None
-    im = Image.new("L", (c1 - c0, r1 - r0), 0)
-    draw = ImageDraw.Draw(im)
-    for c, r in polys:
-        draw.polygon(list(zip((c - c0).tolist(), (r - r0).tolist())), fill=255)
-    sub = np.asarray(im, np.float32).reshape((r1 - r0) // k, k, (c1 - c0) // k, k).mean(axis=(1, 3)) / 255.0
-    out = np.zeros((h, w), np.float32)
-    out[r0 // k:r1 // k, c0 // k:c1 // k] = sub
-    return out
+    fast.require(140, "pad coverage")
+    cov = fast._ef.pad_cover(int(h), int(w), polys)
+    return None if cov is None else cov.astype(np.float32) / 4.0
 
 
 def _windows_px(frame, x0, y0, size, w, h, pads):
@@ -973,18 +966,13 @@ def photo_pads(rgb, frame, x0, y0, size, pads):
     """The photo rgb (H x W x 3, row 0 north, over [x0, x0 + size]² of frame) with the pads painted in the paved
     roads' colour (PHOTO_ROAD_RGBA). Pure."""
     h, w = rgb.shape[:2]
-    a = _pads_px(frame, x0, y0, size, w, h, pads)
-    if a is None:
+    polys = _pads_photo_px(frame, x0, y0, size, w, h, pads) if pads else []
+    if not polys:
         return rgb
-    rows, cols = np.flatnonzero(a.any(axis=1)), np.flatnonzero(a.any(axis=0))
-    if not len(rows):
-        return rgb
-    r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1     # (only the pads' box blended)
+    fast.require(140, "pad painting")
     r, g, b, op = PHOTO_ROAD_RGBA["paved"]
-    sub = (a[r0:r1, c0:c1] * op)[..., None]
-    out = rgb.copy()
-    blend = rgb[r0:r1, c0:c1].astype(np.float32) * (1.0 - sub) + np.array([r, g, b], np.float32) * sub
-    out[r0:r1, c0:c1] = np.clip(np.round(blend), 0, 255).astype(np.uint8)
+    out = np.array(rgb, np.uint8, copy=True, order="C")
+    fast._ef.paint_pads(out, polys, [float(r), float(g), float(b)], float(np.float32(op)))
     return out
 
 

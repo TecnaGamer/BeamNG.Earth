@@ -424,11 +424,12 @@ class DriveBase(unittest.TestCase):
     launcher = "earthd.py"
     cells = 32
     block = ff.TERRAIN_BLOCK    # M4 (docs/V1_4_SPEC.md §3.5): the server's --block (terrain mode: its 2 km block)
-    # simulated seconds per wall second: SPEEDUP, half of it for a 2048² block (2 km at 1 m since 2026-11-01: 4x the
-    # 1 km block's samples, the server's builds that much slower against the same 2 km follow table)
+    # simulated seconds per wall second: half of SPEEDUP since the blocks went to 1 m squares (2026-11-01: 4x the
+    # samples of the 2 m blocks the follow tables' lead was tuned for, the server's builds that much slower; at 4 the
+    # builds of a cold start or a rebase arrived past the commit distance)
     @property
     def speedup(self):
-        return SPEEDUP if self.block < 2048 else SPEEDUP / 2
+        return SPEEDUP / 2
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
