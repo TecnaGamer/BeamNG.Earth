@@ -1214,6 +1214,13 @@ class NamelessCarriagewaysTest(unittest.TestCase):
         got = roads.dual_carriageways(f, [sp, sp])
         self.assertAlmostEqual(got[0].width, 6.4, 1)
         self.assertAlmostEqual(got[1].width, 6.4, 1)
+        self.assertIsNone(got[0].median, "no town median between them")
+
+    def test_a_fast_carriageway_past_houses_has_no_sidewalks(self):
+        sp = roads.Spec(7.0, "paved", True, "primary", True, 2.5, 1, 100.0)
+        self.assertFalse(roads.has_sidewalks(sp))
+        self.assertTrue(roads.has_sidewalks(sp._replace(kmh=50.0)))
+        self.assertTrue(roads.has_sidewalks(sp._replace(sides=(1,))), "the map says so")
 
     def test_a_wide_median_changes_nothing(self):
         sp = roads.Spec(9.0, "paved", False, "trunk", True, 2.5, 1, 100.0)

@@ -179,7 +179,10 @@ class MedianTest(unittest.TestCase):
         self.assertEqual(medians.flags_of(sp) & 1, 0)
         self.assertEqual(medians.flags_of(sp, False, "SE") & 1, 1)
         self.assertEqual(medians.flags_of(sp._replace(kmh=50.0), False, "SE") & 1, 0)
-        self.assertEqual(medians.flags_of(sp._replace(urban=True), False, "SE") & 1, 0)
+        self.assertEqual(medians.flags_of(sp._replace(urban=True, kmh=70.0), False, "SE") & 1, 0)
+        fast_past_houses = medians.flags_of(sp._replace(urban=True), False, "SE")
+        self.assertEqual(fast_past_houses & 1, 1)
+        self.assertEqual(fast_past_houses & 8, 0, "the rural cable, not a town's kerb")
         for rows in medians.STYLES.values():
             widths = [r[0] for r in rows]
             self.assertEqual(widths, sorted(widths))

@@ -119,13 +119,15 @@ def flags_of(spec, deck=False, country=None):
     geometry, 3 urban, 4 WIDE_LANES or more, 5 a motorway, 6 a bridge deck."""
     import roads as roadsmod
     classes = ("motorway", "trunk")
-    if (country or "").upper() == "SE" and not spec.urban and (spec.kmh or 0.0) >= SE_KMH:
+    kmh = spec.kmh or 0.0
+    sweden = (country or "").upper() == "SE"
+    if sweden and (kmh >= roadsmod.NO_WALK_KMH or (kmh >= SE_KMH and not spec.urban)):
         classes += ("primary", "secondary", "tertiary")
     cand = (spec.cls in classes and bool(spec.oneway) and not spec.link
             and spec.kind in roadsmod.BUILT and not roadsmod.has_sidewalks(spec))
     wide = spec.lanes >= WIDE_LANES if spec.lanes else float(spec.width) >= WIDE_M
     return ((1 if cand else 0) | (2 if spec.link else 0) | (4 if (spec.dir or 1) < 0 else 0) |
-            (8 if spec.urban else 0) | (16 if wide else 0) | (32 if spec.cls == "motorway" else 0) | (64 if deck else 0))
+            (8 if spec.urban and not (sweden and kmh >= roadsmod.NO_WALK_KMH) else 0) | (16 if wide else 0) | (32 if spec.cls == "motorway" else 0) | (64 if deck else 0))
 
 
 def modules(roads_near, box, left_hand=False, country=None, mapped_rows=(), decks=()):

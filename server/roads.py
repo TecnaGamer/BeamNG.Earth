@@ -1458,9 +1458,10 @@ def dual_carriageways(feats, specs, left_hand=False):
             sp = out[i]
             # driving on the right the other carriageway is on the left
             gap = best[3]
-            if not group_name and gap >= sp.width:
-                continue                # (nameless: only so they don't overlap. Sweden's 2+1 carriageways are 6-8 m
-                                        # apart, and 11 m wide where no lane count came through: no room for a barrier)
+            if not group_name:          # nameless: only so they don't overlap. Sweden's 2+1 carriageways are 6-8 m
+                if gap < sp.width:      # apart, and 11 m wide where no lane count came through: no room for a barrier.
+                    out[i] = sp._replace(width=dual_cap(gap, sp.width))     # (no median: a town's raised strip would
+                continue                # stand there in place of the barrier, the user's report 2026-11-02)
             if sp.oneway:               # the map's own one-way carriageway: its direction stands
                 out[i] = sp._replace(median=gap, width=_dual_width(sp, sp.width, gap, feats, i))
                 continue
@@ -3382,6 +3383,8 @@ def _runs_outside(d, inside):
     return out
 
 
+NO_WALK_KMH = 80.0              # a one-way carriageway this fast has no sidewalks, whatever stands near it (Swedish 2+1
+                                # roads past houses read as town, and got a raised sidewalk for a median: 2026-11-02)
 ARTERIAL_KMH = 73.0             # a divided urban trunk this slow (45 mph) is a town arterial, not an expressway ...
 ARTERIAL_GAP_M = 150.0          # ... or, with no limit, one with a junction this often (Coastal Highway ~50 m)
 
@@ -3392,6 +3395,8 @@ def has_sidewalks(spec):
     # Highway, 35 mph, 2026-10-14 street photos) one on their outer side (walk_sides)
     if getattr(spec, "sides", None) is not None:      # the map says (_osm_sidewalks)
         return spec.kind in BUILT and bool(spec.sides)
+    if spec.oneway and spec.kmh is not None and spec.kmh >= NO_WALK_KMH:
+        return False
     return spec.kind in BUILT and spec.urban and (spec.cls in SIDEWALK_CLASSES
                                                   or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
 
