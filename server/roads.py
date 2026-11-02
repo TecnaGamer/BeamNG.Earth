@@ -1705,7 +1705,10 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     if got is None:             # (the measured widths on the specs without them: those are asked for too, _bridge_reach)
         extra = (widths is not None, bool(left_hand))
         cid = feats.__dict__.get("_bnge_cell")
-        mk = (cid, "specs", extra) if cid is not None and urban_fn is None else None
+        # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
+        # specs with its parking widths were ~0.37 s of each of its road tiles after every reload, 2026-11-02)
+        mk = None if cid is None else (cid, "specs", extra) if urban_fn is None else \
+            (cid, "specs_urban", extra, id(getattr(urban_fn, "__self__", urban_fn)), getattr(urban_fn, "__name__", ""))
         if mk is not None:      # (_FACTS_MEM: made in this process before, for another copy of the layer)
             with _FACTS_LOCK:
                 mem = _FACTS_MEM.get(mk)
@@ -1718,8 +1721,10 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
             f0 = revisit.thread_faults()
             got = (_road_specs(feats, urban_fn, left_hand) if widths is None else
                    _measured_widths(feats, road_specs(feats, urban_fn, None, left_hand), widths))
-            if urban_fn is None and revisit.thread_faults() == f0:
+            clean = revisit.thread_faults() == f0
+            if urban_fn is None and clean:
                 _facts_store(feats, "specs", extra, [None if sp is None else _spec_json(sp) for sp in got])
+            if clean:
                 if mk is not None:
                     with _FACTS_LOCK:
                         _FACTS_MEM[mk] = list(got)
@@ -1911,9 +1916,10 @@ def lane_flow(feats):
     cell (I-95 by the Middle Branch: 4 lanes, 20.4 m, in one and the default 11.8 m in the other, a 4.3 m step where
     their tiles met; then 24.0 m against 20.4 m where the 3 x 3 round each saw another stretch of the chain). Pure
     given the cells; remembered on feats."""
-    got = feats.__dict__.get("_lane_flow_home")
-    if got is not None:
-        return got
+    return _cell_memo(feats, "_lane_flow_home", lambda: _lane_flow_home(feats))
+
+
+def _lane_flow_home(feats):
     out = list(_lane_flow_local(feats))
     me = feats.__dict__.get("_bnge_cell")
     hook = feats.__dict__.get("_bnge_neighbours")
@@ -1938,7 +1944,6 @@ def lane_flow(feats):
                 j = pos.get(feats.ids[i])
                 if j is not None:
                     out[i] = res[j]
-    feats.__dict__["_lane_flow_home"] = out
     return out
 
 
