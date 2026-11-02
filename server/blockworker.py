@@ -784,7 +784,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
-                                                     country, guardrail_rows, tx, ty)
+                                                     country, guardrail_rows, tx, ty, chunks)
     guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
     mark("medians")
     P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(box), ctx, bridges.beams_in(box), ground=cover,
@@ -1395,15 +1395,18 @@ def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
         return []
 
 
-def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_hand, country, mapped, tx, ty):
+def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_hand, country, mapped, tx, ty, chunks=None):
     """The centre barriers' Forest rows of a road tile on Sweden's 2+1 roads (motesfri.tile_rows; only there are the
-    wider cells read), [] if they fail (logged: the tile goes on without them)."""
+    wider cells read), [] if they fail (logged: the tile goes on without them). chunks gets the lane drops' arrows."""
     import motesfri
     try:
         if not motesfri.wanted(country, near_roads):
             return []
         cells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, motesfri.REACH_M)]
-        return motesfri.tile_rows(frame, cells, box, elev, urban, widths, left_hand, mapped)
+        ways = motesfri._ways(frame, cells, box, urban, widths, left_hand)
+        if chunks is not None:
+            chunks.extend(motesfri.drop_marks(ways, box))
+        return motesfri.tile_rows(frame, cells, box, elev, urban, widths, left_hand, mapped, ways)
     except Exception as ex:
         log.warning("2+1 centre barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []

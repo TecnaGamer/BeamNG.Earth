@@ -326,6 +326,26 @@ def give_way_lines(arms, crosswalks, left_hand=False):
     return teeth, gone
 
 
+# M20 at 7.5 m long, a road above 60 km/h (TSFS 2010:171 5 kap. 4 §; VGU 2024 figure 12.2.1.5.3-2, whose dimensions give
+# its tail 2.4 m straight, 0.30 m wide and 1.05 m off the tip's line, and a head 1.5 m wide, 2.0 m long; its arc, R 7.5,
+# as three straights): m along from the tail, m to the left, the tip at (7.5, 0)
+M20_SHAFT = ((0.0, 1.20), (2.40, 1.20), (3.40, 1.13), (4.20, 0.98), (4.83, 0.78))
+M20_HEAD = ((5.50, 1.16), (4.16, 0.39), (7.50, 0.0))
+M20_LANE_M = 0.6            # m to the left of the tip's line the arrow's middle is: on the middle of its lane
+
+
+def m20(tip, t):
+    """Polygons [(k, 3)] of an M20 arrow with its tip at tip (x, y) on the lane's middle, travel direction t, turning
+    right (the lane on the right goes on: VGU's figure 12.2.1.5.3-1)."""
+    tip, t = np.asarray(tip, np.float64)[:2], np.asarray(t, np.float64)[:2]
+    n = np.array([-t[1], t[0]])
+    place = lambda pts: np.c_[np.array([tip + t * (x - 7.5) + n * (y - M20_LANE_M) for x, y in pts]), np.zeros(len(pts))]   # noqa: E731
+    w = 0.15
+    quads = [((a[0], a[1] + w), (b[0], b[1] + w), (b[0], b[1] - w), (a[0], a[1] - w))
+             for a, b in zip(M20_SHAFT, M20_SHAFT[1:])]
+    return [place(q) for q in quads] + [place(M20_HEAD)]
+
+
 # Turn arrows (MUTCD 3B.20: two per turn lane, near the start of the full lane and before the stop line) from
 # OpenStreetMap's turn:lanes, drawn with West Coast USA's road-marking decal sheet (roadmarkings1, 4 x 4 cells:
 # row 0 left, right and straight arrows; cell rows from the top: arrow_quad turns them into the shape's V)

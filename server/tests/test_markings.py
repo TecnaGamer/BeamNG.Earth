@@ -167,6 +167,18 @@ class GiveWayLineTest(unittest.TestCase):
         self.assertEqual(markings.give_way_lines([(fid, spec, np.array([[0.0, 0.0, 0.0], [0.0, 6.0, 0.0]]), wide)], [])[0], [])
 
 
+class M20Test(unittest.TestCase):
+    def test_arrow_ends_at_its_tip_and_points_right_of_the_lane(self):
+        polys = markings.m20((10.0, 20.0), (0.0, 1.0))       # heading north
+        pts = np.concatenate(polys)
+        self.assertAlmostEqual(pts[:, 1].max(), 20.0, 6, "its tip is the most forward")
+        self.assertAlmostEqual(pts[:, 1].min(), 12.5, 6, "7.5 m long")
+        tail = pts[pts[:, 1] < 13.0]
+        tip = pts[np.argmax(pts[:, 1])]
+        self.assertLess(tail[:, 0].mean(), tip[0], "the tail on the left: it turns right")
+        self.assertAlmostEqual(np.ptp(tail[:, 0]), 0.30, 6, "0.30 m wide")
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -250,5 +250,40 @@ class OpeningTest(unittest.TestCase):
         self.assertEqual(len(motesfri.modules([way("a", line(-400, 400))], BOX, mapped_rows=rows)), len(ours))
 
 
+class LaneDropTest(unittest.TestCase):
+    """M20: VGU 2024 12.2.1.5.3, table 12.14, before the place the overtaking lane ends."""
+    PLAIN = {"lanes:forward": "1", "lanes:backward": "1"}
+
+    def test_five_arrows_back_from_the_end_at_90(self):
+        got = motesfri.lane_drops([way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2))])
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [2.5, 27.5, 77.5, 152.5, 252.5])
+        off, travel = motesfri._overtaking(way("s", line(-400, 0)))
+        self.assertEqual(travel, 1)
+        for p, t in got:
+            self.assertAlmostEqual(float(p[0]), -off, 6, "in the lane that ends")
+            self.assertAlmostEqual(float(t[1]), 1.0, 6)
+
+    def test_four_arrows_at_80(self):
+        got = motesfri.lane_drops([way("s", line(-400, 0), sp=spec(kmh=80.0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2, kmh=80.0))])
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [2.5, 22.5, 62.5, 122.5])
+
+    def test_the_lanes_may_run_the_other_way_along_the_geometry(self):
+        got = motesfri.lane_drops([way("s", line(0, 400), ONE), way("c", line(-400, 0), self.PLAIN, spec(lanes=2))])
+        self.assertEqual([round(float(p[1]), 1) for p, _ in got], [2.5, 27.5, 77.5, 152.5, 252.5])
+        self.assertTrue(all(float(t[1]) < -0.99 for _, t in got), "heading south")
+
+    def test_no_drop_where_the_two_lanes_go_on_and_arrows_past_a_joint(self):
+        ways = [way("a", line(-500, -100), key="k"), way("b", line(-100, 0), key="k"), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in motesfri.lane_drops(ways)], [2.5, 27.5, 77.5, 152.5, 252.5])
+
+    def test_nothing_read_past_it_no_guess(self):
+        self.assertEqual(motesfri.lane_drops([way("s", line(-400, 0))]), [])
+
+    def test_a_box_keeps_its_own_arrows(self):
+        ways = [way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
+        self.assertEqual(len(motesfri.drop_marks(ways, (-128.0, -128.0, 128.0, 128.0))), 3 * 5, "three arrows of five pieces")
+        self.assertEqual(motesfri.drop_marks(ways, (-128.0, 128.0, 128.0, 384.0)), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -332,11 +332,85 @@ def _ways(frame, cells, box, urban, widths, left_hand):
     return out
 
 
-def tile_rows(frame, cells, box, elev, urban=None, widths=None, left_hand=False, mapped_rows=()):
+# A section's lane drop: M20 "före plats där körfält upphör", in the middle of the lane that ends, the first arrow 2.5 m
+# before its lane line stops (VGU 2024 12.2.1.5.3, K237774-6, figure 12.2.1.5.3-1), m between the arrows as its table
+# 12.14 (at 90 km/h and up its last column: the table stops there, 2+1 roads run at 100 too)
+M20_FIRST_M = 2.5
+M20_GAPS_80, M20_GAPS_90 = (20.0, 40.0, 60.0), (25.0, 50.0, 75.0, 100.0)
+
+
+def _overtaking(way):
+    """(m left of way's geometry of the lane that ends, the two lanes' travel along it: +1 / -1), None if not told."""
+    import roads
+    drive, lanes = roads.lane_layout(way.spec)
+    plan = markings.lane_plan(way.tags, True, drive, _lanes(way.spec, way.tags) or lanes, False) or ()
+    centre, lane = ([off for off, role, _ in plan if role == r] for r in ("centre", "lane"))
+    if len(centre) != 1 or len(lane) != 1:
+        return None
+    return (centre[0] + lane[0]) / 2, 1 if lane[0] < centre[0] else -1      # (traffic on the right: Sweden's)
+
+
+def _back_along(way, offset, travel, d):
+    """The point d m before the end of way in its travel direction, offset m left of its geometry, and its direction of
+    travel; None past the way's start, with the m left over."""
+    xy = way.xy[:, :2] if travel > 0 else way.xy[::-1, :2]
+    seg = np.hypot(*np.diff(xy, axis=0).T)
+    cum = np.r_[0.0, np.cumsum(seg)]
+    if d > cum[-1] or cum[-1] <= 0.0:
+        return None, d - cum[-1]
+    at = cum[-1] - d
+    k = min(int(np.searchsorted(cum, at, side="right")) - 1, len(seg) - 1)
+    t = (xy[k + 1] - xy[k]) / max(seg[k], 1e-9)
+    p = xy[k] + t * (at - cum[k])
+    return p + np.array([-t[1], t[0]]) * offset * travel, t
+
+
+def lane_drops(ways):
+    """[(tip of an arrow (2,), direction of travel (2,))] of the M20 arrows before the lane drops of ways' sections,
+    following the two lanes back past a joint in the way. Every tile sees the same list (see the module's header)."""
+    run = []
+    for p in sections(ways):
+        over = _overtaking(p.way) if p.section else None
+        if over is not None:
+            run.append((p.way, over[0], over[1]))
+    end = lambda r: r[0].xy[-1 if r[2] > 0 else 0, :2]      # noqa: E731
+    start = lambda r: r[0].xy[0 if r[2] > 0 else -1, :2]    # noqa: E731
+    out = []
+    for r in run:
+        e = end(r)
+        if any(q is not r and _touches(e, start(q)) for q in run):
+            continue                                        # the two lanes go on
+        if not any(w is not r[0] and (_touches(e, w.xy[0, :2]) or _touches(e, w.xy[-1, :2])) for w in ways):
+            continue                                        # (nothing read past it: don't guess)
+        d, here = M20_FIRST_M, r
+        gaps = M20_GAPS_90 if (r[0].spec.kmh or 0) >= 90.0 else M20_GAPS_80
+        for gap in (0.0, *gaps):
+            d += gap
+            while here is not None:
+                got, rest = _back_along(here[0], here[1], here[2], d)
+                if got is not None:
+                    out.append((got, rest))
+                    break
+                d = rest
+                here = next((q for q in run if q is not here and _touches(start(here), end(q))), None)
+    return out
+
+
+def drop_marks(ways, box):
+    """The road chunks of box's M20 arrows (by an arrow's tip: lane_drops)."""
+    import geotiles
+    import roads
+    return [roads.mark_poly(q) for tip, t in lane_drops(ways) if geotiles.box_owns(box, tip[0], tip[1])
+            for q in markings.m20(tip, t)]
+
+
+def tile_rows(frame, cells, box, elev, urban=None, widths=None, left_hand=False, mapped_rows=(), ways=None):
     """Forest rows (guardrails.forest_rows' layout and GROUPS) of the centre barriers in road tile box: cells the
     decoded road cells within REACH_M of it, elev(lat, lon) the ground, urban and widths as roads.build_tile's,
-    mapped_rows the tile's rows so far (none of ours along a mapped barrier)."""
-    mods = modules(_ways(frame, cells, box, urban, widths, left_hand), box, left_hand, mapped_rows)
+    mapped_rows the tile's rows so far (none of ours along a mapped barrier); ways: _ways', if read already."""
+    if ways is None:
+        ways = _ways(frame, cells, box, urban, widths, left_hand)
+    mods = modules(ways, box, left_hand, mapped_rows)
     if not len(mods):
         return []
     fast.require(99, "median_rows")

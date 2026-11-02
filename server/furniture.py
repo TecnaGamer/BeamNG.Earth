@@ -307,8 +307,8 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     (islands.ring_fids): a junction on a ring (two of its arms) has give-way signs on incoming external arms.
     The AI graph handles their priority, without installing stop controllers on the ring. signals: the mapped
     traffic signals near (mapped_signals; None: guessed by the roads' classes). Sweden (country): give-way on the
-    minor arms meeting a major road and nothing between minor roads, as trafikförordningen (1998:1276): the right-hand
-    rule is 3 kap. 18 §, give-way entering a main road 21 §, and a stop sign is a local exception "där väjningsplikt
+    arms lower than the road through and nothing between roads of a class, as trafikförordningen (1998:1276): the
+    right-hand rule is 3 kap. 18 §, give-way entering a main road 21 §, and a stop sign is a local exception "där väjningsplikt
     inte fungerar" (Transportstyrelsen's decision TSV 2011-1541, 2012-01-09), which no map data says."""
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
         return [(a, G_YIELD) for a in arms if a[0] not in ring and not _outbound(a)]

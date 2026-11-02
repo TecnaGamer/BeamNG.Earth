@@ -1637,7 +1637,7 @@ class Server:
             deck_parts)
         guardrail_rows = guardrail_rows + blockworker._motesfri_rows(
             anchor.frame, cell_fn, near_roads, box, elev, urban, self.road_widths, self.left_hand(anchor),
-            self.country(anchor), guardrail_rows, tx, ty)
+            self.country(anchor), guardrail_rows, tx, ty, chunks)
         guardrail_rows = guardrail_rows + blockworker._kantstolpe_rows(
             anchor.frame, near_roads, box, elev, self.country(anchor), guardrail_rows, tx, ty)
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),

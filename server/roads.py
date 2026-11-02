@@ -4087,6 +4087,12 @@ def lane_tag_parts(feats, i):
     return [(0.0, 1.0, railtags.way_id(str(rec[i])) if rec is not None else None, lane_tags(feats, i))]
 
 
+def mark_poly(pts):
+    """A white painted shape's road chunk: pts (k, 2 or 3), a convex polygon (draped by roadmesh: its z doesn't count)."""
+    return {"m": "line_white", "w": 0.0, "tl": EDGE_LINE["tl"], "p": CENTRE["p"], "layer": "mark",
+            "poly": [[round(float(v), 3) for v in q] for q in pts], "uvq": [[0.5, 0.5]] * len(pts), "n": []}
+
+
 def _chunk(look, w, c):
     out = {"m": look["m"], "w": round(float(w), 2), "tl": look["tl"], "p": look["p"],
            "n": [[round(float(v), 3) for v in p] for p in c]}
@@ -7111,8 +7117,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                "uvq": uv.tolist(), "n": []})
     for tri in teeth:
         if skin_own(*tri[:2].mean(0)[:2]):
-            chunks.append({"m": "line_white", "w": 0.0, "tl": EDGE_LINE["tl"], "p": CENTRE["p"], "layer": "mark",
-                           "poly": [[round(float(v), 3) for v in q] for q in tri], "uvq": [[0.5, 0.5]] * 3, "n": []})
+            chunks.append(mark_poly(tri))
     gore_look = {"m": "line_white", "tl": EDGE_LINE["tl"], "p": CENTRE["p"]}
     for kind_, gw, gl in markings.gores(roads):     # ramp gores: channelizing lines and stripes (MUTCD 3B.08 / 3B.25)
         if kind_ == "fill":
