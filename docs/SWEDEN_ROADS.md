@@ -46,12 +46,13 @@ Not covered by the table above. Listed by subject from `git log`.
 - `7faf6df1` Give-way at junctions: on the road entering a main road, and nothing between roads of a class (Trafikförordningen 3 kap. 18, 21 §§); yellow B1 of TSFS 2019:74's size.
 - `4a37734a` Give-way line M14 (TSFS 2010:171 4 kap. 5, 7 §§) where a B1 stands.
 - `8e75d5e6` Lane drops on 2+1 roads: M20 arrows in the overtaking lane before it ends (VGU 2024 12.2.1.5.3, table 12.14).
+- `e812161d` The AI gets the lanes a road has room for: the fit moves from the paint into `lane_layout`, so navgraph and motesfri plan the lanes the paint shows.
 
 ## City data: crossings, stop lines and signs
 
 Commit `25610804`. Before it, `junctions.find` drew a crosswalk on every arm with corners and a stop line behind it, as on a West Coast US street. A Swedish street is painted by rule (TSFS 2010:171): M15 only where a B3 stands or signals are (4 kap. 8 §), M13 only at a B2 or at signals (3 kap. 1, 3 §§). So a junction under the right-hand rule has nothing painted unless one of those stands there.
 
-`server/crossings.py` reads OpenStreetMap's nodes through Overture's infrastructure layer. M15 and M16 come from `crossing:markings`. Tallied 2026-11-02 within 1.5 km of the middle of Borås, Göteborg, Stockholm, Malmö and Umeå: 7427 crossings, 95% within 2 m of a road's centreline. Mid-block crossings are included, kerbs are lowered at unpainted ones, and a node on a junction is left out.
+`server/crossings.py` reads OpenStreetMap's nodes through Overture's infrastructure layer. M15 and M16 come from `crossing:markings`. Tallied 2026-11-02 within 1.5 km of the middle of Borås, Göteborg, Stockholm, Malmö and Umeå: 7427 crossings, 95% within 2 m of a road's centreline. Mid-block crossings are included, kerbs are lowered at unpainted ones, and a node on a junction is left out. Commit `1c0cde55` also passes the nodes to earthd's tile and AI graph paths, which `25610804` had missed (it gave them to blockworker only).
 
 **Assumption:** a crossing with no word on its paint counts as painted. This is the tags' majority, not a certainty: 614 of 722 signal crossings that say have a zebra, and 296 of 492 unsignalled crossings that say are marked.
 
@@ -87,6 +88,20 @@ Mapped give-way and stop nodes add to the rank guess, for props and the AI: 47 m
 - B3 signs are not placed yet.
 - If the tags cannot be read, the tile falls back to the old guess.
 
+## Trams
+
+Commit `1c0cde55`. A tram within 3.5 m of a town carriageway's edge is now street track on paving: a `road_tramline` decal on a 3.4 m paved strip, not a gravel bed with sleepers. Raised sidewalks and medians stop at a tram (`rails.tram_lines`).
+
+- **Source:** VGU 2024 K235543 asks a reserved track to lie at least 3.5 m from the road edge at 40 km/h, measured to the track's middle. This is an inference from that rule. It is not a rule about trams in streets. A track nearer than 3.5 m is therefore treated as gatuspår (street track). OpenStreetMap's embedded tag is not in the data.
+- **3.4 m:** no official figure. Half of Göteborg's double tracks lie 3.24-4.19 m apart (median 3.58 m). 3.4 m was chosen so that a pair's paving mostly meets.
+
+Results, central Göteborg, about 150 km of track:
+
+- Ballast inside a sidewalk or median band, with 1.3 m tolerance: 8.1 km -> 1.4 km.
+- Strict overlap after the change: 0.32 km on sidewalks, about 0.01 km on medians.
+
+Limits: paved track still lies in a sidewalk's outer band for 3.3 km, because only the curb line is tested. Not tested in game.
+
 ## Road type detection
 
 Findings, and the rules built on them, which shipped in `0fbe4bbb`. The commit message says what the rules do.
@@ -120,10 +135,11 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 ## Known limits
 
 - **Not tested in game.** None of the fixes has been tested in game. The user confirmed that the 2+1 centre barrier works, which is not one of the fixes above.
-- **Test suite.** The full test suite has not been run on these commits, because the game was open. 29 related test modules pass.
+- **Test suite.** Full run on these commits: 148 of 153 modules pass. The five that fail are on the list of those failing on clean code: test_advance_sign_layout (fontTools missing), test_fargeo and test_roadgeo (real-data tests), test_e2e and test_integration_drive (far tiles).
 - **Sign artwork.** Transportstyrelsen's pages state no reuse terms for the artwork. This must be flagged in the PR.
 - **Flat tiles.** Tiles are built on flat ground, so the measurements do not include terrain slope.
 - **Height steps.** 66 of 620 loaded tiles have at least 15 m² of road mesh steeper than 20%. One spot was examined: (57.6696, 13.0284), a track beside a bridge embankment. The rest are unexplained.
 - **Samples.** Fix 3 was measured on 60 tiles and fix 5 on 300, both around Boras. The surface statistics cover seven regions and only rural roads with a surface tag.
 - **Road types.** Class "unknown" roads have no OpenStreetMap tags to work from.
 - **Widths of gravel and private roads.** No official width was found for gravel or private roads, so the repo's existing STYLE values stay.
+- **Dashes at joins.** The dashes of two ways do not meet at a join. A fit was tried and reverted, because it moved TSFS's 9.0 m dash to 8.8 m, off the official figure.
