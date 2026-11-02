@@ -2716,8 +2716,11 @@ class _Planner:
             for b in range(a + 1, len(ends)):
                 na, ia, pa = ends[a]
                 nb, ib, pb = ends[b]
-                if na != nb and np.hypot(*(pa - pb)) <= _cw.TOUCH_M:
+                if na != nb and np.hypot(*(pa - pb)) <= _cw.COUPLE_M:
                     couplings.append((na, ia, nb, ib, "eq", 0.0))
+        # (an end meeting the inside of another chain: a slip road at its overpass road's node, solved with it)
+        joined = _cw.branch_ties([x[0] for x in samples], [x[3] for x in samples])
+        couplings += [(na, ia, nb, jb, "eq", 0.0) for na, ia, nb, jb in joined]
         cross = []
         boxes = [(x[0].min(0), x[0].max(0)) for x in samples]
         for na in range(len(chains)):
@@ -2767,6 +2770,13 @@ class _Planner:
             pa_ = chains[a_][0][int(samples[a_][2][i_])]
             pb_ = chains[b_][0][int(samples[b_][2][j_])]
             if pa_[4] is not None and pa_[4] == pb_[4]:
+                par[root(a_)] = root(b_)
+        for na, _ia, nb, _jb in joined:
+            par[root(na)] = root(nb)
+        # (the roads leaving a deck's end: its approaches rise with it. Solved first, on the ground, they pinned the deck to
+        # it, a 95 m span that must clear a road 7 m under it left 2 m over its own approaches)
+        for a_, i_, b_, j_, kind, _v in couplings:
+            if kind == "eq" and bool(samples[a_][3][i_]) != bool(samples[b_][3][j_]):
                 par[root(a_)] = root(b_)
         top = {}
         for n in range(len(chains)):
