@@ -8,7 +8,7 @@ cleanup path; an additional regression covers that case.
 
 The latest focused selection ran 307 cases: 304 passed and 3 optional skips.
 The resolved four-PR integration passed 1,861 selected Python cases (10 optional
-skips) and 4,113 Lua assertions, including affected-module reruns. Its worldgen
+skips) and 4,117 Lua assertions, including affected-module reruns. Its worldgen
 worker-argument/cache-timer resolution is recorded in merge `bd6d4084`; retain
 both progress/detail/view arguments and the new `submitted_at` when integrating.
 [Full merge preparation and remaining acceptance](https://github.com/PaperboyNZ/BeamNG.EarthBuildTest/blob/testing/building-system/docs/PR_DEV_PREPARATION_20261102.md).
