@@ -168,7 +168,7 @@ capture remains available separately.
 ## Independent upstream build
 
 The profiler also targets original upstream `TecnaGamer/BeamNG.Earth` dev commit
-`fcf042fc9c01572a072b5e8eef4b4f6e2fca3a5c` (1.7.3-beta). That checkout contains
+`992e11fd` (dev fetched 2 November 2026). That checkout contains
 neither `server/buildgen` nor `server/sitegen`. Its patch adds profiler files,
 timing decorators, thread/process and I/O instrumentation, opt-in settings and tests.
 The original upstream generation code is retained. Both source trees pass the
