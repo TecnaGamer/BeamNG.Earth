@@ -78,7 +78,7 @@ _GPU_FAILED = False
 
 def _encode_gpu(chain):
     """The chain's BC7 blocks encoded on the GPU (earthfast.bc7_encode_gpu: a 4096² photo's ~0.7 CPU-s on 8 threads ->
-    ~0.05 CPU-s, the same quality), or None: no GPU (fast.gpu(): off on Windows), not RGBA, or it failed (then the
+    ~0.05 CPU-s, the same quality), or None: no GPU (fast.gpu()), not RGBA, or it failed (then the
     CPU from there on)."""
     global _GPU_FAILED
     if _GPU_FAILED or not fast.gpu() or any(np.ndim(m) != 3 or np.shape(m)[2] != 4 for m in chain):
