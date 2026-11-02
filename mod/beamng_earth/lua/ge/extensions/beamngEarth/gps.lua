@@ -4,13 +4,16 @@
 -- OSRM on OpenStreetMap); the map draws it, and the game's own route arrows (core_groundMarkers.setPath: arrows on
 -- the road, the navigation app, the minimap's line) follow it on our AI road graph (navgraph.lua), which only
 -- covers ~1 km around the player: the arrows go to the farthest point of the planned route ahead (up to LOOKAHEAD_M)
--- that the local graph reaches, set again as the player advances or the graph moves on. Leaving the route by more
--- than OFF_ROUTE_M plans it again from where the player is. Without a planned route (offline): steered toward the
--- destination through the graph node nearest it. Within ARRIVE_M: arrived, cleared.
+-- that the local graph reaches, set again as the player advances or the graph moves on. Leaving the route or driving
+-- back along it for a substantial stretch plans it again. Without a planned route (offline): steered toward the
+-- destination through the graph node nearest it. Arrival needs both proximity and the route's end, or proximity alone
+-- when no route is available.
 local M = {}
+local simhold = require('beamngEarth/simhold')
 
 M.CHECK_S = 1.0
-M.ARRIVE_M = 40         -- this close (horizontally): arrived
+M.ARRIVE_M = 40         -- horizontal proximity also required for arrival
+M.ARRIVE_ROUTE_M = 30   -- with a route, its remaining distance (including the approach to it) must also be below this
 M.FINAL_M = 60          -- a graph node this close to the destination: the arrows end at the destination itself
 M.ON_GRAPH_M = 25       -- a route point this close to a graph node is reachable on the local graph
 M.LOOKAHEAD_M = 1500    -- how far along the route the arrows may reach
@@ -20,6 +23,14 @@ M.VIA_M = 250           -- the arrows' path is pinned to the route by a waypoint
                         -- its own shortest way to the target: Fells Point 2026-10-14, a loop round a block)
 M.OFF_ROUTE_M = 120     -- farther from the route: planned again ...
 M.REROUTE_S = 20        -- ... at most this often
+-- Manual driving: 200 m backwards within a rolling 40 s while above 20 km/h; at the minimum speed 200 m takes 36 s,
+-- while the reported 110 km/h case is caught in about 7 s. A five-second minimum and 20 m forward tolerance avoid
+-- treating a projection jump or ordinary maneuver/noise as a sustained reversal.
+M.BACKTRACK_M = 200
+M.BACKTRACK_S = 40
+M.BACKTRACK_MIN_S = 5
+M.BACKTRACK_SPEED_MS = 20 / 3.6
+M.BACKTRACK_TOL_M = 20
 -- Past the local graph's edge the arrows go on along the planned route itself (the user, 2026-10-14, a Cannonball run:
 -- "the in game arrows would keep ending and I'd have to wait a while before they continue": the graph only covers the
 -- terrain block, which lags a fast car): the stock planner's path gets the route's next TAIL_M appended, a point every
@@ -67,6 +78,11 @@ local vehGraph = {}     -- vehicle id -> the game's map buildSerial when its map
 local pathWait = nil    -- os.clock() since a path waits for the car to have the graph it was planned on
 local targetS = nil     -- the route distance of the arrows' target
 local downloadProgress = nil   -- { total, done, active } | nil: the route's corridor prefetch (server routeahead.py)
+local backSamples, backPeak = nil, nil  -- recent manual route distances, and the greatest seen since forward progress
+
+local function resetBacktrack()
+  backSamples, backPeak = nil, nil
+end
 
 -- Pure: the id and position {x, y, z} of the node in `nodes` (map.getMap().nodes: id -> { pos = {x, y, z} })
 -- nearest (tx, ty), and its distance; nil when there are none.
@@ -216,6 +232,7 @@ function M.setDestination(lat, lon, name)
   if not lat or not lon then return false end
   dest = { lat = lat, lon = lon, name = name }
   route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
+  resetBacktrack()
   routedTo, lastCheck, lastRequest = nil, -math.huge, -math.huge     -- plan and route at the next update
   downloadProgress = nil         -- the previous destination's bar, not this one's (its own push is coming)
   return true
@@ -224,6 +241,7 @@ end
 function M.clear()
   if auto then M.setAutodrive(false) end
   dest, route, routeError, pendingId, enu, info = nil, nil, nil, nil, nil, nil
+  resetBacktrack()
   downloadProgress = nil
   clearArrows()
 end
@@ -265,6 +283,7 @@ local function toEnu(anchor)
     if i > 1 then cum[i] = cum[i - 1] + math.sqrt((xs[i] - xs[i - 1]) ^ 2 + (ys[i] - ys[i - 1]) ^ 2) end
   end
   enu = { anchor = anchor, x = xs, y = ys, cum = cum }
+  resetBacktrack()       -- a new route or a new anchor must not be compared with the old frame
   progress = 1
   return enu
 end
@@ -605,6 +624,7 @@ function M.setAutodrive(on)
   if on == auto then return auto end
   auto = on
   autoPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, false, nil
+  resetBacktrack()
   progRemaining, progAt, stuckTries = nil, nil, 0
   if on then
     routedTo = nil                       -- the arrows (and the AI's path) set again at the next check
@@ -679,9 +699,47 @@ recoverAhead = function(e, nodes, i, t)
   return ok
 end
 
+-- Recent on-route distance (not the lateral offset): require sustained backwards travel, not a stopped car,
+-- small oscillations or a single projection jump. A gap or unmoved position also breaks the window: physics may
+-- have been paused while the last reported velocity stayed nonzero.
+local function backtracking(now, remaining, x, y, vx, vy)
+  if vx * vx + vy * vy <= M.BACKTRACK_SPEED_MS * M.BACKTRACK_SPEED_MS then
+    resetBacktrack()
+    return false
+  end
+  local samples = backSamples
+  local last = samples and samples[#samples]
+  if last then
+    local dx, dy = x - last.x, y - last.y
+    local moved = math.sqrt(dx * dx + dy * dy)
+    if now - last.at > 3 * M.CHECK_S or moved < 1
+      or math.abs(remaining - last.remaining) > moved + M.JUMP_FREE_M
+      or remaining < backPeak - M.BACKTRACK_TOL_M then
+      resetBacktrack()
+      samples, last = nil, nil
+    end
+  end
+  if not samples then samples = {}; backSamples = samples end
+  while samples[1] and now - samples[1].at > M.BACKTRACK_S do table.remove(samples, 1) end
+  local backwards = false
+  if last and remaining > last.remaining then
+    for _, sample in ipairs(samples) do
+      if now - sample.at >= M.BACKTRACK_MIN_S and remaining - sample.remaining > M.BACKTRACK_M then
+        backwards = true
+        break
+      end
+    end
+  end
+  backPeak = math.max(backPeak or remaining, remaining)
+  samples[#samples + 1] = { at = now, remaining = remaining, x = x, y = y }
+  return backwards
+end
+
 -- Every frame (anchor: the current geodesy anchor; player: {x, y, lat, lon}): the route kept to the destination.
 function M.update(anchor, player)
-  if not dest or not anchor or not player then return end
+  if not dest or not anchor or not player then resetBacktrack(); return end
+  local simPaused = simhold.paused()
+  if simPaused then resetBacktrack() end  -- also catch a pause shorter than the one-second route check
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
@@ -694,7 +752,7 @@ function M.update(anchor, player)
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
         route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev }
-        routeError, enu, routedTo = nil, nil, nil
+        routeError, enu, routedTo, progressS = nil, nil, nil, nil
       else
         routeError = r.error or 'no route'
         if not route then route = false end
@@ -710,7 +768,26 @@ function M.update(anchor, player)
   local dx, dy = tx - player.x, ty - player.y
   local dist = math.sqrt(dx * dx + dy * dy)
   info = { dist = dist, bearing = M.bearing(player.x, player.y, tx, ty), remaining = dist }
-  if dist < M.ARRIVE_M then
+  local e, i, t, off, remaining
+  local vx, vy = player.vx or 0, player.vy or 0
+  if route then
+    e = toEnu(anchor)
+    local n = #e.x
+    i, t, off = M.routePosition(e.x, e.y, e.cum, player.x, player.y, vx, vy, progressS, progress - 5,
+      progress + 400)
+    if off > M.OFF_ROUTE_M then
+      i, t, off = M.routePosition(e.x, e.y, e.cum, player.x, player.y, vx, vy, progressS, 1, n)
+    end
+    progress = i
+    progressS = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
+    remaining = e.cum[n] - progressS
+    info.remaining = remaining + off
+    info.off = off
+  else
+    resetBacktrack()
+  end
+  -- Wait for an initial plan before deciding; if unavailable, failed or timed out, fall back to proximity alone.
+  if dist < M.ARRIVE_M and ((route and info.remaining < M.ARRIVE_ROUTE_M) or (not route and not pendingId)) then
     if ui_message then pcall(ui_message, 'Arrived: ' .. (dest.name or 'destination'), 5, 'beamngEarthGps') end
     M.clear()
     return
@@ -720,19 +797,6 @@ function M.update(anchor, player)
   autoKeep(nodes, now)
 
   if route then
-    local e = toEnu(anchor)
-    local n = #e.x
-    local vx, vy = player.vx or 0, player.vy or 0
-    local i, t, off = M.routePosition(e.x, e.y, e.cum, player.x, player.y, vx, vy, progressS, progress - 5,
-      progress + 400)
-    if off > M.OFF_ROUTE_M then
-      i, t, off = M.routePosition(e.x, e.y, e.cum, player.x, player.y, vx, vy, progressS, 1, n)
-    end
-    progress = i
-    progressS = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
-    local remaining = e.cum[n] - (e.cum[i] + t * (e.cum[i + 1] - e.cum[i]))
-    info.remaining = remaining + off
-    info.off = off
     if auto and not paused then
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end
@@ -748,7 +812,16 @@ function M.update(anchor, player)
       end
     end
     if route.dist and route.dist > 0 and route.dur then info.eta = route.dur * remaining / route.dist end
-    if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
+    local backwards = false
+    if not auto and not paused and not simPaused and off <= M.OFF_ROUTE_M then
+      backwards = backtracking(now, remaining, player.x, player.y, vx, vy)
+    else
+      resetBacktrack()
+    end
+    if (off > M.OFF_ROUTE_M or backwards) and not pendingId and now - lastRequest > M.REROUTE_S then
+      requestRoute(player)
+      resetBacktrack()
+    end
     local tg = nodes and routeTarget(e, nodes, i, t)
     if tg then
       -- set again only when the target moved on by a good stretch (each setPath re-plans the arrows)
@@ -775,6 +848,7 @@ end
 -- The level ended: the arrows went with it (the destination and its route stay for the next level start).
 function M.reset()
   routedTo, info, lastCheck, enu, progress, progressS = nil, nil, -math.huge, nil, 1, nil
+  resetBacktrack()
 end
 
 return M

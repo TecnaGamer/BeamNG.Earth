@@ -2,6 +2,13 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Replan manual GPS guidance after sustained wrong-way progress along the route, respecting request
+  cooldowns and pending plans. Stops, forward progress, pauses and route changes reset the detector.
+- Keep guidance through the final turns when the destination is nearby in a straight line; with a
+  planned route, arrival also requires reaching its last 30 m (#623).
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
