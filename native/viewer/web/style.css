@@ -18,7 +18,22 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 .small { font-size: 12px; }
 .status { margin: 4px 0 8px; color: #cfe6ff; min-height: 1.4em; word-break: break-word; }
 #panel { top: 12px; left: 12px; width: 320px; max-height: calc(100% - 24px); overflow: auto; }
-#goto { display: flex; gap: 6px; margin-bottom: 8px; }
+.location { margin-top: 4px; font-weight: 500; color: #ffffff; min-height: 1.4em; }
+.credit { font-size: 11px; margin-top: 8px; }
+#goto { display: flex; gap: 6px; margin-bottom: 2px; }
+.search { position: relative; flex: 1; min-width: 0; display: flex; }
+#results { position: absolute; top: calc(100% + 3px); left: 0; right: -52px; z-index: 5; margin: 0; padding: 3px;
+  list-style: none; background: #101820; border: 1px solid var(--line); border-radius: 6px; max-height: 320px;
+  overflow: auto; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); }
+#results li { padding: 5px 7px; border-radius: 4px; cursor: pointer; }
+#results li[aria-selected="true"], #results li:hover { background: #24384a; }
+#results .name { display: block; }
+#results .detail { display: block; color: var(--muted); font-size: 12px; }
+#results .tag { float: right; color: var(--muted); font-size: 11px; margin-left: 6px; }
+#searchMsg { min-height: 1.2em; margin-bottom: 6px; }
+.debug { font: 11px/1.35 ui-monospace, Consolas, monospace; word-break: break-all; margin: -2px 0 6px;
+  padding: 4px 6px; border: 1px dashed var(--line); border-radius: 4px; }
+.debug .bad { color: #ff8a80; }
 #goto input { flex: 1; min-width: 0; background: #0b1014; color: var(--text); border: 1px solid var(--line);
   border-radius: 5px; padding: 5px 7px; font: inherit; }
 button { background: #24323d; color: var(--text); border: 1px solid var(--line); border-radius: 5px;

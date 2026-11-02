@@ -14,11 +14,18 @@
 <div id="panel" class="card">
   <div class="title">BeamNG.Earth viewer</div>
   <div id="conn" class="muted">Connecting...</div>
+  <div id="location" class="location" title="Street from earthd's map data; town, region and country from Photon"></div>
   <div id="status" class="status"></div>
-  <form id="goto">
-    <input id="where" placeholder="lat, lon (e.g. 36.5785, -118.2923)" autocomplete="off">
+  <form id="goto" autocomplete="off">
+    <div class="search">
+      <input id="where" placeholder="Search a place or address, or lat, lon" spellcheck="false"
+             role="combobox" aria-autocomplete="list" aria-controls="results" aria-expanded="false">
+      <ul id="results" role="listbox" class="hidden"></ul>
+    </div>
     <button>Go</button>
   </form>
+  <div id="searchMsg" class="muted small"></div>
+  <div id="geoDebug" class="muted small debug hidden"></div>
   <dl id="info"></dl>
   <details open>
     <summary>Layers</summary>
@@ -30,9 +37,11 @@
       Drag: look &middot; WASD: move &middot; E / Space: up &middot; Q / C: down<br>
       Shift: x5 &middot; Ctrl: x0.2 &middot; Wheel: speed<br>
       Click: inspect (an OSM way or node, or a shape)<br>
-      Minimap: click to teleport, drag to pan, wheel to zoom
+      Minimap: click to teleport, drag to pan, wheel to zoom<br>
+      Search: type 3+ letters, arrows to choose, Enter to go
     </div>
   </details>
+  <div id="credit" class="muted credit"></div>
 </div>
 
 <div id="pick" class="card hidden">

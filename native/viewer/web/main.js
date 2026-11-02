@@ -7,6 +7,7 @@ import { Osm } from './osm.js'
 import { FlyControls } from './controls.js'
 import { Minimap } from './minimap.js'
 import { setWireframe } from './materials.js'
+import * as gc from './geocode.js'
 
 const $ = id => document.getElementById(id)
 
@@ -54,15 +55,137 @@ function lastPlace() {
   try { const v = JSON.parse(localStorage.getItem(LAST)); return Array.isArray(v) ? v : null } catch (e) { return null }
 }
 
-function teleport(lat, lon) {
+function teleport(lat, lon, place = null) {
   if (!world.hello) { world.status = 'Not connected to earthd'; return }
   world.teleport(lat, lon)
   minimap.pending = { lat, lon }
   remember(lat, lon)
+  if (place) gc.addRecent(place)
+  where.reset()
+  $('location').textContent = ''
 }
 
+// --- place search and the location line (geocode.js: earthd's geocode / where, as the mod) ---
+const search = new gc.Search(m => net.send(m))
+const where = new gc.Where()
+// the debugging switch: Photon asked by this page (geocode.js Direct) instead of through earthd
+const DIRECT_KEY = 'bnge-viewer-geocode-direct'
+let geoDirect = false
+try { geoDirect = localStorage.getItem(DIRECT_KEY) === '1' } catch (e) { /* none */ }
+const direct = new gc.Direct(d => {
+  const ok = d.status === 200 || d.status === 'cache'
+  const line = `${d.status} ${d.ms ? `${d.ms.toFixed(0)} ms` : ''} ${d.n != null ? `${d.n} features` : ''} GET ${d.url}`
+  ;(ok ? console.debug : console.warn)('geocode (viewer):', line, d.error || '')
+  const el = $('geoDebug')
+  el.textContent = ''
+  const s = document.createElement('span')
+  s.className = ok ? '' : 'bad'
+  s.textContent = `viewer -> Photon: ${d.status}${d.ms ? `, ${d.ms.toFixed(0)} ms` : ''}${d.n != null ? `, ${d.n} features` : ''}${d.error ? `, ${d.error}` : ''}`
+  const a = document.createElement('a')
+  a.href = d.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = d.url; a.style.color = 'var(--accent)'
+  el.append(s, document.createElement('br'), a)
+})
+function setGeoDirect(on) {
+  geoDirect = on
+  try { localStorage.setItem(DIRECT_KEY, on ? '1' : '0') } catch (e) { /* none */ }
+  $('geoDebug').classList.toggle('hidden', !on)
+  if (on) $('geoDebug').textContent = 'viewer -> Photon: no request yet'
+  where.reset()
+  $('location').textContent = ''
+}
+if (geoDirect) setGeoDirect(true)
+const geocodeQuery = (q, lat, lon) => geoDirect ? direct.query(q, lat, lon) : search.query(q, lat, lon)
+$('credit').textContent = gc.ATTRIBUTION
+const input = $('where'), list = $('results')
+let results = [], sel = -1, searchSeq = 0, searchTimer = null
+
+function biasPoint() {
+  if (minimap.cam) return [minimap.cam.lat, minimap.cam.lon]
+  return minimap.z >= 5 ? [minimap.lat, minimap.lon] : [null, null]
+}
+
+function showResults(rs) {
+  results = rs
+  sel = -1
+  list.textContent = ''
+  rs.forEach((r, k) => {
+    const li = document.createElement('li')
+    li.setAttribute('role', 'option')
+    li.id = `result-${k}`
+    const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = r.recent ? 'recent' : (r.kind || '')
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = r.name
+    const detail = document.createElement('span'); detail.className = 'detail'; detail.textContent = r.detail || ''
+    li.append(tag, name, detail)
+    li.addEventListener('mousedown', e => { e.preventDefault(); choose(r) })
+    list.append(li)
+  })
+  list.classList.toggle('hidden', !rs.length)
+  input.setAttribute('aria-expanded', rs.length ? 'true' : 'false')
+}
+
+function highlight(k) {
+  sel = k
+  list.querySelectorAll('li').forEach((li, i) => li.setAttribute('aria-selected', i === k ? 'true' : 'false'))
+  if (k >= 0) { list.children[k]?.scrollIntoView({ block: 'nearest' }); input.setAttribute('aria-activedescendant', `result-${k}`) }
+}
+
+function choose(r) {
+  showResults([])
+  input.value = r.name
+  $('searchMsg').textContent = r.detail ? `${r.name}, ${r.detail}` : ''
+  teleport(r.lat, r.lon, r)
+}
+
+// 300 ms after the last key, 3+ characters (EarthMap.vue liveSearch): recent places at once, then earthd's answer
+function liveSearch() {
+  const text = input.value.trim()
+  const seq = ++searchSeq
+  $('searchMsg').textContent = ''
+  const local = text ? gc.recentHits(text) : []
+  showResults(local)
+  if (text.length < gc.MIN_CHARS || gc.parseLatLon(text)) return
+  $('searchMsg').textContent = 'Searching...'
+  const [lat, lon] = biasPoint()
+  geocodeQuery(text, lat, lon).then(r => {
+    if (seq !== searchSeq) return
+    showResults([...local, ...r.results])
+    $('searchMsg').textContent = results.length ? '' : (r.error || r.text) ? gc.errorText(r) : 'Nothing found'
+    if (r.error) console.warn('geocode:', r.error)
+  }, e => {
+    if (seq !== searchSeq) return
+    $('searchMsg').textContent = local.length ? '' : e.message
+  })
+}
+
+input.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(liveSearch, gc.DEBOUNCE_MS) })
+input.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!results.length) return
+    e.preventDefault()
+    highlight((sel + (e.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length)
+  } else if (e.key === 'Escape') {
+    showResults([])
+  }
+})
+input.addEventListener('blur', () => setTimeout(() => showResults([]), 150))
+input.addEventListener('focus', () => { if (input.value.trim().length >= gc.MIN_CHARS && !results.length) liveSearch() })
+
+$('goto').addEventListener('submit', e => {
+  e.preventDefault()
+  const text = input.value.trim()
+  if (!text) return
+  const ll = gc.parseLatLon(text)
+  if (ll) { showResults([]); $('searchMsg').textContent = ''; teleport(ll[0], ll[1]); return }
+  if (results.length) { choose(results[Math.max(0, sel)]); return }
+  clearTimeout(searchTimer)
+  liveSearch()
+})
+
 world.on((ev, d) => {
+  if (ev === 'geocode_result') { search.onResult(d); return }
+  if (ev === 'where_result') { where.onResult(d); $('location').textContent = where.text(); return }
   if (ev === 'hello') {
+    where.reset()
     const p = lastPlace()
     if (p && !world.aid) teleport(p[0], p[1])
   } else if (ev === 'teleported') {
@@ -80,12 +203,6 @@ world.on((ev, d) => {
   } else if (ev === 'far_done' || ev === 'block' || ev === 'anchor') {
     osm.dirty = true
   }
-})
-
-$('goto').addEventListener('submit', e => {
-  e.preventDefault()
-  const m = /(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)/.exec($('where').value)
-  if (m) teleport(+m[1], +m[2])
 })
 
 // --- layers ---
@@ -108,10 +225,13 @@ for (const [label, get, on] of LAYERS) {
   l.append(cb, label)
   $('layers').append(l)
 }
-for (const [label, fn] of [['OSM drawn on top', on => osm.setOnTop(on)], ['Wireframe', on => setWireframe(on)]]) {
+for (const [label, fn, on] of [['OSM drawn on top', on => osm.setOnTop(on)], ['Wireframe', on => setWireframe(on)],
+  ['Place names online (Photon)', on => { where.online = on; where.reset(); if (!on) $('location').textContent = '' }, true],
+  ['Geocode in the viewer (debug: Photon from this page, not earthd)', setGeoDirect, geoDirect]]) {
   const l = document.createElement('label')
   const cb = document.createElement('input')
   cb.type = 'checkbox'
+  cb.checked = !!on
   cb.onchange = () => fn(cb.checked)
   l.append(cb, label)
   $('layers').append(l)
@@ -220,6 +340,23 @@ function frame(now) {
   if (world.anchor) {
     const [lat, lon] = world.anchor.worldToGeodetic(p.x, p.y, 0)
     minimap.cam = { lat, lon, heading: controls.heading, fov: camera.fov * camera.aspect }
+    // the location line: the place under the camera (statusbar.lua's timing), not during an anchor change
+    if (!world.pending) {
+      const q = where.request(now / 1000, lat, lon)
+      if (q && geoDirect) {
+        // the street from earthd's map data still (not a geocoder's), the place names asked by this page
+        const placeDue = q.online
+        q.online = false
+        if (!net.send(q)) where.last = null
+        if (placeDue) {
+          direct.reverse(lat, lon).then(place => {
+            if (!place || !geoDirect) return
+            where.onResult({ ...place })
+            $('location').textContent = where.text()
+          })
+        }
+      } else if (q && !net.send(q)) where.last = null
+    }
     const b = world.block
     minimap.block = b && b.aid === world.aid
       ? [[b.x0, b.y0], [b.x0 + (b.N - 1) * b.s, b.y0], [b.x0 + (b.N - 1) * b.s, b.y0 + (b.N - 1) * b.s], [b.x0, b.y0 + (b.N - 1) * b.s]]

@@ -283,6 +283,8 @@ export class World {
       case 'bldfar_drop': this.dropFarGeo(`F:${msg.key}`); break
       case 'bldsky_drop': this.dropFarGeo(`S:${msg.key}`); break
       case 'brfar_drop': this.dropFarGeo(`B:${msg.key}`); break
+      case 'geocode_result': this.emit('geocode_result', msg); return      // (geocode.js)
+      case 'where_result': this.emit('where_result', msg); return
       default: return
     }
     this.emit('status')
