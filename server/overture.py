@@ -95,11 +95,17 @@ THEME_LICENCES = {
 }
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
+# A road's own source: the one for the whole feature (property ""). A road in a route relation lists the relation
+# first (property "/routes") and its way after it, and the relation's id gave osmtags.join no way: the bridge of
+# Järveküla - Jüri (Estonia) took a one-lane slip road's tags by name, 12 % of the drivable segments round Tallinn's
+# ring road and 5 % of Baltimore's came from a relation (GitHub #683).
+_OWN = "coalesce(list_filter(sources, lambda s: coalesce(s.property, '') = '')[1], sources[1])"
+_SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
-                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}",
+                  cols=f"subtype, class, subclass, {_NAME}, {_SRC_OWN}",
                   text=("subtype", "class", "subclass", "name", "src_dataset", "src_record"),
                   extra="road_flags, rail_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
                         "subclass_rules, access_restrictions",
