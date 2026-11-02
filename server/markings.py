@@ -49,7 +49,7 @@ _SE = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorw
             centre_rural=(3.0, 9.0), centre_urban=(3.0, 3.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 3.0),
             lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.15, min_centre_m=5.5,
             edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10)
-MIN_LANE_M = 2.6            # no line leaving a lane narrower than a vehicle may be (Trafikförordningen 4 kap. 15 §: 260 cm)
+MIN_LANE_M = 2.75           # no line leaving a lane narrower than the least VGU 2024 allows (K233046; K233040: under 5.5 m none)
 WARNING_BELOW_M = 6.5       # a narrower road has a warning line, not a double solid one (TSFS 2010:171 2 kap. 7 §)
 # a 2+1 road (VGU 2024 table 12.5, K237686): no centre line, a solid left edge line each side of the barrier, its outer
 # edge at least 0.20 m from it (the model's posts are 0.04 m a side), and a solid right edge line

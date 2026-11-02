@@ -125,8 +125,9 @@ def look_of(spec):
     if spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
     return LOOK[spec.kind]
-Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides",
-                  defaults=(False, 2.5, 0, None, None, None, None, None, False, None))   # median: m to the other carriageway's centre line
+Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides parking",
+                  defaults=(False, 2.5, 0, None, None, None, None, None, False, None, True))   # median: m to the other carriageway's centre line
+# (parking: whether a town street's carriageway holds parking lanes: _swedish_specs)
 # (sides: the sidewalk sides OpenStreetMap's sidewalk tag gives (_osm_sidewalks; walk_sides' +1 left / -1 right of the
 # geometry, () none), None where it has none: the class and land-cover rule, has_sidewalks; from mpsteppe's PR #292)
 # (lanes: OpenStreetMap's lane count, both directions on a two-way road, None unknown: osmtags.py; surf: the surface
@@ -1471,7 +1472,7 @@ def dual_carriageways(feats, specs, left_hand=False):
                 continue                # carriageways are one-way ways there): Portland's Rosa Parks Way, 1+1 lanes and
                                         # a turn lane, was drawn as two one-ways of 3 lanes each (2026-10-27)
             d = (1 if best[1] > 0 else -1) * (-1 if left_hand else 1)
-            w = sp.width if (_rule_value(feats.rules.get("width"), i) is not None
+            w = sp.width if (not sp.parking or _rule_value(feats.rules.get("width"), i) is not None
                              or _osm(feats, "width", i, *OSM_WIDTH_M) is not None) else \
                 carriageway(sp.cls, sp.kind, sp.urban, None, True, sp.lanes)
             out[i] = sp._replace(oneway=True, dir=d, width=_dual_width(sp, w, gap, feats, i), median=gap)
@@ -1504,7 +1505,7 @@ def _dual_width(sp, w, gap, feats, i):
     if (_rule_value(feats.rules.get("width"), i) is not None
             or _osm(feats, "width", i, *OSM_WIDTH_M) is not None):
         return w
-    if sp.urban and gap <= URBAN_MEDIAN_GAP_M:
+    if sp.urban and sp.parking and gap <= URBAN_MEDIAN_GAP_M:
         w = float(np.clip(gap - URBAN_MEDIAN_M, w, URBAN_DUAL_MAX_W))
     return dual_cap(gap, w)
 
@@ -1660,6 +1661,7 @@ def _road_specs(feats, urban_fn, left_hand):
             k += b - a
             out[j] = Spec(carriageway(cls, kind, urban, None, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token, link=link)
+    out = _swedish_specs(feats, out)
     out = _rings(feats, out)
     out = dual_carriageways(feats, out, left_hand)
     # A primary's opposite carriageway can supply all of its apparent development
@@ -1674,6 +1676,52 @@ def _road_specs(feats, urban_fn, left_hand):
             w = carriageway(sp.cls, sp.kind, False, width, sp.oneway, sp.lanes)
             out[j] = sp._replace(urban=False, width=_dual_width(sp._replace(urban=False), w, sp.median, feats, j))
     return _osm_sidewalks(feats, _rural_connectors(feats, out))
+
+
+SE_TOWN_MAX_KMH = 70.0      # Trafikförordningen 3 kap. 17 §: 50 km/h in a built-up area, 70 outside; so a road of 70 or
+                            # more is no town street, whatever stands beside it (a 100 km/h primary read as town)
+# Rural roads with no surface in the map: gravel where the tagged ones mostly are. km paved / unpaved of the tagged ones
+# in seven samples of 8 km round, Boras to Norrbotten, OpenStreetMap through Overture, 2026-11-02: unclassified 97 / 748,
+# service 40 / 121; tertiary (264 / 81) and residential stay paved. "unknown" is TomTom's through Overture, in no
+# OpenStreetMap at all: 100 km within 25 km of Boras, forest roads drawn as 7 m of asphalt
+SE_GRAVEL_CLASSES = {"unclassified", "service", "unknown"}
+SE_NO_STRIPS = {"residential", "living_street", "unclassified", "service", "unknown"}   # no paved edge strips
+
+
+def _swedish_specs(feats, specs, widths_only=False):
+    """specs with Sweden's own reading of a road, by its first point: a town street there has no parking lanes in its
+    width, and one width in town and out of it: which of the two a road is comes from the land cover beside each map
+    way, and flipped the width at 32% of the joins along roads round Boras, up to 4.6 m at once. Mapped widths stand.
+    Pure."""
+    import sweden
+    if not len(feats):
+        return specs
+    first = feats.lonlat[feats.coord_off[feats.ring_off[feats.part_off[:-1]]]]
+    inside = sweden.contains(first[:, 0], first[:, 1])
+    if not inside.any():
+        return specs
+    rules, out = feats.rules, list(specs)
+    tags = feats.attrs.get("osm_surface")
+    subclass = rules.get("subclass")
+    for j in np.flatnonzero(inside):
+        sp = out[j]
+        if sp is None:
+            continue
+        mapped = sp.link or (_rule_value(rules.get("width"), j) is not None
+                             or _osm(feats, "width", j, *OSM_WIDTH_M) is not None)
+        urban, kind, surf = sp.urban and not (sp.kmh or 0.0) >= SE_TOWN_MAX_KMH, sp.kind, sp.surf
+        if not widths_only:
+            tag = None if tags is None or tags[j] is None else str(tags[j])
+            if surf is None and tag not in (None, "", "None", "nan"):       # (Overture's rule has it only for some)
+                kind, surf = surface_kind(sp.cls, tag), surface_token(tag)
+            elif (surf is None and not urban and sp.cls in SE_GRAVEL_CLASSES and not sp.lanes and not mapped
+                  and _rule_value(subclass, j) not in ("parking_aisle",)):
+                kind = "gravel"
+        w = sp.width
+        if not mapped and sp.cls != "motorway" and sp.cls != "track":
+            w = carriageway(sp.cls, "gravel" if sp.cls in SE_NO_STRIPS else "paved", False, None, sp.oneway, sp.lanes)
+        out[j] = sp._replace(width=w, urban=urban, kind=kind, surf=surf, parking=False)
+    return out
 
 
 def _rural_connectors(feats, specs):
@@ -1761,7 +1809,7 @@ def _measured_widths(feats, specs, widths):
     for j, sp in enumerate(out):
         if sp is None or sp.kind not in BUILT or sp.cls not in SIDEWALK_CLASSES or sp.cls in MEASURE_SKIP:
             continue
-        if _rule_value(rules.get("width"), j) is not None:
+        if _rule_value(rules.get("width"), j) is not None or not sp.parking:
             continue
         if sp.median:       # one carriageway of a divided road: the width between the buildings is both of them
             continue        # and the median (each took all of it, one wide road over Boston Street's median)
@@ -1828,7 +1876,7 @@ def _bridge_specs(feats, want="bridge"):
             rule_w = LINK_M[1] if ow else LINK_M[2]
         out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes), kind, False, cls, ow,
                         lanes=lanes, surf=surface_token(surf)))
-    return out
+    return _swedish_specs(feats, out, widths_only=True)
 
 
 class _EndJoin:
@@ -3545,7 +3593,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
             out.append((look, width, piece))
     # the driving width (a town street's parking lanes and a rural road's edge strips left out: three lanes on every
     # rural Interstate, GitHub #43) and its lanes (OpenStreetMap's count where known)
-    parked = urban and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
+    parked = urban and spec.parking and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
     drive, lanes = lane_layout(spec)
     if lanes > 1 and w / lanes < markings.MIN_LANE_M:   # (a count the road has no room for: a tag, or a way of a stretch)
         lanes = max(1, int(w // markings.MIN_LANE_M))
@@ -4082,7 +4130,7 @@ def lane_layout(spec):
     carriageway less a town street's parking lanes or a rural road's edge strips (counted as lanes, every rural
     Interstate had three, GitHub #43), its lanes OpenStreetMap's count or as many LANE_M as fit (at least 1). Pure."""
     w, cls = spec.width, spec.cls
-    parked = spec.urban and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
+    parked = spec.urban and spec.parking and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
     drive = w - ((PARKING_M if spec.oneway else 2 * PARKING_M) if parked else 2 * edge_margin(spec))
     lanes = int(spec.lanes) if spec.lanes else int(drive // LANE_M)
     return drive, max(1, lanes)
