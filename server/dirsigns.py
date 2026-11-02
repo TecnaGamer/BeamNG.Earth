@@ -44,6 +44,7 @@ METAL = "bne_dir_metal"
 CLASS = {"village": 0, "hamlet": 0, "town": 1, "city": 2}
 CITY_POP = 5000                 # a place without a class is a city from this many people on
 MAX_PLATES = 3
+REPEAT_MARGIN_M = 600.0         # m beyond a repeat cell the roads are read (a board stands before its junction)
 _FONTS_SET = False
 
 
@@ -198,7 +199,8 @@ def _route_rows(md, keys, rows):
 def _params(p):
     return [p["advance_urban_m"], p["advance_rural_m"], p["advance_freeway_m"], p["lateral_urban_m"],
             p["lateral_rural_m"], p["lateral_freeway_m"], p["panel_w_m"], p["cone_deg"], p["near_min_m"],
-            p["near_max_m"], p["far_max_m"], float(p["near_min_pop"]), float(p["far_min_pop"]), p["mount_m"]]
+            p["near_max_m"], p["far_max_m"], float(p["near_min_pop"]), float(p["far_min_pop"]), p["mount_m"],
+            p["repeat_m"]]
 
 
 def best_plates(marks):
@@ -267,7 +269,8 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
     pl = places()
     box = roads.tile_bbox(tx, ty)
     x0, y0, x1, y1 = box
-    m = speedsigns.MARGIN_M
+    # (the repeats of a board are thinned over a cell of a grid: the roads of every cell the tile's boards could share)
+    m = max(speedsigns.MARGIN_M, st["placement"]["repeat_m"] + REPEAT_MARGIN_M)
     la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
     rows, seen, keys = {}, set(), []
     for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):

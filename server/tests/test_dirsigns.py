@@ -34,16 +34,20 @@ def place_array(rows):
     return np.ascontiguousarray([[x / M_LON + LON0, y / M_LAT + LAT0, pop, cls] for x, y, pop, cls in rows], np.float64)
 
 
-def boards(roads, places, routes=None, box=(-5000, -5000, 5000, 5000), left_hand=False, polys=()):
+def boards(roads, places, routes=None, box=(-5000, -5000, 5000, 5000), left_hand=False, polys=(), repeat=None):
     table = dirsigns.RouteTable()
     routes_of = {fid: [(n, r, a, b) for n, r, a, b in rs] for fid, rs in (routes or {}).items()}
-    arrays = dirsigns._arrays(roads, box, 900.0, table, routes_of)
+    # (the margin the glue reads the roads in: a repeat cell and more, so that a tile sees every board it shares one with)
+    arrays = dirsigns._arrays(roads, box, dirsigns.styles()["placement"]["repeat_m"] + dirsigns.REPEAT_MARGIN_M, table, routes_of)
+    if arrays is None:
+        return np.zeros((0, 12)), np.zeros((0, 11)), table
     polys = [np.asarray(p, np.float64) for p in polys]
     pts = np.concatenate(polys) if polys else np.zeros((0, 2))
     off = np.r_[0, np.cumsum([len(p) for p in polys])].astype(np.int64)
     st = dirsigns.styles()
+    placement = dict(st["placement"], **({} if repeat is None else {"repeat_m": repeat}))
     b, r = fast._ef.dirsign_place(*arrays, np.ascontiguousarray(pts), off, places, [float(v) for v in box], left_hand,
-                                  dirsigns._params(st["placement"]))
+                                  dirsigns._params(placement))
     return b, r, table
 
 
@@ -130,6 +134,62 @@ class PlaceTest(unittest.TestCase):
         b, _, _ = boards(junction(), self.places, left_hand=True)
         x = [x for x in b if x[2] > 0.9 and x[0] < 0][0]
         self.assertGreater(x[1], 6.5, "left-hand: north of an eastbound road")
+
+
+@unittest.skipUnless(HAVE, "earthfast with the direction-sign kernels")
+class RepeatTest(unittest.TestCase):
+    """The same board is not repeated at every junction (once in a repeat cell), a turn always has its board."""
+
+    def setUp(self):
+        self.places = place_array([(30000, 0, 20000, 1), (0, 80000, 500000, 2), (0, -80000, 400000, 2)])
+
+    @staticmethod
+    def crossings():
+        """A primary road going east with a crossing primary road every 500 m."""
+        roads = {}
+        for i in range(10):
+            x = -2500 + 500 * i
+            roads[f"m{i}"] = row([(x, 0), (x + 500, 0)], ends=(f"j{i}", f"j{i + 1}"))
+            roads[f"n{i}"] = row([(x, 0), (x, 1500)], ends=(f"j{i}", f"n{i}"))
+            roads[f"s{i}"] = row([(x, -1500), (x, 0)], ends=(f"s{i}", f"j{i}"))
+        return roads
+
+    @staticmethod
+    def eastbound(b, y_from=-50, y_to=50):
+        return [x for x in b if x[2] > 0.9 and y_from < x[1] < y_to]
+
+    def test_a_board_that_says_the_same_is_not_at_every_junction(self):
+        every, _, _ = boards(self.crossings(), self.places, repeat=0.0)
+        thin, _, _ = boards(self.crossings(), self.places, repeat=2000.0)
+        n_every, n_thin = len(self.eastbound(every, -20, 0)), len(self.eastbound(thin, -20, 0))
+        self.assertGreaterEqual(n_every, 8, "without the thinning a board before nearly every junction")
+        self.assertTrue(1 <= n_thin <= 4, f"with it about one in 2 km of a 5 km road: {n_thin}")
+
+    def test_the_thinning_does_not_depend_on_the_tile(self):
+        whole, _, _ = boards(self.crossings(), self.places)
+        parts = []
+        for x0 in range(-5000, 5000, 1000):
+            b, _, _ = boards(self.crossings(), self.places, box=(x0, -5000, x0 + 1000, 5000))
+            parts += list(b)
+        key = lambda a: sorted((round(v[0], 3), round(v[1], 3)) for v in a)          # noqa: E731
+        self.assertEqual(key(parts), key(whole))
+
+    def test_a_turn_always_has_its_board(self):
+        roads = {}
+        for i in range(5):                                     # five side roads ending on a trunk: each a turn
+            y = 300 * i
+            roads[f"t{i}"] = row([(0, y), (0, y + 300)], ends=(f"t{i}", f"t{i + 1}"))
+            roads[f"s{i}"] = row([(-1500, y), (0, y)], ends=(f"s{i}", f"t{i}"))
+        roads["tail"] = row([(0, -300), (0, 0)], ends=("tail", "t0"))
+        roads["head"] = row([(0, 1500), (0, 1800)], ends=("t5", "head"))
+        roads["t4"] = row([(0, 1200), (0, 1500)], ends=("t4", "t5"))
+        thin, _, _ = boards(roads, self.places, repeat=2000.0)
+        east = [x for x in thin if x[2] > 0.9 and x[0] < 0]
+        self.assertEqual(len(east), 5, "every side road's turn onto the trunk has a board")
+
+    def test_different_boards_are_both_kept(self):
+        b, r, _ = boards(self.crossings(), self.places, repeat=2000.0)
+        self.assertTrue(any(x[3] > 0.9 for x in b) or any(x[3] < -0.9 for x in b), "boards for the crossing roads too")
 
 
 class ContentTest(unittest.TestCase):
@@ -231,7 +291,8 @@ class FaceTest(unittest.TestCase):
             self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
         self.assertEqual(tex, f"vfs/{name}.color.png")
         self.assertTrue(2.0 <= w <= 6.0 and 0.5 < h < 3.0, (w, h))
-        wpx, hpx = struct.unpack(">II", open(path, "rb").read(24)[16:24])
+        with open(path, "rb") as f:
+            wpx, hpx = struct.unpack(">II", f.read(24)[16:24])
         self.assertTrue(wpx & (wpx - 1) == 0 and hpx & (hpx - 1) == 0 and min(wpx, hpx) >= 16,
                         f"the engine's texture cooker takes only power-of-two sizes: {wpx}x{hpx}")
         self.assertGreaterEqual(wpx, w * self.face["px_per_m"] - 1, "stretched up, never down")

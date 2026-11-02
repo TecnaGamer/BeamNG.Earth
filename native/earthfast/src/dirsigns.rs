@@ -220,7 +220,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
                           rt_off: PyReadonlyArray1<'py, i64>, skip: PyReadonlyArray2<'py, f64>,
                           skip_off: PyReadonlyArray1<'py, i64>, poly: PyReadonlyArray2<'py, f64>,
                           poly_off: PyReadonlyArray1<'py, i64>, places: PyReadonlyArray2<'py, f64>, bx: [f64; 4],
-                          left_hand: bool, params: [f64; 14])
+                          left_hand: bool, params: [f64; 15])
                           -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
     let (pts, ll, off, meta) = (pts.as_array(), ll.as_array(), off.as_array(), meta.as_array());
     let (con_at, con_id, con_off) = (con_at.as_array(), con_id.as_array(), con_off.as_array());
@@ -228,7 +228,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
     let (skip, skip_off, poly, poly_off) = (skip.as_array(), skip_off.as_array(), poly.as_array(), poly_off.as_array());
     let places = Places { v: places.as_array() };
     let [adv_urban, adv_rural, adv_freeway, lat_urban, lat_rural, lat_freeway, panel_w, cone, near_min, near_max,
-         far_max, near_pop, far_pop, _mount] = params;
+         far_max, near_pop, far_pop, _mount, repeat_m] = params;
     let mut net = Net { pts, ll, roads: Vec::new() };
     let nr = off.len().saturating_sub(1);
 
@@ -317,9 +317,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
 
     let mut nodes_sorted: Vec<i64> = at_node.keys().copied().collect();
     nodes_sorted.sort();
-    let margin = 80.0;
-    let mut boards: Vec<f64> = Vec::new();
-    let mut rows_out: Vec<f64> = Vec::new();
+    let mut pend: Vec<Pending> = Vec::new();
     let mut placed: Vec<([f64; 2], [f64; 2])> = Vec::new();
     for node in nodes_sorted {
         let here = &at_node[&node];
@@ -410,11 +408,13 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
                 continue;
             }
             placed.push((q, t));
-            if !(q[0] >= bx[0] - margin && q[0] < bx[2] + margin && q[1] >= bx[1] - margin && q[1] < bx[3] + margin) { continue; }
-            if !(q[0] >= bx[0] && q[0] < bx[2] && q[1] >= bx[1] && q[1] < bx[3]) { continue; }
+            // (the repeats of a board are thinned over every board of the loaded area: those outside the box are
+            // worked out too, but only when there is a thinning)
+            let inside = q[0] >= bx[0] && q[0] < bx[2] && q[1] >= bx[1] && q[1] < bx[3];
+            if repeat_m <= 0.0 && !inside { continue; }
             // the places for each row, none twice on a board
             let mut used: HashSet<usize> = HashSet::new();
-            let first = rows_out.len() / 11;
+            let mut rows: Vec<[f64; 11]> = Vec::new();
             let heading = t;                // (the approach's heading: the board's travel direction)
             let mut made = 0usize;
             for (bearing, routes, ang, rank, _bi) in &cand {
@@ -437,21 +437,87 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
                 let turn = if ang.abs() <= STRAIGHT_DEG { 0.0 } else if *ang > 0.0 { -1.0 } else { 1.0 };
                 let mut rr = [-1.0f64; MAX_ROUTES];
                 for (k, id) in routes.iter().take(MAX_ROUTES).enumerate() { rr[k] = *id as f64; }
-                rows_out.extend_from_slice(&[turn, angle(*bearing), rr[0], rr[1], rr[2],
+                rows.push([turn, angle(*bearing), rr[0], rr[1], rr[2],
                     near_idx.map_or(-1.0, |i| i as f64), near_d,
                     far.map_or(-1.0, |f| f.idx as f64), far.map_or(0.0, |f| f.d), *rank as f64, 0.0]);
                 made += 1;
             }
             if made == 0 { continue; }
-            boards.extend_from_slice(&[q[0], q[1], t[0], t[1], road_xy[0], road_xy[1], if rd.urban { 1.0 } else { 0.0 }, size,
-                                       jll[0], jll[1], first as f64, made as f64]);
+            // A turn: no arm goes straight on along the road the board stands on (it ends here or bends): always a
+            // board. Else the board repeats what the road's last boards said: thinned below.
+            let mut here_routes: Vec<i64> = Vec::new();
+            routes_at(a.road, net.frac(a.road, a.s_at(a.len() * 0.5)), &mut here_routes);
+            let straight = cand.iter().find(|c| c.2.abs() <= STRAIGHT_DEG);
+            let turn = match straight {
+                None => true,
+                Some(c) => !here_routes.is_empty() && !c.1.is_empty() && !c.1.iter().any(|r| here_routes.contains(r)),
+            };
+            // what it says, without the distances: the same board from every junction that has it
+            let sector = ((angle(t) / 45.0).round() as i64).rem_euclid(8) as u64;
+            let mut sig = splitmix(sector ^ 0xD1B5_4A32_D192_ED03);
+            for r in &rows {
+                for &v in &[r[0], r[2], r[3], r[4], r[5], r[7]] { sig = splitmix(sig ^ (v as i64 as u64)); }
+            }
+            let key = splitmix(splitmix(((jll[0] * 1e5).round() as i64) as u64) ^ ((jll[1] * 1e5).round() as i64) as u64 ^ sector);
+            pend.push(Pending { q, t, road_xy, urban: rd.urban, size, jll, rows, sig, turn, key, inside });
             let _ = jxy;
         }
+    }
+    // The repeats of a board: one in each cell (about repeat_m a side) of a fixed lat/lon grid, the lowest key of those
+    // that say the same; a turn is always kept. (A fixed grid, no walking along the roads: the same boards whichever
+    // tile asks, once its margin covers the cell.)
+    let mut best: HashMap<(u64, i64, i64), u64> = HashMap::new();
+    let cell_of = |p: &Pending| -> (i64, i64) {
+        let dlat = repeat_m / M_PER_DEG;
+        let band = (p.jll[1].floor() + 0.5).to_radians().cos().max(0.05);
+        ((p.jll[0] / (dlat / band)).floor() as i64, (p.jll[1] / dlat).floor() as i64)
+    };
+    if repeat_m > 0.0 {
+        for p in pend.iter().filter(|p| !p.turn) {
+            let (cx, cy) = cell_of(p);
+            let e = best.entry((p.sig, cx, cy)).or_insert(p.key);
+            if p.key < *e { *e = p.key; }
+        }
+    }
+    let mut boards: Vec<f64> = Vec::new();
+    let mut rows_out: Vec<f64> = Vec::new();
+    for p in &pend {
+        if !p.inside { continue; }
+        if repeat_m > 0.0 && !p.turn {
+            let (cx, cy) = cell_of(p);
+            if best.get(&(p.sig, cx, cy)) != Some(&p.key) { continue; }
+        }
+        let first = rows_out.len() / 11;
+        for r in &p.rows { rows_out.extend_from_slice(r); }
+        boards.extend_from_slice(&[p.q[0], p.q[1], p.t[0], p.t[1], p.road_xy[0], p.road_xy[1],
+                                   if p.urban { 1.0 } else { 0.0 }, p.size, p.jll[0], p.jll[1], first as f64, p.rows.len() as f64]);
     }
     let nb = boards.len() / 12;
     let nrw = rows_out.len() / 11;
     (numpy::ndarray::Array2::from_shape_vec((nb, 12), boards).unwrap().into_pyarray(py),
      numpy::ndarray::Array2::from_shape_vec((nrw, 11), rows_out).unwrap().into_pyarray(py))
+}
+
+/// A board worked out, before the repeats are thinned.
+struct Pending {
+    q: [f64; 2],
+    t: [f64; 2],
+    road_xy: [f64; 2],
+    urban: bool,
+    size: f64,
+    jll: [f64; 2],
+    rows: Vec<[f64; 11]>,
+    sig: u64,
+    turn: bool,
+    key: u64,
+    inside: bool,
+}
+
+fn splitmix(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E3779B97F4A7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
 }
 
 impl<'a> Net<'a> {

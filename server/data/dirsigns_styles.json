@@ -8,6 +8,7 @@
     "near_min_m": 3000.0, "near_max_m": 60000.0, "far_max_m": 120000.0,
     "near_min_pop": 4000, "far_min_pop": 50000, "mount_m": 1.8,
     "detour_factor": 1.25,
+    "repeat_m": 2000.0,
     "verified": false
   },
   "face": {
