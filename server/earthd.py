@@ -4368,8 +4368,9 @@ class Connection:
                                                        self.s.country_at(lat, lon))
                     self._where_place = (key, place)
                     cached = self._where_place
-                except Exception as e:  # offline, rate limited: the bar shows the street alone
+                except Exception as e:  # offline, rate limited, refused: the bar shows the street alone
                     log.debug("where: place: %s: %s", type(e).__name__, e)
+                    geocodemod.error_text(e)        # (a refusal kept: the search box says it too, GitHub #602)
             if cached is not None and cached[0] == key:
                 out.update(cached[1])
         self.send(out)
@@ -4383,8 +4384,14 @@ class Connection:
             out["results"] = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, geocodemod.search, q, lat, lon, self.s.net,
                 self.s.country_at(lat, lon) if lat is not None and lon is not None else None)
-        except Exception as e:          # offline, rate limited, a bad answer: the map says so
+        except Exception as e:          # offline, rate limited, refused, a bad answer: the map says which (GitHub #602)
             out["error"] = f"{type(e).__name__}: {e}"[:200]
+            out["text"] = geocodemod.error_text(e)
+            if out["text"] != getattr(self.s, "_geocode_said", None):     # once per change, not per keystroke
+                self.s._geocode_said = out["text"]
+                log.warning("address search: %s (%s)", out["text"], out["error"])
+        else:
+            self.s._geocode_said = None
         log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 

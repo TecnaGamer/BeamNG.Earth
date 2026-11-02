@@ -1696,7 +1696,7 @@ function liveSearch() {
         searching.value = false
         const online = toArray(res.results)
         results.value = [...local, ...online]
-        if (!results.value.length) searchMsg.value = res.error ? "Address search unavailable (offline?)" : "Nothing found"
+        if (!results.value.length) searchMsg.value = res.error ? (res.text || "Address search unavailable (offline?)") : "Nothing found"
       })
     }
     setTimeout(poll, 150)
