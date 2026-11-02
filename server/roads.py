@@ -3447,6 +3447,30 @@ def sidewalk_stop(spec, fid, other, ofid):
     return other.width / 2
 
 
+def _motesfri_section(spec, osm):
+    import motesfri
+    return motesfri.is_section(spec, osm)
+
+
+def way_lines(ex, feats, i, spec, pts, lon, left_hand, country):
+    """extras' lines ex of feature i, its centre and lane lines drawn way by way: a 2+1 road's lanes alternate along one
+    segment (lane_tag_parts). pts is the whole feature on the ground, so not where a bridge cuts it (they stay as ex)."""
+    parts = lane_tag_parts(feats, i)
+    if len(parts) < 2 or level_ranges(feats, i):
+        return ex
+    import markings
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts[:, :2], axis=0).T))]
+    t = s / max(s[-1], 1e-9)
+    at = lambda f: np.array([[np.interp(f, t, pts[:, c]) for c in range(3)]])       # noqa: E731
+    out = [e for e in ex if e[0].get("kind") not in ("centre", "lane")]
+    for a, b, _, tags in parts:
+        piece = np.vstack([at(a), pts[(t > a) & (t < b)], at(b)])
+        way_spec = spec._replace(lanes=markings._count((tags or {}).get("lanes")) or spec.lanes)
+        out += [e for e in extras(way_spec, piece, lon, left_hand, country, tags)
+                if e[0].get("kind") in ("centre", "lane")]
+    return out
+
+
 def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
     """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
     pts: its centreline (k, 3) in the anchor frame (a whole ground part: its broken lines' dashes start their cycle at
@@ -3481,7 +3505,9 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
                         pts, ms * (w / 2 - EDGE_LINE["inset"] - k * (st.w + st.double_gap)))))
             out.append(({**GUTTER, "side": ms}, GUTTER["w"], offset_polyline(pts, ms * (w / 2 - GUTTER["w"] / 2))))
     motorway = cls == "motorway"
-    lw_ = st.w_motorway if motorway else st.w           # a line's width
+    lw_ = st.w_motorway if motorway else (st.w_urban or st.w) if urban else st.w           # a line's width
+    sweden = st is markings.STYLES["SE"]
+    barrier = sweden and kind == "paved" and _motesfri_section(spec, osm)   # (a 2+1 road's: motesfri.py)
 
     def mark(kind_, mat, width, along, pattern=None, side=None):
         """A solid line, or a broken one's dashes (pattern: dash, gap); kind_: "centre", "lane" or "edge"; side: an edge
@@ -3493,7 +3519,10 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
             out.append((look, width, along))
             return
         for piece in markings.dashes(along, pattern):
-            out.append(({"m": mat, "tl": max(1.0, pattern[0]), "p": CENTRE["p"], "kind": kind_}, width, piece))
+            look = {"m": mat, "tl": max(1.0, pattern[0]), "p": CENTRE["p"], "kind": kind_}
+            if side is not None:
+                look["side"] = side
+            out.append((look, width, piece))
     # the driving width (a town street's parking lanes and a rural road's edge strips left out: three lanes on every
     # rural Interstate, GitHub #43) and its lanes (OpenStreetMap's count where known)
     parked = urban and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
@@ -3510,13 +3539,18 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
         def at(off):
             return offset_polyline(pts, off) if abs(off) > 1e-6 else pts.copy()
         for off, role, how in plan:
-            if role == "lane":
+            if role == "centre" and barrier:
+                for sd in (1, -1):
+                    mark("centre", st.centre, markings.BARRIER_LINE_W, at(off + sd * markings.BARRIER_LINE_M))
+            elif role == "lane":
                 mark("lane", "line_white", lw_, at(off), None if how else pat)
             elif role == "twltl":           # solid on the through side, broken on the turn lane's (MUTCD 3B.05)
                 mark("centre", st.centre, lw_, at(off + how * d))
                 mark("centre", st.centre, lw_, at(off - how * d), cpat)
-            elif how == "double":
-                if st.centre == "line_yellow" or st is markings.STYLES.get("GB"):
+            elif how == "double" or (sweden and lanes >= 4 and how is None):     # (TSFS 2010:171 2 kap. 17 §)
+                if st.warning and w < markings.WARNING_BELOW_M:
+                    mark("centre", st.centre, lw_, at(off), st.warning)
+                elif st.centre == "line_yellow" or sweden or st is markings.STYLES.get("GB"):
                     for sd in (1, -1):
                         mark("centre", st.centre, lw_, at(off + sd * d))
                 else:
@@ -3534,7 +3568,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
         # more get a solid line (the Americas: double solid yellow), and in the US a town's street a double solid one;
         # otherwise one broken line in the country's colour and town / country pattern
         solid = lanes >= 4 or (st.double_centre_urban and urban)
-        if solid and st.centre == "line_yellow":
+        if solid and (st.centre == "line_yellow" or sweden):
             for side in (1, -1):
                 mark("centre", st.centre, lw_, offset_polyline(pts, side * (st.double_gap + lw_) / 2))
         elif solid:
@@ -3565,12 +3599,16 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None):
         # no curb: edge lines
         # the right edge white; a one-way carriageway's left edge yellow where the country says so (MUTCD 3B.09:
         # divided roads, ramps); wider on motorways (TSRGD 1012, RMS: 0.20-0.30 m)
-        ew = st.edge_motorway if motorway else st.edge
+        # Sweden: broken except on motorways, a dual carriageway and a 2+1 road
+        wide = motorway or (st.edge_pattern is not None and spec.oneway and not urban)
+        ew = markings.MOTESFRI_EDGE_W if barrier else st.edge_motorway if wide else (st.w_urban or st.edge) if urban \
+            else st.edge
+        epat = None if wide or barrier else st.edge_pattern
         travel_left = 1 if getattr(spec, "dir", 0) >= 0 else -1      # (dir < 0: one way against the line)
         for side in (1, -1):
             inset = motorway_shoulder(spec) if rural_motorway(spec) else EDGE_LINE["inset"]
             mat = st.left_edge if (st.left_edge and spec.oneway and side == travel_left) else "line_white"
-            mark("edge", mat, ew, offset_polyline(pts, side * (w / 2 - inset)), side=side)
+            mark("edge", mat, ew, offset_polyline(pts, side * (w / 2 - inset)), epat, side=side)
     return out
     if has_sidewalks(spec):
         for side in walk_sides(spec, left_hand):
@@ -7097,6 +7135,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if fid not in jinternal else []    # inside a junction: none
         if not ex:
             continue
+        if fid in seen and str(country or "").upper() == "SE":
+            ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country)
         blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid]
         decal_blockers = [(p2[:, :2], s2.width / 2 + (CUT_MARGIN if (fid, f2) in going_on else
                                                       EDGE_DECAL["w"] + EDGE_DECAL_GAP_M))

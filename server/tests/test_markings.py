@@ -1,6 +1,7 @@
 """markings: country styles, real dashes and the lines lane by lane from OpenStreetMap's lane tags."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(markings.style("GB").lane_urban, (1.0, 5.0))
         self.assertEqual(markings.style(None, -100.0).centre, "line_yellow", "unknown: by longitude")
         self.assertEqual(markings.style(None, 10.0).centre, "line_white")
+        self.assertEqual(markings.style("SE").centre_rural, (3.0, 9.0))
 
 
 class DashTest(unittest.TestCase):
@@ -61,6 +63,65 @@ class LanePlanTest(unittest.TestCase):
               roads.extras(sp, line, -76.0, country="US", osm={"lanes:forward": "1", "lanes:backward": "1",
                                                                 "overtaking": "no"}) if lk.get("kind") == "centre"]
         self.assertEqual(sorted(set(lk)), [("centre", -0.12), ("centre", 0.12)], "a double solid yellow line")
+
+
+class SwedenTest(unittest.TestCase):
+    LINE = np.array([[0.0, 0, 0], [118, 0, 0]])     # (no dash ends right at its end)
+
+    @staticmethod
+    def lines(ex, kind):
+        return [(round(float(w), 2), round(float(ln[0][1]), 2), round(float(np.hypot(*(ln[-1] - ln[0])[:2])), 1))
+                for lk, w, ln in ex if lk.get("kind") == kind]
+
+    def extras(self, width=9.0, cls="primary", urban=False, oneway=False, osm=None, kmh=None):
+        sp = roads.Spec(width, "paved", urban, cls, oneway)._replace(kmh=kmh)
+        return roads.extras(sp, self.LINE, 12.0, country="SE", osm=osm)
+
+    def test_a_rural_road_has_broken_edge_lines(self):
+        ex = self.extras()
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "edge")}, {(0.15, 1.0)}, "M2: 1 m dashes, 0.15 m")
+        self.assertEqual(len(self.lines(ex, "edge")), 2 * 40, "1 + 2 m both sides")
+        self.assertEqual({n for _, _, n in self.lines(ex, "centre")}, {3.0})
+        self.assertEqual(len(self.lines(ex, "centre")), 10, "M1: 3 + 9 m")
+
+    def test_a_town_road_is_1_to_1_and_narrower(self):
+        got = self.lines(self.extras(urban=True), "centre")
+        self.assertEqual({w for w, _, _ in got}, {0.10})
+        self.assertEqual(len(got), 20)
+
+    def test_a_motorway_edge_is_solid(self):
+        self.assertEqual({(w, n) for w, _, n in self.lines(self.extras(14.0, "motorway", oneway=True), "edge")},
+                         {(0.30, 118.0)})
+
+    def test_no_overtaking_is_a_double_line_or_a_warning_line_on_a_narrow_road(self):
+        osm = {"lanes:forward": "1", "lanes:backward": "1", "overtaking": "no"}
+        self.assertEqual(sorted(self.lines(self.extras(osm=osm), "centre")), [(0.15, -0.15, 118.0), (0.15, 0.15, 118.0)])
+        got = self.lines(self.extras(6.0, osm=osm), "centre")
+        self.assertEqual(({n for _, _, n in got}, len(got)), ({9.0}, 10), "M3: 9 + 3 m")
+
+    def test_a_2_plus_1_road_has_solid_lines_round_its_barrier(self):
+        osm = {"lanes": "3", "lanes:forward": "2", "lanes:backward": "1"}
+        ex = self.extras(11.0, osm=osm, kmh=100.0)
+        centre = self.lines(ex, "centre")
+        self.assertEqual({(w, n) for w, _, n in centre}, {(0.30, 118.0)}, "no centre line: the left edge lines")
+        self.assertAlmostEqual(abs(centre[0][1] - centre[1][1]), 2 * markings.BARRIER_LINE_M, 1)
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "edge")}, {(0.20, 118.0)})
+        self.assertEqual({n for _, _, n in self.lines(ex, "lane")}, {3.0})
+
+    def test_a_2_plus_1_segments_lines_follow_each_way(self):
+        class Feats:
+            attrs = {}
+            rules = {}
+        sp = roads.Spec(11.0, "paved", False, "primary", False)._replace(kmh=100.0, lanes=3)
+        a = {"lanes": "3", "lanes:forward": "2", "lanes:backward": "1"}
+        b = {"lanes": "3", "lanes:forward": "1", "lanes:backward": "2"}
+        parts = [(0.0, 0.5, "w1", a), (0.5, 1.0, "w2", b)]
+        with mock.patch.object(roads, "lane_tag_parts", return_value=parts), \
+                mock.patch.object(roads, "level_ranges", return_value=[]):
+            ex = roads.way_lines(roads.extras(sp, self.LINE, 12.0, country="SE", osm=a), Feats, 0, sp, self.LINE, 12.0,
+                                 False, "SE")
+        mids = {round(float(ln[0][1]), 1) for lk, _, ln in ex if lk.get("kind") == "centre"}
+        self.assertEqual(len(mids), 4, f"each way's two lines, on its own side of the middle: {mids}")
 
 
 class AiLanesTest(unittest.TestCase):

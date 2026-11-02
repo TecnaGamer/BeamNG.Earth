@@ -16,10 +16,12 @@ import fast
 # line of a two-way road (None: solid); lane_* the lines between lanes of one direction; edge: the edge line's width;
 # left_edge: the material of a one-way carriageway's left edge (the Americas' yellow) or None (white like the right);
 # double_centre_urban: a town's two-way road gets a double solid centre line (the US practice on arterials) instead of
-# a broken one; double_gap: the space between the two lines of a double line.
+# a broken one; double_gap: the space between the two lines of a double line; edge_pattern: a broken edge line (dash,
+# gap) off the main roads; warning: the broken line in place of a double solid one on a narrow road; w_urban: a line's
+# width in town (else w).
 Style = namedtuple("Style", "centre w w_motorway edge edge_motorway centre_rural centre_urban lane_rural lane_urban "
-                            "lane_motorway left_edge double_centre_urban double_gap min_centre_m edge_classes ladder",
-                   defaults=(None, False))
+                            "lane_motorway left_edge double_centre_urban double_gap min_centre_m edge_classes ladder "
+                            "edge_pattern warning w_urban", defaults=(None, False, None, None, None))
 
 _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
             centre_rural=(3.05, 9.14), centre_urban=(3.05, 9.14), lane_rural=(3.05, 9.14), lane_urban=(3.05, 9.14),
@@ -39,6 +41,18 @@ _DE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.12, edge_motorw
 _FR = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_motorway=0.225,
             centre_rural=(3.0, 10.0), centre_urban=(1.5, 5.0), lane_rural=(3.0, 10.0), lane_urban=(1.5, 5.0),
             lane_motorway=(3.0, 10.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
+# Sweden. Lengths: TSFS 2010:171 2 kap. 3, 6, 8 §§ (M1 3 m, M2 1 m, M3 9 m); gaps: Vägmärkesförordningen 2007:90 4 kap.
+# (M1 1:3, in town 1:1; M2 1:2; M3 3:1); double lines: their gap the line's width (18, 21 §§). Widths and where: VGU 2024
+# 12.2.1, tables 12.4-12.9 (TRVINFRA-00396, remiss version 0.9, 2024-07-01): rural 0.15, town 0.10, motorway edge solid
+# 0.30. Its 0.10 on rural roads under 2000 vehicles a day is not here: no traffic counts. Below 5.5 m no centre line.
+_SE = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.30,
+            centre_rural=(3.0, 9.0), centre_urban=(3.0, 3.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 3.0),
+            lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.15, min_centre_m=5.5,
+            edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10)
+WARNING_BELOW_M = 6.5       # a narrower road has a warning line, not a double solid one (TSFS 2010:171 2 kap. 7 §)
+# a 2+1 road (VGU 2024 table 12.5, K237686): no centre line, a solid left edge line each side of the barrier, its outer
+# edge at least 0.20 m from it (the model's posts are 0.04 m a side), and a solid right edge line
+BARRIER_LINE_W, BARRIER_LINE_M, MOTESFRI_EDGE_W = 0.30, 0.04 + 0.20 + 0.15, 0.20
 _NL = _DE._replace(centre_rural=(3.0, 9.0), lane_rural=(3.0, 9.0), lane_motorway=(3.0, 9.0), edge_motorway=0.20)
 _JP = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(5.0, 5.0), centre_urban=(5.0, 5.0), lane_rural=(6.0, 9.0), lane_urban=(5.0, 5.0),
@@ -54,7 +68,8 @@ _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_mot
 _YELLOW = _WHITE._replace(centre="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
-          "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU}
+          "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
+          "SE": _SE}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",
