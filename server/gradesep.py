@@ -73,9 +73,34 @@ def hook(md, key):
         with lock:
             got = memo.get("spans")
             if got is None:
-                got = memo["spans"] = _spans(md, key, feats) if TUNNELS else {}
+                got = memo["spans"] = _spans_kept(md, key, feats) if TUNNELS else {}
         return got
     return run
+
+
+def _spans_kept(md, key, feats):
+    """_spans through this process's cell cache (roads._FACTS_MEM, by the layer's cell id): the map data reloads a
+    city's layers again and again, and each copy made them again (33 makings of ~0.2 s for 3 Manhattan cells'
+    plans, 2026-11-02). Kept when made with no fault of this thread (a neighbour not there yet)."""
+    import revisit
+    import roads
+    cid = feats.__dict__.get("_bnge_cell")
+    mk = (cid, "gradesep", MODE, VERSION, ON, TUNNELS) if cid is not None else None
+    if mk is not None:
+        with roads._FACTS_LOCK:
+            got = roads._FACTS_MEM.get(mk)
+        if got is not None:
+            spans, why = got
+            feats.__dict__["_gradesep_why"] = why
+            return spans
+    f0 = revisit.thread_faults()
+    spans = _spans(md, key, feats)
+    if mk is not None and revisit.thread_faults() == f0:
+        with roads._FACTS_LOCK:
+            roads._FACTS_MEM[mk] = (spans, feats.__dict__.get("_gradesep_why"))
+            while len(roads._FACTS_MEM) > roads.FACTS_MEM_KEPT:
+                roads._FACTS_MEM.popitem(last=False)
+    return spans
 
 
 _POOL = None
