@@ -199,6 +199,9 @@ def wire_mesh(lines, origin):
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}
 MINOR = {"residential", "unclassified", "living_street"}
 G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
+G_B1, B1_TOP = "giveway_b1", 2.28       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
+_SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
+            "living_street": 0}         # which arm gives way at a Swedish junction
 JUNCTION_SNAP_M = 1.0       # road ends this close are one junction
 
 
@@ -296,14 +299,17 @@ def _is_signalled(arms, signals=None):
     return bool((np.hypot(signals[:, 0] - c[0], signals[:, 1] - c[1]) <= reach).any())
 
 
-def junction_controls(arms, k, link_ok=None, ring=None, signals=None):
+def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=None):
     """[(arm, G_SIGNAL | G_STOP | G_YIELD)] of a junction's arms (fid, spec, unit vector away, point): signals on
     every arm where two or more major roads meet, stop signs on the minor arms meeting a major road, on the
     stem of a minor T and on half the minor four-ways (hashed by the roads meeting there; k is unused). Shared with
     navgraph.py, so the AI's signals and stop signs are where the props stand. ring: the fids of roundabout rings
     (islands.ring_fids): a junction on a ring (two of its arms) has give-way signs on incoming external arms.
     The AI graph handles their priority, without installing stop controllers on the ring. signals: the mapped
-    traffic signals near (mapped_signals; None: guessed by the roads' classes)."""
+    traffic signals near (mapped_signals; None: guessed by the roads' classes). Sweden (country): give-way on the
+    minor arms meeting a major road and nothing between minor roads, as trafikförordningen (1998:1276): the right-hand
+    rule is 3 kap. 18 §, give-way entering a main road 21 §, and a stop sign is a local exception "där väjningsplikt
+    inte fungerar" (Transportstyrelsen's decision TSV 2011-1541, 2012-01-09), which no map data says."""
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
         return [(a, G_YIELD) for a in arms if a[0] not in ring and not _outbound(a)]
     major = [a for a in arms if a[1].cls in MAJOR]
@@ -314,6 +320,10 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None):
         # Boston St, "way too many traffic lights"); link_ok(arm) says whether that link's far end is signalled
         return [(a, G_SIGNAL) for a in arms if a[1].cls in MAJOR | MINOR and not _outbound(a)
                 and not (link_ok is not None and len(a) >= 6 and a[5] < LINK_M and link_ok(a))]
+    if str(country or "").upper() == "SE":
+        # the two highest arms are the main road through; a lower one gives way, a road of its own class does not
+        ranks = sorted((_SE_RANK.get(a[1].cls, 0) for a in arms), reverse=True)
+        return [(a, G_YIELD) for a in arms if a[1].cls in _SE_RANK and _SE_RANK[a[1].cls] < ranks[1]]
     if major:
         return [(a, G_STOP) for a in minor]
     if len(arms) == 3:
@@ -381,13 +391,15 @@ def signal_spot(c, u, right, wide, half, lines):
     return _off_carriageways(c, u, right, wide + 2.5, half + 1.0, near)
 
 
-def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None):
+def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None, country=None):
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
     Each on the approach's right (its left where traffic drives on the left), at the junction's edge, facing
-    the drivers who come in. decks: [(centreline (k, 3), half width)] of the bridge decks near (signal_spot)."""
+    the drivers who come in. decks: [(centreline (k, 3), half width)] of the bridge decks near (signal_spot).
+    Sweden: junction_controls' rules, and the give-way signs in the country too."""
     x0, y0, x1, y1 = box
+    sweden = str(country or "").upper() == "SE"
     rows = []
     junctions = _arms(roads)
     link_ok = _link_check(junctions, signals)
@@ -397,12 +409,15 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     lines += [(float(h), np.asarray(pts, np.float64)[:, :2]) for pts, h in decks if len(pts) >= 2]
     for k, arms in junctions.items():
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
-        if len(arms) < 3 or (not on_ring and not _controlled_here(arms, signals)):
+        here = _controlled_here(arms, signals)
+        if len(arms) < 3 or not (on_ring or here or sweden):
             continue
         p = arms[0][3]
         if not (_owns(box, p[0], p[1])):
             continue
-        put = junction_controls(arms, k, link_ok, ring, signals)
+        put = junction_controls(arms, k, link_ok, ring, signals, country)
+        if sweden and not here:
+            put = [p for p in put if p[1] == G_YIELD]       # (no signals guessed out here)
         if not put:
             continue
         wide = max(a[1].width for a in arms) / 2
@@ -413,8 +428,10 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
             q = signal_spot(c, u, right, wide, spec.width / 2, lines)
             if q is None or not (x0 - 20 <= q[0] < x1 + 20 and y0 - 20 <= q[1] < y1 + 20):
                 continue
-            rows.append([what, round(float(q[0]), 2), round(float(q[1]), 2), round(float(c[2] + curb_h), 2),
-                         round(_yaw(right[0], right[1]), 1), 1.0, 9.4 if what == G_SIGNAL else 3.0, 0.0])
+            b1 = sweden and what == G_YIELD
+            rows.append([G_B1 if b1 else what, round(float(q[0]), 2), round(float(q[1]), 2),
+                         round(float(c[2] + curb_h), 2), round(_yaw(right[0], right[1]), 1), 1.0,
+                         B1_TOP if b1 else 9.4 if what == G_SIGNAL else 3.0, 0.0])
     return rows
 
 
@@ -580,7 +597,7 @@ def under_decks(rows, decks, wires=None):
 
 
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
-          signals=None, buried=0.0, region=None, lighting=None):
+          signals=None, buried=0.0, region=None, lighting=None, country=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -669,7 +686,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BENCH, BENCH_SPACING, _h01(fid, side, "bench") * BENCH_SPACING, w - 0.45, 0.9,
                 lambda out: _yaw(-out[0], -out[1]) + BENCH_YAW)
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1, lambda out: _yaw(-out[0], -out[1]))
-    rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals))
+    rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals, country))
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue

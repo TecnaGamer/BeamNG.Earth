@@ -12,6 +12,11 @@ ropes' height.
 Also Sweden's kantstolpe (bne_kantstolpe.dae, server kantstolpar.py), as VGU 2024 12.2.2.1 (TRVINFRA-00396, remiss version
 0.9): white, 1.05 m high, 0.10 m wide, a 0.25 m black band round its 0.80 m high reflectors: facing the traffic on its
 right a 45 x 160 mm one, on the other face two of 60 mm, 100 mm apart. Nothing to hit: it gives way (K237854).
+
+And Sweden's give-way sign B1 (bne_giveway_b1.dae, server furniture.junction_controls), yellow where the stock prop is
+white. TSFS 2019:74 3 kap. 1 §: S1, across its rounded corners, 0.90 m (Normal, a road not a motorway); the border and
+corners as Transportstyrelsen's artwork b1-1.png: 456 px wide, sharp sides 507 px, the yellow's 358 px; its colours
+#FFD204, #EE3A42 (as C31). 1 kap. 13 §: 1.0-2.0 m up to its lower edge.
 """
 import json
 import os
@@ -29,7 +34,14 @@ COLOURS = {
     "bne_cable_reflector": ((0.92, 0.92, 0.90), 0.0, 0.3),   # its white reflective band
     "bne_post_white": ((0.86, 0.87, 0.85), 0.0, 0.55),
     "bne_post_black": ((0.02, 0.02, 0.02), 0.0, 0.55),
+    "bne_b1_yellow": ((1.0, 0.645, 0.001), 0.0, 0.45),
+    "bne_b1_red": ((0.855, 0.042, 0.054), 0.0, 0.45),
 }
+B1_S = 0.90 * 507 / 456             # m: the sides extended to sharp corners
+B1_CUT = 0.90 * 51 / 456            # m of each side at a corner: the rounding, cut straight
+B1_YELLOW = 0.90 * 358 / 456        # m: the yellow triangle's side
+B1_LOW = 1.5                        # m up to the point
+B1_TOP = B1_LOW + (B1_S - B1_CUT) * 3 ** 0.5 / 2    # (bne_giveway_b1's height: trees.lua's catalog)
 
 
 def module(detail=True):
@@ -77,6 +89,25 @@ def post(near):
     return m
 
 
+def giveway(near):
+    """B1: Z up from the ground, point down, its face towards -Y (the traffic it faces), on a post behind it."""
+    h = 3 ** 0.5 / 2
+    x, cut, top = B1_S / 2, B1_CUT, B1_TOP
+    low = top - B1_S * h                                    # the sharp point, below the cut one
+    plate = [(cut / 2, low + cut * h), (x - cut / 2, top - cut * h), (x - cut, top),
+             (cut - x, top), (cut / 2 - x, top - cut * h), (-cut / 2, low + cut * h)]
+    mid = top - B1_S * h / 3                                # the centre of both triangles
+    y = B1_YELLOW / 2
+    m = Mesh(4)
+    m.face("bne_b1_red", [(a, -0.03, z) for a, z in plate])
+    m.face("bne_cable_steel", [(a, -0.029, z) for a, z in reversed(plate)])
+    m.face("bne_b1_yellow", [(0.0, -0.031, mid - 2 * y * h / 3), (y, -0.031, mid + y * h / 3),
+                             (-y, -0.031, mid + y * h / 3)])
+    if near:
+        m.box("bne_cable_steel", (0.0, 0.0, (top - 0.1 - POST_SINK) / 2), (0.03, 0.03, (top - 0.1 + POST_SINK) / 2))
+    return m
+
+
 def materials():
     out = {}
     pid = lambda n: str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth/" + n))
@@ -97,6 +128,11 @@ def main():
     path = os.path.join(OUT, "bne_kantstolpe.dae")
     write_dae(path, "bne_kantstolpe", [(24, post(True)), (4, post(False))], Mesh(4))
     print(path, os.path.getsize(path), "bytes")
+    path = os.path.join(OUT, "bne_giveway_b1.dae")
+    pole = Mesh(4)
+    pole.box("bne_cable_steel", (0.0, 0.0, B1_TOP / 2), (0.04, 0.04, B1_TOP / 2))
+    write_dae(path, "bne_giveway_b1", [(32, giveway(True)), (4, giveway(False))], pole)
+    print(path, os.path.getsize(path), "bytes", round(B1_TOP, 2), "m")
 
 
 if __name__ == "__main__":

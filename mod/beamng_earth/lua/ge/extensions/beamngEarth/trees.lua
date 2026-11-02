@@ -233,6 +233,8 @@ M.GROUP_MAX_M.jersey_end = 4000
 M.GROUP_MAX_M.cable = 1500
 M.CATALOG.kantstolpe = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_kantstolpe', 1.05 } }   -- (Sweden's post)
 M.GROUP_MAX_M.kantstolpe = 800
+M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.28 } }   -- (Sweden's yellow give-way)
+M.GROUP_MAX_M.giveway_b1 = 300
 -- Pure: whether a group is a road barrier's (guard rails, jersey and cable barriers): continuous runs, not thinned
 -- below the tile cap.
 function M.isBarrier(g)
