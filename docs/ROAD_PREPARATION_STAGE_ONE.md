@@ -1,5 +1,20 @@
 # Shared road preparation: first-stage PR
 
+Final PR preparation on 2 November 2026 verified this branch against freshly
+fetched upstream dev `b41b4b04`. The shared bridge-cache docstring now matches
+PR #3, eliminating their textual merge conflict. Optional dependency telemetry
+also tolerates absent worker state, preserving the original build exception and
+cleanup path; an additional regression covers that case.
+
+The latest focused selection ran 307 cases: 304 passed and 3 optional skips.
+The resolved four-PR integration passed 1,861 selected Python cases (10 optional
+skips) and 4,113 Lua assertions, including affected-module reruns. Its worldgen
+worker-argument/cache-timer resolution is recorded in merge `bd6d4084`; retain
+both progress/detail/view arguments and the new `submitted_at` when integrating.
+[Full merge preparation and remaining acceptance](https://github.com/PaperboyNZ/BeamNG.EarthBuildTest/blob/testing/building-system/docs/PR_DEV_PREPARATION_20261102.md).
+The historical A/B measurements below do not constitute fresh benchmark or native
+acceptance of the final four-PR combination. The open benchmark gates still apply.
+
 Paused for PR preparation on 2 November 2026. Base: upstream `dev`
 [`b41b4b04`](https://github.com/TecnaGamer/BeamNG.Earth/commit/b41b4b04edffab6083e78b0c2ef41982869287b2).
 The initial architectural review used `0c790738`; upstream added packed map-array
