@@ -19,7 +19,7 @@ import urllib.request
 import netfetch
 import updates
 
-API_URL = f"https://api.github.com/repos/{updates.REPO}/releases/latest"
+API_URL = updates.LATEST_API
 ASSET_PREFIX = f"https://github.com/{updates.REPO}/releases/download/"
 STAGED = "BeamNG.Earth-update.json"     # beside the downloaded file: {"version", "path", "sha256"}
 CHUNK = 1 << 16

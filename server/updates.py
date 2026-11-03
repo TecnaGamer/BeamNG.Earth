@@ -1,8 +1,9 @@
 """Update check (the user, 2026-10-15: "add an update system where the mod will check GitHub for any updates").
 
-The project's VERSION file on GitHub's main branch is read (raw.githubusercontent.com, netfetch's policy: a few
-requests a day, cached for hours) and compared with this copy's VERSION; when GitHub's is newer the server tells the
+The project's latest published main release on GitHub is compared with this copy's VERSION; when it is newer the server tells the
 mod ('update' message), which says so once in game and on its settings page, with the link to the download.
+This uses the same release endpoint as the one-click downloader, so a version committed before a failed or
+cancelled release build is not advertised. Development builds continue to use the releases list.
 
     newer("1.4.1-preview", "1.4.0-preview") -> True
     check(local_version, net) -> {"current", "latest", "url"} or None (up to date, offline, no VERSION there)
@@ -12,6 +13,7 @@ builds each push to the dev branch as the GitHub pre-release v<VERSION>.dev.<n> 
 1.7.2-beta, older than 1.7.3-beta). A copy that is one asks GitHub's releases list instead (pre-releases included),
 so it is told of the next development build or the next beta, whichever is newer.
 """
+import json
 import os
 import re
 import sys
@@ -21,7 +23,7 @@ import time
 import netfetch
 
 REPO = "redthepro/Beam-Earth"
-VERSION_URL = f"https://raw.githubusercontent.com/{REPO}/main/VERSION"
+LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PAGE_URL = f"https://github.com/{REPO}/releases"      # the downloads (.exe / AppImage)
 # the folder with VERSION: above server/, or the packaged app's bundle (launcher.py frozen by PyInstaller, where
 # every module sits at the bundle's top)
@@ -75,12 +77,17 @@ def check(current, net=None):
             return None
         return {"current": current, "latest": rel[0], "url": rel[1], "dev": is_dev(rel[0])}
     try:
-        latest = net.get(VERSION_URL, kind="background").body.decode("utf-8", "replace").strip()
-    except (netfetch.FetchError, OSError):
+        raw = net.get(LATEST_API, kind="background", headers={"Accept": "application/vnd.github+json"})
+        release = json.loads(raw.body.decode("utf-8", "replace"))
+    except (netfetch.FetchError, OSError, ValueError):
         return None
-    if not newer(latest, current):
+    if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
         return None
-    return {"current": current, "latest": latest, "url": PAGE_URL}
+    latest = str(release.get("tag_name") or "").removeprefix("v")
+    url = str(release.get("html_url") or "")
+    if is_dev(latest) or not newer(latest, current) or url != f"{PAGE_URL}/tag/v{latest}":
+        return None
+    return {"current": current, "latest": latest, "url": url}
 
 
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
