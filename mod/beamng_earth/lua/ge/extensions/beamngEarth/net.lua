@@ -23,12 +23,6 @@ local RECONNECT_S = 2.0
 local CONNECT_TIMEOUT_S = 2.0
 local RECV_CHUNK = 65536
 local MAX_RECV_PER_FRAME = 64 -- chunks; 4 MiB per frame is plenty for JSON control traffic
--- A connected companion can stop reading while our nonblocking sends keep timing out. Bound the
--- retained strings and fail the connection explicitly, so ordinary reconnect/resync handles it.
--- Do not drop/coalesce ordered control messages within an otherwise live stream.
-M.MAX_OUT_MESSAGES = 256
-M.MAX_OUT_BYTES = 4 * 1024 * 1024
-M.SEND_STALL_S = 10
 
 local socket = nil
 local sock = nil
@@ -37,8 +31,6 @@ local timer = RECONNECT_S    -- first attempt happens on the first update
 local rx = framing.newReassembler()
 local outQueue = {}          -- encoded frames waiting to be sent
 local outPos = 1             -- next byte of outQueue[1] to send
-local outBytes, outPending = 0, 0 -- retained strings (including sent prefix) / unsent bytes
-local sendStalledS = 0       -- update's wall seconds without forward progress while data waits
 local events = {}
 local attempts = 0           -- connection attempts since the last successful connection
 local everConnected = false
@@ -51,7 +43,6 @@ local function closeSocket(err)
   sock, state, timer = nil, 'disconnected', 0
   rx:reset()
   outQueue, outPos = {}, 1
-  outBytes, outPending, sendStalledS = 0, 0, 0
   M.lastError = err
   if wasConnected then events[#events + 1] = { type = '_disconnected', error = err } end
 end
@@ -98,22 +89,16 @@ local function flush()
   while sock and outQueue[1] do
     local data = outQueue[1]
     local last, err, partialLast = sock:send(data, outPos)
-    if err and err ~= 'timeout' then
+    if last then
+      table.remove(outQueue, 1)
+      outPos = 1
+    elseif err == 'timeout' then
+      outPos = (partialLast or (outPos - 1)) + 1 -- kernel buffer full; continue next frame
+      return
+    else
       closeSocket('send: ' .. tostring(err))
       return
     end
-    -- LuaSocket returns an absolute last-byte index, not a count relative to outPos.
-    local nextPos = math.min(#data, last or partialLast or (outPos - 1)) + 1
-    local sent = math.max(0, nextPos - outPos)
-    outPending = outPending - sent
-    if sent > 0 then sendStalledS = 0 end
-    outPos = outPos + sent
-    if outPos > #data then
-      table.remove(outQueue, 1)
-      outBytes = outBytes - #data -- the whole string was retained until its last byte was sent
-      outPos = 1
-    end
-    if err == 'timeout' or sent == 0 then return end -- kernel full; continue next frame
   end
 end
 
@@ -155,11 +140,7 @@ function M.update(dt)
   local out = events
   events = {}
   if state == 'connected' then
-    if outPending > 0 then sendStalledS = sendStalledS + math.max(0, dt or 0) end
     flush()
-    if sock and outPending > 0 and sendStalledS >= M.SEND_STALL_S then
-      closeSocket('send stalled: companion not reading')
-    end
     if sock then receive(out) end
   end
   for _, e in ipairs(events) do out[#out + 1] = e end
@@ -167,31 +148,12 @@ function M.update(dt)
   return out
 end
 
--- Queue a message table. False means disconnected or rejected by an explicit connection failure;
--- the caller receives _disconnected through update, as with an ordinary broken socket.
+-- Queue a message table; returns false when not connected (the message is dropped).
 function M.send(msg)
   if state ~= 'connected' then return false end
-  flush() -- allow a recovered reader to drain the queue before deciding whether it is full
-  if state ~= 'connected' then return false end
-  local payload = jsonEncode(msg)
-  local size = #payload + 4
-  if size > M.MAX_OUT_BYTES then
-    closeSocket('outgoing frame exceeds byte limit')
-    return false
-  end
-  if #outQueue >= M.MAX_OUT_MESSAGES or outBytes + size > M.MAX_OUT_BYTES then
-    closeSocket('outgoing queue limit exceeded: companion not reading')
-    return false
-  end
-  outQueue[#outQueue + 1] = framing.encode(payload)
-  outBytes, outPending = outBytes + size, outPending + size
+  outQueue[#outQueue + 1] = framing.encode(jsonEncode(msg))
   flush()
-  return state == 'connected'
-end
-
--- Read-only diagnostics; retained bytes, rather than just the unsent suffix, enforce the memory cap.
-function M.sendQueueState()
-  return { messages = #outQueue, bytes = outBytes, pendingBytes = outPending, stalledS = sendStalledS }
+  return true
 end
 
 function M.state() return state end
