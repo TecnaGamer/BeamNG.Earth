@@ -93,6 +93,7 @@ local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' co
 local terrainpatch = require('beamngEarth/terrainpatch')   -- ground under the islands off the terrain block
 local farcars = require('beamngEarth/farcars')             -- far player cars saved, taken out and put back
 local fociBroken = false
+M.shadowctl = require('beamngEarth/shadowctl')
 -- The pose's foci: the last collision foci (collisionfoci.lua), rounded, at most 16 (earthd FOCI_MAX); nil when none.
 local function poseFoci()
   local f = collisionfoci.last
@@ -423,7 +424,9 @@ local function activateWorld()
   local fixed = stg and stg.get and stg.get('viewDistanceMode') == 'fixed'
   if scenetree.theLevelInfo and not fixed then scenetree.theLevelInfo.visibleDistance = VISIBLE_DISTANCE end
   terrain.hideGroundPlanes()
+  if trees.adoptExistingForests then pcall(trees.adoptExistingForests) end
   applyHorizon()
+  if M.shadowctl and M.shadowctl.apply then pcall(M.shadowctl.apply) end
 end
 
 local function sendCommits(anchorId, cx, cy)
@@ -565,6 +568,7 @@ local function commitTeleport(msg)
   edgeguard.newFrame(st.guard)
   sendCommits(msg.anchorId, tr.cx, tr.cy)
   activateWorld()
+  if M.shadowctl and M.shadowctl.apply then pcall(M.shadowctl.apply) end
   st.skyTimer, st.poseTimer = SKY_INTERVAL, POSE_INTERVAL -- refresh both right away
   setStatus(string.format('Anchor #%s at %.5f, %.5f (teleport, %.0f ms)', tostring(msg.anchorId),
     msg.lat, msg.lon, sw()))
@@ -610,6 +614,7 @@ local function finishRebase()
   edgeguard.newFrame(st.guard)
   sendCommits(msg.anchorId, tr.cx, tr.cy)
   activateWorld()
+  if M.shadowctl and M.shadowctl.apply then pcall(M.shadowctl.apply) end
   st.skyTimer, st.poseTimer = SKY_INTERVAL, POSE_INTERVAL
   st.lastRebaseMs, st.lastRebaseWait = rb.phase1Ms + sw(), rb.waited
   st.rebaseCount = st.rebaseCount + 1
@@ -769,13 +774,18 @@ end
 local function placePlayer(z, again)
   local veh = getPlayerVehicle(0)
   local x, y = st.placeX or 0, st.placeY or 0
-  -- (a snapped teleport's spot: the server's height there is the first block's, as at the origin; a ray from above
-  -- hit the old place's buildings, still in the static collision, and the car fell 30 m, 2026-10-25)
-  if (x ~= 0 or y ~= 0) and not st.placeSnapped then
-    -- away from the origin (a BeamMP player's anchor): the server's height there is the raw elevation data; set down
-    -- on the collision under it (a graded road can be a few metres off)
+  if not again and not st.floorZ then
+    -- Always check ground under spot (even when st.placeSnapped): if surface at (x, y) is higher than z, lift to g + 1.0
     local g = M.groundRay(z)(x, y)
-    if g then z = g + 1.0 end
+    if g then
+      if not st.placeSnapped then
+        if x ~= 0 or y ~= 0 or g > z then
+          z = g + 1.0
+        end
+      elseif g > z then
+        z = g + 1.0
+      end
+    end
   end
   -- nothing under the spot (a hole in the terrain: a tunnel's portal before its road tile): the nearest spot that has
   -- some (safeSpot); a tunnel's tube (floorZ) is left to floorCheck
@@ -2121,6 +2131,18 @@ local function onUpdate(dtReal, dtSim)
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
     roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor)
+    if gov.allowUrgent then
+      local function urgentRemaining()
+        local count = 0
+        if trees.urgentCount then count = count + (trees.urgentCount() or 0) end
+        if roads.urgentCount then count = count + (roads.urgentCount() or 0) end
+        return count
+      end
+      if gov:allowUrgent(urgentRemaining) then
+        if roads.stepUrgent then roads.stepUrgent() end
+        if trees.stepUrgent then trees.stepUrgent() end
+      end
+    end
     gasstations.update(gov)
     t = mark('roads', t)
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
@@ -2170,6 +2192,10 @@ M._devbuild = require('beamngEarth/devbuild')    -- the development build's noti
 M._pacer = require('beamngEarth/framepacer')    -- even frame pacing (fields: the main chunk's 200-local limit)
 M._paceClock = stopwatch.clock()
 local function onPreRender(dtReal, dtSim)
+  local pl = st and st.player
+  if M.shadowctl and M.shadowctl.applyGlobalProfile then
+    pcall(M.shadowctl.applyGlobalProfile, (pl and pl.speed) or 0, gov, dtReal)
+  end
   -- even frame pacing (framepacer.lua): our level, playing (not paused, not loading), not BeamMP, the setting on
   local now = M._paceClock()
   if M._paceLast then
@@ -2278,6 +2304,7 @@ local function onClientPreStartMission(levelPath)
 end
 
 local function onClientEndMission()
+  if M.shadowctl and M.shadowctl.restore then pcall(M.shadowctl.restore) end
   notePlayerPos(true)
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
@@ -2312,6 +2339,8 @@ end
 
 local function onExtensionLoaded()
   log('I', 'beamngEarth', 'beamngEarth_core loaded')
+  collectgarbage('setpause', 120)
+  collectgarbage('setstepmul', 200)
   groundcover.enginePatch(false)    -- a flag a crashed game left: stock until our level starts
   -- the level select's spawn points: the saved places (levelinfo.lua), from the main menu on
   pcall(places.list)
@@ -2336,6 +2365,7 @@ end
 M.onFilesChanged = onFilesChanged
 
 local function onExtensionUnloaded()
+  if M.shadowctl and M.shadowctl.restore then pcall(M.shadowctl.restore) end
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
   levelinfo.unhookSpawnPois()

@@ -204,17 +204,20 @@ end
 -- block drawn (detail mode), screenshots after a forced redraw were pixel-identical with and without, the redraw
 -- itself as dear (PC 8.4 / 7.7 ms vs 8.4 / 7.5), the floor of Yosemite Valley sunlit near sunset either way; trees,
 -- roads, buildings and the far meshes cast the shadows.
-local function getOrCreate()
+local function getOrCreate(opts)
   local tb = M.get()
   if tb then return tb end
   ensureMaterials()
   M.applyBaseSize(wantBase)      -- (the settings' ground photo size, before the block: it sizes its base textures)
-  tb = TerrainBlock()
+  local prep = TerrainBlock()
+  tb = prep
   tb:setName(M.NAME)
   -- the resolution the engine bakes the block's base colour at (default 1024; West Coast USA's block 2048;
   -- set before registerObject: the engine sizes it when the block is added)
   tb:setField('baseTexSize', 0, tostring(M.BASE_TEX_SIZE))
   tb:setField('castShadows', 0, '0')     -- (no sun shadows: see above)
+  prep:setField('hidden', 0, 'true')
+  if prep.setHidden then prep:setHidden(true) end
   tb:registerObject(M.NAME)
   tb.canSave = false
   -- importMaps keeps its .ter data under this folder; /temp is writable and outside any level.
@@ -222,7 +225,10 @@ local function getOrCreate()
   -- v1.5 terrain materials need the block to name its TerrainMaterialTextureSet
   -- (terrainGenerator.lua:418, editor/terrainEditor.lua:1280).
   tb:setField('materialTextureSet', 0, M.TEXTURE_SET)
-  scenetree.MissionGroup:addObject(tb)
+  if (opts and opts.hidden == true) or not renderEnabled then
+    pcall(prep.setRenderEnabled, prep, false)
+  end
+  scenetree.MissionGroup:addObject(prep)
   local ok, err = pcall(function()
     tb:addMaterial(M.MATERIAL, -1)
     tb:updateMaterial(0, M.MATERIAL)
@@ -358,6 +364,8 @@ function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   end
   tb:setField('castShadows', 0, '0')     -- (no sun shadows: kept across imports, set again to be sure)
   tb:setPosition(vec3(x, y, z))
+  tb:setField('hidden', 0, 'false')
+  if tb.setHidden then tb:setHidden(false) end
   applyRender(tb) -- mesh mode: hidden again after every import
   if base ~= nil then M.setBase(base or nil, baseSize) end
   return true
@@ -428,6 +436,8 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   M.slots = slots
   if base ~= nil then baseNow = base or nil end
   M.swaps = (M.swaps or 0) + 1
+  tb:setField('hidden', 0, 'false')
+  if tb.setHidden then tb:setHidden(false) end
   applyRender(tb)
   -- Windows: every slot rebound after the swap again, as 1.5.4 did (~18 ms more per swap; REBIND_AFTER_SWAP).
   if base ~= nil and M.REBIND_AFTER_SWAP then M.setBase(base or nil, baseSize) end

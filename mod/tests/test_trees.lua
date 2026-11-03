@@ -46,8 +46,8 @@ end
 local trees = require('beamngEarth/trees')
 trees.EVERY_N = 1               -- (every update works here; the batching is tested below)
 -- (no time budget, no spare Forests: both tested at the end)
-local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
-trees.FRAME_MS, trees.POOL_SPARE = math.huge, 0
+local FRAME_MS, POOL_SPARE, FIRSTS_PER_FRAME = trees.FRAME_MS, trees.POOL_SPARE, trees.FIRSTS_PER_FRAME
+trees.FRAME_MS, trees.POOL_SPARE, trees.FIRSTS_PER_FRAME = math.huge, 0, math.huge
 local function count() local n = 0; for _ in pairs(items) do n = n + 1 end; return n end
 
 -- the variant: a height inside its range, scaled to it
@@ -112,6 +112,9 @@ trees.update(1, { x = 50, y = 50 })
 trees.onDrop({ anchorId = 1, key = '0_0' })
 trees.update(1, { x = 50, y = 50 })
 T.check(count() == 0 and trees.status().tiles == 0 and forests == 1, 'dropped: its items removed, its Forest kept')
+for _, o in pairs(S.objects) do
+  if o.class == 'Forest' then T.check(o.hidden == true, 'released empty Forest is hidden in pool') end
+end
 T.check(trees.forestName(3) == 'bngEarthForest_3', 'pool Forests are numbered')
 T.check(trees.typeName('/a/b-c', true) == 'bngEarthTree__a_b_c' and trees.typeName('/a/b-c') == 'bngEarthTree__a_b_c_n',
   'an item type per shape and solidity')
@@ -124,6 +127,9 @@ end
 trees.onTile({ anchorId = 1, key = '0_0', path = '/t/v.json', n = 100 }, 1)
 trees.update(1, { x = 50, y = 50 })
 T.check(count() == 100 and forests == 1, 'the next tile reuses the empty Forest')
+for _, o in pairs(S.objects) do
+  if o.class == 'Forest' then T.check(o.hidden == false, 'reused Forest is unhidden') end
+end
 trees.update(2, { x = 50, y = 50 })
 T.check(count() == 0, 'another anchor: removed')
 trees.onTile({ anchorId = 2, key = '0_0', path = '/t/v.json', n = 100 }, 2)
@@ -447,6 +453,43 @@ do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1,
   T.check(trees.isBarrier('guardrail_back_end') and not trees.isBarrier('deciduous') and not trees.isBarrier(nil),
     'guard rails are barriers, trees not')
 end
+
+-- per-type shadowNullDetailSize (solid datablock = 35, non-solid datablock = 150)
+do
+  local sawSolid35, sawNonSolid150 = false, false
+  for _, o in pairs(S.objects) do
+    if o.class == 'TSForestItemData' and o.fields then
+      if o.fields.collidable == '1' and o.fields.shadowNullDetailSize == '35' then
+        sawSolid35 = true
+      elseif o.fields.collidable == '0' and o.fields.shadowNullDetailSize == '150' then
+        sawNonSolid150 = true
+      end
+    end
+  end
+  T.check(sawSolid35, 'solid TSForestItemData datablock gets shadowNullDetailSize 35')
+  T.check(sawNonSolid150, 'non-solid TSForestItemData datablock gets shadowNullDetailSize 150')
+end
+
+-- Provence & Mediterranean groups (cypress, vineyard, vineyard_block, lavender, olive)
+do
+  local s1, _ = trees.pick('cypress', 1.65, 0.2)
+  local s2, _ = trees.pick('cypress', 7.5, 0.2)
+  local s3, _ = trees.pick('vineyard', 1.71, 0.2)
+  local s4, _ = trees.pick('vineyard_block', 1.86, 0.2)
+  local s5, _ = trees.pick('lavender', 0.85, 0.2)
+  local s6, _ = trees.pick('olive', 4.0, 0.2)
+  local s7, _ = trees.pick('olive', 11.0, 0.2)
+  T.check(s1:find('cypress_hedge_3m') ~= nil, 'short cypress picks cypress_hedge_3m')
+  T.check(s2:find('cypress_tree') ~= nil, 'tall cypress picks cypress_tree')
+  T.check(s3:find('grape_vine$') ~= nil, 'vineyard picks grape_vine')
+  T.check(s4:find('grape_vine_group') ~= nil, 'vineyard_block picks grape_vine_group')
+  T.check(s5:find('bne_lavender_row') ~= nil, 'lavender picks bne_lavender_row')
+  T.check(s6:find('olive') ~= nil, '4m olive group picks olive tree')
+  T.check(s7:find('holm_oak') ~= nil, '11m olive group picks holm_oak')
+  T.check(trees.NO_COLLIDE.vineyard and trees.NO_COLLIDE.vineyard_block and trees.NO_COLLIDE.lavender,
+    'vineyards and lavender rows do not collide')
+end
+
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 -- a pass with nothing to do is skipped (the game speed pulsing, 2026-10-28): until a tile comes or goes, the car moves
 -- RECHECK_M, or RECHECK_S goes by

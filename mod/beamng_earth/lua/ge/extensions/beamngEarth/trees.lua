@@ -30,7 +30,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, vineyard = 350, vineyard_block = 450, lavender = 350, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -50,7 +50,15 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.MAX_FAR_DIST = 1600
+M.NEAR_DIST = 550
+M.COLLIDE_DIST = 120
+M.COLLIDE_BUILD_AHEAD = 140
+M.COLLIDE_DROP_DIST = 150
+M.RECENTER_STEP = 60
+M.SOLID_SHADOW_NULL_PX = 35
+M.NONSOLID_SHADOW_NULL_PX = 150
+M.NO_COLLIDE = { shrub = true, desert_shrub = true, vineyard = true, vineyard_block = true, lavender = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -102,7 +110,8 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
   },
   conifer = {
-    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { IT .. 'trees/trees_italy/maritime_pine', 11.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
     { IT .. 'trees/trees_italy/scots_pine', 18.9 },
@@ -206,6 +215,24 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
+  -- Provence & Mediterranean vegetation (server/ign_fr.py + server/vegetation.py): cypress trees and Mistral windbreak
+  -- hedges (BD TOPO haie), vineyard rows and multi-row blocks (IGN RPG VRC/VRT & Overture vineyard), lavender furrow
+  -- rows (IGN RPG LAV), and olive groves / holm oaks (IGN RPG OLI/TRU & Mediterranean scrub)
+  cypress = {
+    { IT .. 'trees/trees_italy/cypress_hedge_3m', 1.65 }, { IT .. 'trees/trees_italy/cypress_tree', 7.0 },
+  },
+  vineyard = {
+    { IT .. 'trees/trees_italy/grape_vine', 1.71 },
+  },
+  vineyard_block = {
+    { IT .. 'trees/trees_italy/grape_vine_group', 1.86 },
+  },
+  lavender = {
+    { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lavender_row', 0.74 },
+  },
+  olive = {
+    { IT .. 'trees/trees_italy/olive', 4.0 }, { IT .. 'trees/trees_italy/holm_oak', 11.4 },
+  },
 }
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
 -- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.
@@ -240,6 +267,7 @@ end
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth',
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
   WCA .. 'trees/trees_conifer', WCA .. 'trees/trees_oak', WCA .. 'trees/trees_eucalyptus', WCA .. 'trees/trees_palm',
@@ -288,14 +316,25 @@ local lastPass = nil    -- { anchor, x, y, vx, vy, clock } of the last full pass
 local ghostSince = nil               -- since the last rebase that left ghost tiles (M.transform)
 local types = {}        -- "shape" / "shape#n" (not solid) -> TSForestItemData
 local pop = {}          -- shape -> its items in the level
+local everMade = {}     -- shape -> true once an item of it was made in this level (allow: FIRSTS_PER_FRAME)
 local ready = false
 M.made, M.removed, M.errors = 0, 0, 0
 M.unknownGroups = {}      -- groups seen without a CATALOG entry (logged once each)
 
-local pool = {}          -- ids of empty Forests to reuse
+local pool = {}          -- ids of empty Forests to reuse (kept hidden while pooled)
+local forestHidden = {}  -- forestId -> true while hidden in pool
 local forestCount = 0
 local newForests = 0     -- Forests made this tree frame (FORESTS_PER_FRAME)
 M.forests = 0
+
+local function setForestHidden(id, f, hidden)
+  local isHidden = (forestHidden[id] == true)
+  if isHidden == hidden then return end
+  forestHidden[id] = hidden or nil
+  if not f then f = scenetree.findObjectById(id) end
+  if not f then return end
+  if f.setHidden then f:setHidden(hidden) else f.hidden = hidden end
+end
 
 -- Groups the player turned off (settings: Rocks off, GitHub #5): not shown, removed where made. (After
 -- MihneaTeodorStoica's PR #321.)
@@ -408,14 +447,19 @@ local function forest(t)
     if newForests >= M.FORESTS_PER_FRAME then return nil end
     f = newForest()
   end
-  t.forestId = f:getID()
+  local id = f:getID()
+  setForestHidden(id, f, false)
+  t.forestId = id
   return f
 end
 
--- An emptied tile's Forest back to the pool.
+-- An emptied tile's Forest back to the pool (hidden while pooled).
 local function releaseForest(t)
-  if t.forestId then pool[#pool + 1] = t.forestId end
+  local id = t.forestId
+  if not id then return end
   t.forestId = nil
+  setForestHidden(id, nil, true)
+  pool[#pool + 1] = id
 end
 
 -- The stock boom's lamps (instanced_trafficlight) light by the object's instance colour, and a forest item has none:
@@ -483,6 +527,8 @@ local function itemType(shape, solid)
     d:setField('shapeFile', 0, shape .. '.dae')
     d:setField('collidable', 0, solid and '1' or '0')
     d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local shadowNullPx = solid and (M.SOLID_SHADOW_NULL_PX or 35) or (M.NONSOLID_SHADOW_NULL_PX or 150)
+    d:setField('shadowNullDetailSize', 0, tostring(shadowNullPx))
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end
@@ -599,6 +645,14 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local d = itemType(shape, vienna.faceSolid(group, solid))
   if not d then M.errors = M.errors + 1; return nil end
   if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
+  if not itemVec.set and type(itemVec) == 'table' then
+    local mt = getmetatable(itemVec)
+    if mt then mt.set = function(v, x, y, z) v.x, v.y, v.z = x, y, z end end
+  end
+  if not itemPos.set and type(itemPos) == 'table' then
+    local mt = getmetatable(itemPos)
+    if mt then mt.set = function(v, x, y, z) v.x, v.y, v.z = x, y, z end end
+  end
   local m = itemMat
   -- setFromEuler turns clockwise (the engine's headings): a row's yaw (counter-clockwise from +x, the server's) is
   -- given negated. Positive, every prop was mirrored about the x axis: doors on north-south walls backwards, on
@@ -607,11 +661,11 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   local yawAdd = 0
   if t.geo then             -- (made where the tile's placement put it when its first items were made: madePl)
     local x, y, z = geotile.apply(t.madePl, f[b + F_X], f[b + F_Y], f[b + F_Z])
-    itemPos:set(x, y, z)
+    if itemPos.set then itemPos:set(x, y, z) else itemPos.x, itemPos.y, itemPos.z = x, y, z end
     yawAdd = t.madeYaw or geotile.yawOf(t.madePl)
     t.madeYaw = yawAdd
   else
-    itemPos:set(f[b + F_X], f[b + F_Y], f[b + F_Z])
+    if itemPos.set then itemPos:set(f[b + F_X], f[b + F_Y], f[b + F_Z]) else itemPos.x, itemPos.y, itemPos.z = f[b + F_X], f[b + F_Y], f[b + F_Z] end
   end
   if t.s >= 17 and type(f[b + 17]) == 'number' then
     -- Guardrails carry their orthonormal world-space basis; local X follows the road chord. (A geotile's: in its
@@ -622,12 +676,14 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
       if r then
         vx, vy, vz = r[1] * vx + r[2] * vy + r[3] * vz, r[4] * vx + r[5] * vy + r[6] * vz, r[7] * vx + r[8] * vy + r[9] * vz
       end
-      itemVec:set(vx, vy, vz); m:setColumn(c, itemVec)
+      if itemVec.set then itemVec:set(vx, vy, vz) else itemVec.x, itemVec.y, itemVec.z = vx, vy, vz end
+      m:setColumn(c, itemVec)
     end
     m:setPosition(itemPos)
   else
     -- Existing props use a flat yaw (counter-clockwise in server coordinates).
-    itemVec:set(0, 0, -math.rad(f[b + F_YAW] + yawAdd))
+    local yaw = -math.rad(f[b + F_YAW] + yawAdd)
+    if itemVec.set then itemVec:set(0, 0, yaw) else itemVec.x, itemVec.y, itemVec.z = 0, 0, yaw end
     m:setFromEuler(itemVec)
     m:setPosition(itemPos)
   end
@@ -635,13 +691,15 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   if not ok then M.errors = M.errors + 1; return nil end
   local body = vienna.body(group)
   if body then
-    local pair = vienna.addBody(fd, it, spelled(body, variant), m, sc, solid, itemType)
+    local pair = vienna.addBody(fd, it, spelled(body, variant), scratchMat, sc, solid, itemType)
     if pair then it = pair else M.errors = M.errors + 1 end
   end
   M.made = M.made + 1
   pop[shape] = (pop[shape] or 0) + 1
+  everMade[shape] = true
   return it
 end
+M.addBatch = makeItem
 
 local function removeItem(fd, it, shape)
   if not vienna.remove(fd, it) then pcall(function() fd:removeItem(it) end) end
@@ -650,10 +708,18 @@ local function removeItem(fd, it, shape)
 end
 
 -- This frame's shapes: may an item of this shape change now? (see SHAPE_ITEMS_PER_FRAME)
+-- FIRSTS_PER_FRAME and everMade adapted from mpsteppe (https://github.com/mpsteppe/BeamNG.Earth-Perf):
+-- caps first-time C++ shape loads to 1 per frame while keeping everMade across anchor rebases.
 local touched, touchedItems = {}, 0
+M.FIRSTS_PER_FRAME = 1
+local firsts = 0
 local function allow(shape)
   if touched[shape] then return true end
   local n = pop[shape] or 0
+  if n == 0 and not everMade[shape] then
+    if firsts >= M.FIRSTS_PER_FRAME then return false end
+    firsts = firsts + 1
+  end
   if next(touched) ~= nil and touchedItems + n > M.SHAPE_ITEMS_PER_FRAME then return false end
   touched[shape], touchedItems = true, touchedItems + n
   return true
@@ -1018,13 +1084,31 @@ function M.update(anchorId, player, view, frameMs)
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
-  touched, touchedItems = {}, 0
+  touched, touchedItems, firsts = {}, 0, 0
   releaseGhosts(anchorId, player)
   bandCapsUpdate()
-  for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)
+  local dropOrder = nil
+  for li = 1, #tileList do
     local key = tileList[li]
     local t = tiles[key]
     if (not t.geo and t.anchor ~= anchorId and not t.ghost) or t.drop or t.flush then
+      local dx = player and (math.abs(player.x - t.cx) - 128) or 0
+      local dy = player and (math.abs(player.y - t.cy) - 128) or 0
+      local dist = player and math.sqrt(math.max(dx, 0)^2 + math.max(dy, 0)^2) or 0
+      if not dropOrder then dropOrder = {} end
+      dropOrder[#dropOrder + 1] = { key = key, t = t, d = dist }
+    end
+  end
+  if dropOrder then
+    if #dropOrder > 1 then
+      table.sort(dropOrder, function(a, b)
+        local pa = a.d or 0
+        local pb = b.d or 0
+        return pa > pb
+      end)
+    end
+    for _, entry in ipairs(dropOrder) do
+      local key, t = entry.key, entry.t
       local f = t.forestId and scenetree.findObjectById(t.forestId)
       local fd = f and f:getData()
       local left = false
@@ -1205,14 +1289,23 @@ function M.update(anchorId, player, view, frameMs)
       t.shown = want
       t.band = band
       t.near = near
-      if skipped then t.pending = true; t.scan = { from = skipped, want = want, band = band, near = near }; dirty = true end
+      if skipped then
+        t.pending = true
+        t.scan = { from = skipped, want = want, band = band, near = near }
+        dirty = true
+      elseif want == 0 and t.forestId and next(t.made) == nil then
+        releaseForest(t)
+      end
     end
     ::nexttile::
   end
   finish()
   -- nothing changed this frame: a spare Forest made for the pool (its ~9 ms alone, not in a frame of items)
   if budget == M.PER_FRAME * M.EVERY_N and newForests == 0 and #pool < M.spareWanted(frameMs) then
-    pool[#pool + 1] = newForest():getID()
+    local sf = newForest()
+    local sid = sf:getID()
+    setForestHidden(sid, sf, true)
+    pool[#pool + 1] = sid
   end
 end
 
@@ -1228,8 +1321,29 @@ function M.clear()
 end
 
 -- Level end: the level deletes its objects itself.
+function M.urgentCount() return 0 end
+function M.stepUrgent() end
+M.ensureItemData = itemType
+
+function M.adoptExistingForests()
+  local mg = scenetree and scenetree.MissionGroup
+  if not mg or not mg.size then return 0 end
+  pool, forestHidden, forestCount = {}, {}, 0
+  for i = 0, mg:size() - 1 do
+    local o = mg:at(i)
+    if o and o.getClassName and o:getClassName() == 'Forest' then
+      local id = o:getID()
+      setForestHidden(id, o, true)
+      pool[#pool + 1] = id
+      forestCount = forestCount + 1
+    end
+  end
+  M.forests = forestCount
+  return #pool
+end
+
 function M.reset()
-  tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
+  tiles, tileList, tileAt, types, ready, pool, forestHidden, forestCount, pop, everMade = {}, {}, {}, {}, false, {}, {}, 0, {}, {}
   dirty, lastPass = true, nil
 end
 

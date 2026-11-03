@@ -132,10 +132,18 @@ files['/t/wc.json'] = '{ chunks = { }, walk = { shape = "/t/walks_2_6_6.cdae", p
   'walkcol = { shape = "/t/walkcol_2_6_6.cdae", pos = { 0, 0, 0 } } }'
 roads.onTile({ anchorId = 2, key = '6_6', path = '/t/wc.json', n = 0 }, 2)
 roads.update(gov, 2)
-local kinds = {}
-for _, o in ipairs(statics()) do kinds[o.fields.shapeName] = o.fields.collisionType end
+local kinds, renderOff, hiddenFlags = {}, {}, {}
+for _, o in ipairs(statics()) do
+  kinds[o.fields.shapeName] = o.fields.collisionType
+  renderOff[o.fields.shapeName] = (o.renderEnabled == false or o.fields.isRenderEnabled == 'false')
+  hiddenFlags[o.fields.shapeName] = (o.hidden == true or o.fields.hidden == 'true')
+end
 T.check(kinds['/t/walks_2_6_6.cdae'] == 'None' and kinds['/t/walkcol_2_6_6.cdae'] == 'Collision Mesh',
   'walkcol collides, the drawn sidewalks only render')
+T.check(renderOff['/t/walkcol_2_6_6.cdae'] == true and not renderOff['/t/walks_2_6_6.cdae'],
+  'collision-only walkcol mesh disables rendering so shadow cascades skip it')
+T.check(not hiddenFlags['/t/walkcol_2_6_6.cdae'],
+  'collision-only walkcol mesh must not set hidden=true (which removes it from be:reloadCollision)')
 roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 T.check(#statics() == 0, 'walkcol dropped with its tile')
@@ -412,19 +420,48 @@ end
 do
   roads.reset()
   local made = {}
-  for _, name in ipairs({ 'road_asphalt_2lane', 'm_gm_concrete_plain', 'curbs' }) do
+  for _, name in ipairs({ 'road_asphalt_2lane', 'm_gm_concrete_plain', 'bridge_deck' }) do
     local m = createObject('Material'); m:registerObject(name); m:setField('translucent', 0, '1'); made[name] = m
   end
   S.calls.reload_Material = 0
   files['/t/mat.json'] = '{ chunks = { ' .. chunk(0) .. ' } }'
   roads.onTile({ anchorId = 7, key = '0_0', path = '/t/mat.json', n = 1 }, 7)
   roads.update(gov, 7)
-  local a, c, k = made.road_asphalt_2lane, made.m_gm_concrete_plain, made.curbs
+  local a, c, k = made.road_asphalt_2lane, made.m_gm_concrete_plain, made.bridge_deck
   T.check(a:getField('translucent') == '0' and a:getField('castShadows') == '0', 'asphalt: opaque, no shadow')
   T.check(c:getField('castShadows') == '0' and c:getField('translucent') == '1', 'concrete streets: no shadow')
-  T.check(k:getField('castShadows') == nil, 'the curbs keep their shadow')
+  T.check(k:getField('castShadows') == nil, 'the deck keeps its shadow')
   T.check(S.calls.reload_Material == 2, 'one reload a changed material')
   for _, m in pairs(made) do m:delete() end
+  roads.reset()
+end
+
+-- R6: M.NO_SHADOW applied once per level load and only reloads changed materials
+do
+  roads.reset()
+  local mCurbs = createObject('Material'); mCurbs:registerObject('curbs'); mCurbs:setField('castShadows', 0, '1')
+  local mLine = createObject('Material'); mLine:registerObject('line_white'); mLine:setField('castShadows', 0, '0')
+  S.calls.reload_Material = 0
+  S.calls.flush_Material = 0
+  S.calls.loadJsonMaterialsFile = 0
+  roads.onTile({ anchorId = 5, key = '0_0', path = '/t/a.json', n = 2 }, 5)
+  roads.update(gov, 5)
+  T.check(mCurbs:getField('castShadows', 0) == '0' and mLine:getField('castShadows', 0) == '0',
+    'NO_SHADOW sets castShadows=0 on stock road/sidewalk materials')
+  T.check(S.calls.reload_Material == 1 and S.calls.flush_Material == 1,
+    'NO_SHADOW only flushes/reloads materials whose castShadows changed')
+  local jsonLoads = S.calls.loadJsonMaterialsFile
+  -- Subsequent tiles in the same level load do not re-apply loadMaterials()
+  roads.onTile({ anchorId = 5, key = '1_0', path = '/t/b.json', n = 1 }, 5)
+  roads.update(gov, 5)
+  T.check(S.calls.loadJsonMaterialsFile == jsonLoads and S.calls.reload_Material == 1,
+    'NO_SHADOW applied once per level load, not per tile')
+  -- Even after a level reset, already-updated Material objects are not reloaded again
+  roads.reset()
+  roads.onTile({ anchorId = 6, key = '0_0', path = '/t/b.json', n = 1 }, 6)
+  roads.update(gov, 6)
+  T.check(S.calls.reload_Material == 1, 'idempotent across level reload when castShadows is already 0')
+  mCurbs:delete(); mLine:delete()
   roads.reset()
 end
 T.done('test_roads')
