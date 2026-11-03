@@ -157,6 +157,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'cliff_height.png')}{SEP}.",  # (cliffmaterial.HEIGHT_PATH)
            "--add-data", f"{os.path.join(server, 'cliff_cut_height.png')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'cliff_arid_cut_height.png')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'cliff_canyon_height.png')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'oil_wells.npz')}{SEP}.",  # (oilwells.PATH)
            "--add-data", f"{os.path.join(server, 'refineries.npz')}{SEP}.",  # (industry.PATH)
            # (overture.BUNDLED: the pinned release's STAC index, tools/build_stac_index.py)

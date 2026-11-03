@@ -1,8 +1,9 @@
 """Low-frequency mineral colour from cached regional imagery, without downloads.
 
 Sampling is on a shared geographic lattice so neighbouring cliff tiles receive
-the same tint. Missing/vegetated/wet samples retain the biome fallback. Raw
-imagery is used only for colour, never as shading or surface geometry.
+the same tint. Near cliffs infer mineral hue and reject photo shadows; distant
+cliffs use the blurred terrain photo including its broad baked shading. Neither
+path changes surface geometry or initiates imagery downloads.
 """
 from functools import lru_cache
 from pathlib import Path
@@ -103,3 +104,71 @@ def sample(cache_dir, lat, lon, *, grid_m=GRID_M, radius_m=RADIUS_M):
         out += w[..., None]*field[j+dj, i+di]
         weight += w
     return out/np.maximum(weight[..., None], 1e-6)
+
+
+def linear(rgb):
+    """sRGB [0,1] to linear light for material and vertex-colour multiplication."""
+    rgb = np.asarray(rgb, float)
+    return np.where(rgb <= .04045, rgb/12.92, ((rgb+.055)/1.055)**2.4)
+
+
+def srgb(rgb):
+    """Linear light to sRGB; retain HDR values for material-factor headroom."""
+    rgb = np.maximum(np.asarray(rgb, float), 0)
+    return np.where(rgb <= .0031308, rgb*12.92, 1.055*rgb**(1/2.4)-.055)
+
+
+def material_tint(rgb_linear, reference, amount, count=None, *, hue_amount=None, exposure=1.0):
+    """Blend satellite light/color with a rock's mean, returning sRGB RGBA8 for the PBR vertex input.
+
+    Unlike near mineral inference, this intentionally preserves photo shadows.
+    No image means a neutral tint cancelling the material's extra headroom.
+    """
+    import cliffmaterial as cm
+    reference = np.asarray(reference, float)
+    if rgb_linear is None:
+        gain = np.full((count, 3), 1/cm.SATELLITE_HEADROOM)
+    else:
+        rgb = np.asarray(rgb_linear, float)
+        target = (1-amount)*reference + amount*rgb
+        if hue_amount is not None:
+            # A full per-channel white balance neutralizes red beds but pushes
+            # their less-red pale bands green. Transfer luminance independently
+            # and only a fraction of chromaticity, preserving the mineral palette.
+            weights = np.array((.2126, .7152, .0722))
+            ref_light = reference @ weights
+            light = np.maximum(target @ weights, 1e-8)
+            chroma = (target/light[...,None])/(reference/ref_light)
+            chroma = np.clip(chroma, .5, 2.0)**hue_amount
+            gain = chroma*(light/(reference*chroma @ weights))[...,None]
+        else:
+            gain = target/reference
+        gain *= exposure/cm.SATELLITE_HEADROOM
+    colors = np.full((*gain.shape[:-1], 4), 255, np.uint8)
+    # BeamNG defaultMat.hlsl decodes vertex RGB with toLinearColor().
+    # Encode our linear gain here, otherwise hue ratios get squared in-game.
+    gain = np.clip(gain, 0, 1)
+    encoded = srgb(gain)
+    colors[..., :3] = np.rint(encoded*255).astype(np.uint8)
+    return colors
+
+
+def canyon_tint(biomes, rgb=None):
+    """A restrained regional hue blend for near canyon rock, without photo shade."""
+    import cliffmaterial as cm
+    reference = linear(cm.CANYON_MEDIAN_SRGB)*cm.CANYON_COLOR_FACTOR
+    shape = np.shape(biomes)
+    target = np.broadcast_to(reference, (*shape, 3)).copy()
+    if rgb is not None:
+        rgb = np.asarray(rgb, float)
+        if rgb.shape != target.shape or not np.isfinite(rgb).all():
+            raise ValueError('terrain colours must be finite RGB, one per point')
+        rgb = np.clip(rgb, 0, 255)
+        lum = rgb @ np.array((.2126, .7152, .0722))
+        valid = (lum > 35) & (rgb[...,1] < rgb[...,0]*1.12) & (rgb[...,2] < rgb[...,0]*1.12)
+        # Inherit chromaticity, but normalize exposure: near geometry receives
+        # real sun/cast shadows, so satellite shadows must not be painted on it.
+        stone = .7*rgb + .3*lum[...,None]
+        stone *= (155/np.maximum(lum,1))[...,None]
+        target = np.where(valid[...,None], linear(np.clip(stone/255,0,1)), target)
+    return material_tint(target, reference, .45, hue_amount=.30)

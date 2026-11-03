@@ -832,9 +832,9 @@ do -- the window gets its view only while it is shown: it is hidden by default (
   ui.draw, ui.visible = draw, vis0
 end
 do -- Changing only cliff detail must survive graphics-message deduplication.
-  local level = 'normal'
+  local level, distant = 'normal', true
   beamngEarth_settings.serverGraphics = function()
-    return {lodScale=1, treeScale=1, buildingScale=1, photoPx=2048, viewM=0, cliffDetail=level}
+    return {lodScale=1, treeScale=1, buildingScale=1, photoPx=2048, viewM=0, cliffDetail=level, distantCliffFaces=distant}
   end
   for _,v in ipairs({'normal', 'low', 'extreme', 'medium', 'high', 'normal'}) do
     level = v
@@ -842,6 +842,12 @@ do -- Changing only cliff detail must survive graphics-message deduplication.
     T.check(core.sendGraphics(), 'cliff detail-only change sent: '..v)
     T.check(last('graphics').cliffDetail == v, 'cliff enum on the wire: '..v)
     T.check(not core.sendGraphics() and #received('graphics') == before+1, 'unchanged quality deduped')
+  end
+  for _,v in ipairs({false,true,false}) do
+    distant=v
+    T.check(core.sendGraphics(),'distant cliff-only change sent')
+    T.check(last('graphics').distantCliffFaces==v,'distant cliff boolean on the wire')
+    T.check(not core.sendGraphics(),'unchanged distant cliff switch deduped')
   end
 end
 core.reconnect()

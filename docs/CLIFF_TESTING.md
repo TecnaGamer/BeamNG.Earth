@@ -164,3 +164,197 @@ luajit mod/tests/test_graphics.lua
 luajit mod/tests/test_settings.lua
 luajit mod/tests/test_roads.lua
 ```
+
+
+## Distant natural cliffs and canyon variant (2026-11-02)
+
+Distant CDAE terrain (levels above zero, sampled at up to 128 m spacing) now
+uses wall-projected rock on steep exposed triangles. `farcliffs.py` preserves
+all positions, triangle winding, normals, holes and skirts. It duplicates
+vertices only at material/projection boundaries. Triangle count is unchanged;
+there are additional material draws and some vertex memory, so this is not
+zero rendering cost. The coarsest horizon, DAE fallback and near terrain keep
+the existing imagery path. Terrain detail and its presets control distant
+geometry; Cliff detail continues to control generated nearby rock skins.
+Nearby cliff faces toggles the additional skins; distant rock remains terrain.
+
+Detection: face slope >= 48 degrees, vertical drop >= 8 m, positive XY area
+(excludes skirts). Cached shrub, grass and bare-rock land cover qualify;
+forest, crops, built-up land, snow, wetlands and water do not. Land cover is
+read with `fetch=False`: no wider download workload. Unknown cover is allowed
+only in the explicit Colorado Plateau appearance region. This keeps broad
+Grand Canyon coverage independent of near-road prefetch without a worldwide
+unknown-land fallback. Classification is an appearance heuristic, not geology.
+
+`cliffmaterial.canyon_region` covers the Grand Canyon and similar Colorado
+Plateau escarpments (including Zion/Canyonlands), excluding El Paso and Austin.
+Near natural faces and distant terrain share the new canyon family. Road cuts
+retain their existing limestone/arid choice. Canyon height and every material
+map share a geographic chart (91.44 x 182.88 m). Source and generation prompt:
+`tools/assets/canyon_generated`; bake via `tools/bake_canyon_material.py`.
+
+Offline measurement: `python tools/preview_far_cliffs.py` uses the usual DEM
+provider/cache and writes `build/grand-canyon-cliffs/coverage.json` and
+`terrain.npz`. A 32.768 km square at 36.14 N, 112.12 W, sampled at 64 m:
+56/64 tiles have cliffs; 67,075 of 425,288 triangles cover about 281.6 square km
+of wall surface; zero triangles added. Material classification/assembly median
+was about 4.1 ms per tile on the development PC before satellite-color sampling
+was added (not an in-game FPS benchmark).
+
+`tools/render_far_cliffs.py` renders an optional Blender preview from those
+outputs. It uses illustrative ground colours, not aerial imagery or BeamNG's
+lighting; it exposes the coarse face-selection boundaries. It is not visual
+acceptance for in-game material matching. Initial implementation was done with
+the game closed; subsequent texture/color fixes were checked in the running
+game from the user-controlled free camera. Coarse face-mask boundaries remain
+visible and need a separate transition/blending pass. No native shape edits
+were used.
+
+Regressions: `test_farcliffs.py`, `test_farfield.py`, `test_surface.py`, existing
+cliff suites, and Lua `test_farfield.lua` / `test_farfield_spares.lua`.
+
+Texture import regression (2026-11-02): BeamNG rejected the original 1254-square
+runtime canyon maps. Bake v3 outputs 1024-square base/normal/roughness maps;
+source remains 1254. Tests now enforce TextureCooker power-of-two dimensions.
+
+### Satellite color and distant baked shadows
+
+Canyon near meshes use the same cached regional imagery sampler as the original
+natural cliffs. Their new tint blends 45% mineral hue with normalized exposure,
+rejecting blue/green/invalid samples; local satellite shadows remain excluded.
+Distant cliff vertices sample the tile's existing satellite texture after a
+48 m Gaussian blur and retain 90% of its broad color/luminance. This includes
+photo shadows and needs no additional texture downloads, GPU textures or
+triangles. Both limestone-style and canyon distant materials use this path.
+
+BeamNG decodes vertex colors and material factors from sRGB. Linear tint gains
+must be encoded before writing RGBA8; the 4x linear material headroom must also
+be encoded, including values above 1. Regression tests decode both and verify
+that their product preserves the intended albedo. Separate `_sat` names keep
+old in-flight shapes compatible with legacy white vertex colors.
+
+Terrain photos interpolate from normal near de-shadowing at L0, through 1/3
+and 2/3 original shading at L1/L2, to full original shading at L3+. A shared
+Imagery render view reuses raw fetch/cache/pools, while isolating finished
+near/far caches and splitting their memory budget. Color matching and seasonal
+processing remain active; interpolation occurs in linear light. Cache keys
+include the shadow blend. With de-shadowing disabled, the original photo path
+is unchanged.
+
+Limitation: asynchronous color-match updates can replace a terrain texture
+while its cliff vertex colors still reflect the build-time photo. They catch
+up on tile regeneration; no loaded native mesh is mutated. The 48 m blur and
+coarse vertex interpolation intentionally discard fine aerial detail.
+
+Validation: 67 Python far-cliff/terrain/shadow tests, the existing 127-test cliff
+harness (2 optional-data skips), and 176 Lua farfield checks. Tests cover color
+variation, shadow retention/exclusion, UV orientation, blur, PBR color-space
+round trips, unchanged triangles/collision and isolated imagery cache results.
+Live reference: `build/grand-canyon-cliffs/in-game-satellite-color.jpg`.
+
+### Warm bands and macro normals (live refinement)
+
+Full RGB white balancing made the less-red pale beds green. Canyon tint now
+transfers luminance separately, with 25% chromaticity correction far / 30% near;
+far rock uses a 0.85 exposure gain to reduce washout. Satellite shadow variation
+is retained. The base-color texture itself is unchanged.
+
+Distant rock now has a shared normal map. Canyon `canyon_far_v3.normal.png`
+combines periodic vertical erosion and source-aligned broad ledges, with quiet
+fine fractures. Macro strength was reduced 20% after the user's live review.
+The 5-30 m structures survive low-resolution mips; nearby displacement/normals
+are unchanged. Other distant rock uses the existing scan flat normal map.
+Cost: one shared normal-map sample per distant rock pixel, no extra geometry.
+18 focused color/shadow/geometry/material regressions pass, including warm pale
+bands under neutral satellite tint, unit normals and macro relief at a 32px mip.
+
+### Larger normals on the farthest cliffs
+
+The existing far normal maps repeat at 2x physical scale on tiles >=3072 m wide
+and 4x on tiles >=6144 m. These LOD proxies cover the nominal 4/8 km rings despite
+latitude-dependent Mercator footprints. Actual view distance follows terrain
+selection; this is not a fixed camera-distance cutoff. The coarsest horizon
+that does not qualify as cliff still keeps its existing photo-only appearance.
+
+Normals use UV1 independently of the unchanged UV0 albedo chart. Scaling the
+absolute geographic chart before wrapping the tile origin preserves neighboring
+phase; terrain vertices retain their existing detail UVs. No new maps, triangles,
+materials or draw calls. Existing LOD crossovers handle changes between scales.
+70 Python checks pass across far-cliff, shadow, farfield and global-tile suites;
+new coverage checks scale thresholds, unchanged albedo/geometry, adjacent tile
+normal phase and finite exported UVs/tangents.
+
+## Distant cliff faces switch (2026-11-02)
+
+Graphics now has `distantCliffFaces`, default on. Low preset disables it;
+Medium, High, Ultra and Extreme enable it. A manual override selects Custom.
+The choice is saved and sent on connect and change in the graphics message.
+Nearby cliff faces, road cuts, scattered rocks and decals stay independent.
+
+Applies to newly loaded tiles; reload the level for a consistent change across
+cliffs already in view. No native shape edits or synchronous world rebuilds.
+Far export retains a photo-only CDAE only where cliff triangles exist. The off
+variant preserves the original terrain triangles, UVs, normals and colors.
+Connections selecting Off receive a fresh pooled shape/material slot; the
+shared authored shape remains untouched. Normal slotsGone tracking releases
+it, photo retexture updates still target each instance's material, and cached
+plain files are pruned with their terrain tile.
+
+Validation: 50 focused Python tests (export, graphics validation, pooled-slot
+isolation/lifetime, protocol agreement); Lua cliff settings30, settings320,
+core307 checks. The broader protocol suite also completed with one optional
+skip; its combined run's test_graphics import-path error was rerun successfully
+with PYTHONPATH=server;server/tests.
+
+
+## Canyon terrain fit and normal width (2026-11-03)
+
+Nearby canyon skins now start from the terrain envelope, with 0.20 m clearance.
+Their albedo/relief chart follows that same base to avoid stretching after fitting.
+The original natural scan contributes 60% of its relief alongside canyon beds.
+Conforming subdivision resolves intermediate height samples on tall faces, with
+shared edges and terrain-checked residual displacement. LODs derive from the
+original mesh and reject terrain penetration rather than compounding inward drift.
+
+The user identified the remaining dense vertical streaks as the normal map.
+Canyon normal repeats are now 3x wider horizontally on an independent UV1 chart;
+vertical scale, albedo, tint, normal strength and geometry remain unchanged by
+this adjustment. Near refinement and all LOD exports preserve UV1/tangents. Far
+normals retain their additional 1x/2x/4x ring scale and geographic phase.
+
+Validation: 85 cliff/far-cliff/detail/LOD tests passed, plus the new near normal
+chart regression covering unchanged geometry/color, refinement, LODs and export.
+Earlier terrain-fit validation: El Paso harness 130 passed, 2 optional skips;
+15 km rebase left no built tiles behind. Live visual tuning still requires user
+review at their chosen lighting; no camera or lighting changes are made.
+
+
+### Near tall-wall correction and diffuse-derived PBR (2026-11-03)
+
+Supersedes the near normal-width adjustment above. Near normals now match the
+approved diffuse UV0. The dedicated `bake_canyon_near_pbr.py` produces 4096-square
+normal, roughness and subtle cavity AO maps from that exact runtime diffuse;
+metallicity remains zero. These are inferred channels, not measured PBR. Broad
+lighting/pigment changes are filtered before differentiating, and cavity AO is
+bounded to avoid baking strong shadows. Albedo and exposure are unchanged.
+
+A 200 m sigmoid wall reproduced 193 folded horizontal edges in the old initial
+normal displacement. Canyon backing now retains XY ordering, refines long wall
+edges first and only then samples the original scan/canyon relief. Displacements
+are terrain-checked and shortened at local orientation flips. Pure canyon tiles
+use 1 m rather than 0.5 m footprint sampling; vertical splits target 2 m. Road
+cuts retain their existing sampling/fit. A regression covers a cut in the halo
+without letting it switch all natural canyon vertices back to the old path.
+
+Mid-distance canyon normal width remains 3x. The >=6144 m tile tier uses 1.5x
+horizontal width instead of 3x, keeping its existing vertical repeat. This is a
+streaming tile tier, not an exact camera-distance boundary.
+
+Live inspection after the first reload found near-mesh 99th-percentile vertical
+edges around 2 m. Temporary overlay hiding confirmed broad grooves also exist in
+the underlying terrain; all overlays were restored, with camera/time untouched.
+The mixed-halo correction was identified and tested after this inspection.
+
+Validation: 92 focused geometry/PBR tests passed; El Paso harness ran 132 tests
+with 2 optional-data skips and passed its 15 km rebase checks. BeamNG cooked
+all three new near maps successfully. Local runtime updated; no release made.

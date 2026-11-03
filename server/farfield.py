@@ -1241,16 +1241,28 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     return Built(pos, P, nrm, uv, planar, np.concatenate(tris), U.astype(np.float32), err, sink, depth, S)
 
 
-def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None):
+def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None,
+                cliff_frame=None, cliff_surface=None, cliff_texture=None, plain_path=None):
     """Write a built tile as .cdae (default) or .dae; returns the file size. textured: the tile
     has its own imagery texture (UV0 = footprint, UV1 = world-locked detail); otherwise UV0 is
     the shared palette coordinate and there is no UV1. tex_px: the texture has a border of
-    imagery.gutter(tex_px) texels around the footprint (UV0 is inset to match)."""
+    imagery.gutter(tex_px) texels around the footprint (UV0 is inset to match).
+    cliff_frame enables wall-projected distant rock without changing the terrain geometry."""
     assert len(built.positions) <= VERTS_MAX
     uvs = built.uvs
     if textured:
         uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
     uvs2 = built.detail_uvs if textured else None
+    if fmt == "cdae" and cliff_frame is not None:
+        import farcliffs
+        rock = farcliffs.geometry(built, cliff_frame, uvs, uvs2, material, cliff_surface, cliff_texture)
+        if rock is not None:
+            if plain_path is not None:
+                # Keep original photo UVs/colors for the per-player off variant.
+                # Never rewrite an already loaded shape to change this setting.
+                cdae.write(plain_path, built.positions, built.tris, normals=built.normals,
+                           uvs=uvs, uvs2=uvs2, material=material, tangent_uvs=built.planar)
+            return cdae.write(path, **rock)
     if fmt == "cdae":
         return cdae.write(path, built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=uvs2,
                           material=material, tangent_uvs=built.planar)
@@ -1304,3 +1316,12 @@ if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "mod", "beamng_earth")
     print("wrote", write_mod_assets(target))
+
+
+# The close surface receives dynamic shadows. Distant terrain is outside that
+# shadow coverage and needs the relief already present in the satellite photo.
+PHOTO_SHADOW_FULL_LEVEL = 3  # L0 near: none; L1/L2 transition; L3 (2 km tiles)+ full
+
+
+def photo_shadow_mix(level):
+    return min(1.0, max(0.0, level/PHOTO_SHADOW_FULL_LEVEL))

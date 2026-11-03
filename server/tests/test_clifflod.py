@@ -38,6 +38,26 @@ class CliffLodTest(unittest.TestCase):
             self.assertEqual(b,boundary(rock.positions,rock.tris)[0])
             self.assertLessEqual(count,2)
 
+    def test_curved_terrain_does_not_punch_through_lods(self):
+        rock = surface(65)
+        rock.tri_materials = None
+        rock.lod_ground = lambda p: 2*p[:,1]+2*np.cos(.6*p[:,0])
+        rock.positions[:,2] = rock.lod_ground(rock.positions)+.35
+        rock.normals = cdae.face_normal_sum(rock.positions, rock.tris)
+        levels = clifflod.levels(rock)
+        self.assertTrue(levels)
+        self.assertLess(len(levels[0][1]['tris']), len(rock.tris)*.6)
+        for _, coarse in levels:
+            vertices = coarse['positions'][coarse['tris']]
+            # Independent, denser barycentric probes than the reducer uses.
+            for a in np.linspace(0,1,9):
+                for b in np.linspace(0,1-a,9):
+                    q = vertices[:,0]*a+vertices[:,1]*b+vertices[:,2]*(1-a-b)
+                    gap = q[:,2]-rock.lod_ground(q)
+                    self.assertGreater(gap.min(), -.04)
+            self.assertEqual(boundary(coarse['positions'],coarse['tris'])[0],
+                             boundary(rock.positions,rock.tris)[0])
+
     def test_opposing_faces_and_holes_never_weld(self):
         rock=surface(35)
         center=rock.positions[rock.tris].mean(axis=1)

@@ -70,6 +70,19 @@ class GraphicsMessageTest(unittest.TestCase):
                            {"type": "graphics", "cliffDetail": invalid}])
             self.assertEqual(c.cliff_detail, "high")
 
+    def test_distant_cliffs_are_boolean_and_per_connection(self):
+        self.assertTrue(self.conn([]).distant_cliff_faces)
+        off=self.conn([{"type":"graphics","distantCliffFaces":False},
+                       {"type":"graphics","cliffDetail":"low"}])
+        self.assertFalse(off.distant_cliff_faces)
+        self.assertTrue(self.conn([]).distant_cliff_faces)
+        for invalid in (None,0,1,"false",[],{}):
+            c=self.conn([{"type":"graphics","distantCliffFaces":False},
+                         {"type":"graphics","distantCliffFaces":invalid}])
+            self.assertFalse(c.distant_cliff_faces)
+        self.assertTrue(self.conn([{"type":"graphics","distantCliffFaces":False},
+                                   {"type":"graphics","distantCliffFaces":True}]).distant_cliff_faces)
+
     def test_scales(self):
         c = self.conn([{"type": "graphics", "lodScale": 2.0, "treeScale": 2.2, "buildingScale": 1.5, "photoPx": 4096}])
         self.assertEqual(c.kfun()(1), 2.0 * self.s.kfun(1))

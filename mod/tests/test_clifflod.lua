@@ -13,6 +13,7 @@ beamngEarth_core = {sendGraphics=function() sent[#sent+1]=settings.serverGraphic
 for p,want in pairs({low='low',medium='medium',high='normal',ultra='high',extreme='extreme'}) do
   settings.setQuality(p)
   T.check(settings.get('cliffDetail')==want,p..' controls cliff detail')
+  T.check(settings.get('distantCliffFaces')==(p~='low'),p..' controls distant cliffs')
   T.check(sent[#sent].cliffDetail==want,p..' sends cliff detail to server')
 end
 settings.setQuality('high')
@@ -25,5 +26,12 @@ T.check(settings.get('quality')=='custom','manual cliff detail changes preset to
 local count=#sent
 settings.set('cliffDetail','bogus')
 T.check(#sent==count and settings.get('cliffDetail')=='medium','invalid setting rejected')
+settings.setQuality('high')
+settings.set('distantCliffFaces',false)
+T.check(settings.get('quality')=='custom','distant cliff override selects Custom')
+T.check(sent[#sent].distantCliffFaces==false,'off boolean reaches graphics')
+T.check(settings.get('cliffFaces')==true,'near cliffs remain enabled')
+settings.set('distantCliffFaces',true)
+T.check(sent[#sent].distantCliffFaces==true,'on boolean reaches graphics')
 T.check(package.loaded['beamngEarth/clifflod']==nil,'no native cliff-edit module loaded')
 T.done('test_clifflod')

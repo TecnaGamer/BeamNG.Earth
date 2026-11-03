@@ -19,6 +19,7 @@ log = logging.getLogger("earthd.cliffrocks")
 
 MATERIAL = "bne_cliff_strata"
 GRID_M = 4.0
+CANYON_RENDER_SUBDIVISIONS = 4  # 1 m footprint; tall walls refine vertically in surface space
 RENDER_SUBDIVISIONS = 8    # 0.5 m terrain/heightmap samples; detection remains coarse
 CLEARANCE_M = 0.35
 EDGE_BLEND_M = 2.0
@@ -26,7 +27,7 @@ TERRAIN_SPAN_M = 2.0 * math.sqrt(2.0)  # diagonal of the game's 2 m terrain cell
 CLEARANCE_STEP_M = 0.25
 CLEARANCE_SEARCH_M = 2 * TERRAIN_SPAN_M
 STEEP_BLEND_DEG = 70.0
-TERRAIN_CLEARANCE_M = 0.05
+TERRAIN_CLEARANCE_M = 0.20  # includes fine-terrain simplification and height quantisation
 CLEARANCE_REFINE_STEPS = 5
 SHORE_DRY_MIN_M = 0.5
 SHORE_CELL_RELIEF_M = 6.0
@@ -309,6 +310,9 @@ class Mesh:
     talus: list = field(default_factory=list)
     decals: list = field(default_factory=list)
     tri_materials: np.ndarray | None = None
+    # Ephemeral build-only sampler; never serialized or sent to the engine.
+    lod_ground: object = field(default=None, repr=False)
+    uvs2: np.ndarray | None = None
 
 
 def _surface_fade(h, touches, dx, dy):
@@ -358,19 +362,33 @@ def _cut_chart(h, envelope, cuts, dx, dy):
     return h + (envelope-h)*fade
 
 
-def displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale=1.0, cuts=None):
+def displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale=1.0, cuts=None, natural_family=cliffmaterial.NATURAL):
     """Shared terrain-following skin, including the actual faded/sunken rim."""
     h = np.asarray(heights, float)
     touches = np.zeros(h.shape, np.uint8)
     for dy, dx in ((0, 0), (0, 1), (1, 0), (1, 1)):
         touches[dy:dy+keep.shape[0], dx:dx+keep.shape[1]] += keep
     dx, dy = float(xs[1]-xs[0]), float(ys[1]-ys[0])
-    gy, gx = np.gradient(h, dy, dx*horizontal_scale)
+    envelope = _terrain_envelope(h, dx*horizontal_scale, dy)
+    # Start canyon faces on a continuous enclosing surface. Lifting individual
+    # buried vertices after normal displacement stretches narrow DEM folds
+    # into long fins; the envelope supplies a coherent crest/toe instead.
+    base = envelope if natural_family == cliffmaterial.CANYON else h
+    gy, gx = np.gradient(base, dy, dx*horizontal_scale)
+    if natural_family == cliffmaterial.CANYON and (cuts is None or not cuts.any()):
+        # Do not displace the sparse vertical endpoints of a dense XY lattice.
+        # Normal offsets can cross adjacent columns at a rounded crest; later
+        # subdivision only reproduces those folds as tall narrow curtains.
+        # Keep a monotone backing surface; add relief AFTER surface refinement.
+        surface = np.stack((*np.meshgrid(xs, ys), base.copy()), axis=-1)
+        surface[...,2] += np.where(touches == 4, TERRAIN_CLEARANCE_M, -EDGE_SINK_M)
+        return surface, gx, gy
     norm = np.sqrt(1 + gx*gx + gy*gy)
     xx, yy = np.meshgrid(xs, ys)
     vb = np.pad(biomes, ((0, 1), (0, 1)), mode='edge')
     across = np.where(np.abs(gx) >= np.abs(gy), yy, xx)
-    relief = cliffmaterial.sample(across/cliffmaterial.WIDTH_M, h/cliffmaterial.HEIGHT_M) * RELIEF_M[vb]
+    relief = cliffmaterial.geometry_sample(across/cliffmaterial.WIDTH_M, base/cliffmaterial.height_span(natural_family),
+                                  family=natural_family) * RELIEF_M[vb]
     if cuts is not None and cuts.any():
         # Shared vertices interpolate the change in relief. There is only one
         # skin, including where a confirmed cutting meets a natural cliff.
@@ -395,11 +413,10 @@ def displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale=1.0, cuts=
     offset = (CLEARANCE_M + relief)*fade
     # Offset in physical metres along the surface normal, never in vertical
     # metres times slope. The latter turns a 3 m scan into ~18 m stretched fins.
-    surface = np.stack((xx, yy, h), axis=-1)
+    surface = np.stack((xx, yy, base), axis=-1)
     displacement = terrain_normal*offset[..., None]
     displacement[..., 0] /= horizontal_scale
     surface += displacement
-    envelope = _terrain_envelope(h, dx*horizontal_scale, dy)
     direction = terrain_normal.copy()
     direction[..., 0] /= horizontal_scale
     # Move outward, never lift vertically by slope (which creates tall fins).
@@ -438,12 +455,19 @@ def displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale=1.0, cuts=
         cut_surface = np.stack((xx, yy, h + offset), axis=-1)
         surface = surface*(1-cut_weight[..., None])+cut_surface*cut_weight[..., None]
     surface[..., 2] -= np.where(touches == 4, 0, EDGE_SINK_M)
+    if natural_family == cliffmaterial.CANYON:
+        # A road cut anywhere in the halo must not switch an entire canyon
+        # tile back to endpoint displacement. Keep the established cut fit
+        # only at vertices actually touched by those cut cells.
+        natural = cut_weight == 0
+        backing = np.stack((xx, yy, base + np.where(touches == 4, TERRAIN_CLEARANCE_M, -EDGE_SINK_M)),axis=-1)
+        surface[natural] = backing[natural]
     return surface, gx, gy
 
 
 def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
          horizontal_scale=1.0, project=None, clip_box=None, surface_data=None, road_segments=None, cuts=None,
-         road_clearance=None):
+         road_clearance=None, natural_family=cliffmaterial.NATURAL):
     """Continuous sampled rock surface with shared positions and smooth normals.
 
     A positive normal clearance separates the interior from the terrain, while
@@ -455,7 +479,7 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     dx, dy = float(xs[1]-xs[0]), float(ys[1]-ys[0])
     xx, yy = np.meshgrid(xs, ys)
     vb = np.pad(biomes, ((0, 1), (0, 1)), mode='edge')
-    surface, gx, gy = (displaced_surface(h, keep, xs, ys, biomes, horizontal_scale, cuts)
+    surface, gx, gy = (displaced_surface(h, keep, xs, ys, biomes, horizontal_scale, cuts, natural_family)
                        if surface_data is None else surface_data)
     # Normals of the displaced parametric surface, including horizontal motion.
     physical = surface.copy()
@@ -463,7 +487,8 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     along_y, along_x = np.gradient(physical, dy, dx*horizontal_scale, axis=(0, 1))
     normals = np.cross(along_x, along_y)
     normals /= np.linalg.norm(normals, axis=-1, keepdims=True)
-    colors = rock_colors(vb, None if rgb is None else np.pad(rgb, ((0, 1), (0, 1), (0, 0)), mode='edge'))
+    vertex_rgb = None if rgb is None else np.pad(rgb, ((0, 1), (0, 1), (0, 0)), mode='edge')
+    colors = rock_colors(vb, vertex_rgb)
     colors = np.concatenate((colors, np.full((*h.shape, 1), 255, np.uint8)), axis=-1)
     p = surface.reshape(-1, 3)
     if project is not None:
@@ -477,25 +502,35 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     # Vertical wall projection: no top-down stretching. Use two dominant planes,
     # and duplicate UVs only where the plane changes; geometric normals stay shared.
     axis = np.abs(gx[j, i]) >= np.abs(gy[j, i])
-    out_p, out_t, out_uv, out_c, out_n = [], [], [], [], []
+    out_p, out_t, out_uv, out_c, out_n, out_uv2 = [], [], [], [], [], []
     out_mat = []
     cut_cells = np.zeros(len(j), bool) if cuts is None else cuts[j, i]
-    families = np.where(cut_cells, cliffmaterial.cut_family(biomes[j, i]), cliffmaterial.NATURAL)
+    families = np.where(cut_cells, cliffmaterial.cut_family(biomes[j, i]), natural_family)
     count = 0
     for family, use_y in ((f, a) for f in range(len(cliffmaterial.MATERIALS)) for a in (False, True)):
-        cut_material = family != cliffmaterial.NATURAL
+        cut_material = family in (cliffmaterial.LIMESTONE_CUT, cliffmaterial.ARID_CUT)
         selected = tris[np.repeat((axis == use_y) & (families == family), 2)]
         if not len(selected):
             continue
         u = (yy if use_y else xx) / cliffmaterial.WIDTH_M + cliffmaterial.UV_OFFSET[0]
         # Height and every PBR channel use the SAME undeformed surface chart.
         # Reprojecting at final z slides the albedo/normal away from its relief.
-        v = h / cliffmaterial.HEIGHT_M + cliffmaterial.UV_OFFSET[1]
+        chart_height = (_terrain_envelope(h, dx*horizontal_scale, dy)
+                        if family == cliffmaterial.CANYON else h)
+        v = chart_height / cliffmaterial.height_span(family) + cliffmaterial.UV_OFFSET[1]
         # Subtract whole repeats before float32 encoding. Neighbours have the
         # same texture phase without million-metre UV quantisation/shimmer.
         uv = np.column_stack((u.ravel()-math.floor(float(u.flat[0])),
                               v.ravel()-math.floor(float(v.flat[0]))))
-        attributes = np.column_stack((uv, normals.reshape(-1, 3), colors.reshape(-1, 4)))
+        if family == cliffmaterial.CANYON:
+            import cliffcolors
+            chart_colors = cliffcolors.canyon_tint(vb, vertex_rgb)
+        else:
+            chart_colors = colors
+        normal_u = u
+        normal_uv = np.column_stack((normal_u.ravel()-math.floor(float(normal_u.flat[0])),
+                                     v.ravel()-math.floor(float(v.flat[0]))))
+        attributes = np.column_stack((uv, normals.reshape(-1, 3), chart_colors.reshape(-1, 4), normal_uv))
         material_points = p
         if road_segments is not None:
             import cliffcuts
@@ -516,13 +551,14 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
         out_p.append(pp[used] - np.asarray(origin))
         out_t.append(inverse.reshape(-1, 3) + count)
         out_mat.append(np.full(len(tt), family, np.int32))
-        out_uv.append(attrs[:, :2]); out_n.append(nn); out_c.append(attrs[:, 5:9])
+        out_uv.append(attrs[:, :2]); out_n.append(nn); out_c.append(attrs[:, 5:9]); out_uv2.append(attrs[:, 9:11])
         count += len(used)
     if not out_t:
         return None
     return Mesh(np.concatenate(out_p).astype(np.float32), np.concatenate(out_t).astype(np.int32),
                 np.concatenate(out_uv).astype(np.float32), np.concatenate(out_c).astype(np.uint8),
-                np.concatenate(out_n).astype(np.float32), tri_materials=np.concatenate(out_mat))
+                np.concatenate(out_n).astype(np.float32), tri_materials=np.concatenate(out_mat),
+                uvs2=np.concatenate(out_uv2).astype(np.float32))
 
 
 def _fit_cut_toes(h, seed, allowed, dx, dy, *, fit_crest=False):
@@ -584,14 +620,14 @@ def _fit_cut_toes(h, seed, allowed, dx, dy, *, fit_crest=False):
     return distance <= TOE_REACH_M
 
 
-def _refine(xs, ys, keep, biomes, box, elev, color_at, shore=None, horizontal_scale=1.0):
+def _refine(xs, ys, keep, biomes, box, elev, color_at, shore=None, horizontal_scale=1.0, subdivisions=RENDER_SUBDIVISIONS):
     """Resample only the tile and a normal-calculation apron on a 0.5 m world grid.
 
     Detection's large halo remains coarse. Re-evaluating elevation, rather than
     subdividing coarse triangles, prevents rock sheets cutting through curved DEM
     cliffs. The apron keeps normals identical on both sides of a tile boundary.
     """
-    n = RENDER_SUBDIVISIONS
+    n = subdivisions
     # Toe propagation, edge fade, the two-axis terrain envelope and outward
     # clearance all consume context. Keep the full dependency radius outside
     # the exported tile so adjoining tiles produce the same fitted boundary.
@@ -728,7 +764,10 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     import clifftalus
     coarse = (xs, ys, keep, classes, blocked, b)
     shore = (classes[:-1, :-1] == 80) | (classes[:-1, 1:] == 80) | (classes[1:, :-1] == 80) | (classes[1:, 1:] == 80)
-    xs, ys, h, keep, b, colors = _refine(xs, ys, keep, b, world_box, elev, color_at, shore, scale)
+    natural_family = int(cliffmaterial.natural_family(float(la.mean()), float(lo.mean())))
+    coarse_canyon_grid = natural_family == cliffmaterial.CANYON and not cuts.any()
+    subdivisions = CANYON_RENDER_SUBDIVISIONS if coarse_canyon_grid else RENDER_SUBDIVISIONS
+    xs, ys, h, keep, b, colors = _refine(xs, ys, keep, b, world_box, elev, color_at, shore, scale, subdivisions)
     # Transfer provenance with the same coarse-cell ownership as _refine.
     ci = np.clip(np.floor(((xs[:-1]+xs[1:])/2-coarse[0][0])/GRID_M).astype(int), 0, cuts.shape[1]-1)
     cj = np.clip(np.floor(((ys[:-1]+ys[1:])/2-coarse[1][0])/GRID_M).astype(int), 0, cuts.shape[0]-1)
@@ -775,7 +814,8 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     # Keep missing elevations invalid through toe fitting, then prevent them
     # from poisoning finite-difference normals of neighbouring valid cells.
     h = np.nan_to_num(h, nan=0, posinf=0, neginf=0)
-    surface_data = displaced_surface(h, keep, xs, ys, b, scale, fine_cuts)
+    natural_family = int(cliffmaterial.natural_family(float(la.mean()), float(lo.mean())))
+    surface_data = displaced_surface(h, keep, xs, ys, b, scale, fine_cuts, natural_family)
     skin_at = clifftalus.surface_sampler(xs, ys, h, surface_data[0])
     rubble = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, skin_at)
 
@@ -784,8 +824,21 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
                                (p[:, 0]/WORLD_M_PER_DEG+180) % 360-180, p[:, 2]))
     result = mesh(h, keep, xs, ys, b, world_box, (box[0], box[1], 0), colors,
                   horizontal_scale=scale, project=project, clip_box=box, surface_data=surface_data,
-                  road_segments=road_segments, cuts=fine_cuts, road_clearance=road_clearance)
+                  road_segments=road_segments, cuts=fine_cuts, road_clearance=road_clearance,
+                  natural_family=natural_family)
     if result is not None:
+        envelope = _terrain_envelope(h, (xs[1]-xs[0])*scale, ys[1]-ys[0])
+        def lod_ground(points):
+            world = points + np.array((box[0], box[1], 0.0))
+            la, lo, _ = frame.enu_to_geodetic(*world.T)
+            lo = frame.lon0 + (lo-frame.lon0+180) % 360-180
+            z = _height_at(envelope, (lo*WORLD_M_PER_DEG-xs[0])/(xs[1]-xs[0]),
+                           (la*WORLD_M_PER_DEG-ys[0])/(ys[1]-ys[0]))
+            return frame.geodetic_to_enu(la, lo, z)[2]
+        result.lod_ground = lod_ground
+        if natural_family == cliffmaterial.CANYON:
+            import cliffdetail
+            result = cliffdetail.refine_canyon(result, full_relief=True)
         result.talus = rubble
         import cliffdecals
         result.decals = cliffdecals.rows(frame, box, *coarse, elev, rubble_color_at)
@@ -810,4 +863,4 @@ def write(path, rock):
     return cdae.write(path, rock.positions, rock.tris, uvs=rock.uvs,
                       material=list(cliffmaterial.MATERIALS) if rock.tri_materials is not None else MATERIAL,
                       tri_materials=rock.tri_materials, colors=rock.colors, normals=rock.normals, object_name="cliff",
-                      split_meshes=True, lods=clifflod.levels(rock))
+                      split_meshes=True, lods=clifflod.levels(rock), uvs2=rock.uvs2, tangent_uvs=rock.uvs2)

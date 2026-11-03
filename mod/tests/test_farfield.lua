@@ -7,6 +7,9 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+local materialFiles = {}
+local loadMaterials = loadJsonMaterialsFile
+function loadJsonMaterialsFile(path) materialFiles[path] = true; loadMaterials(path) end
 local farfield = require('beamngEarth/farfield')
 farfield.SPARE_MAX = 0 -- these tests check the delete pipeline; the spare pool is test_farfield_spares.lua
 local governor = require('beamngEarth/governor')
@@ -52,7 +55,9 @@ local camSouth = { x = 0, y = 0, z = 200, fx = 0, fy = -1, fz = 0, fovDeg = 60 }
 ------------------------------------------------------------------------------------------
 -- first fill (one-sided group, nothing to cross over): instant
 farfield.switchAnchor(1, false, { cx = 0, cy = 0 })
-T.check(S.calls.loadJsonMaterialsFile == 1, 'static far-tile material loaded before the first tile')
+T.check(materialFiles[farfield.MATERIALS_FILE], 'static far-tile material loaded before the first tile')
+T.check(materialFiles['/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json'],
+  'distant cliff materials loaded before the first tile')
 farfield.onTile(tile(1, 1, 0, 8)) -- 512 m tile at (0, 4096), north of the camera
 step()
 local o = obj('1_0_8')

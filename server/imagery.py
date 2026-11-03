@@ -38,6 +38,7 @@ Output: DDS DXT1 with a full mip chain (write_dds): linear-light 2 x 2 levels, e
 DDSCAPS_MIPMAP|COMPLEX).
 """
 import contextlib
+import copy
 import hashlib
 import io
 import logging
@@ -487,6 +488,31 @@ class Imagery:
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
         self.stats = {}                     # counters ("usgs:net", "eox2023:404", ...), and fetch times
         self.fetch_ms = []                  # network fetch latencies (ms), for the log / measurements
+
+    def with_shadows(self):
+        """A render view retaining original photo shade, sharing all raw fetches.
+
+        Finished caches are separate: near de-shadowed pixels must never leak
+        into distant textures, even when concurrent renders use the same tile.
+        No new pools or downloader; only the owner may close shared resources.
+        """
+        if self.deshadow is None:
+            return self
+        with self._lock:
+            view = getattr(self, '_shadow_view', None)
+            if view is None:
+                view = copy.copy(self)
+                view.deshadow = None
+                view._fin = OrderedDict()
+                view._fin_rgb = OrderedDict()
+                view._fin_busy = {}
+                view._fin_sigs = {}
+                view._fin_bytes = 0
+                # Split the existing finished-cache budget rather than doubling it.
+                view.mem_finished = self.mem_finished//2
+                self.mem_finished -= view.mem_finished
+                self._shadow_view = view
+            return view
 
     def attribution(self):
         """Attribution line for the sources in use (with --colormatch, its reference layers too:

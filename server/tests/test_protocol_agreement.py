@@ -146,7 +146,7 @@ MOD_TO_SERVER = {
     # the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the
     # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px
     "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),
-                 "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT), "cliffDetail": F(str, OPT)},
+                 "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT), "cliffDetail": F(str, OPT), "distantCliffFaces": F(bool, OPT)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},   # the map's search box
     # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /

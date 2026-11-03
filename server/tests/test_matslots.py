@@ -85,6 +85,30 @@ class ServerTest(unittest.TestCase):
                                            self.s.texture_name(1, key))
         return ck, name
 
+    def test_photo_only_far_slots_are_isolated_and_released(self):
+        ck,original=self.add('1_0_0')
+        info=self.s.tiles[ck]
+        path=os.path.splitext(os.path.join(self.s.out_dir,self.s.tile_name(*ck)))[0]+'_plain.cdae'
+        source=b'head'+original.encode()+b'tail'
+        with open(path,'wb') as fh: fh.write(source)
+        on,off=Conn(),Conn()
+        on.distant_cliff_faces=True;off.distant_cliff_faces=False
+        self.s.connections.update((on,off))
+        self.assertIsNone(self.s.plain_far_shape(on,ck,info))
+        first=self.s.plain_far_shape(off,ck,info)
+        second=self.s.plain_far_shape(off,ck,info)
+        self.assertNotEqual(first['shape'],second['shape'],'held shapes are never overwritten')
+        self.assertNotEqual(first['material'],original)
+        with open(path,'rb') as fh: self.assertEqual(fh.read(),source)
+        for variant in (first,second):
+            n=matslots.MatSlots.number(variant['material'])
+            self.assertEqual(off.slot_holds[n],variant['slotSerial'])
+            with open(os.path.join(self.s.out_dir,matslots.MatSlots.file(variant['material'])),'rb') as fh:
+                self.assertEqual(fh.read(),source.replace(original.encode(),variant['material'].encode()))
+            del off.slot_holds[n]
+            self.s.slots_let_go([n])
+        self.assertIn(path,self.s.tile_files(self.s.tile_name(*ck)), 'variant pruned with its tile')
+
     def test_idle_tiles_reclaimed_lru_first_and_reslotted(self):
         cks = [self.add(f"0_{i}_0") for i in range(matslots.TARGET + 20)]
         busy = cks[0][0]

@@ -28,6 +28,54 @@ class CliffRocksTest(unittest.TestCase):
                        box, (0, 0, 0))
 
 
+    def test_canyon_pbr_chart_survives_refinement_and_lods(self):
+        import cliffmaterial as cm
+        import cliffdetail
+        import clifflod
+        keep = np.ones((20,20),bool)
+        rock = cr.mesh(self.h,keep,self.x,self.x,np.zeros(keep.shape,int),
+                       (0,0,160,160),(0,0,0),natural_family=cm.CANYON)
+        np.testing.assert_array_equal(rock.uvs2,rock.uvs)
+        cliffdetail.refine_canyon(rock, full_relief=True)
+        np.testing.assert_array_equal(rock.uvs2,rock.uvs)
+        for _,lod in clifflod.levels(rock):
+            np.testing.assert_array_equal(lod['uvs2'],lod['uvs'])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'aligned-normal.cdae'
+            cr.write(str(path),rock)
+            for mesh in cdae.read(path)['meshes']:
+                arrays = cdae.mesh_arrays(mesh)
+                self.assertTrue(np.isfinite(arrays['tangents']).all())
+                np.testing.assert_array_equal(arrays['tverts2'],arrays['tverts'])
+
+    def test_tall_canyon_backing_does_not_fold_before_surface_sampling(self):
+        import cliffmaterial as cm
+        x,y = np.arange(129)*.5,np.arange(65)*.5
+        xx,yy = np.meshgrid(x,y)
+        h = 200/(1+np.exp(-(xx-32-.3*np.sin(yy*.9))/.3))
+        keep = np.ones((len(y)-1,len(x)-1),bool)
+        skin,_,_ = cr.displaced_surface(h,keep,x,y,np.ones(keep.shape,int),natural_family=cm.CANYON)
+        # Previous endpoint displacement folded 193 columns on this wall.
+        self.assertTrue((np.diff(skin[:,:,0],axis=1)>0).all())
+        self.assertTrue((np.diff(skin[:,:,1],axis=0)>0).all())
+        np.testing.assert_allclose(skin[2:-2,2:-2,2],
+            cr._terrain_envelope(h,.5,.5)[2:-2,2:-2]+cr.TERRAIN_CLEARANCE_M)
+
+    def test_cut_in_halo_does_not_displace_natural_canyon_columns(self):
+        import cliffmaterial as cm
+        x,y = np.arange(129)*.5,np.arange(65)*.5
+        xx,yy = np.meshgrid(x,y)
+        h = 200/(1+np.exp(-(xx-32-.3*np.sin(yy*.9))/.3))
+        keep = np.ones((len(y)-1,len(x)-1),bool)
+        biomes = np.ones(keep.shape,int)
+        plain,_,_ = cr.displaced_surface(h,keep,x,y,biomes,natural_family=cm.CANYON)
+        cuts = np.zeros_like(keep);cuts[:3,:3]=True
+        mixed,_,_ = cr.displaced_surface(h,keep,x,y,biomes,cuts=cuts,natural_family=cm.CANYON)
+        np.testing.assert_array_equal(plain[5:,5:],mixed[5:,5:])
+        # The road-cut surface itself still uses its established fit.
+        old,_,_ = cr.displaced_surface(h,keep,x,y,biomes,cuts=cuts)
+        np.testing.assert_allclose(mixed[:3,:3],old[:3,:3])
+
     def test_large_divided_mountain_cut_export_has_no_cross_road_sheets(self):
         # El Paso: dense opposing walls exceed the renderer's 16-bit vertex
         # range even though the file stores uint32 indices. Exercise clipping,
@@ -89,7 +137,7 @@ class CliffRocksTest(unittest.TestCase):
         self.assertEqual(set(rock.tri_materials), {cm.NATURAL, cm.LIMESTONE_CUT, cm.ARID_CUT})
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp)/'mixed.cdae'); cr.write(path, rock)
-            self.assertEqual([m['name'] for m in cdae.read(path)['materials']], list(cm.MATERIALS))
+            self.assertEqual([m['name'] for m in cdae.read(path)['materials']], list(cm.MATERIALS[:3]))
         # Neighboring tile generation and order must not alter material phase.
         def tile(box):
             return cr.mesh(self.h, keep, self.x, self.x, biomes, box, (0, 0, 0), cuts=cuts)
@@ -657,6 +705,39 @@ class CliffRocksTest(unittest.TestCase):
         delta = high.positions[middle]-low.positions[middle]
         np.testing.assert_allclose(np.linalg.norm(delta, axis=1), expected, atol=2e-5)
         np.testing.assert_allclose(delta/expected, np.broadcast_to(np.array((-2,0,1))/np.sqrt(5), delta.shape), atol=2e-5)
+
+    def test_canyon_geometry_uses_original_scan_at_its_physical_scale(self):
+        import cliffmaterial as cm
+        u, v = np.meshgrid(np.linspace(.1,.9,17), np.linspace(.1,.9,11))
+        original = cm._heightmap
+        def heightmap(family):
+            if family == cm.NATURAL:
+                return np.tile(np.linspace(0,1,64)[:,None], (1,256))
+            return np.full((64,256), .4)
+        with patch.object(cm, '_heightmap', side_effect=heightmap):
+            relief = cm.geometry_sample(u, v, family=cm.CANYON)
+            expected = cm.sample(u, v, family=cm.CANYON)+cm.CANYON_SCAN_RELIEF_WEIGHT*cm.sample(
+                u, v*cm.CANYON_HEIGHT_M/cm.HEIGHT_M, family=cm.NATURAL)
+            np.testing.assert_allclose(relief, expected)
+            self.assertGreater(np.ptp(relief), .8, 'scan must affect canyon geometry, not just shading')
+            np.testing.assert_allclose(cm.geometry_sample(u,v),cm.sample(u,v))
+        self.assertIs(cm._heightmap, original)
+
+    def test_canyon_concave_bend_has_continuous_terrain_clearance(self):
+        import cliffmaterial as cm
+        x, y = np.arange(97)*.5, np.arange(65)*.5
+        xx, yy = np.meshgrid(x,y)
+        h = 60/(1+np.exp(-(xx-24-.4*np.sin(yy*.4))/.6))
+        keep = np.ones((len(y)-1,len(x)-1),bool)
+        skin, _, _ = cr.displaced_surface(h, keep, x, y,
+            np.ones(keep.shape,int), natural_family=cm.CANYON)
+        envelope = cr._terrain_envelope(h,.5,.5)
+        centers = np.stack(((skin[:-1,:-1]+skin[:-1,1:]+skin[1:,1:])/3,
+                            (skin[:-1,:-1]+skin[1:,1:]+skin[1:,:-1])/3),axis=2)
+        q = centers[6:-6,6:-6].reshape(-1,3)
+        ground = cr._height_at(envelope,q[:,0]/.5,q[:,1]/.5)
+        self.assertTrue(np.isfinite(q).all())
+        self.assertGreater((q[:,2]-ground).min(), 0)
 
     def test_near_vertical_skin_clears_coarse_terrain_at_different_grid_phases(self):
         x, y = np.arange(65)*.5, np.arange(33)*.5

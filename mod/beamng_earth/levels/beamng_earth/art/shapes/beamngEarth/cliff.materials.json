@@ -109,5 +109,281 @@
     ],
     "groundType": "ROCK",
     "translucent": false
+  },
+  "bne_cliff_canyon": {
+    "name": "bne_cliff_canyon",
+    "mapTo": "bne_cliff_canyon",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3_base.color.png",
+        "baseColorFactor": [
+          0.84,
+          0.9,
+          0.93,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3_roughness.data.png",
+        "roughnessMapUseUV": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_canyon": {
+    "name": "bne_far_cliff_canyon",
+    "mapTo": "bne_far_cliff_canyon",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3_base.color.png",
+        "baseColorFactor": [
+          0.84,
+          0.9,
+          0.93,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "vertColor": true,
+        "useAnisotropic": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_strata": {
+    "name": "bne_far_cliff_strata",
+    "mapTo": "bne_far_cliff_strata",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_base.color.png",
+        "baseColorFactor": [
+          1.3,
+          1.4,
+          1.5,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "vertColor": true,
+        "useAnisotropic": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_cliff_canyon_sat": {
+    "name": "bne_cliff_canyon_sat",
+    "mapTo": "bne_cliff_canyon_sat",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_base.color.png",
+        "baseColorFactor": [
+          1.1824551753070842,
+          1.3869410192552947,
+          1.6041860783866533,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.65,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near_roughness.data.png",
+        "roughnessMapUseUV": 0,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near_ao.data.png",
+        "ambientOcclusionMapUseUV": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_canyon_sat": {
+    "name": "bne_far_cliff_canyon_sat",
+    "mapTo": "bne_far_cliff_canyon_sat",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_base.color.png",
+        "baseColorFactor": [
+          1.55718371763322,
+          1.8235923558434752,
+          2.1066239791755503,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v3.normal.png",
+        "normalMapUseUV": 1,
+        "normalMapStrength": 0.7
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_strata_sat": {
+    "name": "bne_far_cliff_strata_sat",
+    "mapTo": "bne_far_cliff_strata_sat",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_base.color.png",
+        "baseColorFactor": [
+          2.041945707282118,
+          2.1077059291734166,
+          2.1707795469563114,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.94,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_flat.normal.png",
+        "normalMapUseUV": 1
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_canyon_blend": {
+    "name": "bne_far_cliff_canyon_blend",
+    "mapTo": "bne_far_cliff_canyon_blend",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          2.191481630493194,
+          2.7426258658303135,
+          3.0905787004239977,
+          1
+        ],
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_base.color.png",
+        "detailMapUseUV": 0,
+        "detailScale": [
+          1,
+          1
+        ],
+        "detailBaseColorMapStrength": 0.84,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v3.normal.png",
+        "normalMapUseUV": 1,
+        "roughnessFactor": 0.94,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.7
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_far_cliff_strata_blend": {
+    "name": "bne_far_cliff_strata_blend",
+    "mapTo": "bne_far_cliff_strata_blend",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.959774210865709,
+          1.9714051758386686,
+          1.988411009868763,
+          1
+        ],
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_base.color.png",
+        "detailMapUseUV": 0,
+        "detailScale": [
+          1,
+          1
+        ],
+        "detailBaseColorMapStrength": 0.45,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_flat.normal.png",
+        "normalMapUseUV": 1,
+        "roughnessFactor": 0.94,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "useAnisotropic": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
+  },
+  "bne_cliff_canyon_blend": {
+    "name": "bne_cliff_canyon_blend",
+    "mapTo": "bne_cliff_canyon_blend",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          2.0384024620432504,
+          2.147316029143429,
+          2.1868593183976506,
+          1
+        ],
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3_base.color.png",
+        "detailMapUseUV": 0,
+        "detailScale": [
+          1,
+          1
+        ],
+        "detailBaseColorMapStrength": 0.45,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3.normal.png",
+        "normalMapUseUV": 0,
+        "roughnessFactor": 0.94,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3_roughness.data.png",
+        "roughnessMapUseUV": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
   }
 }

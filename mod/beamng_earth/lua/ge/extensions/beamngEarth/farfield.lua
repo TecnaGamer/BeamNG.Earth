@@ -290,6 +290,10 @@ end
 local function ensureMaterial()
   if materialChecked then return end
   materialChecked = true
+  if not scenetree.findObject('bne_far_cliff_canyon_blend') then
+    local cliffs = '/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json'
+    if FS:fileExists(cliffs) then loadJsonMaterialsFile(cliffs) end
+  end
   if scenetree.findObject(M.MATERIAL) then return end
   if FS:fileExists(M.MATERIALS_FILE) then
     log('I', 'beamngEarth', 'loading far-tile material from ' .. M.MATERIALS_FILE)

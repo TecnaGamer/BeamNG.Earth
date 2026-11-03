@@ -1253,11 +1253,12 @@ class Surface:
     def close(self):
         self.pool.shutdown(wait=False)
 
-    def _cached(self, key):
+    def _cached(self, key, *, fetch=True):
         """The cell's land-cover Raster from the cache, None if absent (a fetch is queued) or no
         coverage (open ocean: the layer is stored as missing)."""
         if not self.md.has(key, "landcover"):
-            self._queue(key)
+            if fetch:
+                self._queue(key)
             return None
         try:        # (mapdata's memory LRU: a far tile's road paint and every block read the same cells again)
             return self.md.cell(key, layers=("landcover",), kind="background").layers.get("landcover")
@@ -1413,19 +1414,23 @@ class Surface:
         read as not built-up."""
         return self.classes(lat, lon)[0] == roadsmod.URBAN_CLASS
 
-    def classes(self, lat, lon):
-        """(WorldCover class per point, complete): 0 (no data) where the cell is not cached yet. The
-        land cover is read at the warped points (warp: organic borders)."""
+    def classes(self, lat, lon, *, fetch=True):
+        """(WorldCover class per point, complete): 0 where not cached. fetch=False
+        reads available cells only, without queuing distant-terrain downloads.
+        Land cover is read at warped points (organic borders)."""
         lat, lon = warp(lat, lon)
         out = np.zeros(lat.shape, np.uint8)
         complete = True
         for key in mapcells.cells_for_points(lat, lon):
-            r = self._cached(key)
+            r = self._cached(key) if fetch else self._cached(key, fetch=False)
             lon0, lat0, lon1, lat1 = key.bounds()
             inside = (lat >= lat0) & (lat < lat1) & (lon >= lon0) & (lon < lon1)
             if not inside.any():
                 continue
             if r is None:
+                if not fetch:
+                    complete = False
+                    continue
                 complete = complete and not self._is_queued(key)
                 if not complete:
                     revisit.fault()         # (not cached yet: nothing built now is kept)

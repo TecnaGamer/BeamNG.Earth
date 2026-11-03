@@ -18,8 +18,29 @@ ROAD_CUT_RELIEF_M = 0.65
 ROAD_CUT_MATERIAL = 'bne_cliff_roadcut'
 ARID_CUT_HEIGHT_PATH = Path(__file__).with_name('cliff_arid_cut_height.png')
 ARID_CUT_MATERIAL = 'bne_cliff_roadcut_arid'
-NATURAL, LIMESTONE_CUT, ARID_CUT = range(3)
-MATERIALS = ('bne_cliff_strata', ROAD_CUT_MATERIAL, ARID_CUT_MATERIAL)
+CANYON_RELIEF_M = 0.65
+# The canyon albedo uses broad beds, but nearby geometry needs the original
+# scanned rock's broken ledges too. Keep its physical 91.44 m chart.
+CANYON_SCAN_RELIEF_WEIGHT = 0.60
+FAR_CANYON_NORMAL_WIDTH_SCALE = 3.0  # far-only broad erosion; near normals align with diffuse
+CANYON_HEIGHT_M = 182.88  # broad sedimentary beds at canyon viewing distances
+CANYON_HEIGHT_PATH = Path(__file__).with_name("cliff_canyon_height.png")
+# Extra shader headroom is cancelled by vertex tint; it permits light satellite
+# colours as well as dark ones without clipping individual colour channels.
+# Linear-light gains; the baker encodes material factors as sRGB. Vertex
+# colors cancel this headroom while allowing satellite tint to brighten rock.
+SATELLITE_HEADROOM = 4.0
+SATELLITE_ALBEDO_DETAIL_STRENGTH = .45  # other far rock: quiet variation around satellite colour
+FAR_CANYON_ALBEDO_DETAIL_STRENGTH = .84  # restrained layers, satellite mean remains unchanged
+NEAR_CANYON_EXPOSURE = .53  # reduce sunlit near-face brightness without flattening bed colors
+NEAR_CANYON_NORMAL_STRENGTH = .65
+FAR_CANYON_NORMAL_STRENGTH = .70  # soften grazing-light noise, retain macro erosion
+CANYON_MEDIAN_SRGB = np.array((136, 105, 95), float)/255
+CANYON_COLOR_FACTOR = np.array((.84, .90, .93))
+FAR_STRATA_MEDIAN_SRGB = np.array((155, 152, 147), float)/255
+FAR_STRATA_COLOR_FACTOR = np.array((1.3, 1.4, 1.5))
+NATURAL, LIMESTONE_CUT, ARID_CUT, CANYON = range(4)
+MATERIALS = ('bne_cliff_strata', ROAD_CUT_MATERIAL, ARID_CUT_MATERIAL, 'bne_cliff_canyon_sat')
 
 
 def cut_family(biomes):
@@ -31,10 +52,10 @@ def cut_family(biomes):
     return np.where(np.asarray(biomes) == 1, ARID_CUT, LIMESTONE_CUT)
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=4)
 def _heightmap(family=NATURAL):
     from PIL import Image
-    with Image.open((HEIGHT_PATH, ROAD_CUT_HEIGHT_PATH, ARID_CUT_HEIGHT_PATH)[family]) as im:
+    with Image.open((HEIGHT_PATH, ROAD_CUT_HEIGHT_PATH, ARID_CUT_HEIGHT_PATH, CANYON_HEIGHT_PATH)[family]) as im:
         return np.flipud(np.asarray(im, np.float32)/65535).copy()
 
 
@@ -50,6 +71,46 @@ def sample(u, v, roadcut=False, *, family=None):
     x, y = np.mod(u, 1)*nx-.5, np.mod(v, 1)*ny-.5
     ix, iy = np.floor(x).astype(np.int64), np.floor(y).astype(np.int64)
     fx, fy = x-ix, y-iy
-    amplitude = RELIEF_M if family == NATURAL else ROAD_CUT_RELIEF_M
+    amplitude = (RELIEF_M if family == NATURAL else
+                 CANYON_RELIEF_M if family == CANYON else ROAD_CUT_RELIEF_M)
     return amplitude*((1-fy)*((1-fx)*grid[iy%ny, ix%nx] + fx*grid[iy%ny, (ix+1)%nx])
                     + fy*((1-fx)*grid[(iy+1)%ny, ix%nx] + fx*grid[(iy+1)%ny, (ix+1)%nx]))
+
+
+def geometry_sample(u, v, *, family=NATURAL):
+    """Near-face relief; canyon beds plus the original natural rock scan.
+
+    v uses the family's albedo chart. Rescale only the scan lookup so changing
+    the canyon bed repeat cannot stretch the scanned rock vertically.
+    """
+    beds = sample(u, v, family=family)
+    if family != CANYON:
+        return beds
+    scan = sample(u, np.asarray(v)*CANYON_HEIGHT_M/HEIGHT_M, family=NATURAL)
+    return beds + CANYON_SCAN_RELIEF_WEIGHT*scan
+
+
+# Broad appearance region for the Colorado Plateau: Grand Canyon, Zion and
+# Canyonlands. Deliberately not a lithology map; excludes El Paso and Austin.
+# Selection is shared by near skins and far terrain, independent of the anchor.
+PLATEAU_RING = ((-114.2,35.3),(-112.4,34.3),(-109.1,34.3),(-107.5,36.0),
+                (-108.3,39.7),(-111.8,40.2),(-113.7,38.1))
+
+
+def canyon_region(lat, lon):
+    lat, lon = np.broadcast_arrays(np.asarray(lat, float), np.asarray(lon, float))
+    inside = np.zeros(lat.shape, bool)
+    for (x0,y0),(x1,y1) in zip(PLATEAU_RING, PLATEAU_RING[1:]+PLATEAU_RING[:1]):
+        if y0 == y1:
+            continue
+        crosses = ((y0 > lat) != (y1 > lat)) & (lon < (x1-x0)*(lat-y0)/(y1-y0)+x0)
+        inside ^= crosses
+    return inside
+
+
+def natural_family(lat, lon):
+    return np.where(canyon_region(lat, lon), CANYON, NATURAL)
+
+
+def height_span(family):
+    return CANYON_HEIGHT_M if family == CANYON else HEIGHT_M

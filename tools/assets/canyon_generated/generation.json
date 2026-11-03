@@ -1,0 +1,11 @@
+{
+  "generator": "built-in image_gen",
+  "date": "2026-11-02",
+  "source_sha256": "afeaa25f50416993dedaddfc5307d292dafb1872f45d2e02c1976155dc6dc293",
+  "prompt": "Use case: photorealistic-natural. Asset type: seamless square game PBR base-color texture, 2048x2048 or highest available resolution. Create a new natural sedimentary canyon cliff rock albedo texture suitable for Grand Canyon and similar arid layered escarpments. Orthographic straight-on view of a continuous exposed rock face, fills every edge, approximately a 35 metre wide patch. Broad predominantly horizontal beds of dusty brick red, muted terracotta and warm russet sandstone alternating with thinner weathered buff, beige and pale cream limestone bands; believable irregular bed thickness, blocky vertical joints, fine chipped stratified rock detail. Moderate saturation, weathered rather than orange. Large coherent stone beds, avoid rubble/pile appearance and tiny all-over noise. Flat diffuse neutral illumination, intrinsic base color only, remove directional lighting, deep baked shadows, ambient occlusion, blue sky reflection, and highlights. Seamlessly tileable on all four edges with continuous strata at left/right and compatible color at top/bottom. No landscape, sky, horizon, plants, soil, people, river, text, borders or perspective. This is a material scan-style texture, not a landscape photo.",
+  "notes": "Generated plausible rock appearance, not a measured scan or geological map. CPU height and normal are approximate derived maps.",
+  "actual_resolution": [
+    1254,
+    1254
+  ]
+}

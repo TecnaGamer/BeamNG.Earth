@@ -1,0 +1,9 @@
+{
+  "generator": "built-in image_gen",
+  "date": "2026-11-02",
+  "prompt": "Edit target: the first image, a square canyon rock albedo texture. Supporting reference: second image is a BeamNG screenshot; use ONLY the surrounding natural terrain palette as color reference, do not reproduce the landscape or UI. Make a color-only correction to the first image. Preserve its exact composition, all fractures, stone beds, fine detail, horizontal band positions and tileable straight-on material layout. Replace the strong orange/terracotta brick coloration with subdued dusty rose-taupe sandstone, predominantly neutral warm grey-brown with a subtle red undertone. Reduce orange/red saturation by roughly two thirds. Make the cream bands neutral sandy beige, never cyan/blue/green. Reduce the contrast of the light bands against the main rock so there are no conspicuous bright stripes at long distance. Moderate-dark game albedo, overall mean around sRGB 135,120,112, light bands around 155,143,130, keeping local variation and realistic chipped rock detail. Flat neutral diffuse albedo lighting with no new highlights or shadows. Do not change topology or geological structure. No landscape, border, text or additional objects. Output only the edited square texture.",
+  "source": "source.png",
+  "output": "source-muted.png",
+  "output_sha256": "14edfffdaa9efd52e14ed4e7d95f416620fb14027314140dcaa0903a22cd00d7",
+  "notes": "Color-only revision using the live Grand Canyon terrain as palette reference. Original source still drives height and normal so palette corrections do not change geometry."
+}
