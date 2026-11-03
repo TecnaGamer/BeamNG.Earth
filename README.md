@@ -234,7 +234,8 @@ connection (the map is downloaded while you play).
      "Allow executing", or `chmod +x`).
 2. **Run it** (with Steam running). A console window opens (like BeamMP's launcher); it copies the mod into the
    game, starts the world server and starts BeamNG.drive. Closing the game stops the server.
-   - **Linux, native game:** started with the grass patch (`tools/gcpatch`) already applied, no Steam launch
+   - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
+     terrain textures kept across block swaps, no game-speed catch-up after a hitch) already applied, no Steam launch
      options needed.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
