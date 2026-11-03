@@ -21,8 +21,8 @@ not a new feature or fresh engine validation in this contribution.
 | SIMD/AVX2/AVX-512 | No new SIMD change. Existing native Rust kernels remain; stage profiling must justify runtime-dispatched acceleration. |
 | Multithreaded generation | Existing workers and native batching; retained. |
 | Network utilization/caching | Range integrity and lock-race fixes; immutable prepared road plans deduplicate content and support offline warm reuse. |
-| Reduced stuttering | Not measured in BeamNG during this initiative. |
-| Memory/resource management | Revisit descriptor lifecycle fixed; bundle reads, handlers, artifacts and storage budgets bounded. Launcher cleanup targets owned companion processes and workers. Long-session memory profiling pending. |
+| Reduced stuttering | Stutter and a native crash observed during a local 1.8.2 drive. No controlled before/after improvement established; see stability validation. |
+| Memory/resource management | Revisit descriptor lifecycle fixed; bundle resources bounded. Canceled tile producers retain file ownership until completion; free-slot allocation checks restored holds. Disconnect-gap ownership and stalled send-queue limits remain open. Launcher cleanup targets owned workers. Long-session runtime validation pending. |
 | Windows/Linux dedicated hosting | Packaging tools produce an Earth plugin ZIP and version-pinned official BeamMP Windows/Linux executable bundles with notices/source and empty-key configuration. AuthKey and actual hosting acceptance still required. |
 | Headless mode | Existing BeamMP dedicated server and Earth companion; new loopback road-plan cache commands in player executable. |
 | TUI/GUI administration | Full shared server-management interfaces not implemented. |
@@ -38,11 +38,13 @@ not a new feature or fresh engine validation in this contribution.
 | Reliable releases | Required quality gate, published-release update checks, versioned player/host assets, digest validation and explicit validation boundaries. |
 
 A locally built fork 1.8.2 candidate launched BeamNG and connected to its companion with `--no-beammp`
-on the user's Windows host. Isolated real-process tests cover parent exit, owned-tree cleanup and port reuse.
+on the user's Windows host, then crashed after about 12.5 minutes. The native crash cause remains open.
+Isolated real-process tests cover parent exit, owned-tree cleanup and port reuse.
 Full live close/relaunch cycles, pinned-world driving and successful BeamMP startup remain separate checks.
 Upstream `VERSION` remains `1.7.3-beta`; no upstream release is announced by these fork references.
 
 See [startup and relaunch troubleshooting](RELAUNCH_TROUBLESHOOTING.md),
+[stability evidence and acceptance](STABILITY_VALIDATION.md),
 [shared road-plan operations](SHARED_WORLD.md), [foundation audit](MODERNIZATION.md), and
 [foundation validation](MODERNIZATION_VALIDATION.md). Next acceptance priority is real client driving
 with pinned road plans and a larger measured region, then complete world-dependency manifests.

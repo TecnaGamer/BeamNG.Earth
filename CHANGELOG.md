@@ -4,6 +4,8 @@ Unreleased contributions, historical fork validation notes, and BeamNG.Earth rel
 
 ## Unreleased — modernization contribution
 
+- Keep canceled tile producers tracked until their file writes finish, preventing pooled shape filenames from being reassigned while an old worker can still overwrite them. Defer anchor pruning until producers finish.
+- Recheck restored game holds before allocating a free pooled slot after reconnect. The earlier disconnect-to-hello ownership gap remains open; automatic queue-timeout disconnects are deferred pending its resolution.
 - Limit the wait for an installed BeamMP launcher to 30 seconds by default (`--beammp-wait` adjusts it), stop a failed owned attempt and continue in single-player. `--no-beammp` bypasses it; first-time installation remains separate.
 - Bound failed game startup, distinguish Windows CEF helpers from the main game, and clean up owned companion workers when startup fails or the game closes. Preserve open launch dialogs and unrelated/live companions. See [startup and relaunch troubleshooting](docs/RELAUNCH_TROUBLESHOOTING.md).
 - Read companion readiness from its fresh startup log, without creating a fake game connection; cancel and await the stream's event waiter when a client disconnects.
@@ -19,8 +21,9 @@ Unreleased contributions, historical fork validation notes, and BeamNG.Earth rel
 Shared road plans remain disabled by default and do not represent every terrain, mesh or asset dependency.
 Real two-client driving, long-session stability and whole-world performance acceptance remain pending;
 see [scope and validation](docs/PLATFORM_STATUS.md). Upstream release numbering is unchanged by this contribution.
-The released fork 1.8.1 started the game with `--no-beammp` on the user's Windows host. That baseline smoke
-check does not validate the planned fork 1.8.2 relaunch changes or multiplayer gameplay.
+The local fork 1.8.2 candidate connected with `--no-beammp` but later crashed inside the native game.
+Fork 1.8.3 carries these stability fixes; their relationship to that crash remains unproven. See
+[stability evidence and acceptance](docs/STABILITY_VALIDATION.md). Fork 1.8.2 was not published.
 
 ## Historical fork releases (not upstream releases)
 
