@@ -225,3 +225,151 @@ pub fn snap_junctions<'py>(
     }
     Ok((zz.into_pyarray(py), changed.into_pyarray(py)))
 }
+
+/// (distance, height) of the nearest point of polyline xy / z to (x, y) (grading's old _nearest_on_line): numpy's
+/// argmin (the first NaN, else the first minimum), its operation order.
+fn nearest_on_line(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64) {
+    let (mut bi, mut bd, mut bt) = (0usize, f64::INFINITY, 0.0);
+    for i in 0..xy.len() - 1 {
+        let (a, b) = (xy[i], xy[i + 1]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let ll = (dx * dx + dy * dy).max(1e-12);
+        let t = (((x - a[0]) * dx + (y - a[1]) * dy) / ll).clamp(0.0, 1.0);
+        let d = (a[0] + t * dx - x).hypot(a[1] + t * dy - y);
+        if d.is_nan() {
+            (bi, bd, bt) = (i, d, t);
+            break;
+        }
+        if i == 0 || d < bd {
+            (bi, bd, bt) = (i, d, t);
+        }
+    }
+    (bd, z[bi] + bt * (z[bi + 1] - z[bi]))
+}
+
+/// grading._hold_junction_corridors: a side road's end the snap changed (changed: per plan) holds the joined road's
+/// height, at the nearest point of it, across its carriageway + pad_m, then returns to its own profile at most grade
+/// steep. The arrays as snap_junctions'; reach: JUNCTION_REACH_M. Returns (z, held per plan: its heights replaced).
+/// The Python version's numbers (its operation order, numpy's argmin), bit for bit. Pure.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn hold_junction_corridors<'py>(
+    py: Python<'py>,
+    xy: PyReadonlyArray2<'py, f64>,
+    z: PyReadonlyArray1<'py, f64>,
+    off: PyReadonlyArray1<'py, i64>,
+    rank: PyReadonlyArray1<'py, i64>,
+    half: PyReadonlyArray1<'py, f64>,
+    abut: PyReadonlyArray2<'py, u8>,
+    bbox: PyReadonlyArray2<'py, f64>,
+    changed: PyReadonlyArray1<'py, u8>,
+    reach: f64,
+    pad_m: f64,
+    grade: f64,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<u8>>)> {
+    let xa = xy.as_array();
+    let n = xa.nrows();
+    let pts: Vec<[f64; 2]> = (0..n).map(|i| [xa[[i, 0]], xa[[i, 1]]]).collect();
+    let mut zz: Vec<f64> = z.as_array().to_vec();
+    let off: Vec<usize> = off.as_array().iter().map(|&v| v.max(0) as usize).collect();
+    let rank: Vec<i64> = rank.as_array().to_vec();
+    let half: Vec<f64> = half.as_array().to_vec();
+    let ch: Vec<u8> = changed.as_array().to_vec();
+    let ab = abut.as_array();
+    let bb = bbox.as_array();
+    let np = rank.len();
+    if off.len() != np + 1 || zz.len() != n || half.len() != np || ab.nrows() != np || bb.nrows() != np
+        || ch.len() != np || off[np] > n || (0..np).any(|j| off[j] > off[j + 1])
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err("hold_junction_corridors: array sizes differ"));
+    }
+    let boxes: Vec<[f64; 4]> = (0..np).map(|k| [bb[[k, 0]], bb[[k, 1]], bb[[k, 2]], bb[[k, 3]]]).collect();
+    let mut held_by = vec![0u8; np];
+    let mut ends: Vec<(usize, usize)> = Vec::new();
+    for j in 0..np {
+        if ch[j] != 0 && off[j + 1] - off[j] >= 4 {
+            for e in 0..2 {
+                if ab[[j, e]] == 0 {
+                    ends.push((j, e));
+                }
+            }
+        }
+    }
+    ends.sort_by_key(|&(j, _)| -rank[j]); // (stable, as Python's sort: the higher ranks first)
+    for &(j, e) in &ends {
+        let (o0, o1) = (off[j], off[j + 1]);
+        let len = o1 - o0;
+        let p = &pts[o0..o1];
+        let mut s = vec![0.0; len];
+        for i in 1..len {
+            s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).hypot(p[i][1] - p[i - 1][1]);
+        }
+        let length = s[len - 1];
+        let vi = |t: usize| if e == 0 { t } else { len - 1 - t }; // the road's vertices from this end
+        let sj = |t: usize| if e == 0 { s[t] } else { length - s[len - 1 - t] };
+        let (x0, y0) = (p[vi(0)][0], p[vi(0)][1]);
+        let mut best: Option<(f64, usize, f64)> = None;
+        for k in 0..np {
+            let b = boxes[k];
+            if !(b[0] <= x0 && x0 <= b[2] && b[1] <= y0 && y0 <= b[3] && rank[k] > rank[j]) {
+                continue;
+            }
+            let (q0, q1) = (off[k], off[k + 1]);
+            if q1 - q0 < 2 {
+                continue;
+            }
+            let (d, zq) = nearest_on_line(&pts[q0..q1], &zz[q0..q1], x0, y0);
+            if d <= half[k] + reach && best.map_or(true, |bs| d < bs.0) {
+                best = Some((d, k, zq));
+            }
+        }
+        let Some((_, k, zq0)) = best else { continue };
+        let hold = half[k] + pad_m;
+        if length < 3.0 * hold || (zz[o0 + vi(0)] - zq0).abs() > 1e-6 {
+            continue; // short, or the snap left this end as it was
+        }
+        let (q0, q1) = (off[k], off[k + 1]);
+        let mut held: Vec<f64> = Vec::new();
+        for t in 0..len {
+            if sj(t) > hold {
+                break;
+            }
+            let i = vi(t);
+            let (d, zq) = nearest_on_line(&pts[q0..q1], &zz[q0..q1], p[i][0], p[i][1]);
+            if d > hold {
+                break;
+            }
+            held.push(zq);
+        }
+        let h = held.len();
+        if h < 2 {
+            continue;
+        }
+        let zj = &zz[o0..o1];
+        let mut out = zj.to_vec();
+        for (t, &v) in held.iter().enumerate() {
+            out[vi(t)] = v;
+        }
+        let mut prev = held[h - 1];
+        let mut met = false;
+        for t in h..len {
+            if sj(t) > 0.5 * length {
+                break; // (it does not meet its profile in its first half: as it was)
+            }
+            let i = vi(t);
+            let lim = grade * (sj(t) - sj(t - 1));
+            let dz = zj[i] - prev;
+            if dz.abs() <= lim {
+                met = true; // met it: the rest is the snap's own
+                break;
+            }
+            prev += if dz > 0.0 { lim } else { -lim };
+            out[i] = prev;
+        }
+        if met {
+            zz[o0..o1].copy_from_slice(&out);
+            held_by[j] = 1;
+        }
+    }
+    Ok((zz.into_pyarray(py), held_by.into_pyarray(py)))
+}
