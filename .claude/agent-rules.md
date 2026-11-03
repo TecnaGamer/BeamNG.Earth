@@ -41,6 +41,11 @@
 - **Never `pkill -f` / `pgrep -f`** a pattern that also appears in your own command line: it kills your own shell. Use a bracket: `pgrep -f "[e]arthd"`.
 - **Generalise:** no location-specific code. Test places are benchmarks; fixes must be general rules, deterministic.
 - **Data sources:** better open data, Rust ports and engine patches are pre-approved.
+- **Format numbers (the user, 2026-11-02: plans and cell facts survive updates):** road plans and cell facts are
+  cached by `plancache.PLANS_FORMAT` / `roads.FACTS_FORMAT`, not the code hash. ANY change that alters grading plans
+  or road facts output (level ranges, specs, lane flow, grade separations, their inputs' rules) must bump the number in
+  the same commit, or players keep the old output; then `BNGE_UPDATE_GOLDEN=1` for tests/test_bake_formats.py. Pure
+  speed work keeps them only when byte-identical output was shown.
 - **Verify before claiming:**
   - Check in game, with screenshots you look at.
   - Compare against real photos (Mapillary) and stock maps.

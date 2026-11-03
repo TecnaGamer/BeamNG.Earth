@@ -77,6 +77,11 @@ local stats = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }
 -- local anchorSince = 0       -- seconds our anchor has been the same (converge's settle)
 -- local lastAnchorKey = nil
 local statusIn = 5
+-- BeamMP shared world generation v2 (server mpshare.py, .claude/work/mp_share_v2.md): our world server's share code
+-- and weight (its share_info answer) ride on our poses; the plugin groups the players near each other with the same
+-- code (bngeGroup) and relays their messages (bngeShare), which pass through here untouched. nil: not asked yet this
+-- session; false: asked.
+local shareInfo = nil
 local members = {}          -- tostring(pid) -> true: the other players within DAMAGE_NEAR_M at the last check
 local sentDamage = {}       -- own game vehicle id -> the damage its state was last sent at
 local damageSince = {}      -- own game vehicle id -> seconds its damage has differed from sentDamage
@@ -824,12 +829,44 @@ local function updateFloating(owners)
   end
 end
 
+function M.onShareInfo(msg)
+  shareInfo = { code = tostring(msg.code or ''), weight = tonumber(msg.weight) or 1 }
+  log('I', 'beamngEarth', 'BeamMP: sharing world building with the players near us (code ' .. shareInfo.code .. ')')
+end
+
+-- A share message of our world server for the group ("*") or one member, through the plugin.
+-- (never a message BeamMP's launcher aborts on: over 500 bytes with "Zp" in it, its Network/GlobalHandler.cpp; the
+-- app's base64 has none, this is the guard)
+function M.shareOut(msg)
+  if rawget(_G, 'TriggerServerEvent') and type(msg.d) == 'string' then
+    local data = tostring(msg.to or '*') .. '|' .. msg.d
+    if #data > 400 and data:find('Zp', 1, true) then
+      stats.shareRefused = (stats.shareRefused or 0) + 1
+      return
+    end
+    TriggerServerEvent('bngeShare', data)
+    stats.shareOut = (stats.shareOut or 0) + 1
+  end
+end
+
+local function onShare(data)
+  if type(data) ~= 'string' then return end
+  require('beamngEarth/net').send({ type = 'share_in', d = data })
+  stats.shareIn = (stats.shareIn or 0) + 1
+end
+
+local function onGroup(data)
+  if type(data) == 'string' then require('beamngEarth/net').send({ type = 'share_group', d = data }) end
+end
+
 -- Each frame (core.lua) in a BeamMP session in our level: anchor (core's st.anchor), player { x, y, z } in its frame
 -- (the car; the camera when there is none).
 function M.update(dt, anchor, player)
   if not handlers and rawget(_G, 'AddEventHandler') then
     AddEventHandler('bngeAnchors', onAnchors, 'beamngEarth')
     AddEventHandler('bngeGoTo', onGoTo, 'beamngEarth')
+    AddEventHandler('bngeShare', onShare, 'beamngEarth')
+    AddEventHandler('bngeGroup', onGroup, 'beamngEarth')
     -- AddEventHandler('bngePeers', onPeers, 'beamngEarth')     -- (shared world building, commented out)
     AddEventHandler('bngeConfig', onConfig, 'beamngEarth')
     handlers = true
@@ -929,6 +966,10 @@ function M.update(dt, anchor, player)
   --   share = false               -- our world server's group service, asked once a session (its answer: onShare), on
   --   require('beamngEarth/net').send({ type = 'share', port = M.sharePort(config) })     -- the server's port
   -- end
+  if shareInfo == nil then
+    shareInfo = false               -- (asked once a session: its answer is onShareInfo)
+    require('beamngEarth/net').send({ type = 'share_hello' })
+  end
   if not anchor then return end
   placeCamera(player)
   anchorRef = anchor
@@ -945,8 +986,8 @@ function M.update(dt, anchor, player)
       if ok and tonumber(nx) and tonumber(ny) then h = (h - math.deg(math.atan2(nx, ny)) + 360) % 360 end
     end
     TriggerServerEvent('bngePose', jsonEncode({ v = M.PROTO, aLat = anchor.lat, aLon = anchor.lon, lat = lat,
-      lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil }))   -- (sp / sc / sw: shared world
-      -- building's port, code and weight, commented out)
+      lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
+      sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil }))
     stats.poses = stats.poses + 1
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
     joined = false
@@ -1098,6 +1139,7 @@ end
 
 -- The session's end (BeamMP left, the level's end): the deactivated cars back on, everything forgotten.
 function M.reset()
+  shareInfo = nil             -- (asked again in the next session)
   for gid in pairs(deactivated) do
     local veh = vehicle(gid)
     if veh then veh:setActive(1) end

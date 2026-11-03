@@ -297,9 +297,14 @@ function D.tick(dtReal, dtSim)
   local p = veh:getPosition()
   if place and s.frame - (s.rebaseFrame or -1e9) > D.REBASE_GRACE
     and (p.x - s.x) ^ 2 + (p.y - s.y) ^ 2 > D.JUMP_M * D.JUMP_M then
-    s.done, s.reason, s.endMs = true, 'jump', now - s.installMs
-    record(ms, flags + D.FLAG_SKIP, nil)
-    return
+    -- on a path: back onto it where the car was set down (the edge guard's rescue at a late block), on from there
+    local back = s.path and D.nearestS(s.path, p.x, p.y, s.s)
+    if not back then
+      s.done, s.reason, s.endMs = true, 'jump', now - s.installMs
+      record(ms, flags + D.FLAG_SKIP, nil)
+      return
+    end
+    s.s, s.x, s.y, s.jumps = back, p.x, p.y, s.jumps + 1
   end
 
   -- advance along the profile (also in a rebase frame: the car keeps moving at its velocity)
@@ -308,7 +313,21 @@ function D.tick(dtReal, dtSim)
   local h = (heading + s.hOff) % 360
   local ds = speed * dtSim
   local hx, hy = sin(rad(h)), cos(rad(h))
-  s.x, s.y = s.x + hx * ds, s.y + hy * ds
+  if s.path then              -- along the path: its point at s, heading along it (3 m ahead)
+    local x1, y1 = D.pathXY(s.path, s.s + ds)
+    local x2, y2 = D.pathXY(s.path, s.s + ds + 3)
+    if x1 and x2 then
+      local dx, dy = x2 - x1, y2 - y1
+      local len = math.sqrt(dx * dx + dy * dy)
+      if len > 1e-6 then hx, hy = dx / len, dy / len end
+      h = D.headingOf(hx, hy)
+      s.x, s.y = x1, y1
+    else
+      s.x, s.y = s.x + hx * ds, s.y + hy * ds
+    end
+  else
+    s.x, s.y = s.x + hx * ds, s.y + hy * ds
+  end
   s.s, s.t = s.s + ds, s.t + dtSim
 
   if place then
@@ -340,7 +359,9 @@ function D.tick(dtReal, dtSim)
     end
     -- the speed physics reports (the motion since the last placement) against the profile's
     s.placed = s.placed + 1
-    local v = s.placed > 1 and veh:getVelocity()
+    -- (on a path the first placement moves the car from its spawn onto the path: a jump of a few metres reads as a
+    -- velocity of hundreds of m/s for a frame or two)
+    local v = s.placed > (s.path and 8 or 1) and veh:getVelocity()
     -- a physics blow-up (in-game 2026-10-10: the user's lifted Hopper at 67 m/s went unstable and the
     -- engine removed it; velocity read inf and the old driver kept going): stop at once
     if v and not D.sane(v, speed) then
@@ -379,6 +400,61 @@ end
 
 local function fail(text) return toJson({ error = text }) end
 
+-- A path to follow instead of the profile's headings (tools/nyc_speed.py: the GPS route along the streets, where a
+-- heading drifted into the buildings and the car went unstable): { la, lo, cum } with cum the metres along it.
+function D.makePath(pts)
+  if type(pts) ~= 'table' or #pts < 2 then return nil end
+  local la0, lo0 = tonumber(pts[1][1]), tonumber(pts[1][2])
+  local kx = 111320 * math.cos(math.rad(la0))
+  local path = { la = {}, lo = {}, cum = { 0 } }
+  for i, q in ipairs(pts) do
+    path.la[i], path.lo[i] = tonumber(q[1]), tonumber(q[2])
+    if i > 1 then
+      local dx = (path.lo[i] - path.lo[i - 1]) * kx
+      local dy = (path.la[i] - path.la[i - 1]) * 110540
+      path.cum[i] = path.cum[i - 1] + math.sqrt(dx * dx + dy * dy)
+    end
+  end
+  path.k = 1
+  return path
+end
+
+-- The path's point at s metres (lat, lon), linear between its points; k: the segment search's start (kept).
+function D.pathAt(path, s)
+  local n = #path.cum
+  local k = path.k or 1
+  if s <= 0 then k = 1 end
+  while k < n - 1 and path.cum[k + 1] < s do k = k + 1 end
+  while k > 1 and path.cum[k] > s do k = k - 1 end
+  path.k = k
+  local seg = path.cum[k + 1] - path.cum[k]
+  local f = seg > 0 and math.max(0, math.min(1, (s - path.cum[k]) / seg)) or 0
+  return path.la[k] + f * (path.la[k + 1] - path.la[k]), path.lo[k] + f * (path.lo[k + 1] - path.lo[k])
+end
+
+-- The path's arc length nearest (x, y), searched within NEAR_SEARCH_M of s (every 4 m), or nil (too far off it).
+D.NEAR_SEARCH_M = 600
+D.NEAR_MAX_M = 80
+function D.nearestS(path, x, y, s)
+  local best, bd = nil, D.NEAR_MAX_M * D.NEAR_MAX_M
+  for t = math.max(0, s - D.NEAR_SEARCH_M), s + D.NEAR_SEARCH_M, 4 do
+    local px, py = D.pathXY(path, t)
+    if not px then return nil end
+    local d = (px - x) ^ 2 + (py - y) ^ 2
+    if d < bd then best, bd = t, d end
+  end
+  return best
+end
+
+-- World x, y (the mod's current anchor) of the path at s.
+function D.pathXY(path, s)
+  local st = rawget(_G, 'beamngEarth_core') and beamngEarth_core._state()
+  if not (st and st.anchor) then return nil end
+  local la, lo = D.pathAt(path, s)
+  local x, y = st.anchor:geodeticToEnu(la, lo, 0)
+  return x, y
+end
+
 -- cfg (JSON text or a table): { points = {...} (see makeProfile), km = total km (optional: else the
 -- profile's end), clearance = m (optional: measured), exactLevel = n (optional, v1.3.1 mod only) }
 function D.install(cfg)
@@ -398,11 +474,17 @@ function D.install(cfg)
   D.clock = D.clock or D.newClock()
   D.frames = newFrames()
   D.harnessTag = true -- the rest of this MCP call (encoding, the HTTP answer) lands in the first frame
+  local path = cfg.path and D.makePath(cfg.path)
+  local sx, sy = p.x, p.y
+  if path then
+    sx, sy = D.pathXY(path, 0)
+    if not sx then return fail('no anchor for the path') end
+  end
   D.state = {
-    prof = prof, km = tonumber(cfg.km), x = p.x, y = p.y, z = p.z, s = 0, t = 0,
+    prof = prof, km = tonumber(cfg.km), x = sx, y = sy, z = p.z, s = 0, t = 0, path = path,
     ground = g, base = g, clearance = tonumber(cfg.clearance) or max(0.05, min(5, p.z - g)),
     cmd = h0, hOff = 0, frame = 0, lastTick = D.clock(), installMs = D.clock(), lastPoll = D.clock(),
-    falls = 0, resets = 0, rebases = 0, resyncs = 0, vSum = 0, vProfSum = 0, vN = 0, placed = 0, lastSpeed = 0,
+    falls = 0, resets = 0, rebases = 0, resyncs = 0, jumps = 0, vSum = 0, vProfSum = 0, vN = 0, placed = 0, lastSpeed = 0,
     vehId = veh:getID(), done = false, reason = nil, skip = false, rebaseFrame = nil,
   }
   -- from here on uninstall() undoes every step, also when one of them fails
@@ -456,7 +538,7 @@ function D.pollTable()
     wallMs = D.clock and s.installMs and (D.clock() - s.installMs) or 0,
     frames = { ms = f.ms, flags = f.flags, under = f.under, dropped = f.dropped },
     drive = { s = s.s, t = s.t, x = s.x, y = s.y, z = s.z, heading = s.cmd, done = s.done, reason = s.reason,
-      error = s.error, endMs = s.endMs, falls = s.falls, resets = s.resets, rebases = s.rebases, resyncs = s.resyncs,
+      error = s.error, endMs = s.endMs, falls = s.falls, resets = s.resets, rebases = s.rebases, resyncs = s.resyncs, jumps = s.jumps,
       vSum = s.vSum, vProfSum = s.vProfSum, vN = s.vN },
   }
   local core = rawget(_G, 'beamngEarth_core')

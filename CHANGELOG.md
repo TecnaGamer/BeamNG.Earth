@@ -2,6 +2,11 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Keep the world map and saved-place search usable with no saved or recent places, including after deleting the
+  last saved place. Empty lists from Lua are normalized before map rendering and search consume them (#601).
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

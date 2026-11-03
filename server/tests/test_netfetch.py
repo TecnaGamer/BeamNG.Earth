@@ -799,7 +799,7 @@ class UserAgentTest(unittest.TestCase):
             def __enter__(self):
                 return self
 
-        def urlopen(req, timeout):
+        def urlopen(req, timeout, context=None):       # (context: the Windows certificate check, #640)
             seen.append(dict(req.header_items()))
             return Resp(data)
         f, clock, sleep, tr = fetcher()

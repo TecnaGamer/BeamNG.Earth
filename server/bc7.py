@@ -76,9 +76,16 @@ def mips(img):
 _GPU_FAILED = False
 
 
+def gpu_ok():
+    """True when this process encodes on the GPU (fast.gpu(), not failed yet): then a photo's encode costs ~0.05
+    CPU-s here, and sending it to a busy block process only queued it behind that process's block (a stand-in's
+    "cache" stage 3-8 s of its 9, nyc_speed.py --cold 2026-11-02)."""
+    return not _GPU_FAILED and fast.gpu()
+
+
 def _encode_gpu(chain):
     """The chain's BC7 blocks encoded on the GPU (earthfast.bc7_encode_gpu: a 4096² photo's ~0.7 CPU-s on 8 threads ->
-    ~0.05 CPU-s, the same quality), or None: no GPU (fast.gpu(): off on Windows), not RGBA, or it failed (then the
+    ~0.05 CPU-s, the same quality), or None: no GPU (fast.gpu()), not RGBA, or it failed (then the
     CPU from there on)."""
     global _GPU_FAILED
     if _GPU_FAILED or not fast.gpu() or any(np.ndim(m) != 3 or np.shape(m)[2] != 4 for m in chain):

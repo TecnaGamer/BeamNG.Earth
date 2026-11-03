@@ -1,7 +1,8 @@
 """The command line's defaults are exactly v1.4 M1's (docs/V1_4_SPEC.md §0: every later milestone ships
 behind a flag that is off until its in-game probes pass; M4 `--block 512`, M1h `--horizon`): the server
 `earthd.py` builds with no flags but `--block 1024` (mesh mode, 64 cells, no horizon; the CLI's block is
-512 since M4's probes passed, test_new_flags_default_off) answers hello and
+512 since M4's probes passed, test_new_flags_default_off; since 2026-11-01 the lattice is 1 m and M1's 2 km block is
+`--block 2048`, whose every second sample is M1's) answers hello and
 status with the same messages, selects the same tiles (with hysteresis and HOLD_S, on a fake clock),
 groups and orders them the same way, predicts the same terrain requests (the prefetch), snaps and
 commits the same blocks, and writes the same heightmap as the M1 tree did, compared with
@@ -89,9 +90,12 @@ def compute(server_dir):
     out = {}
     cells = earthd.resolve_cells(None, "mesh")
     clock = _Clock(earthd.time)
+    # M1's block: 1024² at 2 m; on the 1 m lattice (2026-11-01) the same 2 km is 2048², every second sample M1's
+    sub = int(round(2.0 / getattr(heightmap, "SQUARE", 2.0)))
+    block = {"block": 1024 * sub} if sub > 1 else {}
 
     async def run(tmp):
-        s = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=None, cells=cells)
+        s = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=None, cells=cells, **block)
         s.dem = RoughDem()
         snap = getattr(s, "snap", heightmap.snap)       # M4 (Server.snap: the layout's grid); M1: 256 m
         try:
@@ -110,6 +114,9 @@ def compute(server_dir):
             hello = dict(w.msgs[-1])
             hello.pop("sessionId")
             hello.pop("appVersion", None)     # the release (VERSION): changes every release
+            # since 2026-11-01 hello always names the block (M1's: 2 km, no field = the 1024² block at 2 m)
+            if sub > 1 and (hello.get("blockSize"), hello.get("squareSize")) == (1024 * sub, 2.0 / sub):
+                del hello["blockSize"], hello["squareSize"]
             out["hello"] = hello
             c.status("Ready")
             out["status"] = w.msgs[-1]
@@ -121,7 +128,8 @@ def compute(server_dir):
                               for k, v in sorted(info.items()) if k not in ("seconds", "stages", "ter")}
             from PIL import Image
             with Image.open(os.path.join(s.out_dir, s.hm_name((a.id, snap(300.0), snap(-140.0))))) as im:
-                out["terrain_png"] = [im.size[0], im.mode, _h(np.asarray(im).tobytes())]
+                px = np.asarray(im)[sub - 1::sub, ::sub]       # (the 2 m samples: odd rows from the north)
+                out["terrain_png"] = [px.shape[1], im.mode, _h(px.tobytes())]
             a.first_terrain = (0.0, 0.0)
             c.active = a.id
             c._set_block(a.id, 0.0, 0.0)
@@ -180,6 +188,9 @@ class CliDefaultTest(unittest.TestCase):
         want = json.loads(FIXTURE.read_text())
         got = json.loads(json.dumps(compute(Path(__file__).resolve().parents[1])))
         self.assertEqual(sorted(got), sorted(want))
+        # The 1 m lattice holds M1's 2 m samples (terrain_png) and the ones between them, so its highest one can only
+        # be higher; its lowest, zBase and q are M1's here.
+        self.assertGreaterEqual(got["terrain"].pop("maxU"), want["terrain"].pop("maxU"))
         for k in want:
             self.assertEqual(got[k], want[k], k)
 
@@ -191,14 +202,16 @@ class CliDefaultTest(unittest.TestCase):
             sys.path.pop(0)
         import inspect
         self.assertEqual(earthd.BLOCK_DEFAULT, 1024)                        # Server()'s block
-        # M4 is on from the command line in mesh mode (P2, P7, P11 passed in-game); terrain mode keeps 1024
+        # M4's 1 km block is on from the command line in mesh mode (P2, P7, P11 passed in-game; since 2026-11-01
+        # 1024² at 1 m, as terrain mode's block); --block 2048 (2 km) is mesh mode's other one
         self.assertEqual((earthd.resolve_block(None, "mesh"), earthd.resolve_block(None, "terrain"),
-                          earthd.resolve_block(1024, "mesh")), (512, 1024, 1024))
+                          earthd.resolve_block(2048, "mesh")), (1024, earthd.TERRAIN_BLOCK, 2048))
         # M1h is on from the command line in mesh mode (2026-10-11); --no-horizon and terrain mode: off
         self.assertEqual((earthd.resolve_horizon(None, "mesh"), earthd.resolve_horizon(None, "terrain"),
                           earthd.resolve_horizon(False, "mesh")), (True, False, False))
         p = inspect.signature(earthd.Server).parameters
-        self.assertEqual((p["block"].default, p["horizon"].default), (1024, False))   # M1h off until P12
+        # (block None: BLOCK_DEFAULT, 1024; terrain mode its TERRAIN_BLOCK) M1h off until P12
+        self.assertEqual((p["block"].default, p["horizon"].default), (None, False))
 
 
 if __name__ == "__main__":

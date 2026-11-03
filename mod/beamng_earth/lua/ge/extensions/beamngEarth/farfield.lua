@@ -1473,11 +1473,11 @@ end
 -- anchor's tile, and whether that frame was an exact miss (mesh mode).
 function M.exactState() return under.level, under.old, under.miss end
 
--- The exact (physics lattice) level of a tile grid: the level whose tile is `cells` lattice squares
--- wide (32 cells: L-2 = 64 m; 64 cells: L-1 = 128 m).
+-- The exact level of a tile grid: the level whose tile is `cells` squares of the far field's own 2 m lattice wide
+-- (lattice.FAR_SQUARE, every second sample of the 1 m physics block; 32 cells: L-2 = 64 m; 64 cells: L-1 = 128 m).
 function M.exactLevelFor(cells)
   cells = tonumber(cells) or 32
-  return floor(ln(cells * lattice.SQUARE / lattice.L0) / ln(2) + 0.5)
+  return floor(ln(cells * lattice.FAR_SQUARE / lattice.L0) / ln(2) + 0.5)
 end
 
 -- The exact (physics lattice) level: -2 for the v1.3.1 32-cell layout (default), -1 for 64 cells (M1).

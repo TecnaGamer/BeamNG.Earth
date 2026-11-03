@@ -129,70 +129,21 @@ def classify(classes, u, square, lat=None, lon=None):
     return np.where(steep & (idx != SNOW), np.uint8(ROCK), idx).astype(np.uint8)
 
 
-def _hash01(ix, iy, seed):
-    """Deterministic pseudo-random in [-1, 1] per integer lattice point (uint64 arithmetic)."""
-    h = (ix.astype(np.int64).astype(np.uint64) * np.uint64(0x9E3779B185EBCA87)
-         ^ iy.astype(np.int64).astype(np.uint64) * np.uint64(0xC2B2AE3D27D4EB4F)
-         ^ np.uint64(seed) * np.uint64(0x165667B19E3779F9))
-    h ^= h >> np.uint64(29)
-    h *= np.uint64(0xBF58476D1CE4E5B9)
-    h ^= h >> np.uint64(32)
-    return (h >> np.uint64(11)).astype(np.float64) / float(1 << 53) * 2.0 - 1.0
-
-
 def _value_noise(x, y, seed):
     """Smooth value noise in [-1, 1] at points (x, y) given in lattice units."""
     return _value_noises(x, y, (seed,))[0]
 
 
 def _value_noises(x, y, seeds):
-    """_value_noise(x, y, seed) for each of seeds, the lattice work done once (warp's dx and dy share their points).
-    KyzoFox 1.5.4: the four corner hashes come from a table of the lattice points the samples touch. A 1 km
-    block's million samples sit in a few thousand lattice cells (12-40 m features, 2 m samples), and hashing every
-    corner of every sample was most of the terrain block's "landcover" time (warp + lawns: 6 noises). The same values
-    exactly (the same hash and arithmetic, looked up)."""
-    x0 = np.floor(x)
-    y0 = np.floor(y)
-    fx = x - x0
-    fy = y - y0
-    fx = fx * fx * (3.0 - 2.0 * fx)
-    fy = fy * fy * (3.0 - 2.0 * fy)
-    ix = x0.astype(np.int64)
-    iy = y0.astype(np.int64)
-    table = None
-    if ix.size >= NOISE_TABLE_MIN:
-        bx, by = int(ix.min()), int(iy.min())
-        w, h = int(ix.max()) - bx + 2, int(iy.max()) - by + 2
-        if w * h * NOISE_TABLE_SHARE <= ix.size:
-            gy, gx = np.mgrid[by:by + h, bx:bx + w]
-            k = (iy - by) * w + (ix - bx)
-            table = (gx, gy, k, w)
-    out = []
-    for seed in seeds:
-        if table is not None:
-            gx, gy, k, w = table
-            tab = _hash01(gx, gy, seed).ravel()
-            a, b, c, d = tab[k], tab[k + 1], tab[k + w], tab[k + w + 1]
-        else:
-            a = _hash01(ix, iy, seed)
-            b = _hash01(ix + 1, iy, seed)
-            c = _hash01(ix, iy + 1, seed)
-            d = _hash01(ix + 1, iy + 1, seed)
-        top = b - a
-        top *= fx
-        top += a                        # a + (b - a) * fx
-        bot = d - c
-        bot *= fx
-        bot += c                        # c + (d - c) * fx
-        bot -= top
-        bot *= fy
-        bot += top                      # top + (bot - top) * fy
-        out.append(bot)
-    return out
-
-
-NOISE_TABLE_MIN = 4096      # samples from which _value_noise hashes a lattice table ...
-NOISE_TABLE_SHARE = 4       # ... when the table has at most a quarter as many points as there are samples
+    """_value_noise(x, y, seed) for each of seeds (warp's dx and dy share their points): earthfast.value_noises (the
+    hash of each lattice corner, smoothstep weights, bilinear; ported 2026-11-01 from the numpy version, the same
+    values bit for bit)."""
+    fast.require(139, "value noise")
+    x = np.asarray(x, np.float64)
+    y = np.asarray(y, np.float64)
+    out = fast._ef.value_noises(np.ascontiguousarray(x.ravel()), np.ascontiguousarray(y.ravel()),
+                                [int(v) for v in seeds])
+    return [o.reshape(x.shape) for o in out]
 
 
 def warp(lat, lon):
@@ -259,9 +210,9 @@ def _lonlat_boxes(feats):
     return got
 
 
-ROAD_EDGE_M = 1.0    # m past a carriageway's edge its material reaches: a square whose centre is at most this far out
-                     # is road (a 2 m square reaches back up to 1.4 m: at 0.5 a wheel 0.2 m inside a 9 m road's edge was
-                     # on dirt; the grain beyond lies under the edge decal, roads.EDGE_DECAL)
+ROAD_EDGE_M = 0.5    # m past a carriageway's edge its material reaches: a square whose centre is at most this far out
+                     # is road (a 1 m square reaches back up to 0.7 m; at 2 m squares this was 1.0: at 0.5 a wheel 0.2 m
+                     # inside a 9 m road's edge was on dirt; the grain beyond lies under the edge decal, roads.EDGE_DECAL)
 
 
 def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, extra=()):
@@ -879,9 +830,9 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
 
 
 # A road without sidewalks gets a verge of VERGE_M a side painted bare where the ground would carry grass or shrubs:
-# the ground cover goes by the 2 m layer samples, and tufts stood on the asphalt along its edges in many places (the
-# user, 2026-10-20: "grass on the road")
-VERGE_M = 2.0
+# the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
+# edges in many places (the user, 2026-10-20: "grass on the road")
+VERGE_M = 1.5
 VERGE_FROM = (GRASS, LAWN, DUSTY)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
@@ -927,38 +878,31 @@ def paint_pads(idx, lat, lon, pads):
     return out
 
 
-def _pads_px(frame, x0, y0, size, w, h, pads):
-    """A w x h coverage (float 0..1, 2x supersampled edges) of the pads in a photo over [x0, x0 + size]² of frame
-    (row 0 north), or None when none is in it. Drawn only over the pads' bounding box (most tiles have none: no image
-    is made for them)."""
-    if not pads:
-        return None
-    k = 2
-    px_m = w * k / size
-    polys = []
+def _pads_photo_px(frame, x0, y0, size, w, h, pads):
+    """The pads as (cols, rows) rings in a w x h photo over [x0, x0 + size]² of frame (row 0 north): those that reach
+    into it."""
+    out = []
     for la, lo in pads:
         e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(len(la)))
-        c = (np.asarray(e) - x0) * px_m
-        r = (y0 + size - np.asarray(n)) * px_m
-        if c.max() < 0 or c.min() > w * k or r.max() < 0 or r.min() > h * k:
+        c = (np.asarray(e, np.float64) - x0) * (w / size)
+        r = (y0 + size - np.asarray(n, np.float64)) * (h / size)
+        if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
             continue
-        polys.append((c, r))
+        out.append((np.ascontiguousarray(c), np.ascontiguousarray(r)))
+    return out
+
+
+def _pads_px(frame, x0, y0, size, w, h, pads):
+    """A w x h coverage (float 0..1: the share of each pixel's 2 x 2 sub-pixel centres inside a pad) of the pads in a
+    photo over [x0, x0 + size]² of frame (row 0 north), or None when none is in it (earthfast.pad_cover: PIL drew
+    the whole 2x image over the lots' common box, most of a 4096 px block photo, 1.1 s of its 1.5 s of roads,
+    2026-11-01)."""
+    polys = _pads_photo_px(frame, x0, y0, size, w, h, pads) if pads else []
     if not polys:
         return None
-    c0 = max(0, int(min(c.min() for c, _ in polys)) // k * k)
-    r0 = max(0, int(min(r.min() for _, r in polys)) // k * k)
-    c1 = min(w * k, -(-int(max(c.max() for c, _ in polys) + 1) // k) * k)
-    r1 = min(h * k, -(-int(max(r.max() for _, r in polys) + 1) // k) * k)
-    if c1 <= c0 or r1 <= r0:
-        return None
-    im = Image.new("L", (c1 - c0, r1 - r0), 0)
-    draw = ImageDraw.Draw(im)
-    for c, r in polys:
-        draw.polygon(list(zip((c - c0).tolist(), (r - r0).tolist())), fill=255)
-    sub = np.asarray(im, np.float32).reshape((r1 - r0) // k, k, (c1 - c0) // k, k).mean(axis=(1, 3)) / 255.0
-    out = np.zeros((h, w), np.float32)
-    out[r0 // k:r1 // k, c0 // k:c1 // k] = sub
-    return out
+    fast.require(140, "pad coverage")
+    cov = fast._ef.pad_cover(int(h), int(w), polys)
+    return None if cov is None else cov.astype(np.float32) / 4.0
 
 
 def _windows_px(frame, x0, y0, size, w, h, pads):
@@ -1019,18 +963,13 @@ def photo_pads(rgb, frame, x0, y0, size, pads):
     """The photo rgb (H x W x 3, row 0 north, over [x0, x0 + size]² of frame) with the pads painted in the paved
     roads' colour (PHOTO_ROAD_RGBA). Pure."""
     h, w = rgb.shape[:2]
-    a = _pads_px(frame, x0, y0, size, w, h, pads)
-    if a is None:
+    polys = _pads_photo_px(frame, x0, y0, size, w, h, pads) if pads else []
+    if not polys:
         return rgb
-    rows, cols = np.flatnonzero(a.any(axis=1)), np.flatnonzero(a.any(axis=0))
-    if not len(rows):
-        return rgb
-    r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1     # (only the pads' box blended)
+    fast.require(140, "pad painting")
     r, g, b, op = PHOTO_ROAD_RGBA["paved"]
-    sub = (a[r0:r1, c0:c1] * op)[..., None]
-    out = rgb.copy()
-    blend = rgb[r0:r1, c0:c1].astype(np.float32) * (1.0 - sub) + np.array([r, g, b], np.float32) * sub
-    out[r0:r1, c0:c1] = np.clip(np.round(blend), 0, 255).astype(np.uint8)
+    out = np.array(rgb, np.uint8, copy=True, order="C")
+    fast._ef.paint_pads(out, polys, [float(r), float(g), float(b)], float(np.float32(op)))
     return out
 
 

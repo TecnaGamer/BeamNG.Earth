@@ -445,3 +445,139 @@ pub fn gradesep_spans<'py>(
     }
     out.into_pyarray(py)
 }
+
+/// numpy's interp for one x over increasing xp (binary search for the last xp[j] <= x; x at xp[j] exactly: fp[j]; the
+/// slope form, tried from the other end when it is NaN; below xp[0]: fp[0], above or at the last: fp[last]).
+fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
+    let n = xp.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    if x.is_nan() {
+        return x;
+    }
+    if !(x >= xp[0]) {
+        return fp[0];
+    }
+    if !(x < xp[n - 1]) {
+        return fp[n - 1];
+    }
+    // (the last j with xp[j] <= x, x < xp[n - 1]: j < n - 1)
+    let (mut lo, mut hi) = (0usize, n - 1);
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if xp[mid] <= x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let j = lo;
+    if x == xp[j] {
+        return fp[j];
+    }
+    let slope = (fp[j + 1] - fp[j]) / (xp[j + 1] - xp[j]);
+    let mut r = slope * (x - xp[j]) + fp[j];
+    if r.is_nan() {
+        r = slope * (x - xp[j + 1]) + fp[j + 1];
+        if r.is_nan() && fp[j] == fp[j + 1] {
+            r = fp[j];
+        }
+    }
+    r
+}
+
+/// gradesep._cut: the part of polyline xy between fractions a < b of its length (xy[:1] when it has none).
+fn cut(xy: &[[f64; 2]], a: f64, b: f64) -> Vec<[f64; 2]> {
+    let mut s = Vec::with_capacity(xy.len());
+    s.push(0.0f64);
+    for k in 1..xy.len() {
+        let d = (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        let last = *s.last().unwrap();
+        s.push(last + d);
+    }
+    let total = *s.last().unwrap();
+    if !(total > 0.0) {
+        return vec![xy[0]];
+    }
+    let (sa, sb) = (a * total, b * total);
+    let xs: Vec<f64> = xy.iter().map(|p| p[0]).collect();
+    let ys: Vec<f64> = xy.iter().map(|p| p[1]).collect();
+    let mut out = vec![[np_interp(sa, &s, &xs), np_interp(sa, &s, &ys)]];
+    for k in 0..xy.len() {
+        if s[k] > sa && s[k] < sb {
+            out.push(xy[k]);
+        }
+    }
+    out.push([np_interp(sb, &s, &xs), np_interp(sb, &s, &ys)]);
+    out
+}
+
+/// gradesep._spans' lines (2026-11-02: 1.9 of its 3.6 s on 6 Midtown cells was this loop in Python, each layer walked
+/// again for each of the nine cells round it). rows (r,): the layer's features in order; for each, its parts' rings
+/// (offsets part_off / ring_off / coord_off into xy, the layer in the asking cell's frame) cut into its pieces
+/// (piece_off[i]..piece_off[i + 1] of pk (a line's kind, -1 for a deck), pa, pb). Returns (line points (m, 2), their
+/// starts (l + 1,), each line's row index and piece index, deck ends and lengths (2d, 3), each deck's row index).
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn gradesep_gather<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, coord_off: PyReadonlyArray1<'py, i64>,
+                            ring_off: PyReadonlyArray1<'py, i64>, part_off: PyReadonlyArray1<'py, i64>,
+                            rows: PyReadonlyArray1<'py, i64>, piece_off: PyReadonlyArray1<'py, i64>,
+                            pk: PyReadonlyArray1<'py, i64>, pa: PyReadonlyArray1<'py, f64>,
+                            pb: PyReadonlyArray1<'py, f64>)
+                            -> (Bound<'py, PyArray2<f64>>, Bound<'py, numpy::PyArray1<i64>>,
+                                Bound<'py, numpy::PyArray1<i64>>, Bound<'py, numpy::PyArray1<i64>>,
+                                Bound<'py, PyArray2<f64>>, Bound<'py, numpy::PyArray1<i64>>) {
+    let (xy, co, ro, po) = (xy.as_array(), coord_off.as_array(), ring_off.as_array(), part_off.as_array());
+    let (rows, poff, pk, pa, pb) = (rows.as_array(), piece_off.as_array(), pk.as_array(), pa.as_array(), pb.as_array());
+    let mut pts: Vec<f64> = Vec::new();
+    let mut starts: Vec<i64> = vec![0];
+    let mut line_row: Vec<i64> = Vec::new();
+    let mut line_piece: Vec<i64> = Vec::new();
+    let mut de: Vec<f64> = Vec::new();
+    let mut deck_row: Vec<i64> = Vec::new();
+    for (r, &i) in rows.iter().enumerate() {
+        let i = i as usize;
+        let (p0, p1) = (poff[i] as usize, poff[i + 1] as usize);
+        if p1 <= p0 {
+            continue;
+        }
+        for p in po[i] as usize..po[i + 1] as usize {
+            for g in ro[p] as usize..ro[p + 1] as usize {
+                let (a, b) = (co[g] as usize, co[g + 1] as usize);
+                if b - a < 2 {
+                    continue;
+                }
+                let ring: Vec<[f64; 2]> = (a..b).map(|k| [xy[[k, 0]], xy[[k, 1]]]).collect();
+                for q in p0..p1 {
+                    let piece = if pa[q] == 0.0 && pb[q] == 1.0 { ring.clone() } else { cut(&ring, pa[q], pb[q]) };
+                    if piece.len() < 2 {
+                        continue;
+                    }
+                    if pk[q] < 0 {
+                        let seg: Vec<f64> = (1..piece.len())
+                            .map(|k| (piece[k][0] - piece[k - 1][0]).hypot(piece[k][1] - piece[k - 1][1]))
+                            .collect();
+                        let l = crate::levels::np_sum(&seg);
+                        let (f, e) = (piece[0], piece[piece.len() - 1]);
+                        de.extend_from_slice(&[f[0], f[1], l, e[0], e[1], l]);
+                        deck_row.push(r as i64);
+                        continue;
+                    }
+                    for v in &piece {
+                        pts.push(v[0]);
+                        pts.push(v[1]);
+                    }
+                    starts.push((pts.len() / 2) as i64);
+                    line_row.push(r as i64);
+                    line_piece.push(q as i64);
+                }
+            }
+        }
+    }
+    let m = pts.len() / 2;
+    let d = deck_row.len();
+    (Array2::from_shape_vec((m, 2), pts).expect("points").into_pyarray(py), starts.into_pyarray(py),
+     line_row.into_pyarray(py), line_piece.into_pyarray(py),
+     Array2::from_shape_vec((2 * d, 3), de).expect("decks").into_pyarray(py), deck_row.into_pyarray(py))
+}

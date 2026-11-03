@@ -119,6 +119,23 @@ class RevisitTest(unittest.TestCase):
         self.assertNotEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 3))
         self.assertEqual(len(revisit.code_key()), 16)
 
+    def test_format_keys_survive_code_changes(self):
+        """Road plans and cell facts (the user, 2026-11-02): keyed by their format number, not the code, so an update
+        keeps them; another format number or build switch is another key; the map's cache view counts their sidecar
+        rows as current."""
+        from unittest import mock
+        import plancache
+        k = revisit.format_key("plans", "1.1", (14, 1, 2))
+        with mock.patch.object(revisit, "_code", ["another-code-key"]):
+            self.assertEqual(revisit.format_key("plans", "1.1", (14, 1, 2)), k, "the code changed: the same key")
+            self.assertNotEqual(revisit.key("plans", (14, 1, 2)), revisit.format_key("plans", "1.1", (14, 1, 2)))
+        self.assertNotEqual(revisit.format_key("plans", "2.1", (14, 1, 2)), k, "another format")
+        with mock.patch.object(revisit, "_switches", ["other-switches"]):
+            self.assertNotEqual(revisit.format_key("plans", "1.1", (14, 1, 2)), k, "other BNE_* switches")
+        codes = revisit.current_codes()
+        self.assertIn(revisit.code_key(), codes)
+        self.assertIn(revisit.format_marker("plans", plancache.plans_format()), codes)
+
 
 if __name__ == "__main__":
     unittest.main()

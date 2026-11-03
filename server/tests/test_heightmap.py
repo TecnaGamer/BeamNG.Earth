@@ -28,56 +28,58 @@ def rough(lat, lon):
 class GeometryTest(unittest.TestCase):
     def test_constants(self):
         self.assertEqual(heightmap.SIZE, 1024)
-        self.assertEqual(heightmap.SQUARE, 2.0)
-        self.assertEqual(heightmap.VALID, 2046.0)           # (N-1)*s, probe P1
+        self.assertEqual(heightmap.SQUARE, 1.0)
+        self.assertEqual(heightmap.FAR_SQUARE, 2.0)         # the far field's lattice: every second sample
+        self.assertEqual(heightmap.HALF, 512.0)
+        self.assertEqual(heightmap.VALID, 1023.0)           # (N-1)*s, probe P1
         self.assertEqual(heightmap.GRID / heightmap.SQUARE, 128)
 
     def test_sample_positions_on_lattice(self):
         for cx, cy in ((0.0, 0.0), (256.0, -768.0), (10240.0, 5376.0), (-24832.0, 24576.0)):
             xs, ys = heightmap.sample_coords(cx, cy)
             self.assertEqual(len(xs), 1024)
-            # Block position (SW corner) = (cx - 1024, cy - 1024); sample gx at x0 + 2 gx, exactly.
-            self.assertEqual(xs[0], cx - 1024)
-            self.assertEqual(ys[0], cy - 1024)
-            self.assertTrue((xs == cx - 1024 + 2.0 * np.arange(1024)).all())
-            self.assertTrue((xs % 2 == 0).all())
-            self.assertEqual(xs[1023], cx + 1022)
+            # Block position (SW corner) = (cx - 512, cy - 512); sample gx at x0 + 1 gx, exactly.
+            self.assertEqual(xs[0], cx - 512)
+            self.assertEqual(ys[0], cy - 512)
+            self.assertTrue((xs == cx - 512 + 1.0 * np.arange(1024)).all())
+            self.assertTrue((xs % 1 == 0).all())
+            self.assertEqual(xs[1023], cx + 511)
         # Adjacent blocks share their samples bit for bit.
         a, _ = heightmap.sample_coords(0.0, 0.0)
-        b, _ = heightmap.sample_coords(256.0, 0.0)
+        b, _ = heightmap.sample_coords(128.0, 0.0)
         self.assertTrue((a[128:] == b[:896]).all())
         with self.assertRaises(ValueError):
-            heightmap.sample_coords(1.0, 0.0)
+            heightmap.sample_coords(0.5, 0.0)
 
     def test_block_size_parameter(self):
         """The block size is a parameter (the server passes its Layout's block, docs/V1_4_SPEC.md
-        §3.1), not a module setting: a 512² block sits on the same lattice, centred the same way."""
+        §3.1), not a module setting: a 2048² block (2 km) sits on the same lattice, centred the same way."""
         self.assertEqual(heightmap.half_extent(), heightmap.HALF)
-        self.assertEqual(heightmap.half_extent(512), 512.0)
-        xs, ys = heightmap.sample_coords(256.0, -768.0, 512)
-        self.assertEqual((len(xs), xs[0], ys[0], xs[-1]), (512, 256.0 - 512, -768.0 - 512, 256.0 + 510))
-        big, _ = heightmap.sample_coords(256.0, -768.0)
-        self.assertTrue((big[256:768] == xs).all())                    # the same lattice points
-        # height_at takes the block size from the grid: a 4² grid centred at (0, 0) spans [-4, 4)
+        self.assertEqual(heightmap.half_extent(2048), 1024.0)
+        big, bys = heightmap.sample_coords(256.0, -768.0, 2048)
+        self.assertEqual((len(big), big[0], bys[0], big[-1]), (2048, 256.0 - 1024, -768.0 - 1024, 256.0 + 1023))
+        xs, _ = heightmap.sample_coords(256.0, -768.0)
+        self.assertTrue((big[512:1536] == xs).all())                   # the same lattice points
+        # height_at takes the block size from the grid: a 4² grid centred at (0, 0) spans [-2, 2)
         q = np.arange(16, dtype=np.uint16).reshape(4, 4)
-        self.assertEqual(heightmap.height_at(q, 0.0, 65536.0, 0.0, 0.0, -4.0, -4.0), 0.0)
-        self.assertEqual(heightmap.height_at(q, 0.0, 65536.0, 0.0, 0.0, -2.0, 0.0), 9.0)
-        self.assertIsNone(heightmap.height_at(q, 0.0, 65536.0, 0.0, 0.0, 2.5, 0.0))
+        self.assertEqual(heightmap.height_at(q, 0.0, 65536.0, 0.0, 0.0, -2.0, -2.0), 0.0)
+        self.assertEqual(heightmap.height_at(q, 0.0, 65536.0, 0.0, 0.0, -1.0, 0.0), 9.0)
+        self.assertIsNone(heightmap.height_at(q, 0.0, 65536.0, 0.0, 0.0, 1.5, 0.0))
 
     def test_grids(self):
-        """M4: the centre grid per block size; snap takes it."""
-        self.assertEqual((heightmap.grid(), heightmap.grid(1024), heightmap.grid(512)), (256.0, 256.0, 128.0))
-        self.assertEqual((heightmap.valid(), heightmap.valid(512)), (2046.0, 1022.0))
-        self.assertEqual((heightmap.snap(63.9, 128.0), heightmap.snap(64.0, 128.0), heightmap.snap(-64.1, 128.0)),
-                         (0.0, 128.0, -128.0))
+        """The centre grid by the block's width (1 km: 128 m, 2 km: 256 m); snap takes it."""
+        self.assertEqual((heightmap.grid(), heightmap.grid(1024), heightmap.grid(2048)), (128.0, 128.0, 256.0))
+        self.assertEqual((heightmap.valid(), heightmap.valid(2048)), (1023.0, 2047.0))
+        self.assertEqual((heightmap.snap(127.9, 256.0), heightmap.snap(128.0, 256.0), heightmap.snap(-128.1, 256.0)),
+                         (0.0, 256.0, -256.0))
 
     def test_snap(self):
-        self.assertEqual(heightmap.snap(127.9), 0.0)
-        self.assertEqual(heightmap.snap(128.0), 256.0)
-        self.assertEqual(heightmap.snap(-128.1), -256.0)
-        self.assertEqual(heightmap.snap(-127.0), 0.0)
+        self.assertEqual(heightmap.snap(63.9), 0.0)
+        self.assertEqual(heightmap.snap(64.0), 128.0)
+        self.assertEqual(heightmap.snap(-64.1), -128.0)
+        self.assertEqual(heightmap.snap(-63.0), 0.0)
         self.assertEqual(str(heightmap.snap(-1.0)), "0.0")    # no -0.0 in file names / JSON
-        self.assertEqual(heightmap.snap(5000.0), 5120.0)
+        self.assertEqual(heightmap.snap(5000.0), 4992.0)
 
     def test_choose_q_and_block_params(self):
         self.assertEqual(heightmap.choose_q(50), 1 / 256)
@@ -95,10 +97,10 @@ class GeometryTest(unittest.TestCase):
 
 class HeightmapTest(unittest.TestCase):
     """The block as the server writes it, parametrised over the layouts' block sizes
-    (docs/V1_4_SPEC.md §3.5, E11: (32 cells, 1024²) here, (64 cells, 512²) in Heightmap512Test):
+    (docs/V1_4_SPEC.md §3.5, E11: (32 cells, 1024² = 1 km) here, (64 cells, 2048² = 2 km) in Heightmap2kmTest):
     a move of the size's grid shares bit-identical samples, the q / zBase rules are the same."""
     layout = ff.Layout(32, 1024)
-    ORIENT_C = (768.0, -256.0)          # a block centre with (0, 0) inside it
+    ORIENT_C = (384.0, -256.0)          # a block centre with (0, 0) inside it
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -121,9 +123,9 @@ class HeightmapTest(unittest.TestCase):
             return np.asarray(im).astype(np.int64)[::-1]       # back to [gy, gx], gy = north
 
     def test_grid_and_parity(self):
-        """Centres on the size's grid (256 / 128 m); the SW corner is then an even lattice index, so
+        """Centres on the size's grid (128 / 256 m); the SW corner is then an even lattice index, so
         the block-local Torque diagonal parity is the world lattice's (farfield.torque_split45)."""
-        self.assertEqual(self.grid, {1024: 256.0, 512: 128.0}[self.n])
+        self.assertEqual(self.grid, {1024: 128.0, 2048: 256.0}[self.n])
         self.assertEqual(self.grid / heightmap.SQUARE % 2, 0)
         for k in range(-7, 8):
             c = k * self.grid
@@ -150,9 +152,9 @@ class HeightmapTest(unittest.TestCase):
         self.assertLessEqual(info["zBase"], info["minU"] - 8)
         q = self.read()
         h = heightmap.heights(q, info["zBase"], info["maxHeight"])
-        # Sample (gx, gy) at (cx-half+2gx, cy-half+2gy); the last row/column is real data.
+        # Sample (gx, gy) at (cx-half+s gx, cy-half+s gy); the last row/column is real data.
         for gy, gx in ((100, n - 124), (0, 0), (n - 1, n - 1), (n - 1, 0), (0, n - 1), (n // 2 - 1, n // 2 - 1)):
-            x, y = cx - half + 2 * gx, cy - half + 2 * gy
+            x, y = cx - half + heightmap.SQUARE * gx, cy - half + heightmap.SQUARE * gy
             _, _, _, _, _, u = self.frame.surface_enu(np.float64(x), np.float64(y), elev)
             self.assertAlmostEqual(h[gy, gx], float(u), delta=info["q"] / 2 + 1e-9)
         self.assertFalse((q[:, n - 1] == q[:, n - 2]).all())
@@ -174,7 +176,7 @@ class HeightmapTest(unittest.TestCase):
                 info = self.generate(rough, p, dx, dy)
                 q1 = self.read(p)
                 h1 = heightmap.heights(q1, info["zBase"], info["maxHeight"])
-                sx, sy = int(dx // 2), int(dy // 2)
+                sx, sy = int(dx // heightmap.SQUARE), int(dy // heightmap.SQUARE)
                 a = (slice(max(0, sy), n + min(0, sy)), slice(max(0, sx), n + min(0, sx)))
                 b = (slice(max(0, -sy), n - max(0, sy)), slice(max(0, -sx), n - max(0, sx)))
                 self.assertEqual(info["q"], base["q"])
@@ -204,7 +206,7 @@ class HeightmapTest(unittest.TestCase):
             b = self.generate(fn, p, G, -3 * G)
             h1 = heightmap.heights(self.read(p), b["zBase"], b["maxHeight"])
             dem.pool.shutdown()
-        sx, sy = int(G // 2), int(3 * G // 2)                  # new sample (gx, gy) = old (gx + sx, gy - sy)
+        sx, sy = int(G // heightmap.SQUARE), int(3 * G // heightmap.SQUARE)    # new (gx, gy) = old (gx + sx, gy - sy)
         self.assertTrue((h0[:n - sy, sx:] == h1[sy:, :n - sx]).all())
 
     def test_ground_outside_block(self):
@@ -218,13 +220,13 @@ class HeightmapTest(unittest.TestCase):
         args = (q, info["zBase"], info["maxHeight"], 0.0, 0.0)
         self.assertIsNotNone(heightmap.height_at(*args, -h, -h))
         self.assertIsNotNone(heightmap.height_at(*args, v - h, v - h))       # sample n-1: still collidable
-        self.assertIsNone(heightmap.height_at(*args, v - h + 1.0, 0.0))     # the 2 m N/E strip
+        self.assertIsNone(heightmap.height_at(*args, v - h + heightmap.SQUARE / 2, 0.0))     # the last N/E strip
         self.assertIsNone(heightmap.height_at(*args, 0.0, -h - 0.5))
 
     def test_quantisation_and_curvature(self):
         info = self.generate(lambda lat, lon: np.zeros_like(lat), self.path)
         q = self.read()
-        # Flat ellipsoid: centre is highest; corners (1.45 km out for 1024²) drop d² / 2R.
+        # Flat ellipsoid: centre is highest; corners (0.72 km out for the 1 km block) drop d² / 2R.
         self.assertEqual(info["q"], heightmap.Q_DEFAULT)
         self.assertEqual(info["zBase"], math.floor((info["minU"] - 8) / 64) * 64)
         self.assertAlmostEqual(info["groundZ"], 0.0, delta=0.01)
@@ -253,10 +255,10 @@ class HeightmapTest(unittest.TestCase):
         self.assertEqual(data[o + 4:], b"\x01a\x02bb\x03ccc")
 
 
-class Heightmap512Test(HeightmapTest):
-    """M4 (docs/V1_4_SPEC.md §3.5): the 512² block of the (64 cells, 512) layout, on a 128 m grid."""
-    layout = ff.Layout(64, 512)
-    ORIENT_C = (384.0, -256.0)
+class Heightmap2kmTest(HeightmapTest):
+    """The 2 km block (2048² at 1 m, mesh mode's --block 2048) of the (64 cells, 2048) layout, on a 256 m grid."""
+    layout = ff.Layout(64, 2048)
+    ORIENT_C = (768.0, -256.0)
 
 
 if __name__ == "__main__":

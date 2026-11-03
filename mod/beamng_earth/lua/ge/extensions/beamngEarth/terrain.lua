@@ -24,7 +24,7 @@ local M = {}
 
 M.NAME = 'bngEarthTerrain'
 M.SIZE = lattice.N              -- samples per side (configure); the layer map has the same size
-M.SQUARE_SIZE = lattice.SQUARE  -- 2.0 m
+M.SQUARE_SIZE = lattice.SQUARE  -- m (configure: the server's hello.squareSize)
 M.MATERIAL = 'beamngEarthDirt'
 M.TEXTURE_SET = 'beamngEarthTerrainMaterialTextureSet'
 M.BASE_TEX_SIZE = 2048   -- = the level texture set's base slot (tools/make_level_assets.py BASE_TEX): the size in use
@@ -41,8 +41,10 @@ local TERRAIN_DIR_BASE = TERRAIN_DIR .. 'bngEarth_base_b.png'   -- the level's f
 local FLAT_H = TERRAIN_DIR .. 'bngEarth_flat_h_1024.png'          -- neutral height (detail / macro slots)
 local MATERIALS_FILE = TERRAIN_DIR .. 'main.materials.json'
 -- per block size (tools/make_level_assets.py): all white = material 0 everywhere; all zero, 16-bit
-local LAYER_MAPS = { [1024] = TERRAIN_DIR .. 'beamngEarth_layer_1024.png', [512] = TERRAIN_DIR .. 'beamngEarth_layer_512.png' }
-local FLAT_HEIGHTMAPS = { [1024] = TERRAIN_DIR .. 'beamngEarth_flat_1024.png', [512] = TERRAIN_DIR .. 'beamngEarth_flat_512.png' }
+local LAYER_MAPS = { [2048] = TERRAIN_DIR .. 'beamngEarth_layer_2048.png', [1024] = TERRAIN_DIR .. 'beamngEarth_layer_1024.png',
+  [512] = TERRAIN_DIR .. 'beamngEarth_layer_512.png' }
+local FLAT_HEIGHTMAPS = { [2048] = TERRAIN_DIR .. 'beamngEarth_flat_2048.png', [1024] = TERRAIN_DIR .. 'beamngEarth_flat_1024.png',
+  [512] = TERRAIN_DIR .. 'beamngEarth_flat_512.png' }
 local LAYER_MAP, FLAT_HEIGHTMAP = LAYER_MAPS[1024], FLAT_HEIGHTMAPS[1024]
 
 -- Surface materials (server --surface on, server/surface.py): runtime clones of M.MATERIAL with other
@@ -97,9 +99,9 @@ M.LOOKS = {
   bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
-M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, size = '256' }
+M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
 
-M.square = 2.0   -- the block's square size (m per sample), from the last load
+M.square = lattice.SQUARE   -- the block's square size (m per sample), from the last load
 -- surface materials made here (other levels: our level defines them in main.materials.json, made by
 -- tools/make_level_assets.py, because runtime TerrainMaterials made every updateMaterial cost ~1 s,
 -- in-game 2026-10-12)
@@ -124,7 +126,7 @@ local function applyLook(m, name)
 end
 
 local function baseFields(path, size)
-  return path or M.LEVEL_BASE.tex, path and tostring(toSamples(size or 1024)) or M.LEVEL_BASE.size
+  return path or M.LEVEL_BASE.tex, tostring(toSamples(path and (size or 1024) or M.LEVEL_BASE.sizeM))
 end
 
 local function setMaterialBase(m, name, path, tex, size)
@@ -192,6 +194,7 @@ end
 function M.configure(size)
   local n = LAYER_MAPS[size] and size or 1024
   M.SIZE, LAYER_MAP, FLAT_HEIGHTMAP = n, LAYER_MAPS[n], FLAT_HEIGHTMAPS[n]
+  M.SQUARE_SIZE = lattice.SQUARE
   return n
 end
 

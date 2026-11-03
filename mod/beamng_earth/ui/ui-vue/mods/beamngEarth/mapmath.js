@@ -120,6 +120,20 @@ export function fitView(points, w, h, pad = 60, maxZ = 12) {
 
 // Places whose name contains every word of the query (case-insensitive), best (name starts with
 // the query) first; at most `limit`.
+// A list the game's Lua sent: an empty Lua table arrives as {} and one indexed by number may arrive as an object of
+// its values; [] for anything else. Pure.
+export function luaList(v) {
+  if (Array.isArray(v)) return v
+  return v && typeof v === "object" ? Object.values(v) : []
+}
+
+// The saved places, then the recent ones (their text as the name), for the search box. With no saved or no recent
+// places the game sends {} for that list, and spreading it threw ("not iterable"): the search box found nothing,
+// not even the places of the other list. Pure.
+export function searchList(places, recent) {
+  return [...luaList(places), ...luaList(recent).map(r => ({ ...r, name: r.name || r.text }))]
+}
+
 export function searchPlaces(list, query, limit = 8) {
   const q = String(query || "").trim().toLowerCase()
   if (!q) return []

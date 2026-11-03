@@ -93,6 +93,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 **Driving and traffic**
 - Drive anywhere: the physics ground follows the car at 100+ mph, the world origin moves with you
   (floating origin), and the world streams ahead of you; you never fall out of the world.
+- The ground around the car is a 1 km terrain block at 1 m (3 ft) resolution, the stock maps' own detail, so road
+  edges, ditches and the ground at walls follow the map closely.
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
 - Real bridge and tunnel heights where open data measures them: in the US, bridge decks follow the USGS 3DEP lidar
@@ -103,10 +105,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
 - Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
-  2 to 4 road pieces at once, by your computer's CPU threads and memory.
+  2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
+  behind, it borrows a quarter of the game's cores until it has caught up (`BNGE_CATCHUP_LEND=0` turns that off,
+  `0.5` borrows half).
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
-  `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off).
+  `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
+  update changes how that part of the world is built.
 - **AI support**: the mod builds BeamNG's road graph (the AI's map) from the real roads around you, with
   lanes, one-way streets, speed limits (mapped, or the country's defaults), the country's driving side and
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the
@@ -293,7 +298,8 @@ false positives); GitHub Actions (`.github/workflows/release.yml`) builds both a
 whenever `main` gets a `VERSION` without one. Release zip of the source: `python3 tools/package.py`.
 
 Tests: `cd server && python3 -m unittest discover -s tests -t tests` and
-`cd mod/tests && for f in test_*.lua; do luajit $f; done`.
+`cd mod/tests && for f in test_*.lua; do luajit $f; done` (no luajit: `pip install lupa`, then
+`python3 tools/run_lua_tests.py`).
 
 ## Multiplayer (BeamMP)
 
@@ -339,9 +345,16 @@ world map (**M**) as green arrows; players far away (another country) are hidden
 you watch keeps the damage your own game worked out; a car that crashed out of your sight takes on its owner's damage
 (broken parts and dents) once it comes within about 0.6 miles.
 
-Each player's app builds the world around them on their own computer.
+Each player's app builds the world around them on their own computer. **Sharing the work** (in testing): the BeamMP
+server keeps what its players build of the slowest part of the world, the road levelling plans of each map area
+(compressed, a few hundred KB each), and sends it to every player who comes there later, this session or the next. A
+player near the others gets much of it from the server instead of building it, which is quickest on slower
+computers. It all goes through the BeamMP connection itself, nothing to set up or forward, and only between players
+running the same BeamNG.Earth version with the same settings. A server can also hold baked packs of whole areas (put
+`.bnge` files in `Resources/Server/BeamNGEarth/bake/`), and the machine running the server can build ahead of
+the players itself (the share helper, below).
 
-<!-- Shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
+<!-- v1 shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
 **Sharing the work** (turned off for now: each player builds their own world)**:** players near each other share one
 world origin and split the building of the distant landscape (each piece is built once and sent to the others; faster computers take more), while a player far from
 everyone builds their own. For that the other players must reach your computer on a TCP port, 47621 unless the server
@@ -362,6 +375,13 @@ Update the server zip with every release: it carries the mod the server sends to
 (`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real or clear, cloudy, rain, storm, snow,
 fog) are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
 little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip.
+
+The server keeps its players' shared world building in `Resources/Server/BeamNGEarth/store` (up to `G.SHARE_STORE_MB`,
+2 GB by default; the pieces used longest ago go first) and sends at most `G.SHARE_OUT_KBPS` (1 MB/s) of it, both near
+the top of `main.lua`. **Share helper** (in testing): to let the server's machine build ahead of its players, run
+BeamNG.Earth's world server next to it, from the source:
+`python3 server/sharehelper.py --share-dir <BeamMP server>/Resources/Server/BeamNGEarth --cache <a folder for its map
+data> --procs 4`. It needs the same BeamNG.Earth version as the players and a few GB of disk for each area.
 
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.

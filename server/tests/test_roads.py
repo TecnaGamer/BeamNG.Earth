@@ -1045,11 +1045,11 @@ class TrackerTest(unittest.TestCase):
 
 
 class PaintRoadsTest(unittest.TestCase):
-    def grid(self, n=128):
+    def grid(self, n=128, sq=2.0):
         rows = np.arange(n)[:, None]
         cols = np.arange(n)[None, :]
-        lat = LAT + (n / 2 - rows) * 2 / M_LAT + np.zeros((1, n))
-        lon = LON + (cols - n / 2) * 2 / M_LON + np.zeros((n, 1))
+        lat = LAT + (n / 2 - rows) * sq / M_LAT + np.zeros((1, n))
+        lon = LON + (cols - n / 2) * sq / M_LON + np.zeros((n, 1))
         return lat, lon
 
     def test_affine(self):
@@ -1072,21 +1072,23 @@ class PaintRoadsTest(unittest.TestCase):
 
     def test_bare_verge_beside_roads(self):
         """Grass tufts stood on the asphalt along road edges (the user, 2026-10-20): a road without sidewalks gets a
-        bare verge (VERGE_M a side) where the ground carries grass; rock stays rock."""
-        lat, lon = self.grid()
+        bare verge (VERGE_M a side) where the ground carries grass; rock stays rock. On the block's 1 m samples, each
+        tested at the centre of the square north-east of it (its square's material in the engine)."""
+        lat, lon = self.grid(sq=1.0)
         f = features([[(-200, 0), (200, 0)]], ["residential"])
-        out = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f], 2.0)
+        out = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f], 1.0)
         col = [int(v) for v in out[:, 10]]
-        self.assertEqual(col[64 - 2], sf.ASPHALT, "4 m north: the 8 m road's edge, painted")
-        self.assertEqual(col[64 + 2], sf.ASPHALT, "4 m south: likewise (centred, not half a sample off)")
-        self.assertEqual((col[64 - 3], col[64 + 3]), (sf.VERGE, sf.VERGE), "6 m either side: the verge")
-        self.assertEqual(col[64 - 6], sf.GRASS, "12 m north: grass again")
-        rock = sf.paint_roads(np.full(lat.shape, sf.ROCK, np.uint8), lat, lon, [f], 2.0)
-        self.assertEqual(int(rock[64 - 3, 10]), sf.ROCK)
+        # (the squares whose centres lie exactly ROAD_EDGE_M past the edges, 4-5 m out, are left out: on the line)
+        self.assertEqual(col[64 - 3], sf.ASPHALT, "the square 3-4 m north: the 8 m road's edge, painted")
+        self.assertEqual(col[64 + 4], sf.ASPHALT, "the square 3-4 m south: likewise (centred, not half a sample off)")
+        self.assertEqual((col[64 - 5], col[64 + 6]), (sf.VERGE, sf.VERGE), "5-6 m either side: the verge")
+        self.assertEqual((col[64 - 6], col[64 + 7]), (sf.GRASS, sf.GRASS), "6-7 m either side: grass again")
+        rock = sf.paint_roads(np.full(lat.shape, sf.ROCK, np.uint8), lat, lon, [f], 1.0)
+        self.assertEqual(int(rock[64 - 5, 10]), sf.ROCK)
         f9 = features([[(-200, 0), (200, 0)]], ["residential"], widths=[(0, 9.0)])
-        out9 = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f9], 2.0)
+        out9 = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f9], 1.0)
         n = int((out9[:, 10] == sf.ASPHALT).sum())
-        self.assertGreaterEqual(n * 2.0, 9.0, "a 9 m road painted at least 9 m wide (was 8)")
+        self.assertGreaterEqual(n * 1.0, 9.0, "a 9 m road painted at least 9 m wide (was 8)")
 
     def test_cobbles_under_the_tyres(self):
         lat, lon = self.grid()
@@ -1145,7 +1147,7 @@ class TileNeedsTest(unittest.TestCase):
         needs = roads.tile_needs(frame, 0, 0, buildings=True, widths=True, water_ring=3)
         self.assertEqual(len(needs), len(set(needs)), "no (cell, layer) twice")
         self.assertEqual({k for k, ly in needs if ly == "building_parts"}, own)   # the tile's own cells first
-        self.assertEqual({ly for k, ly in needs[:len(own) * 5]}, {"roads", "infrastructure", "buildings",
+        self.assertEqual({ly for k, ly in needs[:len(own) * 6]}, {"roads", "infrastructure", "land_use", "buildings",
                                                                     "building_parts", "water"})
         xs = sorted({k.x for k in own})
         ring = {k for k, ly in needs if ly == "buildings"}
@@ -1155,7 +1157,7 @@ class TileNeedsTest(unittest.TestCase):
         far = [i for i, (k, ly) in enumerate(needs) if ly == "water" and k not in own]
         self.assertEqual(far, list(range(far[0], len(needs))), "the water ring last")
         bare = roads.tile_needs(frame, 0, 0, buildings=False, widths=False, water_ring=0)
-        self.assertEqual({ly for _, ly in bare}, {"roads", "infrastructure"})
+        self.assertEqual({ly for _, ly in bare}, {"roads", "infrastructure", "land_use"})
         import gradesep
         r = 2 if gradesep.ON else 1     # (grading's ring of roads; gradesep's neighbours of those when it is on)
         self.assertEqual(sorted({k.x for k, ly in bare if ly == "roads"}), list(range(xs[0] - r, xs[-1] + r + 1)))
@@ -1507,6 +1509,64 @@ class MountainRoadTest(unittest.TestCase):
         self.assertIn("centre", kinds(sp))
         self.assertNotIn("centre", kinds(sp._replace(mountain=True)))
         self.assertIn("edge", kinds(sp._replace(mountain=True)))
+
+    def test_hairpins_widened(self):
+        """Each hairpin's apex found; the road HAIRPIN_WIDEN_M wider there through its tapers, its legs as they were;
+        the grading's core of the road's own plan as much wider there (no plan of its own: its ends stepped the
+        lanes)."""
+        import grading
+        f = features([_zigzag(4)], ["secondary"])
+        sp = roads.road_specs(f)[0]
+        ll = f.lonlat
+        apexes = roads.hairpin_apexes(ll)
+        self.assertEqual(len(apexes), 4)
+        tp = roads.road_tapers(f)[0]
+        ws = roads.taper_widths(sp.width, tp, ll[:, 0], ll[:, 1])
+        self.assertAlmostEqual(float(ws.max()), sp.width + roads.HAIRPIN_WIDEN_M, delta=0.3)
+        self.assertAlmostEqual(float(ws.min()), sp.width, delta=0.01)
+        xy = np.c_[(ll[:, 0] - LON) * M_LON, (ll[:, 1] - LAT) * M_LAT]
+        p = grading._plan(xy, np.zeros(len(xy)), sp)
+        self.assertEqual(grading.hairpin_cores([("r", p)], [sp], FRAME), 1)
+        self.assertAlmostEqual(float(p.widen.max()), roads.HAIRPIN_WIDEN_M / 2, delta=0.2)
+        self.assertEqual(float(p.widen.min()), 0.0, "the legs as they were")
+        pack = grading.PlanPack([p])
+        k = int(np.argmax(p.widen[:-1]))
+        self.assertGreater(pack.h[k], p.half + 1.5, "the core wider round the apex")
+        self.assertEqual(float(pack.h.min()), p.half)
+        # (a piece of it trimmed to a box keeps its widening there)
+        x0 = float(np.asarray(p.xy)[k, 0])
+        parts = grading.trim_plan(p, (x0 - 30.0, -1e9, x0 + 30.0, 1e9))
+        self.assertTrue(parts and all(q.widen is not None and len(q.widen) == len(q.xy) for q in parts))
+        self.assertGreater(max(float(q.widen.max()) for q in parts), 1.5)
+
+    def test_hairpin_legs_own_roads(self):
+        """A pass road's legs between its hairpins grade as roads of their own (grading.PlanPack: another rid each), so
+        one leg's ground gives way over the other's carriageway at another level (the leg below's wall strip stepped the
+        lane above 27 cm across the Stelvio's hairpins, 2026-11-01); a road without the flag stays one."""
+        import grading
+        f = features([_zigzag(3)], ["secondary"])
+        sp = roads.road_specs(f)[0]
+        ll = f.lonlat
+        xy = np.c_[(ll[:, 0] - LON) * M_LON, (ll[:, 1] - LAT) * M_LAT]
+        p = grading._plan(xy, np.zeros(len(xy)), sp)
+        self.assertTrue(p.steep)
+        self.assertEqual(len(set(grading.PlanPack([p]).rid.tolist())), 4)
+        q = grading._plan(xy, np.zeros(len(xy)), sp._replace(mountain=False))
+        self.assertEqual(len(set(grading.PlanPack([q]).rid.tolist())), 1)
+
+    def test_give_way_smooth(self):
+        """Beside a road, another road at another level gives way over its carriageway smoothly as their heights part
+        (grading.YIELD_RAMP_M), not at once where they are WALL_CUT_M apart: a step there (27 cm in a Stelvio hairpin's
+        lane, 2026-11-01)."""
+        import grading
+        x = np.arange(0.0, 200.1, 4.0)
+        a = grading.Plan(np.c_[x, np.zeros(len(x))], np.zeros(len(x)), 4.0, road_half=3.0)
+        b = grading.Plan(np.c_[x, np.full(len(x), 7.0)], -0.02 * x, 4.0, road_half=3.0)   # (parting from it)
+        a.rid, b.rid = 1, 2
+        px = np.arange(20.0, 180.0, 0.25)
+        py = np.full(len(px), 1.5)                  # (a's lane on b's side)
+        z = grading.grade_points(px, py, np.zeros(len(px)), [a, b])
+        self.assertLess(float(np.abs(np.diff(z)).max()), 0.01, "no step along the lane")
 
     def test_steep_sides_no_verge(self):
         """Graded across a 45-degree hillside: the pass road's fill side falls away within 2 m of its carriageway's

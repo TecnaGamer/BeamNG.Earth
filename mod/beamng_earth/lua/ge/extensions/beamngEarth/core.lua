@@ -868,7 +868,7 @@ local function formatKnown(f)
   return false
 end
 
-local geocodeResults = {}       -- the world map's address search answers: id -> { results, error }
+local geocodeResults = {}       -- the world map's address search answers: id -> { results, error, text }
 local routeResults = {}         -- the GPS's planned routes: id -> { points, dist, dur, error }
 
 -- The pooled shape slots (far tiles, road / building tiles) let go since the last pose, for this server; nil if none.
@@ -947,9 +947,9 @@ local function onMessage(msg)
     M.sendGraphics()
     -- the on-screen credits: this session's own follow (the attribution line until then)
     credits.clear()
-    -- M4: the terrain block size first (everything below may use the lattice / follow table); a
-    -- server without hello.blockSize has the v1.3.1 1024² block
-    local size, okSize = M.setBlockSize(msg.blockSize or 1024)
+    -- M4: the terrain block first (everything below may use the lattice / follow table); a server without
+    -- hello.squareSize has 2 m squares, without hello.blockSize the v1.3.1 1024² block
+    local size, okSize = M.setBlockSize(msg.blockSize or 1024, msg.squareSize or 2.0)
     if not okSize then
       setStatus('Unsupported terrain block size ' .. tostring(msg.blockSize) .. ': using ' .. size)
     end
@@ -1001,8 +1001,10 @@ local function onMessage(msg)
     if msg.radius ~= nil then M.setFarRadius(msg.radius) end
   elseif t == 'load_progress' then      -- the loading line's counts (server Connection.send_progress)
     st.loadProgress = msg
-  -- elseif t == 'share' then           -- our world server serving our BeamMP group (shared world building,
-  --   pcall(mpsession.onShare, msg)    -- commented out 2026-10-27: mpsession.lua, peerwork.py)
+  elseif t == 'share_info' then        -- BeamMP shared generation v2: our share code and weight (mpsession poses)
+    pcall(mpsession.onShareInfo, msg)
+  elseif t == 'share_out' then         -- a share message for the group, through the plugin (mpshare.py)
+    pcall(mpsession.shareOut, msg)
   elseif t == 'terrain_patch' then
     pcall(terrainpatch.onPatch, msg)
   elseif t == 'anchor_ready' then
@@ -1051,10 +1053,15 @@ local function onMessage(msg)
     -- A refresh for an anchor not committed yet is kept for the commit: a cached place's graded block came 1 s after
     -- the provisional one while the teleport's commit waited out a 1.9 s level-load frame, and the provisional block
     -- (no road grading, ground through the roads) stayed until the car drove off (BeamMP join, 2026-10-24)
+    -- A follow block sent provisional too (server provisional_follow: its road plans late, a first visit's cells;
+    -- 2026-11-01): the graded one for the block about to be committed replaces it in the pending request.
+    local p = st.terrainPending
     if msg.anchorId ~= st.anchorId then
       st.refreshLater = msg
     elseif st.block and msg.cx == st.block.cx and msg.cy == st.block.cy and msg.size == terrain.SIZE then
       if windowMinimized() then st.deferredRefresh = msg else commitTerrain(msg) end
+    elseif p and p.ready and p.msg and msg.cx == p.cx and msg.cy == p.cy and msg.size == terrain.SIZE then
+      p.msg = msg
     end
   elseif t == 'terrain_error' then
     local p = st.terrainPending
@@ -1147,7 +1154,7 @@ local function onMessage(msg)
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
   elseif t == 'geocode_result' then
-    if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error } end
+    if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error, text = msg.text } end
   elseif t == 'areas' then
     -- the saved areas downloaded ahead (server areas.py): the list and progress; result answers an area_add / area_cmd
     M._areas = msg
@@ -1451,6 +1458,8 @@ local function updateWorld(dt)
       sessions = roads.allHeldSessions(),
       slotsGone = slotsGoneNow(), -- pooled shape slots let go (server/matslots.py)
       foci = poseFoci(),          -- other vehicles' collision islands (collisionfoci.lua; earthd parse_foci)
+      -- the edge guard holds the car for its ground: the server takes every core meanwhile (earthd hold_boost)
+      guardHold = st.guard.mode == 'hold' or nil,
       cam = c and { x = c.x, y = c.y, z = c.z, fx = c.fx, fy = c.fy, fz = c.fz, fovDeg = c.fovDeg, h = c.h } or nil })
   end
 
@@ -1538,12 +1547,13 @@ local function updateWorld(dt)
   -- commit gating: the far tiles of the strip the move uncovers must be live, and no coarse tile
   -- may straddle the new block (design 2.3, farfield.uncoverReady)
   local gate = b and function(ncx, ncy) return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) end
-  local fa, tx, ty = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
+  local fa, tx, ty, preferred = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
     st.clock, st.terrainRetryAt, gate, st.terrainLatency)
   if fa == 'prepare' then
     if net.isConnected() and anchorKnown() then
       local id = nextId()
-      st.terrainPending = { requestId = id, anchorId = st.anchorId, cx = tx, cy = ty, sentAt = st.clock }
+      st.terrainPending = { requestId = id, anchorId = st.anchorId, cx = tx, cy = ty, sentAt = st.clock,
+        preferred = preferred }
       net.send({ type = 'prepare_terrain', requestId = id, anchorId = st.anchorId, cx = tx, cy = ty })
     end
   elseif fa == 'commit' then
@@ -1614,6 +1624,7 @@ local function updateGuard()
   -- if the next block is late (a first visit, a busy server) the car is paused at the edge of the collidable ground
   -- instead of driving off it; normally the block follows long before (the pause needs the edge within PAUSE_LEAD_S).
   g.healthy = serverHealthy()
+  g.warnCap = g.healthy and follow.warnCap() or nil    -- (the block follows: warned only when it is late)
   if not g.pausedByUs and (guardFailed or st.placeFrames or st.paused) then
     g.mode = 'off'
     return
@@ -2423,11 +2434,11 @@ function M.toggleUI() ui.visible = not ui.visible end
 -- The session's terrain block size (docs/V1_4_SPEC.md 3.5, M4): 1024 (v1.3.1) or 512, from the
 -- server's hello.blockSize. Sets the lattice, the terrain-follow table, the importMaps layer / flat
 -- maps and the rebase staleness rule together. Returns the size in use and whether `size` was valid.
-function M.setBlockSize(size)
-  local n, ok = lattice.configure(tonumber(size))
-  follow.configure(n)
+function M.setBlockSize(size, square)
+  local n, ok, width = lattice.configure(tonumber(size), tonumber(square))
+  follow.configure()
   terrain.configure(n)
-  rebase.configure(n)
+  rebase.configure(width)
   blockSize = n
   return n, ok
 end

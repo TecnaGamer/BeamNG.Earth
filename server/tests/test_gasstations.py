@@ -1189,7 +1189,7 @@ class SwitchTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         sur = sf.Surface(None)
         self.addCleanup(sur.close)
-        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=512, surface=sur,
+        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=1024, surface=sur,
                           mapdata=types.SimpleNamespace(), **kw)
         self.addCleanup(s.hm_pool.shutdown)
         self.addCleanup(s.tile_pool.shutdown)
