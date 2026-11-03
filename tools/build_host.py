@@ -129,6 +129,8 @@ def build(out_dir, downloader=fetch, platform="windows"):
                + ("Linux target: Ubuntu 22.04 x86_64; other distributions need compatible system libraries.\n"
                   "If extraction lost executable permissions: chmod +x BeamMP-Server run_host.sh\n" if linux else "") +
                "Configure TCP/UDP 30814 forwarding only when hosting outside your LAN. Do not publish your AuthKey.\n"
+               "Windows prerequisite: Microsoft Visual C++ x64 Redistributable, https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+               "Platform dependencies and server setup: https://docs.beammp.com/server/create-a-server/\n"
                "See BeamNG.Earth-README.md for Earth-specific setup. No Redis or voice service is required.\n")
     host_tmp = host_path.with_suffix(".zip.tmp")
     try:
