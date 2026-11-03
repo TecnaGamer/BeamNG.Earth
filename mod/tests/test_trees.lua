@@ -536,6 +536,28 @@ do
   trees.RECHECK_S = 1.0
 end
 
+-- a suppress rule's refresh re-runs only the tiles holding that group (navgraph: 'signal'), not every tile
+do
+  trees.onRows(31, 'sigA', { { 0, 1, 1, 0, 0, 1, 5, 0.1 }, { 1, 3, 3, 0, 0, 1, 5, 0.1 } }, { 'deciduous', 'signal' })
+  trees.onRows(31, 'treeB', { { 0, 5, 5, 0, 0, 1, 5, 0.1 } }, { 'deciduous', 'signal' })
+  for _ = 1, 30 do trees.update(31, { x = 0, y = 0 }) end
+  local tl = {}
+  for i = 1, 200 do local n, v = debug.getupvalue(trees.update, i) if not n then break end if n == 'tiles' then tl = v end end
+  local a, b
+  for k, t in pairs(tl) do
+    if k:find('sigA', 1, true) then a = t elseif k:find('treeB', 1, true) then b = t end
+  end
+  T.check(a and b and not a.pending and not b.pending, 'refresh: both tiles done first')
+  T.check(trees.tileHasGroup(a, 'signal') and not trees.tileHasGroup(b, 'signal'), 'refresh: which tile holds signals')
+  trees.refresh('signal')
+  T.check(a.pending == true and not b.pending, 'refresh: only the tile with signals again')
+  trees.refresh()
+  T.check(b.pending == true, 'refresh: no group: every tile')
+  trees.onDrop({ anchorId = 31, key = 'sigA' })
+  trees.onDrop({ anchorId = 31, key = 'treeB' })
+  for _ = 1, 30 do trees.update(31, { x = 0, y = 0 }) end
+end
+
 -- the pass order's sort keys: nearer first, the index only between equal quarter metres, the index recoverable
 do
   local ks = { trees.orderKey(300.2, 1), trees.orderKey(12.0, 2), trees.orderKey(12.3, 3), trees.orderKey(0, 4),

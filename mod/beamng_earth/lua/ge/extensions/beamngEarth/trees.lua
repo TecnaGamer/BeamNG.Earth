@@ -259,10 +259,28 @@ local MATERIALS = {
 local stopwatch = require('beamngEarth/stopwatch')
 M.clock = stopwatch.new      -- the tree frame's clock (FRAME_MS; tests: their own)
 local tiles = {}        -- key "a:tx_ty" -> { anchor, cx, cy, f (flat items), s (stride), n, made = { i -> item }, shown }
--- A tree pass's order (M.update): the shown tiles' keys and distances in arrays kept between passes, and their sort
+-- ... their keys in an array too (key -> its index in tileAt), for the tree passes' loops over every tile: a numeric
+-- loop is compiled, pairs() runs in LuaJIT's interpreter (5,500 tiles: most of a pass, 2026-11-02). setTile keeps both.
+local tileList, tileAt = {}, {}
+local function setTile(key, t)
+  if t == nil then
+    local i = tileAt[key]
+    if i then
+      local n = #tileList
+      local last = tileList[n]
+      tileList[i], tileAt[last] = last, i
+      tileList[n], tileAt[key] = nil, nil
+    end
+  elseif not tileAt[key] then
+    tileList[#tileList + 1] = key
+    tileAt[key] = #tileList
+  end
+  tiles[key] = t
+end
+-- A tree pass's order (M.update): the keys, distances and targets of the tiles it changes, in arrays kept between passes, and their sort
 -- keys: the distance in quarter metres times ORDER_SLOTS plus the entry's index (plain numbers: the default sort)
 local ORDER_SLOTS = 2 ^ 20
-local passOrder = { keys = {}, d = {}, car = {}, sort = {}, n = 0 }
+local passOrder = { keys = {}, d = {}, sort = {}, want = {}, band = {}, near = {}, n = 0 }
 function M.orderKey(d, i) return math.floor(math.min(d, 1e7) * 4) * ORDER_SLOTS + i end
 local foci = {}         -- other vehicles' collision foci { x, y, r, trees } (M.setFoci, collisionfoci.lua)
 local dirty = true      -- a tree pass has work (M.update: a pass with none is skipped)
@@ -497,7 +515,7 @@ end
 
 local GROUPS = { 'deciduous', 'conifer', 'shrub', 'rock' }
 local releaseGhosts
-local groupBand
+local groupBand, bandCapsUpdate
 
 -- A tile's items are one flat array of numbers, STRIDE numbers an item: { group, x, y, z, yaw, scale, height, rank, ... }
 -- (server vegetation.tile_items; scale unused: M.pick scales by height). They were a table per item, and a forest holds
@@ -661,7 +679,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo)
     t.moved = old and old.moved or nil
     M.placeGeo(t)
   end
-  tiles[key] = t
+  setTile(key, t)
   dirty = true
 end
 
@@ -790,18 +808,54 @@ local function tileThreshold(d, t)
 end
 M.tileThreshold = tileThreshold
 
--- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh() re-runs every tile's rows
--- after it changes.
+-- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh(group) re-runs the rows of every
+-- tile with an item of that group (every tile without one) after it changes. navgraph applies its signals every time
+-- its graph changes, a few times a minute while driving: all 5,300 tiles of a drive through LA rescanned each time
+-- kept the tree passes at their time limit, the new tiles' trees waiting behind (2026-11-02).
 M.suppress = nil
-function M.refresh()
-  for _, t in pairs(tiles) do t.pending, t.scan = true, nil end      -- (every row again: an interrupted pass too)
+-- Pure but for its cache (t.hasGroup): does tile t hold an item of group g?
+function M.tileHasGroup(t, g)
+  t.hasGroup = t.hasGroup or {}
+  local has = t.hasGroup[g]
+  if has == nil then
+    has = false
+    local names, f, s = t.groups or GROUPS, t.f, t.s
+    local gi = nil
+    for i, name in ipairs(names) do if name == g then gi = i - 1 end end
+    if gi ~= nil and f and s then
+      for i = 1, t.n or 0 do
+        if f[(i - 1) * s + F_GROUP] == gi then has = true; break end
+      end
+    end
+    t.hasGroup[g] = has
+  end
+  return has
+end
+function M.refresh(group)
+  for _, t in pairs(tiles) do
+    if group == nil or M.tileHasGroup(t, group) then t.pending, t.scan = true, nil end   -- (every row again)
+  end
   dirty = true
 end
 
 -- Which of the capped groups a tile at distance d still shows (changes re-run its rows).
+-- (GROUP_MAX_M's caps, largest first, in bandCaps: made again at each pass, as the speed signs add their groups; a
+-- pairs() over its ~50 entries for each of 5,500 tiles was a third of a pass, 2026-11-02)
+local bandCaps = {}
+bandCapsUpdate = function()
+  local n = 0
+  for _, cap in pairs(M.GROUP_MAX_M) do n = n + 1; bandCaps[n] = cap end
+  for i = n + 1, #bandCaps do bandCaps[i] = nil end
+  table.sort(bandCaps, function(a, b) return a > b end)
+end
 groupBand = function(t, d)
+  if bandCaps[1] == nil then bandCapsUpdate() end
   local k = 0
-  for _, cap in pairs(M.GROUP_MAX_M) do if d <= cap then k = k + cap end end
+  for i = 1, #bandCaps do
+    local cap = bandCaps[i]
+    if d > cap then break end
+    k = k + cap
+  end
   return k
 end
 
@@ -966,7 +1020,10 @@ function M.update(anchorId, player, view, frameMs)
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems = {}, 0
   releaseGhosts(anchorId, player)
-  for key, t in pairs(tiles) do
+  bandCapsUpdate()
+  for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)
+    local key = tileList[li]
+    local t = tiles[key]
     if (not t.geo and t.anchor ~= anchorId and not t.ghost) or t.drop or t.flush then
       local f = t.forestId and scenetree.findObjectById(t.forestId)
       local fd = f and f:getData()
@@ -989,37 +1046,22 @@ function M.update(anchorId, player, view, frameMs)
         dirty = true
       elseif not left then
         releaseForest(t)
-        tiles[key] = nil
+        setTile(key, nil)
       else dirty = true end
     end
   end
   if not player then return end
   -- nearest tiles first (to the camera when it is away: view), and the distance to the car (the colliding items).
-  -- The order is plain numbers (orderKey) in arrays kept from pass to pass, sorted by the default `<`: a table per
-  -- tile sorted with a Lua comparator cost ~10 ms a pass over the 5,500 tiles of a drive through LA (2026-11-02: a
-  -- comparator called from C for each of ~70k comparisons, and the garbage), outside the tree frame's time limit.
+  -- Only the tiles with something to change are ordered: their keys, distances and targets in arrays kept from pass to
+  -- pass, sorted as plain numbers (orderKey) by the default `<`. A table per tile, every tile sorted with a Lua
+  -- comparator, cost ~4 ms a pass and 580 KB of garbage over the 5,500 tiles of a drive through LA (2026-11-02),
+  -- outside the tree frame's time limit: every third frame ~10 ms, which the frame pacer spread over every frame.
   local function boxDist(p, t)
     local h = t.half or 128
     local dx = math.max(math.abs(p.x - t.cx) - h, 0)
     local dy = math.max(math.abs(p.y - t.cy) - h, 0)
     return math.sqrt(dx * dx + dy * dy)
   end
-  local oKeys, oD, oCar, oSort = passOrder.keys, passOrder.d, passOrder.car, passOrder.sort
-  local nOrder = 0
-  for key, t in pairs(tiles) do
-    if (not t.geo and t.anchor ~= anchorId) or t.drop or t.flush then goto continue end     -- still being emptied
-    nOrder = nOrder + 1
-    local dCar = boxDist(player, t)
-    oKeys[nOrder], oCar[nOrder] = key, dCar
-    oD[nOrder] = view and math.min(boxDist(view, t), dCar) or dCar
-    oSort[nOrder] = M.orderKey(oD[nOrder], nOrder)
-    ::continue::
-  end
-  for i = nOrder + 1, passOrder.n do oKeys[i], oD[i], oCar[i], oSort[i] = nil, nil, nil, nil end
-  passOrder.n = nOrder
-  table.sort(oSort)
-  local nearMade = false
-  local rowsScanned = 0
   -- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
   local function nearFocus(t)
     for _, f in ipairs(foci) do
@@ -1027,6 +1069,35 @@ function M.update(anchorId, player, view, frameMs)
     end
     return false
   end
+  local oKeys, oD, oSort = passOrder.keys, passOrder.d, passOrder.sort
+  local oWant, oBand, oNear = passOrder.want, passOrder.band, passOrder.near
+  local nOrder = 0
+  for li = 1, #tileList do
+    local key = tileList[li]
+    local t = tiles[key]
+    if (not t.geo and t.anchor ~= anchorId) or t.drop or t.flush then goto continue end     -- still being emptied
+    do
+      local dCar = boxDist(player, t)
+      local dist = view and math.min(boxDist(view, t), dCar) or dCar
+      local want = tileThreshold(dist, t)
+      local band = groupBand(t, dist)
+      local near = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
+      if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
+        nOrder = nOrder + 1
+        oKeys[nOrder], oD[nOrder] = key, dist
+        oWant[nOrder], oBand[nOrder], oNear[nOrder] = want, band, near
+        oSort[nOrder] = M.orderKey(dist, nOrder)
+      end
+    end
+    ::continue::
+  end
+  for i = nOrder + 1, passOrder.n do
+    oKeys[i], oD[i], oSort[i], oWant[i], oBand[i], oNear[i] = nil, nil, nil, nil, nil, nil
+  end
+  passOrder.n = nOrder
+  table.sort(oSort)
+  local nearMade = false
+  local rowsScanned = 0
   local function finish()
     M.lastRows = rowsScanned                -- (diagnostics)
     if nearMade then
@@ -1053,11 +1124,9 @@ function M.update(anchorId, player, view, frameMs)
   end
   for oi = 1, nOrder do
     local at = oSort[oi] % ORDER_SLOTS
-    local dist, dCar = oD[at], oCar[at]
+    local dist = oD[at]
+    local want, band, near = oWant[at], oBand[at], oNear[at]
     t, fd = tiles[oKeys[at]], nil
-    local want = tileThreshold(dist, t)
-    local band = groupBand(t, dist)
-    local near = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
       -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
@@ -1155,12 +1224,12 @@ function M.clear()
     for i, it in pairs(t.made) do if fd then removeItem(fd, it, t.madeShape[i]) end end
     releaseForest(t)
   end
-  tiles, frameN, dirty, lastPass = {}, 0, true, nil
+  tiles, tileList, tileAt, frameN, dirty, lastPass = {}, {}, {}, 0, true, nil
 end
 
 -- Level end: the level deletes its objects itself.
 function M.reset()
-  tiles, types, ready, pool, forestCount, pop = {}, {}, false, {}, 0, {}
+  tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
   dirty, lastPass = true, nil
 end
 

@@ -375,7 +375,7 @@ local function applySignals(nodes)
       for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
       return false
     end
-    trees.refresh()
+    trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
   end)
   stats.signalsMs = (os.clock() - t1) * 1000
   if not okS then log('W', 'beamngEarth', 'navgraph: signals: ' .. tostring(err2)) end
