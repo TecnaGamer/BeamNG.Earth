@@ -89,6 +89,7 @@ class SessionAdoptionTest(unittest.TestCase):
         self.a = make_session(self.root, "20261010-120000-bbbb", 300)
         self.b = make_session(self.root, "20261010-120500-cccc", 120)
         running = earthd.game_running
+        self._real_game_running = running
         earthd.game_running = lambda: True          # (a game runs: the younger sessions wait for its claim)
         self.addCleanup(setattr, earthd, "game_running", running)
         self.s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
@@ -238,6 +239,23 @@ class SessionAdoptionTest(unittest.TestCase):
         s.trash_thread.join(10)
         self.assertEqual(os.listdir(os.path.join(self.root, "cache", earthd.TRASH_DIR)), [])
         self.assertTrue(os.path.isdir(s.out_dir), "its own session stays")
+
+    def test_game_running_as_the_launcher_says(self):
+        """The launcher starts the game right after the server: BNGEARTH_GAME_AT_START says whether one ran before."""
+        real = self._real_game_running
+        old = os.environ.get("BNGEARTH_GAME_AT_START")
+        try:
+            os.environ["BNGEARTH_GAME_AT_START"] = "0"
+            self.assertFalse(real())
+            os.environ["BNGEARTH_GAME_AT_START"] = "1"
+            self.assertTrue(real())
+            del os.environ["BNGEARTH_GAME_AT_START"]
+            self.assertIsInstance(real(), bool)
+        finally:
+            if old is None:
+                os.environ.pop("BNGEARTH_GAME_AT_START", None)
+            else:
+                os.environ["BNGEARTH_GAME_AT_START"] = old
 
     def test_own_sid_never_an_orphan(self):
         """A folder that happens to carry the new session's id (a restart in the same second with the same

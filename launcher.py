@@ -208,11 +208,13 @@ def run_server(argv):
     earthd.main()
 
 
-def start_server(user_dir, extra, log_path):
+def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
+        env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
     # alone, not the game, e.g. a heap profiler)
     for kv in os.environ.get("BNGE_SERVER_ENV", "").split():
@@ -1366,7 +1368,7 @@ def run(args):
                 "Close its window (or end 'BeamNG.Earth' in the task manager), then start again.")
         sys.exit(1)
     log_path = os.path.join(data_dir(), "logs", "server.log")
-    server = start_server(user_dir, extra, log_path)
+    server = start_server(user_dir, extra, log_path, game_running=bool(running))
     row("World server", "running")
     row("Server log", log_path)
     beammp = None

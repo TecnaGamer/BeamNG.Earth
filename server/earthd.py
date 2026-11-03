@@ -699,9 +699,14 @@ def survey_q(frame, dem, block_m=BLOCK_SURVEY_M):
 
 
 def game_running():
-    """Is BeamNG.drive running for this user: its Linux build (cpupin.game_pids), its Windows build on Windows or under
-    Wine / Proton (a process whose command line names BeamNG.drive.x64.exe)? Unsure (an error): True, the careful
-    answer (_scan_sessions then keeps earlier sessions for the game to claim)."""
+    """Was BeamNG.drive running when this server started? The launcher says (BNGEARTH_GAME_AT_START: it starts the game
+    right after the server, a new game that holds none of the earlier sessions); else whether one runs now: its Linux
+    build (cpupin.game_pids), its Windows build on Windows or under Wine / Proton (a process whose command line names
+    BeamNG.drive.x64.exe). Unsure (an error): True, the careful answer (_scan_sessions then keeps earlier sessions for
+    the game to claim)."""
+    said = os.environ.get("BNGEARTH_GAME_AT_START")
+    if said in ("0", "1"):
+        return said == "1"
     try:
         import cpupin
         if cpupin.game_pids():
