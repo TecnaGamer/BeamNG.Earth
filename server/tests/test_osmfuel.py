@@ -171,6 +171,7 @@ class OsmFuelReadTest(unittest.TestCase):
         o = osmfuel.OsmFuel(self.dir, None)
         o._reader = overture.Reader(self.dir, None)
         remote = rangeread.MemoryRange(self.data)
+        remote.cache_dir = self._tmpdir()     # (osmtags keeps the parsed footer in its cache folder)
         o._fuel(remote, (10.0, 10.0, 10.1, 10.1), "demand")
         remote.reads.clear()
         rows = o._fuel(remote, (-79.0, 5.3, -78.0, 5.4), "demand")
