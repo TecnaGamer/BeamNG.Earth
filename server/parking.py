@@ -287,23 +287,24 @@ def aisle_spots(roads, aisles, box, blockers=(), lots=()):
 
 
 def _hits(paths, pts):
-    """Per point of pts (k, 2): does it lie in any of the polygons (_hit for every point at once: one point at a time it
-    was ~0.36 s of a Manhattan tile set, 2026-11-02)?"""
+    """Per point of pts (k, 2): does it lie in any of the polygons (Path.contains_points)? One
+    contains_points call per polygon whose bounding box meets the points' (not one per point and polygon:
+    aisle_spots and lot_markings tested every stall against every building of the tile, 480k calls and
+    ~3 s of a Las Vegas road tile's build, 2026-11-01)."""
     pts = np.asarray(pts, np.float64).reshape(-1, 2)
     out = np.zeros(len(pts), bool)
-    for pa in paths or ():
-        if not len(pts):
-            break
+    if not paths or not len(pts):
+        return out
+    lo, hi = pts.min(0), pts.max(0)
+    for pa in paths:
+        v = pa.vertices
+        if not len(v):
+            continue
+        vlo, vhi = v.min(0), v.max(0)
+        if vlo[0] > hi[0] or vlo[1] > hi[1] or vhi[0] < lo[0] or vhi[1] < lo[1]:
+            continue                        # (contains_points is False for a point outside the polygon's box)
         out |= np.asarray(pa.contains_points(pts), bool).reshape(-1)
     return out
-
-
-def _hit(paths, q):
-    """Does q lie in any of the polygons (Path.contains_points; one point)?"""
-    if not paths:
-        return False
-    pt = np.atleast_2d(np.asarray(q, np.float64))
-    return any(bool(np.asarray(pa.contains_points(pt)).reshape(-1)[0]) for pa in paths)
 
 
 def _groups(ok):
