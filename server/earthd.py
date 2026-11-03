@@ -5618,6 +5618,10 @@ async def main_async(args):
     if os.environ.get("BNGE_WORLD_BUNDLE") and getattr(args, "peers", ""):
         from worldbundle import BundleError
         raise BundleError("Legacy --peers helpers do not negotiate the pinned road-plan identity")
+    if os.environ.get("BNGE_WORLD_BUNDLE"):
+        from worldbundle import validate_bundle
+        # Reject malformed/missing data before allocating services or starting cache maintenance.
+        validate_bundle(os.environ["BNGE_WORLD_BUNDLE"])
     fmt = args.far_format
     if fmt == "cdae":
         v = cdae.engine_version(args.user_dir)
@@ -5631,17 +5635,25 @@ async def main_async(args):
         ml = farfield.MESH_MIN_LEVEL[args.cells]
         radii = {ml: args.near_radii[0], ml + 1: args.near_radii[1]}
     net = netfetch.Fetcher(stats_dir=os.path.join(args.cache_dir, "netstats"), offline=args.offline)
+    # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
+    mapdata = None
+    try:
+        mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
+                   if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
+        if os.environ.get("BNGE_WORLD_BUNDLE"):
+            from worldbundle import PinnedPlanCache
+            PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],
+                            f"w{int(args.road_widths == 'on')}s{int(args.sea == 'on')}", mapdata.bundle_versions())
+    except BaseException:
+        try:
+            if mapdata is not None:
+                mapdata.close()
+        finally:
+            net.close()
+        raise
     disk = cachemod.Cache(args.cache_dir, args.cache_cap)
     threading.Thread(target=prune_own_caches, args=(args.cache_dir, time.time()), daemon=True,
                      name="cache-prune").start()
-    # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
-    mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
-               if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
-    if os.environ.get("BNGE_WORLD_BUNDLE"):
-        from worldbundle import PinnedPlanCache, validate_bundle
-        validate_bundle(os.environ["BNGE_WORLD_BUNDLE"])
-        PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],
-                        f"w{int(args.road_widths == 'on')}s{int(args.sea == 'on')}", mapdata.versions())
     pacer.DUTY = args.background_duty
     global DETAIL_RING_M, AHEAD_ON, ROUTE_AHEAD_ON, ROUTE_AHEAD_MAX_M
     DETAIL_RING_M = args.detail_ring

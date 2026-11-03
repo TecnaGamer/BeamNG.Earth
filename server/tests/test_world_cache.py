@@ -1,5 +1,6 @@
 """Actual loopback transfer, isolated clients and failed activation of road-plan bundles."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout, redirect_stderr
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -125,6 +127,120 @@ class TransportTest(unittest.TestCase):
                 world_cache.download("https://example.com", "manifest.json", 1024)
         self.assertEqual(connection.request.call_count, 1)
         connection.close.assert_called_once()
+
+
+class DeadlineTest(unittest.TestCase):
+    def test_deadline_interrupts_headers_and_detached_body_socket(self):
+        # Trigger the watchdog explicitly after a real socket read starts. This
+        # reproduces a stalled/trickling peer without sleep-sensitive timing.
+        for stage in ("headers", "body"):
+            with self.subTest(stage=stage):
+                sent, reading, release, finished = (threading.Event() for _ in range(4))
+                timers, failures, detached = [], [], []
+
+                class Timer:
+                    def __init__(self, interval, callback):
+                        self.callback = callback
+                        self.cancelled = self.joined = False
+                        timers.append(self)
+                    def start(self):
+                        pass
+                    def cancel(self):
+                        self.cancelled = True
+                    def join(self):
+                        self.joined = True
+
+                class Handler(world_cache.BaseHTTPRequestHandler):
+                    def log_message(self, *args):
+                        pass
+                    def do_GET(self):
+                        prefix = (b"HTTP/1.0 200" if stage == "headers" else
+                                  b"HTTP/1.0 200 OK\r\nContent-Length: 1\r\n\r\n")
+                        self.connection.sendall(prefix)
+                        sent.set()
+                        release.wait(5)
+
+                server = world_cache.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                serving = threading.Thread(target=server.serve_forever,
+                                           kwargs={"poll_interval": .01}, daemon=True)
+                serving.start()
+                original_response = world_cache.http.client.HTTPConnection.getresponse
+                original_read = world_cache.http.client.HTTPResponse.read1
+
+                def getresponse(connection):
+                    if stage == "headers":
+                        reading.set()
+                    result = original_response(connection)
+                    detached.append(connection.sock is None)
+                    return result
+
+                def read1(response, *args):
+                    reading.set()
+                    return original_read(response, *args)
+
+                def receive():
+                    try:
+                        world_cache.download(f"http://127.0.0.1:{server.server_port}",
+                                             "manifest.json", 1024, timeout=30)
+                    except Exception as exc:
+                        failures.append(exc)
+                    finally:
+                        finished.set()
+
+                worker = threading.Thread(target=receive, daemon=True)
+                try:
+                    with mock.patch.object(world_cache.threading, "Timer", Timer), \
+                            mock.patch.object(world_cache.http.client.HTTPConnection, "getresponse", getresponse), \
+                            mock.patch.object(world_cache.http.client.HTTPResponse, "read1", read1):
+                        worker.start()
+                        self.assertTrue(sent.wait(3), "server did not send response prefix")
+                        self.assertTrue(reading.wait(3), "client did not begin the blocking read")
+                        self.assertEqual(len(timers), 1)
+                        timers[0].callback()
+                        self.assertTrue(finished.wait(3), "deadline did not interrupt the socket")
+                        self.assertEqual(len(failures), 1)
+                        self.assertIsInstance(failures[0], TimeoutError)
+                        self.assertTrue(timers[0].cancelled)
+                        self.assertTrue(timers[0].joined)
+                        if stage == "body":
+                            self.assertEqual(detached, [True])
+                finally:
+                    release.set()
+                    worker.join(3)
+                    server.shutdown()
+                    server.server_close()
+                    serving.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertFalse(serving.is_alive())
+
+    def test_invalid_timeouts_rejected_without_connecting(self):
+        for timeout in (0, -1, float("nan"), float("inf"), "20"):
+            with self.subTest(timeout=timeout), \
+                    mock.patch.object(world_cache.http.client, "HTTPSConnection") as connection:
+                with self.assertRaises(ValueError):
+                    world_cache.download("https://example.com", "manifest.json", 1024, timeout)
+                connection.assert_not_called()
+
+    def test_source_versions_cli_uses_bundle_snapshot_and_closes_resources(self):
+        import mapdata
+        import netfetch
+        for failure in (None, RuntimeError("metadata unavailable")):
+            with self.subTest(failure=failure), \
+                    mock.patch.object(mapdata, "MapData") as make_md, \
+                    mock.patch.object(netfetch, "Fetcher") as make_fetcher, \
+                    redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                md = make_md.return_value
+                md.bundle_versions.return_value = {"rail": "cached-rail", "lanes": "cached-lanes"}
+                md.bundle_versions.side_effect = failure
+                result = world_cache.main(["source-versions", "fixture-cache"])
+                self.assertEqual(result, 2 if failure else 0)
+                md.bundle_versions.assert_called_once_with()
+                md.versions.assert_not_called()
+                md.close.assert_called_once_with()
+                make_fetcher.assert_called_once_with(offline=True)
+                make_fetcher.return_value.close.assert_called_once_with()
+                if failure is None:
+                    self.assertEqual(json.loads(output.getvalue()), md.bundle_versions.return_value)
 
 
 if __name__ == "__main__":

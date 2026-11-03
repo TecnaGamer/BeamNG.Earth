@@ -70,6 +70,41 @@ def generator_identity():
     return {"code": peerwork.code_id() + "-" + env_id, "native": int(fast._ef.VERSION)}
 
 
+def cached_source_build(path):
+    """Read an already cached shard manifest without fetching or refreshing it. Unknown stays unknown."""
+    try:
+        with open(path, "rb") as stream:
+            data = stream.read(MAX_MANIFEST_BYTES + 1)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise BundleError("Cannot read cached source manifest") from exc
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise BundleError("Cached source manifest exceeds size limit")
+    manifest = _json(data)
+    if not isinstance(manifest, dict) or not _text(manifest.get("built"), 256):
+        raise BundleError("Cached source manifest has no valid build identity")
+    return manifest["built"]
+
+
+def completion_record(key, signature, sources, digest):
+    """Generation-time provenance, stored beside exactly the NPZ bytes it describes."""
+    return {"schema": 2, "sha256": digest, "key": list(_key(key)), "frames": "r10",
+            "signature": signature, "generator": generator_identity(), "sources": sources}
+
+
+def _read_completion(path, key, signature, digest, sources, generator):
+    with open(path, "rb") as stream:
+        data = stream.read(MAX_MANIFEST_BYTES + 1)
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise BundleError("Plan provenance exceeds size limit")
+    record = _json(data)
+    expected = {"schema": 2, "sha256": digest, "key": list(key), "frames": "r10",
+                "signature": signature, "generator": generator, "sources": sources}
+    if canonical(record) != canonical(expected):
+        raise BundleError("Plan provenance differs: regenerate with matching code, settings and source versions")
+
+
 def _key(key):
     if not isinstance(key, (list, tuple)) or len(key) != 3 or any(type(v) is not int for v in key):
         raise BundleError("Invalid geographic cell key")
@@ -237,7 +272,7 @@ def validate_artifact(data, artifact=None):
     fields = {"fid", "half", "abut", "road_half", "rid", "max_wall", "cut", "bank"}
     for item, xy, heights in zip(plans_meta, groups["p"], groups["z"]):
         if (not isinstance(item, dict) or set(item) != fields or len(xy) < 2 or len(xy) != len(heights)
-                or not (_text(item["fid"]) or type(item["fid"]) is int)
+                or not _text(item["fid"])
                 or type(item["rid"]) is not int or not -1 <= item["rid"] <= 2 ** 31 - 1
                 or not all(_number(item[k], 0, 10000) for k in ("half", "road_half", "max_wall"))
                 or not isinstance(item["abut"], list) or len(item["abut"]) != 2
@@ -308,6 +343,7 @@ def build_bundle(plan_dir, output_root, sources, input_digest, attribution):
     if output_root.exists():
         raise BundleError("Bundle output already exists; immutable bundles cannot be overwritten")
     signature = plan_dir.name
+    generator = generator_identity()
     entries, payloads = [], {}
     for path in sorted(plan_dir.glob("*.npz")):
         try:
@@ -315,16 +351,15 @@ def build_bundle(plan_dir, output_root, sources, input_digest, attribution):
             with path.open("rb") as stream:
                 data = stream.read(MAX_ARTIFACT_BYTES + 1)
             digest = hashlib.sha256(data).hexdigest()
-            if path.with_suffix(".npz.complete").read_text(encoding="ascii") != digest:
-                raise BundleError("Plan completeness marker does not match")
+            _read_completion(path.with_suffix(".npz.complete"), key, signature, digest, sources, generator)
         except (OSError, ValueError) as exc:
-            raise BundleError("Export requires matching complete-input markers for every plan") from exc
+            raise BundleError("Export requires matching generation-time provenance for every complete plan") from exc
         validate_artifact(data)
         entries.append({"key": list(key), "sha256": digest, "size": len(data)})
         payloads[digest] = data
         if len(entries) > MAX_ARTIFACTS or sum(e["size"] for e in entries) > MAX_TOTAL_BYTES:
             raise BundleError("Bundle exceeds configured limits")
-    manifest = {"schema": 1, "kind": "road-plans", "frames": "r10", "generator": generator_identity(),
+    manifest = {"schema": 1, "kind": "road-plans", "frames": "r10", "generator": generator,
                 "signature": signature, "sources": sources, "input_digest": input_digest,
                 "attribution": attribution, "artifacts": entries}
     manifest["id"] = manifest_id(manifest)

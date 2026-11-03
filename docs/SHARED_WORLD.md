@@ -8,7 +8,9 @@ terrain, bridge meshes, buildings, vehicle physics or imagery. Automatic BeamMP 
 ## How it works
 
 1. A companion generates complete road plans through the existing grading pipeline. Only files with
-   a matching completeness marker may be exported. Plans produced while retrieval failed are rejected.
+   matching version 2 provenance markers may be exported. Each marker binds the bytes, geographic cell,
+   settings, generation-time code identity and source versions. Plans produced while retrieval failed,
+   older hash-only markers, mixed source versions and relabeled generator settings are rejected.
 2. Export produces a deterministic manifest and content-addressed NPZ artifacts. The manifest records
    generator/native compatibility, geographic cell keys, settings, locally known source versions,
    an operator-declared input snapshot digest, attribution, byte sizes and SHA256 hashes.
@@ -26,11 +28,15 @@ DEM sample or collision asset was captured. The local DEM and other world assets
 ## Operator workflow
 
 Commands work from source as `python tools/world_cache.py ...`. The player executable also exposes
-the same tool as `BeamNG.Earth-1.8.0.exe --world-cache ...` (Linux: AppImage `--world-cache`).
+the same tool as `BeamNG.Earth-1.8.1.exe --world-cache ...` (Linux: AppImage `--world-cache`).
 
 First drive or pre-build a bounded region with this version, grading enabled, and no bundle pinned.
 Find the resulting `plans/<run>/r10/w0s0` (or the actual width/water signature) in the companion cache.
-Regenerate older plans that have no `.npz.complete` marker. Include neighboring planning cells needed
+Regenerate older plans with 1.8.1 to obtain version 2 `.npz.complete` provenance, including plans from
+1.7.4-beta and the unpublished 1.8.0 candidate.
+For an export preparation run, set `BNE_REVISIT=off` before starting the producer so an older prepared
+cache cannot skip generation of the new provenance; restore the usual setting for normal play.
+Export with the same code and generator settings used for that run. Include neighboring planning cells needed
 by the route; this release deliberately rejects missing cells instead of extending a pin automatically.
 
 ```sh
@@ -40,7 +46,9 @@ python tools/world_cache.py verify prepared-region
 python tools/world_cache.py serve prepared-region --port 47622
 ```
 
-The source-versions command reads local metadata offline. Use the producer's versions and record the
+The source-versions command reads local metadata offline, including bounded cached rail/lane manifests.
+Missing source metadata stays unknown; malformed metadata is rejected. The exported source values must
+match the generation-time records in every selected plan. Use the producer's versions and record the
 actual input snapshot/digest and licensing separately; do not invent them or use the examples as provenance.
 Export only data you are allowed to redistribute and retain all required notices.
 
@@ -61,10 +69,13 @@ desired session, then launch the Earth player app:
 
 ```powershell
 $env:BNGE_WORLD_BUNDLE = 'C:\absolute\client-worlds\EXPECTED_SHA256'
-try { & '.\BeamNG.Earth-1.8.0.exe' } finally { Remove-Item Env:BNGE_WORLD_BUNDLE }
+try { & '.\BeamNG.Earth-1.8.1.exe' } finally { Remove-Item Env:BNGE_WORLD_BUNDLE }
 ```
 
 Keep grading enabled and retain the producer's compatible width/water settings and source metadata.
+Clients need actual matching local provider manifests when the bundle records known rail/lane releases;
+missing or differing releases fail compatibility checks. Acquiring those source snapshots automatically
+is outside this experimental release. Changing source metadata or bundles requires a companion restart.
 For the local proof, fetch `http://127.0.0.1:47622`; plaintext HTTP is refused for non-loopback hosts.
 Redirects, embedded URL credentials and query-string tokens are refused. Trust comes from the separately
 obtained manifest hash plus HTTPS, not an unauthenticated discovery announcement.
@@ -81,6 +92,8 @@ obtained manifest hash plus HTTPS, not an unauthenticated discovery announcement
   next session. A valid warm bundle remains usable without the server.
 - Pinned mode disables incompatible revisit reuse and provisional ungraded first blocks. Its stricter
   safety checks may increase startup latency; it is not the default recommendation for normal driving yet.
+- Invalid bundles are rejected before cache maintenance starts. A later source compatibility failure
+  closes the temporary source reader and network accounting resources before returning the error.
 - Missing region or damaged pinned data reports a build error. Retaining previous collision-safe ground
   through that error still requires real BeamNG acceptance; offline tests cannot certify engine behavior.
 

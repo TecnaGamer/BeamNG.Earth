@@ -105,6 +105,128 @@ class BundleTest(unittest.TestCase):
         with self.assertRaises(wb.BundleError):
             self.export()
 
+    def test_export_rejects_relabeling_generation_settings_or_code(self):
+        with mock.patch.dict(os.environ, {"BNE_GRADE_MAJOR": "40"}):
+            self.write()
+        with mock.patch.dict(os.environ, {"BNE_GRADE_MAJOR": "80"}):
+            with self.assertRaises(wb.BundleError):
+                self.export()
+        with mock.patch.object(wb, "generator_identity", return_value={"code": "older-generator", "native": 116}):
+            self.write()
+        with self.assertRaises(wb.BundleError):
+            self.export()
+        self.assertFalse(self.bundle.exists())
+
+    def test_provenance_binds_cell_sources_and_rejects_legacy_markers(self):
+        path = self.write()
+        marker = Path(str(path) + ".complete")
+        original = marker.read_bytes()
+        marker.write_text(hashlib.sha256(path.read_bytes()).hexdigest(), encoding="ascii")
+        with self.assertRaises(wb.BundleError):
+            self.export()
+        marker.write_bytes(original)
+        with self.assertRaises(wb.BundleError):
+            wb.build_bundle(self.pc.dir, self.bundle, {"rails": "invented"}, DIGEST, ["Synthetic test fixture"])
+        renamed = path.with_name("14_4001_6000.npz")
+        path.rename(renamed)
+        marker.rename(Path(str(renamed) + ".complete"))
+        with self.assertRaises(wb.BundleError):
+            self.export()
+
+    def test_source_provenance_is_resolved_after_generation(self):
+        sources = {"rails": None}
+        md = SimpleNamespace(versions=lambda: dict(sources), bundle_versions=lambda: dict(sources))
+        self.pc = plancache.for_grader(str(self.root), SimpleNamespace(md=md), None, None)
+        sources["rails"] = "release-discovered-during-generation"
+        path = self.write()
+        record = json.loads(Path(str(path) + ".complete").read_bytes())
+        self.assertEqual(record["sources"], sources)
+        manifest = wb.build_bundle(self.pc.dir, self.bundle, sources, DIGEST, ["Synthetic test fixture"])
+        self.assertEqual(manifest["sources"], sources)
+
+    def test_cached_source_versions_are_offline_and_used_by_pin_setup(self):
+        import mapdata
+        import netfetch
+        import railtags
+        for name in ("rail", "lanes"):
+            path = self.root / "pagesdata" / name / "manifest.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"built": "source-build-1"}), encoding="utf-8")
+        net = netfetch.Fetcher(offline=True)
+        self.addCleanup(net.close)
+        with mock.patch.object(railtags, "ON", True), mock.patch.object(railtags, "LANES_ON", True):
+            md = mapdata.MapData(str(self.root), fetcher=net)
+            missing = mapdata.MapData(str(self.root / "empty-cache"), fetcher=net)
+        self.addCleanup(md.close)
+        self.addCleanup(missing.close)
+        with mock.patch.object(net, "get", side_effect=AssertionError("No source download allowed")) as get:
+            self.assertIsNone(md.versions()["rails"])
+            sources = md.bundle_versions()
+            self.assertEqual(sources["rails"], "source-build-1")
+            self.assertEqual(sources["lanes"], "source-build-1")
+            self.pc.source_versions = md.bundle_versions
+            self.write()
+            wb.build_bundle(self.pc.dir, self.bundle, sources, DIGEST, ["Synthetic test fixture"])
+            os.environ[wb.ENV] = str(self.bundle)
+            pinned = plancache.for_grader(str(self.root), SimpleNamespace(md=md), None, None)
+            self.assertIsNotNone(pinned.claim(KEY)[0])
+            with self.assertRaises(wb.BundleError):
+                plancache.for_grader(str(self.root), SimpleNamespace(md=missing), None, None)
+            get.assert_not_called()
+        # An already used build remains the identity even if the disk manifest changes later.
+        md.rail_tags.built = "actively-used-build"
+        self.assertEqual(md.bundle_versions()["rails"], "actively-used-build")
+
+    def test_cached_source_manifest_invalid_values_fail_closed(self):
+        path = self.root / "source-manifest.json"
+        self.assertIsNone(wb.cached_source_build(path))
+        for data in (b'{}', b'{"built":null}', b'{"built":2}', b'{"built":""}',
+                     b'{"built":"a","built":"b"}', b'{' , b' ' * (wb.MAX_MANIFEST_BYTES + 1)):
+            path.write_bytes(data)
+            with self.subTest(data=data[:40]), self.assertRaises(wb.BundleError):
+                wb.cached_source_build(path)
+
+    def test_unavailable_provenance_does_not_disable_local_plan_cache(self):
+        path = self.write()
+        self.pc.source_versions = mock.Mock(side_effect=wb.BundleError("Corrupt source metadata"))
+        self.write()
+        self.assertIsNotNone(self.pc.load(KEY))
+        self.assertFalse(Path(str(path) + ".complete").exists())
+        with self.assertRaises(wb.BundleError):
+            self.export()
+
+    def test_failed_pin_startup_does_not_leave_services_running(self):
+        import earthd
+        os.environ[wb.ENV] = str(self.bundle)
+        early = SimpleNamespace(roads="on", grading="on", peers="")
+        with mock.patch.object(earthd.netfetch, "Fetcher") as fetcher, \
+                mock.patch.object(earthd.cachemod, "Cache") as cache:
+            for _ in range(2):
+                with self.assertRaises(OSError):
+                    asyncio.run(earthd.main_async(early))
+            fetcher.assert_not_called()
+            cache.assert_not_called()
+        self.write()
+        self.export()
+        args = SimpleNamespace(**vars(early), far_format="dae", lod_k=None, near_radii=None,
+                               cache_dir=str(self.root), offline=True, surface="off", sea="off", trees="off",
+                               road_widths="off")
+        md = mock.Mock()
+        md.bundle_versions.return_value = {"rails": "incompatible"}
+        with mock.patch.object(earthd.netfetch, "Fetcher") as fetcher, \
+                mock.patch.object(earthd.mapdatamod, "MapData", return_value=md), \
+                mock.patch.object(earthd.cachemod, "Cache") as cache:
+            for _ in range(2):
+                with self.assertRaises(wb.BundleError):
+                    asyncio.run(earthd.main_async(args))
+            self.assertEqual(md.close.call_count, 2)
+            self.assertEqual(fetcher.return_value.close.call_count, 2)
+            cache.assert_not_called()
+            md.close.side_effect = RuntimeError("reader close failed")
+            with self.assertRaisesRegex(RuntimeError, "reader close failed"):
+                asyncio.run(earthd.main_async(args))
+            self.assertEqual(fetcher.return_value.close.call_count, 3)
+
     def test_identity_is_canonical_and_immutable(self):
         self.write()
         manifest = self.export()
@@ -203,6 +325,20 @@ class BundleTest(unittest.TestCase):
                 dest.writestr(name, header.getvalue() if name == "p.npy" else source.read(name))
         with self.assertRaises(wb.BundleError):
             wb.validate_artifact(out.getvalue())
+
+    def test_non_string_feature_ids_rejected_before_export(self):
+        # Graders test tunnel suffixes and sort feature IDs, so even a lone
+        # integer can fail after loading; mixed string/integer IDs also cannot sort.
+        for ids in ((7,), ("road", 7), (True,), (None,), ("",)):
+            with self.subTest(ids=ids):
+                self.assertTrue(self.pc.store(KEY, [(fid, self.plan()) for fid in ids],
+                                              [], [], [], persist=True))
+                data = Path(self.pc._path(KEY)).read_bytes()
+                with self.assertRaises(wb.BundleError):
+                    wb.validate_artifact(data)
+                with self.assertRaises(wb.BundleError):
+                    self.export()
+                self.assertFalse(self.bundle.exists())
 
     def test_two_anchors_consume_same_prepared_grades_without_map_fetch(self):
         f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])

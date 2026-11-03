@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -37,13 +38,48 @@ def endpoint(url):
 
 
 def download(base, path, limit, timeout=20):
+    if not isinstance(timeout, (int, float)) or not 0 < timeout < float("inf"):
+        raise ValueError("Download timeout must be finite and positive")
     u = endpoint(base)
     cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
     conn = cls(u.hostname, u.port, timeout=timeout)
     deadline = time.monotonic() + timeout
+    response = transport = None
+    expired = threading.Event()
+
+    def expire():
+        expired.set()
+        # HTTP/1.0 and Connection: close detach conn.sock while the response's
+        # makefile still owns it. Retain that socket to interrupt body reads too.
+        for current in (transport, conn.sock):
+            if current is not None:
+                try:
+                    current.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                # On Windows shutdown alone does not wake a timed socket's
+                # select(). close() also defers while a makefile owns it. Detach
+                # invalidates this socket object before closing its descriptor,
+                # so response cleanup cannot later close a reused descriptor.
+                try:
+                    descriptor = current.detach()
+                    if descriptor >= 0:
+                        socket.close(descriptor)
+                except OSError:
+                    pass
+
+    # Socket timeouts reset on each recv; a server can otherwise trickle headers
+    # indefinitely. The watchdog interrupts blocking header/body reads at the
+    # wall deadline. System DNS resolution remains managed by the OS resolver.
+    watchdog = threading.Timer(timeout, expire)
+    watchdog.daemon = True
+    watchdog.start()
     try:
         conn.request("GET", u.path.rstrip("/") + "/" + path,
                      headers={"User-Agent": "BeamNG-Earth-WorldCache/1", "Accept-Encoding": "identity"})
+        transport = conn.sock
+        if expired.is_set():
+            raise TimeoutError("Bundle request timed out")
         response = conn.getresponse()
         # http.client never follows redirects. Only this fixed origin is used.
         if response.status != 200:
@@ -54,11 +90,13 @@ def download(base, path, limit, timeout=20):
         data = bytearray()
         while True:
             left = deadline - time.monotonic()
-            if left <= 0:
+            if expired.is_set() or left <= 0:
                 raise TimeoutError("Bundle request timed out")
             if conn.sock is not None:
                 conn.sock.settimeout(left)
             part = response.read1(min(65536, limit + 1 - len(data)))
+            if expired.is_set() or time.monotonic() >= deadline:
+                raise TimeoutError("Bundle request timed out")
             if not part:
                 break
             data.extend(part)
@@ -67,7 +105,15 @@ def download(base, path, limit, timeout=20):
         if length is not None and len(data) != int(length):
             raise ValueError("Truncated bundle response")
         return bytes(data)
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        if expired.is_set() or time.monotonic() >= deadline:
+            raise TimeoutError("Bundle request timed out") from exc
+        raise
     finally:
+        watchdog.cancel()
+        watchdog.join()
+        if response is not None:
+            response.close()
         conn.close()
 
 
@@ -238,11 +284,15 @@ def main(argv=None):
         elif args.command == "source-versions":
             import mapdata
             import netfetch
-            md = mapdata.MapData(args.cache_dir, fetcher=netfetch.Fetcher(offline=True))
+            fetcher = netfetch.Fetcher(offline=True)
             try:
-                print(json.dumps(md.versions(), sort_keys=True))
+                md = mapdata.MapData(args.cache_dir, fetcher=fetcher)
+                try:
+                    print(json.dumps(md.bundle_versions(), sort_keys=True))
+                finally:
+                    md.close()
             finally:
-                md.close()
+                fetcher.close()
         else:
             with make_server(args.bundle, args.port) as server:
                 print(f"Road-plan cache listening on http://127.0.0.1:{server.server_port}", flush=True)
