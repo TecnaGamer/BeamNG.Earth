@@ -251,6 +251,12 @@ end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
 vienna.install(M)
+-- Experimental French traffic signs (BNE_FR_ROADS=on); faces look along -local Y.
+for _, group in ipairs({'fr_giveway_m9c', 'fr_a1a', 'fr_a1b', 'fr_a1c', 'fr_a1d'}) do
+  local height = group:match('^fr_a1') and 1.8 or 2.45
+  M.CATALOG[group] = { { '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/bne_' .. group, height } }
+  M.GROUP_MAX_M[group] = 1000
+end
 -- Data generated with the meshes; one shared catalog for render/collision/LODs.
 for group, a in pairs(require('beamngEarth/europeAssets')) do
   M.CATALOG[group] = { { a[1], a[2] } }
@@ -258,6 +264,7 @@ for group, a in pairs(require('beamngEarth/europeAssets')) do
   if a[4] then M.NO_COLLIDE[group] = true end
 end
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture',

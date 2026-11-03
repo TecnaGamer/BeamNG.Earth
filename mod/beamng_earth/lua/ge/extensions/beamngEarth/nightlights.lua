@@ -8,6 +8,7 @@ local M = {}
 M.CHECK_S = 1.0
 -- the materials and their night glow (emissive factor, nits: West Coast USA's highrise windows glow at 200)
 M.MATERIALS = {
+  bne_fr_house_glass_lit = { '1 0.82 0.60', 60 },
   bne_bld_facade = { '1 1 1', 200 },
   -- (offices: 150 nits drew Manhattan's curtain-wall towers as white lanterns, TGForever Discord 2026-10-28)
   bne_bld_office = { '0.95 0.97 1', 70 },

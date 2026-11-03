@@ -602,6 +602,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
 
     def overhead(fid):          # does this road's line run on poles (not buried)?
+        import franceroads
+        sp = by_fid.get(fid, (None, None))[0]
+        if sp is not None and franceroads.enabled(sp) and not sp.urban:
+            return False
         return _h01(fid, "buried") >= buried
     import fast
     others = fast.Others([(fid, spec.width / 2, pts) for fid, spec, pts, _ in roads])
@@ -751,6 +755,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         rows.extend(regionalmarkers.place(roads, box, country_at, lighting=lighting))
         import regionalstops
         rows=regionalstops.localize(rows,pole_profile,pole_frame,country_at)
+        import regionaltraffic
+        rows=regionaltraffic.localize(rows,country_at)
+        rows.extend(regionaltraffic.place(roads,box,country_at))
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 

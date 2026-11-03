@@ -1,0 +1,368 @@
+{
+  "source": "OpenStreetMap API 0.6, retrieved 2026-11-03 UTC",
+  "url": "https://api.openstreetmap.org/api/0.6/map?bbox=7.775,48.910,7.797,48.925",
+  "license": "ODbL 1.0; © OpenStreetMap contributors",
+  "observed_location": [
+    7.78231,
+    48.91623
+  ],
+  "selection": "Mapped power supports within 1200 m of the screenshot position and excerpts of their two high-voltage lines, with one neighbouring vertex. No Street View poles have been added to these data.",
+  "records": [
+    {
+      "id": "n1895064876",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7713428,
+          48.911002
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole",
+        "source": "cadastre-dgi-fr source : Direction Générale des Impôts - Cadastre. Mise à jour : 2012"
+      }
+    },
+    {
+      "id": "n1895064883",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7723893,
+          48.9124328
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole",
+        "source": "cadastre-dgi-fr source : Direction Générale des Impôts - Cadastre. Mise à jour : 2012"
+      }
+    },
+    {
+      "id": "n1895064892",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.774292,
+          48.9149059
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole",
+        "source": "cadastre-dgi-fr source : Direction Générale des Impôts - Cadastre. Mise à jour : 2012"
+      }
+    },
+    {
+      "id": "n2134223565",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7779582,
+          48.919665
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223569",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7692572,
+          48.9221786
+        ]
+      ],
+      "tags": {
+        "not:operator:wikidata": "Q107352347",
+        "operator": "Strasbourg Electricité Réseaux",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223570",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7800759,
+          48.9224134
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223571",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7724817,
+          48.9229579
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223572",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.775879,
+          48.9238069
+        ]
+      ],
+      "tags": {
+        "operator": "Strasbourg Électricité Réseaux",
+        "operator:wikidata": "Q107352347",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223573",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.779393,
+          48.9246275
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223574",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7819066,
+          48.9247008
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223575",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7825571,
+          48.9254033
+        ]
+      ],
+      "tags": {
+        "operator": "Strasbourg Électricité Réseaux",
+        "operator:wikidata": "Q107352347",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223576",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.783985,
+          48.9257783
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n2134223577",
+      "class": "power_pole",
+      "lonlat": [
+        [
+          7.7847081,
+          48.9264767
+        ]
+      ],
+      "tags": {
+        "operator": "SER",
+        "power": "pole"
+      }
+    },
+    {
+      "id": "n6785636976",
+      "class": "power_tower",
+      "lonlat": [
+        [
+          7.7732415,
+          48.9135403
+        ]
+      ],
+      "tags": {
+        "power": "tower",
+        "source": "BDOrtho IGN - available 2019 at the latest"
+      }
+    },
+    {
+      "id": "n6785636977",
+      "class": "power_tower",
+      "lonlat": [
+        [
+          7.775276,
+          48.9161885
+        ]
+      ],
+      "tags": {
+        "power": "tower",
+        "source": "BDOrtho IGN - available 2019 at the latest"
+      }
+    },
+    {
+      "id": "n6785636978",
+      "class": "power_tower",
+      "lonlat": [
+        [
+          7.7760575,
+          48.9172033
+        ]
+      ],
+      "tags": {
+        "power": "tower",
+        "source": "BDOrtho IGN - available 2019 at the latest"
+      }
+    },
+    {
+      "id": "n6785636979",
+      "class": "power_tower",
+      "lonlat": [
+        [
+          7.7768904,
+          48.9182723
+        ]
+      ],
+      "tags": {
+        "power": "tower",
+        "source": "BDOrtho IGN - available 2019 at the latest"
+      }
+    },
+    {
+      "id": "w179158710",
+      "class": "power_line",
+      "lonlat": [
+        [
+          7.7861399,
+          48.9269214
+        ],
+        [
+          7.783985,
+          48.9257783
+        ],
+        [
+          7.7819066,
+          48.9247008
+        ],
+        [
+          7.7800759,
+          48.9224134
+        ],
+        [
+          7.7779582,
+          48.919665
+        ],
+        [
+          7.7768904,
+          48.9182723
+        ],
+        [
+          7.7760575,
+          48.9172033
+        ],
+        [
+          7.775276,
+          48.9161885
+        ],
+        [
+          7.774292,
+          48.9149059
+        ],
+        [
+          7.7732415,
+          48.9135403
+        ],
+        [
+          7.7723893,
+          48.9124328
+        ],
+        [
+          7.7713428,
+          48.911002
+        ],
+        [
+          7.7688371,
+          48.9078061
+        ]
+      ],
+      "tags": {
+        "cables": "6",
+        "circuits": "2",
+        "operator": "SER",
+        "power": "line",
+        "source": "cadastre-dgi-fr source : Direction Générale des Impôts - Cadastre. Mise à jour : 2012",
+        "voltage": "63000"
+      }
+    },
+    {
+      "id": "w203411522",
+      "class": "power_line",
+      "lonlat": [
+        [
+          7.7873617,
+          48.9278925
+        ],
+        [
+          7.7847081,
+          48.9264767
+        ],
+        [
+          7.7825571,
+          48.9254033
+        ],
+        [
+          7.779393,
+          48.9246275
+        ],
+        [
+          7.775879,
+          48.9238069
+        ],
+        [
+          7.7724817,
+          48.9229579
+        ],
+        [
+          7.7692572,
+          48.9221786
+        ],
+        [
+          7.7643079,
+          48.9210056
+        ]
+      ],
+      "tags": {
+        "cables": "3",
+        "operator": "Strasbourg Électricité Réseaux",
+        "operator:short": "SER",
+        "operator:wikidata": "Q107352347",
+        "power": "line",
+        "voltage": "63000"
+      }
+    }
+  ]
+}

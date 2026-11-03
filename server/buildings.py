@@ -22,6 +22,7 @@ import numpy as np
 import fast
 import mapgeom
 import staging
+import francehouses
 
 FLOOR_M = 3.0               # m per storey (residential)
 GROUND_FLOOR_SHOP_M = 4.2   # m, a shop's ground floor
@@ -75,7 +76,7 @@ BRICK_WALL = "bne_bld_brick"    # plain red brick (the stock brick_plain): a gar
 CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a precast garage's skin
 SKY_WALL = "bne_bld_sky"    # the skyline's walls: plain (vertex colours), their windows lit at night (_sky_mesh)
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
-             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL)
+             STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL) + francehouses.MATERIALS
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -205,6 +206,9 @@ class _Looks:
     def __getitem__(self, name):
         if name in LOOKS:
             mat, c = LOOKS[name]
+        elif name.startswith("bne_fr_house_") and "|c_" in name:
+            mat, rgb = name.split("|c_", 1)
+            c = tuple(float(v) for v in rgb.split("_"))
         elif name.startswith("custom|") or ("|c_" in name):
             mat = name.split("|")[0]
             c = (1.0, 1.0, 1.0)
@@ -321,7 +325,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "fr_house")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -773,10 +777,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if porch:   # pitched roofs draw the walls on the oriented box: an L-shaped house's door wall can be inside it
         _, _, hl, hw = oriented_box(ring)
         porch = area >= 0.9 * 4 * hl * hw
-    return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
+    spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
                 deck=garage and roof == "flat", pitch=style.pitch)
+    return francehouses.adapt(spec, attrs, lat, lon)
 
 
 class Mesh:
@@ -1000,7 +1005,11 @@ def drawn_ring(spec):
     door's frame showing: Stelvio pass, the user's reports 2026-10-17)."""
     ring = spec.ring
     if spec.roof != "flat":
-        c, u, hl, hw = oriented_box(ring)
+        if spec.fr_house:
+            import francehouse_mesh
+            c, u, hl, hw = francehouse_mesh.model_box(ring)
+        else:
+            c, u, hl, hw = oriented_box(ring)
         v = np.array([-u[1], u[0]])
         ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
     return ring
@@ -1199,14 +1208,20 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
     lite mesh of its buildings as a 7th element (write: the shape's coarse detail)."""
     parts, cur, cur_lite, n = [], [], [], 0
+    if not isinstance(specs_and_ground, (list, tuple)):
+        specs_and_ground = list(specs_and_ground)
+    prepared = None
+    if any(item[0].fr_house for item in specs_and_ground) and max_verts == MAX_MESH_VERTS:
+        import francehouse_mesh
+        prepared = francehouse_mesh.prepared_parts(specs_and_ground, lite, with_lod, max_verts)
 
     def flush():
         if cur:
             mesh = _concat(cur)
             parts.append(mesh + (_concat(cur_lite) if cur_lite else None,) if with_lod and not lite else mesh)
 
-    for item in specs_and_ground:
-        one = build([item], lite)
+    for i, item in enumerate(specs_and_ground):
+        one = prepared[i][0] if prepared is not None else build([item], lite)
         if one is None:
             continue
         if cur and n + len(one[0]) > max_verts:
@@ -1215,7 +1230,7 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
         cur.append(one)
         n += len(one[0])
         if with_lod and not lite:
-            o = build([item], lite=True)
+            o = prepared[i][1] if prepared is not None else build([item], lite=True)
             if o is not None:
                 cur_lite.append(o)
     flush()
@@ -1483,6 +1498,10 @@ def build(specs_and_ground, lite=False):
         if spec.cls == "toll_booth":        # a stock prop (toll_booth_rows)
             continue
         mat_idx = _Looks(spec.seed)
+        if spec.fr_house:
+            import francehouse_mesh
+            francehouse_mesh.draw(m, spec, gmin, gmax, mat_idx, lite)
+            continue
         if spec.cls in BRIDGE_CLASSES:
             _steel_frame(m, spec, gmin, mat_idx[spec.facade if spec.facade in LOOKS else STEEL], lite)
             continue
@@ -1563,6 +1582,10 @@ def collision_mesh(specs_and_ground):
     tok = (MATERIALS.index(PANEL), (128, 128, 128, 255))
     zero = (0.0, 0.0)
     for spec, gmin, gmax in specs_and_ground:
+        if spec.fr_house:
+            import francehouse_mesh
+            francehouse_mesh.draw(m, spec, gmin, gmax, _Looks(spec.seed), collision=True)
+            continue
         if spec.cls in BRIDGE_CLASSES:          # its legs (the decks run between them)
             _steel_frame(m, spec, gmin, tok, True, legs_only=True)
             continue
@@ -2257,7 +2280,7 @@ class _PartsOf:
 
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None):
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=()):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -2431,9 +2454,18 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     if ok.any():
         up_all[ok] = np.asarray(frame.geodetic_to_enu(la_all[ok], lo_all[ok], g_all[ok])[2], np.float64)
     out = []
+    house_land = francehouses.ResidentialLand(house_land_layers) if francehouses.ON and francehouses.INFER else None
     for k, (ring, at, sh, look, mh) in enumerate(zip(rings, attrs, shared, looks, mins)):
         if mh > 0.5 and at.get("height") is not None and np.isfinite(at["height"]) and look is None:
             at = dict(at, height=max(2.5, float(at["height"]) - mh))     # a building's own height range
+        i0, i1 = (ends[k - 1] if k else 0), ends[k]
+        if francehouses.ON:
+            if not ok[i0:i1].all():
+                continue
+            hlat, hlon = float(la_all[i0:i1].mean()), float(lo_all[i0:i1].mean())
+            at = dict(at, _fr_location=(hlat, hlon), _fr_altitude=float(np.nanmean(g_all[i0:i1])),
+                      _fr_part=look is not None or mh > .5, _fr_neighbours=int(sh),
+                      _fr_residential=house_land.at(hlat, hlon) if house_land is not None else False)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
         spec.portal = bool(at.get("portal"))
@@ -2786,6 +2818,8 @@ def doors(items, lines, x0, y0, drives=None):
         p = a + d * (Le * f) + out * DOOR_OUT_M
         gd = door_ground(spec, edge, Le * f, gmax) if spec.stoop else gmax     # a stoop's door: over its own ground
         base = gd + (STOOP_H if spec.stoop else 0.0) + (PORCH_DECK_M if spec.porch else 0.0)   # (the deck / stoop)
+        if spec.fr_house:
+            continue                    # the regional model contains its own fitted front door
         rows.append([G_DOOR, round(float(p[0]), 2), round(float(p[1]), 2), round(base, 2),
                      round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1), 1.0, 2.2,
                      round(_hash01(spec.seed, "dv"), 3)])
@@ -2896,7 +2930,8 @@ def road_tile_items(frame, tx, ty, md, ground, decks=None, skip=frozenset()):
     import roads
     box = roads.tile_bbox(tx, ty)
     x0, y0, x1, y1 = box
-    cds = [md.cell(k, layers=("buildings", "building_parts", "roads", "infrastructure", "water"), kind="demand")
+    house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
+    cds = [md.cell(k, layers=("buildings", "building_parts", "roads", "infrastructure", "water") + house_layers, kind="demand")
            for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
     return tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground,
                           own=box if hasattr(box, "owns") else None,
@@ -2909,6 +2944,7 @@ def road_tile_items(frame, tx, ty, md, ground, decks=None, skip=frozenset()):
                           supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                           bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                           water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
+                          house_land_layers=[c.layers.get("land_use") for c in cds],
                           decks=[(np.asarray(d[0], np.float64)[:, :2] - [x0, y0], np.asarray(d[1], np.float64))
                                  + tuple(d[2:3]) for d in decks] if decks else None, skip=skip)
 
@@ -2965,9 +3001,11 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
     box = roads.tile_bbox(tile, ty)
     x0, y0, x1, y1 = box
     own = box if hasattr(box, "owns") else None
-    cds = [md.cell(k, layers=FAR_LAYERS, kind="demand") for k in roads.cells_of_tile(frame, tile, ty, margin=0.0)]
+    house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
+    cds = [md.cell(k, layers=FAR_LAYERS + house_layers, kind="demand") for k in roads.cells_of_tile(frame, tile, ty, margin=0.0)]
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds],
+                           house_land_layers=[c.layers.get("land_use") for c in cds],
                            west_town=district_town(frame, tile, ty, md),
                            garages_xy=garage_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
