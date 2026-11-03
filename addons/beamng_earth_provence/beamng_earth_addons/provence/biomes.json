@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "biomes": [
+    {
+      "id": "provence_mediterranean",
+      "name": "Provence & Occitanie Mediterranean garrigue, vineyards, and lavender plateaus",
+      "bbox": [43.0, 4.0, 44.6, 6.8],
+      "altitude_m": [0, 1912],
+      "species_distribution": {
+        "holm_oak": 0.35,
+        "aleppo_pine": 0.25,
+        "cypress_windbreak": 0.15,
+        "olive_tree": 0.15,
+        "garrigue_scrub": 0.10
+      },
+      "structured_crops": {
+        "vineyard": {
+          "pattern": "parallel_rows",
+          "row_spacing_m": 2.2,
+          "point_spacing_m": 1.2,
+          "block_spacing_a_m": 15.5,
+          "block_spacing_b_m": 7.2,
+          "single_spacing_a_m": 5.17,
+          "single_spacing_b_m": 2.4,
+          "orientation": "parcel_major_axis",
+          "headland_margin_m": 3.0,
+          "plant_group": "vineyard_row",
+          "height_m": [1.25, 1.55]
+        },
+        "lavender": {
+          "pattern": "parallel_rows",
+          "row_spacing_m": 1.5,
+          "point_spacing_m": 0.8,
+          "block_spacing_a_m": 2.45,
+          "block_spacing_b_m": 2.72,
+          "orientation": "parcel_major_axis",
+          "headland_margin_m": 2.0,
+          "plant_group": "lavender_bush",
+          "height_m": [0.65, 0.90]
+        },
+        "olive": {
+          "pattern": "staggered_grid",
+          "row_spacing_m": 6.0,
+          "point_spacing_m": 6.0,
+          "block_spacing_a_m": 7.5,
+          "block_spacing_b_m": 7.5,
+          "headland_margin_m": 3.5,
+          "plant_group": "olive",
+          "height_m": [3.5, 5.3]
+        },
+        "orchard": {
+          "pattern": "staggered_grid",
+          "row_spacing_m": 5.5,
+          "point_spacing_m": 5.0,
+          "block_spacing_a_m": 6.0,
+          "block_spacing_b_m": 6.0,
+          "headland_margin_m": 3.0,
+          "plant_group": "deciduous",
+          "height_m": [3.2, 4.8]
+        },
+        "truffle": {
+          "pattern": "staggered_grid",
+          "row_spacing_m": 8.0,
+          "point_spacing_m": 8.0,
+          "block_spacing_a_m": 9.0,
+          "block_spacing_b_m": 9.0,
+          "headland_margin_m": 4.0,
+          "plant_group": "Broadleaf",
+          "height_m": [3.8, 5.6]
+        }
+      },
+      "building_palettes": {
+        "roof_style": {
+          "style_name": "mediterranean",
+          "preferred_materials": ["tile"],
+          "clay_tile_indices": [4, 5, 6],
+          "terracotta_hsv_bounds": {
+            "hue_deg": [8.0, 32.0],
+            "sat": [0.22, 0.72],
+            "val": [0.35, 0.82]
+          },
+          "default_rgb": [182, 108, 76],
+          "sample_ortho_when_available": true
+        }
+      }
+    }
+  ]
+}

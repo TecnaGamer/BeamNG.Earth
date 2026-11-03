@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "data_sources": [
+    {
+      "id": "ign_rpg_parcels",
+      "name": "IGN RPG Agricultural Parcels & BD TOPO Hedgerows",
+      "type": "wfs_geojson",
+      "endpoint": "https://data.geopf.fr/wfs/ows",
+      "layer": "RPG.LATEST:parcelles_graphiques",
+      "bbox": [43.0, 4.0, 44.6, 6.8],
+      "default_enabled": true,
+      "attribution": "IGN Géoplateforme — Etalab Licence Ouverte 2.0",
+      "crop_code_map": {
+        "VRC": "vineyard",
+        "VRT": "vineyard",
+        "LAV": "lavender",
+        "PPAM": "lavender",
+        "OLI": "olive",
+        "TRU": "truffle",
+        "VRG": "orchard"
+      }
+    },
+    {
+      "id": "ign_orthophoto_20cm",
+      "name": "IGN BD ORTHO 20cm Aerial Orthophoto (Roof & Lavender Sampling)",
+      "type": "wmts_ortho",
+      "endpoint": "https://data.geopf.fr/wmts",
+      "layer": "HR.ORTHOIMAGERY.ORTHOPHOTOS",
+      "bbox": [43.0, 4.0, 44.6, 6.8],
+      "default_enabled": true,
+      "attribution": "IGN BD ORTHO — Etalab Licence Ouverte 2.0"
+    },
+    {
+      "id": "osm_provence_landuse",
+      "name": "OpenStreetMap Provence Landuse & Viticulture Tags",
+      "type": "overpass_landuse",
+      "bbox": [43.0, 4.0, 44.6, 6.8],
+      "default_enabled": true,
+      "tags": [
+        "landuse=vineyard",
+        "landuse=orchard",
+        "crop=lavender",
+        "trees=olive_trees"
+      ]
+    }
+  ]
+}

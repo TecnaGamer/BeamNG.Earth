@@ -1080,3 +1080,184 @@ class RealTagsTest(unittest.TestCase):
         self.assertLess(p2_rgba[0], 50)
         self.assertGreater(p2_rgba[1], 200)
         self.assertEqual(p2_spec.roof, "hipped")
+
+class IgnBdTopoAndAerialRoofTest(unittest.TestCase):
+    """IGN BDTOPO_V3:batiment 3D height/material joining and streamed z=17 aerial roof colour sampling."""
+
+    def test_ign_bdtopo_join_enriches_and_appends(self):
+        import tempfile
+        import geodesy
+        import ign_fr
+        import mapcells
+        import mapgeom
+
+        frame = geodesy.EnuFrame(43.88, 5.19)  # Gordes, Provence
+        with tempfile.TemporaryDirectory() as tmp:
+            ign = ign_fr.IgnFr(Path(tmp))
+            key = mapcells.cells_for_points([43.88], [5.19])[0]
+            # Pre-seed the BDTOPO building cell cache with 2 buildings:
+            # 1) Matching Overture footprint at (5.1900, 43.8800) with height=9.4m, 2 floors, stone walls, tile roof
+            # 2) Unmatched rural mas at (5.1920, 43.8810) with height=6.8m
+            ring1 = [[5.18995, 43.87995], [5.19005, 43.87995], [5.19005, 43.88005], [5.18995, 43.88005], [5.18995, 43.87995]]
+            ring2 = [[5.19195, 43.88095], [5.19205, 43.88095], [5.19205, 43.88105], [5.19195, 43.88105], [5.19195, 43.88095]]
+            ign._bld_mem[key] = [
+                {
+                    "id": "BATIMENT0001",
+                    "p": [[ring1]],
+                    "c": [5.1900, 43.8800],
+                    "h": 9.4,
+                    "fl": 2,
+                    "rh": 2.3,
+                    "rs": "gabled",
+                    "wm": "stone",
+                    "rm": "tile",
+                    "cl": "residential",
+                },
+                {
+                    "id": "BATIMENT0002",
+                    "p": [[ring2]],
+                    "c": [5.1920, 43.8810],
+                    "h": 6.8,
+                    "fl": 2,
+                    "rh": 1.8,
+                    "rs": "gabled",
+                    "wm": "stone",
+                    "rm": "tile",
+                    "cl": "farm_auxiliary",
+                },
+            ]
+
+            ov = mapgeom.Features(
+                layer="buildings",
+                ids=mapgeom.text_column(["ov_1"]),
+                kind=np.array([mapgeom.POLYGON], np.uint8),
+                part_off=np.array([0, 1], np.int64),
+                ring_off=np.array([0, 1], np.int64),
+                coord_off=np.array([0, len(ring1)], np.int64),
+                lonlat=np.array(ring1, np.float64),
+                attrs={
+                    "height": np.array([np.nan], np.float32),
+                    "num_floors": np.array([np.nan], np.float32),
+                    "class": mapgeom.text_column([""]),
+                },
+            )
+            joined = ign.join_buildings(ov, key, frame, "cached")
+            self.assertEqual(len(joined), 2, "matched Overture footprint + appended unmatched IGN building")
+            self.assertAlmostEqual(float(joined.attrs["height"][0]), 9.4, places=1)
+            self.assertEqual(int(joined.attrs["num_floors"][0]), 2)
+            self.assertEqual(str(joined.attrs["facade_material"][0]), "stone")
+            self.assertEqual(str(joined.attrs["roof_material"][0]), "tile")
+            self.assertEqual(str(joined.ids[1]), "~ign:BATIMENT0002")
+            self.assertEqual(str(joined.attrs["class"][1]), "farm_auxiliary")
+
+    def test_provence_tile_roof_and_aerial_roof_sampling(self):
+        import tempfile
+        import PIL.Image
+        import geodesy
+        import imagery
+
+        frame = geodesy.EnuFrame(43.88, 5.19)
+        s = bld.plan(
+            rect(10, 10, 16, 12),
+            {
+                "class": "residential",
+                "height": 8.5,
+                "num_floors": 2,
+                "roof_shape": "gabled",
+                "facade_material": "stone",
+                "roof_material": "tile",
+            },
+            0,
+            43.88,
+            5.19,
+        )
+        self.assertTrue(s.wall.startswith(bld.STONE))
+        self.assertIn(s.roof_mat, (f"{bld.ROOF_SLATE}|4", f"{bld.ROOF_SLATE}|5", f"{bld.ROOF_SLATE}|6"))
+        self.assertEqual(bld.LOOKS[s.roof_mat][0], bld.ROOF_TILE)
+
+        # Create a synthetic cached z=17 aerial orthophoto tile over (43.88, 5.19)
+        with tempfile.TemporaryDirectory() as tmp:
+            la, lo, _ = frame.enu_to_geodetic(np.array([18.0]), np.array([16.0]), np.array([0.0]))
+            px, py = imagery.mercator_px(la, lo, 17)
+            tx, ty = int(px[0] // 256), int(py[0] // 256)
+            tile_path = Path(tmp) / "imagery" / "france" / "17" / str(tx) / f"{ty}.jpg"
+            tile_path.parent.mkdir(parents=True, exist_ok=True)
+            # Warm terracotta roof colour (195, 118, 82)
+            img = np.full((256, 256, 3), (195, 118, 82), dtype=np.uint8)
+            img[::2, ::2] = (155, 88, 56)
+            img[0:32, 0:32] = (80, 90, 70)
+            img[::2, ::2] = (155, 88, 56)
+            img[0:32, 0:32] = (80, 90, 70)
+            PIL.Image.fromarray(img).save(tile_path, quality=95)
+
+            md = type("MD", (), {"cache_dir": Path(tmp), "imagery_source": "world", "offline": True})()
+            items = [(s, 100.0, 100.5)]
+            bld.sample_aerial_roofs(frame, items, 0.0, 0.0, md)
+            self.assertIsNotNone(s.roof_rgb, "sampled roof colour from z=17 aerial orthophoto")
+            self.assertGreater(s.roof_rgb[0], s.roof_rgb[2], "warm terracotta red > blue")
+
+            P, UV, T, M, mats, C = bld.build([(s, 100.0, 100.5)])
+            self.assertIn(bld.ROOF_TILE, mats, "uses 3D normal-mapped Mediterranean clay roof tile material")
+
+    def test_ign_bdtopo_over_road_clear_not_synthesized(self):
+        import geodesy
+        import mapgeom
+
+        frame = geodesy.EnuFrame(44.17, 5.14)
+        e = np.array([25.0, 75.0, 75.0, 25.0, 25.0])
+        n = np.array([25.0, 25.0, 75.0, 75.0, 25.0])
+        la, lo, _ = frame.enu_to_geodetic(e, n, 0.0)
+        ring_ll = np.stack([lo, la], 1)
+        road = np.array([[10.0, 50.0], [90.0, 50.0]])
+        
+        # 1) IGN BD TOPO building -> should NOT get OVER_ROAD_CLEAR_M (min_h remains 0.0)
+        feats_ign = mapgeom.Features(
+            layer="buildings",
+            ids=mapgeom.text_column(["ign_bld1"]),
+            kind=np.array([mapgeom.POLYGON], np.uint8),
+            part_off=np.array([0, 1], np.int64),
+            ring_off=np.array([0, 1], np.int64),
+            coord_off=np.array([0, len(ring_ll)], np.int64),
+            lonlat=ring_ll,
+            attrs={
+                "height": np.array([9.2], np.float32),
+                "num_floors": np.array([np.nan], np.float32),
+                "class": mapgeom.text_column(["industrial"]),
+                "src_dataset": mapgeom.text_column(["IGN_BDTOPO"]),
+            },
+        )
+        def ground(la, lo):
+            return np.full(len(la), 350.0)
+
+        items_ign = bld.tile_buildings(frame, 0, 0, 100, 100, [feats_ign], ground, roads_xy=[road])
+        self.assertEqual(len(items_ign), 1)
+        spec_ign, gmin, gmax = items_ign[0]
+        self.assertEqual(spec_ign.min_h, 0.0, "IGN BD TOPO building is not lifted as overpass")
+        self.assertAlmostEqual(spec_ign.height, 9.2, places=1)
+
+        # 2) Regular building on steep slope (>4m) with synthesized overpass -> reset to min_h=0.0
+        feats_osm = mapgeom.Features(
+            layer="buildings",
+            ids=mapgeom.text_column(["osm_bld1"]),
+            kind=np.array([mapgeom.POLYGON], np.uint8),
+            part_off=np.array([0, 1], np.int64),
+            ring_off=np.array([0, 1], np.int64),
+            coord_off=np.array([0, len(ring_ll)], np.int64),
+            lonlat=ring_ll,
+            attrs={
+                "height": np.array([12.0], np.float32),
+                "num_floors": np.array([np.nan], np.float32),
+                "class": mapgeom.text_column(["residential"]),
+                "src_dataset": mapgeom.text_column(["OpenStreetMap"]),
+            },
+        )
+        def steep_ground(la, lo):
+            # 10m height diff across footprint
+            e_samp, n_samp, _ = frame.geodetic_to_enu(la, lo, 0.0)
+            return 350.0 + (n_samp - 25.0) / 50.0 * 10.0
+
+        items_osm = bld.tile_buildings(frame, 0, 0, 100, 100, [feats_osm], steep_ground, roads_xy=[road])
+        self.assertEqual(len(items_osm), 1)
+        spec_osm, gmin, gmax = items_osm[0]
+        self.assertEqual(spec_osm.min_h, 0.0, "Steep hillside building resets synthesized overpass to 0.0")
+        self.assertAlmostEqual(spec_osm.height, 12.0, places=1)

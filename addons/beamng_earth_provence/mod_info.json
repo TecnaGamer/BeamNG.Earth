@@ -1,0 +1,10 @@
+{
+  "name": "BeamNG.Earth — Provence & Occitanie Ground Truth",
+  "author": "BeamNG.Earth Contributors",
+  "version": "1.0.0",
+  "description": "High-accuracy Ground Truth regional addon for Provence & Occitanie (France): IGN RPG parcel polygons, BD ORTHO 20cm aerial roof sampling, Mediterranean species distribution, and structured crop row geometry (vineyards, lavender, olive groves, orchards).",
+  "tag_line": "Ground Truth regional enrichment for Provence & Occitanie",
+  "dependencies": [
+    "beamng_earth"
+  ]
+}
