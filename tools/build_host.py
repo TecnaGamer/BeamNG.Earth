@@ -143,8 +143,7 @@ def build(out_dir, downloader=fetch, platform="windows"):
                 member(z, "run_host.sh", '#!/bin/sh\nset -eu\ncd -- "$(dirname -- "$0")"\nexec ./BeamMP-Server "$@"\n', 0o100755)
             z.writestr("ServerConfig.toml", CONFIG)
             z.writestr("LICENSE-BeamMP.txt", license_text)
-            z.write(ROOT / "LICENSE", "LICENSE-Earth.txt")
-            z.write(ROOT / "CREDITS.md", "CREDITS-Earth.md")
+            # Earth's license and credits already arrived with the plugin ZIP.
             z.writestr("HOSTING.txt", notices)
             z.write(source_path, source_path.name)
             z.writestr("UPSTREAM-PROVENANCE.json", json.dumps({"beammp_version": BEAMMP_VERSION,

@@ -41,6 +41,7 @@ class HostPackageTest(unittest.TestCase):
             host, source = build_host.build(d, download, platform="linux")
             source_bytes = source.read_bytes()
             with zipfile.ZipFile(host) as z:
+                self.assertEqual(len(z.namelist()), len(set(z.namelist())), "host members must be unique")
                 self.assertEqual(z.read("BeamMP-Server"), binary)
                 for name in ("BeamMP-Server", "run_host.sh"):
                     self.assertEqual(z.getinfo(name).external_attr >> 16, 0o100755)
@@ -65,11 +66,14 @@ class HostPackageTest(unittest.TestCase):
                 mock.patch.object(build_host, "EXE_SHA256", build_host.sha256(binary)):
             host, source = build_host.build(d, download)
             with zipfile.ZipFile(host) as z:
+                self.assertEqual(len(z.namelist()), len(set(z.namelist())), "host members must be unique")
                 self.assertEqual(z.read("BeamMP-Server.exe"), binary)
                 self.assertIn('AuthKey = ""', z.read("ServerConfig.toml").decode())
                 self.assertIn('Private = true', z.read("ServerConfig.toml").decode())
                 self.assertIn("Resources/Client/beamng_earth.zip", z.namelist())
                 self.assertIn("Resources/Server/BeamNGEarth/main.lua", z.namelist())
+                self.assertEqual(z.read("LICENSE-Earth.txt"), (build_host.ROOT / "LICENSE").read_bytes())
+                self.assertEqual(z.read("CREDITS-Earth.md"), (build_host.ROOT / "CREDITS.md").read_bytes())
                 self.assertEqual(z.read(source.name), source.read_bytes())
                 provenance = json.loads(z.read("UPSTREAM-PROVENANCE.json"))
                 self.assertFalse(provenance["locally_compiled"])
