@@ -3099,7 +3099,11 @@ class Server:
         if fut is None:
             fut = self.tile_inflight[ck] = loop.run_in_executor(self.tile_pool, self.make_tile, anchor, tile, prev)
             fut.add_done_callback(lambda f: self._tile_done(ck, f))
-        return fut
+        # A connection may stop waiting at a rebase or disconnect. Cancelling the
+        # executor Future does not stop a running thread: it can still write its
+        # pooled shape. Keep that producer tracked until its writes have finished,
+        # so reclaim_names cannot give its slot to another tile in the meantime.
+        return asyncio.shield(fut)
 
     def in_use(self):
         """(anchorId, key) of every tile a connection shows or holds, or let go of less than
@@ -3400,7 +3404,14 @@ class Server:
 
     def prune(self, keep_from):
         """Forget anchors older than keep_from and delete their files."""
+        busy = {k[0] for k in self.tile_inflight}
+        retry = False
         for aid in [a for a in self.anchors if a < keep_from]:
+            if aid in busy:
+                # A running worker still owns its files and pooled shape slot.
+                # Its asyncio Future must not be cancelled to hurry pruning.
+                retry = True
+                continue
             del self.anchors[aid]
             self.horizon_grids.pop(aid, None)
             self.horizon_failed.pop(aid, None)
@@ -3417,8 +3428,6 @@ class Server:
                 self.cm_waiting[rk] = {ck for ck in self.cm_waiting[rk] if ck[0] != aid}
                 if not self.cm_waiting[rk]:
                     del self.cm_waiting[rk]
-            for fut in [f for k, f in self.tile_inflight.items() if k[0] == aid]:
-                fut.cancel()
             for key in [k for k in self.hm if k[0] == aid]:
                 if key not in self.hm_committed and key not in self.hm_sent:
                     del self.hm[key]
@@ -3437,6 +3446,8 @@ class Server:
             for stem in ANCHOR_TILE_FILES:
                 doomed += glob.glob(os.path.join(self.out_dir, f"{stem}_{aid}_*"))
             self.queue_delete(p for p in dict.fromkeys(doomed) if os.path.exists(p))
+        if retry:
+            self.schedule_prune(keep_from)
 
 
 # Per-anchor tile files (besides far_ / hm_) that prune() deletes with their anchor
@@ -4659,7 +4670,7 @@ class Connection:
             self.view_at = None
         for ck, (fut, _) in self.inflight.items():
             if ck[0] != aid:
-                fut.cancel()            # only stops jobs that have not started
+                fut.cancel()            # this connection's waiter; the producer keeps its slot until it finishes
         # Tiles sent but not swapped in are dropped by the mod at the anchor switch, but for the global ones (any
         # anchor's: the mod keeps them loading, placed into the new anchor; not after a resync, old is None)
         keep = {k: t for k, t in self.sent.items() if farfield.is_global_key(k)} if old is not None else {}
