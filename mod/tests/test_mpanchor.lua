@@ -93,6 +93,30 @@ positionGE.handle('p:9-0:{"pos":[1,2,3]}')      -- (a player with no anchor know
 jsonDecode = saved
 T.check(#got == before, 'a NaN packet never reaches BeamMP, converted or not')
 
+-- Present vectors must be complete numeric tuples before coordinate arithmetic.
+-- A missing optional field is supported, but a missing component is malformed.
+for _, field in ipairs({ 'pos', 'vel', 'rvel', 'rot' }) do
+  for _, malformed in ipairs({ {}, { 1 }, { 1, 2 }, { [1] = 1, [3] = 3 },
+      { 1, '2', 3, 1 }, { 1, false, 3, 1 }, 'not a vector', { 1, math.huge, 3, 1 } }) do
+    for _, pid in ipairs({ 4, 99 }) do
+      jsonDecode = function() return { [field] = malformed } end
+      local countBefore = #got
+      local ok = pcall(positionGE.handle, 'p:' .. pid .. '-0:{"test":1}')
+      T.check(ok and #got == countBefore, 'malformed ' .. field .. ' dropped without throwing, peer ' .. pid)
+    end
+  end
+end
+jsonDecode = function() return { rot = { 0, 0, 0 } } end
+local quaternionBefore = #got
+T.check(pcall(positionGE.handle, 'p:4-0:{"test":1}') and #got == quaternionBefore,
+  'incomplete quaternion never reaches transform arithmetic or BeamMP')
+local optionalBefore = #got
+jsonDecode = function() return {} end
+positionGE.handle('p:99-0:{"test":1}')
+T.check(#got == optionalBefore + 1 and got[#got] == 'p:99-0:{"test":1}',
+  'absent optional fields preserve valid unknown-peer compatibility')
+jsonDecode = saved
+
 -- a player's anchor changes: its packets are dropped for SETTLE_S (packets from its old place can still come, and
 -- converted with the new anchor they would put the car under the ground), then pass again
 local tnow = 1000

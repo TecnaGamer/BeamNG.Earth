@@ -186,12 +186,13 @@ end
 M.MAX_SPEED = 2000          -- m/s
 local function finite(v) return type(v) == 'number' and v == v and v > -math.huge and v < math.huge end
 function M.sanitize(decoded)
+  if type(decoded) ~= 'table' then return false end
   for _, k in ipairs({ 'pos', 'vel', 'rvel', 'rot' }) do
     local t = decoded[k]
     if t ~= nil then
       if type(t) ~= 'table' then return false end
       for i = 1, (k == 'rot' and 4 or 3) do
-        if t[i] ~= nil and not finite(t[i]) then return false end
+        if not finite(t[i]) then return false end
       end
     end
   end
@@ -230,21 +231,24 @@ local function wrapHandle(original)
     local xf = pid and transformFor(pid) or nil
     local ok, decoded = pcall(jsonDecode, data)
     if not ok or type(decoded) ~= 'table' then return original(rawData) end
+    -- Coordinate arithmetic needs every component of each present vector.
+    -- Validate before transforming, then again after to catch numeric overflow.
+    local sane, changed = M.sanitize(decoded)
+    if not sane then return end
     if not xf then                          -- (no conversion: the packet as sent, if it is sane)
-      local sane, changed = M.sanitize(decoded)
-      if not sane then return end
       if type(decoded.pos) == 'table' then lastPos[serverVehicleID] = decoded.pos end
       if not changed then return original(rawData) end
       local okE, enc = pcall(jsonEncode, decoded)
       return original(okE and (code .. ':' .. serverVehicleID .. ':' .. enc) or rawData)
     end
     applyTransform(decoded, xf)
-    local sane, changed = M.sanitize(decoded)
+    local afterChanged
+    sane, afterChanged = M.sanitize(decoded)
     if not sane then
       note(serverVehicleID, 'insane', 'BeamMP: a position packet of car ' .. serverVehicleID .. ' with a non-finite number dropped')
       return
     end
-    if changed then
+    if changed or afterChanged then
       note(serverVehicleID, 'fast', 'BeamMP: car ' .. serverVehicleID .. ' reported over MAX_SPEED: its speeds zeroed')
     end
     local p = decoded.pos
