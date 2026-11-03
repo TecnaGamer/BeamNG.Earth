@@ -88,6 +88,9 @@ class SessionAdoptionTest(unittest.TestCase):
         self.stale = make_session(self.root, "20260101-000000-aaaa", earthd.SESSION_STALE_S + 600)
         self.a = make_session(self.root, "20261010-120000-bbbb", 300)
         self.b = make_session(self.root, "20261010-120500-cccc", 120)
+        running = earthd.game_running
+        earthd.game_running = lambda: True          # (a game runs: the younger sessions wait for its claim)
+        self.addCleanup(setattr, earthd, "game_running", running)
         self.s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
         self.addCleanup(self.s.tile_pool.shutdown)
         self.addCleanup(self.s.hm_pool.shutdown)
@@ -187,29 +190,54 @@ class SessionAdoptionTest(unittest.TestCase):
         self.assertLess(time.time() - os.path.getmtime(own), 5, "heartbeat: the own marker touched")
 
     def test_sweep_deletes_off_the_event_loop(self):
-        """An unclaimed orphan is a whole session (~1 GB, thousands of files): main_async's sweep
-        (sweep_sessions_async) keeps the bookkeeping on the loop and removes the folders in a worker
-        thread, so the streaming never stalls behind an rmtree."""
+        """An unclaimed orphan is a whole session (~11k files): main_async's sweep (sweep_sessions_async) keeps the
+        bookkeeping on the loop, lists the files in a worker thread, and deletes them one at a time through the delete
+        queue (a game runs: its file watcher took a whole session moved out at once as an 8.6 s frame, 2026-11-02)."""
         self.s.orphan_s = 30.0
+        self.s.delete_interval = 0.005
         for sid in self.s.orphans:
             self.s.orphans[sid] -= 1000
         t = time.time() - 100
         for d in (self.a[0], self.b[0]):
             os.utime(os.path.join(d, earthd.SESSION_MARKER), (t, t))
         threads = []
-        rm = self.s._rmtree_session
-        self.s._rmtree_session = lambda sid: (threads.append(threading.get_ident()), rm(sid))
+        listing = self.s._session_paths
+        self.s._session_paths = lambda sid: (threads.append(threading.get_ident()), listing(sid))[1]
         loop = asyncio.new_event_loop()
         self.addCleanup(loop.close)
+        seen = []
 
         async def run():
-            return threading.get_ident(), await self.s.sweep_sessions_async()
+            me = threading.get_ident()
+            gone = await self.s.sweep_sessions_async()
+            for _ in range(400):
+                seen.append(len(os.listdir(self.a[0])) if os.path.exists(self.a[0]) else -1)
+                if not any(os.path.exists(p) for p in self.a + self.b):
+                    break
+                await asyncio.sleep(0.005)
+            return me, gone
         loop_thread, gone = loop.run_until_complete(run())
         self.assertEqual(sorted(gone), ["20261010-120000-bbbb", "20261010-120500-cccc"])
         self.assertEqual(len(threads), 2)
-        self.assertNotIn(loop_thread, threads, "the folders are removed off the event loop")
-        self.assertFalse(any(os.path.exists(p) for p in self.a + self.b))
+        self.assertNotIn(loop_thread, threads, "the files are listed off the event loop")
+        self.assertFalse(any(os.path.exists(p) for p in self.a + self.b), "deleted in the end, folders too")
+        self.assertGreater(len(set(seen)), 2, f"one file at a time: {seen[:20]}")
         self.assertEqual(self.s.orphans, {})
+
+    def test_no_game_at_start_every_earlier_session_goes(self):
+        """No game running at the start (the launcher starts the server first): every earlier session goes now, moved
+        out of the user folder at once (no file watcher sees it), deleted by the trash thread; none kept as an orphan."""
+        a = make_session(self.root, "20261011-080000-dddd", 300)
+        earthd.game_running = lambda: False
+        s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
+        self.addCleanup(s.tile_pool.shutdown)
+        self.addCleanup(s.hm_pool.shutdown)
+        self.assertFalse(any(os.path.exists(p) for p in a + self.a + self.b), "moved out of the user folder")
+        self.assertEqual(s.orphans, {})
+        self.assertIsNotNone(s.trash_thread)
+        s.trash_thread.join(10)
+        self.assertEqual(os.listdir(os.path.join(self.root, "cache", earthd.TRASH_DIR)), [])
+        self.assertTrue(os.path.isdir(s.out_dir), "its own session stays")
 
     def test_own_sid_never_an_orphan(self):
         """A folder that happens to carry the new session's id (a restart in the same second with the same

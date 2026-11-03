@@ -698,6 +698,30 @@ def survey_q(frame, dem, block_m=BLOCK_SURVEY_M):
     return heightmap.choose_q(float(np.percentile(win.max(axis=(2, 3)) - win.min(axis=(2, 3)), SURVEY_PERCENTILE)))
 
 
+def game_running():
+    """Is BeamNG.drive running for this user: its Linux build (cpupin.game_pids), its Windows build on Windows or under
+    Wine / Proton (a process whose command line names BeamNG.drive.x64.exe)? Unsure (an error): True, the careful
+    answer (_scan_sessions then keeps earlier sessions for the game to claim)."""
+    try:
+        import cpupin
+        if cpupin.game_pids():
+            return True
+        if os.name == "nt" or not os.path.isdir("/proc"):
+            return False
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open(f"/proc/{d}/cmdline", "rb") as f:
+                    if b"beamng.drive.x64.exe" in f.read().lower():
+                        return True
+            except OSError:
+                continue
+        return False
+    except Exception:
+        return True
+
+
 def road_tracker(conn):
     """A connection's road tiles' tracker: geotiles (roads.GeoTracker) when its mod places them (Connection.road_geo),
     else the anchor's."""
@@ -1018,10 +1042,12 @@ class Server:
     def _scan_sessions(self):
         """Session folders left by earlier runs (only ones we marked): one whose marker is untouched
         for SESSION_STALE_S goes now, with the engine's .cdae caches of its shapes; a younger one is
-        kept as an orphan until a game claims it or sweep_sessions deletes it. And the trash earlier runs left
-        (_empty_trash)."""
-        self.trash_thread = self._empty_trash()
+        kept as an orphan until a game claims it or sweep_sessions deletes it. With no game running (the usual start:
+        the launcher starts the server first) every earlier session goes now: no game can claim it, and no file
+        watcher sees it go, where the sweep's later move of four sessions out of the user folder froze the game for
+        2 x 8.6 s ("FileWatchers", 2026-11-02). Then the trash earlier runs left and these moves (_empty_trash)."""
         wall, now = time.time(), time.monotonic()
+        no_game = not game_running()
         for d in glob.glob(os.path.join(self.root, "*", SESSION_MARKER)):
             sid = os.path.basename(os.path.dirname(d))
             if sid == self.sid:     # a restart in the same second with the same suffix: ours now, never released
@@ -1030,32 +1056,52 @@ class Server:
                 age = wall - os.path.getmtime(d)
             except OSError:
                 continue
-            if age > SESSION_STALE_S:
-                self._rmtree_session(sid)
+            if age > SESSION_STALE_S or no_game:
+                self._rmtree_session(sid, later=True)
             else:
                 self.orphans[sid] = now
                 log.info("session %s of an earlier run (%.0f min old) kept until the game says whether it still "
                          "shows its tiles", sid, age / 60)
+        self.trash_thread = self._empty_trash()
 
-    def _rmtree_session(self, sid):
-        # detail mode's packed copies of its base photos in the game's terrain texture cache (terraincache.py) go
-        # with it: blocks evicted during a run took theirs (prune), but whatever a run left behind stayed for good,
-        # ~1.4 MB a block, 3.9 GB of them by 2026-10-18
+    def _base_cache_files(self, sid):
+        """Detail mode's packed copies of session sid's base photos in the game's terrain texture cache (terraincache.py):
+        they go with it (blocks evicted during a run took theirs, prune; whatever a run left behind stayed for good,
+        ~1.4 MB a block, 3.9 GB of them by 2026-10-18)."""
+        out = []
         for path in glob.glob(os.path.join(self.root, sid, "*_base*.png")):
             for px in BASE_SIZES:           # (whichever size it was made at)
                 key = terraincache.base_key(f"/temp/beamngEarth/{sid}/{os.path.basename(path)}", base_ao_vfs(px))
-                try:
-                    os.remove(os.path.join(terraincache.cache_dir(self.user_dir), key + ".dds"))
-                except OSError:
-                    pass
-        for d in (os.path.join(self.root, sid), os.path.join(self.cdae_root, sid.lower())):
-            self._rmtree_outside(d)
+                p = os.path.join(terraincache.cache_dir(self.user_dir), key + ".dds")
+                if os.path.exists(p):
+                    out.append(p)
+        return out
 
-    def _rmtree_outside(self, d):
+    def _rmtree_session(self, sid, later=False):
+        """Session sid's folders (and its base photos' terrain cache copies) removed at once: moved out of the user
+        folder and deleted (later: only moved, the trash thread deletes them). For when no game watches the folder
+        (the start); a running game's sessions go file by file (_session_paths, queue_delete)."""
+        for path in self._base_cache_files(sid):
+            self._remove(path)
+        for d in (os.path.join(self.root, sid), os.path.join(self.cdae_root, sid.lower())):
+            self._rmtree_outside(d, later=later)
+
+    def _session_paths(self, sid):
+        """Session sid's files for the rate-limited delete queue, in order: its base photos' terrain cache copies, the
+        session's and its .cdae cache's files, the marker, the folders. (Blocking: a whole session is ~11k files.)"""
+        d = os.path.join(self.root, sid)
+        cd = os.path.join(self.cdae_root, sid.lower())
+        marker = os.path.join(d, SESSION_MARKER)
+        files = sorted(p for p in glob.glob(os.path.join(d, "*")) + glob.glob(os.path.join(cd, "*")) if p != marker)
+        return self._base_cache_files(sid) + files + [marker, d, cd]
+
+    def _rmtree_outside(self, d, later=False):
         """Remove folder d of the game's user folder: moved out of it first (into the cache's trash, one rename) and
-        deleted there. Deleted in place, a whole session's thousands of files were as many notifications for the game's
-        file watcher, on its main thread: a 4 s frame at Utrecht 2026-10-30 ("FileWatchers 1501.7"). In place when the
-        move cannot be made (the cache on another drive)."""
+        deleted there (later: left there for _empty_trash). Deleted in place, a whole session's thousands of files were
+        as many notifications for the game's file watcher, on its main thread: a 4 s frame at Utrecht 2026-10-30
+        ("FileWatchers 1501.7"); the move alone of four sessions froze it too (2 x 8.6 s, 2026-11-02), so a running
+        game's sessions go file by file instead (_session_paths). In place when the move cannot be made (the cache on
+        another drive)."""
         if not os.path.isdir(d):
             return
         cache = getattr(self, "cache_dir", None)
@@ -1064,6 +1110,8 @@ class Server:
             try:
                 os.makedirs(os.path.dirname(trash), exist_ok=True)
                 os.replace(d, trash)
+                if later:
+                    return
                 d = trash
             except OSError:
                 pass
@@ -1145,18 +1193,20 @@ class Server:
             if idle < self.orphan_s:
                 continue
             del self.orphans[sid]
-            log.info("session %s of an earlier run: no game claimed it, deleted", sid)
+            log.info("session %s of an earlier run: no game claimed it, deleting it file by file", sid)
             if remove:
-                self._rmtree_session(sid)
+                self.queue_delete(self._session_paths(sid))
             gone.append(sid)
         return gone
 
     async def sweep_sessions_async(self):
-        """sweep_sessions on the event loop (its state is the loop's), the folders removed in a worker
-        thread: a whole session is thousands of files, the streaming must not wait for the rmtree."""
+        """sweep_sessions on the event loop (its state is the loop's): each session's files listed in a worker thread
+        (a whole session is ~11k files, the streaming must not wait) and deleted through the rate-limited queue, as a
+        released session's are: a game is running, and its file watcher took a whole session moved out of the user
+        folder at once as an 8.6 s frame (2026-11-02)."""
         gone = self.sweep_sessions(remove=False)
-        if gone:
-            await asyncio.to_thread(lambda: [self._rmtree_session(sid) for sid in gone])
+        for sid in gone:
+            self.queue_delete(await asyncio.to_thread(self._session_paths, sid))
         return gone
 
     def snap(self, v):
