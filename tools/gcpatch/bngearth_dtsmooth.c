@@ -17,7 +17,7 @@
 // 0.1); the rest as before with s in raw's register). C lives in that cold block (0x120aed0: `movapd xmm0,xmm1; jmp
 // back`), only reachable from the replaced ja. Another build: the region is found by its instructions (rip
 // displacements and the call masked; one match only) and the patch is built from that build's own addresses;
-// otherwise nothing is patched. BNGEARTH_DTSMOOTH_OFF=1: not patched at all. Status: <user>/temp/beamngEarth_dtsmooth.txt.
+// otherwise nothing is patched. Opt-in: BNGEARTH_DTSMOOTH=1 (BNGEARTH_DTSMOOTH_OFF=1 wins). Status: <user>/temp/beamngEarth_dtsmooth.txt.
 #include "bngearth_common.h"
 #include <pthread.h>
 #include <sys/mman.h>
@@ -153,8 +153,14 @@ static void *watch(void *arg) {
 
 __attribute__((constructor)) static void bngearth_dtsmooth(void) {
     if (!bnge_is_main_game()) return;
+    // (opt-in for now, BNGEARTH_DTSMOOTH=1: it ends the fast-forward after a hitch, but the hitch's time is lost instead,
+    // game time 0.963-0.967 of real time over a Manhattan minute against 0.979-0.987 stock, 2026-11-03; to be tuned)
+    const char *on = getenv("BNGEARTH_DTSMOOTH");
     const char *off = getenv("BNGEARTH_DTSMOOTH_OFF");
-    if (off && *off && strcmp(off, "0")) { bnge_report(TAG, STATUS_FILE, "off (BNGEARTH_DTSMOOTH_OFF set)"); return; }
+    if (!on || !*on || !strcmp(on, "0") || (off && *off && strcmp(off, "0"))) {
+        bnge_report(TAG, STATUS_FILE, "off (opt-in: BNGEARTH_DTSMOOTH=1)");
+        return;
+    }
     const char *cs = getenv("BNGEARTH_DTSMOOTH_C");
     if (cs && *cs) {
         double v = atof(cs);

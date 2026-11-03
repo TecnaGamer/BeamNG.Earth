@@ -7,7 +7,7 @@ map, has its own off switch and its own status file in the game's user folder `t
 |---|---|---|---|---|
 | grass | `bngearth_gcpatch.c` | keeps the grass when the physics block moves | `BNGEARTH_GCPATCH_OFF=1` | `beamngEarth_gcpatch.txt` |
 | texkeep | `bngearth_texkeep.c` | keeps the terrain's packed textures across material rebuilds | `BNGEARTH_TEXKEEP_OFF=1` | `beamngEarth_texkeep.txt` |
-| dtsmooth | `bngearth_dtsmooth.c` | no fast-forward of game time after a hitch | `BNGEARTH_DTSMOOTH_OFF=1` | `beamngEarth_dtsmooth.txt` |
+| dtsmooth (opt-in) | `bngearth_dtsmooth.c` | no fast-forward of game time after a hitch | on with `BNGEARTH_DTSMOOTH=1` | `beamngEarth_dtsmooth.txt` |
 
 ## Grass: keep the grass when the physics block moves
 
@@ -61,6 +61,11 @@ that filter (FrameTime::update) once at startup so that the filter sees min(fram
 C = 10 ms: a hitch enters it as at most +10 ms and its excess is dropped instead of replayed. The raw frame time Lua
 sees is unchanged. The constant sits in the patched code; C = 2 s computes exactly the stock result, which is what it
 holds outside the BeamNG.Earth level (one 8-byte store switches it). `BNGEARTH_DTSMOOTH_C=<seconds>` sets C for tests.
+
+**Opt-in for now (`BNGEARTH_DTSMOOTH=1`):** in a Manhattan drive it removed the fast-forward (0.25 s game speed p99
+1.48 -> 1.28) but the hitch's time is lost instead of repaid (game time 0.963-0.967 of real time over a minute against
+0.979-0.987 stock), and the frame-to-frame swings between hitches stay (p10-p90 ~0.89-1.11). To be tuned before it is
+on by default.
 
 - Written for BeamNG.drive 0.40 Linux; in another build it looks for the same instructions (addresses masked), builds
   the patch from that build's addresses and patches only a single match, else nothing.

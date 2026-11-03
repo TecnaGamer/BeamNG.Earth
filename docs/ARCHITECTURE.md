@@ -972,8 +972,8 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   createTexture (vtable slot 5) for the terrain pack loader and hands back the packed terrain textures it kept from
   the last material rebuild, so a block swap or setBase no longer re-creates the unchanged packs (swap frame Render
   21.6 -> 13.0 ms median, setBase 83 -> 58 ms on the PC); and dtsmooth, a 95-byte rewrite of FrameTime::update so
-  game time drops a hitch's excess instead of fast-forwarding to repay it. Both only on our level, exact build or
-  signature, own OFF switches.
+  game time drops a hitch's excess instead of fast-forwarding to repay it (opt-in, BNGEARTH_DTSMOOTH=1: it loses
+  ~3 % of game time a minute in cities, to be tuned). Both only on our level, exact build or signature, own switches.
 - A second TerrainBlock (even 5 km away with disableCollision) drops the player's vehicle through the
   ground at once (in-game, twice): never create one while a vehicle is in the world.
 
