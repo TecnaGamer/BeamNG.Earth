@@ -32,6 +32,7 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json' }
@@ -154,6 +155,8 @@ end
 -- one road mesh the markings showed only while the engine happened to draw them after the asphalt; with
 -- many more translucent objects in view (buildings' windows, signals) they vanished. Opaque asphalt is
 -- drawn first, always, and the translucent lines, crossings and gutters over it.
+-- The dirt and gravel strips stay translucent (dirtroad.materials.json, from PR #455): an opacity map on their second
+-- uv fades their sides and open ends into the ground; the server lists them first in a road mesh, the lines over them.
 M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
 -- The opaque road surfaces cast no sun shadow (from Madderose's PR #41). Translucent, as the stock decal materials are,
 -- they drew none; made opaque (above) they joined the shadow pass: every road tile's mesh drawn into each shadow
@@ -1686,6 +1689,7 @@ end
 -- Once per frame (core onUpdate): deletions, then creations, within the governor's budget.
 local viewAt = nil  -- core.viewAway(): the camera's { x, y } when it is away from the car, else nil (M.nextWalk)
 local prewarmId, prewarmPath, prewarmWant = nil, nil, nil     -- (the materials' prewarm shape, below)
+local prewarmXId = nil      -- its sibling in the strips' vertex format (prewarm_x.cdae), when the server wrote one
 local prewarmNow
 
 -- The last frame's update in parts (ms; diagnostics: the frame-time probes, 2026-10-29)
@@ -2061,16 +2065,23 @@ prewarmNow = function()
   if not path or not M.enabled or not scenetree.MissionGroup then return end
   prewarmWant = nil
   if path == prewarmPath and prewarmId and scenetree.findObjectById(prewarmId) then return end   -- (made already)
-  if prewarmId then
-    local o = scenetree.findObjectById(prewarmId)
+  for _, old in pairs({ prewarmId or false, prewarmXId or false }) do
+    local o = old and scenetree.findObjectById(old)
     if o then o:delete() end
-    prewarmId = nil
   end
+  prewarmId, prewarmXId = nil, nil
   loadMaterials()
   local t = stopwatch.new()
   local ok, id = pcall(createWalk, { shape = path, pos = { 0, 0, -5000 } }, false)
   if not ok then lastError = tostring(id); return end
   prewarmId, prewarmPath = id, path
+  -- a road mesh with a dirt or gravel strip carries a second uv and a colour (server roadmesh.write): its materials'
+  -- instances for that vertex format, set up now too
+  local xpath = path:gsub('prewarm%.cdae$', 'prewarm_x.cdae')
+  if xpath ~= path and FS:fileExists(xpath) then
+    local okx, idx = pcall(createWalk, { shape = xpath, pos = { 0, 0, -5000 } }, false)
+    if okx then prewarmXId = idx else lastError = tostring(idx) end
+  end
   log('I', 'beamngEarth', string.format('roads: materials prewarmed in %.0f ms (%s)', t(), path))
 end
 

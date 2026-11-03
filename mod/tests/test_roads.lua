@@ -441,4 +441,25 @@ do
   for _, m in pairs(made) do m:delete() end
   roads.reset()
 end
+-- the materials' prewarm shape, and its sibling in the dirt and gravel strips' vertex format when the server wrote one
+do
+  roads.reset()
+  local function shapes()
+    local r = {}
+    for _, o in ipairs(S.liveOf('TSStatic')) do r[#r + 1] = o:getField('shapeName') end
+    table.sort(r)
+    return table.concat(r, ' ')
+  end
+  for _, o in ipairs(S.liveOf('TSStatic')) do o:delete() end
+  local exists = FS.fileExists
+  FS.fileExists = function(_, p) return p == '/t/a/prewarm_x.cdae' end
+  T.check(roads.prewarm('/t/a/prewarm.cdae'), 'prewarm taken')
+  T.check(shapes() == '/t/a/prewarm.cdae /t/a/prewarm_x.cdae', 'both prewarm shapes: ' .. shapes())
+  FS.fileExists = function() return false end
+  roads.prewarm('/t/b/prewarm.cdae')
+  T.check(shapes() == '/t/b/prewarm.cdae', 'an older server: its one shape, the old ones gone: ' .. shapes())
+  FS.fileExists = exists
+  for _, o in ipairs(S.liveOf('TSStatic')) do o:delete() end
+  roads.reset()
+end
 T.done('test_roads')

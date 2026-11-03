@@ -387,7 +387,8 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # ground's photos have the carriageways painted in at their width (photo_roads): the drawn block's base photo and the
 # far tiles' textures down to PHOTO_ROADS_MAX_TEXEL (the near ring the block does not cover, where the meshes were);
 # the asphalt / cobble terrain layer (paint_roads) gives them their grain up close. Markings, curbs and sidewalks stay
-# meshes.
+# meshes, and dirt and gravel roads keep a mesh of BeamNG's rutted road strip over this tint, fading into it at its
+# edges (roads.DIRT_LOOK, PR #455; BNE_DIRT_STRIPS=off: the tint alone).
 # colour and opacity by surface, blended in this order (paved last: it wins at junctions); a trace of the photo is kept
 # (stains, patches), and most of it on unpaved tracks, which the photo shows well and a flat colour drew as stripes
 # paved alpha 1.0 (was 0.92): an old through-road scar in the photo stayed visible as a dark E–W band across

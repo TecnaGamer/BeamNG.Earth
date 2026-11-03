@@ -26,6 +26,99 @@ DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's l
 LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01}   # m above the physics ground (lifted under roads
                                                         # by grading.ROAD_LIFT over the visible ground)
 
+# Dirt and gravel strips (from PR #455 by AnthonyGraceffa; roads.DIRT_STRIPS): BeamNG's continuous rutted road strips
+# (roads.DIRT_LOOK, our copies in dirtroad.materials.json) over the ground photo's tint, fading into the ground.
+# A strip follows the mapped vertices, so a bend was one mitre and the ruts kinked: round_dirt_centerline replaces a
+# bend sharper than DIRT_BEND_DEG with an arc of radius DIRT_BEND_R (less on short arms), cut into DIRT_BEND_STEP_DEG
+# pieces, on the mapped segments (not the 12 m densify, which left a corner a truck cannot take). Its two corners may
+# use DIRT_BEND_SEG of a segment between them, the inner edge may sit DIRT_EDGE_SLACK m past the graded half width,
+# and a bend whose arms cannot hold an arc with DIRT_INNER_MIN m inside it keeps its point.
+DIRT_BEND_DEG = 10.0
+DIRT_BEND_STEP_DEG = 5.0
+DIRT_BEND_R = 28.0          # m, a bend a vehicle follows instead of a polygon joint
+DIRT_BEND_SEG = 0.85
+DIRT_INNER_MIN = 0.4
+DIRT_EDGE_SLACK = 12.0
+# The fade: the materials' opacity map (dirt_fade_o.data.png) on the second uv (the fade uv: vertex alpha only tints
+# the colour). Its u is 0 / 1 on the strip's edges and 0.5 over the solid middle, EDGE_FADE_M in from each edge (at most
+# EDGE_FADE_SHARE of the width: a narrow track keeps a middle); its v is 0 at an open start, 1 at an open end and 0.5
+# from END_FADE_M in (at most END_FADE_SHARE of a short road), the map's own ramps in FADE_V_BAND of each end. An end
+# where the road joins another strip or goes on over a bridge does not fade (roads._strip_open_ends). Anything else in
+# a mesh that has a strip samples the solid middle.
+FADE_PREFIX = "bne_dirt_"   # the materials that fade (dirtroad.materials.json)
+EDGE_FADE_M = 1.2
+EDGE_FADE_SHARE = 0.38
+END_FADE_M = 14.0
+END_FADE_SHARE = 0.3
+FADE_V_BAND = 0.25
+
+
+def round_dirt_centerline(pts, half):
+    """pts (k, 3) with each bend sharper than DIRT_BEND_DEG replaced by an arc of about DIRT_BEND_R (less on a short
+    arm, or where a wider arc would put the inner edge more than DIRT_EDGE_SLACK past the half width `half`); the ends
+    stay. Vectorized (PR #455's per-corner loops, in numpy). Pure."""
+    P = np.asarray(pts, np.float64)
+    n = len(P)
+    half = float(half)
+    if n < 3 or half <= 0.05:
+        return P
+    d = np.diff(P[:, :2], axis=0)
+    seg = np.hypot(d[:, 0], d[:, 1])
+    lab, lbc = seg[:-1], seg[1:]                         # the arms of the corners 1 .. n-2
+    ok = (lab >= 0.5) & (lbc >= 0.5)
+    t0 = d[:-1] / np.maximum(lab, 1e-9)[:, None]
+    t1 = d[1:] / np.maximum(lbc, 1e-9)[:, None]
+    delta = np.arctan2(t0[:, 0] * t1[:, 1] - t0[:, 1] * t1[:, 0], (t0 * t1).sum(1))
+    alpha = np.abs(delta) / 2.0
+    cos_a = np.cos(alpha)
+    bend = 1.0 - cos_a
+    ok &= (np.abs(delta) > math.radians(DIRT_BEND_DEG)) & (cos_a >= 1e-3) & (bend >= 1e-8)
+    if not ok.any():
+        return P
+    radius = np.minimum(DIRT_BEND_R, half + DIRT_EDGE_SLACK / np.where(ok, bend, 1.0))
+    want = np.where(ok, radius * np.tan(np.where(ok, alpha, 0.0)), 0.0)
+    back = np.r_[0.0, want, 0.0]                         # per vertex: m of arm used before it ...
+    fwd = back.copy()                                    # ... and after it
+    budget = DIRT_BEND_SEG * seg                         # per segment: what its two corners may use between them
+    need = fwd[:-1] + back[1:]
+    scale = np.where(budget <= 1e-6, 0.0, np.where(need > budget, budget / np.maximum(need, 1e-12), 1.0))
+    fwd[:-1] *= scale
+    back[1:] *= scale
+    dd = np.minimum(back, fwd)[1:-1]
+    ok &= dd >= 0.3
+    r = np.where(ok, dd / np.tan(np.where(ok, alpha, 1.0)), 0.0)
+    ok &= r >= half + DIRT_INNER_MIN
+    if not ok.any():
+        return P
+    c = np.nonzero(ok)[0]                                # corners kept (vertex c + 1)
+    a, b, e = P[c], P[c + 1], P[c + 2]
+    dc, rc, dl, la, lb = dd[c], r[c], delta[c], lab[c], lbc[c]
+    tc0, tc1 = t0[c], t1[c]
+    T0 = b[:, :2] - tc0 * dc[:, None]
+    z0 = a[:, 2] + (b[:, 2] - a[:, 2]) * ((la - dc) / la)
+    z1 = b[:, 2] + (e[:, 2] - b[:, 2]) * (dc / lb)
+    side = np.where(dl > 0.0, 1.0, -1.0)
+    centre = T0 + (side * rc)[:, None] * np.stack([-tc0[:, 1], tc0[:, 0]], 1)
+    a0 = np.arctan2(T0[:, 1] - centre[:, 1], T0[:, 0] - centre[:, 0])
+    steps = np.maximum(1, np.ceil(np.abs(dl) / math.radians(DIRT_BEND_STEP_DEG))).astype(np.int64)
+    cnt = steps + 1
+    which = np.repeat(np.arange(len(c)), cnt)
+    kth = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)     # 0 .. steps along each arc
+    f = kth / np.repeat(steps, cnt)
+    ang = a0[which] + dl[which] * f
+    arcs = np.c_[centre[which, 0] + rc[which] * np.cos(ang), centre[which, 1] + rc[which] * np.sin(ang),
+                 z0[which] + (z1[which] - z0[which]) * f]
+    if P.shape[1] > 3:                                   # (extra columns: the corner's own)
+        arcs = np.c_[arcs, P[c + 1][which, 3:]]
+    per = np.ones(n, np.int64)                           # points each vertex becomes, in order
+    per[c + 1] = cnt
+    out = np.repeat(P, per, axis=0)
+    start = np.cumsum(per) - per
+    out[np.repeat(start[c + 1], cnt) + kth] = arcs
+    keep = np.r_[True, np.hypot(*np.diff(out[:, :2], axis=0).T) >= 1e-3]
+    out = out[keep]
+    return out if len(out) >= 2 else P
+
 
 def layer_of(chunk):
     if chunk.get("layer") in LIFT:             # a chunk naming its own (rails.py: sleepers over ballast, rails over both)
@@ -117,9 +210,20 @@ def ribbons(chunks, keep_none=False):
             if b - a < 2:
                 continue
             c = chunks[k]
-            out[k] = (L[a:b], R[a:b], S[a:b] / float(c.get("tl") or 10.0), c["m"], layer_of(c),
+            out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
                       Z[a:b] if c.get("fixed") else None)
     return out if keep_none else [r for r in out if r is not None]
+
+
+def _ribbon_v(s, c):
+    """v along a ribbon: s (m along the chunk) over its texture length. A dirt or gravel strip's chunk carries s0 / s1,
+    m along its whole road to its ends (roads._surface_pieces): v is that distance, so the ruts run on across a tile's
+    edge instead of restarting there (PR #455)."""
+    tl = float(c.get("tl") or 10.0)
+    s0, s1 = c.get("s0"), c.get("s1")
+    if s0 is not None and s1 is not None and len(s) and float(s[-1] - s[0]) > 1e-9:
+        return (float(s0) + (float(s1) - float(s0)) * ((s - s[0]) / float(s[-1] - s[0]))) / tl
+    return s / tl
 
 
 TRIM_DZ = (0.3, 4.5)                # m: another deck overlapping a deck in plan this far above or below it (two
@@ -260,7 +364,11 @@ def _reach_past(c, box):
         n.insert(0, ends[0][None])
     if ends[1] is not None:
         n.append(ends[1][None])
-    return {**c, "n": np.concatenate(n).tolist()}
+    out = {**c, "n": np.concatenate(n).tolist()}
+    if c.get("s0") is not None and c.get("s1") is not None:    # (a strip's distance along its road: the same reach)
+        out["s0"] = float(c["s0"]) - (reach if ends[0] is not None else 0.0)
+        out["s1"] = float(c["s1"]) + (reach if ends[1] is not None else 0.0)
+    return out
 
 
 GRID_M = 1.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
@@ -273,20 +381,49 @@ FOLLOW_TOL = 0.02       # m a road triangle may depart from the drawn ground ins
                         # the triangles); at 2 cm 1.7x in Baltimore, 5.7x on the E6 in Norway, 7.5x in San Francisco
 
 
-def _height_grid(frame, elev, xy, q=None, cell=GRID_M):
+def _height_grid(frame, elev, xy, q=None, cell=GRID_M, tris=None):
     """(grid [j, i], i0, j0): the terrain block's samples (elev on the cell lattice, rounded to the height quantum q
-    as heightmap.write_png does) over the points xy (n, 2) and a sample around. One elev call."""
+    as heightmap.write_png does) over the points xy (n, 2) and a sample around. One elev call. tris (m, 3) into xy:
+    only the samples round those triangles (their boxes and a sample more: all follow_ground reads), the rest nan,
+    the same grid: a strip across a tile (a dirt road, roads.DIRT_LOOK) covers a few % of its box, whose every
+    sample was most of the mesh's time (elev is pointwise, so the same heights)."""
+    if tris is not None:
+        tris = np.asarray(tris, np.int64)
+        xy = xy[np.unique(tris)]
     i0 = int(np.floor(xy[:, 0].min() / cell)) - 1
     j0 = int(np.floor(xy[:, 1].min() / cell)) - 1
     i1 = int(np.ceil(xy[:, 0].max() / cell)) + 1
     j1 = int(np.ceil(xy[:, 1].max() / cell)) + 1
-    gx, gy = np.meshgrid(np.arange(i0, i1 + 1) * cell, np.arange(j0, j1 + 1) * cell)
-    la, lo, _ = frame.enu_to_geodetic(gx.ravel(), gy.ravel(), 0.0)
+    nx, ny = i1 - i0 + 1, j1 - j0 + 1
+    if tris is None or not len(tris):
+        gx, gy = np.meshgrid(np.arange(i0, i1 + 1) * cell, np.arange(j0, j1 + 1) * cell)
+        la, lo, _ = frame.enu_to_geodetic(gx.ravel(), gy.ravel(), 0.0)
+        h = np.asarray(elev(la, lo), np.float64)
+        u = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64).reshape(gx.shape)
+        if q:
+            u = np.rint(u / q) * q
+        return np.ascontiguousarray(u), i0, j0
+    pt = xy[np.searchsorted(np.unique(tris), tris)]     # (m, 3, 2) the triangles' corners
+    lo_i = np.clip(np.floor(pt[..., 0].min(1) / cell).astype(np.int64) - 1 - i0, 0, nx - 1)
+    hi_i = np.clip(np.floor(pt[..., 0].max(1) / cell).astype(np.int64) + 1 - i0, 0, nx - 1)
+    lo_j = np.clip(np.floor(pt[..., 1].min(1) / cell).astype(np.int64) - 1 - j0, 0, ny - 1)
+    hi_j = np.clip(np.floor(pt[..., 1].max(1) / cell).astype(np.int64) + 1 - j0, 0, ny - 1)
+    w = hi_i - lo_i + 1
+    cnt = w * (hi_j - lo_j + 1)
+    if int(cnt.sum()) > 8 * nx * ny:                    # (big triangles over most of the box: all of it)
+        return _height_grid(frame, elev, xy, q, cell)
+    k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+    rw = np.repeat(w, cnt)
+    nodes = np.unique((np.repeat(lo_j, cnt) + k // rw) * nx + np.repeat(lo_i, cnt) + k % rw)
+    if len(nodes) > 0.6 * nx * ny:                      # (most of the box anyway)
+        return _height_grid(frame, elev, xy, q, cell)
+    ex, ey = (nodes % nx + i0) * cell, (nodes // nx + j0) * cell
+    la, lo, _ = frame.enu_to_geodetic(ex.astype(np.float64), ey.astype(np.float64), 0.0)
     h = np.asarray(elev(la, lo), np.float64)
-    u = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64).reshape(gx.shape)
-    if q:
-        u = np.rint(u / q) * q
-    return np.ascontiguousarray(u), i0, j0
+    u = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64)
+    grid = np.full(ny * nx, np.nan)
+    grid[nodes] = np.rint(u / q) * q if q else u
+    return np.ascontiguousarray(grid.reshape(ny, nx)), i0, j0
 
 
 def drawn_ground(frame, drawn, xy, q=None, cell=GRID_M):
@@ -359,7 +496,10 @@ def _shared(P, UV, T):
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
           clip_poly=None):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions
-    relative to origin, tris, uvs, materials, tri material index), or None. elev(lat, lon) -> m (graded,
+    relative to origin, tris, uvs, materials, tri material index), or None; with a dirt or gravel strip in it (a
+    FADE_PREFIX material) a sixth element, the fade uv (n, 2) (_fade_uv; write, plazas.merge), and those materials
+    first. A chunk with "slen" (roads._surface_pieces) is drawn in four rows, its sides feathered.
+    elev(lat, lon) -> m (graded,
     as the physics block). One elev call. lift: m more for the draped surfaces (detail mode: the physics
     block is drawn, so the asphalt must sit over it, not in it; earthd DETAIL_ROAD_LIFT). clip: the tile's box
     (x0, y0, x1, y1): the ribbons (built roads.OVERLAP past it, no gap at the seam) cut exactly at its edges; two
@@ -436,8 +576,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     mats = []
     P, UV, T, M = [], [], [], []
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
+    RI = []                                     # per triangle: its ribbon (-1: a filled polygon), for the fade uv
+    rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends)
     k0 = nverts = 0
-    for (left, right, v, m, layer, fz), c in rbc:
+    for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
         k = len(left)
         if fz is None:
             cur_lift = np.full(k, lift)
@@ -461,24 +603,38 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         if m not in mats:
             mats.append(m)
         mi = mats.index(m)
-        P.append(np.c_[np.concatenate([left, right]), z])
-        UV.append(np.column_stack((np.concatenate((np.zeros(k), np.full(k, float(c.get("tu") or 1.0)))),
-                                   np.concatenate((v, v)))))     # ("tu": the texture's repeats across, else once)
-        i = np.arange(k - 1)
-        A, A1, B, B1 = nverts + i, nverts + i + 1, nverts + k + i, nverts + k + i + 1
-        # left edge to the left of the direction: (A, B, B1) is counter-clockwise seen from above
-        tri = np.concatenate([np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)])
+        tu = float(c.get("tu") or 1.0)          # ("tu": the texture's repeats across, else once)
+        fu = 0.0                                # a strip's feather: this share of its width each side (EDGE_FADE_M)
+        slen = c.get("slen")
+        if slen and fz is None:
+            w = float(c.get("w") or 0.0)
+            feather = min(EDGE_FADE_M, EDGE_FADE_SHARE * w)
+            if feather > 0.05 and w > 2.0 * feather:
+                fu = feather / w
+        if fu:                                  # four rows: the edges, and the solid middle's edges between them
+            zl, zr = z[:k], z[k:]
+            xy = np.concatenate((left, left + (right - left) * fu, right + (left - right) * fu, right))[:, :2]
+            P.append(np.c_[xy, np.concatenate((zl, (1.0 - fu) * zl + fu * zr, fu * zl + (1.0 - fu) * zr, zr))])
+            UV.append(np.column_stack((np.repeat(np.array([0.0, fu, 1.0 - fu, 1.0]) * tu, k), np.tile(v, 4))))
+            tri = np.concatenate([_quads(nverts, k, row, row + 1) for row in range(3)])
+            nrows = 4
+        else:
+            xy = np.concatenate([left, right])[:, :2]
+            P.append(np.c_[xy, z])
+            UV.append(np.column_stack((np.concatenate((np.zeros(k), np.full(k, tu))), np.concatenate((v, v)))))
+            tri = _quads(nverts, k, 0, 1)
+            nrows = 2
         # where a ribbon folds over itself (a mitred joint at a sharp merge pulls its edges across: the user saw
         # black triangles in President St, 2026-10-14) its triangles turn over: dropped, the neighbours cover it
-        xy = np.concatenate([left, right])[:, :2]
-        loc = tri - nverts
-        e1, e2 = xy[loc[:, 1]] - xy[loc[:, 0]], xy[loc[:, 2]] - xy[loc[:, 0]]
-        cz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
-        keep = cz * np.sign(np.median(cz) or 1.0) > 1e-6
-        T.append(tri[keep])
-        M.append(np.full(int(keep.sum()), mi))
-        TL.append(np.full(int(keep.sum()), np.nan if fz is not None else LIFT[layer] + lift))
-        nverts += 2 * k
+        tri = _keep_up(tri, xy, nverts)
+        T.append(tri)
+        M.append(np.full(len(tri), mi))
+        TL.append(np.full(len(tri), np.nan if fz is not None else LIFT[layer] + lift))
+        RI.append(np.full(len(tri), ri))
+        ends = c.get("fends") or (1, 1)
+        rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
+                     float(bool(ends[0])), float(bool(ends[1]))))
+        nverts += nrows * k
     for c in polys:                             # filled polygons (corner asphalt): a fan from vertex 0
         pq = np.asarray(c["poly"], np.float64)
         k = len(pq)
@@ -497,9 +653,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         T.append(fan)
         M.append(np.full(len(fan), mats.index(c["m"])))
         TL.append(np.full(len(fan), LIFT[layer_of(c)] + lift))
+        RI.append(np.full(len(fan), -1))
         nverts += k
     P, T, UV, M = np.concatenate(P), np.concatenate(T), np.concatenate(UV), np.concatenate(M)
-    TL = np.concatenate(TL)
+    TL, RI = np.concatenate(TL), np.concatenate(RI)
     tid = np.arange(len(T))
     if clip_poly is not None:
         import fast
@@ -515,11 +672,11 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         P, T, UV, tid = _clip_tris(P, T, UV, tid, clip)
         if not len(T):
             return None
-    M, TL = M[tid], TL[tid]
+    M, TL, RI = M[tid], TL[tid], RI[tid]
     if follow:
         dr = np.isfinite(TL)
         if dr.any():
-            grid, i0, j0 = _height_grid(frame, drawn or elev, P[np.unique(T[dr])][:, :2], q)
+            grid, i0, j0 = _height_grid(frame, drawn or elev, P[:, :2], q, tris=T[dr])
             fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[dr], grid, i0, j0)
             if len(fT):
                 lifts = TL[dr][src]
@@ -532,12 +689,73 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 UV = np.concatenate([UV, fUV])
                 T = np.concatenate([T[~dr], fT + n0])
                 M = np.concatenate([M[~dr], M[dr][src]])
+                RI = np.concatenate([RI[~dr], RI[dr][src]])
             else:
-                T, M = T[~dr], M[~dr]
+                T, M, RI = T[~dr], M[~dr], RI[~dr]
             if not len(T):
                 return None
         P, UV, T = _shared(P, UV, T)
-    return P - np.asarray(origin, np.float64), T, UV, mats, M
+    out = (P - np.asarray(origin, np.float64), T, UV, mats, M)
+    if not any(m.startswith(FADE_PREFIX) for m in mats):
+        return out
+    # a strip in the mesh: the fade uv for every point (a sixth element: write, plazas.merge), and the strips' materials
+    # first, so the markings and anything else translucent in the mesh draw over them (one primitive per material, in
+    # the list's order)
+    vr = np.full(len(P), -1, np.int64)
+    vr[T.ravel()] = np.repeat(RI, 3)
+    order = sorted(range(len(mats)), key=lambda j: (not mats[j].startswith(FADE_PREFIX), j))
+    remap = np.empty(len(mats), np.int64)
+    remap[order] = np.arange(len(mats))
+    return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)], _fade_uv(UV, vr, rpar)
+
+
+def _quads(base, k, row_a, row_b):
+    """The triangles of one band of a ribbon whose rows of k points start at base + row * k: row_a to its right row_b,
+    left to right then along ((A, B, B1) counter-clockwise seen from above)."""
+    i = np.arange(k - 1)
+    A, A1 = base + row_a * k + i, base + row_a * k + i + 1
+    B, B1 = base + row_b * k + i, base + row_b * k + i + 1
+    return np.concatenate([np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)])
+
+
+def _keep_up(tri, xy, base):
+    """tri with the triangles facing the ribbon's way kept (a mitre folding over itself turns some over)."""
+    loc = tri - base
+    e1, e2 = xy[loc[:, 1]] - xy[loc[:, 0]], xy[loc[:, 2]] - xy[loc[:, 0]]
+    cz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+    return tri[cz * np.sign(np.median(cz) or 1.0) > 1e-6]
+
+
+def _fade_uv(UV, vr, par):
+    """The fade uv (n, 2) of a mesh's points (the opacity map's: FADE_PREFIX) from their colour uv: vr (n,) each
+    point's ribbon (-1: none), par per ribbon (feather share fu, texture length tl, repeats across tu, slen (nan: not a
+    strip), start open, end open). Across: u / tu within fu of an edge ramps 0 -> 0.5 (1 -> 0.5), else 0.5: the strips'
+    rows lie on those lines, so a point the clip or the ground cut put inside a band gets what the GPU interpolates
+    there. Along: v x tl is m along the road (ribbons' _ribbon_v): 0 at an open start ramping to FADE_V_BAND
+    END_FADE_M in, 1 at an open end, 0.5 between. Vectorized (PR #455 carried a colour per point through the cuts).
+    Pure."""
+    C = np.full((len(UV), 2), 0.5)
+    has = vr >= 0
+    if not has.any() or not len(par):
+        return C
+    fu, tl, tu, slen, o0, o1 = np.asarray(par, np.float64)[vr[has]].T
+    u = UV[has, 0] / tu
+    f = np.maximum(fu, 1e-9)
+    cu = np.where(u < fu, 0.5 * u / f, np.where(u > 1.0 - fu, 1.0 - 0.5 * (1.0 - u) / f, 0.5))
+    C[has, 0] = np.where(fu > 0.0, np.clip(cu, 0.0, 1.0), 0.5)
+    s = UV[has, 1] * tl
+    strip = np.isfinite(slen)
+    sl = np.where(strip, slen, 0.0)
+    fade = np.minimum(END_FADE_M, END_FADE_SHARE * sl)
+    strip &= fade > 1e-3
+    fd = np.maximum(fade, 1e-9)
+    cv = np.full(len(s), 0.5)
+    at = strip & (o0 > 0.0) & (s <= fade)
+    cv[at] = FADE_V_BAND * np.clip(s[at] / fd[at], 0.0, 1.0)
+    at = strip & (o1 > 0.0) & (s >= sl - fade)
+    cv[at] = (1.0 - FADE_V_BAND) + FADE_V_BAND * np.clip((s[at] - (sl[at] - fade[at])) / fd[at], 0.0, 1.0)
+    C[has, 1] = cv
+    return C
 
 
 DECK_DEPTH = 1.2        # m of deck slab under the surface
@@ -1612,5 +1830,11 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
 
 
 def write(path, mesh):
-    P, T, UV, mats, M = mesh
-    return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="road")
+    """mesh: build's (positions, tris, uvs, materials, tri material) and, with a dirt or gravel strip in it, its fade
+    uv: the second uv, in the vertex format that also carries a colour (white: the strips' materials leave vertColor
+    off, and the others in the mesh ignore it or multiply by 1)."""
+    P, T, UV, mats, M = mesh[:5]
+    uvs2 = mesh[5] if len(mesh) > 5 else None
+    colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
+    return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road",
+                      colors=colors)
