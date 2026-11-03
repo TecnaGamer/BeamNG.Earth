@@ -593,9 +593,11 @@ def _stack_watch(what):
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                        gas_stations, buried, lamp_region, country=None):
     import revisit
+    import threedmr
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
-                    _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country)
+                    _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
+                    threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)))
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), md=_md_versions())
@@ -709,7 +711,7 @@ class _Parts:
 
 @profile_step('Road tile assembly')
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
-                q, rkey, centre, skin_margin=0.0, walks_raw=None):
+                q, rkey, centre, skin_margin=0.0, walks_raw=None, cache_dir=None, out_dir=None, vfs_dir=None):
     """A road tile's parts in frame: tile (tx, ty) of an anchor, or a geotiles.GeoBox (its own frame, no anchor in
     it). g: the frame's grading.Grader view (None: no grading); q: the height quantum the sidewalks' curbs are put on
     (None: the ground as it is: a geotile's content); rkey: the railways' ground cache key; centre (lat, lon): the
@@ -751,6 +753,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     park = [] if buildings else None
     items = town = None
     wrows = []
+    _custom, _entries = [], []      # the 3dmr.eu / local models in the tile, their baked entries (roads.write_tile)
+    _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
+    _bridge_ends = {}
     box = roadsmod.tile_bbox(tx, ty)
     side = roadsmod.tile_side(tx, ty)
     if buildings:
@@ -765,8 +770,14 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             wrows = []
         # (on the graded ground, the one the terrain is drawn with: on the raw elevation a building beside a road's
         # cutting stood over the cut; hashk014's PR #69)
-        items = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
-                                             skip=skip)
+        items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
+                                                      skip=skip, cache_dir=cache_dir)
+        _bridge_fps = buildingsmod.bridge_footprints(frame, tx, ty, cache_dir)
+        if any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
+            try:            # (the tile that bakes the model: where the mapped bridge meets the roads)
+                _bridge_ends = buildingsmod.bridge_road_ends(_bridge_fps, bridges, cells)
+            except Exception as ex:
+                log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
         if wrows:
             props.extend(wrows)
         town = buildingsmod.coverage(items, side) < buildingsmod.POLES_COVERAGE
@@ -818,12 +829,21 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("doors_park")
     chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks)
     mark("markings")
+    if _bridge_fps:                 # (the model bridge is the road there: its deck slab, threedmr.write_bridge_deck)
+        _n0 = len(chunks)
+        chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
+        ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
+        props = buildingsmod.bridge_stub_props(_bridge_fps, props)
+        log.info("3dmr: %d procedural bridge chunk(s) left out under model bridge(s) %s", _n0 - len(chunks),
+                 [m for _fp, _c, m in _bridge_fps])
     # Share the bridge mesh's exact parapet geometry with the tile builder.
     # (the junction pads on the bridges round the tile: their decks' parapets stop at them; the tile draws its own:
     # roads.deck_pads)
     try:
         pad_parts = list(bridges.parts(cells, (box[0] - 40, box[1] - 40, box[2] + 40, box[3] + 40)))
         pad_parts = roadsmod.shifted_parts(pad_parts, roadsmod.deck_shift_fn(frame, cells, urban, _s.widths, left_hand))
+        if _bridge_fps:
+            pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts)
         pads_near = roadsmod.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in pad_parts], near_roads, box,
                                        bridges._ground, own=False)
     except Exception as ex:
@@ -837,6 +857,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     deck_parts = []                 # the bridges' parts near the tile (the median barriers' on joined decks too)
     try:
         deck_parts = list(bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
+        if _bridge_fps:
+            deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
         guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
                            for _fid, spec, xy, z, _lon in deck_parts]
         guardrail_rows = guardrailsmod.forest_rows(frame, infra_fn, box, elev,
@@ -851,7 +873,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts)
     mark("medians")
-    P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(box), ctx, bridges.beams_in(box), ground=cover,
+    _piers, _beams = bridges.piers_in(box), bridges.beams_in(box)
+    if _bridge_fps:
+        _piers, _beams = buildingsmod.bridge_stub_piers(_bridge_fps, _piers, _beams)
+    P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams, ground=cover,
                                parapets=parapets, low_parapet_decks=low_parapet_decks, pads=pads)
     mark("deck_mesh")
     P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
@@ -879,7 +904,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     if buildings:
         import buildings as buildingsmod
         import oilwells
-        bld = buildingsmod.road_tile(frame, tx, ty, _s.md, elev, None, None, items)
+        _radii = []
+        if _custom and out_dir and vfs_dir:
+            _entries, _radii, _boxes = buildingsmod.custom_models(frame, _custom, elev, out_dir, vfs_dir,
+                                                                  road_ends=_bridge_ends)
+        bld, _entries = buildingsmod.road_tile(frame, tx, ty, _s.md, elev, None, None, items, custom=_custom,
+                                               out_dir=out_dir, vfs_dir=vfs_dir, entries=_entries, radii=_radii)
         mark("bld")
         garage_sound = buildingsmod.garage_sound_boxes(items, *box[:2], roadsmod.SOUND_GARAGE)
         oil_wells = oilwells.tile_wells(frame, tx, ty, elev)     # (the mod's pump jacks)
@@ -913,6 +943,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
         mark("powerlines")
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
+    P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     return P
@@ -927,7 +958,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     frame = geodesy.EnuFrame(lat, lon)
     g, _ = _s.anchor(aid, lat, lon)
     P = _tile_parts(mark, frame, (tx, ty), zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                    country, q, (aid, lat, lon), (lat, lon))
+                    country, q, (aid, lat, lon), (lat, lon),
+                    cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir)
     mesh = roadmeshmod.build(frame, P.chunks, P.elev, P.origin, lift, clip=P.box, follow=True, q=q, drawn=P.drawn,
                              context=P.ctx)
     mark("mesh")
@@ -936,7 +968,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              wells=P.wells) + (P.fuel_pads,)
+                              custom_entries=P.custom_entries, wells=P.wells) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -1034,7 +1066,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         # (roads.write_tile writes the shapes and the rows; its names are the anchor tile's: written aside, renamed)
         _, n = roadsmod.write_tile(tmpdir, vfs_dir, 0, tile, None, P.chunks, None, None, P.dmesh, P.bld, P.props,
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
-                                   guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound, wells=P.wells,
+                                   guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
+                                   custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
                                    decals=False)
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
@@ -1086,16 +1119,20 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None):
+def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None,
+                     models_dir=None):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
-    check, earthd.Server.geo_prebuilt)."""
+    check, earthd.Server.geo_prebuilt; models_dir: the folder of the 3dmr.eu models' cache, whose local models are
+    built in: threedmr.local_signature)."""
     import revisit
+    import threedmr
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
-                       _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M)
+                       _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
+                       threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir))
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
-                 country=None):
+                 country=None, scratch_vfs="/x"):
     """Saved areas' world phase (areas.py, the user 2026-10-29: "pre generate along a route or area"): geotile (gx, gy)'s
     road content (_geo_content: roads, sidewalks, bridges, buildings, street furniture) built into the revisit cache
     ahead of play; nothing for the game (its files written to scratch, then removed). The revisit key when the content
@@ -1103,13 +1140,14 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     import geotiles
     import revisit
     tile_key = geotiles.geobox(gx, gy).key
-    k = _geo_content_key(tile_key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country)
+    k = _geo_content_key(tile_key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
+                         models_dir=os.path.dirname(scratch))
     path = revisit._path(_s.cache_dir, "roadsg", k)
     if not os.path.exists(path):
         os.makedirs(scratch, exist_ok=True)
         try:
-            _geo_content(gx, gy, zoom, scratch, "/x", buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                         country)
+            _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
+                         lamp_region, country)
         finally:
             for name in geo_names(tile_key).values():
                 try:
@@ -1130,7 +1168,8 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
     import revisit
     tile = geotiles.geobox(gx, gy)
     names = geo_names(tile.key)
-    k = _geo_content_key(tile.key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country)
+    k = _geo_content_key(tile.key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
+                         models_dir=os.path.dirname(out_dir))
     got = revisit.load(_s.cache_dir, "roadsg", k)
     if got is not None:
         blobs, extra = got
@@ -1146,7 +1185,8 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
     g = _frame_grader(tile.frame)
     walks_raw = []
     P = _tile_parts(mark, tile.frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                    country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw)
+                    country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw,
+                    cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir)
     P.walks_raw = walks_raw
     path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
     mark("write")
@@ -1162,6 +1202,13 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
                     if name.endswith(".json"):
                         data = data.decode("utf-8").replace(f"{vfs_dir}/", "@V@/").encode("utf-8")
                     blobs[name] = data
+            # (its 3dmr models' shapes - the deck slab of a model bridge too - are written beside it under their
+            # own names: kept with it, or a later session's hit pointed at files its folder never had)
+            with open(os.path.join(out_dir, names["json"]), encoding="utf-8") as fh:
+                for name in revisit.shapes_in(fh.read(), vfs_dir):
+                    if name.startswith("threedmr_") and name not in blobs:
+                        with open(os.path.join(out_dir, name), "rb") as fh2:
+                            blobs[name] = fh2.read()
             s, w, nn, e = geotiles.info(gx, gy)[2:]
             wh = revisit.where(*geotiles.centre(gx, gy), s, w, nn, e,
                                revisit.sig(buildings=bool(buildings), gas_stations=bool(gas_stations),

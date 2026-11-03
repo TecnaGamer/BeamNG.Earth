@@ -1843,7 +1843,8 @@ class Server:
         import geotiles
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         return blockworker._geo_content_key(geotiles.geobox(gx, gy).key, gzoom, self.buildings, lh, mph,
-                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions())
+                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
+                                            models_dir=self.root)
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker, no network)? -> its key or None."""
@@ -1856,10 +1857,12 @@ class Server:
         if self.mapdata is None or self.road_pool is None or not revisitmod.ON:
             return None
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
-        scratch = os.path.join(self.cache_dir, "areas", "scratch")
+        # (beside the session folders, as a session's: a 3dmr.eu model baked there finds the models' cache, its textures'
+        # game path and the mod's materials file where the game's own tiles do: buildings._custom_tile_entries, PR #626)
+        scratch = os.path.join(self.root, "areas_scratch")
         return poolsmod.result_running(getattr(self.road_pool, "submit_low", self.road_pool.submit)(
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
-            lamps, country), ROAD_TILE_TIMEOUT_S)
+            lamps, country, "/temp/beamngEarth/areas_scratch"), ROAD_TILE_TIMEOUT_S)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -1916,6 +1919,7 @@ class Server:
         park = [] if self.buildings else None
         items = town = None
         wrows = []
+        _bridge_fps, _bridge_ends = [], {}      # 3dmr model bridges over the tile (as blockworker._tile_parts)
         if self.buildings:
             # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
             try:
@@ -1926,8 +1930,15 @@ class Server:
                 log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
                 wrows = []
             # (on the graded ground, as blockworker.roads_tile)
-            items = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
-                                                 decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip)
+            items, _custom = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
+                                                 decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip,
+                                                 cache_dir=os.path.dirname(self.out_dir))
+            _bridge_fps = buildingsmod.bridge_footprints(anchor.frame, tx, ty, os.path.dirname(self.out_dir))
+            if anchor.bridges is not None and any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
+                try:
+                    _bridge_ends = buildingsmod.bridge_road_ends(_bridge_fps, anchor.bridges, cells)
+                except Exception as ex:
+                    log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
             if wrows:
                 props.extend(wrows)
             town = buildingsmod.coverage(items) < buildingsmod.POLES_COVERAGE
@@ -1974,6 +1985,10 @@ class Server:
             park = gasstationsmod.clear_park(park, fuel)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
         chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks)
+        if _bridge_fps:                 # (the model bridge is the road there: its deck slab)
+            chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
+            ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
+            props = buildingsmod.bridge_stub_props(_bridge_fps, props)
 
         # Share the bridge mesh's exact parapet geometry with the tile builder.
         # Mapped rails on a deck are replaced by guardrails.bridge_rows(); the parapet runs also feed the fallback matching.
@@ -1983,6 +1998,7 @@ class Server:
                 pad_parts = list(anchor.bridges.parts(cells, (box[0] - 40, box[1] - 40, box[2] + 40, box[3] + 40)))
                 pad_parts = roadsmod.shifted_parts(pad_parts, roadsmod.deck_shift_fn(
                     anchor.frame, cells, urban, self.road_widths, self.left_hand(anchor)))
+                pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts)
                 pads_near = roadsmod.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in pad_parts], near_roads, box,
                                                anchor.bridges._ground, own=False)
             except Exception as ex:
@@ -1995,6 +2011,7 @@ class Server:
         deck_parts = []                 # the bridges' parts near the tile (the median barriers' on joined decks too)
         try:
             deck_parts = list(anchor.bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
+            deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
             guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
                                for _fid, spec, xy, z, _lon in deck_parts]
             guardrail_rows = guardrailsmod.forest_rows(anchor.frame, infra_fn, box, elev,
@@ -2014,10 +2031,11 @@ class Server:
                                  clip=box, follow=True, q=self.anchor_q(anchor), drawn=drawn)
         mesh = blockworker._with_plazas(mesh, anchor.frame, roadsmod.tile_bbox(tx, ty), elev, (x0, y0, 0.0),
                                         self.surface)
-        dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0),
-                                 anchor.bridges.piers_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
-                                 ctx,
-                                 anchor.bridges.beams_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
+        _piers, _beams = buildingsmod.bridge_stub_piers(
+            _bridge_fps,
+            anchor.bridges.piers_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
+            anchor.bridges.beams_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else ())
+        dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams,
                                  ground=cover, parapets=parapets,
                                  low_parapet_decks=low_parapet_decks, pads=pads)
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
@@ -2032,9 +2050,16 @@ class Server:
         bld = None
         garage_sound = ()
         oil_wells = []
+        custom_entries = []             # the tile's baked 3dmr.eu / local models (roads.write_tile's "b3dmr")
         if self.buildings:
             import oilwells
-            bld = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata, elev, None, None, items)
+            _baked_entries, _baked_radii = [], []
+            if _custom and self.out_dir and self.vfs_dir:
+                _baked_entries, _baked_radii, _boxes = buildingsmod.custom_models(
+                    anchor.frame, _custom, elev, self.out_dir, self.vfs_dir, road_ends=_bridge_ends)
+                custom_entries = _baked_entries
+            bld, _ = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata, elev, None, None,
+                                            items, entries=_baked_entries, radii=_baked_radii)
             garage_sound = buildingsmod.garage_sound_boxes(items, *roadsmod.tile_bbox(tx, ty)[:2],
                                                            roadsmod.SOUND_GARAGE)
             oil_wells = oilwells.tile_wells(anchor.frame, tx, ty, elev)     # (the mod's pump jacks)
@@ -2064,7 +2089,8 @@ class Server:
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
-                                   rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound, wells=oil_wells)
+                                   rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
+                                   custom_entries=custom_entries, wells=oil_wells)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
