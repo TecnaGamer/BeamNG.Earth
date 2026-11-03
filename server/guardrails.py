@@ -25,7 +25,9 @@ BBOX_PAD_M = 2.0
 # jersey barrier and its sloped end (they run along their model's y axis: the rows' first two columns swapped); the
 # mod's cable barrier and Sweden's roadside post (tools/build_median_props.py). medians.py's rows use the same groups.
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
-          "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe")
+          "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
+          "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
+          "se_b3", "se_e1", "se_e2")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)

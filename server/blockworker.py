@@ -787,9 +787,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("guardrails")
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts)
+    wide = {}                           # (the wider cells' ways, both of these want the same)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
-                                                     country, guardrail_rows, tx, ty, chunks)
+                                                     country, guardrail_rows, tx, ty, chunks, wide)
     guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
+    guardrail_rows = guardrail_rows + _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, _s.widths, left_hand,
+                                                 country, tx, ty, wide)
     mark("medians")
     P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), bridges.piers_in(box), ctx, bridges.beams_in(box), ground=cover,
                                parapets=parapets, low_parapet_decks=low_parapet_decks, pads=pads)
@@ -1399,18 +1402,46 @@ def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
         return []
 
 
-def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_hand, country, mapped, tx, ty, chunks=None):
+def _wide_ways(wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty):
+    """motesfri._ways of a tile, read once in dict wide."""
+    import motesfri
+    import roads as roadsmod
+    if "ways" not in wide:
+        cells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, motesfri.REACH_M)]
+        wide["ways"] = motesfri._ways(frame, cells, box, urban, widths, left_hand)
+    return wide["ways"]
+
+
+def _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, widths, left_hand, country, tx, ty, wide=None):
+    """Sweden's signs' Forest rows of a road tile (sesigns.tile_rows; only there are the wider cells read), [] if they
+    fail (logged). After every barrier's rows: medians takes all that come before them for barriers."""
+    import sesigns
+    try:
+        if str(country or "").upper() not in sesigns.COUNTRIES:
+            return []
+        ways = None
+        if sesigns.wanted(country, near_roads):
+            ways = _wide_ways({} if wide is None else wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty)
+        return sesigns.tile_rows(frame, ways, near_roads, nodes, box, elev, country)
+    except Exception as ex:
+        log.warning("signs: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_hand, country, mapped, tx, ty, chunks=None,
+                   wide=None):
     """The centre barriers' Forest rows of a road tile on Sweden's 2+1 roads (motesfri.tile_rows; only there are the
-    wider cells read), [] if they fail (logged: the tile goes on without them). chunks gets the lane drops' arrows."""
+    wider cells read), [] if they fail (logged: the tile goes on without them). chunks gets the lane drops' arrows and
+    its lines bent to them."""
     import motesfri
     try:
         if not motesfri.wanted(country, near_roads):
             return []
-        cells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, motesfri.REACH_M)]
-        ways = motesfri._ways(frame, cells, box, urban, widths, left_hand)
+        ways = _wide_ways({} if wide is None else wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty)
         if chunks is not None:
+            motesfri.bend_lines(chunks, ways)
             chunks.extend(motesfri.drop_marks(ways, box))
-        return motesfri.tile_rows(frame, cells, box, elev, urban, widths, left_hand, mapped, ways)
+        return motesfri.tile_rows(frame, None, box, elev, urban, widths, left_hand, mapped, ways)
     except Exception as ex:
         log.warning("2+1 centre barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []

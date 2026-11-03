@@ -235,10 +235,18 @@ M.CATALOG.kantstolpe = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_kant
 M.GROUP_MAX_M.kantstolpe = 800
 M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.30 } }   -- (Sweden's yellow give-way)
 M.GROUP_MAX_M.giveway_b1 = 300
+-- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
+local SE_SIGNS = { se_f17 = 2.70, se_f17_400 = 2.78, se_f17_300 = 2.78, se_f17_200 = 2.78, se_f18_11 = 2.70, se_f18_12 = 2.70,
+  se_f18_21 = 2.70, se_f2 = 3.50, se_c1 = 2.10, se_b3 = 2.60, se_e1 = 2.70, se_e2 = 2.70 }
+for g, h in pairs(SE_SIGNS) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
+  M.GROUP_MAX_M[g] = 500
+end
 -- Pure: whether a group is a road barrier's (guard rails, jersey and cable barriers): continuous runs, not thinned
 -- below the tile cap.
 function M.isBarrier(g)
-  return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe')
+  return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
+    or g:sub(1, 3) == 'se_')      -- (a sign thinned away is a rule gone, not a tree fewer)
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)

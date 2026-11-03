@@ -47,6 +47,15 @@ STRAIGHT_COS = 0.7          # a chain goes straight on through a joint (within 4
 # m aside. The shift is a smoothstep, whose steepest slope is 1.5 x its mean, so 1.5 x that long stays within 1:20.
 SHIFT_RATIO = 20.0
 SMOOTHSTEP_PEAK = 1.5
+# The end of a lane. VGU 2024: from two lanes to one the road moves sideways over at least 150 m (K236067), from one to
+# two over at least 100 m (K236066), the lane line stops where the lane that ends is 2.5 m wide (K236077). Over a lane of
+# 3.25 m on the smoothstep that is a third of the way along, whatever the road's own lanes are here (a way's width comes
+# from its class: a 2+1 road's lanes often come out near 2.6 m, and 2.5 m itself would stop the line where it begins).
+CLOSE_M, OPEN_M = 150.0, 100.0
+LINE_ENDS_AT = 1.0 / 3.0    # of the way along the move
+LINE_STARTS_AT = 0.2        # ... and where a new lane's line begins (K236074: at 0.5 m of a 3.25 m lane, near enough)
+RELAX_M = 100.0             # m past the end a one-way carriageway's left edge line goes back to its edge
+ONE_LANE_M = 3.25           # m left between the right edge line and the left one at the end of the lane
 # m of a mapped barrier from ours that stands for it: a mapped line down the road's middle is a third of the driving
 # width from ours (1.83 m on an 11 m carriageway), a side rail 3.6 m or more
 MAPPED_REACH_M = 3.0
@@ -179,10 +188,28 @@ def sections(ways, left_hand=False):
     return [Piece(w, centre_offset(w, left_hand), id(w) in sect) for w in base if id(w) in links or id(w) in sect]
 
 
-def end_offsets(pieces):
+class Whole(float):
+    """An end_offsets value the barrier goes all the way to inside its own way: nothing takes up the other half."""
+
+
+def _goes_plain(p, k, ways):
+    """Does piece p's end k run straight on into one ordinary road, with no lanes shared out (the 2+1 stretch is over)?"""
+    xy = p.way.xy[:, :2]
+    e = xy[k]
+    on = [w for w in ways if w is not p.way and (_touches(e, w.xy[0, :2]) or _touches(e, w.xy[-1, :2]))]
+    if len(on) != 1 or not _base(on[0].spec) or on[0].spec.oneway or on[0].spec.link:
+        return False
+    w = on[0]
+    if _overtaking(w) is not None or (_lanes(w.spec, w.tags) or 2) > 2:
+        return False
+    return float(np.dot(_leaving(xy, 0 if k == 0 else len(xy) - 1), -_leaving(w.xy[:, :2], 0 if _touches(e, w.xy[0, :2])
+                                                                             else len(w.xy) - 1))) > STRAIGHT_COS
+
+
+def end_offsets(pieces, ways=()):
     """[(offset at the start, offset at the end)] per piece: the mean of its own and the piece it touches there (each
     in its own geometry's left: a way drawn the other way round has its left on our right), so both shift to one point.
-    A loose end keeps its own."""
+    A loose end keeps its own, but where ways has the road going on plain the barrier comes back to the middle."""
     out = []
     for p in pieces:
         got = []
@@ -198,20 +225,40 @@ def end_offsets(pieces):
                         o = q.offset if j != k else -q.offset
                         if mate is None or (q.way.key, j) < mate[0]:     # (a fork: the same pick in every tile)
                             mate = ((q.way.key, j), o)
-            got.append(p.offset if mate is None else (p.offset + mate[1]) / 2)
+            if mate is not None:
+                got.append((p.offset + mate[1]) / 2)
+            else:
+                got.append(Whole(0.0) if _goes_plain(p, k, ways) else p.offset)
         out.append(tuple(got))
     return out
 
 
+def shift_span(half):
+    """m either side of a joint that a barrier moving half m to it takes (see CLOSE_M)."""
+    return max(half * 2.0 * SHIFT_RATIO * SMOOTHSTEP_PEAK / 2.0, CLOSE_M / 2.0)
+
+
+def _span(length, value, target):
+    """shift_span of a way of length m shifting from target to value at an end, half the way at most."""
+    if abs(value - target) <= 1e-9:
+        return 0.0
+    if isinstance(value, Whole):
+        return min(CLOSE_M, 0.9 * length)
+    return min(shift_span(abs(value - target)), length / 2.0)
+
+
 def offset_along(s, length, target, start, end):
-    """The offset at arc lengths s: target, shifting to start / end at the way's ends (see SHIFT_RATIO)."""
+    """The offset at arc lengths s: target, shifting to start / end at the way's ends (see SHIFT_RATIO). Each way draws
+    its half of one smoothstep whose middle is the joint: the two meet there in height and in slope, so the barrier
+    makes one curve, not two with a straight step between them. A Whole end draws all of it (see Whole)."""
     def ramp(d, value):
-        span = abs(value - target) * SHIFT_RATIO * SMOOTHSTEP_PEAK
-        span = min(span, length / 2)
+        span = _span(length, value, target)
         if span <= 0:
             return np.zeros_like(d)
-        t = np.clip(d / span, 0.0, 1.0)
-        return (value - target) * (1.0 - t * t * (3.0 - 2.0 * t))
+        if isinstance(value, Whole):
+            return (value - target) * (1.0 - _smooth(d / span))
+        t = 0.5 + 0.5 * np.clip(d / span, 0.0, 1.0)
+        return 2.0 * (value - target) * (1.0 - t * t * (3.0 - 2.0 * t))
     return target + ramp(np.asarray(s), start) + ramp(length - np.asarray(s), end)
 
 
@@ -276,7 +323,7 @@ def modules(ways, box, left_hand=False, mapped_rows=()):
               and _meets(w.xy, pad)]
     mapped = medians._mapped_segments(mapped_rows)
     out = []
-    for p, (start, end) in zip(pieces, end_offsets(pieces)):
+    for p, (start, end) in zip(pieces, end_offsets(pieces, ways)):
         xy = p.way.xy[:, :2]
         if not _meets(xy, near):
             continue
@@ -377,9 +424,19 @@ def _back_along(way, offset, travel, d):
     return p + np.array([-t[1], t[0]]) * offset * travel, t
 
 
-def lane_drops(ways):
-    """[(tip of an arrow (2,), direction of travel (2,))] of the M20 arrows before the lane drops of ways' sections,
-    following the two lanes back past a joint in the way. Every tile sees the same list (see the module's header)."""
+Drop = namedtuple("Drop", "way offset travel lane_end run")     # lane_end: m before the way's end its lane line stops
+
+
+def _end(r):
+    return r[0].xy[-1 if r[2] > 0 else 0, :2]
+
+
+def _start(r):
+    return r[0].xy[0 if r[2] > 0 else -1, :2]
+
+
+def _runs(ways):
+    """[(way, m left of its geometry of the middle of the lane that ends, travel +1 / -1)] of ways' two-lane stretches."""
     run = []
     for p in sections(ways):
         over = _overtaking(p.way) if p.section else None
@@ -389,32 +446,305 @@ def lane_drops(ways):
         if _carriageway(w.spec) and _lanes(w.spec, w.tags) == 2:    # the left lane ends: its middle, left of travel
             travel = -1 if (w.spec.dir or 1) < 0 else 1
             run.append((w, travel * w.spec.width / 4, travel))
-    end = lambda r: r[0].xy[-1 if r[2] > 0 else 0, :2]      # noqa: E731
-    start = lambda r: r[0].xy[0 if r[2] > 0 else -1, :2]    # noqa: E731
+    return run
+
+
+def _travel(w):
+    return -1 if (w.spec.dir or 1) < 0 else 1
+
+
+def merges(w):
+    """Does the map say a lane of w merges away? (turn:lanes, or on a two-way 2+1 way its :forward / :backward)"""
+    tags = w.tags or {}
+    return any("merge_to_" in str(tags.get(k, "")) for k in ("turn:lanes", "turn:lanes:forward", "turn:lanes:backward"))
+
+
+def _on(r, ways):
+    """The one one-lane carriageway two-lane carriageway r (_runs') goes on into, or None: not a fork, a ring, a ramp.
+    One with no lane count is one lane past a lane the map says merges away (Rv 27 at Borås, 57.6371,13.0773)."""
+    e = _end(r)
+    on = [w for w in ways if w is not r[0] and w.spec.oneway and _touches(e, w.xy[-1 if _travel(w) < 0 else 0, :2])]
+    if len(on) != 1 or not _carriageway(on[0].spec):
+        return None
+    lanes = _lanes(on[0].spec, on[0].tags)
+    return on[0] if lanes == 1 or (lanes is None and merges(r[0])) else None
+
+
+def _two_lanes_on(r, w):
+    """Does way w, past two-lane stretch r's end, have the two lanes on the same side? (Under MIN_WAY_M: no section.)"""
+    if w.spec.oneway:
+        return False
+    over = _overtaking(w)
+    return over is not None and _touches(_end(r), _start((w, over[0], over[1])))
+
+
+def _chain_length(r, run):
+    """m of two lanes back from r's end, past joints in the way, as far as it matters."""
+    here, total = r, 0.0
+    seen = {id(r[0])}
+    while here is not None and total < CLOSE_M + M20_FIRST_M + 500.0:
+        total += _length(here[0].xy)
+        here = next((q for q in run if id(q[0]) not in seen and _touches(_start(here), _end(q))), None)
+        if here is not None:
+            seen.add(id(here[0]))
+    return total
+
+
+def drops(ways):
+    """[Drop] of ways' sections' lane drops. Every tile sees the same list (see the module's header)."""
+    run = _runs(ways)
+    pieces = sections(ways)
+    ends = {id(p.way): (p, e) for p, e in zip(pieces, end_offsets(pieces, ways))}
     out = []
     for r in run:
-        e = end(r)
-        if any(q is not r and _touches(e, start(q)) for q in run):
+        e = _end(r)
+        if any(q is not r and _touches(e, _start(q)) for q in run):
             continue                                        # the two lanes go on
         if r[0].spec.oneway:                                # one lane on, not a fork, not a ring or a slip road
-            on = [w for w in ways if w is not r[0] and w.spec.oneway
-                  and _touches(e, w.xy[-1 if (w.spec.dir or 1) < 0 else 0, :2])]
-            if len(on) != 1 or not _carriageway(on[0].spec) or _lanes(on[0].spec, on[0].tags) != 1:
+            if _on(r, ways) is None:
                 continue
-        elif not any(w is not r[0] and (_touches(e, w.xy[0, :2]) or _touches(e, w.xy[-1, :2])) for w in ways):
+            out.append(Drop(*r, min(CLOSE_M, 0.8 * _chain_length(r, run)) * (1.0 - LINE_ENDS_AT), run))
+            continue
+        past = [w for w in ways if w is not r[0] and (_touches(e, w.xy[0, :2]) or _touches(e, w.xy[-1, :2]))]
+        if not past:
             continue                                        # (nothing read past it: don't guess)
-        d, here = M20_FIRST_M, r
-        gaps = M20_GAPS_90 if (r[0].spec.kmh or 0) >= 90.0 else M20_GAPS_80    # (70 is table 12.14's 80 column too)
+        if any(_two_lanes_on(r, w) for w in past):
+            continue                                        # the way past it is too short for a section, but goes on
+        p, pair = ends[id(r[0])]
+        value = pair[1 if r[2] > 0 else 0]
+        span = _span(_length(r[0].xy), value, p.offset)     # (of two halves of a move, a third is span / 3 short)
+        out.append(Drop(*r, span * ((1.0 - LINE_ENDS_AT) if isinstance(value, Whole) else 1.0 - 2.0 * LINE_ENDS_AT), run))
+    return out
+
+
+def back_along(drop, d, offset=None):
+    """(the point d m before drop's way's end, offset m left of the way's geometry or in its lane's middle, the unit
+    direction of travel, its way, the travel along that), following the two lanes back past a joint; None past their
+    start."""
+    here = (drop.way, drop.offset, drop.travel)
+    seen = {id(here[0])}
+    while here is not None:
+        got, rest = _back_along(here[0], here[1] if offset is None else offset, here[2], d)
+        if got is not None:
+            return got, rest, here[0], here[2]
+        d = rest
+        here = next((q for q in drop.run if id(q[0]) not in seen and _touches(_start(here), _end(q))), None)
+        if here is not None:
+            seen.add(id(here[0]))
+    return None
+
+
+def lane_drops(ways):
+    """[(tip of an arrow (2,), direction of travel (2,))] of the M20 arrows before the lane drops of ways' sections,
+    from where the lane line stops, following the two lanes back past a joint in the way."""
+    out = []
+    for drop in drops(ways):
+        d = drop.lane_end + M20_FIRST_M
+        gaps = M20_GAPS_90 if (drop.way.spec.kmh or 0) >= 90.0 else M20_GAPS_80    # (70 is table 12.14's 80 column too)
         for gap in (0.0, *gaps):
             d += gap
-            while here is not None:
-                got, rest = _back_along(here[0], here[1], here[2], d)
-                if got is not None:
-                    out.append((got, rest))
-                    break
-                d = rest
-                here = next((q for q in run if q is not here and _touches(start(here), end(q))), None)
+            got = back_along(drop, d)
+            if got is not None:
+                out.append(got[:2])
     return out
+
+
+# Lines bent to a lane's end (bend_lines). Bend: the line (k, 2) arcs are measured along, m along it of the end, what is
+# moved or cut: (lo, hi) of the lines' m left of it, and shift(s) the m left they move; cuts: (lo, hi, s0, s1) lines there
+# stop, s m along it.
+Bend = namedtuple("Bend", "line moves shift cuts")
+
+
+def _project(points, line):
+    """(s, left, distance) of points (m, 2) on polyline line (k, 2): m along it, m left of it, m from it."""
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    l2 = np.maximum((ab * ab).sum(1), 1e-12)
+    t = np.clip(((points[:, None] - a[None]) * ab[None]).sum(2) / l2[None], 0.0, 1.0)
+    d = points[:, None] - (a[None] + t[..., None] * ab[None])
+    dist = np.hypot(d[..., 0], d[..., 1])
+    k = dist.argmin(1)
+    i = np.arange(len(points))
+    cum = np.r_[0.0, np.cumsum(np.sqrt(l2))]
+    cross = ab[k, 0] * d[i, k, 1] - ab[k, 1] * d[i, k, 0]
+    return cum[k] + t[i, k] * np.sqrt(l2[k]), cross / np.sqrt(l2[k]), dist[i, k]
+
+
+def _smooth(t):
+    t = np.clip(t, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _path(r, run, ways, back, ahead):
+    """Polyline (k, 2) in the direction of travel from back m before two-lane stretch r's end to ahead m past it (or
+    where the ways stop), and the m along it of that end."""
+    points = [r[0].xy[:, :2] if r[2] > 0 else r[0].xy[::-1, :2]]
+    total = _length(points[0])
+    here, seen = r, {id(r[0])}
+    while total < back:
+        here = next((q for q in run if id(q[0]) not in seen and _touches(_start(here), _end(q))), None)
+        if here is None:
+            break
+        seen.add(id(here[0]))
+        xy = here[0].xy[:, :2] if here[2] > 0 else here[0].xy[::-1, :2]
+        points.insert(0, xy[:-1])
+        total += _length(xy)
+    on = _on(r, ways)
+    if on is not None:
+        xy = on.xy[:, :2] if _travel(on) > 0 else on.xy[::-1, :2]
+        points.append(xy[1:])
+    return np.vstack(points), total
+
+
+def _start_from(r, ways):
+    """The one one-lane carriageway two-lane carriageway r starts out of, or None."""
+    s = _start(r)
+    into = [w for w in ways if w is not r[0] and w.spec.oneway and _touches(s, w.xy[0 if _travel(w) < 0 else -1, :2])]
+    if len(into) != 1 or not _carriageway(into[0].spec) or _lanes(into[0].spec, into[0].tags) != 1:
+        return None
+    return into[0]
+
+
+def _edge_bend(xy, at, side, width, width_past, long, cut_to):
+    """Bend of a one-way carriageway of width m going down to one lane past xy's end at, its left edge line moving in
+    over long m and back to its edge over RELAX_M past it (side: +1 the lane is on xy's left, -1 on its right)."""
+    inset = 0.25
+    edge, edge_past = width / 2 - inset, width_past / 2 - inset
+    stop = min(ONE_LANE_M - edge, edge_past)
+    before, after = max(edge - stop, 0.0), max(edge_past - stop, 0.0)
+
+    def shift(s):
+        d = np.asarray(s, np.float64) - at
+        return -side * np.where(d < 0, before * _smooth((d + long) / long), after * (1.0 - _smooth(d / RELAX_M)))
+    lo, hi = (0.5, width / 2 + 1.0) if side > 0 else (-width / 2 - 1.0, -0.5)
+    return Bend(xy, (lo, hi, at - long - 5.0, at + RELAX_M + 5.0), shift, ((-0.4, 0.4, at - cut_to, at),))
+
+
+def _bends(ways):
+    """[Bend] of the lanes that end and begin on ways."""
+    out = []
+    pieces = sections(ways)
+    for p, (a, b) in zip(pieces, end_offsets(pieces, ways)):
+        if abs(a - p.offset) < 1e-9 and abs(b - p.offset) < 1e-9:
+            continue
+        length = _length(p.way.xy)
+        over = _overtaking(p.way) if p.section else None
+        if over is not None:                                # one lane growing to two out of a plain road
+            value, at = (a, 0.0) if over[1] > 0 else (b, length)
+            if isinstance(value, Whole):
+                lane = 2.0 * over[0] - centre_offset(p.way)
+                out.append(Bend(p.way.xy[:, :2], None, None, ((lane - 0.35, lane + 0.35, at - LINE_STARTS_AT * CLOSE_M,
+                                                               at + LINE_STARTS_AT * CLOSE_M),)))
+
+        def shift(s, t=p.offset, a=a, b=b, length=length):
+            return offset_along(s, length, t, a, b) - t
+        out.append(Bend(p.way.xy[:, :2], (p.offset - 0.75, p.offset + 0.75, 0.0, length), shift, ()))
+    run = _runs(ways)
+    for d in drops(ways):
+        r = (d.way, d.offset, d.travel)
+        if d.way.spec.oneway:
+            long = d.lane_end / (1.0 - LINE_ENDS_AT)
+            xy, at = _path(r, run, ways, long + 10.0, RELAX_M + 10.0)
+            on = _on(r, ways)
+            out.append(_edge_bend(xy, at, 1, d.way.spec.width, on.spec.width, long, d.lane_end))
+        else:                                               # the lane line stops; the barrier has moved over it
+            line = d.way.xy[:, :2]
+            length = _length(line)
+            lane = 2.0 * d.offset - centre_offset(d.way)    # (the lane's middle is halfway to the line between directions)
+            at = (length - d.lane_end, length) if d.travel > 0 else (0.0, d.lane_end)
+            out.append(Bend(line, None, None, ((lane - 0.35, lane + 0.35, *at),)))
+    for r in run:                                           # a one-way carriageway's lane beginning: the end run backwards
+        if not r[0].spec.oneway or any(q is not r and _touches(_start(r), _end(q)) for q in run):
+            continue
+        before = _start_from(r, ways)
+        if before is None:
+            continue
+        long = min(OPEN_M, 0.8 * _length(r[0].xy))
+        xy = r[0].xy[:, :2] if r[2] < 0 else r[0].xy[::-1, :2]      # against the traffic: from inside out to the start
+        past = before.xy[:, :2] if _travel(before) < 0 else before.xy[::-1, :2]
+        at = _length(xy)
+        out.append(_edge_bend(np.vstack([xy, past[1:]]), at, -1, r[0].spec.width, before.spec.width, long,
+                              long * LINE_STARTS_AT))
+    return out
+
+
+LINE_LOOKS = ("line_white", "line_yellow")
+PARALLEL_COS = 0.85         # a line this near a way's direction is one of its own (cos of about 30 degrees)
+
+
+def _dense(n, step=4.0):
+    """Chunk polyline n (k, 3) with a point at least every step m: a bent line needs them."""
+    out = [n[:1]]
+    for a, b in zip(n[:-1], n[1:]):
+        k = max(1, int(math.ceil(float(np.hypot(*(b - a)[:2])) / step)))
+        out.append(a + (b - a) * (np.arange(1, k + 1) / k)[:, None])
+    return np.vstack(out)
+
+
+def _bent(c, bend):
+    """Chunks replacing line chunk c by bend, or None if bend leaves it alone."""
+    n = np.asarray(c["n"], np.float64)
+    if len(n) < 2 or not _meets(n[:, :2], (bend.line[:, 0].min() - 15.0, bend.line[:, 1].min() - 15.0,
+                                           bend.line[:, 0].max() + 15.0, bend.line[:, 1].max() + 15.0)):
+        return None
+    s, left, dist = _project(n[:, :2], bend.line)
+    if float(dist.max()) > 12.0:
+        return None
+    along = n[-1, :2] - n[0, :2]
+    k = min(int(np.argmin(dist)), len(bend.line) - 2)
+    u = bend.line[k + 1] - bend.line[k]
+    if abs(float(np.dot(along, u))) < PARALLEL_COS * float(np.hypot(*along) * np.hypot(*u)):
+        return None
+    mid = float(np.median(left))
+    if bend.moves is not None and bend.moves[0] <= mid <= bend.moves[1]:
+        n = _dense(n)
+        s, _, _ = _project(n[:, :2], bend.line)
+        here = (s >= bend.moves[2]) & (s <= bend.moves[3])
+        if here.any():
+            seg = np.diff(bend.line, axis=0)
+            cum = np.r_[0.0, np.cumsum(np.hypot(*seg.T))]
+            t = seg[np.clip(np.searchsorted(cum, s, side="right") - 1, 0, len(seg) - 1)]
+            t = t / np.maximum(np.hypot(*t.T), 1e-9)[:, None]
+            n = n.copy()
+            n[:, :2] += np.c_[-t[:, 1], t[:, 0]] * (np.asarray(bend.shift(s), np.float64) * here)[:, None]
+            return [dict(c, n=[[round(float(v), 3) for v in q] for q in n])]
+    for lo, hi, s0, s1 in bend.cuts:
+        if lo <= mid <= hi and s.max() >= s0 and s.min() <= s1:
+            n = _dense(n)
+            s, _, _ = _project(n[:, :2], bend.line)
+            keep = (s < s0) | (s > s1)
+            out, k, m = [], 0, len(n)
+            while k < m:
+                if not keep[k]:
+                    k += 1
+                    continue
+                j = k
+                while j < m and keep[j]:
+                    j += 1
+                if j - k >= 2:
+                    out.append(dict(c, n=[[round(float(v), 3) for v in q] for q in n[k:j]]))
+                k = j
+            return out
+    return None
+
+
+def bend_lines(chunks, ways):
+    """Chunks with the lines of the lanes that end and begin on ways bent to it, in place (see CLOSE_M): a tile's own
+    lines, wherever they came from (roads.extras, way by way or whole), the way they lie in the world, so tiles agree."""
+    bends = _bends(ways)
+    if not bends:
+        return
+    for bend in bends:
+        k = 0
+        while k < len(chunks):
+            c = chunks[k]
+            if c.get("m") in LINE_LOOKS and c.get("n"):
+                got = _bent(c, bend)
+                if got is not None:
+                    chunks[k:k + 1] = got
+                    k += len(got)
+                    continue
+            k += 1
 
 
 def drop_marks(ways, box):

@@ -12,6 +12,7 @@ crossing without signals; of the signal crossings that say, 614 of 722 have a ze
 """
 import json
 import logging
+import math
 
 import numpy as np
 
@@ -22,6 +23,7 @@ M15, M16 = 1, 2                 # paint: bits of paint()
 CLASSES = ("crossing", "give_way", "stop", "traffic_signals")
 UNPAINTED = ("unmarked", "informal", "no")
 NODE_NEAR_M = 2.0               # m from a carriageway's centreline a crossing is on that road (95% of them, above)
+SIGNALS_NEAR_M = 15.0           # m from a set of signals a crossing is under them, whatever its own tags say
 ONE_CROSSING_M = 5.0            # m along a road within which two nodes are one crossing
 ON_JUNCTION_M = 1.0             # m from where three roads meet a node has no road to cross, nor a way to lie across it
                                 # (16 of 649 near Göteborg stood on another road, 10 of them exactly on the junction)
@@ -80,15 +82,20 @@ def nodes(frame, infra_list):
         ll = np.array([q[1] for q in found], np.float64)
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
-    crossings, lines, priority = [], [], []
+    crossings, lines, priority, zebras, signals = [], [], [], [], []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
             crossings.append((float(p[0]), float(p[1]), paint(tag)))
+            if paint(tag) & M15 and tag.get("crossing") != "traffic_signals":
+                zebras.append((float(p[0]), float(p[1])))
+        elif cls == "traffic_signals":
+            signals.append((float(p[0]), float(p[1])))
         elif cls in ("give_way", "stop"):
             priority.append((float(p[0]), float(p[1]), float(cls == "stop")))
         if cls != "crossing" and tag.get("road_marking") == "stop_line":
             lines.append((float(p[0]), float(p[1])))
-    return {"crossings": crossings, "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
+    zebras = [z for z in zebras if not any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)]
+    return {"crossings": crossings, "zebras": zebras, "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 
 

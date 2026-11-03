@@ -1576,6 +1576,8 @@ class Server:
         marks = []                  # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
         near_roads = []             # the ground carriageways near the tile (the median barriers': medians.tile_rows)
         nkeys = roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)
+        sign_nodes = crossings.read(self.mapdata, anchor.frame, nkeys) if str(self.country(anchor) or "").upper() == "SE" \
+            else None
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
@@ -1587,8 +1589,7 @@ class Server:
                                                                                   self.anchor_q(anchor)),
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
                                      roads_out=near_roads, signals=furnituremod.signals_for(self.mapdata, anchor.frame, nkeys),
-                                     nodes=crossings.read(self.mapdata, anchor.frame, nkeys)
-                                     if str(self.country(anchor) or "").upper() == "SE" else None)
+                                     nodes=sign_nodes)
         # (railway and tram tracks on the ground)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
@@ -1638,11 +1639,15 @@ class Server:
         guardrail_rows = guardrail_rows + blockworker._median_rows(
             anchor.frame, near_roads, box, elev, self.left_hand(anchor), self.country(anchor), guardrail_rows, tx, ty,
             deck_parts)
+        wide = {}                       # (the wider cells' ways, both of these want the same)
         guardrail_rows = guardrail_rows + blockworker._motesfri_rows(
             anchor.frame, cell_fn, near_roads, box, elev, urban, self.road_widths, self.left_hand(anchor),
-            self.country(anchor), guardrail_rows, tx, ty, chunks)
+            self.country(anchor), guardrail_rows, tx, ty, chunks, wide)
         guardrail_rows = guardrail_rows + blockworker._kantstolpe_rows(
             anchor.frame, near_roads, box, elev, self.country(anchor), guardrail_rows, tx, ty)
+        guardrail_rows = guardrail_rows + blockworker._sign_rows(
+            anchor.frame, cell_fn, near_roads, sign_nodes, box, elev, urban, self.road_widths, self.left_hand(anchor),
+            self.country(anchor), tx, ty, wide)
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                                  clip=box, follow=True, q=self.anchor_q(anchor), drawn=drawn)

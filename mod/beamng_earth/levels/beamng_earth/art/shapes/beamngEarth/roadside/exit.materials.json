@@ -294,5 +294,22 @@
       {}
     ],
     "castShadows": false
+  },
+  "bne_se_signs2": {
+    "name": "bne_se_signs2",
+    "mapTo": "bne_se_signs2",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_se_signs2.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
   }
 }

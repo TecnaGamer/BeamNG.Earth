@@ -102,6 +102,58 @@ Results, central Göteborg, about 150 km of track:
 
 Limits: paved track still lies in a sidewalk's outer band for 3.3 km, because only the curb line is tested. Not tested in game.
 
+## Lane ends on 2+1 roads and signs from the road's shape
+
+Sources: VGU 2024 (remiss version 0.9) and TSFS 2019:74, requirement numbers in `server/motesfri.py` and `server/sesigns.py`.
+
+**The closure** (`motesfri.py`). The road surface keeps its width, as real 2+1 roads mostly do, and is painted into the ground, so the closure is the barrier and the paint:
+
+- The barrier moves in one smooth curve across the joint between two sections, 150 m long at least (K236067). It used to move in two pieces over about 35 m.
+- Where a 2+1 stretch ends on a plain road, the barrier comes back to the road's centre line inside its own last 150 m (`Whole`). It used to stop off-centre.
+- The centre lines follow the barrier, and the lane line stops a third of the way along the move, where the lane is 2.5 m wide on a 3.25 m lane (K236077).
+- On a carriageway drawn as its own one-way way, the left edge line moves in to leave one lane, then goes back to the edge over 100 m. A lane that begins on such a carriageway does the same over 100 m (K236066).
+- M20 arrows count from where the lane line stops (K237774-6), not from the joint.
+
+`bend_lines` bends the lines in a tile's finished chunks, so it does not matter how the road builder made them.
+
+**Signs** (`sesigns.py`, country SE only). Forest rows after every barrier's, because `medians._mapped_segments` reads what comes before as barriers.
+
+| Sign | Where | Near Borås, 18 km across |
+|---|---|---|
+| F17, F17 + T2 400/300/200 m | Just before the first merge arrow (20 m), the plate 400/300/200 m before the arrows, both sides (the median one halfway to the oncoming carriageway where the two are drawn close); VGU's 50 m before the 2.5 m point came too late in the game. On two-lane stretches of 300 m or more, or shorter ones the map tags `merge_to_*` (not an on-ramp's acceleration lane); two lanes are measured back through a wider carriageway beside an exit lane | 16, 18 |
+| F18 | Where a plain road becomes a section, or forks into a pair of carriageways | 4 |
+| F2 | 350 m before a spansk sväng, outside towns | 3 |
+| C1 | Both sides of the end of an exit ramp from a fast road, and of a spansk sväng's link | 10 |
+| E1, E2 | Where a motorway begins and ends, and on its ramps | 16, 9 |
+| B3 | Both sides of a painted crossing without signals, at 60 km/h or less | 181 in about 3 km² of Borås |
+
+**Spansk sväng.** The data has no turn bans, so it is told by shape: a one-way link leaving a main road of 70 km/h or more on the right, 20-300 m long, that crosses back or ends beside it. Scored against OpenStreetMap's `no_left_turn` relations across Sweden: 148 hits, 92% with a ban, against 42% for plain right slip roads. Service roads are left out.
+
+**How to test in game.** Not yet checked in game. Stop the running server, then start this branch's: `cd ~/.cache/bngearth-dev && ./run_server.sh` (no leading `!` in fish).
+
+| Check | Coordinates |
+|---|---|
+| Lane closure, F17 and the 400 m plate | 57.5331, 12.79387 |
+| Lane closure after an exit lane, F17 and the 400 m plate (E4 north, Härnösand) | 62.6482, 17.8979 |
+| Lane end past pieces with no lane count, both F17s (Rv 27 south-east, Borås) | 57.6371, 13.0773 |
+| Spansk sväng | 57.65439, 12.91846 |
+| Its F2 sign | 57.66319, 12.91821 |
+| Motorway E1 signs | 57.6979, 12.8242 |
+| B3 at zebra crossings, central Borås | 57.7210, 12.9401 |
+
+Look for: a barrier curve of about 150 m with the lines following it, the lane line stopping before the arrows run out, and each sign on the correct side and facing the traffic it is for.
+
+Not built:
+
+- **Speed cameras (E24):** the Overture infrastructure data has no such class across 30 cells round Göteborg.
+- **Town signs (E5):** town limits are not mapped well enough to place them.
+- **Ferries:** they need a ship model and movement.
+- **Speed bumps and raised crossings:** they need a physical bump, and a sign alone would mislead.
+- **Road number signs (F14):** each number needs its own texture.
+- **Bus lanes:** M28 needs a texture of its own, and how many lanes the data shows was never counted.
+- **Warning line before a solid line (M3, K237689):** the dash pattern is chosen per way, so changing the last 100 m needs a change in the line builder.
+- **Rest areas:** not attempted.
+
 ## Road type detection
 
 Findings, and the rules built on them, which shipped in `0fbe4bbb`. The commit message says what the rules do.
@@ -141,4 +193,7 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 - **Samples.** Fix 3 was measured on 60 tiles and fix 5 on 300, both around Boras. The surface statistics cover seven regions and only rural roads with a surface tag.
 - **Road types.** Class "unknown" roads have no OpenStreetMap tags to work from.
 - **Widths of gravel and private roads.** No official width was found for gravel or private roads, so the repo's existing STYLE values stay.
+- **Lane ends with no barrier move.** Where a section meets a short way with no lane split tagged, the barrier cannot tell where to go, so it keeps its offset and the lane line stops at the joint. 2 of 13 lane ends in the two sampled areas.
+- **Wide single lanes.** Past a two-way lane end the road keeps its width, so a connector between sections can have a single lane near 6 m wide.
+- **Spansk sväng.** About 8% of what the shape detector finds has no mapped ban, measured on a sample of Sweden.
 - **Dashes at joins.** The dashes of two ways do not meet at a join. A fit was tried and reverted, because it moved TSFS's 9.0 m dash to 8.8 m, off the official figure.

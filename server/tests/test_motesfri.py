@@ -260,7 +260,7 @@ class LaneDropTest(unittest.TestCase):
 
     def test_five_arrows_back_from_the_end_at_90(self):
         got = motesfri.lane_drops([way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2))])
-        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [2.5, 27.5, 77.5, 152.5, 252.5])
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [102.5, 127.5, 177.5, 252.5, 352.5])
         off, travel = motesfri._overtaking(way("s", line(-400, 0)))
         self.assertEqual(travel, 1)
         for p, t in got:
@@ -269,16 +269,16 @@ class LaneDropTest(unittest.TestCase):
 
     def test_four_arrows_at_80(self):
         got = motesfri.lane_drops([way("s", line(-400, 0), sp=spec(kmh=80.0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2, kmh=80.0))])
-        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [2.5, 22.5, 62.5, 122.5])
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [102.5, 122.5, 162.5, 222.5])
 
     def test_the_lanes_may_run_the_other_way_along_the_geometry(self):
         got = motesfri.lane_drops([way("s", line(0, 400), ONE), way("c", line(-400, 0), self.PLAIN, spec(lanes=2))])
-        self.assertEqual([round(float(p[1]), 1) for p, _ in got], [2.5, 27.5, 77.5, 152.5, 252.5])
+        self.assertEqual([round(float(p[1]), 1) for p, _ in got], [102.5, 127.5, 177.5, 252.5, 352.5])
         self.assertTrue(all(float(t[1]) < -0.99 for _, t in got), "heading south")
 
     def test_no_drop_where_the_two_lanes_go_on_and_arrows_past_a_joint(self):
         ways = [way("a", line(-500, -100), key="k"), way("b", line(-100, 0), key="k"), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
-        self.assertEqual([round(-float(p[1]), 1) for p, _ in motesfri.lane_drops(ways)], [2.5, 27.5, 77.5, 152.5, 252.5])
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in motesfri.lane_drops(ways)], [62.5, 87.5, 137.5, 212.5, 312.5])
 
     def carriageway(self, fid, xy, lanes, kmh=100.0, link=False, dir_=1):
         return way(fid, xy, {}, roads.Spec(9.0 if lanes == 2 else 4.5, "paved", False, "trunk", True, 2.5, dir_, kmh,
@@ -286,7 +286,7 @@ class LaneDropTest(unittest.TestCase):
 
     def test_a_carriageway_of_two_lanes_narrowing_to_one(self):
         got = motesfri.lane_drops([self.carriageway("a", line(-400, 0), 2), self.carriageway("b", line(0, 400), 1)])
-        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [2.5, 27.5, 77.5, 152.5, 252.5])
+        self.assertEqual([round(-float(p[1]), 1) for p, _ in got], [102.5, 127.5, 177.5, 252.5, 352.5])
         self.assertAlmostEqual(float(got[0][0][0]), -9.0 / 4, 6, "the left lane, heading north")
 
     def test_a_carriageway_drawn_the_other_way(self):
@@ -311,8 +311,86 @@ class LaneDropTest(unittest.TestCase):
 
     def test_a_box_keeps_its_own_arrows(self):
         ways = [way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
-        self.assertEqual(len(motesfri.drop_marks(ways, (-128.0, -128.0, 128.0, 128.0))), 3 * 5, "three arrows of five pieces")
+        self.assertEqual(len(motesfri.drop_marks(ways, (-128.0, -128.0, 128.0, 128.0))), 2 * 5, "two arrows of five pieces")
         self.assertEqual(motesfri.drop_marks(ways, (-128.0, 128.0, 128.0, 384.0)), [])
+
+
+class ClosureTest(unittest.TestCase):
+    """The end of a lane: one smooth move over VGU's 150 m, the lines going with it (K236067, K236077)."""
+    PLAIN = LaneDropTest.PLAIN
+
+    def test_a_shift_is_one_curve_across_the_joint(self):
+        s = np.linspace(0.0, 400.0, 801)
+        a = motesfri.offset_along(s, 400.0, 1.3, 1.3, 0.0)                      # our half, to the joint at 400 m
+        b = motesfri.offset_along(s, 400.0, -1.3, 0.0, -1.3)                    # theirs, from it
+        whole = np.r_[a, b[1:]]
+        self.assertAlmostEqual(float(whole[0]), 1.3, 9)
+        self.assertAlmostEqual(float(a[-1]), 0.0, 9)
+        self.assertLessEqual(float(np.abs(np.diff(whole)).max() / 0.5), 1.0 / motesfri.SHIFT_RATIO)
+        slope = np.diff(whole) / 0.5
+        self.assertLess(float(np.abs(np.diff(slope)).max()), 1e-3, "no corner at the joint")
+
+    def test_it_takes_150_m(self):
+        s = np.linspace(0.0, 400.0, 801)
+        moving = np.flatnonzero(np.abs(motesfri.offset_along(s, 400.0, 1.3, 1.3, 0.0) - 1.3) > 1e-9)
+        self.assertAlmostEqual(400.0 - float(s[moving[0]]), motesfri.CLOSE_M / 2, delta=1.0, msg="half each side of the joint")
+
+    def test_at_the_end_of_the_stretch_all_of_it_is_ours(self):
+        ways = [way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
+        pieces = motesfri.sections(ways)
+        (_, end), = motesfri.end_offsets(pieces, ways)
+        self.assertIsInstance(end, motesfri.Whole)
+        s = np.array([0.0, 400.0 - motesfri.CLOSE_M, 400.0])
+        got = motesfri.offset_along(s, 400.0, pieces[0].offset, pieces[0].offset, end)
+        self.assertAlmostEqual(float(got[1]), pieces[0].offset, 6)
+        self.assertAlmostEqual(float(got[2]), 0.0, 6, "on the plain road's centre line")
+
+    def test_a_junction_is_not_that(self):
+        ways = [way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2)),
+                way("x", np.c_[np.linspace(0, 300, 9), np.zeros(9)], self.PLAIN, spec(lanes=2))]
+        pieces = motesfri.sections(ways)
+        self.assertNotIsInstance(motesfri.end_offsets(pieces, ways)[0][1], motesfri.Whole)
+
+    def chunks(self, xy, m="line_white"):
+        return [{"m": m, "n": [[float(x), float(y), 0.0] for x, y in xy], "w": 0.1}]
+
+    def test_centre_lines_go_with_the_barrier_and_the_lane_line_stops(self):
+        ways = [way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
+        p = motesfri.sections(ways)[0]
+        over, _ = motesfri._overtaking(ways[0])
+        centre = self.chunks(np.c_[np.full(5, -p.offset), np.linspace(-300, -1, 5)])
+        lane_x = -(2.0 * over - p.offset)
+        lane = self.chunks(np.c_[np.full(5, lane_x), np.linspace(-200, -1, 5)])
+        got = centre + lane
+        motesfri.bend_lines(got, ways)
+        bent = np.array(got[0]["n"])
+        self.assertAlmostEqual(float(bent[0, 0]), -p.offset, 2)
+        self.assertAlmostEqual(float(bent[-1, 0]), 0.0, delta=0.05, msg="in the middle of the road at the end")
+        self.assertLess(float(np.abs(np.diff(bent[:, 0]) / np.maximum(np.diff(bent[:, 1]), 1e-9)).max()), 1.0 / motesfri.SHIFT_RATIO)
+        self.assertEqual(len(got), 2)
+        self.assertAlmostEqual(float(np.array(got[1]["n"])[:, 1].max()), -100.0, delta=4.0, msg="the line stops at 2/3 of 150 m")
+
+    def test_a_cross_street_line_stays(self):
+        ways = [way("s", line(-400, 0)), way("c", line(0, 400), self.PLAIN, spec(lanes=2))]
+        got = self.chunks(np.c_[np.linspace(-6, 6, 5), np.full(5, -40.0)])
+        before = [dict(c) for c in got]
+        motesfri.bend_lines(got, ways)
+        self.assertEqual(got, before)
+
+    def carriageway(self, fid, xy, lanes):
+        return way(fid, xy, {}, roads.Spec(9.0 if lanes == 2 else 4.5, "paved", False, "trunk", True, 2.5, 1, 100.0, None, None,
+                                           lanes, None, False))
+
+    def test_a_carriageways_left_edge_line_comes_in_and_goes_back(self):
+        ways = [self.carriageway("a", line(-400, 0), 2), self.carriageway("b", line(0, 400), 1)]
+        e = 9.0 / 2 - 0.25
+        got = self.chunks(np.c_[np.full(9, -e), np.linspace(-300, -1, 9)]) + self.chunks(np.c_[np.full(9, -(4.5 / 2 - 0.25)), np.linspace(1, 200, 9)])
+        motesfri.bend_lines(got, ways)
+        before, after = np.array(got[0]["n"]), np.array(got[1]["n"])
+        self.assertAlmostEqual(float(before[0, 0]), -e, 6)
+        stop = min(motesfri.ONE_LANE_M - e, 4.5 / 2 - 0.25)
+        self.assertAlmostEqual(float(before[-1, 0]), -stop, delta=0.02, msg="one lane's room left at the end")
+        self.assertAlmostEqual(float(after[-1, 0]), -(4.5 / 2 - 0.25), 6)
 
 
 if __name__ == "__main__":
