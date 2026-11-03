@@ -1096,6 +1096,9 @@ def hand_over():
 
 def main():
     ensure_ca_certs()
+    if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
+        from tools import world_cache
+        raise SystemExit(world_cache.main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "--server":
         run_server(sys.argv[2:])
         return

@@ -91,6 +91,7 @@ jobs:
         run: |
           f=$(ls dist/*.AppImage)
           "$f" --appimage-extract-and-run --server --help > help.txt && head -3 help.txt
+          "$f" --appimage-extract-and-run --world-cache --help > world-cache-help.txt
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -125,6 +126,7 @@ jobs:
         run: |
           f=$(ls dist/*.exe)
           "$f" --server --help > help.txt && head -3 help.txt
+          "$f" --world-cache --help > world-cache-help.txt
       - name: Verify the Windows hosting executable
         run: python tools/build_host.py --platform windows --out build/host-smoke --smoke
       - uses: actions/upload-artifact@v4

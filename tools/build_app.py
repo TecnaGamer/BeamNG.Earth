@@ -151,6 +151,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--hidden-import", "truststore",     # Windows: the native certificate store (netfetch.windows_ssl_context, PR #371)
            "--add-data", f"{os.path.join(ROOT, 'mod', 'beamng_earth')}{SEP}mod/beamng_earth",
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'LICENSE')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'CREDITS.md')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'docs', 'SHARED_WORLD.md')}{SEP}docs",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
            "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}.",     # (bridgetypes.WD_PATH)
            "--add-data", f"{os.path.join(server, 'koppen_1991_2020_0p1.png')}{SEP}.",  # (climate.PATH)

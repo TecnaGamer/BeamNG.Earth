@@ -10,6 +10,10 @@ Status: beta (see VERSION). Tested on BeamNG.drive 0.40.4 on Linux (Vulkan) and 
 **Modernization branch:** current changes, architecture, measured results and remaining work are tracked in
 [the foundation milestone](docs/MODERNIZATION.md) and [validation report](docs/MODERNIZATION_VALIDATION.md).
 These changes still require real BeamNG/BeamMP and cross-platform release validation.
+Version 1.7.4-beta adds opt-in [shared road-plan bundles](docs/SHARED_WORLD.md); this is a bounded
+prepared-data workflow, not full shared-world generation or the completed platform overhaul.
+The [platform status table](docs/PLATFORM_STATUS.md) distinguishes existing features, verified changes,
+experimental functionality and work still outstanding.
 
 **Community:** join the TGForever Discord, **[discord.gg/tgf](https://discord.gg/tgf)**, and head to the
 #beamng-earth channel to chat about the mod, get help, report bugs, help with its development, and get an IP to join a

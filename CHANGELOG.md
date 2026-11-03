@@ -12,6 +12,8 @@ This fork release builds on TecnaGamer's BeamNG.Earth 1.7.3-beta. Upstream credi
 - Release revisit-cache file handles after writes so cache cleanup and replacement work on Windows.
 - Add cross-platform regression gates and a Sketchfab metadata/licensing preflight tool. No model import or embedded voice is claimed.
 - Direct the fork's update checks and downloads to this repository. Include the BeamMP plugin ZIP in ordinary release publication.
+- Add experimental immutable road-plan bundles: complete-only export, pinned manifest/hash validation, offline warm reuse and actual grading integration across local origins. This shares road plans, not the whole terrain or all assets; it is opt-in and requires runtime validation.
+- Provide Windows and Linux hosting bundles with pinned official BeamMP binaries, licenses, corresponding source and empty-key configuration. Player builds include `--world-cache` administration commands.
 
 Local unit, integration and stub checks are documented in `docs/MODERNIZATION_VALIDATION.md`. Real BeamNG/BeamMP gameplay validation, full-platform performance measurements and the remaining modernization workstreams are still outstanding.
 

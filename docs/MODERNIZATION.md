@@ -131,7 +131,7 @@ trees. No BeamNG or BeamMP instance is launched by the gate.
 | Multiplayer fixes | Implemented; awaiting environment validation | Two real clients, join/leave/rejoin, dateline, origin rebase, stale snapshot and network loss. |
 | Test/release gate | Implemented; local execution recorded separately | Windows/Linux remote CI and native packaged-app acceptance. |
 | Sketchfab | Metadata preflight implemented and mocked-HTTP tested | Live credential check, candidate matching, permitted acquisition, conversion, collision/LOD, placement and credit integration. No model imported. |
-| Shared world manifests / server cache | Deferred to next core-streaming milestone | Define canonical content identities and prove cross-client reuse before introducing infrastructure. |
+| Shared world manifests / server cache | Experimental pinned road-plan bundles implemented and locally tested in 1.7.4-beta | [Road-plan workflow](SHARED_WORLD.md); full DEM, mesh and asset dependency closure and real multiplayer validation remain outstanding. |
 | Steam parties | Deferred; platform capability constraints documented | Supported identity linking and invite workflow; no native Steam friend/party claim. |
 | Embedded voice | Deferred pending actual audio client and packaging integration | Audio capture/playback, Opus/encrypted transport, session authorization and measured latency. Mumble Link alone is insufficient. |
 | Radio / Spotify | Deferred behind core reliability and streaming | Verify policy and supported playback authorization; implement local/licensed source path independently. |
