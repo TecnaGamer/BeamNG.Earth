@@ -3221,8 +3221,7 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     # (curve mode for a deck that clears something; one over nothing but the ground keeps the ground envelope's rounded
     # crest: Lombard Street, Baltimore's deck over its embankment, test_no_step_onto_a_steep_abutment)
     if curve and lines and bridge_profile_mode() == "curve" and len(crossings):
-        cl, cg = _unpinned(lines, ground_fn, pins)
-        got = deck_curve(cl, cg, _curve_crossings(crossings, n_road, levels), (), clear, lift)
+        got = deck_curve(lines, ground_fn, _curve_crossings(crossings, n_road, levels), (), clear, lift, pins=pins)
         if got is not None:
             g = _curve_grade(lines, got)
             if g <= DECK_STEEP_GRADE or _end_step(lines, got) <= DECK_STEEP_GRADE:
@@ -3381,9 +3380,9 @@ def _upper_hull(s, z):
     return h
 
 
-def _simple_path(lines):
+def _simple_path(lines, graph=None):
     """[(edge index, reversed)] in order along the chain if the parts form one open path, else None."""
-    nodes, edges, adj = _chain_graph(lines)
+    nodes, edges, adj = _chain_graph(lines) if graph is None else graph
     deg = np.zeros(len(nodes), int)
     for a, b, _ in edges:
         deg[a] += 1
@@ -3538,7 +3537,8 @@ def _path_curve(lines, order, ground_fn, crossings, spans, clear, lift, max_grad
     L = S[-1]
     if L < 1.0 or len(P) < 2:
         return None
-    n = max(int(math.ceil(L / DECK_CURVE_STEP)), 2)
+    # A rotation can put an integral length a few ulps above its metre station.
+    n = max(int(math.ceil(L / DECK_CURVE_STEP - 1e-9)), 2)
     s = np.linspace(0.0, L, n + 1)
     xy = np.c_[np.interp(s, S, P[:, 0]), np.interp(s, S, P[:, 1])]
 
@@ -3574,12 +3574,12 @@ def _path_curve(lines, order, ground_fn, crossings, spans, clear, lift, max_grad
                 continue
             # (upstream's full-headroom corridor, DECK_CLEAR_REACH_M either side, and the curve's 5 cm acceptance
             # taken up front: the corridor came out 4 cm short, test_bridge_clearance)
-            m = np.abs(s - sc) <= max(DECK_ROAD_HALF, DECK_CLEAR_REACH_M if not own else 0.0)
+            m = np.abs(s - sc) <= max(DECK_ROAD_HALF, DECK_CLEAR_REACH_M if not own else 0.0) + 1e-8
             req[m] = np.maximum(req[m], zc + cl + (0.06 if not own else 0.0))
     for k, a0, a1, zmin in spans:
         if k in info:
             x0, x1 = sorted((to_s(k, a0), to_s(k, a1)))
-            m = (s >= x0) & (s <= x1)
+            m = (s >= x0 - 1e-8) & (s <= x1 + 1e-8)
             req[m] = np.maximum(req[m], zmin)
     z = curve_profile(s, g, req, z0, zL, g0, gL, max_grade, lift, cap=junction)
     out = {}
@@ -3589,23 +3589,25 @@ def _path_curve(lines, order, ground_fn, crossings, spans, clear, lift, max_grad
     return out, xy, s, z
 
 
-def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, max_grade=None):
+def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, max_grade=None, pins=None):
     """Deck heights (one array per part) of a bridge chain by curve_profile. A chain of parts in one line is
     solved as one profile; a branched chain (ramps leaving a viaduct) as its longest abutment-to-abutment
     line first, then each remaining branch from the solved deck it leaves (its height and grade there) to
     its own abutment or the deck it rejoins. None when the chain has no abutment (a closed loop). crossings:
     (part, arc m, height under it[, its own clearance]) roads and water under it (held `clear`, or their own
-    clearance, over +-DECK_ROAD_HALF); spans: (part, arc from, arc to, min deck height). Pure given ground_fn."""
+    clearance, over +-DECK_ROAD_HALF); spans: (part, arc from, arc to, min deck height). pins: joints at ground
+    roads, split into independent abutments in the graph without moving the mapped geometry. Pure given ground_fn."""
     clear = DECK_ROAD_CLEAR if clear is None else clear
     lift = DECK_CLEAR if lift is None else lift
     if not lines:
         return None
     args = (ground_fn, crossings, spans, clear, lift, max_grade)
-    order = _simple_path(lines)
+    graph = _curve_graph(lines, pins)
+    order = _simple_path(lines, graph)
     if order is not None:
         got = _path_curve(lines, order, *args)
         return None if got is None else [got[0][k] for k in range(len(lines))]
-    nodes, edges, adj = _chain_graph(lines)
+    nodes, edges, adj = graph
     # parts not joined at all (a chain also holds the decks crossing it, solved together for the deck-over-deck
     # rule): each joined group on its own (2026-10-19: one crossing deck sent a whole interchange to the legacy
     # profile)
@@ -3627,10 +3629,11 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
             idx = {k: i for i, k in enumerate(ks)}
             sub = deck_curve([lines[k] for k in ks], ground_fn,
                              [(idx[cr[0]],) + tuple(cr[1:]) for cr in crossings if cr[0] in idx],
-                             [(idx[k], a0, a1, z) for k, a0, a1, z in spans if k in idx], clear, lift, max_grade)
+                             [(idx[k], a0, a1, z) for k, a0, a1, z in spans if k in idx], clear, lift, max_grade, pins)
             if sub is None:
                 sub = deck_profile_once([lines[k] for k in ks], ground_fn,
-                                        [(idx[cr[0]],) + tuple(cr[1:]) for cr in crossings if cr[0] in idx], clear, None, lift)
+                                        [(idx[cr[0]],) + tuple(cr[1:]) for cr in crossings if cr[0] in idx], clear, None,
+                                        lift, pins=pins)
                 if bridge_profile_mode() == "curve" and sub is not None and any(
                         s is None for s in sub):
                     return None
@@ -3816,51 +3819,70 @@ LIFT_END_GRADE = 0.01   # by an abutment the floor rises from the abutment no fa
 
 
 def _lift_smooth(s, z, floor, iters=8):
-    """z (heights at arcs s) raised to at least floor between its ends, the lift run out at LIFT_GRADE and rounded
-    over LIFT_EASE_M, not stepped: clamping each point to the ground left a 0.6-0.9 m step in the last few metres
-    where a deck lands on a bank the DEM shows steep (the Steel and St. Johns bridges' ends: 17-31 % between two deck
-    points). The ends keep their heights; whatever the rounding leaves short is clamped last. Pure."""
+    """z (heights at arcs s) raised to at least floor between its ends. The required *addition* to z runs out at
+    LIFT_GRADE and is rounded over LIFT_EASE_M. Spreading absolute floor heights instead turned a legitimate 5 %
+    uphill deck into a 3 % envelope held metres above its low abutment, then reset that end in one step.
+    The ends keep their heights; whatever the rounding leaves short is clamped last. Pure."""
     s = np.asarray(s, np.float64)
     z = np.array(z, np.float64)
     floor = np.asarray(floor, np.float64)
     if len(z) < 3 or s[-1] <= 0:
         z[1:-1] = np.maximum(z[1:-1], floor[1:-1])
         return z
-    g = np.arange(0.0, s[-1] + 1e-9, 1.0)
-    if g[-1] < s[-1]:
-        g = np.r_[g, s[-1]]
+    # Uniform and end-inclusive: tiny rotation/length roundoff must not add an almost-zero final interval.
+    g = np.linspace(0.0, s[-1], max(1, int(math.ceil(s[-1] - 1e-9))) + 1)
     zg = np.interp(g, s, z)
-    # within LIFT_EASE_M / 2 of an abutment the floor is no higher than the abutment allows at LIFT_END_GRADE (a bank
-    # the DEM shows over the road's end: the deck lands on the road, not on the bank's top)
-    d0, d1 = g, g[-1] - g
-    cap = np.minimum(np.where(d0 < LIFT_EASE_M / 2, z[0] + LIFT_END_GRADE * d0, np.inf),
-                     np.where(d1 < LIFT_EASE_M / 2, z[-1] + LIFT_END_GRADE * d1, np.inf))
-    fl = np.interp(g, s, floor)
-    fg = np.maximum(np.minimum(fl, cap), fl - DECK_CLEAR)     # (never under the ground itself)
+    # Within LIFT_EASE_M / 2 of an abutment, limit the lift to the landing grade,
+    # but never put the deck under the ground itself.
+    def bounded_floor(at, levels):
+        d0, d1 = at, s[-1] - at
+        cap = np.minimum(np.where(d0 < LIFT_EASE_M / 2 - 1e-8, z[0] + LIFT_END_GRADE * d0, np.inf),
+                         np.where(d1 < LIFT_EASE_M / 2 - 1e-8, z[-1] + LIFT_END_GRADE * d1, np.inf))
+        return np.maximum(np.minimum(levels, cap), levels - DECK_CLEAR)
+    fg = bounded_floor(g, np.interp(g, s, floor))
+    fs = bounded_floor(s, floor)
     r = int(LIFT_EASE_M // 2)
     inner = np.ones(len(g), bool)
     inner[0] = inner[-1] = False
-    if not (fg[inner] > zg[inner] + 0.01).any():
+    if not (fg[inner] > zg[inner] + 0.01).any() and not (fs[1:-1] > z[1:-1] + 0.01).any():
         out = np.array(z)
-        out[1:-1] = np.maximum(out[1:-1], np.interp(s, g, fg)[1:-1])
+        out[1:-1] = np.maximum(out[1:-1], np.maximum(fs, np.interp(s, g, fg))[1:-1])
         return out
-    want = fg.copy()
-    zz = zg
+    # The metre grid can straddle a terrain peak sampled at a mapped vertex.
+    # Feed each original requirement into both bracketing grid points before
+    # smoothing, rather than losing it in the interpolation to and from g.
+    source = s[1:-1]
+    hi = np.minimum(np.searchsorted(g, source), len(g) - 1)
+    left = np.maximum(hi - 1, 0)
+    at_left = np.abs(g[left] - source) < 1e-9
+    at_right = np.abs(g[hi] - source) < 1e-9
+    lo = np.where(at_right, hi, left)
+    hi = np.where(at_left, left, hi)
+    want = np.maximum(fg - zg, 0.0)
+    source_want = np.maximum(fs[1:-1] - z[1:-1], 0.0)
+    np.maximum.at(want, lo, source_want)
+    np.maximum.at(want, hi, source_want)
+    addition = np.zeros_like(zg)
     for _ in range(iters):
         cone = _tents(g, np.where(inner, want, -np.inf), LIFT_GRADE)
-        tgt = np.maximum(zg, cone)
+        tgt = np.maximum(cone, 0.0)
         ext = np.r_[np.full(r, tgt[0]), tgt, np.full(r, tgt[-1])]
-        zz = np.convolve(ext, np.ones(2 * r + 1) / (2 * r + 1), mode="valid")
-        zz = np.maximum(zz, zg)
-        zz[0], zz[-1] = zg[0], zg[-1]
+        addition = np.convolve(ext, np.ones(2 * r + 1) / (2 * r + 1), mode="valid")
+        addition[0], addition[-1] = 0.0, 0.0
+        zz = zg + addition
         short = np.where(inner, fg - zz, 0.0)
-        if short.max() <= 0.01:
+        source_short = np.maximum(fs[1:-1] - z[1:-1] - np.interp(source, g, addition), 0.0)
+        if max(short.max(), source_short.max()) <= 0.01:
             break
-        want = want + np.maximum(short, 0.0)
-    zg = zz
-    out = np.interp(s, g, zg)
+        increase = np.maximum(short, 0.0)
+        np.maximum.at(increase, lo, source_short)
+        np.maximum.at(increase, hi, source_short)
+        want += increase
+    # Interpolate only the lift: resampling the solved profile itself could
+    # lower an existing peak and lose its clearance at a mapped station.
+    out = z + np.interp(s, g, addition)
     out[0], out[-1] = z[0], z[-1]
-    ff = np.interp(s, g, fg)
+    ff = np.maximum(fs, np.interp(s, g, fg))
     out[1:-1] = np.maximum(out[1:-1], ff[1:-1])
     return out
 
@@ -3939,56 +3961,39 @@ PIN_M = 1.0             # m: a ground road's end this near a joint of decks make
 PIN_ROAD_M = 20.0       # ... a road at least this long (a shorter piece between decks is a gap in the map's bridge tags)
 
 
-PIN_SPLIT_M = 0.7      # m between the ends of the parts at a pinned joint as _unpinned parts them (> _EndJoin's 0.5)
+def _curve_graph(lines, pins):
+    """The deck graph with each incident end at a ground pin its own abutment.
 
-
-def _unpinned(lines, ground_fn, pins):
-    """(lines, ground_fn) for deck_curve with each joint at pins (_pin: a ground road goes on from it) made an end of
-    each part there: their ends moved PIN_SPLIT_M apart (one more step east each), ground_fn giving the ground at the
-    joint itself there. deck_curve's graph joined them, the path went through the joint, and the ground road went on
-    from it 8.5 m under the deck (Charles Street over I-83 in Baltimore: the AI crashed at the step, 2026-10-29). The
-    heights stay one per point of each line. Pure."""
-    if pins is None or not len(pins) or len(lines) < 2:
-        return lines, ground_fn
-    nodes, edges, _adj = _chain_graph(lines)
-    deg = np.zeros(len(nodes), int)
-    for a, b, _ in edges:
-        deg[a] += 1
-        deg[b] += 1
+    Splitting by displacing endpoints east could join a different nearby deck instead, leaving the real
+    junction elevated. It also changed arc lengths and approach tangents according to part order and bearing.
+    Only connectivity changes here; clearance arcs and physical/rendered polylines keep their mapped positions.
+    """
+    nodes, edges, adj = _chain_graph(lines)
+    if pins is None or not len(pins):
+        return nodes, edges, adj
+    deg = np.array([len(neighbours) for neighbours in adj])
     pinned = _pin(nodes, deg, pins)
-    split = [i for i in range(len(nodes)) if deg[i] > 1 and pinned[i] == 1]
-    if not split:
-        return lines, ground_fn
-    out = [np.array(ln, np.float64, copy=True) for ln in lines]
-    moved = []                      # (moved point, the joint)
-    for nd in split:
-        q = np.asarray(nodes[nd], np.float64)
-        n = 0
-        for k, (a, b, _s) in enumerate(edges):
-            for at, end in ((0, a), (-1, b)):
-                if end != nd:
+    split = (deg > 1) & (pinned == 1)
+    if not split.any():
+        return nodes, edges, adj
+    seen = set()
+    out = []
+    for a, b, s in edges:
+        ends = []
+        for nd in (a, b):
+            if split[nd]:
+                if nd in seen:
+                    nodes.append(nodes[nd])
+                    ends.append(len(nodes) - 1)
                     continue
-                n += 1
-                if n == 1:
-                    continue        # (the first part keeps the joint's point)
-                out[k][at, 0] = q[0] + PIN_SPLIT_M * (n - 1)
-                out[k][at, 1] = q[1]
-                moved.append((out[k][at, :2].copy(), q))
-    if not moved:
-        return lines, ground_fn
-    M = np.array([m for m, _ in moved], np.float64)
-    Q = np.array([q for _, q in moved], np.float64)
-
-    def ground_at(xy):
-        xy = np.asarray(xy, np.float64).reshape(-1, 2)
-        hit = np.full(len(xy), -1)
-        for j, m in enumerate(M):
-            hit[(np.abs(xy[:, 0] - m[0]) < 1e-6) & (np.abs(xy[:, 1] - m[1]) < 1e-6)] = j
-        if not (hit >= 0).any():
-            return ground_fn(xy)
-        q = np.where((hit >= 0)[:, None], Q[np.maximum(hit, 0)], xy)
-        return ground_fn(q)
-    return out, ground_at
+                seen.add(nd)
+            ends.append(nd)
+        out.append((ends[0], ends[1], s))
+    adj = [[] for _ in nodes]
+    for a, b, s in out:
+        adj[a].append((b, s[-1]))
+        adj[b].append((a, s[-1]))
+    return nodes, out, adj
 
 
 def _pin(nodes, deg, pins):
