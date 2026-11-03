@@ -49,6 +49,25 @@ python tools/run_lua_tests.py test_framing test_core_robustness test_core_stubbe
 python tools/quality_gate.py --par 2
 ```
 
+## Optional airport refresh must fit the startup budget
+
+PR review reproduced a startup regression: the companion waits for airport data
+before listening, while the launcher allows 120 seconds for readiness. The
+provider's two 120-second attempts plus backoff could take over 240 seconds before
+the existing stale-cache or no-airports fallback ran. A fake-clock stalled
+transport reproduced 244.222 seconds in both cases, without network access.
+
+Startup now isolates that optional refresh in a spawned process with a 20-second
+budget. The parent terminates and reaps an overdue child before reading the
+transactionally committed snapshot or creating world workers. No network-bound
+thread remains to change airport data later. A fresh/offline/recent-failure cache
+path avoids spawning; a timed-out stale refresh preserves the normal six-hour
+retry backoff. If the child cannot be reaped, startup reports an explicit error
+rather than exposing a snapshot that could still change.
+
+`test_airports_startup` covers the deadline, process cleanup and cache fallback;
+`test_airports` retains parsing, refresh and snapshot validation coverage.
+
 ## Native crash investigation remains open
 
 A local fork 1.8.2 candidate connected successfully on Windows with `--no-beammp`,

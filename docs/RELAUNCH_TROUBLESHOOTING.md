@@ -24,6 +24,19 @@ On Windows, BeamMP's detailed output is usually `Launcher.log` beside its execut
 redirected `beammp-launcher.log` can be empty. Earth's companion log is
 `%LOCALAPPDATA%\beamng-earth\logs\server.log`.
 
+## Optional airport data during companion startup
+
+A missing or old airport snapshot normally refreshes before world workers start.
+The refresh now runs in a separate process with a 20-second budget. If the provider
+stalls, that process is stopped and reaped before startup reads the last committed
+snapshot. A cached copy remains usable; without one, the companion starts with
+runway grading unavailable for that session. A stale-cache failure is remembered
+for six hours, avoiding repeated slow retries on each relaunch. Fresh cached data
+and offline launches do not start the refresh process.
+
+This budget applies to the optional refresh, not all companion startup work.
+There is no late background switch of airport data while world workers run.
+
 ## The world server is already running
 
 Close the previous Earth window first. The companion normally listens on loopback
