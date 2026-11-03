@@ -24,6 +24,39 @@ def touch(path, mtime=None):
 
 
 @unittest.skipIf(os.name == "nt", "Linux: the launcher's Windows paths (LOCALAPPDATA, USERPROFILE) ignore HOME")
+class ContainerHome(unittest.TestCase):
+    """GitHub #709 (Bazzite, distrobox --home): the app ran with ~ = <real home>/distrobox/ubuntu and put the mod in a
+    user folder there, while Steam and the game, on the host, use the real home's: the game never had the mod."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.real = self.tmp.name
+        self.home = os.path.join(self.real, "distrobox", "ubuntu")
+        self.env = mock.patch.dict(os.environ, {"HOME": self.home})
+        self.env.start()
+        self.mine = os.path.join(self.home, ".local", "share", "BeamNG", "BeamNG.drive", "current")
+        os.makedirs(os.path.join(self.mine, "mods"))            # (made by the app's first run, no game in it)
+        self.game = os.path.join(self.real, ".local", "share", "BeamNG", "BeamNG.drive", "current")
+        touch(os.path.join(self.game, "beamng.log"))
+        touch(os.path.join(self.real, ".local", "share", "Steam", "steamapps", "common", "BeamNG.drive", "BinLinux",
+                           "BeamNG.drive.x64"))
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_the_real_homes_folder_the_game_ran_from(self):
+        self.assertEqual(install.homes(), [self.home, self.real])
+        self.assertEqual(install.candidate_user_dirs()[0], self.game)
+        with mock.patch.object(launcher, "steam_compat_tool", return_value=""):
+            self.assertEqual(launcher.linux_build(), ("native", self.game))
+
+    def test_a_plain_home_is_alone(self):
+        os.environ["HOME"] = self.real
+        self.assertEqual(install.homes(), [self.real])
+
+
+@unittest.skipIf(os.name == "nt", "Linux: the launcher's Windows paths (LOCALAPPDATA, USERPROFILE) ignore HOME")
 class FlatpakSteam(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -472,9 +472,12 @@ def game_alive():
 
 
 def steam_running():
-    home = os.path.expanduser("~")
-    for pidfile in (os.path.join(home, ".steam", "steam.pid"),
-                    os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam.pid")):
+    import install
+    pidfiles = []
+    for home in install.homes():        # (a container's own home inside the real one: GitHub #709)
+        pidfiles += [os.path.join(home, ".steam", "steam.pid"),
+                     os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam.pid")]
+    for pidfile in pidfiles:
         try:
             with open(pidfile) as f:
                 pid = int(f.read().strip())
