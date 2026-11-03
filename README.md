@@ -8,8 +8,15 @@ Version and release status: [VERSION](VERSION). Recorded runtime baseline: BeamN
 and 0.40.3 on the Steam Deck. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for what is coming.
 
-**Modernization contribution (unreleased):** geographic download and cache fixes, safer road and multiplayer
-input handling, and opt-in [shared road-plan bundles](docs/SHARED_WORLD.md) build on the existing world generator.
+**Modernization contribution (unreleased):** bounded startup waits, companion cleanup on failed starts and game
+exit, geographic download/cache fixes, safer multiplayer input handling, and opt-in
+[shared road-plan bundles](docs/SHARED_WORLD.md) build on the existing world generator.
+
+- An installed BeamMP launcher gets 30 seconds to become ready, configurable with `--beammp-wait`; a failed
+  attempt is stopped and Earth continues in single-player. `--no-beammp` skips it for one launch. Initial
+  installation is separate. See [startup and relaunch troubleshooting](docs/RELAUNCH_TROUBLESHOOTING.md).
+- Shared-plan export now treats an unset bridge profile and the game's default `curve` as the same effective
+  setting. Legacy compute helpers reject pinned bundles because their protocol cannot negotiate bundle identity.
 
 - A [controlled cache-race benchmark](docs/research/2026-11-02-range-cache.md) reduced duplicate requests from
   two to one and median elapsed time from 134.6 to 71.3 ms.
@@ -22,6 +29,8 @@ The [foundation audit](docs/MODERNIZATION.md), [validation report](docs/MODERNIZ
 are experimental, off by default, and cover road grading rather than the complete world. Real BeamNG/BeamMP
 driving acceptance remains pending. [Archived fork validation](docs/RELEASE_1_8_1.md) records the contribution's
 review and build evidence; it is not an upstream release announcement.
+A locally built fork 1.8.2 candidate launched BeamNG and connected to its companion with `--no-beammp`
+on the user's Windows host. Successful BeamMP startup and full gameplay acceptance remain separate checks.
 
 **Community:** join the TGForever Discord, **[discord.gg/tgf](https://discord.gg/tgf)**, and head to the
 #beamng-earth channel to chat about the mod, get help, report bugs, help with its development, and get an IP to join a

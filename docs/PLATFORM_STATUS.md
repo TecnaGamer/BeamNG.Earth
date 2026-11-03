@@ -6,6 +6,7 @@ not a new feature or fresh engine validation in this contribution.
 
 | Target | Current evidence/status |
 |---|---|
+| Startup/relaunch reliability | Installed BeamMP startup has a configurable 30-second readiness limit and single-player fallback. Failed game startup and owned companion cleanup have regression coverage; current candidate live relaunch acceptance pending. |
 | Faster world loading | Range-cache duplicate request fixed; controlled race benchmark improved. Whole-world cold/warm loading speed not yet measured. |
 | Predictive world streaming | Existing speed/heading prediction, terrain preparation and GPS-route data prefetch. No new end-to-end driving claim. |
 | Smoother roads/geographic accuracy | Existing grading, junction/bridge/tunnel handling; new malformed-survey isolation and finite-coordinate fixes tested. Vehicle-response validation pending. |
@@ -13,7 +14,7 @@ not a new feature or fresh engine validation in this contribution.
 | Intelligent placement and asset LOD | Existing procedural buildings/LOD; new downloaded-model matching/placement and LOD pipeline outstanding. |
 | Steam friend grouping | Not implemented. Supported identity/invitation bridge still needed; no Steam authentication spoofing. |
 | Multiplayer synchronization/recovery | Coordinate, dateline, stale-origin and malformed-vector fixes pass offline tests. Real two-client/network-fault acceptance pending. |
-| Shared world data | Experimental immutable road-plan sharing integrated into grading, real loopback transfer and two-anchor tests. Complete shared terrain/world manifest outstanding. |
+| Shared world data | Experimental immutable road-plan sharing integrated into grading, loopback transfer and two-anchor tests. Effective bridge-profile defaults now match across producer/export processes; legacy helpers reject pins they cannot negotiate. Complete shared terrain/world manifest outstanding. |
 | Proximity/server/group voice | Not implemented. Mumble Link research does not constitute embedded audio transport or private channels. |
 | Embedded VOIP/PTT/device/mute controls | Not implemented; actual audio client, authorized routing and runtime latency tests needed. |
 | Spotify/internet radio/AI DJ/location radio | Not implemented in this initiative. Policy/authentication, licensed sources and playback work remain. |
@@ -21,7 +22,7 @@ not a new feature or fresh engine validation in this contribution.
 | Multithreaded generation | Existing workers and native batching; retained. |
 | Network utilization/caching | Range integrity and lock-race fixes; immutable prepared road plans deduplicate content and support offline warm reuse. |
 | Reduced stuttering | Not measured in BeamNG during this initiative. |
-| Memory/resource management | Revisit descriptor lifecycle fixed; bundle reads, handlers, artifacts and storage budgets bounded. Long-session memory profiling pending. |
+| Memory/resource management | Revisit descriptor lifecycle fixed; bundle reads, handlers, artifacts and storage budgets bounded. Launcher cleanup targets owned companion processes and workers. Long-session memory profiling pending. |
 | Windows/Linux dedicated hosting | Packaging tools produce an Earth plugin ZIP and version-pinned official BeamMP Windows/Linux executable bundles with notices/source and empty-key configuration. AuthKey and actual hosting acceptance still required. |
 | Headless mode | Existing BeamMP dedicated server and Earth companion; new loopback road-plan cache commands in player executable. |
 | TUI/GUI administration | Full shared server-management interfaces not implemented. |
@@ -36,6 +37,12 @@ not a new feature or fresh engine validation in this contribution.
 | Error handling | Corrupt ranges, malformed surveys/packets, stale peer origins and incompatible/incomplete bundle failures covered. |
 | Reliable releases | Required quality gate, published-release update checks, versioned player/host assets, digest validation and explicit validation boundaries. |
 
-See [shared road-plan operations](SHARED_WORLD.md), [foundation audit](MODERNIZATION.md), and
+A locally built fork 1.8.2 candidate launched BeamNG and connected to its companion with `--no-beammp`
+on the user's Windows host. Isolated real-process tests cover parent exit, owned-tree cleanup and port reuse.
+Full live close/relaunch cycles, pinned-world driving and successful BeamMP startup remain separate checks.
+Upstream `VERSION` remains `1.7.3-beta`; no upstream release is announced by these fork references.
+
+See [startup and relaunch troubleshooting](RELAUNCH_TROUBLESHOOTING.md),
+[shared road-plan operations](SHARED_WORLD.md), [foundation audit](MODERNIZATION.md), and
 [foundation validation](MODERNIZATION_VALIDATION.md). Next acceptance priority is real client driving
 with pinned road plans and a larger measured region, then complete world-dependency manifests.
