@@ -26,7 +26,7 @@ DEM sample or collision asset was captured. The local DEM and other world assets
 ## Operator workflow
 
 Commands work from source as `python tools/world_cache.py ...`. The player executable also exposes
-the same tool as `BeamNG.Earth-1.7.4-beta.exe --world-cache ...` (Linux: AppImage `--world-cache`).
+the same tool as `BeamNG.Earth-1.8.0.exe --world-cache ...` (Linux: AppImage `--world-cache`).
 
 First drive or pre-build a bounded region with this version, grading enabled, and no bundle pinned.
 Find the resulting `plans/<run>/r10/w0s0` (or the actual width/water signature) in the companion cache.
@@ -61,7 +61,7 @@ desired session, then launch the Earth player app:
 
 ```powershell
 $env:BNGE_WORLD_BUNDLE = 'C:\absolute\client-worlds\EXPECTED_SHA256'
-try { & '.\BeamNG.Earth-1.7.4-beta.exe' } finally { Remove-Item Env:BNGE_WORLD_BUNDLE }
+try { & '.\BeamNG.Earth-1.8.0.exe' } finally { Remove-Item Env:BNGE_WORLD_BUNDLE }
 ```
 
 Keep grading enabled and retain the producer's compatible width/water settings and source metadata.

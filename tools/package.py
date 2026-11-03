@@ -20,7 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FILES = ["install.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md",
          "VERSION", "docs/QUICKSTART.md", "docs/MODERNIZATION.md", "docs/MODERNIZATION_VALIDATION.md",
-         "docs/SKETCHFAB_ASSETS.md", "docs/SHARED_WORLD.md", "docs/PLATFORM_STATUS.md", "docs/RELEASE_1_7_4.md",
+         "docs/SKETCHFAB_ASSETS.md", "docs/SHARED_WORLD.md", "docs/PLATFORM_STATUS.md", "docs/RELEASE_1_7_4.md", "docs/RELEASE_1_8_0.md",
          "docs/research/2026-11-02-range-cache.md", "beammp/MODERNIZATION.md"]
 TREES = ["mod/beamng_earth", "server"]
 TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py", "tools/world_cache.py"]  # no stored credentials

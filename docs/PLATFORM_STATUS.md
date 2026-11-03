@@ -1,4 +1,4 @@
-# Modernization target status — 1.7.4-beta
+# Modernization target status — 1.8.0
 
 This tracks the requested platform scope. A release is not a claim that every target is complete.
 "Existing" means inherited upstream code, not a new feature or fresh engine validation in this initiative.

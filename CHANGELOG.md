@@ -2,6 +2,12 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.8.0 (2026-11-02, Beam-Earth fork)
+
+- Bump the published version from 1.7.4-beta to 1.8.0 and rebuild the player and hosting packages.
+- Carry forward the reliability fixes and opt-in shared road-plan workflow from 1.7.4-beta, including the request-counter ordering fix.
+- Update current download examples and release documentation. This version bump introduces no gameplay changes; existing experimental features and runtime-validation gaps remain documented.
+
 ## 1.7.4 beta (2026-11-02, Beam-Earth fork)
 
 This fork release builds on TecnaGamer's BeamNG.Earth 1.7.3-beta. Upstream credit and the MIT license are retained.

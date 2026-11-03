@@ -4,16 +4,17 @@ A 1:1 scale, streamed Earth for [BeamNG.drive](https://www.beamng.com/): drive a
 planet on real elevation data and satellite imagery, with distance-based level of detail and the
 real curvature of the Earth.
 
-Status: beta (see VERSION). Tested on BeamNG.drive 0.40.4 on Linux (Vulkan) and 0.40.3 on the Steam Deck. See
+Release: 1.8.0 (see VERSION). Upstream runtime baseline: BeamNG.drive 0.40.4 on Linux (Vulkan) and 0.40.3 on the Steam Deck. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for what is coming.
 
 **Modernization branch:** current changes, architecture, measured results and remaining work are tracked in
 [the foundation milestone](docs/MODERNIZATION.md) and [validation report](docs/MODERNIZATION_VALIDATION.md).
-These changes still require real BeamNG/BeamMP and cross-platform release validation.
-Version 1.7.4-beta adds opt-in [shared road-plan bundles](docs/SHARED_WORLD.md); this is a bounded
+These changes still require real BeamNG/BeamMP gameplay validation. Cross-platform build results are recorded
+with each release. Version 1.8.0 carries forward the opt-in [shared road-plan bundles](docs/SHARED_WORLD.md); this is a bounded
 prepared-data workflow, not full shared-world generation or the completed platform overhaul.
 The [platform status table](docs/PLATFORM_STATUS.md) distinguishes existing features, verified changes,
 experimental functionality and work still outstanding.
+See the [1.8.0 release record](docs/RELEASE_1_8_0.md) for the version bump and validation boundaries.
 
 **Community:** join the TGForever Discord, **[discord.gg/tgf](https://discord.gg/tgf)**, and head to the
 #beamng-earth channel to chat about the mod, get help, report bugs, help with its development, and get an IP to join a
@@ -244,11 +245,11 @@ double-click `run_server.bat` (Windows) or run `python3 install.py` (Linux). The
 the source: unzip it over the old folder and run the installer again).
 
 **Development builds (pre-releases):** every change pushed to the `dev` branch is built automatically and published
-as a GitHub **pre-release** named after the beta it follows, with a build number (for example
+as a GitHub **pre-release** named after the release it follows, with a build number (for example
 `1.7.2-beta.dev.37`). They have the newest fixes and features, but they are **built from the development branch
-and not thoroughly tested**: expect bugs, and things may change or break from one build to the next. The beta
-releases are the tested ones. A development build says so in game, and its update check offers the next development
-build (or the next beta, if that is newer); a beta only ever offers betas.
+and not thoroughly tested**: expect bugs, and things may change or break from one build to the next.
+See each release's validation record for its tested scope. A development build says so in game, and its update
+check offers the next development build or newer main release. Main releases do not offer development builds.
 
 **Uninstalling:** delete the `beamng_earth` folder in `<BeamNG user folder>/current/mods/unpacked/` and the
 downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your home folder (`~/.cache/beamng-earth` on Linux,
