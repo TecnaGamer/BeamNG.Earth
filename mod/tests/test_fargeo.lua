@@ -101,6 +101,18 @@ do
 end
 T.check(#called('trees', 'onGeoRows', 'FLF' .. K) == 1, 'its lamps a trees geotile of its key')
 T.check(#called('trees', 'onGeoRows', 'FLS' .. K2) == 1, 'the skyline lamps per road geotile key')
+do      -- the lamps' rows as the trees get them: kept as flat arrays, the same rows (glow phase by the lamp's index)
+  local c = called('trees', 'onGeoRows', 'FLF' .. K)[1]
+  local rows = c and c[5]
+  local function ph(i) return ((i * 7919) % 997) / 997 * 0.19 end
+  T.check(type(rows) == 'table' and #rows == 2 and rows[1][2] == 1 and rows[1][3] == 2 and rows[1][4] == 30
+    and rows[2][2] == 5 and rows[2][4] == 31 and math.abs(rows[1][8] - ph(1)) < 1e-12 and math.abs(rows[2][8] - ph(2)) < 1e-12,
+    'lamp rows: positions and phases')
+end
+local fl = require('beamngEarth/roads').flatLamps({ a = { pivot = 3, rows = { { 1, 2, 3 }, 'x', { 4, 5, 6 } } }, b = { rows = {} } })
+T.check(fl.a.pivot == 3 and table.concat(fl.a.flat, ',') == '1,2,3,1,4,5,6,3' and fl.b == nil,
+  'flatLamps: a bad lamp left out, its index kept; a key without lamps none')
+T.check(require('beamngEarth/roads').flatLamps({}) == nil and require('beamngEarth/roads').flatLamps(nil) == nil, 'flatLamps: none')
 
 -- the other 15 far tiles of the square (no buildings): the skyline hides, its lamps go
 for j = 0, 3 do

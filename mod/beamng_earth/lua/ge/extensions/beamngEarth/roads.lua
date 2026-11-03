@@ -1184,6 +1184,29 @@ local function farPartPlace(f, p, a)
 end
 M._farPartPlace = farPartPlace
 
+-- Pure: a far geotile's lamps {key: {pivot, rows {{x, y, z}, ...}}} as {key: {pivot, flat {x, y, z, i, ...}}} (nil: none):
+-- one table a road geotile key instead of one a lamp (78k lamp tables in the 1,400 far tiles of LA, the most of the
+-- mod's live Lua tables, which every collection goes through, 2026-11-02); i: the lamp's index in its rows (its phase)
+function M.flatLamps(lamps)
+  local out = nil
+  for k17, g in pairs(type(lamps) == 'table' and lamps or {}) do
+    local flat, n = {}, 0
+    for i, pt in ipairs(type(g) == 'table' and type(g.rows) == 'table' and g.rows or {}) do
+      local x, y, z = type(pt) == 'table' and tonumber(pt[1]), type(pt) == 'table' and tonumber(pt[2]),
+        type(pt) == 'table' and tonumber(pt[3])
+      if x and y and z then
+        flat[n + 1], flat[n + 2], flat[n + 3], flat[n + 4] = x, y, z, i
+        n = n + 4
+      end
+    end
+    if n > 0 then
+      out = out or {}
+      out[k17] = { pivot = g.pivot, flat = flat }
+    end
+  end
+  return out
+end
+
 -- A far geotile's lamps on / off: each road geotile key's rows a trees.lua geotile 'FL<kind><key>' (lampglow).
 local function farGeoLamps(f, on)
   on = on and f.lamps ~= nil and anchorObj ~= nil
@@ -1194,11 +1217,10 @@ local function farGeoLamps(f, on)
   for k17, g in pairs(f.lamps or {}) do
     local tk = 'FL' .. f.kind .. tostring(k17)
     if on then
-      local rows = {}
-      for i, pt in ipairs(type(g) == 'table' and type(g.rows) == 'table' and g.rows or {}) do
-        if type(pt) == 'table' and tonumber(pt[1]) and tonumber(pt[2]) and tonumber(pt[3]) then
-          rows[#rows + 1] = { 0, pt[1], pt[2], pt[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
-        end
+      local rows, flat = {}, g.flat
+      for j = 1, #flat, 4 do
+        local i = flat[j + 3]
+        rows[#rows + 1] = { 0, flat[j], flat[j + 1], flat[j + 2], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
       end
       local fr = geotile.frameOf(k17)
       if #rows > 0 and fr then
@@ -1258,7 +1280,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   local frame = geotile.frameOf({ frame = msg.frame or data.frame, key = msg.key })
   if not frame then release(); lastError = 'far geotile without a frame: ' .. tostring(msg.key); return false end
   local f = { geo = true, kind = k, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
-    lamps = type(data.lamps) == 'table' and next(data.lamps) ~= nil and data.lamps or nil }
+    lamps = M.flatLamps(data.lamps) }
   if k == 'S' then
     local z, x, y = geotile.parse(msg.key)
     f.sky = { z, x, y }
