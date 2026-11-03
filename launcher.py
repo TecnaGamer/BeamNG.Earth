@@ -1130,10 +1130,9 @@ def main():
                     help="Linux: the game is the Windows build under Proton")
     ap.add_argument("--native", dest="build", action="store_const", const="native",
                     help="Linux: the game is the native Linux build")
-    # default: BeamNG's launch options dialog (renderer, safe mode...) shows, as when started from Steam (the user,
-    # 2026-10-16); --gfx skips it
-    ap.add_argument("--gfx", default="", choices=["dx11", "dx12", "vk", ""],
-                    help="the Windows build's renderer, skipping its launch options dialog (default: the dialog)")
+    # default on Windows: DirectX 12 (-gfx d3d12), skipping BeamNG's launch options dialog
+    ap.add_argument("--gfx", default="dx12" if IS_WIN else "", choices=["dx11", "dx12", "vk", ""],
+                    help="the Windows build's renderer, skipping its launch options dialog (default: dx12 on Windows)")
     ap.add_argument("--gpu", default="auto", choices=["auto", "discrete", "off"], metavar="MODE",
                     help="Linux: which GPU the game renders on when the machine has two (hybrid graphics): auto "
                          "(default) puts it on the discrete one when the default would be the weaker (the "

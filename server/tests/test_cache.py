@@ -862,6 +862,16 @@ class LinkedCacheTest(unittest.TestCase):
     """A scratch cache of links into a real one must never delete the real one's files (2026-10-29: ~7 GB evicted
     through the links of a benchmark's scratch cache)."""
 
+    def setUp(self):
+        with tempfile.TemporaryDirectory() as td:
+            src, dst = os.path.join(td, "src"), os.path.join(td, "dst")
+            with open(src, "w") as f:
+                f.write("a")
+            try:
+                os.symlink(src, dst)
+            except OSError as e:
+                self.skipTest(f"Symlinks not permitted: {e}")
+
     def test_a_cache_whose_folders_are_links_is_left_alone(self):
         with tempfile.TemporaryDirectory() as real, tempfile.TemporaryDirectory() as scratch:
             d = os.path.join(real, "dem", "z")

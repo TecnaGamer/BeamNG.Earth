@@ -281,11 +281,56 @@ def ground(frame, la, lo, z):
     return z
 
 
+_runtime_state_mtime = None
+
+
+def _sync_runtime_state():
+    """Sync addon registry and effort controller state exported by the parent earthd process."""
+    global _runtime_state_mtime
+    cache_dir = getattr(_s, "cache_dir", None)
+    if not cache_dir:
+        return False
+    path = os.path.join(cache_dir, "runtime_addon_effort.json")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    mtime = (st.st_mtime_ns, st.st_size)
+    if mtime == _runtime_state_mtime:
+        return False
+    _runtime_state_mtime = mtime
+    try:
+        import json
+        import addons as addonsmod
+        import effort as effortmod
+        import revisit
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        c1 = addonsmod.get_registry().import_runtime_state(data.get("addons"))
+        c2 = effortmod.get_effort_controller().import_runtime_state(data.get("effort"))
+        if c1 or c2:
+            revisit.invalidate_runtime_cache()
+            if getattr(_s, "veg", None) is not None and hasattr(_s.veg, "_mem"):
+                with _s.veg._lock:
+                    _s.veg._mem.clear()
+            if getattr(_s, "md", None) is not None and hasattr(_s.md, "_mem"):
+                with _s.md._mem_lock:
+                    _s.md._mem.clear()
+                    _s.md._mem_bytes = 0
+            if "_geo_inputs" in globals() and isinstance(_geo_inputs, dict):
+                _geo_inputs.clear()
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     """earthd.Server.build_veg_geo in this process (the road tiles' processes): geotile (gx, gy)'s trees, bushes and
     rocks written to out_dir: (vfs path, n, frame (lat, lon), pivot) or None. In the server's process they were ~35
     CPU-s of a Manhattan session's 250 on its one interpreter, beside the far textures, the road plans and the map
     layers (the user, 2026-11-01: "trees, poles, sidewalks struggle to keep up")."""
+    _sync_runtime_state()
     import geotiles
     import vegetation as vegetationmod
     if _s.md is None:
@@ -326,6 +371,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
+    _sync_runtime_state()
     _take_pads(fuel_pads)
     started = time.time()       # (the server's "queue" stage: from its submit to here, wall clock across processes)
     t0 = time.perf_counter()
@@ -535,6 +581,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     server keeps them for the ground's painters). In the server's process its Python made up
     ~80 % of the main process's busy threads (in-game profile 2026-10-13): the block photos and far
     textures waited for the GIL. A tile built in this anchor's place before comes from the revisit cache."""
+    _sync_runtime_state()
     watch = _stack_watch(f"road tile {tx}_{ty}")
     try:
         return _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings,
@@ -1389,6 +1436,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
     parts' exact variants for that anchor (exact: {what: {pivot}}, or "auto": those of the content built here that its
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
+    _sync_runtime_state()
     watch = _stack_watch(f"road geotile {gx}_{gy}")
     try:
         out = {"content": None, "skin": None, "exact": {}, "stages": {}}
@@ -1528,6 +1576,7 @@ def tunnel_profiles(aid, frame, elev, g=None):
 def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_region=None):
     """earthd.Server.build_far_bld_tile here (road-tile pool): buildings.far_tile (from the revisit cache when built in
     this anchor's place before)."""
+    _sync_runtime_state()
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
@@ -1545,6 +1594,7 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
 def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None):
     """earthd.Server.build_sky_tile here (the far buildings' pool): buildings.skyline_tile (from the revisit cache when
     built in this anchor's place before)."""
+    _sync_runtime_state()
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
@@ -1713,6 +1763,7 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     frame (gzoom its DEM zoom, lamp_region its rules) or from the revisit cache (no anchor in the key). Written as
     <prefix>_<key>.json (+ its shapes); returns (vfs path of the JSON, count, frame (lat, lon), pivot, {what: shape
     file name}) or None when its cells are not at hand yet."""
+    _sync_runtime_state()
     import json
     import geotiles
     import revisit

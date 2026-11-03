@@ -22,7 +22,8 @@ import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
-REPO = "TecnaGamer/BeamNG.Earth"
+# Maintainer configuration: target GitHub repo for tickets ("Madderose/BeamNG.Earth" on fork, "TecnaGamer/BeamNG.Earth" upstream)
+REPO = os.environ.get("BEAMNG_EARTH_ISSUE_REPO", "Madderose/BeamNG.Earth")
 URL_MAX = 7000          # characters of the whole new-issue URL (GitHub refuses ~8 KB)
 TRUNCATED = "\n\n_(Truncated: paste the rest from issue.md in the report folder.)_"
 

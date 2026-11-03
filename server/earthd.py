@@ -141,8 +141,95 @@ import cpupin  # noqa: E402
 import netfetch  # noqa: E402
 import protocol  # noqa: E402
 import weather as weathermod  # noqa: E402
+import addons as addonsmod  # noqa: E402
+import effort as effortmod  # noqa: E402
 
 PROTOCOL = 4
+VERSION = updatesmod.local_version() or "1.7.0-beta"
+HTTP_ROUTES = ("GET /api/addons", "POST /api/addons/sync", "GET /api/effort", "POST /api/effort")
+
+
+def handle_api_request(method: str, path: str, body=None, server=None) -> tuple[int, dict]:
+    """Handle HTTP API routes for Native Addons (Layer A) and Effort Controller (Layer B):
+      - GET  /api/addons
+      - POST /api/addons/sync
+      - GET  /api/effort
+      - POST /api/effort
+    """
+    m = str(method or "GET").strip().upper()
+    clean_path = str(path or "").split("?", 1)[0].rstrip("/") or "/"
+    data = {}
+    if body is not None:
+        if isinstance(body, (bytes, bytearray)):
+            raw_s = body.decode("utf-8", errors="replace").strip()
+            data = json.loads(raw_s) if raw_s else {}
+        elif isinstance(body, str):
+            raw_s = body.strip()
+            data = json.loads(raw_s) if raw_s else {}
+        elif isinstance(body, dict):
+            data = dict(body)
+
+    if m == "GET" and clean_path == "/api/addons":
+        return 200, addonsmod.get_registry().get_status()
+
+    if m == "POST" and clean_path == "/api/addons/sync":
+        reg = addonsmod.get_registry()
+        prev_fp = reg.cache_fingerprint()
+        if "addons" in data:
+            resp = reg.sync_addons(
+                data.get("addons") or [],
+                user_toggles=data.get("user_toggles"),
+                policy=data.get("policy") or data.get("approval_policy"),
+            )
+        else:
+            if "policy" in data or "approval_policy" in data:
+                reg.set_approval_policy(str(data.get("policy") or data.get("approval_policy")))
+            if "addon_id" in data and "source_id" in data and "enabled" in data:
+                reg.set_source_enabled(str(data["addon_id"]), str(data["source_id"]), bool(data["enabled"]))
+            elif "source_id" in data and "enabled" in data:
+                reg.set_source_enabled(str(data["source_id"]), bool(data["enabled"]))
+            elif "addon_id" in data and "enabled" in data:
+                reg.set_addon_enabled(str(data["addon_id"]), bool(data["enabled"]))
+            resp = reg.get_status()
+            resp["cache_invalidated"] = prev_fp != reg.cache_fingerprint()
+            resp["previous_fingerprint"] = prev_fp
+
+        if resp.get("cache_invalidated"):
+            revisitmod.invalidate_runtime_cache()
+            if server is not None and hasattr(server, "invalidate_addon_effort_caches"):
+                server.invalidate_addon_effort_caches()
+        return 200, resp
+
+    if m == "GET" and clean_path == "/api/effort":
+        return 200, effortmod.get_effort_controller().get_status()
+
+    if m == "POST" and clean_path == "/api/effort":
+        ctrl = effortmod.get_effort_controller()
+        prev_tag = ctrl.cache_tag()
+        try:
+            if "profile" in data and data["profile"] is not None:
+                ctrl.set_profile(str(data["profile"]), initial_auto_tier=data.get("initial_auto_tier"))
+            telem = data.get("telemetry") if isinstance(data.get("telemetry"), dict) else data
+            if any(k in telem for k in ("fps_p50", "fps_p95", "frame_ms_p95", "target_fps")):
+                ctrl.report_telemetry(
+                    fps_p50=telem.get("fps_p50"),
+                    fps_p95=telem.get("fps_p95"),
+                    frame_ms_p95=telem.get("frame_ms_p95"),
+                    target_fps=telem.get("target_fps"),
+                )
+        except ValueError as exc:
+            return 400, {"error": str(exc)}
+
+        new_tag = ctrl.cache_tag()
+        out = ctrl.get_status()
+        out["cache_invalidated"] = prev_tag != new_tag
+        if out["cache_invalidated"]:
+            revisitmod.invalidate_runtime_cache()
+            if server is not None and hasattr(server, "invalidate_addon_effort_caches"):
+                server.invalidate_addon_effort_caches()
+        return 200, out
+
+    return 404, {"error": f"Unknown API route: {m} {clean_path}"}
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
 SERVER_LIST_URL = "https://earth.tgforever.net/servers"
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
@@ -877,6 +964,7 @@ class Server:
         self.cache_dir = cache_dir
         self.picking = None          # the settings page's file window open (apppaths.pick): for which path
         revisitmod.CACHE_DIR = cache_dir
+        self.sync_worker_runtime_state()
         self.refetched = 0              # far textures whose missing photo tiles were fetched here (make_tile)
         # self.share_lock, self.group_helper = threading.Lock(), None    # (share_start: shared world building, commented out)
         try:                            # (BeamMP sharing v2: a session's mark left by an earlier run; share_hub sets it)
@@ -1662,6 +1750,47 @@ class Server:
         return signstream.build_tile(self.mapdata, anchor.frame, aid, tx, ty, elev, self.out_dir, self.vfs_dir,
                                      urban, self.road_widths, self.left_hand(anchor), self.mph(anchor),
                                      self.country(anchor))
+
+    def sync_worker_runtime_state(self):
+        """Export current addon and effort runtime state to cache_dir so blockworker subprocesses stay synchronized."""
+        cache_dir = getattr(self, "cache_dir", None)
+        if not cache_dir:
+            return
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            path = os.path.join(cache_dir, "runtime_addon_effort.json")
+            tmp = f"{path}.{os.getpid()}.tmp"
+            data = {
+                "addons": addonsmod.get_registry().export_runtime_state(),
+                "effort": effortmod.get_effort_controller().export_runtime_state(),
+                "ts": time.time_ns(),
+            }
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, path)
+        except Exception as exc:
+            log.debug("sync_worker_runtime_state failed: %s", exc)
+
+    def invalidate_addon_effort_caches(self):
+        """Invalidate in-memory vegetation and tile caches when active addons or effort budget change."""
+        revisitmod.invalidate_runtime_cache()
+        self.sync_worker_runtime_state()
+        if getattr(self, "veg", None) is not None and hasattr(self.veg, "_mem"):
+            with self.veg._lock:
+                self.veg._mem.clear()
+        if getattr(self, "mapdata", None) is not None and hasattr(self.mapdata, "_mem"):
+            with self.mapdata._mem_lock:
+                self.mapdata._mem.clear()
+                self.mapdata._mem_bytes = 0
+        if hasattr(self, "tiles") and isinstance(getattr(self, "tiles", None), dict):
+            self.tiles.clear()
+        memo = self.__dict__.get("_far_geo_done")
+        if isinstance(memo, dict):
+            memo.clear()
+
+    def handle_api_request(self, method: str, path: str, body=None) -> tuple[int, dict]:
+        """Dispatch /api/addons and /api/effort HTTP requests bound to this Server instance."""
+        return handle_api_request(method, path, body=body, server=self)
 
     def build_sky_tile(self, aid, ux, uy):
         """buildings.skyline_tile: a skyline (render-only) tile of anchor aid, or None (its cells not at hand: asked
@@ -4680,8 +4809,10 @@ class Connection:
                 except Exception:
                     log.exception("client %s: message %r failed", self.peer, msg.get("type"))
                 await self.writer.drain()
-        except (protocol.ProtocolError, ConnectionError) as e:
+        except protocol.ProtocolError as e:
             log.warning("client %s: %s", self.peer, e)
+        except ConnectionError as e:
+            log.info("client %s: %s", self.peer, e)
         finally:
             self.route_dl_version += 1          # (a running route_download stops: no one to show its bar to)
             self.s.connections.discard(self)
@@ -4695,6 +4826,7 @@ class Connection:
             self.credits.close()
             for t in list(self.tasks):
                 t.cancel()
+            await asyncio.gather(self.streamer, *self.tasks, return_exceptions=True)
             self.writer.close()
             log.info("client disconnected %s", self.peer)
 
@@ -4960,10 +5092,14 @@ class Connection:
                 if isinstance(line, str):
                     log.info("game: %s", line[:PERF_LOG_CHARS].replace("\n", " "))
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
-            self.roads.close()
-            self.roads = road_tracker(self)
-            self.signs.close()
-            self.signs = signstream.Tracker()
+            if msg.get("all"):
+                self.s.invalidate_addon_effort_caches()
+                self.reset_world_trackers()
+            else:
+                self.roads.close()
+                self.roads = road_tracker(self)
+                self.signs.close()
+                self.signs = signstream.Tracker()
         elif kind == "highway_signs":           # the settings page's switch: no sign tiles built while it is off
             self.signs_on = bool(msg.get("on", True))
         elif kind == "graphics":                # the settings page's graphics knobs (set_graphics)
@@ -4972,8 +5108,41 @@ class Connection:
             if self.s.set_gas_stations(msg.get("on")):
                 self.roads.close()
                 self.roads = road_tracker(self)
+        elif kind in ("addons_sync", "addons_get"):
+            _code, payload = self.s.handle_api_request(
+                "POST" if kind == "addons_sync" else "GET",
+                "/api/addons/sync" if kind == "addons_sync" else "/api/addons",
+                msg,
+            )
+            if payload.get("cache_invalidated"):
+                self.reset_world_trackers()
+            self.send({"type": "addons_status", **payload})
+        elif kind in ("effort_set", "effort_get", "effort"):
+            _code, payload = self.s.handle_api_request(
+                "POST" if kind in ("effort_set", "effort") else "GET",
+                "/api/effort",
+                msg,
+            )
+            if payload.get("cache_invalidated"):
+                self.reset_world_trackers()
+            self.send({"type": "effort_status", **payload})
         else:
             log.debug("ignoring message type %r", kind)
+
+    def reset_world_trackers(self):
+        """Reset vegetation, road, sign, and far-building trackers so nearby world tiles re-stream on the next pose."""
+        if getattr(self, "veg", None) is not None:
+            old = self.veg
+            old.close()
+            self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, geo=old.geo)
+        if getattr(self, "roads", None) is not None:
+            self.roads.close()
+            self.roads = road_tracker(self)
+        if getattr(self, "signs", None) is not None:
+            self.signs.close()
+            self.signs = signstream.Tracker()
+        if hasattr(self, "make_far_trackers"):
+            self.make_far_trackers(getattr(self, "far_geo", False))
 
     def set_graphics(self, msg):
         """The settings page's graphics (the user, 2026-10-28: "give player much more control in the graphics settings
@@ -5206,7 +5375,7 @@ class Connection:
         self.s.hm_sent.append(key)
         # groundZ is None when (0, 0) lies outside the block (a resync around a distant player)
         gz = info["groundZ"]
-        if place is not None and (not provisional or gz is None):
+        if place is not None:
             # (a provisional block's groundZ is at the place already: ground_z_at carves the sea floor, which waits on
             # the water cells: 30 s of a fresh place's teleport, 2026-10-25)
             gz = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.ground_z_at, anchor, *place)
@@ -6379,127 +6548,131 @@ class Connection:
         """Build the needed tiles by priority, send them, emit swap groups as they complete;
         one task per connection."""
         waker = None
-        while True:
-            # Clear before reading the state, so an update from here on wakes us again.
-            self.wake.clear()
-            anchor = self.s.anchors.get(self.active)
-            # While a physics block builds in this process, one far tile at a time: they share the interpreter
-            # (GIL), and three far workers made a block build 3-10x slower (landcover 1.4 s vs 0.1 s), too slow
-            # to follow a car at 58 m/s (2026-10-12). The far tile finishing next refills the workers.
-            workers = HM_BUSY_TILE_WORKERS if self.s.hm_here else self.s.tile_workers
-            # plus the helpers' slots (compute sharing): their tiles cost this process only the files (26 ms a
-            # tile); kept to the local workers, a Steam Deck sent 2 at a time to 12 idle helper workers (2026-10-22)
-            workers += self.s.remote_slots()
-            while anchor is not None and not self.teleport_pending and len(self.inflight) < workers:
-                t = self._next_tile()
-                if t is None:
-                    break
-                self.inflight[self.ck(t.key)] = (self.s.tile(anchor, t), t)
-            if anchor is not None and self.s.imagery is not None and not self.teleport_pending:
-                # a tile at most every PREFETCH_AGAIN_S (a prefetch skips sources short of request tokens): the
-                # loop wakes on every tile done and every message from the game, and asking again for the same 40
-                # tiles each time kept the event loop busy (~22 s of a teleport on a Steam Deck, 2026-10-20)
-                now = time.monotonic()
-                if len(self.prefetched) > PREFETCHED_MAX:
-                    self.prefetched.clear()
-                for t in self.queue[self.qi:self.qi + IMAGERY_PREFETCH]:
-                    ck = self.ck(t.key)
-                    if ck not in self.s.tiles and now - self.prefetched.get(ck, -1e9) >= PREFETCH_AGAIN_S:
-                        self.prefetched[ck] = now
-                        self.s.prefetch_imagery(anchor, t)
-            if anchor is not None:
-                self.emit_groups()
-                self.flush_old()
-            if (not self.inflight and self.dirty and anchor is not None
-                    and len(self.groups) == len(self._blocked())):
-                self.dirty = False
-                n = sum(1 for k in self.desired if self.ck(k) in self.shown)
-                self.send({"type": "far_done", "anchorId": anchor.id, "count": n})
-                self.far_done_at = time.monotonic()
-                # (full priority: the roads too, on_pose; a catch-up boost is ended by catch_up only: ended here, it
-                # stayed off for the rest of a 150 mph drive, its flag still on, 2026-11-02)
-                if not self.s.boost_full and not self.catchup:
-                    self.s.load_boost(False, "far field done")
-                self.status(f"Far field ready ({n} tiles)")
-                bs = sorted(self.s.build_stats)
-                log.info("anchor %d far field done: %d tiles (%d sent, %d swaps in %.2f s; build median %.1f ms)",
-                         anchor.id, n, self.batch[1], self.batch[2], time.perf_counter() - self.batch[0],
-                         1000 * bs[len(bs) // 2] if bs else 0.0)
-                log.info("tile build ms (geometry+write / texture) and KB (shape / texture) by level: %s",
-                         self.s.level_summary())
-                if getattr(self.s.far_pool, "stats", None) is not None and self.batch[1] >= 50:   # (a full one)
-                    g = getattr(self.s.far_pool, "group", None)
-                    log.info("compute sharing: %s; group %s", self.s.far_pool.stats,
-                             g["ids"] if g else "none")
-                if self.s.imagery is not None:
-                    log.info("imagery: %s", self.s.imagery.summary())
-                    if self.s.imagery_worker or self.s.base_worker:
-                        log.info("imagery in the worker processes: %d far textures (%d after a fetch here), "
-                                 "%d base photos", self.s.imagery_worker, self.s.refetched, self.s.base_worker)
-                if self.s.retex_stats["started"]:
-                    log.info("live retexture: %s, %d waiting", self.s.retex_stats, len(self.s.retex_todo))
-                if not any(ck[0] != anchor.id and ck[0] != GLOBAL_AID for ck in self.shown):
-                    self.s.schedule_prune(anchor.id)
-            await self.writer.drain()
-            if waker is None:
-                waker = asyncio.ensure_future(self.wake.wait())
-            futs = [f for f, _ in self.inflight.values()]
-            done, _ = await asyncio.wait(futs + [waker], return_when=asyncio.FIRST_COMPLETED)
-            if waker in done:
-                waker = None
-            for ck in [ck for ck, (f, _) in self.inflight.items() if f.done()]:
-                fut, t = self.inflight.pop(ck)
-                if fut.cancelled():
-                    continue
-                if fut.exception() is not None:
-                    log.error("far tile %s of anchor %d failed: %r", t.key, ck[0], fut.exception(),
-                              exc_info=fut.exception() if t.key not in self.failed else None)   # (its first)
-                    self.failed.add(t.key)
-                    continue
-                if ck != self.ck(t.key) or t.key not in self.desired or ck in self.shown or t.key in self.sent:
-                    continue            # superseded meanwhile; the file stays cached
-                # the server's latest record: a live retexture may have finished since this build
-                info = self.s.tiles.get(ck, fut.result())
-                if info.material is not None and not self.s.matslots.owns(ck, info.material):
-                    info = self.s.reslot(ck, info)      # its material name went to another tile meanwhile
-                    if not self.s.matslots.owns(ck, info.material):
-                        # not renamed: sent with that name it would draw the other tile's texture; built again
-                        # (its files are written anew; the cached entry and its claim on the name go)
-                        self.s.tiles.pop(ck, None)
-                        self.s.matslots.release(ck)
-                        self.queue.append(t)
+        try:
+            while True:
+                # Clear before reading the state, so an update from here on wakes us again.
+                self.wake.clear()
+                anchor = self.s.anchors.get(self.active)
+                # While a physics block builds in this process, one far tile at a time: they share the interpreter
+                # (GIL), and three far workers made a block build 3-10x slower (landcover 1.4 s vs 0.1 s), too slow
+                # to follow a car at 58 m/s (2026-10-12). The far tile finishing next refills the workers.
+                workers = HM_BUSY_TILE_WORKERS if self.s.hm_here else self.s.tile_workers
+                # plus the helpers' slots (compute sharing): their tiles cost this process only the files (26 ms a
+                # tile); kept to the local workers, a Steam Deck sent 2 at a time to 12 idle helper workers (2026-10-22)
+                workers += self.s.remote_slots()
+                while anchor is not None and not self.teleport_pending and len(self.inflight) < workers:
+                    t = self._next_tile()
+                    if t is None:
+                        break
+                    self.inflight[self.ck(t.key)] = (self.s.tile(anchor, t), t)
+                if anchor is not None and self.s.imagery is not None and not self.teleport_pending:
+                    # a tile at most every PREFETCH_AGAIN_S (a prefetch skips sources short of request tokens): the
+                    # loop wakes on every tile done and every message from the game, and asking again for the same 40
+                    # tiles each time kept the event loop busy (~22 s of a teleport on a Steam Deck, 2026-10-20)
+                    now = time.monotonic()
+                    if len(self.prefetched) > PREFETCHED_MAX:
+                        self.prefetched.clear()
+                    for t in self.queue[self.qi:self.qi + IMAGERY_PREFETCH]:
+                        ck = self.ck(t.key)
+                        if ck not in self.s.tiles and now - self.prefetched.get(ck, -1e9) >= PREFETCH_AGAIN_S:
+                            self.prefetched[ck] = now
+                            self.s.prefetch_imagery(anchor, t)
+                if anchor is not None:
+                    self.emit_groups()
+                    self.flush_old()
+                if (not self.inflight and self.dirty and anchor is not None
+                        and len(self.groups) == len(self._blocked())):
+                    self.dirty = False
+                    n = sum(1 for k in self.desired if self.ck(k) in self.shown)
+                    self.send({"type": "far_done", "anchorId": anchor.id, "count": n})
+                    self.far_done_at = time.monotonic()
+                    # (full priority: the roads too, on_pose; a catch-up boost is ended by catch_up only: ended here, it
+                    # stayed off for the rest of a 150 mph drive, its flag still on, 2026-11-02)
+                    if not self.s.boost_full and not self.catchup:
+                        self.s.load_boost(False, "far field done")
+                    self.status(f"Far field ready ({n} tiles)")
+                    bs = sorted(self.s.build_stats)
+                    log.info("anchor %d far field done: %d tiles (%d sent, %d swaps in %.2f s; build median %.1f ms)",
+                             anchor.id, n, self.batch[1], self.batch[2], time.perf_counter() - self.batch[0],
+                             1000 * bs[len(bs) // 2] if bs else 0.0)
+                    log.info("tile build ms (geometry+write / texture) and KB (shape / texture) by level: %s",
+                             self.s.level_summary())
+                    if getattr(self.s.far_pool, "stats", None) is not None and self.batch[1] >= 50:   # (a full one)
+                        g = getattr(self.s.far_pool, "group", None)
+                        log.info("compute sharing: %s; group %s", self.s.far_pool.stats,
+                                 g["ids"] if g else "none")
+                    if self.s.imagery is not None:
+                        log.info("imagery: %s", self.s.imagery.summary())
+                        if self.s.imagery_worker or self.s.base_worker:
+                            log.info("imagery in the worker processes: %d far textures (%d after a fetch here), "
+                                     "%d base photos", self.s.imagery_worker, self.s.refetched, self.s.base_worker)
+                    if self.s.retex_stats["started"]:
+                        log.info("live retexture: %s, %d waiting", self.s.retex_stats, len(self.s.retex_todo))
+                    if not any(ck[0] != anchor.id and ck[0] != GLOBAL_AID for ck in self.shown):
+                        self.s.schedule_prune(anchor.id)
+                await self.writer.drain()
+                if waker is None:
+                    waker = asyncio.ensure_future(self.wake.wait())
+                futs = [f for f, _ in self.inflight.values()]
+                done, _ = await asyncio.wait(futs + [waker], return_when=asyncio.FIRST_COMPLETED)
+                if waker in done:
+                    waker = None
+                for ck in [ck for ck, (f, _) in self.inflight.items() if f.done()]:
+                    fut, t = self.inflight.pop(ck)
+                    if fut.cancelled():
                         continue
-                self.sent[t.key] = t
-                if info.stale:          # a region turned ready since: re-rendered live, then far_retex
-                    self.s.retex_request(ck)
-                self.batch[1] += 1
-                m = {"type": "far_tile", "anchorId": self.active, "key": t.key, "level": t.level,
-                     "shape": f"{self.s.vfs_dir}/{info.shape or self.s.tile_name(*ck)}",
-                     "pos": [round(v, 3) for v in info.pos], "err": round(info.err, 3),
-                     "skirt": round(info.skirt, 2), "state": "group"}
-                if info.sink is not None:
-                    m["sink"] = round(info.sink, 2)
-                if isinstance(t, farfield.GTile):   # geotiles phase 3b: placed by the mod from its own frame
-                    m["frame"] = [info.frame[0], info.frame[1]]
-                    m["pos"] = [0, 0, round(info.pos[2], 3)]
-                    m["poly"] = [round(v, 2) for v in t.quad]
-                elif isinstance(t, farfield.Piece):
-                    m["poly"] = [round(v, 2) for v in t.poly]
-                    self.ppolys[t.key] = t.poly
-                if info.shape is not None and info.shape.startswith("slot_"):  # pooled (matslots.py)
-                    m["slotSerial"] = serial = next(self.s.slot_serial)
-                    self.slot_holds[matslotsmod.MatSlots.number(info.material)] = serial
-                if info.material is not None:   # protocol 4: the tile's own imagery material
-                    m["material"] = info.material
-                    m["texture"] = f"{self.s.vfs_dir}/{info.texture}"
-                    m["detail"] = True          # the shape has UV1 (world-locked detail map)
-                    if self.s.layout.format >= 4:   # M1: texture px, the mod's governor unit kind
-                        m["tex"] = self.s.tex_size(t.level)
-                self.send(m)
-                if self.batch[1] % 50 == 0:
-                    left = sum(1 for g in self.groups for k in g[0] if k not in self.sent)
-                    # this change's tiles (sent / sent + still to send), not the whole far field
-                    self.status(f"Far field loading: {self.batch[1]}/{left + self.batch[1]} tiles")
+                    if fut.exception() is not None:
+                        log.error("far tile %s of anchor %d failed: %r", t.key, ck[0], fut.exception(),
+                                  exc_info=fut.exception() if t.key not in self.failed else None)   # (its first)
+                        self.failed.add(t.key)
+                        continue
+                    if ck != self.ck(t.key) or t.key not in self.desired or ck in self.shown or t.key in self.sent:
+                        continue            # superseded meanwhile; the file stays cached
+                    # the server's latest record: a live retexture may have finished since this build
+                    info = self.s.tiles.get(ck, fut.result())
+                    if info.material is not None and not self.s.matslots.owns(ck, info.material):
+                        info = self.s.reslot(ck, info)      # its material name went to another tile meanwhile
+                        if not self.s.matslots.owns(ck, info.material):
+                            # not renamed: sent with that name it would draw the other tile's texture; built again
+                            # (its files are written anew; the cached entry and its claim on the name go)
+                            self.s.tiles.pop(ck, None)
+                            self.s.matslots.release(ck)
+                            self.queue.append(t)
+                            continue
+                    self.sent[t.key] = t
+                    if info.stale:          # a region turned ready since: re-rendered live, then far_retex
+                        self.s.retex_request(ck)
+                    self.batch[1] += 1
+                    m = {"type": "far_tile", "anchorId": self.active, "key": t.key, "level": t.level,
+                         "shape": f"{self.s.vfs_dir}/{info.shape or self.s.tile_name(*ck)}",
+                         "pos": [round(v, 3) for v in info.pos], "err": round(info.err, 3),
+                         "skirt": round(info.skirt, 2), "state": "group"}
+                    if info.sink is not None:
+                        m["sink"] = round(info.sink, 2)
+                    if isinstance(t, farfield.GTile):   # geotiles phase 3b: placed by the mod from its own frame
+                        m["frame"] = [info.frame[0], info.frame[1]]
+                        m["pos"] = [0, 0, round(info.pos[2], 3)]
+                        m["poly"] = [round(v, 2) for v in t.quad]
+                    elif isinstance(t, farfield.Piece):
+                        m["poly"] = [round(v, 2) for v in t.poly]
+                        self.ppolys[t.key] = t.poly
+                    if info.shape is not None and info.shape.startswith("slot_"):  # pooled (matslots.py)
+                        m["slotSerial"] = serial = next(self.s.slot_serial)
+                        self.slot_holds[matslotsmod.MatSlots.number(info.material)] = serial
+                    if info.material is not None:   # protocol 4: the tile's own imagery material
+                        m["material"] = info.material
+                        m["texture"] = f"{self.s.vfs_dir}/{info.texture}"
+                        m["detail"] = True          # the shape has UV1 (world-locked detail map)
+                        if self.s.layout.format >= 4:   # M1: texture px, the mod's governor unit kind
+                            m["tex"] = self.s.tex_size(t.level)
+                    self.send(m)
+                    if self.batch[1] % 50 == 0:
+                        left = sum(1 for g in self.groups for k in g[0] if k not in self.sent)
+                        # this change's tiles (sent / sent + still to send), not the whole far field
+                        self.status(f"Far field loading: {self.batch[1]}/{left + self.batch[1]} tiles")
+        finally:
+            if waker is not None and not waker.done():
+                waker.cancel()
 
 
 async def main_async(args):

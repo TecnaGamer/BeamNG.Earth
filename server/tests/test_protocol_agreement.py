@@ -141,7 +141,7 @@ MOD_TO_SERVER = {
     # "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)
     # "peers": {"me": F(str), "members": F(list)},
     # roads (roads.py; additive): the mod removed its roads (switched off and on again): send them again
-    "roads_reset": {},
+    "roads_reset": {"all": F(bool, OPT)},
     # gas stations (gasstations.py; additive): on, sent after every hello
     "gas_stations": {"on": F(bool)},
     # highway signs (signstream.py; additive): the settings page's switch, sent after every hello and when changed
@@ -180,6 +180,9 @@ MOD_TO_SERVER = {
     "random_place": {"id": F(int)},
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
     "place_previews": {"places": F((list, dict))},
+    # Native Addon Registry (addons.lua <-> addons.py) & Layer B Effort Controller (effort.py)
+    "addons_sync": {"addons": F((list, dict), OPT), "user_toggles": F(dict, OPT)},
+    "effort_set": {"profile": F(str, OPT), "telemetry": F(dict, OPT, NULL)},
 }
 CAM = {"x", "y", "z", "fx", "fy", "fz", "fovDeg", "h"}     # h: the screen height px (screen-space LOD)
 TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squareSize": F(NUM),
@@ -218,6 +221,12 @@ SERVER_TO_MOD = {
                      "country": F(str, OPT)},   # the status bar's location
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},
+    "addons_status": {"schema_version": F(int, OPT), "approval_policy": F(str, OPT), "engine_version": F(str, OPT),
+                      "earthfast_abi": F(int, OPT), "cache_fingerprint": F(str, OPT), "addons": F(list, OPT),
+                      "active": F(list, OPT), "rejected": F(list, OPT), "warnings": F(list, OPT),
+                      "cache_invalidated": F(bool, OPT), "previous_fingerprint": F(str, OPT)},
+    "effort_status": {"profile": F(str, OPT), "effective_profile": F(str, OPT), "budget": F(dict, OPT),
+                      "governor": F(dict, OPT), "cache_tag": F(str, OPT), "cache_invalidated": F(bool, OPT)},
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "hello": {"protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
               "farFormat": F(str), "material": F(str),
@@ -360,7 +369,8 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
                        "terrain_ready_set",                          # only to a fast player's mod that says readySet
                        "server_list",                                # only when the BeamMP tab asks (online)
-                       "share_info", "share_out"}                    # only in a BeamMP session (test_mpshare)
+                       "share_info", "share_out",                    # only in a BeamMP session (test_mpshare)
+                       "addons_status", "effort_status"}             # addon & effort sync (test_addons / test_effort)
 # events the mod's net.lua makes up itself (not on the wire)
 MOD_INTERNAL = {"_connected": set(), "_disconnected": {"error"}}
 
@@ -651,8 +661,10 @@ class ConstantsTest(unittest.TestCase):
         """crossover.defaultErr after setCells (from hello.cells) and farfield.exactLevelFor agree
         with the server's layout for both cell counts: a quarter of the layout's vertex spacing,
         and the level on the physics lattice."""
-        lua = (f"package.path = '{modsim.MOD_DIR.parent}/?.lua;' .. package.path\n"
-               f"dofile('{modsim.MOD_ROOT.parent / 'tests' / 'stubs.lua'}')\n"
+        p_mod = Path(modsim.MOD_DIR.parent).as_posix()
+        p_stubs = (Path(modsim.MOD_ROOT.parent) / "tests" / "stubs.lua").as_posix()
+        lua = (f"package.path = '{p_mod}/?.lua;' .. package.path\n"
+               f"dofile('{p_stubs}')\n"
                "local X = require('beamngEarth/crossover')\n"
                "local F = require('beamngEarth/farfield')\n"
                "for _, c in ipairs({ 32, 64 }) do\n"

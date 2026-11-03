@@ -43,6 +43,7 @@ class RespawningPool:
         self.name, self._args, self._kwargs = name, args, kwargs
         self._lock = threading.Lock()
         self._pool = ProcessPoolExecutor(*args, **kwargs)
+        self._old = []
         self._last = -float("inf")
         self.respawns = 0
         self.inflight = 0           # jobs submitted and not done (Server.live_busy: the saved areas' downloads wait)
@@ -128,6 +129,7 @@ class RespawningPool:
                 self._last = now
                 self.respawns += 1
                 log.warning("%s worker process died: its pool made again (%d so far)", self.name, self.respawns)
+                self._old.append(broken)
                 try:
                     broken.shutdown(wait=False, cancel_futures=True)
                 except Exception:       # (it is broken already)
