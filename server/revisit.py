@@ -26,6 +26,10 @@ import threading
 import time
 import zipfile
 
+import addons
+import effort
+
+SCHEMA = 2
 ON = os.environ.get("BNE_REVISIT", "on") != "off"
 SKIP = {k for k in os.environ.get("BNE_REVISIT_SKIP", "").split(",") if k}     # kinds left out (tests: "roads,far")
 MAX_MB = float(os.environ.get("BNE_REVISIT_MB", "2000"))      # the cache's size, cut back at start (earthd)
@@ -145,10 +149,22 @@ def code_key():
         return _code[0]
 
 
+def runtime_cache_tag() -> str:
+    """Return deterministic cache tag combining active Ground Truth addons fingerprint and EffortBudget tag."""
+    return f"{addons.get_registry().cache_fingerprint()}:{effort.effort_cache_tag()}"
+
+
+def invalidate_runtime_cache() -> str:
+    """Refresh switch memoization when active addons or effort profile change and return the new runtime tag."""
+    with _lock:
+        _switches.clear()
+    return runtime_cache_tag()
+
+
 def key(kind, *parts):
-    """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings) and
-    the code."""
-    return hashlib.sha1(repr((kind, code_key(), parts)).encode()).hexdigest()
+    """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings),
+    the active addon + effort runtime cache tag, and the code."""
+    return hashlib.sha1(repr((kind, code_key(), runtime_cache_tag(), parts)).encode()).hexdigest()
 
 
 # Items kept across code changes (the user, 2026-11-02: road plans and cell facts survive updates): keyed by their

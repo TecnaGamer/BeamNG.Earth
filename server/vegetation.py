@@ -26,7 +26,10 @@ from dataclasses import dataclass
 import numpy as np
 
 import fast
+from PIL import Image, ImageDraw
 
+import addons
+import effort
 import mapcells
 import pacer
 import staging
@@ -36,15 +39,15 @@ log = logging.getLogger("earthd.vegetation")
 VERSION = 20          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown, thin_tops; 20: none on or
-                      # beside a bridge deck, _mask_decks)
+                      # beside a bridge deck, _mask_decks; Provence lavender rows & flower spikes)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
-          "oak_west", "tropical")
+          "oak_west", "tropical", "cypress", "vineyard", "vineyard_block", "lavender", "olive")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
- G_OAK_WEST, G_TROPICAL) = range(len(GROUPS))
+ G_OAK_WEST, G_TROPICAL, G_CYPRESS, G_VINEYARD, G_VINEYARD_BLOCK, G_LAVENDER, G_OLIVE) = range(len(GROUPS))
 ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
@@ -136,19 +139,52 @@ def _dry_west(lat, lon):
     return (lon < -102.0) & (lat > 25.0) & (lat < 46.0) & ~((lon < -121.0) & (lat > 37.0))
 
 
-def regional(group, height, lat, lon, lcls, u):
+def regional(group, height, lat, lon, lcls, u, narrow=None):
     """The groups of a region (the stock maps' species: West Coast USA's pines, oaks and palms, Utah's junipers
-    and desert bushes, Johnson Valley's rocks, Jungle Rock Island's palms and tropical trees) from the generic
+    and desert bushes, Johnson Valley's rocks, Jungle Rock Island's palms and tropical trees, plus Provence &
+    Mediterranean cypresses, olive trees and holm oaks) from the generic
     ones, by a coarse climate from the position and the land cover class at the item (until a species map): the Rust
     kernel earthfast.regional_groups (its rules there). u: a hashed [0, 1) per item. Pure."""
     fast.require(43, "regional_groups")
     f64 = np.float64
     n = np.size(group)
     bc = lambda a, t: np.ascontiguousarray(np.broadcast_to(np.asarray(a, t), (n,)))     # noqa: E731
-    return np.asarray(fast._ef.regional_groups(
-        bc(group, np.uint8), bc(height, f64), bc(lat, f64), bc(lon, f64), bc(lcls, np.uint8), bc(u, f64),
+    g_h, g_lat, g_lon = bc(height, f64), bc(lat, f64), bc(lon, f64)
+    g_cls, g_u = bc(lcls, np.uint8), bc(u, f64)
+    out = np.asarray(fast._ef.regional_groups(
+        bc(group, np.uint8), g_h, g_lat, g_lon, g_cls, g_u,
         [G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
          G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]]), np.uint8)
+    med = (g_lat >= 35.0) & (g_lat <= 45.2) & (g_lon >= -9.5) & (g_lon <= 28.0)
+    if med.any() and addons.get_registry().is_source_enabled("osm_provence_landuse"):
+        out = out.copy()
+        prov_bbox = (42.0, 2.5, 45.0, 7.8)
+        try:
+            reg = addons.get_registry()
+            for a in reg.active_addons():
+                for b in a.biomes:
+                    if b.get("id") == "provence_mediterranean" and isinstance(b.get("bbox"), (list, tuple)) and len(b["bbox"]) == 4:
+                        bb = b["bbox"]
+                        prov_bbox = (min(42.0, float(bb[0])), min(2.5, float(bb[1])), max(45.0, float(bb[2])), max(7.8, float(bb[3])))
+                        break
+        except Exception:
+            pass
+        provence = (g_lat >= prov_bbox[0]) & (g_lat <= prov_bbox[2]) & (g_lon >= prov_bbox[1]) & (g_lon <= prov_bbox[3])
+        is_tree = (out == G_DECIDUOUS) | (out == G_CONIFER)
+        is_nar = bc(narrow, bool) if narrow is not None else np.zeros(n, bool)
+        cyp = med & is_tree & (
+            (is_nar & (g_h >= 4.2))
+            | (provence & np.isin(g_cls, (WC["crop"], WC["built"])) & (g_u < 0.65))
+            | (provence & np.isin(g_cls, (WC["grass"], WC["shrub"])) & (g_u < 0.22))
+            | (~provence & np.isin(g_cls, (WC["crop"], WC["built"])) & (g_u < 0.30))
+        )
+        out = np.where(cyp, G_CYPRESS, out)
+        oli = med & (out == G_DECIDUOUS) & (
+            (np.isin(g_cls, (WC["crop"], WC["shrub"], WC["grass"])) & (g_u < 0.72))
+            | ((g_cls == WC["tree"]) & (g_u < 0.45))
+        )
+        out = np.where(oli, G_OLIVE, out)
+    return out
 
 
 def _north_america(lat, lon):
@@ -184,9 +220,16 @@ class Vegetation:
         self._warm, self._warm_thread = [], None
         self._warm_cv = threading.Condition()
 
+    def _cache_tag(self):
+        try:
+            return f"{addons.get_registry().cache_fingerprint()}_{effort.effort_cache_tag()}"
+        except Exception:
+            return "default"
+
     def cell(self, key):
         """The Items of map-data cell key ((z, x, y) or CellKey)."""
-        k = (int(key[1]), int(key[2]))
+        tag = self._cache_tag()
+        k = (int(key[1]), int(key[2]), tag)
         with self._lock:
             if k in self._mem:
                 self._mem.move_to_end(k)
@@ -196,7 +239,7 @@ class Vegetation:
             with self._lock:
                 if k in self._mem:
                     return self._mem[k]
-            items = self._load(*k)
+            items = self._load(int(key[1]), int(key[2]))
             with self._lock:
                 self._mem[k] = items
                 while len(self._mem) > MEM_CELLS:
@@ -236,16 +279,20 @@ class Vegetation:
                 log.exception("vegetation: building cell %s", (x, y))
 
     def ready(self, key):
-        k = (int(key[1]), int(key[2]))
+        tag = self._cache_tag()
+        k = (int(key[1]), int(key[2]), tag)
         with self._lock:
             if k in self._mem:
                 return True
-        p = self._path(*k)
+        p = self._path(int(key[1]), int(key[2]))
         return bool(p and os.path.exists(p))
 
     def _path(self, x, y):
+        if not self.dir:
+            return None
         rel = getattr(self.md, "release", "x")
-        return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
+        tag = self._cache_tag()
+        return os.path.join(self.dir, f"{rel}_{tag}", str(x), f"{y}.npz")
 
     def _load(self, x, y):
         p = self._path(x, y)
@@ -374,33 +421,394 @@ class Vegetation:
             keep[barren[~near]] = False
             jj, ii, th, tlon, tlat, lcls, is_tree = jj[keep], ii[keep], th[keep], tlon[keep], tlat[keep], lcls[keep], \
                 is_tree[keep]
+        # squares, pedestrian areas, parking lots, plus Overture & IGN French agricultural parcels and hedgerows
+        paved = np.zeros(h.shape, bool)
+        res_mask = np.zeros(h.shape, bool)
+        lu = None
+        try:
+            cl = self.md.cell((mapcells.ZOOM, x, y), layers=("land_use", "infrastructure"))
+            lu, inf = cl.layers.get("land_use"), cl.layers.get("infrastructure")
+            if lu is not None and getattr(lu, "attrs", None) is not None:
+                if lu.attrs.get("subtype") is not None:
+                    _mask_polys(lu, paved, chm, 0.0, select=lu.attrs["subtype"].astype(str) == "pedestrian")
+                if lu.attrs.get("class") is not None:
+                    _mask_polys(lu, res_mask, chm, 0.0, select=lu.attrs["class"].astype(str) == "residential")
+            if inf is not None and len(inf) and inf.attrs.get("class") is not None:
+                _mask_polys(inf, paved, chm, 0.0, select=inf.attrs["class"].astype(str) == "parking")
+        except Exception as e:                  # not at hand: scattered as before
+            log.debug("vegetation: land use of %s: %s", (x, y), e)
+        bld_parcel = np.zeros(h.shape, bool)
+        bld_feat = cd.layers.get("buildings")
+        if bld_feat is not None:
+            _mask_polys(bld_feat, bld_parcel, chm, 5.0)
+        fr = None
+        ign = getattr(self.md, "ign_fr", None)
+        if ign is not None and addons.get_registry().is_source_enabled("ign_rpg_parcels"):
+            try:
+                fr = ign.cell(key, bounds=cd.bounds)
+            except Exception as e:
+                log.debug("vegetation: ign_fr of %s: %s", (x, y), e)
+        hedge_mask = np.zeros(h.shape, bool)
+        hedges = self._build_hedges(fr, cd, chm, hs, blocked, hedge_mask)
+        crop_mask = np.zeros(h.shape, bool)
+        parcel_blocked = blocked | road | paved | res_mask | bld_parcel
+        parcels = self._build_parcels(fr, lu, cd, chm, parcel_blocked, crop_mask)
+        if (hedge_mask | crop_mask).any():
+            keep_m = ~(hedge_mask[jj, ii] | crop_mask[jj, ii])
+            jj, ii, th, tlon, tlat, lcls, is_tree = (
+                jj[keep_m], ii[keep_m], th[keep_m], tlon[keep_m], tlat[keep_m], lcls[keep_m], is_tree[keep_m]
+            )
+        # Crown narrowness (columnar cypress detection: peak vs 4-pixel ring ~4.8m away)
+        if len(jj):
+            h_surr = 0.25 * (
+                hs[np.clip(jj - 3, 0, n_r - 1), ii]
+                + hs[np.clip(jj + 3, 0, n_r - 1), ii]
+                + hs[jj, np.clip(ii - 3, 0, n_c - 1)]
+                + hs[jj, np.clip(ii + 3, 0, n_c - 1)]
+            )
+            narrow = (th >= 4.2) & (h_surr < 0.65 * th)
+        else:
+            narrow = np.zeros(0, bool)
         # hashed choices keyed on the global pixel (z17 Web-Mercator index: the CHM grid)
         gx = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
         conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
-        group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7))
+        group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7), narrow=narrow)
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
-        # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays)
-        paved = np.zeros(h.shape, bool)
-        try:
-            cl = self.md.cell((mapcells.ZOOM, x, y), layers=("land_use", "infrastructure"))
-            lu, inf = cl.layers.get("land_use"), cl.layers.get("infrastructure")
-            if lu is not None and len(lu) and lu.attrs.get("subtype") is not None:
-                _mask_polys(lu, paved, chm, 0.0, select=lu.attrs["subtype"].astype(str) == "pedestrian")
-            if inf is not None and len(inf) and inf.attrs.get("class") is not None:
-                _mask_polys(inf, paved, chm, 0.0, select=inf.attrs["class"].astype(str) == "parking")
-        except Exception as e:                  # not at hand: scattered as before
-            log.debug("vegetation: land use of %s: %s", (x, y), e)
-        scatter = self._scatter(cd, lc, blocked | paved, chm, hs)
-        edge = self._edge(cd, lc, blocked, road, chm, hs)
-        return _concat(_concat(tree, scatter), edge)
+        scatter = self._scatter(cd, lc, blocked | paved | hedge_mask | crop_mask, chm, hs)
+        edge = self._edge(cd, lc, blocked | hedge_mask | crop_mask, road, chm, hs)
+        out = _concat(_concat(tree, scatter), edge)
+        if len(hedges):
+            out = _concat(out, hedges)
+        if len(parcels):
+            out = _concat(out, parcels)
+        return out
+
+    def _build_hedges(self, fr, cd, chm, hs, blocked, hedge_mask):
+        """Linear hedgerows from IGN BDTOPO_V3:haie: Mistral cypress windbreaks & trimmed cypress hedges in
+        Provence / Southern France, deciduous/shrub hedgerows further north."""
+        if fr is None or not fr.hedges:
+            return _empty()
+        lon0, lat0, lon1, lat1 = cd.bounds
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        lat_mid = 0.5 * (lat0 + lat1)
+        m_scale = 1.0 / max(math.cos(math.radians(lat_mid)), 0.05)
+        step_3857 = 2.4 * m_scale
+        n_r, n_c = hs.shape
+        provence = lat_mid <= 45.2
+
+        px_list, py_list, yaw_list, h_attr_list = [], [], [], []
+        for pts_lonlat, h_m, _w_m in fr.hedges:
+            hx, hy = _to3857(pts_lonlat[:, 0], pts_lonlat[:, 1])
+            dx, dy = np.diff(hx), np.diff(hy)
+            seg_len = np.hypot(dx, dy)
+            for k in range(len(seg_len)):
+                L = float(seg_len[k])
+                if L < 1.0:
+                    continue
+                ux, uy = float(dx[k]) / L, float(dy[k]) / L
+                seg_yaw = float(math.degrees(math.atan2(uy, ux)) % 360.0)
+                n_steps = max(1, int(math.floor(L / step_3857)))
+                ts = (np.arange(n_steps) + 0.5) * (L / n_steps)
+                px_list.append(hx[k] + ts * ux)
+                py_list.append(hy[k] + ts * uy)
+                yaw_list.append(np.full(n_steps, seg_yaw, np.float32))
+                h_attr_list.append(np.full(n_steps, h_m, np.float32))
+        if not px_list:
+            return _empty()
+        px = np.concatenate(px_list)
+        py = np.concatenate(py_list)
+        seg_yaw = np.concatenate(yaw_list)
+        h_attr = np.concatenate(h_attr_list)
+        c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        ok = (px >= ex0) & (px < ex1) & (py > ey0) & (py <= ey1) & (c_ >= 0) & (c_ < n_c) & (r_ >= 0) & (r_ < n_r)
+        if not ok.any():
+            return _empty()
+        px, py, seg_yaw, h_attr, r_, c_ = px[ok], py[ok], seg_yaw[ok], h_attr[ok], r_[ok], c_[ok]
+        free = ~blocked[r_, c_]
+        if not free.any():
+            return _empty()
+        px, py, seg_yaw, h_attr, r_, c_ = px[free], py[free], seg_yaw[free], h_attr[free], r_[free], c_[free]
+        # Deduplicate points landing on the same CHM pixel
+        lin_idx = r_ * n_c + c_
+        _, uniq = np.unique(lin_idx, return_index=True)
+        uniq.sort()
+        px, py, seg_yaw, h_attr, r_, c_ = px[uniq], py[uniq], seg_yaw[uniq], h_attr[uniq], r_[uniq], c_[uniq]
+        # Mark a 2-pixel exclusion band around hedgerow trees so generic CHM peaks don't double-place
+        hm = np.zeros(hs.shape, bool)
+        hm[r_, c_] = True
+        hedge_mask |= _dilate(hm, 2)
+
+        gx = np.floor((px + 20037508.342789244) / chm.dx).astype(np.int64)
+        gy = np.floor((20037508.342789244 - py) / chm.dy).astype(np.int64)
+        u_h = _hash01(gx, gy, 31)
+        u_yaw = _hash01(gx, gy, 32)
+        u_rank = _hash01(gx, gy, 33)
+        u_sc = _hash01(gx, gy, 34)
+        h_chm = hs[r_, c_]
+        h_raw = np.maximum(h_chm, h_attr)
+        # Default height when neither CHM nor attribute recorded a height (7.2m cypress windbreak in Provence)
+        h_base = np.where(h_raw >= 1.2, h_raw, 7.2 if provence else 4.5)
+        is_tall = h_base >= 3.0
+        height = np.where(is_tall, np.clip(h_base * (0.88 + 0.24 * u_h), 3.5, 14.0), 1.65).astype(np.float32)
+        yaw = np.where(is_tall, u_yaw * 360.0, seg_yaw).astype(np.float32)
+        kind = np.where(is_tall, KIND_TREE, KIND_BUSH).astype(np.uint8)
+        group = np.full(len(px), G_CYPRESS if provence else G_DECIDUOUS, np.uint8)
+        radius = np.where(is_tall, 0.35, 0.45).astype(np.float32)
+        lon, lat = _to4326(px, py)
+        return Items(lon, lat, height, radius, kind, group, u_rank.astype(np.float32), yaw,
+                     (0.9 + 0.2 * u_sc).astype(np.float32))
+
+    def _build_parcels(self, fr, lu, cd, chm, blocked, crop_mask):
+        """Row-aligned vineyards (grape_vine_group & grape_vine), lavender fields (bne_lavender_row), and
+        olive/truffle orchards (olive & holm_oak) from IGN RPG / BD TOPO and Overture land_use."""
+        if not addons.get_registry().is_source_enabled("osm_provence_landuse"):
+            return _empty()
+        lon0, lat0, lon1, lat1 = cd.bounds
+        lat_mid = 0.5 * (lat0 + lat1)
+        lon_mid = 0.5 * (lon0 + lon1)
+        med = (35.0 <= lat_mid <= 45.2) and (-9.5 <= lon_mid <= 28.0)
+
+        # Gather (crop_type, FeatTable, select_bool) sources
+        sources = []
+        has_fr_vineyard = False
+        has_fr_olive = False
+        if fr is not None and len(fr.polys):
+            crops = fr.polys.attrs.get("crop")
+            if crops is not None:
+                for cname in ("vineyard", "lavender", "olive", "truffle"):
+                    sel = crops == cname
+                    if sel.any():
+                        sources.append((cname, fr.polys, sel))
+                        if cname == "vineyard":
+                            has_fr_vineyard = True
+                        elif cname == "olive":
+                            has_fr_olive = True
+        if lu is not None and len(lu) and lu.attrs.get("class") is not None:
+            lcls_str = lu.attrs["class"].astype(str)
+            v_sel = lcls_str == "vineyard"
+            if v_sel.any() and not has_fr_vineyard:
+                sources.append(("vineyard", lu, v_sel))
+            if med and not has_fr_olive:
+                o_sel = lcls_str == "orchard"
+                if o_sel.any():
+                    sources.append(("olive", lu, o_sel))
+        if not sources:
+            return _empty()
+
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        m_scale = 1.0 / max(math.cos(math.radians(lat_mid)), 0.05)
+        n_r, n_c = blocked.shape
+        parts_out = []
+
+        for cname in ("vineyard", "lavender", "olive", "truffle"):
+            c_sources = [(f_tab, sel) for cn, f_tab, sel in sources if cn == cname]
+            if not c_sources:
+                continue
+            avail = np.zeros(blocked.shape, bool)
+            for f_tab, sel in c_sources:
+                _mask_polys(f_tab, avail, chm, 0.0, select=sel)
+            crop_mask |= avail
+            avail &= ~blocked
+            if not avail.any():
+                continue
+
+            if cname == "vineyard":
+                inner = avail & ~_dilate(~avail, max(2, int(round(6.5 / chm.dx))))
+            else:
+                inner = None
+                avail &= ~_dilate(~avail, 1)
+            crop_cfg = _structured_crop(cname, lat=lat_mid, lon=lon_mid, m_scale=m_scale)
+            sa_blk, sb_blk = crop_cfg["sa_blk"], crop_cfg["sb_blk"]
+            da_sub, db_sub = crop_cfg["da_sub"], crop_cfg["db_sub"]
+
+            all_parts = []
+            for f_tab, sel in c_sources:
+                for fi in np.flatnonzero((f_tab.kind == 3) & sel):
+                    for part in f_tab.parts(int(fi)):
+                        if not part or len(part[0]) < 4:
+                            continue
+                        ring = part[0]
+                        rx, ry = _to3857(ring[:, 0], ring[:, 1])
+                        if rx.max() < ex0 or rx.min() > ex1 or ry.max() < ey0 or ry.min() > ey1:
+                            continue
+                        area_est = float((rx.max() - rx.min()) * (ry.max() - ry.min()))
+                        all_parts.append((area_est, rx, ry, part))
+            all_parts.sort(key=lambda item: item[0])
+
+            for _, rx, ry, part in all_parts:
+                c0 = max(0, int(math.floor((rx.min() - chm.x0) / chm.dx)))
+                c1 = min(n_c, int(math.ceil((rx.max() - chm.x0) / chm.dx)) + 1)
+                r0 = max(0, int(math.floor((chm.y0 - ry.max()) / chm.dy)))
+                r1 = min(n_r, int(math.ceil((chm.y0 - ry.min()) / chm.dy)) + 1)
+                if c1 <= c0 or r1 <= r0 or not avail[r0:r1, c0:c1].any():
+                    continue
+                # Rasterize parcel part polygon mask in r0:r1, c0:c1
+                poly_c = (rx - chm.x0) / chm.dx - c0
+                poly_r = (chm.y0 - ry) / chm.dy - r0
+                im_mask = Image.new("1", (c1 - c0, r1 - r0), 0)
+                draw = ImageDraw.Draw(im_mask)
+                draw.polygon(list(zip(poly_c, poly_r)), fill=1)
+                for hole in part[1:]:
+                    if len(hole) >= 3:
+                        hx, hy = _to3857(hole[:, 0], hole[:, 1])
+                        hc = (hx - chm.x0) / chm.dx - c0
+                        hr = (chm.y0 - hy) / chm.dy - r0
+                        draw.polygon(list(zip(hc, hr)), fill=0)
+                part_poly_mask = np.asarray(im_mask, dtype=bool)
+
+                sub_avail = avail[r0:r1, c0:c1]
+                if not part_poly_mask.any() or sub_avail[part_poly_mask].mean() < 0.35:
+                    continue
+
+                part_avail = part_poly_mask & sub_avail
+                if cname == "vineyard":
+                    r_blk = max(2, int(round(6.5 / chm.dx)))
+                    part_inner = part_avail & ~_dilate(~part_poly_mask, r_blk)
+                    if inner is not None:
+                        part_inner &= inner[r0:r1, c0:c1]
+                else:
+                    part_inner = None
+
+                ring_xy = np.column_stack([rx, ry])
+                try:
+                    best = fast._ef.oriented_box_core(np.ascontiguousarray(ring_xy, np.float64))
+                except Exception:
+                    best = None
+                if best is not None:
+                    ux, uy, vx, vy, amin, amax, bmin, bmax = best
+                    if (bmax - bmin) > (amax - amin):
+                        ux, uy, vx, vy, amin, amax, bmin, bmax = vx, vy, -ux, -uy, bmin, bmax, -amax, -amin
+                else:
+                    ux, uy, vx, vy = 1.0, 0.0, 0.0, 1.0
+                    amin, amax, bmin, bmax = float(rx.min()), float(rx.max()), float(ry.min()), float(ry.max())
+                yaw_deg = float(math.degrees(math.atan2(uy, ux)) % 360.0)
+                aa = np.arange(amin, amax + 0.5 * sa_blk, sa_blk)
+                bb = np.arange(bmin, bmax + 0.5 * sb_blk, sb_blk)
+                if not len(aa) or not len(bb):
+                    continue
+                AA, BB = np.meshgrid(aa, bb)
+                AA, BB = AA.ravel(), BB.ravel()
+
+                if cname == "vineyard":
+                    px = AA * ux + BB * vx
+                    py = AA * uy + BB * vy
+                    cc = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+                    rr = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+                    in_box = (px >= ex0) & (px < ex1) & (py > ey0) & (py <= ey1) & (cc >= c0) & (cc < c1) & (rr >= r0) & (rr < r1)
+                    is_blk = np.zeros(len(px), bool)
+                    if in_box.any():
+                        is_blk[in_box] = part_inner[rr[in_box] - r0, cc[in_box] - c0]
+                    if is_blk.any():
+                        b_px, b_py, b_rr, b_cc = px[is_blk], py[is_blk], rr[is_blk], cc[is_blk]
+                        # Clear block footprints from avail so overlapping polygons don't double-fill
+                        rb_px = max(1, int(round(4.0 / chm.dx)))
+                        for dr_ in range(-rb_px, rb_px + 1):
+                            for dc_ in range(-rb_px, rb_px + 1):
+                                avail[np.clip(b_rr + dr_, 0, n_r - 1), np.clip(b_cc + dc_, 0, n_c - 1)] = False
+                        if inner is not None:
+                            inner[r0:r1, c0:c1] &= avail[r0:r1, c0:c1]
+                        part_avail &= avail[r0:r1, c0:c1]
+                        b_lon, b_lat = _to4326(b_px, b_py)
+                        gx = np.floor((b_px + 20037508.342789244) / chm.dx).astype(np.int64)
+                        gy = np.floor((20037508.342789244 - b_py) / chm.dy).astype(np.int64)
+                        nb = len(b_px)
+                        parts_out.append(Items(
+                            b_lon, b_lat, np.full(nb, 1.86, np.float32), np.full(nb, 3.5, np.float32),
+                            np.full(nb, KIND_BUSH, np.uint8), np.full(nb, G_VINEYARD_BLOCK, np.uint8),
+                            (_hash01(gx, gy, 41) * 0.5).astype(np.float32),
+                            np.full(nb, yaw_deg, np.float32),
+                            (0.94 + 0.12 * _hash01(gx, gy, 42)).astype(np.float32),
+                        ))
+                    # Subdivide non-block cells into 3x3 single-row grape_vine segments
+                    rem = ~is_blk
+                    if rem.any():
+                        A_sub = (AA[rem, None, None] + da_sub[None, :, None] + np.zeros((1, 1, 3))).ravel()
+                        B_sub = (BB[rem, None, None] + np.zeros((1, 3, 1)) + db_sub[None, None, :]).ravel()
+                        spx = A_sub * ux + B_sub * vx
+                        spy = A_sub * uy + B_sub * vy
+                        scc = np.floor((spx - chm.x0) / chm.dx).astype(np.int64)
+                        srr = np.floor((chm.y0 - spy) / chm.dy).astype(np.int64)
+                        sok = (spx >= ex0) & (spx < ex1) & (spy > ey0) & (spy <= ey1) & (scc >= c0) & (scc < c1) & (srr >= r0) & (srr < r1)
+                        if sok.any():
+                            sok[sok] &= part_avail[srr[sok] - r0, scc[sok] - c0]
+                        if sok.any():
+                            spx, spy, srr, scc = spx[sok], spy[sok], srr[sok], scc[sok]
+                            rs_px = max(1, int(round(1.8 / chm.dx)))
+                            for dr_ in range(-rs_px, rs_px + 1):
+                                for dc_ in range(-rs_px, rs_px + 1):
+                                    avail[np.clip(srr + dr_, 0, n_r - 1), np.clip(scc + dc_, 0, n_c - 1)] = False
+                            slon, slat = _to4326(spx, spy)
+                            gx = np.floor((spx + 20037508.342789244) / chm.dx).astype(np.int64)
+                            gy = np.floor((20037508.342789244 - spy) / chm.dy).astype(np.int64)
+                            ns = len(spx)
+                            parts_out.append(Items(
+                                slon, slat, np.full(ns, 1.71, np.float32), np.full(ns, 1.2, np.float32),
+                                np.full(ns, KIND_BUSH, np.uint8), np.full(ns, G_VINEYARD, np.uint8),
+                                (_hash01(gx, gy, 43) * 0.7).astype(np.float32),
+                                np.full(ns, yaw_deg, np.float32),
+                                (0.92 + 0.16 * _hash01(gx, gy, 44)).astype(np.float32),
+                            ))
+                else:
+                    px = AA * ux + BB * vx
+                    py = AA * uy + BB * vy
+                    if cname in ("olive", "truffle"):
+                        gx0 = np.floor((px + 20037508.342789244) / chm.dx).astype(np.int64)
+                        gy0 = np.floor((20037508.342789244 - py) / chm.dy).astype(np.int64)
+                        jit = 0.6 * m_scale
+                        px = px + (_hash01(gx0, gy0, 45) - 0.5) * 2.0 * jit
+                        py = py + (_hash01(gx0, gy0, 46) - 0.5) * 2.0 * jit
+                    cc = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+                    rr = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+                    ok = (px >= ex0) & (px < ex1) & (py > ey0) & (py <= ey1) & (cc >= c0) & (cc < c1) & (rr >= r0) & (rr < r1)
+                    if ok.any():
+                        ok[ok] &= part_avail[rr[ok] - r0, cc[ok] - c0]
+                    if not ok.any():
+                        continue
+                    px, py, rr, cc = px[ok], py[ok], rr[ok], cc[ok]
+                    if cname == "lavender":
+                        avail[rr, cc] = False
+                    else:
+                        for dr_ in (-1, 0, 1):
+                            for dc_ in (-1, 0, 1):
+                                avail[np.clip(rr + dr_, 0, n_r - 1), np.clip(cc + dc_, 0, n_c - 1)] = False
+                    lon, lat = _to4326(px, py)
+                    gx = np.floor((px + 20037508.342789244) / chm.dx).astype(np.int64)
+                    gy = np.floor((20037508.342789244 - py) / chm.dy).astype(np.int64)
+                    np_ = len(px)
+                    if cname == "lavender":
+                        h_lav = (0.66 + 0.14 * _hash01(gx, gy, 48)).astype(np.float32)
+                        parts_out.append(Items(
+                            lon, lat, h_lav, np.full(np_, 1.25, np.float32),
+                            np.full(np_, KIND_BUSH, np.uint8), np.full(np_, G_LAVENDER, np.uint8),
+                            (_hash01(gx, gy, 47) * 0.6).astype(np.float32),
+                            np.full(np_, yaw_deg, np.float32),
+                            (0.92 + 0.16 * _hash01(gx, gy, 48)).astype(np.float32),
+                        ))
+                    else:
+                        h_tree = (3.6 + 1.5 * _hash01(gx, gy, 49)) if cname == "olive" else (7.8 + 2.4 * _hash01(gx, gy, 49))
+                        parts_out.append(Items(
+                            lon, lat, h_tree.astype(np.float32), (0.15 * h_tree + 1.0).astype(np.float32),
+                            np.full(np_, KIND_TREE, np.uint8), np.full(np_, G_OLIVE, np.uint8),
+                            (_hash01(gx, gy, 50) * 0.5).astype(np.float32),
+                            (_hash01(gx, gy, 51) * 360.0).astype(np.float32),
+                            (0.88 + 0.24 * _hash01(gx, gy, 52)).astype(np.float32),
+                        ))
+                # Mark the entire polygon area as claimed
+                avail[r0:r1, c0:c1] &= ~part_poly_mask
+                if inner is not None:
+                    inner[r0:r1, c0:c1] &= ~part_poly_mask
+        return _concat_all(parts_out) if parts_out else _empty()
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -520,16 +928,95 @@ class Vegetation:
                      (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
 
 
-def _thin(jj, ii, h, px):
+def _structured_crop(cname="vineyard", lat=None, lon=None, m_scale=1.0, poly=None, budget=None, registry=None):
+    """Resolve Layer A Ground Truth crop row specification from active addons (with default fallback)
+    and scale spacings by Layer B EffortBudget.crop_row_spacing_mult."""
+    if not isinstance(cname, str) and poly is None:
+        poly, cname = cname, "vineyard"
+    b = budget if budget is not None else effort.get_budget()
+    reg = registry if registry is not None else addons.get_registry()
+    mult = float(b.crop_row_spacing_mult)
+    key = str(cname or "vineyard").strip().lower()
+    spec = reg.get_crop_row_spec(key, lat=lat, lon=lon) or {}
+
+    defaults = {
+        "vineyard": {"row_spacing_m": 2.2, "point_spacing_m": 1.2, "block_spacing_a_m": 15.5, "block_spacing_b_m": 7.2,
+                     "single_spacing_a_m": 5.17, "single_spacing_b_m": 2.4},
+        "lavender": {"row_spacing_m": 1.5, "point_spacing_m": 0.8, "block_spacing_a_m": 2.45, "block_spacing_b_m": 2.72},
+        "olive": {"row_spacing_m": 6.0, "point_spacing_m": 6.0, "block_spacing_a_m": 7.5, "block_spacing_b_m": 7.5},
+        "orchard": {"row_spacing_m": 5.5, "point_spacing_m": 5.0, "block_spacing_a_m": 6.0, "block_spacing_b_m": 6.0},
+        "truffle": {"row_spacing_m": 8.0, "point_spacing_m": 8.0, "block_spacing_a_m": 9.0, "block_spacing_b_m": 9.0},
+    }
+    d = defaults.get(key, defaults["vineyard"])
+    row_sp = float(spec.get("row_spacing_m", d["row_spacing_m"])) * mult
+    pt_sp = float(spec.get("point_spacing_m", d["point_spacing_m"])) * mult
+    sa_blk = float(spec.get("block_spacing_a_m", d["block_spacing_a_m"])) * mult * float(m_scale)
+    sb_blk = float(spec.get("block_spacing_b_m", d["block_spacing_b_m"])) * mult * float(m_scale)
+    sa_single = float(spec.get("single_spacing_a_m", d.get("single_spacing_a_m", 5.17))) * mult * float(m_scale)
+    sb_single = float(spec.get("single_spacing_b_m", d.get("single_spacing_b_m", 2.4))) * mult * float(m_scale)
+    da_sub = np.array([-sa_single, 0.0, sa_single], dtype=np.float64)
+    db_sub = np.array([-sb_single, 0.0, sb_single], dtype=np.float64)
+
+    points = None
+    if poly is not None:
+        arr = np.asarray(poly, dtype=np.float64)
+        if arr.ndim == 2 and len(arr) >= 3:
+            xmin, ymin = arr[:, 0].min(), arr[:, 1].min()
+            xmax, ymax = arr[:, 0].max(), arr[:, 1].max()
+            xs = np.arange(xmin, xmax, max(0.2, pt_sp))
+            ys = np.arange(ymin, ymax, max(0.2, row_sp))
+            if len(xs) and len(ys):
+                XX, YY = np.meshgrid(xs, ys)
+                points = np.column_stack([XX.ravel(), YY.ravel()])
+
+    return {
+        "crop": key,
+        "row_spacing": row_sp,
+        "point_spacing": pt_sp,
+        "sa_blk": sa_blk,
+        "sb_blk": sb_blk,
+        "da_sub": da_sub,
+        "db_sub": db_sub,
+        "crop_row_spacing_mult": mult,
+        "spec": spec,
+        "points": points,
+    }
+
+
+def _aerial_blob_trees(candidates, budget=None):
+    """Gate and cap aerial canopy blob trees according to Layer B EffortBudget.aerial_blob_max_trees."""
+    b = budget if budget is not None else effort.get_budget()
+    cap = int(b.aerial_blob_max_trees)
+    if isinstance(candidates, Items):
+        if cap <= 0 or len(candidates) == 0:
+            return _empty()
+        if len(candidates) <= cap:
+            return candidates
+        order = np.argsort(candidates.rank)[:cap]
+        order.sort()
+        return candidates.take(order)
+    seq = list(candidates or [])
+    if cap <= 0 or not seq:
+        return []
+    return seq[:cap]
+
+
+def _thin(jj, ii, h, px, spacing_mult=None):
     """Non-maximum suppression: the tallest tops first, each removing the others within its crown
-    radius (0.12 h + 1 m, times CROWN_SPACING). Deterministic (ties broken by position). earthfast thin_tops
-    (2026-10-23: the same tops as the Python loop it replaced)."""
+    radius (0.12 h + 1 m, times CROWN_SPACING * budget.tree_spacing_mult). Deterministic (ties broken by position).
+    earthfast thin_tops (2026-10-23: the same tops as the Python loop it replaced)."""
     if len(jj) == 0:
         return jj, ii
     fast.require(64, "thin_tops")
+    mult = float(spacing_mult) if spacing_mult is not None else float(effort.get_budget().tree_spacing_mult)
+    eff_spacing = float(CROWN_SPACING) * mult
     keep = fast._ef.thin_tops(np.ascontiguousarray(jj, np.int64), np.ascontiguousarray(ii, np.int64),
-                              np.ascontiguousarray(h, np.float32), float(CROWN_SPACING), float(px))
+                              np.ascontiguousarray(h, np.float32), eff_spacing, float(px))
     return jj[keep], ii[keep]
+
+
+Vegetation._structured_crop = staticmethod(_structured_crop)
+Vegetation._aerial_blob_trees = staticmethod(_aerial_blob_trees)
 
 
 def _empty():
@@ -699,7 +1186,7 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK)]
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINEYARD, G_VINEYARD_BLOCK, G_LAVENDER)]
 
 
 def _ambience(group, e, n, z, height, lat, lon):

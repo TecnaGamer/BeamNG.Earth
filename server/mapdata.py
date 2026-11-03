@@ -61,6 +61,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import geodesy
+import addons
+import effort
 import gradesep
 import mapcells
 import mapgeom
@@ -259,6 +261,8 @@ class MapData:
         self.lane_tags = railtags.LaneTags(cache_dir, self.fetcher) if railtags.LANES_ON else None   # (markings.py)
         import highwaysigns             # (exit, overhead and mile-marker signs: railtags.SignTags, signstream.py)
         self.highway_signs = highwaysigns.Source(self) if railtags.SIGNS_ON else None
+        import ign_fr                   # (French IGN RPG parcels & BD TOPO hedgerows for Provence/France)
+        self.ign_fr = ign_fr.IgnFr(cache_dir, self.fetcher) if ign_fr.ON else None
         self.dem = None                 # (gradesep's ground: the server's dem.Dem, set by its owner, else its own)
         self._locks = {}
         self._lock = threading.Lock()
@@ -307,6 +311,31 @@ class MapData:
             feats.__dict__["_lanes_built"] = built
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
+
+    def _fr_buildings(self, key, layer, feats, frame, kind="demand"):
+        """Enrich Overture buildings in France with IGN BDTOPO_V3:batiment heights, storeys, roof/wall materials,
+        and unmatched rural French buildings (ign_fr.py), once per decoded cell layer."""
+        ig = getattr(self, "ign_fr", None)
+        if ig is None or layer != "buildings" or feats is None:
+            return feats
+        if not addons.get_registry().is_source_enabled("ign_rpg_parcels"):
+            return feats
+        if feats.__dict__.get("_ign_bld_joined"):
+            return feats
+        try:
+            return ig.join_buildings(feats, key, frame=frame, kind=kind)
+        except Exception as e:
+            log.debug("ign_fr buildings join %s: %s: %s", key, type(e).__name__, e)
+            return feats
+
+    def _fr_parcels(self, key, bounds=None, kind="demand"):
+        """Fetch/enrich IGN RPG agricultural parcels for cell `key` when `ign_rpg_parcels` data source is enabled."""
+        ig = getattr(self, "ign_fr", None)
+        if ig is None or not addons.get_registry().is_source_enabled("ign_rpg_parcels"):
+            return None
+        return ig.cell(key, bounds=bounds, kind=kind)
+
+    enrich_ign_parcels = _fr_parcels
 
     def versions(self):
         rails = getattr(self, "rail_tags", None)
@@ -610,7 +639,7 @@ class MapData:
         with self._mem_lock:
             return dict(self._cell_stats)
 
-    def _decoded_layer(self, key, layer, kind, frame):
+    def _decoded_layer(self, key, layer, kind, frame, ign_kind="cached"):
         """Load and publish one decoded layer for all its callers. No neighbor discovery is run here:
         hooks are attached only, and no cache lock is held across I/O, decoding or tag joins."""
         k = (str(key), layer)
@@ -631,6 +660,7 @@ class MapData:
                 self._lanes(key, layer, f)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
+                f = self._fr_buildings(key, layer, f, frame, ign_kind)
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
@@ -656,6 +686,7 @@ class MapData:
         frame = geodesy.EnuFrame(lat_c, lon_c, 0.0)
         cd = CellData(key, key.bounds(), (lat_c, lon_c), frame, self.versions())
         provs = {}
+        ign_kind = kind if tuple(layers) == ("buildings", "building_parts", "roads", "infrastructure", "water") else "cached"
 
         mem, futs = {}, []
         with self._mem_lock:
@@ -670,7 +701,7 @@ class MapData:
                     fut = self._loading.get(k)
                     shared = fut is not None
                     if fut is None:
-                        fut = self.pool.submit(self._decoded_layer, key, layer, kind, frame)
+                        fut = self.pool.submit(self._decoded_layer, key, layer, kind, frame, ign_kind)
                         self._loading[k] = fut
                         self._cell_stats["loads"] += 1
                     else:
@@ -694,13 +725,23 @@ class MapData:
             raise err
         for layer in layers:                # assembled in the caller's order, whatever finished first
             if layer in mem:                # decoded before: shared (cell layers are never changed after loading)
-                cd.layers[layer], prov, _ = mem[layer]
+                cd.layers[layer], prov, nbytes_ = mem[layer]
                 dt, hit = 0.0, True
                 self._rails(key, layer, cd.layers[layer])
                 self._lanes(key, layer, cd.layers[layer])
+                new_f = self._fr_buildings(key, layer, cd.layers[layer], frame, ign_kind)
+                if new_f is not cd.layers[layer]:
+                    new_f.__dict__["_bnge_cell"] = cd.layers[layer].__dict__.get("_bnge_cell")
+                    cd.layers[layer] = new_f
+                    self._remember((str(key), layer), (new_f, prov, nbytes_))
             else:
                 entry, hit, dt = results[layer]
-                cd.layers[layer], prov, _ = entry
+                cd.layers[layer], prov, nbytes_ = entry
+                new_f = self._fr_buildings(key, layer, cd.layers[layer], frame, ign_kind)
+                if new_f is not cd.layers[layer]:
+                    new_f.__dict__["_bnge_cell"] = cd.layers[layer].__dict__.get("_bnge_cell")
+                    cd.layers[layer] = new_f
+                    self._remember((str(key), layer), (new_f, prov, nbytes_))
             if prov:
                 pid = prov["id"]
                 if pid in provs:            # roads + connectors: one transportation record

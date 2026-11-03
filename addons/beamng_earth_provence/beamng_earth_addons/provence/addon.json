@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "provence",
+  "name": "BeamNG.Earth — Provence & Occitanie Ground Truth",
+  "version": "1.0.0",
+  "author": "BeamNG.Earth Contributors",
+  "description": "High-accuracy Ground Truth regional addon for Provence & Occitanie (IGN RPG agricultural parcels, BD ORTHO 20cm roof color sampling, Mediterranean biomes, and structured crop rows).",
+  "priority": 100,
+  "engine_compat": {
+    "min_version": "1.7.0",
+    "max_version": "1.8.x",
+    "earthfast_abi": {
+      "min": 113,
+      "max": 160
+    },
+    "revisit_schema": 2,
+    "plans_format": 1
+  },
+  "approval": {
+    "channel": "official",
+    "publisher": "beamng-earth",
+    "public_key_id": "ed25519:beamng-earth-official-2026",
+    "signature": "ed25519:provence-1.0.0-official"
+  },
+  "capabilities": [
+    "data_sources",
+    "biomes",
+    "structured_crops",
+    "roof_palettes"
+  ],
+  "data_sources_file": "data_sources.json",
+  "biomes_file": "biomes.json"
+}

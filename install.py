@@ -243,9 +243,9 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
         if dry_run:
             say(f"(dry run) would replace {dest}")
             return None
-        old_times = _unchanged_times(dest, MOD_SRC)
-        shutil.rmtree(dest)
-        status = "updated"
+        _sync_tree_in_place(MOD_SRC, dest)
+        note(f"Mod: installed to {dest}")
+        return "updated"
     elif dry_run:
         say(f"(dry run) would copy the mod to {dest}")
         return None
@@ -253,8 +253,6 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
         status = "installed"
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copytree(MOD_SRC, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
-    if status == "updated":
-        _stamp_times(dest, old_times)
     note(f"Mod: installed to {dest}")
     return status
 
@@ -265,6 +263,53 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
 # repacked every ground material as it first appeared: freezes of ~2.7 s driving into new ground (the user,
 # 2026-10-21: "freezes" in Pécs and Brisbane on 1.5.4, 13 repacks in the game's log). An unchanged file keeps the
 # time of the copy it replaces; a changed one gets now, newer than any cache entry made from its old content.
+def _sync_tree_in_place(src, dest):
+    """Update dest in place without deleting unchanged files (shutil.rmtree briefly removed levels/beamng_earth/main.level.json
+    while a running game watched its user folder, causing core_levels to drop beamng_earth and break the pause menu/map)."""
+    import filecmp
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
+    want_files = set()
+    want_dirs = set()
+    for dirpath, dirnames, filenames in os.walk(src):
+        skipped = ignore(dirpath, dirnames + filenames)
+        dirnames[:] = [d for d in dirnames if d not in skipped]
+        rel_dir = os.path.relpath(dirpath, src)
+        if rel_dir != ".":
+            want_dirs.add(rel_dir)
+            os.makedirs(os.path.join(dest, rel_dir), exist_ok=True)
+        for name in filenames:
+            if name in skipped:
+                continue
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            want_files.add(rel)
+            s_path = os.path.join(src, rel)
+            d_path = os.path.join(dest, rel)
+            try:
+                if os.path.isfile(d_path) and filecmp.cmp(s_path, d_path, shallow=False):
+                    continue
+            except OSError:
+                pass
+            os.makedirs(os.path.dirname(d_path), exist_ok=True)
+            tmp = d_path + ".bnge-tmp"
+            shutil.copyfile(s_path, tmp)
+            os.utime(tmp, None)
+            os.replace(tmp, d_path)
+    for dirpath, dirnames, filenames in os.walk(dest, topdown=False):
+        rel_dir = os.path.relpath(dirpath, dest)
+        for name in filenames:
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            if rel not in want_files:
+                try:
+                    os.remove(os.path.join(dirpath, name))
+                except OSError:
+                    pass
+        if rel_dir != "." and rel_dir not in want_dirs:
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                pass
+
+
 def _unchanged_times(dest, src):
     """{relative path: (atime, mtime)} of the files in dest whose content is the same in src."""
     import filecmp
@@ -506,7 +551,10 @@ def main():
     say("")
     user_dir = choose_user_dir(args)
     try:
-        install_mod(user_dir, args.yes, args.dry_run)
+        status = install_mod(user_dir, args.yes, args.dry_run)
+        if not args.dry_run and status in ("updated", "installed", "enabled"):
+            if reload_running_game(user_dir):
+                say("Mod: reloaded Lua in the running game.")
     except OSError as e:
         fail(f"could not copy the mod: {e}\n  Close BeamNG.drive if it is running and try again.")
     if args.no_venv:

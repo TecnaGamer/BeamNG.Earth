@@ -463,6 +463,8 @@ class Imagery:
         self.mem_tiles = MEM_TILES if mem_tiles is None else mem_tiles
         self.leaf_on = leaf_on
         self.season_mode = season_mode
+        import ign_fr
+        self.ign_fr = ign_fr.IgnFr(cache_dir, self.fetcher) if ign_fr.ON else None
         self.lut = tone_lut(tone)
         self.deshadow = deshadow
         if deshadow is not None:
@@ -1360,7 +1362,10 @@ class Imagery:
     SEASON_GRID = 17            # world positions for the season noise: on this grid, bilinear in between
 
     def _seasoned(self, where, rgb):
-        """rgb graded toward the season (season.grade; season_mode "off": unchanged)."""
+        """rgb graded toward the season (season.grade; season_mode "off": unchanged), plus Provençal lavender bloom."""
+        if getattr(self, "ign_fr", None) is not None and self.season_mode in (None, "off", "summer", "spring"):
+            if hasattr(where, "frame") and hasattr(where, "x0") and hasattr(where, "y0") and hasattr(where, "size"):
+                rgb = self.ign_fr.tint_lavender_rgb(rgb, where.frame, where.x0, where.y0, where.size)
         if self.season_mode in (None, "off", "summer"):
             return rgb
         lat, lon = where.grid(self.SEASON_GRID - 1)             # row 0 = north

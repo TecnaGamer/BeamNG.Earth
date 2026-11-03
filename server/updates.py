@@ -125,7 +125,37 @@ def newest_release(net, fresh=False):
 # The mod's update notice asks the server to open the releases page: the game's openWebBrowser does nothing in the
 # native Linux build (the user, 2026-10-18: "i clicked open releases page but it never opened my browser"). Only this
 # project's GitHub pages are opened (a message from the mod cannot open anything else).
+# Target GitHub repository for in-game benchmark & issue tickets (report.lua / tools/reports.py).
+# Maintainer configuration:
+#   - Experimental fork (Madderose): "TecnaGamer/BeamNG.Earth"
+#   - Upstream (TecnaGamer):         "TecnaGamer/BeamNG.Earth"
+# Can also be overridden at runtime via environment variable BEAMNG_EARTH_ISSUE_REPO="Owner/Repo".
+ISSUE_REPO = os.environ.get("BEAMNG_EARTH_ISSUE_REPO", "TecnaGamer/BeamNG.Earth")
 OPEN_PREFIX = f"https://github.com/{REPO}/"
+OPEN_PREFIXES = (
+    f"https://github.com/{REPO}/",
+    f"https://github.com/{ISSUE_REPO}/",
+    "https://github.com/TecnaGamer/BeamNG.Earth/",
+)
+
+
+def _win_https_browser_exe():
+    """Resolve the user's default HTTPS browser executable on Windows via winreg so URLs > 2,083 chars
+    (Win32 ShellExecuteW / os.startfile limit) open in full up to 7,000 chars without truncation."""
+    try:
+        import shlex
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+        ) as k:
+            prog_id, _ = winreg.QueryValueEx(k, "ProgId")
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{prog_id}\shell\open\command") as k:
+            cmd_str, _ = winreg.QueryValueEx(k, "")
+        exe = shlex.split(cmd_str, posix=False)[0].strip('"')
+        return exe if os.path.isfile(exe) else None
+    except Exception:
+        return None
 
 
 def open_page(url, popen=None):
@@ -133,11 +163,16 @@ def open_page(url, popen=None):
     browser was asked. On Linux xdg-open runs with the packaged app's library and Python paths taken out of its
     environment (the AppImage's own libraries broke the browser it starts)."""
     import subprocess
-    if not isinstance(url, str) or not url.startswith(OPEN_PREFIX) or any(c in url for c in ' "\'<>`\\\n\r'):
+    if not isinstance(url, str) or not any(url.startswith(p) for p in OPEN_PREFIXES) or any(c in url for c in ' "\'<>`\\\n\r'):
         return False
     popen = popen or subprocess.Popen
     try:
         if sys.platform == "win32":
+            if len(url) > 2000:
+                exe = _win_https_browser_exe()
+                if exe:
+                    popen([exe, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return True
             os.startfile(url)       # noqa: S606 (the default browser)
             return True
         env = {k: v for k, v in os.environ.items()

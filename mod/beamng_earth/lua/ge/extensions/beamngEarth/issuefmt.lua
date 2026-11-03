@@ -4,8 +4,15 @@
 -- kinds, labels and the URL truncation.
 local M = {}
 
+-- Maintainer configuration for GitHub ticket routing:
+--   * M.REPO: baseline repository constant ('TecnaGamer/BeamNG.Earth', verified by mod/tests/test_issuefmt.lua).
+--   * M.ISSUE_REPO: active target repository where in-game reports & benchmark tickets are posted:
+--       - Experimental fork / branch: 'TecnaGamer/BeamNG.Earth'
+--       - Upstream main / dev branch: 'TecnaGamer/BeamNG.Earth'
 M.REPO = 'TecnaGamer/BeamNG.Earth'
+M.ISSUE_REPO = 'TecnaGamer/BeamNG.Earth'
 M.URL_MAX = 7000        -- characters of the whole new-issue URL (GitHub refuses ~8 KB)
+M.WIN_URL_MAX = 1950    -- safe URL limit for Windows ShellExecuteW / os.startfile (< 2083 chars)
 
 -- The kinds the user picks from (order = the window's radio buttons). label = the GitHub label.
 M.KINDS = {
@@ -183,6 +190,12 @@ function M.formatHardware(hw)
   local app = (hw.server or {}).appVersion
   if app and app ~= '' then add('BeamNG.Earth', tostring(app))
   elseif hw.modVersion then add('BeamNG.Earth', 'mod ' .. tostring(hw.modVersion)) end
+  if str(hw.activeAddons) then
+    add('Generation Addons (Layer A)', str(hw.activeAddons))
+  end
+  if str(hw.effortProfile) then
+    add('Effort Profile (Layer B)', str(hw.effortProfile))
+  end
   local srv = hw.server or {}
   if next(srv) then
     local sp = {}
@@ -240,6 +253,17 @@ function M.buildIssue(data, hw)
   local v = data.vehicle
   if type(v) == 'table' and num(v.speedMph) then
     p(string.format('**Vehicle:** %s, %.0f mph, heading %.0f°', str(v.name) or '?', v.speedMph, num(v.headingDeg) or 0))
+  end
+  local rt = data.route
+  if type(rt) == 'table' and str(rt.name) then
+    local kmh = num(rt.speedKmh) or (num(rt.speedMps) and (rt.speedMps * 3.6)) or 0
+    local mph = num(rt.speedMph) or (kmh * 0.621371)
+    local dkm = num(rt.distanceDrivenM) and (rt.distanceDrivenM / 1000.0) or (num(rt.targetKm) or 0)
+    local loadStr = str(rt.loadMode) == 'cold' and 'immediate start' or 'waited for full load'
+    p(string.format('**Benchmark Route:** %s — %s (%.0f km/h / %.0f mph, driven %.2f km, %s)',
+      str(rt.name), str(rt.speedLabel) or str(rt.speedId) or 'custom', kmh, mph, dkm, loadStr))
+  elseif str(data.benchMode) == 'free' then
+    p('**Benchmark Mode:** Free Drive (30 s)')
   end
   p('**Time:** ' .. (str(data.time) or '?'))
   local fr = M.framesLine(data.recentFrames)

@@ -113,9 +113,12 @@ export async function onLoad() {
   await registerMapRoute()
   // the BeamNG.Earth servers tab in BeamMP's server browser (earthServers.js); its failure costs nothing else
   try { (await import("./earthServers.js")).start() } catch (e) { console.error("BeamNG.Earth: servers tab failed", e) }
+  // standalone floating Generation Addons window (earthAddonsWindow.js)
+  try { (await import("./earthAddonsWindow.js")).start() } catch (e) { console.error("BeamNG.Earth: addons window failed", e) }
 }
 
 export async function onUnload() {
+  try { (await import("./earthAddonsWindow.js")).stop() } catch (e) { /* never started */ }
   try { (await import("./earthServers.js")).stop() } catch (e) { /* never started */ }
   await lua.extensions.ui_pause_actions.unregisterModTab(TAB_ID)       // (its buttons with it)
   try {
