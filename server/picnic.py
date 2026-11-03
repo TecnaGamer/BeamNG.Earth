@@ -39,17 +39,22 @@ NEAR_TABLE_M = 8.0             # a scattered table this close to a mapped one is
 
 
 def _tags(feats, i):
-    """source_tags of feature i as a lower-case dict, or {}."""
+    """source_tags of feature i as a lower-case dict, or {} (kept on the layer: shared, not to be changed)."""
     tags = feats.attrs.get("tags")
     if tags is None:
         return {}
+    memo = feats.__dict__.setdefault("_lc_tags", {})    # (parsed once per layer: the decoded cells serve many tiles;
+    got = memo.get(i)                                   # ~390k json.loads over 16 Midtown tiles, 2026-11-03)
+    if got is not None:
+        return got
     try:
         values = json.loads(str(tags[i]))
     except (TypeError, ValueError):
-        return {}
-    if not isinstance(values, dict):
-        return {}
-    return {str(k).strip().lower(): str(v).strip().lower() for k, v in values.items()}
+        values = None
+    got = {str(k).strip().lower(): str(v).strip().lower() for k, v in values.items()} \
+        if isinstance(values, dict) else {}
+    memo[i] = got
+    return got
 
 
 def _cls(feats, i):

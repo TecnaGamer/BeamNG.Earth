@@ -181,14 +181,19 @@ def _tags_of(feats, i):
         return val
     if val is None or (isinstance(val, float) and not np.isfinite(val)):
         return {}
+    memo = feats.__dict__.setdefault("_wp_tags", {})     # (parsed once per layer, shared: not to be changed)
+    got = memo.get(i)
+    if got is not None:
+        return got
     text = str(val).strip()
-    if not text or text == "nan":
-        return {}
-    try:
-        got = json.loads(text)
-    except Exception:
-        return {}
-    return got if isinstance(got, dict) else {}
+    got = {}
+    if text and text != "nan":
+        try:
+            got = json.loads(text)
+        except Exception:
+            got = {}
+    got = memo[i] = got if isinstance(got, dict) else {}
+    return got
 
 
 def _advertising(tags):
