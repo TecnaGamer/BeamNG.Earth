@@ -201,6 +201,31 @@ class ModUpdateTimes(unittest.TestCase):
             with open(os.path.join(dest, "code.lua"), "rb") as f:
                 self.assertEqual(f.read(), b"new")
 
+    def test_in_place_update_never_deletes_unmodified_files_and_removes_obsolete_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, user = os.path.join(tmp, "src"), os.path.join(tmp, "user")
+            dest = os.path.join(user, "mods", "unpacked", install.MOD_NAME)
+            os.makedirs(os.path.join(src, "levels", "beamng_earth"))
+            os.makedirs(os.path.join(dest, "levels", "beamng_earth"))
+            os.makedirs(os.path.join(dest, "obsolete_dir"))
+            for root in (src, dest):
+                with open(os.path.join(root, "levels", "beamng_earth", "main.level.json"), "wb") as f:
+                    f.write(b"{}")
+            with open(os.path.join(src, "code.lua"), "wb") as f:
+                f.write(b"v2")
+            with open(os.path.join(dest, "code.lua"), "wb") as f:
+                f.write(b"v1")
+            with open(os.path.join(dest, "obsolete_dir", "stale.lua"), "wb") as f:
+                f.write(b"stale")
+            with mock.patch.object(install, "MOD_SRC", src), \
+                 mock.patch.object(install.shutil, "rmtree", side_effect=AssertionError("rmtree breaks live level")) as rmtree, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(install.install_mod(user, True, dry_run=False, quiet=True), "updated")
+            rmtree.assert_not_called()
+            self.assertTrue(os.path.isfile(os.path.join(dest, "levels", "beamng_earth", "main.level.json")))
+            self.assertFalse(os.path.exists(os.path.join(dest, "obsolete_dir", "stale.lua")))
+            self.assertFalse(os.path.exists(os.path.join(dest, "obsolete_dir")))
+
 
 if __name__ == "__main__":
     unittest.main()

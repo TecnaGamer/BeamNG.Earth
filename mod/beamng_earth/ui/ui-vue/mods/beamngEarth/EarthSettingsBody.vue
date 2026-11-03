@@ -75,6 +75,13 @@
       <span v-else-if="item.type === 'info'" class="earth-value">{{ infoValue(item) }}</span>
       <div v-else-if="item.type === 'text'" class="earth-text">{{ infoValue(item) }}</div>
       <BngButton v-else-if="item.type === 'feedback'" :accent="ACCENTS.outlined" @click="openFeedback(item.what)">{{ item.label }}</BngButton>
+      <div v-else-if="item.type === 'worldRefresh'" class="earth-inline">
+        <span v-if="worldRefreshNote" class="earth-value">{{ worldRefreshNote }}</span>
+        <BngButton :accent="ACCENTS.outlined" @click="triggerWorldRefresh">{{ item.label || "Refresh now" }}</BngButton>
+      </div>
+      <div v-else-if="item.type === 'addonsPopup'" class="earth-inline">
+        <BngButton :accent="ACCENTS.outlined" @click="openAddonsFloatingWindow">{{ item.label || "Open floating window" }}</BngButton>
+      </div>
 
       <!-- Clear cache: asks in the row first -->
       <div v-else-if="item.type === 'action'" class="earth-inline">
@@ -120,9 +127,9 @@ import { computed, reactive } from "vue"
 import { BngButton, BngSwitch, BngSlider, BngInput, BngSelect, BngRow, BngCardHeading, ACCENTS } from "@/common/components/base"
 import {
   config, dev, help, qualityPresets, devPresets, presetLine, detectedPick, optionConfig, categoryNamed, visibleItems,
-  cacheConfirm, cacheBusy, cacheResult, pathText, pathBusy, pathPick, pathMsg,
+  cacheConfirm, cacheBusy, cacheResult, worldRefreshNote, pathText, pathBusy, pathPick, pathMsg,
   setQuality, presetName, valueOf, selectOption, onSwitchChange, onSliderChange, onNumberEnter, onDevChange, infoValue,
-  openFeedback,
+  openFeedback, triggerWorldRefresh, openAddonsFloatingWindow,
   confirmClearCache, askClearCache, usePath, sendPath, pathNote, typing, applyDevPreset,
 } from "./earthSettingsStore.js"
 

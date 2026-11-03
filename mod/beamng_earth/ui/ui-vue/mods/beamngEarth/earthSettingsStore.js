@@ -55,6 +55,22 @@ export const settingsSchema = [
     ],
   },
   {
+    name: "Addons",
+    intro: "Generation Addons (Layer A Ground Truth) and Effort Governor (Layer B). Toggle installed regional packs, individual data sources, and synthesis density in this dedicated window.",
+    items: [
+      { id: "addonsStatus", type: "info", name: "Active generation addons", desc: "Shows which native BeamNG.Earth Ground Truth addons are currently discovered, approved, and active in the world server." },
+      { id: "addonProvence", type: "bool", default: true, name: "France & Provence Ground Truth Pack", desc: "Enables the native Provence / Occitanie Ground Truth addon (beamng_earth_provence): IGN BD TOPO 3D building footprints, IGN RPG agricultural parcels, 20 cm aerial orthophoto roof tinting, and Mediterranean crops (vineyards, lavender, olive groves, cypress windbreaks)." },
+      { id: "sourceIgnRpg", type: "bool", default: true, name: "- IGN BD TOPO & RPG Parcels", desc: "Fetches official French IGN Geoplateforme WFS building heights/materials, RPG crop parcels, and linear hedgerows.", showIf: c => c.addonProvence !== false },
+      { id: "sourceIgnOrtho", type: "bool", default: true, name: "- IGN 20 cm Orthophoto Roof Tinting", desc: "Samples 20 cm aerial orthophotos to tint Provence building roofs with real terracotta and limestone hues.", showIf: c => c.addonProvence !== false },
+      { id: "sourceProvenceBiomes", type: "bool", default: true, name: "- Provence Crops & Mediterranean Biomes", desc: "Row-oriented vineyards, Sault lavender fields, olive orchards, and Mistral cypress windbreaks.", showIf: c => c.addonProvence !== false },
+      { id: "effortProfile", type: "select", default: "balanced", name: "Ground-Truth Effort Profile", desc: "Layer B Effort Governor: controls how densely Ground Truth crops, trees, and aerial roof samples are synthesized without changing what exists in the world.",
+        options: [ { label: "Low (Steam Deck / APU)", value: "low" }, { label: "Balanced (60 FPS Default)", value: "balanced" }, { label: "High", value: "high" }, { label: "Ultra Ground-Truth", value: "ultra" }, { label: "Auto-FPS Governor", value: "auto_fps" } ] },
+      { id: "refreshWorld", type: "worldRefresh", virtual: true, label: "Refresh now", name: "Refresh world around you", desc: "Clears and re-streams nearby vegetation, crops, buildings, and roads using your active Ground Truth addons and Effort profile." },
+      { id: "openAddonsWindow", type: "addonsPopup", virtual: true, label: "Open floating window", name: "Floating Addons window (in-game)", desc: "Opens a standalone floating Generation Addons window on screen so you can toggle addons, data sources, and Effort profiles live while driving without opening the pause menu." },
+      { id: "addonsBench", type: "feedback", what: "profiler", label: "Benchmark (30s)", name: "Run 30s performance benchmark", desc: "Closes this menu and records 30 s of frame times, hitches, VRAM/RAM usage, CPU/GPU specs, and your active Layer A Ground Truth Addons & Layer B Effort Profile into a ready-to-post GitHub ticket (report.json, hardware.json, issue.md, screenshot.jpg). Also Ctrl+Shift+Y while driving." },
+    ],
+  },
+  {
     name: "Interface",
     items: [
       { id: "statusBar", type: "bool", default: true, name: "Status bar", desc: "The bar at the top of the screen: the street and town you are in, loading progress and the frame rate." },
@@ -145,7 +161,7 @@ export const settingsSchema = [
 
 // Each page's icon (the pause menu's side buttons take the icon's name, LayoutMenu's tabs the icon) and its button id
 // (the first keeps the old Mods-tab button's id: settings.lua M.BUTTON_ID, pageExists)
-export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Interface: "cogOutline",
+export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Addons: "puzzleModule", Interface: "cogOutline",
   Multiplayer: "peopleOutline", Storage: "floppyDisk", Feedback: "bug", About: "info", Developer: "code" }
 export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEarth-settings-" + name.toLowerCase()
 
@@ -173,6 +189,7 @@ export const help = ref(null)          // the setting pointed at (the side card'
 export const cacheConfirm = ref(false) // Clear cache: the confirmation is showing
 export const cacheBusy = ref(false)    // Clear cache: sent, waiting for the server's answer
 export const cacheResult = ref("")     // "Freed 1.2 GB" / an error
+export const worldRefreshNote = ref("") // Refresh world status note
 let cacheClearsAt = 0                  // status.cache.clears when the clear was sent
 let cacheSentAt = 0
 let lastWriteAt = 0 // a poll answered just after a uiSet may carry the value from before it
@@ -235,6 +252,11 @@ export function infoValue(item) {
   if (item.id === "deshadow") return s.deshadow || "off"
   if (item.id === "colormatch") return s.colormatch || "off"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
+  if (item.id === "addonsStatus") {
+    const a = s.addons
+    if (!a || !Array.isArray(a.active)) return config.value.addonProvence !== false ? "provence (active)" : "None active"
+    return a.active.length ? a.active.join(", ") : "None active"
+  }
   return ""
 }
 
@@ -378,6 +400,25 @@ export function confirmClearCache() {
     if (res && res.ok) { cacheBusy.value = true; cacheSentAt = Date.now() }
     else cacheResult.value = (res && res.error) || "mod not loaded"
   })
+}
+
+export function triggerWorldRefresh() {
+  worldRefreshNote.value = "Refreshing nearby vegetation & buildings..."
+  engineLua("beamngEarth_settings and beamngEarth_settings.uiRefreshWorld() or nil", res => {
+    if (res && res.ok) {
+      worldRefreshNote.value = "World refresh triggered"
+      setTimeout(() => { if (worldRefreshNote.value === "World refresh triggered") worldRefreshNote.value = "" }, 3500)
+    } else {
+      worldRefreshNote.value = (res && res.error) || "mod not loaded"
+    }
+  })
+}
+
+export function openAddonsFloatingWindow() {
+  if (window.bngEarthAddonsWindow && window.bngEarthAddonsWindow.open) {
+    window.bngEarthAddonsWindow.open()
+  }
+  engineLua("beamngEarth_settings and beamngEarth_settings.uiOpenAddonsWindow() or nil")
 }
 
 export function selectOption(item, val) {

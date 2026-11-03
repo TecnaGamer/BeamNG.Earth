@@ -23,6 +23,7 @@
 -- UI and the Lua extensions does not matter). Without the page the window stays as before.
 
 local M = {}
+M.dependencies = { 'ui_imgui' }
 
 local rebase = require('beamngEarth/rebase')
 local ui = require('beamngEarth/ui')
@@ -83,6 +84,13 @@ M.SCHEMA = {
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
   -- signstream.py, from cody196's PR #363); needs Roads
   highwaySigns = { kind = 'bool', default = true, label = 'Highway signs' },
+  -- Native Addon Registry (Layer A Ground Truth) & Effort Controller (Layer B) controls
+  addonProvence = { kind = 'bool', default = true, label = 'France & Provence Ground Truth Pack' },
+  sourceIgnRpg = { kind = 'bool', default = true, label = 'IGN BD TOPO & RPG Parcels' },
+  sourceIgnOrtho = { kind = 'bool', default = true, label = 'IGN 20 cm Orthophoto Roof Tinting' },
+  sourceProvenceBiomes = { kind = 'bool', default = true, label = 'Provence Crops & Mediterranean Biomes' },
+  effortProfile = { kind = 'enum', default = 'balanced',
+    values = { 'low', 'balanced', 'high', 'ultra', 'auto_fps' }, label = 'Ground-Truth Effort Profile' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -125,7 +133,8 @@ M.SCHEMA = {
 }
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns',
+  'addonProvence', 'sourceIgnRpg', 'sourceIgnOrtho', 'sourceProvenceBiomes', 'effortProfile', 'dashboardSatellite',
   'hudVisible', 'statusBar',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
@@ -464,6 +473,45 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end
   end,
+  addonProvence = function()
+    local core = ext('beamngEarth_core')
+    local a = core and core.addonsModule and core.addonsModule()
+    if a then
+      a.setAddonEnabled('provence', values.addonProvence ~= false)
+      a.setSourceEnabled('provence', 'ign_rpg_parcels', values.sourceIgnRpg ~= false)
+      a.setSourceEnabled('provence', 'ign_orthophoto_20cm', values.sourceIgnOrtho ~= false)
+      a.setSourceEnabled('provence', 'osm_provence_landuse', values.sourceProvenceBiomes ~= false)
+      if core.syncAddons then core.syncAddons() end
+    end
+  end,
+  sourceIgnRpg = function()
+    local core = ext('beamngEarth_core')
+    local a = core and core.addonsModule and core.addonsModule()
+    if a then
+      a.setSourceEnabled('provence', 'ign_rpg_parcels', values.sourceIgnRpg ~= false)
+      if core.syncAddons then core.syncAddons() end
+    end
+  end,
+  sourceIgnOrtho = function()
+    local core = ext('beamngEarth_core')
+    local a = core and core.addonsModule and core.addonsModule()
+    if a then
+      a.setSourceEnabled('provence', 'ign_orthophoto_20cm', values.sourceIgnOrtho ~= false)
+      if core.syncAddons then core.syncAddons() end
+    end
+  end,
+  sourceProvenceBiomes = function()
+    local core = ext('beamngEarth_core')
+    local a = core and core.addonsModule and core.addonsModule()
+    if a then
+      a.setSourceEnabled('provence', 'osm_provence_landuse', values.sourceProvenceBiomes ~= false)
+      if core.syncAddons then core.syncAddons() end
+    end
+  end,
+  effortProfile = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setEffortProfile then core.setEffortProfile(v) end
+  end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
@@ -583,6 +631,7 @@ function M.uiState()
   status.gravity = w and w.gravityLine and w.gravityLine() or nil
   status.deshadow = st and st.deshadow or 'off'
   status.colormatch = st and st.colormatch or 'off'
+  status.addons = core and core.getAddonsStatus and core.getAddonsStatus() or nil
   -- the download cache: the server's last numbers, fresh ones asked every CACHE_POLL-th call (the page
   -- polls every 2 s while it is open)
   cachePolls = cachePolls + 1
@@ -1002,10 +1051,12 @@ function M.mapControls(on)
     pcall(pushActionMap, 'BigMap')
     local am = scenetree.findObject('BigMapActionMap')
     if am then am.trapHandledEvents = false end      -- (as the stock map: nothing else gets stuck behind it)
-  elseif not on and mapCtl then
-    if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
-    for f, fn in pairs(mapCtl) do if f ~= 'bm' and f ~= 'vt' and f ~= 'vtOrig' then mapCtl.bm[f] = fn end end
-    mapCtl = nil
+  elseif not on then
+    if mapCtl then
+      if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
+      for f, fn in pairs(mapCtl) do if f ~= 'bm' and f ~= 'vt' and f ~= 'vtOrig' then mapCtl.bm[f] = fn end end
+      mapCtl = nil
+    end
     pcall(popActionMap, 'BigMap')
     if filter and filter.addAction then pcall(filter.addAction, 0, 'beamngEarthMapBlocked', false) end
   end
@@ -1069,6 +1120,11 @@ function M.onExtensionLoaded()
   M.applyAll()
 end
 
+function M.onExtensionUnloaded()
+  M.mapOpened(false)
+  M.redirectBigMap(false)
+end
+
 -- The one-time welcome (the user, 2026-10-15: "add a 1 time popup with info about this project"): shown a moment after
 -- our level starts, once per WELCOME_VERSION (raise it when the page has news worth showing again).
 M.WELCOME_VERSION = 1
@@ -1083,6 +1139,26 @@ end
 -- EarthWelcome.vue's buttons: seen.
 function M.uiWelcomeDone()
   if (values.welcomeSeen or 0) < M.WELCOME_VERSION then M.set('welcomeSeen', M.WELCOME_VERSION) end
+  return { ok = true }
+end
+
+-- World / Addons page's "Refresh world" button: re-syncs addon toggles and clears/re-streams nearby vegetation, roads & buildings.
+function M.uiRefreshWorld()
+  local core = ext('beamngEarth_core')
+  if not core then return { ok = false, error = 'mod not loaded' } end
+  if core.syncAddons then pcall(core.syncAddons) end
+  if core.refreshWorld then pcall(core.refreshWorld) end
+  return { ok = true }
+end
+
+-- Opens the standalone floating CEF "Generation Addons" window and returns to gameplay.
+function M.uiOpenAddonsWindow()
+  M.navigate('play')
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger then gh.trigger('BeamNGEarthAddonsWindow', { open = true }) end
+  if be and be.queueJS then
+    pcall(be.queueJS, be, 'if(window.bngEarthAddonsWindow && window.bngEarthAddonsWindow.open) window.bngEarthAddonsWindow.open();')
+  end
   return { ok = true }
 end
 

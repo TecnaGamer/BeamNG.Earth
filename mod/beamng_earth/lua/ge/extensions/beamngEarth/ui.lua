@@ -5,14 +5,16 @@
 -- status HUD (status line + quick buttons), hidden at level start unless the settings say otherwise;
 -- "Full window" brings this window back for the session.
 
-local M = {}
+local M = rawget(_G, '__beamngEarth_ui_table') or {}
+rawset(_G, '__beamngEarth_ui_table', M)
 
 M.visible = true
 M.compact = false   -- set by settings.lua once the settings page exists
 M.hudHidden = false -- the window starts hidden at level start (settings: hudVisible off)
+M.addonsVisible = false -- standalone Generation Addons window
 
 local im = nil
-local openPtr, latPtr, lonPtr, rebaseKmPtr = nil, nil, nil, nil
+local openPtr, addonsOpenPtr, latPtr, lonPtr, rebaseKmPtr = nil, nil, nil, nil, nil
 
 local function text(s) im.TextUnformatted(tostring(s)) end
 
@@ -40,6 +42,13 @@ local function drawCompact(view)
     local dev = rawget(_G, 'beamngEarth_dev')
     if dev then
       if im.Button(dev.isActive() and 'Dev tools off' or 'Dev tools') then dev.toggleLast() end
+      im.SameLine()
+    end
+    local st = rawget(_G, 'beamngEarth_settings')
+    if st and st.uiOpenAddonsWindow then
+      if im.Button('Addons...') then st.uiOpenAddonsWindow() end
+      im.SameLine()
+      if st.uiRefreshWorld and im.Button('Refresh world') then st.uiRefreshWorld() end
       im.SameLine()
     end
     if im.Button('Full window') then M.compact = false end
@@ -105,6 +114,15 @@ function M.draw(view, actions)
     if dev then
       im.SameLine()
       if im.Button(dev.isActive() and 'Dev tools off' or 'Dev tools') then dev.toggleLast() end
+    end
+    local st = rawget(_G, 'beamngEarth_settings')
+    if st and st.uiOpenAddonsWindow then
+      im.SameLine()
+      if im.Button('Addons Window...') then st.uiOpenAddonsWindow() end
+      if st.uiRefreshWorld then
+        im.SameLine()
+        if im.Button('Refresh world') then st.uiRefreshWorld() end
+      end
     end
     im.Separator()
     wrapped('Status: ' .. (view.status ~= '' and view.status or '-'))

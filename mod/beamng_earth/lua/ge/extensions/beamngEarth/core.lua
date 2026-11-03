@@ -945,6 +945,11 @@ local function onMessage(msg)
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
+    pcall(M.syncAddons)
+    if settings and settings.get then
+      local ep = settings.get('effortProfile')
+      if type(ep) == 'string' and #ep > 0 then pcall(M.setEffortProfile, ep) end
+    end
     -- the on-screen credits: this session's own follow (the attribution line until then)
     credits.clear()
     -- M4: the terrain block first (everything below may use the lattice / follow table); a server without
@@ -1205,6 +1210,22 @@ local function onMessage(msg)
     if msg.clearedBytes ~= nil then
       cacheClears = cacheClears + 1
       cacheInfo.clearedBytes, cacheInfo.clears = tonumber(msg.clearedBytes) or 0, cacheClears
+    end
+  elseif t == 'addons_status' or t == 'addons_sync' then
+    local a = M.addonsModule and M.addonsModule()
+    if a and a.applySyncResponse then a.applySyncResponse(msg) end
+    if msg.cache_invalidated == true then
+      trees.clear()
+      if roads.newSession then roads.newSession() end
+      if roads.incrementBldGen then roads.incrementBldGen() end
+    end
+  elseif t == 'effort_status' then
+    if type(msg.profile) == 'string' then M._effortProfile = msg.profile end
+    M._effortBudget = msg
+    if msg.cache_invalidated == true then
+      trees.clear()
+      if roads.newSession then roads.newSession() end
+      if roads.incrementBldGen then roads.incrementBldGen() end
     end
   end
 end
@@ -2431,6 +2452,18 @@ end
 
 function M.toggleUI() ui.visible = not ui.visible end
 
+function M.openPage(url)
+  if type(url) ~= 'string' or url == '' then return false end
+  if net.isConnected() then
+    net.send({ type = 'open_page', url = url })
+    return true
+  elseif openWebBrowser then
+    pcall(openWebBrowser, url)
+    return true
+  end
+  return false
+end
+
 -- The session's terrain block size (docs/V1_4_SPEC.md 3.5, M4): 1024 (v1.3.1) or 512, from the
 -- server's hello.blockSize. Sets the lattice, the terrain-follow table, the importMaps layer / flat
 -- maps and the rebase staleness rule together. Returns the size in use and whether `size` was valid.
@@ -2749,6 +2782,61 @@ end
 -- The highway signs on / off (settings highwaySigns): shown or hidden at once, built by the server only while on.
 function M.setHighwaySigns(on)
   if roads.setSignsEnabled(on) then net.send({ type = 'highway_signs', on = roads.signsEnabled }) end
+end
+
+-- Native Addon Registry (addons.lua) & Layer B Effort Controller hooks (stored on M to respect 200-local limit)
+M._addons = nil
+M._effortProfile = 'balanced'
+M._effortBudget = nil
+function M.addonsModule()
+  if not M._addons then
+    local ok, mod = pcall(require, 'beamngEarth/addons')
+    if ok and type(mod) == 'table' then M._addons = mod end
+  end
+  return M._addons
+end
+function M.syncAddons(userToggles)
+  local a = M.addonsModule()
+  if not a then return nil end
+  a.discover()
+  if not userToggles then
+    local settings = rawget(_G, 'beamngEarth_settings')
+    if settings and settings.get then
+      a.setAddonEnabled('provence', settings.get('addonProvence') ~= false)
+      a.setSourceEnabled('provence', 'ign_rpg_parcels', settings.get('sourceIgnRpg') ~= false)
+      a.setSourceEnabled('provence', 'ign_orthophoto_20cm', settings.get('sourceIgnOrtho') ~= false)
+      a.setSourceEnabled('provence', 'osm_provence_landuse', settings.get('sourceProvenceBiomes') ~= false)
+    end
+  end
+  local payload = a.buildSyncPayload(userToggles)
+  if net.isConnected() then
+    net.send({ type = 'addons_sync', addons = payload.addons, user_toggles = payload.user_toggles })
+  end
+  return payload
+end
+function M.refreshWorld()
+  trees.clear()
+  if roads.newSession then roads.newSession() end
+  if roads.incrementBldGen then roads.incrementBldGen() end
+  if net.isConnected() then
+    net.send({ type = 'roads_reset', all = true })
+  end
+  return { ok = true }
+end
+function M.getAddonsStatus()
+  local a = M.addonsModule()
+  return a and a.getStatus() or { synced = false, discovered = {}, active = {}, rejected = {}, warnings = {} }
+end
+function M.setEffortProfile(profile, telemetry)
+  if type(profile) == 'string' and #profile > 0 then
+    M._effortProfile = profile
+  end
+  local sent = false
+  if net.isConnected() then
+    net.send({ type = 'effort_set', profile = M._effortProfile, telemetry = telemetry })
+    sent = true
+  end
+  return { ok = true, profile = M._effortProfile, sent = sent }
 end
 
 M.onUpdate = onUpdate
