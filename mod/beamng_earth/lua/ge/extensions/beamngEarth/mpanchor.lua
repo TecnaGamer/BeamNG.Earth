@@ -61,14 +61,21 @@ local lastAt = {}                        -- [serverVehicleString] = os.clock() o
 M.clock = os.clock                       -- (tests)
 
 -- mpsession.lua: player pid's anchor, from the plugin's bngeAnchors.
+function M.coordinates(lat, lon)
+  lat, lon = tonumber(lat), tonumber(lon)
+  if lat and lon and math.abs(lat) <= 90 and math.abs(lon) <= 180 then return lat, lon end
+end
+
 function M.setRemote(pid, lat, lon)
-  pid, lat, lon = tonumber(pid), tonumber(lat), tonumber(lon)
-  if not pid or not lat or not lon then return end
+  pid = tonumber(pid)
+  lat, lon = M.coordinates(lat, lon)
+  if not pid or not (pid >= 0 and pid < math.huge and pid % 1 == 0) or not lat then return false end
   local old = remote[pid]
   if old and (old.lat ~= lat or old.lon ~= lon) then
     settleUntil[pid] = M.clock() + M.SETTLE_S
   end
   remote[pid] = { lat = lat, lon = lon }
+  return true
 end
 
 -- Do we know player pid's anchor (its cars' positions can be converted)?
@@ -77,6 +84,21 @@ function M.knows(pid) return remote[tonumber(pid)] ~= nil end
 -- Was this remote car's last position (BeamMP's serverVehicleString "pid-vid") beyond FAR_M?
 function M.isFar(sid) return far[sid] == true end
 local nearSince = {}                     -- [serverVehicleString] = M.clock() its packets came in again after far
+-- bngeAnchors is a complete live snapshot, not a delta. Expire origins and vehicle
+-- history together, so a reconnect reusing a player id cannot inherit old state.
+function M.retainRemote(players)
+  for pid in pairs(remote) do
+    if not players[tostring(pid)] then
+      remote[pid], xfCache[pid], settleUntil[pid] = nil, nil, nil
+    end
+  end
+  for _, records in ipairs({ far, wasFar, lastPos, lastAt, nearSince }) do
+    for sid in pairs(records) do
+      local pid = tostring(sid):match('^(%d+)%-')
+      if not players[pid] then records[sid] = nil end
+    end
+  end
+end
 -- Seconds since a car that was far sent packets in reach again (math.huge: never far, or long since).
 function M.nearFor(sid)
   local t = nearSince[sid]

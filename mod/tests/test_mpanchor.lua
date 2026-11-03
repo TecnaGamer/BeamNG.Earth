@@ -29,6 +29,14 @@ ma.announceOwn(36.5, -118.1)
 T.check(ma.ownChanged == true, 'our anchor changed: mpsession sends a pose at once')
 ma.setRemote(4, 36.52, -118.08)
 T.check(ma.knows(4) and not ma.knows(5), 'knows the anchors it was told')
+for _, bad in ipairs({ 0 / 0, math.huge, -math.huge, 181, {}, false }) do
+  ma.setRemote(99, 0, bad)
+  T.check(not ma.knows(99), 'invalid remote longitude rejected: ' .. tostring(bad))
+end
+ma.setRemote(99, 91, 0)
+T.check(not ma.knows(99), 'invalid remote latitude rejected')
+T.check(pcall(ma.setRemote, 0 / 0, 0, 0), 'NaN player id rejected without throwing')
+ma.setRemote(4, 0 / 0, 0)
 
 positionGE.handle('p:4-0:{"pos":[100,200,30]}')
 local out = enc[#enc]
@@ -115,6 +123,18 @@ tnow = tnow + 0.1
 positionGE.handle('p:4-0:{"pos":[8125,200,30]}')
 T.check(#got == n2 + 2, '... and it moves on from there')
 ma.clock = os.clock
+
+-- A departed/stale peer loses its transform and history; the same numeric player
+-- id can then reconnect elsewhere without inheriting a settle or jump timer.
+ma._noteFar('4-0')
+ma.retainRemote({ ['6'] = true })
+T.check(not ma.knows(4) and ma.knows(6), 'snapshot expires only missing peers')
+T.check(not ma.wasFar('4-0') and not ma.isFar('4-0') and ma.lastPos('4-0') == nil,
+  'expired peer loses vehicle history')
+ma.setRemote(4, 36.52, -118.08)
+local reconnectBefore = #got
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == reconnectBefore + 1, 'reused player id starts without old settle or jump state')
 
 ma.reset()
 T.check(not ma.knows(4), 'reset: the anchors forgotten')
