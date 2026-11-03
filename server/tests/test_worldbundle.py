@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
@@ -251,6 +252,55 @@ class BundleTest(unittest.TestCase):
         before = wb.generator_identity()
         with mock.patch.dict(os.environ, {"BNE_ROADZ": "off"}):
             self.assertNotEqual(before, wb.generator_identity())
+
+    def test_bridge_identity_uses_the_effective_profile(self):
+        import roads
+        with mock.patch.dict(os.environ):
+            os.environ.pop("BNE_BRIDGE_PROFILE", None)
+            default = wb.generator_identity()
+            for value in ("curve", "CURVE", "flat", ""):
+                # The existing generator treats any non-legacy string as curve; flat is not a new mode.
+                os.environ["BNE_BRIDGE_PROFILE"] = value
+                self.assertEqual(roads.bridge_profile_mode(), "curve")
+                self.assertEqual(wb.generator_identity(), default)
+            os.environ["BNE_BRIDGE_PROFILE"] = "legacy"
+            legacy = wb.generator_identity()
+            self.assertNotEqual(legacy, default)
+            os.environ["BNE_BRIDGE_PROFILE"] = "LEGACY"
+            self.assertEqual(wb.generator_identity(), legacy)
+            self.write()
+            os.environ.pop("BNE_BRIDGE_PROFILE")
+            with self.assertRaises(wb.BundleError):
+                self.export()
+
+    def test_default_producer_plans_export_in_a_clean_process(self):
+        root = Path(__file__).resolve().parents[2]
+        env = dict(os.environ)
+        env.pop("BNE_BRIDGE_PROFILE", None)
+        env.pop(wb.ENV, None)
+        producer = """import os, sys
+sys.path.insert(0, 'server')
+import plancache
+# earthd.main sets its parsed default before generating plans.
+os.environ['BNE_BRIDGE_PROFILE'] = 'curve'
+cache = plancache.PlanCache(sys.argv[1], 'w0s0')
+assert cache.store((14, 4000, 6000), [], [], [], [], persist=True)
+"""
+        plans = self.root / "producer"
+        result = subprocess.run([sys.executable, "-c", producer, str(plans)], cwd=root, env=env,
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        sources = self.root / "sources.json"
+        sources.write_text("{}", encoding="utf-8")
+        result = subprocess.run([sys.executable, str(root / "tools" / "world_cache.py"), "export",
+                                 str(plans / "r10" / "w0s0"), str(self.bundle), "--sources", str(sources),
+                                 "--input-digest", DIGEST, "--credit", "Synthetic test fixture"], cwd=root,
+                                env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = wb.validate_bundle(self.bundle, json.loads(result.stdout)["manifest_id"])
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(manifest["generator"], wb.generator_identity())
+            self.assertIsNotNone(wb.PinnedPlanCache(self.bundle, "w0s0", {}).claim(KEY)[0])
 
     def test_manifest_shape_limits_and_paths(self):
         self.write()

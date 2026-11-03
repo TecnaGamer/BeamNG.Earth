@@ -107,9 +107,10 @@ class GameClosed(unittest.TestCase):
         def sleep(s):
             clock[0] += s
         with mock.patch.object(launcher, "game_pids", lambda: next(seen)), \
+                mock.patch.object(launcher, "IS_WIN", False), \
                 mock.patch.object(launcher, "game_connected", lambda: False), \
                 mock.patch.object(launcher.time, "sleep", sleep), \
-                mock.patch.object(launcher.time, "time", lambda: clock[0]):
+                mock.patch.object(launcher.time, "monotonic", lambda: clock[0]):
             launcher.wait_for_game(None)
         # [1] found; gone twice (6 s), back ([2] x2, 6 s), then gone for good: closed after GAME_GONE_S of absence
         self.assertGreaterEqual(clock[0], 12 + launcher.GAME_GONE_S)
@@ -335,7 +336,10 @@ class DirectStartAdoptsOptionsTest(unittest.TestCase):
                 calls.append((argv, kw["env"]))   # the game's spawn; a later one is the through-Steam fallback
             return mock.Mock(poll=lambda: 0)      # "ended at once": the launcher then goes through Steam instead
 
-        with mock.patch.object(launcher, "linux_game_exe", return_value="/g/BeamNG/BinLinux/BeamNG.drive.x64"), \
+        with mock.patch.object(launcher, "IS_WIN", False), \
+                mock.patch.object(launcher.apppaths, "saved_game_dir", return_value=None), \
+                mock.patch.object(launcher, "steam_launch"), \
+                mock.patch.object(launcher, "linux_game_exe", return_value="/g/BeamNG/BinLinux/BeamNG.drive.x64"), \
                 mock.patch.object(launcher, "sandboxed_game", return_value=False), \
                 mock.patch.object(launcher, "steam_running", return_value=True), \
                 mock.patch.object(launcher, "gcpatch_lib", return_value=None), \
@@ -541,16 +545,14 @@ class WaitForGameTest(unittest.TestCase):
         """Started through Steam: no game for longer than GAME_START_S (the launch options window open), then the game
         runs and closes: wait_for_game returns once it is gone (it used to wait for good)."""
         clock = [0.0]
-        seen = iter([False] * 5 + [True] * 3)        # game_pids: none for a while, then the game
-
         def fake_sleep(s):
             clock[0] += max(s, 100)
-        alive = iter([True, True, False, False, False, False, False, False, False, False, False, False])
-        with mock.patch.object(launcher.time, "time", side_effect=lambda: clock[0]), \
+        with mock.patch.object(launcher, "IS_WIN", True), \
+                mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock[0]), \
                 mock.patch.object(launcher.time, "sleep", side_effect=fake_sleep), \
-                mock.patch.object(launcher, "game_pids", side_effect=lambda: [1] if next(seen, True) else []), \
-                mock.patch.object(launcher, "game_alive", side_effect=lambda: next(alive, False)), \
-                mock.patch.object(launcher, "game_launcher_running", return_value=False), \
+                mock.patch.object(launcher, "game_alive", side_effect=lambda: 500 <= clock[0] < 700), \
+                mock.patch.object(launcher, "game_launcher_running", side_effect=lambda: clock[0] < 500), \
                 mock.patch.object(launcher, "say") as say:
-            launcher.wait_for_game(None)
-            self.assertEqual(say.call_count, 1, "told once that the game has not started yet")
+            self.assertTrue(launcher.wait_for_game(None))
+            self.assertGreaterEqual(clock[0], 700 + launcher.WINDOWS_GAME_GONE_S)
+            say.assert_not_called()

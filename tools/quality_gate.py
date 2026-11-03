@@ -14,12 +14,13 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
     "test_protocol", "test_protocol_agreement", "test_geodesy", "test_cache",
     "test_budget", "test_install", "test_updates", "test_selfupdate", "test_bmplaunch",
+    "test_launcher_linux", "test_launcher_lifecycle", "test_process_lifecycle",
     "test_netfetch", "test_mapdata", "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_plancache", "test_chunkcache", "test_pools",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets",
-    "test_worldbundle", "test_world_cache",
+    "test_worldbundle", "test_world_cache", "test_peerwork",
     "test_host_package",
 )
 
