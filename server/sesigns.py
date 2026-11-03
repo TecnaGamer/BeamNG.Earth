@@ -13,6 +13,11 @@ TSFS 2019:74.
     C1          both sides of the end of an exit ramp from a motorway or mötesfri väg, and of such an ögla (K237582)
     B3          both sides of a painted crossing without signals, at 60 km/h at most (TSFS 3 kap. 10-11 §§)
     E1, E2      where a motorway begins and ends, and on the ramps on to and off it (TSFS 6 kap. 3-4 §§, K237587)
+    A19         the moose, sparingly (the user: "very typical swedish thing but dont overdo it", 2026-11-03): no data
+                says where they stand (OpenStreetMap has 1 within 150 km of Borås, Trafikverket's API has no signs),
+                so on a rural two-lane main road at 70-100 km/h a piece of road (a map segment, between junctions) of
+                L m gets a pair with chance L / MOOSE_SPACING_M, by a hash of its id: MOOSE_FROM_M into it, each
+                facing the traffic entering it. Not on motorways, 2+1 roads or divided roads: those have game fences.
 
 Spansk sväng: the data has no turn bans (Overture's prohibited_transitions are not downloaded), so it is told by shape:
 a one-way link leaving a fast main road on the right that comes back across it, or ends beside it heading along it. Of
@@ -21,6 +26,7 @@ a one-way link leaving a fast main road on the right that comes back across it, 
 Tile independence: every place is worked out from motesfri._ways, which are the same near a place whichever tile reads
 them, and a tile keeps the rows in its box. Forest rows follow guardrails.forest_rows' layout.
 """
+import hashlib
 import math
 from collections import namedtuple
 
@@ -34,7 +40,7 @@ COUNTRIES = {"SE"}
 # Heights (mod trees.lua SE_SIGNS, tools/build_median_props.py): a row's height over its catalog's is its scale.
 HEIGHTS = {"se_f17": 2.70, "se_f17_400": 2.78, "se_f17_300": 2.78, "se_f17_200": 2.78, "se_f18_11": 2.70,
            "se_f18_12": 2.70, "se_f18_21": 2.70, "se_f2": 3.50, "se_c1": 2.10, "se_b3": 2.60, "se_e1": 2.70,
-           "se_e2": 2.70}
+           "se_e2": 2.70, "se_a19": 2.30}
 
 MIN_RUN_M = 300.0           # m of two lanes that are an overtaking stretch and not a junction's lane
 NEAR_M = 50.0               # F17 before the lane is 2.5 m wide where the arrows don't fit; and F18 before the barrier
@@ -61,6 +67,11 @@ RAMP_BACK_M = (5.0, 10.0, 15.0, 20.0, 30.0)  # m before a ramp's end its C1 stan
 RAMP_E_M = 20.0             # m from a ramp's end its E sign stand
 MOTORWAY_E_M = 30.0         # ... and a motorway's
 ZEBRA_KMH = 60.0
+MOOSE_SPACING_M = 15000.0   # m of such road to a pair of A19s, on average
+MOOSE_MIN_M = 1000.0        # m a piece of road is at least
+MOOSE_FROM_M = 150.0        # m into it from a junction
+MOOSE_SIDE_M = 1.5          # m past the road's edge (TSFS 1 kap. 13 §: 0.3-4.0)
+MOOSE_CLASSES = {"trunk", "primary", "secondary", "tertiary"}
 ZEBRA_M = 2.0               # m from a crossing's middle along the road to its B3 (M15 is 3-4 m long)
 ONE_ZEBRA_M = 6.0
 NEAR_NODE_M = 2.0           # crossings.NODE_NEAR_M
@@ -570,12 +581,41 @@ def all_signs(ways):
     return out
 
 
+def _moose_road(s):
+    return (s.kind == "paved" and not s.urban and not s.link and not s.oneway and s.cls in MOOSE_CLASSES
+            and 70.0 <= _limit(s) <= 100.0 and (s.lanes or 2) <= 2)
+
+
+def _chance(fid):
+    """A number in [0, 1) of a road's id, the same in every tile and run."""
+    return int(hashlib.sha1(str(fid).encode("utf-8")).hexdigest()[:8], 16) / 2.0 ** 32
+
+
+def moose_signs(near_roads):
+    """A19 on near_roads (build_tile's roads_out: whole ground pieces, the same in every tile), see the header."""
+    lines = [motesfri.Way(fid, s, {}, np.asarray(pts, np.float64)[:, :2], fid) for fid, s, pts, *_ in near_roads
+             if len(pts) >= 2]
+    out = []
+    for w in lines:
+        if not _moose_road(w.spec):
+            continue
+        length = _length(w.xy)
+        if length < MOOSE_MIN_M or _chance(w.fid) >= length / MOOSE_SPACING_M:
+            continue
+        for xy in (w.xy, w.xy[::-1]):
+            p, t = _point(xy, MOOSE_FROM_M)
+            q = p + _right(t) * (float(w.spec.width) / 2 + MOOSE_SIDE_M)
+            if _free(q, lines, {id(w)}):
+                out.append(Sign("se_a19", q, t))
+    return out
+
+
 def tile_rows(frame, ways, near_roads, nodes, box, elev, country):
     """Forest rows of road tile box: ways motesfri._ways' (None: only the zebras' B3, which need no wider cells),
     near_roads build_tile's roads_out, nodes crossings.nodes', elev(lat, lon) the ground."""
     if (country or "").upper() not in COUNTRIES:
         return []
     signs = all_signs(ways) if ways else []
-    signs = signs + zebra_signs(near_roads, (nodes or {}).get("zebras", ()))
+    signs = signs + zebra_signs(near_roads, (nodes or {}).get("zebras", ())) + moose_signs(near_roads)
     x0, y0, x1, y1 = box
     return [_row(s.group, s.p, s.facing, frame, elev) for s in signs if x0 <= s.p[0] < x1 and y0 <= s.p[1] < y1]

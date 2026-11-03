@@ -154,6 +154,15 @@ Not built:
 - **Warning line before a solid line (M3, K237689):** the dash pattern is chosen per way, so changing the last 100 m needs a change in the line builder.
 - **Rest areas:** not attempted.
 
+## Moose signs (A19)
+
+`sesigns.moose_signs` puts the moose warning sign A19-1 on rural roads, sparingly: the user wanted the typical Swedish sign but not overdone.
+
+- **No data:** OpenStreetMap has 1 A19 within 150 km of Borås, and Trafikverket's API has no road signs, so the signs follow a rule.
+- **Rule:** rural two-lane trunk, primary, secondary and tertiary roads at 70-100 km/h, not one-way. A piece of road (a map segment, junction to junction) of at least 1 km and L m long gets a pair with chance L / 15 km, decided by a hash of its id, so every tile and every run agree. Each sign stands 150 m into the piece facing the traffic entering it, 1.5 m past the edge.
+- **Measured:** one sign per 12-25 km of such road per direction (Borås 312 km of road, 30 signs; Härnösand 125 km, 10; Jämtland 152 km, 26).
+- **Left out:** motorways, 2+1 and divided roads, which have game fences (viltstängsel) for long stretches; where fences end has no data.
+
 ## Road type detection
 
 Findings, and the rules built on them, which shipped in `0fbe4bbb`. The commit message says what the rules do.

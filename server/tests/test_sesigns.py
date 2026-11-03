@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -321,3 +322,31 @@ class NodesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MooseTest(unittest.TestCase):
+    def roads(self, **kw):
+        sp = spec(8.0, kw.get("cls", "secondary"), kw.get("oneway", False), kw.get("kmh", 80.0), 2,
+                  urban=kw.get("urban", False))
+        return [("r", sp, np.c_[np.zeros(9), np.linspace(0, kw.get("length", 3000.0), 9), np.zeros(9)], 13.0)]
+
+    def test_a_chosen_road_gets_one_each_way_facing_its_traffic(self):
+        with unittest.mock.patch.object(sesigns, "MOOSE_SPACING_M", 1.0):
+            got = sesigns.moose_signs(self.roads())
+        self.assertEqual(len(got), 2)
+        north_, south_ = sorted(got, key=lambda s: float(s.facing[1]), reverse=True)
+        self.assertAlmostEqual(float(north_.p[1]), sesigns.MOOSE_FROM_M, 3)
+        self.assertAlmostEqual(float(north_.p[0]), 4.0 + sesigns.MOOSE_SIDE_M, 3, "on the northbound traffic's right")
+        self.assertAlmostEqual(float(south_.p[1]), 3000.0 - sesigns.MOOSE_FROM_M, 3)
+        self.assertLess(float(south_.p[0]), 0.0)
+
+    def test_the_choice_is_the_roads_own(self):
+        self.assertEqual(sesigns._chance("r"), sesigns._chance("r"))
+        picked = sum(sesigns._chance(f"road{k}") < 0.2 for k in range(2000))
+        self.assertTrue(300 < picked < 500, picked)
+
+    def test_not_in_town_nor_on_fast_short_or_one_way_roads(self):
+        with unittest.mock.patch.object(sesigns, "MOOSE_SPACING_M", 1.0):
+            for kw in ({"urban": True}, {"cls": "motorway"}, {"kmh": 110.0}, {"kmh": 50.0}, {"length": 900.0},
+                       {"oneway": True}, {"cls": "residential"}):
+                self.assertEqual(sesigns.moose_signs(self.roads(**kw)), [], kw)

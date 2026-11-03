@@ -237,7 +237,8 @@ M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_give
 M.GROUP_MAX_M.giveway_b1 = 300
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
 local SE_SIGNS = { se_f17 = 2.70, se_f17_400 = 2.78, se_f17_300 = 2.78, se_f17_200 = 2.78, se_f18_11 = 2.70, se_f18_12 = 2.70,
-  se_f18_21 = 2.70, se_f2 = 3.50, se_c1 = 2.10, se_b3 = 2.60, se_e1 = 2.70, se_e2 = 2.70 }
+  se_f18_21 = 2.70, se_f2 = 3.50, se_c1 = 2.10, se_b3 = 2.60, se_e1 = 2.70, se_e2 = 2.70,
+  se_a19 = 2.30 }
 for g, h in pairs(SE_SIGNS) do
   M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
   M.GROUP_MAX_M[g] = 500

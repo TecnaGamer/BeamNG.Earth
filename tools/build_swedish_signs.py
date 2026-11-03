@@ -3,7 +3,7 @@ bne_se_signs2.png (the signs of server/sesigns.py).
 
     python tools/build_swedish_signs.py <folder of the downloaded PNGs: c31-3.png ... c31-12.png, b1-1.png,
                                          f17-1.png, f18-2.png, f18-5.png, f18-6.png, t2-1.png, c1-1.png, b3-1.png,
-                                         e-11.png, e2-1.png, f2-1.png>
+                                         e-11.png, e2-1.png, f2-1.png, a19-1.png>
 
 The artwork is the agency's PNGs of the signs (transportstyrelsen.se, vagmarken: C31 30 to 120 km/h as c31-3 to c31-12,
 B1 as b1-1; fetched 2026-11-02), drawn in its Tratex. Each stands centred in a cell of 256 px on the signs' red, which
@@ -139,7 +139,7 @@ def sheet2(src):
 
 def main(src):
     sheet = Image.new("RGB", (CELL * 4, CELL * 4), RED)
-    names = [f"c31-{n}.png" for n in range(3, 13)] + ["b1-1.png"]
+    names = [f"c31-{n}.png" for n in range(3, 13)] + ["b1-1.png", "a19-1.png"]
     for k, name in enumerate(names):
         im = Image.open(os.path.join(src, name)).convert("RGBA")
         s = ART / max(im.size)

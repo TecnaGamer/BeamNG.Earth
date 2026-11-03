@@ -123,6 +123,29 @@ def giveway(near):
     return m
 
 
+# A19-1, the moose (server/sesigns.py moose_signs): B1's triangle point up, its artwork beside B1's on bne_se_signs.png
+# (cell 3, 2), the same size (TSFS 2019:74 2 kap. 1 §: a warning sign's "normal" side 900 mm, B1's too)
+A19_CELL = (896.0, 640.0)
+A19_TOP = B1_TOP                    # (its lower edge B1's point: 1.5 m)
+
+
+def moose(near):
+    """A19: Z up from the ground, point up, its face towards -Y, on a post behind it."""
+    edge = [(x, -z) for x, z in reversed(b1_outline(6 if near else 1))]
+    mid = B1_LOW + (B1_TOP - B1_LOW) / 2
+    front, back = -B1_POST - B1_DEPTH, -B1_POST
+    m = Mesh(8)
+    m.face("bne_se_signs", [(x, front, mid + z) for x, z in edge],
+           [((A19_CELL[0] + x * B1_PX) / 1024, 1 - (A19_CELL[1] - z * B1_PX) / 1024) for x, z in edge])
+    m.face("bne_cable_steel", [(x, back, mid + z) for x, z in reversed(edge)])
+    if near:
+        for (x0, z0), (x1, z1) in zip(edge, edge[1:] + edge[:1]):
+            m.face("bne_cable_steel", [(x0, back, mid + z0), (x1, back, mid + z1), (x1, front, mid + z1),
+                                       (x0, front, mid + z0)])
+        m.cylinder("bne_cable_steel", 0.0, 0.0, -POST_SINK, A19_TOP - 0.05, B1_POST, caps=False)
+    return m
+
+
 # Sweden's signs of server/sesigns.py, on tools/build_swedish_signs.py's second sheet: picture's middle in px of 1024, its
 # drawn size in px, the plate in m and its shape. Sizes: "normal" of TSFS 2019:74 (F16-F18: 8 kap. 2 §, 1.20 m high; C1:
 # 4 kap. 1 § 0.60 m; B3: 3 kap. 1 § 0.60 m; E1, E2: 6 kap. 1 §, 0.90 m wide); F2 has none, its text's scale made it 2 m.
@@ -229,6 +252,11 @@ def main():
         path = os.path.join(OUT, name + ".dae")
         write_dae(path, name, [(32, se_sign(group, True)), (4, se_sign(group, False))], se_pole(group))
         print(path, os.path.getsize(path), "bytes", round(se_height(group), 2), "m")
+    path = os.path.join(OUT, "bne_se_a19.dae")
+    pole = Mesh(4)
+    pole.box("bne_cable_steel", (0.0, 0.0, A19_TOP / 2), (0.04, 0.04, A19_TOP / 2))
+    write_dae(path, "bne_se_a19", [(32, moose(True)), (4, moose(False))], pole)
+    print(path, os.path.getsize(path), "bytes", round(A19_TOP, 2), "m")
 
 
 if __name__ == "__main__":
