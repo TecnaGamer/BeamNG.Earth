@@ -81,7 +81,8 @@ function G.key(aLat, aLon) return string.format('%.6f,%.6f', aLat, aLon) end
 -- Metres between two latitude / longitude points (equirectangular: the distances here are a few km).
 function G.dist(lat1, lon1, lat2, lon2)
   local k = math.pi / 180
-  local x = (lon2 - lon1) * k * math.cos((lat1 + lat2) / 2 * k)
+  local dLon = (lon2 - lon1 + 180) % 360 - 180
+  local x = dLon * k * math.cos((lat1 + lat2) / 2 * k)
   local y = (lat2 - lat1) * k
   return 6371000 * math.sqrt(x * x + y * y)
 end
@@ -121,8 +122,9 @@ end
 function G.onPose(pid, d, name)
   if type(d) ~= 'table' or tonumber(d.v) ~= G.PROTO then return nil, false end
   local aLat, aLon, lat, lon = tonumber(d.aLat), tonumber(d.aLon), tonumber(d.lat), tonumber(d.lon)
-  if not (aLat and aLon and lat and lon) or math.abs(lat) > 90 or math.abs(lon) > 180
-      or math.abs(aLat) > 90 or math.abs(aLon) > 180 then
+  -- Positive range checks reject NaN as well as infinity and missing values.
+  if not (aLat and aLon and lat and lon and math.abs(lat) <= 90 and math.abs(lon) <= 180
+      and math.abs(aLat) <= 90 and math.abs(aLon) <= 180) then
     return nil, false
   end
   local p = G.players[pid]

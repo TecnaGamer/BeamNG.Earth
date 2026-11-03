@@ -316,6 +316,28 @@ class MapData:
                 "lanes": lanes.known() if lanes is not None else None,
                 "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None}
 
+    def bundle_versions(self):
+        """Offline source identity for prepared road plans, including cached but not yet opened shards.
+
+        Prefer an actively used release over a later disk update. Missing manifests stay unknown;
+        malformed manifests reject export/pinning instead of silently inventing a source version.
+        This does not alter normal lazy source refresh or claim a complete raw-input snapshot.
+        """
+        from worldbundle import BundleError, cached_source_build
+        versions = self.versions()
+        for name, attr in (("rails", "rail_tags"), ("lanes", "lane_tags")):
+            source = getattr(self, attr, None)
+            if source is None:
+                continue
+            built = versions[name]
+            if built is None and source.dir:
+                built = cached_source_build(os.path.join(source.dir, "manifest.json"))
+            if built is not None and (not isinstance(built, str) or not 0 < len(built) <= 256
+                                      or any(ord(c) < 32 for c in built)):
+                raise BundleError("Invalid active source build identity")
+            versions[name] = built
+        return versions
+
     def path(self, key, layer):
         source, release = _source(layer, self.release)
         lv = LAYER_VERSIONS.get(layer)

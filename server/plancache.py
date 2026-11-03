@@ -15,6 +15,7 @@ is taken over; a wait longer than WAIT_S plans the cell here as before; a proces
 favoured as itself (xproc.once). Old runs' folders go at server start (prune).
 """
 import json
+import hashlib
 import os
 import shutil
 import threading
@@ -78,11 +79,19 @@ def for_grader(cache_dir, grader, widths, wet):
     settings that change plans in the signature), or None outside a server run. Complete plans are kept in the revisit
     cache too (persist): a place's next visit (a game started where it was left, or anchored anywhere near) reads them
     instead of planning again."""
+    md = getattr(grader, "md", None)
+    signature = f"w{int(widths is not None)}s{int(wet is not None)}"
+    bundle = os.environ.get("BNGE_WORLD_BUNDLE")
+    if bundle:
+        from worldbundle import PinnedPlanCache
+        versions = getattr(md, "bundle_versions", None) or getattr(md, "versions", None)
+        return PinnedPlanCache(bundle, signature, versions() if versions is not None else {})
     run = os.environ.get(RUN_ENV)
     if not run:
         return None
-    md = getattr(grader, "md", None)
-    pc = PlanCache(os.path.join(cache_dir, "plans", run), f"w{int(widths is not None)}s{int(wet is not None)}")
+    pc = PlanCache(os.path.join(cache_dir, "plans", run), signature)
+    # Resolve after generation: loading source layers can discover their actual shard releases.
+    pc.source_versions = getattr(md, "bundle_versions", None) or getattr(md, "versions", None)
     pc.persist = (cache_dir, (FRAMES, pc.signature,
                               md.versions() if md is not None and hasattr(md, "versions") else None))
     return pc
@@ -93,6 +102,7 @@ class PlanCache:
         self.dir = os.path.join(root, FRAMES, signature)
         self.signature = signature
         self.persist = None     # (cache dir, key parts) of the revisit cache's copy (for_grader), or None
+        self.source_versions = None  # callable for the versions actually known after a complete cell was built
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
         self._lock = threading.Lock()
 
@@ -222,7 +232,31 @@ class PlanCache:
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
                 np.savez(fh, **arrays)
+            provenance = None
+            if persist:
+                from worldbundle import canonical, completion_record
+                with open(tmp, "rb") as fh:
+                    digest = hashlib.sha256(fh.read()).hexdigest()
+                try:
+                    sources = self.source_versions() if self.source_versions is not None else {}
+                    provenance = canonical(completion_record(key, self.signature, sources, digest))
+                except (OSError, ValueError, TypeError):
+                    # Optional export provenance must not disable normal local caching. Without a
+                    # valid marker this cell remains unexportable, including any stale earlier marker.
+                    pass
             os.replace(tmp, p)
+            # Export only plans whose complete-input condition the grader actually observed.
+            # The digest binds the marker to this version; an interrupted replacement fails closed.
+            marker = p + ".complete"
+            if provenance is not None:
+                with open(tmp, "wb") as fh:
+                    fh.write(provenance)
+                os.replace(tmp, marker)
+            else:
+                try:
+                    os.remove(marker)
+                except FileNotFoundError:
+                    pass
             if persist and self.persist is not None:
                 import revisit
                 with open(p, "rb") as fh:

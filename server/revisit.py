@@ -15,8 +15,9 @@ are built starts afresh.
 
 Where each item stands (the map's cache view, covermap.py): store(..., where=where(...)) also appends one line to this
 process's revisit/where/<pid>_<start>.tsv (one os.write under O_APPEND: whole lines, and only this process writes
-the file): the code_key, the settings it was built with (sig(): one short hash per setting, compared with
-earthd.Server.world_signature()), kind, key, the anchor and the item's box in degrees. compact() (the server's start)
+the file; the handle closes after each append so Windows can remove an idle cache): the code_key, the settings it was
+built with (sig(): one short hash per setting, compared with earthd.Server.world_signature()), kind, key, the anchor
+and the item's box in degrees. compact() (the server's start)
 folds the files into one and drops the lines whose zip is gone."""
 import hashlib
 import json
@@ -36,7 +37,6 @@ WHERE_DIR = "where"
 WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "fargeo", "far")    # (cellfacts: per cell, no place)
 NEAR_KINDS = ("roads", "roadsg", "plans")    # the drivable world (the road geotiles too); the others the distant view
 COMPACTED = threading.Event()           # set once compact() ran in this process (covermap reads the files after it)
-_where = {}                             # cache dir -> this process's open sidecar fd
 _START = int(time.time())
 
 _faults = [0]
@@ -228,17 +228,22 @@ def _note(cache_dir, kind, k, wh, code=None):
     try:
         lat, lon, s, w, n, e, settings = wh
         line = (f"{code or code_key()}\t{settings}\t{kind}\t{k}\t{lat:.7f}\t{lon:.7f}\t{s:.6f}\t{w:.6f}\t{n:.6f}\t{e:.6f}\n")
-        fd = _where.get(cache_dir)
-        if fd is None:
-            with _lock:
-                fd = _where.get(cache_dir)
-                if fd is None:
-                    d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
-                    os.makedirs(d, exist_ok=True)
-                    fd = _where[cache_dir] = os.open(os.path.join(d, f"{os.getpid()}_{_START}.tsv"),
-                                                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0),
-                                                     0o644)
-        os.write(fd, line.encode("utf-8"))
+        d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
+        path = os.path.join(d, f"{os.getpid()}_{_START}.tsv")
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        # Keep the handle only while writing. Cached descriptors blocked Windows cache cleanup and, on Unix,
+        # silently wrote into an unlinked file after a cache directory was replaced. Serialise our threads too:
+        # Windows' append descriptors do not promise POSIX's atomic seek-to-end/write between different handles.
+        with _lock:
+            try:
+                fd = os.open(path, flags, 0o644)
+            except FileNotFoundError:
+                os.makedirs(d, exist_ok=True)
+                fd = os.open(path, flags, 0o644)
+            try:
+                os.write(fd, line.encode("utf-8"))
+            finally:
+                os.close(fd)
     except Exception:
         pass
 
@@ -304,7 +309,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
     """Keep an item under key k: blobs {name: bytes}, extra JSON data; where (where()): the place it stands, for the
     map's cache view (a sidecar line; code: its code value there, format_marker's for a format-keyed item, else
     code_key). Never raises; False when not kept."""
-    if not ON or kind in SKIP:
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return False
     path = _path(cache_dir, kind, k)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
@@ -328,7 +333,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
 
 def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
-    if not ON or kind in SKIP:
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return None
     path = _path(cache_dir, kind, k)
     if not os.path.exists(path):

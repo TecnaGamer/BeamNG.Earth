@@ -330,7 +330,8 @@ BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive t
      (a `BeamMP-Launcher` folder in your home folder or one folder down, e.g. `~/Games/BeamMP-Launcher`, or
      `~/.local/share`; or answer "Have it already", or set `BEAMMP_LAUNCHER`).
    - The setting **Start BeamMP with BeamNG.Earth** (Pause menu > BeamNG.Earth > Multiplayer) turns this off or
-     back on; `--no-beammp` starts the game without BeamMP once.
+     back on; `--no-beammp` starts the game without BeamMP once. If BeamMP is not ready within 30 seconds the app
+     stops it and carries on in single player (`--beammp-wait SECONDS` waits longer, up to 600).
 2. In the game: main menu > More > BeamMP, log in (an account or a guest).
 3. Pick the **BeamNG.Earth** category in BeamMP's server browser: the servers running BeamNG.Earth (search,
    filters, favorites and details as for the other servers), the official server at the top. They are listed only there, for players who have BeamNG.Earth. A private server: Direct Connect with its address (the
@@ -374,7 +375,14 @@ players use Direct Connect. The plugin lists the server once a minute with `curl
 Update the server zip with every release: it carries the mod the server sends to players. The server's time and weather for everyone
 (`G.TIME`: real or a fixed / running time such as `'20:30'`; `G.WEATHER`: real or clear, cloudy, rain, storm, snow,
 fog) are set near the top of `Resources/Server/BeamNGEarth/main.lua`. The server needs no world data and
-little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip.
+little CPU. From the source, `python3 tools/package.py --beammp` builds the same zip. Releases may also carry
+ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
+`tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
+checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` with an empty AuthKey for your own.
+
+**Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
+the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
+companions skip planning those roads; see [docs/SHARED_WORLD.md](docs/SHARED_WORLD.md).
 
 The server keeps its players' shared world building in `Resources/Server/BeamNGEarth/store` (up to `G.SHARE_STORE_MB`,
 2 GB by default; the pieces used longest ago go first) and sends at most `G.SHARE_OUT_KBPS` (1 MB/s) of it, both near

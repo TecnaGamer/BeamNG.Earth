@@ -754,6 +754,9 @@ class Server:
         feather on the USGS tiles); cache: the download cache's cache.Cache (last use per file, the
         size cap, the page's 'cache' messages; None = no bookkeeping and no 'cache' message, Server()'s
         default); retex_rate: --retex-rate (live retextures per second, 0 = none)."""
+        if os.environ.get("BNGE_WORLD_BUNDLE") and not (grading and mapdata is not None):
+            from worldbundle import BundleError
+            raise BundleError("Pinned road plans require roads and grading enabled")
         self.sid = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
         self.user_dir = user_dir           # the game's user folder (detail mode fills its terrain texture cache)
         self.cache_dir = cache_dir         # (here already: _scan_sessions moves old sessions into its trash)
@@ -2179,6 +2182,9 @@ class Server:
     def grader_for(self, anchor):
         """The anchor's grading.Grader (--grading on), else None."""
         if not self.grading:
+            if os.environ.get("BNGE_WORLD_BUNDLE"):
+                from worldbundle import BundleError
+                raise BundleError("Pinned road plans require roads and grading enabled")
             return None
         with self.grader_lock:
             if anchor.grader is None:
@@ -2186,12 +2192,12 @@ class Server:
                 if getattr(self, "plan_store", None) is None:
                     self.plan_store = gradingmod.PlanStore(
                         self.mapdata, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.road_widths)
-                anchor.grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
-                                                  store=self.plan_store)
-                anchor.grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
-                anchor.grader.dem = self.dem                # (its urgent lane: _plan_missing)
-                anchor.grader.shared = plancachemod.for_grader(self.cache_dir, anchor.grader, self.road_widths,
-                                                              anchor.grader.wet)
+                grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
+                                          store=self.plan_store)
+                grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
+                grader.dem = self.dem                # (its urgent lane: _plan_missing)
+                grader.shared = plancachemod.for_grader(self.cache_dir, grader, self.road_widths, grader.wet)
+                anchor.grader = grader       # publish only after a pinned bundle passed compatibility checks
             return anchor.grader
 
     def warm_roads(self, anchor, x, y, vx, vy):
@@ -2431,6 +2437,9 @@ class Server:
         cached land cover and the photo. The graded block replaces it when it is built (Connection.refine_first:
         terrain_refresh). Not kept in hm (the graded one is the block of its key), nor in anchor.chunks. ground_at: the
         point its groundZ is for (the car's spot)."""
+        if os.environ.get("BNGE_WORLD_BUNDLE"):
+            from worldbundle import BundleError
+            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
         q = self.anchor_q(anchor)
         base = None
@@ -2457,6 +2466,9 @@ class Server:
                 self.hm_here -= 1
 
     def _make_heightmap_here_(self, anchor, cx, cy, progress, t0, q, base=None, provisional=False, ground_at=(0.0, 0.0)):
+        if provisional and os.environ.get("BNGE_WORLD_BUNDLE"):
+            from worldbundle import BundleError
+            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         keep = {}
         g = None if provisional else self.grader_for(anchor)
         c0 = time.thread_time()
@@ -3704,7 +3716,11 @@ class Server:
         if fut is None:
             fut = self.tile_inflight[ck] = loop.run_in_executor(self.tile_pool, self.make_tile, anchor, tile, prev)
             fut.add_done_callback(lambda f: self._tile_done(ck, f))
-        return fut
+        # A connection may stop waiting at a rebase or disconnect. Cancelling the
+        # executor Future does not stop a running thread: it can still write its
+        # pooled shape. Keep that producer tracked until its writes have finished,
+        # so reclaim_names cannot give its slot to another tile in the meantime.
+        return asyncio.shield(fut)
 
     def in_use(self):
         """(anchorId, key) of every tile a connection shows or holds, or let go of less than
@@ -3739,7 +3755,9 @@ class Server:
 
     def slot_held(self, n):
         """Does some game still hold pooled slot n (a far_tile with it not reported gone)?"""
-        return any(n in c.slot_holds for c in self.connections)
+        # Allocation can query this from a tile worker while the event loop
+        # connects/disconnects clients; do not iterate the mutable set directly.
+        return any(n in c.slot_holds for c in tuple(self.connections))
 
     def slots_let_go(self, slots):
         """Event loop: these slots' holds ended (reported gone, or a connection closed)."""
@@ -4005,7 +4023,14 @@ class Server:
 
     def prune(self, keep_from):
         """Forget anchors older than keep_from and delete their files."""
+        busy = {k[0] for k in self.tile_inflight}
+        retry = False
         for aid in [a for a in self.anchors if a < keep_from]:
+            if aid in busy:
+                # A running worker still owns its files and pooled shape slot.
+                # Its asyncio Future must not be cancelled to hurry pruning.
+                retry = True
+                continue
             del self.anchors[aid]
             self.horizon_grids.pop(aid, None)
             self.horizon_failed.pop(aid, None)
@@ -4022,8 +4047,6 @@ class Server:
                 self.cm_waiting[rk] = {ck for ck in self.cm_waiting[rk] if ck[0] != aid}
                 if not self.cm_waiting[rk]:
                     del self.cm_waiting[rk]
-            for fut in [f for k, f in self.tile_inflight.items() if k[0] == aid]:
-                fut.cancel()
             for key in [k for k in self.hm if k[0] == aid]:
                 if key not in self.hm_committed and key not in self.hm_sent:
                     del self.hm[key]
@@ -4042,6 +4065,8 @@ class Server:
             for stem in ANCHOR_TILE_FILES:
                 doomed += glob.glob(os.path.join(self.out_dir, f"{stem}_{aid}_*"))
             self.queue_delete(p for p in dict.fromkeys(doomed) if os.path.exists(p))
+        if retry:
+            self.schedule_prune(keep_from)
 
 
 # Per-anchor tile files (besides far_ / hm_) that prune() deletes with their anchor
@@ -4696,6 +4721,9 @@ class Connection:
             for t in list(self.tasks):
                 t.cancel()
             self.writer.close()
+            # The streamer owns a separate Event.wait task; let its finally
+            # finish before this connection (including a readiness probe) goes.
+            await asyncio.gather(self.streamer, return_exceptions=True)
             log.info("client disconnected %s", self.peer)
 
     def build_veg_tile(self, aid, tx, ty):
@@ -5173,7 +5201,7 @@ class Connection:
         self.status(f"Building terrain at {lat:.5f}, {lon:.5f}...")
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
-        provisional = teleport and PROVISIONAL_FIRST and self.s.grading
+        provisional = teleport and PROVISIONAL_FIRST and self.s.grading and not os.environ.get("BNGE_WORLD_BUNDLE")
         if self.s.surface is not None and not provisional:
             # the anchor's first block is built once and kept while the player stands still: give the
             # land cover around it a moment to arrive (blocks built while driving never wait)
@@ -5409,7 +5437,7 @@ class Connection:
             self.view_at = None
         for ck, (fut, _) in self.inflight.items():
             if ck[0] != aid:
-                fut.cancel()            # only stops jobs that have not started
+                fut.cancel()            # this connection's waiter; the producer keeps its slot until it finishes
         # Tiles sent but not swapped in are dropped by the mod at the anchor switch, but for the global ones (any
         # anchor's: the mod keeps them loading, placed into the new anchor; not after a resync, old is None)
         keep = {k: t for k, t in self.sent.items() if farfield.is_global_key(k)} if old is not None else {}
@@ -6366,6 +6394,7 @@ class Connection:
         return [g for g in self.groups if any(k in self.failed for k in g[0])]
 
     async def stream(self):
+        self._stream_waker = None
         try:
             await self._stream()
         except ConnectionError:
@@ -6374,11 +6403,15 @@ class Connection:
             for fut, _ in self.inflight.values():
                 fut.cancel()
             raise
+        finally:
+            if self._stream_waker is not None:
+                self._stream_waker.cancel()
+                await asyncio.gather(self._stream_waker, return_exceptions=True)
+                self._stream_waker = None
 
     async def _stream(self):
         """Build the needed tiles by priority, send them, emit swap groups as they complete;
         one task per connection."""
-        waker = None
         while True:
             # Clear before reading the state, so an update from here on wakes us again.
             self.wake.clear()
@@ -6441,12 +6474,12 @@ class Connection:
                 if not any(ck[0] != anchor.id and ck[0] != GLOBAL_AID for ck in self.shown):
                     self.s.schedule_prune(anchor.id)
             await self.writer.drain()
-            if waker is None:
-                waker = asyncio.ensure_future(self.wake.wait())
+            if self._stream_waker is None:
+                self._stream_waker = asyncio.ensure_future(self.wake.wait())
             futs = [f for f, _ in self.inflight.values()]
-            done, _ = await asyncio.wait(futs + [waker], return_when=asyncio.FIRST_COMPLETED)
-            if waker in done:
-                waker = None
+            done, _ = await asyncio.wait(futs + [self._stream_waker], return_when=asyncio.FIRST_COMPLETED)
+            if self._stream_waker in done:
+                self._stream_waker = None
             for ck in [ck for ck, (f, _) in self.inflight.items() if f.done()]:
                 fut, t = self.inflight.pop(ck)
                 if fut.cancelled():
@@ -6503,6 +6536,16 @@ class Connection:
 
 
 async def main_async(args):
+    if os.environ.get("BNGE_WORLD_BUNDLE") and (args.roads != "on" or args.grading != "on"):
+        from worldbundle import BundleError
+        raise BundleError("BNGE_WORLD_BUNDLE requires --roads on --grading on")
+    if os.environ.get("BNGE_WORLD_BUNDLE") and getattr(args, "peers", ""):
+        from worldbundle import BundleError
+        raise BundleError("Legacy --peers helpers do not negotiate the pinned road-plan identity")
+    if os.environ.get("BNGE_WORLD_BUNDLE"):
+        from worldbundle import validate_bundle
+        # Reject malformed/missing data before allocating services or starting cache maintenance.
+        validate_bundle(os.environ["BNGE_WORLD_BUNDLE"])
     fmt = args.far_format
     if fmt == "cdae":
         v = cdae.engine_version(args.user_dir)
@@ -6516,12 +6559,25 @@ async def main_async(args):
         ml = farfield.MESH_MIN_LEVEL[args.cells]
         radii = {ml: args.near_radii[0], ml + 1: args.near_radii[1]}
     net = netfetch.Fetcher(stats_dir=os.path.join(args.cache_dir, "netstats"), offline=args.offline)
+    # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
+    mapdata = None
+    try:
+        mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
+                   if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
+        if os.environ.get("BNGE_WORLD_BUNDLE"):
+            from worldbundle import PinnedPlanCache
+            PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],
+                            f"w{int(args.road_widths == 'on')}s{int(args.sea == 'on')}", mapdata.bundle_versions())
+    except BaseException:
+        try:
+            if mapdata is not None:
+                mapdata.close()
+        finally:
+            net.close()
+        raise
     disk = cachemod.Cache(args.cache_dir, args.cache_cap)
     threading.Thread(target=prune_own_caches, args=(args.cache_dir, time.time()), daemon=True,
                      name="cache-prune").start()
-    # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
-    mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
-               if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
     pacer.DUTY = args.background_duty
     global DETAIL_RING_M, AHEAD_ON, ROUTE_AHEAD_ON, ROUTE_AHEAD_MAX_M
     DETAIL_RING_M = args.detail_ring

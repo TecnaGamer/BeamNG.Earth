@@ -44,6 +44,9 @@ _s = None       # this process's state (init)
 class _State:
     def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False,
                  gas_stations=False):
+        if os.environ.get("BNGE_WORLD_BUNDLE") and not (roads and grading):
+            from worldbundle import BundleError
+            raise BundleError("Pinned road plans require roads and grading enabled")
         self.cache_dir = cache_dir
         import revisit
         revisit.CACHE_DIR = cache_dir
@@ -85,21 +88,20 @@ class _State:
         with self.lock:
             if aid not in self.chunks:
                 frame = geodesy.EnuFrame(lat, lon)
-                self.chunks[aid] = heightmap.ChunkCache()
                 if self.grading and getattr(self, "plan_store", None) is None:
                     # (one store for every anchor: the plans are the planning regions', whatever the anchor)
                     self.plan_store = gradingmod.PlanStore(
                         self.md, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.widths)
                     # (its tunnels' drowned question asked of the road tiles' chain store: resolved once for both)
                     self.plan_store.tunnel_store = lambda: self.__dict__.get("chain_stores", {}).get("tunnels")
-                self.graders[aid] = (gradingmod.Grader(frame, self.md, self.plan_store.elev, self.widths,
-                                                       store=self.plan_store)
-                                     if self.grading else None)
-                if self.graders[aid] is not None:
-                    self.graders[aid].wet = self.sea.depth if getattr(self, "sea", None) is not None else None
-                    self.graders[aid].dem = self.dem          # (its urgent lane: _plan_missing)
-                    self.graders[aid].shared = plancache.for_grader(self.cache_dir, self.graders[aid], self.widths,
-                                                                   self.graders[aid].wet)
+                grader = (gradingmod.Grader(frame, self.md, self.plan_store.elev, self.widths,
+                                           store=self.plan_store) if self.grading else None)
+                if grader is not None:
+                    grader.wet = self.sea.depth if getattr(self, "sea", None) is not None else None
+                    grader.dem = self.dem          # (its urgent lane: _plan_missing)
+                    grader.shared = plancache.for_grader(self.cache_dir, grader, self.widths, grader.wet)
+                self.graders[aid] = grader
+                self.chunks[aid] = heightmap.ChunkCache()    # no cached unpinned state after a failed setup
                 for old in sorted(self.chunks)[:-ANCHORS_KEPT]:
                     del self.chunks[old], self.graders[old]
             return self.graders[aid], self.chunks[aid]

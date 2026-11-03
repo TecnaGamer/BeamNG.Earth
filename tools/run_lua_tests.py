@@ -1,68 +1,63 @@
 #!/usr/bin/env python3
-"""The mod's Lua tests (mod/tests/test_*.lua) without a luajit binary: each file under the LuaJIT that the lupa package
-bundles (pip install lupa), in its own process, as `luajit mod/tests/<file>` runs it (arg[0] is the file, the tests'
-folder the working directory). For Windows contributors and anyone with Python but no luajit on the PATH; with luajit
-installed the README's loop (cd mod/tests && for f in test_*.lua; do luajit $f; done) is the same thing.
+"""Run offline Lua unit/stub tests; this does not start or validate BeamNG/BeamMP.
 
-  python3 tools/run_lua_tests.py                    every mod/tests/test_*.lua
-  python3 tools/run_lua_tests.py test_gps test_places  just these
-
-Prints each file's last line (testlib's "<name>: N passed, M failed") and exits 1 when any file failed or errored.
+Requires the development dependency lupa. Uses LuaJIT 2.1 for client tests and
+Lua 5.3 for the BeamMP server plugin, in separate processes with a timeout.
 """
-import glob
-import os
+import argparse
+import importlib
+from pathlib import Path
 import subprocess
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-TESTS = os.path.join(os.path.dirname(HERE), "mod", "tests")
-TIMEOUT_S = 120
+ROOT = Path(__file__).resolve().parents[1]
+TESTS = ROOT / "mod" / "tests"
 
 
-def run_one(path):
-    """Run one Lua file under lupa's LuaJIT in this process (the child side of main)."""
-    try:
-        from lupa import luajit21 as lupa_rt
-    except ImportError:
+def run_one(path, runtime):
+    lua = importlib.import_module("lupa." + runtime).LuaRuntime()
+    print(f"{path.name}: {lua.lua_implementation} (offline/stubbed)", flush=True)
+    lua.globals().arg = lua.table_from({0: path.as_posix()})
+    if path.stem == "test_scoping":
+        lua.globals().BNE_TEST_LUA_FILES = lua.table_from(
+            [p.as_posix() for p in sorted((ROOT / "mod" / "beamng_earth" / "lua").rglob("*.lua"))])
+    # os.exit deliberately exits this child, preserving the test's exit code.
+    lua.execute("dofile(...)", path.as_posix())
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("tests", nargs="*", help="test stems or .lua filenames; default: all")
+    ap.add_argument("--timeout", type=float, default=120)
+    ap.add_argument("--runtime", choices=("luajit21", "lua51", "lua53", "lua54"),
+                    help="override automatic runtime selection")
+    ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    args = ap.parse_args()
+    if args.timeout <= 0:
+        ap.error("--timeout must be positive")
+    names = args.tests or [p.stem for p in sorted(TESTS.glob("test_*.lua"))]
+    paths = [TESTS / (Path(name).stem + ".lua") for name in names]
+    if any(not p.is_file() for p in paths):
+        ap.error("unknown test: " + ", ".join(p.name for p in paths if not p.is_file()))
+    if args.child:
+        return run_one(paths[0], args.runtime)
+    failures = []
+    for path in paths:
+        runtime = args.runtime or ("lua53" if path.stem == "test_beammp_plugin" else "luajit21")
         try:
-            from lupa import luajit20 as lupa_rt
-        except ImportError:
-            sys.exit("run_lua_tests: no LuaJIT in lupa (pip install lupa)")
-    path = os.path.abspath(path)
-    os.chdir(os.path.dirname(path))
-    rt = lupa_rt.LuaRuntime()
-    rt.execute("arg = {}")
-    rt.globals().arg[0] = path
-    run = rt.eval("function(p) local ok, err = pcall(dofile, p) if not ok then io.stderr:write(tostring(err), '\\n')"
-                  " os.exit(1) end end")
-    run(path)
-
-
-def main(argv):
-    if len(argv) == 2 and argv[0] == "--one":
-        run_one(argv[1])
-        return 0
-    names = argv or sorted(os.path.basename(p)[:-4] for p in glob.glob(os.path.join(TESTS, "test_*.lua")))
-    bad = []
-    for n in names:
-        path = os.path.join(TESTS, n if n.endswith(".lua") else n + ".lua")
-        out = []
-        try:
-            r = subprocess.run([sys.executable, os.path.abspath(__file__), "--one", path], capture_output=True,
-                               text=True, timeout=TIMEOUT_S)
-            out = (r.stdout + r.stderr).strip().splitlines()
-            last = out[-1] if out else "(no output)"
-            ok = r.returncode == 0 and " 0 failed" in last
+            result = subprocess.run([sys.executable, __file__, "--child", "--runtime", runtime, path.stem],
+                                    cwd=TESTS, timeout=args.timeout)
+            if result.returncode:
+                failures.append(path.stem)
         except subprocess.TimeoutExpired:
-            last, ok = f"timed out after {TIMEOUT_S} s", False
-        print(f"{'ok  ' if ok else 'FAIL'} {n}: {last}", flush=True)
-        if not ok:
-            bad.append(n)
-            for line in out[-15:]:
-                print("     " + line)
-    print(f"{len(names) - len(bad)} of {len(names)} Lua test files passed" + (f"; failed: {', '.join(bad)}" if bad else ""))
-    return 1 if bad else 0
+            print(f"TIMEOUT: {path.stem}", flush=True)
+            failures.append(path.stem)
+    print(f"Lua modules: {len(paths) - len(failures)} passed, {len(failures)} failed", flush=True)
+    if failures:
+        print("Failed: " + ", ".join(failures))
+    return int(bool(failures))
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

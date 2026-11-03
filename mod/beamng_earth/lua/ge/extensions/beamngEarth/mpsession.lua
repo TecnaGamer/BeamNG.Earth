@@ -124,7 +124,8 @@ end
 -- Metres between two latitude / longitude points (equirectangular: a few km).
 function M.dist(lat1, lon1, lat2, lon2)
   local k = math.pi / 180
-  local x = (lon2 - lon1) * k * math.cos((lat1 + lat2) / 2 * k)
+  local dLon = (lon2 - lon1 + 180) % 360 - 180
+  local x = dLon * k * math.cos((lat1 + lat2) / 2 * k)
   return 6371000 * math.sqrt(x * x + ((lat2 - lat1) * k) ^ 2)
 end
 
@@ -418,13 +419,21 @@ local function onAnchors(data)
   local ok, d = pcall(jsonDecode, data)
   if not ok or type(d) ~= 'table' then return end
   stats.anchors = stats.anchors + 1
-  anchors = d
+  anchors = {}
   local mpanchor = require('beamngEarth/mpanchor')
   local n = 0
   for pid, a in pairs(d) do
-    n = n + 1
-    if type(a) == 'table' then mpanchor.setRemote(pid, a.aLat, a.aLon) end
+    if type(a) == 'table' then
+      local lat, lon = mpanchor.coordinates(a.lat, a.lon)
+      if lat and mpanchor.setRemote(pid, a.aLat, a.aLon) then
+        local id = tostring(tonumber(pid))
+        anchors[id] = { aLat = tonumber(a.aLat), aLon = tonumber(a.aLon), lat = lat, lon = lon,
+          name = a.name, h = a.h }
+        n = n + 1
+      end
+    end
   end
+  mpanchor.retainRemote(anchors)
   if n ~= lastPlayers then
     lastPlayers = n
     log('I', 'beamngEarth', string.format('BeamMP: %d player(s) with BeamNG.Earth', n))
@@ -513,11 +522,12 @@ local function onGoTo(data)
   stats.go = stats.go + 1
   if test.late and testClock < M.TEST_LATE_S then lateGoTo = data; return end
   if wentTo or not ok or type(d) ~= 'table' or not c then return end
-  local lat, lon = tonumber(d.lat), tonumber(d.lon)
-  if not lat or not lon then return end
+  local lat, lon = require('beamngEarth/mpanchor').coordinates(d.lat, d.lon)
+  if not lat then return end
   wentTo = true
   -- beside the other player, not on it (12 m east)
   lon = lon + M.GOTO_OFFSET_M / (111320 * math.max(0.01, math.cos(math.rad(lat))))
+  lon = (lon + 180) % 360 - 180
   log('I', 'beamngEarth', string.format('BeamMP: to the other players at %.5f, %.5f', lat, lon))
   c.teleport(lat, lon, nil, { record = false })
 end

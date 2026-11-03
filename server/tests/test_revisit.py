@@ -4,6 +4,9 @@ import json
 import os
 import sys
 import tempfile
+import shutil
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -113,6 +116,44 @@ class RevisitTest(unittest.TestCase):
         self.assertFalse(revisit.sig_current(revisit.sig(lanes=1), cur), "a setting the server does not name")
         self.assertTrue(revisit.sig_current("", cur))
         self.assertEqual(revisit.sig(b=1, a=2), revisit.sig(a=2, b=1))
+
+    def test_sidecar_reopens_after_cache_directory_is_replaced(self):
+        wh = revisit.where(39, -76, 39, -76, 40, -75, "")
+        with tempfile.TemporaryDirectory() as d:
+            revisit._note(d, "roads", "first", wh)
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            shutil.rmtree(wd)                 # Windows must not retain an open handle here.
+            revisit._note(d, "roads", "second", wh)
+            names = os.listdir(wd)            # Unix must not keep writing the removed inode.
+            self.assertEqual(len(names), 1)
+            with open(os.path.join(wd, names[0])) as f:
+                self.assertEqual([revisit.parse_where(line)[3] for line in f], ["second"])
+
+    def test_sidecar_closes_handle_after_write_failure(self):
+        wh = revisit.where(39, -76, 39, -76, 40, -75, "")
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(revisit.os, "write", side_effect=OSError("full disk")), \
+                    mock.patch.object(revisit.os, "close", wraps=os.close) as close:
+                revisit._note(d, "roads", "failed", wh)
+                close.assert_called_once()
+                with self.assertRaises(OSError):
+                    os.fstat(close.call_args.args[0])
+            revisit._note(d, "roads", "recovered", wh)
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            with open(os.path.join(wd, os.listdir(wd)[0])) as f:
+                self.assertEqual([revisit.parse_where(line)[3] for line in f], ["recovered"])
+
+    def test_concurrent_sidecar_appends_remain_complete(self):
+        wh = revisit.where(39, -76, 39, -76, 40, -75, "")
+        with tempfile.TemporaryDirectory() as d:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(lambda k: revisit._note(d, "roads", str(k), wh), range(200)))
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            with open(os.path.join(wd, os.listdir(wd)[0])) as f:
+                rows = [revisit.parse_where(line) for line in f]
+            self.assertEqual(len(rows), 200)
+            self.assertNotIn(None, rows)
+            self.assertEqual({r[3] for r in rows}, {str(k) for k in range(200)})
 
     def test_the_key_holds_the_code(self):
         self.assertEqual(revisit.key("roads", 1, 2), revisit.key("roads", 1, 2))

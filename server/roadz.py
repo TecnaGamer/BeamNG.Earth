@@ -26,6 +26,9 @@ taken off, so a datum or survey offset of 0.5-2 m makes no step where the deck m
 
 Off: BNE_ROADZ=off (every source), BNE_LIDAR_DECKS=off (the US lidar decks only). Pure given the cached data: every
 process reads the same files; a fetch that fails is a revisit fault (netfetch) and the inference stands in.
+Malformed vector survey records are isolated: invalid XY splits a line into valid runs, invalid Z is missing, and
+bridge/tunnel levels stay attached to each run. Cached invalid coordinates trigger a refetch; if unavailable, the
+existing inference remains the fallback. This validation does not smooth or alter finite surveyed heights.
 """
 import gzip
 import json
@@ -196,7 +199,11 @@ class Lines:
 
     def __init__(self, lonlat, z, off, level, ref, name, corrected=False):
         self.lonlat = np.asarray(lonlat, np.float64).reshape(-1, 2)
-        self.z = np.asarray(z, np.float64).ravel()
+        if not (np.isfinite(self.lonlat).all() and (np.abs(self.lonlat) <= [180.0, 90.0]).all()):
+            # Reject old/corrupt cached geometry too: lines() will fetch it again through the validated parser.
+            raise ValueError("road survey coordinates must be finite longitude/latitude")
+        self.z = np.asarray(z, np.float64).ravel().copy()
+        self.z[~np.isfinite(self.z)] = np.nan
         self.off = np.asarray(off, np.int64).ravel()
         self.level = np.asarray(level, np.int8).ravel()
         self.ref = np.asarray(ref, dtype=str).ravel() if len(ref) else np.zeros(0, "U1")
@@ -235,56 +242,82 @@ class Lines:
 
 # ---- the vector sources ----------------------------------------------------------------------------------------
 
+def _mapping(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _survey_runs(vertices, lat_first=False):
+    """Finite geographic runs, split at bad XY rather than drawing a new segment across missing geometry.
+    A missing/bad Z keeps its vertex with NaN: the profile cleaner handles height gaps separately."""
+    run = []
+    for vertex in vertices:
+        try:
+            if not isinstance(vertex, (list, tuple)) or len(vertex) < 2:
+                raise ValueError("missing coordinate")
+            lon, lat = float(vertex[1 if lat_first else 0]), float(vertex[0 if lat_first else 1])
+            if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
+                raise ValueError("invalid coordinate")
+        except (TypeError, ValueError, OverflowError):
+            if len(run) >= 2:
+                yield np.asarray(run, np.float64)
+            run = []
+            continue
+        try:
+            z = float(vertex[2]) if len(vertex) > 2 else math.nan
+        except (TypeError, ValueError, OverflowError):
+            z = math.nan
+        run.append((lon, lat, z if math.isfinite(z) else math.nan))
+    if len(run) >= 2:
+        yield np.asarray(run, np.float64)
+
+
 def parse_ign(features):
     """[(lonlat, z, level, ref, name)] of BD TOPO troncon_de_route GeoJSON features (CRS:84, xyz). Fictitious
     (fictif) links have no surveyed heights: left out; Z -1000 (none) is NaN."""
     rows = []
     for f in features or ():
-        p = f.get("properties") or {}
+        f = _mapping(f)
+        p = _mapping(f.get("properties"))
         if p.get("fictif") in (True, "true", "1", 1):
             continue
-        g = f.get("geometry") or {}
-        lines = [g.get("coordinates") or []] if g.get("type") == "LineString" else (
-            g.get("coordinates") or [] if g.get("type") == "MultiLineString" else [])
+        g = _mapping(f.get("geometry"))
+        coords = g.get("coordinates")
+        coords = coords if isinstance(coords, (list, tuple)) else []
+        lines = [coords] if g.get("type") == "LineString" else (
+            coords if g.get("type") == "MultiLineString" else [])
         try:
             pos = int(str(p.get("position_par_rapport_au_sol") or "0").strip())
         except ValueError:
             pos = 0
         lvl = 1 if pos > 0 else (-1 if pos < 0 else 0)
         for ln in lines:
-            a = np.array([[float(c[0]), float(c[1]), float(c[2]) if len(c) > 2 and c[2] is not None else np.nan]
-                          for c in ln], np.float64).reshape(-1, 3)
-            if len(a) < 2:
+            if not isinstance(ln, (list, tuple)):
                 continue
-            a[a[:, 2] <= -999.0, 2] = np.nan
-            rows.append((a[:, :2], a[:, 2], lvl, p.get("cpx_numero") or "", p.get("nom_collaboratif_gauche") or ""))
+            for a in _survey_runs(ln):
+                a[a[:, 2] <= -999.0, 2] = np.nan
+                rows.append((a[:, :2], a[:, 2], lvl, p.get("cpx_numero") or "", p.get("nom_collaboratif_gauche") or ""))
     return rows
 
 
-_WKT = re.compile(r"LINESTRING\s*Z?\s*\(([^)]*)\)", re.I)
+_WKT = re.compile(r"\s*LINESTRING\s*Z?\s*\(([^()]*)\)\s*", re.I)
 
 
 def parse_nvdb(objects):
     """[(lonlat, z, level, ref, name)] of NVDB v4 segmented road links (srid 4326: WKT in lat lon z order)."""
     rows = []
     for o in objects or ():
-        g = o.get("geometri") or {}
-        m = _WKT.search(g.get("wkt") or "")
+        o = _mapping(o)
+        g = _mapping(o.get("geometri"))
+        wkt = g.get("wkt")
+        m = _WKT.fullmatch(wkt) if isinstance(wkt, str) else None
         if not m:
             continue
-        pts = []
-        for tri in m.group(1).split(","):
-            v = tri.split()
-            if len(v) >= 2:
-                pts.append((float(v[1]), float(v[0]), float(v[2]) if len(v) > 2 else np.nan))
-        if len(pts) < 2:
-            continue
-        a = np.array(pts, np.float64)
         med = str(g.get("medium") or o.get("medium") or "T").upper()
         lvl = 1 if med == "L" else (-1 if med in ("U", "B") else 0)
-        vs = ((o.get("vegsystemreferanse") or {}).get("vegsystem") or {})
+        vs = _mapping(_mapping(o.get("vegsystemreferanse")).get("vegsystem"))
         ref = f"{vs.get('vegkategori', '')}{vs.get('nummer', '')}" if vs.get("nummer") is not None else ""
-        rows.append((a[:, :2], a[:, 2], lvl, ref, ""))
+        for a in _survey_runs((tri.split() for tri in m.group(1).split(",")), lat_first=True):
+            rows.append((a[:, :2], a[:, 2], lvl, ref, ""))
     return rows
 
 
