@@ -15,6 +15,8 @@ carriageway (a level crossing: the road's own surface across it). Tunnels are le
 import math
 import re
 
+import os
+
 import numpy as np
 
 import mapgeom
@@ -266,6 +268,48 @@ def road_underpasses(frame, cells, box, reach=REACH_M):
 # under the Балмошная–Лёвшино line, a walled trench 400 m long where the street is at grade under an embankment.
 COARSE_AT = None
 COARSE_PIECE_M = 25.0
+# ... and on lidar wherever the elevation shows no grade separation (a rail bridge built after the survey: Davis Road
+# under the Armadale Line at Kelmscott, WA, where the 5 m DEM still has the old level crossing; the underpass rule dug
+# the street 8 m under the rail, the user 2026-10-29). grading's UNDER_LIDAR rule (PR #504) keeps such a road at its
+# own level where the deck (its ends' ground) stands less than roads.AT_GRADE_M over it; flat_rail_crossing asks the
+# same of a rail bridge, so every crossing that rule leaves at grade gets its track raised over the road (as on coarse
+# elevation), not a deck lying across the road. RAW_ELEV: the server sets it to the grader's own elevation
+# (PROFILE_ZOOM). Off with BNE_RAIL_FLAT_SEP=0, or with the rule itself (BNE_UNDER_LIDAR=off).
+FLAT_SEP_ON = os.environ.get("BNE_RAIL_FLAT_SEP", "1") != "0" and os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
+FLAT_SEP_M = roads.AT_GRADE_M
+FLAT_SAMPLE_M = (-12.0, -6.0, 0.0, 6.0, 12.0)  # m along the road either side of the crossing (the median)
+RAW_ELEV = None
+
+
+def flat_rail_crossing(frame, bridge_xy, road_xy, at, elev=None):
+    """Does the natural ground show no separation where road_xy (k, 2) crosses under the rail bridge bridge_xy at arc
+    at (m along the road)? As grading's UNDER_LIDAR rule: the deck there (its ends' ground, interpolated along it, the
+    lowest within roads.DECK_CLEAR_REACH_M of the crossing) stands less than FLAT_SEP_M (roads.AT_GRADE_M) over the
+    road's ground (the median of FLAT_SAMPLE_M). elev(lat, lon): RAW_ELEV by default; False without one (as before).
+    Pure given elev."""
+    elev = elev if elev is not None else RAW_ELEV
+    if not FLAT_SEP_ON or elev is None:
+        return False
+    road_xy = np.asarray(road_xy, np.float64)[:, :2]
+    b = np.asarray(bridge_xy, np.float64)[:, :2]
+    s = _arc(road_xy)
+    a = np.clip(at + np.asarray(FLAT_SAMPLE_M), 0.0, s[-1])
+    pts = np.r_[np.c_[np.interp(a, s, road_xy[:, 0]), np.interp(a, s, road_xy[:, 1])], b[[0, -1]]]
+    la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+    try:
+        z = np.asarray(elev(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64).ravel()
+    except Exception:
+        return False
+    if not np.all(np.isfinite(z)):
+        return False
+    # (where along the bridge the road crosses: the deck within roads.DECK_CLEAR_REACH_M of it, as the rule takes it)
+    sb = _arc(b)
+    L = max(float(sb[-1]), 1e-9)
+    hits = _seg_hits(b, road_xy)
+    arc_b = hits[0] if hits else 0.5 * L
+    corridor = np.clip([arc_b - roads.DECK_CLEAR_REACH_M, arc_b + roads.DECK_CLEAR_REACH_M], 0.0, L)
+    deck = float(np.min(z[-2] + (z[-1] - z[-2]) * corridor / L))
+    return bool(deck < float(np.median(z[:-2])) + FLAT_SEP_M)
 
 
 def _coarse_here(frame, box):
@@ -300,7 +344,10 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
     """[(xy, half width)] (as road_underpasses): on coarse elevation (COARSE_AT), each ground road's piece
     COARSE_PIECE_M either side of where a rail bridge part crosses it."""
     bridges = [xy for (_fid, _c, kind, xy) in rails if kind == "bridge" and len(xy) >= 2]
-    if not bridges or not _coarse_here(frame, box):
+    if not bridges:
+        return []
+    coarse = _coarse_here(frame, box)
+    if not coarse and not (FLAT_SEP_ON and RAW_ELEV is not None):
         return []
     out = []
     for line, half in crossings(frame, cells, box, reach):
@@ -309,6 +356,8 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
         sl = _arc(line)
         for b in bridges:
             for sc in _seg_hits(line, b):
+                if not coarse and not flat_rail_crossing(frame, b, line, sc):
+                    continue
                 a0, a1 = max(0.0, sc - COARSE_PIECE_M), min(float(sl[-1]), sc + COARSE_PIECE_M)
                 if a1 - a0 < 1.0:
                     continue

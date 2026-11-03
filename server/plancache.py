@@ -61,7 +61,8 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 3
+PLANS_FORMAT = 4      # 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
+                      # bridge ends on embankments (#694), the ground under decks (#698), junction corridors (#682)
 
 
 def plans_format():
@@ -300,6 +301,64 @@ class PlanCache:
 
     def release(self, key):
         xproc.release(self._path(key) + ".lock")
+
+
+    # ---- carriageway regions (grading._Planner._cw_region): solved once a run, read by every process ----
+
+    def _region_path(self, tag, home):
+        return os.path.join(self.dir, "cw", tag, f"{int(home[0])}_{int(home[1])}_{int(home[2])}.npz")
+
+    def region_load(self, tag, home):
+        """{"parts": [(key, line, is_bridge, cls, fid)], "prof": {key: (xy, z)}} of region home (planner frame tag) or
+        None."""
+        try:
+            with np.load(self._region_path(tag, home), allow_pickle=False) as f:
+                meta = json.loads(bytes(f["meta"]).decode("utf-8"))
+                lines, cx, cz = _split(f, "l"), _split(f, "x"), _split(f, "q")
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        parts, prof = [], {}
+        for m, ln in zip(meta["parts"], lines):
+            key = tuple([m["key"][0]] + [float(v) for v in m["key"][1:]])
+            parts.append((key, ln, bool(m["br"]), m["cls"], m["fid"], float(m.get("lv", 1.0 if m["br"] else 0.0)),
+                          float(m.get("half", 5.0))))
+            if m["chain"] >= 0:
+                prof[key] = (cx[m["chain"]], cz[m["chain"]])
+        return {"parts": parts, "prof": prof}
+
+    def region_store(self, tag, home, got):
+        chains, idx = [], {}
+        for key, (xy, z) in got["prof"].items():
+            if id(xy) not in idx:
+                idx[id(xy)] = len(chains)
+                chains.append((xy, z))
+        meta = {"parts": [{"key": list(q[0]), "br": bool(q[2]), "cls": q[3],
+                           "fid": q[4] if isinstance(q[4], (str, int, type(None))) else str(q[4]),
+                           "lv": float(q[5]) if len(q) > 5 else (1.0 if q[2] else 0.0),
+                           "half": float(q[6]) if len(q) > 6 else 5.0,
+                           "chain": idx[id(got["prof"][q[0]][0])] if q[0] in got["prof"] else -1}
+                          for q in got["parts"]]}
+        arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
+        try:
+            _pack(arrays, "l", [np.asarray(q[1], np.float64) for q in got["parts"]])
+            _pack(arrays, "x", [np.asarray(xy, np.float64) for xy, _z in chains])
+            _pack(arrays, "q", [np.asarray(z, np.float64) for _xy, z in chains])
+            p = self._region_path(tag, home)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as fh:
+                np.savez(fh, **arrays)
+            os.replace(tmp, p)
+        except (OSError, ValueError, TypeError):
+            return False
+        return True
+
+    def region_claim(self, tag, home):
+        """As claim, for a carriageway region."""
+        return xproc.once(self._region_path(tag, home) + ".lock", lambda: self.region_load(tag, home), WAIT_S)
+
+    def region_release(self, tag, home):
+        xproc.release(self._region_path(tag, home) + ".lock")
 
 
 def _newest(d, depth=2):

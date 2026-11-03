@@ -5200,6 +5200,10 @@ OBS_END_MAX_M = float(os.environ.get("BNE_OBS_END_MAX", "inf"))  # m a measured 
                         # its abutment, else the inference (inf: always eased onto it; 4 m made Springfield worse)
 
 
+DECK_Z_HOOK = None      # grading sets it (BNE_INTERCHANGE + carriageways): hook(frame, lines) -> [z (k,) or None] per
+                        # deck line, in the frame's up metres
+
+
 class BridgeProfiles:
     """Deck heights per bridge part for one anchor frame, each chain resolved once from all of it, so
     every tile gets the same deck (2026-10-11: computed per tile from the tile's cells, a chain's
@@ -5500,9 +5504,19 @@ class BridgeProfiles:
             # filled players' consoles, GitHub #391, TGForever Discord 2026-10-28)
             log.debug("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
                       MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
-        if ons and not over:
-            return final
-        return self._observed(comp, pool, lines, zs, pins=_ground_pins(lines, gl))
+        out = final if (ons and not over) else self._observed(comp, pool, lines, zs, pins=_ground_pins(lines, gl))
+        hook = DECK_Z_HOOK
+        if hook is not None:
+            # (a carriageway's deck: the height its roads and decks were solved for together, grading's
+            # carriageways.py, so the road meets it at its ends whatever the ground there)
+            try:
+                got = hook(self.frame, lines, [k[0] for k in comp])
+            except Exception as ex:
+                log.debug("deck heights from the carriageways: %s: %s", type(ex).__name__, ex)
+                got = None
+            if got is not None:
+                out = [g if g is not None else z for g, z in zip(got, out)]
+        return out
 
     def _observed(self, comp, pool, lines, zs, level=1, pins=None):
         """The chain's deck heights where a source measured them (roadz.py: IGN BD TOPO, NVDB, US lidar), the solved
