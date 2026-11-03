@@ -115,6 +115,7 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 | fsspec | the filesystem interface DuckDB reads the remote files through (`server/rangeread.py`) | BSD-3-Clause | branch (feature/mapdata) |
 | Roadgeek 2014 Series EEM (`tools/fonts/RG2014EEM.ttf`, release 3.1, https://github.com/sammdot/roadgeek-fonts) | the highway signs' lettering: baked into one opacity atlas (`sign_letters_o.data.png`, `server/sign_glyphs.json`) by `tools/build_sign_glyphs.py`; the font file itself only in the repository | MIT, Copyright (c) 2015 Sammi De Guzman (`tools/fonts/Roadgeek-LICENSE.txt`, also beside the atlas in the mod) | dev (2026-10-28) |
 | laz-rs (`laz` crate 0.13, https://github.com/tmontaigu/laz-rs) | decoding LAZ point clouds in the server's Rust module (`native/earthfast/src/roadz.rs`: 3DEP lidar for bridge decks) | Apache-2.0 | branch (2026-10-29) |
+| RustCrypto `blake2` crate 0.10 (https://github.com/RustCrypto/hashes) | stable priorities for bounded distant traffic route selection (`native/earthfast/src/traffic.rs`) | MIT OR Apache-2.0 | branch (#565) |
 | pyosmium | the weekly OpenStreetMap shards' builders (`tools/build_rail_tags.py`, `build_lane_tags.py`, `build_sign_tags.py`), run in the data repo's GitHub Action only; not part of the app | BSD-2-Clause | in use (data repo) |
 | Git, GitHub, GitHub CLI | version control and hosting | GPL-2.0 (git) / MIT (gh) | in use |
 

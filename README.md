@@ -118,6 +118,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   vehicle menu work on it.
 - **Traffic**: stock BeamNG traffic and police can be switched on, and parked cars line the streets and fill
   parking lots (stock BeamNG parking).
+- Distant headlights and taillights move along the mapped roads at night while traffic is on, with density
+  following the local time. Returning to a recently viewed road keeps established lights bright.
 
 **Multiplayer (BeamMP, in testing)**
 - Play the real world together on a BeamMP server (every player runs the BeamNG.Earth app, which starts BeamMP with
@@ -185,6 +187,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
     and 3 miles).
   - **Object detail**: how far out objects keep their detailed models (Game setting = the game's Mesh Quality).
+  - **Distant traffic lights**: moving headlights and taillights on distant roads (needs Roads and nighttime).
+    **Distant lights without traffic** keeps them on even when game traffic is off; otherwise they follow traffic.
+    Density follows road class, length and local hour, with quieter evenings and sparse overnight traffic.
+    Cars persist around the player when turning or zooming;
+    **Distant traffic quality** offers Low, Medium and High populations; lower levels reduce resource use.
+    Off-screen motion updates less often. See [the implementation guide](docs/DISTANT_TRAFFIC.md) for bounds.
   - **Grass and shrubs**, **Grass draw distance**, **Rocks**, **Street lamp lights**, **View distance** (the real
     horizon or a fixed distance).
   - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose

@@ -5672,9 +5672,9 @@ class BridgeProfiles:
     owner_of = None     # owner_of(self, comp, pool) -> the profiles that solve chain comp (ChainStore: the one of its
                         # first part's region), or None: this one
 
-    def parts_todo(self, todo, solved_only=False):
+    def parts_todo(self, todo, solved_only=False, part_ids=False):
         """[(fid, spec, xy, z, lon)] of the parts todo [((fid, j), feats, i)], each solved with its chain (once);
-        solved_only: only those solved already."""
+        solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
         out = []
         for key, feats, i in todo:
             with self.lock:
@@ -5684,7 +5684,7 @@ class BridgeProfiles:
                 got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
             if got is not None:
                 spec, xy, z, lon = got
-                out.append((self._part_id(key), spec, xy, z, lon))
+                out.append((key if part_ids else self._part_id(key), spec, xy, z, lon))
         return out
 
     def _chain_of(self, key, ends, adopt=True):
@@ -6486,6 +6486,10 @@ class ChainView:
 
     def parts(self, cells_feats, box):
         return self._parts(cells_feats, box)
+
+    def parts_with_ids(self, cells_feats, box):
+        """Bridge parts with their stable (fid, part index), including when tiles ask for different spans."""
+        return self._parts(cells_feats, box, part_ids=True)
 
     def open_parts(self, cells_feats, box):
         return self._parts(cells_feats, box, open_=True)

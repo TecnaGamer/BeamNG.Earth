@@ -896,6 +896,7 @@ local function onMessage(msg)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
       farGeo = roads.FAR_GEO,          -- (and the far buildings, skyline and far bridges: roads.lua)
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
+      trafficVisuals = M._trafficvisuals.PROTO,
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
@@ -907,6 +908,7 @@ local function onMessage(msg)
     sea.clear()
     trees.clear()
     ambience.clear()
+    M._trafficvisuals.session(nil, false)
     setStatus('Disconnected from companion server: ' .. tostring(msg.error))
   elseif t == 'runtime_profiler_pong' then
     require('beamngEarth/profiler').pong(msg)
@@ -915,6 +917,7 @@ local function onMessage(msg)
   elseif t == 'hello' then
     require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
     st.sessionId = msg.sessionId
+    M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
     lastHello = {}           -- the server's version and options, for the reports' hardware.json
@@ -1171,6 +1174,8 @@ local function onMessage(msg)
     if msg.id then M._cacheMapResults = { [msg.id] = msg } end
   elseif t == 'map_tiles_ready' then
     -- a world map tile file is written (settings.mapTiles: the map polls every 250 ms while it misses tiles)
+  elseif t == 'traffic_tile' or t == 'traffic_drop' or t == 'traffic_far_tile' or t == 'traffic_far_drop' then
+    M._trafficvisuals.onMessage(msg)
   elseif t == 'navgraph' then
     -- the AI road graph around the player (server navgraph.py, --traffic on): map.reset (navgraph.lua)
     navgraph.onMessage(msg, st.anchorId)
@@ -2076,7 +2081,7 @@ local function onUpdate(dtReal, dtSim)
   end
   -- the governor's frame opens first: its clock is the wall time since the last onUpdate (hptimer)
   gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
-  gov:beginFrame(farfield.hasWork() or roads.hasWork())
+  gov:beginFrame(farfield.hasWork() or roads.hasWork() or M._trafficvisuals.hasWork())
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
   for _, msg in ipairs(net.update(dtReal)) do
     local ok, err = pcall(onMessage, msg)
@@ -2161,6 +2166,11 @@ local function onUpdate(dtReal, dtSim)
     t = mark('parking', t)
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
+    do
+      local ok, err = pcall(M._trafficvisuals.update, dtReal, dtSim, st, pb, gov)
+      if not ok then M._trafficvisuals.reset(); log('E', 'beamngEarth', 'distant traffic: ' .. tostring(err)) end
+    end
+    t = mark('trafficvisuals', t)
     updateSky(dtReal)
     updateGuard()
     t = mark('sky', t)
@@ -2248,6 +2258,7 @@ local function onLevelStart()
     setStatus('Flat terrain failed: ' .. tostring(err))
   end
   if net.isConnected() then
+    M._trafficvisuals.session(st.sessionId, lastHello and lastHello.trafficVisuals == M._trafficvisuals.PROTO)
     st.autoTeleportDone = true
     startTeleport()
   end
@@ -2312,6 +2323,7 @@ local function onClientEndMission()
   nightlights.reset()
   parking.reset()
   navgraph.reset()
+  M._trafficvisuals.reset()
   local sessionId, nextRequestId, mapPort = st.sessionId, st.nextRequestId, st.mapPort
   resetState()
   st.sessionId, st.nextRequestId, st.mapPort = sessionId, nextRequestId, mapPort   -- the connection's (hello)
@@ -2343,6 +2355,7 @@ end
 M.onFilesChanged = onFilesChanged
 
 local function onExtensionUnloaded()
+  M._trafficvisuals.reset()
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
   levelinfo.unhookSpawnPois()
@@ -2397,6 +2410,7 @@ teleportTo = function(lat, lon, name, kind)
     loadprogress.start(st.clock)        -- the bar says "Loading" from now (loadprogress.lua)
     parking.onTeleport()
     navgraph.onTeleport()
+    M._trafficvisuals.onTeleport()
     do local ok, err = pcall(farcars.onTeleport) if not ok then log('W', 'beamngEarth', 'far cars: ' .. tostring(err)) end end
     pcall(mpsession.onTeleport)      -- (BeamMP: the camera is ours to put at the target, commitTeleport)
     if kind ~= 'tool' then
@@ -2772,5 +2786,7 @@ M.onExit = function() notePlayerPos(true) end           -- the game closing (a c
 M.onClientPostStartMission = onClientPostStartMission
 M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded
+
+M._trafficvisuals = require('beamngEarth/trafficvisuals')
 
 return M

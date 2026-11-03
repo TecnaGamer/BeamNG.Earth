@@ -98,6 +98,7 @@ MOD_TO_SERVER = {
               # the mod places geotiles itself (geotile.lua's zoom: 17): the server sends their content once, kept
               # across rebases (geotiles.py, --geo-tiles on)
               "geoTiles": F(int, OPT),
+              "trafficVisuals": F(int, OPT),
               # ... the road tiles too (roads.lua ROAD_GEO: content kept, a skin per anchor; roads.GeoTracker)
               "roadGeo": F(int, OPT),
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
@@ -106,6 +107,7 @@ MOD_TO_SERVER = {
               "globalFar": F(int, OPT),
               # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
               "readySet": F(int, OPT)},
+    "traffic_visuals": {"enabled": F(bool), "reset": F(bool, OPT)},
     "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
                        # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
                        "px": F(NUM, OPT), "py": F(NUM, OPT),
@@ -230,6 +232,7 @@ SERVER_TO_MOD = {
               "squareSize": F(NUM),             # ... and their spacing, m (1 m; without both the mod takes 1024 x 2 m)
               "horizon": F(bool, OPT),          # v1.4 M1h: true with --horizon only
               "geoTiles": F(int, OPT),          # geotiles: the zoom of the tiles it sends (hello.geoTiles, --geo-tiles on)
+              "trafficVisuals": F(int, OPT),    # visual roads, independent of the AI graph's physics window
               "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
               "farGeo": F(int, OPT),            # far buildings / skyline / far bridges as geotiles (hello.farGeo)
               "globalFar": F(int, OPT),         # far levels >= 3 as global tiles (hello.globalFar, --global-far)
@@ -311,6 +314,12 @@ SERVER_TO_MOD = {
     "veg_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
                  "frame": F(list, OPT), "pivot": F(NUM, OPT)},
     "veg_drop": {"anchorId": F(int), "key": F(str)},
+    "traffic_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                     "frame": F(list), "pivot": F(NUM)},
+    "traffic_drop": {"anchorId": F(int), "key": F(str)},
+    "traffic_far_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                         "frame": F(list), "pivot": F(NUM)},
+    "traffic_far_drop": {"anchorId": F(int), "key": F(str)},
     # far buildings (buildings.far_tile, --buildings on): a JSON file naming a render-only mesh
     # (a geotile, key "g17_x_y", hello.farGeo: frame [lat, lon] of its centre and pivot, m in that frame: the mod
     # places it and keeps it across rebases; the skyline's and far bridges' keys "g15_x_y")
@@ -356,6 +365,8 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data
+                       "traffic_tile", "traffic_drop",                # visual traffic: negotiated, needs map data
+                       "traffic_far_tile", "traffic_far_drop",        # major roads beyond the detailed stream
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
                        "geocode_result", "route_result",             # only when the map / GPS asks
@@ -418,7 +429,7 @@ def mod_sends():
     mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua (core hands it
     net.send)."""
     out = {}
-    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua"), r"net(?:'\))?\.send\(\{"),
+    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua",), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")

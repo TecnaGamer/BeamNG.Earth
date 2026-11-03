@@ -1221,7 +1221,7 @@ class Tracker:
     (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
 
     def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=BUILD_PER_POSE, kind="veg", skip_m=None, group=None,
-                 unit=1, inner=None, geo=False, z=None, group_z=None):
+                 unit=1, inner=None, geo=False, z=None, group_z=None, rebuild_history=True):
         # group G (the far buildings under the skyline tiles): every tile of a G x G group whose square comes within
         # send_m is wanted (a skyline tile shows only while none of its tiles do: no overlap, no hole). unit U (the
         # skyline tiles): keys are U x U squares of road tiles; inner (m, G): squares whose G-group comes within m are
@@ -1250,7 +1250,7 @@ class Tracker:
         self.frame = None
         self._quads = {}            # (anchor id, key) -> its quad in that anchor's world
         self.rebuilt = 0            # tiles built again for a key sent before (diagnostics: 0 with geo)
-        self.ever = set()
+        self.ever = set() if rebuild_history else None
 
     def close(self):
         if self.pool is not None:
@@ -1389,9 +1389,10 @@ class Tracker:
             return
         path, n, frame, pivot = res[:4]
         shapes = res[4] if len(res) > 4 else None       # (the far geotiles': {what: shape file}, pooled paths below)
-        if key in self.ever:
-            self.rebuilt += 1
-        self.ever.add(key)
+        if self.ever is not None:
+            if key in self.ever:
+                self.rebuilt += 1
+            self.ever.add(key)
         self.sent.add(key)
         m = {"type": f"{self.kind}_tile", "anchorId": self.aid, "key": geotiles.key(*key, self.z or geotiles.Z),
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
