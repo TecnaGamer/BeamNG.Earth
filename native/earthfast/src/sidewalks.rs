@@ -131,7 +131,7 @@ fn curb_heights(s: &[f64], ramps: &[(f64, f64)], h: f64) -> Vec<f64> {
 }
 
 /// sidewalks.simplify (Douglas-Peucker over points of dimension d, both ends kept): the indices kept.
-fn simplify(pts: &[Vec<f64>], tol: f64) -> Vec<usize> {
+pub(crate) fn simplify(pts: &[Vec<f64>], tol: f64) -> Vec<usize> {
     let k = pts.len();
     if k <= 2 {
         return (0..k).collect();

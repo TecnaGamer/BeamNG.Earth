@@ -50,7 +50,10 @@ RECOMMENDED = ["--deshadow", "full", "--near-visual", "detail", "--airports", "o
                "--buildings", "on", "--gas-stations", "on"]
 SERVER_PORT = 47613         # earthd's default
 GAME_GONE_S = 30            # no game process this long: the game closed (wait_for_game)
+WINDOWS_GAME_GONE_S = 3     # Windows has no Steam container restart gap; allow prompt relaunch
 GAME_START_S = 180          # waiting for the game's process after asking Steam
+SERVER_START_S = 120        # imports/startup must finish before the game is launched
+PROCESS_QUERY_S = 3         # a stuck process query must not hang the launcher
 DIRECT_FAIL_S = 20          # a direct start that ends this soon did not work (no Steam client): through Steam
 
 
@@ -169,19 +172,43 @@ def watch_parent():
         parent = int(os.environ.get("BNGEARTH_PARENT") or 0)
     except ValueError:
         parent = 0
-    if not parent:
+    if parent <= 0:
         return
     import threading
 
     def gone():
         if IS_WIN:
             import ctypes
-            k32 = ctypes.windll.kernel32
-            h = k32.OpenProcess(0x00100000, False, parent)      # SYNCHRONIZE
-            if not h:
-                return True
-            k32.WaitForSingleObject(h, 0xFFFFFFFF)
-            return True
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            k32.OpenProcess.restype = wintypes.HANDLE
+            k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+            k32.WaitForSingleObject.restype = wintypes.DWORD
+            k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            k32.CloseHandle.restype = wintypes.BOOL
+            warned = False
+            while True:
+                h = k32.OpenProcess(0x00100000, False, parent)  # SYNCHRONIZE
+                if not h:
+                    error = ctypes.get_last_error()
+                    if error == 87:                           # ERROR_INVALID_PARAMETER: PID is gone
+                        return True
+                else:
+                    try:
+                        result = k32.WaitForSingleObject(h, 0xFFFFFFFF)
+                        if result == 0:                      # WAIT_OBJECT_0: process exited
+                            return True
+                        error = ctypes.get_last_error()
+                    finally:
+                        k32.CloseHandle(h)
+                # Access denied or a failed wait does not establish that the
+                # launcher exited. Retry without killing a possibly live session.
+                if not warned:
+                    print(f"[BeamNG.Earth] cannot confirm launcher state (Windows error {error}); retrying",
+                          flush=True)
+                    warned = True
+                time.sleep(2)
         while os.getppid() == parent:
             time.sleep(2)
         return True
@@ -208,11 +235,19 @@ def run_server(argv):
     earthd.main()
 
 
-def start_server(user_dir, extra, log_path):
+def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
+        env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
+    # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
+    # alone, not the game, e.g. a heap profiler)
+    for kv in os.environ.get("BNGE_SERVER_ENV", "").split():
+        k, sep, v = kv.partition("=")
+        if sep and k:
+            env[k] = v
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -221,9 +256,9 @@ def start_server(user_dir, extra, log_path):
     # its full log to a file; the console shows only its warnings and errors (echo_server_log): the INFO lines
     # buried the launcher's own (the user, 2026-10-17: 'easier to read')
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    out = open(log_path, "w", encoding="utf-8")
-    kw.update(stdout=out, stderr=subprocess.STDOUT)
-    proc = subprocess.Popen(cmd, **kw)
+    with open(log_path, "w", encoding="utf-8") as out:
+        kw.update(stdout=out, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, **kw)
     threading.Thread(target=echo_server_log, args=(log_path, proc), daemon=True).start()
     return proc
 
@@ -276,13 +311,45 @@ def server_port_busy(port=SERVER_PORT):
         return False
 
 
+def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
+    """Read the owned child's post-bind marker from its freshly truncated startup log.
+
+    Do not connect to the game protocol just to test readiness: that creates a fake game session.
+    Only the last 64 KiB are read each poll, even when startup produced a large log.
+    """
+    marker = b"earthd listening on 127.0.0.1:"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return False
+        try:
+            with open(log_path, "rb") as log:
+                log.seek(0, os.SEEK_END)
+                start = max(0, log.tell() - 65536)
+                log.seek(start)
+                tail = log.read(65536)
+            if start:
+                tail = tail.partition(b"\n")[2]  # discard a potentially partial first line
+            for line in tail.splitlines():
+                if not line.startswith(marker):
+                    continue
+                number, separator, _ = line[len(marker):].partition(b" ")
+                if separator and number.isdigit() and 0 < int(number) < 65536:
+                    if port == 0 or int(number) == port:
+                        return proc.poll() is None
+        except OSError:
+            pass
+        time.sleep(0.25)
+    return False
+
+
 def stop_server(proc):
     if proc is None or proc.poll() is not None:
         return
     row("World server", "stopping")
     try:
         if IS_WIN:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
         else:
             os.killpg(proc.pid, signal.SIGTERM)
         proc.wait(15)
@@ -292,7 +359,8 @@ def stop_server(proc):
                 proc.kill()
             else:
                 os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
+            proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
             pass
 
 
@@ -310,6 +378,31 @@ def linux_game_exe():
     return None
 
 
+def windows_game_main_pids(pids):
+    """Exclude only confirmed CEF helpers; inaccessible command lines remain game candidates."""
+    if not pids:
+        return pids
+    import json
+    import re
+    command = ("Get-CimInstance -ClassName Win32_Process -Filter \"Name='BeamNG.drive.x64.exe'\" "
+               "-Property ProcessId,CommandLine -ErrorAction Stop | "
+               "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress")
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+                                capture_output=True, timeout=PROCESS_QUERY_S,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.returncode != 0:
+            return pids
+        data = json.loads((result.stdout or b"").decode("utf-8", errors="replace"))
+        rows = data if isinstance(data, list) else [data]
+        helpers = {row["ProcessId"] for row in rows if isinstance(row, dict)
+                   and isinstance(row.get("CommandLine"), str)
+                   and re.search(r'(?:^|\s|[\"])--type(?:=|\s)', row["CommandLine"])}
+        return [pid for pid in pids if pid not in helpers]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return pids
+
+
 def game_pids():
     """The game's main processes (not its CEF helpers)."""
     if IS_WIN:
@@ -318,8 +411,8 @@ def game_pids():
         # 2026-10-17: the launcher stopped with UnicodeDecodeError and r.stdout None)
         try:
             r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {GAME_EXE_WIN}", "/FO", "CSV", "/NH"],
-                               capture_output=True)
-        except OSError:
+                               capture_output=True, timeout=PROCESS_QUERY_S)
+        except (OSError, subprocess.TimeoutExpired):
             return []
         text = (r.stdout or b"").decode("utf-8", errors="replace")
         out = []
@@ -329,7 +422,7 @@ def game_pids():
                     out.append(int(line.split('","')[1]))
                 except (IndexError, ValueError):
                     pass
-        return out
+        return windows_game_main_pids(out)
     out = []
     for d in os.listdir("/proc"):
         if not d.isdigit():
@@ -379,9 +472,12 @@ def game_alive():
 
 
 def steam_running():
-    home = os.path.expanduser("~")
-    for pidfile in (os.path.join(home, ".steam", "steam.pid"),
-                    os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam.pid")):
+    import install
+    pidfiles = []
+    for home in install.homes():        # (a container's own home inside the real one: GitHub #709)
+        pidfiles += [os.path.join(home, ".steam", "steam.pid"),
+                     os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam.pid")]
+    for pidfile in pidfiles:
         try:
             with open(pidfile) as f:
                 pid = int(f.read().strip())
@@ -728,6 +824,8 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
     Steam applies them itself): variables for the game's environment, a command that wraps it (gamemoderun,
     mangohud), the game's own options after %command%."""
     steam_env, wrapper, steam_opts = steam_args
+    # (dev: BNGE_GAME_WRAPPER="perf record ... --" profiles the game alone, Linux direct start)
+    wrapper = os.environ.get("BNGE_GAME_WRAPPER", "").split() + list(wrapper or [])
     win_args = ["-gfx", GFX_ARG.get(gfx, gfx)] if gfx else []
     extra = os.environ.get("BNGE_GAME_ARGS", "").split()     # (tests: e.g. "-bngetest car,damage")
     win_args += extra
@@ -849,41 +947,51 @@ def game_launcher_running():
     if not IS_WIN:
         return False
     try:
-        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq BeamNG.drive.exe", "/FO", "CSV", "/NH"], capture_output=True)
-    except OSError:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq BeamNG.drive.exe", "/FO", "CSV", "/NH"],
+                           capture_output=True, timeout=PROCESS_QUERY_S)
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return '"BeamNG.drive.exe"' in (r.stdout or b"").decode("utf-8", errors="replace")
 
 
-def wait_for_game(proc):
-    """Until the game closes."""
-    if proc is not None:
-        proc.wait()
-        while game_pids():          # the Windows build's launcher may end before the game
-            time.sleep(3)
-        return
-    # (started through Steam: the game may take a while, BeamNG's launch options window open for as long as the player
-    # likes; the server keeps waiting for it, and once it has gone, stops with it. It waited 180 s and then never looked
-    # again, the server left running after the game closed, 2026-10-24.)
-    t0, said = time.time(), False
-    while not game_pids():
-        if not said and time.time() - t0 > GAME_START_S and not game_launcher_running():
+def wait_for_game(proc, server=None):
+    """Follow the actual game, with bounded failed startup and cleanup when our server exits."""
+    deadline = time.monotonic() + GAME_START_S
+    grace = WINDOWS_GAME_GONE_S if IS_WIN else GAME_GONE_S
+    started, dialog_seen, said = False, False, False
+    gone_since = dialog_closed_since = None
+    while True:
+        if server is not None and server.poll() is not None:
+            say("The world server stopped. See its log for details; restart BeamNG.Earth to reconnect.")
+            return False
+        now = time.monotonic()
+        direct_alive = proc is not None and proc.poll() is None
+        if game_alive() or (not IS_WIN and direct_alive):
+            started = True
+            gone_since = None
+        elif started:
+            if gone_since is None:
+                gone_since = now
+            elif now - gone_since >= grace:
+                return True
+        elif game_launcher_running() or (IS_WIN and direct_alive):
+            # Never time out an open BeamNG launch dialog. Once the game has been seen, its bootstrap
+            # process no longer keeps this launcher alive after the actual game closes.
+            dialog_seen = True
+            dialog_closed_since = None
+        elif dialog_seen:
+            if dialog_closed_since is None:
+                dialog_closed_since = now
+            elif now - dialog_closed_since >= grace:
+                say("The BeamNG launch window closed without starting the game; stopping the world server.")
+                return False
+        elif now >= deadline and not said:
+            # (said once; the server keeps waiting: a Steam start can take minutes, a game update or the first
+            # shader build, and on Linux the launch options window is not seen; the 2026-10-24 rule)
             say("the game has not started yet (no BeamNG.drive process): start it from Steam; the server keeps "
                 "running for it, Ctrl+C stops it")
             said = True
-        time.sleep(2)
-    gone_since = None
-    while True:
-        # closed only once no game process was seen for GAME_GONE_S: under Steam's runtime container (a Flatpak
-        # Steam's above all) the game's process can end and start again during its start (a player's report,
-        # 2026-10-17: the server stopped right after the game launched)
-        if game_alive():
-            gone_since = None
-        elif gone_since is None:
-            gone_since = time.time()
-        elif time.time() - gone_since > GAME_GONE_S:
-            return
-        time.sleep(3)
+        time.sleep(1 if IS_WIN else 3)
 
 
 # --- the console window ---------------------------------------------------------------------------
@@ -1094,8 +1202,22 @@ def hand_over():
     return True
 
 
+def beammp_wait_seconds(value):
+    import math
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("BeamMP wait must be seconds greater than 0 and at most 600")
+    if not math.isfinite(seconds) or not 0 < seconds <= 600:
+        raise argparse.ArgumentTypeError("BeamMP wait must be seconds greater than 0 and at most 600")
+    return seconds
+
+
 def main():
     ensure_ca_certs()
+    if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
+        from tools import world_cache
+        raise SystemExit(world_cache.main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "--server":
         run_server(sys.argv[2:])
         return
@@ -1107,6 +1229,8 @@ def main():
     ap.add_argument("--keep-mod", action="store_true", help="leave the game's copy of the mod as it is")
     ap.add_argument("--no-beammp", action="store_true",
                     help="do not start BeamMP (multiplayer) with the game (bmplaunch.py)")
+    ap.add_argument("--beammp-wait", type=beammp_wait_seconds, default=30.0, metavar="SECONDS",
+                    help="wait up to this long for BeamMP, then continue in single player (default: 30; maximum: 600)")
     ap.add_argument("--cache-dir", metavar="PATH",
                     help="where the map download cache goes, e.g. another drive (kept for the next starts; "
                          "'default' goes back to .cache/beamng-earth in your home folder)")
@@ -1262,22 +1386,34 @@ def beammp_up(user_dir, build, args):
         return None
     log_path = os.path.join(dd, "logs", "beammp-launcher.log")
     proc = bmplaunch.start(exe, user_dir, log_path)
-    row("Multiplayer", "starting BeamMP ...")
-    if not bmplaunch.wait_ready(proc):
+    timeout = getattr(args, "beammp_wait", 30.0)
+    try:
+        row("Multiplayer", f"starting BeamMP (up to {timeout:g}s; --no-beammp skips this) ...")
+        ready = bmplaunch.wait_ready(proc, timeout=timeout)
+    except BaseException:
         bmplaunch.stop(proc)
-        row("Multiplayer", f"BeamMP did not start (its log: {log_path})")
+        raise
+    if not ready:
+        bmplaunch.stop(proc)
+        row("Multiplayer", f"BeamMP did not become ready; continuing in single player. "
+                           f"Use --beammp-wait for a longer wait, or --no-beammp to skip it. "
+                           f"Logs: {log_path}; {os.path.join(os.path.dirname(exe), 'Launcher.log')}")
         return None
-    version = bmplaunch.log_version(bmplaunch.read_log(log_path))
-    row("Multiplayer", f"BeamMP{' v' + version if version else ''} ready: in the game, Multiplayer, then a server "
-        "running BeamNG.Earth")
-    support_notice(multiplayer=True)
+    try:
+        version = bmplaunch.log_version(bmplaunch.read_log(log_path, exe))
+        row("Multiplayer", f"BeamMP{' v' + version if version else ''} ready: in the game, Multiplayer, then a server "
+            "running BeamNG.Earth")
+        support_notice(multiplayer=True)
+    except BaseException:
+        bmplaunch.stop(proc)
+        raise
 
     def watch():                            # (a launcher too old for BeamMP's current mod: said once, plainly)
         for _ in range(60):
             time.sleep(5)
             if proc.poll() is not None:
                 return
-            if bmplaunch.log_too_old(bmplaunch.read_log(log_path)):
+            if bmplaunch.log_too_old(bmplaunch.read_log(log_path, exe)):
                 if not IS_WIN and exe == os.path.join(dd, "beammp", bmplaunch.EXE):
                     bmplaunch.save_settings(dd, rebuild=True)
                     problem("BeamMP's launcher built here is older than BeamMP's mod (\"Invalid lua communication\").",
@@ -1288,7 +1424,11 @@ def beammp_up(user_dir, build, args):
                         "Update BeamMP's launcher (on Linux: build the latest from github.com/BeamMP/BeamMP-Launcher)."
                         " Multiplayer will not work until then; single player is not affected.")
                 return
-    threading.Thread(target=watch, daemon=True, name="beammp-watch").start()
+    try:
+        threading.Thread(target=watch, daemon=True, name="beammp-watch").start()
+    except BaseException:
+        bmplaunch.stop(proc)
+        raise
     return proc
 
 
@@ -1342,6 +1482,9 @@ def run(args):
             windows_game_dir() if IS_WIN else linux_game_exe()):
         ask_game_dir()
     extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
+    port_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    port_parser.add_argument("--port", type=int, default=SERVER_PORT)
+    port = port_parser.parse_known_args(extra)[0].port
     if "--cache-dir" not in extra:
         try:
             cache = cache_dir_arg(args.cache_dir)
@@ -1352,17 +1495,22 @@ def run(args):
         if cache:
             extra = ["--cache-dir", cache] + extra
             row("Download cache", cache)
-    if "--port" not in extra and server_port_busy():
-        problem(f"another BeamNG.Earth world server is already running (port {SERVER_PORT} is in use), maybe "
+    if server_port_busy(port):
+        problem(f"another BeamNG.Earth world server is already running (port {port} is in use), maybe "
                 "left over from an earlier start.",
                 "Close its window (or end 'BeamNG.Earth' in the task manager), then start again.")
         sys.exit(1)
     log_path = os.path.join(data_dir(), "logs", "server.log")
-    server = start_server(user_dir, extra, log_path)
-    row("World server", "running")
-    row("Server log", log_path)
+    server = start_server(user_dir, extra, log_path, game_running=bool(running))
     beammp = None
     try:
+        row("World server", "starting")
+        row("Server log", log_path)
+        if not wait_server_ready(server, log_path, port):
+            problem("the world server did not start listening; the game was not started.",
+                    f"See {log_path} for the startup error, then try again.")
+            raise SystemExit(1)
+        row("World server", "running")
         try:
             beammp = None if args.no_game else beammp_up(user_dir, build, args)
         except OSError as e:
@@ -1392,8 +1540,8 @@ def run(args):
         say()
         say("In the game: Freeroam > BeamNG.Earth.  Closing the game stops the server.")
         say()
-        wait_for_game(proc)
-        row("Game", "closed")
+        if wait_for_game(proc, server):
+            row("Game", "closed")
     finally:
         if beammp is not None:
             import bmplaunch

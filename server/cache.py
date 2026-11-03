@@ -48,6 +48,7 @@ Memory: about 200 bytes per tracked file (a 20 GB cache of 30 KB imagery tiles: 
 import logging
 import math
 import os
+import ioprofiler
 import threading
 import time
 
@@ -84,6 +85,7 @@ class NoCache:
     """The default of every producer's `disk` attribute: reads and writes without bookkeeping (Server()
     without a Cache, the tools, the tests)."""
 
+    @ioprofiler.disk_read
     def read(self, path):
         """The file's bytes, or None if it is not there (also when it was evicted a moment ago). On Windows a file
         another process is replacing or deleting cannot be opened for a moment (PermissionError: a far tile of a
@@ -105,7 +107,7 @@ class NoCache:
         pass
 
     def wrote(self, path, size=None):
-        pass
+        ioprofiler.monitor.record_write(size)
 
     def forget(self, path):
         pass
@@ -256,6 +258,7 @@ class Cache(NoCache):
                 size = os.path.getsize(path)
             except OSError:
                 return
+        ioprofiler.monitor.record_write(size)
         self.used(path, size)
         if self._cap and self._used > self._cap:
             self._wake.set()

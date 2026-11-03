@@ -1,11 +1,14 @@
 """buildings: footprints become closed walls and a roof, heights predicted where the data has none,
 deterministic, every triangle facing out."""
+import json
 import math
 import os
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -13,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import buildings as bld  # noqa: E402
 import cdae  # noqa: E402
+import threedmr  # noqa: E402
 
 
 def rect(x, y, w, d):
@@ -563,13 +567,431 @@ class OverRoadTest(unittest.TestCase):
                   **{"class": ["", ""], "height": [16.0, 9.0]})
         street = np.array([[0.0, 40.0], [256.0, 40.0]])         # through the first, past the second
         items = bld.tile_buildings(self.f, 0, 0, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)),
-                                   roads_xy=[street])
+                                            roads_xy=[street])
         by_area = sorted(items, key=lambda it: -bld._area2(it[0].ring))
         over, house = by_area[0][0], by_area[1][0]
         self.assertEqual(over.min_h, bld.OVER_ROAD_CLEAR_M)
         self.assertAlmostEqual(over.min_h + over.height, 16.0, delta=0.01, msg="its top where it was")
         self.assertEqual(house.min_h, 0.0)
         self.assertAlmostEqual(bld.road_through(over.ring, [street - 0]), 80.0, delta=2.5)
+
+    def test_a_geosearch_hit_is_returned_as_custom(self):
+        # a 3dmr.eu model found by geo-search (road_tile_items, threedmr.search_ids/model_info): the footprints
+        # stay procedural, the model is returned alongside them as custom
+        b = Feats(["M", "H"], [self.ll(10, 10, 20, 15), self.ll(100, 100, 12, 10)],
+                  **{"class": ["", "house"], "height": [8.0, 6.0]})
+
+        class MD:
+            def cell(self, key, layers=None, kind=None):
+                return type("C", (), {"layers": {"buildings": b}})()
+
+        mx, my = 50.0, 60.0
+        mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
+
+        def model_position(mid, cache_dir, iface=None, timeout=30.0):
+            return (float(mlat), float(mlon), False)
+
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.region_ids", return_value=[24]), \
+             mock.patch("threedmr.model_position", side_effect=model_position):
+            items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
+            self.assertEqual(len(items), 2, "both footprints stay procedural")
+            self.assertEqual(len(custom), 1)
+            self.assertEqual(custom[0]["id"], 24)
+            x, y = custom[0]["xy"]
+            self.assertAlmostEqual(x, mx, places=4)
+            self.assertAlmostEqual(y, my, places=4)
+            self.assertTrue(0 <= x < 256 and 0 <= y < 256, "inside the tile bbox")
+
+            _items, custom_none = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir=None)
+            self.assertEqual(custom_none, [], "no cache_dir: geo-search skipped")
+
+    def test_geotile_box_owns_its_buildings(self):
+        # (tile_buildings' own=: a geotile's quad overlaps its neighbours' bounding boxes; without its exact ownership a
+        # footprint in the overlap was built by both tiles - lost in our rebuild, restored at the 1.7.3 merge)
+        class Owned(tuple):
+            def owns(self, x, y):
+                return x < 50.0
+
+        class MD:
+            def cell(self, key, layers=None, kind=None):
+                return type("C", (), {"layers": {}})()
+
+        got = {}
+
+        def tile_buildings(*a, **kw):
+            got.update(kw)
+            return []
+
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("roads.tile_bbox", return_value=Owned((0.0, 0.0, 256.0, 256.0))), \
+             mock.patch("roads.cells_of_tile", return_value=[]), \
+             mock.patch.object(bld, "tile_buildings", side_effect=tile_buildings), \
+             mock.patch.object(bld, "district_town", return_value=False):
+            bld.road_tile_items(self.f, 0, 0, MD(), ground)
+            self.assertTrue(hasattr(got.get("own"), "owns"), "a geotile's box is passed as own")
+        with mock.patch("roads.cells_of_tile", return_value=[]), \
+             mock.patch.object(bld, "tile_buildings", side_effect=tile_buildings), \
+             mock.patch.object(bld, "district_town", return_value=False):
+            bld.road_tile_items(self.f, 0, 0, MD(), ground)
+            self.assertIsNone(got.get("own"), "an anchor tile's square: its half-open box")
+
+    def test_geosearch_uses_corrected_desc_coords(self):
+        # threedmr.model_position (id 22's fix): when it returns corrected coordinates (its api point is far
+        # from its desc's own osmgo.org link), both xy and custom["latlon"] must come from those corrected
+        # coordinates, not the api's - latlon in particular feeds osm_yaw's OSM lookup, which must look
+        # around the model's real position, not wherever the stale api point sits
+        b = Feats(["M"], [self.ll(10, 10, 20, 15)], **{"class": [""], "height": [8.0]})
+
+        class MD:
+            def cell(self, key, layers=None, kind=None):
+                return type("C", (), {"layers": {"buildings": b}})()
+
+        mx, my = 50.0, 60.0
+        mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.region_ids", return_value=[22]), \
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
+            _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
+            self.assertEqual(len(custom), 1)
+            x, y = custom[0]["xy"]
+            self.assertAlmostEqual(x, mx, places=4)
+            self.assertAlmostEqual(y, my, places=4)
+            self.assertAlmostEqual(custom[0]["latlon"][0], float(mlat))
+            self.assertAlmostEqual(custom[0]["latlon"][1], float(mlon))
+
+    def test_geosearch_falls_back_to_the_wide_corrected_search(self):
+        # id 22 (Dragon Bridge, Da Nang): its api point sits ~26 km from the real bridge, outside any tile's
+        # own small search_ids radius, so the first (tile-radius) search never finds it at all - only the
+        # second, threedmr.SEARCH_CORRECT_R_M-radius one does, and only because model_position corrects it
+        b = Feats(["H"], [self.ll(100, 100, 12, 10)], **{"class": ["house"], "height": [6.0]})
+
+        class MD:
+            def cell(self, key, layers=None, kind=None):
+                return type("C", (), {"layers": {"buildings": b}})()
+
+        mx, my = 50.0, 60.0
+        mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
+        ground = lambda la, lo: np.zeros(np.shape(la))
+
+        # (the region's search reaches SEARCH_CORRECT_R_M past its corners: id 22 is in it, placed where corrected)
+        with mock.patch("threedmr.region_ids", return_value=[22]), \
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
+            _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
+            self.assertEqual(len(custom), 1)
+            self.assertEqual(custom[0]["id"], 22)
+            x, y = custom[0]["xy"]
+            self.assertAlmostEqual(x, mx, places=4)
+            self.assertAlmostEqual(y, my, places=4)
+
+    def test_wide_search_hit_without_correction_is_dropped(self):
+        # a model only found by the wide search whose model_position did NOT correct it (corrected False) is
+        # not trusted that far out - an api point 20+ km away is not "this tile's" model
+        b = Feats(["H"], [self.ll(100, 100, 12, 10)], **{"class": ["house"], "height": [6.0]})
+
+        class MD:
+            def cell(self, key, layers=None, kind=None):
+                return type("C", (), {"layers": {"buildings": b}})()
+
+        mx, my = 50.0, 60.0
+        mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
+        ground = lambda la, lo: np.zeros(np.shape(la))
+
+        # (one region search: a model counts where model_position puts it; its api point 20 km off, uncorrected,
+        # is not in this tile)
+        flat, flon, _ = self.f.enu_to_geodetic(20000.0, 0.0, 0.0)
+        with mock.patch("threedmr.region_ids", return_value=[22]), \
+             mock.patch("threedmr.model_position", return_value=(float(flat), float(flon), False)):
+            _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
+            self.assertEqual(custom, [], "a region model far from the tile is not this tile's")
+
+    def test_one_region_search_a_tile(self):
+        # one cached search for the tile's region (threedmr.region_ids), not two per tile; its model added once
+        b = Feats(["H"], [self.ll(100, 100, 12, 10)], **{"class": ["house"], "height": [6.0]})
+
+        class MD:
+            def cell(self, key, layers=None, kind=None):
+                return type("C", (), {"layers": {"buildings": b}})()
+
+        mx, my = 50.0, 60.0
+        mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        seen_ranges = []
+
+        def region_ids(lat, lon, cache_dir):
+            seen_ranges.append((lat, lon))
+            return [24]
+
+        with mock.patch("threedmr.region_ids", side_effect=region_ids), \
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), False)):
+            _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
+            self.assertEqual(len(custom), 1, "added once")
+            self.assertEqual(len(seen_ranges), 1, "one region search")
+
+    def test_local_model_in_bbox_is_returned_as_custom(self):
+        # a local (no-3dmr-base) model (threedmr.local_models) whose own lat/lon falls in the tile is folded
+        # into custom exactly like a geo-search hit, but with a string id (never a numeric 3dmr one) and a
+        # "local" key (_custom_tile_entries' signal to skip fetch_model/gltf_mesh for it)
+        b = Feats(["H"], [self.ll(100, 100, 12, 10)], **{"class": ["house"], "height": [6.0]})
+
+        class MD:
+            def cell(self, key, layers=None, kind=None):
+                return type("C", (), {"layers": {"buildings": b}})()
+
+        mx, my = 50.0, 60.0
+        mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
+        entry = {"id": "local_fire_tower_20m", "file": "fire_tower_20m.stl",
+                  "lat": float(mlat), "lon": float(mlon), "factor": [0.784, 0.063, 0.18]}
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.region_ids", return_value=[]), \
+             mock.patch("threedmr.local_models", return_value=[entry]):
+            _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
+            self.assertEqual(len(custom), 1)
+            self.assertEqual(custom[0]["id"], "local_fire_tower_20m")
+            self.assertIsInstance(custom[0]["id"], str)
+            self.assertIs(custom[0]["local"], entry)
+            x, y = custom[0]["xy"]
+            self.assertAlmostEqual(x, mx, places=4)
+            self.assertAlmostEqual(y, my, places=4)
+
+            _items, custom_none = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir=None)
+            self.assertEqual(custom_none, [], "no cache_dir: local catalog skipped too")
+
+
+class CustomModelSuppressionTest(unittest.TestCase):
+    """A baked 3dmr.eu model suppresses the procedural footprints under it (_suppress_under_models) - the
+    user's report at Baghdad's Al-Shaheed Monument: two OSM "sector" footprints (the domes' lower tiers)
+    stayed and intersected model 24's real mesh once it loaded."""
+
+    def setUp(self):
+        import geodesy
+        self.f = geodesy.EnuFrame(39.28, -76.59)
+
+    @staticmethod
+    def _gltf_mesh(pos_bbox):
+        """A fake threedmr.gltf_mesh returning a one-triangle mesh whose horizontal bbox is pos_bbox (dx, dy)."""
+        dx, dy = pos_bbox
+        pos = np.array([[0.0, 0.0, 0.0], [dx, 0.0, 0.0], [0.0, dy, 1.0]])
+        return (pos, np.zeros((3, 2)), np.array([[0, 1, 2]]), None, [(None, None, None, False, None)],
+               np.zeros(1, np.int64))
+
+    def test_custom_model_suppresses_procedural(self):
+        # the model stands at (10, 10); one footprint's centre is 4.2 m away (under it), the other 127 m away
+        near = bld.Spec(ring=rect(5, 5, 4, 4), height=6.0, min_h=0.0, cls="")
+        far = bld.Spec(ring=rect(100, 100, 4, 4), height=6.0, min_h=0.0, cls="")
+        items = [(near, 0.0, 6.0), (far, 0.0, 6.0)]
+        radii = [(24, 10.0, 10.0, 20.0)]
+        out = bld._suppress_under_models(items, radii, 0.0, 0.0)
+        self.assertEqual([s for s, _, _ in out], [far], "only the footprint under the model is dropped")
+
+    def test_toll_booths_are_never_suppressed(self):
+        booth = bld.Spec(ring=rect(5, 5, 4, 4), height=4.0, min_h=0.0, cls="toll_booth")
+        items = [(booth, 0.0, 4.0)]
+        out = bld._suppress_under_models(items, [(24, 7.0, 7.0, 20.0)], 0.0, 0.0)
+        self.assertEqual(out, items, "a toll island's booth is kept even under a model's radius")
+
+    def test_no_suppression_without_a_model(self):
+        # a failed geo-search / download leaves radii empty (_custom_tile_entries): items untouched
+        house = bld.Spec(ring=rect(5, 5, 4, 4), height=6.0, min_h=0.0, cls="")
+        items = [(house, 0.0, 6.0)]
+        out = bld._suppress_under_models(items, [], 0.0, 0.0)
+        self.assertEqual(out, items)
+
+    def test_suppress_radius_clamped(self):
+        custom = [{"id": 41, "xy": (10.0, 10.0)}, {"id": 3, "xy": (20.0, 20.0)}]
+
+        def gltf_mesh(glb, model_id=None):
+            return self._gltf_mesh((0.5, 0.5) if model_id == 41 else (900.0, 900.0))
+
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
+             mock.patch("threedmr.gltf_mesh", side_effect=gltf_mesh), \
+             mock.patch("threedmr.write_model",
+                       return_value={"shape": "threedmr_x.cdae", "texture": None, "material": "threedmr_x",
+                                    "has_alpha": False, "alpha_cutoff": None}), \
+             mock.patch("threedmr.update_materials", return_value=None):
+            _entries, radii, _boxes = bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
+        by_id = {cid: r for cid, _cx, _cy, r in radii}
+        self.assertEqual(by_id[41], bld.SUPPRESS_MIN_M, "a 0.5 m model: radius clamped up to the minimum")
+        self.assertEqual(by_id[3], bld.SUPPRESS_MAX_M, "a 900 m model: radius clamped down to the maximum")
+
+    def test_model_wider_than_a_km_not_placed(self):
+        # 3dmr.eu id 29 (a district, 61 km) and ids 6 / 7 (stray geometry 1.4-1.9 km round a building): not placed,
+        # nothing suppressed; a model up to MODEL_MAX_M (the Dragon Bridge, 842 m) is
+        custom = [{"id": 29, "xy": (10.0, 10.0)}, {"id": 22, "xy": (20.0, 20.0)}]
+
+        def gltf_mesh(glb, model_id=None):
+            return self._gltf_mesh((61000.0, 37000.0) if model_id == 29 else (842.0, 83.0))
+
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
+             mock.patch("threedmr.gltf_mesh", side_effect=gltf_mesh), \
+             mock.patch("threedmr.bridge_deck_surface", return_value=None), \
+             mock.patch("threedmr.write_model",
+                       return_value={"shape": "threedmr_x.cdae", "texture": None, "material": "threedmr_x",
+                                    "has_alpha": False, "alpha_cutoff": None}), \
+             mock.patch("threedmr.update_materials", return_value=None):
+            _entries, radii, _boxes = bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
+        self.assertEqual([cid for cid, _cx, _cy, _r in radii], [22])
+
+    def test_failed_model_yields_no_radius(self):
+        custom = [{"id": 24, "xy": (10.0, 10.0)}]
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.fetch_model", side_effect=RuntimeError("network down")), \
+             mock.patch("revisit.fault") as fault:
+            entries, radii, _b = bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
+        self.assertEqual(entries, [])
+        self.assertEqual(radii, [], "no mesh downloaded: no suppression circle, the procedural stand-in stays")
+        fault.assert_called_once()
+
+    def test_split_sections_each_get_an_entry_and_their_materials_updated(self):
+        # a model too big for Torque's 16-bit IBO comes back from write_model with "sections": every section
+        # must land its own {"shape", "pos"} entry (same pos) and have its own materials registered, while
+        # the suppression radius stays a single one, measured off the model's own full (pre-split) bbox
+        custom = [{"id": 8, "xy": (10.0, 10.0)}]
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        section0 = {"shape": "threedmr_8.cdae", "texture": "threedmr_8.png", "material": "threedmr_8",
+                   "has_alpha": False, "alpha_cutoff": None}
+        section1 = {"shape": "threedmr_8_s1.cdae", "textures": ["threedmr_8_s1_0.png"],
+                   "materials": ["threedmr_8_s1_0"], "has_alpha": [False], "alpha_cutoff": [None]}
+        write_result = dict(section0, sections=[section0, section1])
+        updated = []
+        with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
+             mock.patch("threedmr.gltf_mesh", side_effect=lambda glb, model_id=None: self._gltf_mesh((569.0, 81.0))), \
+             mock.patch("threedmr.write_model", return_value=write_result), \
+             mock.patch("threedmr.update_materials", side_effect=lambda *a, **k: updated.append(a[1])):
+            entries, radii, _b = bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
+        self.assertEqual([e["shape"] for e in entries],
+                        ["/temp/beamngEarth/s1/threedmr_8.cdae", "/temp/beamngEarth/s1/threedmr_8_s1.cdae"])
+        self.assertEqual(entries[0]["pos"], entries[1]["pos"], "every section placed at the same pos")
+        self.assertEqual(updated, ["threedmr_8", "threedmr_8_s1_0"], "both sections' materials registered")
+        self.assertEqual(len(radii), 1, "one suppression radius for the whole model, not per section")
+        self.assertAlmostEqual(radii[0][3], bld.SUPPRESS_MAX_M, delta=0.01)
+
+    def test_override_yaw_forces_rotation_without_osm_lookup(self):
+        # id 22 (Dragon Bridge)'s POSITION_OVERRIDES entry carries a forced yaw - _custom_tile_entries must
+        # use it as-is and never call osm_yaw's OSM lookup at all (temporarily overridden to a non-zero yaw
+        # here so the rotation itself is observable, rather than the real 0.0 which would look like "no
+        # rotation happened" either way)
+        custom = [{"id": 22, "xy": (10.0, 10.0), "latlon": (16.06120, 108.22790)}]
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch.dict(threedmr.POSITION_OVERRIDES, {22: (16.06120, 108.22790, 30.0)}), \
+             mock.patch("threedmr.fetch_model", return_value=b"glb"), \
+             mock.patch("threedmr.gltf_mesh", side_effect=lambda glb, model_id=None: self._gltf_mesh((2.0, 2.0))), \
+             mock.patch("threedmr.osm_yaw") as osm_yaw, \
+             mock.patch("threedmr.write_model",
+                       return_value={"shape": "threedmr_22.cdae", "texture": None, "material": "threedmr_22",
+                                    "has_alpha": False, "alpha_cutoff": None}) as write_model, \
+             mock.patch("threedmr.update_materials", return_value=None):
+            bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
+        osm_yaw.assert_not_called()
+        rotated_pos = write_model.call_args[0][2]
+        self.assertFalse(np.allclose(rotated_pos[1], [2.0, 0.0, 0.0]), "the forced 30 degree yaw was applied")
+
+    def test_bridge_shaped_model_is_not_carved(self):
+        # FV=18: an is_bridge model (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M) no longer has its deck carved out
+        # (threedmr.carve_bridge_deck_mask) - it is baked exactly like any other model, deck triangles and
+        # all, and the stub road underneath is left to carry its own collision
+        pos = np.array([[0.0, 0.0, 0.0], [150.0, 0.0, 0.0], [0.0, 10.0, 0.0], [150.0, 10.0, 0.0]])
+        tris = np.array([[0, 1, 2], [1, 3, 2]])  # a flat, low deck: exactly what the old carve dropped
+        mesh = (pos, np.zeros((4, 2)), tris, None, [(None, None, None, False, None)], np.zeros(2, np.int64))
+        custom = [{"id": 22, "xy": (10.0, 10.0)}]
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
+             mock.patch("threedmr.gltf_mesh", return_value=mesh), \
+             mock.patch("threedmr.carve_bridge_deck_mask") as carve, \
+             mock.patch("threedmr.write_model",
+                       return_value={"shape": "threedmr_22.cdae", "texture": None, "material": "threedmr_22",
+                                    "has_alpha": False, "alpha_cutoff": None}) as write_model, \
+             mock.patch("threedmr.update_materials", return_value=None):
+            bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
+        carve.assert_not_called()
+        self.assertEqual(write_model.call_args[0][3].tolist(), tris.tolist(),
+                         "every tri (including the deck) reaches write_model unchanged")
+
+    def test_local_model_is_baked_without_fetch(self):
+        # a "local" custom entry (road_tile_items') skips fetch_model/gltf_mesh entirely - the mesh comes
+        # from threedmr.load_local_model instead, and its material/shape names come straight from the
+        # string id ("local_fire_tower_20m"), the same naming scheme write_model always uses for a numeric
+        # 3dmr one
+        factor = (0.784, 0.063, 0.18)
+        pos = np.array([[0.0, 0.0, 0.0], [1.24, 0.0, 0.0], [0.0, 1.24, 20.22]])
+        local_mesh = (pos, np.zeros((3, 2)), np.array([[0, 1, 2]]), None,
+                      [(None, None, factor, False, None)], np.zeros(1, np.int64))
+        entry = {"id": "local_fire_tower_20m", "file": "fire_tower_20m.stl", "factor": list(factor)}
+        custom = [{"id": "local_fire_tower_20m", "xy": (10.0, 10.0), "local": entry}]
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        with mock.patch("threedmr.fetch_model") as fetch_model, \
+             mock.patch("threedmr.load_local_model", return_value=local_mesh) as load_local_model, \
+             mock.patch("threedmr.write_model",
+                       return_value={"shape": "threedmr_local_fire_tower_20m.cdae", "texture": None,
+                                    "material": "threedmr_local_fire_tower_20m",
+                                    "has_alpha": False, "alpha_cutoff": None}) as write_model, \
+             mock.patch("threedmr.update_materials", return_value=None) as update_materials:
+            entries, radii, _b = bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
+        fetch_model.assert_not_called()
+        load_local_model.assert_called_once_with("/tmp", entry)
+        self.assertEqual(write_model.call_args[0][1], "local_fire_tower_20m", "shape/material name from the id")
+        self.assertEqual(entries[0]["shape"], "/temp/beamngEarth/s1/threedmr_local_fire_tower_20m.cdae")
+        update_materials.assert_called_once()
+        call_args = update_materials.call_args[0]
+        self.assertEqual(call_args[1], "threedmr_local_fire_tower_20m")
+        self.assertEqual(call_args[3], factor, "the catalog's own factor reaches the material")
+        self.assertEqual(len(radii), 1)
+
+
+
+
+class CustomModelTextureSurvivesSweepTest(unittest.TestCase):
+    """The "NO MATERIAL" bug: a session's out_dir (<user_dir>/temp/beamngEarth/<sid>) is wiped whenever the
+    anchor changes (sweep_sessions), and a tile that later comes back from the revisit cache restores only
+    its .cdae (revisit.shapes_in matches a tile JSON's own "shape" field, never a materials.json colorMap) -
+    so a texture _custom_tile_entries wrote beside the .cdae in that same out_dir goes dead, and every
+    material using it falls back to the engine's own "NO MATERIAL" stand-in. write_model's tex_cache_dir
+    (threedmr._persistent_png_dir) keeps the texture in cache_dir/threedmr_cache instead, which a session
+    sweep never touches - this exercises the real (non-mocked) threedmr.write_model/update_materials through
+    _custom_tile_entries to prove the file the materials.json entry points at survives the session's own
+    out_dir being removed."""
+
+    @staticmethod
+    def _gltf_mesh(glb, model_id=None):
+        pos = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 1.0]])
+        uvs = np.zeros((3, 2))
+        tris = np.array([[0, 1, 2]])
+        textures = [(b"\x89PNGfake", "png", None, False, None)]
+        return pos, uvs, tris, None, textures, np.zeros(1, np.int64)
+
+    def test_texture_outlives_its_session_dir(self):
+        import geodesy
+        f = geodesy.EnuFrame(39.28, -76.59)
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        custom = [{"id": 4, "xy": (10.0, 10.0)}]
+        with tempfile.TemporaryDirectory() as user_dir:
+            cache_dir = os.path.join(user_dir, "temp", "beamngEarth")
+            out_dir_a = os.path.join(cache_dir, "AAA")
+            os.makedirs(out_dir_a)
+            os.makedirs(os.path.join(user_dir, *threedmr.MOD_MATERIALS_REL[:3]))
+
+            with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
+                 mock.patch("threedmr.gltf_mesh", side_effect=self._gltf_mesh):
+                entries, _radii, _b = bld._custom_tile_entries(f, custom, ground, out_dir_a,
+                                                            "/temp/beamngEarth/AAA")
+
+            materials_path = os.path.join(user_dir, *threedmr.MOD_MATERIALS_REL, threedmr.MATERIALS_FILE)
+            with open(materials_path) as fh:
+                data = json.load(fh)
+            color_map = data["threedmr_4"]["Stages"][0]["colorMap"]
+            self.assertEqual(color_map, "/temp/beamngEarth/threedmr_cache/threedmr_4.png",
+                             "the texture is registered under the persistent cache, not the session dir")
+            self.assertEqual(entries[0]["shape"], "/temp/beamngEarth/AAA/threedmr_4.cdae")
+
+            shutil.rmtree(out_dir_a)       # sweep_sessions: an anchor change wipes the session folder
+
+            self.assertTrue(os.path.exists(os.path.join(user_dir, color_map.lstrip("/"))),
+                            "the texture the materials.json entry names must still be on disk")
+            self.assertFalse(os.path.exists(os.path.join(user_dir, entries[0]["shape"].lstrip("/"))),
+                             "only the .cdae lived in the swept session dir - a revisit cache hit re-creates "
+                             "that one from its own stored blob, not from here")
 
 
 class PhotoFillTest(unittest.TestCase):
@@ -1080,3 +1502,100 @@ class RealTagsTest(unittest.TestCase):
         self.assertLess(p2_rgba[0], 50)
         self.assertGreater(p2_rgba[1], 200)
         self.assertEqual(p2_spec.roof, "hipped")
+
+
+class ModelBridgeTest(unittest.TestCase):
+    """A 3dmr model bridge carries the road (FV=24): _custom_tile_entries bakes it leaned onto the mapped bridge's
+    ends, drawn without collision ("col": False) beside its deck slab (threedmr.write_bridge_deck); the procedural
+    bridge under it is left out of every tile (bridge_stub_*), wherever its footprint reaches."""
+
+    FP = {"bridge": True, "ax": 0, "u0": -100.0, "du": 2.0, "cols": [[-10.0, 10.0]] * 101}
+
+    def setUp(self):
+        import geodesy
+        self.f = geodesy.EnuFrame(16.0612, 108.2279)
+
+    @staticmethod
+    def _slab(length=200.0, width=20.0):
+        P, T = [], []
+        for z in (5.0, 3.0):        # a flat two-sided deck slab: top and its lower skin, each face doubled
+            n = len(P)
+            P += [[-length / 2, -width / 2, z], [length / 2, -width / 2, z], [length / 2, width / 2, z],
+                  [-length / 2, width / 2, z]]
+            T += [[n, n + 1, n + 2], [n, n + 2, n + 3], [n, n + 2, n + 1], [n, n + 3, n + 2]]
+        P = np.array(P, np.float64)
+        return (P, np.zeros((len(P), 2)), np.array(T, np.int64), None, [(None, None, None, False, None)],
+                np.zeros(len(T), np.int64))
+
+    def _bake(self, **patches):
+        custom = [{"id": 22, "xy": (10.0, 10.0)}]
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        res = {"shape": "threedmr_22.cdae", "texture": None, "material": "threedmr_22", "has_alpha": False,
+               "alpha_cutoff": None}
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "s1")
+            os.makedirs(out)
+            with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
+                 mock.patch("threedmr.gltf_mesh", return_value=self._slab()), \
+                 mock.patch("threedmr.write_model", return_value=res) as write_model, \
+                 mock.patch("threedmr.update_materials", return_value=None), \
+                 mock.patch("revisit.fault") as fault:
+                with mock.patch.multiple("threedmr", **patches) if patches else mock.patch("os.sep", os.sep):
+                    entries, radii, _b = bld._custom_tile_entries(
+                        self.f, custom, ground, out, "/temp/beamngEarth/s1",
+                        road_ends={22: [(-80.0, 10.0, 1.0), (100.0, 10.0, 2.0)]})
+                files = sorted(os.listdir(out))
+        return entries, write_model, fault, files
+
+    def test_bridge_drawn_without_collision_beside_its_deck_slab(self):
+        entries, write_model, fault, files = self._bake()
+        self.assertEqual([(e["shape"].rsplit("/", 1)[1], e.get("col", True)) for e in entries],
+                         [("threedmr_22.cdae", False), ("threedmr_22_deck.cdae", True)])
+        self.assertIn("threedmr_22_deck.cdae", files)
+        tilt = write_model.call_args.kwargs["tilt"]
+        self.assertEqual(tilt[4], (-90.0, 90.0), "the deck's span: the mapped bridge's ends (model frame)")
+        top = 5.0 - threedmr._support_z(np.array([5.0] * 4 + [3.0] * 4)) - 0.2     # (the deck's top as bedded)
+        self.assertAlmostEqual(threedmr.tilt_dz(tilt, [[-90.0, 0.0]])[0] + top, 1.0 + threedmr.BRIDGE_END_EPS_M,
+                               delta=0.01)
+        fault.assert_not_called()
+
+    def test_a_failed_slab_keeps_the_models_own_collision(self):
+        entries, _w, fault, _f = self._bake(write_bridge_deck=mock.Mock(side_effect=OSError("disk")))
+        self.assertEqual([(e["shape"].rsplit("/", 1)[1], e.get("col", True)) for e in entries],
+                         [("threedmr_22.cdae", True)])
+        fault.assert_called()
+
+    def test_stub_chunks_under_the_model_left_out(self):
+        fps = [(self.FP, (0.0, 0.0), 22)]
+        line = np.c_[np.linspace(-50, 50, 11), np.zeros(11), np.full(11, 9.0)]
+        chunks = [{"deck": True, "fixed": True, "n": line}, {"fixed": True, "m": "line_white", "n": line},
+                  {"m": "road", "n": line}, {"fixed": True, "tunnel": True, "deck": True, "n": line},
+                  {"deck": True, "fixed": True, "n": line + [0.0, 60.0, 0.0]}]
+        kept = bld.bridge_stub_chunks(fps, chunks)
+        self.assertEqual([i for i, c in enumerate(chunks) if any(c is k for k in kept)], [2, 3, 4],
+                         "the deck and its line under the model go; a ground road, a tunnel, a deck beside stay")
+        self.assertIs(bld.bridge_stub_chunks([], chunks), chunks)
+
+    def test_stub_parts_piers_props_left_out(self):
+        fps = [(self.FP, (0.0, 0.0), 22)]
+        parts = [("a", None, np.array([[-50.0, 0.0], [50.0, 0.0]]), np.array([9.0, 9.0]), None),
+                 ("b", None, np.array([[-50.0, 60.0], [50.0, 60.0]]), np.array([1.0, 1.0]), None)]
+        self.assertEqual([p[0] for p in bld.bridge_stub_parts(fps, parts)], ["b"])
+        piers, beams = bld.bridge_stub_piers(fps, [(0.0, 0.0, 1.0), (0.0, 50.0, 1.0)],
+                                             [((-5.0, 0.0, 9.0), (5.0, 0.0, 9.0)), ((-5.0, 50.0, 9.0), (5.0, 50.0, 9.0))])
+        self.assertEqual((len(piers), piers[0][1], len(beams), beams[0][0][1]), (1, 50.0, 1, 50.0))
+        props = [[0, 10.0, 0.0, 9.0], [0, 10.0, 40.0, 1.0]]
+        self.assertEqual(bld.bridge_stub_props(fps, props), [[0, 10.0, 40.0, 1.0]])
+
+    def test_road_ends_of_the_mapped_bridge_under_the_model(self):
+        class Bridges:
+            def parts(self, cells, box):
+                self.box = box
+                return [("a", None, np.array([[-80.0, 2.0], [0.0, 2.0], [90.0, 2.0]]), np.array([1.0, 7.0, 2.0]), None),
+                        ("b", None, np.array([[-50.0, 60.0], [50.0, 60.0]]), np.array([1.0, 1.0]), None)]
+        b = Bridges()
+        got = bld.bridge_road_ends([(self.FP, (1000.0, 0.0), 22)], b, [])
+        self.assertEqual(b.box, (900.0, -10.0, 1100.0, 10.0))
+        self.assertEqual(got, {})       # (the parts are near the origin, the model at x 1000: none under it)
+        got = bld.bridge_road_ends([(self.FP, (0.0, 0.0), 22)], b, [])
+        self.assertEqual(got, {22: [(-80.0, 2.0, 1.0), (90.0, 2.0, 2.0)]})

@@ -68,8 +68,8 @@ PRIORITIES = ("low", "normal")
 
 
 def player_settings(user_dir):
-    """{"cores": n, "priority": "normal"} of the player's choices on the settings page (absent: "auto" / "low", or no
-    settings file). The game writes its file names in lower case on Linux (settings/beamngearth.json)."""
+    """{"cores": n, "priority": "normal", "models3dmr": False} of the player's choices on the settings page (absent:
+    "auto" / "low" / on, or no settings file). The game writes its file names in lower case on Linux (settings/beamngearth.json)."""
     out = {}
     if not user_dir:
         return out
@@ -90,13 +90,19 @@ def player_settings(user_dir):
         out["priority"] = "normal"
     if d.get("teleportPriority") is True:
         out["teleport_full"] = True
+    env = os.environ.get("BNGE_TELEPORT_FULL")      # (tests: the setting either way for this run)
+    if env in ("0", "1"):
+        out["teleport_full"] = env == "1"
+    if d.get("models3dmr") is False:
+        out["models3dmr"] = False
     return out
 
 
 def apply_player_settings(user_dir, nice, default_nice, environ=None):
     """The settings page's choices (player_settings) applied where the player set nothing by hand: the cores as
     BNGE_SERVER_CORES in environ (default os.environ; split reads it), "normal" priority as niceness 0 when nice is
-    still default_nice (a --nice given wins). Returns (the niceness to use, [what changed] for the log)."""
+    still default_nice (a --nice given wins), the 3dmr.eu models off as BNE_3DMR=off (threedmr.enabled). Returns (the
+    niceness to use, [what changed] for the log)."""
     environ = os.environ if environ is None else environ
     chosen, notes = player_settings(user_dir), []
     if chosen.get("cores") and not environ.get("BNGE_SERVER_CORES"):
@@ -105,6 +111,9 @@ def apply_player_settings(user_dir, nice, default_nice, environ=None):
     if chosen.get("priority") == "normal" and nice == default_nice:
         nice = 0
         notes.append("normal priority")
+    if chosen.get("models3dmr") is False and not environ.get("BNE_3DMR"):
+        environ["BNE_3DMR"] = "off"            # (threedmr.enabled; the worker processes inherit it)
+        notes.append("no 3dmr.eu models")
     return nice, notes
 
 

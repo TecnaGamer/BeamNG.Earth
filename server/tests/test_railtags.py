@@ -91,3 +91,30 @@ class LaneTagsTest(unittest.TestCase):
                          "the road with the way's tags; a rail segment of the same way none")
         self.assertEqual(f.attrs["osm_overtaking"][0], "no")
         self.assertIsNone(f.attrs["osm_change_lanes"][0])
+
+
+class WaysTest(unittest.TestCase):
+    """A shard's ways kept compact (railtags.Ways): the same lookups as the dict, the distinct tag sets once."""
+
+    def test_same_as_the_dict(self):
+        ways = {"21": {"lanes": "3", "highway": "primary"}, "7": {"highway": "primary", "lanes": "3"},
+                "900000000001": {"lane_markings": "no"}, "5": {}}
+        w = railtags.Ways.of(ways)
+        self.assertIsInstance(w, railtags.Ways)
+        for k, v in ways.items():
+            self.assertEqual(w.get(k), v)
+        self.assertEqual(len(w.tags), 3, "equal tag sets kept once")
+        self.assertIsNone(w.get("8"))
+        self.assertIsNone(w.get(""))
+        self.assertIsNone(w.get(None))
+        self.assertEqual(w.get("8", "x"), "x")
+        self.assertEqual(w.get_many(["21", "8", "", "900000000001"]), [ways["21"], None, None, ways["900000000001"]])
+        self.assertEqual(len(w), 4)
+
+    def test_not_plain_numbers_stay_a_dict(self):
+        ways = {"w21": {"lanes": "2"}}
+        self.assertIs(railtags.Ways.of(ways), ways)
+        self.assertEqual(railtags._tags_of(ways, ["w21", ""]), [{"lanes": "2"}, None])
+        empty = railtags.Ways.of({})
+        self.assertFalse(empty)
+        self.assertEqual(empty.get_many(["1"]), [None])

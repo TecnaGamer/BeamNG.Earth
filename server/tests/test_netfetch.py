@@ -310,9 +310,10 @@ class TransportTest(unittest.TestCase):
                 return b"ok"
 
         class Conn:
-            def __init__(self, netloc, timeout=None, **kwargs):
+            def __init__(self, netloc, timeout=None, context=None, **kwargs):
                 made.append(self)
                 self.sent = 0
+                self.context = context
 
             def request(self, method, path, headers=None):
                 self.sent += 1
@@ -352,6 +353,13 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(tr.request(url(), {}, 20.0)[0], 200)
         self.assertEqual(tr.request(url(), {}, 20.0)[0], 200)      # reused, closed by the server: reopened
         self.assertEqual((len(made), [c.sent for c in made]), (2, [2, 1]))
+
+    def test_configured_tls_context_reaches_connection(self):
+        context = object()
+        with mock.patch.object(nf, "windows_ssl_context", return_value=context):
+            tr, made = self.transport([])
+        self.assertEqual(tr.request(url(), {}, 20.0)[0], 200)
+        self.assertIs(made[0].context, context)
 
 
 class RetryTest(unittest.TestCase):
@@ -799,7 +807,7 @@ class UserAgentTest(unittest.TestCase):
             def __enter__(self):
                 return self
 
-        def urlopen(req, timeout):
+        def urlopen(req, timeout, context=None):       # (context: the Windows certificate check, #640)
             seen.append(dict(req.header_items()))
             return Resp(data)
         f, clock, sleep, tr = fetcher()

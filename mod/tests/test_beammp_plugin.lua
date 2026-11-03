@@ -8,6 +8,26 @@ local G = dofile(dir .. '/../../beammp/Server/BeamNGEarth/main.lua')
 local M_PER_DEG = 111194.9     -- (G.dist's sphere)
 
 T.check(math.abs(G.dist(0, 0, 1000 / M_PER_DEG, 0) - 1000) < 1, 'dist: 1 km north')
+T.near(G.dist(0, 179.995, 0, -179.995), 1111.949, 0.01, 'dist: neighbours across the date line')
+
+-- Invalid client numbers must never enter the anchors broadcast or replace a good pose.
+for _, field in ipairs({ 'aLat', 'aLon', 'lat', 'lon' }) do
+  for _, bad in ipairs({ 0 / 0, math.huge, -math.huge, 'nan', {}, false }) do
+    G.players = {}
+    local d = { v = G.PROTO, aLat = 1, aLon = 2, lat = 3, lon = 4 }
+    d[field] = bad
+    local p, changed = G.onPose(99, d, 'invalid')
+    T.check(p == nil and changed == false and G.players[99] == nil, 'invalid pose rejected: ' .. field .. '/' .. tostring(bad))
+    G.onPose(99, { v = G.PROTO, aLat = 1, aLon = 2, lat = 3, lon = 4 }, 'valid')
+    G.onPose(99, d, 'invalid')
+    T.check(G.players[99][field] == ({ aLat = 1, aLon = 2, lat = 3, lon = 4 })[field],
+      'invalid pose preserves previous coordinates: ' .. field)
+  end
+end
+G.players = {}
+G.onPose(1, { v = G.PROTO, aLat = 0, aLon = 179.995, lat = 0, lon = 179.995 }, 'west')
+T.check(G.onPose(2, { v = G.PROTO, aLat = 0, aLon = -179.995, lat = 0, lon = -179.995, joined = true }, 'east') == nil,
+  'nearby date-line joiner stays in place')
 
 -- the startup notice: the Discord for help, not BeamMP's developers; why the server is hidden from other players
 local notice = table.concat(G.supportNotice(), '\n')

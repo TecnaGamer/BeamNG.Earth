@@ -27,7 +27,7 @@ import math
 import os
 import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 

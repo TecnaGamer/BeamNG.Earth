@@ -19,9 +19,14 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FILES = ["install.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md",
-         "VERSION", "docs/QUICKSTART.md", "docs/CLIFF_TESTING.md"]
+         "VERSION", "docs/QUICKSTART.md", "docs/CLIFF_TESTING.md", "docs/MODERNIZATION.md", "docs/MODERNIZATION_VALIDATION.md",
+         "docs/SKETCHFAB_ASSETS.md", "docs/SHARED_WORLD.md", "docs/RELAUNCH_TROUBLESHOOTING.md", "docs/STABILITY_VALIDATION.md",
+         "docs/PLATFORM_STATUS.md", "docs/RELEASE_1_7_4.md", "docs/RELEASE_1_8_1.md",
+         "docs/research/2026-11-02-range-cache.md", "docs/research/2026-11-02-world-bundle.md",
+         "docs/research/2026-11-02-world-bundle.json", "docs/research/2026-11-02-release-1.8.1-world-bundle.json",
+         "beammp/MODERNIZATION.md"]
 TREES = ["mod/beamng_earth", "server"]
-TOOLS = ["tools/reports.py"]                # user-facing helpers from tools/ (the in-game reports -> GitHub issues)
+TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py", "tools/world_cache.py"]  # no stored credentials
 SKIP_DIRS = {"__pycache__", "tests", ".git", "backups", "probes", "research", ".venv", "dist"}
 SKIP_EXT = {".pyc", ".pyo", ".log", ".swp"}
 EXECUTABLE = {"run_server.sh", "install.py", "start.py"}
@@ -74,6 +79,8 @@ def beammp_zip(out_dir, ver):
         for rel in tree_files("beammp/Server"):
             z.write(os.path.join(ROOT, "beammp/Server", rel), f"Resources/Server/{rel}")
         z.write(os.path.join(ROOT, "beammp/README.md"), "BeamNG.Earth-README.md")
+        z.write(os.path.join(ROOT, "LICENSE"), "LICENSE-Earth.txt")
+        z.write(os.path.join(ROOT, "CREDITS.md"), "CREDITS-Earth.md")
     print(f"{path}: {os.path.getsize(path) / 1e6:.1f} MB")
 
 

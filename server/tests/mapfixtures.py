@@ -217,6 +217,8 @@ SCHEMAS = {
 OSM = {"property": "", "dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "w1@1"}
 MSFT_H = {"property": "/properties/height", "dataset": "Microsoft ML Buildings", "license": "ODbL-1.0",
           "record_id": None}
+# a road in a route relation: Overture lists the relation first, the road's own way after it (GitHub #683)
+ROUTE = {"property": "/routes", "dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "r7@3"}
 
 
 def _cell_xy(fx, fy, cell=CELL):
@@ -254,7 +256,8 @@ def features():
                                 {"max_speed": {"value": 15, "unit": "mph"}, "between": None,
                                  "when": {"heading": "forward"}}],
                   connectors=[{"connector_id": "con-a", "at": 0.0}, {"connector_id": "con-b", "at": 1.0}])
-    seg[1].update(road_surface=[{"value": "paved", "between": [0.0, 0.5]},
+    seg[1].update(sources=[ROUTE, dict(OSM, record_id="w2@5")],
+                  road_surface=[{"value": "paved", "between": [0.0, 0.5]},
                                 {"value": "gravel", "between": [0.5, 1.0]}],
                   speed_limits=[{"max_speed": {"value": 50, "unit": "km/h"}, "between": None, "when": None}],
                   # one-way along the geometry; a delivery-only restriction that must not count

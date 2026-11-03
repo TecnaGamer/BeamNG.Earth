@@ -6,7 +6,7 @@ Every guide sign face is drawn to the US MUTCD (green guide panels, Interstate /
 diamond, Interstate mile markers): those are built where signstates finds a US state (BNE_SIGNS_WORLD=1: everywhere,
 for tests), elsewhere no sign data is asked for. The speed-limit signs (speedsigns.py, field speeds: the AI's limit, in
 each region's style) are built everywhere."""
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 import json
 import logging
 import os

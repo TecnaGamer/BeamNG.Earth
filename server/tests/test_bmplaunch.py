@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -97,8 +98,9 @@ class LinuxBuild(unittest.TestCase):
 
         def run(cmd, **kw):
             cmds.append(cmd)
-            out = [v.split(":")[0] for v in cmd if v.endswith(":/out:Z")][0]
-            src = [v.split(":")[0] for v in cmd if v.endswith(":/src:ro,Z")][0]
+            # Strip the known mount suffix, preserving a Windows drive letter.
+            out = [v.removesuffix(":/out:Z") for v in cmd if v.endswith(":/out:Z")][0]
+            src = [v.removesuffix(":/src:ro,Z") for v in cmd if v.endswith(":/src:ro,Z")][0]
             self.assertTrue(os.path.isfile(os.path.join(src, "CMakeLists.txt")), "BeamMP's source in the container")
             Path(out, "BeamMP-Launcher").write_bytes(b"\x7fELF built")
 
@@ -263,6 +265,22 @@ class Finding(unittest.TestCase):
         self.assertTrue(bmplaunch.log_too_old(log))
         self.assertFalse(bmplaunch.log_too_old("[INFO] Game Connected!"))
 
+    def test_native_windows_log_is_current_and_bounded(self):
+        with tempfile.TemporaryDirectory() as d:
+            redirected = Path(d, "stdout.log")
+            native = Path(d, "Launcher.log")
+            exe = Path(d, "BeamMP-Launcher.exe")
+            redirected.write_text("")
+            native.write_text("old failure")
+            os.utime(native, (100, 100))
+            os.utime(redirected, (200, 200))
+            self.assertNotIn("old failure", bmplaunch.read_log(redirected, exe))
+            native.write_text("x" * 100000 + "\n[DEBUG] Launcher Version : 2.8.1\n")
+            os.utime(native, (201, 201))
+            text = bmplaunch.read_log(redirected, exe)
+            self.assertLessEqual(len(text), 65537)
+            self.assertEqual(bmplaunch.log_version(text), "2.8.1")
+
     def test_running(self):
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
@@ -271,6 +289,54 @@ class Finding(unittest.TestCase):
             self.assertTrue(bmplaunch.running(s.getsockname()[1]))
         finally:
             s.close()
+
+
+class ProcessCleanup(unittest.TestCase):
+    def test_spawn_closes_parent_log_even_on_failure(self):
+        for failed in (False, True):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as d:
+                handles = []
+
+                def spawn(*args, **kw):
+                    handles.append(kw["stdout"])
+                    self.assertFalse(handles[-1].closed)
+                    if failed:
+                        raise OSError("could not spawn")
+                    return mock.sentinel.child
+
+                with mock.patch.object(bmplaunch.subprocess, "Popen", side_effect=spawn):
+                    if failed:
+                        with self.assertRaises(OSError):
+                            bmplaunch.start(os.path.join(d, bmplaunch.EXE), d, os.path.join(d, "output.log"))
+                    else:
+                        self.assertIs(bmplaunch.start(os.path.join(d, bmplaunch.EXE), d,
+                                                     os.path.join(d, "output.log")), mock.sentinel.child)
+                self.assertTrue(handles[0].closed)
+
+    def test_forced_stop_reaps_owned_child(self):
+        child = mock.Mock()
+        child.poll.return_value = None
+        child.wait.side_effect = [subprocess.TimeoutExpired("fixture", 10), 0]
+        bmplaunch.stop(child)
+        child.terminate.assert_called_once_with()
+        child.kill.assert_called_once_with()
+        self.assertEqual(child.wait.call_args_list, [mock.call(timeout=10), mock.call(timeout=5)])
+
+    def test_completed_process_is_not_signaled(self):
+        child = mock.Mock()
+        child.poll.return_value = 0
+        bmplaunch.stop(child)
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+
+    def test_readiness_deadline_uses_monotonic_clock(self):
+        child = mock.Mock()
+        child.poll.return_value = None
+        with mock.patch.object(bmplaunch.time, "monotonic", side_effect=[1, 1.1, 2.1]), \
+                mock.patch.object(bmplaunch.time, "time", side_effect=AssertionError("wall clock")), \
+                mock.patch.object(bmplaunch.time, "sleep"), \
+                mock.patch.object(bmplaunch, "running", return_value=False):
+            self.assertFalse(bmplaunch.wait_ready(child, timeout=1))
 
 
 if __name__ == "__main__":

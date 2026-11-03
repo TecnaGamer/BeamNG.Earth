@@ -34,6 +34,7 @@ import http.client
 import json
 import math
 import os
+import ioprofiler
 import struct
 import sys
 import tarfile
@@ -454,6 +455,10 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
     process-wide one): the host's policy (one at a time), the project User-Agent (nothing else is
     sent), its circuit breaker and Retry-After."""
     net = net if net is not None else netfetch.default_fetcher()
+    # Windows: the system's own certificate check, as every other request (netfetch.HttpsTransport): OpenSSL's chain
+    # picked an expired intermediate on some SourceForge mirrors and every attempt failed with "certificate has
+    # expired" (GitHub #567; this download opens its own connections, so the 1.7.0 fix never reached it)
+    tls = netfetch.windows_ssl_context()
     part = dest + ".part"
     for i in range(attempts):
         have = os.path.getsize(part) if os.path.exists(part) else 0
@@ -466,7 +471,8 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                     req = urllib.request.Request(url, headers=s.headers)
                     if have:
                         req.add_header("Range", f"bytes={have}-")
-                    with urllib.request.urlopen(req, timeout=30) as resp:
+                    with urllib.request.urlopen(req, timeout=30, context=tls) as resp:
+                        ioprofiler.headers_received()
                         s.status = resp.status
                         mode = "ab" if have and resp.status == 206 else "wb"
                         with open(part, mode) as f:
@@ -477,6 +483,7 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                                     break
                                 f.write(chunk)
                                 got += len(chunk)
+                                ioprofiler.received_bytes(len(chunk))
                                 s.nbytes = got
                                 dt = time.monotonic() - t0
                                 if dt > 20 and got / dt < min_rate:   # a stalled mirror: try another
@@ -633,7 +640,7 @@ class Provider:
 
     def __init__(self, cache_dir=CACHE_DIR, model=None, nmax=None, download=True, log=None, net=None):
         import logging
-        from concurrent.futures import ThreadPoolExecutor
+        from runtimeprofiler import ThreadPoolExecutor
         self.cache_dir = cache_dir
         self.nmax = nmax or int(os.environ.get("BNGE_GRAVITY_NMAX", DEFAULT_NMAX))
         self.model = model

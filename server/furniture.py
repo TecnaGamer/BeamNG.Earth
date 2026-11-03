@@ -370,6 +370,23 @@ def _seg_dist_min(p, line):
     return float(np.hypot(*(a + t[:, None] * d - p).T).min())
 
 
+def approach_pose(u, what, left_hand=False):
+    """(side, yaw) of the signal or sign for the approach into a junction along -u (u: the arm's unit vector away from
+    it): side, the unit vector from the road toward where it stands (signal_spot's right), and yaw (_yaw), the turn
+    that faces it toward the drivers coming in. Pure.
+
+    The yaw is the same on either side of the road: it is the turn that faces the model's front toward the drivers,
+    and turning it the other way for left-hand traffic stood every head and sign with its back to them (GitHub #595,
+    the UK). A sign stands on the kerb side traffic keeps to (the left where it drives on the left). The signal is the
+    stock boom (s_trafficlight_boom_sn): its arm reaches to the drivers' left from its pole, and a turn cannot mirror
+    it, so its pole stands on the drivers' right everywhere and the arm is over the road (on the left kerb and facing
+    them, the arm would hang over the pavement)."""
+    inc = -np.asarray(u, np.float64)[:2]
+    right = np.array([inc[1], -inc[0]])         # the right of travel (along inc)
+    side = -right if left_hand and what != G_SIGNAL else right
+    return side, round(_yaw(right[0], right[1]), 1)
+
+
 def signal_spot(c, u, right, wide, half, lines):
     """Where an approach's signal or sign stands at junction point c (arm direction u away from it, right: the kerb
     side): past the junction's widest arm (wide: its half width) and outside the approach's carriageway (half), moved
@@ -385,8 +402,8 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
-    Each on the approach's right (its left where traffic drives on the left), at the junction's edge, facing
-    the drivers who come in. decks: [(centreline (k, 3), half width)] of the bridge decks near (signal_spot)."""
+    Each on the approach's right (approach_pose: a sign on its left where traffic drives on the left, a signal's
+    boom on its right everywhere), at the junction's edge, facing the drivers who come in. decks: [(centreline (k, 3), half width)] of the bridge decks near (signal_spot)."""
     x0, y0, x1, y1 = box
     rows = []
     junctions = _arms(roads)
@@ -407,14 +424,12 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
             continue
         wide = max(a[1].width for a in arms) / 2
         for (fid, spec, u, c, *_), what in put:
-            # the approach comes in along -u; its right is (-u_y, u_x)... rotated: right of travel (-u)
-            inc = -u
-            right = np.array([inc[1], -inc[0]]) * (-1 if left_hand else 1)     # the kerb side of the approach
-            q = signal_spot(c, u, right, wide, spec.width / 2, lines)
+            side, yaw = approach_pose(u, what, left_hand)
+            q = signal_spot(c, u, side, wide, spec.width / 2, lines)
             if q is None or not (x0 - 20 <= q[0] < x1 + 20 and y0 - 20 <= q[1] < y1 + 20):
                 continue
             rows.append([what, round(float(q[0]), 2), round(float(q[1]), 2), round(float(c[2] + curb_h), 2),
-                         round(_yaw(right[0], right[1]), 1), 1.0, 9.4 if what == G_SIGNAL else 3.0, 0.0])
+                         yaw, 1.0, 9.4 if what == G_SIGNAL else 3.0, 0.0])
     return rows
 
 

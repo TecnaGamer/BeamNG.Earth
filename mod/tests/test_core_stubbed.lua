@@ -9,6 +9,10 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+-- (the v1.3.1 block, 1024² at 2 m: these checks are written for it; the 1 m default: test_lattice / test_follow)
+require('beamngEarth/lattice').configure(1024, 2.0)
+require('beamngEarth/follow').configure()
+require('beamngEarth/rebase').configure(2048)
 require('beamngEarth/farfield').SPARE_MAX = 0 -- deletion timing as before; the spare pool: test_farfield_spares.lua
 local framing = require('beamngEarth/framing')
 local geodesy = require('beamngEarth/geodesy')
@@ -850,6 +854,22 @@ do -- Changing only cliff detail must survive graphics-message deduplication.
     T.check(not core.sendGraphics(),'unchanged distant cliff switch deduped')
   end
 end
+-- The connection survives a level reload; its negotiated capability must survive the scene reset too.
+do
+  local actual, seen = core._trafficvisuals, {}
+  core._trafficvisuals = { PROTO = 2,
+    session = function(id, available) seen.id, seen.available = id, available end,
+    reset = function() seen = {} end,
+    hasWork = function() return false end, update = function() end, onTeleport = function() end }
+  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
+  frames(3)
+  T.check(seen.available, 'hello negotiates distant traffic before the level reload')
+  core.onClientEndMission()
+  core.onClientStartMission()
+  T.check(seen.id == 'traffic-reload' and seen.available, 'level start restores the live connection capability')
+  core._trafficvisuals = actual
+end
 core.reconnect()
 T.check(core.cacheState() == nil and not core.cacheClear(), 'disconnected: numbers gone, no request sent')
 beamngEarth_settings = nil
@@ -880,5 +900,27 @@ do
   local a, b, c = core.safeSpot(5, 5, function() return 7 end)
   T.check(a == 5 and b == 5 and c == 7, 'safeSpot: ground under the spot: the spot itself')
   T.check(core.safeSpot(0, 0, function() return nil end) == nil, 'safeSpot: no ground anywhere near: nil')
+end
+-- a block's refreshed base photo (block_base) waits while the car is fast and comes once it is slower (core.applyBaseLater)
+do
+  local core = require('beamngEarth/core')
+  local terrain = require('beamngEarth/terrain')
+  local setBase, n = terrain.setBase, 0
+  terrain.setBase = function() n = n + 1; return true end
+  local st = core._state()
+  local was = { st.anchorId, st.block, st.player }
+  st.anchorId, st.block = 7, { cx = 512, cy = -512 }
+  core._baseLater = { anchorId = 7, cx = 512, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  st.player = { speed = core.BASE_LATER_MS + 5 }
+  T.check(core.applyBaseLater() == false and n == 0 and core._baseLater ~= nil, 'base photo refresh: waits while the car is fast')
+  st.player = { speed = (core.BASE_LATER_MS + core.BASE_NOW_MS) / 2 }
+  T.check(core.applyBaseLater() == false and n == 0, 'base photo refresh: still waits between the two speeds')
+  st.player = { speed = core.BASE_NOW_MS - 5 }
+  T.check(core.applyBaseLater() == true and n == 1 and core._baseLater == nil, 'base photo refresh: applied once the car is slower')
+  core._baseLater = { anchorId = 7, cx = 0, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  T.check(core.applyBaseLater() == false and n == 1 and core._baseLater == nil,
+    'base photo refresh: dropped when its block is no longer the one in use')
+  terrain.setBase = setBase
+  st.anchorId, st.block, st.player = was[1], was[2], was[3]
 end
 T.done('test_core_stubbed')

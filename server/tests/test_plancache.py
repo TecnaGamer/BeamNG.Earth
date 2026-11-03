@@ -59,6 +59,21 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(md.calls, 0, "planned in the last run: read from the revisit cache")
         self.assertTrue(np.array_equal(za, zb))
 
+    def test_has(self):
+        """PlanCache.has: a cell's plans on disk, this run's or (a later run) the revisit cache's; nothing read."""
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        a = self.grader(FakeMD(f))
+        keys = sorted({k for pl, idx in a.store.planners_of(np.asarray(la), np.asarray(lo))
+                       for k in pl._keys(np.asarray(la)[idx], np.asarray(lo)[idx])})
+        self.assertFalse(any(a.shared.has(k) for k in keys), "nothing planned yet")
+        a.apply(la, lo, np.zeros(50))
+        self.assertTrue(all(a.shared.has(k) for k in keys), "this run's plans")
+        os.environ[plancache.RUN_ENV] = "next"          # (a later server run: its own run folder, empty)
+        b = self.grader(FakeMD(f))
+        self.assertTrue(all(b.shared.has(k) for k in keys), "the revisit cache's copy")
+        self.assertFalse(b.shared.has((14, 1, 1)), "another cell")
+
     def test_incomplete_plans_not_kept(self):
         import revisit
         f = features([[(-300, 20), (300, 20)]], ["residential"])

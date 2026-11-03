@@ -106,6 +106,34 @@ as JSON floats (`512.0`). All positions are in the ENU plane of the anchor named
 
 ### mod → server
 
+`hello.trafficVisuals: 2` opts into visual-only traffic routes. The server answers the same capability when geotiles,
+roads and traffic are available. Without it neither side starts this stream; older clients and servers keep their
+existing behaviour. `traffic_visuals` (`enabled`, bool) requests it only while the mod's setting, roads and night
+are on. It also requires BeamNG traffic unless the mod's independent-lights switch is enabled. Two existing
+geotile trackers use the shared worker pool, one job per tracker in flight,
+independently of buildings and the physical AI graph. The mod keeps received tiles while temporarily disabled.
+After discarding its route cache (a level reload), it sends `traffic_visuals` with `enabled: true, reset: true` to
+request both streams again on the surviving connection. Ordinary off/on toggles omit `reset` and reuse the cache.
+
+`traffic_tile` carries `anchorId`, `key` (`g14_x_y`), `path`, `n`, `frame` (lat/lon), `pivot` and optional inline `data`;
+`traffic_drop` carries `anchorId` and `key`. `traffic_far_tile` / `traffic_far_drop` have the same fields. The near
+stream covers 5.5 km and includes local / unpaved roads; the far stream covers major roads to 11 km with a 4.5 km
+inner skip. Shared routes have the same id; the client retains them while either stream owns them.
+
+The JSON is `{v:2,key,frame,pivot,paths}`; each path has a stable `id`, XYZ `points` in the tile's world frame,
+`speed` (m/s), `spacing` (peak metres per cosmetic car per direction), `reach` (m), `roadClass`, `surface`, and
+`offset` (m right of travel; currently zero: heights are sampled in each lane). Stable 2 km pieces bound long ways;
+the client retains them across rebases. Bridge routes use the same solved deck profiles as far bridge slabs;
+tunnels remain excluded. Bounds: 128 routes / 8192 points per tile, 512 points per route; the client holds at most 384 tiles,
+8192 routes and 196608 prepared or pending points. Client quality selects a world population of at most
+512/1024/2048 cosmetic cars (twice as many planes), including those fading out, independently of camera direction
+or zoom. Demand-based range shares, distance LOD and 2 Hz cached off-screen motion bound updates; hidden planes
+receive no transform uploads and newly revealed actors refresh immediately. Local routes fade out
+by 6 km and major routes by 10 km. No vehicles, lights or collision. The route planner is Rust
+(`native/earthfast/src/traffic.rs`, bundled native 139 on this base); Python marshals shared road rules and height samples. At capacity
+the mod defers whole tiles by file descriptor and retries after ownership releases space, with bounded resync
+for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the code, limits and lifecycle.
+
 | Message | Notes |
 |---|---|
 | `{"type":"hello","protocol":4,"format":4,"modVersion":"…","sessions":["…"]}` | `format` = the newest tile format the mod reads (the v1.4 mod reads 3 and 4; a v1.3.1 mod sends 3). A different `protocol`, or a `format` below the server's, gets a `status` warning. `sessions` (optional; a list, or `{}` for an empty Lua table): the session folders whose files the mod's objects still use (shapes of every tile object, textures of its imagery materials; `farfield.heldSessions`). An earlier run's folder named here is adopted (see "Run"); the server's own id and unknown names are ignored. The server's `hello` is unchanged. `vegFlat` (optional, `true`): the mod reads a vegetation tile as one flat array (`--trees`); without it the server sends the rows. `geoTiles` (optional, `17`): the mod places geotiles itself (`--geo-tiles`); the server's `hello` answers `geoTiles: 17` when it sends them. `roadGeo` (optional, `1`): it places road geotiles too (`roads.lua`); the server answers `roadGeo: 1` when its road tiles are geotiles. `farGeo` (optional, `1`): it places far geotiles too (far buildings, skyline, far bridges: `roads.lua`); the server answers `farGeo: 1` when they are (with `roadGeo` only). |

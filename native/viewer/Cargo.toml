@@ -1,0 +1,18 @@
+[package]
+name = "bnge-viewer"
+version = "0.1.0"
+edition = "2021"
+description = "BeamNG.Earth viewer: a browser view of exactly the files earthd sends the game, with the OSM ways and a minimap"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "ws", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "fs", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"
+futures-util ={ version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[profile.release]
+opt-level = 3
+strip = true

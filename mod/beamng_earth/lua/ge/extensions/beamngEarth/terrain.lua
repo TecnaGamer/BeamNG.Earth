@@ -24,7 +24,7 @@ local M = {}
 
 M.NAME = 'bngEarthTerrain'
 M.SIZE = lattice.N              -- samples per side (configure); the layer map has the same size
-M.SQUARE_SIZE = lattice.SQUARE  -- 2.0 m
+M.SQUARE_SIZE = lattice.SQUARE  -- m (configure: the server's hello.squareSize)
 M.MATERIAL = 'beamngEarthDirt'
 M.TEXTURE_SET = 'beamngEarthTerrainMaterialTextureSet'
 M.BASE_TEX_SIZE = 2048   -- = the level texture set's base slot (tools/make_level_assets.py BASE_TEX): the size in use
@@ -41,8 +41,10 @@ local TERRAIN_DIR_BASE = TERRAIN_DIR .. 'bngEarth_base_b.png'   -- the level's f
 local FLAT_H = TERRAIN_DIR .. 'bngEarth_flat_h_1024.png'          -- neutral height (detail / macro slots)
 local MATERIALS_FILE = TERRAIN_DIR .. 'main.materials.json'
 -- per block size (tools/make_level_assets.py): all white = material 0 everywhere; all zero, 16-bit
-local LAYER_MAPS = { [1024] = TERRAIN_DIR .. 'beamngEarth_layer_1024.png', [512] = TERRAIN_DIR .. 'beamngEarth_layer_512.png' }
-local FLAT_HEIGHTMAPS = { [1024] = TERRAIN_DIR .. 'beamngEarth_flat_1024.png', [512] = TERRAIN_DIR .. 'beamngEarth_flat_512.png' }
+local LAYER_MAPS = { [2048] = TERRAIN_DIR .. 'beamngEarth_layer_2048.png', [1024] = TERRAIN_DIR .. 'beamngEarth_layer_1024.png',
+  [512] = TERRAIN_DIR .. 'beamngEarth_layer_512.png' }
+local FLAT_HEIGHTMAPS = { [2048] = TERRAIN_DIR .. 'beamngEarth_flat_2048.png', [1024] = TERRAIN_DIR .. 'beamngEarth_flat_1024.png',
+  [512] = TERRAIN_DIR .. 'beamngEarth_flat_512.png' }
 local LAYER_MAP, FLAT_HEIGHTMAP = LAYER_MAPS[1024], FLAT_HEIGHTMAPS[1024]
 
 -- Surface materials (server --surface on, server/surface.py): runtime clones of M.MATERIAL with other
@@ -97,9 +99,9 @@ M.LOOKS = {
   bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
-M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, size = '256' }
+M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
 
-M.square = 2.0   -- the block's square size (m per sample), from the last load
+M.square = lattice.SQUARE   -- the block's square size (m per sample), from the last load
 -- surface materials made here (other levels: our level defines them in main.materials.json, made by
 -- tools/make_level_assets.py, because runtime TerrainMaterials made every updateMaterial cost ~1 s,
 -- in-game 2026-10-12)
@@ -124,7 +126,7 @@ local function applyLook(m, name)
 end
 
 local function baseFields(path, size)
-  return path or M.LEVEL_BASE.tex, path and tostring(toSamples(size or 1024)) or M.LEVEL_BASE.size
+  return path or M.LEVEL_BASE.tex, tostring(toSamples(path and (size or 1024) or M.LEVEL_BASE.sizeM))
 end
 
 local function setMaterialBase(m, name, path, tex, size)
@@ -192,6 +194,7 @@ end
 function M.configure(size)
   local n = LAYER_MAPS[size] and size or 1024
   M.SIZE, LAYER_MAP, FLAT_HEIGHTMAP = n, LAYER_MAPS[n], FLAT_HEIGHTMAPS[n]
+  M.SQUARE_SIZE = lattice.SQUARE
   return n
 end
 
@@ -367,198 +370,7 @@ end
 -- importMaps (the block exists with its material set-up) and at the same square size: returns false
 -- (nothing changed) otherwise, and the caller imports. The .ter names its materials (server
 -- surface.write_ter: layers.materials, or M.MATERIAL alone). The caller does NOT rebuild collision.
--- Fine ground (server finepatch.py, BNE_FINE=on): a block's sharp graded cells are holes in its .ter, filled by a 0.5 m
--- mesh of the same ground in pieces (fine.parts: {shape, pos, slot}, colliding), each cell drawn with its surface
--- layer's material (fine.materials: {name, layer}; a bank of four by block, finepatch.bank): the block's aerial photo
--- (its roads painted in; the pieces' UV0 spans the block from its south-west corner) and the layer's detail texture on
--- UV1 (world-locked), as the terrain draws it. The pieces are made in the frame the .ter goes in (M.swap: a hole never
--- shows without its fill, a car never meets one), the old block's deleted right after, and the static collision
--- reloaded (it applies the next frame, with the .ter's).
-M.fine = { ids = {}, fine = nil, bank = nil }
-local fineMade = 0
-
-local function fineTexture(m, base)
-  local satmat = require('beamngEarth/satmat')
-  if type(base) == 'string' and FS:fileExists(base) then
-    satmat._setTexture(m, base, false)
-  else
-    m:setField('diffuseColor', 0, satmat.FALLBACK_COLOR)
-  end
-end
-
--- A fine material: the block's photo (colour map) with its surface layer's detail texture over it (layer: the
--- TerrainMaterial whose detail textures the terrain draws there, its size in samples: metres / 2), the terrain's look;
--- no layer: satmat's ground grain. The pieces' UV1 is world metres / 2 (finepatch.DETAIL_M).
-local function fineMaterial(name, layer, base)
-  local satmat = require('beamngEarth/satmat')
-  local m = scenetree.findObject(name)
-  local fresh = not m
-  if fresh then
-    m = createObject('Material')
-    m:setField('mapTo', 0, name)
-  end
-  fineTexture(m, base)
-  if fresh then
-    for _, f in ipairs(satmat.FIELDS) do m:setField(f[1], 0, f[2]) end
-    local tm = type(layer) == 'string' and scenetree.findObject(layer) or nil
-    local dtex = tm and tm:getField('baseColorDetailTex', 0) or ''
-    if dtex ~= '' then
-      local size = tonumber(tm:getField('baseColorDetailTexSize', 0)) or 1
-      local sc = string.format('%.4f %.4f', 1 / math.max(size, 0.25), 1 / math.max(size, 0.25))
-      m:setField('detailMap', 0, dtex)
-      m:setField('detailMapUseUV', 0, '1')
-      m:setField('detailScale', 0, sc)
-      m:setField('detailBaseColorMapStrength', 0, '0.35')
-      local ntex = tm:getField('normalDetailTex', 0) or ''
-      if ntex ~= '' then
-        m:setField('detailNormalMap', 0, ntex)
-        m:setField('normalDetailMapUseUV', 0, '1')
-        m:setField('detailNormalMapStrength', 0, '0.6')
-      end
-    else
-      m:setField('detailMap', 0, satmat.DETAIL_MAP)
-      for _, f in ipairs(satmat.DETAIL_FIELDS) do m:setField(f[1], 0, f[2]) end
-    end
-    m.canSave = false
-    m:registerObject(name)
-  else
-    pcall(function() m:flush() end)
-    pcall(function() m:reload() end)
-  end
-  return m
-end
-
--- A block's fine materials ({{name, layer}, ...}) with its photo.
-local function fineMaterials(fine, base)
-  for _, e in ipairs(type(fine) == 'table' and type(fine.materials) == 'table' and fine.materials or {}) do
-    if type(e) == 'table' and type(e[1]) == 'string' then fineMaterial(e[1], e[2], base) end
-  end
-end
-
--- pooled pieces (server pool_shapes: slot_<n> paths): object id -> its slot, let go with the object
-local pieceSlot = {}
-local function pooled() return require('beamngEarth/roads') end
-local function partSlot(p) return p.slot and pooled().pooledSlot(p.shape, p.slot) or nil end
-
-local function finePiece(p, staged)
-  if type(p.shape) ~= 'string' or type(p.pos) ~= 'table' or not FS:fileExists(p.shape) then
-    pooled().pooledRelease(partSlot(p), nil)
-    return nil
-  end
-  local o = createObject('TSStatic')
-  o:setField('shapeName', 0, p.shape)
-  -- (made ahead, staged: hidden and not colliding until its block goes in: its ground differs a little from the block
-  -- in place over the same cells)
-  o:setField('collisionType', 0, (staged or p.collide == false) and 'None' or 'Visible Mesh Final')
-  o:setField('decalType', 0, 'Visible Mesh')
-  o:setField('dynamic', 0, 'true')
-  o.canSave = false
-  o:setPosition(vec3(p.pos[1], p.pos[2], p.pos[3]))
-  o:registerObject('')
-  if staged then o.hidden = true end
-  fineMade = fineMade + 1
-  local id = o:getID()
-  local sl = partSlot(p)
-  if sl then
-    pooled().pooledMade(id, p.shape)
-    pieceSlot[id] = sl
-  end
-  return id
-end
-
-local function pieceDelete(id)
-  local o = scenetree.findObjectById(id)
-  if o then o:delete() end
-  local sl = pieceSlot[id]
-  if sl then
-    pieceSlot[id] = nil
-    pooled().pooledRelease(sl, id)
-  end
-end
-
-local function fineValid(fine)
-  return type(fine) == 'table' and type(fine.parts) == 'table' and type(fine.materials) == 'table'
-end
-
--- The pieces of the next block, made a few a frame before its swap (fineStep: each new shape ~2 ms to load; all at
--- the swap held its frame 140 ms on the Stelvio, 2026-11-01): { key (its .ter), fine, ids {part index: id}, next }.
-local stage = nil
-M.FINE_STEP_MS = 4
-
-local function stageDrop()
-  if not stage then return end
-  for i, p in ipairs(stage.fine.parts) do
-    local id = stage.ids[i]
-    if id then pieceDelete(id)
-    elseif id == nil then pooled().pooledRelease(partSlot(p), nil) end   -- (never made: its slot goes now)
-  end
-  stage = nil
-end
-
--- A block arrived (terrain_ready, before its commit): its pieces are made ahead (fineStep).
-function M.finePrepare(msg)
-  if type(msg) ~= 'table' or not fineValid(msg.fine) or type(msg.ter) ~= 'string' then return end
-  if stage and stage.key == msg.ter then return end
-  stageDrop()
-  -- (its materials take its photo now: a bank of their own, never the shown block's, finepatch.bank; a block in the
-  -- shown one's bank (a far jump) is made at its swap instead)
-  if M.fine.bank ~= nil and msg.fine.bank == M.fine.bank then return end
-  fineMaterials(msg.fine, type(msg.base) == 'string' and msg.base or nil)
-  stage = { key = msg.ter, fine = msg.fine, ids = {}, next = 1 }
-end
-
--- Make staged pieces for up to M.FINE_STEP_MS this frame (core.lua's update).
-function M.fineStep()
-  if not stage or stage.next > #stage.fine.parts then return end
-  local sw = stopwatch.new()
-  while stage.next <= #stage.fine.parts and sw() < M.FINE_STEP_MS do
-    local i = stage.next
-    stage.ids[i] = finePiece(stage.fine.parts[i], true) or false
-    stage.next = i + 1
-  end
-end
-
--- The block's fine pieces made (TSStatic ids, shown and colliding): the staged ones of this .ter, the rest now.
-local function fineMake(fine, base, terPath)
-  local ids = {}
-  if not fineValid(fine) then stageDrop(); return ids end
-  fineMaterials(fine, base)
-  local st_ = (stage and stage.key == terPath) and stage or nil
-  for i, p in ipairs(fine.parts) do
-    local id = st_ and st_.ids[i]
-    local o = id and scenetree.findObjectById(id)
-    if o then
-      o.hidden = false
-      if p.collide ~= false then o:setField('collisionType', 0, 'Visible Mesh Final') end
-      ids[#ids + 1] = id
-      st_.ids[i] = nil
-      -- (this message's own slot for it unused: the staged piece came from the earlier message's)
-      if st_.fine ~= fine then pooled().pooledRelease(partSlot(p), nil) end
-    else
-      local nid = finePiece(p, false)
-      if nid then ids[#ids + 1] = nid end
-    end
-  end
-  M.fineStaged = st_ and (st_.next - 1) or 0
-  if st_ then stage = nil end
-  stageDrop()
-  return ids
-end
-
-local function fineDelete(ids)
-  for _, id in ipairs(ids or {}) do pieceDelete(id) end
-end
-
--- The current block's photo changed (setBase: its stand-in, then its full photo): the fine pieces' too.
-local function fineBase(base)
-  if M.fine.fine then fineMaterials(M.fine.fine, base) end
-end
-
-function M.fineStatus()
-  return { pieces = #M.fine.ids, bank = M.fine.bank, made = fineMade, staged = stage and (stage.next - 1) or 0 }
-end
-
-function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize, fine)
+function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   local tb = M.get()
   local sq = tonumber(squareSize)
   if not tb or not M.slots or not sq or math.abs(sq - M.square) > 1e-9 then return false end
@@ -574,8 +386,6 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize,
   end
   local sw = stopwatch.new()
   local saved = {}
-  local fineIds = fineMake(fine, base or nil, terPath)      -- (with the .ter: its holes filled from the first frame)
-  local tFine = sw()
   local ok, err = pcall(function()
     if base ~= nil then
       local path = base or nil
@@ -607,13 +417,8 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize,
       M.looked[name] = old.looked
     end
     log('W', 'beamngEarth', 'terrain .ter swap failed: ' .. tostring(err))
-    fineDelete(fineIds)
     return false
   end
-  fineDelete(M.fine.ids)
-  local hadFine = #M.fine.ids > 0
-  M.fine = { ids = fineIds, fine = fineValid(fine) and fine or nil, bank = fineValid(fine) and fine.bank or nil }
-  if #fineIds > 0 or hadFine then be:reloadCollision() end    -- (next frame, with the .ter's own)
   -- the materials this block lists that no block of this session listed before (a first use costs the engine
   -- its textures' load: hitch diagnosis, core's commit log)
   local fresh = {}
@@ -627,8 +432,7 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize,
   -- Windows: every slot rebound after the swap again, as 1.5.4 did (~18 ms more per swap; REBIND_AFTER_SWAP).
   if base ~= nil and M.REBIND_AFTER_SWAP then M.setBase(base or nil, baseSize) end
   -- ms of the last swap: the base fields' preparation and the .ter's application, then the whole call; its materials
-  M.lastSwap = { apply = tApply, total = sw(), mats = #slots, fresh = #fresh > 0 and fresh or nil,
-    fine = #fineIds > 0 and tFine or nil, fineStaged = #fineIds > 0 and M.fineStaged or nil }
+  M.lastSwap = { apply = tApply, total = sw(), mats = #slots, fresh = #fresh > 0 and fresh or nil }
   return true
 end
 
@@ -648,7 +452,6 @@ function M.setBase(path, size)
     end
   end
   baseNow = path
-  fineBase(path)
   return true
 end
 
@@ -671,9 +474,6 @@ function M.hideGroundPlanes()
 end
 
 function M.delete()
-  stageDrop()
-  fineDelete(M.fine.ids)
-  M.fine = { ids = {}, fine = nil, bank = nil }
   local tb = M.get()
   if tb then tb:delete() end
 end

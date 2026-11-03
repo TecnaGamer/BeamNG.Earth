@@ -85,6 +85,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 |---|---|---|---|---|
 | BeamNG.Earth's weekly data (GitHub Pages) | `tecnagamer.github.io` | Built every week from the whole OpenStreetMap planet by this project: railway details (track gauge, electrification, disused and abandoned lines, level crossings and their barriers) and, in the US, the Federal Railroad Administration's list of the gates, lights and crossbucks at each level crossing. | Railways keep their basic class; level crossings get equipment by road size. | optional |
 | OurAirports | `davidmegginson.github.io` | Airports and their runways (position, length, width, surface), for paved runways and levelled airfields. Fetched about once a week. | The copy on disk is used. | named |
+| 3D Model Repository | `3dmr.eu` | 3D models of landmarks (the Eiffel Tower, the Dragon Bridge in Da Nang, ...) where the map links one: the models near you are looked up and downloaded once, then kept in the cache. Off on the settings page ("3D models from 3dmr.eu"). | The usual buildings and bridges stay there; asked again on a later visit. | optional |
+| OpenStreetMap API | `api.openstreetmap.org` | The outline of the building a 3dmr.eu model stands on, read once per model to turn the model the way the building faces. | The model is placed as downloaded. | optional |
 
 ## Live services (used only when you use the feature)
 

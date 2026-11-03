@@ -253,10 +253,10 @@ class CoverMap:
     def world_classes(self):
         """[(class, near, current)] of the sidecar rows' groups."""
         sig = self.signature()
-        code = revisit.code_key()
+        codes = revisit.current_codes()     # (the code key, and the format markers of items kept across updates)
         out = []
         for (c, s), gid in list(self.groups.items()):
-            cur = c == code and revisit.sig_current(s, sig)
+            cur = c in codes and revisit.sig_current(s, sig)
             out += [(WORLD0 + 2 * gid, False, cur), (WORLD0 + 2 * gid + 1, True, cur)]
         return out
 

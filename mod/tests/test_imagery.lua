@@ -6,6 +6,13 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+local materialFiles = {}
+local loadMaterials = loadJsonMaterialsFile
+function loadJsonMaterialsFile(path) materialFiles[path] = true; loadMaterials(path) end
+-- (the v1.3.1 block, 1024² at 2 m: these checks are written for it; the 1 m default: test_lattice / test_follow)
+require('beamngEarth/lattice').configure(1024, 2.0)
+require('beamngEarth/follow').configure()
+require('beamngEarth/rebase').configure(2048)
 require('beamngEarth/farfield').SPARE_MAX = 0 -- deletion timing as before; the spare pool: test_farfield_spares.lua
 local farfield = require('beamngEarth/farfield')
 local governor = require('beamngEarth/governor')
@@ -71,7 +78,7 @@ local camSouth = { x = 0, y = 0, z = 200, fx = 0, fy = -1, fz = 0, fovDeg = 60 }
 farfield.switchAnchor(1, false, { cx = 100000, cy = 0 })
 farfield.onTile(tile(1, 1, 0, 8))
 step()
-T.check(#mats() == 0 and S.calls.loadJsonMaterialsFile == 1, 'protocol-3 tile: static material only, no per-tile Material')
+T.check(#mats() == 0 and materialFiles[farfield.MATERIALS_FILE], 'protocol-3 tile: static material only, no per-tile Material')
 farfield.onSwap(swap(1, 1, { '1_0_8' }))
 step(free, camNorth)
 T.check(visible(obj('1_0_8')), 'protocol-3 tile shown')

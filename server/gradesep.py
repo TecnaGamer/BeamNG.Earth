@@ -73,9 +73,34 @@ def hook(md, key):
         with lock:
             got = memo.get("spans")
             if got is None:
-                got = memo["spans"] = _spans(md, key, feats) if TUNNELS else {}
+                got = memo["spans"] = _spans_kept(md, key, feats) if TUNNELS else {}
         return got
     return run
+
+
+def _spans_kept(md, key, feats):
+    """_spans through this process's cell cache (roads._FACTS_MEM, by the layer's cell id): the map data reloads a
+    city's layers again and again, and each copy made them again (33 makings of ~0.2 s for 3 Manhattan cells'
+    plans, 2026-11-02). Kept when made with no fault of this thread (a neighbour not there yet)."""
+    import revisit
+    import roads
+    cid = feats.__dict__.get("_bnge_cell")
+    mk = (cid, "gradesep", MODE, VERSION, ON, TUNNELS) if cid is not None else None
+    if mk is not None:
+        with roads._FACTS_LOCK:
+            got = roads._FACTS_MEM.get(mk)
+        if got is not None:
+            spans, why = got
+            feats.__dict__["_gradesep_why"] = why
+            return spans
+    f0 = revisit.thread_faults()
+    spans = _spans(md, key, feats)
+    if mk is not None and revisit.thread_faults() == f0:
+        with roads._FACTS_LOCK:
+            roads._FACTS_MEM[mk] = (spans, feats.__dict__.get("_gradesep_why"))
+            while len(roads._FACTS_MEM) > roads.FACTS_MEM_KEPT:
+                roads._FACTS_MEM.popitem(last=False)
+    return spans
 
 
 _POOL = None
@@ -104,7 +129,7 @@ def _neighbours(md, key):
             for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dx or dy) and 0 <= key.y + dy < key.n]
     with _POOL_LOCK:
         if _POOL is None:
-            from concurrent.futures import ThreadPoolExecutor
+            from runtimeprofiler import ThreadPoolExecutor
             _POOL = ThreadPoolExecutor(8, thread_name_prefix="gradesep-cells")
     futs = [_POOL.submit(lambda k: md.cell(k, layers=("roads",), kind="demand").layers.get("roads"), k) for k in keys]
     return [f.result() for f in futs]
@@ -159,6 +184,101 @@ def _pieces(feats, i, kind):
     return out
 
 
+def _layer_rows(f):
+    """Every feature's _row of a layer as arrays, once per decoded layer: (kind (-1: no crossing line), half width,
+    piece offsets, piece kinds (-1: a deck), from, to, the ids as str)."""
+    got = f.__dict__.get("_gs_layer")
+    if got is None:
+        n = len(f)
+        kinds, halves = np.full(n, -1, np.int64), np.zeros(n)
+        poff, pk, pa, pb = [0], [], [], []
+        if "subtype" in f.attrs:
+            # (_kind_half for the whole layer: a road's style by its class, unbuilt as an array; the few railways one at
+            # a time. _row per feature was 1.5 s of two cells' planning, 2026-11-02)
+            def strs(col):
+                return [str(v) for v in (col.tolist() if hasattr(col, "tolist") else col)]
+            subs = strs(f.attrs["subtype"])
+            clss = strs(f.attrs["class"]) if "class" in f.attrs else ["unknown"] * n
+            unb = roads.unbuilt_mask(f)
+            for i in range(n):
+                if subs[i] == "road":
+                    st = roads.STYLE.get(clss[i])
+                    if st is None or unb[i]:
+                        continue
+                    kinds[i], halves[i] = 0, st[0] / 2.0
+                elif subs[i] == "rail" and railways.drawn(f, i) is not None:
+                    kinds[i], halves[i] = 1, RAIL_HALF_M
+            tags = roads._tag_ranges_list(f)
+            for i in range(n):
+                k = int(kinds[i])
+                if k >= 0:
+                    if not tags[i]:             # (no level range: the whole line, as _pieces makes it)
+                        pk.append(k)
+                        pa.append(0.0)
+                        pb.append(1.0)
+                    else:
+                        for kk, a, b, deck in _pieces(f, i, k):
+                            pk.append(-1 if deck else kk)
+                            pa.append(a)
+                            pb.append(b)
+                poff.append(len(pk))
+        else:
+            poff += [0] * n
+        got = f.__dict__["_gs_layer"] = (kinds, halves, np.asarray(poff, np.int64), np.asarray(pk, np.int64),
+                                         np.asarray(pa, np.float64), np.asarray(pb, np.float64),
+                                         [str(x) for x in f.ids])
+    return got
+
+
+def _gather(frame, rows, own):
+    """_spans' ground lines (kinds, half widths, rows as groups, owners) and deck ends cut from rows [(fid, feats, i)]
+    in the frame: earthfast.gradesep_gather over the layers' arrays, one call (each layer was walked in Python again
+    for each of the nine cells round it: 1.9 of _spans' 3.6 s on 6 Midtown cells, 2026-11-02)."""
+    fast.require(142, "gradesep_gather")
+    layers, base = {}, []
+    xy, co, ro, po, pof, pk, pa, pb, ha = [], [], [], [], [], [], [], [], []
+    nc = nr = npp = nf = nq = 0
+    gi = np.empty(len(rows), np.int64)
+    for r, (_fid, f, i) in enumerate(rows):
+        b = layers.get(id(f))
+        if b is None:
+            kinds, halves, poff, lk, la_, lb_, _ids = _layer_rows(f)
+            e, n, _ = frame.geodetic_to_enu(f.lonlat[:, 1], f.lonlat[:, 0], 0.0)
+            xy.append(np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], 1).reshape(-1, 2))
+            co.append(np.asarray(f.coord_off, np.int64)[:-1] + nc)
+            ro.append(np.asarray(f.ring_off, np.int64)[:-1] + nr)
+            po.append(np.asarray(f.part_off, np.int64)[:-1] + npp)
+            pof.append(poff[:-1] + nq)
+            pk.append(lk)
+            pa.append(la_)
+            pb.append(lb_)
+            ha.append(halves)
+            b = layers[id(f)] = (nf, kinds)
+            nc += len(f.lonlat)
+            nr += len(f.coord_off) - 1
+            npp += len(f.ring_off) - 1
+            nf += len(f)
+            nq += len(lk)
+        gi[r] = b[0] + i if b[1][i] >= 0 else -1
+    if not layers:
+        return [], [], [], [], [], np.zeros((0, 3))
+    cat = lambda v, t: np.ascontiguousarray(np.concatenate(v), t)       # noqa: E731
+    keep = gi >= 0
+    pts, starts, line_row, line_piece, de, _deck_row = fast._ef.gradesep_gather(
+        cat(xy, np.float64).reshape(-1, 2), np.r_[cat(co, np.int64), nc], np.r_[cat(ro, np.int64), nr],
+        np.r_[cat(po, np.int64), npp], np.ascontiguousarray(np.where(keep, gi, 0), np.int64)[keep],
+        np.r_[cat(pof, np.int64), nq], cat(pk, np.int64), cat(pa, np.float64), cat(pb, np.float64))
+    rid = np.flatnonzero(keep)[line_row] if len(line_row) else np.zeros(0, np.int64)
+    lines = np.split(pts, starts[1:-1]) if len(line_row) else []
+    allk, alla, allb, allh = cat(pk, np.int64), cat(pa, np.float64), cat(pb, np.float64), cat(ha, np.float64)
+    kinds = allk[line_piece].tolist()
+    a_l, b_l = alla[line_piece].tolist(), allb[line_piece].tolist()
+    halves = allh[gi[rid]].tolist() if len(rid) else []
+    groups = rid.tolist()
+    owner = [(own.get(rows[r][0]), a, b) for r, a, b in zip(groups, a_l, b_l)]
+    return lines, kinds, halves, groups, owner, np.asarray(de, np.float64).reshape(-1, 3)
+
+
 def _spans(md, key, feats):
     if feats is None or not len(feats) or "subtype" not in feats.attrs:
         return {}
@@ -185,39 +305,16 @@ def _spans(md, key, feats):
         if f is None or not len(f) or "subtype" not in f.attrs:
             continue
         bx = f.boxes(frame)
-        for i in range(len(f)):
-            fid = str(f.ids[i])
-            if fid in seen or bx[i, 2] < box[0] or bx[i, 0] > box[2] or bx[i, 3] < box[1] or bx[i, 1] > box[3]:
+        ids = _layer_rows(f)[6]
+        for i in np.flatnonzero(~((bx[:, 2] < box[0]) | (bx[:, 0] > box[2]) | (bx[:, 3] < box[1])
+                                  | (bx[:, 1] > box[3]))).tolist():
+            fid = ids[i]
+            if fid in seen:
                 continue
             seen.add(fid)
             rows.append((fid, f, i))
     rows.sort(key=lambda r: r[0])   # (the same order whichever cell asks)
-    lines, kinds, halves, groups, owner, decks = [], [], [], [], [], []
-    enu = {}                        # id(feats) -> its coordinates in frame (one conversion a layer)
-    for g, (fid, f, i) in enumerate(rows):
-        kind, half, pieces = _row(f, i)
-        if kind is None:
-            continue
-        allxy = enu.get(id(f))
-        if allxy is None:
-            e, n, _ = frame.geodetic_to_enu(f.lonlat[:, 1], f.lonlat[:, 0], 0.0)
-            allxy = enu[id(f)] = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], 1)
-        for part in f.parts(i, allxy):
-            for ring in part:
-                if len(ring) < 2:
-                    continue
-                for k, a, b, deck in pieces:
-                    xy = ring if (a, b) == (0.0, 1.0) else _cut(ring, a, b)
-                    if len(xy) < 2:
-                        continue
-                    if deck:
-                        decks.append((xy, g))
-                        continue
-                    lines.append(xy)
-                    kinds.append(k)
-                    halves.append(half)
-                    groups.append(g)
-                    owner.append((own.get(fid), a, b))   # (a row of this cell's, or None)
+    lines, kinds, halves, groups, owner, de = _gather(frame, rows, own)
     try:
         keep = _underpasses(md, frame, lines, kinds, groups)
     except Exception as e:
@@ -228,10 +325,6 @@ def _spans(md, key, feats):
                                            for v in (lines, kinds, halves, groups, owner))
     if not lines:
         return {}
-    de = np.zeros((2 * len(decks), 3))         # (the decks' ends and lengths)
-    for d, (xy, _g) in enumerate(decks):
-        de[2 * d, :2], de[2 * d + 1, :2] = xy[0], xy[-1]
-        de[2 * d:2 * d + 2, 2] = float(np.hypot(*np.diff(xy, axis=0).T).sum())
     fast.require(86, "gradesep_candidates")
     pts = np.ascontiguousarray(np.vstack(lines))
     starts = np.r_[0, np.cumsum([len(x) for x in lines])].astype(np.int64)

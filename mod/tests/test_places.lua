@@ -463,4 +463,22 @@ T.check(not places.notePosition(nil, -75.0, 2000, true), 'a bad position: not wr
 places.noteTeleport(35.5, 139.7, 'x', 'teleport')
 T.check(files[PF].lat == 35.5 and places.lastPosition().lon == 139.7, 'a teleport: written at once')
 
+-- map links (the bug report form's location is an OpenStreetMap link; Google Maps' share links)
+do
+  local function near(a, b, x, y) return a and math.abs(a - x) < 1e-9 and math.abs(b - y) < 1e-9 end
+  local a, b = places.parseLatLon('https://www.openstreetmap.org/?mlat=47.564180&mlon=26.272906#map=17/47.564180/26.272906')
+  T.check(near(a, b, 47.56418, 26.272906), 'OpenStreetMap marker link')
+  a, b = places.parseLatLon('https://www.openstreetmap.org/#map=19/-37.754930/144.994372')
+  T.check(near(a, b, -37.75493, 144.994372), 'OpenStreetMap view link')
+  a, b = places.parseLatLon('https://www.google.com/maps/place/Stonehenge/@51.1788823,-1.8284037,17z/data=!3m1!4b1!4m6!3m5!1s0x0:0x0!8m2!3d51.1788823!4d-1.8262150')
+  T.check(near(a, b, 51.1788823, -1.826215), 'Google Maps place link: the place, not the view')
+  a, b = places.parseLatLon('https://www.google.com/maps/@40.553176,-105.079734,15z')
+  T.check(near(a, b, 40.553176, -105.079734), 'Google Maps view link')
+  a, b = places.parseLatLon('https://maps.google.com/?q=63.768%2C-18.133')
+  T.check(near(a, b, 63.768, -18.133), 'Google Maps query link, comma escaped')
+  a, b = places.parseLatLon('https://www.google.com/maps/search/?api=1&query=-23.88319,-46.49485')
+  T.check(near(a, b, -23.88319, -46.49485), 'Google Maps search link')
+  T.check(places.parseLatLon('https://www.openstreetmap.org/way/167488546') == nil, 'a link without a point')
+  T.check(places.parseMapLink('41.66214 -72.76497') == nil, 'plain numbers are not a link')
+end
 T.done('test_places')

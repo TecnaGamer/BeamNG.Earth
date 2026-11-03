@@ -68,7 +68,7 @@ class PavementCornerTest(unittest.TestCase):
         mat = surface.paint_roads(np.full(e.shape, surface.GRASS, np.uint8), la, lo, [f], 0.25)
         self.assertEqual(mat[150, 150], surface.ASPHALT, "(5.5, 5.5) is between the old square corner and the arc")
         self.assertNotEqual(mat[168, 168], surface.ASPHALT, "(10, 10) stays roadside")
-        self.assertEqual(mat[164, 164], surface.VERGE, "(9, 9): a bare verge round the corner, as along the roads")
+        self.assertEqual(mat[162, 162], surface.VERGE, "(8.5, 8.5): a bare verge round the corner, as along the roads")
         self.assertEqual(mat[168, 168], surface.GRASS)
         image = np.full((257, 257, 3), 230, np.uint8)
         photo = surface.photo_roads(image, FRAME, -32.0, -32.0, 64.0, [f])

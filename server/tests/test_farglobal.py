@@ -31,7 +31,7 @@ import test_server  # noqa: E402
 from netclient import FarState  # noqa: E402
 
 LAT, LON = 35.46, -118.77
-LAY = ff.Layout(64, 512, True)
+LAY = ff.Layout(64, 1024, True)
 
 
 class FakeDem:
@@ -321,7 +321,7 @@ class ContentTest(unittest.TestCase):
         revisit.ON = False
         self.addCleanup(setattr, revisit, "ON", on)
         with tempfile.TemporaryDirectory() as tmp:
-            s = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=None, near_visual="mesh", cells=64, block=512)
+            s = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=None, near_visual="mesh", cells=64, block=1024)
             s.dem = FakeDem()
             s.imagery = test_server.FakeImagery(os.path.join(tmp, "cache", "imagery"))
             try:
@@ -390,7 +390,7 @@ class RebaseTest(test_server.ServerHarness):
     at the place: no level >= 3 tile is sent again (global tiles stay), and what shows covers the radius."""
     near_visual = "mesh"
     cells = 64
-    block = 512
+    block = 1024
     with_imagery = True
 
     def setUp(self):

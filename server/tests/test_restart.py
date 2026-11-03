@@ -13,7 +13,7 @@ SessionAdoptionTest (earthd.Server's session folders, no streaming):
   - main_async's sweep removes the folders off the event loop; a folder with the new session's own id
     is never an orphan.
 
-RestartDriveTest (fault injection with the mod simulator, modsim): a 64-cell, 512² mesh-mode session;
+RestartDriveTest (fault injection with the mod simulator, modsim): a 64-cell, 1024² (1 m) mesh-mode session;
 the mod teleports twice (its anchor 2) or once (its anchor 1: the new server's resync anchor id too, so
 no pose or terrain request may name it until the resync commits, core.lua anchorKnown; the resync
 commit waits the governor's CALM_TIMEOUT so poses go out meanwhile), drives east, then the server is
@@ -49,7 +49,7 @@ from test_integration_drive import near_holes  # noqa: E402
 
 LAT, LON = test_server.LAT, test_server.LON
 MOD_VERSION = "0.4.0"
-SIZE = 512
+SIZE = 1024                     # the 1 km block (1024² at 1 m; it was 512² at 2 m)
 DT = 1 / 60
 SPEED = 30.0
 PACE = 1.5                      # simulated seconds per wall second while a server streams
@@ -88,6 +88,10 @@ class SessionAdoptionTest(unittest.TestCase):
         self.stale = make_session(self.root, "20260101-000000-aaaa", earthd.SESSION_STALE_S + 600)
         self.a = make_session(self.root, "20261010-120000-bbbb", 300)
         self.b = make_session(self.root, "20261010-120500-cccc", 120)
+        running = earthd.game_running
+        self._real_game_running = running
+        earthd.game_running = lambda: True          # (a game runs: the younger sessions wait for its claim)
+        self.addCleanup(setattr, earthd, "game_running", running)
         self.s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
         self.addCleanup(self.s.tile_pool.shutdown)
         self.addCleanup(self.s.hm_pool.shutdown)
@@ -187,29 +191,71 @@ class SessionAdoptionTest(unittest.TestCase):
         self.assertLess(time.time() - os.path.getmtime(own), 5, "heartbeat: the own marker touched")
 
     def test_sweep_deletes_off_the_event_loop(self):
-        """An unclaimed orphan is a whole session (~1 GB, thousands of files): main_async's sweep
-        (sweep_sessions_async) keeps the bookkeeping on the loop and removes the folders in a worker
-        thread, so the streaming never stalls behind an rmtree."""
+        """An unclaimed orphan is a whole session (~11k files): main_async's sweep (sweep_sessions_async) keeps the
+        bookkeeping on the loop, lists the files in a worker thread, and deletes them one at a time through the delete
+        queue (a game runs: its file watcher took a whole session moved out at once as an 8.6 s frame, 2026-11-02)."""
         self.s.orphan_s = 30.0
+        self.s.delete_interval = 0.005
         for sid in self.s.orphans:
             self.s.orphans[sid] -= 1000
         t = time.time() - 100
         for d in (self.a[0], self.b[0]):
             os.utime(os.path.join(d, earthd.SESSION_MARKER), (t, t))
         threads = []
-        rm = self.s._rmtree_session
-        self.s._rmtree_session = lambda sid: (threads.append(threading.get_ident()), rm(sid))
+        listing = self.s._session_paths
+        self.s._session_paths = lambda sid: (threads.append(threading.get_ident()), listing(sid))[1]
         loop = asyncio.new_event_loop()
         self.addCleanup(loop.close)
+        seen = []
 
         async def run():
-            return threading.get_ident(), await self.s.sweep_sessions_async()
+            me = threading.get_ident()
+            gone = await self.s.sweep_sessions_async()
+            for _ in range(400):
+                seen.append(len(os.listdir(self.a[0])) if os.path.exists(self.a[0]) else -1)
+                if not any(os.path.exists(p) for p in self.a + self.b):
+                    break
+                await asyncio.sleep(0.005)
+            return me, gone
         loop_thread, gone = loop.run_until_complete(run())
         self.assertEqual(sorted(gone), ["20261010-120000-bbbb", "20261010-120500-cccc"])
         self.assertEqual(len(threads), 2)
-        self.assertNotIn(loop_thread, threads, "the folders are removed off the event loop")
-        self.assertFalse(any(os.path.exists(p) for p in self.a + self.b))
+        self.assertNotIn(loop_thread, threads, "the files are listed off the event loop")
+        self.assertFalse(any(os.path.exists(p) for p in self.a + self.b), "deleted in the end, folders too")
+        self.assertGreater(len(set(seen)), 2, f"one file at a time: {seen[:20]}")
         self.assertEqual(self.s.orphans, {})
+
+    def test_no_game_at_start_every_earlier_session_goes(self):
+        """No game running at the start (the launcher starts the server first): every earlier session goes now, moved
+        out of the user folder at once (no file watcher sees it), deleted by the trash thread; none kept as an orphan."""
+        a = make_session(self.root, "20261011-080000-dddd", 300)
+        earthd.game_running = lambda: False
+        s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
+        self.addCleanup(s.tile_pool.shutdown)
+        self.addCleanup(s.hm_pool.shutdown)
+        self.assertFalse(any(os.path.exists(p) for p in a + self.a + self.b), "moved out of the user folder")
+        self.assertEqual(s.orphans, {})
+        self.assertIsNotNone(s.trash_thread)
+        s.trash_thread.join(10)
+        self.assertEqual(os.listdir(os.path.join(self.root, "cache", earthd.TRASH_DIR)), [])
+        self.assertTrue(os.path.isdir(s.out_dir), "its own session stays")
+
+    def test_game_running_as_the_launcher_says(self):
+        """The launcher starts the game right after the server: BNGEARTH_GAME_AT_START says whether one ran before."""
+        real = self._real_game_running
+        old = os.environ.get("BNGEARTH_GAME_AT_START")
+        try:
+            os.environ["BNGEARTH_GAME_AT_START"] = "0"
+            self.assertFalse(real())
+            os.environ["BNGEARTH_GAME_AT_START"] = "1"
+            self.assertTrue(real())
+            del os.environ["BNGEARTH_GAME_AT_START"]
+            self.assertIsInstance(real(), bool)
+        finally:
+            if old is None:
+                os.environ.pop("BNGEARTH_GAME_AT_START", None)
+            else:
+                os.environ["BNGEARTH_GAME_AT_START"] = old
 
     def test_own_sid_never_an_orphan(self):
         """A folder that happens to carry the new session's id (a restart in the same second with the same
@@ -237,7 +283,7 @@ class SessionAdoptionTest(unittest.TestCase):
 
 
 class _Running:
-    """An in-process server (mesh mode, 64 cells, 512² block, synthetic DEM and imagery) on its own loop."""
+    """An in-process server (mesh mode, 64 cells, 1024² block at 1 m, synthetic DEM and imagery) on its own loop."""
 
     def __init__(self, user_dir):
         s = earthd.Server(user_dir, os.path.join(user_dir, "cache"), tile_workers=3, imagery=None, near_visual="mesh",
@@ -285,6 +331,13 @@ class _Running:
 
 
 class RestartDriveTest(unittest.TestCase):
+    def setUp(self):
+        # (the game outlives the killed server: a game runs whatever this machine runs, so the dead session waits for
+        # its claim; with no game the start moves earlier sessions out at once, _scan_sessions)
+        running = earthd.game_running
+        earthd.game_running = lambda: True
+        self.addCleanup(setattr, earthd, "game_running", running)
+
     def test_kill_and_restart_mid_drive(self):
         """The mod's anchor 2: none of the new server's anchor ids is the mod's until it rebases."""
         self._drive(teleports=2)

@@ -98,6 +98,21 @@ vals, warn = settings.load()
 T.check(vals.clouds == true and #warn == 1, 'load: a non-object file -> defaults + warning')
 files[settings.FILE] = nil
 
+-- A previous capture must never start automatically on a later session.
+files[settings.FILE] = { version = 1, runtimeProfiler = true, profilerMode = 'full' }
+vals, warn = settings.load()
+T.check(vals.runtimeProfiler == false and vals.profilerMode == 'essential' and #warn == 0,
+  'load always starts with profiling off and minimal Essential mode')
+settings.set('runtimeProfiler', true)
+T.check(settings.get('runtimeProfiler') == true and files[settings.FILE].runtimeProfiler == false,
+  'explicit opt-in starts this session but saves the disabled state')
+settings.set('clouds', false)
+T.check(settings.get('runtimeProfiler') == true and files[settings.FILE].runtimeProfiler == false,
+  'saving another setting does not persist the active capture')
+vals = settings.load()
+T.check(vals.runtimeProfiler == false, 'a new session starts with profiling off')
+files[settings.FILE] = nil
+
 ------------------------------------------------------------------------------------------
 -- set: validated, saved, applied through the owner
 
@@ -417,6 +432,15 @@ do
   T.check(on.serverCores and on.serverPriority, 'both on the settings page')
 end
 
+-- the 3dmr.eu models' switch: on the page, on by default (server cpupin.player_settings reads it when it starts)
+do
+  local st = require('beamngEarth/settings')
+  T.check(st.SCHEMA.models3dmr.kind == 'bool' and st.SCHEMA.models3dmr.default == true, 'models3dmr: on by default')
+  local on = {}
+  for _, k in ipairs(st.ORDER) do on[k] = true end
+  T.check(on.models3dmr, 'models3dmr on the settings page')
+end
+
 -- the map holds off the car's controls (the user, 2026-10-21: the controller drove the car behind the map): the stock
 -- groups and every driving action by name
 do
@@ -508,6 +532,40 @@ do
   settings.load()
 end
 
+-- #565: independent distant lights are opt-in and survive the settings round trip.
+do
+  local visual0, settingsFile0 = package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE]
+  local independent
+  package.loaded['beamngEarth/trafficvisuals'] = { setWithoutTraffic = function(v) independent = v end }
+  files[settings.FILE] = { version = 1 }
+  T.check(settings.load().distantTrafficWithoutTraffic == false, 'older settings retain traffic-following lights')
+  T.check(settings.set('distantTrafficWithoutTraffic', true).ok and independent == true,
+    'independent lights apply through the renderer')
+  T.check(files[settings.FILE].distantTrafficWithoutTraffic == true
+      and settings.load().distantTrafficWithoutTraffic == true, 'independent lights survive reload')
+  settings.set('distantTrafficWithoutTraffic', false)
+  T.check(independent == false, 'traffic-following lights can be restored')
+  package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE] = visual0, settingsFile0
+  settings.load()
+end
+
+
+do
+  local visual0, settingsFile0 = package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE]
+  local quality
+  package.loaded['beamngEarth/trafficvisuals'] = { setQuality = function(v) quality = v end }
+  files[settings.FILE] = { version = 1, quality = 'low' }
+  T.check(settings.load().distantTrafficQuality == 'low', 'an older Low preset gets the light traffic pool')
+  files[settings.FILE] = { version = 1, quality = 'custom' }
+  T.check(settings.load().distantTrafficQuality == 'high', 'Custom keeps the dense traffic default')
+  for _, v in ipairs({ 'low', 'medium', 'high' }) do
+    T.check(settings.set('distantTrafficQuality', v).ok and quality == v, 'traffic quality applies: ' .. v)
+    T.check(settings.load().distantTrafficQuality == v, 'traffic quality survives reload: ' .. v)
+  end
+  T.check(not settings.set('distantTrafficQuality', 'ultra').ok, 'unknown traffic quality is rejected')
+  package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE] = visual0, settingsFile0
+  settings.load()
+end
 
 -- presets: picking one sets its knobs; moving a knob makes it Custom (or the preset it now matches)
 local r = settings.setQuality('low')

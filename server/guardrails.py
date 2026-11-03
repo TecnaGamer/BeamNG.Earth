@@ -231,28 +231,44 @@ PARAPET_MATCH_SAMPLES = 7
 OUTER_DECK_SEARCH_M = 30.0
 
 
-def _deck_is_outward_of_parapet(mid, tangent, outward, z, decks):
-    """True when another same-level, parallel bridge deck lies outside this concrete parapet."""
+def _parapet_deck_lines(decks):
+    """(a, v, l2, unit, z0, z1) of every deck's centre line segments together (_deck_is_outward_of_parapet: made once
+    per parapet set, not for every parapet segment and deck: ~0.4 s of a Manhattan tile set, 2026-11-02), or None."""
+    parts = []
     for deck in decks or ():
         line = np.asarray(deck.get("n", ()), np.float64)
-        if len(line) < 2 or line.shape[1] < 3:
+        if len(line) < 2 or line.ndim != 2 or line.shape[1] < 3:
             continue
-        a, b = line[:-1, :2], line[1:, :2]
-        v = b - a
-        l2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
-        t = np.clip(np.sum((mid - a) * v, axis=1) / l2, 0.0, 1.0)
-        near = a + t[:, None] * v
-        delta = near - mid
-        signed = delta @ outward
-        dist = np.hypot(delta[:, 0], delta[:, 1])
-        length = np.maximum(np.linalg.norm(v, axis=1), 1e-9)
-        parallel = np.abs((v / length[:, None]) @ tangent) >= PARAPET_PARALLEL_DOT
-        deck_z = line[:-1, 2] + t * (line[1:, 2] - line[:-1, 2])
-        level_ok = np.abs(deck_z - z) <= PARAPET_LEVEL_TOLERANCE_M
-        if np.any(parallel & level_ok & (signed >= 1.0) &
-                  (signed <= OUTER_DECK_SEARCH_M) & (dist <= OUTER_DECK_SEARCH_M)):
-            return True
-    return False
+        parts.append(line)
+    if not parts:
+        return None
+    a = np.concatenate([ln[:-1, :2] for ln in parts])
+    b = np.concatenate([ln[1:, :2] for ln in parts])
+    z0 = np.concatenate([ln[:-1, 2] for ln in parts])
+    z1 = np.concatenate([ln[1:, 2] for ln in parts])
+    v = b - a
+    l2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
+    length = np.maximum(np.linalg.norm(v, axis=1), 1e-9)
+    return a, v, l2, v / length[:, None], z0, z1
+
+
+def _deck_is_outward_of_parapet(mid, tangent, outward, z, decks, segs=None):
+    """True when another same-level, parallel bridge deck lies outside this concrete parapet. segs: _parapet_deck_lines of
+    decks (made here when not given)."""
+    segs = _parapet_deck_lines(decks) if segs is None else segs
+    if segs is None:
+        return False
+    a, v, l2, unit, z0, z1 = segs
+    t = np.clip(np.sum((mid - a) * v, axis=1) / l2, 0.0, 1.0)
+    near = a + t[:, None] * v
+    delta = near - mid
+    signed = delta @ outward
+    dist = np.hypot(delta[:, 0], delta[:, 1])
+    parallel = np.abs(unit @ tangent) >= PARAPET_PARALLEL_DOT
+    deck_z = z0 + t * (z1 - z0)
+    level_ok = np.abs(deck_z - z) <= PARAPET_LEVEL_TOLERANCE_M
+    return bool(np.any(parallel & level_ok & (signed >= 1.0) &
+                       (signed <= OUTER_DECK_SEARCH_M) & (dist <= OUTER_DECK_SEARCH_M)))
 
 
 def _parapet_segments(parapets, decks=()):
@@ -264,6 +280,7 @@ def _parapet_segments(parapets, decks=()):
     that were mapped a little farther from the wall than its centre line.
     """
     starts, ends, z_starts, z_ends, outer_segments = [], [], [], [], []
+    deck_segs = _parapet_deck_lines(decks)
     for parapet in parapets or ():
         line = np.asarray(parapet.get("line", ()) if isinstance(parapet, dict) else parapet,
                           np.float64).reshape(-1, 2)
@@ -293,7 +310,8 @@ def _parapet_segments(parapets, decks=()):
             if np.linalg.norm(outward) < 1e-9 or not np.isfinite(level):
                 is_outer.append(False)
                 continue
-            inner = _deck_is_outward_of_parapet(mid, tangent, outward, float(level), decks)
+            inner = deck_segs is not None and _deck_is_outward_of_parapet(mid, tangent, outward, float(level), decks,
+                                                                          deck_segs)
             is_outer.append(not inner)
         starts.append(a[keep])
         ends.append(b[keep])
@@ -341,12 +359,14 @@ def _overlaps_bridge_parapet(a, b, segments, level=None, distance_limit=PARAPET_
     v2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
     samples = a[None, :] + np.linspace(0.1, 0.9, PARAPET_MATCH_SAMPLES)[:, None] * d[None, :]
     delta = samples[:, None, :] - pa[None, :, :]
-    t = np.clip(np.sum(delta * v[None, :, :], axis=2) / v2[None, :], 0.0, 1.0)
+    t_raw = np.sum(delta * v[None, :, :], axis=2) / v2[None, :]
+    on_segment = (t_raw >= -1e-4) & (t_raw <= 1.0 + 1e-4)
+    t = np.clip(t_raw, 0.0, 1.0)
     nearest = pa[None, :, :] + t[:, :, None] * v[None, :, :]
     dist = np.hypot(samples[:, None, 0] - nearest[:, :, 0],
                     samples[:, None, 1] - nearest[:, :, 1])
     parallel = np.abs(unit @ tangent) >= PARAPET_PARALLEL_DOT
-    matches = (dist <= distance_limit) & parallel[None, :]
+    matches = (dist <= distance_limit) & parallel[None, :] & on_segment
     if level is not None:
         parapet_z = segments["za"][box][None, :] + t * (segments["zb"][box] - segments["za"][box])[None, :]
         matches &= np.isfinite(parapet_z) & (np.abs(parapet_z - float(level)) <= PARAPET_LEVEL_TOLERANCE_M)
@@ -498,7 +518,7 @@ def _relate(mid, segs, direction=None):
     v = mid - segs["a"]
     along = np.sum(v * segs["unit"], axis=1)
     lateral = v[:, 0] * segs["unit"][:, 1] - v[:, 1] * segs["unit"][:, 0]
-    span = (along >= -SPAN_TOL_M) & (along <= segs["len"] + SPAN_TOL_M)
+    span = (along >= -1e-4) & (along <= segs["len"] + SPAN_TOL_M)
     past = np.abs(lateral) - segs["half"]
     aligned = np.ones(len(segs["unit"]), bool)
     if direction is not None:

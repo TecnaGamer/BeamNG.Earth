@@ -1,30 +1,29 @@
 """Near-field TerrainBlock heightmap (docs/V1_2_DESIGN.md §1, §12 P1).
 
-1024 x 1024 samples at exactly s = 2.0 m, on a world-locked lattice: the block centre (cx, cy)
-is a multiple of 256 m in the anchor's ENU plane, the block position (SW corner) is
-(cx - 1024, cy - 1024, zBase), and sample (gx, gy) sits at (cx - 1024 + 2 gx, cy - 1024 + 2 gy).
-Coordinates are computed as integer lattice index x 2.0, so the same world point yields
-bit-identical lat/lon (and DEM value) in every block; a 256 m terrain-follow move is exactly
-128 samples. Row/column 1023 hold real DEM data.
+SIZE x SIZE samples at exactly s = SQUARE m (1024 x 1 m), on a world-locked lattice: the block centre (cx, cy)
+is a multiple of grid() in the anchor's ENU plane, the block position (SW corner) is (cx - HALF, cy - HALF, zBase),
+and sample (gx, gy) sits at (cx - HALF + s gx, cy - HALF + s gy). Coordinates are computed as integer lattice index x
+s, so the same world point yields bit-identical lat/lon (and DEM value) in every block. The last row/column hold real
+DEM data.
 
 The engine (probe P1) computes h = zBase + q * maxHeight / 65536. With a fixed per-anchor
 height quantum Q (a power of two), maxHeight = Q * 65536 and zBase a multiple of Q, every
 stored height is Q * round(u / Q) whatever the block, so overlapping samples of two blocks are
-identical. Physics covers [x0, x0 + (N-1) s] = 2046 m per axis (P1); the 2 m strip up to
-x0 + 2048 on the N/E edges is left to the far tiles.
+identical. Physics covers [x0, x0 + (N-1) s] per axis (P1); the last square's strip on the N/E edges is left to
+the far tiles.
 
 The value of a sample is the ENU z of the DEM surface point under it. Stored as a 16-bit
 grayscale PNG, row 0 = north.
 
-SIZE, HALF, VALID and GRID describe the v1.3.1 block. The functions that depend on the block size
-take it as a parameter (`size`, samples per edge; the server passes its Layout's `block`,
-docs/V1_4_SPEC.md §3.1), defaulting to SIZE; nothing reads a module setting at call time.
-
-M4 (docs/V1_4_SPEC.md §3.5, `earthd.py --block 512`): a 512² block, collidable [c-512, c+510],
-centred on a 128 m grid (GRIDS). Its SW corner c - 512 is then a multiple of 128 m, an even lattice
-index, so the block-local Torque diagonal parity is the world one, as with 1024² (farfield.py
-torque_split45), and a 128 m move is exactly 64 samples.
+The block: SIZE² samples SQUARE apart (1024² at 1 m since 2026-11-01, the stock maps' resolution; it was 512² at
+2 m, and 1024² at 2 m in the v1.3.1 terrain mode), collidable [c-512, c+511], centred on a 128 m grid (grid(): by the
+block's width in metres). Its SW corner c - 512 is then a multiple of 128 m, an even lattice index, so the block-local
+Torque diagonal parity is the world one (farfield.py torque_split45), and a 128 m move is exactly 128 samples. The
+functions that depend on the block size take it as a parameter (`size`, samples per edge; the server passes its
+Layout's `block`), defaulting to SIZE; nothing reads a module setting at call time. The far field's near tiles keep a
+2 m lattice (FAR_SQUARE): every second block sample, the same values.
 """
+from runtimeprofiler import step as profile_step
 import math
 import os
 import struct
@@ -36,14 +35,15 @@ import staging
 from PIL import Image
 
 SIZE = 1024
-SQUARE = 2.0                        # m; exactly representable, so the lattice is exact
-HALF = 1024.0                       # block position = centre - HALF
-VALID = (SIZE - 1) * SQUARE         # 2046 m: collidable extent from the SW corner (P1)
-GRID = 256.0                        # block centres are multiples of this (= 128 samples)
-GRIDS = {1024: GRID, 512: 128.0}    # the centre grid per block size (M4: 512² on 128 m = 64 samples)
+SQUARE = 1.0                        # m; exactly representable, so the lattice is exact
+FAR_SQUARE = 2.0                    # m: the far field's near tiles' lattice (every second block sample)
+HALF = SIZE * SQUARE / 2            # block position = centre - HALF
+VALID = (SIZE - 1) * SQUARE         # 1023 m: collidable extent from the SW corner (P1)
+GRID_BY_M = {1024.0: 128.0, 2048.0: 256.0}  # the centre grid (m) by the block's width (m)
+GRID = GRID_BY_M[SIZE * SQUARE]     # block centres are multiples of this
 CHUNK_ROWS = 256                    # bounds the geodesy temporaries
-CHUNK = 64                          # samples: ChunkCache's chunk, 128 m (the 512² block's follow grid)
-CHUNK_CACHE = 1024                  # chunks kept per frame (32 KB each: 32 MB)
+CHUNK = 128                         # samples: ChunkCache's chunk, 128 m (the block's follow grid)
+CHUNK_CACHE = 512                   # chunks kept per frame (128 KB each: 64 MB, 8 blocks)
 # Height quanta (m), finest first: 65536 Q = 256 ... 4096 m of range per block.
 Q_LADDER = (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16)
 Q_DEFAULT = 1 / 64
@@ -57,30 +57,30 @@ def snap(v, grid=GRID):
 
 
 def half_extent(size=SIZE):
-    """Block position = centre - this (1024 m for the 1024² block)."""
+    """Block position = centre - this (512 m for the 1024² block at 1 m)."""
     return size * SQUARE / 2
 
 
 def grid(size=SIZE):
-    """The centre grid of a `size`² block (256 m for 1024², 128 m for 512²)."""
-    return GRIDS[size]
+    """The centre grid of a `size`² block, by its width in metres (128 m for 1 km, 256 m for 2 km)."""
+    return GRID_BY_M[size * SQUARE]
 
 
 def valid(size=SIZE):
-    """Collidable extent from the SW corner, (N-1) * s (P1): 2046 m for 1024², 1022 m for 512²."""
+    """Collidable extent from the SW corner, (N-1) * s (P1): 1023 m for 1024² at 1 m."""
     return (size - 1) * SQUARE
 
 
 def lattice_index(c, size=SIZE):
-    """Lattice index of the first sample of a `size`² block centred at c (a multiple of 2 m)."""
+    """Lattice index of the first sample of a `size`² block centred at c (a multiple of SQUARE)."""
     k = (c - half_extent(size)) / SQUARE
     if k != math.floor(k):
-        raise ValueError(f"block centre {c} is not on the 2 m lattice")
+        raise ValueError(f"block centre {c} is not on the {SQUARE:g} m lattice")
     return int(k)
 
 
 def lattice_coords(k0, n):
-    """World coordinates of n lattice samples starting at index k0 (exact: index x 2.0)."""
+    """World coordinates of n lattice samples starting at index k0 (exact: index x SQUARE)."""
     return (k0 + np.arange(n, dtype=np.int64)).astype(np.float64) * SQUARE
 
 
@@ -285,6 +285,7 @@ def height_at(qgrid, z_base, max_height, cx, cy, x, y, square=SQUARE):
     return float((h[0, 0] * (1 - wx) + h[0, 1] * wx) * (1 - wy) + (h[1, 0] * (1 - wx) + h[1, 1] * wx) * wy)
 
 
+@profile_step('Heightmap generation')
 def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEFAULT, size=SIZE, keep=None,
              chunks=None):
     """Build the size² block centred at (cx, cy) with height quantum q and write it to path.
@@ -294,7 +295,9 @@ def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEF
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:
-        u, _ = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
+        u, share = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
+        if keep is not None:
+            keep["new_share"] = share       # (the share of samples computed: the rest from earlier blocks' chunks)
     q, z_base, max_height, qgrid = write_png(path, u, q)
     if keep is not None:
         keep["u"] = u

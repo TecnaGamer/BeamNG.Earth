@@ -165,6 +165,32 @@ for _ = 1, 20 do trees.update(3, { x = 50, y = 50 }) end
 T.check(count() == 20 and trees.status().tiles == 1, 'drained over frames, the kept tile untouched')
 trees.SHAPE_ITEMS_PER_FRAME = saved
 trees.clear()
+
+-- new shapes (never made this session) come one a frame while driving (a frame budget under LOADING_FRAME_MS): their
+-- first items load the shape in the engine's tick (75-255 ms frames, Windows 2026-11-03); any number while loading
+local savedF = trees.FORESTS_PER_FRAME
+trees.FORESTS_PER_FRAME = 99   -- (new Forests have a limit of their own: not this test's)
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() == 10, 'driving: one new shape a frame (' .. count() .. ')')
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() > 10 and count() < 20, 'driving: the next new shape the frame after (the tall tile has two)')
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() == 20, 'driving: its third shape the frame after that')
+tile('1_0', 4, 10)
+tile('1_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() == 40, 'shapes made before: not new, both in one frame (' .. count() .. ')')
+trees.clear()
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS)
+T.check(count() == 20, 'loading: every new shape at once (' .. count() .. ')')
+trees.clear()
+trees.FORESTS_PER_FRAME = savedF
 trees.SHAPE_VARIANTS = savedV
 
 -- shape path variants: the same file spelled differently (the engine counts them as shapes of their own)
@@ -447,6 +473,17 @@ do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1,
   T.check(trees.isBarrier('guardrail_back_end') and not trees.isBarrier('deciduous') and not trees.isBarrier(nil),
     'guard rails are barriers, trees not')
 end
+do -- stock world props (server worldprops.py): the catalog height is the mesh, so that height is 1:1
+  local props = {
+    { 'celltower', 28.93 }, { 'watertower', 26.16 }, { 'barn', 8.41 }, { 'container', 2.59 }, { 'billboard', 11.95 },
+  }
+  for _, it in ipairs(props) do
+    local shape, sc = trees.pick(it[1], it[2], 0)
+    T.check(trees.CATALOG[it[1]] and shape == trees.CATALOG[it[1]][1][1] and math.abs(sc - 1) < 1e-6,
+      it[1] .. ': its model at 1:1')
+    T.check(trees.GROUP_MAX_M[it[1]] and trees.GROUP_MAX_M[it[1]] > 0, it[1] .. ': a draw distance')
+  end
+end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 -- a pass with nothing to do is skipped (the game speed pulsing, 2026-10-28): until a tile comes or goes, the car moves
 -- RECHECK_M, or RECHECK_S goes by
@@ -468,8 +505,8 @@ do
   T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
 end
 -- geotiles (server --geo-tiles on): a tile in its own frame is made where its placement puts it in the anchor's
--- world; a rebase moves its Forest (nothing made again) unless it must collide, then it is made again at the new
--- placement; it is no ghost and needs nothing from the server again
+-- world; a rebase moves its Forest at once, then it is made again at the new placement (far too: the engine draws
+-- far impostors without the Forest's transform); it is no ghost and needs nothing from the server again
 do
   local gd = require('beamngEarth/geodesy')
   local gt = require('beamngEarth/geotile')
@@ -512,16 +549,21 @@ do
   trees.transform(xf, gd, B)
   T.check(trees.status().tiles == 1 and count() == 35, 'kept across the rebase, no ghost')
   T.check(trees.geoMoved == 1, 'placed again')
-  -- as far from the player in the new world: drawn moved, nothing made again
-  trees.update(21, { x = 1000, y = 0 })
-  T.check(trees.made == made and count() == 35, 'far: its Forest moved, no item made again')
+  -- its Forest takes the move at once (drawn in place near); far as well as near its items are made again at the
+  -- new placement and the Forest goes back to the origin (the engine draws far items' impostors without the Forest's
+  -- transform: whole tiles floated 767 m off, 2026-11-01)
   local f
   for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and math.abs(o.pos.x) > 1 then f = o end end
   T.check(f ~= nil, 'its Forest took the move')
-  -- the player at it: it must collide, made again at its placement in the new world
+  for _ = 1, 4 do trees.update(21, { x = 1000, y = 0 }) end
+  T.check(trees.geoFlushed == 1 and trees.made == made + 35 and count() == 35,
+    'far: made again (once) at the new placement: ' .. tostring(trees.geoFlushed) .. ' ' .. (trees.made - made))
+  f = nil
+  for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and math.abs(o.pos.x) > 1 then f = o end end
+  T.check(f == nil, 'its Forest back at the origin')
+  -- the player at it: it collides, its higher ranks made too, not made again
   for _ = 1, 4 do trees.update(21, { x = 0, y = 0 }) end
-  T.check(trees.geoFlushed == 1 and trees.made == made + 50 and count() == 50,
-    'near: made again (once) at the new placement: ' .. tostring(trees.geoFlushed) .. ' ' .. (trees.made - made))
+  T.check(trees.geoFlushed == 1 and count() == 50, 'near: its higher ranks added, no second flush')
   w = off(gt.placement(tf, B, 0, 0, 60))
   T.check(w < 1e-6, 'at the new placement: ' .. w)
   -- its drop by key, whatever the anchor
@@ -558,5 +600,38 @@ do
   trees.update(22,{x=10,y=10})
   T.check(count()==0,'cliff collection removed with tile')
   trees.CATALOG[g],trees.GROUP_MAX_M[g]=nil,nil
+end
+
+-- a suppress rule's refresh re-runs only the tiles holding that group (navgraph: 'signal'), not every tile
+do
+  trees.onRows(31, 'sigA', { { 0, 1, 1, 0, 0, 1, 5, 0.1 }, { 1, 3, 3, 0, 0, 1, 5, 0.1 } }, { 'deciduous', 'signal' })
+  trees.onRows(31, 'treeB', { { 0, 5, 5, 0, 0, 1, 5, 0.1 } }, { 'deciduous', 'signal' })
+  for _ = 1, 30 do trees.update(31, { x = 0, y = 0 }) end
+  local tl = {}
+  for i = 1, 200 do local n, v = debug.getupvalue(trees.update, i) if not n then break end if n == 'tiles' then tl = v end end
+  local a, b
+  for k, t in pairs(tl) do
+    if k:find('sigA', 1, true) then a = t elseif k:find('treeB', 1, true) then b = t end
+  end
+  T.check(a and b and not a.pending and not b.pending, 'refresh: both tiles done first')
+  T.check(trees.tileHasGroup(a, 'signal') and not trees.tileHasGroup(b, 'signal'), 'refresh: which tile holds signals')
+  trees.refresh('signal')
+  T.check(a.pending == true and not b.pending, 'refresh: only the tile with signals again')
+  trees.refresh()
+  T.check(b.pending == true, 'refresh: no group: every tile')
+  trees.onDrop({ anchorId = 31, key = 'sigA' })
+  trees.onDrop({ anchorId = 31, key = 'treeB' })
+  for _ = 1, 30 do trees.update(31, { x = 0, y = 0 }) end
+end
+
+-- the pass order's sort keys: nearer first, the index only between equal quarter metres, the index recoverable
+do
+  local ks = { trees.orderKey(300.2, 1), trees.orderKey(12.0, 2), trees.orderKey(12.3, 3), trees.orderKey(0, 4),
+    trees.orderKey(12.0, 5) }
+  table.sort(ks)
+  local at = {}
+  for i, k in ipairs(ks) do at[i] = k % 2 ^ 20 end
+  T.check(table.concat(at, ',') == '4,2,5,3,1', 'pass order: ' .. table.concat(at, ','))
+  T.check(trees.orderKey(1e9, 7) % 2 ^ 20 == 7 and trees.orderKey(1e9, 7) < 2 ^ 53, 'pass order: far tiles capped')
 end
 T.done('test_trees')

@@ -32,9 +32,14 @@ def captured(case):
                          np.arange(n+1, dtype=np.int64), np.arange(n+1, dtype=np.int64),
                          np.r_[0, np.cumsum(lengths)].astype(np.int64),
                          np.concatenate([w['lonlat'] for w in ways]), attrs=attrs, rules=tables)
+    # the captured land cover at the points it was read at; elsewhere the nearest of them (the roads are sampled at
+    # fixed spacing now, PR #634: not at their vertices only)
+    known = np.array([[int(v) / 1e9 for v in k.split(',')] for k in case['cover']], np.float64).reshape(-1, 2)
+    vals = np.array(list(case['cover'].values()), bool)
     def cover(la, lo):
-        return np.array([case['cover'][f'{round(float(a)*1e9)},{round(float(b)*1e9)}']
-                         for a, b in zip(la, lo)], bool)
+        q = np.column_stack([np.asarray(la, np.float64).ravel(), np.asarray(lo, np.float64).ravel()])
+        d = ((q[:, None, :] - known[None, :, :]) ** 2).sum(-1)
+        return vals[np.argmin(d, axis=1)]
     return f, cover
 
 

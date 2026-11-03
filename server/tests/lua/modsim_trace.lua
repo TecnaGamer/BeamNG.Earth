@@ -1,9 +1,10 @@
 -- Trace of the mod's pure rule modules (governor.lua, follow.lua, rebase.lua) on a deterministic
 -- pseudo-random schedule, for server/tests/test_modsim.py, which runs the Python ports
--- (server/tests/modsim.py) on the same schedule and compares line by line. 'M' lines (M4,
--- docs/V1_4_SPEC.md 3.5): the same rules after configure(512) (the 512 follow table with its fast
--- mode and commit-time re-check, the stale-anchor rule, centreNear / aheadLead of core.lua's
--- rebaseHint), then after configure(1024) again.
+-- (server/tests/modsim.py) on the same schedule and compares line by line. 'F' lines: the tables the modules start
+-- with (the 1 km block, 1024 x 1 m). 'M' lines (M4, docs/V1_4_SPEC.md 3.5), by the block's width: the same rules
+-- after core.lua's setBlockSize(1024, 2.0) (the 2 km table, an old server's v1.3.1 block), then setBlockSize(1024,
+-- 1.0) (back to the 1 km follow table with its fast mode and commit-time re-check, the stale-anchor rule,
+-- centreNear / aheadLead of core.lua's rebaseHint).
 --   luajit modsim_trace.lua <mod lua/ge/extensions dir> <frames> <seed>
 local dir, frames, seed = arg[1], tonumber(arg[2]), tonumber(arg[3])
 package.path = dir .. '/?.lua;' .. package.path
@@ -62,10 +63,10 @@ for i = 1, frames do
   print(table.concat({ 'F', i, tostring(a), f(tx or 0), f(ty or 0), f(tgx), f(tgy), tostring(ra) }, ' '))
 end
 
--- M4: the 512² block, then back to 1024² (configure switches the tables and the derived locals)
-for _, size in ipairs({ 512, 1024 }) do
-  lattice.configure(size)
-  follow.configure(size)
+-- The 2 km block, then back to the 1 km one (configure switches the tables and the derived locals)
+for _, square in ipairs({ 2.0, 1.0 }) do
+  local _, _, size = lattice.configure(1024, square)    -- (size: the block's width, m)
+  follow.configure()
   rebase.configure(size)
   for i = 1, frames do
     local px, py = (rnd() - 0.5) * 3000, (rnd() - 0.5) * 3000

@@ -26,6 +26,9 @@ concurrency:
   cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}     # (a newer push to dev replaces the build under way)
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
   check:
     runs-on: ubuntu-latest
     outputs:
@@ -60,7 +63,7 @@ jobs:
           echo "VERSION $v, release exists: $exists, publish: $pub"
 
   linux:
-    needs: check
+    needs: [check, quality]
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-22.04          # an older glibc: the AppImage runs on more distributions
     steps:
@@ -76,7 +79,7 @@ jobs:
       - name: Grass patch (tools/gcpatch)
         run: sh tools/gcpatch/build.sh
       - name: Python packages
-        run: python -m pip install pyinstaller -r server/requirements.txt
+        run: python -m pip install pyinstaller==6.22.3 -r server/requirements.txt
       - name: appimagetool
         run: |
           curl -sSLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
@@ -88,6 +91,7 @@ jobs:
         run: |
           f=$(ls dist/*.AppImage)
           "$f" --appimage-extract-and-run --server --help > help.txt && head -3 help.txt
+          "$f" --appimage-extract-and-run --world-cache --help > world-cache-help.txt
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -95,7 +99,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: check
+    needs: [check, quality]
     if: needs.check.outputs.build == 'true'
     runs-on: windows-latest
     steps:
@@ -110,7 +114,7 @@ jobs:
       - name: Rust kernels
         run: python tools/build_native.py
       - name: Python packages
-        run: python -m pip install pyinstaller -r server/requirements.txt
+        run: python -m pip install pyinstaller==6.22.3 -r server/requirements.txt
       # PyInstaller's bootloader compiled here (MSVC) instead of the wheel's prebuilt one that antivirus heuristics
       # know (VirusTotal 2026-10-17: 2/60 on 1.4.35); build_app.py stops without it
       - name: Bootloader from source
@@ -122,6 +126,9 @@ jobs:
         run: |
           f=$(ls dist/*.exe)
           "$f" --server --help > help.txt && head -3 help.txt
+          "$f" --world-cache --help > world-cache-help.txt
+      - name: Verify the Windows hosting executable
+        run: python tools/build_host.py --platform windows --out build/host-smoke --smoke
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -147,6 +154,7 @@ jobs:
           v=${{ needs.check.outputs.version }}
           printf '%s\n' "$v" > VERSION
           python3 tools/package.py --beammp
+          python3 tools/build_host.py --smoke
           prev=$(gh release list --limit 50 --json tagName,isPrerelease \
                  -q '[.[] | select(.isPrerelease and (.tagName | test("dev\\.[0-9]+$")))][0].tagName' || true)
           if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" >/dev/null; then range="$prev..$GITHUB_SHA"
@@ -170,7 +178,7 @@ jobs:
               echo "Full list of changes: https://github.com/${{ github.repository }}/compare/$prev...v$v"
             fi
           } > notes.md
-          gh release create "v$v" out/linux/* out/windows/* dist/BeamNG.Earth-BeamMP-Server-*.zip \
+          gh release create "v$v" out/linux/* out/windows/* dist/BeamNG.Earth-BeamMP-Server-*.zip dist/BeamNG.Earth-Host-*.zip dist/BeamMP-Server-*-corresponding-source.zip \
             --target "$GITHUB_SHA" --title "BeamNG.Earth $v (development build)" --notes-file notes.md --prerelease
           # only the newest DEV_KEEP development builds stay (the releases page has no filter: the betas got lost among
           # them, and the in-game update check reads the newest 30 releases only)
@@ -185,8 +193,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v=${{ needs.check.outputs.version }}
+          python3 tools/package.py --beammp
+          python3 tools/build_host.py --smoke
           pre=""
-          case "$v" in *preview*|*alpha*|*rc*) pre="--prerelease";; esac     # betas are full releases (the user, 2026-10-22)
+          case "$v" in *preview*|*alpha*|*rc*) pre="--prerelease";; esac     # preserve upstream: betas are full releases
           cat > notes.md <<EOF
           **Download** the file for your system, run it, and it does the rest: it installs the mod into BeamNG.drive,
           starts the world server and starts the game. Then pick **Freeroam > BeamNG.Earth**.
@@ -194,8 +204,11 @@ jobs:
           - **Windows:** \`BeamNG.Earth-$v.exe\` (Windows may warn about an unknown app: More info > Run anyway)
           - **Linux:** \`BeamNG.Earth-$v-x86_64.AppImage\` (make it executable: right-click > Properties, or
             \`chmod +x\`). It starts the native game with the grass patch, no Steam launch options needed.
+          - **Hosting:** \`BeamNG.Earth-BeamMP-Server-$v.zip\` contains the Earth client mod and server plugin to install into a dedicated BeamMP server. Obtain the BeamMP server executable from its official releases; the player app's world companion is not the dedicated BeamMP server.
+          - **Windows hosting bundle:** \`BeamNG.Earth-Host-$v-Windows.zip\` includes the unmodified official BeamMP server executable, Earth plugin, empty-key configuration, licenses and corresponding source. The BeamMP executable was not compiled by this project. Supply your own BeamMP AuthKey before hosting.
+          - **Linux hosting bundle:** \`BeamNG.Earth-Host-$v-Linux-x86_64.zip\` contains the official Ubuntu 22.04 x86_64 BeamMP executable and the same Earth resources/notices; run \`./run_host.sh\` after supplying your own AuthKey. Other distributions require compatible system libraries.
 
           Steam must be running. Closing the game stops the server. See the README for details.
           EOF
-          gh release create "v$v" out/linux/* out/windows/* --target "$GITHUB_SHA" --title "BeamNG.Earth $v" \
+          gh release create "v$v" out/linux/* out/windows/* dist/BeamNG.Earth-BeamMP-Server-*.zip dist/BeamNG.Earth-Host-*.zip dist/BeamMP-Server-*-corresponding-source.zip --target "$GITHUB_SHA" --title "BeamNG.Earth $v" \
             --notes-file notes.md --generate-notes $pre
