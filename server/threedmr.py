@@ -26,11 +26,14 @@ detected instead of baked into a broken shape; retried once through curl (bound 
 the caller passes one: iface).
 """
 
+import contextlib
 import hashlib
 import io
 import json
 import logging
 import math
+import threading
+import time
 import os
 import re
 import struct
@@ -124,10 +127,18 @@ def _glb_complete(data):
     return len(data) >= total_len
 
 
+MAX_DOWNLOAD = 64 << 20         # bytes: a model (or a search/info reply) larger than this is refused
+MAX_TRIANGLES = 400_000         # a model with more is left out (gltf_mesh): the pure-Python baking per triangle (id 8:
+                                # ~1.1 M) would hold a road tile for a long time
+
+
 def _urllib_fetch(url, timeout):
     req = urllib.request.Request(url, headers={"User-Agent": netfetch.USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read(MAX_DOWNLOAD + 1)
+    if len(data) > MAX_DOWNLOAD:
+        raise OSError(f"reply over {MAX_DOWNLOAD >> 20} MB")
+    return data
 
 
 def _curl_fetch(url, iface, timeout):
@@ -227,6 +238,65 @@ def search_ids(lat, lon, range_m, cache_dir, iface=None, timeout=30.0):
         revisit.fault()
         return []
     log.info("3dmr search %s,%s,%s: %d models", rlat, rlon, rrange, len(ids))
+    return ids
+
+
+# One search per REGION_DEG square (its centre, out to its corners plus SEARCH_CORRECT_R_M), not two per road tile: a
+# tile's own centre made each tile's 40 km search a request of its own (a new key per tile), on the world-gen path,
+# and the volunteer-run service a request per tile (2026-11-03). The library is sparse (one model within 80 km of
+# central Paris), so a region's list is short. Kept REGION_TTL_S, then asked again (a failed refresh keeps the old).
+REGION_DEG = 0.5
+REGION_TTL_S = 14 * 86400.0
+REGION_PAGES = 20               # (the search is paged: /<page>, from 1, until an empty page)
+
+
+def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
+    """Model ids of 3dmr.eu's coordinate search for the REGION_DEG square holding (lat, lon), reaching
+    SEARCH_CORRECT_R_M past its corners (a model whose api point is stale and far off, model_position corrects),
+    cached under <cache_dir>/threedmr_cache/region_<i>_<j>.json. [] with the models off. A first search that fails
+    is a revisit fault (the tile is rebuilt next visit); an old list stands in when its refresh fails."""
+    import revisit
+
+    if not enabled() or not cache_dir:
+        return []
+    i, j = math.floor(float(lat) / REGION_DEG), math.floor(float(lon) / REGION_DEG)
+    clat, clon = (i + 0.5) * REGION_DEG, (j + 0.5) * REGION_DEG
+    half = math.hypot(REGION_DEG / 2 * 111320.0 * math.cos(math.radians(min(abs(clat) + REGION_DEG / 2, 89.9))),
+                      REGION_DEG / 2 * 110540.0)
+    rng = int(math.ceil(half + SEARCH_CORRECT_R_M))
+    path = os.path.join(cache_dir, "threedmr_cache", f"region_{i}_{j}.json")
+    old = None
+    try:
+        with open(path) as f:
+            old = json.load(f)
+        if time.time() - os.path.getmtime(path) < REGION_TTL_S:
+            return [int(v) for v in old]
+    except (OSError, ValueError, TypeError):
+        old = None
+    ids = []
+    try:
+        for page in range(1, REGION_PAGES + 1):
+            url = SEARCH_URL.format(lat=clat, lon=clon, range_m=rng) + f"/{page}"
+            got = json.loads(_fetch_retry(url, iface, timeout, what=f"search {i},{j} page {page}") or b"null")
+            if not isinstance(got, list):
+                raise ValueError("not a list of model ids")
+            if not got:
+                break
+            ids += [int(v) for v in got]
+        ids = sorted(set(ids))
+    except (ValueError, OSError, TypeError) as e:
+        if old is not None:
+            log.warning("3dmr search %s,%s: %s (the cached list kept)", i, j, e)
+            return [int(v) for v in old]
+        log.warning("3dmr search %s,%s: %s", i, j, e)
+        revisit.fault()
+        return []
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        json.dump(ids, f)
+    staging.replace(tmp, path)
+    log.info("3dmr search %s,%s: %d models", i, j, len(ids))
     return ids
 
 
@@ -1759,6 +1829,8 @@ def gltf_mesh(glb, model_id=None):
     )
     textures = [tex + (ds,) for tex, ds in zip(textures, double_sided)]
 
+    if len(tris) > MAX_TRIANGLES:
+        raise UnsupportedModelError(f"3dmr model {model_id}: {len(tris)} triangles (over {MAX_TRIANGLES})")
     return positions, uvs, tris, normals, textures, tri_materials
 
 
@@ -2237,6 +2309,37 @@ def update_materials(
     materials_dir = os.path.join(user_dir, *MOD_MATERIALS_REL)
     os.makedirs(materials_dir, exist_ok=True)
     path = os.path.join(materials_dir, MATERIALS_FILE)
+    with _materials_locked(path):
+        return _update_materials_file(path, user_dir, material_name, texture_vfs, factor, has_alpha, alpha_cutoff,
+                                      double_sided)
+
+
+_MATERIALS_TLOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _materials_locked(path):
+    """The mod's materials file for this process alone while it is read, changed and written: the road processes
+    each update it, and two at once lost one's entries ("NO MATERIAL" in game). The lock file is in the system's temp
+    folder, not beside it in the game's (the game watches its own folders)."""
+    import tempfile
+    import xproc
+    lock = os.path.join(tempfile.gettempdir(),
+                        "bnge_3dmr_materials_%s.lock" % hashlib.sha1(os.path.abspath(path).encode()).hexdigest()[:16])
+    with _MATERIALS_TLOCK:
+        held, t0 = False, time.monotonic()
+        while not held and time.monotonic() - t0 < 10.0:
+            held = xproc.take(lock)
+            if not held:
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            if held:
+                xproc.release(lock)
+
+
+def _update_materials_file(path, user_dir, material_name, texture_vfs, factor, has_alpha, alpha_cutoff, double_sided):
     try:
         with open(path) as f:
             data = json.load(f)

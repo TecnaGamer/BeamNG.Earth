@@ -3361,7 +3361,7 @@ def road_tile_items(
     frame, tx, ty, md, ground, decks=None, skip=frozenset(), cache_dir=None
 ):
     """tile_buildings of road tile (tx, ty) (items, custom), from the map cells under it, plus any
-    3dmr.eu models found near it by geo-search (threedmr.search_ids/model_position), appended to custom as
+    3dmr.eu models found near it by geo-search (threedmr.region_ids/model_position), appended to custom as
     {"id", "xy" (anchor frame), "latlon" (its mapped lat/lon, for threedmr.osm_yaw's OSM lookup in
     _custom_tile_entries)}, and any local (no-3dmr-base) models whose own lat/lon (threedmr.local_models) falls
     in the tile, appended the same way plus a "local" key (the catalog entry itself - _custom_tile_entries'
@@ -3371,13 +3371,9 @@ def road_tile_items(
     cache (None skips the geo-search and the local catalog: lite/far tiles and callers that do not bake custom
     models).
 
-    The geo-search itself runs twice: once at the tile's own radius (every model whose api point - search_ids'
-    own coordinates - actually sits in the tile, the common case), then again at threedmr.SEARCH_CORRECT_R_M (a
-    model whose api point is stale and far off, but whose desc-corrected position - threedmr.model_position -
-    lands in the tile anyway: id 22, the Dragon Bridge, api point 26 km off in the mountains, is never found by
-    the first search at all, so model_position - which would have corrected it - is never even reached for it).
-    A second-pass hit only counts when model_position actually corrected it (an uncorrected api point that far
-    out is not trusted as this tile's own); a hit already added by the first pass is not added again."""
+    The geo-search is the tile's region's (threedmr.region_ids: its REGION_DEG square out to SEARCH_CORRECT_R_M past
+    its corners, one cached search): a model counts where model_position puts it, its desc-corrected position when
+    its api point is stale and far off (id 22, the Dragon Bridge: api point 26 km off in the mountains)."""
     import roads
     import threedmr
 
@@ -3431,9 +3427,10 @@ def road_tile_items(
 
         log = logging.getLogger("earthd.buildings")
         clat, clon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
-        range_m = math.hypot((x1 - x0) / 2, (y1 - y0) / 2) + 10.0
-        found_ids = set()
-        for mid in threedmr.search_ids(float(clat), float(clon), range_m, cache_dir):
+        # (the region's models, one cached search per threedmr.REGION_DEG square: every model whose position -
+        # model_position's, corrected where its api point is stale - stands in the tile; the PR's two per-tile
+        # searches, tile radius and SEARCH_CORRECT_R_M, found the same models with a request per tile)
+        for mid in threedmr.region_ids(float(clat), float(clon), cache_dir):
             mid = int(mid)
             try:
                 mlat, mlon, _corrected = threedmr.model_position(mid, cache_dir)
@@ -3445,26 +3442,6 @@ def road_tile_items(
                 custom.append(
                     {"id": mid, "xy": (float(mx), float(my)), "latlon": (mlat, mlon)}
                 )
-                found_ids.add(mid)
-        for mid in threedmr.search_ids(
-            float(clat), float(clon), threedmr.SEARCH_CORRECT_R_M, cache_dir
-        ):
-            mid = int(mid)
-            if mid in found_ids:
-                continue
-            try:
-                mlat, mlon, corrected = threedmr.model_position(mid, cache_dir)
-            except Exception:
-                log.warning("3dmr model %s: info failed", mid, exc_info=True)
-                continue
-            if not corrected:
-                continue
-            mx, my, _ = frame.geodetic_to_enu(mlat, mlon, 0.0)
-            if x0 <= mx < x1 and y0 <= my < y1:
-                custom.append(
-                    {"id": mid, "xy": (float(mx), float(my)), "latlon": (mlat, mlon)}
-                )
-                found_ids.add(mid)
         for entry in threedmr.local_models(cache_dir):
             mlat, mlon = float(entry["lat"]), float(entry["lon"])
             mx, my, _ = frame.geodetic_to_enu(mlat, mlon, 0.0)
@@ -3510,7 +3487,7 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
 def bridge_footprints(frame, tx, ty, cache_dir):
     """[(footprint, (x, y) of its model in frame, model id)] of the 3dmr model bridges whose deck reaches road tile
     (tx, ty) (threedmr.bridge_footprint: every tile reads the same per-model answer, the one the model is baked in
-    or not), found as road_tile_items finds models (threedmr.search_ids at SEARCH_CORRECT_R_M, model_position)
+    or not), found as road_tile_items finds models (threedmr.region_ids, model_position)
     within threedmr.BRIDGE_REACH_M of the tile. [] without cache_dir. A model it could not read marks the build
     incomplete (revisit.fault: tried again next visit)."""
     import logging
@@ -3526,7 +3503,7 @@ def bridge_footprints(frame, tx, ty, cache_dir):
     clat, clon, _ = frame.enu_to_geodetic(cx, cy, 0.0)
     reach = math.hypot((x1 - x0) / 2, (y1 - y0) / 2) + threedmr.BRIDGE_REACH_M
     out = []
-    for mid in threedmr.search_ids(float(clat), float(clon), threedmr.SEARCH_CORRECT_R_M, cache_dir):
+    for mid in threedmr.region_ids(float(clat), float(clon), cache_dir):
         mid = int(mid)
         try:
             mlat, mlon, _corrected = threedmr.model_position(mid, cache_dir)

@@ -12,6 +12,7 @@ import os
 import struct
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -946,6 +947,77 @@ class FetchModelTest(unittest.TestCase):
                 f.write(payload)
             data = threedmr.fetch_model("999", d)
             self.assertEqual(data, payload)
+
+
+class RegionIdsTest(unittest.TestCase):
+    """region_ids: one cached, paged search per REGION_DEG square (not two per road tile)."""
+
+    def pages(self, *pages):
+        got = []
+
+        def fetch(url, timeout):
+            got.append(url)
+            n = int(url.rsplit("/", 1)[1])
+            return json.dumps(pages[n - 1] if n <= len(pages) else []).encode()
+        return got, fetch
+
+    def test_paged_once_per_region_then_cached(self):
+        with tempfile.TemporaryDirectory() as d:
+            urls, fetch = self.pages([4, 9], [12], [])
+            with mock.patch("threedmr._urllib_fetch", side_effect=fetch):
+                a = threedmr.region_ids(48.85, 2.35, d)
+                b = threedmr.region_ids(48.95, 2.45, d)          # (the same 0.5-degree square)
+            self.assertEqual(a, [4, 9, 12])
+            self.assertEqual(b, a)
+            self.assertEqual(len(urls), 3, "pages 1-3 once, the second tile from the cache")
+            self.assertTrue(urls[0].startswith("https://3dmr.eu/api/search/48.750000/2.250000/"))
+            rng = int(urls[0].split("/")[-2])
+            self.assertGreater(rng, threedmr.SEARCH_CORRECT_R_M, "reaches past the square's corners")
+
+    def test_stale_list_kept_when_its_refresh_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            _u, fetch = self.pages([7])
+            with mock.patch("threedmr._urllib_fetch", side_effect=fetch):
+                threedmr.region_ids(10.1, 20.1, d)
+            path = os.path.join(d, "threedmr_cache", "region_20_40.json")
+            old = time.time() - threedmr.REGION_TTL_S - 10
+            os.utime(path, (old, old))
+            faults = []
+            with mock.patch("threedmr._urllib_fetch", side_effect=OSError("down")), \
+                    mock.patch("revisit.fault", side_effect=lambda: faults.append(1)):
+                self.assertEqual(threedmr.region_ids(10.1, 20.1, d), [7])
+            self.assertEqual(faults, [], "an old list stands in: no fault")
+
+    def test_first_search_failing_faults(self):
+        faults = []
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("threedmr._urllib_fetch", side_effect=OSError("down")), \
+                mock.patch("revisit.fault", side_effect=lambda: faults.append(1)):
+            self.assertEqual(threedmr.region_ids(1.0, 2.0, d), [])
+        self.assertEqual(faults, [1])
+
+    def test_off_no_request(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"BNE_3DMR": "off"}), \
+                mock.patch("threedmr._urllib_fetch", side_effect=AssertionError("no request")):
+            self.assertEqual(threedmr.region_ids(1.0, 2.0, d), [])
+
+
+class CapsTest(unittest.TestCase):
+    def test_download_over_the_cap_refused(self):
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n=-1):
+                return b"x" * n
+
+        with mock.patch.object(threedmr, "MAX_DOWNLOAD", 1000), \
+                mock.patch("urllib.request.urlopen", return_value=Resp()):
+            with self.assertRaises(OSError):
+                threedmr._urllib_fetch("https://3dmr.eu/api/model/1", 5)
 
 
 class SearchIdsTest(unittest.TestCase):

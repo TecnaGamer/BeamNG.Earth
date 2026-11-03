@@ -592,7 +592,7 @@ class OverRoadTest(unittest.TestCase):
             return (float(mlat), float(mlon), False)
 
         ground = lambda la, lo: np.zeros(np.shape(la))
-        with mock.patch("threedmr.search_ids", return_value=[24]), \
+        with mock.patch("threedmr.region_ids", return_value=[24]), \
              mock.patch("threedmr.model_position", side_effect=model_position):
             items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(items), 2, "both footprints stay procedural")
@@ -650,7 +650,7 @@ class OverRoadTest(unittest.TestCase):
         mx, my = 50.0, 60.0
         mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
         ground = lambda la, lo: np.zeros(np.shape(la))
-        with mock.patch("threedmr.search_ids", return_value=[22]), \
+        with mock.patch("threedmr.region_ids", return_value=[22]), \
              mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1)
@@ -674,10 +674,8 @@ class OverRoadTest(unittest.TestCase):
         mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
         ground = lambda la, lo: np.zeros(np.shape(la))
 
-        def search_ids(lat, lon, range_m, cache_dir):
-            return [22] if range_m == threedmr.SEARCH_CORRECT_R_M else []
-
-        with mock.patch("threedmr.search_ids", side_effect=search_ids), \
+        # (the region's search reaches SEARCH_CORRECT_R_M past its corners: id 22 is in it, placed where corrected)
+        with mock.patch("threedmr.region_ids", return_value=[22]), \
              mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1)
@@ -699,17 +697,16 @@ class OverRoadTest(unittest.TestCase):
         mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
         ground = lambda la, lo: np.zeros(np.shape(la))
 
-        def search_ids(lat, lon, range_m, cache_dir):
-            return [22] if range_m == threedmr.SEARCH_CORRECT_R_M else []
-
-        with mock.patch("threedmr.search_ids", side_effect=search_ids), \
-             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), False)):
+        # (one region search: a model counts where model_position puts it; its api point 20 km off, uncorrected,
+        # is not in this tile)
+        flat, flon, _ = self.f.enu_to_geodetic(20000.0, 0.0, 0.0)
+        with mock.patch("threedmr.region_ids", return_value=[22]), \
+             mock.patch("threedmr.model_position", return_value=(float(flat), float(flon), False)):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
-            self.assertEqual(custom, [], "an uncorrected wide-search hit is not trusted")
+            self.assertEqual(custom, [], "a region model far from the tile is not this tile's")
 
-    def test_wide_search_does_not_duplicate_a_near_hit(self):
-        # a model already found (and added) by the tile-radius search must not be added again just because
-        # it also falls inside the wide, SEARCH_CORRECT_R_M-radius search (a strict superset of the near one)
+    def test_one_region_search_a_tile(self):
+        # one cached search for the tile's region (threedmr.region_ids), not two per tile; its model added once
         b = Feats(["H"], [self.ll(100, 100, 12, 10)], **{"class": ["house"], "height": [6.0]})
 
         class MD:
@@ -721,15 +718,15 @@ class OverRoadTest(unittest.TestCase):
         ground = lambda la, lo: np.zeros(np.shape(la))
         seen_ranges = []
 
-        def search_ids(lat, lon, range_m, cache_dir):
-            seen_ranges.append(range_m)
-            return [24]  # both the near and the wide search turn it up
+        def region_ids(lat, lon, cache_dir):
+            seen_ranges.append((lat, lon))
+            return [24]
 
-        with mock.patch("threedmr.search_ids", side_effect=search_ids), \
+        with mock.patch("threedmr.region_ids", side_effect=region_ids), \
              mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), False)):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
-            self.assertEqual(len(custom), 1, "not added twice")
-            self.assertEqual(len(seen_ranges), 2, "both searches ran")
+            self.assertEqual(len(custom), 1, "added once")
+            self.assertEqual(len(seen_ranges), 1, "one region search")
 
     def test_local_model_in_bbox_is_returned_as_custom(self):
         # a local (no-3dmr-base) model (threedmr.local_models) whose own lat/lon falls in the tile is folded
@@ -746,7 +743,7 @@ class OverRoadTest(unittest.TestCase):
         entry = {"id": "local_fire_tower_20m", "file": "fire_tower_20m.stl",
                   "lat": float(mlat), "lon": float(mlon), "factor": [0.784, 0.063, 0.18]}
         ground = lambda la, lo: np.zeros(np.shape(la))
-        with mock.patch("threedmr.search_ids", return_value=[]), \
+        with mock.patch("threedmr.region_ids", return_value=[]), \
              mock.patch("threedmr.local_models", return_value=[entry]):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1)
