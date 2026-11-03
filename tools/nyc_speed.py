@@ -2,8 +2,9 @@
 """High-speed drives through dense Manhattan, for world-generation speed (the user, 2026-11-02: "create a tool where
 you can simulate high speed driving down dense new york streets ... even cached places are too slow to generate").
 
-The car is moved by tools/drive.py's in-game driver (a scripted profile: the speed held whatever the traffic, the
-ground followed, no AI) along a route of avenues and cross streets, while this tool records what keeping up means:
+The vehicle (a ball prop by default: --vehicle) is moved by tools/drive.py's in-game driver (a scripted profile: the
+speed held whatever the traffic, the ground followed, no AI) along a route of avenues and cross streets, while this
+tool records what keeping up means:
 
   - the edge guard: frames in "warn" / "hold" (the mod's banner / pause), polled every POLL_S;
   - every terrain block the mod asked for: request -> ready (server.log terrain_ready), provisional ones, their
@@ -168,6 +169,24 @@ def heading_of(path):
     return math.degrees(math.atan2((lo1 - lo0) * kx, la1 - la0)) % 360
 
 
+def use_vehicle(model):
+    """The player's vehicle as `model` (a jbeam name), replaced in place when it is another one. The user, 2026-11-03:
+    "Instead of using a full car. Use a simple prop to reduce the chance of instability": the scripted driver places
+    the vehicle every frame, and a car's soft body blew up (NaN) at 150 mph under overpasses; the ball prop has a few
+    nodes. 'car' keeps whatever the session spawned."""
+    if model in (None, "", "car"):
+        return
+    got = lua(f"local v = getPlayerVehicle(0) if v and v:getJBeamFilename() == '{model}' then return 'same' end "
+              f"core_vehicles.replaceVehicle('{model}', {{}}) return 'replaced'")
+    for _ in range(20):
+        time.sleep(1)
+        if lua(f"local v = getPlayerVehicle(0) return tostring(v ~= nil and v:getJBeamFilename() == '{model}')") == "true":
+            break
+    else:
+        raise SystemExit(f"could not make the player vehicle a {model}")
+    print(f"vehicle: {model} ({got})", flush=True)
+
+
 def teleport(lat, lon, heading, wait_s=240):
     """The car to (lat, lon) facing heading, and the world around it built (the edge guard clear, the road tiles near)."""
     lua(f"beamngEarth_core.teleport({lat}, {lon}, nil, {{record = false}}) return 1")
@@ -305,6 +324,8 @@ def main():
     ap.add_argument("--warm-first", action="store_true", help="drive the route once at 40 mph first (untimed)")
     ap.add_argument("--label", default=None)
     ap.add_argument("--bake", action="append", help="with --cold: a baked pack (.bnge) put in the fresh cache first")
+    ap.add_argument("--vehicle", default=os.environ.get("BNGE_DRIVE_VEHICLE", "ball"),
+                    help="the driven vehicle: a jbeam model ('ball': a simple prop, the default) or 'car' (the session's)")
     ap.add_argument("--accel", type=float, default=0.0, help="m/s^2: set off from a near standstill (0: at speed at once)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -331,6 +352,7 @@ def main():
         start, end = ROUTES.get(a.route) if not a.start else (
             tuple(map(float, a.start.split(","))), tuple(map(float, a.end.split(","))))
         print(f"{label}: teleport to {start}", flush=True)
+        use_vehicle(a.vehicle)
         teleport(*start, 0.0)
         path = gps_path(start, end)
         prof = profile(path, mph, a.km, a.accel)
