@@ -57,6 +57,19 @@ def start_run(cache_dir):
     os.environ[RUN_ENV] = f"{os.getpid()}_{int(time.time())}"
 
 
+# The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
+# place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
+# old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
+PLANS_FORMAT = 3      # 3: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482)
+
+
+def plans_format():
+    """The plans' revisit key format: PLANS_FORMAT and the road facts' (roads.FACTS_FORMAT: the plans are made from
+    them), "<plans>.<facts>"."""
+    import roads
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}"
+
+
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
 
 
@@ -88,26 +101,31 @@ class PlanCache:
 
     def load(self, key):
         """(plans, keeps, covers, opens) of cell key from the cache, or None."""
-        from grading import Plan
+        from grading import Plan, set_widen
         from roads import Spec
         try:
             src = self._path(key)
             if not os.path.exists(src):
                 src = self._kept(key)
                 if src is None:
+                    src = self._baked(key)
+                if src is None:
                     return None
             with np.load(src, allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
                 lists["b"] = _split(f, "b") if "b_n" in f.files else []
+                lists["w"] = _split(f, "w") if "w_n" in f.files else []
         except (OSError, ValueError, KeyError, TypeError):
             return None
-        plans, cuts, banks = [], iter(lists["c"]), iter(lists["b"])
+        plans, cuts, banks, widens = [], iter(lists["c"]), iter(lists["b"]), iter(lists["w"])
         for m, xy, z in zip(meta["plans"], lists["p"], lists["z"]):
             pl = Plan(xy, z, m["half"], tuple(m["abut"]), next(cuts) if m["cut"] else None, m["road_half"])
             pl.rid, pl.max_wall = m["rid"], m["max_wall"]
             pl.steep = bool(m.get("steep", False))
             pl.bank = next(banks) if m.get("bank") else None
+            if m.get("widen"):
+                set_widen(pl, next(widens))
             plans.append((m["fid"], pl))
         keeps = list(zip(lists["k"], meta["keeps"]))
         covers = list(zip(lists["v"], meta["covers"]))
@@ -119,7 +137,9 @@ class PlanCache:
 
     def _revisit_key(self, key):
         import revisit
-        return revisit.key("plans", *self.persist[1], (int(key[0]), int(key[1]), int(key[2])))
+        # (by PLANS_FORMAT, not the code: kept across updates, the user, 2026-11-02)
+        return revisit.format_key("plans", plans_format(), *self.persist[1],
+                                  (int(key[0]), int(key[1]), int(key[2])))
 
     def _where(self, key):
         """revisit.where of cell key's plans (the map's cache view), or None."""
@@ -132,6 +152,38 @@ class PlanCache:
             return revisit.where((s + n) / 2, (w + e) / 2, s, w, n, e, revisit.sig(plans=sig, md=versions))
         except Exception:
             return None
+
+    def has(self, key):
+        """Are cell key's plans on disk (this run's, or the revisit cache's copy)? A stat or two, nothing read."""
+        if os.path.exists(self._path(key)):
+            return True
+        if self.persist is None:
+            return False
+        import revisit
+        if os.path.exists(revisit._path(self.persist[0], "plans", self._revisit_key(key))):
+            return True
+        import bakepack
+        k = bakepack.plans_key(self.signature, key)
+        return any(k in p.items and bakepack._matches(p, self._bake_expect()) for p in bakepack.packs(self.persist[0]))
+
+    def _bake_expect(self):
+        import bakepack
+        return {"bake_format": bakepack.BAKE_FORMAT, "plans_format": PLANS_FORMAT, "frames": FRAMES,
+                "signature": self.signature,
+                "versions": json.loads(json.dumps(self.persist[1][2], sort_keys=True))}
+
+    def _baked(self, key):
+        """A baked pack's plans of cell key (bakepack.py: made offline for this map data and signature), or None."""
+        if self.persist is None:
+            return None
+        import io
+        import bakepack
+        got = bakepack.find(self.persist[0], bakepack.plans_key(self.signature, key), self._bake_expect())
+        if got is None:
+            return None
+        with self._lock:
+            self.stats["baked"] = self.stats.get("baked", 0) + 1
+        return io.BytesIO(got)
 
     def _kept(self, key):
         """The revisit cache's copy of cell key's plans (a file-like npz), or None."""
@@ -149,7 +201,8 @@ class PlanCache:
         nothing they read failed or was missing, Grader._plan_cell)."""
         meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
                            "rid": int(p.rid), "max_wall": float(p.max_wall), "cut": p.cut is not None,
-                           "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False))}
+                           "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
+                           "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
                 "opens": [{k: (v.item() if hasattr(v, "item") else v) for k, v in sp._asdict().items()}
@@ -160,6 +213,7 @@ class PlanCache:
             _pack(arrays, "z", [p.z for _f, p in plans])
             _pack(arrays, "c", [p.cut for _f, p in plans if p.cut is not None])
             _pack(arrays, "b", [p.bank for _f, p in plans if getattr(p, "bank", None) is not None])
+            _pack(arrays, "w", [p.widen for _f, p in plans if getattr(p, "widen", None) is not None])
             _pack(arrays, "k", [xy for xy, _hw in keeps])
             _pack(arrays, "v", [xy for xy, _w in covers])
             _pack(arrays, "o", [xy for xy, _sp in opens])
@@ -173,7 +227,9 @@ class PlanCache:
                 import revisit
                 with open(p, "rb") as fh:
                     revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()},
-                                  where=self._where(key))
+                                  where=self._where(key), code=revisit.format_marker("plans", plans_format()))
+                import mpshare          # (a BeamMP session shares them: the hub sends them to the server)
+                mpshare.note_built(self.persist[0], self.signature, key)
         except (OSError, ValueError, TypeError):
             return False
         with self._lock:
@@ -185,6 +241,19 @@ class PlanCache:
         waited); (None, True) when this process plans it (call release after store); (None, False) when it plans it
         without the lock (xproc.once)."""
         t0 = time.monotonic()
+        if self.persist is not None:
+            import mpshare      # (a BeamMP session: the server is sending this cell's plans; waited for a little)
+            if mpshare.coming(self.persist[0], self.signature, key):
+                while time.monotonic() - t0 < mpshare.COMING_WAIT_S:
+                    if self.has(key):
+                        got = self.load(key)
+                        if got is not None:
+                            with self._lock:
+                                self.stats["shared"] = self.stats.get("shared", 0) + 1
+                            return got, False
+                    if not mpshare.coming(self.persist[0], self.signature, key):
+                        break   # (missed: planned here)
+                    time.sleep(0.1)
 
         def waiting():
             with self._lock:

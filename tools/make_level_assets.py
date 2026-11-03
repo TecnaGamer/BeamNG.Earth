@@ -129,8 +129,10 @@ FLAT_H = B + "bngEarth_flat_h_1024.png"     # neutral height for the detail / ma
 # The server's surface materials (server/surface.py MATERIALS, the tyres' ground models), each with its
 # own stock detail / macro textures for the detail near-visual mode (terrain.lua LOOKS has the same
 # choices; in-game 2026-10-12: TerrainMaterials made at runtime cost ~1 s per updateMaterial, so they are
-# level materials now). Texture sizes are in heightmap samples (2 m on the shipped block: detail 4 m,
-# macro 32-64 m, dividing the 128 m block step); the colour comes from the photo base in detail mode.
+# level materials now). Texture sizes are in heightmap samples (TEX_SQ: 1 m on the shipped block since 2026-11-01;
+# below in 2 m units, doubled: detail 2-4 m, macro 32-64 m, dividing the 128 m block step); the colour comes from the
+# photo base in detail mode.
+TEX_SQ = 2          # samples per 2 m (the square is heightmap.SQUARE = 1 m)
 T_ = "/assets/materials/terrain/"
 def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
     m = {"name": name, "internalName": name, "class": "TerrainMaterial", "persistentId": pid, "groundmodelName": gm,
@@ -140,13 +142,13 @@ def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
          "roughnessMacroStrength": [0, 0.8]}
     for key, suf, base in (("baseColor", "_b", "bngEarth_base_b.png"), ("normal", "_nm", "bngEarth_base_nm.png"),
                            ("roughness", "_r", "bngEarth_base_r.png"), ("ao", "_ao", "bngEarth_base_ao.png")):
-        m[key + "BaseTex"], m[key + "BaseTexSize"] = B + base, 128
-        m[key + "DetailTex"], m[key + "DetailTexSize"] = T_ + detail + suf + ".png", dsize
-        m[key + "MacroTex"], m[key + "MacroTexSize"] = T_ + macro + suf + ".png", msize
-    m["heightBaseTex"], m["heightBaseTexSize"] = B + "bngEarth_base_h.png", 128
+        m[key + "BaseTex"], m[key + "BaseTexSize"] = B + base, 128 * TEX_SQ
+        m[key + "DetailTex"], m[key + "DetailTexSize"] = T_ + detail + suf + ".png", dsize * TEX_SQ
+        m[key + "MacroTex"], m[key + "MacroTexSize"] = T_ + macro + suf + ".png", msize * TEX_SQ
+    m["heightBaseTex"], m["heightBaseTexSize"] = B + "bngEarth_base_h.png", 128 * TEX_SQ
     # flat (no height-blended borders: they swirled across whole blocks, in-game 2026-10-12), never empty
-    m["heightDetailTex"], m["heightDetailTexSize"] = FLAT_H, dsize
-    m["heightMacroTex"], m["heightMacroTexSize"] = FLAT_H, msize
+    m["heightDetailTex"], m["heightDetailTexSize"] = FLAT_H, dsize * TEX_SQ
+    m["heightMacroTex"], m["heightMacroTexSize"] = FLAT_H, msize * TEX_SQ
     return {name: m}
 SURFACES = {}
 for i, args in enumerate((
@@ -173,22 +175,22 @@ pretty(os.path.join(T, "main.materials.json"), {
         # Texture repeat sizes (metres) must divide the 256 m terrain-follow step, or the texture
         # pattern shifts under the car at every terrain move (in-game 2026-10-10: macro 80 m / base 512 m
         # made 24% of the view change at each commit; 64 m / 256 m makes it pixel-identical).
-        "aoBaseTex": B + "bngEarth_base_ao.png", "aoBaseTexSize": 256,
+        "aoBaseTex": B + "bngEarth_base_ao.png", "aoBaseTexSize": 256 * TEX_SQ,
         "aoDetailStrength": [1, 0], "aoDetailTex": A + "dirt_crumbly/t_dirt_crumbly_ao.png",
-        "aoMacroTex": A + "macro_clumply/t_macro_clumpy_ao.png", "aoMacroTexSize": 64,
-        "baseColorBaseTex": B + "bngEarth_base_b.png", "baseColorBaseTexSize": 256,
+        "aoMacroTex": A + "macro_clumply/t_macro_clumpy_ao.png", "aoMacroTexSize": 64 * TEX_SQ,
+        "baseColorBaseTex": B + "bngEarth_base_b.png", "baseColorBaseTexSize": 256 * TEX_SQ,
         "baseColorDetailStrength": [0.25, 0], "baseColorDetailTex": A + "dirt_crumbly/t_dirt_crumbly_b.png",
-        "baseColorMacroStrength": [0.12, 0.08], "baseColorMacroTex": A + "macro_clumply/t_macro_clumpy_b.png", "baseColorMacroTexSize": 64,
+        "baseColorMacroStrength": [0.12, 0.08], "baseColorMacroTex": A + "macro_clumply/t_macro_clumpy_b.png", "baseColorMacroTexSize": 64 * TEX_SQ,
         "detailDistances": [0, 0, 30, 60], "macroDistances": [0, 10, 100, 3000],
-        "heightBaseTex": B + "bngEarth_base_h.png", "heightBaseTexSize": 256,
+        "heightBaseTex": B + "bngEarth_base_h.png", "heightBaseTexSize": 256 * TEX_SQ,
         "heightDetailTex": A + "dirt_crumbly/t_dirt_crumbly_h.png",
-        "heightMacroTex": A + "macro_clumply/t_macro_clumpy_h.png", "heightMacroTexSize": 64,
-        "normalBaseTex": B + "bngEarth_base_nm.png", "normalBaseTexSize": 256,
+        "heightMacroTex": A + "macro_clumply/t_macro_clumpy_h.png", "heightMacroTexSize": 64 * TEX_SQ,
+        "normalBaseTex": B + "bngEarth_base_nm.png", "normalBaseTexSize": 256 * TEX_SQ,
         "normalDetailStrength": [0.8, 0], "normalDetailTex": A + "dirt_crumbly/t_dirt_crumbly_nm.png",
-        "normalMacroStrength": [0.5, 0.2], "normalMacroTex": A + "macro_clumply/t_macro_clumpy_nm.png", "normalMacroTexSize": 64,
-        "roughnessBaseTex": B + "bngEarth_base_r.png", "roughnessBaseTexSize": 256,
+        "normalMacroStrength": [0.5, 0.2], "normalMacroTex": A + "macro_clumply/t_macro_clumpy_nm.png", "normalMacroTexSize": 64 * TEX_SQ,
+        "roughnessBaseTex": B + "bngEarth_base_r.png", "roughnessBaseTexSize": 256 * TEX_SQ,
         "roughnessDetailStrength": [1, 0], "roughnessDetailTex": A + "dirt_crumbly/t_dirt_crumbly_r.png",
-        "roughnessMacroStrength": [0, 0.8], "roughnessMacroTex": A + "macro_clumply/t_macro_clumpy_r.png", "roughnessMacroTexSize": 64,
+        "roughnessMacroStrength": [0, 0.8], "roughnessMacroTex": A + "macro_clumply/t_macro_clumpy_r.png", "roughnessMacroTexSize": 64 * TEX_SQ,
     },
     **SURFACES,
     "beamngEarthTerrainMaterialTextureSet": {
@@ -215,15 +217,11 @@ for n in BASE_SIZES:
     Image.new("L", (n, n), 175).save(os.path.join(T, f"bngEarth_base_h{suf}.png"), optimize=True)
 Image.new("L", (1024, 1024), 128).save(os.path.join(T, "bngEarth_flat_h_1024.png"), optimize=True)   # detail size
 # importMaps inputs, sized like the terrain block (N = 1024, docs/V1_1_SPEC.md 1a; and 512 for the
-# M4 block, docs/V1_4_SPEC.md 3.5: the layer map must match the heightmap size): one all-white
-# layer map (material 0 everywhere) and a flat 16-bit heightmap per size. The v1 2048-sample files
-# are removed.
-for n in (1024, 512):
+# M4 block, docs/V1_4_SPEC.md 3.5; 2048 for the 2 km block at 1 m, --block 2048: the layer map must match the
+# heightmap size): one all-white layer map (material 0 everywhere) and a flat 16-bit heightmap per size.
+for n in (2048, 1024, 512):
     Image.new("RGB", (n, n), (255, 255, 255)).save(os.path.join(T, f"beamngEarth_layer_{n}.png"), optimize=True)
     Image.new("I;16", (n, n), 0).save(os.path.join(T, f"beamngEarth_flat_{n}.png"), optimize=True)
-for old in ("beamngEarth_layer_2048.png", "beamngEarth_flat_2048.png"):
-    if os.path.exists(os.path.join(T, old)):
-        os.remove(os.path.join(T, old))
 
 # (the preview, the whole Earth as the world map shows it: tools/make_level_preview.py)
 print("ok")

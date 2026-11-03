@@ -468,8 +468,8 @@ do
   T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
 end
 -- geotiles (server --geo-tiles on): a tile in its own frame is made where its placement puts it in the anchor's
--- world; a rebase moves its Forest (nothing made again) unless it must collide, then it is made again at the new
--- placement; it is no ghost and needs nothing from the server again
+-- world; a rebase moves its Forest at once, then it is made again at the new placement (far too: the engine draws
+-- far impostors without the Forest's transform); it is no ghost and needs nothing from the server again
 do
   local gd = require('beamngEarth/geodesy')
   local gt = require('beamngEarth/geotile')
@@ -512,16 +512,21 @@ do
   trees.transform(xf, gd, B)
   T.check(trees.status().tiles == 1 and count() == 35, 'kept across the rebase, no ghost')
   T.check(trees.geoMoved == 1, 'placed again')
-  -- as far from the player in the new world: drawn moved, nothing made again
-  trees.update(21, { x = 1000, y = 0 })
-  T.check(trees.made == made and count() == 35, 'far: its Forest moved, no item made again')
+  -- its Forest takes the move at once (drawn in place near); far as well as near its items are made again at the
+  -- new placement and the Forest goes back to the origin (the engine draws far items' impostors without the Forest's
+  -- transform: whole tiles floated 767 m off, 2026-11-01)
   local f
   for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and math.abs(o.pos.x) > 1 then f = o end end
   T.check(f ~= nil, 'its Forest took the move')
-  -- the player at it: it must collide, made again at its placement in the new world
+  for _ = 1, 4 do trees.update(21, { x = 1000, y = 0 }) end
+  T.check(trees.geoFlushed == 1 and trees.made == made + 35 and count() == 35,
+    'far: made again (once) at the new placement: ' .. tostring(trees.geoFlushed) .. ' ' .. (trees.made - made))
+  f = nil
+  for _, o in pairs(S.objects) do if o.class == 'Forest' and o.pos and math.abs(o.pos.x) > 1 then f = o end end
+  T.check(f == nil, 'its Forest back at the origin')
+  -- the player at it: it collides, its higher ranks made too, not made again
   for _ = 1, 4 do trees.update(21, { x = 0, y = 0 }) end
-  T.check(trees.geoFlushed == 1 and trees.made == made + 50 and count() == 50,
-    'near: made again (once) at the new placement: ' .. tostring(trees.geoFlushed) .. ' ' .. (trees.made - made))
+  T.check(trees.geoFlushed == 1 and count() == 50, 'near: its higher ranks added, no second flush')
   w = off(gt.placement(tf, B, 0, 0, 60))
   T.check(w < 1e-6, 'at the new placement: ' .. w)
   -- its drop by key, whatever the anchor

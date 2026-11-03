@@ -73,8 +73,21 @@ data and little CPU: the world is built on each player's computer.
   the world can't load without it.
 - A player who joins is sent to where the others are, and each player's car shows in the right place in everyone's
   world, with its dents. Other players show on the world map (M) as arrows.
-- Each player's app builds the world around them on their own computer.
-<!-- Shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
+- Each player's app builds the world around them on their own computer, and this server shares the slowest part of
+  it (in testing): the road levelling plans of each map area that a player builds come to the server, which keeps
+  them in `Resources/Server/BeamNGEarth/store` and sends them to every player who comes there later, this session or
+  the next. Nothing to set up or forward: it goes over the BeamMP connection. Near the top of
+  `Resources/Server/BeamNGEarth/main.lua`: `G.SHARE_STORE_MB` (the store's size, 2048 MB; the pieces used longest ago
+  go first) and `G.SHARE_OUT_KBPS` (how fast the server sends them, 1024 KB/s for all players together).
+- Baked packs: `.bnge` files of whole areas put in `Resources/Server/BeamNGEarth/bake/` are served the same way to
+  players with the matching BeamNG.Earth version.
+- Share helper (in testing): the server's own machine can build the areas round the players before they get there.
+  Run BeamNG.Earth's world server next to the BeamMP server, from BeamNG.Earth's source (the same version as the
+  players):
+  `python3 server/sharehelper.py --share-dir <this server's folder>/Resources/Server/BeamNGEarth --cache <a folder
+  for its map data> --procs 4` (`--procs`: how many of the machine's cores it uses). It needs internet access and
+  a few GB of disk for each area.
+<!-- v1 shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
 - (Turned off for now: each player builds their own world, and the setting below does nothing yet.) Players near
   each other share one world origin and split the work of building the world: each piece of the distant
   landscape is built once and sent to the others. For that, the other players must reach each player's computer on

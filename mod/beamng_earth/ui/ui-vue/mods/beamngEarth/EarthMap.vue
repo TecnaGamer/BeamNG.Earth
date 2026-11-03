@@ -325,7 +325,7 @@
 
         <div class="panel-sub">Latitude, longitude</div>
         <div class="panel-row">
-          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="36.5785, -118.2923" maxlength="80"
+          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="36.5785, -118.2923 or a map link" maxlength="400"
                  @keydown.enter.stop.prevent="goText" @keydown.esc.stop.prevent="coordText = ''" />
           <button class="map-btn primary" :disabled="!!state.cannotGo || !coordText.trim()" @click="goText">Go</button>
           <button class="map-btn" :disabled="!coordText.trim()" @click="saveText">Save</button>
@@ -437,7 +437,7 @@ function engineLua(script, cb) {
 function poll() {
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapState and beamngEarth_settings.uiMapState() or nil", s => {
     if (!s) { state.value = { places: [], recent: [], missing: true }; return }
-    state.value = { places: [], recent: [], ...s }
+    state.value = { ...s, places: toArray(s.places), recent: toArray(s.recent) }
     if (!s.others && playersPanel.value) closePlayers()   // (out of the session: not open again by itself in the next)
     if (followingPlayer()) {
       const o = followedPlayer.value
@@ -1402,10 +1402,7 @@ const placesMsg = ref(""), placesMsgError = ref(false)
 let confirmTimer = null
 
 // an empty Lua table arrives as {} (an object), not []
-function toArray(v) {
-  if (Array.isArray(v)) return v
-  return v && typeof v === "object" ? Object.values(v) : []
-}
+function toArray(v) { return mm.luaList(v) }
 const placeList = computed(() => toArray(state.value.places))
 const recentList = computed(() => toArray(state.value.recent))
 
@@ -1428,7 +1425,7 @@ function recentDetail(r) {
 function placesCall(script, okText, onOk) {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiPlaces and beamngEarth_settings.${script} or nil`, res => {
     if (!res) { placesMsg.value = "BeamNG.Earth is not loaded"; placesMsgError.value = true; return }
-    state.value = { ...state.value, places: res.places, recent: res.recent, cannotGo: res.cannotGo }
+    state.value = { ...state.value, places: toArray(res.places), recent: toArray(res.recent), cannotGo: res.cannotGo }
     if (res.ok === false && res.error) { placesMsg.value = res.error; placesMsgError.value = true }
     else if (okText !== undefined) { placesMsg.value = okText; placesMsgError.value = false }
     if (res.ok && onOk) onOk()
@@ -1648,8 +1645,7 @@ function fmtMiles(m) {
 
 // ---- search --------------------------------------------------------------------------------
 function allPlaces() {
-  const s = state.value
-  return [...(s.places || []), ...(s.recent || []).map(r => ({ ...r, name: r.name || r.text }))]
+  return mm.searchList(state.value.places, state.value.recent)
 }
 
 function goTo(lat, lon, name) {
@@ -1696,7 +1692,7 @@ function liveSearch() {
         searching.value = false
         const online = toArray(res.results)
         results.value = [...local, ...online]
-        if (!results.value.length) searchMsg.value = res.error ? "Address search unavailable (offline?)" : "Nothing found"
+        if (!results.value.length) searchMsg.value = res.error ? (res.text || "Address search unavailable (offline?)") : "Nothing found"
       })
     }
     setTimeout(poll, 150)

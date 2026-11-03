@@ -15,6 +15,7 @@ mod tunnelcover;
 mod gradesep;
 mod lamps;
 mod decks;
+mod levels;
 mod tapers;
 mod islands;
 mod ribbons;
@@ -1335,7 +1336,8 @@ fn measure_row32(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first
 /// core half width h, carriageway half width rh, road rid): the weights, the inverse-distance blend and the max weight
 /// as the numpy code, the (segment, point) pairs in its order (segments, bucket rows, points sorted by bucket). On a
 /// road's carriageway another road (past its own rh: its verge and blend) more than wall_cut above or below it does not
-/// count: a street's sidewalk over a cutting dragged the road in it up its wall (Munich's McGraw-Graben). Behind a
+/// count (less and less over yield_ramp before: in height and past its rh): a street's sidewalk over a cutting dragged
+/// the road in it up its wall (Munich's McGraw-Graben). Behind a
 /// cutting's wall (an up cut side, wall_flat deep: under the retaining wall's top) no other road at another level counts
 /// at all: the terrain's 2 m lattice drew the step as teeth in front of the wall where a street above came near it.
 /// grading.bank: a road's cross slope at each vertex of its centreline xy (n, 2) (m per m toward its left; a curve
@@ -1403,6 +1405,9 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     out.into_pyarray(py)
 }
 
+/// grade_points: a road's own rid of its rid (grading.PlanPack: a pass road's legs carry their leg in the bits from 44)
+const LEG_ROAD_MASK: i64 = (1i64 << 44) - 1;
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
@@ -1410,10 +1415,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>, h: PyReadonlyArray1<'py, f64>,
                      rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray1<'py, u8>, cut: PyReadonlyArray2<'py, f64>,
                      ba: PyReadonlyArray1<'py, f64>, bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
+                     link: PyReadonlyArray1<'py, u8>, extrap: f64,
                      lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
                      bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
-                     sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64)
-                     -> Bound<'py, PyArray1<f64>> {
+                     sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
+                     yield_ramp: f64) -> Bound<'py, PyArray1<f64>> {
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
     let (a, b, za, zb, h) = (a.as_array(), b.as_array(), za.as_array(), zb.as_array(), h.as_array());
     let (rh, rid) = (rh.as_array(), rid.as_array());
@@ -1424,6 +1430,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
     // (segments): a mountain pass road's (grading.Plan.steep): its sides fall to the natural ground at steep_run, from
     // steep_t_min, between its retaining wall and its parapet
     let steep = steep.as_array();
+    // (segments): bit 0 the plan goes on before it, bit 1 after it. A point past such an end takes the segment's line
+    // carried on (up to extrap m), not its end height: on a grade the ends' heights blended in, before and after, made
+    // a washboard of the plan's vertex step (4 m, +-3.5 cm on the Stelvio's 10 %; the user, 2026-11-01: "the road
+    // still feels bumpy"). A plan's own end (a dead end, a cell's edge) keeps its end height.
+    let link = link.as_array();
     let banked: Vec<bool> = (0..h.len()).map(|s| ba[s] != 0.0 || bb[s] != 0.0).collect();
     let sharp = cut.iter().any(|v| v.is_finite());
     let has_cut: Vec<bool> = (0..h.len()).map(|s| (0..6).any(|k| cut[[s, k]].is_finite())).collect();
@@ -1512,6 +1523,13 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                     let (ddx, ddy) = (qx - t * abx, qy - t * aby);
                     let d = (ddx * ddx + ddy * ddy).sqrt();       // (not hypot: libm's is ~5x dearer, the pairs loop's main cost)
                     let mut target = za[s] + (zb[s] - za[s]) * t;
+                    if link[s] != 0 && l2 > 1e-12 {
+                        let tu = (qx * abx + qy * aby) / l2;
+                        let e = extrap / l2.sqrt();
+                        let lo = if link[s] & 1 != 0 { -e } else { 0.0 };
+                        let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
+                        target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
+                    }
                     if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
                         let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
                         target += (ba[s] + (bb[s] - ba[s]) * t) * off;
@@ -1523,8 +1541,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         if d > far0 {
                             continue;       // (nothing below reaches this far: the box's corners)
                         }
-                        if d - rh[s] < cdeep[idx] || (d <= rh[s] && carz[idx].is_nan()) {
-                            cdeep[idx] = d - rh[s];
+                        // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
+                        // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
+                        let cr = if steep[s] != 0 { h[s] } else { rh[s] };
+                        if d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan()) {
+                            cdeep[idx] = d - cr;
                             carz[idx] = target;
                             carid[idx] = rid[s];
                         }
@@ -1588,10 +1609,25 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                     // (a carriageway first: a road's cutting band reaching over another road's carriageway at another level
                     // (its "climb" was that road's embankment) does not pull that road's ground; a bridge's abutment sank
                     // 2.5 m under the deck into the street below, a wall cars hit, GitHub #108 Meppen)
-                    let on_other_car = carid[idx] >= 0 && carid[idx] != rid[s] && (target - carz[idx]).abs() > wall_cut;
-                    let yields = d > rh[s] && (on_other_car
-                        || (bid[idx] >= 0 && bid[idx] != rid[s] && (target - bz[idx]).abs() > wall_cut));
-                    if w > 0.0 && !drop && !yields && !(d > hs && ahead < side && target < top[idx] - wall_cut) {
+                    // (by how much: fully from wall_cut apart and yield_ramp past its carriageway, none from yield_ramp
+                    // less and at its edge; giving way at once there stepped a hairpin's lane 27 cm where its other leg
+                    // crossed wall_cut, the Stelvio, 2026-11-01)
+                    let ramp = yield_ramp.max(1e-6);
+                    let apart = |dz: f64| smooth((dz.abs() - wall_cut + ramp) / ramp);
+                    let mut yf = 0.0f64;
+                    if carid[idx] >= 0 && carid[idx] != rid[s] {
+                        yf = apart(target - carz[idx]);
+                    }
+                    // (a cutting's band: another road's alone; a pass road's legs (grading.LEG_RID_SHIFT: the same road)
+                    // blend over each other's bands, the ground between them a slope: giving way there drew a 5 m step
+                    // along the band's edge, which notches at every vertex: spikes between a hairpin's legs, the user's
+                    // report 2026-11-01. On each other's lanes they still give way, above)
+                    if bid[idx] >= 0 && bid[idx] & LEG_ROAD_MASK != rid[s] & LEG_ROAD_MASK {
+                        yf = yf.max(apart(target - bz[idx]));
+                    }
+                    yf *= smooth((d - rh[s]) / ramp);
+                    if w > 0.0 && !drop && yf < 1.0 && !(d > hs && ahead < side && target < top[idx] - wall_cut) {
+                        let w = w * (1.0 - yf);
                         let r = d / blend_r;
                         let mut wb = w / (1.0 + r * r);
                         if sep {
@@ -4706,6 +4742,37 @@ fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: 
 }
 
 
+/// grading.hairpin_cores: for each of the points rows (indices into a polyline xy (k, 2)), its distance to the nearest
+/// stretch of the same line that is folded back by it: nearer than ratio x the distance along the line between them (a
+/// hairpin's other leg across its narrow middle, not the turn round it nor its own leg); infinity where none is.
+#[pyfunction]
+fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: numpy::PyReadonlyArray1<'py, i64>,
+                       ratio: f64) -> Bound<'py, PyArray1<f64>> {
+    let (p, rows) = (xy.as_array(), rows.as_array());
+    let k = p.nrows();
+    let mut s = vec![0.0f64; k];
+    for i in 1..k {
+        s[i] = s[i - 1] + (p[[i, 0]] - p[[i - 1, 0]]).hypot(p[[i, 1]] - p[[i - 1, 1]]);
+    }
+    let out: Vec<f64> = rows.iter().map(|&r| {
+        let i = r.clamp(0, k as i64 - 1) as usize;
+        let (x, y) = (p[[i, 0]], p[[i, 1]]);
+        let mut best = f64::INFINITY;
+        for j in 0..k.saturating_sub(1) {
+            let (ax, ay, bx, by) = (p[[j, 0]], p[[j, 1]], p[[j + 1, 0]], p[[j + 1, 1]]);
+            let (dx, dy) = (bx - ax, by - ay);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 1e-12 { (((x - ax) * dx + (y - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            let d = (x - ax - t * dx).hypot(y - ay - t * dy);
+            if d < best && d < ratio * (s[j] + t * (s[j + 1] - s[j]) - s[i]).abs() {
+                best = d;
+            }
+        }
+        best
+    }).collect();
+    out.into_pyarray(py)
+}
+
 /// vegetation.regional: the groups of a region from the generic ones (group, height m, lat, lon, ESA WorldCover class,
 /// a hashed [0, 1) per item) by a coarse climate. ids: the group ids (deciduous, conifer, shrub, rock, pine_west, palm,
 /// juniper, desert_shrub, desert_rock, oak_west, tropical); wc: WorldCover's (shrub, bare, grass, built) classes.
@@ -5254,12 +5321,18 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tapers::lane_flow, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_shifts, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_gaps, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_tents, m)?)?;
+    m.add_function(wrap_pyfunction!(levels::tag_level_ranges, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::gradesep_gather, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
     m.add_function(wrap_pyfunction!(islands::road_cycles, m)?)?;
     m.add_function(wrap_pyfunction!(ribbons::ribbon_edges, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::mask_segments, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::value_noises, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::pad_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::paint_pads, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::photo_ghosts, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::dash_pieces, m)?)?;
     m.add_function(wrap_pyfunction!(power::substation_yard, m)?)?;
@@ -5339,6 +5412,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sharp_probes, m)?)?;
     m.add_function(wrap_pyfunction!(sharp_cuts, m)?)?;
     m.add_function(wrap_pyfunction!(tight_bends, m)?)?;
+    m.add_function(wrap_pyfunction!(fold_clearance, m)?)?;
     m.add_function(wrap_pyfunction!(regional_groups, m)?)?;
     m.add_function(wrap_pyfunction!(clip_segments, m)?)?;
     m.add_function(wrap_pyfunction!(first_probe_near_lines, m)?)?;
@@ -5390,6 +5464,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
-    m.add("VERSION", 123)?;
+    m.add("VERSION", 142)?;
     Ok(())
 }

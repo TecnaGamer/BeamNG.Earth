@@ -6,7 +6,8 @@
 -- covers ~1 km around the player: the arrows go to the farthest point of the planned route ahead (up to LOOKAHEAD_M)
 -- that the local graph reaches, set again as the player advances or the graph moves on. Leaving the route by more
 -- than OFF_ROUTE_M plans it again from where the player is. Without a planned route (offline): steered toward the
--- destination through the graph node nearest it. Within ARRIVE_M: arrived, cleared.
+-- destination through the graph node nearest it. Arrived (M.arrived: at the planned route's end, else within ARRIVE_M):
+-- cleared.
 local M = {}
 
 M.CHECK_S = 1.0
@@ -20,6 +21,19 @@ M.VIA_M = 250           -- the arrows' path is pinned to the route by a waypoint
                         -- its own shortest way to the target: Fells Point 2026-10-14, a loop round a block)
 M.OFF_ROUTE_M = 120     -- farther from the route: planned again ...
 M.REROUTE_S = 20        -- ... at most this often
+-- Driving back along the route (turned round on the same road: never OFF_ROUTE_M off it, GitHub #623): the route's
+-- remaining distance grown by BACKTRACK_M over the least it was since the plan, moving faster than BACKTRACK_MPS:
+-- planned again from where the car is, the way it now drives.
+M.BACKTRACK_M = 200
+M.BACKTRACK_MPS = 5
+-- Arrived, on a planned route: its end within ROUTE_ARRIVE_M along it (GitHub #623: 40 m from the destination in a
+-- straight line ended the guidance with 82 m and two turns of route still to go round a corner).
+M.ROUTE_ARRIVE_M = 30
+-- A route request that failed (offline for a moment, the routing service busy or timing out) is asked again after
+-- ROUTE_RETRY_S, twice as long after each failure in a row up to ROUTE_RETRY_MAX_S: one failure left the GPS steering
+-- in a straight line for the rest of the drive, "no road route: heading straight there" (GitHub #103, #38).
+M.ROUTE_RETRY_S = 15
+M.ROUTE_RETRY_MAX_S = 240
 -- Past the local graph's edge the arrows go on along the planned route itself (the user, 2026-10-14, a Cannonball run:
 -- "the in game arrows would keep ending and I'd have to wait a while before they continue": the graph only covers the
 -- terrain block, which lags a fast car): the stock planner's path gets the route's next TAIL_M appended, a point every
@@ -60,6 +74,8 @@ local autoPath = nil    -- the node ids last given to the AI
 local autoSerial = nil  -- the graph (navgraph applies) they were taken from
 local stillSince = nil
 local progRemaining, progAt = nil, nil   -- the remaining route distance last seen go down, and when (AUTO_NOPROGRESS_S)
+local leastRemaining = nil  -- the least remaining route distance since the route came (BACKTRACK_M)
+local routeFails = 0        -- route requests failed in a row (ROUTE_RETRY_S)
 local stuckTries = 0     -- AUTO_NOPROGRESS_S spells in a row without progress
 local recoverAhead       -- (below)
 local paused = false    -- the AI holds the car (world server away)
@@ -216,6 +232,7 @@ function M.setDestination(lat, lon, name)
   if not lat or not lon then return false end
   dest = { lat = lat, lon = lon, name = name }
   route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
+  leastRemaining, routeFails = nil, 0
   routedTo, lastCheck, lastRequest = nil, -math.huge, -math.huge     -- plan and route at the next update
   downloadProgress = nil         -- the previous destination's bar, not this one's (its own push is coming)
   return true
@@ -679,6 +696,30 @@ recoverAhead = function(e, nodes, i, t)
   return ok
 end
 
+-- Ask for the route (again)? route: the planned one, false (the last request failed) or nil (none asked yet); since:
+-- s since the last request; fails: requests failed in a row. Pure.
+function M.retryRoute(route, since, fails)
+  if route == nil then return true end
+  if route ~= false then return false end
+  return since >= math.min(M.ROUTE_RETRY_MAX_S, M.ROUTE_RETRY_S * 2 ^ math.max(0, (fails or 1) - 1))
+end
+
+-- Arrived? dist: straight to the destination; left: the planned route still ahead along it (nil: no route); off: the
+-- car's distance from the route. On a route: its end reached (within ROUTE_ARRIVE_M along it, on it), or the
+-- destination reached away from the route (driven to across a car park). Pure.
+function M.arrived(dist, left, off)
+  if left == nil then return dist < M.ARRIVE_M end
+  if left < M.ROUTE_ARRIVE_M and off < M.ARRIVE_M then return true end
+  return dist < M.ARRIVE_M and off > M.ARRIVE_M
+end
+
+-- Driving back along the route? least: the least remaining distance seen (nil: none yet), remaining: now, speed: the
+-- car's (m/s). -> backtracking, the least remaining to keep. Pure.
+function M.backtracking(least, remaining, speed)
+  if not least or remaining < least then return false, remaining end
+  return remaining - least > M.BACKTRACK_M and speed > M.BACKTRACK_MPS, least
+end
+
 -- Every frame (anchor: the current geodesy anchor; player: {x, y, lat, lon}): the route kept to the destination.
 function M.update(anchor, player)
   if not dest or not anchor or not player then return end
@@ -694,15 +735,16 @@ function M.update(anchor, player)
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
         route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev }
-        routeError, enu, routedTo = nil, nil, nil
+        routeError, enu, routedTo, leastRemaining, routeFails = nil, nil, nil, nil, 0
       else
         routeError = r.error or 'no route'
+        routeFails = routeFails + 1
         if not route then route = false end
       end
     elseif now - lastRequest > 30 then
       pendingId = nil                      -- no answer: try again below
     end
-  elseif route == nil then
+  elseif M.retryRoute(route, now - lastRequest, routeFails) then
     requestRoute(player)
   end
 
@@ -710,11 +752,11 @@ function M.update(anchor, player)
   local dx, dy = tx - player.x, ty - player.y
   local dist = math.sqrt(dx * dx + dy * dy)
   info = { dist = dist, bearing = M.bearing(player.x, player.y, tx, ty), remaining = dist }
-  if dist < M.ARRIVE_M then
+  local function arrive()
     if ui_message then pcall(ui_message, 'Arrived: ' .. (dest.name or 'destination'), 5, 'beamngEarthGps') end
     M.clear()
-    return
   end
+  if not route and dist < M.ARRIVE_M then arrive() return end
   local m = rawget(_G, 'map') and map.getMap and map.getMap()
   local nodes = m and m.nodes
   autoKeep(nodes, now)
@@ -733,6 +775,14 @@ function M.update(anchor, player)
     local remaining = e.cum[n] - (e.cum[i] + t * (e.cum[i + 1] - e.cum[i]))
     info.remaining = remaining + off
     info.off = off
+    if M.arrived(dist, remaining, off) then arrive() return end
+    local speed = math.sqrt(vx * vx + vy * vy)
+    local back
+    back, leastRemaining = M.backtracking(leastRemaining, info.remaining, speed)
+    if back and not pendingId and now - lastRequest > M.REROUTE_S then
+      leastRemaining = nil
+      requestRoute(player)
+    end
     if auto and not paused then
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end

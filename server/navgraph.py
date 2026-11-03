@@ -37,6 +37,9 @@ NARROW_M = 5.5              # narrower two-way town streets need slower encounte
 NARROW_MS = 30.0 / 3.6      # doors); a narrow rural road keeps its limit (the Netherlands' 60 km/h country roads, ~5 m
                             # wide: the AI held 30 km/h on all of them, GitHub #451)
 RING_MS = 30.0 / 3.6
+# m a mountain pass road's AI half width keeps inside its edge lines (roads._mountain_roads: a wall or a parapet right at
+# the edge; the AI ran its outer wheels onto the verge on the Stelvio's hairpins and hit a parapet's end, 2026-11-01)
+MOUNTAIN_EDGE_M = 0.4
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
 
 
@@ -292,6 +295,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             else:
                 lo, li = _lanes(w, direction != 0, spec.lanes)
             profile = _speed_profile(xy, w, direction != 0, urban=bool(getattr(spec, "urban", True)))
+            # (a pass road's widened hairpins: its half width there, roads.hairpin_extra on its whole line)
+            hx = roads.hairpin_extra(frame, spec, np.asarray(p, np.float64)[:, :2])
+            hxm = np.zeros(len(full)) if hx is None else np.interp(full, s, hx)
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
                 j, nb = (0, 1) if end == 0 else (len(names) - 1, len(names) - 2)
@@ -320,7 +326,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         pending_by[nm] = (-w, fid)
                 legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(w / 2, 2)])
+                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv,
+                              round(w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0)
+                                    + float(max(hxm[j], hxm[j + 1])), 2)])
                 edge_fids.append(fid)
     import islands
     ring = islands.ring_directions(ring_cands, left_hand)
@@ -403,7 +411,7 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
         wide = max(x[1].width for x in a) / 2
         jx, jy, jz = nodes[name][:3]
         app = []
-        for arm, _ in put:
+        for arm, what in put:
             full = next(x for x in a if x[0] == arm[0] and x[2] is arm[2])
             fid, spec, u, _, end, *_ = full
             nb, incoming = approaches.get((name, fid, end), (None, False))
@@ -418,9 +426,10 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
             phase = 0 if abs(float(u @ axis)) > 0.7 else 1
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none
             # where no spot is clear of the carriageways (no prop there either)
-            pp = furniture.signal_spot(np.array([jx, jy]), u, right, wide, spec.width / 2, lines)
+            side, yaw = furniture.approach_pose(u, what, left_hand)
+            pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines)
             head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(jz + 0.15, 2),
-                                                  round(furniture._yaw(right[0], right[1]), 1)]
+                                                  yaw]
             app.append([nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
                         round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head)
         if app:
@@ -433,10 +442,14 @@ LEFT_HAND = {"GB", "IE", "IM", "JE", "GG", "MT", "CY", "IN", "PK", "BD", "LK", "
              "SG", "BN", "TH", "TL", "HK", "MO", "AU", "NZ", "PG", "FJ", "WS", "TO", "KI", "SB", "TV", "NR", "NU",
              "CK", "ZA", "NA", "BW", "ZW", "ZM", "MZ", "MW", "KE", "TZ", "UG", "LS", "SZ", "MU", "SC", "SH", "FK",
              "JM", "BS", "BB", "TT", "GY", "SR", "AG", "DM", "GD", "KN", "LC", "VC", "VG", "VI", "AI", "KY", "TC",
-             "BM", "MS", "PN"}
+             "BM", "MS", "PN", "NF", "CX", "CC"}     # (the last three: Australia's external territories)
 TURN_ON_RED = {"US", "CA"}
-# speed limits posted in mph (the rest: km/h); the US territories, the UK and its crown dependencies, Liberia, Myanmar
-MPH_COUNTRIES = {"US", "PR", "VI", "GU", "AS", "MP", "UM", "GB", "IM", "JE", "GG", "LR", "MM"}
+# speed limits posted in mph (the rest: km/h); the US territories, the UK and its crown dependencies, Liberia, Myanmar;
+# the Caribbean's mph countries and the US's former Pacific trust territories (Wikipedia "Miles per hour": Antigua and
+# Barbuda, the Bahamas, Belize, Dominica, Grenada, Saint Kitts and Nevis, Saint Lucia, Saint Vincent, the Marshall
+# Islands, Micronesia, Palau: their limits were drawn in km/h)
+MPH_COUNTRIES = {"US", "PR", "VI", "GU", "AS", "MP", "UM", "GB", "IM", "JE", "GG", "LR", "MM",
+                 "AG", "BS", "BZ", "DM", "GD", "KN", "LC", "VC", "MH", "FM", "PW"}
 RED_YELLOW = {"GB", "IE", "DE", "AT", "CH", "LI", "NL", "BE", "LU", "DK", "NO", "SE", "FI", "IS", "PL", "CZ", "SK",
               "HU", "SI", "HR", "BA", "RS", "ME", "MK", "AL", "RO", "BG", "LT", "LV", "EE", "UA", "BY", "RU", "IL"}
 

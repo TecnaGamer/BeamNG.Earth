@@ -895,6 +895,32 @@ class CacheTest(Sources, SmallBlocks, unittest.TestCase):
         left = [d for d, _, f in os.walk(root) if "ok" in f]
         self.assertEqual(left, [])
 
+    def test_old_mirror_folders_are_read_and_packed(self):
+        """A mirror folder from before the pack (one .npy per array) is still read, the same arrays, and on Linux
+        packed into one file for the next read (mapdata.PACK_FILE)."""
+        cache = os.path.join(self.tmp, "cache")
+        md, _ = self.mapdata(cache=cache)
+        digest = md.cell(mf.CELL).digest()
+        p = md.path(mf.CELL, "roads")
+        d = md._mirror_dir(p)
+        packed = md._mirror_load(p)
+        self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)))
+        for n in os.listdir(d):             # the folder as an older version wrote it
+            os.remove(os.path.join(d, n))
+        for n, a in packed.items():
+            np.save(os.path.join(d, n + ".npy"), np.asarray(a), allow_pickle=False)
+        with open(os.path.join(d, "ok"), "w") as fh:
+            fh.write(md._stamp(p) + "\n" + "\n".join(packed) + "\n")
+        old = md._mirror_load(p)
+        self.assertEqual(sorted(old), sorted(packed))
+        for n in packed:
+            self.assertEqual(old[n].dtype, packed[n].dtype)
+            self.assertEqual(np.asarray(old[n]).tobytes(), np.asarray(packed[n]).tobytes())
+        if os.name != "nt":
+            self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)), "packed again")
+        md2, _ = self.mapdata(cache=cache)
+        self.assertEqual(md2.cell(mf.CELL).digest(), digest)
+
     def test_corrupt_layer_files_are_rebuilt(self):
         """A damaged layer file (truncated, a flipped byte in the deflate stream, an old layout without
         provenance) is a miss: rebuilt from the raw blocks, same digest, not a permanent error."""

@@ -103,6 +103,47 @@ class Station:
     trusted: bool = True    # its records current (TRUST_CONF): a station mapped as one building needs it
 
 
+def _candidates(f):
+    """[(feature index, classify's result, confidence)] of a places layer's fuel-station candidates, made once per layer
+    (kept on it): classify over every place of a city cell was ~0.3 s of each of its road tiles (47k places, 2026-11-02).
+    Pure given the layer."""
+    got = f.__dict__.get("_fuel_candidates")
+    if got is not None:
+        return got
+    cid = f.__dict__.get("_bnge_cell")
+    import roads
+    mk = (cid, "fuel_candidates") if cid is not None else None
+    if mk is not None:          # (this process's, for another copy of the layer: the map data reloads them)
+        with roads._FACTS_LOCK:
+            got = roads._FACTS_MEM.get(mk)
+        if got is not None:
+            f.__dict__["_fuel_candidates"] = got
+            return got
+    a = f.attrs
+
+    def col(k, i):
+        v = a[k][i] if k in a else None
+        return "" if v is None else str(v)
+    out = []
+    for i in range(len(f)):
+        c = classify(col("basic_category", i), col("taxonomy", i), col("brand_wikidata", i),
+                     col("operating_status", i) or None, col("brand_name", i))
+        if c is None:
+            continue
+        try:
+            conf = float(col("confidence", i) or 1.0)
+        except ValueError:
+            conf = 1.0
+        out.append((i, c, conf, col("name", i), col("brand_name", i), col("brand_wikidata", i), col("src_dataset", i)))
+    f.__dict__["_fuel_candidates"] = out
+    if mk is not None:
+        with roads._FACTS_LOCK:
+            roads._FACTS_MEM[mk] = out
+            while len(roads._FACTS_MEM) > roads.FACTS_MEM_KEPT:
+                roads._FACTS_MEM.popitem(last=False)
+    return out
+
+
 def pins(frame, layers):
     """Pins of the fuel-station candidates among places layers (mapgeom.Features, one per map cell; a place in two
     cells is taken once, by id), in frame (an EnuFrame)."""
@@ -110,30 +151,16 @@ def pins(frame, layers):
     for f in layers:
         if f is None or len(f) == 0:
             continue
-        a = f.attrs
-
-        def col(k, i):
-            v = a[k][i] if k in a else None
-            return "" if v is None else str(v)
         xy = None
-        for i in range(len(f)):
+        for i, c, conf, name, brand, wikidata, src in _candidates(f):
             fid = str(f.ids[i])
             if fid in seen:
-                continue
-            c = classify(col("basic_category", i), col("taxonomy", i), col("brand_wikidata", i),
-                         col("operating_status", i) or None, col("brand_name", i))
-            if c is None:
                 continue
             seen.add(fid)
             if xy is None:
                 xy = f.xy_in(frame)
             k = f.coord_off[f.ring_off[f.part_off[i]]]
-            try:
-                conf = float(col("confidence", i) or 1.0)
-            except ValueError:
-                conf = 1.0
-            out.append(Pin(fid, float(xy[k, 0]), float(xy[k, 1]), col("name", i), col("brand_name", i),
-                           col("brand_wikidata", i), *c, conf, col("src_dataset", i)))
+            out.append(Pin(fid, float(xy[k, 0]), float(xy[k, 1]), name, brand, wikidata, *c, conf, src))
     return out
 
 

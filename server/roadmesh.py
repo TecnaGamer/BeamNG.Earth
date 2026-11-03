@@ -262,7 +262,7 @@ def _reach_past(c, box):
     return {**c, "n": np.concatenate(n).tolist()}
 
 
-GRID_M = 2.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
+GRID_M = 1.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
                         # from its south-west corner to its north-east one (probed in-game 2026-10-20)
 
 
@@ -298,25 +298,39 @@ def drawn_ground(frame, drawn, xy, q=None, cell=GRID_M):
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     if not len(xy):
         return np.zeros(0)
-    grid, i0, j0 = _height_grid(frame, drawn, xy, q, cell)
+    # (_height_grid's lattice, drawn only at the corners of the squares the points are in: sidewalks cover a fraction
+    # of a tile's bounds, and drawn (the DEM, grading, arch raise) is pointwise, so the same heights)
+    i0 = int(np.floor(xy[:, 0].min() / cell)) - 1
+    j0 = int(np.floor(xy[:, 1].min() / cell)) - 1
+    nx = int(np.ceil(xy[:, 0].max() / cell)) + 1 - i0 + 1
+    ny = int(np.ceil(xy[:, 1].max() / cell)) + 1 - j0 + 1
     gx, gy = xy[:, 0] / cell, xy[:, 1] / cell
     i, j = np.floor(gx).astype(np.int64), np.floor(gy).astype(np.int64)
-    ny, nx = grid.shape
     i -= (i - i0 == nx - 1) & (gx == i)         # a point on the grid's last line belongs to the square before it
     j -= (j - j0 == ny - 1) & (gy == j)
     li, lj = i - i0, j - j0
     ok = (li >= 0) & (lj >= 0) & (li + 1 < nx) & (lj + 1 < ny)
     li, lj = np.clip(li, 0, nx - 2), np.clip(lj, 0, ny - 2)
+    base = (lj * nx + li)[ok]
+    nodes = np.unique(np.concatenate([base, base + 1, base + nx, base + nx + 1]))
+    grid = np.full(ny * nx, np.nan)
+    if len(nodes):
+        ex, ny_ = (nodes % nx + i0) * cell, (nodes // nx + j0) * cell
+        la, lo, _ = frame.enu_to_geodetic(ex.astype(np.float64), ny_.astype(np.float64), 0.0)
+        h = np.asarray(drawn(la, lo), np.float64)
+        u = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64)
+        grid[nodes] = np.rint(u / q) * q if q else u
+    grid = grid.reshape(ny, nx)
     fx, fy = gx - i, gy - j
     a, b, c, d = grid[lj, li], grid[lj, li + 1], grid[lj + 1, li], grid[lj + 1, li + 1]
     z = np.where(fy > fx, a + fy * (c - a) + fx * (d - c), a + fx * (b - a) + fy * (d - b))
     return np.where(ok, z, np.nan)
 
 
-FOLLOW_STEP_M = 0.9     # a terrain cell whose corners are further apart holds a step (a cutting's wall, the lattice's
+FOLLOW_STEP_M = 0.45    # a terrain cell whose corners are further apart holds a step (a cutting's wall, the lattice's
 FOLLOW_MAX_UP = 0.1     # teeth): a draped surface goes at most this over its lowest corner there (the McGraw-Graben's
                         # edge lines climbed the teeth as white tents up to 1.3 m, 2026-10-22). A road would need a
-                        # ~32 % grade along a cell's diagonal to count as a step.
+                        # ~32 % grade along a cell's diagonal (GRID_M 1 m) to count as a step.
 
 
 def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M):

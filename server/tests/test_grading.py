@@ -1,7 +1,9 @@
 """Ground graded under roads (grading.py): the profile smoothing, flat across the core, untouched away from
 roads, junctions blended, the plans made once per cell, and GradedDem as a drop-in DEM."""
+import math
 import os
 import sys
+import types
 import unittest
 import unittest.mock
 
@@ -333,6 +335,14 @@ class FailingMD:
 
 
 class GraderTest(unittest.TestCase):
+    def setUp(self):
+        # (no measured road heights' provider: a test that made a Server (test_areas, test_fargeo) left one set, and
+        # the far-apart points read a cell more, 31 of 30, in the full suite only)
+        import roadz
+        p = unittest.mock.patch.object(roadz, "PROVIDER", None)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_failed_fetch_not_retried_at_once(self):
         md = FailingMD()
         g = grading.Grader(FRAME, md, lambda la, lo: np.zeros(np.shape(la)))
@@ -680,6 +690,87 @@ class UnderpassShortfallTest(unittest.TestCase):
             return float(g.apply(la, lo, np.full(1, 10.0))[0])
         self.assertAlmostEqual(motorway_z(False), 10.0, delta=0.1, msg="lidar: the road under keeps its ground")
         self.assertLess(motorway_z(True), 10.0 - 0.6 * grading.UNDER_CLEAR_M, "coarse: it dips as before")
+
+    def test_on_lidar_a_never_raised_deck_level_with_the_road_still_clears_it(self):
+        """As above, but the deck is a motorway's (never raised, APPROACH_SKIP): it cannot rise, so the road under it
+        still dips, on lidar too (the deck sat on the road: cars drove into it, 2026-10-31)."""
+        lines = [[(-300, 0), (300, 0)], [(0, -20), (0, 20)], [(0, -260), (0, -20)], [(0, 20), (0, 260)]]
+        classes = ["residential", "motorway", "motorway", "motorway"]
+
+        class Dem:
+            def coarse_at(self, lat, lon):
+                return False
+        g = grading.Grader(FRAME, FakeMD(features(lines, classes, flags=[(1, "is_bridge")])),
+                           lambda la, lo: np.full(np.shape(la), 10.0))
+        g.dem = Dem()
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
+        self.assertLess(float(g.apply(la, lo, np.full(1, 10.0))[0]), 10.0 - 0.6 * grading.UNDER_CLEAR_M,
+                        "lidar, a motorway's deck: the road under dips")
+
+
+class StreetRunsTest(unittest.TestCase):
+    # a street from x -60 to 60 in two pieces (the second drawn backwards) between junctions with side streets
+    LINES = [np.array(ln, float) for ln in ([(-300, 0), (-60, 0)], [(-60, 0), (20, 0)], [(60, 0), (20, 0)],
+                                             [(60, 0), (300, 0)], [(-60, 0), (-60, 200)], [(60, 0), (60, 200)])]
+
+    def test_a_street_dip_runs_through_its_pieces_to_its_junctions(self):
+        cls = ["tertiary"] * 4 + ["residential"] * 2
+        net, runs = grading.street_runs(self.LINES, cls, [(1, 60.0, 7.0), (2, 38.0, 1.0)])
+        self.assertEqual(net, [])
+        self.assertEqual(len(runs), 1, "both on one run")
+        xy, members, reqs = runs[0]
+        self.assertEqual(members, {1, 2})
+        np.testing.assert_allclose(xy[[0, -1]], [(-60, 0), (60, 0)])
+        self.assertAlmostEqual(float(np.hypot(*np.diff(xy, axis=0).T).sum()), 120.0)
+        np.testing.assert_allclose([r[1] for r in reqs], [60.0, 82.0], err_msg="x 0, and x 22 on the backward piece")
+        self.assertEqual([r[0] for r in reqs], [0, 0])
+
+    def test_spread_as_before_by_a_junction_on_motorways_and_rings(self):
+        cls = ["tertiary"] * 4 + ["residential"] * 2
+        near = (1, 5.0, 7.0)            # (5 m from its junction: no room for UNDER_RUN_MIN_M)
+        self.assertEqual(grading.street_runs(self.LINES, cls, [near]), ([near], []))
+        shallow = (1, 20.0, 0.3)        # (room for all of a shallow dip)
+        self.assertEqual(grading.street_runs(self.LINES, cls, [shallow])[0], [])
+        mway = (1, 60.0, 7.0)
+        self.assertEqual(grading.street_runs(self.LINES, ["motorway"] * 6, [mway]), ([mway], []))
+        ring = [np.array(ln, float) for ln in ([(0, 0), (300, 0)], [(300, 0), (300, 300)], [(300, 300), (0, 300)],
+                                                [(0, 300), (0, 0)])]
+        self.assertEqual(grading.street_runs(ring, ["tertiary"] * 4, [(0, 150.0, 5.0)]), ([(0, 150.0, 5.0)], []))
+
+
+class CoarseUnderpassTest(unittest.TestCase):
+    def test_a_street_dip_stays_on_the_street_on_coarse_elevation(self):
+        """Samara (2026-11-02): on the 30 m model a street under a bridge whose ramps the frontage roads hold down dips
+        between its own junctions only, as deep as fits there (UNDER_RUN_*); the side streets stay at their ground.
+        On lidar terrain, or with BNE_UNDERPASS_RUN=off, the dip spreads along the side streets as before."""
+        street = [[(-300, 0), (-60, 0)], [(-60, 0), (20, 0)], [(60, 0), (20, 0)], [(60, 0), (300, 0)]]
+        side = [[(-60, 0), (-60, 200)], [(60, 0), (60, 200)]]
+        bridge = [[(0, -20), (0, 20)]]
+        ramps = [[(0, -260), (0, -20)], [(0, 20), (0, 260)]]
+        frontage = [[(-150, -26), (150, -26)], [(-150, 26), (150, 26)]]
+        f = features(street + side + bridge + ramps + frontage,
+                     ["tertiary"] * 4 + ["residential"] * 2 + ["tertiary"] * 3 + ["residential"] * 2,
+                     flags=[(6, "is_bridge")])
+        pts = np.array([(0, 0), (20, 0), (60, 0), (-60, 0), (200, 0), (60, 60), (-60, 60)], float)
+
+        def heights(coarse):
+            g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+            if coarse:
+                g.dem = types.SimpleNamespace(coarse_at=lambda la, lo: True)
+            la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            return g.apply(la, lo, np.full(len(pts), 10.0))
+        fit = (60.0 - grading.UNDER_FLAT_M) * 2 * grading.UNDER_MAX_GRADE / math.pi
+        z = heights(True)
+        self.assertAlmostEqual(float(z[0]), 10.0 - fit, delta=0.3, msg="as deep as fits between its junctions")
+        self.assertLess(float(z[1]), 9.0, "on past the node where only its next piece joins")
+        np.testing.assert_allclose(z[2:5], 10.0, atol=0.1, err_msg="back up by its junctions, and beyond")
+        np.testing.assert_allclose(z[5:], 10.0, atol=0.05, err_msg="the side streets at their ground")
+        lidar = heights(False)
+        self.assertLess(float(lidar[0]), float(z[0]) - 1.0, "lidar: the deck's whole clearance")
+        self.assertLess(float(lidar[5]), 9.5, "lidar: the dip spreads along the side streets")
+        with unittest.mock.patch.object(grading, "UNDER_RUN_ON", False):
+            off = heights(True)
+        np.testing.assert_allclose(off, lidar, atol=1e-9, err_msg="BNE_UNDERPASS_RUN=off: as before")
 
 
 class RacewayKeepTest(unittest.TestCase):

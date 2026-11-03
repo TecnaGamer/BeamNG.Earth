@@ -24,7 +24,7 @@ class RoadsRefreshTest(unittest.TestCase):
         self.addCleanup(sur.close)
         cached = set()
         md = types.SimpleNamespace(has=lambda key, layer: (str(key), layer) in cached)
-        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=512, surface=sur,
+        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=1024, surface=sur,
                           mapdata=md)
         self.addCleanup(s.hm_pool.shutdown)
         self.addCleanup(s.tile_pool.shutdown)

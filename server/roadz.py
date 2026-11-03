@@ -456,6 +456,16 @@ class RoadZ:
         self.lidar = LIDAR_ON
 
     # ---- cells ----
+    def lidar_wanted(self, key):
+        """Do this cell's road heights read the US lidar (gap_answers)? No network."""
+        la, lo = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).center()
+        return bool(self.enabled and self.lidar and self.fetcher is not None and "lidar" in sources_at(la, lo, True))
+
+    def lidar_on_disk(self, key):
+        """Is this cell's lidar kept on disk already? No network."""
+        p = self._path("lidar", mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])))
+        return bool(p and os.path.exists(p))
+
     def _path(self, src, key):
         import roads
         if src == "lidar" and not roads.LIDAR_GAPS_ON:
@@ -596,7 +606,9 @@ class RoadZ:
         if p:
             import staging
             os.makedirs(os.path.dirname(p), exist_ok=True)
-            tmp = staging.tmp_for(p)
+            # (a name of its own: a cell's neighbours read the same EPT file from threads of their own, and on Windows
+            # a temporary file another thread has open cannot be opened: that cell then took the rule for the run)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
                 fh.write(body)
             staging.replace_cached(tmp, p)
@@ -957,7 +969,7 @@ class RoadZ:
             if got is not ...:
                 if got is None:             # (each build that takes the rule from it is not kept either)
                     import revisit
-                    revisit.fault()
+                    revisit.fault(lidar=True)   # (the session's answer: roads._FACTS_MEM keeps the facts made on it)
                 out[key] = got
                 continue
             todo.append(key)
@@ -987,7 +999,7 @@ class RoadZ:
                 got = self._decide(key, done.get(str(key)))     # (not built in time: None, the rule)
                 if got is None:
                     import revisit
-                    revisit.fault()
+                    revisit.fault(lidar=True)
                 with self._lock:
                     self._off[("gapans", str(key))] = got
                 out[key] = got

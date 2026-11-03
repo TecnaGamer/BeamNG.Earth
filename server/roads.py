@@ -22,6 +22,7 @@ flagged as bridge / tunnel or off ground level are left out), the navgraph.
 import json
 import logging
 import math
+import collections
 import os
 import threading
 import time
@@ -266,6 +267,20 @@ def _rule_value(table, i):
 HOME_RANGES_ON = os.environ.get("BNE_HOME_RANGES", "on") != "off"
 
 
+def _home_cell(feats, i):
+    """str of feature i's home cell (the cell of its first point), kept per layer (level_ranges asks for it at every
+    call: 95k cell_of in two Midtown cells' planning, 2026-11-02)."""
+    memo = feats.__dict__.get("_home_cells")
+    if memo is None:
+        memo = feats.__dict__.setdefault("_home_cells", {})
+    got = memo.get(i)
+    if got is None:
+        import mapcells
+        a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
+        got = memo[i] = str(mapcells.cell_of(float(feats.lonlat[a, 1]), float(feats.lonlat[a, 0])))
+    return got
+
+
 def home_copy(feats, i):
     """(feats', j) of feature i's copy in its home cell (the cell of its first point, among the eight round feats'
     cell: mapdata's _bnge_neighbours), None where that is this cell or not at hand. A road's copies in the cells it
@@ -274,9 +289,7 @@ def home_copy(feats, i):
     hook = feats.__dict__.get("_bnge_neighbours")
     if me is None or hook is None:
         return None
-    import mapcells
-    a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
-    home = str(mapcells.cell_of(float(feats.lonlat[a, 1]), float(feats.lonlat[a, 0])))
+    home = _home_cell(feats, i)
     if home == me[0]:
         return None
     try:
@@ -317,7 +330,7 @@ def level_ranges(feats, i, _home=True):
             got = memo[i] = _deck_gaps(feats, i, _lidar_gaps(feats, i, rule_level_ranges(feats, i)))
     if feats.__dict__.get("_lidar_rule"):
         import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
-        revisit.fault()
+        revisit.fault(lidar=True)
     return list(got)
 
 
@@ -349,6 +362,15 @@ def raw_level_ranges(feats, i):
 # process that draws or grades its roads made for itself (~0.2 s a city cell each; the terrain blocks', the road
 # tiles' and the AI graph's processes, 2026-10-25). Kept only when complete (revisit.faults unchanged).
 _FACTS_LOCK = threading.Lock()
+# A cell's facts made in this process, by its id (_bnge_cell: the cell, the layer, the map data's versions), beyond the
+# layer object they were made for: the map data's memory cache drops and reloads a city's big layers all the time,
+# and each reload made them again. On a first visit down Manhattan 89 cells' facts were made 787 times, 685 of 1081
+# CPU-s again (BNGE_FACTS_LOG, 2026-11-02): kept on disk only when complete, and almost nothing was, any fault of any
+# thread counting against them (revisit.thread_faults now).
+_FACTS_MEM = collections.OrderedDict()
+FACTS_MEM_KEPT = 640         # entries (~8 a cell: ranges, specs, bridges ...; a city cell ~0.6 MB in all; budget: fewer when small)
+FACTS_SHORT_S = 10.0        # s a cell's facts made short of something (a fault) are used before they are made again
+FACTS_LOG = bool(os.environ.get("BNGE_FACTS_LOG"))
 
 
 def _facts_key(feats, kind, extra):
@@ -356,7 +378,8 @@ def _facts_key(feats, kind, extra):
     import revisit
     if cid is None or not revisit.ON or revisit.CACHE_DIR is None:
         return None
-    return revisit.key("cellfacts", kind, cid, extra)
+    # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions)
+    return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra)
 
 
 def _facts_load(feats, kind, extra):
@@ -365,12 +388,37 @@ def _facts_load(feats, kind, extra):
         return None
     import revisit
     got = revisit.load(revisit.CACHE_DIR, "cellfacts", k)
-    if got is None or "facts.json" not in got[0]:
+    data = got[0].get("facts.json") if got is not None else None
+    if data is None:
+        data = _facts_baked(feats, kind, extra)
+    if data is None:
         return None
     try:
-        return json.loads(got[0]["facts.json"])
+        return json.loads(data)
     except ValueError:
         return None
+
+
+# The facts' output format: their key in the revisit cache (kept across updates: _facts_key) and in baked packs
+# (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
+# change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
+# the old ones; tests/test_bake_formats.py fails until it is bumped.
+FACTS_FORMAT = 1
+
+
+def _facts_baked(feats, kind, extra):
+    """A baked pack's facts of this layer's cell (bakepack.py), as JSON bytes, or None."""
+    import revisit
+    cid = feats.__dict__.get("_bnge_cell")
+    if cid is None or revisit.CACHE_DIR is None:
+        return None
+    import bakepack
+    try:
+        versions = json.loads(cid[2])
+    except (ValueError, IndexError, TypeError):
+        return None
+    return bakepack.find(revisit.CACHE_DIR, bakepack.facts_key(kind, extra, cid[0]),
+                         {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions})
 
 
 def _facts_store(feats, kind, extra, data):
@@ -379,6 +427,56 @@ def _facts_store(feats, kind, extra, data):
         return
     import revisit
     revisit.store(revisit.CACHE_DIR, "cellfacts", k, {"facts.json": json.dumps(data).encode("utf-8")})
+
+
+FACTS_WAIT_S = 3.0          # s a process waits for another making a cell's facts this run before it makes them too
+# (a 30 s wait on a cell's road specs made a Steam Deck's first road tile ~30 s later, 2026-10-26: holders busy)
+
+
+def _run_facts_path(st):
+    """This server run's file of a layer's level ranges (beside its road plans: plancache.RUN_ENV), shared by its
+    processes, the lidar rule's too (a session's answer for the cell: roadz decides it once, on disk), or None."""
+    import revisit
+    cid = st.get("_bnge_cell")
+    run = os.environ.get("BNGE_PLAN_RUN")
+    if cid is None or not run or revisit.CACHE_DIR is None or not revisit.ON:
+        return None
+    import hashlib
+    h = hashlib.sha1(repr((cid, bool(LIDAR_GAPS_ON), revisit.code_key())).encode()).hexdigest()[:20]
+    return os.path.join(revisit.CACHE_DIR, "plans", run, "facts", h + ".json")
+
+
+def _run_facts_load(path, n):
+    try:
+        with open(path, encoding="utf-8") as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(got, dict) or len(got.get("raw", ())) != n or len(got.get("lvl", ())) != n:
+        return None
+    return got
+
+
+def _run_facts_store(path, data):
+    import staging
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = staging.tmp_for(path)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        staging.replace(tmp, path)
+    except OSError as e:
+        log.debug("cell facts %s not kept for the run: %s", path, e)
+
+
+def _ranges_mem_key(st):
+    """_FACTS_MEM's key of a layer's level ranges: its cell id and the lidar's switch and provider (the same all along
+    in a server; tests change them)."""
+    cid = st.get("_bnge_cell")
+    if cid is None:
+        return None
+    import roadz
+    return (cid, "ranges", bool(LIDAR_GAPS_ON), id(getattr(roadz, "PROVIDER", None)))
 
 
 def _cell_ranges(feats, load_only=False):
@@ -392,6 +490,26 @@ def _cell_ranges(feats, load_only=False):
         tried = st.get("_ranges_state")
         st["_ranges_state"] = "busy"
     if tried is None:
+        mk = _ranges_mem_key(st)
+        with _FACTS_LOCK:
+            mem = _FACTS_MEM.get(mk) if mk is not None else None
+            if mem is not None:
+                _FACTS_MEM.move_to_end(mk)
+        if mem is not None and mem.get("until") is not None and time.monotonic() > mem["until"]:
+            mem = None                  # (made short of something: made again once FACTS_SHORT_S is past)
+        if mem is not None and len(mem["raw"]) == len(feats):
+            if mem.get("until") is not None:
+                import revisit
+                revisit.fault()         # (made short of something: what is built on it now is not kept either)
+            raw, lvl = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
+            mraw, mlvl = mem["raw"], mem["lvl"]     # (shared: level_ranges and the rest hand out copies)
+            for i in range(len(feats)):
+                raw.setdefault(i, mraw[i])
+                lvl.setdefault(i, mlvl[i])
+            if mem["rule"]:
+                st["_lidar_rule"] = True    # (built on the rule: level_ranges says so, nothing on it kept)
+            st["_ranges_state"] = "done"
+            return
         got = _facts_load(feats, "ranges", None)
         if got is not None and len(got.get("raw", ())) == len(feats) and len(got.get("lvl", ())) == len(feats):
             raw, lvl = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
@@ -404,13 +522,59 @@ def _cell_ranges(feats, load_only=False):
         st["_ranges_state"] = "loadable"        # (the eager build waits for level_ranges: road_specs reads the raw)
         return
     import revisit
-    f0 = revisit.faults()
-    raw = [raw_level_ranges(feats, i) for i in range(len(feats))]
-    lvl = [level_ranges(feats, i, _home=False) for i in range(len(feats))]
+    run_path = _run_facts_path(st)
+    mine = False
+    if run_path is not None:            # (this run's: another process's, or theirs being made, waited for briefly)
+        import xproc
+        got, mine = xproc.once(run_path + ".lock", lambda: _run_facts_load(run_path, len(feats)), FACTS_WAIT_S)
+        if got is not None:
+            raw_m, lvl_m = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
+            for i in range(len(feats)):
+                raw_m.setdefault(i, [tuple(r) for r in got["raw"][i]])
+                lvl_m.setdefault(i, [tuple(r) for r in got["lvl"][i]])
+            if got.get("rule"):
+                st["_lidar_rule"] = True
+            st["_ranges_state"] = "done"
+            mk = _ranges_mem_key(st)
+            if mk is not None:
+                with _FACTS_LOCK:
+                    _FACTS_MEM[mk] = {"raw": [raw_m[i] for i in range(len(feats))],
+                                      "lvl": [lvl_m[i] for i in range(len(feats))], "rule": bool(got.get("rule")),
+                                      "until": None}
+            return
+    f0 = revisit.thread_faults()
+    t0 = time.perf_counter()
+    try:
+        raw = [raw_level_ranges(feats, i) for i in range(len(feats))]
+        lvl = [level_ranges(feats, i, _home=False) for i in range(len(feats))]
+    except BaseException:
+        if mine:
+            import xproc
+            xproc.release(run_path + ".lock")
+        raise
     st["_ranges_state"] = "done"
-    if revisit.faults() == f0:
-        _facts_store(feats, "ranges", None, {"raw": [[[float(a), float(b), k] for a, b, k in r] for r in raw],
-                                             "lvl": [[[float(a), float(b), k] for a, b, k in r] for r in lvl]})
+    if FACTS_LOG:                       # (BNGE_FACTS_LOG: which process made which cell's facts, how long)
+        log.info("cell facts %s made in %.2f s (pid %d)%s", st.get("_bnge_cell"), time.perf_counter() - t0, os.getpid(),
+                 "" if revisit.thread_faults() == f0 else " short")
+    clean = revisit.thread_faults() == f0
+    mk = _ranges_mem_key(st)
+    if mk is not None:                  # (the lidar rule's too: a cell's answer stays the same for the session)
+        with _FACTS_LOCK:
+            # (made short of something (a neighbour not downloaded yet: a first visit): kept FACTS_SHORT_S, not made
+            # again for every reload meanwhile, one cell 14 times in a process down Manhattan, 2026-11-02)
+            _FACTS_MEM[mk] = {"raw": raw, "lvl": lvl, "rule": bool(st.get("_lidar_rule")),
+                              "until": None if clean else time.monotonic() + FACTS_SHORT_S}
+            while len(_FACTS_MEM) > FACTS_MEM_KEPT:
+                _FACTS_MEM.popitem(last=False)
+    data = {"raw": [[[float(a), float(b), k] for a, b, k in r] for r in raw],
+            "lvl": [[[float(a), float(b), k] for a, b, k in r] for r in lvl]}
+    if clean and run_path is not None:
+        _run_facts_store(run_path, dict(data, rule=bool(st.get("_lidar_rule"))))
+    if mine:
+        import xproc
+        xproc.release(run_path + ".lock")
+    if clean and not st.get("_lidar_rule"):
+        _facts_store(feats, "ranges", None, data)
 
 
 # A bridge over a road spans more than its carriageway: the road's shoulders and the abutments' slopes stand under it.
@@ -767,9 +931,12 @@ def _first_ring_ends(feats):
 def _deck_gaps(feats, i, rngs):
     """rngs (feature i's level ranges) with its short ground gaps between decks made bridge (GAP_DECK_*;
     earthfast.deck_gaps). A road with a tunnel range keeps its own. Pure given feats."""
-    if not GAP_DECK_ON or any(k == "tunnel" for _, _, k in rngs):
+    if not GAP_DECK_ON:
         return rngs
-    if not any(k == "bridge" for _, _, k in rngs):
+    kinds = [r[2] for r in rngs] if rngs else ()   # (most roads have no range: 127k calls in two cells' planning)
+    if "tunnel" in kinds:
+        return rngs
+    if "bridge" not in kinds:
         near = _near_bridge_ends(feats)
         if near is not None and not near[i]:
             return rngs                         # (no bridge of its own, none ending at it)
@@ -1030,73 +1197,61 @@ def _level_ranges(feats, i):
 
 
 def tag_level_ranges(feats, i):
-    """Feature i's off-ground ranges as the map's flags and level rules have them (level_ranges, before gradesep)."""
-    got = {"flags": [], "level": []}
-    for name in ("flags", "level"):
-        t = feats.rules.get(name)
-        if t is None or len(t.feature) == 0:
-            continue
-        for j in t.rows(i):
-            v = t.value[j]
-            if name == "flags":
-                kind = "tunnel" if "is_tunnel" in str(v) else "bridge" if "is_bridge" in str(v) else None
-            else:
-                try:
-                    lv = float(v)
-                except (TypeError, ValueError):
-                    lv = 0.0
-                kind = "bridge" if lv > 0 else "tunnel" if lv < 0 else None
-            if kind is not None and t.end[j] > t.start[j]:
-                got[name].append((float(t.start[j]), float(t.end[j]), kind))
-    # the flags first; a level range only where no flag says otherwise (Tower Bridge: level 1 over 0.03-0.88 of its
-    # segment, flags bridge / tunnel (through a tower) / bridge / tunnel / bridge: merged, tunnel winning, the whole
-    # bridge was a tunnel, under water for most of it, and left out, 2026-10-18)
-    out = sorted(got["flags"])
-    for a, b, k in sorted(got["level"]):
-        for fa, fb, _ in out[:]:
-            if fb <= a or fa >= b:
-                continue
-            if fa > a:
-                out.append((a, fa, k))
-            a = max(a, fb)
-            if a >= b:
-                break
-        if a < b:
-            out.append((a, b, k))
-    out.sort()
-    merged = []                                 # overlapping ranges merged (a tunnel wins over a bridge); touching
-    for a, b, k in out:                         # ones of the same kind joined, of different kinds kept apart
-        if merged and (a < merged[-1][1] - 1e-9 or (a <= merged[-1][1] + 1e-9 and k == merged[-1][2])):
-            pa, pb, pk = merged[-1]
-            merged[-1] = (pa, max(pb, b), "tunnel" if "tunnel" in (pk, k) else "bridge")
+    """Feature i's off-ground ranges as the map's flags and level rules have them (level_ranges, before gradesep):
+    the flags first, a level range only where no flag says otherwise (Tower Bridge: level 1 over 0.03-0.88 of its
+    segment, flags bridge / tunnel (through a tower) / bridge / tunnel / bridge: merged, tunnel winning, the whole
+    bridge was a tunnel, under water for most of it, and left out, 2026-10-18); overlapping ranges merged (a tunnel
+    wins over a bridge), touching ones of the same kind joined; a tunnel shorter than PASSAGE_M between two bridge
+    ranges is a passage through a bridge's tower (the bridge goes on); a segment's tunnel ranges closer than
+    TUNNEL_GAP_M are one tunnel (Overture splits a tunnel's range: 0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort McHenry
+    Tunnel's segment). Every feature of the layer at once (earthfast.tag_level_ranges), kept on feats."""
+    got = feats.__dict__.get("_tag_ranges")
+    if got is None:
+        got = feats.__dict__["_tag_ranges"] = _tag_ranges_all(feats)
+    return list(got[i])
+
+
+def _tag_rule_rows(t, name):
+    """(feature, start, end, kind) arrays of a flags / level rule table (kind 1 bridge, 2 tunnel, 0 neither)."""
+    if t is None or len(t.feature) == 0:
+        return (np.zeros(0, np.int64), np.zeros(0), np.zeros(0), np.zeros(0, np.int8))
+    kind = np.zeros(len(t.feature), np.int8)
+    for j, v in enumerate(t.value.tolist() if hasattr(t.value, "tolist") else t.value):
+        if name == "flags":
+            v = str(v)
+            kind[j] = 2 if "is_tunnel" in v else 1 if "is_bridge" in v else 0
         else:
-            merged.append((a, b, k))
-    if len(merged) >= 3:                        # a short tunnel between two bridge ranges: a passage through a
-        L = _feature_length_m(feats, i)         # bridge's tower (Tower Bridge's): the bridge goes on
-        for n in range(1, len(merged) - 1):
-            a, b, k = merged[n]
-            if k == "tunnel" and (b - a) * L < PASSAGE_M and merged[n - 1][2] == "bridge" and \
-                    merged[n + 1][2] == "bridge" and abs(merged[n - 1][1] - a) < 1e-6 and abs(b - merged[n + 1][0]) < 1e-6:
-                merged[n] = (a, b, "bridge")
-        joined = []
-        for a, b, k in merged:
-            if joined and k == joined[-1][2] and a <= joined[-1][1] + 1e-9:
-                joined[-1] = (joined[-1][0], b, k)
-            else:
-                joined.append((a, b, k))
-        merged = joined
-    if sum(1 for _, _, k in merged if k == "tunnel") > 1:
-        # one tunnel, not several: Overture splits a tunnel's range (0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort
-        # McHenry Tunnel's segment), and each gap would be a few metres of ground road inside the mountain
-        L = _feature_length_m(feats, i)
-        joined = []
-        for a, b, k in merged:
-            if joined and k == "tunnel" and joined[-1][2] == "tunnel" and (a - joined[-1][1]) * L < TUNNEL_GAP_M:
-                joined[-1] = (joined[-1][0], b, "tunnel")
-            else:
-                joined.append((a, b, k))
-        merged = joined
-    return merged
+            try:
+                lv = float(v)
+            except (TypeError, ValueError):
+                lv = 0.0
+            kind[j] = 1 if lv > 0 else 2 if lv < 0 else 0
+    return (np.ascontiguousarray(t.feature, np.int64), np.ascontiguousarray(t.start, np.float64),
+            np.ascontiguousarray(t.end, np.float64), kind)
+
+
+_KIND_NAMES = {1: "bridge", 2: "tunnel"}
+
+
+def _tag_ranges_list(feats):
+    """Every feature's tag_level_ranges (the lists themselves: callers must not change them), kept on feats."""
+    got = feats.__dict__.get("_tag_ranges")
+    if got is None:
+        got = feats.__dict__["_tag_ranges"] = _tag_ranges_all(feats)
+    return got
+
+
+def _tag_ranges_all(feats):
+    import fast
+    fast.require(142, "tag_level_ranges")
+    ll = np.asarray(feats.lonlat, np.float64)
+    off, rng, kinds = fast._ef.tag_level_ranges(
+        len(feats), *_tag_rule_rows(feats.rules.get("flags"), "flags"),
+        *_tag_rule_rows(feats.rules.get("level"), "level"), np.ascontiguousarray(ll),
+        np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
+        np.ascontiguousarray(feats.part_off, np.int64), PASSAGE_M, TUNNEL_GAP_M)
+    rl, kl, ol = rng.tolist(), kinds.tolist(), off.tolist()
+    return [[(rl[r][0], rl[r][1], _KIND_NAMES[kl[r]]) for r in range(ol[i], ol[i + 1])] for i in range(len(feats))]
 
 
 PASSAGE_M = 40.0        # m: a tunnel range this short between two bridge ranges is a passage through a tower
@@ -1229,35 +1384,55 @@ def _clear_portals(feats, i, parts):
         return parts
     import roadmesh
     half = ts[i].width / 2 + roadmesh.TUNNEL_SHOULDER + roadmesh.PORTAL_FRAME
-    rs = road_specs(feats)
     out = []
     for ring in parts:
         ring = np.asarray(ring, np.float64)
         kx = 111320.0 * math.cos(math.radians(float(ring[0, 1])))
         if float(np.hypot(*(np.diff(ring, axis=0) * [kx, 111320.0]).T).sum()) <= UNDERPASS_MAX_M:
             for at_start in (True, False):
-                ring = _clear_end(feats, i, rs, ring, at_start, half)
+                ring = _clear_end(feats, i, ring, at_start, half)
         out.append(ring)
     return out
 
 
 def _crosses(a, b):
-    """Do the polylines a and b (k, 2) cross?"""
-    for p, q in zip(a[:-1], a[1:]):
-        r = q - p
-        c, d = b[:-1], b[1:]
-        s_ = d - c
-        den = r[0] * s_[:, 1] - r[1] * s_[:, 0]
-        ok = np.abs(den) > 1e-12
-        w = c - p
-        t = np.where(ok, (w[:, 0] * s_[:, 1] - w[:, 1] * s_[:, 0]) / np.where(ok, den, 1.0), -1.0)
-        u = np.where(ok, (w[:, 0] * r[1] - w[:, 1] * r[0]) / np.where(ok, den, 1.0), -1.0)
-        if np.any(ok & (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)):
-            return True
-    return False
+    """Do the polylines a and b (k, 2) cross? (Every segment pair at once.)"""
+    if len(a) < 2 or len(b) < 2:
+        return False
+    p, r = a[:-1, None, :], (a[1:] - a[:-1])[:, None, :]
+    c, s_ = b[None, :-1, :], (b[1:] - b[:-1])[None, :, :]
+    den = r[..., 0] * s_[..., 1] - r[..., 1] * s_[..., 0]
+    ok = np.abs(den) > 1e-12
+    w = c - p
+    dn = np.where(ok, den, 1.0)
+    t = np.where(ok, (w[..., 0] * s_[..., 1] - w[..., 1] * s_[..., 0]) / dn, -1.0)
+    u = np.where(ok, (w[..., 0] * r[..., 1] - w[..., 1] * r[..., 0]) / dn, -1.0)
+    return bool(np.any(ok & (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)))
 
 
-def _clear_end(feats, i, rs, ring, at_start, half):
+def _portal_roads(feats):
+    """The ground parts of feats' PORTAL_CLASSES roads (road_specs(feats)) as float arrays with their bounds, in feature
+    order, and their half widths: made once per layer for _clear_end (each tunnel end looked over every feature: 0.85 s
+    of 8 Midtown tiles)."""
+    got = feats.__dict__.get("_portal_roads")
+    if got is not None:
+        return got
+    rs = road_specs(feats)
+    js, parts = [], []
+    for j in range(len(feats)):
+        if rs[j] is None or rs[j].cls not in PORTAL_CLASSES:
+            continue
+        for g in ground_parts(feats, j):
+            js.append(j)
+            parts.append(np.asarray(g, np.float64))
+    bb = np.array([(g[:, 0].min(), g[:, 0].max(), g[:, 1].min(), g[:, 1].max()) for g in parts]).reshape(-1, 4)
+    idx = {"j": np.asarray(js, np.int64), "parts": parts, "minx": bb[:, 0], "maxx": bb[:, 1], "miny": bb[:, 2],
+           "maxy": bb[:, 3], "hw": [rs[j].width / 2 for j in js]}
+    feats.__dict__["_portal_roads"] = idx
+    return idx
+
+
+def _clear_end(feats, i, ring, at_start, half):
     import grading
     p0 = ring[0] if at_start else ring[-1]
     kx, ky = 111320.0 * math.cos(math.radians(p0[1])), 111320.0      # m per degree there
@@ -1271,21 +1446,19 @@ def _clear_end(feats, i, rs, ring, at_start, half):
     nrm = np.array([-d[1], d[0]])
     reach = (half + PORTAL_EXTEND_MAX_M + 40.0) / ky                   # roads that could matter, in degrees
     roads_m = []
-    for j in range(len(feats)):
-        if j == i or rs[j] is None or rs[j].cls not in PORTAL_CLASSES:
-            continue
-        for g in ground_parts(feats, j):
-            g = np.asarray(g, np.float64)
-            if g[:, 1].min() > p0[1] + reach or g[:, 1].max() < p0[1] - reach or \
-                    (g[:, 0].min() - p0[0]) * kx / ky > reach or (p0[0] - g[:, 0].max()) * kx / ky > reach:
-                continue
-            gm = (g - p0) * [kx, ky]
-            a_, d_ = gm[:-1], np.diff(gm, axis=0)
-            t_ = np.clip(-(a_ * d_).sum(1) / np.maximum((d_ * d_).sum(1), 1e-9), 0.0, 1.0)
-            if float(np.hypot(*(a_ + t_[:, None] * d_).T).min()) < PORTAL_JOIN_M or not _crosses(m, gm):
-                continue                        # joined here (an end at it or a T junction) / not over the tunnel
-            hw = rs[j].width / 2
-            roads_m.append((gm, ((0, hw + grading.T_MAX), (1, hw + PORTAL_CLEAR_M), (2, hw + PORTAL_CLEAR_M))))
+    idx = _portal_roads(feats)
+    near = np.flatnonzero((idx["miny"] <= p0[1] + reach) & (idx["maxy"] >= p0[1] - reach) &
+                          ((idx["minx"] - p0[0]) * kx / ky <= reach) & ((p0[0] - idx["maxx"]) * kx / ky <= reach) &
+                          (idx["j"] != i)) if len(idx["j"]) else ()
+    for n_ in near:
+        g = idx["parts"][n_]
+        gm = (g - p0) * [kx, ky]
+        a_, d_ = gm[:-1], np.diff(gm, axis=0)
+        t_ = np.clip(-(a_ * d_).sum(1) / np.maximum((d_ * d_).sum(1), 1e-9), 0.0, 1.0)
+        if float(np.hypot(*(a_ + t_[:, None] * d_).T).min()) < PORTAL_JOIN_M or not _crosses(m, gm):
+            continue                        # joined here (an end at it or a T junction) / not over the tunnel
+        hw = idx["hw"][n_]
+        roads_m.append((gm, ((0, hw + grading.T_MAX), (1, hw + PORTAL_CLEAR_M), (2, hw + PORTAL_CLEAR_M))))
 
     def clear(c):
         pts = np.array([c, c + nrm * half, c - nrm * half])
@@ -1556,15 +1729,32 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     got = memo.get(k)
     if got is None:             # (the measured widths on the specs without them: those are asked for too, _bridge_reach)
         extra = (widths is not None, bool(left_hand))
-        if urban_fn is None:    # (the land cover's are the server's own: not shared, cell_facts)
+        cid = feats.__dict__.get("_bnge_cell")
+        # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
+        # specs with its parking widths were ~0.37 s of each of its road tiles after every reload, 2026-11-02)
+        mk = None if cid is None else (cid, "specs", extra) if urban_fn is None else \
+            (cid, "specs_urban", extra, id(getattr(urban_fn, "__self__", urban_fn)), getattr(urban_fn, "__name__", ""))
+        if mk is not None:      # (_FACTS_MEM: made in this process before, for another copy of the layer)
+            with _FACTS_LOCK:
+                mem = _FACTS_MEM.get(mk)
+            if mem is not None and len(mem) == len(feats):
+                got = mem
+        if got is None and urban_fn is None:    # (the land cover's are the server's own: not shared, cell_facts)
             got = _specs_from(_facts_load(feats, "specs", extra), len(feats))
         if got is None:
             import revisit
-            f0 = revisit.faults()
+            f0 = revisit.thread_faults()
             got = (_road_specs(feats, urban_fn, left_hand) if widths is None else
                    _measured_widths(feats, road_specs(feats, urban_fn, None, left_hand), widths))
-            if urban_fn is None and revisit.faults() == f0:
+            clean = revisit.thread_faults() == f0
+            if urban_fn is None and clean:
                 _facts_store(feats, "specs", extra, [None if sp is None else _spec_json(sp) for sp in got])
+            if clean:
+                if mk is not None:
+                    with _FACTS_LOCK:
+                        _FACTS_MEM[mk] = list(got)
+                        while len(_FACTS_MEM) > FACTS_MEM_KEPT:
+                            _FACTS_MEM.popitem(last=False)
         got = memo.setdefault(k, got)
     return list(got)
 
@@ -1592,7 +1782,16 @@ def road_tapers(feats, urban_fn=None, widths=None, left_hand=False):
     k = (urban_fn, widths, bool(left_hand))
     got = memo.get(k)
     if got is None:
-        got = memo[k] = _tapers(feats, road_specs(feats, urban_fn, widths, left_hand))
+        specs = road_specs(feats, urban_fn, widths, left_hand)
+        got = _tapers(feats, specs)
+        for i, sp in enumerate(specs):          # (a pass road's hairpins: hairpin_tapers)
+            if sp is not None and sp.mountain:
+                a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
+                b = feats.coord_off[feats.ring_off[feats.part_off[i] + 1]]
+                hp = hairpin_tapers(feats.lonlat[a:b], sp.width)
+                if hp:
+                    got[i] = tuple(got[i] or ()) + hp
+        memo[k] = got
     return got
 
 
@@ -1665,15 +1864,33 @@ def joint_desc(copies, fn):
     return tuple(out[k] for k in sorted(out))
 
 
-def copies_of(cells):
-    """{road id: [(feats, i)]}: every copy of each road in cells (joint_desc)."""
-    where = {}
-    for f in cells or ():
-        if f is None:
-            continue
+def _id_rows(f):
+    """{road id: [rows]} of a layer, made once (kept on it)."""
+    got = f.__dict__.get("_id_rows")
+    if got is None:
+        got = {}
         for i, fid in enumerate(f.ids.tolist()):
-            where.setdefault(str(fid), []).append((f, i))
-    return where
+            got.setdefault(str(fid), []).append(i)
+        f.__dict__["_id_rows"] = got
+    return got
+
+
+class _Copies:
+    """copies_of's answer: get(road id, default) -> [(feats, i)] of every copy, in the cells' order, from each layer's
+    own index (_id_rows: a dict of every road of the cells made at each call was ~0.4 s of a Manhattan tile set)."""
+
+    def __init__(self, cells):
+        self.cells = [f for f in (cells or ()) if f is not None]
+
+    def get(self, fid, default=None):
+        fid = str(fid)
+        out = [(f, i) for f in self.cells for i in _id_rows(f).get(fid, ())]
+        return out if out else default
+
+
+def copies_of(cells):
+    """{road id: [(feats, i)]} (a _Copies, read with .get): every copy of each road in cells (joint_desc)."""
+    return _Copies(cells)
 
 
 def deck_tapers(feats):
@@ -1742,9 +1959,10 @@ def lane_flow(feats):
     cell (I-95 by the Middle Branch: 4 lanes, 20.4 m, in one and the default 11.8 m in the other, a 4.3 m step where
     their tiles met; then 24.0 m against 20.4 m where the 3 x 3 round each saw another stretch of the chain). Pure
     given the cells; remembered on feats."""
-    got = feats.__dict__.get("_lane_flow_home")
-    if got is not None:
-        return got
+    return _cell_memo(feats, "_lane_flow_home", lambda: _lane_flow_home(feats))
+
+
+def _lane_flow_home(feats):
     out = list(_lane_flow_local(feats))
     me = feats.__dict__.get("_bnge_cell")
     hook = feats.__dict__.get("_bnge_neighbours")
@@ -1754,11 +1972,9 @@ def lane_flow(feats):
         except Exception as e:          # (this cell's own)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
             near = {}
-        import mapcells
         rows = {}
         for i in range(len(feats)):
-            a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
-            home = str(mapcells.cell_of(float(feats.lonlat[a, 1]), float(feats.lonlat[a, 0])))
+            home = _home_cell(feats, i)
             if home != me[0] and home in near:
                 rows.setdefault(home, []).append(i)
         for home, idx in rows.items():
@@ -1769,8 +1985,55 @@ def lane_flow(feats):
                 j = pos.get(feats.ids[i])
                 if j is not None:
                     out[i] = res[j]
-    feats.__dict__["_lane_flow_home"] = out
     return out
+
+
+_LANE_FLOW_DFLT = {}            # road class -> its one-way carriageway's lanes when the map gives none (_lane_flow_rows)
+
+
+def _lane_flow_ids(f):
+    """Layer f's road ids as a numpy str array (lane_flow's dedup), kept on it."""
+    got = f.__dict__.get("_lane_flow_ids")
+    if got is None:
+        got = f.__dict__["_lane_flow_ids"] = np.asarray([str(x) for x in f.ids.tolist()], dtype=str)
+    return got
+
+
+def _lane_flow_rows(f):
+    """Layer f's rows for lane_flow, made once per layer (kept on it): (ids, first coordinate, end coordinate, attrs
+    (n, 4): one-way sign or 0, the map's lanes or nan, link, the class's default lanes or nan). Each cell's solve
+    covers the 3 x 3 around it, so every layer's rows were made again for each of its neighbours' solves: 6 of
+    lane_flow's 7 CPU-s in Manhattan's first visit, the solve itself 0.3 (2026-11-02)."""
+    got = f.__dict__.get("_lane_flow_rows")
+    if got is not None:
+        return got
+    n = len(f)
+    ids = f.ids.tolist()
+    po = np.asarray(f.part_off, np.int64)
+    starts = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[:n]]]
+    ends = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[1:n + 1]]]
+    attrs = np.zeros((n, 4))
+    attrs[:, 1] = np.nan
+    attrs[:, 3] = np.nan
+    cls_a, sub_a = f.attrs.get("class"), f.attrs.get("subtype")
+    for i in range(n):
+        if cls_a is None or str(cls_a[i]) not in LANE_FLOW_CLASSES or (sub_a is not None and str(sub_a[i]) != "road"):
+            continue
+        v = _rule_value(f.rules.get("oneway"), i)
+        if v is None:
+            continue
+        attrs[i, 0] = -1.0 if float(v) < 0 else 1.0
+        lanes = _osm(f, "lanes", i, *OSM_LANES)
+        if lanes is not None:
+            attrs[i, 1] = float(int(lanes))
+        attrs[i, 2] = 1.0 if _rule_value(f.rules.get("subclass"), i) == "link" else 0.0
+        c = str(cls_a[i])
+        if c not in _LANE_FLOW_DFLT:
+            _LANE_FLOW_DFLT[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved", False, c,
+                                                  True))[1]
+        attrs[i, 3] = float(_LANE_FLOW_DFLT[c])
+    got = f.__dict__["_lane_flow_rows"] = (ids, starts, ends, attrs)
+    return got
 
 
 def _lane_flow_local(feats):
@@ -1788,50 +2051,42 @@ def _lane_flow_local(feats):
             layers += [f for f in hook() if f is not None and len(f)]
         except Exception as e:          # (this cell alone)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
-    seen, rows = set(), []              # (layer, feature) once per road id, this cell's first
-    for f in layers:
-        ids = f.ids.tolist()
-        for i in range(len(f)):
-            if ids[i] not in seen:
-                seen.add(ids[i])
-                rows.append((f, i))
-    n = len(rows)
+    # each road id once, this cell's first (the first row of each id over the layers in order: np.unique's first
+    # index; a set over every row of the nine layers was 0.25 s of 6 Midtown cells' facts, 2026-11-02)
+    rows = [_lane_flow_rows(f) for f in layers]
+    id_arrays = [_lane_flow_ids(f) for f in layers]
+    keep = np.zeros(sum(len(a) for a in id_arrays), bool)
+    if len(keep):
+        _u, first = np.unique(np.concatenate(id_arrays), return_index=True)
+        keep[first] = True
+    coords, lens, attrs, mine = [], [], [], None
+    base = 0
+    for f, (ids, starts, ends, at), ida in zip(layers, rows, id_arrays):
+        sel = np.flatnonzero(keep[base:base + len(ida)]).astype(np.int64)
+        base += len(ida)
+        if f is feats and mine is None:
+            mine = sel                  # (its rows first: rows 0 .. len(mine) - 1)
+        if not len(sel):
+            continue
+        a, n_ = starts[sel], ends[sel] - starts[sel]
+        tot = int(n_.sum())
+        if tot:
+            # the selected features' coordinate ranges as one index array
+            first = np.concatenate([[0], np.cumsum(n_)[:-1]])
+            coords.append(f.lonlat[np.repeat(a - first, n_) + np.arange(tot)])
+        lens.append(n_)
+        attrs.append(at[sel])
     out = [None] * len(feats)
-    if n:
-        lonlat, off = [], np.zeros(n + 1, np.int64)
-        attrs = np.zeros((n, 4))
-        attrs[:, 1] = np.nan
-        attrs[:, 3] = np.nan
-        dflt = {}                       # class -> its one-way carriageway's lanes when the map gives none
-        for r, (f, i) in enumerate(rows):
-            a = f.coord_off[f.ring_off[f.part_off[i]]]
-            b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
-            lonlat.append(f.lonlat[a:b])
-            off[r + 1] = off[r] + (b - a)
-            cls = f.attrs.get("class")
-            sub = f.attrs.get("subtype")
-            if cls is None or str(cls[i]) not in LANE_FLOW_CLASSES or (sub is not None and str(sub[i]) != "road"):
-                continue
-            v = _rule_value(f.rules.get("oneway"), i)
-            if v is None:
-                continue
-            attrs[r, 0] = -1.0 if float(v) < 0 else 1.0
-            lanes = _osm(f, "lanes", i, *OSM_LANES)
-            if lanes is not None:
-                attrs[r, 1] = float(int(lanes))
-            attrs[r, 2] = 1.0 if _rule_value(f.rules.get("subclass"), i) == "link" else 0.0
-            c = str(cls[i])
-            if c not in dflt:
-                dflt[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved", False, c,
-                                           True))[1]
-            attrs[r, 3] = float(dflt[c])
+    if lens:
+        n_all = np.concatenate(lens)
+        off = np.concatenate([[0], np.cumsum(n_all)]).astype(np.int64)
+        at_all = np.ascontiguousarray(np.concatenate(attrs), np.float64)
         if off[-1]:
-            got = np.asarray(fast._ef.lane_flow(np.ascontiguousarray(np.concatenate(lonlat), np.float64), off, attrs,
+            got = np.asarray(fast._ef.lane_flow(np.ascontiguousarray(np.concatenate(coords), np.float64), off, at_all,
                                                 float(LANE_FLOW_MAX)))
-            for r, (f, i) in enumerate(rows):
-                if f is feats:
-                    x = got[r]
-                    out[i] = None if not np.isfinite(x) or attrs[r, 2] > 0.5 else int(x)
+            for r, i in enumerate((mine if mine is not None else np.zeros(0, np.int64)).tolist()):
+                x = got[r]
+                out[i] = None if not np.isfinite(x) or at_all[r, 2] > 0.5 else int(x)
     feats.__dict__["_lane_flow"] = out
     return out
 
@@ -1953,18 +2208,41 @@ def unbuilt(feats, i):
     Overture's is_under_construction flag over most of it)? Not drawn, as on the stock map views (GitHub #184). (The
     Gotthard road tunnel's second bore, highway=construction until ~2029, was built beside the real one, its portal in
     the A2's lanes: Layercake leaves construction ways out, and the join took the open tunnel's tags, 2026-10-28.)"""
+    return bool(unbuilt_mask(feats)[i])
+
+
+def unbuilt_mask(feats):
+    """unbuilt of every feature of a layer (n,) bool, kept on it."""
+    got = feats.__dict__.get("_unbuilt")
+    if got is None:
+        got = feats.__dict__["_unbuilt"] = _unbuilt_all(feats)
+    return got
+
+
+def _unbuilt_all(feats):
+    """unbuilt for every feature of a layer at once (105k calls in two cells' planning, 2026-11-02): each feature's
+    construction share summed over its flag rows in their order, as one at a time did."""
+    n = len(feats)
+    out = np.zeros(n, bool)
     col = feats.attrs.get("osm_highway")
-    if col is not None and str(col[i]) in ("construction", "proposed"):
-        return True
+    if col is not None:
+        out |= np.isin(np.asarray([str(v) for v in col.tolist()] if hasattr(col, "tolist") else
+                                  [str(v) for v in col], dtype=object), ["construction", "proposed"])
     t = feats.rules.get("flags")
-    if t is None or len(t.feature) == 0:
-        return False
-    share = 0.0
-    for j in t.rows(i):
-        if "is_under_construction" in str(t.value[j]):
-            a, b = float(t.start[j]), float(t.end[j])
-            share += (b - a) if b > a else 1.0      # (no range: the whole feature)
-    return share >= UNBUILT_SHARE
+    if t is not None and len(t.feature):
+        vals = t.value.tolist() if hasattr(t.value, "tolist") else list(t.value)
+        uc = np.fromiter(("is_under_construction" in str(v) for v in vals), bool, len(vals))
+        if uc.any():
+            share = np.zeros(n)
+            st = np.asarray(t.start, np.float64)
+            en = np.asarray(t.end, np.float64)
+            for j in np.flatnonzero(uc).tolist():       # (rows in order: the same sums as before)
+                i = int(t.feature[j])
+                if 0 <= i < n:
+                    a, b = float(st[j]), float(en[j])
+                    share[i] += (b - a) if b > a else 1.0      # (no range: the whole feature)
+            out |= share >= UNBUILT_SHARE
+    return out
 
 
 def _road_specs(feats, urban_fn, left_hand):
@@ -2069,6 +2347,51 @@ def switchbacks(lonlat):
     xy = np.ascontiguousarray(np.c_[(ll[:, 0] - ll[0, 0]) * kx, (ll[:, 1] - ll[0, 1]) * 111320.0])
     m = np.asarray(fast._ef.tight_bends(xy, MOUNTAIN_SPAN_M, MOUNTAIN_TURN_DEG), bool)
     return int(np.count_nonzero(m[1:] & ~m[:-1]) + (1 if m[0] else 0))
+
+
+# A pass road's hairpins are widened (the Stelvio's aerial: ~6 m legs, 10-12 m round each hairpin, the turning cars'
+# swept path; the AI cut the inside of a 6 m hairpin onto the island's parapet, 2026-11-01): HAIRPIN_WIDEN_M more at
+# each hairpin's apex (the middle of its run of MOUNTAIN_TURN_DEG turns), fading out over HAIRPIN_SPAN_M from it, as a
+# taper of the road (road_tapers: its paint, markings, the grading's pads and parapets follow).
+HAIRPIN_WIDEN_M = 4.0
+HAIRPIN_SPAN_M = 22.0
+
+
+def hairpin_apexes(lonlat):
+    """The (lon, lat) of each hairpin's apex on a lon/lat polyline (k, 2): the middle point of each run of points in a
+    MOUNTAIN_TURN_DEG turn within 2 x MOUNTAIN_SPAN_M (earthfast.tight_bends)."""
+    ll = np.asarray(lonlat, np.float64)
+    if len(ll) < 3:
+        return []
+    kx = 111320.0 * math.cos(math.radians(float(ll[:, 1].mean())))
+    xy = np.c_[(ll[:, 0] - ll[0, 0]) * kx, (ll[:, 1] - ll[0, 1]) * 111320.0]
+    return [(float(ll[k, 0]), float(ll[k, 1])) for k in hairpin_apex_rows(xy)]
+
+
+def hairpin_apex_rows(xy):
+    """hairpin_apexes on a polyline xy (k, 2) in metres: the index of each apex's point."""
+    import fast
+    fast.require(42, "tight_bends")
+    xy = np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2])
+    if len(xy) < 3:
+        return []
+    m = np.asarray(fast._ef.tight_bends(xy, MOUNTAIN_SPAN_M, MOUNTAIN_TURN_DEG), bool)
+    out, i = [], 0
+    while i < len(m):
+        if not m[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(m) and m[j + 1]:
+            j += 1
+        out.append((i + j) // 2)
+        i = j + 1
+    return out
+
+
+def hairpin_tapers(lonlat, width):
+    """The tapers (as road_tapers': (lon, lat, width there, length)) of a pass road's hairpins (HAIRPIN_*)."""
+    return tuple((lo, la, float(width) + HAIRPIN_WIDEN_M, HAIRPIN_SPAN_M) for lo, la in hairpin_apexes(lonlat))
 
 
 def _mountain_roads(feats, specs):
@@ -2196,21 +2519,41 @@ def _measured_widths(feats, specs, widths):
     return out
 
 
+def _cell_memo(feats, name, make):
+    """make() of a layer, remembered on it and in _FACTS_MEM by its cell (another copy of the layer, after the map
+    data's memory cache reloaded it, takes it: 2026-11-02) when made with no fault of this thread."""
+    st = feats.__dict__
+    got = st.get(name)
+    if got is not None:
+        return got
+    mk = _ranges_mem_key(st)
+    mk = None if mk is None else mk[:1] + (name,) + mk[2:]
+    if mk is not None:
+        with _FACTS_LOCK:
+            got = _FACTS_MEM.get(mk)
+        if got is not None and len(got) == len(feats):
+            st[name] = got
+            return got
+    import revisit
+    f0 = revisit.thread_faults()
+    got = st[name] = make()
+    if mk is not None and revisit.thread_faults() == f0:
+        with _FACTS_LOCK:
+            _FACTS_MEM[mk] = got
+            while len(_FACTS_MEM) > FACTS_MEM_KEPT:
+                _FACTS_MEM.popitem(last=False)
+    return got
+
+
 def bridge_specs(feats):
     """Per feature: the Spec of a road bridge (flag is_bridge, or level above ground; not a tunnel), else
     None. No parking widths on bridges (urban False). Pure."""
-    got = feats.__dict__.get("_bridge_specs")      # remembered: cells stay decoded (mapdata)
-    if got is None:
-        got = feats.__dict__["_bridge_specs"] = _bridge_specs(feats)
-    return list(got)
+    return list(_cell_memo(feats, "_bridge_specs", lambda: _bridge_specs(feats)))  # (cells stay decoded: mapdata)
 
 
 def tunnel_specs(feats):
     """Per feature: the Spec of a road with a tunnel range, else None (as bridge_specs). Pure."""
-    got = feats.__dict__.get("_tunnel_specs")
-    if got is None:
-        got = feats.__dict__["_tunnel_specs"] = _bridge_specs(feats, "tunnel")
-    return list(got)
+    return list(_cell_memo(feats, "_tunnel_specs", lambda: _bridge_specs(feats, "tunnel")))
 
 
 def _bridge_specs(feats, want="bridge"):
@@ -2528,8 +2871,14 @@ def _ground_pins(lines, ground_lines):
     ends = np.array([p[:2] for ln in lines for p in (ln[0], ln[-1])], np.float64).reshape(-1, 2)
     if not len(ends) or not ground_lines:
         return []
-    shared = [p for k, p in enumerate(ends) if (np.hypot(*(ends - p).T) < 0.5).sum() > 1]
-    if not shared:
+    # (every end against every end at once, in row blocks: one at a time was ~1 s of a Queensboro Bridge tile)
+    keep = np.zeros(len(ends), bool)
+    for r0 in range(0, len(ends), 512):
+        blk = ends[r0:r0 + 512]
+        d = np.hypot(ends[None, :, 0] - blk[:, None, 0], ends[None, :, 1] - blk[:, None, 1])
+        keep[r0:r0 + 512] = (d < 0.5).sum(1) > 1
+    shared = ends[keep]
+    if not len(shared):
         return []
     out = []
     for gl in ground_lines:
@@ -2537,9 +2886,7 @@ def _ground_pins(lines, ground_lines):
         if len(gl) < 2 or float(np.hypot(*np.diff(gl, axis=0).T).sum()) < PIN_ROAD_M:
             continue
         for e in (gl[0], gl[-1]):
-            for p in shared:
-                if np.hypot(*(e - p)) < PIN_M:
-                    out.append(p)
+            out.extend(shared[np.hypot(e[0] - shared[:, 0], e[1] - shared[:, 1]) < PIN_M])
     return out
 
 
@@ -3111,15 +3458,10 @@ def curve_profile(s, g, req, z0, zL, g0=0.0, gL=0.0, max_grade=None, lift=None, 
 
 def _tents(s, z, grade):
     """max over points i of z_i - grade * |s - s_i|: every requirement reached at `grade` and left at it
-    (the deck rides low where nothing is under it, then climbs to what it must clear). Pure."""
-    ds = np.diff(s)
-    f = np.array(z, np.float64)
-    for i in range(1, len(f)):
-        f[i] = max(f[i], f[i - 1] - grade * ds[i - 1])
-    b = np.array(z, np.float64)
-    for i in range(len(b) - 2, -1, -1):
-        b[i] = max(b[i], b[i + 1] - grade * ds[i])
-    return np.maximum(f, b)
+    (the deck rides low where nothing is under it, then climbs to what it must clear; earthfast.deck_tents). Pure."""
+    import fast
+    fast.require(141, "deck_tents")
+    return fast._ef.deck_tents(np.ascontiguousarray(s, np.float64), np.ascontiguousarray(z, np.float64), float(grade))
 
 
 def _curve_try(s, want, cap, z0, zL, g0, gL, step, L, K, iters):
@@ -4565,7 +4907,9 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
                if 0 <= y < n]
         return sorted(out, key=lambda k: (abs((k.x - cx + n / 2) % n - n / 2) + abs(k.y - cy), k))
     own = set(keys)
-    tile = ("roads", "infrastructure") + (TILE_BUILDING_LAYERS if buildings else ())
+    # (land use too: industry._named_plants reads it for every tile; asked for alone after the rest it was ~5 s of a
+    # first visit's Manhattan road tile, 2026-11-02)
+    tile = ("roads", "infrastructure", "land_use") + (TILE_BUILDING_LAYERS if buildings else ())
     needs = [(k, ly) for k in sorted(keys) for ly in tile]
     needs += [(k, "roads") for k in ring(1) if k not in own]
     # (and the ring past that: gradesep reads the neighbours of every cell whose level ranges are asked, the ring's too)
@@ -6216,7 +6560,7 @@ def wet_run_inside(xy, wet):
 
 TUNNEL = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}     # the road surface in a tunnel (a deck: collides)
 LOW_HOLE_M = 3.0            # m from a low arch's ends: its mouths, flat at its floor (arch_raise) and cut away ...
-LOW_HOLE_STEP = 2.5         # ... the cut a terrain grid step further (the squares from the floor up to the soil)
+LOW_HOLE_STEP = 1.5         # ... the cut a terrain grid step (1 m) further (the squares from the floor up to the soil)
 TUNNEL_HOLE_MARGIN = 0.5    # m around the tube a portal's terrain hole reaches (above, below and sideways)
 
 
@@ -6434,7 +6778,7 @@ WALL_TAPER_M = 8.0      # m at each end of a wall over which it comes down ...
 WALL_TAPER_LOW_M = 0.6  # ... to this over the road
 WALL_SLAB_DZ = 0.8      # m the ground behind a wall may fall under its top before the top ends there ...
 WALL_COPING_MIN_M = 0.5  # ... at least its coping
-WALL_DIAG_M = 2.9       # the terrain lattice's diagonal (heightmap.SQUARE 2 m)
+WALL_DIAG_M = 1.45      # the terrain lattice's diagonal (heightmap.SQUARE 1 m)
 # a major road's cutting is walled in concrete (Munich's McGraw-Graben, Mapillary 2026-10-21), a smaller road's in stone
 # (Central Park's transverses)
 CONCRETE_WALL_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"}
@@ -6702,6 +7046,7 @@ def _parapets(xy, z, out_n, rh, inside, steps, gs, others, own, decks, drop_m=No
             out.append({"base": base[sl], "top": z[sl] + PARAPET_H, "foot": np.minimum(z[sl] - 1.0, g_back - 0.3),
                         "toward": -out_n[sl],
                         "thick": np.full(j - i + 1, PARAPET_W), "concrete": False, "rock": False, "parapet": True,
+                        "at": (i, j + 1),
                         "road_z": z[sl]})
         i = j + 1
     return out
@@ -6788,6 +7133,17 @@ def _cut_behind(base, out_n, z, ground):
     return bool(np.median(rise) >= WALL_STEEP)
 
 
+def hairpin_extra(frame, spec, xy):
+    """Per point of a road's line xy (k, 2) in the frame: how much wider than its width / 2 a pass road is there round
+    its widened hairpins (hairpin_tapers on the line itself), or None (not a pass road, no hairpin)."""
+    if not getattr(spec, "mountain", False) or len(xy) < 3:
+        return None
+    la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    lo, la = np.asarray(lo, np.float64), np.asarray(la, np.float64)
+    ws = taper_widths(spec.width, hairpin_tapers(np.c_[lo, la], spec.width), lo, la)
+    return None if ws is None else (ws - spec.width) / 2
+
+
 def retaining_walls(frame, roads, elev, exact, decks=()):
     """Stone retaining walls along the ground roads cut deeper than grading.WALL_CUT_M into the ground (the grading
     leaves the ground at its natural height right behind them): [dict(base (k, 2) the wall's face line, top (k,),
@@ -6828,7 +7184,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                          ((PARAPET_DROP_MOUNTAIN_M, PARAPET_PROBE_MOUNTAIN_M) if spec.mountain
                           else (PARAPET_DROP_M, PARAPET_PROBE_M))
                          if not spec.urban and spec.cls not in NO_PARAPET_CLASSES and not spec.median else None,
-                         grading.wall_max_h(spec), spec.mountain))
+                         grading.wall_max_h(spec), spec.mountain, hairpin_extra(frame, spec, xy)))
     if not pts_all:
         return []
 
@@ -6840,7 +7196,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     # finds no cutting (_wall_runs) and that gets no parapets has no use for them (most of a town's streets: 8 of 9 of
     # the ground lookups, 2026-10-25)
     probes, k = [], 0
-    for xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn in info:
+    for xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn, _hx in info:
         gg = g[k:k + len(xy)]
         k += len(xy)
         need = len(steps) and (parapets is not None or _wall_runs(gg - z).any())
@@ -6854,7 +7210,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     others = {fid: (np.asarray(pts, np.float64)[:, :2], spec.width / 2) for fid, spec, pts, _ in roads if len(pts) >= 2}
     others = _Segs(others)          # (one table for all the carriageway tests below)
     bend_of = {}
-    for (xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, mountain), (gg, need) in \
+    for (xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, mountain, hx), (gg, need) in \
             zip(info, probes):
         key = (id(xy), len(xy))
         if key not in bend_of:          # (a tight bend: no wall into it, grading.bend_zone)
@@ -6897,7 +7253,12 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
             ground_at = lambda d, idx: np.array([np.interp(d[n], np.r_[steps, pd], np.r_[gs[m], gg[m]])  # noqa: E731
                                                  for n, m in enumerate(idx)])
         if parapets is not None and need:
-            out.extend(_parapets(xy, z, out_n, rh, inside, steps, gs, others, fid, decks, *parapets))
+            par = _parapets(xy, z, out_n, rh, inside, steps, gs, others, fid, decks, *parapets)
+            if hx is not None:          # (round a widened hairpin: at its edge there, hairpin_extra)
+                for w_ in par:
+                    a_, b_ = w_["at"]
+                    w_["base"] = w_["base"] + out_n[a_:b_] * hx[a_:b_, None]
+            out.extend(par)
         full = _wall_runs(gg - z) & ~_under_decks(xy + out_n * core, z, decks) & ~bends
         # (no face standing on a carriageway: a hairpin's other leg, the same road, the Stelvio Pass 2026-10-21)
         full &= ~_on_carriageways(xy + out_n * face[:, None], others, 0.0)
@@ -7401,6 +7762,29 @@ def _deck_frame(spec, walk):
     return float(spec.width) + wm * len(sides), wm / 2 * float(sum(sides))
 
 
+def _end_nodes(feats):
+    """(rounded end point -> [(feature, 0 | 1)], (feature, 0 | 1) -> its end point) of a layer's features' first-to-last
+    coordinates, made once (kept on it): deck_walks made them for the whole layer at each deck, ~0.5 s of a Manhattan
+    tile set (2026-11-02). Pure given feats."""
+    got = feats.__dict__.get("_end_nodes")
+    if got is not None:
+        return got
+    nodes = {}                                  # rounded end point -> [(feature, 0 | 1)]
+    for j in range(len(feats)):
+        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
+        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
+        if b - a < 2:
+            continue
+        for e, k in ((0, a), (1, b - 1)):
+            nodes.setdefault((round(float(feats.lonlat[k, 0]), 6), round(float(feats.lonlat[k, 1]), 6)), []).append((j, e))
+    ends = {}
+    for key, lst in nodes.items():
+        for j, e in lst:
+            ends[(j, e)] = key
+    got = feats.__dict__["_end_nodes"] = (nodes, ends)
+    return got
+
+
 def deck_walks(feats, i, ground_specs, left_hand=False):
     """(sidewalk width m, sides) a deck of feature i carries, or None: its own ground part's (ground_specs[i]: the
     tile's road_specs, land cover and all) where that has sidewalks, else those of the nearest road of its class with
@@ -7414,18 +7798,7 @@ def deck_walks(feats, i, ground_specs, left_hand=False):
     if bridge[i] is None:
         return None
     cls = bridge[i].cls
-    nodes = {}                                  # rounded end point -> [(feature, 0 | 1)]
-    for j in range(len(feats)):
-        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
-        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
-        if b - a < 2:
-            continue
-        for e, k in ((0, a), (1, b - 1)):
-            nodes.setdefault((round(float(feats.lonlat[k, 0]), 6), round(float(feats.lonlat[k, 1]), 6)), []).append((j, e))
-    ends = {}
-    for key, lst in nodes.items():
-        for j, e in lst:
-            ends[(j, e)] = key
+    nodes, ends = _end_nodes(feats)
     seen, frontier = {i}, [(i, False)]          # (feature, whether its direction runs against i's)
     for _ in range(DECK_WALK_CHAIN):
         nxt, best = [], None
@@ -8368,6 +8741,9 @@ class GeoTracker:
             self.shown.pop(k, None)
             self.need = {nk: v for nk, v in self.need.items() if nk[0] != k}
             conn.send({"type": "roads_drop", "anchorId": aid, "key": geotiles.key(*k)})
+            gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
+            if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
+                gone("roads", k, geotiles.key(*k))
         if self.retry:
             self.retry = {k: t for k, t in self.retry.items() if t > now}
 

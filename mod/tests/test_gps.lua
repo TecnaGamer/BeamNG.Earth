@@ -171,4 +171,27 @@ do -- the minimap's distance counts the whole planned route, not only the arrows
   G.addRest(rp, 0)
   T.check(rp.path[1].distToTarget == 482700, 'nothing left past the path: unchanged')
 end
+-- GitHub #623: arrival on the route, not by straight line; driving back along the route plans it again
+do
+  T.check(not G.arrived(35, 82, 2), 'within 40 m in a straight line, 82 m of route and two turns to go: not yet')
+  T.check(G.arrived(35, 20, 2), 'the route\'s end reached')
+  T.check(G.arrived(150, 10, 3), 'the route\'s end, the destination off the road beyond it: arrived')
+  T.check(G.arrived(30, 500, 200), 'the destination reached away from the route')
+  T.check(G.arrived(30, nil, 0) and not G.arrived(50, nil, 0), 'no route: by straight line, as before')
+  local least, back = nil, false
+  for _, r in ipairs({ 1000, 900, 800, 850, 950 }) do back, least = G.backtracking(least, r, 30) end
+  T.check(not back and least == 800, 'turned round: 150 m back is not yet a re-plan')
+  back, least = G.backtracking(least, 1010, 30)
+  T.check(back and least == 800, '210 m back along the route at speed: planned again')
+  T.check(not G.backtracking(800, 1010, 2), 'creeping (a U-turn manoeuvre): no re-plan')
+  T.check(not G.backtracking(nil, 5000, 30), 'the first look sets the mark')
+end
+-- GitHub #103 / #38: a failed route request is asked again (it was never, the GPS steered straight for good)
+do
+  T.check(G.retryRoute(nil, 0, 0), 'no route asked yet: ask')
+  T.check(not G.retryRoute({ points = {} }, 999, 0), 'a planned route: no new request here (off-route / backtrack do that)')
+  T.check(not G.retryRoute(false, 10, 1) and G.retryRoute(false, 15, 1), 'one failure: again after 15 s')
+  T.check(not G.retryRoute(false, 50, 3) and G.retryRoute(false, 60, 3), 'three in a row: after 60 s')
+  T.check(G.retryRoute(false, 240, 20), 'never longer than 4 min')
+end
 T.done('test_gps')

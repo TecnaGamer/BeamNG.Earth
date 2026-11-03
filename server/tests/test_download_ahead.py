@@ -40,7 +40,7 @@ class FakeMapdata:
 def server():
     s = types.SimpleNamespace(dem=FakeDem(), mapdata=FakeMapdata(), buildings=True, ahead_pool=SyncPool(),
                               ahead_busy=False, ahead_last=None, ahead_stats={"dem": 0, "cells": 0, "deferred": 0},
-                              layout=types.SimpleNamespace(block=512))
+                              layout=types.SimpleNamespace(block=1024))
     return s
 
 
