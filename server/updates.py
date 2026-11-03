@@ -22,7 +22,7 @@ import time
 
 import netfetch
 
-REPO = "redthepro/Beam-Earth"
+REPO = "TecnaGamer/BeamNG.Earth"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PAGE_URL = f"https://github.com/{REPO}/releases"      # the downloads (.exe / AppImage)
 # the folder with VERSION: above server/, or the packaged app's bundle (launcher.py frozen by PyInstaller, where

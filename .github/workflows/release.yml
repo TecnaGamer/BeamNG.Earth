@@ -189,7 +189,7 @@ jobs:
           python3 tools/package.py --beammp
           python3 tools/build_host.py --smoke
           pre=""
-          case "$v" in *preview*|*alpha*|*beta*|*rc*) pre="--prerelease";; esac
+          case "$v" in *preview*|*alpha*|*rc*) pre="--prerelease";; esac     # preserve upstream: betas are full releases
           cat > notes.md <<EOF
           **Download** the file for your system, run it, and it does the rest: it installs the mod into BeamNG.drive,
           starts the world server and starts the game. Then pick **Freeroam > BeamNG.Earth**.

@@ -4,17 +4,24 @@ A 1:1 scale, streamed Earth for [BeamNG.drive](https://www.beamng.com/): drive a
 planet on real elevation data and satellite imagery, with distance-based level of detail and the
 real curvature of the Earth.
 
-Release: 1.8.1 (see VERSION). Upstream runtime baseline: BeamNG.drive 0.40.4 on Linux (Vulkan) and 0.40.3 on the Steam Deck. See
+Version and release status: [VERSION](VERSION). Recorded runtime baseline: BeamNG.drive 0.40.4 on Linux (Vulkan)
+and 0.40.3 on the Steam Deck. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for what is coming.
 
-**Modernization branch:** current changes, architecture, measured results and remaining work are tracked in
-[the foundation milestone](docs/MODERNIZATION.md) and [validation report](docs/MODERNIZATION_VALIDATION.md).
-These changes still require real BeamNG/BeamMP gameplay validation. Cross-platform build results are recorded
-with each release. Version 1.8.1 carries forward the opt-in [shared road-plan bundles](docs/SHARED_WORLD.md); this is a bounded
-prepared-data workflow, not full shared-world generation or the completed platform overhaul.
-The [platform status table](docs/PLATFORM_STATUS.md) distinguishes existing features, verified changes,
-experimental functionality and work still outstanding.
-See the [1.8.1 release record](docs/RELEASE_1_8_1.md) for review fixes and validation boundaries.
+**Modernization contribution (unreleased):** geographic download and cache fixes, safer road and multiplayer
+input handling, and opt-in [shared road-plan bundles](docs/SHARED_WORLD.md) build on the existing world generator.
+
+- A [controlled cache-race benchmark](docs/research/2026-11-02-range-cache.md) reduced duplicate requests from
+  two to one and median elapsed time from 134.6 to 71.3 ms.
+- The [shared-plan experiment](docs/research/2026-11-02-world-bundle.md) reused the same road heights across
+  two floating origins with zero source queries by either consumer. Its small synthetic cold path was slower;
+  it demonstrates consistent prepared data and less repeated retrieval, without claiming faster world loading.
+
+The [foundation audit](docs/MODERNIZATION.md), [validation report](docs/MODERNIZATION_VALIDATION.md), and
+[platform status table](docs/PLATFORM_STATUS.md) describe the implementation and remaining work. Shared plans
+are experimental, off by default, and cover road grading rather than the complete world. Real BeamNG/BeamMP
+driving acceptance remains pending. [Archived fork validation](docs/RELEASE_1_8_1.md) records the contribution's
+review and build evidence; it is not an upstream release announcement.
 
 **Community:** join the TGForever Discord, **[discord.gg/tgf](https://discord.gg/tgf)**, and head to the
 #beamng-earth channel to chat about the mod, get help, report bugs, help with its development, and get an IP to join a

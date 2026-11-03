@@ -1,8 +1,27 @@
 # Changelog
 
-What changed in each release of BeamNG.Earth, newest first.
+Unreleased contributions, historical fork validation notes, and BeamNG.Earth release history.
 
-## 1.8.1 (2026-11-02, Beam-Earth fork)
+## Unreleased — modernization contribution
+
+- Prevent duplicate geographic range downloads and reject incomplete or inconsistent responses; close revisit-cache file handles so cleanup and replacement work on Windows.
+- Preserve valid road-survey segments and bridge/tunnel levels when neighboring data is malformed. Validate multiplayer coordinates and complete vectors, handle date-line proximity, and quarantine expired peer origins until valid data returns.
+- Add opt-in shared road-plan bundles through the existing grader: complete-only export, deterministic manifests, generation-time provenance, bounded verified transfer, and offline warm reuse across floating origins.
+- Validate plan feature IDs, source versions, settings and content hashes before activation; enforce transfer deadlines and clean up resources on failed startup. Older hash-only export markers must be regenerated.
+- Add reproducible benchmarks and cross-platform regression gates. The [forced cache race](docs/research/2026-11-02-range-cache.md) went from two requests to one; the [shared-plan experiment](docs/research/2026-11-02-world-bundle.md) halved total source queries and required none from consumers, but was slower cold on its small fixture.
+- Match update notices to published releases, retain package license notices, and provide verified Windows/Linux hosting-package tooling with official BeamMP binaries and corresponding source.
+- Add Sketchfab metadata and license preflight without claiming model download, conversion or runtime import.
+
+Shared road plans remain disabled by default and do not represent every terrain, mesh or asset dependency.
+Real two-client driving, long-session stability and whole-world performance acceptance remain pending;
+see [scope and validation](docs/PLATFORM_STATUS.md). Upstream release numbering is unchanged by this contribution.
+
+## Historical fork releases (not upstream releases)
+
+The following records describe releases of `redthepro/Beam-Earth`, retained as development and validation
+history for this contribution. They are not releases published by `TecnaGamer/BeamNG.Earth`.
+
+### Fork 1.8.1 (2026-11-02)
 
 - Bump the published version from 1.7.4-beta to 1.8.1 and rebuild the player and hosting packages. The pending 1.8.0 publication was cancelled.
 - Carry forward the reliability fixes and opt-in shared road-plan workflow from 1.7.4-beta, including the request-counter ordering fix.
@@ -13,7 +32,7 @@ What changed in each release of BeamNG.Earth, newest first.
 - Bind export provenance to generation-time identity and cell/source metadata; hydrate cached source versions before pin validation and release resources on failed startup. Legacy hash-only export markers require regeneration.
 - Update current download examples and release documentation. Existing experimental features and runtime-validation gaps remain documented.
 
-## 1.7.4 beta (2026-11-02, Beam-Earth fork)
+### Fork 1.7.4 beta (2026-11-02)
 
 This fork release builds on TecnaGamer's BeamNG.Earth 1.7.3-beta. Upstream credit and the MIT license are retained.
 
@@ -22,7 +41,7 @@ This fork release builds on TecnaGamer's BeamNG.Earth 1.7.3-beta. Upstream credi
 - Validate multiplayer coordinates and packet vectors before conversion, handle the date line, and quarantine expired peer origins until a valid origin returns.
 - Release revisit-cache file handles after writes so cache cleanup and replacement work on Windows.
 - Add cross-platform regression gates and a Sketchfab metadata/licensing preflight tool. No model import or embedded voice is claimed.
-- Direct the fork's update checks and downloads to this repository. Include the BeamMP plugin ZIP in ordinary release publication.
+- Direct the fork's update checks and downloads to `redthepro/Beam-Earth`. Include the BeamMP plugin ZIP in ordinary release publication.
 - Add experimental immutable road-plan bundles: complete-only export, pinned manifest/hash validation, offline warm reuse and actual grading integration across local origins. This shares road plans, not the whole terrain or all assets; it is opt-in and requires runtime validation.
 - Provide Windows and Linux hosting bundles with pinned official BeamMP binaries, licenses, corresponding source and empty-key configuration. Player builds include `--world-cache` administration commands.
 

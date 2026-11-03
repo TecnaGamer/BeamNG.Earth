@@ -3,6 +3,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import netfetch  # noqa: E402
@@ -101,16 +102,20 @@ class OpenPageTest(unittest.TestCase):
 
     def test_only_the_projects_pages(self):
         calls = []
-        ok = updates.open_page(updates.PAGE_URL, popen=lambda *a, **k: calls.append(a))
+        with mock.patch.object(updates.os, "startfile", create=True) as startfile:
+            ok = updates.open_page(updates.PAGE_URL, popen=lambda *a, **k: calls.append(a))
+            if updates.sys.platform == "win32":
+                self.assertTrue(ok)
+                startfile.assert_called_once_with(updates.PAGE_URL)
         if updates.sys.platform != "win32":
             self.assertTrue(ok)
             self.assertEqual(calls[0][0][1], updates.PAGE_URL)
         for bad in ("https://evil.example/x", "https://github.com/someone/else", None, 5,
-                    updates.PAGE_URL + '\" && rm -rf ~', "https://github.com/TecnaGamer/BeamNG.Earth/releases"):
+                    updates.PAGE_URL + '\" && rm -rf ~', "https://github.com/redthepro/Beam-Earth/releases"):
             self.assertFalse(updates.open_page(bad, popen=lambda *a, **k: calls.append(a)), bad)
 
-    def test_fork_downloads_stay_on_the_fork(self):
+    def test_downloads_stay_on_upstream(self):
         import selfupdate
-        self.assertEqual(updates.REPO, "redthepro/Beam-Earth")
+        self.assertEqual(updates.REPO, "TecnaGamer/BeamNG.Earth")
         self.assertEqual(selfupdate.API_URL, updates.LATEST_API)
-        self.assertEqual(selfupdate.ASSET_PREFIX, "https://github.com/redthepro/Beam-Earth/releases/download/")
+        self.assertEqual(selfupdate.ASSET_PREFIX, "https://github.com/TecnaGamer/BeamNG.Earth/releases/download/")

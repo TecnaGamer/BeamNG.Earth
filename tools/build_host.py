@@ -34,11 +34,11 @@ MAX_DOWNLOAD = 128 * 1024 * 1024
 CONFIG = '''[General]
 AuthKey = ""
 Debug = false
-Description = "Beam-Earth community server"
+Description = "BeamNG.Earth community server"
 Map = "/levels/beamng_earth/info.json"
 MaxCars = 2
 MaxPlayers = 8
-Name = "Beam-Earth"
+Name = "BeamNG.Earth"
 Port = 30814
 Private = true
 ResourceFolder = "Resources"
@@ -46,7 +46,7 @@ ResourceFolder = "Resources"
 
 
 def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Beam-Earth-release-builder"})
+    req = urllib.request.Request(url, headers={"User-Agent": "BeamNG.Earth-release-builder"})
     with urllib.request.urlopen(req, timeout=60) as response:
         if not response.geturl().startswith("https://"):
             raise ValueError("Refused insecure download redirect")
@@ -116,7 +116,7 @@ def build(out_dir, downloader=fetch, platform="windows"):
     package.beammp_zip(str(out_dir), ver)
     plugin_path = out_dir / f"BeamNG.Earth-BeamMP-Server-{ver}.zip"
     host_path = out_dir / f"BeamNG.Earth-Host-{ver}-{platform_name}.zip"
-    notices = (f"Beam-Earth {platform_name} host bundle {ver}\n\n"
+    notices = (f"BeamNG.Earth {platform_name} host bundle {ver}\n\n"
                f"{binary_name} is the unmodified official BeamMP v{BEAMMP_VERSION} release.\n"
                f"Binary source: {binary_url}\nSHA-256: {binary_hash}\n"
                f"Corresponding source and pinned submodules: {source_path.name} (inside this bundle and alongside it).\n"

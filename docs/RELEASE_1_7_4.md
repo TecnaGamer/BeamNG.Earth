@@ -1,7 +1,11 @@
-# 1.7.4-beta build and validation record
+# Archived fork validation — 1.7.4-beta
 
-The release contains the foundation reliability work and opt-in pinned road-plan bundles. It does not
-complete the full modernization initiative. [Feature status](PLATFORM_STATUS.md) records remaining work.
+This historical record concerns the [redthepro/Beam-Earth fork's 1.7.4-beta release](https://github.com/redthepro/Beam-Earth/releases/tag/v1.7.4-beta),
+not a release published by `TecnaGamer/BeamNG.Earth`. It is retained as evidence for the upstream contribution;
+its results apply to that fork revision, not automatically to later PR revisions.
+
+That fork release contained the foundation reliability work and opt-in pinned road-plan bundles. It did not
+complete the full modernization initiative. [Current scope and validation](PLATFORM_STATUS.md) records remaining work.
 
 Local machine: Windows 11, Ryzen 7 7700X, Python 3.14.7, native earthfast 116. The source-native build and
 PyInstaller 6.22.3 custom MSVC bootloader build succeeded. Player executable compilation succeeded;
@@ -27,4 +31,4 @@ is the authority for remote build results; do not infer them from this local rec
 
 No actual BeamNG/BeamMP server session was launched for this validation. Users still supply their own
 BeamNG installation and BeamMP AuthKey. Embedded voice, parties, imported models and radio remain absent.
-This is a prerelease, with bounded road-plan sharing disabled by default and real gameplay acceptance pending.
+That fork release was a prerelease, with bounded road-plan sharing disabled by default and real gameplay acceptance pending.

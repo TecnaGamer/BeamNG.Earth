@@ -1,7 +1,11 @@
-# 1.8.1 release record
+# Archived fork validation — 1.8.1
 
-Version 1.8.1 follows a release review of the 1.7.4-beta implementation. The pending 1.8.0 publication
-was cancelled in favor of this version. It retains the gameplay implementation, reliability fixes and
+This historical record concerns `redthepro/Beam-Earth`, not an upstream release published by
+`TecnaGamer/BeamNG.Earth`. It preserves review findings and validation evidence for the contribution;
+the current PR's checks remain authoritative for the adapted upstream branch.
+
+Fork version 1.8.1 followed a release review of the fork's 1.7.4-beta implementation. The pending 1.8.0 publication
+was cancelled in favor of that version. It retained the gameplay implementation, reliability fixes and
 experimental shared road-plan support, with the review fixes listed in the changelog. This does not
 complete the [modernization roadmap](PLATFORM_STATUS.md) or add runtime acceptance.
 
@@ -16,7 +20,7 @@ complete the [modernization roadmap](PLATFORM_STATUS.md) or add runtime acceptan
 | Export could relabel old plans with current generation settings | Bind generation-time identity, source versions and cell metadata to each complete plan; reject mismatched or legacy markers. |
 | Cached rail/lane releases were invisible during pin validation | Read bounded cached manifest metadata without downloads, and clean up resources on failed startup compatibility checks. |
 
-Older hash-only export markers must be regenerated for 1.8.1. This affects the experimental bundle
+Older hash-only export markers needed regeneration for fork 1.8.1. This affects the experimental bundle
 export workflow; ordinary gameplay does not require a bundle. See [shared-plan setup](SHARED_WORLD.md).
 
 The provenance/integration review passed 176 focused cases with four existing skips. A two-iteration
@@ -24,11 +28,11 @@ The provenance/integration review passed 176 focused cases with four existing sk
 geographic heights, zero consumer source queries and zero warm requests. Its median cold path remained
 slower with sharing (125.96 ms versus 22.45 ms); this is a small synthetic regression fixture, not gameplay.
 
-The preceding release passed both Windows and Linux quality gates and player build/startup checks.
+The preceding fork release passed both Windows and Linux quality gates and player build/startup checks.
 Its final local gate passed 446 Python cases (five skipped), 72 Lua modules, two JavaScript checks and
-four Rust tests. The new version is rebuilt and passes the release workflow before publication;
-the [release page](https://github.com/redthepro/Beam-Earth/releases/tag/v1.8.1) records final build evidence
-and publishes SHA-256 checksums for the actual downloads.
+four Rust tests. The [fork's published 1.8.1 release](https://github.com/redthepro/Beam-Earth/releases/tag/v1.8.1)
+records final build evidence and SHA-256 checksums for those downloads. These are historical fork artifacts,
+not upstream downloads or evidence that the upstream PR has already been released.
 
 Windows player compilation runs locally with the custom MSVC bootloader and native earthfast 116;
 Linux AppImage compilation runs in CI. Windows and Linux hosting bundles include unchanged official

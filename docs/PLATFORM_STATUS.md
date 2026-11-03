@@ -1,7 +1,8 @@
-# Modernization target status — 1.8.1
+# Modernization contribution — scope and validation
 
-This tracks the requested platform scope. A release is not a claim that every target is complete.
-"Existing" means inherited upstream code, not a new feature or fresh engine validation in this initiative.
+This separates the work in this contribution from the broader modernization goals. It is not an upstream
+release announcement or a claim that every target is complete. "Existing" means existing BeamNG.Earth code,
+not a new feature or fresh engine validation in this contribution.
 
 | Target | Current evidence/status |
 |---|---|
@@ -21,7 +22,7 @@ This tracks the requested platform scope. A release is not a claim that every ta
 | Network utilization/caching | Range integrity and lock-race fixes; immutable prepared road plans deduplicate content and support offline warm reuse. |
 | Reduced stuttering | Not measured in BeamNG during this initiative. |
 | Memory/resource management | Revisit descriptor lifecycle fixed; bundle reads, handlers, artifacts and storage budgets bounded. Long-session memory profiling pending. |
-| Windows/Linux dedicated hosting | Earth plugin ZIP plus version-pinned official BeamMP Windows/Linux executable bundles, notices/source and empty-key configuration. AuthKey and actual hosting acceptance still required. |
+| Windows/Linux dedicated hosting | Packaging tools produce an Earth plugin ZIP and version-pinned official BeamMP Windows/Linux executable bundles with notices/source and empty-key configuration. AuthKey and actual hosting acceptance still required. |
 | Headless mode | Existing BeamMP dedicated server and Earth companion; new loopback road-plan cache commands in player executable. |
 | TUI/GUI administration | Full shared server-management interfaces not implemented. |
 | Integrated voice server | Not bundled or implemented. |
@@ -29,11 +30,11 @@ This tracks the requested platform scope. A release is not a claim that every ta
 | Server-side prefetching | Prepared bundles can be served before driving. Live aggregate-player predictive scheduling not implemented. |
 | Docker/automated deployment | Full deployment stack not implemented. Existing native release automation retained and expanded. |
 | Inherited bug fixes | Reproduced fixes integrated with regression coverage; see foundation audit. |
-| Automated testing | Windows/Linux quality workflow; local Python/Lua/Node/Rust suites and package validation. Remote results reported per release. |
+| Automated testing | Windows/Linux quality workflow; local Python/Lua/Node/Rust suites and package validation. Archived fork results document prior checks; the current PR's checks establish its build status. |
 | Multiplayer stress testing | Not performed against actual BeamMP clients. |
 | Performance benchmarks | Forced range race and synthetic two-client road-plan reuse measured. No full-city/FPS claims. |
 | Error handling | Corrupt ranges, malformed surveys/packets, stale peer origins and incompatible/incomplete bundle failures covered. |
-| Reliable releases | Required quality gate, fork-specific updater, versioned player/host assets, digest validation and explicit release limitations. |
+| Reliable releases | Required quality gate, published-release update checks, versioned player/host assets, digest validation and explicit validation boundaries. |
 
 See [shared road-plan operations](SHARED_WORLD.md), [foundation audit](MODERNIZATION.md), and
 [foundation validation](MODERNIZATION_VALIDATION.md). Next acceptance priority is real client driving

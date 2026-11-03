@@ -78,7 +78,7 @@ def version_files(work, ver):
     strings = {"CompanyName": "TecnaGamer", "FileDescription": "BeamNG.Earth launcher and world server",
                "FileVersion": ver, "InternalName": NAME, "LegalCopyright": "Copyright (c) 2026 TecnaGamer, MIT License",
                "OriginalFilename": f"{NAME}-{ver}.exe", "ProductName": NAME, "ProductVersion": ver,
-               "Comments": "Beam-Earth fork of TecnaGamer's BeamNG.Earth. https://github.com/redthepro/Beam-Earth"}
+               "Comments": "Drive the real world in BeamNG.drive. https://github.com/TecnaGamer/BeamNG.Earth"}
     vf = os.path.join(work, "version_info.txt")
     with open(vf, "w", encoding="utf-8") as f:
         f.write("VSVersionInfo(\n"
