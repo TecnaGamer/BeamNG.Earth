@@ -78,8 +78,18 @@ export class Minimap {
     const ctx = this.ctx
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     if (this.follow && this.cam) { this.lat = this.cam.lat; this.lon = this.cam.lon }
-    ctx.fillStyle = '#1d2329'
+    ctx.fillStyle = '#e1e8e2'
     ctx.fillRect(0, 0, w, h)
+    if (this.offline) {
+      // (no world server: no tiles to ask for; say why the map is empty)
+      ctx.fillStyle = '#55655f'
+      ctx.font = '500 13px Barlow, system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      const lines = ['The map shows once', 'the world server', 'is running']
+      lines.forEach((t, k) => ctx.fillText(t, w / 2, h / 2 + (k - 1) * 17 + 4))
+      ctx.textAlign = 'start'
+      return
+    }
     for (const t of visibleTiles(this.lat, this.lon, this.z, w, h)) {
       const im = this.tile(t)
       if (im.complete && !im.failed && im.naturalWidth) ctx.drawImage(im, t.left, t.top, t.size + 0.5, t.size + 0.5)
@@ -112,9 +122,9 @@ export class Minimap {
       ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, 2 * Math.PI); ctx.stroke()
     }
     if (this.noTiles) {
-      ctx.fillStyle = 'rgba(255,255,255,0.75)'
-      ctx.font = '11px system-ui, sans-serif'
-      ctx.fillText('No map tiles (earthd --map-tiles)', 8, h - 8)
+      ctx.fillStyle = '#55655f'
+      ctx.font = '500 12px Barlow, system-ui, sans-serif'
+      ctx.fillText('No map tiles: start the server with --map-tiles', 8, h - 8)
     }
   }
 }

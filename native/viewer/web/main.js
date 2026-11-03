@@ -13,6 +13,7 @@ import { itemOf } from './props.js'
 import { NightLights } from './lighting.js'
 import { Sky } from './sky.js'
 import { daylightPanel } from './daylight_ui.js'
+import { Offline } from './offline.js'
 
 const $ = id => document.getElementById(id)
 
@@ -46,9 +47,12 @@ resize()
 // --- world ---
 // (the mod's material definitions before any shape is made: the signs' lettering, the mod's colours)
 const modMaterialCount = await loadModMaterials()
+const viewerConfig = await fetch('/api/config').then(r => r.json()).catch(() => ({}))
 let world
 const net = new Net(msg => world.onMessage(msg))
 world = new World(net, root)
+// the guide sign while earthd can't be reached, with the button that starts it (offline.js)
+const offline = new Offline(net, viewerConfig)
 const osm = new Osm(world, root)
 const controls = new FlyControls(camera, canvas, pick)
 const minimap = new Minimap($('minimap'), (lat, lon) => teleport(lat, lon))
@@ -58,7 +62,7 @@ $('centre').onclick = () => minimap.centre()
 // and the sun, sky and shadows (sky.js: the time of day)
 const lights = new NightLights(root, world.props)
 const sky = new Sky(scene, root, renderer, hemi, sun)
-window.viewer = { camera, controls, world, osm, minimap, scene, lights, sky }      // (for the browser console)
+window.viewer = { camera, controls, world, osm, minimap, scene, lights, sky, offline }      // (for the browser console)
 
 const LAST = 'bnge-viewer-last'
 function remember(lat, lon) { try { localStorage.setItem(LAST, JSON.stringify([lat, lon])) } catch (e) { /* none */ } }
@@ -69,7 +73,7 @@ function lastPlace() {
 }
 
 function teleport(lat, lon, place = null) {
-  if (!world.hello) { world.status = 'Not connected to earthd'; return }
+  if (!world.hello) { world.status = 'Waiting for the world server'; return }
   world.teleport(lat, lon)
   minimap.pending = { lat, lon }
   remember(lat, lon)
@@ -95,7 +99,7 @@ const direct = new gc.Direct(d => {
   s.className = ok ? '' : 'bad'
   s.textContent = `viewer -> Photon: ${d.status}${d.ms ? `, ${d.ms.toFixed(0)} ms` : ''}${d.n != null ? `, ${d.n} features` : ''}${d.error ? `, ${d.error}` : ''}`
   const a = document.createElement('a')
-  a.href = d.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = d.url; a.style.color = 'var(--accent)'
+  a.href = d.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = d.url; a.style.color = 'var(--water)'
   el.append(s, document.createElement('br'), a)
 })
 function setGeoDirect(on) {
@@ -219,43 +223,56 @@ world.on((ev, d) => {
 })
 
 // --- layers ---
+// [group, label, detail, the object, on]
 const LAYERS = [
-  ['Ground (far tiles + imagery)', () => world.layers.ground, true],
-  ['Physics block (heightmap)', () => world.layers.block, false],
-  ['Road surfaces and sidewalks', () => world.layers.roads, true],
-  ['Buildings, decks, wires', () => world.layers.content, true],
-  ['Far buildings and skyline', () => world.layers.farbld, true],
-  ['Street furniture (props)', () => world.layers.props, true],
-  ['Guard rails and barriers', () => world.layers.rails, true],
-  ['Highway signs (exits, mileposts, merges, speed limits)', () => world.layers.signs, true],
-  ['OSM ways', () => osm.ways, true],
-  ['OSM nodes (connectors)', () => osm.nodes, true],
+  ['layersWorld', 'Ground', 'Far tiles with imagery', () => world.layers.ground, true],
+  ['layersWorld', 'Physics block', 'The heightmap the tyres drive on', () => world.layers.block, false],
+  ['layersWorld', 'Roads and sidewalks', '', () => world.layers.roads, true],
+  ['layersWorld', 'Buildings, decks and wires', '', () => world.layers.content, true],
+  ['layersWorld', 'Far buildings and skyline', '', () => world.layers.farbld, true],
+  ['layersWorld', 'Street furniture', 'Lights, poles, hydrants, benches, signals', () => world.layers.props, true],
+  ['layersWorld', 'Guard rails and barriers', '', () => world.layers.rails, true],
+  ['layersWorld', 'Highway signs', 'Exits, mileposts, merges, speed limits', () => world.layers.signs, true],
+  ['layersOsm', 'OSM roads', 'Click one to see its tags', () => osm.ways, true],
+  ['layersOsm', 'Connectors', 'Overture road nodes', () => osm.nodes, true],
 ]
-for (const [label, get, on] of LAYERS) {
+// a switch row: the box, its label and an optional line of detail (also daylight_ui.js)
+function option(label, detail, on, fn) {
   const l = document.createElement('label')
-  const cb = document.createElement('input')
-  cb.type = 'checkbox'
-  cb.checked = on
-  get().visible = on
-  cb.onchange = () => { get().visible = cb.checked }
-  l.append(cb, label)
-  $('layers').append(l)
-}
-for (const [label, fn, on] of [['OSM drawn on top', on => osm.setOnTop(on)], ['Wireframe', on => setWireframe(on)],
-  ["Game materials (the game's textures; off: flat colours by kind)", setGameMaterials, matSettings.game],
-  ['Place names online (Photon)', on => { where.online = on; where.reset(); if (!on) $('location').textContent = '' }, true],
-  ['Geocode in the viewer (debug: Photon from this page, not earthd)', setGeoDirect, geoDirect]]) {
-  const l = document.createElement('label')
+  l.className = 'opt'
   const cb = document.createElement('input')
   cb.type = 'checkbox'
   cb.checked = !!on
   cb.onchange = () => fn(cb.checked)
-  l.append(cb, label)
-  $('layers').append(l)
+  const t = document.createElement('span')
+  t.textContent = label
+  if (detail) { const d = document.createElement('small'); d.textContent = detail; t.append(d) }
+  l.append(cb, t)
+  return l
+}
+for (const [group, label, detail, get, on] of LAYERS) {
+  get().visible = on
+  $(group).append(option(label, detail, on, v => { get().visible = v }))
+}
+for (const [group, label, detail, fn, on] of [
+  ['layersOsm', 'Draw OSM on top', 'Through the ground and buildings', on => osm.setOnTop(on), false],
+  ['layersRender', 'Game materials', "The game's own textures. Off: flat colours by kind", setGameMaterials, matSettings.game],
+  ['layersRender', 'Wireframe', '', on => setWireframe(on), false],
+  ['layersPlaces', 'Place names online', 'Town, region and country from Photon', on => { where.online = on; where.reset(); if (!on) $('location').textContent = '' }, true],
+  ['layersPlaces', 'Search from this page', 'For debugging: ask Photon directly, not through the world server', setGeoDirect, geoDirect]]) {
+  $(group).append(option(label, detail, on, fn))
 }
 
+// "/" goes to the search box, as on most map sites
+window.addEventListener('keydown', e => {
+  if (e.key !== '/' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+  e.preventDefault()
+  input.focus()
+  input.select()
+})
+
 // the time of day, Night, shadows and lamp lights controls (daylight_ui.js)
-const daylight = daylightPanel({ sky, lights, minimap, parent: $('layers') })
+const daylight = daylightPanel({ sky, lights, minimap, parent: $('light'), option })
 
 // --- inspecting ---
 const ray = new THREE.Raycaster()
@@ -289,7 +306,7 @@ function osmLink(rec) {
   a.target = '_blank'
   a.rel = 'noopener'
   a.textContent = rec
-  a.style.color = 'var(--accent)'
+  a.style.color = 'var(--water)'
   return a
 }
 
@@ -408,12 +425,14 @@ function frame(now) {
 requestAnimationFrame(frame)
 
 function ui(agl) {
-  $('conn').textContent = net.connected
-    ? `earthd ${world.hello ? `session ${world.sessionId}, ${world.hello.nearVisual || ''} mode` : 'connected'}`
-    : 'earthd not connected (start it: run_server.bat / start.py)'
-  $('status').textContent = world.status
+  offline.update()
+  minimap.offline = !net.connected
+  if (world.hello && net.connected) $('conn').title = `World server ${viewerConfig.earthd || ''}: session ${world.sessionId}, ${world.hello.nearVisual || ''} mode`
+  $('status').textContent = net.connected ? world.status : ''
   const c = world.counts(), o = osm.counts(), p = camera.position
   const rows = []
+  $('infoEmpty').classList.toggle('hidden', net.connected)
+  if (!net.connected) { $('info').textContent = ''; return }
   if (world.anchor) {
     rows.push(['anchor', `${world.aid} (${world.anchor.lat.toFixed(4)}, ${world.anchor.lon.toFixed(4)})`])
     if (minimap.cam) rows.push(['camera', `${minimap.cam.lat.toFixed(5)}, ${minimap.cam.lon.toFixed(5)}`])

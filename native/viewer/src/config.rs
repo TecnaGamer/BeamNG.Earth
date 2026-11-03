@@ -15,6 +15,8 @@ pub struct Config {
     pub game_dir: Option<PathBuf>,
     /// The mod's folder in this repository (its own shapes).
     pub mod_dir: PathBuf,
+    /// This repository (run_server.bat / run_server.sh: launch.rs).
+    pub repo_dir: PathBuf,
 }
 
 /// The launcher's choice (app.json `gameDir`), else a Steam library that has BeamNG.drive.
@@ -70,6 +72,12 @@ fn home() -> PathBuf {
 /// The repository root (native/viewer/../..), where start.py keeps `.beamng_earth.json`.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+}
+
+/// The repository root without `..` parts (a folder handed to cmd's `start /D`).
+fn repo_dir() -> PathBuf {
+    let m = Path::new(env!("CARGO_MANIFEST_DIR"));
+    m.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_else(repo_root)
 }
 
 fn json_str(path: &Path, key: &str) -> Option<String> {
@@ -153,6 +161,7 @@ impl Config {
             web_dir: web_dir.unwrap_or_else(default_web_dir),
             game_dir: game_dir.or_else(default_game_dir),
             mod_dir: repo_root().join("mod").join("beamng_earth"),
+            repo_dir: repo_dir(),
         })
     }
 }

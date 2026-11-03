@@ -83,6 +83,8 @@ pub async fn config(State(app): State<Arc<App>>) -> Response {
         "userDirOk": c.user_dir.join("temp").is_dir(),
         "cacheDir": c.cache_dir.display().to_string(),
         "mapPort": *app.map_port.lock().unwrap(),
+        "canStart": crate::launch::script(&app).is_some(),
+        "serverScript": crate::launch::script_name(),
     });
     ([(header::CONTENT_TYPE, "application/json")], v.to_string()).into_response()
 }

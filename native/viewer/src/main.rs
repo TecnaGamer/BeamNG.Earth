@@ -14,24 +14,28 @@
 //!   /tiles/...        earthd's map tiles (maptiles.py, port from its hello.mapPort)
 //!   /game/<path>      the game's own shapes for the props, the mod's textures (game.rs)
 //!   /api/materials    the mod's material definitions, merged (game.rs)
+//!   /api/earthd/start POST: start the world server (run_server.bat / .sh, launch.rs)
 
 mod bridge;
 mod config;
 mod files;
 mod game;
+mod launch;
 mod osm;
 mod tiles;
 mod zipfs;
 
 use std::sync::{Arc, Mutex};
 
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 
 pub struct App {
     pub cfg: config::Config,
     /// earthd's map tile port (hello.mapPort of the latest earthd hello).
     pub map_port: Mutex<Option<u16>>,
+    /// When the page last started the world server (launch.rs).
+    pub launched: Mutex<Option<std::time::Instant>>,
 }
 
 #[tokio::main]
@@ -57,10 +61,11 @@ async fn main() {
         eprintln!("warning: {} has no temp folder: is it the BeamNG.drive user folder earthd writes into? (--user-dir)",
                   cfg.user_dir.display());
     }
-    let app = Arc::new(App { cfg, map_port: Mutex::new(None) });
+    let app = Arc::new(App { cfg, map_port: Mutex::new(None), launched: Mutex::new(None) });
     let router = Router::new()
         .route("/ws", get(bridge::ws))
         .route("/api/config", get(files::config))
+        .route("/api/earthd/start", post(launch::start))
         .route("/api/osm", get(osm::handler))
         .route("/api/materials", get(game::materials))
         .route("/api/material", get(game::material))

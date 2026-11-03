@@ -200,7 +200,14 @@ the language from the country under the camera).
    `--user-dir` defaults to `start.py`'s `.beamng_earth.json`. `--cache-dir` defaults to the
    launcher's choice, else `~/.cache/beamng-earth`.
 3. Open http://127.0.0.1:47700/ and click the minimap, or type `lat, lon`. `#lat,lon` in the URL
-   teleports on load, and the last place is remembered.
+   teleports on load, and the last place is remembered. Press `/` to search.
+
+If earthd isn't running, the page says so and offers **Start the world server**. That button
+(`POST /api/earthd/start`, `src/launch.rs`) runs `run_server.bat` in a window of its own (Linux: a
+terminal when one is found, else the background with `earthd-viewer.log`; macOS: Terminal), and the
+page connects as soon as earthd answers. Closing that window stops the server. The button is only
+offered for an earthd on this computer, and the endpoint refuses requests from any other page
+(Origin check).
 
 Controls: drag to look, WASD to move, E / Space up, Q / C down, Shift x5, Ctrl x0.2, wheel for
 speed. Click an OSM way or node, or any shape, to inspect it.
