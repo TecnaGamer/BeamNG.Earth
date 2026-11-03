@@ -878,6 +878,11 @@ local function slotsGoneNow()
   return #out > 0 and out or nil
 end
 
+-- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
+M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24 }
+function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: probes
+function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
+
 local function onMessage(msg)
   local t = msg.type
   if t == '_connected' then
@@ -2083,9 +2088,34 @@ local function onUpdate(dtReal, dtSim)
   gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
   gov:beginFrame(farfield.hasWork() or roads.hasWork() or M._trafficvisuals.hasWork())
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
-  for _, msg in ipairs(net.update(dtReal)) do
-    local ok, err = pcall(onMessage, msg)
-    if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
+  -- The server's messages, in order, up to a budget a frame (NET_BUDGET_MS; NET_BUSY_MS while NET_BUSY_N or more wait;
+  -- none while loading), at least one: a burst was handled in one frame, 40-170 ms "net" hitches on a 120 mph drive,
+  -- 2026-11-03. The rest waits for the next frames. Each type's cost is kept (M.netCosts).
+  do
+    local nq = M._netq
+    for _, msg in ipairs(net.update(dtReal)) do nq.q[#nq.q + 1] = msg end
+    local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
+    local budget = loadingNow and math.huge or ((#nq.q - nq.head + 1 >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    local n0 = hitchClock()
+    while nq.head <= #nq.q do
+      local msg = nq.q[nq.head]
+      nq.head = nq.head + 1       -- (the slot kept: holes would make #nq.q, where the next ones go, unreliable)
+      local m0 = hitchClock()
+      local ok, err = pcall(onMessage, msg)
+      if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
+      local ms = hitchClock() - m0
+      local c = nq.cost[tostring(msg.type)]
+      if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
+      c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
+      if hitchClock() - n0 >= budget then break end
+    end
+    if nq.head > #nq.q then
+      nq.q, nq.head = {}, 1
+    elseif nq.head > 256 then     -- (a lasting backlog: the handled ones dropped, the rest moved to the front)
+      local rest = {}
+      for k = nq.head, #nq.q do rest[#rest + 1] = nq.q[k] end
+      nq.q, nq.head = rest, 1
+    end
   end
   t = mark('net', t)
   if not scenetree.MissionGroup then return end -- no level loaded
