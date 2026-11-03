@@ -399,6 +399,12 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
     E, N, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+    onto_xy = np.zeros((0, 2))          # the part ends leading onto a bridge (fill_abutment's)
+    if abut is not None and ABUT_FILL_ON:
+        last = np.cumsum([len(lonlat) for lonlat, _ in parts]) - 1
+        onto_xy = np.array([(E[i], N[i]) for j, (lonlat, _) in enumerate(parts) if len(lonlat)
+                            for at_end, i in ((0, last[j] - len(lonlat) + 1), (1, last[j])) if abut[j][at_end]],
+                           np.float64).reshape(-1, 2)
     prof, k = [], 0
     for j, (lonlat, spec) in enumerate(parts):
         m = len(lonlat)
@@ -412,11 +418,12 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         if len(xy) < 2:
             prof.append(None)
             continue
-        side, bank_side = [], []
+        side, bank_side, onto = [], [], []
         for out in (ext[j] if ext is not None else (None, None)):
             if out is None or len(out) < 2:
                 side.append(np.zeros((0, 2)))
                 bank_side.append(np.zeros((0, 2)))
+                onto.append(False)
             else:                       # (from the node outward; the node is the part's own end sample)
                 bank_side.append(resample(np.asarray(out, np.float64), step)[0][1:])
                 # Extra bank geometry must not change longitudinal DEM sampling
@@ -425,8 +432,12 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
                 arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(out, axis=0), axis=1))]
                 if arc[-1] > reach + 1e-8:
                     out = np.vstack([np.asarray(out)[arc < reach], _point_along(out, reach)])
+                    onto.append(False)
+                else:                   # (does it end where another part leads onto a bridge?)
+                    onto.append(bool(len(onto_xy)) and
+                                float(np.hypot(*(onto_xy - np.asarray(out, np.float64)[-1]).T).min()) <= CHAIN_JOIN_M)
                 side.append(resample(np.asarray(out, np.float64), step)[0][1:])
-        prof.append((xy, side[0][::-1], side[1], step, bank_side[0][::-1], bank_side[1]))
+        prof.append((xy, side[0][::-1], side[1], step, bank_side[0][::-1], bank_side[1], onto))
     pts = [np.concatenate([b, xy, a]) for xy, b, a, *_ in (p for p in prof if p is not None)]
     if not pts:
         return [None] * len(parts)
@@ -448,7 +459,7 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         if pr is None:
             out.append(None)
             continue
-        xy, before, after, step, bank_before, bank_after = pr
+        xy, before, after, step, bank_before, bank_after, onto = pr
         nb, na = len(before), len(after)
         zx = zall[k:k + nb + len(xy) + na]
         k += nb + len(xy) + na
@@ -460,15 +471,17 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         ab = (False, False)
         if abut is not None and ABUT_FILL_ON:
             ab = (bool(abut[j][0]), bool(abut[j][1]))
-            if ab[0] and nb:            # (no extension past an end onto a bridge: its fill is the part's own)
+            if ab[0] and nb:            # (no extension past an end onto a bridge)
                 zx, nb = zx[nb:], 0
             if ab[1] and na:
                 zx, na = zx[:len(zx) - na], 0
-            z = zx[nb:nb + len(xy)]
-            for at_end in (False, True):
-                if ab[int(at_end)]:
-                    z = fill_abutment(z, at_end)
-            zx = np.concatenate([zx[:nb], z, zx[nb + len(xy):]])
+            # Filled with the road it goes on in past its other end: a part split at a junction by the bridge alone had
+            # too few samples for the grade, and its end stayed at the slope's foot, 6 m under the road (Kurna - Tuhala
+            # over Tallinna ringtee, 59.3364 N 24.8239 E, GitHub #684). An extension running onto a bridge's end (the
+            # part on the other side of that junction) is filled the same, so the two parts meet.
+            for at_end, n_ext in ((False, nb), (True, na)):
+                if ab[int(at_end)] or (n_ext and onto[int(at_end)]):
+                    zx = fill_abutment(zx, at_end, step)
         pin = pins[j] if pins is not None else (None, None)
         if pin[0] is not None and not nb and not ab[0]:     # (the end sample held: the smoothing keeps an end's height)
             zx = zx.copy()
@@ -1466,12 +1479,21 @@ class _Planner:
                 if _never_raised(specs[i]) and not got[3]:
                     continue
                 lift, others = got[0], got[1]
+                zp = float(np.asarray(p.z, np.float64)[-1 if at_end else 0])
                 if len(got) > 4 and got[4] is not None:
                     # (a measured deck end: up to its height from the plan's own there, not from the ground under the
                     # point, which may lie down the cut the deck spans: Charles Street's approach over I-83 rose 2.2 m
                     # over its plan to a deck end measured at the street's height, 2026-10-29)
-                    zp = float(np.asarray(p.z, np.float64)[-1 if at_end else 0])
                     lift = min(float(got[4]) - zp, APPROACH_MAX_LIFT)
+                    if lift < APPROACH_MIN_LIFT:
+                        continue
+                else:
+                    # (the lift is over the ground at the bridge's end point (bridge_lifts): where the plan is higher
+                    # there, filled up the embankment its map line ends down (fill_abutment), only what it still lacks.
+                    # The fill and the whole lift on top took Kurna - Tuhala's deck end 6 m over the embankment it
+                    # stands on, over Tallinna ringtee, 59.3364 N 24.8239 E, GitHub #684)
+                    ela, elo, _ = self.frame.enu_to_geodetic(np.array([e[0]]), np.array([e[1]]), 0.0)
+                    lift -= max(0.0, zp - float(np.asarray(self.elev(ela, elo), np.float64).reshape(-1)[0]))
                     if lift < APPROACH_MIN_LIFT:
                         continue
                 measured = len(got) > 4 and got[4] is not None

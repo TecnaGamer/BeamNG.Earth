@@ -195,6 +195,36 @@ class AbutmentTest(unittest.TestCase):
         steady = 380.0 - 0.06 * d               # a road falling 6 % onto a bridge all the way: left alone
         self.assertIs(grading.fill_abutment(steady, False), steady)
 
+    def test_fill_sees_past_a_junction_by_the_bridge(self):
+        # Kurna - Tuhala over Tallinna ringtee (59.3364 N 24.8239 E, GitHub #684): the map splits the road onto the
+        # bridge at a junction 16 m before it. That piece alone had too few samples for the embankment's grade, its
+        # end stayed at the foot of the slope its map line ends down, 6 m under the road, and so did the deck's end.
+        spec = roads.Spec(6.2, "paved", False, "tertiary")
+
+        def raw(la, lo):
+            x = np.asarray(FRAME.geodetic_to_enu(la, lo, 0.0)[0], np.float64)
+            road = 54.0 - 0.01 * x              # the road on its embankment, rising 1 % away from the bridge (x < 0)
+            return np.where(x > -10.0, 48.0 + (road - 48.0) * -x / 10.0, road)     # its map line ends down the slope
+
+        def line(a, b):
+            xs = np.arange(a, b + np.sign(b - a), 2.0 * np.sign(b - a))
+            return np.stack([xs, np.zeros(len(xs))], axis=1)
+
+        def lonlat(a, b):
+            xy = line(a, b)
+            la, lo, _ = FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+            return np.c_[lo, la]
+
+        whole = grading.plan_roads(FRAME, [(lonlat(-100.0, 0.0), spec)], raw, abut=[(False, True)],
+                                   ext=[(line(-100.0, -200.0), None)], cuts=False)[0]
+        self.assertAlmostEqual(whole.z[-1], 54.0, delta=0.3)       # (the fill as before: one piece to the bridge)
+        split = grading.plan_roads(FRAME, [(lonlat(-100.0, -16.0), spec), (lonlat(-16.0, 0.0), spec)], raw,
+                                   abut=[(False, False), (False, True)],
+                                   ext=[(line(-100.0, -200.0), line(-16.0, 0.0)), (line(-16.0, -116.0), None)],
+                                   cuts=False)
+        self.assertAlmostEqual(split[1].z[-1], whole.z[-1], delta=0.1, msg="the bridge end as if not split")
+        self.assertAlmostEqual(split[1].z[0], split[0].z[-1], delta=0.1, msg="the pieces meet at the junction")
+
     def test_the_abutment_is_its_roads(self):
         # the approach (abut at its first vertex) ends 9.7 m from the centreline of a road cut 8 m under it
         xy = np.stack([np.arange(0.0, 80.1, 4.0), np.zeros(21)], axis=1)
