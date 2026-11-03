@@ -47,10 +47,13 @@ class GameLifecycleTest(unittest.TestCase):
         self.assertTrue(result)
         self.assertGreaterEqual(elapsed, 12 + launcher.GAME_GONE_S)
 
-    def test_start_without_game_or_dialog_is_bounded(self):
-        result, elapsed = self.follow()
-        self.assertFalse(result)
-        self.assertEqual(elapsed, launcher.GAME_START_S)
+    def test_slow_steam_start_keeps_the_server_waiting(self):
+        # (no game yet after GAME_START_S: said once, and the server keeps waiting for it, 2026-10-24)
+        for windows in (True, False):
+            with self.subTest(windows=windows):
+                result, elapsed = self.follow(windows=windows, alive=lambda t: 400 <= t < 405)
+                self.assertTrue(result)
+                self.assertGreaterEqual(elapsed, 405)
 
     def test_cancelled_launch_dialog_stops_services(self):
         result, elapsed = self.follow(dialog=lambda t: t < 5)

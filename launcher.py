@@ -955,7 +955,7 @@ def wait_for_game(proc, server=None):
     """Follow the actual game, with bounded failed startup and cleanup when our server exits."""
     deadline = time.monotonic() + GAME_START_S
     grace = WINDOWS_GAME_GONE_S if IS_WIN else GAME_GONE_S
-    started, dialog_seen = False, False
+    started, dialog_seen, said = False, False, False
     gone_since = dialog_closed_since = None
     while True:
         if server is not None and server.poll() is not None:
@@ -982,9 +982,12 @@ def wait_for_game(proc, server=None):
             elif now - dialog_closed_since >= grace:
                 say("The BeamNG launch window closed without starting the game; stopping the world server.")
                 return False
-        elif now >= deadline:
-            say("BeamNG.drive did not start; stopping the world server. Try again or start the game from Steam.")
-            return False
+        elif now >= deadline and not said:
+            # (said once; the server keeps waiting: a Steam start can take minutes, a game update or the first
+            # shader build, and on Linux the launch options window is not seen; the 2026-10-24 rule)
+            say("the game has not started yet (no BeamNG.drive process): start it from Steam; the server keeps "
+                "running for it, Ctrl+C stops it")
+            said = True
         time.sleep(1 if IS_WIN else 3)
 
 
