@@ -38,6 +38,11 @@ def graded(plans, pts):
 
 
 class AuthorityTest(unittest.TestCase):
+    def setUp(self):              # (opt-in since 2026-11-03: on for these tests)
+        patcher = mock.patch.object(grading, "PAD_ON", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def w(self, spec):
         return grading.pad_class_w(spec)
 
@@ -63,6 +68,11 @@ class AuthorityTest(unittest.TestCase):
 
 
 class PadTest(unittest.TestCase):
+    def setUp(self):              # (opt-in since 2026-11-03: on for these tests)
+        patcher = mock.patch.object(grading, "PAD_ON", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def crossing(self, one_part):
         """A primary along the contour, a residential climbing across it (one part, or split at the node)."""
         w_, e_ = line(-200, 0, 0, 0, 2.0), line(0, 0, 200, 0, 2.0)
@@ -115,6 +125,11 @@ class PadTest(unittest.TestCase):
 
 
 class SteepTrackTest(unittest.TestCase):
+    def setUp(self):              # (opt-in since 2026-11-03: on for these tests)
+        patcher = mock.patch.object(grading, "PAD_ON", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     """A track leaving a residential street straight up a 30 % bank (-32.0951, 116.03866, the user 2026-10-29: a 2.4 m
     trench for 30 m): it lands on the street, then climbs from its edge on a short ramp, not a long sunk ease."""
 

@@ -27,6 +27,11 @@ def cut(la, lo):
 
 
 class FlatRailCrossingTest(unittest.TestCase):
+    def setUp(self):              # (opt-in since 2026-11-03: on for these tests)
+        patcher = mock.patch.object(railways, "FLAT_SEP_ON", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     bridge = np.c_[np.zeros(27), np.linspace(-26, 26, 27)]       # a 52 m deck north-south over x = 0
     road = np.c_[np.linspace(-200, 200, 101), np.zeros(101)]     # the road east-west, crossing at arc 200
 

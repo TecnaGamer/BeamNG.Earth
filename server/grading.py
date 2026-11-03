@@ -186,8 +186,9 @@ COARSE_SIDE_M = 12.0        # m: plan_roads' side samples on coarse elevation (t
 # fall between them: the difference of a far smoother surface (NEIGHBOUR_TREND_SIGMA_M: a hillside's grade, not the
 # data's noise). A difference over NEIGHBOUR_MAX_M is left: a real separation. Roads meeting at a node are left to
 # snap_junctions. Before the junctions are snapped (connectors meet the coupled heights) and the approaches lifted and
-# the underpasses dipped (bridges and their roads keep their separation). BNE_NEIGHBOURS=0: off.
-NEIGHBOUR_ON = os.environ.get("BNE_NEIGHBOURS", "1") != "0"
+# the underpasses dipped (bridges and their roads keep their separation). BNE_NEIGHBOURS=1: on. (Off by default, as the
+# pads and the rail check: the three were ~20 % of a Midtown road tile set's build in Python, 2026-11-03, PR #482/#671.)
+NEIGHBOUR_ON = os.environ.get("BNE_NEIGHBOURS", "0") == "1"
 NEIGHBOUR_GAP_M = 20.0
 NEIGHBOUR_FULL_M = 12.0
 NEIGHBOUR_PARALLEL_DEG = 30.0
@@ -1026,8 +1027,8 @@ def _hold_junction_corridors(plans, rank, changed):
 #     centreline height and its cross slope (Plan.bank: grade_points tilts its core by it), then back to its own
 #     profile and cross slope over JUNCTION_TAPER_M / PAD_BANK_TAPER_M.
 # The strongest road is all but unchanged (the plane is its own surface); the others warp to it, as real junctions are
-# built. BNE_JUNCTION_PAD=0: off.
-PAD_ON = os.environ.get("BNE_JUNCTION_PAD", "1") != "0"
+# built. BNE_JUNCTION_PAD=1: on (off by default: NEIGHBOUR_ON).
+PAD_ON = os.environ.get("BNE_JUNCTION_PAD", "0") == "1"
 PAD_CLASS_W = {"motorway": 1.0, "trunk": 0.9, "primary": 0.8, "secondary": 0.65, "tertiary": 0.5,
                "residential": 0.35, "unclassified": 0.35, "living_street": 0.3, "service": 0.2, "track": 0.15}
 PAD_OTHER_W = 0.25          # a class not listed

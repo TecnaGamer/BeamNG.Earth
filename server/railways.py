@@ -275,7 +275,7 @@ COARSE_PIECE_M = 25.0
 # same of a rail bridge, so every crossing that rule leaves at grade gets its track raised over the road (as on coarse
 # elevation), not a deck lying across the road. RAW_ELEV: the server sets it to the grader's own elevation
 # (PROFILE_ZOOM). Off with BNE_RAIL_FLAT_SEP=0, or with the rule itself (BNE_UNDER_LIDAR=off).
-FLAT_SEP_ON = os.environ.get("BNE_RAIL_FLAT_SEP", "1") != "0" and os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
+FLAT_SEP_ON = os.environ.get("BNE_RAIL_FLAT_SEP", "0") == "1" and os.environ.get("BNE_UNDER_LIDAR", "on") != "off"    # (opt-in: grading.NEIGHBOUR_ON)
 FLAT_SEP_M = roads.AT_GRADE_M
 FLAT_SAMPLE_M = (-12.0, -6.0, 0.0, 6.0, 12.0)  # m along the road either side of the crossing (the median)
 RAW_ELEV = None

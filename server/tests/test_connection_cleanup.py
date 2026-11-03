@@ -40,6 +40,7 @@ class ConnectionCleanupTest(unittest.IsolatedAsyncioTestCase):
         c.route_dl_version = 0
         c.slot_holds = {}
         c.roads = c.signs = c.veg = c.bldfar = c.bldsky = c.brfar = c.nav = None
+        c.distant_traffic = c.distant_traffic_far = None     # (PR #641's trackers)
         c.credits = SimpleNamespace(close=mock.Mock())
         c.tasks = set()
 
