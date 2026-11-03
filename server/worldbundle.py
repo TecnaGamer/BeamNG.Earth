@@ -24,7 +24,7 @@ MAX_ROWS = 1_000_000
 ENV = "BNGE_WORLD_BUNDLE"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 SIGNATURE = re.compile(r"w[01]s[01]\Z")
-GROUPS = ("p", "z", "c", "b", "k", "v", "o")
+GROUPS = ("p", "z", "c", "b", "w", "k", "v", "o")   # plancache.store's array groups
 
 
 class BundleError(ValueError):
@@ -196,7 +196,7 @@ def validate_artifact(data, artifact=None):
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             entries = archive.infolist()
-            if not 8 <= len(entries) <= len(allowed) or sum(e.file_size for e in entries) > MAX_ARTIFACT_BYTES:
+            if not 1 + len(GROUPS) <= len(entries) <= len(allowed) or sum(e.file_size for e in entries) > MAX_ARTIFACT_BYTES:
                 raise BundleError("Invalid NPZ member count/size")
             for entry in entries:
                 name = entry.filename.removesuffix(".npy")
@@ -252,7 +252,7 @@ def validate_artifact(data, artifact=None):
         dims = {"p": 2, "k": 2, "v": 2, "o": 2, "c": 6}
         if (a is None or total != len(a) or total > MAX_ROWS or
                 (group in dims and (a.ndim != 2 or a.shape[1] != dims[group])) or
-                (group in ("z", "b") and a.ndim != 1)):
+                (group in ("z", "b", "w") and a.ndim != 1)):
             raise BundleError("Array shape/count mismatch")
         if group == "c":
             # Cuttings use all-NaN triples to indicate that a side has no wall.
@@ -272,8 +272,9 @@ def validate_artifact(data, artifact=None):
             raise BundleError("Polyline metadata cardinality mismatch")
     from grading import Plan
     from roads import Spec
-    plans, ci, bi = [], 0, 0
-    fields = {"fid", "half", "abut", "road_half", "rid", "max_wall", "cut", "bank"}
+    from grading import set_widen
+    plans, ci, bi, wi = [], 0, 0, 0
+    fields = {"fid", "half", "abut", "road_half", "rid", "max_wall", "cut", "bank", "steep", "widen"}
     for item, xy, heights in zip(plans_meta, groups["p"], groups["z"]):
         if (not isinstance(item, dict) or set(item) != fields or len(xy) < 2 or len(xy) != len(heights)
                 or not _text(item["fid"])
@@ -281,7 +282,7 @@ def validate_artifact(data, artifact=None):
                 or not all(_number(item[k], 0, 10000) for k in ("half", "road_half", "max_wall"))
                 or not isinstance(item["abut"], list) or len(item["abut"]) != 2
                 or any(type(v) is not bool for v in item["abut"])
-                or type(item["cut"]) is not bool or type(item["bank"]) is not bool):
+                or any(type(item[k]) is not bool for k in ("cut", "bank", "steep", "widen"))):
             raise BundleError("Invalid plan fields")
         cut = bank = None
         if item["cut"]:
@@ -294,10 +295,17 @@ def validate_artifact(data, artifact=None):
                 raise BundleError("Banking length mismatch")
             bank = groups["b"][bi]
             bi += 1
+        widen = None
+        if item["widen"]:
+            if wi >= len(groups["w"]) or len(groups["w"][wi]) != len(xy):
+                raise BundleError("Widening length mismatch")
+            widen = groups["w"][wi]
+            wi += 1
         p = Plan(xy, heights, item["half"], tuple(item["abut"]), cut, item["road_half"])
-        p.rid, p.max_wall, p.bank = item["rid"], item["max_wall"], bank
+        p.rid, p.max_wall, p.bank, p.steep = item["rid"], item["max_wall"], bank, item["steep"]
+        set_widen(p, widen)
         plans.append((item["fid"], p))
-    if ci != len(groups["c"]) or bi != len(groups["b"]):
+    if ci != len(groups["c"]) or bi != len(groups["b"]) or wi != len(groups["w"]):
         raise BundleError("Unreferenced cutting/banking arrays")
     for name in ("keeps", "covers"):
         if not all(_number(v, 0, 10000) for v in meta[name]):
@@ -311,7 +319,7 @@ def validate_artifact(data, artifact=None):
                 valid = _text(value, 128)
             elif name == "surf":
                 valid = value is None or _text(value, 128)
-            elif name in ("urban", "oneway", "link"):
+            elif name in ("urban", "oneway", "link", "mountain"):
                 valid = type(value) is bool
             elif name == "sides":
                 valid = value is None or isinstance(value, list) and len(value) <= 2 and all(type(v) is int and v in (-1, 1) for v in value)
