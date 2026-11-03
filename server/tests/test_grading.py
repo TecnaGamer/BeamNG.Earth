@@ -411,14 +411,18 @@ class GraderTest(unittest.TestCase):
         # bbox (one road tile planned them all: 53 s, 2026-10-20); the same heights, in an order of their own
         f = features([[(-300, 20), (300, 20)]], ["residential"])
         md = FakeMD(f)
+        read = set()
+        cell = md.cell
+        md.cell = lambda key, layers=None, kind=None: (read.add(str(key)), cell(key, layers, kind))[1]
         g = grading.Grader(FRAME, md, lambda la, lo: np.full(np.shape(la), 10.0))
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 19000.0]), np.array([20.0, 19000.0]), 0.0)
         bbox = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
         self.assertGreater(len(bbox), 100)
         out = g.apply(la, lo, np.zeros(2))
         # (each point's own cells and those whose plans reach it: a cell plans CLIP_MARGIN_M past its edges; and the
-        # bridges of their neighbours, read for the underpasses: grading.UNDER_*)
-        self.assertLessEqual(md.calls, 30, "the cells around the two points")
+        # bridges of their neighbours, read for the underpasses: grading.UNDER_*. Distinct cells: a cell asked again
+        # is in memory (mapdata), the under-deck ground (PR #698) asks the same 21 cells again for their decks)
+        self.assertLessEqual(len(read), 30, "the cells around the two points")
         self.assertAlmostEqual(float(out[0]), 10.0, delta=0.05)
         near = mapcells.cells_near_points(la, lo, 1e-4, 1e-4)
         self.assertTrue(set(near) <= set(bbox))
