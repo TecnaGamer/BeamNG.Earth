@@ -80,6 +80,18 @@ class TransportTest(unittest.TestCase):
                 self.assertEqual(self.server.stats["requests"] - before, 1)
                 self.assertFalse((self.root / "client" / digest).exists())
 
+    def test_request_count_recorded_before_response_is_visible(self):
+        handler = self.server.RequestHandlerClass
+        original = handler.end_headers
+        counts = []
+        def end_headers(request):
+            counts.append(self.server.stats["requests"])
+            return original(request)
+        with mock.patch.object(handler, "end_headers", end_headers):
+            data = world_cache.download(self.url, "manifest.json", worldbundle.MAX_MANIFEST_BYTES)
+        self.assertEqual(worldbundle.parse_manifest(data)["id"], self.manifest["id"])
+        self.assertEqual(counts, [1])
+
     def test_inflight_install_refused_and_existing_lock_kept(self):
         dest = self.root / "client"
         dest.mkdir()

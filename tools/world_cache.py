@@ -165,6 +165,10 @@ def make_server(bundle, port=47622):
             else:
                 self.send_error(404)
                 return
+            # Count accepted requests before any response becomes visible to the
+            # client. Recording after write races with a client's next request.
+            with guard:
+                stats["requests"] += 1
             self.send_response(200)
             self.send_header("Content-Type", "application/json" if self.path == "/manifest.json" else "application/octet-stream")
             self.send_header("Content-Length", str(len(data)))
@@ -172,7 +176,6 @@ def make_server(bundle, port=47622):
             self.end_headers()
             self.wfile.write(data)
             with guard:
-                stats["requests"] += 1
                 stats["bytes"] += len(data)
 
     class Server(ThreadingHTTPServer):
