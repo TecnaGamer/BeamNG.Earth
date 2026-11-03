@@ -331,6 +331,13 @@ class _Running:
 
 
 class RestartDriveTest(unittest.TestCase):
+    def setUp(self):
+        # (the game outlives the killed server: a game runs whatever this machine runs, so the dead session waits for
+        # its claim; with no game the start moves earlier sessions out at once, _scan_sessions)
+        running = earthd.game_running
+        earthd.game_running = lambda: True
+        self.addCleanup(setattr, earthd, "game_running", running)
+
     def test_kill_and_restart_mid_drive(self):
         """The mod's anchor 2: none of the new server's anchor ids is the mod's until it rebases."""
         self._drive(teleports=2)
