@@ -78,7 +78,10 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(roads.surface_kind("track", None), "dirt")
         self.assertEqual(roads.surface_kind("track", "asphalt"), "paved")
         self.assertEqual(roads.surface_kind("primary", "gravel"), "gravel")
-        self.assertEqual(roads.surface_kind("primary", "unpaved"), "dirt")
+        # (generic "unpaved" on a road cars use: gravel; on a track: dirt, 2026-11-03)
+        self.assertEqual(roads.surface_kind("primary", "unpaved"), "gravel")
+        self.assertEqual(roads.surface_kind("track", "unpaved"), "dirt")
+        self.assertEqual(roads.surface_kind("unclassified", "ground"), "dirt")
         # the detail after a colon (or a second value after a semicolon) does not lose the base surface: İzmir's
         # sett streets were drawn as dirt/gravel tracks (2026-10-22)
         for v in ("cobblestone:flattened", "sett:pattern", "paving_stones:30", "sett;asphalt"):
@@ -1220,8 +1223,6 @@ class RingWidthTest(unittest.TestCase):
         self.assertTrue(sp[2].urban)                    # a street beside it as before
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class MedianTest(unittest.TestCase):
@@ -1600,3 +1601,51 @@ class MountainRoadTest(unittest.TestCase):
         self.assertLess(at(steep, -5.0), -3.0, "the fill side falls away")
         self.assertLess(abs(at(wide, -5.0)), abs(at(steep, -5.0)) - 1.0, "without the flag: a wider bench")
         self.assertLess(at(wide, 7.0), at(steep, 7.0) - 1.0)
+
+
+class GravelTest(unittest.TestCase):
+    """Gravel roads (2026-11-03): OpenStreetMap's own surface first, and untagged minor roads gravel where the
+    mapped ones around are (REGIONAL_*)."""
+
+    def roads(self, n_tagged, tagged_surface, extra_cls="unclassified", lanes=None):
+        lines = [[(-600.0, 30.0 * k), (600.0, 30.0 * k)] for k in range(n_tagged)] + [[(-300.0, -50.0), (300.0, -50.0)]]
+        f = features(lines, ["unclassified"] * n_tagged + [extra_cls])
+        f.attrs["osm_surface"] = np.array([tagged_surface] * n_tagged + [""])
+        if lanes is not None:
+            f.attrs["osm_lanes"] = np.array([np.nan] * n_tagged + [lanes], np.float64)
+        return f
+
+    def test_osm_surface_before_overture(self):
+        # Overture folds OSM's compacted into "unpaved"; the way's own value is the one read
+        f = features([[(-100, 0), (100, 0)]], ["tertiary"], surfaces=[(0, "unpaved")])
+        f.attrs["osm_surface"] = np.array(["compacted"])
+        self.assertEqual(roads._surface_value(f, 0), "compacted")
+        self.assertEqual(roads.road_specs(f)[0].kind, "gravel")
+        g = features([[(-100, 0), (100, 0)]], ["tertiary"], surfaces=[(0, "unpaved")])
+        g.attrs["osm_surface"] = np.array([""])            # (no OSM value: Overture's; generic unpaved: gravel)
+        self.assertEqual(roads._surface_value(g, 0), "unpaved")
+        self.assertEqual(roads.road_specs(g)[0].kind, "gravel")
+
+    def test_untagged_minor_road_where_the_mapped_ones_are_gravel(self):
+        f = self.roads(4, "gravel")                         # 4 x 1.2 km of mapped gravel unclassified roads
+        self.assertEqual(roads.road_specs(f)[-1].kind, "gravel")
+
+    def test_not_where_they_are_paved_nor_with_too_few_nor_with_lanes(self):
+        self.assertEqual(roads.road_specs(self.roads(4, "asphalt"))[-1].kind, "paved")
+        self.assertEqual(roads.road_specs(self.roads(1, "gravel"))[-1].kind, "paved")         # (1.2 km < 1.5 km)
+        self.assertEqual(roads.road_specs(self.roads(4, "gravel", lanes=2.0))[-1].kind, "paved")
+        self.assertEqual(roads.road_specs(self.roads(4, "gravel", extra_cls="tertiary"))[-1].kind, "paved")
+
+    def test_never_in_town(self):
+        town = lambda lat, lon: np.ones(np.shape(lat), bool)      # noqa: E731
+        sp = roads.road_specs(self.roads(4, "gravel"), urban_fn=town)[-1]
+        self.assertEqual((sp.kind, sp.urban), ("paved", True))
+
+    def test_off(self):
+        from unittest import mock
+        with mock.patch.object(roads, "REGIONAL_ON", False):
+            self.assertEqual(roads.road_specs(self.roads(4, "gravel"))[-1].kind, "paved")
+
+
+if __name__ == "__main__":
+    unittest.main()

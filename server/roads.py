@@ -406,7 +406,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 1
+FACTS_FORMAT = 2      # 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -659,7 +659,7 @@ def _structure_width(feats, i):
         rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)
     lanes = _osm(feats, "lanes", i, *OSM_LANES)
     lanes = int(lanes) if lanes is not None else None
-    kind = surface_kind(cls, _rule_value(rules.get("surface"), i))
+    kind = surface_kind(cls, _surface_value(feats, i))
     ow = _rule_value(rules.get("oneway"), i) is not None
     if rule_w is None and _rule_value(rules.get("subclass"), i) == "link" and lanes is None:
         rule_w = LINK_M[1] if ow else LINK_M[2]
@@ -1515,9 +1515,110 @@ def surface_kind(cls, surface):
             return "cobble"
         if s in GRAVEL:
             return "gravel"
+        if s == "unpaved" and cls != "track":
+            # (generic "unpaved" on a road cars use is a gravel road far more often than a dirt track: the
+            # mapped unpaved roads of Ontario, Finland and Estonia, 2026-11-03; a track stays dirt)
+            return "gravel"
         if s in UNPAVED:
             return "dirt"
     return "paved" if STYLE.get(cls, STYLE["unknown"])[1] else "dirt"
+
+
+def _surface_value(feats, i):
+    """Feature i's surface value: OpenStreetMap's own (osm_surface, joined by way id: osmtags.py), else Overture's
+    rule. Overture keeps a short list and folds OSM's compacted / fine_gravel into "unpaved" (drawn as dirt): Finland's
+    compacted-gravel forest roads came out as dirt tracks (the user 2026-11-03: players asking for gravel roads)."""
+    osm = feats.attrs.get("osm_surface")
+    if osm is not None and i < len(osm):
+        v = str(osm[i]).strip()
+        if v and v.lower() not in ("nan", "none"):
+            return v
+    return _rule_value(feats.rules.get("surface"), i)
+
+
+# Untagged minor roads in country where the mapped ones are gravel (2026-11-03: Estonia's unclassified roads and
+# tracks 100 % without a surface, Finland's unclassified 71 %, Iowa's driveways all; drawn as asphalt): a road of
+# REGIONAL_CLASSES without a surface value is gravel when, in its cell and the eight around it, the roads of its class
+# that have one are REGIONAL_SHARE unpaved or more by length, over REGIONAL_MIN_M of them; never in town (the
+# land-cover test), never with a mapped lane count or a good smoothness (a mapper who added those looked at a paved
+# road: Ontario's untagged roads are often asphalt), never tertiary and up. BNE_REGIONAL_SURFACE=off: as before.
+REGIONAL_CLASSES = {"unclassified", "service", "residential", "unknown"}
+REGIONAL_SHARE = 0.75
+REGIONAL_MIN_M = 3000.0
+# a class with less of its own: the minor classes' surfaced roads together decide, over REGIONAL_POOL_MIN_M of them
+# (Estonia's unclassified roads have no surface at all, its service roads are mapped gravel; Iowa's driveways none,
+# its county roads gravel)
+REGIONAL_POOL_MIN_M = 1500.0
+REGIONAL_ON = os.environ.get("BNE_REGIONAL_SURFACE", "on") != "off"
+GOOD_SMOOTHNESS = {"excellent", "good", "intermediate"}
+
+
+def _regional_rows(feats):
+    """(ids, classes, lengths m, unpaved) of feats' REGIONAL_CLASSES roads that have a surface value. Kept on feats."""
+    got = feats.__dict__.get("_regional_rows")
+    if got is not None:
+        return got
+    cls_a = feats.attrs.get("class")
+    ids, cl, un, idx = [], [], [], []
+    if cls_a is not None:
+        for i in range(len(feats)):
+            c = str(cls_a[i])
+            if c not in REGIONAL_CLASSES:
+                continue
+            v = _surface_value(feats, i)
+            if v is None:
+                continue
+            ids.append(str(feats.ids[i]))
+            cl.append(c)
+            un.append(surface_kind(c, v) in ("gravel", "dirt"))
+            idx.append(i)
+    lens = _lengths(feats)[np.asarray(idx, np.int64)] if idx else np.zeros(0)
+    got = feats.__dict__["_regional_rows"] = (ids, cl, np.nan_to_num(np.asarray(lens, np.float64)), un)
+    return got
+
+
+def regional_unpaved(feats):
+    """The REGIONAL_CLASSES whose surfaced roads in feats' cell and the eight around it (mapdata's _bnge_neighbours)
+    are mostly unpaved (REGIONAL_*): a class by its own roads when it has REGIONAL_MIN_M of them, else by the minor
+    classes' together. Each road once. Kept on feats."""
+    got = feats.__dict__.get("_regional_unpaved")
+    if got is not None:
+        return got
+    layers = [feats]
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is not None:
+        try:
+            layers += [f for f in hook() if f is not None and len(f)]
+        except Exception as e:          # (this cell alone)
+            log.debug("regional surface: neighbours: %s: %s", type(e).__name__, e)
+    seen, tot, unp = set(), {}, {}
+    for f in layers:
+        ids, cl, lens, un = _regional_rows(f)
+        for fid, c, ln, u in zip(ids, cl, lens.tolist(), un):
+            if fid in seen:
+                continue
+            seen.add(fid)
+            tot[c] = tot.get(c, 0.0) + ln
+            if u:
+                unp[c] = unp.get(c, 0.0) + ln
+    pool_t, pool_u = sum(tot.values()), sum(unp.values())
+    pooled = pool_t >= REGIONAL_POOL_MIN_M and pool_u >= REGIONAL_SHARE * pool_t
+    got = frozenset(c for c in REGIONAL_CLASSES
+                    if (unp.get(c, 0.0) >= REGIONAL_SHARE * tot[c] if tot.get(c, 0.0) >= REGIONAL_MIN_M else pooled))
+    feats.__dict__["_regional_unpaved"] = got
+    return got
+
+
+def _regional_gravel(feats, i, cls, surf):
+    """Is untagged road i of class cls a REGIONAL_* gravel candidate (before the town test)?"""
+    if not REGIONAL_ON or surf is not None or cls not in REGIONAL_CLASSES:
+        return False
+    if _osm(feats, "lanes", i, *OSM_LANES) is not None:
+        return False
+    sm = feats.attrs.get("osm_smoothness")
+    if sm is not None and str(sm[i]).strip().lower() in GOOD_SMOOTHNESS:
+        return False
+    return cls in regional_unpaved(feats)
 
 
 def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
@@ -2276,6 +2377,7 @@ def _road_specs(feats, urban_fn, left_hand):
     rules = feats.rules
     ask = []                                    # (index in out, cls, kind, samples, oneway, direction, lanes, surface, link, mapped width)
     developed_both = {}
+    regional = set()                            # out indices: untagged roads gravel when rural (_regional_gravel)
     cr = rules.get("connectors")
     ncon = np.bincount(np.asarray(cr.feature), minlength=len(feats)) if cr is not None and len(cr.feature) else None
     lens = _lengths(feats) if ncon is not None else None
@@ -2294,8 +2396,10 @@ def _road_specs(feats, urban_fn, left_hand):
             rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)      # OpenStreetMap's width (osmtags.py)
         lanes = _osm(feats, "lanes", i, *OSM_LANES)
         lanes = int(lanes) if lanes is not None else lane_flow(feats)[i]     # (through merges / splits: lane_flow)
-        surf = _rule_value(rules.get("surface"), i)
+        surf = _surface_value(feats, i)
         kind = surface_kind(cls, surf)
+        if _regional_gravel(feats, i, cls, surf):
+            regional.add(len(out))          # (gravel unless the town test finds it urban, below)
         ow = _rule_value(rules.get("oneway"), i) is not None
         link = _rule_value(rules.get("subclass"), i) == "link"
         if rule_w is None and link and lanes is None:
@@ -2313,6 +2417,8 @@ def _road_specs(feats, urban_fn, left_hand):
                             surface_token(surf), link, rule_w))
                 out.append(None)
                 continue
+        if len(out) in regional:        # (no land cover to tell town from country: rural)
+            kind = "gravel"
         out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes), kind, False, cls, ow, 2.5, *dk,
                         lanes=lanes, surf=surface_token(surf), link=link))
     if ask:
@@ -2331,6 +2437,8 @@ def _road_specs(feats, urban_fn, left_hand):
                      and (cls not in ("motorway", "trunk")
                           or float(np.mean(both[k:k + count])) >= URBAN_BOTH_SHARE))
             k += count
+            if j in regional and not urban:
+                kind = "gravel"
             out[j] = Spec(carriageway(cls, kind, urban, rule_w, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token, link=link)
     out = _rings(feats, out)
@@ -2607,7 +2715,7 @@ def _bridge_specs(feats, want="bridge"):
             rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)
         lanes = _osm(feats, "lanes", i, *OSM_LANES)
         lanes = int(lanes) if lanes is not None else lane_flow(feats)[i]     # (through merges / splits: lane_flow)
-        surf = _rule_value(rules.get("surface"), i)
+        surf = _surface_value(feats, i)
         kind = surface_kind(cls, surf)
         ow = _rule_value(rules.get("oneway"), i) is not None
         link = _rule_value(rules.get("subclass"), i) == "link"
