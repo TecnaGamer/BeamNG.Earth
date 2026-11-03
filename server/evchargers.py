@@ -148,7 +148,9 @@ ROW_BIG = 4
 ROW_TESLA = 8               # (a Supercharger's usual 8)
 ROW_MAX = 8
 ROW_SMALL = 2
-AREA_W_M = 2.4              # a stall's charge area across (its depth along the stall: STALL_M)
+AREA_W_M = 2.4              # a stall's charge area across (its depth along the stall: STALL_M); the area's half
+                            # extents are what it gets (setScale: gasStationMarker.lua passes the scale to
+                            # overlapsOBB_OBB as half-axes; PR #716 review, 2026-11-03)
 ENERGY = ("electricEnergy",)
 
 
@@ -293,7 +295,7 @@ def layout(ch, blds, roads, service=(), style="default"):
             yaw = gs._yaw(front)
             props = [dict(shape=shape, x=float(x), y=float(y), dz=0.0, yaw=(yaw + CHARGER_DYAW) % 360.0,
                           scale=[1.0, 1.0, 1.0], collide=True) for x, y in pts]
-            areas = [dict(x=float(x), y=float(y), dz=gs.AREA_DZ, yaw=area_yaw % 360.0, half=[STALL_M, AREA_W_M, 2.75],
+            areas = [dict(x=float(x), y=float(y), dz=gs.AREA_DZ, yaw=area_yaw % 360.0, half=[STALL_M / 2, AREA_W_M / 2, 2.75],
                           icon=gs.ICON_DZ) for x, y in stalls]
             st = gs.Station(ch.id, ch.x, ch.y, ch.name or "EV charger", ch.brand, (ch.id,), True, True)
             return gs.Site(st, props, areas, (), shop_id="ev:" + ch.id, pad=pad)

@@ -13,7 +13,7 @@ through `onGetRawPoiListForLevel` with `energyTypes = { 'electricEnergy' }`, the
 - `freeroam_gasStations.refuelCar(facility, { electricEnergy = true }, car)` took the battery from 10 % to 100 % at
   once (freeroam: `setEnergyStorageEnergy` to `maxEnergy`; career goes through `career_modules_fuel`).
 
-An area of 5.0 x 2.4 x 2.75 m (`setScale`; a stall in front of the charger) worked.
+The probe's area, `setScale(5.0, 2.4, 2.75)` in front of the charger, worked; the scale is the area's half-extents (`gameplay/markers/gasStationMarker.lua` passes it to `overlapsOBB_OBB` as half-axes), so that was a 10 x 4.8 m box. The layouts give each charger one stall: half-extents 2.75 x 1.2 m (PR #716 review, 2026-11-03).
 
 ## The models
 

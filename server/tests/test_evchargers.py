@@ -122,6 +122,25 @@ class LayoutTest(unittest.TestCase):
         self.assertAlmostEqual(p["yaw"] % 360.0, (gs._yaw(f) + ev.CHARGER_DYAW) % 360.0, places=3)
         self.assertAlmostEqual(a["yaw"] % 360.0, gs._yaw(f) % 360.0, places=3, msg="the area's depth along the stall")
 
+    def test_charge_areas_one_stall(self):
+        # (PR #716 review, 2026-11-03: setScale takes half-extents, gasStationMarker.lua passes the scale to
+        # overlapsOBB_OBB as half-axes) a row's charge area is its own stall: STALL_M deep, under CHARGER_GAP_M wide,
+        # neighbours not overlapping
+        site = ev.layout(charger(big=True, records=2), [], [ROAD], [AISLE], "default")
+        for a in site.areas:
+            self.assertAlmostEqual(2 * a["half"][0], ev.STALL_M, places=6, msg="its depth: one stall")
+            self.assertLessEqual(2 * a["half"][1], ev.CHARGER_GAP_M, "its width: within its stall")
+        xs = sorted(a["x"] for a in site.areas)
+        self.assertTrue(all(b - a >= 2 * site.areas[0]["half"][1] for a, b in zip(xs, xs[1:])), "no overlap")
+
+    def test_kerb_area_one_car(self):
+        # the kerbside charge area is one parked car at the road's edge, not half the lane
+        road = (np.array([(-300.0, 0.0), (300.0, 0.0)]), 4.0)
+        site = ev.layout(charger(x=0.0, y=5.0), [], [road], [], "default")
+        for a in site.areas:
+            self.assertAlmostEqual(2 * a["half"][0], ev.STALL_M, places=6, msg="a car's length along the road")
+            self.assertLessEqual(4.0 - (a["y"] - a["half"][1]), 2.5, "at most a parked car's width into the road")
+
     def test_tesla_row_of_eight(self):
         site = ev.layout(charger(big=True, tesla=True), [], [ROAD], [AISLE], "default")
         self.assertEqual(len(site.props), 8)
