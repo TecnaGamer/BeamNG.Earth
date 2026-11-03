@@ -18,7 +18,21 @@ local files = {}
 readFile = function(p) return files[p] end
 jsonDecode = function(s) return assert(load('return ' .. s))() end   -- the test writes Lua table text
 
+-- Each update represents a frame. Do not depend on host clock resolution: on Windows several
+-- updates can occur in the same os.clock tick, leaving the zero-delay rebuild tests pending.
+local elapsedMs = 0
+local stopwatch = require('beamngEarth/stopwatch')
+stopwatch.clock = function()
+  local start = elapsedMs
+  return function() return elapsedMs - start end
+end
+stopwatch.new = stopwatch.clock
 local roads = require('beamngEarth/roads')
+local update = roads.update
+roads.update = function(...)
+  elapsedMs = elapsedMs + 16
+  return update(...)
+end
 
 local gov = { tries = 0 }
 function gov:try() self.tries = self.tries + 1; return self.allow == nil or self.tries <= self.allow end

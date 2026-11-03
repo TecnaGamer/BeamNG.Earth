@@ -97,8 +97,9 @@ class LinuxBuild(unittest.TestCase):
 
         def run(cmd, **kw):
             cmds.append(cmd)
-            out = [v.split(":")[0] for v in cmd if v.endswith(":/out:Z")][0]
-            src = [v.split(":")[0] for v in cmd if v.endswith(":/src:ro,Z")][0]
+            # Strip the known mount suffix, preserving a Windows drive letter.
+            out = [v.removesuffix(":/out:Z") for v in cmd if v.endswith(":/out:Z")][0]
+            src = [v.removesuffix(":/src:ro,Z") for v in cmd if v.endswith(":/src:ro,Z")][0]
             self.assertTrue(os.path.isfile(os.path.join(src, "CMakeLists.txt")), "BeamMP's source in the container")
             Path(out, "BeamMP-Launcher").write_bytes(b"\x7fELF built")
 

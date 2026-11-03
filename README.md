@@ -7,6 +7,10 @@ real curvature of the Earth.
 Status: beta (see VERSION). Tested on BeamNG.drive 0.40.4 on Linux (Vulkan) and 0.40.3 on the Steam Deck. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for what is coming.
 
+**Modernization branch:** current changes, architecture, measured results and remaining work are tracked in
+[the foundation milestone](docs/MODERNIZATION.md) and [validation report](docs/MODERNIZATION_VALIDATION.md).
+These changes still require real BeamNG/BeamMP and cross-platform release validation.
+
 **Community:** join the TGForever Discord, **[discord.gg/tgf](https://discord.gg/tgf)**, and head to the
 #beamng-earth channel to chat about the mod, get help, report bugs, help with its development, and get an IP to join a
 BeamMP.Earth server (see [Multiplayer](#multiplayer-beammp)).

@@ -26,6 +26,9 @@ concurrency:
   cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}     # (a newer push to dev replaces the build under way)
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
   check:
     runs-on: ubuntu-latest
     outputs:
@@ -60,7 +63,7 @@ jobs:
           echo "VERSION $v, release exists: $exists, publish: $pub"
 
   linux:
-    needs: check
+    needs: [check, quality]
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-22.04          # an older glibc: the AppImage runs on more distributions
     steps:
@@ -95,7 +98,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: check
+    needs: [check, quality]
     if: needs.check.outputs.build == 'true'
     runs-on: windows-latest
     steps:
