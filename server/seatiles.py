@@ -239,8 +239,9 @@ def plan_lakes(frame, x, y, lake_at, ground_at, radius=None):
             # valley: those split on down to LAKE_TILE_FLOOR (a reservoir's 64 m tile flooded Central Park's
             # sunken 86th Street Transverse beside it, the user's report 2026-10-17)
             flooded = low.sum() / low.size if low.size else 0.0
-            if (fit and clear) or (s <= LAKE_TILE_MIN and wet.mean() >= 0.5 and fit
-                                   and (flooded <= LAKE_FLOOD_SHARE or s <= LAKE_TILE_FLOOR)):
+            if ((fit and clear and wet.mean() >= 0.5) or
+                (s <= LAKE_TILE_MIN and wet.mean() >= 0.5 and fit
+                 and (flooded <= LAKE_FLOOD_SHARE or s <= LAKE_TILE_FLOOR))):
                 out.append((x0, y0, s, a, bx, by))
             elif s > LAKE_TILE_FLOOR:
                 h = s / 2
