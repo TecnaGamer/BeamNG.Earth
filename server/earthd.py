@@ -630,6 +630,9 @@ class Server:
         feather on the USGS tiles); cache: the download cache's cache.Cache (last use per file, the
         size cap, the page's 'cache' messages; None = no bookkeeping and no 'cache' message, Server()'s
         default); retex_rate: --retex-rate (live retextures per second, 0 = none)."""
+        if os.environ.get("BNGE_WORLD_BUNDLE") and not (grading and mapdata is not None):
+            from worldbundle import BundleError
+            raise BundleError("Pinned road plans require roads and grading enabled")
         self.sid = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
         self.user_dir = user_dir           # the game's user folder (detail mode fills its terrain texture cache)
         self.cache_dir = cache_dir         # (here already: _scan_sessions moves old sessions into its trash)
@@ -1819,6 +1822,9 @@ class Server:
     def grader_for(self, anchor):
         """The anchor's grading.Grader (--grading on), else None."""
         if not self.grading:
+            if os.environ.get("BNGE_WORLD_BUNDLE"):
+                from worldbundle import BundleError
+                raise BundleError("Pinned road plans require roads and grading enabled")
             return None
         with self.grader_lock:
             if anchor.grader is None:
@@ -1826,12 +1832,12 @@ class Server:
                 if getattr(self, "plan_store", None) is None:
                     self.plan_store = gradingmod.PlanStore(
                         self.mapdata, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.road_widths)
-                anchor.grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
-                                                  store=self.plan_store)
-                anchor.grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
-                anchor.grader.dem = self.dem                # (its urgent lane: _plan_missing)
-                anchor.grader.shared = plancachemod.for_grader(self.cache_dir, anchor.grader, self.road_widths,
-                                                              anchor.grader.wet)
+                grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
+                                          store=self.plan_store)
+                grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
+                grader.dem = self.dem                # (its urgent lane: _plan_missing)
+                grader.shared = plancachemod.for_grader(self.cache_dir, grader, self.road_widths, grader.wet)
+                anchor.grader = grader       # publish only after a pinned bundle passed compatibility checks
             return anchor.grader
 
     def warm_roads(self, anchor, x, y, vx, vy):
@@ -1986,6 +1992,9 @@ class Server:
         cached land cover and the photo. The graded block replaces it when it is built (Connection.refine_first:
         terrain_refresh). Not kept in hm (the graded one is the block of its key), nor in anchor.chunks. ground_at: the
         point its groundZ is for (the car's spot)."""
+        if os.environ.get("BNGE_WORLD_BUNDLE"):
+            from worldbundle import BundleError
+            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
         q = self.anchor_q(anchor)
         base = None
@@ -2012,6 +2021,9 @@ class Server:
                 self.hm_here -= 1
 
     def _make_heightmap_here_(self, anchor, cx, cy, progress, t0, q, base=None, provisional=False, ground_at=(0.0, 0.0)):
+        if provisional and os.environ.get("BNGE_WORLD_BUNDLE"):
+            from worldbundle import BundleError
+            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         keep = {}
         g = None if provisional else self.grader_for(anchor)
         c0 = time.thread_time()
@@ -4478,7 +4490,7 @@ class Connection:
         self.status(f"Building terrain at {lat:.5f}, {lon:.5f}...")
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
-        provisional = teleport and PROVISIONAL_FIRST and self.s.grading
+        provisional = teleport and PROVISIONAL_FIRST and self.s.grading and not os.environ.get("BNGE_WORLD_BUNDLE")
         if self.s.surface is not None and not provisional:
             # the anchor's first block is built once and kept while the player stands still: give the
             # land cover around it a moment to arrive (blocks built while driving never wait)
@@ -5600,6 +5612,12 @@ class Connection:
 
 
 async def main_async(args):
+    if os.environ.get("BNGE_WORLD_BUNDLE") and (args.roads != "on" or args.grading != "on"):
+        from worldbundle import BundleError
+        raise BundleError("BNGE_WORLD_BUNDLE requires --roads on --grading on")
+    if os.environ.get("BNGE_WORLD_BUNDLE") and getattr(args, "peers", ""):
+        from worldbundle import BundleError
+        raise BundleError("Legacy --peers helpers do not negotiate the pinned road-plan identity")
     fmt = args.far_format
     if fmt == "cdae":
         v = cdae.engine_version(args.user_dir)
@@ -5619,6 +5637,11 @@ async def main_async(args):
     # map data (mapdata.py): land cover for the surfaces, roads; one instance shares its cache locks
     mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
                if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
+    if os.environ.get("BNGE_WORLD_BUNDLE"):
+        from worldbundle import PinnedPlanCache, validate_bundle
+        validate_bundle(os.environ["BNGE_WORLD_BUNDLE"])
+        PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],
+                        f"w{int(args.road_widths == 'on')}s{int(args.sea == 'on')}", mapdata.versions())
     pacer.DUTY = args.background_duty
     global DETAIL_RING_M, AHEAD_ON, ROUTE_AHEAD_ON, ROUTE_AHEAD_MAX_M
     DETAIL_RING_M = args.detail_ring

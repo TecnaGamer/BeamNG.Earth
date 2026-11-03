@@ -15,6 +15,7 @@ is taken over; a wait longer than WAIT_S plans the cell here as before; a proces
 favoured as itself (xproc.once). Old runs' folders go at server start (prune).
 """
 import json
+import hashlib
 import os
 import shutil
 import threading
@@ -65,11 +66,16 @@ def for_grader(cache_dir, grader, widths, wet):
     settings that change plans in the signature), or None outside a server run. Complete plans are kept in the revisit
     cache too (persist): a place's next visit (a game started where it was left, or anchored anywhere near) reads them
     instead of planning again."""
+    md = getattr(grader, "md", None)
+    signature = f"w{int(widths is not None)}s{int(wet is not None)}"
+    bundle = os.environ.get("BNGE_WORLD_BUNDLE")
+    if bundle:
+        from worldbundle import PinnedPlanCache
+        return PinnedPlanCache(bundle, signature, md.versions() if md is not None and hasattr(md, "versions") else {})
     run = os.environ.get(RUN_ENV)
     if not run:
         return None
-    md = getattr(grader, "md", None)
-    pc = PlanCache(os.path.join(cache_dir, "plans", run), f"w{int(widths is not None)}s{int(wet is not None)}")
+    pc = PlanCache(os.path.join(cache_dir, "plans", run), signature)
     pc.persist = (cache_dir, (FRAMES, pc.signature,
                               md.versions() if md is not None and hasattr(md, "versions") else None))
     return pc
@@ -167,7 +173,22 @@ class PlanCache:
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
                 np.savez(fh, **arrays)
+            if persist:
+                with open(tmp, "rb") as fh:
+                    digest = hashlib.sha256(fh.read()).hexdigest()
             os.replace(tmp, p)
+            # Export only plans whose complete-input condition the grader actually observed.
+            # The digest binds the marker to this version; an interrupted replacement fails closed.
+            marker = p + ".complete"
+            if persist:
+                with open(tmp, "w", encoding="ascii") as fh:
+                    fh.write(digest)
+                os.replace(tmp, marker)
+            else:
+                try:
+                    os.remove(marker)
+                except FileNotFoundError:
+                    pass
             if persist and self.persist is not None:
                 import revisit
                 with open(p, "rb") as fh:

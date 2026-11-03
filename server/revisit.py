@@ -197,7 +197,7 @@ def compact(cache_dir, before=None):
 def store(cache_dir, kind, k, blobs, extra=None, where=None):
     """Keep an item under key k: blobs {name: bytes}, extra JSON data; where (where()): the place it stands, for the
     map's cache view (a sidecar line). Never raises; False when not kept."""
-    if not ON or kind in SKIP:
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return False
     path = _path(cache_dir, kind, k)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
@@ -221,7 +221,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None):
 
 def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
-    if not ON or kind in SKIP:
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return None
     path = _path(cache_dir, kind, k)
     if not os.path.exists(path):

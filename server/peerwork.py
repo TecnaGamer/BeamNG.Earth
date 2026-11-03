@@ -93,7 +93,8 @@ def source_id(server_dir=None):
     for name in sorted(os.listdir(here)):
         if name.endswith(".py"):
             with open(os.path.join(here, name), "rb") as f:
-                h.update(name.encode() + b"\0" + f.read())
+                # Git's Windows CRLF checkout must identify the same generator as the LF Linux checkout.
+                h.update(name.encode() + b"\0" + f.read().replace(b"\r\n", b"\n"))
     return h.hexdigest()[:16]
 
 

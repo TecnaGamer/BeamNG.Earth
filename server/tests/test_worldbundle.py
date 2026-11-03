@@ -1,0 +1,269 @@
+"""Pinned road plans: bounded untrusted bytes, immutable identity and actual grader consumption."""
+import asyncio
+import copy
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import threading
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+import zipfile
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import worldbundle as wb
+import plancache
+import grading
+import geodesy
+from test_grading import FakeMD
+from test_roads import features, FRAME, LAT, LON
+
+KEY = (14, 4000, 6000)
+DIGEST = "a" * 64
+
+
+class BundleTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.pc = plancache.PlanCache(str(self.root / "plans"), "w0s0")
+        self.bundle = self.root / "bundle"
+        self.env = mock.patch.dict(os.environ, {plancache.RUN_ENV: "test"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        os.environ.pop(wb.ENV, None)
+
+    def plan(self):
+        p = grading.Plan(np.array([[0., 0.], [10., 0.], [20., 1.]]), np.array([3., 3.1, 3.2]), 3.)
+        p.cut = np.array([[1., 2., 3., np.nan, np.nan, np.nan], [1., 2., 3., 4., 5., 6.]])
+        p.bank = np.array([0., .1, .2])
+        return p
+
+    def write(self, complete=True):
+        self.assertTrue(self.pc.store(KEY, [("road", self.plan())], [], [], [], persist=complete))
+        return Path(self.pc._path(KEY))
+
+    def export(self):
+        return wb.build_bundle(self.pc.dir, self.bundle, {}, DIGEST, ["Synthetic test fixture"])
+
+    def arrays(self):
+        path = self.write()
+        with np.load(path, allow_pickle=False) as data:
+            return {name: data[name] for name in data.files}
+
+    def encoded(self, arrays):
+        out = io.BytesIO()
+        np.savez(out, **arrays)
+        return out.getvalue()
+
+    def test_export_roundtrip_and_strict_runtime_pin(self):
+        self.write()
+        manifest = self.export()
+        self.assertEqual(manifest, wb.validate_bundle(self.bundle, manifest["id"]))
+        pc = wb.PinnedPlanCache(self.bundle, "w0s0", {})
+        state, mine = pc.claim(KEY)
+        self.assertFalse(mine)
+        np.testing.assert_array_equal(state[0][0][1].xy, self.plan().xy)
+        np.testing.assert_array_equal(state[0][0][1].cut, self.plan().cut)
+        np.testing.assert_array_equal(state[0][0][1].bank, self.plan().bank)
+        self.assertEqual(pc.stats["read"], 1)
+        with self.assertRaises(wb.BundleError):
+            pc.store(KEY, [], [], [], [])
+        with self.assertRaises(wb.BundleError):
+            pc.claim((14, 4001, 6000))
+
+    def test_export_rejects_incomplete_historical_and_stale_markers(self):
+        p = self.write(False)
+        with self.assertRaises(wb.BundleError):
+            self.export()
+        self.write(True)
+        p.write_bytes(p.read_bytes() + b"changed")
+        with self.assertRaises(wb.BundleError):
+            self.export()
+        self.write(True)
+        self.write(False)
+        self.assertFalse(Path(str(p) + ".complete").exists())
+        with self.assertRaises(wb.BundleError):
+            self.export()
+
+    def test_complete_marker_cannot_bless_an_intervening_writer(self):
+        p = Path(self.pc._path(KEY))
+        original = os.replace
+        def racing(src, dest):
+            original(src, dest)
+            if dest == str(p):
+                p.write_bytes(b"incomplete concurrent result")
+        with mock.patch.object(plancache.os, "replace", side_effect=racing):
+            self.write(True)
+        with self.assertRaises(wb.BundleError):
+            self.export()
+
+    def test_identity_is_canonical_and_immutable(self):
+        self.write()
+        manifest = self.export()
+        self.assertEqual(wb.manifest_id(dict(reversed(list(manifest.items())))), manifest["id"])
+        with self.assertRaises(wb.BundleError):
+            self.export()
+        for field, value in (("signature", "w1s0"), ("input_digest", "b" * 64), ("sources", {"release": "next"})):
+            changed = dict(manifest, **{field: value})
+            with self.assertRaises(wb.BundleError):
+                wb.validate_manifest(changed)
+        with self.assertRaises(wb.BundleError):
+            wb.validate_manifest(manifest, "0" * 64)
+
+    def test_source_identity_normalizes_checkout_line_endings(self):
+        import peerwork
+        a, b = self.root / "lf", self.root / "crlf"
+        a.mkdir()
+        b.mkdir()
+        (a / "generator.py").write_bytes(b"x = 1\ny = 2\n")
+        (b / "generator.py").write_bytes(b"x = 1\r\ny = 2\r\n")
+        self.assertEqual(peerwork.source_id(a), peerwork.source_id(b))
+        before = wb.generator_identity()
+        with mock.patch.dict(os.environ, {"BNE_ROADZ": "off"}):
+            self.assertNotEqual(before, wb.generator_identity())
+
+    def test_manifest_shape_limits_and_paths(self):
+        self.write()
+        manifest = self.export()
+        variants = []
+        for field, value in (("schema", 2), ("signature", "../escape"), ("attribution", []), ("input_digest", "bad")):
+            variants.append(dict(manifest, **{field: value}))
+        changed = copy.deepcopy(manifest)
+        changed["artifacts"][0]["sha256"] = "../escape"
+        variants.append(changed)
+        changed = copy.deepcopy(manifest)
+        changed["artifacts"] *= 2
+        variants.append(changed)
+        changed = copy.deepcopy(manifest)
+        changed["artifacts"][0]["size"] = wb.MAX_ARTIFACT_BYTES + 1
+        variants.append(changed)
+        for changed in variants:
+            changed["id"] = wb.manifest_id(changed)
+            with self.assertRaises(wb.BundleError):
+                wb.validate_manifest(changed)
+        with self.assertRaises(wb.BundleError):
+            wb.parse_manifest(b'{"schema":1,"schema":1}')
+        with self.assertRaises(wb.BundleError):
+            wb.parse_manifest(b" " * (wb.MAX_MANIFEST_BYTES + 1))
+
+    def test_compatibility_and_corruption_fail_without_fallback(self):
+        self.write()
+        manifest = self.export()
+        for signature, sources in (("w1s0", {}), ("w0s0", {"release": "different"})):
+            with self.assertRaises(wb.BundleError):
+                wb.PinnedPlanCache(self.bundle, signature, sources)
+        with mock.patch.object(wb, "generator_identity", return_value={"code": "other", "native": 116}):
+            with self.assertRaises(wb.BundleError):
+                wb.PinnedPlanCache(self.bundle, "w0s0", {})
+        pc = wb.PinnedPlanCache(self.bundle, "w0s0", {})
+        path = self.bundle / "blobs" / (manifest["artifacts"][0]["sha256"] + ".npz")
+        path.write_bytes(b"bad")
+        with self.assertRaises(wb.BundleError):
+            pc.claim(KEY)
+        path.unlink()
+        with self.assertRaises(wb.BundleError):
+            pc.claim(KEY)
+
+    def test_malformed_npz_arrays_rejected(self):
+        baseline = self.arrays()
+        for field, value in (("p", np.array([[0., np.nan], [1., 2.], [3., 4.]])),
+                             ("z", np.array([1., np.inf, 3.])), ("p_n", np.array([-1])),
+                             ("z_n", np.array([2])), ("b_n", np.array([2])),
+                             ("p", np.array([{"pickle": True}], dtype=object)),
+                             ("c", np.full((2, 6), np.inf)), ("p", np.ones((3, 3)))):
+            with self.subTest(field=field), self.assertRaises(wb.BundleError):
+                wb.validate_artifact(self.encoded({**baseline, field: value}))
+        meta = json.loads(baseline["meta"].tobytes())
+        meta["plans"] = []
+        with self.assertRaises(wb.BundleError):
+            wb.validate_artifact(self.encoded({**baseline, "meta": np.frombuffer(json.dumps(meta).encode(), np.uint8)}))
+
+    def test_zip_member_and_allocation_header_rejected(self):
+        baseline = self.arrays()
+        raw = self.encoded(baseline)
+        out = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(raw)) as source, zipfile.ZipFile(out, "w") as dest:
+            for name in source.namelist():
+                dest.writestr("../meta.npy" if name == "meta.npy" else name, source.read(name))
+        with self.assertRaises(wb.BundleError):
+            wb.validate_artifact(out.getvalue())
+        out = io.BytesIO()
+        header = io.BytesIO()
+        np.lib.format.write_array_header_1_0(header, {"descr": "<f8", "fortran_order": False, "shape": (10 ** 10, 2)})
+        with zipfile.ZipFile(io.BytesIO(raw)) as source, zipfile.ZipFile(out, "w") as dest:
+            for name in source.namelist():
+                dest.writestr(name, header.getvalue() if name == "p.npy" else source.read(name))
+        with self.assertRaises(wb.BundleError):
+            wb.validate_artifact(out.getvalue())
+
+    def test_two_anchors_consume_same_prepared_grades_without_map_fetch(self):
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        a = grading.Grader(FRAME, FakeMD(f), lambda la, lo: 10. + 0 * np.asarray(la))
+        a.shared = plancache.for_grader(str(self.root), a, None, None)
+        lat, lon, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.)
+        expected = a.apply(lat, lon, np.zeros(50))
+        self.pc = a.shared
+        self.export()
+        os.environ[wb.ENV] = str(self.bundle)
+        os.environ.pop(plancache.RUN_ENV)  # pin cannot silently disappear outside an ordinary run
+        for frame in (FRAME, geodesy.EnuFrame(LAT, LON + .01)):
+            md = FakeMD(f)
+            md.cell = mock.Mock(side_effect=AssertionError("No map requests allowed"))
+            b = grading.Grader(frame, md, lambda la, lo: (_ for _ in ()).throw(AssertionError("No DEM build allowed")))
+            b.shared = plancache.for_grader(str(self.root / "isolated-client"), b, None, None)
+            np.testing.assert_array_equal(b.apply(lat, lon, np.zeros(50)), expected)
+            md.cell.assert_not_called()
+            self.assertGreater(b.shared.stats["read"], 0)
+
+    def test_rejected_setup_does_not_publish_unpinned_graders(self):
+        import earthd
+        import blockworker
+        dem = SimpleNamespace(sample=lambda la, lo, zoom: np.zeros(np.shape(la)))
+        server = SimpleNamespace(grading=True, grader_lock=threading.Lock(), mapdata=FakeMD(None),
+                                 dem=dem, road_widths=None, cache_dir=str(self.root), sea=None)
+        anchor = SimpleNamespace(grader=None, frame=FRAME)
+        worker = blockworker._State.__new__(blockworker._State)
+        worker.__dict__.update(lock=threading.Lock(), chunks={}, graders={}, grading=True,
+                               md=FakeMD(None), dem=dem, widths=None, cache_dir=str(self.root))
+        with mock.patch.object(plancache, "for_grader", side_effect=wb.BundleError("mismatch")):
+            for _ in range(2):
+                with self.assertRaises(wb.BundleError):
+                    earthd.Server.grader_for(server, anchor)
+                with self.assertRaises(wb.BundleError):
+                    worker.anchor(1, LAT, LON)
+                self.assertIsNone(anchor.grader)
+                self.assertNotIn(1, worker.graders)
+                self.assertNotIn(1, worker.chunks)
+
+    def test_pinning_disables_revisit_and_ungraded_paths(self):
+        import earthd
+        import blockworker
+        import revisit
+        self.assertTrue(revisit.store(str(self.root), "plans", "abc", {"x": b"x"}))
+        os.environ[wb.ENV] = str(self.bundle)
+        self.assertIsNone(revisit.load(str(self.root), "plans", "abc"))
+        self.assertFalse(revisit.store(str(self.root), "plans", "new", {"x": b"x"}))
+        with self.assertRaises(wb.BundleError):
+            earthd.Server.make_provisional(None, None, 0, 0, None)
+        with self.assertRaises(wb.BundleError):
+            earthd.Server.grader_for(SimpleNamespace(grading=False), None)
+        with self.assertRaises(wb.BundleError):
+            blockworker._State(str(self.root), True, False, False, False, False)
+        with self.assertRaises(wb.BundleError):
+            asyncio.run(earthd.main_async(SimpleNamespace(roads="off", grading="on")))
+        with self.assertRaises(wb.BundleError):
+            asyncio.run(earthd.main_async(SimpleNamespace(roads="on", grading="on", peers="localhost:47620")))
+        with self.assertRaises(wb.BundleError):
+            earthd.Server._make_heightmap_here_(None, None, 0, 0, None, 0, 1, provisional=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
