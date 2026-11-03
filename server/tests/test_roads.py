@@ -1149,6 +1149,7 @@ class TileNeedsTest(unittest.TestCase):
         self.assertEqual({k for k, ly in needs if ly == "building_parts"}, own)   # the tile's own cells first
         self.assertEqual({ly for k, ly in needs[:len(own) * 6]}, {"roads", "infrastructure", "land_use", "buildings",
                                                                     "building_parts", "water"})
+        self.assertEqual({k for k, ly in needs if ly == "land_use"}, own)
         xs = sorted({k.x for k in own})
         ring = {k for k, ly in needs if ly == "buildings"}
         self.assertEqual(sorted({k.x for k in ring}), list(range(xs[0] - 2, xs[-1] + 3)))

@@ -447,6 +447,17 @@ do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1,
   T.check(trees.isBarrier('guardrail_back_end') and not trees.isBarrier('deciduous') and not trees.isBarrier(nil),
     'guard rails are barriers, trees not')
 end
+do -- stock world props (server worldprops.py): the catalog height is the mesh, so that height is 1:1
+  local props = {
+    { 'celltower', 28.93 }, { 'watertower', 26.16 }, { 'barn', 8.41 }, { 'container', 2.59 }, { 'billboard', 11.95 },
+  }
+  for _, it in ipairs(props) do
+    local shape, sc = trees.pick(it[1], it[2], 0)
+    T.check(trees.CATALOG[it[1]] and shape == trees.CATALOG[it[1]][1][1] and math.abs(sc - 1) < 1e-6,
+      it[1] .. ': its model at 1:1')
+    T.check(trees.GROUP_MAX_M[it[1]] and trees.GROUP_MAX_M[it[1]] > 0, it[1] .. ': a draw distance')
+  end
+end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 -- a pass with nothing to do is skipped (the game speed pulsing, 2026-10-28): until a tile comes or goes, the car moves
 -- RECHECK_M, or RECHECK_S goes by

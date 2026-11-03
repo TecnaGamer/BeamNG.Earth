@@ -4922,7 +4922,7 @@ TILE_BUILDING_LAYERS = ("buildings", "building_parts", "water")   # a road tile'
 
 def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
     """The (cell, layer)s a road tile asks the map data for, nearest first (MapData.warm, before building it): the
-    roads and infrastructure (bridges) of the cells under it and their buildings (buildings on), the roads of the ring
+    roads, infrastructure (bridges) and land use of the cells under it and their buildings (buildings on), the roads of the ring
     around (grading's neighbours), the buildings of two rings around (widths on: roadwidth's walls) and the water of
     water_ring cells around (seacarve's rasters and river lines), and the roads of the second ring (gradesep's
     neighbours of the first)."""
@@ -4940,8 +4940,8 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
                if 0 <= y < n]
         return sorted(out, key=lambda k: (abs((k.x - cx + n / 2) % n - n / 2) + abs(k.y - cy), k))
     own = set(keys)
-    # (land use too: industry._named_plants reads it for every tile; asked for alone after the rest it was ~5 s of a
-    # first visit's Manhattan road tile, 2026-11-02)
+    # land use with every tile: parks, yards and billboards (worldprops), and industry._named_plants. Asked for
+    # alone after the rest it was ~5 s of a first visit's Manhattan road tile, 2026-11-02.
     tile = ("roads", "infrastructure", "land_use") + (TILE_BUILDING_LAYERS if buildings else ())
     needs = [(k, ly) for k in sorted(keys) for ly in tile]
     needs += [(k, "roads") for k in ring(1) if k not in own]
