@@ -15,7 +15,7 @@ MODULES = (
     "test_protocol", "test_protocol_agreement", "test_geodesy", "test_cache",
     "test_budget", "test_install", "test_updates", "test_selfupdate", "test_bmplaunch",
     "test_launcher_linux", "test_launcher_lifecycle", "test_process_lifecycle",
-    "test_connection_cleanup", "test_tile_ownership",
+    "test_connection_cleanup", "test_tile_ownership", "test_matslots",
     "test_netfetch", "test_mapdata", "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_plancache", "test_chunkcache", "test_pools",

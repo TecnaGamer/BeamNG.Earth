@@ -3138,7 +3138,9 @@ class Server:
 
     def slot_held(self, n):
         """Does some game still hold pooled slot n (a far_tile with it not reported gone)?"""
-        return any(n in c.slot_holds for c in self.connections)
+        # Allocation can query this from a tile worker while the event loop
+        # connects/disconnects clients; do not iterate the mutable set directly.
+        return any(n in c.slot_holds for c in tuple(self.connections))
 
     def slots_let_go(self, slots):
         """Event loop: these slots' holds ended (reported gone, or a connection closed)."""
