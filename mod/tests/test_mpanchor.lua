@@ -131,11 +131,27 @@ ma.retainRemote({ ['6'] = true })
 T.check(not ma.knows(4) and ma.knows(6), 'snapshot expires only missing peers')
 T.check(not ma.wasFar('4-0') and not ma.isFar('4-0') and ma.lastPos('4-0') == nil,
   'expired peer loses vehicle history')
+local expiredBefore = #got
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == expiredBefore and ma.lastPos('4-0') == nil,
+  'expired Earth peer packets dropped before the next vehicle hide update')
+ma.setRemote(4, 0 / 0, 0)
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == expiredBefore, 'invalid reacquisition keeps expired peer quarantined')
+positionGE.handle('p:99-0:{"pos":[100,200,30]}')
+T.check(#got == expiredBefore + 1 and got[#got] == 'p:99-0:{"pos":[100,200,30]}',
+  'a never-known peer retains legacy packet behavior')
 ma.setRemote(4, 36.52, -118.08)
 local reconnectBefore = #got
 positionGE.handle('p:4-0:{"pos":[100,200,30]}')
 T.check(#got == reconnectBefore + 1, 'reused player id starts without old settle or jump state')
+T.check(got[#got] == 'p:4-0:ENC' .. #enc and math.abs(enc[#enc].pos[1] - ex) < 1e-6,
+  'valid reacquisition resumes conversion into our frame')
 
+ma.retainRemote({})
 ma.reset()
 T.check(not ma.knows(4), 'reset: the anchors forgotten')
+local resetBefore = #got
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == resetBefore + 1, 'session reset clears expired-peer quarantine')
 T.done('test_mpanchor')

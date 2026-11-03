@@ -26,6 +26,7 @@ M.FAR_M = 30000
 
 local myLat, myLon = nil, nil            -- our own current anchor (core.lua: announceOwn)
 local remote = {}                        -- [playerId] = { lat, lon }, the plugin's latest (setRemote)
+local expired = {}                       -- previously known Earth peers awaiting a fresh valid anchor
 M.ownChanged = false                     -- our anchor changed since mpsession last sent a pose (it sends one at once)
 local xfCache = {}                       -- [playerId] = { myLat, myLon, rLat, rLon, xf } (lazy, see transformFor)
 local installed = false
@@ -75,6 +76,7 @@ function M.setRemote(pid, lat, lon)
     settleUntil[pid] = M.clock() + M.SETTLE_S
   end
   remote[pid] = { lat = lat, lon = lon }
+  expired[pid] = nil
   return true
 end
 
@@ -90,6 +92,7 @@ function M.retainRemote(players)
   for pid in pairs(remote) do
     if not players[tostring(pid)] then
       remote[pid], xfCache[pid], settleUntil[pid] = nil, nil, nil
+      expired[pid] = true
     end
   end
   for _, records in ipairs({ far, wasFar, lastPos, lastAt, nearSince }) do
@@ -115,7 +118,9 @@ function M.lastPos(sid)
 end
 
 -- (the session's end) the remote anchors forgotten
-function M.reset() remote, xfCache, far, wasFar, lastPos, settleUntil, lastAt, nearSince = {}, {}, {}, {}, {}, {}, {}, {} end
+function M.reset()
+  remote, expired, xfCache, far, wasFar, lastPos, settleUntil, lastAt, nearSince = {}, {}, {}, {}, {}, {}, {}, {}, {}
+end
 
 -- A log line once per car and kind every NOTE_S (the session's log tells what happened to a car before an instability)
 M.NOTE_S = 10
@@ -206,6 +211,10 @@ local function wrapHandle(original)
     local code, serverVehicleID, data = string.match(rawData, '^(%a)%:(%d+%-%d+)%:({.*})')
     if code ~= 'p' or not serverVehicleID then return original(rawData) end
     local pid = tonumber(serverVehicleID:match('^(%d+)%-'))
+    -- A known Earth peer's coordinates require its origin. After expiry, never
+    -- use the legacy no-transform path: the car may still be active until the
+    -- next mpsession hide update. A fresh valid setRemote releases quarantine.
+    if pid and expired[pid] then return end
     local now = M.clock()
     if pid and settleUntil[pid] then
       if now < settleUntil[pid] then
