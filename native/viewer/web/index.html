@@ -65,6 +65,7 @@
       <dt>Wheel</dt><dd>Change flying speed</dd>
       <dt>Click</dt><dd>Inspect a road, node or shape</dd>
       <dt><kbd>/</kbd></dt><dd>Search</dd>
+      <dt><kbd>M</kbd></dt><dd>Widen or shrink the map</dd>
       <dt>Minimap</dt><dd>Click to go there, drag to pan, wheel to zoom</dd>
     </dl>
   </details>
@@ -78,7 +79,15 @@
 
 <div id="mapbox" class="card">
   <canvas id="minimap" aria-label="Minimap: click to go there"></canvas>
-  <button id="centre" class="x" title="Follow the camera" aria-label="Follow the camera">&#9678;</button>
+  <!-- the wide map's top edge: drag (or arrow keys) to resize, double-click for a third of the height -->
+  <div id="mapGrip" class="grip" role="separator" aria-orientation="horizontal" aria-label="Resize the map"
+       aria-valuemin="15" aria-valuemax="80" tabindex="-1" title="Drag to resize. Double-click for a third of the height."></div>
+  <div class="mapTools">
+    <button id="mapWide" class="x" aria-pressed="false" title="Widen the map (M)" aria-label="Widen the map">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="grow" d="M1 6V2h4M11 2h4v4M15 10v4h-4M5 14H1v-4" fill="none" stroke="currentColor" stroke-width="1.6"/><path class="shrink" d="M5 1v4H1M15 5h-4V1M11 15v-4h4M1 11h4v4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+    <button id="centre" class="x" title="Follow the camera" aria-label="Follow the camera">&#9678;</button>
+  </div>
 </div>
 
 <!-- shown while the world server (earthd) can't be reached: a guide sign with the way to start it (offline.js) -->

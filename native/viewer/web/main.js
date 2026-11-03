@@ -58,6 +58,72 @@ const controls = new FlyControls(camera, canvas, pick)
 const minimap = new Minimap($('minimap'), (lat, lon) => teleport(lat, lon))
 minimap.z = 3
 $('centre').onclick = () => minimap.centre()
+
+// --- the wide map: the minimap as a strip across the bottom, its height dragged on its top edge ---
+// (remembered in this browser: { wide, h: the fraction of the window's height })
+const MAP_KEY = 'bnge-viewer-map', MAP_H = 0.33, MAP_MIN = 0.15, MAP_MAX = 0.8
+const mapView = { wide: false, h: MAP_H }
+try { Object.assign(mapView, JSON.parse(localStorage.getItem(MAP_KEY)) || {}) } catch (e) { /* none */ }
+function saveMapView() { try { localStorage.setItem(MAP_KEY, JSON.stringify(mapView)) } catch (e) { /* none */ } }
+function setMapHeight(h) {
+  mapView.h = Math.min(MAP_MAX, Math.max(MAP_MIN, Number.isFinite(h) ? h : MAP_H))
+  document.documentElement.style.setProperty('--map-h', `${(mapView.h * 100).toFixed(1)}vh`)
+  $('mapGrip').setAttribute('aria-valuenow', Math.round(mapView.h * 100))
+}
+function setMapWide(on) {
+  mapView.wide = on
+  document.body.classList.toggle('mapWide', on)
+  const b = $('mapWide')
+  b.setAttribute('aria-pressed', on ? 'true' : 'false')
+  b.title = on ? 'Shrink the map (M)' : 'Widen the map (M)'
+  b.setAttribute('aria-label', on ? 'Shrink the map' : 'Widen the map')
+  $('mapGrip').tabIndex = on ? 0 : -1
+  saveMapView()
+}
+setMapHeight(mapView.h)
+setMapWide(!!mapView.wide)
+$('mapWide').onclick = () => setMapWide(!mapView.wide)
+{
+  const grip = $('mapGrip')
+  let held = false
+  // the strip's top edge follows the pointer (its bottom stays a gap above the window's)
+  const follow = e => {
+    const gap = $('mapbox').getBoundingClientRect().bottom
+    setMapHeight((gap - e.clientY) / window.innerHeight)
+  }
+  grip.addEventListener('pointerdown', e => {
+    held = true
+    grip.setPointerCapture(e.pointerId)
+    grip.classList.add('held')
+    document.body.classList.add('resizing')
+    e.preventDefault()
+  })
+  grip.addEventListener('pointermove', e => { if (held) follow(e) })
+  const release = () => {
+    if (!held) return
+    held = false
+    grip.classList.remove('held')
+    document.body.classList.remove('resizing')
+    saveMapView()
+  }
+  grip.addEventListener('pointerup', release)
+  grip.addEventListener('pointercancel', release)
+  grip.addEventListener('dblclick', () => { setMapHeight(MAP_H); saveMapView() })
+  grip.addEventListener('keydown', e => {
+    const step = { ArrowUp: 0.02, ArrowDown: -0.02, PageUp: 0.1, PageDown: -0.1 }[e.key]
+    if (step == null && e.key !== 'Home') return
+    e.preventDefault()
+    e.stopPropagation()
+    setMapHeight(e.key === 'Home' ? MAP_H : mapView.h + step)
+    saveMapView()
+  })
+}
+// "M" widens or shrinks the map
+window.addEventListener('keydown', e => {
+  if (e.code !== 'KeyM' || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
+  setMapWide(!mapView.wide)
+})
 // night lighting (lighting.js: nightlights.lua's windows, lamp lenses, far glow and street lamp lights)
 // and the sun, sky and shadows (sky.js: the time of day)
 const lights = new NightLights(root, world.props)

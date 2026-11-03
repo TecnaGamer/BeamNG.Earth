@@ -212,6 +212,10 @@ offered for an earthd on this computer, and the endpoint refuses requests from a
 Controls: drag to look, WASD to move, E / Space up, Q / C down, Shift x5, Ctrl x0.2, wheel for
 speed. Click an OSM way or node, or any shape, to inspect it.
 
+The minimap's widen button (or `M`) turns it into a strip across the bottom of the window, a third
+of its height. Drag the strip's top edge to resize it (15 to 80%; arrow keys when the edge has the
+focus, double-click for a third again). The choice and the height are remembered in the browser.
+
 ## Checks
 
 ```sh
