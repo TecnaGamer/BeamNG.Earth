@@ -165,6 +165,32 @@ for _ = 1, 20 do trees.update(3, { x = 50, y = 50 }) end
 T.check(count() == 20 and trees.status().tiles == 1, 'drained over frames, the kept tile untouched')
 trees.SHAPE_ITEMS_PER_FRAME = saved
 trees.clear()
+
+-- new shapes (never made this session) come one a frame while driving (a frame budget under LOADING_FRAME_MS): their
+-- first items load the shape in the engine's tick (75-255 ms frames, Windows 2026-11-03); any number while loading
+local savedF = trees.FORESTS_PER_FRAME
+trees.FORESTS_PER_FRAME = 99   -- (new Forests have a limit of their own: not this test's)
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() == 10, 'driving: one new shape a frame (' .. count() .. ')')
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() > 10 and count() < 20, 'driving: the next new shape the frame after (the tall tile has two)')
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() == 20, 'driving: its third shape the frame after that')
+tile('1_0', 4, 10)
+tile('1_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() == 40, 'shapes made before: not new, both in one frame (' .. count() .. ')')
+trees.clear()
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS)
+T.check(count() == 20, 'loading: every new shape at once (' .. count() .. ')')
+trees.clear()
+trees.FORESTS_PER_FRAME = savedF
 trees.SHAPE_VARIANTS = savedV
 
 -- shape path variants: the same file spelled differently (the engine counts them as shapes of their own)

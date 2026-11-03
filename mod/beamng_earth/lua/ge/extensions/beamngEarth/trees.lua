@@ -685,12 +685,23 @@ local function removeItem(fd, it, shape)
 end
 
 -- This frame's shapes: may an item of this shape change now? (see SHAPE_ITEMS_PER_FRAME)
-local touched, touchedItems = {}, 0
+-- A shape's first items in a session cost far more than its population: the engine loads the shape and instances its
+-- materials in that frame's tick (a Manhattan drive on the Windows test PC, 2026-11-03: tree frames making 5-740
+-- items of new door / hydrant / sign / tree variants took the tick 75-255 ms, the shapes' items almost none). New
+-- shapes (never made this session) come NEW_SHAPES_PER_FRAME a frame at most while driving; any number while the
+-- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
+M.NEW_SHAPES_PER_FRAME = 1
+local touched, touchedItems, newShapes = {}, 0, 0
+local newShapeCap = math.huge
+local everMade = {}     -- shape -> true once it had items this session (the engine keeps it loaded)
 local function allow(shape)
   if touched[shape] then return true end
   local n = pop[shape] or 0
-  if next(touched) ~= nil and touchedItems + n > M.SHAPE_ITEMS_PER_FRAME then return false end
+  local new = not everMade[shape]
+  if next(touched) ~= nil and (touchedItems + n > M.SHAPE_ITEMS_PER_FRAME
+      or (new and newShapes >= newShapeCap)) then return false end
   touched[shape], touchedItems = true, touchedItems + n
+  if new then everMade[shape], newShapes = true, newShapes + 1 end
   return true
 end
 
@@ -1053,7 +1064,8 @@ function M.update(anchorId, player, view, frameMs)
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
-  touched, touchedItems = {}, 0
+  touched, touchedItems, newShapes = {}, 0, 0
+  newShapeCap = (frameMs ~= nil and frameMs < M.LOADING_FRAME_MS) and M.NEW_SHAPES_PER_FRAME or math.huge
   releaseGhosts(anchorId, player)
   bandCapsUpdate()
   for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)
@@ -1265,6 +1277,7 @@ end
 -- Level end: the level deletes its objects itself.
 function M.reset()
   tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
+  everMade = {}
   dirty, lastPass = true, nil
 end
 
