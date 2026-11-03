@@ -27,7 +27,7 @@ SMALL_ROAD_PROCESSES = 2    # road-tile processes (earthd ROAD_PROCESSES; with o
 ROAD_PROCESSES_BY_CPU = ((12, 24.0, 4), (8, 16.0, 3))     # (threads at least, GB at least, processes)
 SMALL_FAR_K = 0.8           # the far field's refinement factors (farfield.K_TABLE) times this: 204 tiles for 332
 SMALL_FAR_TEX = 256         # px of the far tiles' textures at every level (512 from L2 on a desktop)
-ARENA_MAX = 2               # glibc malloc arenas a process (small profile): one per thread kept freed memory ...
+ARENA_MAX = 2               # glibc malloc arenas a process (every profile): one per thread kept freed memory ...
 TRIM_S = 20.0               # ... and every TRIM_S the freed memory is given back (malloc_trim): a worker held ~1 GB
                             # for ~0.3 GB of Python and numpy objects (traced, a Steam Deck 2026-10-20)
 SMALL_FAR_WORKERS = 2       # far-tile worker processes (earthd --workers)
@@ -98,7 +98,9 @@ def apply(is_small=None):
             farfield.K_TABLE[cells] = {lvl: k * SMALL_FAR_K for lvl, k in table.items()}
         for cells, tex in farfield.TEX_DEFAULT.items():
             farfield.TEX_DEFAULT[cells] = tuple(min(t, SMALL_FAR_TEX) for t in tex)
-        _malloc_small()
+    # every machine: a desktop's server held 13-17 GB in its eleven processes (1-1.5 GB a worker, mostly freed memory
+    # its 40-65 threads' arenas kept), next to the game; a 32 GB PC with 4 cores swapped (GitHub #496, 2026-10-30)
+    _malloc_small()
     return is_small
 
 

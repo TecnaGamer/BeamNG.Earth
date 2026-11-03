@@ -601,6 +601,7 @@ local function finishRebase()
   farfield.switchAnchor(msg.anchorId, true, { cx = tr.cx, cy = tr.cy }, st.sessionId, rb.newAnchor)
   local cs = camshift.shift(xf, rb.playerOld[1], rb.playerOld[2], rb.playerOld[3])
   be:reloadCollision()
+  roads.collisionRebuilt()      -- (the moved colliders are solid: no second rebuild up to RELOAD_EVERY_S later)
 
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
   st.anchorSession, st.resync = st.sessionId, false
@@ -894,7 +895,8 @@ local function onMessage(msg)
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
       farGeo = roads.FAR_GEO,          -- (and the far buildings, skyline and far bridges: roads.lua)
-      globalFar = farfield.GLOBAL_FAR })  -- (and the far field from level 3 up as global tiles: farfield.lua)
+      globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
+      readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
@@ -1029,6 +1031,8 @@ local function onMessage(msg)
     else
       setStatus('Anchor request failed: ' .. tostring(msg.error))
     end
+  elseif t == 'terrain_ready_set' then   -- blocks built already (follow.preferReady): this anchor's only
+    follow.setReady(msg.anchorId == st.anchorId and msg.centres or {})
   elseif t == 'terrain_ready' then
     local p = st.terrainPending
     if not p or msg.requestId ~= p.requestId or msg.anchorId ~= st.anchorId then return end -- stale
@@ -1167,7 +1171,8 @@ local function onMessage(msg)
   elseif t == 'update' then
     -- a newer version on GitHub (server updates.py): said once a session in game, and on the settings page
     if type(msg.latest) == 'string' then
-      updateInfo = { current = tostring(msg.current or ''), latest = msg.latest, url = tostring(msg.url or '') }
+      updateInfo = { current = tostring(msg.current or ''), latest = msg.latest, url = tostring(msg.url or ''),
+        dev = msg.dev == true }     -- (a development build: devbuild.lua)
     end
   elseif t == 'update_status' then
     -- the "Update now" download (server selfupdate.py): progress, ready, error; shown in the update notice
@@ -1737,8 +1742,8 @@ local function drawUpdateNotice()
   local flags = im.WindowFlags_AlwaysAutoResize + im.WindowFlags_NoCollapse + im.WindowFlags_NoSavedSettings
     + im.WindowFlags_NoTitleBar
   if im.Begin('BeamNG.Earth update##beamngEarthUpdate', nil, flags) then
-    im.Text(string.format('BeamNG.Earth %s is available (you have %s).', tostring(updateInfo.latest),
-      tostring(updateInfo.current)))
+    im.Text(string.format('BeamNG.Earth %s%s is available (you have %s).', updateInfo.dev and 'development build ' or '',
+      tostring(updateInfo.latest), tostring(updateInfo.current)))
     local us = updateInfo.status
     if us and us.text ~= '' then
       if us.state == 'progress' and us.total > 0 then
@@ -1818,6 +1823,13 @@ local function drawUi(dt)
       and (st.clock or 0) > (st.loadingUntil or 0) then
     local ok, err = pcall(drawUpdateNotice)
     if not ok then updateInfo = nil; log('E', 'beamngEarth', 'update notice: ' .. tostring(err)) end
+  end
+  -- a development build's notice (devbuild.lua), below the update notice when that one is up
+  if st.inOurLevel and st.active and not credits.hiddenByUi() and (st.clock or 0) > (st.loadingUntil or 0)
+      and lastHello and M._devbuild.isDev(lastHello.appVersion) then
+    local up = updateInfo and not updateHidden and settings.get('updateDismissed') ~= tostring(updateInfo.latest)
+    local ok, err = pcall(M._devbuild.draw, lastHello.appVersion, settings, up and 120 or 12)
+    if not ok then lastHello.appVersion = nil; log('E', 'beamngEarth', 'dev build notice: ' .. tostring(err)) end
   end
 end
 
@@ -2142,6 +2154,7 @@ end
 
 -- After physics, before rendering (main.lua:819-824): measure when a rebase's vehicle move became
 -- visible. Hook order relative to core_camera does not matter here; this only measures.
+M._devbuild = require('beamngEarth/devbuild')    -- the development build's notice (a field: the 200-local limit)
 M._pacer = require('beamngEarth/framepacer')    -- even frame pacing (fields: the main chunk's 200-local limit)
 M._paceClock = stopwatch.clock()
 local function onPreRender(dtReal, dtSim)

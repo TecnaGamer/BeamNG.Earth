@@ -24,6 +24,7 @@ M.SPECIES = {
 -- of them had turned, the user 2026-10-29)
 M.SPRING = { 0.95, 1.1, 0.8 }   -- the fresh flush, every species
 M.EASE = 1.6            -- tint = amount ^ EASE: a tree holds its green early in the turn
+M.IMPOSTERS = false     -- tint the far trees' imposter materials too (see M.update)
 
 -- Pure: how far the leaves have turned (0..1) on day-of-year doy at latitude lat (server/season.py
 -- season_amounts: none in the tropics, the southern hemisphere half a year later).
@@ -141,6 +142,10 @@ function M.update(inOurLevel, lat)
   end
   -- (one field: on these version 1 materials baseColorFactor and diffuseColor are the same colour, so tinting both
   -- tinted the far trees twice, brighter and redder than the 3D trees in front of them, the user 2026-10-29)
+  -- (off since 1.7.3: a reload of an imposter material may re-bake the tree's far picture on the GPU, and with trees
+  -- streaming in many came at once: 1.7.2's GPU hangs ~30-90 s after the level loaded, GitHub #535 (TDR, a ~3 s frame
+  -- first); 1.7.1 never tinted them)
+  if not M.IMPOSTERS then return end
   for _, e in ipairs(imposters()) do
     local tint, t = M.speciesTint(e[2], mode, doy, lat)
     pcall(tintOne, e[1], 'baseColorFactor', tint, t)

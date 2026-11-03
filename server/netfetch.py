@@ -159,7 +159,9 @@ POLICIES = {
                                     allow_prefetch=True, offline_ok=True, miss_ttl=30 * DAY,
                                     binary=True, timeout=60.0, max_attempts=2, base_delay=2.0,
                                     breaker_threshold=6, breaker_window=120.0),
-    "tiles.maps.eox.at": HostPolicy(rate=10.0, burst=40.0, max_conc=6, daily_budget=30000,
+    # (20/s, 12 at once: the user's OK 2026-10-30; at 10/s a first visit's far field outside the US took ~4 min, 761
+    # tiles in 241 s at Canterbury; s2maps-tiles.eu, EOX's other domain, refuses us: no mirror)
+    "tiles.maps.eox.at": HostPolicy(rate=20.0, burst=80.0, max_conc=12, daily_budget=30000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # (a tile not in Cloudflare's edge cache takes ~1 s before its first byte: requests in flight set the rate)
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
@@ -181,11 +183,15 @@ POLICIES = {
     # range reads of immutable release files, kept forever; the STAC index is small JSON on CloudFront
     "stac.overturemaps.org": HostPolicy(rate=5.0, burst=10.0, max_conc=2, daily_budget=5000,
                                         allow_prefetch=True, offline_ok=True, timeout=20.0),
-    **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
+    # Overture's two copies of each release (AWS, Azure: rangeread spreads the reads over both): 8 at once each (the
+    # user, 2026-10-30: a fresh place's road cells waited on our 4; one connection gave ~5-27 MB/s, 8 ~40-50)
+    **{h: HostPolicy(rate=40.0, burst=80.0, max_conc=8, daily_budget=None, allow_prefetch=True,
                      offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com",
-                 "overturemapswestus2.blob.core.windows.net",
-                 "esa-worldcover.s3.eu-central-1.amazonaws.com",
+                 "overturemapswestus2.blob.core.windows.net")},
+    **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
+                     offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
+       for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com",
                  "dataforgood-fb-data.s3.amazonaws.com",
                  "copernicus-dem-30m.s3.amazonaws.com")},      # the polar caps' DEM (polardem.py)
     # British Columbia's lidar DEMs (lidarbc.py): range reads of the Province's open bucket; optional
@@ -225,7 +231,9 @@ POLICIES = {
                              timeout=60.0, max_attempts=1, optional=True),
     # OSM US Layercake (osmtags.py): the OSM highways GeoParquet on Cloudflare, read in ranges (the footer once, a few
     # MB per new area); optional: without it roads keep their width guesses
-    "data.openstreetmap.us": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=5000, allow_prefetch=True,
+    # (4 at once: ~1-5 MB/s a connection, uncached at Cloudflare's edge; a fresh place's first graded block waited ~20 s
+    # on 2, the user's OK 2026-10-30; no mirror of the file exists)
+    "data.openstreetmap.us": HostPolicy(rate=8.0, burst=16.0, max_conc=4, daily_budget=5000, allow_prefetch=True,
                                         offline_ok=True, miss_ttl=None, binary=True, timeout=30.0, optional=True),
     # USGS 3DEP lidar point clouds (roadz.py: the US bridge decks, BNE_LIDAR_DECKS): EPT metadata (kept on disk) and
     # ~0.3 MB LAZ nodes along a cell's bridges once (the decks made from them are kept); optional (the inference)

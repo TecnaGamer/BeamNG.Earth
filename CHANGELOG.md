@@ -2,6 +2,63 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.7.3 beta (2026-10-30)
+
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
+> develop the mod.** For help, that includes multiplayer:
+> BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working
+> with BeamMP, it's almost certainly a BeamNG.Earth problem, not a BeamMP one. Please don't contact the BeamMP team or
+> open BeamMP support tickets about it. BeamNG.Earth servers are hidden from players who don't run BeamNG.Earth
+> (BeamMP can't install it for them: it needs its own app), so they only show in the BeamNG.Earth tab of BeamMP's
+> server browser.
+
+Works with BeamNG.drive 0.40.4.
+
+### Faster world building
+- **Much faster at very high speed**: above about 157 mph the next four terrain blocks along your path are built ahead
+  (two at a time), their ground photos come once you get there, and the game picks a block that's already built when
+  one is close enough. In a 90-second test drive at 500 mph, the game stopped to wait for the ground for a total of 3
+  seconds (it was 29 seconds before), and the roads were ready about 0.8 miles ahead of the car (it was 0.25 miles).
+- Roads load in the order you'll reach them when driving fast.
+- **Roads ready sooner in new places**: the map data downloads use more connections at once and both copies of
+  Overture's map data (Amazon and Azure), and the OpenStreetMap road details (lanes, widths) are unpacked once per area
+  instead of once per map square. In a test in York the roads around the car were all there after 35 seconds instead
+  of 50-58.
+- **New places are ready sooner**: the map data a new area needs (roads, buildings for the street widths, water for
+  the sea floor) is now fetched side by side instead of one piece after another, and work several parts of the app
+  repeated for every map square is done once per area. On a Steam Deck, terrain blocks now arrive in about 2 seconds
+  instead of 3 to 15 while driving into new places.
+- **Distant land outside the US fills about twice as fast** on a first visit.
+- Road tiles build a little faster (thanks iknlm, #473).
+- **Steam Deck and slower PCs keep up better when driving fast**: the app's main loop no longer spends a third of its
+  time working out which tiles are near the car, and on small machines ground photos for the blocks ahead are drawn
+  only once you get there from 78 mph up. In tests at 77-87 mph on a Steam Deck the roads were much further ahead.
+- **Frame pacing costs less**: Even frame pacing now holds frames to a lower target, about a seventh of the frame rate
+  instead of a quarter in a city drive, with the same steady game speed.
+- Ground photos are packed for the game faster, on the graphics card where the app already uses it (Linux and the
+  Steam Deck), leaving more of the processor for building the world.
+- Reduced the chance of the roads and buildings never loading on Windows ("the road workers may be stuck", #435): a
+  lock file left behind could make the app's processes wait up to 3 minutes each (thanks OmdevShastri for tracking
+  it down in #481).
+- The app uses about a quarter less memory on Linux, Proton and the Steam Deck.
+
+### Development builds
+- **Development builds**: every change to the development branch is now published as a GitHub pre-release (for
+  example 1.7.2-beta.dev.37), with a warning that it has not been thoroughly tested. A development build says so in
+  game, and its update check offers the next development build; the betas keep offering only betas.
+
+### Fixed
+- Reduced the chance of a multi-second freeze a few minutes after starting, when the app cleaned up an earlier session's
+  files.
+- Reduced the chance of the ground flashing green or brown when driving fast (#548): above 157 mph, ground whose
+  aerial photo isn't ready yet now gets a quick photo first instead of the plain base. It reuses the ground you've
+  just driven over, so ground already on screen should keep its look, with lower-detail imagery only at the new edge
+  and the painted roads drawn in. The full photo still replaces it a moment later. Below 157 mph the ground waits for
+  its full photo for up to 2.5 seconds, then takes the quick photo too. This should reduce the pauses at the edge of
+  the ground in big cities, where one slow photo used to hold up the blocks after it.
+- Reduced the chance of the GPU crashes ("device hung" / TDR) about a minute after loading the map in 1.7.2 (#535): far
+  trees no longer change colour with the seasons.
+
 ## 1.7.2 beta (2026-10-29)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

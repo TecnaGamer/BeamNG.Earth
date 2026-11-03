@@ -11,6 +11,9 @@ Planning frames (grading's plans, bridge / tunnel chain profiles) are the frames
 the same way: one plan per region whatever the anchor.
 """
 import functools
+import math
+import threading
+from collections import OrderedDict
 
 import numpy as np
 
@@ -108,9 +111,44 @@ def quad_dist(q, x, y):
     return float(_ef().geo_quad_dist(np.ascontiguousarray(q, np.float64), float(x), float(y)))
 
 
-def tiles_near(anchor, x, y, r, z=Z):
-    """[(tx, ty, m)] of the tiles whose quad in anchor's world comes within r of (x, y), nearest first."""
-    return _ef().geo_tiles_near(float(anchor.lat0), float(anchor.lon0), int(z), float(x), float(y), float(r))
+NEAR_Q_M = 16.0         # tiles_near's points snapped to a grid of this many metres on the ground (its memo)
+NEAR_MEMO = 4096        # tiles_near answers kept
+_near_memo = OrderedDict()
+_near_lock = threading.Lock()
+
+
+def tiles_near(anchor, x, y, r, z=Z, exact=False):
+    """[(tx, ty, m)] of the tiles whose quad in anchor's world comes within r of (x, y), nearest first. Kept
+    (NEAR_MEMO): exact, for the point itself; else for the place snapped to a NEAR_Q_M grid of latitude and longitude
+    (the same place whatever the anchor: a rebase asks for the same tiles) with r grown by the snap (every tile within
+    r of (x, y) is in it; m from the snapped place). The trackers asked it again at every pose, for every spot and tile
+    round the car: ~1/3 of a Steam Deck's event loop (96 of 292 s, 2026-10-30)."""
+    lat0, lon0, z = float(anchor.lat0), float(anchor.lon0), int(z)
+    if exact:
+        key = (lat0, lon0, z, float(x), float(y), float(r), False)
+    else:
+        la, lo, _ = world_to_geodetic(anchor, np.array([[float(x), float(y), 0.0]]))
+        dla = NEAR_Q_M / 111320.0
+        qla = round(float(la[0]) / dla) * dla
+        dlo = dla / max(0.05, math.cos(math.radians(qla)))
+        qlo = round(float(lo[0]) / dlo) * dlo
+        key = (lat0, lon0, z, qla, qlo, float(r), True)
+    with _near_lock:
+        got = _near_memo.get(key)
+        if got is not None:
+            _near_memo.move_to_end(key)
+            return got
+    if exact:
+        got = _ef().geo_tiles_near(lat0, lon0, z, float(x), float(y), float(r))
+    else:
+        qx, qy, _ = geodetic_to_world(anchor, np.array([key[3]]), np.array([key[4]]))
+        # (the snap's largest offset on the ground: one answer for every point of the cell)
+        got = _ef().geo_tiles_near(lat0, lon0, z, float(qx[0]), float(qy[0]), float(r) + NEAR_Q_M * 0.7072)
+    with _near_lock:
+        _near_memo[key] = got
+        while len(_near_memo) > NEAR_MEMO:
+            _near_memo.popitem(last=False)
+    return got
 
 
 def _pts(p):

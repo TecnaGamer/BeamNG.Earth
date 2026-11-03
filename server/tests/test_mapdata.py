@@ -387,6 +387,14 @@ class RangeTest(SmallBlocks, unittest.TestCase):
         self.assertEqual(r3.read(48000, 50000), self.data[48000:])
         self.assertEqual(r3.size, len(self.data))
 
+    def test_mirrors_take_turns(self):
+        # Overture's AWS and Azure copies: reads spread over both (twice the connections), the same bytes
+        r = self.remote()
+        b = rangeread.BLOCK
+        self.assertEqual(r.read(0, 10), self.data[:10])
+        self.assertEqual(r.read(3 * b, 3 * b + 10), self.data[3 * b:3 * b + 10])
+        self.assertEqual({u for u, _ in self.t.log}, {self.URL, self.MIRROR})
+
     def test_mirror_failover(self):
         self.t.fail[netfetch.host_of(self.URL)] = 503
         r = self.remote()
@@ -960,8 +968,10 @@ class KindsTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(len(cd.layers["roads"]), 6)
 
     def test_policies(self):
-        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com", "overturemapswestus2.blob.core.windows.net",
-                  "esa-worldcover.s3.eu-central-1.amazonaws.com", "dataforgood-fb-data.s3.amazonaws.com"):
+        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com", "overturemapswestus2.blob.core.windows.net"):
+            p = netfetch.POLICIES[h]
+            self.assertEqual((p.rate, p.burst, p.max_conc, p.allow_prefetch, p.miss_ttl), (40.0, 80.0, 8, True, None))
+        for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com", "dataforgood-fb-data.s3.amazonaws.com"):
             p = netfetch.POLICIES[h]
             self.assertEqual((p.rate, p.burst, p.max_conc, p.allow_prefetch, p.miss_ttl), (20.0, 40.0, 4, True, None))
         self.assertTrue(netfetch.POLICIES["stac.overturemaps.org"].allow_prefetch)

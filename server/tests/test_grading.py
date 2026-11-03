@@ -668,7 +668,7 @@ class JunctionTest(unittest.TestCase):
         grading.snap_junctions([main, side], specs)
         main.z = main.z - 3.0 * np.exp(-((x - 60.0) / 40.0) ** 2)     # the dip, after the first snap
         grading.snap_junctions([main, side], specs)
-        _d, zq, _e = grading._nearest_on(main, 50.0, 0.0)
+        zq = np.interp(50.0, x, main.z)        # (the main road's height where the side road meets it)
         self.assertAlmostEqual(side.z[0], zq, places=6)
         self.assertAlmostEqual(side.z[-1], 10.0, places=6)
 
