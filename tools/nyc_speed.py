@@ -320,6 +320,8 @@ def main():
         speeds = [40.0] + speeds
     for i, mph in enumerate(speeds):
         label = f"{'custom' if a.start else a.route}_{int(mph)}mph" + ("_warmup" if a.warm_first and i == 0 else "")
+        if a.label:     # (each labelled run keeps its own data: runs with one --out overwrote each other's, 2026-11-03)
+            label = f"{a.label}_{label}"
         d = os.path.join(a.out, label)
         os.makedirs(d, exist_ok=True)
         start, end = ROUTES.get(a.route) if not a.start else (
