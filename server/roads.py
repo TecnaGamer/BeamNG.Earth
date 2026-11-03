@@ -55,8 +55,11 @@ BUILD_PER_POSE = 4      # tiles started per pose at most
 # CORRIDOR_M of the path ahead are wanted too, up to LEAD_S of driving (LEAD_MAX_M at most), and every wanted tile is
 # built in the order the car reaches it (path_key): the corridor first, the ones beside and behind the car last.
 FAST_MS = 25.0          # m/s (56 mph)
-LEAD_S = float(os.environ.get("BNE_ROADS_LEAD_S", "14"))         # s of driving ahead
-LEAD_MAX_M = float(os.environ.get("BNE_ROADS_LEAD_M", "2000"))
+# (14 s / 2 km until 2026-11-03: the measured lead sat at that cap, ~800 m at 120 mph. 30 s on the Windows test PC
+# (Ryzen 3600, I-10 120 mph): road lead p10 352 -> 832 m, median 800 -> 1632 m, no poll with the car past its roads
+# (10 before), block times and holds the same; the user: "the world should generate far ahead")
+LEAD_S = float(os.environ.get("BNE_ROADS_LEAD_S", "30"))         # s of driving ahead
+LEAD_MAX_M = float(os.environ.get("BNE_ROADS_LEAD_M", "5000"))
 CORRIDOR_M = 160.0      # m either side of the path
 SIDE_PENALTY = 4.0      # a tile off the path counts this many times its sideways distance (path_key)
 
