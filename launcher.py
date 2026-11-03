@@ -213,6 +213,12 @@ def start_server(user_dir, extra, log_path):
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
+    # alone, not the game, e.g. a heap profiler)
+    for kv in os.environ.get("BNGE_SERVER_ENV", "").split():
+        k, sep, v = kv.partition("=")
+        if sep and k:
+            env[k] = v
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP

@@ -535,4 +535,15 @@ do
   T.check(count() == 0 and trees.status().tiles == 0, 'dropped')
   trees.RECHECK_S = 1.0
 end
+
+-- the pass order's sort keys: nearer first, the index only between equal quarter metres, the index recoverable
+do
+  local ks = { trees.orderKey(300.2, 1), trees.orderKey(12.0, 2), trees.orderKey(12.3, 3), trees.orderKey(0, 4),
+    trees.orderKey(12.0, 5) }
+  table.sort(ks)
+  local at = {}
+  for i, k in ipairs(ks) do at[i] = k % 2 ^ 20 end
+  T.check(table.concat(at, ',') == '4,2,5,3,1', 'pass order: ' .. table.concat(at, ','))
+  T.check(trees.orderKey(1e9, 7) % 2 ^ 20 == 7 and trees.orderKey(1e9, 7) < 2 ^ 53, 'pass order: far tiles capped')
+end
 T.done('test_trees')

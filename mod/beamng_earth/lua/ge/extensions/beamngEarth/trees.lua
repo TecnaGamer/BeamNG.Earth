@@ -259,6 +259,11 @@ local MATERIALS = {
 local stopwatch = require('beamngEarth/stopwatch')
 M.clock = stopwatch.new      -- the tree frame's clock (FRAME_MS; tests: their own)
 local tiles = {}        -- key "a:tx_ty" -> { anchor, cx, cy, f (flat items), s (stride), n, made = { i -> item }, shown }
+-- A tree pass's order (M.update): the shown tiles' keys and distances in arrays kept between passes, and their sort
+-- keys: the distance in quarter metres times ORDER_SLOTS plus the entry's index (plain numbers: the default sort)
+local ORDER_SLOTS = 2 ^ 20
+local passOrder = { keys = {}, d = {}, car = {}, sort = {}, n = 0 }
+function M.orderKey(d, i) return math.floor(math.min(d, 1e7) * 4) * ORDER_SLOTS + i end
 local foci = {}         -- other vehicles' collision foci { x, y, r, trees } (M.setFoci, collisionfoci.lua)
 local dirty = true      -- a tree pass has work (M.update: a pass with none is skipped)
 local lastPass = nil    -- { anchor, x, y, vx, vy, clock } of the last full pass (M.update)
@@ -989,21 +994,30 @@ function M.update(anchorId, player, view, frameMs)
     end
   end
   if not player then return end
-  -- nearest tiles first (to the camera when it is away: view); [3] the distance to the car (the colliding items)
-  local order = {}
+  -- nearest tiles first (to the camera when it is away: view), and the distance to the car (the colliding items).
+  -- The order is plain numbers (orderKey) in arrays kept from pass to pass, sorted by the default `<`: a table per
+  -- tile sorted with a Lua comparator cost ~10 ms a pass over the 5,500 tiles of a drive through LA (2026-11-02: a
+  -- comparator called from C for each of ~70k comparisons, and the garbage), outside the tree frame's time limit.
   local function boxDist(p, t)
     local h = t.half or 128
     local dx = math.max(math.abs(p.x - t.cx) - h, 0)
     local dy = math.max(math.abs(p.y - t.cy) - h, 0)
     return math.sqrt(dx * dx + dy * dy)
   end
+  local oKeys, oD, oCar, oSort = passOrder.keys, passOrder.d, passOrder.car, passOrder.sort
+  local nOrder = 0
   for key, t in pairs(tiles) do
     if (not t.geo and t.anchor ~= anchorId) or t.drop or t.flush then goto continue end     -- still being emptied
+    nOrder = nOrder + 1
     local dCar = boxDist(player, t)
-    order[#order + 1] = { key, view and math.min(boxDist(view, t), dCar) or dCar, dCar }
+    oKeys[nOrder], oCar[nOrder] = key, dCar
+    oD[nOrder] = view and math.min(boxDist(view, t), dCar) or dCar
+    oSort[nOrder] = M.orderKey(oD[nOrder], nOrder)
     ::continue::
   end
-  table.sort(order, function(a, b) return a[2] < b[2] end)
+  for i = nOrder + 1, passOrder.n do oKeys[i], oD[i], oCar[i], oSort[i] = nil, nil, nil, nil end
+  passOrder.n = nOrder
+  table.sort(oSort)
   local nearMade = false
   local rowsScanned = 0
   -- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
@@ -1029,19 +1043,21 @@ function M.update(anchorId, player, view, frameMs)
     t.scan = { from = math.min(i, skipped or i), want = want, band = band, near = near }
     finish()
   end
-  for _, o in ipairs(order) do
-    local t = tiles[o[1]]
-    local fd = nil                          -- the tile's Forest data, made when it first needs an item
-    local function data()
-      if not fd then
-        local fo = forest(t)
-        fd = fo and fo:getData()
-      end
-      return fd
+  local t, fd = nil, nil                    -- the tile looked at, and its Forest data (made when it first needs an item)
+  local function data()                     -- (one closure for the pass, not one a tile)
+    if not fd then
+      local fo = forest(t)
+      fd = fo and fo:getData()
     end
-    local want = tileThreshold(o[2], t)
-    local band = groupBand(t, o[2])
-    local near = o[3] <= M.SOLID_M or (t.near and o[3] <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
+    return fd
+  end
+  for oi = 1, nOrder do
+    local at = oSort[oi] % ORDER_SLOTS
+    local dist, dCar = oD[at], oCar[at]
+    t, fd = tiles[oKeys[at]], nil
+    local want = tileThreshold(dist, t)
+    local band = groupBand(t, dist)
+    local near = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
       -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
@@ -1072,14 +1088,14 @@ function M.update(anchorId, player, view, frameMs)
           -- Preserve continuous 3 m runs until a tile cap actually requires thinning.
           local rowCap
           for _, limit in ipairs(M.TILE_CAP) do
-            if o[2] <= limit[1] then rowCap = limit[2]; break end
+            if dist <= limit[1] then rowCap = limit[2]; break end
           end
-          if cap and o[2] > cap then
+          if cap and dist > cap then
             r = 2
           elseif not rowCap or t.n <= rowCap then
             r = 0
           end
-        elseif cap and o[2] > cap then
+        elseif cap and dist > cap then
           r = 2     -- this group is not shown this far out
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
