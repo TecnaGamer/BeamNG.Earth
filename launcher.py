@@ -303,14 +303,29 @@ def server_port_busy(port=SERVER_PORT):
         return False
 
 
-def wait_server_ready(proc, port=SERVER_PORT, timeout=SERVER_START_S):
-    """Wait for the owned child's listener, stopping promptly if startup fails."""
+def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
+    """Read the owned child's post-bind marker from its freshly truncated startup log.
+
+    Do not connect to the game protocol just to test readiness: that creates a fake game session.
+    Only the last 64 KiB are read each poll, even when startup produced a large log.
+    """
+    marker = f"earthd listening on 127.0.0.1:{port} ".encode("ascii")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             return False
-        if server_port_busy(port):
-            return proc.poll() is None
+        try:
+            with open(log_path, "rb") as log:
+                log.seek(0, os.SEEK_END)
+                start = max(0, log.tell() - 65536)
+                log.seek(start)
+                tail = log.read(65536)
+            if start:
+                tail = tail.partition(b"\n")[2]  # discard a potentially partial first line
+            if any(line.startswith(marker) for line in tail.splitlines()):
+                return proc.poll() is None
+        except OSError:
+            pass
         time.sleep(0.25)
     return False
 
@@ -1470,7 +1485,7 @@ def run(args):
     try:
         row("World server", "starting")
         row("Server log", log_path)
-        if not wait_server_ready(server, port):
+        if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
                     f"See {log_path} for the startup error, then try again.")
             raise SystemExit(1)

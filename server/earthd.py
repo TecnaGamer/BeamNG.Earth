@@ -4059,6 +4059,9 @@ class Connection:
             for t in list(self.tasks):
                 t.cancel()
             self.writer.close()
+            # The streamer owns a separate Event.wait task; let its finally
+            # finish before this connection (including a readiness probe) goes.
+            await asyncio.gather(self.streamer, return_exceptions=True)
             log.info("client disconnected %s", self.peer)
 
     def build_veg_tile(self, aid, tx, ty):
@@ -5479,6 +5482,7 @@ class Connection:
         return [g for g in self.groups if any(k in self.failed for k in g[0])]
 
     async def stream(self):
+        self._stream_waker = None
         try:
             await self._stream()
         except ConnectionError:
@@ -5487,11 +5491,15 @@ class Connection:
             for fut, _ in self.inflight.values():
                 fut.cancel()
             raise
+        finally:
+            if self._stream_waker is not None:
+                self._stream_waker.cancel()
+                await asyncio.gather(self._stream_waker, return_exceptions=True)
+                self._stream_waker = None
 
     async def _stream(self):
         """Build the needed tiles by priority, send them, emit swap groups as they complete;
         one task per connection."""
-        waker = None
         while True:
             # Clear before reading the state, so an update from here on wakes us again.
             self.wake.clear()
@@ -5550,12 +5558,12 @@ class Connection:
                 if not any(ck[0] != anchor.id and ck[0] != GLOBAL_AID for ck in self.shown):
                     self.s.schedule_prune(anchor.id)
             await self.writer.drain()
-            if waker is None:
-                waker = asyncio.ensure_future(self.wake.wait())
+            if self._stream_waker is None:
+                self._stream_waker = asyncio.ensure_future(self.wake.wait())
             futs = [f for f, _ in self.inflight.values()]
-            done, _ = await asyncio.wait(futs + [waker], return_when=asyncio.FIRST_COMPLETED)
-            if waker in done:
-                waker = None
+            done, _ = await asyncio.wait(futs + [self._stream_waker], return_when=asyncio.FIRST_COMPLETED)
+            if self._stream_waker in done:
+                self._stream_waker = None
             for ck in [ck for ck, (f, _) in self.inflight.items() if f.done()]:
                 fut, t = self.inflight.pop(ck)
                 if fut.cancelled():

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -103,21 +104,73 @@ class ServerReadinessTest(unittest.TestCase):
             clock = Clock()
             proc = mock.Mock()
             proc.poll.side_effect = lambda: 2 if dies and clock.now >= 0.5 else None
-            with mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock.now), \
-                    mock.patch.object(launcher.time, "sleep", side_effect=clock.sleep), \
-                    mock.patch.object(launcher, "server_port_busy", side_effect=lambda port: clock.now >= 1) as probe:
-                self.assertEqual(launcher.wait_server_ready(proc, 47699, timeout=2), not dies)
+            with tempfile.TemporaryDirectory() as folder:
+                log = Path(folder) / "server.log"
+                log.write_text("starting\n")
+                def advance(seconds):
+                    clock.sleep(seconds)
+                    if clock.now >= 1:
+                        with log.open("a") as f:
+                            f.write("earthd listening on 127.0.0.1:47699 session test -> cache\n")
+                with mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock.now), \
+                        mock.patch.object(launcher.time, "sleep", side_effect=advance), \
+                        mock.patch.object(launcher, "server_port_busy") as probe:
+                    self.assertEqual(launcher.wait_server_ready(proc, log, 47699, timeout=2), not dies)
+                    probe.assert_not_called()
             self.assertLessEqual(clock.now, 1)
-            probe.assert_called_with(47699)
 
-    def test_missing_listener_times_out(self):
+    def test_missing_or_wrong_port_marker_times_out(self):
+        for contents in (None, "starting\n", "earthd listening on 127.0.0.1:476130 session wrong\n"):
+            clock = Clock()
+            proc = mock.Mock()
+            proc.poll.return_value = None
+            with tempfile.TemporaryDirectory() as folder:
+                log = Path(folder) / "server.log"
+                if contents is not None:
+                    log.write_text(contents)
+                with mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock.now), \
+                        mock.patch.object(launcher.time, "sleep", side_effect=clock.sleep), \
+                        mock.patch.object(launcher, "server_port_busy") as probe:
+                    self.assertFalse(launcher.wait_server_ready(proc, log, timeout=1))
+                    probe.assert_not_called()
+            self.assertEqual(clock.now, 1)
+
+    def test_marker_at_end_of_large_log_and_dead_child(self):
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "server.log"
+            log.write_bytes(b"startup data\n" * 200000 + b"earthd listening on 127.0.0.1:47613 session ready\n")
+            real_open = open
+            reads = []
+            def tracked_open(*args, **kwargs):
+                stream = real_open(*args, **kwargs)
+                original_read = stream.read
+                def read(size=-1):
+                    reads.append(size)
+                    return original_read(size)
+                stream.read = read
+                return stream
+            with mock.patch("builtins.open", side_effect=tracked_open):
+                self.assertTrue(launcher.wait_server_ready(proc, log, timeout=1))
+            self.assertEqual(reads, [65536])
+            proc.poll.return_value = 1
+            self.assertFalse(launcher.wait_server_ready(proc, log, timeout=1))
+
+    def test_new_child_truncates_old_marker_before_waiting(self):
         clock = Clock()
         proc = mock.Mock()
         proc.poll.return_value = None
-        with mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock.now), \
-                mock.patch.object(launcher.time, "sleep", side_effect=clock.sleep), \
-                mock.patch.object(launcher, "server_port_busy", return_value=False):
-            self.assertFalse(launcher.wait_server_ready(proc, timeout=1))
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "server.log"
+            log.write_text("earthd listening on 127.0.0.1:47613 session old\n")
+            with mock.patch.object(launcher.subprocess, "Popen", return_value=proc), \
+                    mock.patch.object(launcher.threading, "Thread"):
+                launcher.start_server("game-user", [], str(log))
+            self.assertEqual(log.read_bytes(), b"")
+            with mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock.now), \
+                    mock.patch.object(launcher.time, "sleep", side_effect=clock.sleep):
+                self.assertFalse(launcher.wait_server_ready(proc, log, timeout=1))
         self.assertEqual(clock.now, 1)
 
 
