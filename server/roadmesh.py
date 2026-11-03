@@ -376,6 +376,50 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rbc = list(trim_overlaps(rbc, ctx))
+    deck_abuts = []
+    for r, _c in rbc:
+        if r[5] is not None:
+            l_d, r_d = r[0], r[1]
+            if len(l_d) >= 2:
+                deck_abuts.append(((l_d[0] + r_d[0]) * 0.5, l_d[0].copy(), r_d[0].copy()))
+                deck_abuts.append(((l_d[-1] + r_d[-1]) * 0.5, l_d[-1].copy(), r_d[-1].copy()))
+    if context:
+        for r, _c in ribbon_pairs(list(context)):
+            if r[5] is not None:
+                l_d, r_d = r[0], r[1]
+                if len(l_d) >= 2:
+                    deck_abuts.append(((l_d[0] + r_d[0]) * 0.5, l_d[0].copy(), r_d[0].copy()))
+                    deck_abuts.append(((l_d[-1] + r_d[-1]) * 0.5, l_d[-1].copy(), r_d[-1].copy()))
+
+    ab_pts = np.array([a[0] for a in deck_abuts], np.float64) if deck_abuts else np.zeros((0, 2), np.float64)
+    if len(deck_abuts):
+        new_rbc = []
+        for r, c in rbc:
+            if r[5] is None and len(r[0]) >= 2:
+                left, right, v, m, layer, fz = r
+                left, right = left.copy(), right.copy()
+                mid0 = (left[0] + right[0]) * 0.5
+                mid1 = (left[-1] + right[-1]) * 0.5
+                d0 = np.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
+                d1 = np.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
+                if d0.min() <= 0.75:
+                    hit0 = int(d0.argmin())
+                    _, l_ab, r_ab = deck_abuts[hit0]
+                    if (np.hypot(*(left[0] - l_ab)) + np.hypot(*(right[0] - r_ab))) <= (np.hypot(*(left[0] - r_ab)) + np.hypot(*(right[0] - l_ab))):
+                        left[0], right[0] = l_ab, r_ab
+                    else:
+                        left[0], right[0] = r_ab, l_ab
+                if d1.min() <= 0.75:
+                    hit1 = int(d1.argmin())
+                    _, l_ab, r_ab = deck_abuts[hit1]
+                    if (np.hypot(*(left[-1] - l_ab)) + np.hypot(*(right[-1] - r_ab))) <= (np.hypot(*(left[-1] - r_ab)) + np.hypot(*(right[-1] - l_ab))):
+                        left[-1], right[-1] = l_ab, r_ab
+                    else:
+                        left[-1], right[-1] = r_ab, l_ab
+                new_rbc.append(((left, right, v, m, layer, fz), c))
+            else:
+                new_rbc.append((r, c))
+        rbc = new_rbc
     rb = [r for r, _c in rbc]
     polys = [c for c in chunks if c.get("poly")]
     if not rb and not polys:
@@ -394,7 +438,21 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     for (left, right, v, m, layer, fz), c in rbc:
         k = len(left)
         if fz is None:
-            z = u[k0:k0 + 2 * k] + LIFT[layer] + lift
+            cur_lift = np.full(k, lift)
+            if len(deck_abuts) and k >= 2:
+                mid = (left + right) * 0.5
+                s_from_start = np.r_[0.0, np.cumsum(np.hypot(*np.diff(mid, axis=0).T))]
+                d0 = np.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
+                d1 = np.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
+                if d0 <= 0.75:
+                    w0 = np.clip(s_from_start / 4.0, 0.0, 1.0)
+                    cur_lift = np.minimum(cur_lift, DECK_SKIN + (lift - DECK_SKIN) * w0)
+                if d1 <= 0.75:
+                    s_from_end = s_from_start[-1] - s_from_start
+                    w1 = np.clip(s_from_end / 4.0, 0.0, 1.0)
+                    cur_lift = np.minimum(cur_lift, DECK_SKIN + (lift - DECK_SKIN) * w1)
+            lift_2k = np.concatenate((cur_lift, cur_lift))
+            z = u[k0:k0 + 2 * k] + LIFT[layer] + lift_2k
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
             z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
@@ -943,10 +1001,11 @@ def _median_gaps(rb, context=()):
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         own = c.get("fid", ("own", n))
         mine = _travel_vec(left, right, c.get("tdir", 0))
-        sides, opps = [], []
+        sides, opps, hit_owners = [], [], []
         for E, out_ in ((np.c_[left, z], left - right), (np.c_[right, z], right - left)):
             g = np.zeros(len(E))
             opp = np.zeros(len(E), bool)
+            own_hit = [None] * len(E)
             tan = np.gradient(E[:, :2], axis=0) if len(E) > 1 else np.zeros((len(E), 2))
             tan = tan / np.maximum(np.hypot(tan[:, 0], tan[:, 1]), 1e-9)[:, None]
             out_ = out_ / np.maximum(np.hypot(out_[:, 0], out_[:, 1]), 1e-9)[:, None]
@@ -979,12 +1038,17 @@ def _median_gaps(rb, context=()):
                        & (((rel * out_).sum(1) > -MEDIAN_INSIDE_M) | against) & ~ends)
                 g = np.where(hit, np.maximum(d, 1e-3), g)
                 opp = np.where(hit, against, opp)
+                for idx in np.flatnonzero(hit):
+                    own_hit[idx] = owner
             sides.append(g)
             opps.append(opp)
+            hit_owners.append(own_hit)
         # (an edge facing away from the other deck is near it too where the decks are narrow: only the nearer edge
-        # of the two faces the median)
+        # of the two faces the median when both edges saw the same target deck; when facing different decks on left
+        # and right, both medians are kept, #651)
         gl, gr = sides
-        both = (gl > 0) & (gr > 0)
+        same_target = np.array([ol is not None and ol == or_ for ol, or_ in zip(hit_owners[0], hit_owners[1])])
+        both = (gl > 0) & (gr > 0) & same_target
         gl = np.where(both & (gl > gr), 0.0, gl)
         gr = np.where(both & (gr >= sides[0]), 0.0, gr)
         gl, gr = _fill_short(gl, MEDIAN_FILL_PTS), _fill_short(gr, MEDIAN_FILL_PTS)

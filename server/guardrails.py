@@ -359,12 +359,14 @@ def _overlaps_bridge_parapet(a, b, segments, level=None, distance_limit=PARAPET_
     v2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
     samples = a[None, :] + np.linspace(0.1, 0.9, PARAPET_MATCH_SAMPLES)[:, None] * d[None, :]
     delta = samples[:, None, :] - pa[None, :, :]
-    t = np.clip(np.sum(delta * v[None, :, :], axis=2) / v2[None, :], 0.0, 1.0)
+    t_raw = np.sum(delta * v[None, :, :], axis=2) / v2[None, :]
+    on_segment = (t_raw >= -1e-4) & (t_raw <= 1.0 + 1e-4)
+    t = np.clip(t_raw, 0.0, 1.0)
     nearest = pa[None, :, :] + t[:, :, None] * v[None, :, :]
     dist = np.hypot(samples[:, None, 0] - nearest[:, :, 0],
                     samples[:, None, 1] - nearest[:, :, 1])
     parallel = np.abs(unit @ tangent) >= PARAPET_PARALLEL_DOT
-    matches = (dist <= distance_limit) & parallel[None, :]
+    matches = (dist <= distance_limit) & parallel[None, :] & on_segment
     if level is not None:
         parapet_z = segments["za"][box][None, :] + t * (segments["zb"][box] - segments["za"][box])[None, :]
         matches &= np.isfinite(parapet_z) & (np.abs(parapet_z - float(level)) <= PARAPET_LEVEL_TOLERANCE_M)
@@ -516,7 +518,7 @@ def _relate(mid, segs, direction=None):
     v = mid - segs["a"]
     along = np.sum(v * segs["unit"], axis=1)
     lateral = v[:, 0] * segs["unit"][:, 1] - v[:, 1] * segs["unit"][:, 0]
-    span = (along >= -SPAN_TOL_M) & (along <= segs["len"] + SPAN_TOL_M)
+    span = (along >= -1e-4) & (along <= segs["len"] + SPAN_TOL_M)
     past = np.abs(lateral) - segs["half"]
     aligned = np.ones(len(segs["unit"]), bool)
     if direction is not None:

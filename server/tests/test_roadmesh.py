@@ -564,3 +564,39 @@ class BridgeProfilesTest(unittest.TestCase):
         k = 5                                   # ramp point 20 m from the split, 2.4 m off the mainline
         j = int(np.argmin(np.abs(main[:, 0] - ramp[k, 0])))
         self.assertLess(abs(out[1][k] - out[0][j]), abs(zs[1][k] - zs[0][j]) / 2 + 1e-9)
+
+    def test_abutment_blend_zero_step(self):
+        deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
+                "n": [[10, 0, 20.0], [50, 0, 20.0]]}
+        ground = chunk("road_asphalt_2lane", 8.0, [[0, 0, 0], [10, 0, 0]])
+        elev = lambda la, lo: np.full(len(la), 20.0)
+        res = roadmesh.build(FRAME, [deck, ground], elev, (0.0, 0.0, 0.0), lift=0.04)
+        self.assertIsNotNone(res)
+        P, T, UV, mats, M = res
+        at_abut = np.isclose(P[:, 0], 10.0, atol=0.05)
+        self.assertTrue(at_abut.sum() >= 4)
+        z_abut = P[at_abut, 2]
+        self.assertLess(np.ptp(z_abut), 0.005, f"Step at abutment: {np.ptp(z_abut)}")
+
+    def test_median_barrier_kept_when_facing_different_decks(self):
+        # Two parallel decks side by side: when each side faces a different target, medians are not suppressed
+        x = np.linspace(0.0, 50.0, 15)
+        left1 = np.c_[x, np.full_like(x, -4.0)]
+        right1 = np.c_[x, np.full_like(x, 0.0)]
+        z1 = np.full_like(x, 20.0)
+        c1 = {"fid": ("road", 1), "tdir": 1}
+        rb1 = ((left1, right1, np.linspace(0.0, 50.0, 15), "deck_asphalt", 1, z1), c1)
+
+        left2 = np.c_[x, np.full_like(x, 1.0)]
+        right2 = np.c_[x, np.full_like(x, 5.0)]
+        z2 = np.full_like(x, 20.0)
+        c2 = {"fid": ("road", 2), "tdir": 1}
+        rb2 = ((left2, right2, np.linspace(0.0, 50.0, 15), "deck_asphalt", 1, z2), c2)
+
+        gaps = roadmesh._median_gaps([rb1, rb2])
+        self.assertEqual(len(gaps), 2)
+        # rb1 right edge faces rb2 left edge (gap ~ 1.0m <= MEDIAN_BARRIER_M)
+        gl1, gr1, opp_l1, opp_r1 = gaps[0]
+        gl2, gr2, opp_l2, opp_r2 = gaps[1]
+        self.assertTrue((gr1 > 0).any(), "deck 1 right median detected")
+        self.assertTrue((gl2 > 0).any(), "deck 2 left median detected")
