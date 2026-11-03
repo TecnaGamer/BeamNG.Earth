@@ -2,11 +2,16 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
-## 1.8.0 (2026-11-02, Beam-Earth fork)
+## 1.8.1 (2026-11-02, Beam-Earth fork)
 
-- Bump the published version from 1.7.4-beta to 1.8.0 and rebuild the player and hosting packages.
+- Bump the published version from 1.7.4-beta to 1.8.1 and rebuild the player and hosting packages. The pending 1.8.0 publication was cancelled.
 - Carry forward the reliability fixes and opt-in shared road-plan workflow from 1.7.4-beta, including the request-counter ordering fix.
-- Update current download examples and release documentation. This version bump introduces no gameplay changes; existing experimental features and runtime-validation gaps remain documented.
+- Remove duplicate license entries from hosting ZIPs so fresh extraction does not prompt to overwrite files.
+- Announce updates from GitHub's published main release, matching the one-click downloader, instead of advertising an unpublished version from the main branch.
+- Reject invalid shared-plan feature IDs before they reach the grader.
+- Enforce HTTP response deadlines during bundle downloads, including slow headers, and clean up the watchdog.
+- Bind export provenance to generation-time identity and cell/source metadata; hydrate cached source versions before pin validation and release resources on failed startup. Legacy hash-only export markers require regeneration.
+- Update current download examples and release documentation. Existing experimental features and runtime-validation gaps remain documented.
 
 ## 1.7.4 beta (2026-11-02, Beam-Earth fork)
 
