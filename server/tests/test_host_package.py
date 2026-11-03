@@ -19,6 +19,36 @@ class HostPackageTest(unittest.TestCase):
                 build_host.build(d, lambda url: b"wrong binary")
             self.assertEqual(list(Path(d).iterdir()), [])
 
+    def test_wrong_linux_binary_is_rejected_before_packaging(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError, "digest"):
+                build_host.build(d, lambda url: b"wrong ELF", platform="linux")
+            self.assertEqual(list(Path(d).iterdir()), [])
+
+    def test_linux_has_executable_modes_and_same_source_payload(self):
+        binary = b"\x7fELF test fixture"
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("upstream/CMakeLists.txt", "fixture build source")
+        def download(url):
+            if url == build_host.LINUX_URL:
+                return binary
+            if url.endswith("/LICENSE"):
+                return b"GNU AFFERO GENERAL PUBLIC LICENSE fixture"
+            return archive.getvalue()
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(build_host, "LINUX_SIZE", len(binary)), \
+                mock.patch.object(build_host, "LINUX_SHA256", build_host.sha256(binary)):
+            host, source = build_host.build(d, download, platform="linux")
+            source_bytes = source.read_bytes()
+            with zipfile.ZipFile(host) as z:
+                self.assertEqual(z.read("BeamMP-Server"), binary)
+                for name in ("BeamMP-Server", "run_host.sh"):
+                    self.assertEqual(z.getinfo(name).external_attr >> 16, 0o100755)
+                self.assertIn(b'exec ./BeamMP-Server "$@"', z.read("run_host.sh"))
+                self.assertEqual(json.loads(z.read("UPSTREAM-PROVENANCE.json"))["platform"], "Linux-x86_64")
+            build_host.build(d, download, platform="linux")
+            self.assertEqual(source.read_bytes(), source_bytes, "source archive is reproducible across host builds")
+
     def test_bundle_keeps_verified_binary_source_and_notices(self):
         binary = b"MZ test fixture"
         archive = io.BytesIO()

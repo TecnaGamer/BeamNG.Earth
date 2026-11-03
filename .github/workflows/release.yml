@@ -125,6 +125,8 @@ jobs:
         run: |
           f=$(ls dist/*.exe)
           "$f" --server --help > help.txt && head -3 help.txt
+      - name: Verify the Windows hosting executable
+        run: python tools/build_host.py --platform windows --out build/host-smoke --smoke
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -150,7 +152,7 @@ jobs:
           v=${{ needs.check.outputs.version }}
           printf '%s\n' "$v" > VERSION
           python3 tools/package.py --beammp
-          python3 tools/build_host.py
+          python3 tools/build_host.py --smoke
           prev=$(gh release list --limit 50 --json tagName,isPrerelease \
                  -q '[.[] | select(.isPrerelease and (.tagName | test("dev\\.[0-9]+$")))][0].tagName' || true)
           if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" >/dev/null; then range="$prev..$GITHUB_SHA"
@@ -183,7 +185,7 @@ jobs:
         run: |
           v=${{ needs.check.outputs.version }}
           python3 tools/package.py --beammp
-          python3 tools/build_host.py
+          python3 tools/build_host.py --smoke
           pre=""
           case "$v" in *preview*|*alpha*|*beta*|*rc*) pre="--prerelease";; esac
           cat > notes.md <<EOF
@@ -195,6 +197,7 @@ jobs:
             \`chmod +x\`). It starts the native game with the grass patch, no Steam launch options needed.
           - **Hosting:** \`BeamNG.Earth-BeamMP-Server-$v.zip\` contains the Earth client mod and server plugin to install into a dedicated BeamMP server. Obtain the BeamMP server executable from its official releases; the player app's world companion is not the dedicated BeamMP server.
           - **Windows hosting bundle:** \`BeamNG.Earth-Host-$v-Windows.zip\` includes the unmodified official BeamMP server executable, Earth plugin, empty-key configuration, licenses and corresponding source. The BeamMP executable was not compiled by this project. Supply your own BeamMP AuthKey before hosting.
+          - **Linux hosting bundle:** \`BeamNG.Earth-Host-$v-Linux-x86_64.zip\` contains the official Ubuntu 22.04 x86_64 BeamMP executable and the same Earth resources/notices; run \`./run_host.sh\` after supplying your own AuthKey. Other distributions require compatible system libraries.
 
           Steam must be running. Closing the game stops the server. See the README for details.
           EOF
