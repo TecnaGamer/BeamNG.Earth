@@ -2,7 +2,9 @@
 -- the render-disabled physics block and honours its layer map (docs/research/2026-10-11-engine-probes.md
 -- §4), so binding stock GroundCover definitions to the surface layers (server/surface.py: grassland /
 -- forest floor -> bngEarthGroundGrass, shrubland -> bngEarthGroundDusty) puts grass where the land
--- cover says grass, nothing on asphalt, bare ground, rock, snow or mud.
+-- cover says grass, nothing on asphalt, bare ground, rock, snow or mud. Golf greens, fairways,
+-- rough and bunkers are their own terrain materials (server/surface.py) and are not listed here,
+-- so the 3D grass stays off them.
 --
 -- No flicker at block moves (in-game and binary analysis 2026-10-11, docs/ARCHITECTURE.md "Ground
 -- surfaces"): every import / move of the block makes the engine drop every GroundCover cell on it

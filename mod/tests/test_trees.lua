@@ -447,6 +447,12 @@ do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1,
   T.check(trees.isBarrier('guardrail_back_end') and not trees.isBarrier('deciduous') and not trees.isBarrier(nil),
     'guard rails are barriers, trees not')
 end
+do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is not a barrier
+  local shape, sc = trees.pick('golfflag', 2.05, 0.3)
+  T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,
+    'golfflag: its model at 1:1')
+  T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
+end
 trees.FRAME_MS, trees.POOL_SPARE = FRAME_MS, POOL_SPARE
 -- a pass with nothing to do is skipped (the game speed pulsing, 2026-10-28): until a tile comes or goes, the car moves
 -- RECHECK_M, or RECHECK_S goes by

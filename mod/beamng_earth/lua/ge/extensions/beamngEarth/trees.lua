@@ -228,9 +228,12 @@ M.GROUP_MAX_M.guardrail_back_end = 4000
 M.CATALOG.jersey = { { '/art/shapes/objects/jerseybarrier_3m', 0.88 } }
 M.CATALOG.jersey_end = { { '/art/shapes/objects/jerseybarrier_end', 0.88 } }
 M.CATALOG.cable = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cable_barrier', 1.0 } }
+-- A pin flag (server golf.py, tools/build_golf_flag.py): 2.05 m, origin on the ground, pennant local +Y.
+M.CATALOG.golfflag = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_golf_flag', 2.05 } }
 M.GROUP_MAX_M.jersey = 4000
 M.GROUP_MAX_M.jersey_end = 4000
 M.GROUP_MAX_M.cable = 1500
+M.GROUP_MAX_M.golfflag = 400
 -- Pure: whether a group is a road barrier's (guard rails, jersey and cable barriers): continuous runs, not thinned
 -- below the tile cap.
 function M.isBarrier(g)
@@ -430,6 +433,7 @@ local function setup()
     local p = m .. '/main.materials.json'
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
   if FS and readFile and writeFile then
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL

@@ -386,6 +386,10 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         road_feats, roads_complete = _s.surface.roads(keep["lat"], keep["lon"])
         stages["landcover"] = time.perf_counter() - t1
         t1 = time.perf_counter()
+        if hasattr(_s.surface, "lots"):     # golf under the carriageways (a cart path keeps its own surface)
+            golf_lots = _s.surface.lots(keep["lat"], keep["lon"])
+            if golf_lots:
+                idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], golf_lots)
         if road_feats:
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
@@ -875,6 +879,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
         mark("powerlines")
+    if getattr(_s, "md", None) is not None:
+        import golf
+        try:
+            land_fn = lambda key: _s.md.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
+            flag_rows = golf.rows(frame, land_fn, box, elev)
+            if flag_rows:
+                props = (props or []) + flag_rows
+        except Exception as ex:
+            log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells

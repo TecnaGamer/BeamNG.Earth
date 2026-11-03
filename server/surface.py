@@ -53,9 +53,15 @@ MATERIALS = (
     ("bngEarthGroundMud", "MUD"),
     ("bngEarthGroundCobble", "COBBLESTONE"),      # roads with paving stones / setts (roads.py "cobble")
     ("bngEarthGroundLawn", "GRASS"),              # mown yards in towns (short grass only, groundcover.lua)
+    # Golf (Overture land_use, OSM golf=*). Not GroundCover layers, so the 3D grass stays off them.
+    ("bngEarthGroundGolfRough", "GRASS"),
+    ("bngEarthGroundGolfFairway", "GRASS"),
+    ("bngEarthGroundGolfGreen", "GRASS"),
+    ("bngEarthGroundGolfBunker", "SAND"),
     ("beamngEarthDirt", "DIRT"),
 )
-ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, DIRT = range(len(MATERIALS))
+ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
+    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -756,14 +762,118 @@ def _square_lots(frame, x0, y0, size, surface):
     return surface.lots(la, lo)
 
 
+# Golf playing surfaces (Overture land_use class, subtype golf: OSM golf=*). Painted under the roads and the
+# lots, so a cart path and a car park keep their own surface. Tees and a driving range use the fairway texture.
+# A class that is not a golf subtype (a military bunker) is left alone. These materials are absent from
+# groundcover.lua, so no 3D grass grows on them.
+GOLF_ROUGH_CLASSES = ("rough",)
+GOLF_FAIRWAY_CLASSES = ("fairway", "tee", "driving_range")
+GOLF_GREEN_CLASSES = ("green",)
+GOLF_BUNKER_CLASSES = ("bunker",)
+GOLF_SUBTYPES = ("", "golf")
+GOLF_LAYERS = (
+    (GOLF_ROUGH_CLASSES, GOLF_ROUGH),
+    (GOLF_FAIRWAY_CLASSES, GOLF_FAIRWAY),
+    (GOLF_GREEN_CLASSES, GOLF_GREEN),
+    (GOLF_BUNKER_CLASSES, GOLF_BUNKER),
+)
+# (r, g, b, opacity) painted into the ground photo, mesh mode's visible ground. Later rows cover earlier ones.
+GOLF_PHOTO = (
+    (GOLF_ROUGH_CLASSES, (70, 104, 48, 0.70)),
+    (GOLF_FAIRWAY_CLASSES, (78, 102, 64, 0.42)),
+    (GOLF_GREEN_CLASSES, (68, 112, 70, 0.48)),
+    (GOLF_BUNKER_CLASSES, (214, 196, 148, 0.94)),
+)
+
+
+def _text_col(feats, name):
+    """Attribute `name` as lower-case strings, or None when the column is absent."""
+    a = feats.attrs.get(name)
+    if a is None:
+        return None
+    return np.array([str(v or "").strip().lower() for v in a], dtype=object)
+
+
+def _golf_mask(feats, classes):
+    """True for polygons of these land-use classes whose subtype is golf (or unset)."""
+    cls = _text_col(feats, "class")
+    if cls is None:
+        return None
+    sub = _text_col(feats, "subtype")
+    if sub is None:
+        sub = np.full(len(cls), "", dtype=object)
+    return np.isin(cls, classes) & np.isin(sub, GOLF_SUBTYPES)
+
+
+def _golf_rings(feats_list, classes):
+    """Outer rings (lon, lat) of the golf polygons of these classes."""
+    rings = []
+    for feats in feats_list or ():
+        if feats is None or len(feats) == 0:
+            continue
+        sel = _golf_mask(feats, classes)
+        if sel is None:
+            continue
+        for i in np.flatnonzero(sel & (np.asarray(feats.kind) == 3)):
+            for part in feats.parts(int(i)):
+                if not part or len(part[0]) < 3:
+                    continue
+                rings.append(np.asarray(part[0], np.float64))
+    return rings
+
+
+def paint_golf(idx, lat, lon, feats_list):
+    """idx with rough, then fairway (tees and the driving range too), then greens, then bunkers.
+    A later layer covers an earlier one. Pure."""
+    for classes, material in GOLF_LAYERS:
+        idx = _paint(idx, lat, lon, feats_list, lambda feats, c=classes: _golf_mask(feats, c), material)
+    return idx
+
+
+def photo_golf(rgb, frame, x0, y0, size, feats_list):
+    """The photo with golf surfaces tinted (GOLF_PHOTO), under the lots and the carriageways. Pure: rgb is not changed."""
+    if rgb is None or size <= 0 or not feats_list:
+        return rgb
+    h, w = rgb.shape[:2]
+    if h == 0 or w == 0:
+        return rgb
+    px_x, px_y = w / float(size), h / float(size)
+    out = None
+    for classes, colour in GOLF_PHOTO:
+        rings = _golf_rings(feats_list, classes)
+        if not rings:
+            continue
+        im = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(im)
+        n = 0
+        for ring in rings:
+            e, north, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
+            c = (np.asarray(e, np.float64) - x0) * px_x
+            r = (y0 + size - np.asarray(north, np.float64)) * px_y
+            if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
+                continue
+            draw.polygon(list(zip(c.tolist(), r.tolist())), fill=255)
+            n += 1
+        if n == 0:
+            continue
+        if out is None:
+            out = np.array(rgb, np.uint8, copy=True)
+        a = (np.asarray(im, np.float32) / 255.0 * float(colour[3]))[..., None]
+        paint = np.array(colour[:3], np.float32)
+        out[:] = np.clip(np.round(out.astype(np.float32) * (1.0 - a) + paint * a), 0, 255).astype(np.uint8)
+    return rgb if out is None else out
+
+
 def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False):
     """photo_roads for a ground photo over [x0, x0 + size]² of frame with the roads of surface's cached cells (a
     Surface; never waits); as it was when its texels are coarser than PHOTO_ROADS_MAX_TEXEL or no cell is cached.
-    Parking lots are painted first (photo_lots), then gas-station pads, then the carriageways over both."""
+    Golf surfaces are tinted first (photo_golf), then parking lots, gas-station pads, then the carriageways over them."""
     if surface is None or size / max(rgb.shape[1], 1) > PHOTO_ROADS_MAX_TEXEL:
         return rgb
     if not simple:          # (simple, a stand-in's: the carriageways alone, photo_roads)
-        rgb = photo_lots(rgb, frame, x0, y0, size, _square_lots(frame, x0, y0, size, surface))
+        lots = _square_lots(frame, x0, y0, size, surface)
+        rgb = photo_golf(rgb, frame, x0, y0, size, lots)
+        rgb = photo_lots(rgb, frame, x0, y0, size, lots)
         rgb = photo_pads(rgb, frame, x0, y0, size, _square_pads(frame, x0, y0, size, surface))     # (under the roads)
     feats = _square_roads(frame, x0, y0, size, surface)
     if not feats:

@@ -1973,6 +1973,15 @@ class Server:
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
+        if self.mapdata is not None:
+            import golf
+            try:
+                land_fn = lambda key: self.mapdata.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
+                flag_rows = golf.rows(anchor.frame, land_fn, box, elev)
+                if flag_rows:
+                    props = (props or []) + flag_rows
+            except Exception as ex:
+                log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound, wells=oil_wells)
@@ -2458,6 +2467,10 @@ class Server:
             road_feats, roads_complete = self.surface.roads(keep["lat"], keep["lon"])
             stages["landcover"] = time.perf_counter() - t1
             t1 = time.perf_counter()
+            if hasattr(self.surface, "lots"):   # golf under the carriageways (a cart path keeps its own surface)
+                golf_lots = self.surface.lots(keep["lat"], keep["lon"])
+                if golf_lots:
+                    idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], golf_lots)
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
