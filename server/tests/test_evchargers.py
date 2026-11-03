@@ -46,6 +46,15 @@ class ChargerSitesTest(unittest.TestCase):
         self.assertEqual([p[0] for p in ev.charger_pins(FRAME, [L])], ["pla-sr"])
         self.assertEqual(gs.pins(FRAME, [L]), [])
 
+    def test_candidates_once_per_layer(self):
+        # (dev, 2026-11-02: classify over every place of a city cell was ~0.3 s of each road tile) the chargers among a
+        # places layer are found once and kept on it, as gasstations._candidates keeps the fuel stations
+        L = places([("pla-ev", (100.0, 100.0), {"basic_category": "ev_charging_station", "name": "ChargePoint"})])
+        self.assertEqual([p[0] for p in ev.charger_pins(FRAME, [L])], ["pla-ev"])
+        self.assertIn("_ev_candidates", L.__dict__)
+        L.attrs["basic_category"][0] = "cafe"               # (a second call reads the kept list, not the layer)
+        self.assertEqual([p[0] for p in ev.charger_pins(FRAME, [L])], ["pla-ev"])
+
     def test_merge_across_sources(self):
         pins = [("pla-ev", 100.0, 100.0, "ChargePoint", "")]
         chs = ev.merge(pins, gs._osm_points(FRAME, [[osm_row(7, 130.0, 100.0)]], amenity="charging_station"))

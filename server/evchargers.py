@@ -43,27 +43,55 @@ def _charging(category, taxonomy):
     return "charging" in str(category or "") or "charging" in str(taxonomy or "")
 
 
+def _ev_candidates(f):
+    """[(feature index, name, brand)] of a places layer's open EV chargers, made once per layer (kept on it, and in this
+    process for another copy of the layer, as gasstations._candidates: a city cell has ~47k places, 2026-11-02)."""
+    got = f.__dict__.get("_ev_candidates")
+    if got is not None:
+        return got
+    cid = f.__dict__.get("_bnge_cell")
+    import roads
+    mk = (cid, "ev_candidates") if cid is not None else None
+    if mk is not None:
+        with roads._FACTS_LOCK:
+            got = roads._FACTS_MEM.get(mk)
+        if got is not None:
+            f.__dict__["_ev_candidates"] = got
+            return got
+    a = f.attrs
+
+    def col(k, i):
+        v = a[k][i] if k in a else None
+        return "" if v is None else str(v)
+    out = []
+    for i in range(len(f)):
+        if col("operating_status", i) in gs.CLOSED:
+            continue
+        cat, tax, name, brand = col("basic_category", i), col("taxonomy", i), col("name", i), col("brand_name", i)
+        gas = cat in gs.GAS_CATEGORIES or tax in gs.GAS_CATEGORIES
+        if _charging(cat, tax) or (gas and (gs._is_ev(name) or gs._is_ev(brand))):
+            out.append((i, name, brand))
+    f.__dict__["_ev_candidates"] = out
+    if mk is not None:
+        with roads._FACTS_LOCK:
+            roads._FACTS_MEM[mk] = out
+            while len(roads._FACTS_MEM) > roads.FACTS_MEM_KEPT:
+                roads._FACTS_MEM.popitem(last=False)
+    return out
+
+
 def charger_pins(frame, layers):
     """[(id, x, y, name, brand)] in frame of the open EV chargers among places layers (mapgeom.Features, one per map
     cell; a place in two cells taken once): category or taxonomy ev_charging_station, or a gas listing named as a
-    charger (Shell Recharge, BP Pulse: gasstations._is_ev)."""
+    charger (Shell Recharge, BP Pulse: gasstations._is_ev). The candidates found once per layer (_ev_candidates)."""
     out, seen = [], set()
     for f in layers:
         if f is None or len(f) == 0:
             continue
-        a = f.attrs
-
-        def col(k, i):
-            v = a[k][i] if k in a else None
-            return "" if v is None else str(v)
         xy = None
-        for i in range(len(f)):
+        for i, name, brand in _ev_candidates(f):
             fid = str(f.ids[i])
-            if fid in seen or col("operating_status", i) in gs.CLOSED:
-                continue
-            cat, tax, name, brand = col("basic_category", i), col("taxonomy", i), col("name", i), col("brand_name", i)
-            gas = cat in gs.GAS_CATEGORIES or tax in gs.GAS_CATEGORIES
-            if not (_charging(cat, tax) or (gas and (gs._is_ev(name) or gs._is_ev(brand)))):
+            if fid in seen:
                 continue
             seen.add(fid)
             if xy is None:
