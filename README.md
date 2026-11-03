@@ -183,7 +183,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     about twice as many distant ground pieces).
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
     ground around you; from the next level load.
-  - **Tree density** and **Tree draw distance** (about 0.6 to 1.7 miles; 0.8 miles at Normal).
+  - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
     and 3 miles).
   - **Object detail**: how far out objects keep their detailed models (Game setting = the game's Mesh Quality).
