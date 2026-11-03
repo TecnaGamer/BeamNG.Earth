@@ -8,7 +8,7 @@
 
 Needs, in the Python that runs it: pyinstaller and the server's packages (server/requirements.txt). The Rust kernels
 (server/earthfast.abi3.so / .pyd) and, on Linux, tools/gcpatch/build/libbngearth_gcpatch.so go in when they exist
-(tools/build_native.py, tools/gcpatch/build.sh); the app runs without them. The AppImage step needs appimagetool
+(tools/build_native.py, tools/gcpatch/build.sh); earthfast is required by the world server. The AppImage step needs appimagetool
 (https://github.com/AppImage/appimagetool); GitHub Actions builds both (.github/workflows/release.yml).
 
 The .exe, against antivirus false positives (VirusTotal, 2026-10-17: 2/60 on 1.4.35, Bkav Pro and SecureAge's
@@ -78,7 +78,7 @@ def version_files(work, ver):
     strings = {"CompanyName": "TecnaGamer", "FileDescription": "BeamNG.Earth launcher and world server",
                "FileVersion": ver, "InternalName": NAME, "LegalCopyright": "Copyright (c) 2026 TecnaGamer, MIT License",
                "OriginalFilename": f"{NAME}-{ver}.exe", "ProductName": NAME, "ProductVersion": ver,
-               "Comments": "Drive the real world in BeamNG.drive. https://github.com/TecnaGamer/BeamNG.Earth"}
+               "Comments": "Beam-Earth fork of TecnaGamer's BeamNG.Earth. https://github.com/redthepro/Beam-Earth"}
     vf = os.path.join(work, "version_info.txt")
     with open(vf, "w", encoding="utf-8") as f:
         f.write("VSVersionInfo(\n"

@@ -2,6 +2,19 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.7.4 beta (2026-11-02, Beam-Earth fork)
+
+This fork release builds on TecnaGamer's BeamNG.Earth 1.7.3-beta. Upstream credit and the MIT license are retained.
+
+- Prevent duplicate geographic range downloads after another process has populated the cache, and reject incomplete or inconsistent range responses.
+- Keep valid road survey segments when neighboring data is malformed; preserve bridge/tunnel levels and valid heights.
+- Validate multiplayer coordinates and packet vectors before conversion, handle the date line, and quarantine expired peer origins until a valid origin returns.
+- Release revisit-cache file handles after writes so cache cleanup and replacement work on Windows.
+- Add cross-platform regression gates and a Sketchfab metadata/licensing preflight tool. No model import or embedded voice is claimed.
+- Direct the fork's update checks and downloads to this repository. Include the BeamMP plugin ZIP in ordinary release publication.
+
+Local unit, integration and stub checks are documented in `docs/MODERNIZATION_VALIDATION.md`. Real BeamNG/BeamMP gameplay validation, full-platform performance measurements and the remaining modernization workstreams are still outstanding.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
