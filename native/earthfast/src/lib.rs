@@ -5302,6 +5302,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
     m.add_function(wrap_pyfunction!(junctionsnap::snap_junctions, m)?)?;
+    m.add_function(wrap_pyfunction!(junctionsnap::hold_junction_corridors, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
@@ -5466,6 +5467,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
     m.add_class::<traffic::Routes>()?;
-    m.add("VERSION", 143)?;
+    m.add("VERSION", 144)?;
     Ok(())
 }

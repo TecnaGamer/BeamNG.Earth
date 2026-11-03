@@ -901,42 +901,50 @@ def snap_junctions(plans, specs):
     if not plans:
         return
     rank = np.array([road_rank(sp) for sp in specs], np.int64)
-    changed = _snap_once(plans, rank)
+    js = _Junctions(plans)
+    changed = js.snap(rank)
     # (a road joining one that the hold changed meets it at its new height: snapped again)
-    if _hold_junction_corridors(plans, rank, changed):
-        _hold_junction_corridors(plans, rank, _snap_once(plans, rank))
+    if _hold_junction_corridors(js, rank, changed):
+        _hold_junction_corridors(js, rank, js.snap(rank))
+    js.store()
 
 
-def _snap_once(plans, rank):
-    """One pass of earthfast.snap_junctions over plans (changed in place); the plans it changed (bool array)."""
-    import fast
-    fast.require(115, "the junctions' heights")
-    n = [len(p.xy) for p in plans]
-    off = np.concatenate([[0], np.cumsum(n)]).astype(np.int64)
-    xy = np.ascontiguousarray(np.concatenate([np.asarray(p.xy, np.float64)[:, :2] for p in plans]).reshape(-1, 2))
-    z = np.ascontiguousarray(np.concatenate([np.asarray(p.z, np.float64) for p in plans]))
-    half = np.array([p.road_half for p in plans], np.float64)
-    abut = np.array([[bool(p.abut[0]), bool(p.abut[1])] for p in plans], np.uint8).reshape(-1, 2)
-    boxes = np.ascontiguousarray(np.array([q.bbox for q in plans], np.float64).reshape(-1, 4))
-    out, changed = fast._ef.snap_junctions(xy, z, off, rank, half, abut, boxes, JUNCTION_REACH_M, JUNCTION_END_M,
-                                           JUNCTION_TAPER_M, JUNCTION_MAX_M, bool(COARSE_EASE_ON))
-    for j in np.flatnonzero(changed):
-        plans[j].z = out[off[j]:off[j + 1]].copy()
-    return np.asarray(changed, bool)
+class _Junctions:
+    """snap_junctions' plans as earthfast's flat arrays, made once for all its passes (each pass made them again:
+    0.2-0.4 CPU-s per 16 road tiles), their heights kept here between the passes; store() puts them back on the plans
+    changed."""
+
+    def __init__(self, plans):
+        import fast
+        fast.require(144, "the junctions' heights")
+        self.plans = plans
+        n = [len(p.xy) for p in plans]
+        self.off = np.concatenate([[0], np.cumsum(n)]).astype(np.int64)
+        self.xy = np.ascontiguousarray(np.concatenate([np.asarray(p.xy, np.float64)[:, :2] for p in plans])
+                                       .reshape(-1, 2))
+        self.z = np.ascontiguousarray(np.concatenate([np.asarray(p.z, np.float64) for p in plans]))
+        self.half = np.array([p.road_half for p in plans], np.float64)
+        self.abut = np.array([[bool(p.abut[0]), bool(p.abut[1])] for p in plans], np.uint8).reshape(-1, 2)
+        self.boxes = np.ascontiguousarray(np.array([q.bbox for q in plans], np.float64).reshape(-1, 4))
+        self.touched = np.zeros(len(plans), bool)
+
+    def snap(self, rank):
+        """One pass of earthfast.snap_junctions; the plans it changed (bool array)."""
+        import fast
+        self.z, changed = fast._ef.snap_junctions(self.xy, self.z, self.off, rank, self.half, self.abut, self.boxes,
+                                                  JUNCTION_REACH_M, JUNCTION_END_M, JUNCTION_TAPER_M, JUNCTION_MAX_M,
+                                                  bool(COARSE_EASE_ON))
+        changed = np.asarray(changed, bool)
+        self.touched |= changed
+        return changed
+
+    def store(self):
+        off = self.off
+        for j in np.flatnonzero(self.touched):
+            self.plans[j].z = self.z[off[j]:off[j + 1]].copy()
 
 
-def _nearest_on_line(xy, z, x, y):
-    """(distance, height) of the nearest point of polyline xy (k, 2) with heights z to (x, y). Pure."""
-    a = xy[:-1]
-    d = xy[1:] - a
-    ll = np.maximum((d * d).sum(1), 1e-12)
-    t = np.clip(((x - a[:, 0]) * d[:, 0] + (y - a[:, 1]) * d[:, 1]) / ll, 0.0, 1.0)
-    dist = np.hypot(a[:, 0] + t * d[:, 0] - x, a[:, 1] + t * d[:, 1] - y)
-    m = int(np.argmin(dist))
-    return float(dist[m]), float(z[m] + t[m] * (z[m + 1] - z[m]))
-
-
-def _hold_junction_corridors(plans, rank, changed):
+def _hold_junction_corridors(js, rank, changed):
     """A side road's end snapped to a wide road (snap_junctions) holds that road's height, at the nearest point of it,
     across its carriageway and shoulder (JUNCTION_HOLD_PAD_M), then returns to the profile the snap gave it at most
     JUNCTION_HOLD_GRADE steep. The snap eases from the end's first vertex, so on a 13 m trunk the next vertices lay on
@@ -944,69 +952,17 @@ def _hold_junction_corridors(plans, rank, changed):
     a track's junction (48.83116, 29.33644, the user 2026-11-02; a hole the car took at speed). Only ends the snap
     changed and the road itself reaches (not a bridge abutment, not a gap the snap left as it was); a road shorter than
     three corridors, or one that does not meet its own profile again within its first half, is left as the snap made
-    it. A second call changes nothing (the held heights and the limited grade stay). Plans are changed in place; True
-    when any was."""
-    ends = [(j, e) for j in np.flatnonzero(changed) for e in (0, 1) if len(plans[j].xy) >= 4 and not plans[j].abut[e]]
-    ends.sort(key=lambda je: -rank[je[0]])          # (the higher ranks first, as the snap: a road's main is settled)
-    modified = False
-    if not ends:
-        return modified
-    boxes = np.array([q.bbox for q in plans], np.float64).reshape(-1, 4)
-    for j, e in ends:
-        p = plans[j]
-        n = len(p.xy)
-        xy = np.asarray(p.xy, np.float64)[:, :2]
-        seg = np.hypot(*np.diff(xy, axis=0).T)
-        s = np.concatenate([[0.0], np.cumsum(seg)])
-        length = float(s[-1])
-        idx = np.arange(n) if e == 0 else np.arange(n - 1, -1, -1)       # the road's vertices from this end
-        sj = s[idx] if e == 0 else length - s[idx]
-        x0, y0 = xy[idx[0]]
-        near = np.flatnonzero((boxes[:, 0] <= x0) & (x0 <= boxes[:, 2]) & (boxes[:, 1] <= y0) & (y0 <= boxes[:, 3])
-                              & (rank > rank[j]))
-        best = None
-        for k in near:
-            q = plans[k]
-            if len(q.xy) < 2:
-                continue
-            d, zq = _nearest_on_line(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), x0, y0)
-            if d <= q.road_half + JUNCTION_REACH_M and (best is None or d < best[0]):
-                best = (d, k, zq)
-        if best is None:
-            continue
-        q = plans[best[1]]
-        reach = q.road_half + JUNCTION_HOLD_PAD_M
-        z = np.asarray(p.z, np.float64)
-        if length < 3.0 * reach or abs(z[idx[0]] - best[2]) > 1e-6:       # short, or the snap left this end as it was
-            continue
-        qxy, qz = np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64)
-        held = []
-        for t, i in enumerate(idx):
-            if sj[t] > reach:
-                break
-            d, zq = _nearest_on_line(qxy, qz, xy[i, 0], xy[i, 1])
-            if d > reach:
-                break
-            held.append(zq)
-        h = len(held)
-        if h < 2:
-            continue
-        out = z.copy()
-        out[idx[:h]] = held
-        prev = held[-1]
-        for t in range(h, n):
-            if sj[t] > 0.5 * length:
-                break                                   # (it does not meet its profile in its first half: as it was)
-            i = idx[t]
-            lim = JUNCTION_HOLD_GRADE * (sj[t] - sj[t - 1])
-            dz = z[i] - prev
-            if abs(dz) <= lim:
-                p.z = out                               # met it: the rest is the snap's own
-                modified = True
-                break
-            prev += lim if dz > 0 else -lim
-            out[i] = prev
-    return modified
+    it. A second call changes nothing (the held heights and the limited grade stay). js: _Junctions (its heights changed
+    in place); True when any was. In Rust (earthfast.hold_junction_corridors: 1.2 CPU-s per 16 road tiles in numpy)."""
+    import fast
+    if not changed.any():
+        return False
+    js.z, held = fast._ef.hold_junction_corridors(js.xy, js.z, js.off, rank, js.half, js.abut, js.boxes,
+                                                  np.ascontiguousarray(changed, np.uint8), JUNCTION_REACH_M,
+                                                  JUNCTION_HOLD_PAD_M, JUNCTION_HOLD_GRADE)
+    held = np.asarray(held, bool)
+    js.touched |= held
+    return bool(held.any())
 
 
 # Junction pads (the user, 2026-10-29: "lower ranked roads impacting higher ranked ones ... side streets coming in from a
