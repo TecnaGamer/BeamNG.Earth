@@ -248,6 +248,19 @@ UNDER_POLDER_M = -1.0       # m: a road this far under the sea is behind dikes (
 # Avenue 3 m into a walled trench (the user's report, 2026-10-29). (Not on the coarse models: no cutting there, BR-381.)
 UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
 UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
+# A road's ground where a deck crosses over it is read from beside the deck (deck_capped): the elevation under a deck is
+# the deck, not the road. Lidar keeps some short decks as ground (Tartu mnt's two 18-21 m decks over Järve tee at Assaku,
+# Estonia, 59.3788 N 24.8441 E: a 6 m hump 40 m long in the road under them) and fills a removed bridge's gap at about
+# the deck's height (the A28 / I-84 cases above). Järve tee's plan climbed the hump, and the underpass dip, measured from
+# it, lowered the road and the streets joined to it 5.5 m under their ground for 560 m (GitHub #685). Under a deck the
+# road's samples are capped at the straight line between its ground UNDER_DECK_SIDE_M past the deck's sides, in its plan
+# (plan_roads) and its underpass depth (_under_ground) alike: never raised (a real dip under a bridge stays). Not on the
+# coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
+UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
+UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
+UNDER_DECK_MAX_M = 30.0     # m along the road a deck covers at most either side of the crossing (an oblique one)
+UNDER_DECK_PAD_M = 3.0 * SIGMA_MAJOR_M + PROFILE_STEP + UNDER_DECK_SIDE_M + UNDER_DECK_MAX_M    # m round a cell: the
+                            # farthest its plans' samples reach past its box (their extensions), and a deck's window
 # m around a cell's plans whose roads and spans its dips are solved on: the farthest a dip or a loose end reaches
 # (underpass_offsets: flat + the longest ramp, a junction's share) and a span's length; every cell sees the same
 UNDER_NEAR_M = 4 * VERTEX_STEP  # m past a cell's box its plans' dips are made (to their pieces' cut ends there)
@@ -387,14 +400,15 @@ def _normals(xy):
     return np.stack([-d[:, 1] / ln, d[:, 0] / ln], axis=1)
 
 
-def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None):
+def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
     the part's profile smoothing; pins: per part (start, end) heights its ends are held at, or None (Grader._pins: a
     road ending on a more smoothed one meets it at its height); obs(xy (m, 2), spec) -> measured heights (m,) of a
-    part's samples (NaN where none) or None: they stand in for the DEM's (roadz.py, on coarse elevation: Grader._obs).
-    Pure given elev and obs."""
+    part's samples (NaN where none) or None: they stand in for the DEM's (roadz.py, on coarse elevation: Grader._obs);
+    decks: [(line (k, 2) in the frame, half width)] crossing over the roads, their ground read beside them
+    (deck_capped; not on coarse elevation). Pure given elev and obs."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -452,6 +466,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         nb, na = len(before), len(after)
         zx = zall[k:k + nb + len(xy) + na]
         k += nb + len(xy) + na
+        if decks and not coarse:        # (the part's samples and its extensions', smoothed together)
+            zx = deck_capped(np.concatenate([before, xy, after]), zx, decks)
         if obs is not None:
             o = obs(xy, spec)
             if o is not None and len(o) == len(xy) and np.isfinite(o).any():
@@ -951,7 +967,8 @@ class _Planner:
             pparts = []                         # (fid, spec, lon/lat ring) of each plan (roadcorners.grade_rows)
             coarse = COARSE_EASE_ON and self._coarse(key)
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
-                                                                         coarse=coarse, obs=self._obs(key))):
+                                                                         coarse=coarse, obs=self._obs(key),
+                                                                         decks=self._decks_near(key))):
                 if p is not None:
                     p.rid = road_id(fid)
                     plans.append((fid, p))
@@ -1222,7 +1239,7 @@ class _Planner:
                 ext = self._extensions(parts, [asks[n][0][5] for n in jobs])
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
                                    coarse=COARSE_EASE_ON and self._coarse_ll(parts[0][0]),
-                                   obs=self._obs(None, parts[0][0]))
+                                   obs=self._obs(None, parts[0][0]), decks=self._decks_ll(parts[0][0]))
                 for n, (part, last, whole), p in zip(jobs, preps, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
             except Exception as e:      # one at a time, each its own failure (_stronger_z)
@@ -1281,7 +1298,8 @@ class _Planner:
             # (the profile alone: its cutting's walls cost most of a plan and no height, 2026-10-25)
             p = plan_roads(self.frame, [(part, cand[4])], self.elev, None,
                            self._extensions([(part, cand[4])], [cand[5]]), cuts=False,
-                           coarse=COARSE_EASE_ON and self._coarse_ll(part), obs=self._obs(None, part))[0]
+                           coarse=COARSE_EASE_ON and self._coarse_ll(part), obs=self._obs(None, part),
+                           decks=self._decks_ll(part))[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
             log.debug("grading: pin height of %s: %s: %s", cand[5], type(e).__name__, e)
@@ -1507,9 +1525,12 @@ class _Planner:
         cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
         keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
                                                   float(clo.max()))) | {key}, key=str)
-        bridges, ground = [], {}
+        bridges, ground, over = [], {}, []
         for k in keys:
             c = self._cell_enu(k)
+            if UNDER_DECK_ON:               # (every deck, for the ground under it: _under_ground)
+                over += [(line, half) for line, half in zip(c["bridges"], c.get("bridge_half", ())) if half > 0]
+                over += [(line, railwaysmod.DECK_HALF_M) for line in c.get("rail_bridges", ())]
             for line, cls in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"]))):
                 if cls is None:
                     continue
@@ -1603,7 +1624,7 @@ class _Planner:
                 decks.append((deck, fixed))
         if not cands:
             return
-        zc = self._under_ground(lines, [ground[g][1:3] for g in gids], cands)
+        zc = self._under_ground(lines, [ground[g][1:3] for g in gids], cands, None if coarse else over)
         dem = getattr(self, "dem", None) or getattr(self.md, "dem", None)
         lidar = UNDER_LIDAR_ON and not coarse and dem is not None and hasattr(dem, "coarse_at")
         requirements = []
@@ -1667,11 +1688,11 @@ class _Planner:
             set_widen(np_, getattr(p, "widen", None))
             plans[n] = (fid, np_)
 
-    def _under_ground(self, lines, smooth, cands):
+    def _under_ground(self, lines, smooth, cands, decks=None):
         """The heights of ground roads where they cross under a bridge, cands [(line, arc m, _)]: their ground along
-        them, median-filtered and smoothed as their plans are (_plan: smooth (sigma, median width) per line), at the
-        crossing. A pure function of the road and the ground (its plan's own height is only in the cells planning it).
-        """
+        them, read beside the decks over them (decks: deck_capped's, None: as it is), median-filtered and smoothed as
+        their plans are (_plan: smooth (sigma, median width) per line), at the crossing. A pure function of the road
+        and the ground (its plan's own height is only in the cells planning it)."""
         f64 = np.float64
         pts, spans = [], []
         for i, sc, _d in cands:
@@ -1679,16 +1700,43 @@ class _Planner:
             xy = lines[i]
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             k = int(math.ceil(3.0 * sg / PROFILE_STEP))
-            a = np.clip(sc + PROFILE_STEP * np.arange(-k, k + 1), 0.0, s[-1])
+            raw = sc + PROFILE_STEP * np.arange(-k, k + 1)
+            a = np.clip(raw, 0.0, s[-1])
             pts.append(np.stack([np.interp(a, s, xy[:, 0]), np.interp(a, s, xy[:, 1])], axis=1))
-            spans.append((k, sg, med))
+            ext = None
+            if decks:
+                # (and on straight past the part's ends, for deck_capped's ground beside a deck near one: Järve tee's
+                # part ends 12 m past Tartu mnt's deck, still on the lidar's hump)
+                d0 = (xy[0] - xy[1]) / max(float(np.hypot(*(xy[0] - xy[1]))), 1e-9)
+                d1 = (xy[-1] - xy[-2]) / max(float(np.hypot(*(xy[-1] - xy[-2]))), 1e-9)
+                ext = pts[-1] + np.where(raw < 0.0, -raw, 0.0)[:, None] * d0 \
+                    + np.where(raw > s[-1], raw - s[-1], 0.0)[:, None] * d1
+            spans.append((k, sg, med, raw, a, ext))
         allp = np.concatenate(pts)
         la, lo, _ = self.frame.enu_to_geodetic(allp[:, 0], allp[:, 1], 0.0)
         z = np.asarray(self.elev(np.asarray(la, f64), np.asarray(lo, f64)), f64).ravel()
-        out, k0 = [], 0
-        for k, sg, med in spans:
+        zp = None                   # (the ground past the parts' ends, at once; capped on the parts alone without it)
+        past = [raw != a for _k, _sg, _med, raw, a, _e in spans]
+        if decks and any(m.any() for m in past):
+            try:
+                ep = np.concatenate([sp[5][m] for sp, m in zip(spans, past)])
+                ela, elo, _ = self.frame.enu_to_geodetic(ep[:, 0], ep[:, 1], 0.0)
+                zp = np.asarray(self.elev(np.asarray(ela, f64), np.asarray(elo, f64)), f64).ravel()
+            except Exception as e:
+                log.debug("grading: ground past the ends under decks: %s: %s", type(e).__name__, e)
+        out, k0, j0 = [], 0, 0
+        for (k, sg, med, raw, a, ext), p, m in zip(spans, pts, past):
             zz = z[k0:k0 + 2 * k + 1]
             k0 += 2 * k + 1
+            if decks:
+                zx, q = zz, p
+                if zp is not None and m.any():
+                    zx, q = zz.copy(), ext
+                    zx[m] = zp[j0:j0 + int(m.sum())]
+                j0 += int(m.sum())
+                capped = deck_capped(q, zx, decks)
+                if capped is not zx:            # (the clipped samples at most the capped ground there)
+                    zz = np.minimum(zz, np.interp(a, raw, capped))
             out.append(float(smooth_profile(median_profile(zz, PROFILE_STEP, med), PROFILE_STEP, sg)[k]))
         return out
 
@@ -1827,7 +1875,7 @@ class _Planner:
                         # (and the tracks on the ground: a road bridge's approaches rise over them as over a road,
                         # GitHub #324)
                         rail_g += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
-        bridges, ground_l, ends, end_of, bcls, ground_ids = [], [], [], [], [], []
+        bridges, ground_l, ends, end_of, bcls, ground_ids, bhalf = [], [], [], [], [], [], []
         items = sorted(parts.items())
         if items:               # (the frame's conversion once for every part: it is per call)
             allr = np.concatenate([ring for _k, (ring, _sp) in items])
@@ -1843,6 +1891,7 @@ class _Planner:
                 bridges.append(line)
                 cls = getattr(sp, "cls", None)
                 bcls.append(cls + "_link" if cls is not None and _is_link(sp) else cls)
+                bhalf.append(float(getattr(sp, "width", 0.0) or 0.0) / 2)
             else:
                 ground_l.append((line, sp.width / 2 + shoulder(sp), sp.cls))
                 ground_ids.append((fid, j, profile_sigma(sp), MEDIAN_M if sp.kind in roadsmod.BUILT else DIRT_MEDIAN_M))
@@ -1855,8 +1904,53 @@ class _Planner:
             for ring, out_ in [(r, rail_xy) for r in rail] + [(r, rail_gxy) for r in rail_g]:
                 out_.append(rxy[k0:k0 + len(ring)])
                 k0 += len(ring)
-        return {"bridges": bridges, "bridge_cls": bcls, "ground": ground_l, "ground_ids": ground_ids, "end_of": end_of,
-                "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy}
+        return {"bridges": bridges, "bridge_cls": bcls, "bridge_half": bhalf, "ground": ground_l,
+                "ground_ids": ground_ids, "end_of": end_of, "ends": np.asarray(ends, np.float64).reshape(-1, 2),
+                "rail_bridges": rail_xy, "rail_ground": rail_gxy}
+
+    def _decks_ll(self, lonlat):
+        """_decks_near of the cell holding the middle of a lon/lat part (a pin height's plan: the cell's own plans
+        read the same decks)."""
+        if not UNDER_DECK_ON or lonlat is None or not len(lonlat):
+            return []
+        mid = np.asarray(lonlat, np.float64)[len(lonlat) // 2]
+        return self._decks_near(mapcells.cell_of(float(mid[1]), float(mid[0])))
+
+    def _decks_near(self, key):
+        """[(line (k, 2), half width)] of the road and rail decks within UNDER_DECK_PAD_M of cell key (deck_capped's),
+        each once, made once per cell; [] with UNDER_DECK_ON off."""
+        if not UNDER_DECK_ON or key is None:
+            return []
+        memo = self.__dict__.setdefault("_decks_memo", {})
+        with self.lock:
+            got = memo.get(str(key))
+        if got is not None:
+            return got
+        lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
+        pla = UNDER_DECK_PAD_M / 111320.0
+        plo = pla / max(0.05, math.cos(math.radians((lat0 + lat1) / 2)))
+        keys = sorted(set(mapcells.cells_for_bbox(lat0 - pla, lon0 - plo, lat1 + pla, lon1 + plo)) | {key}, key=str)
+        out, seen, short = [], set(), False
+        for k in keys:
+            try:
+                c = self._cell_enu(k)        # (the table _lower_underpasses reads too: one make per cell)
+            except Exception as e:      # (that cell's decks left out rather than no plans; not kept: asked again)
+                log.debug("grading: decks of %s: %s: %s", k, type(e).__name__, e)
+                short = True
+                continue
+            halves = c.get("bridge_half") or [0.0] * len(c["bridges"])
+            for line, half in list(zip(c["bridges"], halves)) + [(r, railwaysmod.DECK_HALF_M)
+                                                                    for r in c.get("rail_bridges", ())]:
+                if len(line) < 2 or half <= 0:
+                    continue
+                k2 = (round(float(line[0, 0]), 1), round(float(line[0, 1]), 1), round(float(line[-1, 0]), 1), len(line))
+                if k2 not in seen:
+                    seen.add(k2)
+                    out.append((line, half))
+        if not short:
+            with self.lock:
+                memo[str(key)] = out
+        return out
 
     def _ground_table(self, keys, cs):
         """The ground road parts of the cells keys (cs: their _cell_enu), each once (the first copy, by its first point
@@ -2863,6 +2957,64 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
         if lift >= APPROACH_MIN_LIFT:
             out.append((np.asarray(end, np.float64), min(lift, APPROACH_MAX_LIFT)))
     return out
+
+
+def _line_hits(a, b):
+    """Where polylines a (n, 2) and b (m, 2) cross: (arcs on a, arcs on b, |sin| of the angle) and b's length. Pure."""
+    p, r = a[:-1], np.diff(a, axis=0)
+    q, s = b[:-1], np.diff(b, axis=0)
+    rxs = r[:, None, 0] * s[None, :, 1] - r[:, None, 1] * s[None, :, 0]
+    qp = q[None, :, :] - p[:, None, :]
+    ok = np.abs(rxs) > 1e-12
+    den = np.where(ok, rxs, 1.0)
+    t = (qp[..., 0] * s[None, :, 1] - qp[..., 1] * s[None, :, 0]) / den
+    u = (qp[..., 0] * r[:, None, 1] - qp[..., 1] * r[:, None, 0]) / den
+    i, j = np.nonzero(ok & (t >= 0.0) & (t <= 1.0) & (u >= 0.0) & (u <= 1.0))
+    la, lb = np.hypot(*r.T), np.hypot(*s.T)
+    sa, sb = np.r_[0.0, np.cumsum(la)], np.r_[0.0, np.cumsum(lb)]
+    sin = np.abs(rxs[i, j]) / np.maximum(la[i] * lb[j], 1e-12)
+    return sa[i] + t[i, j] * la[i], sb[j] + u[i, j] * lb[j], sin, float(sb[-1])
+
+
+def deck_capped(pts, z, decks):
+    """z (n,), the ground at points pts (n, 2) along a road in order, capped where decks [(line (k, 2), half width)]
+    cross over it (UNDER_DECK_*): from UNDER_DECK_SIDE_M past the deck's sides, at most the straight line between the
+    ground there. A crossing within APPROACH_MIN_CROSS_M of a deck's end is a junction at grade and is left. Returns z
+    itself when nothing is capped. Pure."""
+    if not decks or len(pts) < 2:
+        return z
+    pts = np.asarray(pts, np.float64)[:, :2]
+    lo_p, hi_p = pts.min(0) - UNDER_DECK_MAX_M, pts.max(0) + UNDER_DECK_MAX_M
+    wins = []
+    for line, half in decks:
+        line = np.asarray(line, np.float64)[:, :2]
+        if len(line) < 2 or (line.max(0) < lo_p).any() or (line.min(0) > hi_p).any():
+            continue
+        arcs, on_deck, sin, length = _line_hits(pts, line)
+        for a, b, sn in zip(arcs, on_deck, sin):
+            if APPROACH_MIN_CROSS_M <= b <= length - APPROACH_MIN_CROSS_M:
+                h = min(float(half) / max(float(sn), 0.2), UNDER_DECK_MAX_M) + UNDER_DECK_SIDE_M
+                wins.append((float(a) - h, float(a) + h))
+    if not wins:
+        return z
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+    z = np.asarray(z, np.float64)
+    out = z.copy()
+    wins.sort()
+    merged = [list(wins[0])]
+    for a, b in wins[1:]:
+        if a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    for a, b in merged:
+        a, b = max(a, 0.0), min(b, float(s[-1]))
+        inn = (s > a) & (s < b)
+        if b - a < 1e-6 or not inn.any():
+            continue
+        za, zb = float(np.interp(a, s, z)), float(np.interp(b, s, z))
+        out[inn] = np.minimum(out[inn], za + (zb - za) * (s[inn] - a) / (b - a))
+    return out if (out < z).any() else z
 
 
 def fill_abutment(z, at_end, step=PROFILE_STEP):

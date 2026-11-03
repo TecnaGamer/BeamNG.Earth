@@ -6,6 +6,10 @@ What changed in each release of BeamNG.Earth, newest first.
 
 - Keep the world map and saved-place search usable with no saved or recent places, including after deleting the
   last saved place. Empty lists from Lua are normalized before map rendering and search consume them (#601).
+- Reduced the chance of a road under a short bridge climbing over a hump or sinking into a long trench where the
+  elevation data has the bridge's deck as ground (common with lidar). Järve tee under Tartu mnt at Assaku in Estonia
+  was dug up to 6 m under its ground for about 560 m, with the side street; it's now lowered only near the bridge, as
+  far as the clearance needs (#685).
 
 ## 1.7.3 beta (2026-10-30)
 
