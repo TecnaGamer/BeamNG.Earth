@@ -115,6 +115,13 @@ class LaneEndTest(unittest.TestCase):
         self.assertEqual(len(of(got, "se_f17")), 2)
         self.assertEqual(len(of(got, "se_f17_200")), 2, "the plate on the three-lane way")
 
+    def test_the_plate_goes_back_over_a_bridge(self):
+        two = lambda fid, a, b: way(fid, north(a, b), {"lanes": "2"}, spec(9.0, "trunk", True, 100.0, 2), "k")
+        got = sesigns.all_signs([two("k:0", -900, -330), two("k:1", -310, 0), pair("b", north(0, 400), 1)])
+        far = of(got, "se_f17_400")
+        self.assertEqual(len(far), 2, "past the 20 m the ground ways leave out")
+        self.assertFalse(any(-330.0 < float(s.p[1]) < -310.0 for s in got), "none on the bridge")
+
     def test_a_carriageway_gets_them_too(self):
         got = sesigns.all_signs([pair("a", north(-800, 0), 2), pair("b", north(0, 400), 1)])
         self.assertEqual(len(of(got, "se_f17_400")), 2)

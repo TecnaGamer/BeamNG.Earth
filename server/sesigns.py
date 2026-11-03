@@ -170,6 +170,28 @@ def _wider(ways, unknown=False):
 
 
 _merges = motesfri.merges
+SPAN_MAX_M = 300.0          # m of a bridge or tunnel a sign's walk back from a lane end goes over
+
+
+def _spans(ways):
+    """Ways standing for the bridges and tunnels between two ground stretches of one carriageway (motesfri._ways leaves
+    them out: the walk back to a sign's place stopped there, at Rv 27 and Rv 40 at Borås): a straight line, the spec of
+    the stretch before. Only walked over, never a sign's place."""
+    by = {}
+    for w in ways:
+        feat, _, k = w.fid.rpartition(":")
+        if k.isdigit() and _carriageway(w.spec):
+            by.setdefault(feat, {})[int(k)] = w
+    out = []
+    for feat, parts in by.items():
+        for k, a in parts.items():
+            b = parts.get(k + 1)
+            if b is None or len(a.xy) < 2 or len(b.xy) < 2:
+                continue
+            gap = float(np.hypot(*(b.xy[0, :2] - a.xy[-1, :2])))
+            if motesfri.JOIN_M < gap <= SPAN_MAX_M:
+                out.append(motesfri.Way(f"{feat}:{k}+", a.spec, a.tags, np.vstack([a.xy[-1, :2], b.xy[0, :2]]), a.key))
+    return out
 
 
 def _ramp_made(r, run, ways):
@@ -193,7 +215,9 @@ def _lane_signs(drop, ways):
     if motesfri._chain_length(run, list(drop.run) + _wider(ways)) < MIN_RUN_M and (
             not _merges(drop.way) or _ramp_made(run, list(drop.run) + _wider(ways), ways)):
         return []
-    drop = drop._replace(run=list(drop.run) + _wider(ways, unknown=True))
+    spans = _spans(ways)
+    drop = drop._replace(run=list(drop.run) + _wider(ways, unknown=True) + [(w, 0.0, _travel(w)) for w in spans])
+    spans = {id(w) for w in spans}
     out = []
 
     def both(group, d):
@@ -201,6 +225,8 @@ def _lane_signs(drop, ways):
         if got is None:
             return False
         p, t, w, sense = got
+        if id(w) in spans:
+            return False                                # (on a bridge: the next place back, or a nearer plate)
         right = _right(t)
         left = motesfri.centre_offset(w) * sense if not w.spec.oneway else w.spec.width / 2 + MEDIAN_M
         spots = [p + right * (w.spec.width / 2 + SIDE_M), p - right * left]
@@ -240,7 +266,7 @@ def _in_median(p, t, w, ways, own):
         if x is w or id(x) in own or not _carriageway(x.spec) or len(x.xy) < 2:
             continue
         d = float(motesfri._distance(p[None], x.xy[:, :2])[0])
-        if d > w.spec.width / 2 + x.spec.width / 2 + 2 * MEDIAN_M or (best is not None and d >= best[0]):
+        if d > w.spec.width / 2 + MEDIAN_M + x.spec.width / 2 + CLEAR_M or (best is not None and d >= best[0]):
             continue
         at, _, _ = motesfri._project(p[None], x.xy[:, :2])
         _, u = _point(x.xy[:, :2], float(at[0]))
