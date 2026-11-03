@@ -68,8 +68,11 @@ def tile_props(frame, tx, ty, md, elev):
     infra = _layer(md, keys, "infrastructure")
     land = _layer(md, keys, "land_use")
     blds = _layer(md, keys, "buildings")
-    roads_xy = _polylines(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=ROAD_MARGIN_M), "roads"))
-    bld_rings = _building_rings(frame, blds)
+    # (made only when a billboard or a yard asks for them: every building ring and road line of a Manhattan tile was
+    # ~0.15 s of each of its road tiles, for the few with either, 2026-11-03)
+    roads_xy = _Once(lambda: _polylines(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=ROAD_MARGIN_M),
+                                                      "roads")))
+    bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
     for feats in infra:
         _towers(frame, feats, (x0, y0, x1, y1), placed)
@@ -102,8 +105,21 @@ def tile_props(frame, tx, ty, md, elev):
     return rows, skip
 
 
+class _Once:
+    """fn() made on the first call, the same value after."""
+    __slots__ = ("fn", "got")
+
+    def __init__(self, fn):
+        self.fn, self.got = fn, None
+
+    def __call__(self):
+        if self.fn is not None:
+            self.got, self.fn = self.fn(), None
+        return self.got
+
+
 def _layer(md, keys, name):
-    out, seen = [], set()
+    out, seen = [], []
     for key in keys:
         try:
             feats = md.cell(key, layers=(name,), kind="demand").layers.get(name)
@@ -115,13 +131,19 @@ def _layer(md, keys, name):
         if ids is None:
             out.append(feats)
             continue
-        keep = [i for i in range(len(feats.kind)) if str(ids[i]) not in seen]
-        for i in keep:
-            seen.add(str(ids[i]))
-        if len(keep) == len(feats.kind):
+        # (each id once over the cells, the first cell's: as a numpy test, not a set per row: a Manhattan tile's
+        # buildings were ~0.04 s of it, 2026-11-03)
+        ids = np.asarray([str(x) for x in ids.tolist()]) if not isinstance(ids, np.ndarray) or ids.dtype.kind != "U" \
+            else ids
+        n = len(feats.kind)
+        ids = ids[:n]
+        fresh = ~np.isin(ids, np.concatenate(seen)) if seen else np.ones(n, bool)
+        keep = np.flatnonzero(fresh)
+        seen.append(ids[keep])
+        if len(keep) == n:
             out.append(feats)
-        elif keep:
-            out.append(_take(feats, keep))
+        elif len(keep):
+            out.append(_take(feats, keep.tolist()))
     return out
 
 
@@ -250,7 +272,7 @@ def _billboards(frame, feats, box, roads_xy, placed):
         if not _inside(x, y, box):
             continue
         fid = ids[i] if ids is not None else (round(x, 1), round(y, 1))
-        delta = _road_delta(np.array([x, y]), roads_xy, BILL_ROAD_M)
+        delta = _road_delta(np.array([x, y]), roads_xy(), BILL_ROAD_M)
         if delta is None:
             yaw = _hash(fid, "bill") * 360.0
         else:
@@ -348,8 +370,8 @@ def _containers(frame, feats, box, bld_rings, roads_xy, placed):
             continue
         pxy = np.asarray(pts, np.float64)
         keep = path.contains_points(pxy)
-        keep &= ~_in_rings(pxy, bld_rings)
-        keep &= ~_near_roads(pxy, roads_xy, CONT_ROAD_M)
+        keep &= ~_in_rings(pxy, bld_rings())
+        keep &= ~_near_roads(pxy, roads_xy(), CONT_ROAD_M)
         keep &= (pxy[:, 0] >= x0) & (pxy[:, 0] < x1) & (pxy[:, 1] >= y0) & (pxy[:, 1] < y1)
         pxy = pxy[keep]
         if len(pxy) == 0:

@@ -2052,7 +2052,9 @@ class _Planner:
         out, seen, short = [], set(), False
         for k in keys:
             try:
-                c = self._cell_enu(k)        # (the table _lower_underpasses reads too: one make per cell)
+                # (its bridges only: the decks and their widths are in both tables; the ground roads of every cell
+                # within UNDER_DECK_PAD_M were ~0.35 s of each Manhattan road tile, 2026-11-03)
+                c = self._cell_enu(k, ground=False)
             except Exception as e:      # (that cell's decks left out rather than no plans; not kept: asked again)
                 log.debug("grading: decks of %s: %s: %s", k, type(e).__name__, e)
                 short = True
@@ -2066,6 +2068,7 @@ class _Planner:
                 if k2 not in seen:
                     seen.add(k2)
                     out.append((line, half))
+        out = _Decks(out)
         if not short:
             with self.lock:
                 memo[str(key)] = out
@@ -3097,6 +3100,15 @@ def _line_hits(a, b):
     return sa[i] + t[i, j] * la[i], sb[j] + u[i, j] * lb[j], sin, float(sb[-1])
 
 
+class _Decks(list):
+    """deck_capped's decks [(line (k, 2), half width)] with box (n, 4): each line's x0, y0, x1, y1."""
+
+    def __init__(self, decks):
+        super().__init__(decks)
+        self.box = np.array([(*np.asarray(ln, np.float64)[:, :2].min(0), *np.asarray(ln, np.float64)[:, :2].max(0))
+                             for ln, _h in self], np.float64).reshape(-1, 4)
+
+
 def deck_capped(pts, z, decks):
     """z (n,), the ground at points pts (n, 2) along a road in order, capped where decks [(line (k, 2), half width)]
     cross over it (UNDER_DECK_*): from UNDER_DECK_SIDE_M past the deck's sides, at most the straight line between the
@@ -3106,6 +3118,13 @@ def deck_capped(pts, z, decks):
         return z
     pts = np.asarray(pts, np.float64)[:, :2]
     lo_p, hi_p = pts.min(0) - UNDER_DECK_MAX_M, pts.max(0) + UNDER_DECK_MAX_M
+    box = getattr(decks, "box", None)       # (_Decks: every deck's box at once; ~0.9 ms a call in Manhattan as a loop)
+    if box is not None:
+        near = np.flatnonzero((box[:, 2] >= lo_p[0]) & (box[:, 3] >= lo_p[1]) & (box[:, 0] <= hi_p[0])
+                              & (box[:, 1] <= hi_p[1]))
+        if not len(near):
+            return z
+        decks = [decks[int(i)] for i in near]
     wins = []
     for line, half in decks:
         line = np.asarray(line, np.float64)[:, :2]
