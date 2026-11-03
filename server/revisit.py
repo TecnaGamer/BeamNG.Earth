@@ -36,7 +36,6 @@ WHERE_DIR = "where"
 WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "fargeo", "far")    # (cellfacts: per cell, no place)
 NEAR_KINDS = ("roads", "roadsg", "plans")    # the drivable world (the road geotiles too); the others the distant view
 COMPACTED = threading.Event()           # set once compact() ran in this process (covermap reads the files after it)
-_where = {}                             # cache dir -> this process's open sidecar fd
 _START = int(time.time())
 
 _faults = [0]
@@ -117,17 +116,18 @@ def _note(cache_dir, kind, k, wh):
     try:
         lat, lon, s, w, n, e, settings = wh
         line = (f"{code_key()}\t{settings}\t{kind}\t{k}\t{lat:.7f}\t{lon:.7f}\t{s:.6f}\t{w:.6f}\t{n:.6f}\t{e:.6f}\n")
-        fd = _where.get(cache_dir)
-        if fd is None:
-            with _lock:
-                fd = _where.get(cache_dir)
-                if fd is None:
-                    d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
-                    os.makedirs(d, exist_ok=True)
-                    fd = _where[cache_dir] = os.open(os.path.join(d, f"{os.getpid()}_{_START}.tsv"),
-                                                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0),
-                                                     0o644)
-        os.write(fd, line.encode("utf-8"))
+        # Do not retain an fd for every cache directory: Windows cannot remove an
+        # open sidecar, and temporary/cache directories can go away before exit.
+        # Serialize this process's appends and close even when the write fails.
+        with _lock:
+            d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
+            os.makedirs(d, exist_ok=True)
+            fd = os.open(os.path.join(d, f"{os.getpid()}_{_START}.tsv"),
+                         os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+            try:
+                os.write(fd, line.encode("utf-8"))
+            finally:
+                os.close(fd)
     except Exception:
         pass
 

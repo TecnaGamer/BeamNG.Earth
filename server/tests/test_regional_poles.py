@@ -291,7 +291,10 @@ class GeometryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             mesh.build(d)
             for name in (mesh.NAME + ".dae", "main.materials.json"):
-                self.assertEqual(Path(d, name).read_bytes(), (mesh.OUT / name).read_bytes(), name)
+                # Git's Windows checkout can use CRLF. Compare all UTF-8 text
+                # after universal-newline decoding; geometry and materials stay exact.
+                self.assertEqual(Path(d, name).read_text(encoding="utf-8"),
+                                 (mesh.OUT / name).read_text(encoding="utf-8"), name)
             # PNG compression can differ between Pillow/zlib builds. Require
             # exactly the same decoded image, not the same compressed stream.
             with Image.open(Path(d, "concrete_grain.png")) as generated, \
