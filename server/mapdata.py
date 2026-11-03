@@ -695,7 +695,7 @@ class MapData:
         with self._mem_lock:
             return dict(self._cell_stats)
 
-    def _decoded_layer(self, key, layer, kind, frame):
+    def _decoded_layer(self, key, layer, kind, frame, token=None):
         """Load and publish one decoded layer for all its callers. No neighbor discovery is run here:
         hooks are attached only, and no cache lock is held across I/O, decoding or tag joins."""
         k = (str(key), layer)
@@ -732,7 +732,9 @@ class MapData:
             # Errors are shared by current waiters; a later request can retry. An evicted result
             # remains alive in its Future until every admitted caller has consumed it.
             with self._mem_lock:
-                self._loading.pop(k, None)
+                cur = self._loading.get(k)
+                if cur is not None and cur[2] is token:     # (not a more urgent load that took its place)
+                    del self._loading[k]
 
     def cell(self, key, layers=LAYERS, kind="demand"):
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""
@@ -752,14 +754,23 @@ class MapData:
                     mem[layer] = got
                     self._cell_stats["memory_hits"] += 1
                 else:
-                    fut = self._loading.get(k)
-                    shared = fut is not None
-                    if fut is None:
-                        fut = self.pool.submit(self._decoded_layer, key, layer, kind, frame)
-                        self._loading[k] = fut
-                        self._cell_stats["loads"] += 1
-                    else:
+                    # a load already under way is shared when it is at least as urgent; a more urgent request
+                    # loads at its own priority (its downloads' lane: xproc.KIND_RANK, netfetch) and takes its place
+                    # for the ones after it: a demand cell waited on a background prefetch's download, its slow
+                    # lane, since the loads were shared (PR #676; players: dev.147 "streams very slowly", 2026-11-03)
+                    rank = xproc.KIND_RANK.get(kind, 1)
+                    cur = self._loading.get(k)
+                    shared = cur is not None and cur[1] <= rank
+                    if shared:
+                        fut = cur[0]
                         self._cell_stats["coalesced"] += 1
+                    else:
+                        token = object()
+                        fut = self.pool.submit(self._decoded_layer, key, layer, kind, frame, token)
+                        self._loading[k] = (fut, rank, token)
+                        self._cell_stats["loads"] += 1
+                        if cur is not None:
+                            self._cell_stats["urgent_over"] = self._cell_stats.get("urgent_over", 0) + 1
                     futs.append((layer, fut, shared))
         results = {}
         err = None

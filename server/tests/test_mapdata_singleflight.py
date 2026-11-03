@@ -58,6 +58,31 @@ class SingleFlightTest(unittest.TestCase):
         self.assertEqual(self.md._loading, {})
         self.assertGreater(self.md.cell_stats()["wait_s"], 0)
 
+    def test_a_more_urgent_reader_loads_at_its_own_priority(self):
+        # a demand reader does not wait on a background load under way (its downloads' slow lane, dev.147
+        # 2026-11-03); a later demand reader shares the demand load; a background one shares whichever is going
+        release_bg = threading.Event()
+        kinds = []
+        def load(key, layer, kind):
+            kinds.append(kind)
+            if kind == "background" and not release_bg.wait(5):
+                raise TimeoutError("background producer was not released")
+            return self.arrays(layer)
+        with patch.object(self.md, "layer_arrays", side_effect=load), ThreadPoolExecutor(4) as callers:
+            bg = callers.submit(self.md.cell, KEY, ("roads",), "background")
+            end = time.monotonic() + 5
+            while "background" not in kinds and time.monotonic() < end:
+                time.sleep(0.001)
+            demand = self.md.cell(KEY, ("roads",), "demand")            # not behind the background load
+            self.assertIsNotNone(demand.layers["roads"])
+            self.assertFalse(demand.stats["roads"]["shared"])
+            self.assertFalse(bg.done(), "the background load is still waiting")
+            release_bg.set()
+            self.assertIsNotNone(bg.result(5).layers["roads"])
+        self.assertEqual(sorted(kinds), ["background", "demand"])
+        self.assertEqual(self.md.cell_stats().get("urgent_over"), 1)
+        self.assertEqual(self.md._loading, {})
+
     def test_failed_producer_wakes_all_readers_and_next_request_retries(self):
         release = threading.Event()
         def fail(*args):
