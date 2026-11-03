@@ -57,6 +57,8 @@ export const settingsSchema = [
   {
     name: "Interface",
     items: [
+      { id: "runtimeProfiler", type: "bool", default: false, name: "Detailed performance profiler", desc: "Continuously collects live frame, worker and network/disk feedback in a resizable window. Closing the window leaves a compact status panel; freezing only holds the display. Choose Essential for basic measurements or Full for detailed traces. Off stops collection." },
+      { id: "profilerMode", type: "select", default: "essential", name: "Profiler mode", desc: "Essential keeps frame times, CPU/GPU totals, basic service traffic, average latency and disk space. Full adds detailed steps, worker traces, latency distributions and process I/O sampling.", options: [ { label: "Essential", value: "essential" }, { label: "Full", value: "full" } ] },
       { id: "statusBar", type: "bool", default: true, name: "Status bar", desc: "The bar at the top of the screen: the street and town you are in, loading progress and the frame rate." },
       { id: "placeNamesOnline", type: "bool", default: true, name: "Place names (online)", desc: "Town, state and country names in the status bar, looked up online (Photon by komoot, sent your position rounded to about 1 km)." },
       { id: "hudVisible", type: "bool", default: false, name: "Status window", desc: "The compact BeamNG.Earth status window (connection, location, loading, quick buttons). Also whether it opens at level start." },

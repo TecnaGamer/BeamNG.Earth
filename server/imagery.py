@@ -37,6 +37,7 @@ Output: DDS DXT1 with a full mip chain (write_dds): linear-light 2 x 2 levels, e
 (earthfast.dds_levels: the GPU's encoder when there is one) under our own header (DDSD_MIPMAPCOUNT,
 DDSCAPS_MIPMAP|COMPLEX).
 """
+from runtimeprofiler import step as profile_step
 import contextlib
 import hashlib
 import io
@@ -46,7 +47,7 @@ import os
 import struct
 import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -1326,6 +1327,7 @@ class Imagery:
         return tx0, ty0, nx, ny, {(tx, ty): (src, z, tx % n, ty) for ty in range(ty0, ty1 + 1)
                                   for tx in range(tx0, tx1 + 1)}
 
+    @profile_step('Imagery render')
     def render(self, frame, x0, y0, size, px, pending=None):
         """_render(); texels from a lazy source (NAIP) then take their large-scale colour from the rest of
         the chain (match_colours): NAIP's detail, USGS's colours, so the block's photo meets the far tiles
@@ -1333,12 +1335,14 @@ class Imagery:
         NAIP block was a darker, greener square, its water much darker)."""
         return self.render_where(EnuSquare(frame, x0, y0, size), px, pending)
 
+    @profile_step('Imagery render')
     def render_merc(self, z, x, y, px, pending=None):
         """render() of Web-Mercator tile (z, x, y) with a gutter(px) border: px x px, the tile itself covering texels
         g .. px - g on both axes (gutter_uv of its Mercator position), row 0 north (the far field's global tiles,
         farfield.GTile: the same texture for every anchor)."""
         return self.render_where(MercSquare(z, x, y, px), px, pending)
 
+    @profile_step('Imagery source assembly')
     def render_where(self, where, px, pending=None):
         """render() of a square (EnuSquare, MercSquare)."""
         rgb, used = self._render(where, px, pending)

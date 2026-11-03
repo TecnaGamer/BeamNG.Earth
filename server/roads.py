@@ -8454,7 +8454,7 @@ class Tracker:
             self.empty, self.retry, self.fails = set(), {}, {}
             self.started, self.stuck_said = {}, set()
         if self.pool is None:
-            from concurrent.futures import ThreadPoolExecutor
+            from runtimeprofiler import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-tile")
         vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
         fast = math.hypot(vx, vy) >= FAST_MS
@@ -8691,7 +8691,7 @@ class GeoTracker:
             self.need = {}
             self.stats["anchors"] += 1
         if self.pool is None:
-            from concurrent.futures import ThreadPoolExecutor
+            from runtimeprofiler import ThreadPoolExecutor
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-geo")
         vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
         s = math.hypot(vx, vy)

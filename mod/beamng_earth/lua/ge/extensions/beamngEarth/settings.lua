@@ -87,6 +87,8 @@ M.SCHEMA = {
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
+  profilerMode = { kind = 'enum', default = 'essential', values = { 'essential', 'full' }, label = 'Profiler mode' },
+  runtimeProfiler = { kind = 'bool', default = false, label = 'Detailed performance profiler' },
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
   placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar (online)' },
@@ -126,7 +128,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
-  'hudVisible', 'statusBar',
+  'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
   'devMapKm' }
@@ -240,7 +242,7 @@ function M.load(path)
   if read and (not FS or not FS.fileExists or FS:fileExists(path or M.FILE)) then ok, data = pcall(read, path or M.FILE) end
   if ok and type(data) == 'table' then
     for k, v in pairs(data) do
-      if k ~= 'version' and not M.RETIRED[k] then
+      if k ~= 'version' and k ~= 'runtimeProfiler' and k ~= 'profilerMode' and not M.RETIRED[k] then
         local val, err = M.validate(k, v)
         if val ~= nil then values[k] = val else warnings[#warnings + 1] = err end
       end
@@ -323,6 +325,8 @@ function M.save(path)
   if not write then return false end
   local out = { version = M.VERSION }
   for k, v in pairs(values) do out[k] = v end
+  -- Profiling requires a fresh opt-in after restarting/reloading the extension.
+  out.runtimeProfiler = false
   local ok, err = pcall(write, path or M.FILE, out, true)
   if not ok then log('W', 'beamngEarth', 'settings: write failed: ' .. tostring(err)) end
   return ok and err ~= false
@@ -476,6 +480,8 @@ M.APPLY = {
     if M.pageExists() then ui.visible = v end
   end,
   creditsVisible = function(v) credits.setEnabled(v) end,
+  profilerMode = function(v) require('beamngEarth/profiler').setMode(v) end,
+  runtimeProfiler = function(v) require('beamngEarth/profiler').setEnabled(v) end,
   statusBar = function(v) require('beamngEarth/statusbar').enabled = v and true or false end,
   creditsCorner = function(v) credits.setCorner(v) end,
   creditsSize = function(v) credits.setSize(v) end,

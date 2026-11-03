@@ -23,6 +23,7 @@ functions that depend on the block size take it as a parameter (`size`, samples 
 Layout's `block`), defaulting to SIZE; nothing reads a module setting at call time. The far field's near tiles keep a
 2 m lattice (FAR_SQUARE): every second block sample, the same values.
 """
+from runtimeprofiler import step as profile_step
 import math
 import os
 import struct
@@ -284,6 +285,7 @@ def height_at(qgrid, z_base, max_height, cx, cy, x, y, square=SQUARE):
     return float((h[0, 0] * (1 - wx) + h[0, 1] * wx) * (1 - wy) + (h[1, 0] * (1 - wx) + h[1, 1] * wx) * wy)
 
 
+@profile_step('Heightmap generation')
 def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEFAULT, size=SIZE, keep=None,
              chunks=None):
     """Build the size² block centred at (cx, cy) with height quantum q and write it to path.

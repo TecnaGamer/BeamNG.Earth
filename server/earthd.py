@@ -75,7 +75,7 @@ import time  # noqa: E402
 from collections import OrderedDict, deque  # noqa: E402
 import concurrent.futures  # noqa: E402
 import multiprocessing  # noqa: E402
-from concurrent.futures import ThreadPoolExecutor  # noqa: E402
+from runtimeprofiler import ThreadPoolExecutor  # noqa: E402
 from dataclasses import dataclass, field, replace  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -98,6 +98,7 @@ import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
+import runtimeprofiler
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
@@ -4854,7 +4855,7 @@ class Connection:
                 # the mod's format is the newest it reads (a FORMAT 4 mod reads 3 too)
                 self.status(f"format mismatch: mod {msg.get('format')}, server {lay.format}")
             m = {"type": "hello", "protocol": PROTOCOL, "format": lay.format, "serverVersion": SERVER_VERSION,
-                 "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
+                 "runtimeProfiler": 2, "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
                  "sessionId": self.s.sid, "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
             if self.s.imagery is not None:      # the world map credits the sources its view shows
@@ -5013,6 +5014,15 @@ class Connection:
             self.on_cache(msg)
         elif kind == "app_path":                # the settings page's folders: the cache's, the BeamMP launcher's
             self.spawn(self.app_path(msg))
+        elif kind == "runtime_profiler":
+            mode = msg.get("mode", "full")
+            if mode not in ("essential", "full"):
+                raise ValueError("invalid profiler mode")
+            self.profile_mode = mode
+            self.profile_until = time.monotonic() + 3 if msg.get("enabled") is True else 0
+            probe = msg.get("probe")
+            if msg.get("enabled") is True and type(probe) is int and 0 <= probe <= 2147483647:
+                self.send({"type": "runtime_profiler_pong", "probe": probe})
         elif kind == "perf_log":                # the mod's performance log (perflog.lua): its hitches, frame-rate drops,
             # minute lines and the machine, into this log beside the blocks' own timings (the file players send)
             lines = msg.get("lines")
@@ -6742,6 +6752,7 @@ async def main_async(args):
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
     ticker = asyncio.create_task(net_log())
+    profile_task = asyncio.create_task(runtimeprofiler.stream(server))
 
     # Debug: event-loop stalls (every message the game sends waits for them). The loop beats; a thread
     # logs the main thread's stack when a beat is late, so the stall names its cause.
@@ -6820,6 +6831,12 @@ async def main_async(args):
         async with srv:
             await srv.serve_forever()
     finally:
+        profile_task.cancel()
+        try:
+            await profile_task
+        except asyncio.CancelledError:
+            pass
+        runtimeprofiler.collector.close()
         ticker.cancel()
         lagger.cancel()
         sweeper.cancel()

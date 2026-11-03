@@ -188,6 +188,9 @@ class CliDefaultTest(unittest.TestCase):
         want = json.loads(FIXTURE.read_text())
         got = json.loads(json.dumps(compute(Path(__file__).resolve().parents[1])))
         self.assertEqual(sorted(got), sorted(want))
+        # The profiler adds an advertised capability, while default generation
+        # must still match the historical M1 fixture in every existing field.
+        self.assertEqual(got["hello"].pop("runtimeProfiler"), 2)
         # The 1 m lattice holds M1's 2 m samples (terrain_png) and the ones between them, so its highest one can only
         # be higher; its lowest, zBase and q are M1's here.
         self.assertGreaterEqual(got["terrain"].pop("maxU"), want["terrain"].pop("maxU"))

@@ -13,6 +13,7 @@ and a file whose digest is missing or wrong is deleted, never run. A source copy
 import hashlib
 import json
 import os
+import ioprofiler
 import sys
 import urllib.request
 
@@ -71,7 +72,7 @@ def pick(release, suffix):
 def _get_json(net, url):
     with net.session(url, kind="demand") as s:
         req = urllib.request.Request(url, headers={**s.headers, "Accept": "application/vnd.github+json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with ioprofiler.urlopen(req, timeout=30) as resp:
             s.status = resp.status
             body = resp.read(4 << 20)
             s.nbytes = len(body)
@@ -121,7 +122,7 @@ def download(net, current, path=None, progress=None):
         try:
             with net.session(url, kind="demand") as s:
                 req = urllib.request.Request(url, headers=s.headers)
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with ioprofiler.urlopen(req, timeout=60) as resp:
                     final = resp.geturl()
                     if not final.startswith("https://"):
                         raise UpdateError("the download was redirected off https")

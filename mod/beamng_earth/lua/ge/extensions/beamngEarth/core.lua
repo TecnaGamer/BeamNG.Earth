@@ -908,7 +908,12 @@ local function onMessage(msg)
     trees.clear()
     ambience.clear()
     setStatus('Disconnected from companion server: ' .. tostring(msg.error))
+  elseif t == 'runtime_profiler_pong' then
+    require('beamngEarth/profiler').pong(msg)
+  elseif t == 'runtime_profiler' then
+    require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
     st.sessionId = msg.sessionId
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
@@ -1814,6 +1819,7 @@ local function minimapNorth()
   return st.anchor:northAt(cx, cy)
 end
 local function drawUi(dt)
+  require('beamngEarth/profiler').draw(st.inOurLevel)
   -- the window's view only while it is shown: buildView walks every far tile (farfield.stats) and makes its tables, and
   -- the window is hidden by default (settings hudVisible), where ui.draw returns at once (in-game 2026-10-26, Fells
   -- Point, ~400 far tiles: drawUi 0.085-0.089 -> 0.009-0.011 ms a frame, 2.4 KB less garbage a frame)
@@ -2007,6 +2013,7 @@ local function onUpdate(dtReal, dtSim)
     end
     return
   end
+  require('beamngEarth/profiler').update(frameMs0, marks, st.inOurLevel, net.isConnected(), net.send)
   local hrec = nil
   if frameMs0 > M.HITCH_MS and st.inOurLevel then
     local okH, h = pcall(noteHitch, frameMs0)

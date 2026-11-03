@@ -8,6 +8,7 @@ tile while the terrain and the far buildings went on loading. RespawningPool mak
 import collections
 import concurrent.futures
 import logging
+import runtimeprofiler
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -60,9 +61,9 @@ class RespawningPool:
         with self._lock:
             pool = self._pool
         try:
-            fut = pool.submit(fn, *args, **kwargs)
+            fut = runtimeprofiler.collector.submit(pool.submit, self.name, fn, args, kwargs)
         except BrokenProcessPool:
-            fut = self._renew(pool).submit(fn, *args, **kwargs)
+            fut = runtimeprofiler.collector.submit(self._renew(pool).submit, self.name, fn, args, kwargs)
         with self._count_lock:
             self.inflight += 1
         fut.add_done_callback(self._done)
