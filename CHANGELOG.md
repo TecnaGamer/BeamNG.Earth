@@ -6,6 +6,10 @@ What changed in each release of BeamNG.Earth, newest first.
 
 - Keep the world map and saved-place search usable with no saved or recent places, including after deleting the
   last saved place. Empty lists from Lua are normalized before map rendering and search consume them (#601).
+- Reduced the chance of a bridge dipping to the foot of its embankment or rising high over it where the map's bridge
+  ends part-way down the slope (common on lidar ground, which has the bridge taken out). The Kurna - Tuhala overpass
+  over Tallinna ringtee in Estonia climbed 12 m over its 50 m; it's now level on its embankments, 7 m over the ring
+  road (#684).
 
 ## 1.7.3 beta (2026-10-30)
 
