@@ -5665,6 +5665,17 @@ async def main_async(args):
             from worldbundle import PinnedPlanCache
             PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],
                             f"w{int(args.road_widths == 'on')}s{int(args.sea == 'on')}", mapdata.bundle_versions())
+        airports_db = None
+        if args.airports == "on":       # after pin validation, before cache maintenance or any world worker
+            try:
+                airports_db = airportsmod.load_startup(args.cache_dir, offline=args.offline)
+                log.info("airports: %s", airports_db.summary())
+            except airportsmod.AirportsUnavailable as e:
+                log.warning("airports: no runway grading (%s)", e)
+            # The helper persisted each airport request before its possible
+            # termination. No requests run here yet; preserve its budget counts.
+            net._rollover()             # the refresh may have crossed UTC midnight
+            net._load_stats()
     except BaseException:
         try:
             if mapdata is not None:
@@ -5710,13 +5721,6 @@ async def main_async(args):
              "road_widths": args.road_widths == "on" and args.roads == "on", "airports": args.airports == "on",
              "sea": args.sea == "on", "roads_in_ground": roadsmod.ROADS_IN_GROUND}, None,
             peerworkmod.ReplyCache(os.path.join(args.cache_dir, "peercache")))
-    airports_db = None
-    if args.airports == "on":       # before any worker process starts: they read this copy
-        try:
-            airports_db = airportsmod.Store(args.cache_dir, net).load()
-            log.info("airports: %s", airports_db.summary())
-        except airportsmod.AirportsUnavailable as e:
-            log.warning("airports: no runway grading (%s)", e)
     road_pool = None
     if args.block_process == "on" and args.roads == "on" and args.road_processes > 0:
         road_pool = poolsmod.RespawningPool(      # road tiles (blockworker.roads_tile)

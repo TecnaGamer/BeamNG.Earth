@@ -52,6 +52,7 @@ import io
 import json
 import logging
 import math
+import multiprocessing
 import os
 import re
 import shutil
@@ -77,6 +78,8 @@ FILES = ("airports.csv", "runways.csv")
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
 REFRESH_S = 7 * 86400.0         # a copy older than this is downloaded again
 RETRY_S = 6 * 3600.0            # after a failed refresh, the next attempt waits this long
+STARTUP_REFRESH_S = 20.0        # optional network work before the companion may bind
+STARTUP_REAP_S = 2.0            # each terminate/kill join; no workers start before the helper exits
 MIN_ROWS_SHARE = 0.5            # a new copy with fewer rows than this share of the old one is refused
 FT = 0.3048                     # m per international foot (exact)
 EARTH_R = 6371008.8             # m, mean radius (great-circle prefilter only)
@@ -881,6 +884,101 @@ class Store:
                 os.remove(tmp)
             except OSError:
                 pass
+
+
+class _StartupFetcher(netfetch.Fetcher):
+    """Persist request accounting before a startup helper can be terminated mid-request."""
+
+    def _count(self, host, what, n=1):
+        super()._count(host, what, n)
+        if what == "requests":
+            self.flush()
+
+
+def _startup_refresh(cache_dir, offline):
+    """Spawn target: only this process writes the selected airport generation during startup."""
+    fetcher = _StartupFetcher(offline=offline, stats_dir=os.path.join(cache_dir, "netstats"))
+    try:
+        Store(cache_dir, fetcher).load()
+    except (AirportsUnavailable, DataError, OSError, EOFError) as e:
+        log.warning("airports: startup refresh unavailable (%s)", e)
+        raise SystemExit(1)
+    finally:
+        fetcher.close()
+
+
+def _reap_startup(process):
+    """Do not read/publish the session snapshot while a timed-out writer is still alive."""
+    try:
+        if process.is_alive():
+            process.terminate()
+            process.join(STARTUP_REAP_S)
+        if process.is_alive():
+            process.kill()
+            process.join(STARTUP_REAP_S)
+        if process.is_alive():
+            raise RuntimeError("airport refresh helper could not be stopped; refusing to start world workers")
+    except OSError as e:
+        # It may have exited between is_alive() and the terminate/kill call.
+        process.join(STARTUP_REAP_S)
+        if process.is_alive():
+            raise RuntimeError("airport refresh helper could not be reaped; refusing to start world workers") from e
+
+
+def load_startup(cache_dir, offline=False, *, budget=STARTUP_REFRESH_S, clock=time.monotonic,
+                 wall=time.time, context=None, _refresh_target=None):
+    """Choose one complete airport snapshot before any world worker starts.
+
+    Refresh in a separate process: socket idle timeouts cannot bound DNS or a
+    trickling body. A deadline starts before spawning; teardown adds at most two
+    STARTUP_REAP_S waits. No background writer survives the cached-only read.
+    The ordinary Store.load/CLI refresh retains its existing provider policy.
+    """
+    if not math.isfinite(budget) or budget < 0:
+        raise ValueError("airport startup budget must be a finite nonnegative number")
+    fetcher = netfetch.Fetcher(offline=True)
+    try:
+        return _select_startup(Store(cache_dir, fetcher, wall=wall), cache_dir, offline,
+                               budget, clock, wall, context, _refresh_target)
+    finally:
+        fetcher.close()
+
+
+def _select_startup(store, cache_dir, offline, budget, clock, wall, context, refresh_target):
+    before = store.pointer()
+    now = wall()
+    stale = before is None or now - before.get("checked", before.get("downloaded", 0)) >= REFRESH_S
+    recent_fail = before is not None and before.get("error") and now - before.get("attempt", 0) < RETRY_S
+    failure = None
+    if not offline and stale and not recent_fail:
+        deadline = clock() + budget
+        ctx = context if context is not None else multiprocessing.get_context("spawn")
+        process = ctx.Process(target=refresh_target or _startup_refresh,
+                              args=(os.fspath(cache_dir), bool(offline)), name="airport-startup", daemon=True)
+        try:
+            process.start()
+            process.join(max(0.0, deadline - clock()))
+            if process.is_alive():
+                failure = f"startup refresh exceeded {budget:g} s"
+            elif process.exitcode:
+                failure = f"startup refresh helper exited with code {process.exitcode}"
+        except (OSError, RuntimeError) as e:
+            failure = f"startup refresh could not start ({type(e).__name__})"
+        finally:
+            if process.pid is not None:
+                _reap_startup(process)
+            process.close()
+        if failure:
+            # The helper is gone. Preserve the normal failed-refresh backoff if
+            # it did not finish publishing a new, complete generation meanwhile.
+            current = store.pointer()
+            if current is not None and before is not None and current["gen"] == before["gen"]:
+                current.update(attempt=wall(), error=failure)
+                store._write_pointer(current)
+            log.warning("airports: %s; using committed cache if available", failure)
+    # Missing data follows the existing AirportsUnavailable fallback. No network
+    # can run here, and workers load the same committed pointer with offline=True.
+    return store.load(max_age=float("inf"))
 
 
 # --- CLI ----------------------------------------------------------------------------------------
