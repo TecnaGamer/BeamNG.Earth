@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import collections
+import hashlib
 import os
 import threading
 import time
@@ -102,6 +103,24 @@ LOOK = {
 # a `surface=concrete` street is still a paved one (markings, widths, the tyres' asphalt feel) but is drawn with
 # gridmap v2's plain concrete instead of asphalt (the user, 2026-10-22: "for concrete road surfaces")
 CONCRETE = {"m": "m_gm_concrete_plain", "tl": 11.0, "p": 20}
+# Dirt and gravel strips (from PR #455 by AnthonyGraceffa): with the carriageways in the ground (ROADS_IN_GROUND) a dirt
+# or gravel road still gets a mesh of BeamNG's continuous rutted road strip over the ground photo's tint and its
+# terrain layer (surface.PHOTO_ROAD_RGBA, paint_roads), fading into the ground at its sides and open ends (roadmesh
+# EDGE_FADE_M, END_FADE_M). The strips of /assets/materials/decalroad/dirt, which Johnson Valley paints its dirt roads
+# with, as our copies (dirtroad.materials.json: the stock opacity maps are patchy, ours is dirt_fade_o on the second
+# uv; opacityFactor 0.85 lets the photo through). A variation's albedo is 16 times as long as wide (256 x 4096): its
+# texture length is "aspect" times the road's width, so a repeat stays square; the gravel strip (1024 x 2048) twice
+# the width. "vary": one road keeps one variation its whole length (look_of). Gravel light grey-beige, dirt brown.
+# BNE_DIRT_STRIPS=off: no strip (the tint and the terrain layer alone), the old m_dirt_road look where one is drawn.
+DIRT_STRIPS = os.environ.get("BNE_DIRT_STRIPS", "on") not in ("off", "0")
+DIRT_VARIATIONS = ("bne_dirt_variation_01", "bne_dirt_variation_02", "bne_dirt_variation_03", "bne_dirt_variation_04")
+DIRT_MATERIALS = DIRT_VARIATIONS + ("bne_dirt_gravel",)    # (prewarm.py)
+DIRT_LOOK = {
+    "gravel": {"m": "bne_dirt_gravel", "tl": 8.0, "p": 21, "aspect": 2.0},
+    "dirt": {"m": DIRT_VARIATIONS[0], "tl": 56.0, "p": 21, "aspect": 16.0, "vary": DIRT_VARIATIONS},
+}
+DIRT_SPLIT = 4000       # nodes per strip chunk (no DecalRoad node cap: the chunks are meshed, roadmesh.build)
+STRIP_JOIN_M = 1.0      # m: a strip's end this near another strip road's line joins it (no end fade there)
 
 
 def terrain_surface(spec):
@@ -121,11 +140,19 @@ def surface_material_kind(spec):
     return terrain_surface(spec) or spec.kind
 
 
-def look_of(spec):
-    """A spec's road look: gridmap v2's concrete for a `surface=concrete` street, else its kind's (LOOK)."""
+def look_of(spec, fid=None):
+    """A spec's road look: gridmap v2's concrete for a `surface=concrete` street, a dirt or gravel strip (DIRT_LOOK:
+    texture length its aspect times the width, one variation per road id fid), else its kind's (LOOK)."""
     if spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
-    return LOOK[spec.kind]
+    look = DIRT_LOOK.get(spec.kind) if DIRT_STRIPS else None
+    if look is None:
+        return LOOK[spec.kind]
+    vary = look.get("vary")
+    if vary:
+        n = 0 if fid is None else int.from_bytes(hashlib.blake2s(str(fid).encode(), digest_size=2).digest(), "little")
+        look = {**look, "m": vary[n % len(vary)]}
+    return {**look, "tl": round(float(look["aspect"]) * float(spec.width), 2)}
 Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides mountain",
                   defaults=(False, 2.5, 0, None, None, None, None, None, False, None, False))   # median: m to the other carriageway's centre line
 # (mountain: a mountain pass road, _mountain_roads)
@@ -5101,6 +5128,80 @@ def _chunk(look, w, c):
     return out
 
 
+def _surface_pieces(look, width, line, box, ends=(True, True)):
+    """The carriageway chunks of `line` (k, 3) cut to box. A dirt or gravel strip (look "aspect", DIRT_LOOK) is rounded
+    at its sharp bends first, the whole line (roadmesh.round_dirt_centerline, before the 12 m densify; every tile rounds
+    the same arcs), and each chunk carries s0 / s1 (m along the line to its ends: the ruts run on across a tile's edge),
+    slen (the line's length) and fends (ends: which of the line's ends are open, its strip fading out there:
+    _strip_open_ends). From PR #455; the distance rides through the cut as a fourth column. Pure."""
+    line = np.asarray(line, np.float64)
+    if not look.get("aspect") or len(line) < 2:
+        return [_chunk(look, width, c) for piece in clip_polyline(line, *box)
+                for c in split(densify(simplify(piece))) if len(c) >= 2]
+    rl = densify(roadmesh.round_dirt_centerline(simplify(line[:, :3]), float(width) / 2.0))
+    d = np.diff(rl[:, :2], axis=0)
+    s = np.r_[0.0, np.cumsum(np.hypot(d[:, 0], d[:, 1]))]
+    slen = round(float(s[-1]), 2)
+    fends = [int(bool(ends[0])), int(bool(ends[1]))]
+    out = []
+    for piece in clip_polyline(np.c_[rl, s], *box):
+        for c in split(piece, DIRT_SPLIT):
+            if len(c) >= 2:
+                ch = _chunk(look, width, c[:, :3])
+                ch.update(s0=round(float(c[0, 3]), 3), s1=round(float(c[-1, 3]), 3), slen=slen, fends=fends)
+                out.append(ch)
+    return out
+
+
+def _strip_open_ends(roads, rings, seen, near, skip=lambda spec: False):
+    """{index in roads: (start open, end open)} of the dirt and gravel strips among roads ((fid, spec, centreline, lon),
+    build_tile's, rings its lon/lat parts in the same order, seen fid -> (feats, i, spec)). An end is open (its strip
+    fades out, roadmesh END_FADE_M) unless another strip road's line passes within STRIP_JOIN_M of it (a junction, the
+    next segment of the road: a fade there left a gap in the road), the road comes back to it (a loop), or it is not an
+    end of its feature's own line (the road goes on over a bridge or through a tunnel). Only the ends in the box near
+    (x0, y0, x1, y1: NEAR_M round the tile) are tested, against the lines there: every road at such an end passes
+    through it, so the tiles agree. skip(spec): roads without a strip (rough ground). Pure."""
+    idx = [k for k, r in enumerate(roads) if r[1].kind in DIRT_LOOK and not skip(r[1])]
+    if not idx:
+        return {}
+    cell = STRIP_JOIN_M
+    nx0, ny0, nx1, ny1 = near
+    V = np.concatenate([roads[k][2][:, :2] for k in idx])
+    R = np.repeat(np.arange(len(idx)), [len(roads[k][2]) for k in idx])
+    same = R[:-1] == R[1:]
+    A, B, SR = V[:-1][same], V[1:][same], R[:-1][same]
+    lo, hi = np.minimum(A, B), np.maximum(A, B)
+    keep = (hi[:, 0] >= nx0 - cell) & (lo[:, 0] <= nx1 + cell) & (hi[:, 1] >= ny0 - cell) & (lo[:, 1] <= ny1 + cell)
+    A, B, SR = A[keep], B[keep], SR[keep]
+    AB = B - A
+    L2 = np.maximum((AB * AB).sum(1), 1e-12)
+    tips = np.array([[roads[k][2][0, :2], roads[k][2][-1, :2]] for k in idx])      # (n, 2 ends, 2)
+    loop = np.hypot(*(tips[:, 0] - tips[:, 1]).T) < cell
+    joined = np.zeros((len(idx), 2), bool)
+    for e in (0, 1):
+        E = tips[:, e]
+        inn = np.nonzero((E[:, 0] >= nx0) & (E[:, 0] <= nx1) & (E[:, 1] >= ny0) & (E[:, 1] <= ny1))[0]
+        for blk in range(0, len(inn), 256):
+            q = inn[blk:blk + 256]
+            D = E[q][:, None, :] - A[None]                               # (ends, segments, 2)
+            t = np.clip((D * AB[None]).sum(2) / L2[None], 0.0, 1.0)
+            dist = np.hypot(*(D - t[..., None] * AB[None]).transpose(2, 0, 1))
+            other = SR[None, :] != q[:, None]
+            joined[q, e] = ((dist <= cell) & other).any(1)
+    out = {}
+    for n, k in enumerate(idx):
+        own = (True, True)
+        got = seen.get(roads[k][0])
+        if k < len(rings) and got is not None:          # (a ground part's end inside its feature's line: it goes on)
+            ring = rings[k][2]
+            feats, i, _ = got
+            ft = [r_[t] for part in feats.parts(i) for r_ in part if len(r_) >= 2 for t in (0, -1)]
+            own = tuple(any(abs(float(q[0]) - float(p[0])) < 1e-9 and abs(float(q[1]) - float(p[1])) < 1e-9
+                            for q in ft) for p in (ring[0], ring[-1]))
+        out[k] = (own[0] and not joined[n, 0] and not loop[n], own[1] and not joined[n, 1] and not loop[n])
+    return out
+
+
 DECK = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}      # bridge decks (roadmesh.deck)
 DECK_STEP = 4.0         # m between deck profile points
 DECK_CLEAR = 0.05       # m a deck stays above the ground under it (no z-fighting where it rests on it)
@@ -8248,14 +8349,21 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for c in split(densify(simplify(piece))):
                     if len(c) >= 2:
                         cover_out.append(_chunk(look_of(spec), spec.width, c))
-    for fid, spec, pts, _ in roads:
-        if ROADS_IN_GROUND:                     # the carriageway painted into the ground (surface.photo_roads)
+    # no smooth ribbon over rough ground — but only where the ground layer will paint it (--surface on); with the
+    # surface pass off there is no ROCK/GRASS mask, and the road would otherwise vanish entirely
+    rough = (lambda sp: terrain_paint and terrain_surface(sp) is not None)     # noqa: E731
+    strip_ends = _strip_open_ends(roads, rings, seen, near, rough) if DIRT_STRIPS else {}
+    for k_road, (fid, spec, pts, _) in enumerate(roads):
+        # the carriageway painted into the ground (surface.photo_roads); a dirt or gravel road's strip over it
+        # (DIRT_LOOK)
+        if ROADS_IN_GROUND and not (DIRT_STRIPS and spec.kind in DIRT_LOOK):
             continue
-        # no smooth ribbon over rough ground — but only where the ground layer will paint it (--surface on); with
-        # the surface pass off there is no ROCK/GRASS mask, and the road would otherwise vanish entirely
-        if terrain_paint and terrain_surface(spec):
+        if rough(spec):
             continue
-        look = look_of(spec)
+        look = look_of(spec, fid)
+        if look.get("aspect"):                  # (a strip: whole, its distance along the road, its open ends)
+            chunks.extend(_surface_pieces(look, spec.width, pts, box, strip_ends.get(k_road, (True, True))))
+            continue
         lanes = [(0.0, spec.width)]
         if look.get("strip"):                   # parallel strips across the width (see LOOK)
             n = max(1, int(round(spec.width / look["strip"])))

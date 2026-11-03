@@ -297,7 +297,8 @@ class BuildTileTest(unittest.TestCase):
 
     def test_build_clips_and_styles(self):
         f = features([[(-300, 50), (300, 50)], [(100, 10), (100, 200)]], ["primary", "track"])
-        chunks = [c for c in roads.build_tile(FRAME, 0, 0, [f], flat) if c["m"] in {l["m"] for l in roads.LOOK.values()}]
+        surfaces = {l["m"] for l in roads.LOOK.values()} | set(roads.DIRT_MATERIALS)
+        chunks = [c for c in roads.build_tile(FRAME, 0, 0, [f], flat) if c["m"] in surfaces]
         self.assertEqual(len(chunks), 2, "one surface chunk per road (lines and sidewalks aside)")
         prim = next(c for c in chunks if c["w"] == roads.STYLE["primary"][0] + 2 * roads.EDGE_STRIP_M)
         xs = [n[0] for n in prim["n"]]
@@ -306,7 +307,9 @@ class BuildTileTest(unittest.TestCase):
         self.assertTrue(all(abs(n[1] - 50) < 0.3 for n in prim["n"]), "on its line (the test helper is spherical: ~0.13 m)")
         self.assertEqual(prim["m"], roads.LOOK["paved"]["m"])
         track = next(c for c in chunks if c is not prim)
-        self.assertEqual(track["m"], roads.LOOK["dirt"]["m"])
+        self.assertIn(track["m"], roads.DIRT_VARIATIONS)
+        self.assertAlmostEqual(track["tl"], roads.DIRT_LOOK["dirt"]["aspect"] * track["w"], places=2)
+        self.assertGreater(track["s1"], track["s0"], "the strip's distance runs along the road")
         self.assertTrue(all(abs(n[2] - 10.0) < 0.05 for n in prim["n"]), "z on the DEM (flat, near the anchor)")
 
     def test_ramps_one_lane_wide(self):
@@ -1194,6 +1197,126 @@ class InGroundTest(unittest.TestCase):
         surfaces = {l["m"] for l in roads.LOOK.values()}
         self.assertFalse([c for c in chunks if c["m"] in surfaces], "no carriageway mesh")
         self.assertTrue([c for c in chunks if c["m"] not in surfaces], "its lines stay")
+
+
+def _strips(tx, feats):
+    return [c for c in roads.build_tile(FRAME, tx, 0, [feats], flat) if c["m"] in roads.DIRT_MATERIALS]
+
+
+def _strip_mesh(tx, feats):
+    import roadmesh
+    x0, y0, x1, y1 = roads.tile_bbox(tx, 0)
+    return roadmesh.build(FRAME, _strips(tx, feats), flat, (x0, y0, 0.0), clip=(x0, y0, x1, y1)), x0
+
+
+class DirtStripTest(unittest.TestCase):
+    """Dirt and gravel roads keep a mesh of BeamNG's rutted road strip over the ground's tint (roads.DIRT_LOOK, from
+    PR #455), fading at its sides and open ends; BNE_DIRT_STRIPS=off: none."""
+
+    def setUp(self):
+        self._rig, roads.ROADS_IN_GROUND = roads.ROADS_IN_GROUND, True
+        self._ds, roads.DIRT_STRIPS = roads.DIRT_STRIPS, True
+
+    def tearDown(self):
+        roads.ROADS_IN_GROUND, roads.DIRT_STRIPS = self._rig, self._ds
+
+    def test_dirt_and_gravel_get_a_continuous_strip_paved_none(self):
+        dirt = features([[(-20, 40), (600, 40)]], ["track"], ids=["trk"])
+        gravel = features([[(-20, 80), (600, 80)]], ["residential"], surfaces=[(0, "gravel")], ids=["grv"])
+        paved = features([[(-20, 10), (600, 10)]], ["primary"], ids=["pvd"])
+        d0, d1 = _strips(0, dirt), _strips(1, dirt)
+        self.assertTrue(d0 and d1)
+        self.assertEqual(d0[0]["m"], d1[0]["m"], "one variation along the whole road")
+        self.assertIn(d0[0]["m"], roads.DIRT_VARIATIONS)
+        self.assertEqual(roads.look_of(roads.road_specs(dirt)[0], "trk")["m"], d0[0]["m"])
+        self.assertAlmostEqual(d0[0]["tl"], roads.DIRT_LOOK["dirt"]["aspect"] * d0[0]["w"], places=2)
+        self.assertGreater(d1[0]["s0"], d0[0]["s0"] + 100, "the next tile continues the run")
+        g = _strips(0, gravel)
+        self.assertEqual([c["m"] for c in g], ["bne_dirt_gravel"])
+        self.assertAlmostEqual(g[0]["tl"], roads.DIRT_LOOK["gravel"]["aspect"] * g[0]["w"], places=2)
+        self.assertFalse(_strips(0, paved), "a paved road stays in the ground's photo")
+        self.assertFalse([c for c in roads.build_tile(FRAME, 0, 0, [paved], flat)
+                          if c["m"] in {l["m"] for l in roads.LOOK.values()}])
+
+        def edge_v(tx):
+            (P, T, UV, mats, M, F), x0 = _strip_mesh(tx, dirt)
+            at = np.abs(P[:, 0] + x0 - roads.TILE) < 0.05
+            self.assertTrue(at.any(), "the strip is cut on the tile edge")
+            return float(np.median(UV[at, 1]))
+        self.assertAlmostEqual(edge_v(0), edge_v(1), delta=0.02, msg="the ruts run on across the tile edge")
+
+    def test_the_strip_fades_its_sides_and_its_open_ends(self):
+        road = features([[(20, 40), (220, 40)]], ["track"], ids=["fade"])
+        (P, T, UV, mats, M, F), x0 = _strip_mesh(0, road)
+        wx = P[:, 0] + x0
+        outer = (UV[:, 0] < 0.02) | (UV[:, 0] > 0.98)
+        inner = (UV[:, 0] > 0.2) & (UV[:, 0] < 0.8)
+        mid = (wx > 80) & (wx < 160)
+        self.assertLess(float(np.minimum(F[outer & mid, 0], 1.0 - F[outer & mid, 0]).max()), 0.05, "clear sides")
+        self.assertLess(float(np.abs(F[inner & mid, 0] - 0.5).max()), 0.05, "a solid middle")
+        self.assertGreater(float(F[inner & mid, 1].min()), 0.4, "past the end fades")
+        self.assertLess(float(F[wx < 22, 1].max()), 0.1, "the start fades out")
+        self.assertGreater(float(F[wx > 218, 1].min()), 0.9, "the end fades out")
+        # a tile edge in the middle of a road stays solid
+        onward = features([[(-20, 40), (600, 40)]], ["track"], ids=["on"])
+        (P, T, UV, mats, M, F), x0 = _strip_mesh(1, onward)
+        at = (np.abs(P[:, 0] + x0 - roads.TILE) < 0.5) & (UV[:, 0] > 0.2) & (UV[:, 0] < 0.8)
+        self.assertTrue(at.any())
+        self.assertTrue(np.allclose(F[at, 1], 0.5), "no fade at a tile edge")
+
+    def test_a_joined_end_does_not_fade(self):
+        """Two segments of one track meet at x 120, and a third road tees in at x 200: no fade at either, the open ends
+        (x 20, x 230 and the tee's far end) fade."""
+        road = features([[(20, 40), (120, 40)], [(120, 40), (230, 40)], [(200, 40), (200, 140)]],
+                        ["track", "track", "track"], ids=["a", "b", "c"])
+        ch = _strips(0, road)
+        self.assertEqual(len(ch), 3)
+        a, b, c = sorted(ch, key=lambda k: (float(k["n"][0][0]), float(k["n"][-1][0])))
+        self.assertEqual(tuple(a["fends"]), (1, 0), "a: open start, joined at x 120")
+        self.assertEqual(tuple(b["fends"]), (0, 1), "b: joined at x 120, open at x 230")
+        self.assertEqual(tuple(c["fends"]), (0, 1), "the tee joins b's middle, open at its far end")
+        (P, T, UV, mats, M, F), x0 = _strip_mesh(0, road)
+        wx, wy = P[:, 0] + x0, P[:, 1]
+        near_join = (np.abs(wx - 120) < 6) & (UV[:, 0] > 0.2) & (UV[:, 0] < 0.8) & (np.abs(wy - 40) < 1.5)
+        self.assertTrue(np.allclose(F[near_join, 1], 0.5), "solid through the joint")
+
+    def test_a_sharp_bend_sweeps_and_meets_across_the_seam(self):
+        import math
+        import roadmesh
+        turn = math.radians(50)
+        bend = (250.0 + 80.0 * math.cos(turn), 80.0 + 80.0 * math.sin(turn))
+        road = features([[(80.0, 80.0), (250.0, 80.0), bend]], ["track"], ids=["bend"])
+        for left, right, *_ in roadmesh.ribbons(_strips(0, road)):
+            for edge in (left, right):
+                e = np.diff(edge, axis=0)
+                e = e[np.hypot(e[:, 0], e[:, 1]) > 0.05]
+                t = e / np.hypot(e[:, 0], e[:, 1])[:, None]
+                cross = t[:-1, 0] * t[1:, 1] - t[:-1, 1] * t[1:, 0]
+                turns = np.degrees(np.abs(np.arctan2(cross, (t[:-1] * t[1:]).sum(1))))
+                self.assertLess(turns.max(), roadmesh.DIRT_BEND_STEP_DEG + 2.0, "no kink at the mapped corner")
+        m0, _ = _strip_mesh(0, road)
+        m1, _ = _strip_mesh(1, road)
+
+        def seam(mesh, origin_x):
+            at = np.abs(mesh[0][:, 0] + origin_x - roads.TILE) < 0.15
+            self.assertTrue(at.any(), "the strip crosses the tile edge")
+            return float(mesh[0][at, 1].min()), float(mesh[0][at, 1].max())
+        a0, a1 = seam(m0, 0.0), seam(m1, roads.TILE)
+        self.assertLess(abs(a0[0] - a1[0]), 0.25)
+        self.assertLess(abs(a0[1] - a1[1]), 0.25)
+
+    def test_off_with_the_switch(self):
+        import roadmesh
+        roads.DIRT_STRIPS = False
+        road = features([[(-20, 40), (600, 40)]], ["track"], ids=["trk"])
+        self.assertFalse(_strips(0, road), "no strip: the ground's tint alone")
+        self.assertEqual(roads.look_of(roads.road_specs(road)[0], "trk"), roads.LOOK["dirt"])
+        roads.ROADS_IN_GROUND = False           # (meshes for every carriageway: the old look, no fade uv)
+        ch = [c for c in roads.build_tile(FRAME, 0, 0, [road], flat) if c["m"] == roads.LOOK["dirt"]["m"]]
+        self.assertTrue(ch)
+        self.assertNotIn("slen", ch[0])
+        x0, y0, x1, y1 = roads.tile_bbox(0, 0)
+        self.assertEqual(len(roadmesh.build(FRAME, ch, flat, (x0, y0, 0.0), clip=(x0, y0, x1, y1))), 5)
 
 
 class NearNodePairsTest(unittest.TestCase):
