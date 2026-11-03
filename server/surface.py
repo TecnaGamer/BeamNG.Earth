@@ -393,9 +393,11 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # (stains, patches), and most of it on unpaved tracks, which the photo shows well and a flat colour drew as stripes
 # paved alpha 1.0 (was 0.92): an old through-road scar in the photo stayed visible as a dark E–W band across
 # roundabout approaches even after island grass fill (Chavagnes-en-Paillers 2026-10-28)
+# dirt 0.70 (was 0.45) and a darker earth brown: a farm track on pale fields (Suchy Dul, 2026-11-03) was barely
+# visible; the rest of the photo's own grain still shows through, so it does not read as a flat stripe
 # gravel: the light grey-beige gravel roads are from above (Iowa's NAIP ~200/200/195, Estonia's near white; the old
 # 128/118/102 at 0.6 drew them mid brown, 2026-11-03), less of it: the photo shows a gravel road well
-PHOTO_ROAD_RGBA = {"dirt": (122, 104, 82, 0.45), "gravel": (188, 182, 168, 0.5), "cobble": (112, 104, 96, 0.85),
+PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (112, 104, 96, 0.85),
                    "paved": (95, 95, 94, 1.0)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 PHOTO_ROAD_EDGE_M = 0.2         # m the photo's asphalt reaches past the drawn edge, under the edge decal's inner sliver (its
