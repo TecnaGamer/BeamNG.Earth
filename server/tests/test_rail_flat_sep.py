@@ -52,7 +52,8 @@ class FlatRailCrossingTest(unittest.TestCase):
         self.assertEqual(railways.FLAT_SEP_M, roads.AT_GRADE_M)
 
     def test_off_or_no_ground_as_before(self):
-        self.assertFalse(railways.flat_rail_crossing(FRAME, self.bridge, self.road, 200.0, None))
+        with mock.patch.object(railways, "RAW_ELEV", None):     # (no ground: whatever another test left there)
+            self.assertFalse(railways.flat_rail_crossing(FRAME, self.bridge, self.road, 200.0, None))
         with mock.patch.object(railways, "FLAT_SEP_ON", False):
             self.assertFalse(railways.flat_rail_crossing(FRAME, self.bridge, self.road, 200.0, flat))
 

@@ -3,6 +3,7 @@ land, and roads side by side on coarse elevation are coupled (grading.couple_nei
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -27,6 +28,11 @@ def line(x0, y0, x1, y1, step=4.0):
 
 
 class LandingTest(unittest.TestCase):
+    def setUp(self):              # (opt-in since 2026-11-03: on for these tests)
+        patcher = mock.patch.object(grading, "PAD_ON", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     """The landing, as the grader makes it since 1.7.3: earthfast.snap_junctions (as it was), then junction_pads."""
 
     @staticmethod
@@ -91,6 +97,11 @@ class LandingTest(unittest.TestCase):
 
 
 class NeighbourTest(unittest.TestCase):
+    def setUp(self):              # (opt-in since 2026-11-03: on for these tests)
+        patcher = mock.patch.object(grading, "NEIGHBOUR_ON", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def trend(slope):
         return lambda xy: 100.0 + slope * np.asarray(xy)[:, 1]
