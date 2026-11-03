@@ -61,9 +61,12 @@ class RespawnTest(unittest.TestCase):
         import time
         p = pools.RespawningPool("test", 1)
         try:
-            slow = [p.submit(time.sleep, 0.8) for _ in range(3)]
-            last = p.submit(abs, -7)        # 2.4 s behind them, more than its 1.5 s
-            self.assertEqual(pools.result_running(last, 1.5), 7)
+            # (4 s behind them, more than its 2.5 s; a process pool marks a job running once it is in the worker's call
+            # queue, one job ahead of where it runs: the margin covers that and a slow Windows runner's start,
+            # CI 2026-11-03: 0.8 s jobs and a 1.5 s timeout failed there)
+            slow = [p.submit(time.sleep, 1.0) for _ in range(4)]
+            last = p.submit(abs, -7)
+            self.assertEqual(pools.result_running(last, 2.5), 7)
             self.assertTrue(all(f.done() for f in slow))
             with self.assertRaises(concurrent.futures.TimeoutError):
                 pools.result_running(p.submit(time.sleep, 3), 0.5)
