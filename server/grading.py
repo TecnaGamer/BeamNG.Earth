@@ -1983,12 +1983,13 @@ class _Planner:
             import railways
             sub, rcls = f.attrs["subtype"], f.attrs.get("class")
             for i in range(len(f)):
-                if str(sub[i]) != "rail" or railways.drawn(f, i) is None:
+                got = railways.drawn(f, i, bridges=True) if str(sub[i]) == "rail" else None
+                if got is None:
                     continue
                 for kind, rings in railways._pieces(f, i):
                     if kind == "bridge":
                         rail += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
-                    elif kind == "ground" and ground:
+                    elif kind == "ground" and ground and got[0] != "tram":
                         # (and the tracks on the ground: a road bridge's approaches rise over them as over a road,
                         # GitHub #324)
                         rail_g += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]

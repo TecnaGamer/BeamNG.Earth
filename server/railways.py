@@ -1,6 +1,7 @@
 """Railway tracks: Overture's rail segments (transportation/segment subtype "rail", in the roads layer) as a ballast
 bed with concrete sleepers and two steel rails, and their bridges as concrete decks on piers: one colliding mesh per
-road tile (write_tile's "rail").
+road tile (write_tile's "rail"). Mapped tram bridges use the same visual/collision
+pipeline, with a narrow concrete slab and embedded rails instead of ballast and sleepers.
 
 The heights are one profile along the connected track. On the ground the bed follows the drawn ground, smoothed
 along its length (a railway does not ride every bump of the lattice). A bridge (the segment's is_bridge flag or level
@@ -19,8 +20,9 @@ import numpy as np
 import mapgeom
 import roads
 
-# the classes drawn (Overture's rail classes); trams lie in the street, subways underground, monorails and funiculars
-# on their own structures: none of those. Nor "unknown": OpenStreetMap's railway=proposed / construction (99 of 101
+# the ballasted classes drawn (Overture's rail classes); ground trams stay in rails.py,
+# their mapped bridges alone are meshed here. Subways, monorails and funiculars are not.
+# Nor "unknown": OpenStreetMap's railway=proposed / construction (99 of 101
 # such ways not flagged abandoned or disused, in 3000 cached cells, 2026-10-27; the rest 2 trams and a miniature
 # line): Los Angeles' planned Link Union Station tracks lay across US-101 on the ground and the freeway was dipped
 # under a planned high-speed line's 2.6 km "viaduct", a 38 % step at Union Station
@@ -46,6 +48,7 @@ DECK_HALF_M = 2.4           # m: half a bridge deck's width
 DECK_D = 1.4                # m of deck under the ballast's top
 DECK_WALL_H = 0.7           # m its edge walls stand over the ballast
 DECK_WALL_T = 0.3
+TRAM_DECK_HALF_M = 1.3       # m: a single track's embedded slab (rails.TRACK's tram bed width / 2)
 PIER_EVERY = 25.0           # m between piers (from the deck's start)
 PIER_W, PIER_T = 3.6, 1.4   # m across and along the deck
 PIER_MIN_H = 1.5            # m: a deck lower than this over the ground stands on its ends alone
@@ -192,7 +195,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
             fid = str(feats.ids[i])
             if fid in seen or not _box_hit(fb[i], near):
                 continue
-            got = drawn(feats, i)
+            got = drawn(feats, i, bridges=True)
             if got is None:
                 continue
             c = got[0]
@@ -204,6 +207,8 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
                 if g:
                     gauges[fid] = g
             for kind, rings in _pieces(feats, i):
+                if c == "tram" and kind != "bridge":
+                    continue                    # street track stays draped in rails.py, never terrain grading
                 for ring in rings:
                     e, n = mapgeom.enu_xy(feats, frame, ring)
                     xy = np.c_[e, n]
@@ -444,7 +449,9 @@ def _drop_stubs(rails):
     total = {}
     for a, _b, s in edges:
         total[find(a)] = total.get(find(a), 0.0) + float(s[-1])
-    return [r for r, (a, _b, _s) in zip(rails, edges) if total[find(a)] >= MIN_LINE_M]
+    # A tram's approaches are drawn by rails.py, not present in this graph. Its
+    # short mapped bridges are complete structures, not disconnected sidings.
+    return [r for r, (a, _b, _s) in zip(rails, edges) if r[1] == "tram" or total[find(a)] >= MIN_LINE_M]
 
 
 WEAR_FLAGS = (("is_abandoned", 2), ("is_disused", 1))    # a line's wear: 1 out of use, 2 abandoned (drawn worn: the
@@ -468,10 +475,10 @@ def wear(feats, i):
     return 0
 
 
-def drawn(feats, i):
-    """(class, wear) of feature i drawn as a railway track, or None: a rail segment of the DRAWN classes, or an
-    "unknown" one flagged abandoned or disused (an old line, as standard gauge); not one under construction, nor an
-    "unknown" one that is neither (OpenStreetMap's proposed lines: DRAWN)."""
+def drawn(feats, i, bridges=False):
+    """(class, wear) of a built railway track, or None. bridges also admits trams:
+    only their mapped bridge pieces belong in the 3D mesh; ground trams remain
+    street track in rails.py, not ballast, grading or inferred underpasses."""
     sub = feats.attrs.get("subtype")
     if sub is None or str(sub[i]) != "rail":
         return None
@@ -483,6 +490,8 @@ def drawn(feats, i):
     osm = feats.attrs.get("osm_railway")
     if osm is not None and osm[i]:          # (OSM's own railway value: railtags.py, the weekly rail file)
         v = str(osm[i])
+        if v == "tram":
+            return ("tram", w) if bridges else None
         if v in OSM_RAILWAY_NOT:
             return None
         if v in OSM_RAILWAY_WEAR:
@@ -490,7 +499,7 @@ def drawn(feats, i):
             return (c if c in DRAWN else "standard_gauge", w)
     if c == "unknown" and w:
         c = "standard_gauge"
-    return (c, w) if c in DRAWN else None
+    return (c, w) if c in DRAWN or (bridges and c == "tram") else None
 
 
 # OpenStreetMap's railway values (railtags.py), when the weekly file has the line: drawn with this wear, or not at all
@@ -970,6 +979,20 @@ def _deck(mesh, p, uu, t, v, ballast, concrete):
                0.0, 1.0, v / 1.5, concrete, -up)
 
 
+def _tram_deck(mesh, p, uu, t, v, concrete):
+    """An embedded tram track's concrete slab, not a mainline ballast trough.
+    t is the common ballast-top datum; keep its underside identical to _deck
+    so grading and pier placement consume the same structural depth."""
+    up = np.array([0.0, 0.0, 1.0])
+    out_l = np.c_[uu, np.zeros(len(p))]
+    left, right = p + uu * TRAM_DECK_HALF_M, p - uu * TRAM_DECK_HALF_M
+    top, bottom = t - BALLAST_H + FLUSH_LIFT_M, t - DECK_D
+    mesh.strip(np.c_[left, top], np.c_[right, top], 0.0, 0.9, v, concrete, up)
+    for edge, normal in ((left, out_l), (right, -out_l)):
+        mesh.strip(np.c_[edge, top], np.c_[edge, bottom], 0.0, 0.5, v, concrete, normal)
+    mesh.strip(np.c_[left, bottom], np.c_[right, bottom], 0.0, 0.9, v, concrete, -up)
+
+
 def _piers(s, xy, u, t, zg, i, j):
     """The piers under a deck run: (centres, along, across, z0, z1), every PIER_EVERY from the part's start where the
     deck is PIER_MIN_H or more over the ground, not at its ends (the abutments: the embankment)."""
@@ -1217,11 +1240,17 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
                 (fl, zl), (fr, zr) = feet
                 _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], ballast_w)
             else:
-                _deck(mesh, p, uu, t, v, ballast_w, concrete)
+                if cls == "tram":
+                    _tram_deck(mesh, p, uu, t, v, concrete)
+                else:
+                    _deck(mesh, p, uu, t, v, ballast_w, concrete)
                 pr = _sited(_piers(s, xy, u, top, zg, i, j), crossers, ground)
                 if pr is not None:
-                    small.append((pr, PIER_T / 2, PIER_W / 2, concrete))
+                    pier_w = min(PIER_W, 2 * TRAM_DECK_HALF_M) if cls == "tram" else PIER_W
+                    small.append((pr, PIER_T / 2, pier_w / 2, concrete))
             st = t - SLEEPER_SINK + SLEEPER_H           # the sleepers' top: the rails' foot
+            if cls == "tram":                       # railheads embedded flush in the slab, no exposed sleepers
+                st = t - BALLAST_H + FLUSH_LIFT_M - RAIL_H + 0.005
             out_l = np.c_[uu, np.zeros(len(p))]
             for sg in (1, -1):
                 c = p + uu * sg * half_g
@@ -1229,9 +1258,10 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
                 mesh.strip(np.c_[a, st + RAIL_H], np.c_[b, st + RAIL_H], 0.0, 0.02, v, steel_w, up)
                 mesh.strip(np.c_[a, st], np.c_[a, st + RAIL_H], 0.0, 0.05, v, steel_w, out_l)
                 mesh.strip(np.c_[b, st], np.c_[b, st + RAIL_H], 0.0, 0.05, v, steel_w, -out_l)
-            sp = _sleepers(s, xy, u, top, i, j, SLEEPERS_GONE[w])
-            if sp is not None:
-                small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER_WORN[w])))
+            if cls != "tram":
+                sp = _sleepers(s, xy, u, top, i, j, SLEEPERS_GONE[w])
+                if sp is not None:
+                    small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER_WORN[w])))
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
         room = (VERTS_MAX - mesh.nv) // 8
