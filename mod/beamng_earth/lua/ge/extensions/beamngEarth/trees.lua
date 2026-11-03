@@ -342,6 +342,7 @@ M.groupOff = { lampglow = true }
 -- GHOST_FAR_M follows). 'normal': the defaults above. (Before the split 'trees' also set the distance: low 0.75,
 -- medium 0.9, high 1.3, ultra 1.6; settings.lua migrates a saved level so.)
 M.QUALITY_LEVELS = {
+  lowest = { rank = 0.3, cap = 0.3 },       -- (GitHub #714: ~37 fps in a forest on Low with a 3060 Ti at 1440p)
   low = { rank = 0.5, cap = 0.5 },
   medium = { rank = 0.7, cap = 0.7 },
   normal = { rank = 1.0, cap = 1.0 },
@@ -349,7 +350,7 @@ M.QUALITY_LEVELS = {
   ultra = { rank = 1.7, cap = 2.2 },
   extreme = { rank = 2.5, cap = 2.5 },      -- (rank 2.5: every item the server sends out to ~700 m x distance)
 }
-M.DISTANCES = { near = 0.75, medium = 0.9, normal = 1.0, far = 1.3, farther = 1.6, max = 2.2 }
+M.DISTANCES = { nearest = 0.6, near = 0.75, medium = 0.9, normal = 1.0, far = 1.3, farther = 1.6, max = 2.2 }
 M.TILE_SEND_M, M.TILE_DROP_M = 1280, 1536     -- the server's vegetation SEND_M / DROP_M at distance 1
 local BASE_RINGS, BASE_CAP = nil, nil   -- (the defaults, copied at the first setQuality / setDistance)
 M.quality = 'normal'

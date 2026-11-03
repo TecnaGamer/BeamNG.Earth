@@ -43,9 +43,9 @@ M.SCHEMA = {
     label = 'Quality' },
   -- tree density (trees.lua QUALITY_LEVELS: ranks and tile caps) and draw distance (DISTANCES: the rings and the
   -- server's tree tile reach), split 2026-10-28 (the user: "give player much more control in the graphics settings")
-  trees = { kind = 'enum', default = 'normal', values = { 'low', 'medium', 'normal', 'high', 'ultra', 'extreme' },
+  trees = { kind = 'enum', default = 'normal', values = { 'lowest', 'low', 'medium', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Tree density' },
-  treeDistance = { kind = 'enum', default = 'normal', values = { 'near', 'medium', 'normal', 'far', 'farther', 'max' },
+  treeDistance = { kind = 'enum', default = 'normal', values = { 'nearest', 'near', 'medium', 'normal', 'far', 'farther', 'max' },
     label = 'Tree draw distance' },
   nightLights = { kind = 'enum', default = 'normal', values = { 'few', 'normal', 'many' }, label = 'Street lamp lights' },
   distantTraffic = { kind = 'bool', default = false, label = 'Distant traffic lights' },    -- (off by default: its fps cost, PR #641)
