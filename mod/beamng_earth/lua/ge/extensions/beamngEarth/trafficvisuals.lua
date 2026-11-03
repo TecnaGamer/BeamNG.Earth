@@ -21,6 +21,9 @@ local deferred, deferredCount, deferredSerial = {}, 0, 0
 local retry, retryAt, retryDirty, retryUse, retryTiles, retryIn, resendAt = nil, 1, false, 0, 0, 0, 0
 local resend = false
 local temp = {}
+local hot, dueHeap, wake, lastWake = {}, {}, true, nil    -- (M.update's schedule: visit)
+local WAKE_COS, WAKE_M = math.cos(math.rad(1.5)), 15     -- a turn / a move of the view that looks at every car
+local visit, heapPop
 local stats = { visible = 0, frames = 0, totalMs = 0, maxMs = 0 }
 
 local function deletePair(pair)
@@ -35,6 +38,7 @@ local function clearObjects()
   local group = scenetree.findObject(GROUP)
   if group then group:delete() end
   actors, pool, selected, scan = {}, {}, {}, nil
+  hot, dueHeap, wake, stats.visible = {}, {}, true, 0
   scanFocus, scanBox, scanDensity = nil, nil, nil
 end
 
@@ -90,6 +94,7 @@ function M.onMessage(msg)
   local key = far and (msg.key .. ':far') or msg.key
   if msg.type == 'traffic_drop' or msg.type == 'traffic_far_drop' then
     store:drop(key)
+    wake = true
     forgetDeferred(key)
     retryDirty = true
     dirty = true
@@ -231,6 +236,7 @@ local function selection(anchor, focus, box, density)
     end
   end
   stats.demand, stats.quotas = demand, quotas
+  wake = true                                   -- (what is wanted changed: every car looked at once)
   stats.populationScans = (stats.populationScans or 0) + 1
 end
 
@@ -241,7 +247,7 @@ local function viewOf(cam, forward)
   local tanV = math.tan(math.rad(core_camera.getFovDeg()) * 0.5)
   local function copy(v) return { x = v.x, y = v.y, z = v.z } end
   return { cam = copy(cam), forward = copy(forward), right = copy(core_camera.getRight()), up = copy(core_camera.getUp()),
-    tanV = tanV, tanH = tanV * aspect }
+    tanV = tanV, tanH = tanV * aspect, pix = 2 * tanV / math.max(240, size and size.y or 1080) }
 end
 
 local function pair(create)
@@ -297,6 +303,90 @@ local function place(item, p, q, r, red, a, along)
   if changed then o:updateInstanceRenderData() end
 end
 
+-- The schedule (M.update): a min-heap of { t, key, car } (stale entries skipped: car.queued is its live one).
+local function heapPush(h, e)
+  h[#h + 1] = e
+  local i = #h
+  while i > 1 do
+    local parent = math.floor(i / 2)
+    if h[parent].t <= h[i].t then break end
+    h[parent], h[i], i = h[i], h[parent], parent
+  end
+end
+
+heapPop = function(h)
+  local top, n = h[1], #h
+  h[1] = h[n]                   -- (two statements: a multiple assignment's order is undefined, h[1] is h[n] at n = 1)
+  h[n] = nil
+  n = n - 1
+  local i = 1
+  while i * 2 <= n do
+    local c = i * 2
+    if c < n and h[c + 1].t < h[c].t then c = c + 1 end
+    if h[i].t <= h[c].t then break end
+    h[i], h[c], i = h[c], h[i], c
+  end
+  return top
+end
+
+local function setVisible(car, v)
+  if (car.visible == true) ~= (v == true) then stats.visible = stats.visible + (v and 1 or -1) end
+  car.visible = v
+end
+
+-- One car: its fade, and its pose when due (the old per-frame loop's body, as it was).
+visit = function(key, car, state, cam, box, view, q, dtReal)
+  local want = requested and selected[key] and store.routes[car.route.id] == car.route
+  stats.visits = (stats.visits or 0) + 1
+  local fade0 = car.fade
+  car.fade = want and readyFade(car) or math.max(0, car.fade - dtReal / FADE_S)
+  local p = car.pos
+  local travelled = math.max(0, elapsed - (car.sampleAt or elapsed)) * car.route.speed
+  local edge, guard = math.huge, math.huge
+  if p then edge, guard = paths.viewEdge(p.x, p.y, p.z, view, travelled * 2) end
+  local nearView = guard <= 1.15
+  local wrapped = (car.metres or 0) + travelled >= car.route.length
+  if clock >= (car.nextAt or 0) or car.fade <= 0 or wrapped or nearView and not car.nearView
+      or car.fade ~= fade0 then
+    p = sample(car.route, car.phase, state.anchor, p or {})
+    stats.samples = (stats.samples or 0) + 1
+    car.pos = p
+    car.sampleAt, car.metres = elapsed, (car.phase + elapsed * car.route.speed) % car.route.length
+    local a, d = alpha(p, cam, box, car.route.reach)
+    a = a * paths.smooth(car.fade)
+    local head, tail = paths.facing(p.dx, p.dy, cam.x - p.x, cam.y - p.y)
+    car.lit = a * math.max(head, tail) > 0.01
+    edge = paths.viewEdge(p.x, p.y, p.z, view)
+    nearView = edge <= 1.15
+    local r = paths.glowRadius(d)
+    place(car.pair[1], p, q, r, false, nearView and a * head or 0, 1.5)
+    place(car.pair[2], p, q, r, true, nearView and a * tail or 0, -1.5)
+    -- Retain surrounding actors, caching off-screen motion at 2 Hz without uploading hidden poses. Their swept
+    -- motion and wraps also wake them, so entering the view or turning refreshes the pose before drawing it.
+    -- (in view: as often as it moves about two thirds of a pixel across the screen, 4-45 Hz: 45 Hz to 2.5 km had
+    -- most cars sampled several times a pixel, 35 poses a frame at High, 2026-11-03)
+    local hz = nearView and math.max(4, math.min(45, 1.5 * car.route.speed / (math.max(d, 1) * (view.pix or 0.001))))
+    car.nextAt = clock + (nearView and 1 / hz or 0.5)
+  end
+  car.nearView = nearView
+  setVisible(car, car.lit and edge <= 1)
+  if car.fade <= 0 and not want then
+    setVisible(car, false)
+    car.pair.busy, actors[key], hot[key] = false, nil, nil
+    return
+  end
+  -- fading in or out, or waiting for its route: every frame; else at its nextAt
+  if (want and car.fade < 1) or (not want and car.fade > 0) then
+    hot[key] = car
+  else
+    hot[key] = nil
+    if car.queued ~= car.nextAt then
+      car.queued = car.nextAt
+      heapPush(dueHeap, { t = car.nextAt, key = key, car = car })
+    end
+  end
+end
+
 function M.update(dtReal, dtSim, state, box, gov)
   if not capable then return end
   local started = os.clockhp()
@@ -311,7 +401,7 @@ function M.update(dtReal, dtSim, state, box, gov)
     if want ~= requested then
       net.send({ type = 'traffic_visuals', enabled = want, reset = want and fresh or nil })
       if want then fresh, requestedAt = false, clock end
-      requested, dirty = want, true
+      requested, dirty, wake = want, true, true
     end
   end
   if not state.anchor or not box then return end
@@ -321,6 +411,7 @@ function M.update(dtReal, dtSim, state, box, gov)
   if scanAnchor ~= state.anchor then
     scan, scanAnchor, dirty = nil, state.anchor, true
     for _, car in pairs(actors) do car.nextAt = 0 end   -- every plane moves with the origin, including the far LOD
+    wake = true
   end
   if scanFocus and ((focus.x - scanFocus.x) ^ 2 + (focus.y - scanFocus.y) ^ 2
       + (focus.z - scanFocus.z) ^ 2 > 2500 or box[1] ~= scanBox[1] or box[2] ~= scanBox[2]
@@ -367,6 +458,7 @@ function M.update(dtReal, dtSim, state, box, gov)
         if not p then break end
         car.pair, car.fade, car.admittedAt = p, 0, clock
         actors[key], assigned = car, assigned + 1
+        hot[key] = car                          -- (fading in: every frame until it has)
         if created then made = made + 1 end
         if assigned >= 64 then break end
       end
@@ -375,40 +467,28 @@ function M.update(dtReal, dtSim, state, box, gov)
   if requested and room and gov then gov:charge('trafficVisuals', (os.clockhp() - prepStarted) * 1000) end
   local q = quatFromDir(-f)
   local view = viewOf(cam, f)
-  stats.visible = 0
-  local active = false
-  for key, car in pairs(actors) do
-    local want = requested and selected[key] and store.routes[car.route.id] == car.route
-    car.fade = want and readyFade(car) or math.max(0, car.fade - dtReal / FADE_S)
-    local p = car.pos
-    local travelled = math.max(0, elapsed - (car.sampleAt or elapsed)) * car.route.speed
-    local edge, guard = math.huge, math.huge
-    if p then edge, guard = paths.viewEdge(p.x, p.y, p.z, view, travelled * 2) end
-    local nearView = guard <= 1.15
-    local wrapped = (car.metres or 0) + travelled >= car.route.length
-    if clock >= (car.nextAt or 0) or car.fade <= 0 or wrapped or nearView and not car.nearView then
-      p = sample(car.route, car.phase, state.anchor, p or {})
-      car.pos = p
-      car.sampleAt, car.metres = elapsed, (car.phase + elapsed * car.route.speed) % car.route.length
-      local a, d = alpha(p, cam, box, car.route.reach)
-      a = a * paths.smooth(car.fade)
-      local head, tail = paths.facing(p.dx, p.dy, cam.x - p.x, cam.y - p.y)
-      car.lit = a * math.max(head, tail) > 0.01
-      edge = paths.viewEdge(p.x, p.y, p.z, view)
-      nearView = edge <= 1.15
-      local r = paths.glowRadius(d)
-      place(car.pair[1], p, q, r, false, nearView and a * head or 0, 1.5)
-      place(car.pair[2], p, q, r, true, nearView and a * tail or 0, -1.5)
-      -- Retain surrounding actors, caching off-screen motion at 2 Hz without uploading hidden poses. Their swept
-      -- motion and wraps also wake them, so entering the view or turning refreshes the pose before drawing it.
-      car.nextAt = clock + (nearView and (d < 2500 and 1 / 45 or d < 6000 and 1 / 24 or 1 / 12) or 0.5)
+  -- Each car is looked at when it is due (its nextAt, from a heap), while it fades in or out (hot), and all of them
+  -- when the view turned or moved enough or what is wanted changed (wake): not every car every frame, which was
+  -- ~1.2 us a car a frame (0.8 ms at High's 655 cars, Griffith Observatory, 2026-11-03) for the few due.
+  local lw = lastWake
+  if wake or not lw or f.x * lw.fx + f.y * lw.fy + f.z * lw.fz < WAKE_COS
+      or (cam.x - lw.x) ^ 2 + (cam.y - lw.y) ^ 2 + (cam.z - lw.z) ^ 2 > WAKE_M * WAKE_M then
+    wake, lastWake = false, { fx = f.x, fy = f.y, fz = f.z, x = cam.x, y = cam.y, z = cam.z }
+    stats.wakes = (stats.wakes or 0) + 1
+    for key, car in pairs(actors) do visit(key, car, state, cam, box, view, q, dtReal) end
+  else
+    for key, car in pairs(hot) do visit(key, car, state, cam, box, view, q, dtReal) end
+    local h = dueHeap
+    while h[1] and h[1].t <= clock do
+      local e = heapPop(h)
+      local car = e.car
+      if actors[e.key] == car and car.queued == e.t and not hot[e.key] then
+        car.queued = nil
+        visit(e.key, car, state, cam, box, view, q, dtReal)
+      end
     end
-    car.nearView, car.visible = nearView, car.lit and edge <= 1
-    if car.visible then stats.visible = stats.visible + 1 end
-    if car.fade <= 0 and not want then
-      car.pair.busy, actors[key] = false, nil
-    else active = true end
   end
+  local active = next(actors) ~= nil
   idle = active and 0 or idle + dtReal
   if idle > 30 and #pool > 0 then
     -- Retire a few idle pairs per frame; deleting the whole city pool at once makes disabling it hitch.
@@ -438,7 +518,9 @@ function M.status()
     points = store.points, pendingPoints = store.pendingPoints, cars = n, planes = #pool * 2, visible = stats.visible,
     demand = stats.demand, quotas = stats.quotas,
     deferredTiles = deferredCount,
-    meanMs = stats.totalMs / math.max(1, stats.frames), maxMs = stats.maxMs, frames = stats.frames }
+    meanMs = stats.totalMs / math.max(1, stats.frames), maxMs = stats.maxMs, frames = stats.frames,
+    visits = stats.visits or 0, samples = stats.samples or 0, wakes = stats.wakes or 0, hot = (function()
+      local h = 0 for _ in pairs(hot) do h = h + 1 end return h end)() }
 end
 
 function M.hasWork()
