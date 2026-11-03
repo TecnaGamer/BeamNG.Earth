@@ -99,6 +99,15 @@ class WindowsGameHelpersTest(unittest.TestCase):
 
 
 class ServerReadinessTest(unittest.TestCase):
+    def test_os_selected_port_accepts_only_a_valid_bound_port(self):
+        import tempfile
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "server.log")
+            path.write_text("earthd listening on 127.0.0.1:49123 session fixture\n")
+            self.assertTrue(launcher.wait_server_ready(proc, path, port=0, timeout=1))
+
     def test_waits_for_listener_and_fails_when_child_exits(self):
         for dies in (False, True):
             clock = Clock()

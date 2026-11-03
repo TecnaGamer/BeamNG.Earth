@@ -309,7 +309,7 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     Do not connect to the game protocol just to test readiness: that creates a fake game session.
     Only the last 64 KiB are read each poll, even when startup produced a large log.
     """
-    marker = f"earthd listening on 127.0.0.1:{port} ".encode("ascii")
+    marker = b"earthd listening on 127.0.0.1:"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc.poll() is not None:
@@ -322,8 +322,13 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
                 tail = log.read(65536)
             if start:
                 tail = tail.partition(b"\n")[2]  # discard a potentially partial first line
-            if any(line.startswith(marker) for line in tail.splitlines()):
-                return proc.poll() is None
+            for line in tail.splitlines():
+                if not line.startswith(marker):
+                    continue
+                number, separator, _ = line[len(marker):].partition(b" ")
+                if separator and number.isdigit() and 0 < int(number) < 65536:
+                    if port == 0 or int(number) == port:
+                        return proc.poll() is None
         except OSError:
             pass
         time.sleep(0.25)
