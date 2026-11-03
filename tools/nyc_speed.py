@@ -86,7 +86,7 @@ local b, tp = s.block or {}, s.terrainPending
 local sp = math.sqrt(u.x ^ 2 + u.y ^ 2)
 local arr, road = nil, nil
 if sp > 5 then
-  local ok, list = pcall(require('beamngEarth/roads').ahead, p.x, p.y, u.x / sp, u.y / sp, 1500)
+  local ok, list = pcall(require('beamngEarth/roads').ahead, p.x, p.y, u.x / sp, u.y / sp, AHEAD_PROBE_M)
   if ok and list then
     for _, e in ipairs(list) do
       if not arr and not e.arrived then arr = e.d end
@@ -99,6 +99,9 @@ return jsonEncode({ t = os.clock(), x = p.x, y = p.y, mph = sp * 2.237, guard = 
   pready = tp and tp.ready and true or false, pask = tp and tp.sentAt and (s.clock - tp.sentAt) or nil,
   arrived = arr, roadLead = road })
 """
+# how far ahead the road tiles are looked for (BNGE_AHEAD_PROBE_M; road lead past it reads as no gap)
+AHEAD_PROBE_M = int(os.environ.get("BNGE_AHEAD_PROBE_M", "1500"))
+WATCH_LUA = WATCH_LUA.replace("AHEAD_PROBE_M", str(AHEAD_PROBE_M))
 
 
 def lua(code, timeout=30):
@@ -248,7 +251,8 @@ def summarize(rows, lines, drive):
     def pct(a, p):
         a = sorted(a)
         return round(a[min(len(a) - 1, int(p * len(a)))], 2) if a else None
-    lead = [r["arrived"] for r in moving if r.get("arrived") is not None]
+    # (every tile within the probe in: its whole length, not left out, which read the lead low)
+    lead = [r["arrived"] if r.get("arrived") is not None else AHEAD_PROBE_M for r in moving]
     geo = {}                    # slow road / trees geotiles (earthd ROAD_GEO_SLOW_S): build time and queue
     for l in lines:
         m = re.search(r"(road|trees) geotile \S+ in ([\d.]+) s \(queue ([\d.]+)[);]", l)

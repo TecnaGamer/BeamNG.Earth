@@ -880,6 +880,20 @@ end
 
 -- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
 M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24 }
+-- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
+-- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
+M.BASE_LATER_MS, M.BASE_NOW_MS = 35, 30         -- m/s (78 / 67 mph; the server skips a block's photo wait over 89 mph)
+M._baseLater = nil
+function M.applyBaseLater()
+  local bl, pl = M._baseLater, st.player
+  if not bl or not pl or (pl.speed or 0) > M.BASE_NOW_MS then return false end
+  M._baseLater = nil
+  local b = st.block
+  if bl.anchorId ~= st.anchorId or not b or b.cx ~= bl.cx or b.cy ~= bl.cy or not FS:fileExists(bl.base) then return false end
+  terrain.setBase(bl.base, bl.size)
+  st.baseRefreshes = (st.baseRefreshes or 0) + 1
+  return true
+end
 function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: probes
 function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
 
@@ -1118,8 +1132,17 @@ local function onMessage(msg)
     if nearVisual == 'detail' and msg.anchorId == st.anchorId and type(msg.base) == 'string' then
       local b, tp = st.block, st.terrainPending
       if b and b.cx == msg.cx and b.cy == msg.cy and FS:fileExists(msg.base) then
-        terrain.setBase(msg.base, tonumber(msg.baseSize))
-        st.baseRefreshes = (st.baseRefreshes or 0) + 1
+        -- (a new base photo rebuilds every terrain material the next frame, as a block swap does: 55-140 ms, on
+        -- Windows twice that. At speed the next block replaces this one in seconds, so the refresh waits until the
+        -- car slows: M.applyBaseLater)
+        local pl = st.player
+        if pl and (pl.speed or 0) > M.BASE_LATER_MS then
+          M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize) }
+        else
+          M._baseLater = nil
+          terrain.setBase(msg.base, tonumber(msg.baseSize))
+          st.baseRefreshes = (st.baseRefreshes or 0) + 1
+        end
       end
       if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
     end
@@ -1517,6 +1540,7 @@ local function updateWorld(dt)
     log('I', 'beamngEarth', minimized and 'window minimized: terrain moves wait' or 'window restored: terrain moves resume')
   end
   if minimized then return end
+  M.applyBaseLater()
   local dr = st.deferredRefresh
   if dr then
     st.deferredRefresh = nil

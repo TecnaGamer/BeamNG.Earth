@@ -118,6 +118,11 @@ def source_id(here):
     return h.hexdigest()
 
 
+# BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches
+NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
+                "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M")
+
+
 def code_key():
     """A hash of the code the cached items depend on (source_id; a packaged app's REVISIT_ID, written by its build) and
     the build switches (BNE_*), once per process."""
@@ -139,7 +144,7 @@ def code_key():
                 got = source_id(here).encode()      # (from the sources beside it: a dev tree, a source install)
             h.update(got)
             for k in sorted(os.environ):                # (the build switches: BNE_*)
-                if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP"):
+                if k.startswith("BNE_") and k not in NOT_SWITCHES:
                     h.update(f"{k}={os.environ[k]}".encode())
             _code.append(h.hexdigest()[:16])
         return _code[0]
@@ -163,7 +168,7 @@ def switches_key():
         if not _switches:
             h = hashlib.sha1()
             for k in sorted(os.environ):
-                if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP"):
+                if k.startswith("BNE_") and k not in NOT_SWITCHES:
                     h.update(f"{k}={os.environ[k]}".encode())
             _switches.append(h.hexdigest()[:16])
         return _switches[0]

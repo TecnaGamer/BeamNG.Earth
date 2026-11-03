@@ -61,12 +61,13 @@ def manifest_id(manifest):
 def generator_identity():
     import fast
     import peerwork
+    import revisit
     import roads
     fast.require(fast.MIN_VERSION, "world bundle")
     # Optional generator switches must not silently change the application of pinned plans.
     # Only their digest is retained; environment values never enter distributed metadata.
     settings = {key: value for key, value in os.environ.items()
-                if key.startswith("BNE_") and key not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP")}
+                if key.startswith("BNE_") and key not in revisit.NOT_SWITCHES}
     # earthd writes the CLI default into its environment, whereas a separate exporter does not.
     # Hash the mode actually used by the road generator, including its default/case normalization.
     settings["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()

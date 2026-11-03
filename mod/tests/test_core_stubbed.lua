@@ -882,4 +882,26 @@ do
   T.check(a == 5 and b == 5 and c == 7, 'safeSpot: ground under the spot: the spot itself')
   T.check(core.safeSpot(0, 0, function() return nil end) == nil, 'safeSpot: no ground anywhere near: nil')
 end
+-- a block's refreshed base photo (block_base) waits while the car is fast and comes once it is slower (core.applyBaseLater)
+do
+  local core = require('beamngEarth/core')
+  local terrain = require('beamngEarth/terrain')
+  local setBase, n = terrain.setBase, 0
+  terrain.setBase = function() n = n + 1; return true end
+  local st = core._state()
+  local was = { st.anchorId, st.block, st.player }
+  st.anchorId, st.block = 7, { cx = 512, cy = -512 }
+  core._baseLater = { anchorId = 7, cx = 512, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  st.player = { speed = core.BASE_LATER_MS + 5 }
+  T.check(core.applyBaseLater() == false and n == 0 and core._baseLater ~= nil, 'base photo refresh: waits while the car is fast')
+  st.player = { speed = (core.BASE_LATER_MS + core.BASE_NOW_MS) / 2 }
+  T.check(core.applyBaseLater() == false and n == 0, 'base photo refresh: still waits between the two speeds')
+  st.player = { speed = core.BASE_NOW_MS - 5 }
+  T.check(core.applyBaseLater() == true and n == 1 and core._baseLater == nil, 'base photo refresh: applied once the car is slower')
+  core._baseLater = { anchorId = 7, cx = 0, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  T.check(core.applyBaseLater() == false and n == 1 and core._baseLater == nil,
+    'base photo refresh: dropped when its block is no longer the one in use')
+  terrain.setBase = setBase
+  st.anchorId, st.block, st.player = was[1], was[2], was[3]
+end
 T.done('test_core_stubbed')
