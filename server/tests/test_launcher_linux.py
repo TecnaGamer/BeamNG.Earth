@@ -1,4 +1,5 @@
 """launcher.py on Linux: the user folder and start path with a Flatpak Steam, the game-closed grace period."""
+import io
 import os
 import sys
 import tempfile
@@ -95,8 +96,20 @@ class FlatpakSteam(unittest.TestCase):
     def test_flatpak_steam_pid(self):
         touch(os.path.join(self.home, *FP, ".steam", "steam.pid"))
         with open(os.path.join(self.home, *FP, ".steam", "steam.pid"), "w") as f:
-            f.write(str(os.getpid()))
-        self.assertTrue(launcher.steam_running())
+            f.write("4242")
+        real_open, real_listdir = open, os.listdir
+        comm = ["steam\n"]
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/proc/4242/comm":
+                return io.StringIO(comm[0])
+            return real_open(path, *args, **kwargs)
+        def fake_listdir(path):
+            return ["4242"] if str(path) == "/proc" else real_listdir(path)
+        with mock.patch("builtins.open", side_effect=fake_open), \
+                mock.patch.object(launcher.os, "listdir", side_effect=fake_listdir):
+            self.assertTrue(launcher.steam_running())
+            comm[0] = "python\n"
+            self.assertFalse(launcher.steam_running(), "a reused PID belonging to another program is not Steam")
 
 
 class GameClosed(unittest.TestCase):
