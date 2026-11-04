@@ -7,7 +7,7 @@ road_tramline decal, both rails in one 1.8 m ribbon (textureLength 30, as in its
 collision, as the markings. Subways are left out.
 The classes railways.py builds as a colliding 3D track on the ground and on bridges (standard and narrow gauge, light
 rail: mpsteppe's PR #287) get only their street track here, where they cross a carriageway (railways.py stops
-its track at the road's edge); trams get it all.
+its track at the road's edge). Trams get all their ground track here; mapped tram bridges use railways.py's embedded slab.
 """
 import math
 

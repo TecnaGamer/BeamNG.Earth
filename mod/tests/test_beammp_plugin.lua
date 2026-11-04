@@ -8,6 +8,26 @@ local G = dofile(dir .. '/../../beammp/Server/BeamNGEarth/main.lua')
 local M_PER_DEG = 111194.9     -- (G.dist's sphere)
 
 T.check(math.abs(G.dist(0, 0, 1000 / M_PER_DEG, 0) - 1000) < 1, 'dist: 1 km north')
+T.near(G.dist(0, 179.995, 0, -179.995), 1111.949, 0.01, 'dist: neighbours across the date line')
+
+-- Invalid client numbers must never enter the anchors broadcast or replace a good pose.
+for _, field in ipairs({ 'aLat', 'aLon', 'lat', 'lon' }) do
+  for _, bad in ipairs({ 0 / 0, math.huge, -math.huge, 'nan', {}, false }) do
+    G.players = {}
+    local d = { v = G.PROTO, aLat = 1, aLon = 2, lat = 3, lon = 4 }
+    d[field] = bad
+    local p, changed = G.onPose(99, d, 'invalid')
+    T.check(p == nil and changed == false and G.players[99] == nil, 'invalid pose rejected: ' .. field .. '/' .. tostring(bad))
+    G.onPose(99, { v = G.PROTO, aLat = 1, aLon = 2, lat = 3, lon = 4 }, 'valid')
+    G.onPose(99, d, 'invalid')
+    T.check(G.players[99][field] == ({ aLat = 1, aLon = 2, lat = 3, lon = 4 })[field],
+      'invalid pose preserves previous coordinates: ' .. field)
+  end
+end
+G.players = {}
+G.onPose(1, { v = G.PROTO, aLat = 0, aLon = 179.995, lat = 0, lon = 179.995 }, 'west')
+T.check(G.onPose(2, { v = G.PROTO, aLat = 0, aLon = -179.995, lat = 0, lon = -179.995, joined = true }, 'east') == nil,
+  'nearby date-line joiner stays in place')
 
 -- the startup notice: the Discord for help, not BeamMP's developers; why the server is hidden from other players
 local notice = table.concat(G.supportNotice(), '\n')
@@ -89,6 +109,19 @@ local key = '3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'
 T.check(G.validKey(key) and not G.validKey(zeros) and not G.validKey('') and not G.validKey(nil) and not G.validKey('abc'),
   'validKey: a key, not the placeholder or junk')
 T.check(G.readConfig('AuthKey = "' .. key .. '"').authKey == key, 'readConfig: the key')
+T.check(G.readConfig('Description = "Drive # anywhere" # c').desc == 'Drive # anywhere', 'readConfig: the description')
+T.check(G.announcement({ port = 1, desc = 'd' }, {}).desc == 'd', 'announcement: the description')
+local hc = G.readConfig('Tags = "Freeroam,Drift"\nMap = "/levels/beamngEarth/info.json"\nPassword = "hunter2"\n')
+T.check(hc.tags == 'Freeroam,Drift' and hc.map == '/levels/beamngEarth/info.json' and hc.pass == true,
+  'readConfig: tags, map, has a password')
+local full = G.announcement(hc, {}, { version = '3.9.0', names = { 'a', 'b' }, mods = { names = { 'm1', 'm2' }, size = 7, count = 2 } })
+T.check(full.version == '3.9.0' and full.players == 2 and full.playerslist == 'a;b;' and full.modlist == '/m1;/m2;'
+  and full.modstotal == 2 and full.modstotalsize == 7 and full.pass == true and full.tags == 'Freeroam,Drift',
+  'announcement: what BeamMP\'s heartbeat sends')
+local leak = false
+for _, v in pairs(full) do if tostring(v):find('hunter2', 1, true) then leak = true end end
+T.check(not leak, 'announcement: never the password')
+T.check(G.readConfig('Password = ""').pass == false, 'readConfig: no password')
 T.check(G.listable({ private = false, authKey = key }), 'listable: public with a key')
 T.check(not G.listable({ private = true, authKey = key }), 'listable: Private = true: direct connect only')
 T.check(not G.listable({ private = false, authKey = zeros }), 'listable: no key: direct connect only')

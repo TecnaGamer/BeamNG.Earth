@@ -102,7 +102,7 @@ function M.coordText(lat, lon) return string.format('%.5f, %.5f', lat, lon) end
 ------------------------------------------------------------------------------------------
 -- lat / lon text: "36.5785, -118.2923" (Google Maps' copy), "36.5785 -118.2923",
 -- "36.5785 N, 118.2923 W", "N 36.5785 W 118.2923", "36°34'42.6"N 118°17'32.3"W" (degrees, minutes,
--- seconds). Returns lat, lon or nil + error.
+-- seconds), or a map link (parseMapLink). Returns lat, lon or nil + error.
 
 local SKIP = { ['°'] = true, ['º'] = true, ["'"] = true, ['"'] = true, ['′'] = true, ['″'] = true,
   ['’'] = true, ['”'] = true, ['\194\160'] = true } -- \194\160: a no-break space (pasted text)
@@ -155,8 +155,36 @@ local function component(g)
   return neg and -v or v
 end
 
+-- A map link's point: OpenStreetMap's marker (?mlat=..&mlon=..) or view (#map=zoom/lat/lon), Google Maps' place
+-- (!3d<lat>!4d<lon>), query (?q=lat,lon / ?query= / ?ll=) or view (@lat,lon,zoom), as players paste them (the bug
+-- report form's own location is an OpenStreetMap link). Returns lat, lon or nil. Pure.
+local NUM = '([%-+]?%d+%.?%d*)'
+local LINK_PATTERNS = {
+  '[?&]mlat=' .. NUM .. '&mlon=' .. NUM,
+  '!3d' .. NUM .. '!4d' .. NUM,
+  '[?&]q=' .. NUM .. ',%s*' .. NUM,
+  '[?&]query=' .. NUM .. ',%s*' .. NUM,
+  '[?&]ll=' .. NUM .. ',%s*' .. NUM,
+  '#map=%d+%.?%d*/' .. NUM .. '/' .. NUM,
+  '/@' .. NUM .. ',' .. NUM,
+}
+function M.parseMapLink(text)
+  if type(text) ~= 'string' or not (text:find('://', 1, true) or text:find('www%.') or text:find('maps%.')) then
+    return nil
+  end
+  local t = text:gsub('%%2[Cc]', ','):gsub('%%20', ' ')
+  for _, pat in ipairs(LINK_PATTERNS) do
+    local a, b = t:match(pat)
+    a, b = tonumber(a), tonumber(b)
+    if a and b and a >= -90 and a <= 90 and b >= -180 and b <= 180 then return a, b end
+  end
+  return nil
+end
+
 function M.parseLatLon(text)
   if type(text) ~= 'string' then return nil, 'type a latitude and longitude' end
+  local la, lo = M.parseMapLink(text)
+  if la then return la, lo end
   local toks = tokens(text)
   if not toks or #toks == 0 then return nil, 'not a latitude, longitude' end
   -- group the tokens into coordinates: a separator, a hemisphere letter after numbers (suffix) or

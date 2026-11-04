@@ -77,6 +77,23 @@ class GraphTest(unittest.TestCase):
             lo, li = navgraph._lanes(w, False)
             self.assertEqual(lo, li, cls)
 
+    def test_mountain_road_inside_its_edges(self):
+        """A switchback pass road (roads._mountain_roads): the AI's half width MOUNTAIN_EDGE_M inside its edge lines
+        (a wall and a parapet right at the edge), wider round its widened hairpins; an ordinary rural secondary at its
+        lanes' edge."""
+        from test_roads import _zigzag
+        g = graph([_zigzag(4)], ["secondary"])
+        radii = {round(e[7], 2) for e in g["edges"]}
+        sp = roads.road_specs(__import__("test_roads").features([_zigzag(4)], ["secondary"]))[0]
+        self.assertTrue(sp.mountain)
+        leg = round(navgraph.driving_width(sp) / 2 - navgraph.MOUNTAIN_EDGE_M, 2)
+        self.assertEqual(min(radii), leg, "the legs: inside the edge lines")
+        self.assertGreater(max(radii), leg + 1.0, "round the hairpins: wider (roads.HAIRPIN_WIDEN_M)")
+        self.assertLessEqual(max(radii), leg + roads.HAIRPIN_WIDEN_M / 2 + 0.01)
+        flat_ = graph([[(0, 0), (300, 0)]], ["secondary"])
+        sp2 = roads.road_specs(__import__("test_roads").features([[(0, 0), (300, 0)]], ["secondary"]))[0]
+        self.assertEqual({round(e[7], 2) for e in flat_["edges"]}, {round(navgraph.driving_width(sp2) / 2, 2)})
+
     def test_rural_motorway_two_lanes(self):
         import roads
         for urban, n in ((False, 2), (True, 3)):
@@ -138,6 +155,33 @@ class SignalsTest(unittest.TestCase):
         self.assertEqual(got, {"s1", "cW", "cE"}, "the 8 m link from the next connector gets no stop")
 
 
+    def test_left_hand_signal_heads_stand_as_the_props(self):
+        """The switchable heads stand where furniture.junction_props stands the static booms, turned the same way: in
+        left-hand traffic too (GitHub #595: they faced away from the drivers), the stop points on the left half."""
+        import furniture
+        import roads
+        sp = roads.Spec(10.0, "paved", True, "tertiary", False)
+        nodes = {"cJ": [0.0, 0.0, 0.0, 4], "cN": [0.0, 40.0, 0.0, 2], "cS": [0.0, -40.0, 0.0, 2],
+                 "cW": [-40.0, 0.0, 0.0, 2], "cE": [40.0, 0.0, 0.0, 2]}
+        arms = {"cJ": [("n", sp, np.array([0.0, 1.0]), 0.0, 1), ("s", sp, np.array([0.0, -1.0]), 0.0, 0),
+                       ("w", sp, np.array([-1.0, 0.0]), 0.0, 1), ("e", sp, np.array([1.0, 0.0]), 0.0, 0)]}
+        approaches = {("cJ", "n", 1): ("cN", True), ("cJ", "s", 0): ("cS", True), ("cJ", "w", 1): ("cW", True),
+                      ("cJ", "e", 0): ("cE", True)}
+        orig = furniture.junction_controls
+        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None: [(x, furniture.G_SIGNAL)
+                                                                                          for x in a]
+        try:
+            rh = {ap[0]: ap for ap in navgraph._signals(arms, approaches, nodes)[0]["app"]}
+            lh = {ap[0]: ap for ap in navgraph._signals(arms, approaches, nodes, left_hand=True)[0]["app"]}
+        finally:
+            furniture.junction_controls = orig
+        self.assertEqual(set(rh), {"cN", "cS", "cW", "cE"})
+        for nb in rh:
+            self.assertEqual(lh[nb][7:11], rh[nb][7:11], f"{nb}: the head's transform")
+        self.assertLess(lh["cS"][1], 0.0, "northbound stop point on the west (left) half")
+        self.assertGreater(rh["cS"][1], 0.0, "and on the east half for right-hand traffic")
+
+
 class RulesTest(unittest.TestCase):
     def test_default_speeds_by_country(self):
         class F:            # a feature without a mapped limit
@@ -170,6 +214,12 @@ class RulesTest(unittest.TestCase):
         self.assertFalse(navgraph.road_rules("DE")["rightHandDrive"])
         self.assertTrue(navgraph.road_rules("JP")["rightHandDrive"])
         self.assertFalse(navgraph.road_rules(None)["rightHandDrive"], "unknown: US rules")
+        for cc in ("BS", "BZ", "AG", "LC", "PW", "MH"):         # mph outside the US and the UK
+            self.assertTrue(navgraph.road_rules(cc)["mph"], cc)
+        self.assertTrue(navgraph.road_rules("BS")["rightHandDrive"], "the Bahamas: mph, on the left")
+        self.assertFalse(navgraph.road_rules("BZ")["rightHandDrive"], "Belize: mph, on the right")
+        self.assertTrue(navgraph.road_rules("NF")["rightHandDrive"], "Norfolk Island drives on the left")
+        self.assertFalse(navgraph.road_rules("FR")["mph"])
 
 
 if __name__ == "__main__":

@@ -16,7 +16,9 @@ Layers (LAYERS: name -> theme, type, columns): roads (transportation/segment: cl
 surface / flags / width / level / speed / subclass rules along the segment, connector ids with
 their position), connectors (transportation/connector), buildings (buildings/building: height,
 min_height, floors, roof and facade fields, class), water and land_use (base: subtype, class,
-tags), infrastructure (base: power lines and plants, towers, barriers, bridges...). Rows are
+tags), infrastructure (base: power lines and plants, towers, barriers, bridges...), places (points of interest),
+divisions and division_areas (the status bar's towns, states and countries, placenames.py: a spec with "geometry":
+False reads no geometry column, its features are points at their bbox centres; "where" filters the rows). Rows are
 deduplicated by id (highest version) and sorted by id, so a cell's content does not depend on
 which file or row group a feature came from, or in which order they were read. Water and land-use
 polygons are clipped to the cell (an ocean or a national park would otherwise repeat its whole
@@ -31,7 +33,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
@@ -95,11 +97,18 @@ THEME_LICENCES = {
 }
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
+# A road's own source: the one for the whole feature (property ""). A road in a route relation lists the relation
+# first (property "/routes") and its way after it, and the relation's id gave osmtags.join no way: the bridge of
+# Järveküla - Jüri (Estonia) took a one-lane slip road's tags by name, 12 % of the drivable segments round Tallinn's
+# ring road and 5 % of Baltimore's came from a relation (GitHub #683).
+_OWN = "coalesce(list_filter(sources, lambda s: coalesce(s.property, '') = '')[1], sources[1])"
+_SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
+DIVISION_LANGS = ("en", "de", "fr", "it")
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
-                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}",
+                  cols=f"subtype, class, subclass, {_NAME}, {_SRC_OWN}",
                   text=("subtype", "class", "subclass", "name", "src_dataset", "src_record"),
                   extra="road_flags, rail_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
                         "subclass_rules, access_restrictions",
@@ -151,6 +160,26 @@ LAYERS = {
                    text=("basic_category", "taxonomy", "brand_wikidata", "brand_name", "name", "src_dataset",
                          "src_record", "operating_status"),
                    float=("confidence",)),
+    # the status bar's town, state and country (placenames.py, GitHub #602: no outside geocoder): the towns'
+    # points (no geometry read: the bbox centre is the point) with their names in DIVISION_LANGS (names.common:
+    # geocode.LANG_OF_COUNTRY's languages and English), and the states' and countries' names (their areas' rows: the
+    # geometry, ~10 MB a row group, never read, only the bbox)
+    "divisions": dict(theme="divisions", type="division", clip=False, geometry=False,
+                      cols=f"subtype, class, country, region, population, {_NAME}, "
+                           + ", ".join(f"names.common['{lang}'] AS name_{lang}" for lang in DIVISION_LANGS)
+                           + f", {_SRC}",
+                      where="subtype IN ('locality', 'localadmin')",
+                      text=("subtype", "class", "country", "region", "name")
+                           + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
+                      float=("population",)),
+    "division_areas": dict(theme="divisions", type="division_area", clip=False, geometry=False,
+                           cols=f"subtype, country, region, division_id, {_NAME}, "
+                                + ", ".join(f"names.common['{lang}'] AS name_{lang}" for lang in DIVISION_LANGS)
+                                + f", bbox.xmin AS x0, bbox.ymin AS y0, bbox.xmax AS x1, bbox.ymax AS y1, {_SRC}",
+                           where="subtype IN ('country', 'dependency', 'region')",
+                           text=("subtype", "country", "region", "division_id", "name")
+                                + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
+                           float=("x0", "y0", "x1", "y1")),
 }
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
@@ -248,6 +277,8 @@ class StacIndex:
                              os.path.join(self._dir(theme, typ), "collection.json"), kind)
             items = [link["href"] for link in raw["links"] if link.get("rel") == "item"]
             bboxes = raw["extent"]["spatial"]["bbox"][1:]
+            if len(items) == 1 and not bboxes:  # (one file: the collection's extent is its box; divisions/division)
+                bboxes = raw["extent"]["spatial"]["bbox"][:1]
             if len(items) != len(bboxes):
                 raise OvertureError(f"STAC {theme}/{typ}: {len(items)} items but {len(bboxes)} file boxes")
             c = {"items": items, "bboxes": bboxes, "license": raw.get("license")}
@@ -274,6 +305,12 @@ class StacIndex:
 
 
 META_FILES = 2048        # files whose parsed Parquet metadata Reader keeps (a few hundred row groups each)
+
+
+def _wkb(spec):
+    """The query's WKB column of a layer: its geometry, or none for a layer that reads no geometry (spec "geometry":
+    False: points at their bbox centre, the bbox alone read; the divisions' places and areas, placenames.py)."""
+    return "NULL::BLOB" if spec.get("geometry") is False else "ST_AsWKB(geometry)"
 
 
 def _q(path):
@@ -565,7 +602,8 @@ class Reader:
             t = x0.dtype.type
             if np.any((x0 <= t(lon1)) & (x1 >= t(lon0)) & (y0 <= t(lat1)) & (y1 >= t(lat0))):
                 matched.add(k)
-        used = set(re.findall(r"[A-Za-z_]+", spec["cols"] + " " + spec.get("extra", ""))) | BASE_COLUMNS
+        used = set(re.findall(r"[A-Za-z_]+", " ".join((spec["cols"], spec.get("extra", ""), spec.get("where", "")))))
+        used |= BASE_COLUMNS - ({"geometry"} if spec.get("geometry") is False else set())
         wanted = {}
         for path, rg in sorted(matched):
             for top, chunks in groups[(path, rg)]["cols"].items():
@@ -589,7 +627,7 @@ class Reader:
         itself. A place's cells share their row groups (a fresh place's first block: 55 queries decoded 117 row groups
         of 9 through the Python filesystem, 2026-10-30). Returns the files."""
         extra = f", {spec['extra']}" if spec.get("extra") else ""
-        proj = (f"id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb, (bbox.xmin + bbox.xmax) / 2 AS cx, "
+        proj = (f"id, version, {spec['cols']}, {_wkb(spec)} AS wkb, (bbox.xmin + bbox.xmax) / 2 AS cx, "
                 f"(bbox.ymin + bbox.ymax) / 2 AS cy, sources{extra}, bbox")
         tag = hashlib.sha1(proj.encode()).hexdigest()[:12]
         out = []
@@ -622,6 +660,7 @@ class Reader:
         bbox = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND "
                 f"bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}")
         extra = f", {spec['extra']}" if spec.get("extra") else ""
+        where = f" AND ({spec['where']})" if spec.get("where") else ""
         # The scan first, the dedup (by id, highest version) and numbering from the copy: with the
         # window in the same statement DuckDB 1.5 stopped skipping row groups by their statistics and
         # read every row group of the file between the matches (12 MB more, 9 s, for a city cell).
@@ -634,13 +673,13 @@ class Reader:
                 local = None
         if local:
             con.execute(f"""CREATE TEMP TABLE s AS SELECT * EXCLUDE (bbox)
-                  FROM read_parquet([{", ".join(f"'{_q(f)}'" for f in local)}]) WHERE {bbox}""")
+                  FROM read_parquet([{", ".join(f"'{_q(f)}'" for f in local)}]) WHERE {bbox}{where}""")
         else:
             con.execute(f"""CREATE TEMP TABLE s AS
-                  SELECT id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb,
+                  SELECT id, version, {spec['cols']}, {_wkb(spec)} AS wkb,
                          (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
                          sources{extra}
-                  FROM {src} WHERE ({only}) AND {bbox}""")
+                  FROM {src} WHERE ({only}) AND {bbox}{where}""")
         con.execute("""CREATE TEMP TABLE t AS
             SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * FROM (
               SELECT * EXCLUDE (version) FROM s
@@ -649,7 +688,10 @@ class Reader:
         rows = con.execute(f"SELECT {', '.join(names)} FROM t ORDER BY fi").fetchall()
         at = {c: i for i, c in enumerate(names)}
         ids = mg.text_column([r[at["id"]] for r in rows])
-        geoms = [mg.parse_wkb(r[at["wkb"]]) for r in rows]
+        if spec.get("geometry") is False:     # (a point at the bbox centre: the geometry column is never read)
+            geoms = [(mg.POINT, [[np.array([[r[at["cx"]], r[at["cy"]]]], np.float64)]]) for r in rows]
+        else:
+            geoms = [mg.parse_wkb(r[at["wkb"]]) for r in rows]
         clipped = np.zeros(len(rows), bool)
         if spec["clip"]:
             keep = []

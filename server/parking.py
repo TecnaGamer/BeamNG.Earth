@@ -273,24 +273,38 @@ def aisle_spots(roads, aisles, box, blockers=(), lots=()):
         for side in (1.0, -1.0):
             n = np.stack([-D[:, 1], D[:, 0]], 1) * side
             Q = P[:, :2] + n * (spec.width / 2 + LOT_SPOT_D_M / 2)
-            for q, nn, p in zip(Q, n, P):
+            hit = _hits(paths, Q)
+            for q, nn, p, h in zip(Q, n, P, hit):
                 if not (_owns(box, q[0], q[1])):
                     continue
                 if not furniture._clear(np.array([q[0], q[1], p[2]]), others, fid):
                     continue
-                if _hit(paths, q):
+                if h:
                     continue
                 out.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                             round(math.degrees(math.atan2(nn[1], nn[0])) % 360.0, 1), 1])
     return out
 
 
-def _hit(paths, q):
-    """Does q lie in any of the polygons (Path.contains_points; one point)?"""
-    if not paths:
-        return False
-    pt = np.atleast_2d(np.asarray(q, np.float64))
-    return any(bool(np.asarray(pa.contains_points(pt)).reshape(-1)[0]) for pa in paths)
+def _hits(paths, pts):
+    """Per point of pts (k, 2): does it lie in any of the polygons (Path.contains_points)? One
+    contains_points call per polygon whose bounding box meets the points' (not one per point and polygon:
+    aisle_spots and lot_markings tested every stall against every building of the tile, 480k calls and
+    ~3 s of a Las Vegas road tile's build, 2026-11-01)."""
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    out = np.zeros(len(pts), bool)
+    if not paths or not len(pts):
+        return out
+    lo, hi = pts.min(0), pts.max(0)
+    for pa in paths:
+        v = pa.vertices
+        if not len(v):
+            continue
+        vlo, vhi = v.min(0), v.max(0)
+        if vlo[0] > hi[0] or vlo[1] > hi[1] or vhi[0] < lo[0] or vhi[1] < lo[1]:
+            continue                        # (contains_points is False for a point outside the polygon's box)
+        out |= np.asarray(pa.contains_points(pts), bool).reshape(-1)
+    return out
 
 
 def _groups(ok):
@@ -524,6 +538,7 @@ def aisle_markings(roads, aisles, box, blockers=(), lots=()):
             n = np.stack([-D[:, 1], D[:, 0]], 1) * side
             Q = P[:, :2] + n * (spec.width / 2 + LOT_SPOT_D_M / 2)
             keep = np.ones(len(st), bool)
+            hit = _hits(paths, Q)
             for i, (q, p) in enumerate(zip(Q, P)):
                 if not (ex0 <= q[0] < ex1 and ey0 <= q[1] < ey1):
                     keep[i] = False
@@ -531,7 +546,7 @@ def aisle_markings(roads, aisles, box, blockers=(), lots=()):
                 if not furniture._clear(np.array([q[0], q[1], p[2]]), others, fid):
                     keep[i] = False
                     continue
-                if _hit(paths, q):
+                if hit[i]:
                     keep[i] = False
             room = LOT_MAX_PER_TILE - n_stalls
             if int(keep.sum()) > room:
@@ -550,16 +565,17 @@ def drop_covered(chunks, rings):
     paths = [Path(np.asarray(r, np.float64)) for r in rings if len(np.asarray(r)) >= 3]
     if not paths:
         return list(chunks or [])
-    kept = []
+    cand, mids = [], []
     for ch in chunks or ():
         n = ch.get("n") or []
         if len(n) < 2:
             continue
-        mid = ((n[0][0] + n[1][0]) / 2.0, (n[0][1] + n[1][1]) / 2.0)
-        if _hit(paths, mid):
-            continue
-        kept.append(ch)
-    return kept
+        cand.append(ch)
+        mids.append(((n[0][0] + n[1][0]) / 2.0, (n[0][1] + n[1][1]) / 2.0))
+    if not cand:
+        return []
+    hit = _hits(paths, mids)            # (every midpoint at once: one at a time ~0.37 s of a Manhattan tile set)
+    return [ch for ch, h in zip(cand, hit) if not h]
 
 
 def finish_markings(frame, tx, ty, md, elev, items=None, marks=()):

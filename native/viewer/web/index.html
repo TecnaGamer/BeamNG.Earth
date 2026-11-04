@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeamNG.Earth Viewer</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<canvas id="view" aria-label="3D view: drag to look, WASD to move"></canvas>
+
+<aside id="panel" class="card" aria-label="Viewer">
+  <header class="head">
+    <h1 class="brand">BeamNG.Earth <span>viewer</span></h1>
+    <span id="conn" class="pill" data-state="checking" role="status">Checking</span>
+  </header>
+
+  <form id="goto" autocomplete="off" role="search">
+    <div class="search">
+      <input id="where" placeholder="Search a place, or lat, lon" spellcheck="false" aria-label="Search a place"
+             role="combobox" aria-autocomplete="list" aria-controls="results" aria-expanded="false">
+      <kbd class="hint" aria-hidden="true">/</kbd>
+      <ul id="results" role="listbox" class="hidden"></ul>
+    </div>
+    <button class="primary">Go</button>
+  </form>
+  <div id="searchMsg" class="note"></div>
+  <div id="geoDebug" class="debug hidden"></div>
+
+  <div id="location" class="location" title="Street from the world server's map data; town, region and country from Photon"></div>
+  <div id="status" class="status" aria-live="polite"></div>
+
+  <details class="sect" open>
+    <summary>Layers</summary>
+    <div class="group"><h2>World</h2><div id="layersWorld"></div></div>
+    <div class="group"><h2>Map data</h2><div id="layersOsm"></div></div>
+    <div class="group"><h2>Rendering</h2><div id="layersRender"></div></div>
+  </details>
+  <details class="sect">
+    <summary>Light and time</summary>
+    <div id="light"></div>
+  </details>
+  <details class="sect">
+    <summary>Statistics</summary>
+    <dl id="info"></dl>
+    <p id="infoEmpty" class="note">Numbers appear once the world server is connected.</p>
+  </details>
+  <details class="sect">
+    <summary>Places and search</summary>
+    <div id="layersPlaces"></div>
+  </details>
+  <details class="sect">
+    <summary>Keys</summary>
+    <dl class="keys">
+      <dt>Drag</dt><dd>Look around</dd>
+      <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Move</dd>
+      <dt><kbd>E</kbd> <kbd>Space</kbd></dt><dd>Up</dd>
+      <dt><kbd>Q</kbd> <kbd>C</kbd></dt><dd>Down</dd>
+      <dt><kbd>Shift</kbd> / <kbd>Ctrl</kbd></dt><dd>Five times faster / slower</dd>
+      <dt>Wheel</dt><dd>Change flying speed</dd>
+      <dt>Click</dt><dd>Inspect a road, node or shape</dd>
+      <dt><kbd>/</kbd></dt><dd>Search</dd>
+      <dt><kbd>M</kbd></dt><dd>Widen or shrink the map</dd>
+      <dt>Minimap</dt><dd>Click to go there, drag to pan, wheel to zoom</dd>
+    </dl>
+  </details>
+  <div id="credit" class="credit"></div>
+</aside>
+
+<section id="pick" class="card hidden" aria-label="Inspector">
+  <div class="row"><h2 id="pickTitle"></h2><button id="pickClose" class="x" aria-label="Close inspector">&times;</button></div>
+  <dl id="pickBody"></dl>
+</section>
+
+<div id="mapbox" class="card">
+  <canvas id="minimap" aria-label="Minimap: click to go there"></canvas>
+  <!-- the wide map's top edge: drag (or arrow keys) to resize, double-click for a third of the height -->
+  <div id="mapGrip" class="grip" role="separator" aria-orientation="horizontal" aria-label="Resize the map"
+       aria-valuemin="15" aria-valuemax="80" tabindex="-1" title="Drag to resize. Double-click for a third of the height."></div>
+  <div class="mapTools">
+    <button id="mapWide" class="x" aria-pressed="false" title="Widen the map (M)" aria-label="Widen the map">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="grow" d="M1 6V2h4M11 2h4v4M15 10v4h-4M5 14H1v-4" fill="none" stroke="currentColor" stroke-width="1.6"/><path class="shrink" d="M5 1v4H1M15 5h-4V1M11 15v-4h4M1 11h4v4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+    <button id="centre" class="x" title="Follow the camera" aria-label="Follow the camera">&#9678;</button>
+  </div>
+</div>
+
+<!-- shown while the world server (earthd) can't be reached: a guide sign with the way to start it (offline.js) -->
+<div id="offline" class="offline hidden" role="dialog" aria-modal="true" aria-labelledby="offTitle" aria-describedby="offBody">
+  <div class="sign">
+    <div class="tab" id="offAddr">127.0.0.1:47613</div>
+    <div class="plate">
+      <h2 id="offTitle">World server not running</h2>
+      <p id="offBody">The viewer shows what the world server builds for the game, so it needs the server running on this computer.</p>
+      <div class="actions">
+        <button id="offStart" class="signBtn">Start the world server</button>
+        <button id="offRetry" class="ghost">Try again</button>
+      </div>
+      <p id="offHint" class="small"></p>
+      <details id="offDetail" class="why hidden"><summary>Error details</summary><code id="offError"></code></details>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

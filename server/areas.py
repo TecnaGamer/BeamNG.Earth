@@ -39,6 +39,7 @@ import time
 import fast
 import netfetch
 import pacer
+import roadz
 
 log = logging.getLogger("earthd.areas")
 
@@ -360,7 +361,12 @@ class Areas:
             return plan_steps(tiles, self._hm_zooms(box), self._img_zoom(box),
                               area_layers() if self.s.mapdata is not None else ())
         if phase == "world":
-            return [("geo", WORLD_Z, x, y) for x, y in tiles(WORLD_Z, 0)]
+            # the road heights' lidar first: a road build waits only seconds for it (roadz.gap_answers) and a cell it
+            # had to give up on keeps no geotile for the rest of the server's run
+            prov = roadz.PROVIDER
+            lidar = [("lidar", CELL_Z, x, y) for x, y in tiles(CELL_Z, CELL_RING)
+                     if prov is not None and prov.lidar_wanted((CELL_Z, x, y))]
+            return lidar + [("geo", WORLD_Z, x, y) for x, y in tiles(WORLD_Z, 0)]
         raise ValueError(f"unknown area phase {phase!r}")
 
     def steps(self, box, mode=DEFAULT_MODE, route=None):
@@ -380,6 +386,8 @@ class Areas:
             return self.s.dem.has(step[1], step[2], step[3])
         if kind == "geo":
             return self.s.geo_prebuilt(step[2], step[3]) is not None
+        if kind == "lidar":
+            return roadz.PROVIDER is None or roadz.PROVIDER.lidar_on_disk(step[1:4])
         return done_imgs is not None and img_key(step) in done_imgs
 
     def plan(self, s, w, n, e, mode=DEFAULT_MODE):
@@ -785,6 +793,10 @@ class Areas:
             world.append(k)
             if len(world) % 25 == 0:
                 self._write_world(a["id"], world)
+            return
+        if kind == "lidar":
+            if roadz.PROVIDER is not None and roadz.PROVIDER.lines("lidar", st[1:4]) is None:
+                raise RuntimeError("road height lidar not had")         # (the next pass tries again)
             return
         if kind == "cell":
             import mapcells

@@ -74,7 +74,7 @@ MOOSE_SIDE_M = 1.5          # m past the road's edge (TSFS 1 kap. 13 §: 0.3-4.0
 MOOSE_CLASSES = {"trunk", "primary", "secondary", "tertiary"}
 ZEBRA_M = 2.0               # m from a crossing's middle along the road to its B3 (M15 is 3-4 m long)
 ONE_ZEBRA_M = 6.0
-NEAR_NODE_M = 2.0           # crossings.NODE_NEAR_M
+NEAR_NODE_M = 2.0           # secrossings.NODE_NEAR_M
 
 
 def wanted(country, roads_near):
@@ -612,7 +612,7 @@ def moose_signs(near_roads):
 
 def tile_rows(frame, ways, near_roads, nodes, box, elev, country):
     """Forest rows of road tile box: ways motesfri._ways' (None: only the zebras' B3, which need no wider cells),
-    near_roads build_tile's roads_out, nodes crossings.nodes', elev(lat, lon) the ground."""
+    near_roads build_tile's roads_out, nodes secrossings.nodes', elev(lat, lon) the ground."""
     if (country or "").upper() not in COUNTRIES:
         return []
     signs = all_signs(ways) if ways else []

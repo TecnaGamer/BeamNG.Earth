@@ -18,6 +18,15 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INTERVAL = 2.0
+TERRAIN_SLOW_MS = 1500
+
+
+def _med(v):
+    return sorted(v)[len(v) // 2] if v else 0
+
+
+def far_q(st):
+    return (st.get('far') or {}).get('queued')
 SUMMARY_S = 60.0
 HITCH_MS = 50.0
 
@@ -53,7 +62,9 @@ end
 local lim = Engine.getCurrentFpsLimitReason and Engine.getCurrentFpsLimitReason() or {}
 return jsonEncode({ p1b = p1b, perf = p, focused = lim.windowFocused ~= false, st = { anchor = s.anchorId, block = s.block, net = s.net, status = s.status,
   far = s.far, followMs = s.lastFollowMs, rebaseMs = s.lastRebaseMs, pending = s.pending,
-  player = s.player, rebaseDistance = s.rebaseDistance },
+  player = s.player, rebaseDistance = s.rebaseDistance,
+  guard = (function() local g = beamngEarth_core._state and (beamngEarth_core._state() or {}).guard
+    return g and { mode = g.mode, paused = g.pausedByUs and true or false, healthy = g.healthy and true or false } or nil end)() },
   speed = v and v:getVelocity():length() or 0,
   damage = v and map and map.objects and map.objects[v:getId()] and map.objects[v:getId()].damage or 0 })
 '''
@@ -68,6 +79,9 @@ def mcp_lua(code):
 def find_server_pid():
     r = subprocess.run(['pgrep', '-f', 'server/earthd.py'], capture_output=True, text=True)
     pids = [int(x) for x in r.stdout.split()]
+    if not pids:                    # (the launcher's own server process: launcher.py --server)
+        r = subprocess.run(['pgrep', '-f', '[l]auncher.py --server'], capture_output=True, text=True)
+        pids = [int(x) for x in r.stdout.split()]
     return pids[-1] if pids else None
 
 
@@ -134,9 +148,10 @@ def main():
         d['damageDelta'] = max(0, dmg - last.get('damage', dmg))
         last['damage'] = dmg
         if not pid or not os.path.exists(f'/proc/{pid}'):
-            pid = find_server_pid()
+            was, pid = pid, find_server_pid()
             cpu_prev = None
-            emit(f'server pid now {pid}')
+            if pid != was:
+                emit(f'server pid now {pid}')
         cpu, rss = proc_stat(pid) if pid else (None, None)
         cpu_pct = None
         if cpu is not None and cpu_prev is not None:
@@ -150,6 +165,23 @@ def main():
         out.flush()
 
         # ---- events ----
+        # (world gen speed: the terrain blocks the game waited on for TERRAIN_SLOW_MS or more)
+        for l in new_lines:
+            m_ = re.search(r'terrain_ready \(([^)]*)\) after (\d+) ms', l)
+            if m_:
+                win['ready'] = win.get('ready', []) + [int(m_.group(2))]
+                if int(m_.group(2)) >= TERRAIN_SLOW_MS:
+                    emit(f"slow terrain block {m_.group(1)}: ready after {int(m_.group(2))} ms "
+                         f"(speed {d.get('speed', 0) * 2.237:.0f} mph)")
+        # (the edge guard: warned near the loaded ground's edge, held there, or a rescue)
+        gd = st.get('guard') or {}
+        gmode = gd.get('mode')
+        if gmode != last.get('gmode') and (gmode in ('warn', 'hold', 'stop', 'rescue') or gd.get('paused')
+                                            or last.get('gmode') in ('warn', 'hold', 'stop', 'rescue')):
+            emit(f"EDGE GUARD {last.get('gmode')} -> {gmode}{' (paused)' if gd.get('paused') else ''} at "
+                 f"{d.get('speed', 0) * 2.237:.0f} mph | far q {far_q(st)} | {st.get('status')}")
+            win['edge'] = win.get('edge', 0) + (1 if gmode in ('warn', 'hold', 'stop') else 0)
+        last['gmode'] = gmode
         for l in new_lines:
             if re.search(r'WARNING|ERROR|Traceback|Exception', l):
                 win['errors'] += 1
@@ -160,13 +192,13 @@ def main():
         if last.get('block') not in (None, bkey) and st.get('anchor') == last.get('anchor'):
             win['follow'] += 1
             followed_now = True
-            if d.get('p1b'):
+            if d.get('p1b') and 0.002 < d['p1b']['maxAbsDelta'] < 20.0:   # (larger: points past the moved block)
                 pb = d['p1b']
                 emit(f"ground stability across terrain move: max height change {pb['maxAbsDelta'] * 1000:.2f} mm over {pb['n']} points"
                      + ("  OK" if pb['maxAbsDelta'] <= 0.002 else "  CHANGED"))
             if not a.quiet or (st.get('followMs') or 0) > 100:
               emit(f"terrain-follow -> {bkey}  commit {st.get('followMs') or 0:.0f} ms  "
-                 f"(speed {d.get('speed', 0) * 3.6:.0f} km/h)")
+                 f"(speed {d.get('speed', 0) * 2.237:.0f} mph)")
         if last.get('anchor') not in (None, st.get('anchor')):
             win['rebase'] += 1
             emit(f"REBASE anchor {last.get('anchor')} -> {st.get('anchor')}  commit {st.get('rebaseMs') or 0:.0f} ms, "
@@ -187,7 +219,7 @@ def main():
         followed_now = False
         if (p.get('over50') or 0) > 0 and d.get('focused') and not routine:
             worst = ', '.join(f"{w[0]:.0f}" for w in (p.get('worst') or [])[:3])
-            crash = (f" | likely CRASH (speed -{d['speedDrop'] * 3.6:.0f} km/h)"
+            crash = (f" | likely CRASH (speed -{d['speedDrop'] * 2.237:.0f} mph)"
                      if d.get('speedDrop', 0) > 12 else '')
             emit(f"hitch: {p['over50']} frame(s) >50 ms (worst {worst} ms){crash} | fps {p.get('fps', 0):.0f} "
                  f"| far q {far.get('queued')} | {st.get('status')}")
@@ -210,15 +242,19 @@ def main():
 
         idle = win['dist'] < 1 and not win['follow'] and not win['rebase'] and not win['errors'] and not d.get('focused')
         if now - win['t0'] >= SUMMARY_S and idle:
+            win.update({'ready': [], 'edge': 0})
             win.update({'frames': 0, 'ms': 0.0, 'hitches': 0, 'max': 0.0, 'follow': 0, 'rebase': 0,
                         'serverCpu': 0.0, 'errors': 0, 't0': now, 'speedSum': 0.0, 'n': 0, 'dist': 0.0})
         if now - win['t0'] >= SUMMARY_S:
             fps = win['frames'] / (win['ms'] / 1000) if win['ms'] else 0
             emit(f"SUMMARY {now - win['t0']:.0f}s: avg {fps:.0f} fps, worst frame {win['max']:.0f} ms, "
                  f"{win['hitches']} hitch(es) >50 ms, {win['follow']} terrain-follow, {win['rebase']} rebase, "
-                 f"~{win['dist'] / 1000:.1f} km at avg {win['speedSum'] / max(1, win['n']) * 3.6:.0f} km/h, "
+                 f"~{win['dist'] / 1609.3:.1f} mi at avg {win['speedSum'] / max(1, win['n']) * 2.237:.0f} mph, "
+                 f"terrain ready median/max {_med(win.get('ready'))}/{max(win.get('ready') or [0])} ms "
+                 f"({len(win.get('ready') or [])} blocks), {win.get('edge', 0)} edge warning(s), "
                  f"server cpu {win['serverCpu'] / max(1, win['n']):.0f}% rss {rss or 0:.0f} MB, "
                  f"far live {far.get('live')}, errors {win['errors']}")
+            win.update({'ready': [], 'edge': 0})
             win.update({'frames': 0, 'ms': 0.0, 'hitches': 0, 'max': 0.0, 'follow': 0, 'rebase': 0,
                         'serverCpu': 0.0, 'errors': 0, 't0': now, 'speedSum': 0.0, 'n': 0, 'dist': 0.0})
 

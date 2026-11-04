@@ -21,6 +21,8 @@ laz = { version = "0.13", default-features = false }
 # The finished imagery tiles' JPEGs decoded inside the far-texture warp (fartex.rs: no GIL hand-over per tile);
 # zune-jpeg, pure Rust, MIT / Apache-2.0 / Zlib
 zune-jpeg = "0.5"
+# Stable traffic-piece priority, compatible with the original route stream's BLAKE2s-64 priorities.
+blake2 = "0.10"
 
 [profile.release]
 opt-level = 3

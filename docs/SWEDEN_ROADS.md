@@ -52,7 +52,7 @@ Not covered by the table above. Listed by subject from `git log`.
 
 Commit `25610804`. Before it, `junctions.find` drew a crosswalk on every arm with corners and a stop line behind it, as on a West Coast US street. A Swedish street is painted by rule (TSFS 2010:171): M15 only where a B3 stands or signals are (4 kap. 8 §), M13 only at a B2 or at signals (3 kap. 1, 3 §§). So a junction under the right-hand rule has nothing painted unless one of those stands there.
 
-`server/crossings.py` reads OpenStreetMap's nodes through Overture's infrastructure layer. M15 and M16 come from `crossing:markings`. Tallied 2026-11-02 within 1.5 km of the middle of Borås, Göteborg, Stockholm, Malmö and Umeå: 7427 crossings, 95% within 2 m of a road's centreline. Mid-block crossings are included, kerbs are lowered at unpainted ones, and a node on a junction is left out. Commit `1c0cde55` also passes the nodes to earthd's tile and AI graph paths, which `25610804` had missed (it gave them to blockworker only).
+`server/secrossings.py` reads OpenStreetMap's nodes through Overture's infrastructure layer. M15 and M16 come from `crossing:markings`. Tallied 2026-11-02 within 1.5 km of the middle of Borås, Göteborg, Stockholm, Malmö and Umeå: 7427 crossings, 95% within 2 m of a road's centreline. Mid-block crossings are included, kerbs are lowered at unpainted ones, and a node on a junction is left out. Commit `1c0cde55` also passes the nodes to earthd's tile and AI graph paths, which `25610804` had missed (it gave them to blockworker only).
 
 **Assumption:** a crossing with no word on its paint counts as painted. This is the tags' majority, not a certainty: 614 of 722 signal crossings that say have a zebra, and 296 of 492 unsignalled crossings that say are marked.
 
@@ -190,7 +190,7 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 | Sign sizes and lower edge | TSFS 2019:74 (4 kap. 1 §, 3 kap. 1 §, 1 kap. 13 §) | Sign sizes for fix 2 |
 | Minimum lane width | VGU 2024 K233046 | `markings.MIN_LANE_M` (2.75 m) |
 | Road meshes loaded by the game | `rs_*_road.cdae` files | Height-step checks on loaded tiles |
-| Crossing, stop-line and give-way nodes | OpenStreetMap nodes via Overture's infrastructure layer | `server/crossings.py`: paint, lowered kerbs, stop lines, priority signs |
+| Crossing, stop-line and give-way nodes | OpenStreetMap nodes via Overture's infrastructure layer | `server/secrossings.py`: paint, lowered kerbs, stop lines, priority signs |
 | Crossing and stop-line rules | TSFS 2010:171 (3 kap. 1, 3 §§; 4 kap. 4, 8, 9, 10 §§); VGU 2024 (9.3.8.1, 12.2.1.4.1); VGU K237740 | Marking sizes and positions in the City data section |
 
 ## Known limits

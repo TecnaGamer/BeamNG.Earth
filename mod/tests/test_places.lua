@@ -427,6 +427,31 @@ T.check(info.size[1] * info.size[2] > 5.1e14 and info.size[1] * info.size[2] < 5
 T.check(li.placeId(li.PREFIX .. '12') == 12 and li.placeId(li.RANDOM) == nil and li.placeId(nil) == nil, 'placeId')
 T.check(not li.previewKey(-33.731908, 150.312007):find('[-.]'), 'preview keys: file-name safe')
 
+-- the big map's POI list: core_levels sees our level's spawn points less ours (no scene objects: an error each)
+do
+  local levelTable = { levelName = 'beamng_earth', spawnPoints = info.spawnPoints }
+  local seen, updates = nil, 0
+  local stock = function(id, elements)
+    seen = {}
+    for _, sp in ipairs(core_levels.getLevelByName(id).spawnPoints) do seen[#seen + 1] = sp.objectname end
+  end
+  core_levels = { onGetRawPoiListForLevel = stock, getLevelByName = function() return levelTable end }
+  local savedExt = extensions
+  extensions = { hookUpdate = function(n) if n == 'onGetRawPoiListForLevel' then updates = updates + 1 end end }
+  T.check(li.isOurs(li.RANDOM) and li.isOurs(li.PREFIX .. '3') and not li.isOurs(li.DEFAULT) and not li.isOurs(nil),
+    'isOurs: Random and the places, not the default start')
+  T.check(li.hookSpawnPois() and li.hookSpawnPois() and updates == 1, 'POIs: wrapped once, the hook cache dropped')
+  core_levels.onGetRawPoiListForLevel('beamng_earth', {})
+  T.check(#seen == 1 and seen[1] == li.DEFAULT, 'POIs: only the default start reaches core_levels in our level')
+  T.check(levelTable.spawnPoints == info.spawnPoints and #levelTable.spawnPoints == 2 + #l2,
+    'POIs: the level select keeps every spawn point')
+  core_levels.onGetRawPoiListForLevel('italy', {})
+  T.check(#seen == 2 + #l2, 'POIs: another level as stock')
+  li.unhookSpawnPois()
+  T.check(core_levels.onGetRawPoiListForLevel == stock and updates == 2, 'POIs: the stock function back')
+  core_levels, extensions = nil, savedExt
+end
+
 -- "Where you left off": the car's place, saved while driving (at most every POS_EVERY_S, once moved POS_MOVE_M), and
 -- at once on a teleport, level end and game close (force)
 local PF = places.POS_FILE
@@ -438,4 +463,22 @@ T.check(not places.notePosition(nil, -75.0, 2000, true), 'a bad position: not wr
 places.noteTeleport(35.5, 139.7, 'x', 'teleport')
 T.check(files[PF].lat == 35.5 and places.lastPosition().lon == 139.7, 'a teleport: written at once')
 
+-- map links (the bug report form's location is an OpenStreetMap link; Google Maps' share links)
+do
+  local function near(a, b, x, y) return a and math.abs(a - x) < 1e-9 and math.abs(b - y) < 1e-9 end
+  local a, b = places.parseLatLon('https://www.openstreetmap.org/?mlat=47.564180&mlon=26.272906#map=17/47.564180/26.272906')
+  T.check(near(a, b, 47.56418, 26.272906), 'OpenStreetMap marker link')
+  a, b = places.parseLatLon('https://www.openstreetmap.org/#map=19/-37.754930/144.994372')
+  T.check(near(a, b, -37.75493, 144.994372), 'OpenStreetMap view link')
+  a, b = places.parseLatLon('https://www.google.com/maps/place/Stonehenge/@51.1788823,-1.8284037,17z/data=!3m1!4b1!4m6!3m5!1s0x0:0x0!8m2!3d51.1788823!4d-1.8262150')
+  T.check(near(a, b, 51.1788823, -1.826215), 'Google Maps place link: the place, not the view')
+  a, b = places.parseLatLon('https://www.google.com/maps/@40.553176,-105.079734,15z')
+  T.check(near(a, b, 40.553176, -105.079734), 'Google Maps view link')
+  a, b = places.parseLatLon('https://maps.google.com/?q=63.768%2C-18.133')
+  T.check(near(a, b, 63.768, -18.133), 'Google Maps query link, comma escaped')
+  a, b = places.parseLatLon('https://www.google.com/maps/search/?api=1&query=-23.88319,-46.49485')
+  T.check(near(a, b, -23.88319, -46.49485), 'Google Maps search link')
+  T.check(places.parseLatLon('https://www.openstreetmap.org/way/167488546') == nil, 'a link without a point')
+  T.check(places.parseMapLink('41.66214 -72.76497') == nil, 'plain numbers are not a link')
+end
 T.done('test_places')

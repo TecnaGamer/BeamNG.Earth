@@ -2,8 +2,9 @@
 -- status bar at the top of the screen, like BeamMP ... level loading / performance and location info like street,
 -- city, country ... simple and precise"). One line, top centre:
 --   Thames Street  |  Baltimore, Maryland, United States  |  Loading 120/433
--- The street comes from the server's map data (geocode.nearest_street), the town / state / country from Photon's
--- reverse geocoding with the position rounded to ~1 km (setting placeNamesOnline); asked with a 'where' message when
+-- The street comes from the server's map data (geocode.nearest_street), the town / state / country from its own copy
+-- of Overture's divisions (placenames.py; setting placeNamesOnline, a name kept from when Photon was asked: GitHub
+-- #602; a region not downloaded yet answers in a second where_result); asked with a 'where' message when
 -- the car moved WHERE_STREET_M (street) / WHERE_PLACE_M (place), at most every WHERE_MIN_S. Loading shows while the
 -- world fills in. Drawn like credits.lua (a background draw-list rectangle and one text, measured only when the text
 -- or the viewport changed); hidden in the pause menu and on the map (core passes credits.hiddenByUi()).

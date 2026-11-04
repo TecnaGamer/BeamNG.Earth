@@ -68,7 +68,7 @@ class PavementCornerTest(unittest.TestCase):
         mat = surface.paint_roads(np.full(e.shape, surface.GRASS, np.uint8), la, lo, [f], 0.25)
         self.assertEqual(mat[150, 150], surface.ASPHALT, "(5.5, 5.5) is between the old square corner and the arc")
         self.assertNotEqual(mat[168, 168], surface.ASPHALT, "(10, 10) stays roadside")
-        self.assertEqual(mat[164, 164], surface.VERGE, "(9, 9): a bare verge round the corner, as along the roads")
+        self.assertEqual(mat[162, 162], surface.VERGE, "(8.5, 8.5): a bare verge round the corner, as along the roads")
         self.assertEqual(mat[168, 168], surface.GRASS)
         image = np.full((257, 257, 3), 230, np.uint8)
         photo = surface.photo_roads(image, FRAME, -32.0, -32.0, 64.0, [f])
@@ -105,7 +105,8 @@ class PavementCornerTest(unittest.TestCase):
         cx, cy = np.r_[t, np.zeros(61)], np.r_[np.zeros(61), t]
         base = np.full(len(cx), 16.0)
         np.testing.assert_allclose(grading.grade_points(cx, cy, base, [p for _, p in plans + extra]),
-                                   grading.grade_points(cx, cy, base, [p for _, p in plans]), atol=0.07)
+                                   grading.grade_points(cx, cy, base, [p for _, p in plans]), atol=0.09)
+        # (0.09: the segments' lines carried on past their joints, grading.EXTRAP_M, 7.8 cm at 9 m from the junction)
         # two streets (a sidewalk-wide flat shoulder each, in the country too): their corners are on it already
         _, rows, _ = roadcorners.source([crossing()], frame=FRAME)
         self.assertEqual(roadcorners.grade([(fid, sp, np.c_[p[:, :2], np.full(len(p), 10.0)], lon)

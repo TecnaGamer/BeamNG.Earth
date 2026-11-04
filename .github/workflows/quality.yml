@@ -1,0 +1,38 @@
+name: foundation quality
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dependencies
+        run: python -m pip install -r server/requirements.txt lupa==2.8
+      - name: Build required native kernels
+        run: python tools/build_native.py
+      - name: Foundation regression and package gate
+        run: python tools/quality_gate.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-logs-${{ matrix.os }}
+          path: build/quality-tests/*.log
+          if-no-files-found: warn

@@ -181,6 +181,36 @@ class OverpassIntegrationTest(unittest.TestCase):
         self.assertLess(np.abs(z - FLAT).max(), 0.05, "the motorway's approaches stay on the ground")
 
 
+class EmbankmentApproachTest(unittest.TestCase):
+    """Kurna - Tuhala over Tallinna ringtee (59.3364 N 24.8239 E, GitHub #684): the road reaches the bridge on
+    embankments 6 m over the ring road, but lidar ground has the bridge taken out and its map line ends down their
+    slopes. The approach was filled up the slope to the road (fill_abutment), then raised again by the whole lift the
+    deck needed over the ground at the bridge's end point: the deck end 6 m over the embankment."""
+
+    @staticmethod
+    def embankment(la, lo):
+        x = np.abs(np.asarray(FRAME.geodetic_to_enu(la, lo, 0.0)[0], np.float64))
+        return np.clip(FLAT + 6.0 * (x - 35.0) / 10.0, FLAT, FLAT + 6.0)  # 16 m out from 45 m, down to 10 at the ends
+
+    def test_deck_end_raised_only_by_what_it_lacks(self):
+        f = overpass()
+        g = grading.Grader(FRAME, FakeMD(f), self.embankment)
+
+        def elev(la, lo):
+            return g.apply(la, lo, self.embankment(la, lo), grading.ROAD_LIFT)
+        parts = roads.BridgeProfiles(FRAME, lambda key: f, elev).parts([f], (-100, -100, 100, 100))
+        self.assertEqual(len(parts), 1)
+        _fid, _spec, xy, z, _lon = parts[0]
+        z = np.asarray(z, np.float64)
+        depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
+        need = FLAT + roads.deck_road_clear(depth) + grading.APPROACH_MARGIN_M     # (7.7 m: 2 m over the embankment)
+        self.assertAlmostEqual(z[0], need, delta=0.5, msg="up to the clearance, not the lift again over the fill")
+        self.assertAlmostEqual(z[-1], need, delta=0.5)
+        lanes = elev(*FRAME.enu_to_geodetic(np.array([-12.0, 12.0]), np.array([0.0, 0.0]), 0.0)[:2])
+        over = np.interp([-12.0, 12.0], np.asarray(xy)[:, 0], z) - lanes
+        self.assertGreaterEqual(over.min(), roads.deck_road_clear(depth) - 0.05, "still clears the motorway")
+
+
 class TwinKeepTest(unittest.TestCase):
     def test_twins_kept_ground_only_where_both_run(self):
         # GitHub #84: one twin's portal 3 m deeper than the other's; the other's kept ground reached over its approach

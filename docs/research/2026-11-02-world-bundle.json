@@ -1,0 +1,627 @@
+{
+  "schema": 1,
+  "fixture": "two synthetic roads, flat 10 m elevation, 256 geographic samples",
+  "scope": "Road-plan generation and loopback bundle distribution; two isolated Graders in one process",
+  "limitations": [
+    "No BeamNG/BeamMP runtime",
+    "No real geographic provider downloads",
+    "No FPS, full-world loading or cross-machine determinism measurement",
+    "Producer/export/verification overhead is included; this tiny fixture may be slower overall",
+    "Caches are application-cold per iteration; OS filesystem cache is not flushed"
+  ],
+  "hardware": {
+    "cpu": "AMD Ryzen 7 7700X 8-Core Processor",
+    "logical_processors": 16,
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.7"
+  },
+  "iterations": [
+    {
+      "fixture": {
+        "roads_m": [
+          [
+            [
+              -300,
+              20
+            ],
+            [
+              300,
+              20
+            ]
+          ],
+          [
+            [
+              0,
+              -300
+            ],
+            [
+              0,
+              300
+            ]
+          ]
+        ],
+        "classes": [
+          "residential",
+          "secondary"
+        ],
+        "elevation_m": 10.0,
+        "sample_count": 256,
+        "sample_east_m": [
+          -200,
+          200
+        ],
+        "sample_north_m": [
+          -30,
+          60
+        ],
+        "origin_lat_lon": [
+          39.2834,
+          -76.5934
+        ]
+      },
+      "manifest_id": "e74ec34b1c7e9e954cc40eeeda0e2d2e43338213b6fcd4c661e2df2e4bcb9aca",
+      "generator": {
+        "code": "a5225b0efe5d6d41-116-44136fa355b3678a",
+        "native": 116
+      },
+      "numpy": "2.5.4",
+      "baseline": {
+        "client_grade_ms": [
+          24.338999995961785,
+          13.4141999296844
+        ],
+        "total_grade_ms": 37.753199925646186,
+        "cold_total_ms": 37.79680002480745,
+        "source_cell_calls": [
+          19,
+          19
+        ],
+        "source_elevation_calls": [
+          4,
+          4
+        ]
+      },
+      "shared": {
+        "producer_grade_ms": 62.0840999763459,
+        "producer_source_cell_calls": 19,
+        "producer_elevation_calls": 4,
+        "export_ms": 53.78519999794662,
+        "serve_setup_ms": 39.84800004400313,
+        "concurrent_client_fetch_ms": 60.985100106336176,
+        "client_grade_ms": [
+          18.317700014449656,
+          17.0885999687016
+        ],
+        "client_source_cell_calls": [
+          0,
+          0
+        ],
+        "client_plan_reads": [
+          2,
+          2
+        ],
+        "client_source_elevation_calls": [
+          0,
+          0
+        ],
+        "cold_total_ms": 255.72130002547055,
+        "warm_fetch_ms": 45.761800021864474,
+        "client_transfers": [
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          },
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          }
+        ],
+        "warm_requests": 0,
+        "server_transfers": {
+          "requests": 6,
+          "bytes": 26450
+        },
+        "artifacts": 2,
+        "unique_blobs": 2
+      },
+      "verification": {
+        "equal_geographic_sample_heights": true,
+        "different_anchor_frames": true,
+        "isolated_client_directories": true,
+        "pinned_source_cell_calls": 0,
+        "pinned_source_elevation_calls": 0,
+        "warm_network_requests": 0,
+        "height_sha256": "a3bd1fc7647b5884a30b1817463b5eb96fa06ba9631c7425d9b18722b8da13ed"
+      }
+    },
+    {
+      "fixture": {
+        "roads_m": [
+          [
+            [
+              -300,
+              20
+            ],
+            [
+              300,
+              20
+            ]
+          ],
+          [
+            [
+              0,
+              -300
+            ],
+            [
+              0,
+              300
+            ]
+          ]
+        ],
+        "classes": [
+          "residential",
+          "secondary"
+        ],
+        "elevation_m": 10.0,
+        "sample_count": 256,
+        "sample_east_m": [
+          -200,
+          200
+        ],
+        "sample_north_m": [
+          -30,
+          60
+        ],
+        "origin_lat_lon": [
+          39.2834,
+          -76.5934
+        ]
+      },
+      "manifest_id": "e74ec34b1c7e9e954cc40eeeda0e2d2e43338213b6fcd4c661e2df2e4bcb9aca",
+      "generator": {
+        "code": "a5225b0efe5d6d41-116-44136fa355b3678a",
+        "native": 116
+      },
+      "numpy": "2.5.4",
+      "baseline": {
+        "client_grade_ms": [
+          15.03400004003197,
+          13.217399944551289
+        ],
+        "total_grade_ms": 28.25139998458326,
+        "cold_total_ms": 28.27929996419698,
+        "source_cell_calls": [
+          19,
+          19
+        ],
+        "source_elevation_calls": [
+          4,
+          4
+        ]
+      },
+      "shared": {
+        "producer_grade_ms": 27.770399930886924,
+        "producer_source_cell_calls": 19,
+        "producer_elevation_calls": 4,
+        "export_ms": 28.5061999456957,
+        "serve_setup_ms": 32.966300030238926,
+        "concurrent_client_fetch_ms": 59.83849999029189,
+        "client_grade_ms": [
+          21.676499978639185,
+          17.264300025999546
+        ],
+        "client_source_cell_calls": [
+          0,
+          0
+        ],
+        "client_plan_reads": [
+          2,
+          2
+        ],
+        "client_source_elevation_calls": [
+          0,
+          0
+        ],
+        "cold_total_ms": 191.77359994500875,
+        "warm_fetch_ms": 38.29679999034852,
+        "client_transfers": [
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          },
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          }
+        ],
+        "warm_requests": 0,
+        "server_transfers": {
+          "requests": 6,
+          "bytes": 26450
+        },
+        "artifacts": 2,
+        "unique_blobs": 2
+      },
+      "verification": {
+        "equal_geographic_sample_heights": true,
+        "different_anchor_frames": true,
+        "isolated_client_directories": true,
+        "pinned_source_cell_calls": 0,
+        "pinned_source_elevation_calls": 0,
+        "warm_network_requests": 0,
+        "height_sha256": "a3bd1fc7647b5884a30b1817463b5eb96fa06ba9631c7425d9b18722b8da13ed"
+      }
+    },
+    {
+      "fixture": {
+        "roads_m": [
+          [
+            [
+              -300,
+              20
+            ],
+            [
+              300,
+              20
+            ]
+          ],
+          [
+            [
+              0,
+              -300
+            ],
+            [
+              0,
+              300
+            ]
+          ]
+        ],
+        "classes": [
+          "residential",
+          "secondary"
+        ],
+        "elevation_m": 10.0,
+        "sample_count": 256,
+        "sample_east_m": [
+          -200,
+          200
+        ],
+        "sample_north_m": [
+          -30,
+          60
+        ],
+        "origin_lat_lon": [
+          39.2834,
+          -76.5934
+        ]
+      },
+      "manifest_id": "e74ec34b1c7e9e954cc40eeeda0e2d2e43338213b6fcd4c661e2df2e4bcb9aca",
+      "generator": {
+        "code": "a5225b0efe5d6d41-116-44136fa355b3678a",
+        "native": 116
+      },
+      "numpy": "2.5.4",
+      "baseline": {
+        "client_grade_ms": [
+          11.226199916563928,
+          10.973599972203374
+        ],
+        "total_grade_ms": 22.199799888767302,
+        "cold_total_ms": 22.219400038011372,
+        "source_cell_calls": [
+          19,
+          19
+        ],
+        "source_elevation_calls": [
+          4,
+          4
+        ]
+      },
+      "shared": {
+        "producer_grade_ms": 93.66519993636757,
+        "producer_source_cell_calls": 19,
+        "producer_elevation_calls": 4,
+        "export_ms": 44.15209998842329,
+        "serve_setup_ms": 31.346999923698604,
+        "concurrent_client_fetch_ms": 53.76939999405295,
+        "client_grade_ms": [
+          14.339999994263053,
+          14.384299982339144
+        ],
+        "client_source_cell_calls": [
+          0,
+          0
+        ],
+        "client_plan_reads": [
+          2,
+          2
+        ],
+        "client_source_elevation_calls": [
+          0,
+          0
+        ],
+        "cold_total_ms": 255.13019994832575,
+        "warm_fetch_ms": 48.573600011877716,
+        "client_transfers": [
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          },
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          }
+        ],
+        "warm_requests": 0,
+        "server_transfers": {
+          "requests": 6,
+          "bytes": 26450
+        },
+        "artifacts": 2,
+        "unique_blobs": 2
+      },
+      "verification": {
+        "equal_geographic_sample_heights": true,
+        "different_anchor_frames": true,
+        "isolated_client_directories": true,
+        "pinned_source_cell_calls": 0,
+        "pinned_source_elevation_calls": 0,
+        "warm_network_requests": 0,
+        "height_sha256": "a3bd1fc7647b5884a30b1817463b5eb96fa06ba9631c7425d9b18722b8da13ed"
+      }
+    },
+    {
+      "fixture": {
+        "roads_m": [
+          [
+            [
+              -300,
+              20
+            ],
+            [
+              300,
+              20
+            ]
+          ],
+          [
+            [
+              0,
+              -300
+            ],
+            [
+              0,
+              300
+            ]
+          ]
+        ],
+        "classes": [
+          "residential",
+          "secondary"
+        ],
+        "elevation_m": 10.0,
+        "sample_count": 256,
+        "sample_east_m": [
+          -200,
+          200
+        ],
+        "sample_north_m": [
+          -30,
+          60
+        ],
+        "origin_lat_lon": [
+          39.2834,
+          -76.5934
+        ]
+      },
+      "manifest_id": "e74ec34b1c7e9e954cc40eeeda0e2d2e43338213b6fcd4c661e2df2e4bcb9aca",
+      "generator": {
+        "code": "a5225b0efe5d6d41-116-44136fa355b3678a",
+        "native": 116
+      },
+      "numpy": "2.5.4",
+      "baseline": {
+        "client_grade_ms": [
+          13.911199988797307,
+          12.801700038835406
+        ],
+        "total_grade_ms": 26.712900027632713,
+        "cold_total_ms": 26.73430007416755,
+        "source_cell_calls": [
+          19,
+          19
+        ],
+        "source_elevation_calls": [
+          4,
+          4
+        ]
+      },
+      "shared": {
+        "producer_grade_ms": 81.4312999136746,
+        "producer_source_cell_calls": 19,
+        "producer_elevation_calls": 4,
+        "export_ms": 28.404699987731874,
+        "serve_setup_ms": 23.292899946682155,
+        "concurrent_client_fetch_ms": 74.414600036107,
+        "client_grade_ms": [
+          12.20560004003346,
+          12.006099917925894
+        ],
+        "client_source_cell_calls": [
+          0,
+          0
+        ],
+        "client_plan_reads": [
+          2,
+          2
+        ],
+        "client_source_elevation_calls": [
+          0,
+          0
+        ],
+        "cold_total_ms": 234.79329992551357,
+        "warm_fetch_ms": 27.98470004927367,
+        "client_transfers": [
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          },
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          }
+        ],
+        "warm_requests": 0,
+        "server_transfers": {
+          "requests": 6,
+          "bytes": 26450
+        },
+        "artifacts": 2,
+        "unique_blobs": 2
+      },
+      "verification": {
+        "equal_geographic_sample_heights": true,
+        "different_anchor_frames": true,
+        "isolated_client_directories": true,
+        "pinned_source_cell_calls": 0,
+        "pinned_source_elevation_calls": 0,
+        "warm_network_requests": 0,
+        "height_sha256": "a3bd1fc7647b5884a30b1817463b5eb96fa06ba9631c7425d9b18722b8da13ed"
+      }
+    },
+    {
+      "fixture": {
+        "roads_m": [
+          [
+            [
+              -300,
+              20
+            ],
+            [
+              300,
+              20
+            ]
+          ],
+          [
+            [
+              0,
+              -300
+            ],
+            [
+              0,
+              300
+            ]
+          ]
+        ],
+        "classes": [
+          "residential",
+          "secondary"
+        ],
+        "elevation_m": 10.0,
+        "sample_count": 256,
+        "sample_east_m": [
+          -200,
+          200
+        ],
+        "sample_north_m": [
+          -30,
+          60
+        ],
+        "origin_lat_lon": [
+          39.2834,
+          -76.5934
+        ]
+      },
+      "manifest_id": "e74ec34b1c7e9e954cc40eeeda0e2d2e43338213b6fcd4c661e2df2e4bcb9aca",
+      "generator": {
+        "code": "a5225b0efe5d6d41-116-44136fa355b3678a",
+        "native": 116
+      },
+      "numpy": "2.5.4",
+      "baseline": {
+        "client_grade_ms": [
+          14.469300047494471,
+          12.601400027051568
+        ],
+        "total_grade_ms": 27.07070007454604,
+        "cold_total_ms": 27.09850005339831,
+        "source_cell_calls": [
+          19,
+          19
+        ],
+        "source_elevation_calls": [
+          4,
+          4
+        ]
+      },
+      "shared": {
+        "producer_grade_ms": 91.28789999522269,
+        "producer_source_cell_calls": 19,
+        "producer_elevation_calls": 4,
+        "export_ms": 28.036899981088936,
+        "serve_setup_ms": 20.9931000135839,
+        "concurrent_client_fetch_ms": 49.43130002357066,
+        "client_grade_ms": [
+          11.48860005196184,
+          11.463599978014827
+        ],
+        "client_source_cell_calls": [
+          0,
+          0
+        ],
+        "client_plan_reads": [
+          2,
+          2
+        ],
+        "client_source_elevation_calls": [
+          0,
+          0
+        ],
+        "cold_total_ms": 216.51259995996952,
+        "warm_fetch_ms": 28.35190005134791,
+        "client_transfers": [
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          },
+          {
+            "requests": 3,
+            "bytes": 13225,
+            "warm": false
+          }
+        ],
+        "warm_requests": 0,
+        "server_transfers": {
+          "requests": 6,
+          "bytes": 26450
+        },
+        "artifacts": 2,
+        "unique_blobs": 2
+      },
+      "verification": {
+        "equal_geographic_sample_heights": true,
+        "different_anchor_frames": true,
+        "isolated_client_directories": true,
+        "pinned_source_cell_calls": 0,
+        "pinned_source_elevation_calls": 0,
+        "warm_network_requests": 0,
+        "height_sha256": "a3bd1fc7647b5884a30b1817463b5eb96fa06ba9631c7425d9b18722b8da13ed"
+      }
+    }
+  ],
+  "median_ms": {
+    "baseline_two_client_cold": 27.09850005339831,
+    "baseline_two_client_grading": 27.07070007454604,
+    "shared_cold_total": 234.79329992551357,
+    "shared_two_client_grading": 28.724299976602197,
+    "shared_warm_fetch": 38.29679999034852
+  }
+}

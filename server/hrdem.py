@@ -44,7 +44,7 @@ NODATA_LIMIT = -1000.0          # heights below this are nodata (the files' -327
 BOUNDS = (41.6, -141.1, 62.0, -52.5)
 TILE = 512                      # dem.py's tile size
 TILE_CACHE_BYTES = 256 * 1024 * 1024
-LATTICE_M = 2.0                 # m: the terrain's lattice; finer mosaic pixels are not read (z16's 0.8 m: the 2 m overview)
+LATTICE_M = 1.0                 # m: the terrain's lattice; finer mosaic pixels are not read (z16's 0.8 m: the 1 m overview)
 MAX_LEVEL = 8                   # overviews asked down to 2^8 = 256 m pixels (dem.py asks z13 and deeper: <= 12 m)
 
 # EPSG:3979: NAD83(CSRS) / Canada Atlas Lambert

@@ -246,5 +246,26 @@ class MarkTest(unittest.TestCase):
         self.assertFalse([c for c in aisle if c.get("m") == edge])
 
 
+
+class HitsTest(unittest.TestCase):
+    """_hits: per point, in any polygon, the same as testing each point against each polygon."""
+
+    def test_matches_point_by_point(self):
+        from polygon import Path
+        rng = np.random.default_rng(3)
+        rings = [np.array([[0, 0], [10, 0], [10, 10], [0, 10]], float),
+                 np.array([[20, 5], [30, 5], [25, 15]], float),
+                 np.array([[200, 200], [210, 200], [210, 210]], float)]     # (far: skipped by its box)
+        paths = [Path(r) for r in rings]
+        pts = rng.uniform(-5, 35, (400, 2))
+        want = [any(bool(p.contains_points(q[None])[0]) for p in paths) for q in pts]
+        self.assertEqual(parking._hits(paths, pts).tolist(), want)
+        self.assertTrue(any(want) and not all(want))
+
+    def test_empty(self):
+        self.assertEqual(parking._hits([], np.zeros((3, 2))).tolist(), [False] * 3)
+        self.assertEqual(len(parking._hits([], [])), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

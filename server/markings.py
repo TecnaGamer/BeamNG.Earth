@@ -321,7 +321,7 @@ def _past_crossing(along, st, crosswalks, spec, at, gap, room):
 def stop_lines(arms, crosswalks, mapped=None, left_hand=False):
     """(stop lines [{"a", "b", "w", "stop": True}], line cuts {fid: [(junction point, u, m along)]}) of arms [(fid, spec,
     centreline from the junction, half the crossing road's width, what)] (furniture.give_way_arms): M13 across the lanes
-    coming in, where the map has it (mapped: (n, 2), crossings.nodes) or else at least 1.0 m from the crossing road's
+    coming in, where the map has it (mapped: (n, 2), secrossings.nodes) or else at least 1.0 m from the crossing road's
     edge (VGU 2024 12.2.1.4.1), and at signals before any crossing. The road's lines end at it."""
     import furniture
     out, cuts = [], {}

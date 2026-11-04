@@ -1,8 +1,17 @@
 -- luajit mod/tests/test_follow.lua  (terrain-follow math and rule, V1_1_SPEC 1a, V1_2_DESIGN 1.2, 2.3)
 local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
 local f = require('beamngEarth/follow')
+local lattice = require('beamngEarth/lattice')
 
--- block geometry: 1024 samples at exactly 2.0 m, collidable width (N-1)*s = 2046 m (P1)
+-- the default since 2026-11-01: 1024 samples at 1 m, the 1 km table (as 512² at 2 m)
+T.check(f.SQUARE_SIZE == 1.0 and f.SIZE == 1024 and f.HALF == 512 and f.GRID == 128 and f.PREPARE_DIST == 128
+  and f.REACH == 260 and f.MIN_LEAD == 256, 'default: 1024 x 1 m, the 1 km table')
+local dx0 = f.blockOrigin(128, 0)
+T.check(dx0 == -384, '1 m: block position = cx - 512')
+
+-- the v1.3.1 block: 1024 samples at exactly 2.0 m, collidable width (N-1)*s = 2046 m (P1)
+lattice.configure(1024, 2.0)
+f.configure()
 T.check(f.SQUARE_SIZE == 2.0, 'squareSize = 2.0 (world-locked lattice)')
 T.check((f.SIZE - 1) * f.SQUARE_SIZE == 2046, 'collidable width (N-1)*s = 2046 m')
 T.check(f.REACH == 420, 'REACH = 1020 - 600 = 420 m (same as the server predict_centre)')
@@ -79,9 +88,8 @@ T.check(tx == 256, '1024 at 400 m/s: still the 420 m reach (no fast mode)')
 
 ------------------------------------------------------------------------------------------
 -- M4 (docs/V1_4_SPEC.md 3.5): the 512² table, its fast mode and the commit-time re-check
-local lattice = require('beamngEarth/lattice')
-lattice.configure(512)
-T.check(f.configure(512) == 512, 'configure(512)')
+lattice.configure(512, 2.0)
+T.check(f.configure() == 512, 'configure: the 512² block at 2 m')
 T.check(f.SIZE == 512 and f.HALF == 512 and f.GRID == 128 and f.PREPARE_DIST == 128 and f.COMMIT_DIST == 192
   and f.HARD_COMMIT_DIST == 320 and f.EDGE_MARGIN == 250 and f.REACH == 260 and f.LOOKAHEAD_S == 5
   and f.RECHECK_S == 2 and f.FAST_MODE_V == 150, '512 table active')
@@ -284,8 +292,8 @@ T.check(jit134 >= 150, string.format('134 m/s, 0.3-1.2 s latency per request, al
 T.check(jitAcc >= f.EDGE_MARGIN_FAST, string.format('100 -> 200 m/s through the fast mode: >= 90 m inside (min %.0f m)', jitAcc))
 
 -- back to 1024²: the table and the derived locals
-lattice.configure(1024)
-T.check(f.configure(1024) == 1024 and f.configure(4096) == 1024, 'configure(1024); unknown sizes -> 1024')
+lattice.configure(1024, 2.0)
+T.check(f.configure() == 1024, 'configure: the 1024² block at 2 m')
 T.check(f.SIZE == 1024 and f.HALF == 1024 and f.GRID == 256 and f.REACH == 420 and f.PREPARE_DIST == 300
   and f.RECHECK_S == 0, '1024 table restored')
 tx = f.target(0, 0, 200, 0)
@@ -299,4 +307,41 @@ T.check(not f.altitudeHold(true, 500, -50, 0), 'a 50 m/s descent from 500 m resu
 T.check(not f.altitudeHold(false, 400, -20, 0), 'a 20 m/s descent at 400 m does not start holding')
 T.check(f.altitudeHold(false, 1400, 0, 1000), 'heights above the ground ahead, not above z = 0')
 
+-- the hard commit distance follows the edge guard's warning distance (braking distance): a ready block held by the
+-- uncover gate is taken before the warning would show (the user's 116 mph Baltimore drive, 2026-11-01)
+lattice.configure(1024, 1.0)
+f.configure()
+local eg = require('beamngEarth/edgeguard')
+T.check(f.hardCommitDist(0, 0) == f.HARD_COMMIT_DIST, 'at rest: the fixed hard commit distance')
+local v116 = 52
+local want = (f.HALF - f.SQUARE_SIZE) - eg.warnDistance(v116) - f.COMMIT_MARGIN
+T.check(math.abs(f.hardCommitDist(v116, 0) - want) < 1e-9 and want < f.HARD_COMMIT_DIST and want > f.COMMIT_DIST,
+  '116 mph: before the warning distance (' .. string.format('%.0f', want) .. ' m)')
+local want200 = (f.HALF - f.SQUARE_SIZE) - f.warnCap() - f.COMMIT_MARGIN
+T.check(math.abs(f.hardCommitDist(90, 0) - want200) < 1e-9 and want200 >= f.COMMIT_DIST,
+  '200 mph: before the healthy warning cap, never nearer than the commit distance (' .. string.format('%.0f', want200) .. ' m)')
+T.check(f.warnCap() == f.HALF - f.SQUARE_SIZE - f.COMMIT_DIST - f.WARN_LATE_M and f.warnCap() > eg.WARN_M,
+  'the warning cap: WARN_LATE_M past the commit distance')
+local closed = function() return false end
+T.check(f.decide(want + 1, 0, v116, 0, 0, 0, { cx = 384, cy = 0, ready = true }, 0, 0, closed, 0.3) == 'commit',
+  'a gate-held ready block: committed past the speed\'s hard commit distance')
+T.check(f.decide(want - 1, 0, v116, 0, 0, 0, { cx = 384, cy = 0, ready = true }, 0, 0, closed, 0.3) == nil,
+  '... and still held before it')
+-- a block taken from the server's ready set (preferReady) is never re-checked away for not being the target: the
+-- re-check dropped it and the next frame took it again, every 0.1-0.3 s, never committed (Midtown, 200 mph, 2026-11-02)
+lattice.configure(512, 2.0)
+f.configure()
+do
+  local vx37, vy37 = 134 * math.cos(math.rad(37)), 134 * math.sin(math.rad(37))
+  local pend = { cx = 4480, cy = 3456, ready = true }
+  T.check(f.decide(4671.3, 3520.1, vx37, vy37, 4480, 3328, pend, 0, 0, nil, 0.3) == 'discard', 'a target: re-checked')
+  pend.preferred = true
+  T.check(f.decide(4671.3, 3520.1, vx37, vy37, 4480, 3328, pend, 0, 0, nil, 0.3) == 'commit',
+    'the same block taken from the ready set: committed')
+  f.setReady({ { 384, 128 } })
+  local a, tx, ty, preferred = f.decide(200, 0, 40, 0, 0, 0, nil, 0, 0)
+  T.check(a == 'prepare' and tx == 384 and ty == 128 and preferred == true, 'prepare marks a ready block as preferred: '
+    .. tostring(a) .. ' ' .. tostring(tx) .. ' ' .. tostring(preferred))
+  f.setReady({})
+end
 T.done('test_follow')

@@ -188,6 +188,28 @@
     "groundType": "GRASS",
     "translucent": false
   },
+  "bne_highway_concrete": {
+    "name": "bne_highway_concrete",
+    "mapTo": "bne_highway_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "bc1b6d10-11af-5832-a1ba-19f3c7c6d37b",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_b.color.png",
+        "normalMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_nm.normal.png",
+        "roughnessMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/decalroad/concrete/decalroad_concrete/t_highway_concrete_ao.data.png",
+        "metallicFactor": 0,
+        "pixelSpecular": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "translucent": false
+  },
   "bne_bridge_concrete": {
     "name": "bne_bridge_concrete",
     "mapTo": "bne_bridge_concrete",
@@ -606,6 +628,33 @@
       {}
     ],
     "groundType": "ASPHALT",
+    "translucent": false
+  },
+  "bne_wall_scree": {
+    "name": "bne_wall_scree",
+    "mapTo": "bne_wall_scree",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "89fea456-d542-5544-a477-307c8aef4301",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_b.png",
+        "normalMap": "/assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_nm.png",
+        "roughnessMap": "/assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_r.png",
+        "ambientOcclusionMap": "/assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_ao.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.62,
+          0.6,
+          0.56,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRASS",
     "translucent": false
   }
 }

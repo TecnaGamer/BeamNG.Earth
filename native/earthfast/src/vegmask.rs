@@ -259,7 +259,10 @@ pub fn thin_tops<'py>(py: Python<'py>, jj: PyReadonlyArray1<'py, i64>, ii: PyRea
     let h = h.as_slice().unwrap().to_vec();
     let n = jj.len();
     let keep = py.allow_threads(|| {
-        let rad: Vec<f32> = h.iter().map(|&v| spacing * (0.12f32 * v + 1.0f32) / px).collect();
+        // (at least MIN_RAD_PX: a 9 m tree's 0.87 px let every pixel of a flat crown in the canopy map, its heights
+        // whole metres, stand as its own tree: clusters of up to 9 trees in 3 m by East Pratt Street, 2026-10-31)
+        const MIN_RAD_PX: f32 = 1.5;
+        let rad: Vec<f32> = h.iter().map(|&v| (spacing * (0.12f32 * v + 1.0f32) / px).max(MIN_RAD_PX)).collect();
         let mut order: Vec<usize> = (0..n).collect();
         // np.lexsort((ii, jj, -h)): by -h, then jj, then ii (stable)
         order.sort_by(|&a, &b| {

@@ -53,6 +53,19 @@ class PoolTest(unittest.TestCase):
         self.assertEqual(p.reclaim(cks), 2)
         self.assertTrue(p.owns(cks[1], p.name(1)))
 
+    def test_take_skips_new_hold_and_uses_another_free_slot(self):
+        held = set()
+        p = matslots.MatSlots("ab12", held=lambda n: n in held)
+        a, b = p.take("a"), p.take("b")
+        p.release("a")
+        p.release("b")
+        held.add(p.number(b))              # a hello restored the top free slot's hold
+        self.assertEqual(p.take("c"), a)
+        self.assertEqual(p.stats(), {"made": 2, "owned": 1, "free": 0, "waiting": 1})
+        held.clear()
+        p.unheld(p.number(b))
+        self.assertEqual(p.take("d"), b)
+
     def test_restamp_same_length(self):
         data = b"\x01\x16bngEarthFar_ab12_00003\x03rest"
         out = matslots.restamp(data, "bngEarthFar_ab12_00003", "bngEarthFar_ab12_00104")
@@ -171,6 +184,30 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.s.matslots.stats()["free"], 0)
         earthd.Connection.slots_gone(c, [[n, 5]])
         self.assertEqual(self.s.matslots.stats(), {"made": 1, "owned": 0, "free": 1, "waiting": 0})
+
+    def test_reconnect_snapshot_protects_a_slot_already_in_free(self):
+        """Post-hello guard only: this does not protect the disconnected interval."""
+        c = Conn()
+        c.s = self.s
+        self.s.connections.add(c)
+        name = self.s.matslots.take(("shape", 1))
+        n = matslots.MatSlots.number(name)
+        c.slot_holds[n] = 5
+        self.s.matslots.release(("shape", 1))  # pool_shapes releases its owner, leaving the game hold
+        self.assertEqual(self.s.matslots.stats()["waiting"], 1)
+        self.s.connections.discard(c)        # Connection.run's disconnect cleanup
+        self.s.slots_let_go([n])
+        self.assertIn(n, self.s.matslots.free)
+        reconnect = Conn()
+        reconnect.s = self.s
+        reconnect.slot_holds[n] = 5          # hello restores slotsHeld before allocating new shapes
+        self.s.connections.add(reconnect)
+        self.assertNotEqual(self.s.matslots.take(("shape", 2)), name)
+        self.assertNotIn(n, self.s.matslots.free)
+        self.assertIn(n, self.s.matslots.waiting)
+        earthd.Connection.slots_gone(reconnect, [[n, 5]])
+        self.assertNotIn(n, self.s.matslots.waiting)
+        self.assertEqual(self.s.matslots.take(("shape", 3)), name)
 
     def test_road_shapes_pooled_and_held(self):
         c = Conn()

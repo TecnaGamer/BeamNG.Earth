@@ -39,7 +39,7 @@ class GraphicsMessageTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.s = earthd.Server(self.tmp.name, os.path.join(self.tmp.name, "cache"), imagery=None, cells=64, block=512,
+        self.s = earthd.Server(self.tmp.name, os.path.join(self.tmp.name, "cache"), imagery=None, cells=64, block=1024,
                                near_visual="detail")
         self.addCleanup(self.s.hm_pool.shutdown)
         self.addCleanup(self.s.tile_pool.shutdown)
@@ -161,7 +161,7 @@ class PhotoSizeSessionTest(ServerHarness):
     near_visual = "detail"
     with_imagery = True
     cells = 64
-    block = 512
+    block = 1024
 
     def test_a_1024_photo(self):
         c = self.c

@@ -11,7 +11,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import crossings  # noqa: E402
+import secrossings  # noqa: E402
 import geodesy  # noqa: E402
 import guardrails  # noqa: E402
 import motesfri  # noqa: E402
@@ -315,9 +315,9 @@ class HookTest(unittest.TestCase):
 
 class NodesTest(unittest.TestCase):
     def test_a_painted_crossing_counts_but_not_one_with_signals_or_no_paint(self):
-        self.assertTrue(crossings.paint({"crossing": "uncontrolled"}) & crossings.M15)
-        self.assertTrue(crossings.paint({}) & crossings.M15)
-        self.assertFalse(crossings.paint({"crossing": "unmarked"}) & crossings.M15)
+        self.assertTrue(secrossings.paint({"crossing": "uncontrolled"}) & secrossings.M15)
+        self.assertTrue(secrossings.paint({}) & secrossings.M15)
+        self.assertFalse(secrossings.paint({"crossing": "unmarked"}) & secrossings.M15)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ is taken over; a wait longer than WAIT_S plans the cell here as before; a proces
 favoured as itself (xproc.once). Old runs' folders go at server start (prune).
 """
 import json
+import hashlib
 import os
 import shutil
 import threading
@@ -57,6 +58,20 @@ def start_run(cache_dir):
     os.environ[RUN_ENV] = f"{os.getpid()}_{int(time.time())}"
 
 
+# The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
+# place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
+# old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
+PLANS_FORMAT = 5      # 5: one half width a bridge (each was appended twice: under-deck ground and carriageways read the wrong bridge's); 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
+                      # bridge ends on embankments (#694), the ground under decks (#698), junction corridors (#682)
+
+
+def plans_format():
+    """The plans' revisit key format: PLANS_FORMAT and the road facts' (roads.FACTS_FORMAT: the plans are made from
+    them), "<plans>.<facts>"."""
+    import roads
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}"
+
+
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
 
 
@@ -65,11 +80,19 @@ def for_grader(cache_dir, grader, widths, wet):
     settings that change plans in the signature), or None outside a server run. Complete plans are kept in the revisit
     cache too (persist): a place's next visit (a game started where it was left, or anchored anywhere near) reads them
     instead of planning again."""
+    md = getattr(grader, "md", None)
+    signature = f"w{int(widths is not None)}s{int(wet is not None)}"
+    bundle = os.environ.get("BNGE_WORLD_BUNDLE")
+    if bundle:
+        from worldbundle import PinnedPlanCache
+        versions = getattr(md, "bundle_versions", None) or getattr(md, "versions", None)
+        return PinnedPlanCache(bundle, signature, versions() if versions is not None else {})
     run = os.environ.get(RUN_ENV)
     if not run:
         return None
-    md = getattr(grader, "md", None)
-    pc = PlanCache(os.path.join(cache_dir, "plans", run), f"w{int(widths is not None)}s{int(wet is not None)}")
+    pc = PlanCache(os.path.join(cache_dir, "plans", run), signature)
+    # Resolve after generation: loading source layers can discover their actual shard releases.
+    pc.source_versions = getattr(md, "bundle_versions", None) or getattr(md, "versions", None)
     pc.persist = (cache_dir, (FRAMES, pc.signature,
                               md.versions() if md is not None and hasattr(md, "versions") else None))
     return pc
@@ -80,6 +103,7 @@ class PlanCache:
         self.dir = os.path.join(root, FRAMES, signature)
         self.signature = signature
         self.persist = None     # (cache dir, key parts) of the revisit cache's copy (for_grader), or None
+        self.source_versions = None  # callable for the versions actually known after a complete cell was built
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
         self._lock = threading.Lock()
 
@@ -88,25 +112,31 @@ class PlanCache:
 
     def load(self, key):
         """(plans, keeps, covers, opens) of cell key from the cache, or None."""
-        from grading import Plan
+        from grading import Plan, set_widen
         from roads import Spec
         try:
             src = self._path(key)
             if not os.path.exists(src):
                 src = self._kept(key)
                 if src is None:
+                    src = self._baked(key)
+                if src is None:
                     return None
             with np.load(src, allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
                 lists["b"] = _split(f, "b") if "b_n" in f.files else []
+                lists["w"] = _split(f, "w") if "w_n" in f.files else []
         except (OSError, ValueError, KeyError, TypeError):
             return None
-        plans, cuts, banks = [], iter(lists["c"]), iter(lists["b"])
+        plans, cuts, banks, widens = [], iter(lists["c"]), iter(lists["b"]), iter(lists["w"])
         for m, xy, z in zip(meta["plans"], lists["p"], lists["z"]):
             pl = Plan(xy, z, m["half"], tuple(m["abut"]), next(cuts) if m["cut"] else None, m["road_half"])
             pl.rid, pl.max_wall = m["rid"], m["max_wall"]
+            pl.steep = bool(m.get("steep", False))
             pl.bank = next(banks) if m.get("bank") else None
+            if m.get("widen"):
+                set_widen(pl, next(widens))
             plans.append((m["fid"], pl))
         keeps = list(zip(lists["k"], meta["keeps"]))
         covers = list(zip(lists["v"], meta["covers"]))
@@ -118,7 +148,9 @@ class PlanCache:
 
     def _revisit_key(self, key):
         import revisit
-        return revisit.key("plans", *self.persist[1], (int(key[0]), int(key[1]), int(key[2])))
+        # (by PLANS_FORMAT, not the code: kept across updates, the user, 2026-11-02)
+        return revisit.format_key("plans", plans_format(), *self.persist[1],
+                                  (int(key[0]), int(key[1]), int(key[2])))
 
     def _where(self, key):
         """revisit.where of cell key's plans (the map's cache view), or None."""
@@ -131,6 +163,38 @@ class PlanCache:
             return revisit.where((s + n) / 2, (w + e) / 2, s, w, n, e, revisit.sig(plans=sig, md=versions))
         except Exception:
             return None
+
+    def has(self, key):
+        """Are cell key's plans on disk (this run's, or the revisit cache's copy)? A stat or two, nothing read."""
+        if os.path.exists(self._path(key)):
+            return True
+        if self.persist is None:
+            return False
+        import revisit
+        if os.path.exists(revisit._path(self.persist[0], "plans", self._revisit_key(key))):
+            return True
+        import bakepack
+        k = bakepack.plans_key(self.signature, key)
+        return any(k in p.items and bakepack._matches(p, self._bake_expect()) for p in bakepack.packs(self.persist[0]))
+
+    def _bake_expect(self):
+        import bakepack
+        return {"bake_format": bakepack.BAKE_FORMAT, "plans_format": PLANS_FORMAT, "frames": FRAMES,
+                "signature": self.signature,
+                "versions": json.loads(json.dumps(self.persist[1][2], sort_keys=True))}
+
+    def _baked(self, key):
+        """A baked pack's plans of cell key (bakepack.py: made offline for this map data and signature), or None."""
+        if self.persist is None:
+            return None
+        import io
+        import bakepack
+        got = bakepack.find(self.persist[0], bakepack.plans_key(self.signature, key), self._bake_expect())
+        if got is None:
+            return None
+        with self._lock:
+            self.stats["baked"] = self.stats.get("baked", 0) + 1
+        return io.BytesIO(got)
 
     def _kept(self, key):
         """The revisit cache's copy of cell key's plans (a file-like npz), or None."""
@@ -148,7 +212,8 @@ class PlanCache:
         nothing they read failed or was missing, Grader._plan_cell)."""
         meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
                            "rid": int(p.rid), "max_wall": float(p.max_wall), "cut": p.cut is not None,
-                           "bank": getattr(p, "bank", None) is not None}
+                           "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
+                           "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
                 "opens": [{k: (v.item() if hasattr(v, "item") else v) for k, v in sp._asdict().items()}
@@ -159,6 +224,7 @@ class PlanCache:
             _pack(arrays, "z", [p.z for _f, p in plans])
             _pack(arrays, "c", [p.cut for _f, p in plans if p.cut is not None])
             _pack(arrays, "b", [p.bank for _f, p in plans if getattr(p, "bank", None) is not None])
+            _pack(arrays, "w", [p.widen for _f, p in plans if getattr(p, "widen", None) is not None])
             _pack(arrays, "k", [xy for xy, _hw in keeps])
             _pack(arrays, "v", [xy for xy, _w in covers])
             _pack(arrays, "o", [xy for xy, _sp in opens])
@@ -167,12 +233,38 @@ class PlanCache:
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
                 np.savez(fh, **arrays)
+            provenance = None
+            if persist:
+                from worldbundle import canonical, completion_record
+                with open(tmp, "rb") as fh:
+                    digest = hashlib.sha256(fh.read()).hexdigest()
+                try:
+                    sources = self.source_versions() if self.source_versions is not None else {}
+                    provenance = canonical(completion_record(key, self.signature, sources, digest))
+                except (OSError, ValueError, TypeError):
+                    # Optional export provenance must not disable normal local caching. Without a
+                    # valid marker this cell remains unexportable, including any stale earlier marker.
+                    pass
             os.replace(tmp, p)
+            # Export only plans whose complete-input condition the grader actually observed.
+            # The digest binds the marker to this version; an interrupted replacement fails closed.
+            marker = p + ".complete"
+            if provenance is not None:
+                with open(tmp, "wb") as fh:
+                    fh.write(provenance)
+                os.replace(tmp, marker)
+            else:
+                try:
+                    os.remove(marker)
+                except FileNotFoundError:
+                    pass
             if persist and self.persist is not None:
                 import revisit
                 with open(p, "rb") as fh:
                     revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()},
-                                  where=self._where(key))
+                                  where=self._where(key), code=revisit.format_marker("plans", plans_format()))
+                import mpshare          # (a BeamMP session shares them: the hub sends them to the server)
+                mpshare.note_built(self.persist[0], self.signature, key)
         except (OSError, ValueError, TypeError):
             return False
         with self._lock:
@@ -184,6 +276,19 @@ class PlanCache:
         waited); (None, True) when this process plans it (call release after store); (None, False) when it plans it
         without the lock (xproc.once)."""
         t0 = time.monotonic()
+        if self.persist is not None:
+            import mpshare      # (a BeamMP session: the server is sending this cell's plans; waited for a little)
+            if mpshare.coming(self.persist[0], self.signature, key):
+                while time.monotonic() - t0 < mpshare.COMING_WAIT_S:
+                    if self.has(key):
+                        got = self.load(key)
+                        if got is not None:
+                            with self._lock:
+                                self.stats["shared"] = self.stats.get("shared", 0) + 1
+                            return got, False
+                    if not mpshare.coming(self.persist[0], self.signature, key):
+                        break   # (missed: planned here)
+                    time.sleep(0.1)
 
         def waiting():
             with self._lock:
@@ -196,6 +301,64 @@ class PlanCache:
 
     def release(self, key):
         xproc.release(self._path(key) + ".lock")
+
+
+    # ---- carriageway regions (grading._Planner._cw_region): solved once a run, read by every process ----
+
+    def _region_path(self, tag, home):
+        return os.path.join(self.dir, "cw", tag, f"{int(home[0])}_{int(home[1])}_{int(home[2])}.npz")
+
+    def region_load(self, tag, home):
+        """{"parts": [(key, line, is_bridge, cls, fid)], "prof": {key: (xy, z)}} of region home (planner frame tag) or
+        None."""
+        try:
+            with np.load(self._region_path(tag, home), allow_pickle=False) as f:
+                meta = json.loads(bytes(f["meta"]).decode("utf-8"))
+                lines, cx, cz = _split(f, "l"), _split(f, "x"), _split(f, "q")
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        parts, prof = [], {}
+        for m, ln in zip(meta["parts"], lines):
+            key = tuple([m["key"][0]] + [float(v) for v in m["key"][1:]])
+            parts.append((key, ln, bool(m["br"]), m["cls"], m["fid"], float(m.get("lv", 1.0 if m["br"] else 0.0)),
+                          float(m.get("half", 5.0))))
+            if m["chain"] >= 0:
+                prof[key] = (cx[m["chain"]], cz[m["chain"]])
+        return {"parts": parts, "prof": prof}
+
+    def region_store(self, tag, home, got):
+        chains, idx = [], {}
+        for key, (xy, z) in got["prof"].items():
+            if id(xy) not in idx:
+                idx[id(xy)] = len(chains)
+                chains.append((xy, z))
+        meta = {"parts": [{"key": list(q[0]), "br": bool(q[2]), "cls": q[3],
+                           "fid": q[4] if isinstance(q[4], (str, int, type(None))) else str(q[4]),
+                           "lv": float(q[5]) if len(q) > 5 else (1.0 if q[2] else 0.0),
+                           "half": float(q[6]) if len(q) > 6 else 5.0,
+                           "chain": idx[id(got["prof"][q[0]][0])] if q[0] in got["prof"] else -1}
+                          for q in got["parts"]]}
+        arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
+        try:
+            _pack(arrays, "l", [np.asarray(q[1], np.float64) for q in got["parts"]])
+            _pack(arrays, "x", [np.asarray(xy, np.float64) for xy, _z in chains])
+            _pack(arrays, "q", [np.asarray(z, np.float64) for _xy, z in chains])
+            p = self._region_path(tag, home)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as fh:
+                np.savez(fh, **arrays)
+            os.replace(tmp, p)
+        except (OSError, ValueError, TypeError):
+            return False
+        return True
+
+    def region_claim(self, tag, home):
+        """As claim, for a carriageway region."""
+        return xproc.once(self._region_path(tag, home) + ".lock", lambda: self.region_load(tag, home), WAIT_S)
+
+    def region_release(self, tag, home):
+        xproc.release(self._region_path(tag, home) + ".lock")
 
 
 def _newest(d, depth=2):

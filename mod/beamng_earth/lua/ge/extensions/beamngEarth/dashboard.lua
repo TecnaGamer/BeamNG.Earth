@@ -389,6 +389,22 @@ function M.onVehicleSwitched(oldId, newId)
   if active and enabled and newId then forVehicle(newId, applyScreen) end
 end
 
+-- A vehicle replaced in place (the vehicle selector, core_vehicles.replaceVehicle) keeps its id but not its screens:
+-- calls to the old car's screen tag then failed every frame ("UI texture '@scintilla_gps_screen' not found", ~5,000
+-- log lines in a test session that swapped the car for a prop, 2026-11-03). Its records go, without a restore (the
+-- screen is gone); a new vehicle's navigator registers its own (requestVehicleDashboardMap).
+local function dropScreens(id)
+  id = tonumber(id)
+  if id == nil then return end
+  local prefix = tostring(id) .. '\0'
+  for key in pairs(screens) do
+    if key:sub(1, #prefix) == prefix then screens[key] = nil end
+  end
+  if currentVehicle == id then lastTilesSignature = nil end
+end
+M.onVehicleReplaced = dropScreens
+M.onVehicleDestroyed = dropScreens
+
 function M.onExtensionLoaded()
   readSetting()
   installNavigationHook()

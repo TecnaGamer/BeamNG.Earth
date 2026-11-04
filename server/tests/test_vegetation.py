@@ -317,6 +317,23 @@ class RockSinkTest(unittest.TestCase):
         self.assertTrue(np.allclose(flat, 0.0, atol=0.02), "no sinking on flat ground")
 
 
+class GradedFaceTest(unittest.TestCase):
+    def test_no_tree_on_a_cutting_rocks_stay(self):
+        """A road cut 3 m into a slope (Mount Washington, Pittsburgh): the tree and the bush on its face go, a tree
+        0.5 m off the DEM stays, and a rock on the face stays (sunk into it)."""
+        g = np.array([veg.G_DECIDUOUS, veg.G_SHRUB, veg.G_CONIFER, veg.G_ROCK], np.uint8)
+        it = veg.Items(np.zeros(4), np.arange(4.0), np.full(4, 10.0), np.ones(4), np.zeros(4, np.uint8), g,
+                       np.zeros(4), np.zeros(4), np.ones(4))
+        zg = np.array([97.0, 98.0, 99.5, 97.0])        # graded
+        raw = lambda la, lo: np.full(np.size(la), 100.0)    # noqa: E731
+        it2, e2, n2, z2 = veg._off_graded(it, np.arange(4.0), np.zeros(4), zg, raw)
+        self.assertEqual(list(it2.group), [veg.G_CONIFER, veg.G_ROCK])
+        self.assertEqual(list(e2), [2.0, 3.0])
+        self.assertEqual(list(z2), [99.5, 97.0])
+        same = veg._off_graded(it, np.arange(4.0), np.zeros(4), zg, None)
+        self.assertEqual(len(same[0]), 4, "no raw ground: all kept")
+
+
 class FlatTileTest(unittest.TestCase):
     """A vegetation tile as one flat array (the mod's hello.vegFlat): no table per item in the game's Lua (trees.lua)."""
 
@@ -395,3 +412,77 @@ class DemFailedTest(unittest.TestCase):
             v._build = lambda x, y: build(x, y, False)
             v._load(1, 2)
             self.assertTrue(os.path.exists(v._path(1, 2)), "answered: kept")
+
+
+class OrchardTest(unittest.TestCase):
+    def test_trees_stand_in_lines(self):
+        import mapgeom
+        frame = geodesy.EnuFrame(40.0, -76.0)
+        e = np.array([-40.0, 40.0, 40.0, -40.0, -40.0])
+        n = np.array([-20.0, -20.0, 20.0, 20.0, -20.0])
+        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(5))
+        ring = np.stack([lo, la], 1)
+        feats = mapgeom.build("land_use", np.array(["orch-1"]), [(mapgeom.POLYGON, [[ring]])])
+        feats.attrs["class"] = np.array(["orchard"], object)
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        pad, dx = 40.0, 2.0
+        x0, x1 = float(x.min()) - pad, float(x.max()) + pad
+        y0, y1 = float(y.min()) - pad, float(y.max()) + pad
+        cols = int(np.ceil((x1 - x0) / dx))
+        rows = int(np.ceil((y1 - y0) / dx))
+        chm = Raster(np.zeros((rows, cols), np.uint8), x0, y1, dx)
+        clear = np.zeros((rows, cols), bool)
+        items = veg.orchard_items(feats, chm, clear, None)
+        self.assertGreaterEqual(len(items), 500, "rows at 2.5 m by 3 m")
+        self.assertLessEqual(len(items), 1100)
+        self.assertTrue(np.all(items.kind == veg.KIND_TREE))
+        self.assertTrue(np.all((items.height >= 4.2) & (items.height <= 6.5)))
+        yaw = (np.asarray(items.yaw) + 180.0) % 360.0 - 180.0
+        self.assertLess(float(np.max(np.abs(yaw))), 16.0, "one row direction")
+        _, nn, _ = frame.geodetic_to_enu(items.lat, items.lon, np.zeros(len(items)))
+        order = np.sort(np.asarray(nn))
+        nlines = 1 + int(np.sum(np.diff(order) > 1.2))
+        self.assertGreaterEqual(nlines, 12)
+        self.assertLessEqual(nlines, 22)
+        blocked = np.ones((rows, cols), bool)
+        self.assertEqual(len(veg.orchard_items(feats, chm, blocked, None)), 0)
+        half = np.zeros((rows, cols), bool)
+        centres = x0 + (np.arange(cols) + 0.5) * dx
+        half[:, centres < float(x.mean())] = True
+        kept = veg.orchard_items(feats, chm, half, None)
+        self.assertGreater(len(items), len(kept))
+        self.assertGreater(len(kept), 0)
+        xx, yy = veg._to3857(kept.lon, kept.lat)
+        c = np.floor((xx - chm.x0) / chm.dx).astype(np.int64)
+        r = np.floor((chm.y0 - yy) / chm.dy).astype(np.int64)
+        self.assertFalse(bool(half[r, c].any()))
+
+
+class FarmFoliageTest(unittest.TestCase):
+    def test_shrubs_line_the_gaps_between_rows(self):
+        import mapgeom
+        frame = geodesy.EnuFrame(40.0, -76.0)
+        e = np.array([-45.0, 45.0, 45.0, -45.0, -45.0])
+        n = np.array([-22.0, -22.0, 22.0, 22.0, -22.0])
+        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(5))
+        ring = np.stack([lo, la], 1)
+        feats = mapgeom.build("land_use", np.array(["field-1"]), [(mapgeom.POLYGON, [[ring]])])
+        feats.attrs["class"] = np.array(["farmland"], object)
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        pad, dx = 30.0, 2.0
+        x0, x1 = float(x.min()) - pad, float(x.max()) + pad
+        y0, y1 = float(y.min()) - pad, float(y.max()) + pad
+        cols = int(np.ceil((x1 - x0) / dx))
+        rows = int(np.ceil((y1 - y0) / dx))
+        chm = Raster(np.zeros((rows, cols), np.uint8), x0, y1, dx)
+        items = veg.farm_foliage(feats, chm, np.zeros((rows, cols), bool), None)
+        self.assertGreaterEqual(len(items), 40)
+        self.assertLessEqual(len(items), 280)
+        self.assertTrue(np.all(items.kind == veg.KIND_BUSH))
+        _, nn, _ = frame.geodetic_to_enu(items.lat, items.lon, np.zeros(len(items)))
+        order = np.sort(np.asarray(nn))
+        nlines = 1 + int(np.sum(np.diff(order) > 2.0))
+        self.assertGreaterEqual(nlines, 8)
+        self.assertLessEqual(nlines, 14)
+        blocked = np.ones((rows, cols), bool)
+        self.assertEqual(len(veg.farm_foliage(feats, chm, blocked, None)), 0)

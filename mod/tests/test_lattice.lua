@@ -2,6 +2,16 @@
 local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
 local L = require('beamngEarth/lattice')
 
+-- the default since 2026-11-01: 1024 samples at 1 m, a 1 km block on a 128 m grid (the stock maps' resolution)
+T.check(L.N == 1024 and L.SQUARE == 1.0 and L.HALF == 512 and L.GRID == 128 and L.WIDTH == 1024
+  and L.VALID_W == 1023, 'default: 1024 samples at 1 m, 1 km, 128 m grid')
+T.check(L.GRID / L.SQUARE == 128 and (L.blockOrigin(128, 0) / L.SQUARE) % 2 == 0,
+  'a 128 m re-centre is 128 samples; the SW corner on an even index')
+local a0, b0, c0, d0 = L.groundBox(128, 0)
+T.check(a0 == -384 and b0 == -512 and c0 == 639 and d0 == 511, '1 m: ground box = [cx-512, cx+511]')
+
+-- the v1.3.1 block (hello: blockSize 1024, squareSize 2)
+L.configure(1024, 2.0)
 T.check(L.N == 1024 and L.SQUARE == 2.0 and L.HALF == 1024, 'N = 1024 samples at exactly 2.0 m')
 T.check(L.VALID_W == 2046, 'collidable width (N-1)*s = 2046 m (probe P1)')
 T.check(L.COVER_W == 2048 and L.COVER_W / L.L0 == 8, 'the block sits on 8 x 8 L0 tiles')
@@ -48,7 +58,7 @@ for _, zb in ipairs({ 1088, 1152, 0 }) do
 end
 
 -- M4 (docs/V1_4_SPEC.md 3.5): the 512² block from hello.blockSize (configure), centres on a 128 m grid
-local n, ok = L.configure(512)
+local n, ok = L.configure(512, 2.0)
 T.check(n == 512 and ok and L.N == 512 and L.HALF == 512 and L.SQUARE == 2.0, '512: N = 512 at 2.0 m, HALF 512')
 T.check(L.VALID_W == 1022 and L.COVER_W == 1024 and L.GRID == 128 and L.L0 == 256, '512: collidable 1022 m, 128 m grid, L0 unchanged')
 T.check(L.GRID / L.SQUARE == 64, 'a 128 m re-centre is exactly 64 samples')
@@ -62,10 +72,13 @@ a, b, c, d = L.groundBox(128, 0)
 T.check(a == -384 and b == -512 and c == 638 and d == 510, 'ground (collidable) box = [cx-512, cx+510]')
 T.check(L.sampleX(0, 64 + 5) == L.sampleX(128, 5), 'block (128,0) sample 5 = block (0,0) sample 69')
 T.check(L.sampleX(128, 0) == L.sampleX(0, 0) + 128 and L.sampleX(0, 0) == -512, '512: sample 0 at cx - 512')
-n, ok = L.configure(2048)
-T.check(n == 1024 and ok == false and L.N == 1024 and L.HALF == 1024 and L.GRID == 256 and L.VALID_W == 2046,
-  'an unsupported size falls back to 1024 (and says so)')
-n, ok = L.configure(1024)
-T.check(n == 1024 and ok and L.COVER_W == 2048, 'configure(1024): the v1.3.1 block')
+n, ok = L.configure(2048, 2.0)
+T.check(n == 1024 and ok == false and L.N == 1024 and L.SQUARE == 1.0 and L.HALF == 512 and L.GRID == 128,
+  'an unsupported size falls back to 1024 x 1 m (and says so)')
+n, ok = L.configure(1024, 2.0)
+T.check(n == 1024 and ok and L.COVER_W == 2048 and L.GRID == 256, 'configure(1024, 2): the v1.3.1 block')
+local w
+n, ok, w = L.configure(1024, 1.0)
+T.check(n == 1024 and ok and w == 1024 and L.GRID == 128 and L.HALF == 512, 'configure(1024, 1): 1 km')
 
 T.done('test_lattice')

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the world server's Rust kernels (native/earthfast) and put the module next to the server:
 server/earthfast.abi3.so (Linux) or server/earthfast.pyd (Windows). One build works for every Python from 3.10
-(the stable ABI). Needs Rust (https://rustup.rs). The server runs without it (server/fast.py: the Python code).
+(the stable ABI). Needs Rust (https://rustup.rs). The server requires this module at fast.MIN_VERSION or newer.
 
     python3 tools/build_native.py              # this platform
     python3 tools/build_native.py --windows    # server/earthfast.pyd from Linux: cargo-zigbuild, zig on PATH,

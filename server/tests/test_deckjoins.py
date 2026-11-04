@@ -223,12 +223,14 @@ class PinnedJointTest(unittest.TestCase):
         roadz.PROVIDER = StubProvider(lambda xy, s: np.full(len(xy), FLAT + 6.0))
         self.check()
 
-    def test_unpinned_parts(self):
-        lines = [np.array([[0.0, 0], [0, 50]]), np.array([[0.0, 0], [50, 50]]), np.array([[0.0, -50], [0, 0]])]
-        out, gfn = roads._unpinned(lines, lambda xy: np.asarray(xy, np.float64)[:, 0], [(0.0, 0.0)])
-        ends = [tuple(np.round(out[0][0], 2)), tuple(np.round(out[1][0], 2)), tuple(np.round(out[2][-1], 2))]
-        self.assertEqual(len(set(ends)), 3, "each part's own end")
-        np.testing.assert_allclose(gfn(np.array(ends)), 0.0, atol=1e-9, err_msg="the ground at the joint itself")
+    def test_pin_splits_connectivity_without_moving_geometry(self):
+        lines = [np.array([[0.0, 0], [0, 50]]), np.array([[0.0, 0], [50, 50]]),
+                 np.array([[0.0, -50], [0, 0]])]
+        nodes, edges, adj = roads._curve_graph(lines, [(0.0, 0.0)])
+        ends = [edges[0][0], edges[1][0], edges[2][1]]
+        self.assertEqual(len(set(ends)), 3, "each incident part has its own abutment")
+        np.testing.assert_allclose(np.array(nodes)[ends], 0.0)
+        self.assertTrue(all(len(adj[nd]) == 1 for nd in ends))
 
 
 
