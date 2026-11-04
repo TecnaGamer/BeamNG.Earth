@@ -32,9 +32,11 @@ in a few minutes. No programming needed.
 ## Going places
 - Press **M** (the game's map key) or open **Map** in the pause menu for the **world map**:
   satellite imagery, your car's position and heading, and your saved places. Drag to pan, scroll
-  to zoom. The search box looks up real addresses and places as you type (OpenStreetMap data
-  through Photon by komoot: what you type and your position are sent to it), plus your saved places
-  and a typed "latitude, longitude". M or Esc closes it.
+  to zoom. The search box looks up landmarks and places as you type, in any language (Wikipedia,
+  Wikidata, and Photon by komoot where it answers: what you type is sent to them, and your position
+  to Photon). Enter searches streets and house numbers too (OpenStreetMap's Nominatim: what you type
+  and an area around your position), then Enter again takes the first line. It also answers
+  "highest bridge in Switzerland", and takes your saved places and a typed "latitude, longitude". M or Esc closes it.
 - **Left-click** the map (or a saved place, or a search result) to plan a GPS route there: the whole
   road route is planned online (OSRM on OpenStreetMap; your start and destination are sent to it)
   and drawn on the map with the distance and driving time left; the game's own route arrows follow

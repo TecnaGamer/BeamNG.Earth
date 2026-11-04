@@ -842,13 +842,13 @@ end
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else
 -- { results = {{name, detail, kind, lat, lon}...}, error }). Biased toward the player.
 local geocodeId = 0
-function M.uiGeocode(q)
+function M.uiGeocode(q, full)
   local core = ext('beamngEarth_core')
   if not core or not core.requestGeocode then return { error = 'BeamNG.Earth is not loaded' } end
   local st = core._state and core._state() or nil
   local pl = st and st.player
   geocodeId = geocodeId + 1
-  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon) then
+  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon, full) then
     return { error = 'Companion server not connected' }
   end
   return { id = geocodeId }

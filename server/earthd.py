@@ -912,6 +912,8 @@ class Server:
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
         self.ui_pool = ThreadPoolExecutor(2, thread_name_prefix="map-ui")
+        # the search box's own: a search can take seconds, and must not hold up a route or the map's tiles
+        self.search_pool = ThreadPoolExecutor(4, thread_name_prefix="map-search")
         # the status bar's place names (placenames.py): a thread of their own, a region's first fetch takes seconds
         self.place_pool = ThreadPoolExecutor(1, thread_name_prefix="place-names")
         self._place_names_lock = threading.Lock()
@@ -4858,14 +4860,14 @@ class Connection:
             return
 
     async def geocode(self, msg):
-        """The map's search {"id", "q", "lat"?, "lon"?} -> geocode_result {"id", "results": [...], "error"?}."""
+        """The map's search {"id", "q", "lat"?, "lon"?, "full"?} -> geocode_result {"id", "results": [...], "error"?}."""
         q = str(msg.get("q") or "")[:200]
         lat, lon = msg.get("lat"), msg.get("lon")
         out = {"type": "geocode_result", "id": msg.get("id"), "results": []}
         try:
             out["results"] = await asyncio.get_running_loop().run_in_executor(
-                self.s.ui_pool, geocodemod.search, q, lat, lon, self.s.net,
-                self.s.country_at(lat, lon) if lat is not None and lon is not None else None)
+                self.s.search_pool, geocodemod.search, q, lat, lon, self.s.net,
+                self.s.country_at(lat, lon) if lat is not None and lon is not None else None, bool(msg.get("full")))
         except Exception as e:          # offline, rate limited, refused, a bad answer: the map says which (GitHub #602)
             out["error"] = f"{type(e).__name__}: {e}"[:200]
             out["text"] = geocodemod.error_text(e)

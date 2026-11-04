@@ -2687,9 +2687,9 @@ function M.appPath(what, pick, path)
 end
 
 -- The world map's search box: addresses and places from the server (geocode.py); the answer is geocode_result.
-function M.requestGeocode(id, q, lat, lon)
+function M.requestGeocode(id, q, lat, lon, full)
   if not net.isConnected() then return false end
-  net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon })
+  net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)

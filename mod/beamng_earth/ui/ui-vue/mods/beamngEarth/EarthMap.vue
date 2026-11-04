@@ -132,7 +132,10 @@
             <span class="result-name">{{ r.saved ? "★ " : "" }}{{ r.name }}</span>
             <span class="result-coords">{{ r.detail || fmtLatLon(r.lat, r.lon) }}</span>
           </div>
-          <div class="search-credit">Search: Photon by komoot, © OpenStreetMap contributors</div>
+          <div v-if="moreFor" class="search-result search-more" @mousedown.stop @click="liveSearch(true)">
+            <span class="result-name">Search streets and addresses too (Enter)</span>
+          </div>
+          <div class="search-credit">Search: © OpenStreetMap contributors (Nominatim, Photon), Wikipedia, Wikidata</div>
         </div>
         <div v-if="searchMsg" class="search-msg">{{ searchMsg }}</div>
         <div v-else-if="searching && !results.length" class="search-msg">Searching…</div>
@@ -1654,11 +1657,15 @@ function goTo(lat, lon, name) {
   askTeleport(lat, lon, name)
 }
 
-// Search as you type: saved / recent places at once, and addresses and places from the server (geocode.py:
-// Photon, OpenStreetMap) 300 ms after the last key, 3+ characters; a typed "lat, lon" on Enter.
+// Search as you type: saved / recent places at once, and places from the server (geocode.py) 300 ms after the last key,
+// 3+ characters. Enter: the full search too (streets and house numbers: Nominatim, which may not be asked while typing),
+// unless the server is sure of the list's first line (not a street, no house number); Enter on that answer takes its first line. A "lat, lon" on Enter.
+const MAP_WAIT_TRIES = 100      // x 150 ms: longer than the server's own limit (geocode.py ENTER_DEADLINE_S)
 const searching = ref(false)
 const resultIndex = ref(-1)
 let searchTimer = null, searchSeq = 0
+let fullText = ""               // the text the full search (Enter) last answered
+const moreFor = ref("")         // the text the list offers the full search for
 const LATLON_RE = /^[-+]?\d+(\.\d+)?[°\s]*[NSns]?\s*[,;\s]\s*[-+]?\d+(\.\d+)?/
 
 function typing(on) { engineLua(`if setCEFTyping then setCEFTyping(${on ? "true" : "false"}) end`) }
@@ -1667,16 +1674,18 @@ function localHits(text) {
   return mm.searchPlaces(allPlaces(), text).slice(0, 3).map(r => ({ ...r, saved: true }))
 }
 
-function liveSearch() {
+function liveSearch(full = false) {
   const text = query.value.trim()
   searchMsg.value = ""
   resultIndex.value = -1
+  fullText = ""
+  moreFor.value = ""
   const seq = ++searchSeq
   const local = text ? localHits(text) : []
-  results.value = local
+  if (!full) results.value = local
   if (text.length < 3 || LATLON_RE.test(text)) { searching.value = false; return }
   searching.value = true
-  engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocode(${luaStr(text)}) or nil`, r => {
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocode(${luaStr(text)}, ${full ? "true" : "false"}) or nil`, r => {
     if (seq !== searchSeq) return
     if (!r || r.error || !r.id) { searching.value = false; if (r && r.error && !local.length) searchMsg.value = r.error; return }
     let tries = 0
@@ -1685,14 +1694,20 @@ function liveSearch() {
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocodeResult(${r.id}) or nil`, res => {
         if (seq !== searchSeq) return
         if (!res) {
-          if (++tries < 40) setTimeout(poll, 150)
+          if (++tries < MAP_WAIT_TRIES) setTimeout(poll, 150)
           else { searching.value = false; if (!local.length) searchMsg.value = "No answer from the address search" }
           return
         }
         searching.value = false
         const online = toArray(res.results)
         results.value = [...local, ...online]
-        if (!results.value.length) searchMsg.value = res.error ? (res.text || "Address search unavailable (offline?)") : "Nothing found"
+        if (full) fullText = text
+        if (!results.value.length) {
+          searchMsg.value = res.error ? (res.text || "Address search unavailable (offline?)")
+            : full ? "Nothing found" : "Nothing yet: press Enter to search streets and addresses too"
+        } else if (!full && !results.value[0].sure) {
+          moreFor.value = text      // (a line in the list: a message under it would lie behind it)
+        }
       })
     }
     setTimeout(poll, 150)
@@ -1709,7 +1724,18 @@ function moveResult(d) {
 function onSearch() {
   const text = query.value.trim()
   if (!text) { results.value = []; return }
-  if (results.value.length) { pickResult(results.value[Math.max(0, resultIndex.value)]); return }
+  if (results.value.length && (resultIndex.value >= 0 || fullText === text || results.value[0].sure)) {
+    pickResult(results.value[Math.max(0, resultIndex.value)])
+    return
+  }
+  if (text.length >= 3 && !LATLON_RE.test(text) && fullText !== text) {
+    clearTimeout(searchTimer)
+    engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
+      if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")      // a map link
+      else liveSearch(true)
+    })
+    return
+  }
   // a typed latitude, longitude (places.lua parses every format the page accepts)
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
     if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")
@@ -2040,6 +2066,7 @@ const fmtLatLon = mm.fmtLatLon
 .item-btns { display: flex; gap: 4px; flex-shrink: 0; }
 .panel-empty { padding: 6px 4px; font-size: 12px; color: #9aa4ae; }
 .search-result.active { background: rgba(224, 118, 28, 0.6); }
+.search-more .result-name { color: #ff9a3c; }
 .search-credit { padding: 4px 10px; font-size: 10px; color: #8a949e; border-top: 1px solid rgba(255, 255, 255, 0.08); }
 
 .ctx-menu {
