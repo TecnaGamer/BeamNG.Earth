@@ -879,7 +879,12 @@ local function slotsGoneNow()
 end
 
 -- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
-M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24 }
+M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
+  -- handled at once, ahead of the queue: the terrain's and the UI's answers (a player on dev.151, 2026-11-03: holds for
+  -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
+  urgent = { terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
+    ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true,
+    route_result = true, random_place_result = true, runtime_profiler_pong = true } }
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
 -- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
 M.BASE_LATER_MS, M.BASE_NOW_MS = 35, 30         -- m/s (78 / 67 mph; the server skips a block's photo wait over 89 mph)
@@ -2117,13 +2122,7 @@ local function onUpdate(dtReal, dtSim)
   -- 2026-11-03. The rest waits for the next frames. Each type's cost is kept (M.netCosts).
   do
     local nq = M._netq
-    for _, msg in ipairs(net.update(dtReal)) do nq.q[#nq.q + 1] = msg end
-    local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
-    local budget = loadingNow and math.huge or ((#nq.q - nq.head + 1 >= nq.busyN) and nq.busyMs or nq.budgetMs)
-    local n0 = hitchClock()
-    while nq.head <= #nq.q do
-      local msg = nq.q[nq.head]
-      nq.head = nq.head + 1       -- (the slot kept: holes would make #nq.q, where the next ones go, unreliable)
+    local function handle(msg)
       local m0 = hitchClock()
       local ok, err = pcall(onMessage, msg)
       if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
@@ -2131,7 +2130,22 @@ local function onUpdate(dtReal, dtSim)
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
-      if hitchClock() - n0 >= budget then break end
+    end
+    for _, msg in ipairs(net.update(dtReal)) do
+      if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
+    end
+    local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
+    local waiting = #nq.q - nq.head + 1
+    local budget = loadingNow and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
+    local minN, done = math.ceil(waiting / nq.drainDiv), 0
+    local n0 = hitchClock()
+    while nq.head <= #nq.q do
+      local msg = nq.q[nq.head]
+      nq.head = nq.head + 1       -- (the slot kept: holes would make #nq.q, where the next ones go, unreliable)
+      handle(msg)
+      done = done + 1
+      if done >= minN and hitchClock() - n0 >= budget then break end
     end
     if nq.head > #nq.q then
       nq.q, nq.head = {}, 1
