@@ -256,6 +256,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
     # its full log to a file; the console shows only its warnings and errors (echo_server_log): the INFO lines
     # buried the launcher's own (the user, 2026-10-17: 'easier to read')
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    keep_previous_log(log_path)
     with open(log_path, "w", encoding="utf-8") as out:
         kw.update(stdout=out, stderr=subprocess.STDOUT)
         proc = subprocess.Popen(cmd, **kw)
@@ -283,6 +284,21 @@ def echo_lines(lines, state):
         elif state.get("tb") or (record and any(k in line for k in ECHO_LEVELS)):
             out.append("  server: " + (line[11:] if record else line))
     return out
+
+
+def keep_previous_log(path, keep=2):
+    """The last runs' logs as server.log.1 .. .<keep> (GitHub #687: a crashed session's log, with Python's fatal error
+    dump, was overwritten by the next start before the player could attach it)."""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            return
+        for i in range(keep, 1, -1):
+            older = f"{path}.{i - 1}"
+            if os.path.isfile(older):
+                os.replace(older, f"{path}.{i}")
+        os.replace(path, path + ".1")
+    except OSError:
+        pass                    # (still open somewhere on Windows: overwritten as before)
 
 
 def echo_server_log(path, proc):

@@ -224,5 +224,35 @@ class BeammpStartupTest(unittest.TestCase):
         self.assertEqual(launcher.beammp_wait_seconds("12.5"), 12.5)
 
 
+
+class KeepPreviousLogTest(unittest.TestCase):
+    """GitHub #687: the next start overwrote a crashed session's server.log."""
+
+    def test_rotates_two(self):
+        import importlib
+        import os
+        import tempfile
+        launcher = importlib.import_module("launcher")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "server.log")
+            for run in ("a", "b", "c"):
+                launcher.keep_previous_log(p)
+                with open(p, "w") as f:
+                    f.write(run)
+            got = {n: open(os.path.join(d, n)).read() for n in os.listdir(d)}
+            self.assertEqual(got, {"server.log": "c", "server.log.1": "b", "server.log.2": "a"})
+
+    def test_empty_log_not_kept(self):
+        import importlib
+        import os
+        import tempfile
+        launcher = importlib.import_module("launcher")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "server.log")
+            open(p, "w").close()
+            launcher.keep_previous_log(p)
+            self.assertEqual(os.listdir(d), ["server.log"])
+
+
 if __name__ == "__main__":
     unittest.main()
