@@ -882,8 +882,10 @@ end
 M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
   -- handled at once, ahead of the queue: the terrain's and the UI's answers (a player on dev.151, 2026-11-03: holds for
   -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
+  -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
+  -- taken at once brought the road / green / road ground flicker back, the same player)
   urgent = { terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
-    ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true,
+    block_base = true, terrain_patch = true, ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true,
     route_result = true, random_place_result = true, runtime_profiler_pong = true } }
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
 -- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
@@ -1140,8 +1142,10 @@ local function onMessage(msg)
         -- (a new base photo rebuilds every terrain material the next frame, as a block swap does: 55-140 ms, on
         -- Windows twice that. At speed the next block replaces this one in seconds, so the refresh waits until the
         -- car slows: M.applyBaseLater)
+        -- (only a photo replacing another: a block taken without one (the level's flat brown base, its photo not
+        -- ready at speed) takes its first at once; deferred, the ground stayed brown until the car slowed down)
         local pl = st.player
-        if pl and (pl.speed or 0) > M.BASE_LATER_MS then
+        if pl and (pl.speed or 0) > M.BASE_LATER_MS and terrain.base() ~= nil then
           M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize) }
         else
           M._baseLater = nil

@@ -335,6 +335,28 @@ class ClearTest(Base):
         self.assertEqual(m["clearedBytes"], 3 * MB + 100)
         self.assertTrue(os.path.exists(os.path.join(self.root, cachemod.INDEX_FILE)), "saved after a clear")
 
+    def test_built_caches_count_against_the_cap(self):
+        """The app's built caches (revisit/, seacarve/, roadwidth/, peercache/) count, are evicted and cleared; the
+        map data mirror counts and is cleared, never evicted file by file (a cell's files and its "ok" go together).
+        (A player, 2026-11-03: 25 GB under a 20 GB cap.)"""
+        old = T0 - 3 * DAY
+        put(self.root, "revisit/roadsg/ab/abcd.zip", MB, old - 3 * DAY)
+        put(self.root, "seacarve/v1/12/1/0.npz", MB, old - 2 * DAY)
+        put(self.root, "mapdata-mirror/v2/roads/14/1/0/ok", 10, old - 4 * DAY)
+        put(self.root, "mapdata-mirror/v2/roads/14/1/0/pack.bin", MB, old - 4 * DAY)
+        put(self.root, "roadwidth/v1/a.npy", MB, old - DAY)
+        put(self.root, "peercache/a7/a7.bin", MB, old)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0.0045)
+        self.assertEqual(c.usage(), (5 * MB + 10, 6), "all of them counted")
+        c.evict()
+        self.assertFalse(exists(self.root, "revisit/roadsg/ab/abcd.zip"), "the oldest evictable went")
+        self.assertTrue(exists(self.root, "mapdata-mirror/v2/roads/14/1/0/pack.bin"), "the mirror never evicted")
+        c.clear()
+        for rel in ("seacarve/v1/12/1/0.npz", "mapdata-mirror/v2/roads/14/1/0/ok",
+                    "mapdata-mirror/v2/roads/14/1/0/pack.bin", "roadwidth/v1/a.npy", "peercache/a7/a7.bin"):
+            self.assertFalse(exists(self.root, rel), rel + " cleared")
+
     def test_mapdata_is_managed(self):
         """mapdata/ (mapdata.py: layer files, range blocks) is tracked, evicted LRU and cleared like the
         other producers; its 404 markers stay through eviction, its files being written are not tracked."""
