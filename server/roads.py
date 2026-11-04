@@ -401,6 +401,12 @@ _FACTS_LOCK = threading.Lock()
 # CPU-s again (BNGE_FACTS_LOG, 2026-11-02): kept on disk only when complete, and almost nothing was, any fault of any
 # thread counting against them (revisit.thread_faults now).
 _FACTS_MEM = collections.OrderedDict()
+
+
+def clear_facts_memory():
+    """Drop the cell facts kept in memory (budget.maybe_shed)."""
+    with _FACTS_LOCK:
+        _FACTS_MEM.clear()
 FACTS_MEM_KEPT = 640         # entries (~8 a cell: ranges, specs, bridges ...; a city cell ~0.6 MB in all; budget: fewer when small)
 FACTS_SHORT_S = 10.0        # s a cell's facts made short of something (a fault) are used before they are made again
 FACTS_LOG = bool(os.environ.get("BNGE_FACTS_LOG"))
