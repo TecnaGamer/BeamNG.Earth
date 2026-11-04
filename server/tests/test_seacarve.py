@@ -135,9 +135,14 @@ class SeaCarveTest(unittest.TestCase):
         import glob
         lat = np.array([south(7.3), south(31), south(-20)])
         lon = np.array([LON0, LON0 + 0.001, LON0])
-        a = seacarve.SeaCarver(BathyMapData(), self.tmp.name).water(lat, lon)
+        first = seacarve.SeaCarver(BathyMapData(), self.tmp.name)
+        a = first.water(lat, lon)
         raws = glob.glob(os.path.join(self.tmp.name, "**", "*.raw.npy"), recursive=True)
-        self.assertTrue(raws)
+        self.assertFalse(raws, "no raw copy at a cell's first use (SeaCarver._second_use)")
+        first._mem.clear()              # (out of the process's MEM_CELLS: needed again)
+        first.water(lat, lon)
+        raws = glob.glob(os.path.join(self.tmp.name, "**", "*.raw.npy"), recursive=True)
+        self.assertTrue(raws, "written at its second use")
         sc = seacarve.SeaCarver(BathyMapData(), self.tmp.name)
         b = sc.water(lat, lon)
         mapped = next(r for r, _, _ in sc._mem.values() if r is not None)[0]
@@ -146,7 +151,10 @@ class SeaCarveTest(unittest.TestCase):
         gc.collect()  # the mappings closed: Windows removes no mapped file
         for r in raws:
             os.remove(r)
-        c = seacarve.SeaCarver(BathyMapData(), self.tmp.name).water(lat, lon)
+        csc = seacarve.SeaCarver(BathyMapData(), self.tmp.name)
+        c = csc.water(lat, lon)         # (from the npz, a cell cached before the raw copies)
+        csc._mem.clear()
+        csc.water(lat, lon)
         self.assertTrue(glob.glob(os.path.join(self.tmp.name, "**", "*.raw.npy"), recursive=True))
         for x in (b, c):
             np.testing.assert_array_equal(a[0], x[0])
