@@ -56,7 +56,18 @@ URGENT_WORKERS = 16         # Dem.urgent(): its own fetch threads (with the 16 s
 # pages shared, dropped instead of swapped under memory pressure. At most MIRROR_MB on disk (the oldest go first);
 # older than MIRROR_MAX_AGE_S it is made again (Mapterhorn adds lidar areas). DECODED_VERSION: raise it when what a
 # tile holds changes (the decoding, the ground filter).
-MIRROR_MB = 1024
+# (3 GB but on a small machine: one 30 km drive needs ~1.1 GB of decoded tiles, so at 1 GB the mirror cut back the
+# tiles of the same drive and wrote them again, and none of a previous drive's was left: ~1.2 GB of SSD writes in a
+# warm 8 min drive at 150 mph, 2026-11-04. BNGE_DEM_MIRROR_MB sets it.)
+def _mirror_mb():
+    v = os.environ.get("BNGE_DEM_MIRROR_MB")
+    if v:
+        return float(v)
+    import budget
+    return 1024 if budget.small() else 3072
+
+
+MIRROR_MB = _mirror_mb()
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
