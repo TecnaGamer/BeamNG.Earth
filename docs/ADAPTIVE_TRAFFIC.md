@@ -27,12 +27,25 @@ At unsignalised junctions, lower-priority incoming road classes receive stop con
 priority. Explicit mapped signals take precedence over inferred priority. Roundabout rules remain governed by the
 existing ring detection and yield handling.
 
+## Driver speed and spawn handling
+
+Traffic vehicles receive a shuffled 20-profile speed deck (15 slightly above the posted limit, 4 near it, and 1
+faster). The selected target uses appended legal-speed metadata from the road that best matches the vehicle's heading;
+a perpendicular junction road cannot replace the limit of the road the vehicle follows. The vehicle receives explicit
+car avoidance and speed-limit mode. Periodic updates reapply the target only when the mapped legal speed changes.
+
+Fresh spawns and native pool respawns wait until the traffic record leaves its reset stage and reaches fade-in/active,
+then allow a short delay for BeamNG's AI refresh to finish. A guarded one-shot spawn-speed impulse is skipped if the
+vehicle is reversing, already near its target, lacks mapped speed metadata, or is close to a multi-arm junction. The
+companion vehicle-Lua helper attempts to synchronize wheel tread rotation with body speed using balanced per-wheel
+forces.
+
 ## Validation and remaining work
 
 The focused Python tests cover population interpolation, settlement lookup, graph metadata, road-class priority,
-mapped-signal precedence and existing roundabout behavior. The Lua navgraph unit test covers physical clipping versus
-the route halo. These source tests do not exercise BeamNG.drive's native traffic pool or spawn lifecycle.
+mapped-signal precedence and existing roundabout behavior. Lua tests cover route clipping, speed-profile selection,
+mapped-road speed choice, respawn gating and wheel-force balance.
 
-This port does not yet include the reference's per-driver speeding profiles, post-respawn AI speed reapplication,
-spawn-velocity impulse or its in-game velocity diagnostics. Those behaviors require a careful port against the current
-vehicle lifecycle hooks and an in-game BeamNG test before they can be claimed as supported.
+Source tests do not exercise BeamNG.drive's native pool, vehicle VM, spawn/respawn cadence or measured speed response.
+In-game testing remains necessary before the AI speed commands and one-shot body/wheel impulse can be considered
+validated. Opt-in multi-sample spawn-velocity diagnostics from the reference are not included in this port.
