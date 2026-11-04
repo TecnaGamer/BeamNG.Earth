@@ -193,9 +193,10 @@ class ImageryError(IOError):
     """Imagery could not be fetched (network or server errors, not a missing tile). deferred: a
     prefetch / background request the limiter dropped (a demand fetch may still get it)."""
 
-    def __init__(self, msg, deferred=False):
+    def __init__(self, msg, deferred=False, unavailable=False):
         super().__init__(msg)
         self.deferred = deferred
+        self.unavailable = unavailable      # the host's circuit breaker was open (netfetch logged that once)
 
 
 # netfetch errors of a non-demand request that a demand request would not get
@@ -568,7 +569,8 @@ class Imagery:
             deferred = kind not in ("demand", "urgent") and isinstance(e, _DEFERRED)
             self._count(src.name + (":deferred" if deferred else ":skipped" if isinstance(e, netfetch.HostUnavailable)
                                     else ":error"))
-            raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred) from None
+            raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred,
+                               unavailable=isinstance(e, netfetch.HostUnavailable)) from None
         data = r.body
         with self._lock:
             self.fetch_ms.append(r.elapsed * 1000)
@@ -617,7 +619,8 @@ class Imagery:
                 deferred = kind not in ("demand", "urgent") and isinstance(e, _DEFERRED)
                 self._count(src.name + (":deferred" if deferred else ":skipped" if isinstance(e, netfetch.HostUnavailable)
                                         else ":error"))
-                raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred) from None
+                raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred,
+                               unavailable=isinstance(e, netfetch.HostUnavailable)) from None
             with self._lock:
                 self.fetch_ms.append(r.elapsed * 1000)
                 del self.fetch_ms[:-2000]
