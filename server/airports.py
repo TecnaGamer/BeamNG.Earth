@@ -695,6 +695,19 @@ class AirportDB:
     def summary(self):
         return {"snapshot": self.snapshot, **dict(sorted(self.stats.items()))}
 
+    def lean(self):
+        """A copy for the worker processes' runway grading (airportgrade: groups_in_cell -> in_cell / group / near, the
+        runways alone): without the airports' records and the helipads. ~14 of the ~31 MB the parsed snapshot held in
+        every one of the server's processes, the biggest Python object in most workers (a Steam Deck's trace,
+        2026-11-04: 33 MB of 36-45 MB traced in each)."""
+        import copy
+        c = copy.copy(self)
+        c.airports, c.helipads, c._by_airport, c._cells = {}, [], {}, {}
+        c._hp = np.zeros((0, 2))
+        c._hp_order = np.zeros(0, np.int64)
+        c._hp_lat = np.zeros(0)
+        return c
+
 
 def _convex_overlap(a, b):
     """Separating-axis test for two convex polygons ((k, 2) arrays)."""

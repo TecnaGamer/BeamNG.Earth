@@ -125,7 +125,7 @@ def load_airports(cache_dir, dem):
     except (airportsmod.AirportsUnavailable, OSError, ValueError) as e:
         log.warning("airports: no runway grading (%s)", e)
         return None
-    return airportgrade.AirportGrader(db, dem)
+    return airportgrade.AirportGrader(db.lean(), dem)      # (runways only: the grading's)
 
 
 def _rss_mb():
