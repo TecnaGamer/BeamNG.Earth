@@ -86,6 +86,23 @@ class _State:
         self.lock = threading.Lock()
         self.want = []              # (grader, cell key) to plan, most urgent first
         self.cv = threading.Condition()
+        # the caches a worker over its memory ceiling drops between jobs (budget.maybe_shed: small machines)
+        import budget
+        budget.register_shed(self.dem.clear_memory)
+        if md is not None:
+            budget.register_shed(md.clear_memory)
+        rw = getattr(self.widths, "__self__", None)
+        if rw is not None:
+            budget.register_shed(rw.clear_memory)
+        import roads as _roads
+        budget.register_shed(_roads.clear_facts_memory)
+        budget.register_shed(self._clear_chunks)
+
+    def _clear_chunks(self):
+        with self.lock:
+            for c in self.chunks.values():
+                with c.lock:
+                    c.chunks.clear()
 
     def anchor(self, aid, lat, lon):
         """(Grader or None, ChunkCache) of an anchor; only the last few anchors are kept."""
@@ -126,7 +143,7 @@ def load_airports(cache_dir, dem):
     except (airportsmod.AirportsUnavailable, OSError, ValueError) as e:
         log.warning("airports: no runway grading (%s)", e)
         return None
-    return airportgrade.AirportGrader(db, dem)
+    return airportgrade.AirportGrader(db.lean(), dem)      # (runways only: the grading's)
 
 
 def _rss_mb():

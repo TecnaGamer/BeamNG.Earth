@@ -568,13 +568,75 @@ def ensure_egm2008(cache_dir=CACHE_DIR, log=print, net=None):
     return npy
 
 
-def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, **kw):
-    """EGM2008 truncated to degree ``nmax`` (<= 2190)."""
+# The built model's tables kept on disk and memory-mapped (load_egm2008): kept in memory they were ~128 MB of the
+# server's main process for a value asked every 2 km (and building them peaked at ~380 MB); mapped, they are file pages
+# the system may drop and read again. DERIVED_V: raise it when GravityModel's tables change.
+DERIVED_V = 1
+_BIG = ("coef", "ra", "rb")
+_SMALL = ("zonal", "log_sect", "sect_next", "off")
+_SCALARS = ("nmax", "gm", "a", "name", "height_offset", "check_every")
+
+
+def _derived_dir(cache_dir, nmax, dtype):
+    return os.path.join(cache_dir, f"egm2008_model_v{DERIVED_V}_{nmax}_{np.dtype(dtype).name}")
+
+
+def _save_derived(model, d):
+    tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.makedirs(tmp, exist_ok=True)
+        for k in _BIG + _SMALL:
+            np.save(os.path.join(tmp, k + ".npy"), getattr(model, k))
+        with open(os.path.join(tmp, "meta.json"), "w") as f:
+            json.dump({k: getattr(model, k) for k in _SCALARS} | {"dtype": model.dtype.name}, f)
+        if os.path.isdir(d):
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+        os.rename(tmp, d)
+    except OSError:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _load_derived(d):
+    """The model from _save_derived's folder (big tables memory-mapped), or None."""
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            meta = json.load(f)
+        model = GravityModel.__new__(GravityModel)
+        for k in _SCALARS:
+            setattr(model, k, meta[k])
+        model.dtype = np.dtype(meta["dtype"])
+        for k in _BIG:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy"), mmap_mode="r"))
+        for k in _SMALL:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy")))
+        if model.coef.shape[0] != tri_len(model.nmax) or model.coef.dtype != model.dtype:
+            return None
+        return model
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, mapped=True, **kw):
+    """EGM2008 truncated to degree ``nmax`` (<= 2190); mapped: its tables memory-mapped from the cache (built and
+    written there the first time)."""
+    dtype = kw.get("dtype", np.float32)
+    d = _derived_dir(cache_dir, min(int(nmax), EGM2008_NMAX), dtype)
+    if mapped and set(kw) <= {"dtype"}:
+        model = _load_derived(d)
+        if model is not None:
+            return model
     arr = np.asarray(np.load(ensure_egm2008(cache_dir, log=log), mmap_mode="r"))   # read as needed (a plain view)
     L = tri_len(min(nmax, EGM2008_NMAX))
     model = GravityModel(arr[0, :L], arr[1, :L], nmax=nmax, corr_c=arr[2, :L], corr_s=arr[3, :L],
                          name=f"EGM2008/{nmax}", **kw)
     del arr
+    if mapped and set(kw) <= {"dtype"}:
+        _save_derived(model, d)
+        mm = _load_derived(d)
+        if mm is not None:
+            return mm           # (the built tables go: the mapped ones are the same bytes)
     return model
 
 

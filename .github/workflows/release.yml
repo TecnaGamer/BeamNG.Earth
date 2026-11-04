@@ -178,6 +178,8 @@ jobs:
               echo "Full list of changes: https://github.com/${{ github.repository }}/compare/$prev...v$v"
             fi
           } > notes.md
+          # every release's notes end with the launch steps (the user, 2026-11-04)
+          { echo; echo "---"; echo; python3 tools/release_notes.py --launch-only "$v"; } >> notes.md
           gh release create "v$v" out/linux/* out/windows/* dist/BeamNG.Earth-BeamMP-Server-*.zip dist/BeamNG.Earth-Host-*.zip dist/BeamMP-Server-*-corresponding-source.zip \
             --target "$GITHUB_SHA" --title "BeamNG.Earth $v (development build)" --notes-file notes.md --prerelease
           # only the newest DEV_KEEP development builds stay (the releases page has no filter: the betas got lost among
@@ -210,5 +212,6 @@ jobs:
 
           Steam must be running. Closing the game stops the server. See the README for details.
           EOF
+          { echo; echo "---"; echo; python3 tools/release_notes.py --launch-only "$v"; } >> notes.md
           gh release create "v$v" out/linux/* out/windows/* dist/BeamNG.Earth-BeamMP-Server-*.zip dist/BeamNG.Earth-Host-*.zip dist/BeamMP-Server-*-corresponding-source.zip --target "$GITHUB_SHA" --title "BeamNG.Earth $v" \
             --notes-file notes.md --generate-notes $pre

@@ -1405,6 +1405,42 @@ class PredictTest(unittest.TestCase):
         self.assertGreater(n, 40)
 
 
+
+class MachineProfileTest(unittest.TestCase):
+    """earthd.machine_profile: a small machine gets the small process counts and the analyses off (from 1.7.3 to
+    1.8.1 that only happened with the BNGE_FAST_BASE_V A/B switch set)."""
+
+    def _args(self):
+        import argparse
+        return argparse.Namespace(road_processes=earthd.ROAD_PROCESSES, workers=earthd.WORKERS, deshadow="full",
+                                  colormatch="s2")
+
+    def test_small(self):
+        import budget
+        old = earthd.FAST_BASE_V
+        try:
+            a = self._args()
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("BNGE_FAST_BASE_V", None)
+                earthd.machine_profile(a, True)
+            self.assertEqual(a.road_processes, budget.SMALL_ROAD_PROCESSES)
+            self.assertEqual(a.workers, budget.SMALL_FAR_WORKERS)
+            if budget.SMALL_ANALYSES_OFF:
+                self.assertEqual((a.deshadow, a.colormatch), ("off", "off"))
+            self.assertEqual(earthd.FAST_BASE_V, earthd.SMALL_FAST_BASE_V)
+        finally:
+            earthd.FAST_BASE_V = old
+
+    def test_desktop(self):
+        import budget
+        a = self._args()
+        with mock.patch.object(budget, "road_processes", return_value=4):
+            earthd.machine_profile(a, False)
+        self.assertEqual(a.road_processes, 4)
+        self.assertEqual(a.workers, earthd.WORKERS)
+        self.assertEqual((a.deshadow, a.colormatch), ("full", "s2"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

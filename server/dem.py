@@ -239,6 +239,11 @@ class Dem:
                                                   block=BIAS_BLOCK) if LIDARBC else None)
         self.hrdem_served = set()       # tile keys with HRDEM heights in them (the data credits)
 
+
+    def clear_memory(self):
+        """Drop the decoded tiles kept in memory (budget.maybe_shed)."""
+        with self._lock:
+            self._lru.clear()
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key

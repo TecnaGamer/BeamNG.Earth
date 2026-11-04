@@ -2249,6 +2249,7 @@ local function onUpdate(dtReal, dtSim)
   end
   drawUi(dtReal)
   t = mark('draw', t)
+  if not M._mpMarked then M._mpMarked = true; pcall(mpsession.setMark, mark, hitchClock) end
   updateBeamMP(dtReal)
   mark('beammp', t)
 end
@@ -2853,6 +2854,9 @@ M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
 M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
+M.onVehicleSwitched = function(oldId, newId, player)
+  if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
+end
 M.onClientEndMission = onClientEndMission
 M.onExit = function() notePlayerPos(true) end           -- the game closing (a crash or a kill: the last periodic one)
 M.onClientPostStartMission = onClientPostStartMission

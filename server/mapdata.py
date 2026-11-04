@@ -815,6 +815,12 @@ class MapData:
         cd.provenance = [provs[k] for k in sorted(provs)]
         return cd
 
+    def clear_memory(self):
+        """Drop the decoded layers kept in memory (budget.maybe_shed); the cells load again from disk when asked."""
+        with self._mem_lock:
+            self._mem.clear()
+            self._mem_bytes = 0
+
     def _remember(self, k, entry):
         """Keep a decoded layer for the next cell() of it (at most MEM_MB in all, least recently used out)."""
         with self._mem_lock:

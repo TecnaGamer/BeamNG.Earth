@@ -9,6 +9,8 @@
 -- edge carries its speed limit and lanes; the road rules come from a file of ours (the level's info.json has none);
 -- a reset by someone else (map.reset() with no graph rebuilds an empty one from our level) is undone next frame.
 local M = {}
+local localplayers = require('beamngEarth/localplayers')
+local controlled = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
 M.MIN_GAP_S = 1.0
@@ -24,10 +26,9 @@ M.UI_MAP = false        -- send our graph to the UI (the big map) on every apply
 M.RULES_FILE = '/temp/beamngEarth/roadRules.json'
 M.rules = { rightHandDrive = false, turnOnRed = true }    -- US; `rightHandDrive = true` means driving on the left
 M.enabled = true
--- Traffic (gameplay_traffic, the player's traffic amount): started once the first graph is in the map; a car
+-- Traffic (gameplay_traffic, the player's traffic amount): started once the first graph is in the map; unoccupied AI
 -- within GUARD_M of the block's edge (or past it, where there is no ground) is respawned on the graph
--- (gameplay_traffic.forceTeleport), checked every GUARD_S; after a teleport every car is, once the new
--- place's graph is in.
+-- (gameplay_traffic.forceTeleport), checked every GUARD_S; after a teleport the AI is respawned when the new graph is in.
 M.GUARD_M = 40
 M.GUARD_S = 0.5
 -- A car standing still this long (longer than a signal cycle), this far from the player, is respawned too: stock
@@ -416,9 +417,11 @@ end
 local stillSince = {}   -- car id -> os.clock() it stopped moving
 local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
 local lastTeleport = {} -- car id -> os.clock() it was last teleported
+local syncTrafficPool
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
+  syncTrafficPool(gt)
   local me = playerId()
   local pv = me >= 0 and getObjectByID(me) or nil
   local pp = pv and pv:getPosition() or nil
@@ -426,9 +429,12 @@ local function guard(b, all)
   -- paused: nothing moves, nobody is stuck (the clocks start again after it)
   local paused = simTimeAuthority and simTimeAuthority.getPause and simTimeAuthority.getPause()
   if paused then table.clear(stillSince) end
-  for id in pairs(gt.getTrafficData() or {}) do
-    if id ~= me then
-      local o = getObjectByID(id)
+  for id, traffic in pairs(gt.getTrafficData() or {}) do
+    local o = getObjectByID(id)
+    -- The full traffic table also contains player vehicles and may still contain an AI car just entered by a player.
+    if localplayers.controlled(id, o, controlled) or (type(traffic) == 'table' and traffic.isAi == false) then
+      stillSince[id], seenAt[id], lastTeleport[id] = nil, nil, nil
+    else
       if o and o:getActive() then
         local p = o:getPosition()
         local u = o:getVelocity()
@@ -472,6 +478,102 @@ local function guard(b, all)
       end
     end
   end
+end
+
+-- Stock forceTeleportAll defaults to every AI id, including an AI car a local player may have just entered. Hand it
+-- an explicit filtered list instead; its full traffic data also contains non-AI player cars.
+local eligibleTraffic = {}
+local function scatterTraffic(gt, b)
+  local list = gt.getTrafficList and gt.getTrafficList()
+  if not gt.forceTeleportAll or type(list) ~= 'table' then return guard(b, true) end
+  localplayers.snapshot(controlled)
+  for i = #eligibleTraffic, 1, -1 do eligibleTraffic[i] = nil end
+  for _, id in ipairs(list) do
+    local o = getObjectByID(id)
+    if o and not localplayers.controlled(id, o, controlled) then
+      eligibleTraffic[#eligibleTraffic + 1] = id
+    end
+  end
+  pcall(gt.forceTeleportAll, eligibleTraffic)
+end
+
+-- Stock can keep a traffic car in its AI pool after somebody enters it. In particular, setActiveAmount(0) would
+-- deactivate that car, and reactivating it can invoke stock forceTeleport before our filtered scatter. Protect only
+-- the occupied AI cars, and return each to its original pool and respawn policy when its last local occupant leaves.
+local protectedTraffic, aiTraffic = {}, {}
+local function trafficPool()
+  local pools = rawget(_G, 'core_vehicleActivePooling')
+  local pool = pools and pools.getPool and pools.getPool('autoTraffic')
+  if pool and type(pool.allVehs) == 'table' and pool.removeVeh and pool.insertVeh then return pool end
+end
+
+local function releaseTraffic(id, saved, pool, data, force)
+  local t = saved.traffic
+  if data[id] == t then
+    if t.enableRespawn == false then t.enableRespawn = saved.enableRespawn end
+    if t.ignoreForceTeleport == true then t.ignoreForceTeleport = saved.ignoreForceTeleport end
+  end
+  if saved.pool == pool and pool and aiTraffic[id] and getObjectByID(id) and pool.allVehs[id] == nil then
+    pool:insertVeh(id, force)
+  end
+  protectedTraffic[id] = nil
+end
+
+-- A false return means the pool cannot safely be put on hold; the post-graph guard still recycles the AI.
+syncTrafficPool = function(gt)
+  local data = gt.getTrafficData and gt.getTrafficData() or {}
+  local list = gt.getTrafficList and gt.getTrafficList()
+  for id in pairs(aiTraffic) do aiTraffic[id] = nil end
+  if type(list) == 'table' then
+    for _, id in ipairs(list) do aiTraffic[id] = true end
+  else
+    for id, t in pairs(data) do if type(t) == 'table' and t.isAi then aiTraffic[id] = true end end
+  end
+  localplayers.snapshot(controlled)
+  local pool = trafficPool()
+  for id, saved in pairs(protectedTraffic) do
+    local o = getObjectByID(id)
+    if not aiTraffic[id] or not o or data[id] ~= saved.traffic or not localplayers.controlled(id, o, controlled) then
+      releaseTraffic(id, saved, pool, data, false)
+    end
+  end
+  local safe = type(list) == 'table'
+  for id in pairs(aiTraffic) do
+    local o, t = getObjectByID(id), data[id]
+    if o and localplayers.controlled(id, o, controlled) then
+      if type(t) ~= 'table' then
+        safe = false
+      else
+        local saved = protectedTraffic[id]
+        if not saved then
+          saved = { traffic = t, enableRespawn = t.enableRespawn, ignoreForceTeleport = t.ignoreForceTeleport }
+          protectedTraffic[id] = saved
+          t.enableRespawn, t.ignoreForceTeleport, t._teleport = false, true, nil
+          if t.state ~= nil then t.state = 'locked' end
+          if t.alpha ~= nil then t.alpha = 1 end
+          if o.setMeshAlpha then o:setMeshAlpha(1, '') end
+        end
+        if pool and pool.allVehs[id] ~= nil then
+          if pool:removeVeh(id) then saved.pool = pool else safe = false end
+        elseif not pool then
+          safe = false
+        end
+        -- A player can join while the pool is held. Clear its deferred stock teleport before making that car active.
+        if o.getActive and o.setActive and not o:getActive() then
+          t._teleport = nil
+          o:setActive(1)
+        end
+      end
+    end
+  end
+  return safe
+end
+
+-- core forwards the game's switch hook so a newly occupied traffic car is protected before the next guard tick.
+function M.onVehicleSwitched(_, _, player)
+  localplayers.observe(player)
+  local gt = gameplay_traffic
+  if gt and gt.getState() == 'on' then syncTrafficPool(gt) end
 end
 
 -- The player's traffic choice (the user, 2026-10-14: "if a player has them on then yes, if not then no"): the
@@ -560,7 +662,7 @@ function M.currentGraph() return graph end      -- (tests)
 function M.onTeleport()
   respawnAll = true
   local gt = gameplay_traffic
-  if gt and gt.getState() == 'on' and not heldActive then
+  if gt and gt.getState() == 'on' and not heldActive and syncTrafficPool(gt) then
     local vars = gt.getTrafficVars and gt.getTrafficVars() or {}
     heldActive = vars.activeAmount or math.huge
     pcall(gt.setActiveAmount, 0)
@@ -667,16 +769,15 @@ function M.update(aid, b, gov)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if okA then
     applied = { anchor = aid, serial = graph.serial, box = b and { b[1], b[2], b[3], b[4] } or {} }
-    if not started then
-      startTraffic()
-      respawnAll = false
-    elseif respawnAll then
+    if not started then startTraffic() end
+    if respawnAll then
       respawnAll = false
       local gt = gameplay_traffic
       if gt and heldActive then
+        syncTrafficPool(gt)
         pcall(gt.setActiveAmount, heldActive)
         heldActive = nil
-        if gt.forceTeleportAll then pcall(gt.forceTeleportAll) end
+        scatterTraffic(gt, b)
       else
         pcall(guard, b, true)
       end
@@ -702,6 +803,21 @@ function M.status()
 end
 
 function M.reset()
+  local gt = gameplay_traffic
+  if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
+    syncTrafficPool(gt)
+    if heldActive then pcall(gt.setActiveAmount, heldActive) end
+    local pool, data = trafficPool(), gt.getTrafficData and gt.getTrafficData() or {}
+    -- Keep any still-occupied cars active while returning them to the stock pool on level exit.
+    for id, saved in pairs(protectedTraffic) do releaseTraffic(id, saved, pool, data, true) end
+  else
+    for id, saved in pairs(protectedTraffic) do
+      local t = saved.traffic
+      if t.enableRespawn == false then t.enableRespawn = saved.enableRespawn end
+      if t.ignoreForceTeleport == true then t.ignoreForceTeleport = saved.ignoreForceTeleport end
+      protectedTraffic[id] = nil
+    end
+  end
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
