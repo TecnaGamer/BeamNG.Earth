@@ -66,13 +66,27 @@ def tree_files(tree):
     return out
 
 
+def past_stamp(mtime):
+    """A zip entry's time for the game's mod zip: mtime - 14 h as UTC wall time. Zip times have no time zone and the
+    game reads them as local time; built on a UTC machine (the release workflow) they were hours in the future west
+    of UTC, and the game re-packed every terrain texture whose source looked newer than its cache at every block swap
+    (17-25 s freezes in a BeamMP session right after the 1.8.0 release, 2026-11-04). 14 h back is in the past in every
+    time zone (UTC-12 .. +14) and still newer than the last release's caches."""
+    import time
+    return time.gmtime(mtime - 14 * 3600)[:6]
+
+
 def beammp_zip(out_dir, ver):
     """The BeamMP server's drop-in zip: the mod as Resources/Client/beamng_earth.zip, the plugin, the README."""
     import io
     mod = io.BytesIO()
     with zipfile.ZipFile(mod, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in tree_files("mod/beamng_earth"):
-            z.write(os.path.join(ROOT, "mod/beamng_earth", rel), rel)
+            src = os.path.join(ROOT, "mod/beamng_earth", rel)
+            info = zipfile.ZipInfo(rel, past_stamp(os.path.getmtime(src)))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with open(src, "rb") as f:
+                z.writestr(info, f.read())
     path = os.path.join(out_dir, f"BeamNG.Earth-BeamMP-Server-{ver}.zip")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr("Resources/Client/beamng_earth.zip", mod.getvalue(), zipfile.ZIP_STORED)
@@ -97,7 +111,7 @@ def main():
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in files:
             src = os.path.join(ROOT, rel)
-            info = zipfile.ZipInfo.from_file(src, f"{top}/{rel}")
+            info = zipfile.ZipInfo(f"{top}/{rel}", past_stamp(os.path.getmtime(src)))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o100755 if os.path.basename(rel) in EXECUTABLE else 0o100644) << 16
             with open(src, "rb") as f:
