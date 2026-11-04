@@ -278,6 +278,7 @@ QUICK_MIN_COVER = 0.8          # share of a stand-in's texels real imagery must 
 QUICK_SHARE_WAIT_S = 30.0       # Server._quick_once: a caller waits this long for the stand-in being made
 QUICK_MADE_KEPT = 256           # blocks whose stand-in file names _quick_once remembers
 QUICK_BASE_PX = 512             # a block's stand-in photo (write_quick_base): the imagery alone, 2 m texels
+BASE_NO_STANDIN_MAX_S = 8.0     # a block with no stand-in possible waits this long at most for its photo
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
                                 # car at the edge of its ground; a 4-core PC's photos took ~26 s, GitHub #496); it then
@@ -2187,7 +2188,8 @@ class Server:
             osm = getattr(self.mapdata, "picnic_osm", None)
             try:
                 props.extend(picnic.rows(anchor.frame, infra_fn, land_fn, box, elev,
-                                         osm.cells if osm is not None else None, bld_fn))
+                                         (lambda keys: osm.cells(keys, wait=False)) if osm is not None else None,
+                                         bld_fn))
             except Exception as ex:
                 log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import shelters
@@ -2960,7 +2962,10 @@ class Server:
                     or self.write_quick_base(anchor, cx, cy))
                 info["stages"]["baseQuick"] = time.perf_counter() - t1
                 if not quick and not self.fast:
-                    base.result()       # (no stand-in to show: slower, the photo is waited for, as before)
+                    # (no stand-in to show: slower, the photo is waited for, BASE_NO_STANDIN_MAX_S at most: without a
+                    # limit an imagery host that kept failing held the block and the car at the edge for good,
+                    # "paused until the server answers terrain requests", a player in Nova Scotia, 2026-11-03)
+                    concurrent.futures.wait([base], timeout=BASE_NO_STANDIN_MAX_S)
             if not base.done():
                 # the block goes now with a stand-in photo (below QUICK_SYNC_MAX_V made first: sent without one, the
                 # ground the last blocks had already shown went to the flat base until it came, "it flashes already

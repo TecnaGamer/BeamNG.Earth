@@ -932,7 +932,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         osm = getattr(_s.md, "picnic_osm", None)
         try:
             props.extend(picnic.rows(frame, infra_fn, land_fn, box, elev,
-                                     osm.cells if osm is not None else None, bld_fn))
+                                     (lambda keys: osm.cells(keys, wait=False)) if osm is not None else None, bld_fn))
         except Exception as ex:
             log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import shelters
