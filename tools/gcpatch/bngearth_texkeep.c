@@ -20,7 +20,7 @@
 // Exact build only (BeamNG.drive 0.40 Linux, the 2026-10-29 executable): the code and data it relies on are compared
 // byte for byte at startup (the vtable slots' relocated values, createTexture's prologue, both call sites,
 // requestDeleteTexture's and destroySelf's code); on any difference it does nothing and says why in
-// <user>/temp/beamngEarth_texkeep.txt. BNGEARTH_TEXKEEP_OFF=1: not installed. BNGEARTH_TEXKEEP_DRY=1: installed but
+// <user>/temp/beamngEarth_texkeep.txt. Opt-in: BNGEARTH_TEXKEEP=1 (BNGEARTH_TEXKEEP_OFF=1 wins). BNGEARTH_TEXKEEP_DRY=1: installed but
 // never hands back a kept texture (counts and times the stock calls only: an A/B baseline with the same overhead).
 // BNGEARTH_TEXKEEP_LOG=1: one line per terrain pack call in <user>/temp/beamngEarth_texkeep.log.
 //
@@ -390,6 +390,13 @@ static int same(const struct bnge_main *m, uintptr_t vaddr, const unsigned char 
 
 __attribute__((constructor)) static void bngearth_texkeep(void) {
     if (!bnge_is_main_game()) return;
+    // (opt-in for now, BNGEARTH_TEXKEEP=1: a review 2026-11-03 found a rare permanent-deadlock path (the device mutex's
+    // owner read from glibc's layout) and release_all's lock order; to be fixed before it is on by default)
+    const char *on_ = getenv("BNGEARTH_TEXKEEP");
+    if (!on_ || !*on_ || !strcmp(on_, "0")) {
+        bnge_report(TAG, STATUS_FILE, "off (opt-in: BNGEARTH_TEXKEEP=1)");
+        return;
+    }
     if (getenv("BNGEARTH_TEXKEEP_OFF") && *getenv("BNGEARTH_TEXKEEP_OFF") && strcmp(getenv("BNGEARTH_TEXKEEP_OFF"), "0")) {
         bnge_report(TAG, STATUS_FILE, "off (BNGEARTH_TEXKEEP_OFF set)");
         return;

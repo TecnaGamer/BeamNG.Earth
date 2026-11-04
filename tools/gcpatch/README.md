@@ -6,7 +6,7 @@ map, has its own off switch and its own status file in the game's user folder `t
 | patch | source | what it does | off switch | status file |
 |---|---|---|---|---|
 | grass | `bngearth_gcpatch.c` | keeps the grass when the physics block moves | `BNGEARTH_GCPATCH_OFF=1` | `beamngEarth_gcpatch.txt` |
-| texkeep | `bngearth_texkeep.c` | keeps the terrain's packed textures across material rebuilds | `BNGEARTH_TEXKEEP_OFF=1` | `beamngEarth_texkeep.txt` |
+| texkeep (opt-in) | `bngearth_texkeep.c` | keeps the terrain's packed textures across material rebuilds | on with `BNGEARTH_TEXKEEP=1` | `beamngEarth_texkeep.txt` |
 | dtsmooth (opt-in) | `bngearth_dtsmooth.c` | no fast-forward of game time after a hitch | on with `BNGEARTH_DTSMOOTH=1` | `beamngEarth_dtsmooth.txt` |
 
 ## Grass: keep the grass when the physics block moves
@@ -32,6 +32,9 @@ floating-origin rebases.
   option fixes.
 
 ## texkeep: terrain textures kept across block swaps
+**Opt-in for now (`BNGEARTH_TEXKEEP=1`):** a code review (2026-11-03) found a rare path to a permanent deadlock (the
+device mutex's owner read from glibc's layout) and a lock-order risk in `release_all`; on by default once fixed.
+
 Every terrain block swap (a new `.ter`) and every base-photo refresh (`updateMaterial`) makes the engine rebuild the
 terrain's material data on the next frame. For each ground material it asks the texture manager again for six packed
 textures (`temp/art/terrainmaterialcache/<hash>.dds`) and creates each one again from its file (a Vulkan image and an
