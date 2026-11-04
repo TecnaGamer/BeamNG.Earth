@@ -3406,7 +3406,8 @@ class Server:
             self.base_pending.pop(key, None)
             # its photos (the base, a refreshed one, the stand-in) with their packed copies in the game's terrain
             # texture cache
-            for name in {self.base_name(key), info.get("base") or self.base_name(key), self.quick_base_name(key)}:
+            for name in {self.base_name(key), info.get("base") or self.base_name(key), self.quick_base_name(key),
+                         *info.get("old_bases", ())}:
                 self._remove_base(name)
             if info.get("ter"):
                 self._remove(os.path.join(self.out_dir, info["ter"]))
@@ -6105,7 +6106,10 @@ class Connection:
                     return
                 old, info["base"] = info.get("base"), name
                 if old and old != name and old != s.base_name(key):
-                    s._remove_base(old)         # (with its pack: only the photo went before, its pack stayed)
+                    # (kept until the block goes, prune_hm, with its pack: the mod may still show it a while, its
+                    # refresh deferred at speed (core BASE_LATER_MS), and a material rebuild then needs the pack;
+                    # deleted here, the game packed the photo again on its main thread, ~0.75 s frames, 2026-11-03)
+                    info.setdefault("old_bases", []).append(old)
                 log.info("base photo of %s rendered again with its NAIP (%s)", key, name)
                 self.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
                            "base": f"{s.vfs_dir}/{name}", "baseSize": size})

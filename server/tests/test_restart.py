@@ -676,6 +676,27 @@ class LeakedPacksTest(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(s.out_dir, name)) or os.path.exists(pack))
             self.assertTrue(os.path.exists(other), "the game's own packs stay")
 
+    def test_replaced_photos_stay_until_their_block_goes(self):
+        # a refreshed block's old photo (its stand-in) may still be on screen (the refresh deferred at speed): its
+        # pack stays until the block is evicted (deleted at the refresh, the game packed it again: ~0.75 s frames)
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: True), \
+                mock.patch.object(earthd, "HM_CACHE", 0):
+            s = self.server(root)
+            key = (1, 0.0, 0.0)
+            names = [s.base_name(key), s.quick_base_name(key), s.base_name(key, 2)]
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir, exist_ok=True)
+            packs = [os.path.join(cdir, terraincache.base_key(f"{s.vfs_dir}/{n}", earthd.BASE_AO_VFS) + ".dds")
+                     for n in names]
+            for p in [os.path.join(s.out_dir, n) for n in names] + packs:
+                open(p, "w").close()
+            s.hm[key] = {"base": names[2], "old_bases": [names[1]]}
+            s.hm_committed, s.hm_sent = [], []
+            s.evict_heightmaps(fresh=None)
+            self.assertNotIn(key, s.hm)
+            self.assertFalse(any(os.path.exists(p) for p in packs), "every photo of the block goes with it")
+
     def test_leaked_packs_wiped_once_with_no_game(self):
         import terraincache
         with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: False), \
