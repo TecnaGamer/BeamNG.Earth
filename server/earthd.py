@@ -100,6 +100,7 @@ import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
+import placenames as placenamesmod  # noqa: E402
 import runtimeprofiler
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
@@ -327,6 +328,9 @@ SESSION_MARKER = ".earthd-session"
 # Server-written .cdae tiles (the default) have no such duplicate.
 CDAE_ROOT = ("temp", "temp", "beamngearth")
 PLACE_PREVIEWS_MAX = 100     # place pictures made per request (a long list: the rest next time)
+# the status bar's place names of a region not on disk yet (where(), placenames.py): fetched as a background job,
+# asked again this often while Overture's hosts are busy with the world's downloads, this many times at most
+WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 
 HM_CACHE = 16               # heightmaps kept beyond the protected ones (6 before 2026-10-30: a fast player's prefetched
                             # chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again)
@@ -901,6 +905,9 @@ class Server:
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
         self.ui_pool = ThreadPoolExecutor(2, thread_name_prefix="map-ui")
+        # the status bar's place names (placenames.py): a thread of their own, a region's first fetch takes seconds
+        self.place_pool = ThreadPoolExecutor(1, thread_name_prefix="place-names")
+        self._place_names_lock = threading.Lock()
         # (a thread per helper slot too: a far thread waits for its tile's builder, here or on a helper)
         self.cache_dir = cache_dir
         self.picking = None          # the settings page's file window open (apppaths.pick): for which path
@@ -1503,6 +1510,18 @@ class Server:
         path, n = vegetationmod.write_tile(self.out_dir, self.vfs_dir, None, gx, gy, rows, flat=flat,
                                            geo={"key": geotiles.key(gx, gy), "frame": frame, "pivot": pivot})
         return path, n, frame, pivot
+
+    def place_names(self):
+        """The status bar's town / state / country lookup (placenames.PlaceNames), made at its first use: it shares the
+        map data's Overture reader (footers and row groups read once) when there is one."""
+        with self._place_names_lock:
+            pn = getattr(self, "_place_names", None)
+            if pn is None:
+                md = getattr(self, "mapdata", None)
+                pn = self._place_names = placenamesmod.PlaceNames(
+                    md.cache_dir if md is not None else self.cache_dir, self.net,
+                    reader=md.overture if md is not None else None)
+            return pn
 
     def country_at(self, lat, lon):
         """The ISO country code at (lat, lon) (its nearest airport's: navgraph.country_near), or None."""
@@ -4721,8 +4740,9 @@ class Connection:
     async def where(self, msg):
         """The status bar's location {"id", "lat", "lon", "online"} -> where_result {"id", "street", "place", "region",
         "country"}: the street from the cached map cells (never waits for a download), the town, state and country from
-        Photon's reverse geocoding with the position rounded to ~1 km, only when "online" (the mod's setting), and
-        asked again only when that rounded position changed."""
+        our own copy of Overture's divisions (placenames.py; GitHub #602: no outside geocoder is asked), only when
+        "online" (the mod's setting, and the place due: moved ~1.5 km or 2 min). A region not on disk yet is fetched at
+        low priority after the answer: its place parts come in a second where_result once they are there."""
         try:
             lat, lon = float(msg["lat"]), float(msg["lon"])
         except (KeyError, TypeError, ValueError):
@@ -4738,20 +4758,40 @@ class Connection:
             except Exception as e:      # a cell being written, an odd feature: no street this time
                 log.debug("where: street: %s: %s", type(e).__name__, e)
         if msg.get("online"):
-            key = (round(lat, geocodemod.REVERSE_ROUND), round(lon, geocodemod.REVERSE_ROUND))
-            cached = getattr(self, "_where_place", None)
-            if cached is None or cached[0] != key:
-                try:
-                    place = await loop.run_in_executor(self.s.ui_pool, geocodemod.reverse, lat, lon, self.s.net,
-                                                       self.s.country_at(lat, lon))
-                    self._where_place = (key, place)
-                    cached = self._where_place
-                except Exception as e:  # offline, rate limited, refused: the bar shows the street alone
-                    log.debug("where: place: %s: %s", type(e).__name__, e)
-                    geocodemod.error_text(e)        # (a refusal kept: the search box says it too, GitHub #602)
-            if cached is not None and cached[0] == key:
-                out.update(cached[1])
+            self._where_seq = seq = getattr(self, "_where_seq", 0) + 1
+            pn = self.s.place_names()
+            try:
+                if await loop.run_in_executor(self.s.place_pool, pn.ready, lat, lon):
+                    out.update(await loop.run_in_executor(self.s.place_pool, pn.lookup, lat, lon))
+                else:
+                    self.spawn(self._where_place_later(dict(out), lat, lon, seq))
+            except Exception as e:      # a damaged cell file, odd data: the bar shows the street alone
+                log.debug("where: place: %s: %s", type(e).__name__, e)
         self.send(out)
+
+    async def _where_place_later(self, out, lat, lon, seq):
+        """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
+        never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
+        busy, sent in a where_result of their own unless the player asked for another place meanwhile."""
+        loop = asyncio.get_running_loop()
+        pn = self.s.place_names()
+        for _ in range(WHERE_PLACE_TRIES):
+            if getattr(self, "_where_seq", 0) != seq:
+                return
+            try:
+                place = await loop.run_in_executor(self.s.place_pool, pn.lookup, lat, lon, "background")
+            except mapdatamod.DEFERRED as e:     # busy (the world's downloads first), rate limited: later
+                log.debug("where: place names deferred: %s: %s", type(e).__name__, e)
+                await asyncio.sleep(WHERE_PLACE_RETRY_S)
+                continue
+            except Exception as e:      # offline, the data unreadable: the bar shows the street alone
+                (log.debug if isinstance(e, netfetch.FetchError) else log.info)(
+                    "where: place names: %s: %s", type(e).__name__, e)
+                return
+            if getattr(self, "_where_seq", 0) == seq:
+                out.update(place)
+                self.send(out)
+            return
 
     async def geocode(self, msg):
         """The map's search {"id", "q", "lat"?, "lon"?} -> geocode_result {"id", "results": [...], "error"?}."""

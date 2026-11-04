@@ -51,8 +51,9 @@ in a few minutes. No programming needed.
 ## The status bar
 A slim bar at the top of the screen shows the street you are on, the town, state and country, the loading
 progress after a teleport. The street comes from the map data on your computer; the town,
-state and country come from Photon (komoot), which is sent your position rounded to about 1 km, at most every
-1.5 km driven. Turn either off in the settings page (**Status bar**, **Place names in the status bar (online)**).
+state and country come from Overture Maps' boundaries and places data, downloaded once per region (a few MB) and kept
+with the map data: your position is not sent to any lookup service. Turn either off in the settings page
+(**Status bar**, **Place names**).
 
 ## Traffic
 Traffic and parked cars follow your game settings, like on any other map: pick them in the
