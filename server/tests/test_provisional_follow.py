@@ -60,6 +60,45 @@ class ProvisionalFollowTest(unittest.TestCase):
         self.assertIsNone(r)                # (built within PROVISIONAL_FOLLOW_S of the check: no stand-in)
         self.assertEqual(self.checked, [(0.0, 0.0)])
 
+    def test_stuck_check_starts_the_stand_in(self):
+        """A plan check stuck past PROVISIONAL_FOLLOW_S (the pool busy for good) counts as planned: the stand-in is
+        made after the follow wait, not after the check."""
+        if earthd.PROVISIONAL_FOLLOW_S <= 0 or not earthd.PROVISIONAL_FIRST:
+            self.skipTest("provisional follow blocks off in this environment")
+        made = []
+        stand_pool = ThreadPoolExecutor(1)
+        self.conn.s.make_provisional_follow = lambda a, cx, cy: made.append(1) or {"ter": "prov.ter"}
+        self.conn.spawn = lambda coro: coro.close()
+
+        async def refine(*a):
+            pass
+        self.conn.refine_follow = refine
+
+        async def never():
+            await asyncio.sleep(30)
+
+        async def go():
+            loop = asyncio.get_running_loop()
+            orig = loop.run_in_executor
+            # (the check on the stuck pool, the stand-in on a free thread)
+            loop.run_in_executor = lambda pool, fn, *a: orig(
+                self.pool if fn is self.conn.s.block_planned else stand_pool, fn, *a)
+            try:
+                job = asyncio.ensure_future(never())
+                t0 = time.perf_counter()
+                r = await earthd.Connection.provisional_follow(self.conn, self.anchor, 0.0, 0.0, job)
+                job.cancel()
+                return r, time.perf_counter() - t0
+            finally:
+                loop.run_in_executor = orig
+        try:
+            r, dt = asyncio.run(go())
+        finally:
+            stand_pool.shutdown(wait=False)
+        self.assertEqual(r, {"ter": "prov.ter"})
+        self.assertEqual(made, [1])
+        self.assertLess(dt, earthd.PROVISIONAL_FOLLOW_S + 1.5)
+
 
 if __name__ == "__main__":
     unittest.main()

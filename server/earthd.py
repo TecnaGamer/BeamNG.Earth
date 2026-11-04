@@ -5635,31 +5635,41 @@ class Connection:
             return None
         key = (anchor.id, cx, cy)
         info = s.prov_info.get(key)     # (asked again: its provisional block at once)
-        wait = 0.0
+        wait, planned, t_check = 0.0, False, time.perf_counter()
         if info is None:
             # at once where the block's road plans are not made yet (a first visit's cells: 15-120 s of planning);
             # planned, after PROVISIONAL_FOLLOW_S: the graded block is usually quick then, but a first visit's map data
             # (its roads round the block, read on demand) still held one 84 s (nyc_speed.py --cold, 2026-11-02).
-            # Raced with the block itself: one built already (the prefetch) goes at once. The check waits for a
-            # thread of prov_pool, and with both busy (provisional builds of a first visit) blocks built 15-34 s
-            # before their request were answered 2.6-8.8 s after it, each an edge hold at 68 mph (GitHub #725)
+            # Raced with the block itself: one built already (the prefetch) goes at once. The check runs on
+            # prov_pool and may wait for a planner's lock while a cell is planned: blocks built 15-34 s before their
+            # request were answered 2.6-8.8 s after it, each an edge hold at 68 mph (GitHub #725; 11 and 65 s here
+            # under load, 2026-11-04). The check gets PROVISIONAL_FOLLOW_S at most: past that it counts as planned,
+            # the wait spent.
             pf = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.block_planned, anchor, cx, cy)
-            done, _ = await asyncio.wait({job, pf}, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait({job, pf}, timeout=PROVISIONAL_FOLLOW_S, return_when=asyncio.FIRST_COMPLETED)
             if job in done:
                 return None
-            try:
-                planned = pf.result()
-            except Exception:
-                planned = True
-            wait = PROVISIONAL_FOLLOW_S if planned else 0.0
+            planned = True
+            if pf in done:
+                try:
+                    planned = pf.result()
+                except Exception:
+                    pass
+            else:
+                def slow_check(f, key=key, t=t_check):
+                    log.info("block %s: its plan check took %.1f s (a planner busy)", key, time.perf_counter() - t)
+                pf.add_done_callback(slow_check)
+            if planned:
+                wait = max(0.0, PROVISIONAL_FOLLOW_S - (time.perf_counter() - t_check))
         done, _ = await asyncio.wait({job}, timeout=wait)
         if done:
             return None
-        pf = s.hm_proc.get(key) if info is None and wait > 0 else None
-        if pf is not None and pf.running() and PROVISIONAL_RUNNING_S > wait:
+        pf = s.hm_proc.get(key) if info is None and planned else None
+        left = PROVISIONAL_RUNNING_S - (time.perf_counter() - t_check)
+        if pf is not None and pf.running() and left > 0:
             # (planned and building already: a provisional block beside it took the CPU it needed, finished after it,
             # 150 mph down Midtown on a warm cache 2026-11-02; only if it runs long, a first visit's map data)
-            done, _ = await asyncio.wait({job}, timeout=PROVISIONAL_RUNNING_S - wait)
+            done, _ = await asyncio.wait({job}, timeout=left)
             if done:
                 return None
         if info is None:
