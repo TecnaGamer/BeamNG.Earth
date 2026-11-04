@@ -1992,7 +1992,10 @@ def _imagery(tex):
     online = bool(tex.get("online"))
     fin = tuple(sorted((tex.get("fin") or {}).items()))
     key = (tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"], online, fin)
-    if _s.imagery is None or _s.imagery[0] != key:
+    ims = _s.imagery if isinstance(_s.imagery, dict) else {}
+    if key not in ims:
+        while len(ims) >= 2:            # (with the analyses on: its finished-only one and a plain one, _base_elsewhere)
+            ims.pop(next(iter(ims)))
         im = imagerymod.Imagery(os.path.join(_s.cache_dir, "imagery"), key[0], fetch_workers=4 if online else 1,
                                 mem_tiles=WORKER_IMAGERY_TILES, tone=key[1],
                                 fetcher=netfetch.Fetcher(offline=not online), leaf_on=key[2], season_mode=key[3])
@@ -2000,8 +2003,9 @@ def _imagery(tex):
         if fin:         # (the server's analyses on: its finished tiles alone, Imagery.finished_only)
             im._fin_sigs.update(dict(fin))
             im.finished_only = True
-        _s.imagery = (key, im)
-    return _s.imagery[1]
+        ims[key] = im
+        _s.imagery = ims
+    return ims[key]
 
 
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,

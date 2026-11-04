@@ -1292,9 +1292,15 @@ class Imagery:
             need.append(k)
         if not need:
             return out
-        if self.finished_only:
-            raise ImageryError(f"{len(need)} finished tile(s) not on disk")
         raw = self.tiles(need)
+        if self.finished_only:
+            # (no data there, a remembered 404 or outside the coverage probes: none, as for the server; one with
+            # data but not finished as the server finishes it fails the render)
+            if any(raw.get(k) is not None for k in need):
+                raise ImageryError(f"{sum(raw.get(k) is not None for k in need)} finished tile(s) not on disk")
+            for k in need:
+                out[k] = None
+            return out
         for k in need:
             t = raw.get(k)
             if t is None:

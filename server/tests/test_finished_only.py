@@ -5,6 +5,7 @@ server's names)."""
 import os
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -55,17 +56,26 @@ class FinishedOnlyTest(unittest.TestCase):
         f = self.worker.finished([key])[key]
         self.assertTrue(f.relit)
 
-    def test_missing_tile_fails_without_the_raw(self):
+    def test_missing_tile_fails_and_is_not_made(self):
         key = (self.src, 16, 100, 201)
-        with mock.patch.object(self.worker, "tiles", side_effect=AssertionError("a raw tile read")):
+        raw = types.SimpleNamespace(rgb=np.zeros((imagery.TILE, imagery.TILE, 3), np.uint8), uniform=False)
+        with mock.patch.object(self.worker, "tiles", return_value={key: raw}), \
+                mock.patch.object(self.worker, "_make_finished", side_effect=AssertionError("made here")):
             with self.assertRaises(imagery.ImageryError):
                 self.worker.finished([key])
         self.assertFalse(os.path.exists(self.worker._fin_path(key)))
 
+    def test_no_data_there_is_none(self):
+        key = (self.src, 16, 100, 203)
+        with mock.patch.object(self.worker, "tiles", return_value={key: None}):
+            self.assertIsNone(self.worker.finished([key])[key])     # (a 404 / outside the probes: as the server)
+
     def test_tile_with_a_correction_to_come_fails(self):
         key = (self.src, 16, 100, 202)
         self.keep(key, wait=(("cm", (3, 4)),))
-        with mock.patch.object(self.worker, "tiles", side_effect=AssertionError("a raw tile read")):
+        raw = types.SimpleNamespace(rgb=np.zeros((imagery.TILE, imagery.TILE, 3), np.uint8), uniform=False)
+        with mock.patch.object(self.worker, "tiles", return_value={key: raw}), \
+                mock.patch.object(self.worker, "_make_finished", side_effect=AssertionError("made here")):
             with self.assertRaises(imagery.ImageryError):
                 self.worker.finished([key])
 

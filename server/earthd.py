@@ -2882,11 +2882,10 @@ class Server:
 
     def _base_process(self, lane):
         """The block process that renders the base photo of a block built in lane (blockworker.base_photo): the
-        other lane's, usually idle while this one builds the heights; None (rendered here) with the imagery
-        analyses on (they live in this process) or without block processes."""
+        other lane's, usually idle while this one builds the heights; None (rendered here) without block processes.
+        With the imagery analyses on (they live in this process) it renders from this process's finished tiles on
+        disk (_base_elsewhere), else it is rendered here."""
         if not self.block_pools or self.imagery is None:
-            return None
-        if (self.deshadow is not None or self.colormatch is not None) and not (URGENT_ELSEWHERE and lane == LANE_REQUEST):
             return None
         if lane == LANE_REQUEST and getattr(self, "photo_pool", None) is not None and not getattr(self, "fast", False):
             return self.photo_pool      # (fast: the photo process makes its stand-in first, _stand_in)
@@ -2899,21 +2898,37 @@ class Server:
         fetched ahead of the far field's (Imagery.urgent, netfetch "urgent"). quick: write_base's."""
         t1 = time.perf_counter()
         photo = []
-        name = self._base_elsewhere(anchor, cx, cy, pool, photo) if pool is not None else None
+        plain = URGENT_ELSEWHERE and urgent       # (analyses on: its photo without them at once, then refreshed)
+        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain) if pool is not None else None
         if name is None:
             with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
                 name = self.write_base(anchor, cx, cy, photo=photo, quick=quick)
         return name, photo, time.perf_counter() - t1
 
-    def _base_elsewhere(self, anchor, cx, cy, pool, photo):
+    def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False):
         """write_base in a block process (blockworker.base_photo): the file name, or None when it lacked an imagery
-        tile on disk or failed (then rendered here)."""
+        tile on disk or failed (then rendered here). With the imagery analyses on, from this process's finished tiles
+        on disk (tex["fin"], Imagery.finished_only: as write_base here would render it); one not finished yet fails
+        it, and then plain (a block the player waits for) renders it there without them, refreshed later
+        (base_stale). Every block's photo was rendered twice before (there without them, here with them: 2 x 12 MB
+        of PNG and 2 x 5.6 MB of the game's packed copy a block, 2026-11-04)."""
+        im = self.imagery
+        if self.deshadow is not None or self.colormatch is not None:
+            name = self._base_in(anchor, cx, cy, pool, photo,
+                                 {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain})
+            if name is not None or not plain:
+                return name
+        return self._base_in(anchor, cx, cy, pool, photo, None)
+
+    def _base_in(self, anchor, cx, cy, pool, photo, fin):
         size = self.layout.block * heightmap.SQUARE
         key = (anchor.id, cx, cy)
         name = self.base_name(key)
         im = self.imagery
         tex = {"chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                "season_mode": im.season_mode}
+        if fin:
+            tex["fin"] = fin
         try:
             got = pool.submit(blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                               cy - size / 2 - BASE_SHIFT_M, size,
@@ -2928,7 +2943,7 @@ class Server:
             return None
         rgb, _, pending = got
         self._base_kept(anchor, cx, cy, pending)
-        if self.deshadow is not None or self.colormatch is not None:
+        if not fin and (self.deshadow is not None or self.colormatch is not None):
             # (rendered without the imagery analyses, which live in this process: rendered again here with them,
             # base_refresh, as a photo rendered before they were done)
             self.base_stale.add(key)

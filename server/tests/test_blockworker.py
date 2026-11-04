@@ -207,11 +207,11 @@ class BaseRoutingTest(unittest.TestCase):
         self.assertEqual(S._base_process(s, earthd.LANE_REQUEST), "prefetch")
         self.assertEqual(S._base_process(s, earthd.LANE_PREFETCH), "request")
         for k in ("deshadow", "colormatch"):
-            # (with the analyses on: a requested block's photo there all the same, rendered again here with them;
-            # a prefetched one's here)
-            self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), k: object()}), earthd.LANE_PREFETCH), k)
+            # (with the analyses on: there too, from this process's finished tiles; _base_elsewhere)
+            self.assertEqual(S._base_process(SimpleNamespace(**{**vars(s), k: object()}), earthd.LANE_PREFETCH),
+                             "request", k)
             self.assertEqual(S._base_process(SimpleNamespace(**{**vars(s), k: object()}), earthd.LANE_REQUEST),
-                             "prefetch" if earthd.URGENT_ELSEWHERE else None, k)
+                             "prefetch", k)
         self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), "block_pools": []}), earthd.LANE_REQUEST))
         # the photo process (PHOTO_PROCESS_MIN_CPUS): a requested block's photo there below FAST_BASE_V; faster, it
         # makes the stand-in first and the photo goes to the other lane as before
@@ -227,12 +227,35 @@ class BaseRoutingTest(unittest.TestCase):
             photo.append("here")
             return "here.png"
         s.write_base = write_base
-        s._base_elsewhere = lambda anchor, cx, cy, pool, photo: None         # a tile not on disk
+        s._base_elsewhere = lambda anchor, cx, cy, pool, photo, plain=False: None         # a tile not on disk
         name, photo, _ = S._base_photo(s, None, 1, 2, "pool")
         self.assertEqual((name, photo, calls), ("here.png", ["here"], [(1, 2)]))
-        s._base_elsewhere = lambda anchor, cx, cy, pool, photo: photo.append("there") or "there.png"
+        s._base_elsewhere = lambda anchor, cx, cy, pool, photo, plain=False: photo.append("there") or "there.png"
         name, photo, _ = S._base_photo(s, None, 3, 4, "pool")
         self.assertEqual((name, photo, calls), ("there.png", ["there"], [(1, 2)]))
+
+    def test_analyses_on_finished_first(self):
+        """With the analyses on: the photo from the finished tiles there (tex fin, not stale); not all finished: a
+        block the player waits for (plain) without them there (refreshed later), any other here (None)."""
+        import earthd
+        S = earthd.Server
+        im = SimpleNamespace(chain=[SimpleNamespace(name="eox")], _fin_sigs={}, _fin_sig=lambda src: "sig1")
+        tries = []
+
+        def base_in(anchor, cx, cy, pool, photo, fin):
+            tries.append(fin)
+            return None if fin and fail[0] else "p.png"
+        s = SimpleNamespace(imagery=im, deshadow=object(), colormatch=None, _base_in=base_in)
+        fail = [False]
+        self.assertEqual(S._base_elsewhere(s, None, 1, 2, "pool", []), "p.png")
+        self.assertEqual(tries, [{"eox": "sig1"}])
+        fail[0] = True
+        tries.clear()
+        self.assertIsNone(S._base_elsewhere(s, None, 1, 2, "pool", []))
+        self.assertEqual(tries, [{"eox": "sig1"}])
+        tries.clear()
+        self.assertEqual(S._base_elsewhere(s, None, 1, 2, "pool", [], True), "p.png")
+        self.assertEqual(tries, [{"eox": "sig1"}, None])
 
 
 if __name__ == "__main__":
