@@ -24,7 +24,7 @@ A few things hold for all of them:
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
-| Overture Maps (map data releases) | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` | Every road and railway line, every building (footprint, height, roof shape where mapped), water areas, rivers, land use (parks, farmland, industrial areas), bridges and tunnels as mapped, gas stations, airports' surroundings. Read in small ranges of large files: only the part around you. | Places you have not visited before come without roads, buildings or water until it answers. Places you have visited load from disk. | named |
+| Overture Maps (map data releases) | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` | Every road and railway line, every building (footprint, height, roof shape where mapped), water areas, rivers, land use (parks, farmland, industrial areas), bridges and tunnels as mapped, gas stations, airports' surroundings, and the town, state and country names in the status bar. Read in small ranges of large files: only the part around you. | Places you have not visited before come without roads, buildings or water (and the status bar without the town name) until it answers. Places you have visited load from disk. | named |
 | Overture Maps (second copy, on Azure) | `overturemapswestus2.blob.core.windows.net` | The same data, used when the first copy does not answer. | Only matters while the first copy is down too. | named |
 | Overture Maps file index | `stac.overturemaps.org` | The list of which file holds which part of the world. | The app carries its own copy of the list, which is used instead. | named |
 | OpenStreetMap road details (OSM US Layercake) | `data.openstreetmap.us` | OpenStreetMap's own road tags matched to the roads: lanes, widths, sidewalks, surfaces, speed limits, roads under construction. | Roads keep their width, lane and sidewalk estimates from their class and the land around them. | optional |
@@ -93,7 +93,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 | Source | Address | What it does | What is sent | If it does not answer | Status line |
 |---|---|---|---|---|---|
 | Open-Meteo | `api.open-meteo.com` | Real weather (clouds, rain, snow, wind, fog) and the local time zone. | The position you are at. | The weather stays as it is. | optional |
-| Photon (komoot) | `photon.komoot.io` | The map's address and place search, and the town name in the status bar. | What you type, and your position (to rank nearby results first). | Search says it is unavailable for a moment. | optional |
+| Photon (komoot) | `photon.komoot.io` | The map's address and place search. (The status bar's town names no longer come from it: they are read from the Overture Maps data.) | What you type, and your position (to rank nearby results first). | Search says it is unavailable for a moment. | optional |
 | OSRM routing (FOSSGIS) | `routing.openstreetmap.de` | GPS routes over long distances on the map. | The start and the destination of the route. | No new route until it answers. | optional |
 | EGM2008 gravity model (SourceForge) | `downloads.sourceforge.net` | Real gravity, which differs slightly from place to place (74 MB, downloaded once). | Nothing but the download. | Standard gravity is used. | optional |
 

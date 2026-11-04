@@ -30,7 +30,7 @@ class LangForTest(unittest.TestCase):
         for cc in ("US", "CZ", "PL", "NL", "SI", None, ""):
             self.assertEqual(geocode.lang_for(cc), "en", cc)
 
-    def test_search_and_reverse_pick_it_up(self):
+    def test_search_picks_it_up(self):
         net = FakeNet()
         geocode.search("Koeln", 50.9375, 6.9603, net=net, country="DE")
         self.assertEqual(parse_qs(urlparse(net.urls[0]).query)["lang"], ["de"])
@@ -41,7 +41,7 @@ class LangForTest(unittest.TestCase):
         geocode.search("fells point", 39.2904, -76.6122, net=net)
         self.assertEqual(parse_qs(urlparse(net.urls[0]).query)["lang"], ["en"])
         net = FakeNet()
-        geocode.reverse(46.0207, 7.7491, net=net, country="CH")
+        geocode.search("Zermatt", 46.0207, 7.7491, net=net, country="CH")
         self.assertEqual(parse_qs(urlparse(net.urls[0]).query)["lang"], ["de"])
 
 

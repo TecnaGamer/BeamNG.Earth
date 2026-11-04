@@ -205,7 +205,16 @@ PLACE_SCHEMA = """id VARCHAR, version INTEGER, names STRUCT("primary" VARCHAR), 
     taxonomy STRUCT("primary" VARCHAR), brand STRUCT(wikidata VARCHAR, names STRUCT("primary" VARCHAR)),
     sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[], operating_status VARCHAR,
     confidence DOUBLE"""
+# the divisions theme (placenames.py): names with their common (per language) names
+DIV_NAMES = 'names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR))'
+DIV_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, country VARCHAR, region VARCHAR,
+    population INTEGER, {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR,
+    record_id VARCHAR)[]"""
+DIV_AREA_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, country VARCHAR, region VARCHAR, division_id VARCHAR,
+    {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
 SCHEMAS = {
+    ("divisions", "division"): DIV_SCHEMA,
+    ("divisions", "division_area"): DIV_AREA_SCHEMA,
     ("transportation", "segment"): SEG_SCHEMA,
     ("transportation", "connector"): CON_SCHEMA,
     ("buildings", "building"): BLD_SCHEMA,
@@ -302,9 +311,25 @@ def features():
                 taxonomy={"primary": "convenience_store"}, brand={"wikidata": "Q7492551", "names": {"primary": "Sheetz"}},
                 sources=[dict(OSM, dataset="meta", record_id="m1")], operating_status="open", confidence=0.92,
                 wkt="POINT({!r} {!r})".format(*_cell_xy(0.6, 0.3)))]
+    # the status bar's place names (placenames.py): the city, a neighbourhood (not a town: left out by the layer's
+    # filter) and the state's and country's areas, their boxes round the cell (the geometry is never read)
+    div = [dict(id="div-baltimore", version=1, subtype="locality", **{"class": "city"}, country="US", region="US-MD",
+                population=585708, names={"primary": "Baltimore", "common": {"key": ["en", "it"],
+                                                                             "value": ["Baltimore", "Baltimora"]}},
+                sources=[OSM], wkt="POINT({!r} {!r})".format(*_cell_xy(0.5, 0.5))),
+           dict(id="div-fells", version=1, subtype="neighborhood", country="US", region="US-MD",
+                names={"primary": "Fells Point"}, sources=[OSM], wkt="POINT({!r} {!r})".format(*_cell_xy(0.4, 0.4)))]
+    area = [dict(id="area-md", version=1, subtype="region", country="US", region="US-MD", division_id="d-md",
+                 names={"primary": "Maryland"}, sources=[OSM], wkt=_wkt_poly([_box(-20, -20, 20, 20)])),
+            dict(id="area-us", version=1, subtype="country", country="US", division_id="d-us",
+                 names={"primary": "United States", "common": {"key": ["de"], "value": ["Vereinigte Staaten"]}},
+                 sources=[OSM], wkt=_wkt_poly([_box(-200, -100, 200, 100)])),
+            dict(id="area-county", version=1, subtype="county", country="US", region="US-MD", division_id="d-c",
+                 names={"primary": "Baltimore County"}, sources=[OSM], wkt=_wkt_poly([_box(-5, -5, 5, 5)]))]
     return {("transportation", "segment"): seg, ("transportation", "connector"): con,
             ("buildings", "building"): bld, ("base", "water"): wat, ("base", "land_use"): lu,
-            ("base", "infrastructure"): inf, ("places", "place"): pla}
+            ("base", "infrastructure"): inf, ("places", "place"): pla,
+            ("divisions", "division"): div, ("divisions", "division_area"): area}
 
 
 def _coords(wkt):
