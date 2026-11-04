@@ -4,6 +4,17 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ## Unreleased
 
+## 1.8.1 beta (2026-11-04)
+
+Works with BeamNG.drive 0.40.4.
+
+### Fixed
+- **Multiplayer freezes at every new ground block** (BeamMP servers on 1.8.0): the server download's mod files were
+  dated a few hours in the future for players west of UTC (the Americas), so the game rebuilt its ground textures at
+  every block it loaded, freezing for 15-25 s at a time. The files are now dated in the past in every time zone, which
+  should stop those rebuilds. Server owners: replace `Resources/Client/beamng_earth.zip` with the one from this
+  release's BeamMP server zip.
+
 ## 1.8.0 beta (2026-11-04)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
