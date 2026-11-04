@@ -1,0 +1,11 @@
+{
+  "3": {"lat": 3.1579705, "lon": 101.711761, "name": "Petronas Towers", "src": "way 279944536", "dist_m": 10.2},
+  "4": {"lat": 48.8582603, "lon": 2.2945008, "name": "Eiffel Tower", "src": "way 5013364", "dist_m": 24.7},
+  "6": {"lat": 55.8263364, "lon": 37.9724064, "name": "Belokon building", "src": "way 32008469", "dist_m": 13.8},
+  "14": {"lat": 50.795367, "lon": 12.9172103, "name": "Technology Center Chemnitz E-G", "src": "relation 13462323", "dist_m": 11.9},
+  "15": {"lat": 50.9793305, "lon": 6.9761433, "name": "Hafenkran Kocks", "src": "node 2561999495", "dist_m": 109.4},
+  "25": {"lat": 43.8517961, "lon": 19.8285908, "name": "Uzice Fortress", "src": "way 165020627", "dist_m": 42.0},
+  "32": {"lat": 55.7711682, "lon": 37.6436908, "name": "Red7", "src": "way 1210554267", "dist_m": 14.4},
+  "33": {"lat": 41.6958161, "lon": 44.7849547, "name": "Tbilisi TV tower", "src": "way 437940450", "dist_m": 10.9},
+  "24": {"lat": 33.343561, "lon": 44.446220, "name": "Al-Shaheed Monument", "src": "island centre (also in POSITION_OVERRIDES, reached first)", "dist_m": 20.0}
+}
