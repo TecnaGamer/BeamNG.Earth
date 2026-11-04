@@ -344,6 +344,7 @@ TILE_CACHE = {32: 6000, 64: 2500}
 HM_THREADS = 4
 HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they wait on its block process)
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
+LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
@@ -5587,8 +5588,9 @@ class Connection:
             self.pending_at = time.monotonic()
             t1 = time.perf_counter()
             self.update_far()
-            if time.perf_counter() - t1 > 0.1:
-                log.debug("terrain request %s: update_far %.2f s", (aid, cx, cy), time.perf_counter() - t1)
+            dt = time.perf_counter() - t1
+            if dt > 0.1:
+                (log.info if dt > 0.5 else log.debug)("terrain request %s: update_far %.2f s", (aid, cx, cy), dt)
         t0 = time.perf_counter()
         self.terrain_wait += 1
         try:
@@ -5637,9 +5639,16 @@ class Connection:
         if info is None:
             # at once where the block's road plans are not made yet (a first visit's cells: 15-120 s of planning);
             # planned, after PROVISIONAL_FOLLOW_S: the graded block is usually quick then, but a first visit's map data
-            # (its roads round the block, read on demand) still held one 84 s (nyc_speed.py --cold, 2026-11-02)
+            # (its roads round the block, read on demand) still held one 84 s (nyc_speed.py --cold, 2026-11-02).
+            # Raced with the block itself: one built already (the prefetch) goes at once. The check waits for a
+            # thread of prov_pool, and with both busy (provisional builds of a first visit) blocks built 15-34 s
+            # before their request were answered 2.6-8.8 s after it, each an edge hold at 68 mph (GitHub #725)
+            pf = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.block_planned, anchor, cx, cy)
+            done, _ = await asyncio.wait({job, pf}, return_when=asyncio.FIRST_COMPLETED)
+            if job in done:
+                return None
             try:
-                planned = await asyncio.get_running_loop().run_in_executor(s.prov_pool, s.block_planned, anchor, cx, cy)
+                planned = pf.result()
             except Exception:
                 planned = True
             wait = PROVISIONAL_FOLLOW_S if planned else 0.0
@@ -7026,20 +7035,31 @@ async def main_async(args):
             await asyncio.sleep(LAG_TICK_S)
     lagger = asyncio.create_task(loop_beat())
 
+    def main_stack():
+        f = sys._current_frames().get(main_ident)
+        stack = []
+        while f is not None and len(stack) < 12:
+            stack.append(f"{os.path.basename(f.f_code.co_filename)}:{f.f_code.co_name}:{f.f_lineno}")
+            f = f.f_back
+        return " < ".join(stack)
+
     def watch_lag():
-        reported = None
+        # (long stalls always: GitHub #725's server.log had 19 s with no line right after a block was built, the
+        # block's terrain_ready 25 s late and the car held at the edge; nothing said what the loop was doing)
+        reported, long_at = None, None
         while True:
             time.sleep(LAG_TICK_S)
             b = beat[0]
             lag = time.perf_counter() - b - LAG_TICK_S
-            if lag > LAG_REPORT_S and reported != b and log.isEnabledFor(logging.DEBUG):
+            if long_at is not None and long_at != b:
+                log.warning("event loop: the stall above lasted %.1f s", beat[0] - long_at - LAG_TICK_S)
+                long_at = None
+            if lag > LAG_STALL_S and long_at is None:
+                long_at = b
+                log.warning("event loop stalled > %.1f s (every game message waits) in %s", lag, main_stack())
+            elif lag > LAG_REPORT_S and reported != b and log.isEnabledFor(logging.DEBUG):
                 reported = b
-                f = sys._current_frames().get(main_ident)
-                stack = []
-                while f is not None and len(stack) < 12:
-                    stack.append(f"{os.path.basename(f.f_code.co_filename)}:{f.f_code.co_name}:{f.f_lineno}")
-                    f = f.f_back
-                log.debug("event loop stalled > %.2f s in %s", lag, " < ".join(stack))
+                log.debug("event loop stalled > %.2f s in %s", lag, main_stack())
     threading.Thread(target=watch_lag, daemon=True, name="lag-watch").start()
 
     # Debug: where this process's memory is (BNGE_TRACEMALLOC=1; numpy arrays included): the top allocation sites every
