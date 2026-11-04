@@ -170,6 +170,8 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            # the highway signs' lettering metrics and US state outlines (exitsigns.GLYPHS, signstates.DATA)
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}."]
+    # Offline regional boundaries/localities and the shared lettering metrics.
+    cmd += ["--add-data", f"{os.path.join(server, 'data')}{SEP}data"]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork

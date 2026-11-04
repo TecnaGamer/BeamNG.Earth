@@ -19,7 +19,7 @@ import zipfile
 
 DATA_PATH=Path(__file__).with_name('data')/'fr_town_signs.json.gz'
 DATA_SHA256='3f3dde11f3f13b1226a8ce190ca57ff1f02b0cc241798604aafa52d84599495e'
-VERSION='fr-town-signs-v2'
+VERSION='town-signs-measured-v3'
 EU_DATA_PATH=Path(__file__).with_name('data')/'europe_places.zip'
 EU_DATA_SHA256='de04ae47eac96d7172fc9091219af0d742f8ec015bda04aec486aea6493372e3'
 CLASSES={'primary','secondary','tertiary','unclassified','residential','living_street'}
@@ -135,14 +135,17 @@ def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,
     def emit(s,p,d,spec,source):
         p=np.array(p,float);right=np.array([d[1],-d[0]])
         country=country_at(*p)
-        style=europeinfra.town_style(country,spec.cls,spec.kmh)
+        style=europeinfra.town_style(country,spec.cls,spec.kmh,place_kind=s.get('place'),variant=s.get('sign_variant'))
         if style is None or (s.get('country') and s['country']!=country):return
         if source!='estimated' and country!='FR':return  # bundled surveyed nodes are French
         if country=='FR':style=None  # keep EB10/EB20 and valid D-route cartouches
         if s.get('kind')=='end' and style is not None and style.exit=='none':return
         # Turkish dotted/dotless i require language-specific uppercasing.
         display_name=s['name'].replace('i','İ') if country=='TR' else s['name']
-        width=signmesh.layout(display_name,True if style is None else style.uppercase)[1]
+        raw_details=s.get('admin_lines')
+        details=tuple(signmesh.clean(x,False) for x in raw_details if isinstance(x,str))[:2] if isinstance(raw_details,(tuple,list)) else ()
+        plan=signmesh.town_layout(display_name,style,details)
+        width=plan.width
         shoulder=right*(-1 if s.get('kind')=='end' else 1)*(-1 if country in europeinfra.LEFT_HAND else 1)
         # Mapped on-road node: move to the driver's right shoulder. An off-road
         # sign retains its mapped position if it already clears all carriageways.
@@ -167,16 +170,19 @@ def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,
         if not box_owns(box, p[0], p[1]) or country_at(*p)!=country:return
         if ground is not None:
             p[2]=float(np.asarray(ground(np.array([p[0]]),np.array([p[1]]))).ravel()[0])
-        w=mesh.town(p,d,display_name,s.get('ref',''),s.get('kind','both'),style=style)
+        w=mesh.town(p,d,display_name,s.get('ref',''),s.get('kind','both'),style=style,details=details)
         # Shared collision-capable pole assets; the batched sign faces are render-only.
         for side in ((-1,1) if w>2.4 else (0,)):
             q=p.copy();q[:2]+=right*side*w*.30
-            h=2.35 if side else (2.7 if signmesh.valid_route(s.get('ref','')) else 2.35)
+            h=plan.top-.03
+            if country=='FR' and signmesh.valid_route(s.get('ref','')):h=plan.top+.28
             posts.append(['fr_signpost',round(q[0],3),round(q[1],3),round(q[2],3),
                           round(math.degrees(math.atan2(right[1],right[0])),2),1.,h,0.])
         records.append({'id':s['id'],'name':s['name'],'source':source,'pos':p.tolist(),
                         'route':signmesh.valid_route(s.get('ref','')) if country=='FR' else '',
-                        'country':country,'board_type':'built-up' if style is None else style.meaning})
+                        'country':country,'board_type':'built-up' if style is None else style.meaning,
+                        'size_m':[plan.width,plan.height],'lettering':plan.profile.font,
+                        'layout':plan.profile.family,'admin_lines':list(details)})
     for s in mapped:
         x,y,_=frame.geodetic_to_enu(s['lat'],s['lon'],0)
         hit=_nearest(np.array([float(x),float(y)]),roads,s.get('way'),way_ids)
@@ -265,7 +271,8 @@ def _estimated(frame,roads,box,urban,data,emit,country_at=None):
                              or (np.linalg.norm(delta)<240 and abs(delta[0]*direction[1]-delta[1]*direction[0])<45)))
             if any(same_approach(sign,q,mapped_fid) for sign,q,mapped_fid in mapped_xy):continue
             candidate={'id':'estimated:'+str(fid)+':'+str(round(station,1)),'name':place['name'],'kind':'both',
-                       'country':place.get('country')}
+                       'country':place.get('country'),'place':place.get('place'),
+                       'admin_lines':place.get('admin_lines',[])}
             candidates.append((str(fid),station,candidate,point,direction,spec))
     accepted=[]
     for fid,station,record,point,direction,spec in sorted(candidates,key=lambda v:(v[0],v[1])):

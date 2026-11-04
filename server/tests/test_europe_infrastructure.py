@@ -190,7 +190,8 @@ class TownTest(unittest.TestCase):
         self.assertEqual(ei.town_style('PL').meaning,'place-name')
         self.assertNotEqual(ei.town_style('CH','primary'),ei.town_style('CH','residential'))
         self.assertIsNone(ei.town_style('RO').header_speed)
-        self.assertEqual(ei.town_style('RO','secondary',50).header_speed,50)
+        self.assertIsNone(ei.town_style('RO','secondary',50).header_speed)
+        self.assertEqual(ei.town_style('RO','secondary',50,variant='speed-header').header_speed,50)
         self.assertEqual(ei.town_style('NL').exit,'slash')
         for code in ('LV','LT'):
             self.assertEqual(ei.town_style(code).background,'blue')

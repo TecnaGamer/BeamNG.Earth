@@ -1,0 +1,70 @@
+"""Reproducible shared town lettering atlas; no runtime font/Pillow dependency.
+
+New letterforms retain natural proportions. Missing glyphs use the bundled
+Unicode fallback, without transliteration or silently losing accents. Legacy
+labels retain their original metrics within the repacked shared atlas.
+"""
+from pathlib import Path
+import hashlib
+import json
+from PIL import Image,ImageDraw,ImageFont
+from fontTools.ttLib import TTFont
+ROOT=Path(__file__).resolve().parents[1]
+SOURCES=ROOT/'tools/fonts/town'
+OUT=ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/regional_signs'
+VFS='/levels/beamng_earth/art/shapes/beamngEarth/regional_signs'
+RANGES=((32,127),(160,592),(880,1328),(1328,1424),(4256,4352),(7680,8192))
+SPECS={
+ 'legacy':(ROOT/'tools/fonts/DejaVuSans-Bold.ttf',44,.78,.08,'DejaVu Sans Bold (legacy)'),
+ 'fallback':(SOURCES/'DejaVuSans.ttf',48,1.,.025,'DejaVu Sans (Unicode fallback)'),
+ 'din':(SOURCES/'D-DIN.ttf',56,1.,.035,'D-DIN (DIN-inspired substitute)'),
+ 'condensed':(SOURCES/'D-DINCondensed.ttf',56,1.,.04,'D-DIN Condensed (substitute)'),
+ 'wide':(SOURCES/'D-DINExp.ttf',56,1.,.03,'D-DIN Expanded (substitute)'),
+ 'transport':(SOURCES/'AG-Transport-Heavy.ttf',56,1.,0.,'AG Transport Heavy (DfT drawing reconstruction)'),
+ 'irish':(SOURCES/'AG-EITP-Heavy.ttf',56,1.,0.,'AG EI-TP Heavy (drawing reconstruction)'),
+ 'tratex_black':(SOURCES/'Tratex-Black.ttf',56,1.,.02,'Tratex Svart (Transportstyrelsen)'),
+ 'tratex_white':(SOURCES/'Tratex-White.ttf',56,1.,.02,'Tratex Vit (Transportstyrelsen)'),
+ 'ccrige':(SOURCES/'CCRIGE.otf',56,1.,0.,'CCRIGE (Javi Casas, Spanish drawing reconstruction)'),
+ 'trafikk':(SOURCES/'Trafikk-regular.ttf',56,1.,.015,'Trafikk Regular (Aitor, Norwegian specification interpretation)'),
+}
+
+def build():
+ OUT.mkdir(parents=True,exist_ok=True)
+ fonts={};images=[];allchars=set()
+ for a,b in RANGES:allchars.update(chr(i)for i in range(a,b))
+ for key,(path,size,scale,spacing,label)in SPECS.items():
+  font=ImageFont.truetype(str(path),size);cmap=TTFont(path).getBestCmap();cap=font.getbbox('H',anchor='ls')[3]-font.getbbox('H',anchor='ls')[1]
+  chars=sorted(c for c in allchars if ord(c)in cmap and (key in ('legacy','fallback')or ord(c)<592))
+  glyphs={};fonts[key]={'font':label,'horizontal_scale':scale,'letter_spacing':spacing,'glyphs':glyphs,'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+  for ch in chars:
+   l,t,r,b=font.getbbox(ch,anchor='ls');w,h=r-l,b-t
+   g={'advance':font.getlength(ch)/cap,'bounds':[l/cap,-b/cap,r/cap,-t/cap],'uv':[0,0,0,0]};glyphs[ch]=g
+   if w>0 and h>0:
+    im=Image.new('L',(w,h));ImageDraw.Draw(im).text((-l,-t),ch,font=font,fill=255,anchor='ls')
+    images.append((key,ch,im))
+ # One texture pair shared by every typeface, independent of settlement count.
+ width=4096;x=y=rowh=0;positions=[];pad=3
+ for key,ch,im in sorted(images,key=lambda v:(-v[2].height,v[0],v[1])):
+  w,h=im.size
+  if x+w+pad*2>width:x=0;y+=rowh;rowh=0
+  positions.append((key,ch,im,x+pad,y+pad));x+=w+pad*2;rowh=max(rowh,h+pad*2)
+ height=1<<(y+rowh-1).bit_length()
+ if height>4096:raise ValueError('Font atlas exceeds the 4096x4096 budget')
+ alpha=Image.new('L',(width,height))
+ for key,ch,im,x,y in positions:
+  alpha.paste(im,(x,y));fonts[key]['glyphs'][ch]['uv']=[x/width,1-(y+im.height)/height,(x+im.width)/width,1-y/height]
+ for suffix,rgb in [('',(0,0,0)),('_white',(255,255,255))]:
+  image=Image.new('RGBA',alpha.size,(*rgb,0));image.putalpha(alpha);image.save(OUT/('sign_font'+suffix+'.png'))
+ alpha.save(OUT/'sign_font_opacity.data.png')
+ meta={**fonts['legacy'],'format':2,'fonts':fonts,'atlas_size':[width,height],'generator':'tools/build_town_fonts.py'}
+ (ROOT/'server/data/sign_font.json').write_text(json.dumps(meta,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
+ # Keep existing material names/indices so unrelated signs retain their contract.
+ materials=json.loads((OUT/'main.materials.json').read_text())
+ for key in ('glyph','glyph_white'):
+  m=materials['bne_sign_'+key];m['Stages'][0]['baseColorMap']=VFS+('/sign_font_white.png'if key=='glyph_white'else'/sign_font.png')
+  m['Stages'][0]['opacityMap']=VFS+'/sign_font_opacity.data.png'
+ (OUT/'main.materials.json').write_text(json.dumps(materials,indent=2)+'\n')
+ (OUT/'TOWN-FONTS-NOTICE.md').write_text((SOURCES/'NOTICE.md').read_text(),encoding='utf-8')
+ print(len(fonts),'typefaces;',len(images),'glyphs;',alpha.size,'used height',y+rowh)
+
+if __name__=='__main__':build()

@@ -74,11 +74,14 @@ def geographic_profile(mode):
     if mode not in ("fr-demo", "fr-all", "fr-varied", "europe"):
         return None
     import countrybounds
-    fingerprint = countrybounds.DATA_SHA256
+    import townlayout
+    fingerprint = countrybounds.DATA_SHA256+":"+townlayout.VERSION
     if mode in ("fr-varied", "europe"):
         import townsigns
         import directionsigns
+        import signmesh
         fingerprint += ":" + townsigns.DATA_SHA256 + ":" + directionsigns.DATA_SHA256 + ":" + FR_KIT + ":" + EU_KIT
+        fingerprint += ':'+townsigns.VERSION+':'+signmesh.font_signature()
         if mode=='europe':
             import regionalstops
             import delineatorprofiles

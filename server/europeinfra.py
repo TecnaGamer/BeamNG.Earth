@@ -8,7 +8,7 @@ No profile changes junction priorities, speed limits, or STOP placement.
 """
 from dataclasses import dataclass,replace
 
-VERSION = 'europe-infrastructure-v3'
+VERSION = 'europe-infrastructure-v4-town-layouts'
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,8 @@ class TownStyle:
     meaning: str = 'built-up'
     footer: str = ''
     header_speed: int | None = None
+    country: str = ''
+    symbol: str = ''
 
 
 @dataclass(frozen=True)
@@ -130,16 +132,26 @@ POLE_LAYOUTS = {
 }
 
 
-def town_style(country, road_class=None, speed=None):
+def town_style(country, road_class=None, speed=None, place_kind=None, variant=None):
     kit = KITS.get(country)
     if kit is None:
         return None
-    # Switzerland/Liechtenstein have blue principal-road name boards and white
-    # secondary-road variants. Do not invent a single nationwide board colour.
-    if country in {'CH', 'LI'} and road_class in {'primary', 'secondary'}:
-        return TOWNS['blue_exit']
-    if country=='RO' and speed is not None and 10<=speed<=90:
-        # Only display a numeric speed when the mapped road supplies it; never
-        # invent a 50 km/h override for the navigation or speed-sign systems.
-        return replace(TOWNS['ro'],header_speed=int(speed))
-    return TOWNS[kit.town]
+    style=TOWNS[kit.town]
+    # Preserve the distinction between locality names and legal built-up signs.
+    if country in {'CH','LI'} and road_class in {'primary','secondary'}:
+        style=TOWNS['blue_exit']
+    if country in {'ES','HU'}:
+        style=TownStyle(uppercase=country=='ES')
+    if country in {'FI','AX'}:
+        style=replace(style,uppercase=False)
+    if country=='PL':
+        style=replace(style,exit='slash') # E-18a; D-42 remains a separate sign.
+    if country in {'LT','LV'}:
+        style=replace(style,exit='slash')
+    if country=='TR' and place_kind in {'village','hamlet'}:
+        style=TownStyle(meaning='place-name')
+    # A mapped road speed does not prove that a Romanian yellow-header variant
+    # is actually installed. Keep the plain photographed design by default.
+    if country=='RO' and variant=='speed-header' and speed is not None and 10<=speed<=90:
+        style=replace(style,header_speed=int(speed))
+    return replace(style,country=country,symbol=country if style.skyline else '')

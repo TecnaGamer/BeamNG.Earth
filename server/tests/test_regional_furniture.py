@@ -138,7 +138,10 @@ class SignsTest(unittest.TestCase):
     def test_long_names_accents_bounds_and_unknown_glyph(self):
         for name in ('Wingen','Niederschaeffolsheim','Gœrsdorf','Saint-Remy-en-Bouzemont-Saint-Genest-et-Isson','Très\nlong\x00 nom 😀'):
             text,w,h,letter=signmesh.layout(name)
-            self.assertLessEqual(signmesh.advance(text)*letter,w-.28+1e-9)
+            plan=signmesh.town_layout(name)
+            for line in plan.lines:
+                measured=signmesh.measure(line.text,line.font,line.scale,line.tracking)[0]*line.cap
+                self.assertLessEqual(measured,w-2*plan.profile.pad_x+1e-9)
             m=signmesh.Mesh();m.town((0,0,0),(0,1),name,'D 263')
             self.assertTrue(np.isfinite(np.array(m.p)).all());self.assertLess(len(m.p),3000)
         self.assertIn('Œ',signmesh.font()['glyphs'])
