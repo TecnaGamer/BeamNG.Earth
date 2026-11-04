@@ -189,5 +189,20 @@ class RingTest(unittest.TestCase):
         self.assertEqual(islands.ring_fids(pair), set(), "a divided road's carriageways: no ring")
 
 
+
+class NearEdgesTest(unittest.TestCase):
+    """_near_edges: the edges whose box meets the loop's, in index order (those far off cannot cross it)."""
+
+    def test_box_filter(self):
+        edges = [(f"e{k}", None, np.array(p, float), 0, 1, 1.0) for k, p in enumerate((
+            [[1, 1, 0], [9, 9, 0]],                 # inside
+            [[-5, 5, 0], [15, 5, 0]],               # through
+            [[100, 100, 0], [110, 100, 0]],         # far
+            [[10, -3, 0], [10, 0, 0]]))]            # touching the box's corner
+        poly = np.array([[0, 0], [10, 0], [10, 10], [0, 10]], float)
+        self.assertEqual(islands._near_edges(islands._edge_boxes(edges), poly), [0, 1, 3])
+        self.assertEqual(list(islands._near_edges(islands._edge_boxes([]), poly)), [])
+
+
 if __name__ == "__main__":
     unittest.main()

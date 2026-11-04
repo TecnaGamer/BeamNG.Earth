@@ -154,7 +154,15 @@ amb.transform({ apply = function(_, x, y, z) return -y, x, z end })     -- (a qu
 T.check(math.abs(sp[1].xf.pos.x + 20) < 1e-9 and math.abs(sp[1].xf.pos.y - 10) < 1e-9
   and math.abs(sp[1].xf.yaw + 0.5 + math.pi / 2) < 1e-9, 'a rebase turns and moves them')
 amb.dropSpaces('1:3_4')
-T.check(#S.liveOf('SFXSpace') == 0, 'the tile goes: its spaces with it')
+local live = S.liveOf('SFXSpace')
+T.check(#live == 2 and live[1].pos.z == amb.PARK_Z and live[2].pos.z == amb.PARK_Z and amb.spacesParked == 2,
+  'the tile goes: its spaces parked out of reach, never deleted (a deleted space crashed the sound world)')
+local made = amb.spacesMade
+amb.onSpaces('1:9_9', { 1, 50, 60, 7, 30, 12, 9, 0 })
+local reused = scenetree.findObjectById(sp[2].id)
+T.check(amb.spacesMade == made and #S.liveOf('SFXSpace') == 2 and amb.spacesParked == 1 and reused.xf.pos.x == 50
+  and reused.fields.soundAmbience == 'Level_Under_Bridge_A', 'a new bridge space: the parked one of its ambience reused')
+amb.dropSpaces('1:9_9')
 amb.onSpaces('1:5_5', { 4, 3, 4, 5, 0, 0, 0, 0 })
 local pe = nil
 for _, o in ipairs(S.liveOf('SFXEmitter')) do if o.fields.track == amb.PORTAL_EVENT then pe = o end end

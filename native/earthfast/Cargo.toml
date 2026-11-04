@@ -21,11 +21,21 @@ laz = { version = "0.13", default-features = false }
 # The finished imagery tiles' JPEGs decoded inside the far-texture warp (fartex.rs: no GIL hand-over per tile);
 # zune-jpeg, pure Rust, MIT / Apache-2.0 / Zlib
 zune-jpeg = "0.5"
+# Stable traffic-piece priority, compatible with the original route stream's BLAKE2s-64 priorities.
+blake2 = "0.10"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# tools/build_native.py --fast: development iterations only (no LTO, parallel codegen, incremental): the shipped and
+# committed modules are always [profile.release] builds
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
 
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.25", features = ["generate-import-lib"] }   # links python3.dll without a Python install (cross builds)

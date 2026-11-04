@@ -34,6 +34,7 @@ import http.client
 import json
 import math
 import os
+import ioprofiler
 import struct
 import sys
 import tarfile
@@ -454,6 +455,10 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
     process-wide one): the host's policy (one at a time), the project User-Agent (nothing else is
     sent), its circuit breaker and Retry-After."""
     net = net if net is not None else netfetch.default_fetcher()
+    # Windows: the system's own certificate check, as every other request (netfetch.HttpsTransport): OpenSSL's chain
+    # picked an expired intermediate on some SourceForge mirrors and every attempt failed with "certificate has
+    # expired" (GitHub #567; this download opens its own connections, so the 1.7.0 fix never reached it)
+    tls = netfetch.windows_ssl_context()
     part = dest + ".part"
     for i in range(attempts):
         have = os.path.getsize(part) if os.path.exists(part) else 0
@@ -466,7 +471,8 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                     req = urllib.request.Request(url, headers=s.headers)
                     if have:
                         req.add_header("Range", f"bytes={have}-")
-                    with urllib.request.urlopen(req, timeout=30) as resp:
+                    with urllib.request.urlopen(req, timeout=30, context=tls) as resp:
+                        ioprofiler.headers_received()
                         s.status = resp.status
                         mode = "ab" if have and resp.status == 206 else "wb"
                         with open(part, mode) as f:
@@ -477,6 +483,7 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                                     break
                                 f.write(chunk)
                                 got += len(chunk)
+                                ioprofiler.received_bytes(len(chunk))
                                 s.nbytes = got
                                 dt = time.monotonic() - t0
                                 if dt > 20 and got / dt < min_rate:   # a stalled mirror: try another
@@ -561,13 +568,75 @@ def ensure_egm2008(cache_dir=CACHE_DIR, log=print, net=None):
     return npy
 
 
-def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, **kw):
-    """EGM2008 truncated to degree ``nmax`` (<= 2190)."""
+# The built model's tables kept on disk and memory-mapped (load_egm2008): kept in memory they were ~128 MB of the
+# server's main process for a value asked every 2 km (and building them peaked at ~380 MB); mapped, they are file pages
+# the system may drop and read again. DERIVED_V: raise it when GravityModel's tables change.
+DERIVED_V = 1
+_BIG = ("coef", "ra", "rb")
+_SMALL = ("zonal", "log_sect", "sect_next", "off")
+_SCALARS = ("nmax", "gm", "a", "name", "height_offset", "check_every")
+
+
+def _derived_dir(cache_dir, nmax, dtype):
+    return os.path.join(cache_dir, f"egm2008_model_v{DERIVED_V}_{nmax}_{np.dtype(dtype).name}")
+
+
+def _save_derived(model, d):
+    tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.makedirs(tmp, exist_ok=True)
+        for k in _BIG + _SMALL:
+            np.save(os.path.join(tmp, k + ".npy"), getattr(model, k))
+        with open(os.path.join(tmp, "meta.json"), "w") as f:
+            json.dump({k: getattr(model, k) for k in _SCALARS} | {"dtype": model.dtype.name}, f)
+        if os.path.isdir(d):
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+        os.rename(tmp, d)
+    except OSError:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _load_derived(d):
+    """The model from _save_derived's folder (big tables memory-mapped), or None."""
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            meta = json.load(f)
+        model = GravityModel.__new__(GravityModel)
+        for k in _SCALARS:
+            setattr(model, k, meta[k])
+        model.dtype = np.dtype(meta["dtype"])
+        for k in _BIG:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy"), mmap_mode="r"))
+        for k in _SMALL:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy")))
+        if model.coef.shape[0] != tri_len(model.nmax) or model.coef.dtype != model.dtype:
+            return None
+        return model
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, mapped=True, **kw):
+    """EGM2008 truncated to degree ``nmax`` (<= 2190); mapped: its tables memory-mapped from the cache (built and
+    written there the first time)."""
+    dtype = kw.get("dtype", np.float32)
+    d = _derived_dir(cache_dir, min(int(nmax), EGM2008_NMAX), dtype)
+    if mapped and set(kw) <= {"dtype"}:
+        model = _load_derived(d)
+        if model is not None:
+            return model
     arr = np.asarray(np.load(ensure_egm2008(cache_dir, log=log), mmap_mode="r"))   # read as needed (a plain view)
     L = tri_len(min(nmax, EGM2008_NMAX))
     model = GravityModel(arr[0, :L], arr[1, :L], nmax=nmax, corr_c=arr[2, :L], corr_s=arr[3, :L],
                          name=f"EGM2008/{nmax}", **kw)
     del arr
+    if mapped and set(kw) <= {"dtype"}:
+        _save_derived(model, d)
+        mm = _load_derived(d)
+        if mm is not None:
+            return mm           # (the built tables go: the mapped ones are the same bytes)
     return model
 
 
@@ -633,7 +702,7 @@ class Provider:
 
     def __init__(self, cache_dir=CACHE_DIR, model=None, nmax=None, download=True, log=None, net=None):
         import logging
-        from concurrent.futures import ThreadPoolExecutor
+        from runtimeprofiler import ThreadPoolExecutor
         self.cache_dir = cache_dir
         self.nmax = nmax or int(os.environ.get("BNGE_GRAVITY_NMAX", DEFAULT_NMAX))
         self.model = model

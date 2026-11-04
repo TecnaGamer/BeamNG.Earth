@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod gpu;
+mod traffic;
 mod dsm;
 mod vegmask;
 mod roadgeom;
@@ -15,6 +16,8 @@ mod tunnelcover;
 mod gradesep;
 mod lamps;
 mod decks;
+mod levels;
+mod tapers;
 mod islands;
 mod ribbons;
 mod groundpaint;
@@ -302,6 +305,28 @@ fn bc1_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) ->
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         let refs: Vec<(usize, usize, &[u8])> = data.iter().map(|(w, h, b)| (*w, *h, b.as_slice())).collect();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc1_encode(g, &refs)))
+            .unwrap_or_else(|_| Err("the GPU kernel panicked".to_string()))
+    }).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    Ok(out.iter().map(|b| PyBytes::new(py, b)).collect())
+}
+
+/// BC7 (mode 6) blocks of several RGBA images (a texture's mip levels: [(h, w, 4) uint8]) on the GPU (gpu.rs): one
+/// bytes object per image, as bc7_encode's (float32 maths: a few blocks can differ from it). RuntimeError: no GPU or
+/// it failed.
+#[pyfunction]
+fn bc7_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) -> PyResult<Vec<Bound<'py, PyBytes>>> {
+    let mut refs: Vec<(usize, usize, &[u8])> = Vec::with_capacity(imgs.len());
+    for a in &imgs {
+        let sh = a.as_array().shape().to_vec();
+        if sh[2] != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err("bc7_encode_gpu: (h, w, 4) images"));
+        }
+        let b = a.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("bc7_encode_gpu: contiguous images"))?;
+        refs.push((sh[1], sh[0], b));
+    }
+    let out = py.allow_threads(|| {
+        let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc7_encode(g, &refs)))
             .unwrap_or_else(|_| Err("the GPU kernel panicked".to_string()))
     }).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     Ok(out.iter().map(|b| PyBytes::new(py, b)).collect())
@@ -1312,7 +1337,8 @@ fn measure_row32(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first
 /// core half width h, carriageway half width rh, road rid): the weights, the inverse-distance blend and the max weight
 /// as the numpy code, the (segment, point) pairs in its order (segments, bucket rows, points sorted by bucket). On a
 /// road's carriageway another road (past its own rh: its verge and blend) more than wall_cut above or below it does not
-/// count: a street's sidewalk over a cutting dragged the road in it up its wall (Munich's McGraw-Graben). Behind a
+/// count (less and less over yield_ramp before: in height and past its rh): a street's sidewalk over a cutting dragged
+/// the road in it up its wall (Munich's McGraw-Graben). Behind a
 /// cutting's wall (an up cut side, wall_flat deep: under the retaining wall's top) no other road at another level counts
 /// at all: the terrain's 2 m lattice drew the step as teeth in front of the wall where a street above came near it.
 /// grading.bank: a road's cross slope at each vertex of its centreline xy (n, 2) (m per m toward its left; a curve
@@ -1380,17 +1406,21 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     out.into_pyarray(py)
 }
 
+/// grade_points: a road's own rid of its rid (grading.PlanPack: a pass road's legs carry their leg in the bits from 44)
+const LEG_ROAD_MASK: i64 = (1i64 << 44) - 1;
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
                      base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>, b: PyReadonlyArray2<'py, f64>,
                      za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>, h: PyReadonlyArray1<'py, f64>,
                      rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray1<'py, u8>, cut: PyReadonlyArray2<'py, f64>,
-                     ba: PyReadonlyArray1<'py, f64>, bb: PyReadonlyArray1<'py, f64>, lift: f64, slope_run: f64,
-                     t_min: f64, t_max: f64, blend_r: f64,
+                     ba: PyReadonlyArray1<'py, f64>, bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
+                     link: PyReadonlyArray1<'py, u8>, extrap: f64,
+                     lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
                      bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
-                     sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64)
-                     -> Bound<'py, PyArray1<f64>> {
+                     sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
+                     yield_ramp: f64) -> Bound<'py, PyArray1<f64>> {
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
     let (a, b, za, zb, h) = (a.as_array(), b.as_array(), za.as_array(), zb.as_array(), h.as_array());
     let (rh, rid) = (rh.as_array(), rid.as_array());
@@ -1398,6 +1428,14 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
     let cut = cut.as_array();               // (segments, 6): a cutting's wall, top and top offset, left then right
     // (segments): the cross slope at each segment's ends (m per m toward its left: a banked curve, grading.bank)
     let (ba, bb) = (ba.as_array(), bb.as_array());
+    // (segments): a mountain pass road's (grading.Plan.steep): its sides fall to the natural ground at steep_run, from
+    // steep_t_min, between its retaining wall and its parapet
+    let steep = steep.as_array();
+    // (segments): bit 0 the plan goes on before it, bit 1 after it. A point past such an end takes the segment's line
+    // carried on (up to extrap m), not its end height: on a grade the ends' heights blended in, before and after, made
+    // a washboard of the plan's vertex step (4 m, +-3.5 cm on the Stelvio's 10 %; the user, 2026-11-01: "the road
+    // still feels bumpy"). A plan's own end (a dead end, a cell's edge) keeps its end height.
+    let link = link.as_array();
     let banked: Vec<bool> = (0..h.len()).map(|s| ba[s] != 0.0 || bb[s] != 0.0).collect();
     let sharp = cut.iter().any(|v| v.is_finite());
     let has_cut: Vec<bool> = (0..h.len()).map(|s| (0..6).any(|k| cut[[s, k]].is_finite())).collect();
@@ -1486,6 +1524,13 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                     let (ddx, ddy) = (qx - t * abx, qy - t * aby);
                     let d = (ddx * ddx + ddy * ddy).sqrt();       // (not hypot: libm's is ~5x dearer, the pairs loop's main cost)
                     let mut target = za[s] + (zb[s] - za[s]) * t;
+                    if link[s] != 0 && l2 > 1e-12 {
+                        let tu = (qx * abx + qy * aby) / l2;
+                        let e = extrap / l2.sqrt();
+                        let lo = if link[s] & 1 != 0 { -e } else { 0.0 };
+                        let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
+                        target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
+                    }
                     if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
                         let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
                         target += (ba[s] + (bb[s] - ba[s]) * t) * off;
@@ -1497,8 +1542,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         if d > far0 {
                             continue;       // (nothing below reaches this far: the box's corners)
                         }
-                        if d - rh[s] < cdeep[idx] || (d <= rh[s] && carz[idx].is_nan()) {
-                            cdeep[idx] = d - rh[s];
+                        // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
+                        // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
+                        let cr = if steep[s] != 0 { h[s] } else { rh[s] };
+                        if d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan()) {
+                            cdeep[idx] = d - cr;
                             carz[idx] = target;
                             carid[idx] = rid[s];
                         }
@@ -1550,7 +1598,9 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                     let hs = if cwall.is_finite() { h[s].min(cwall) } else { h[s] };
                     let drop = cwall.is_finite() && !ctop.is_finite() && d > cwall;
                     let wall = beff[idx] - target > wall_cut && ahead < side && ahead < wall_ahead;
-                    let tt = if wall { wall_t } else { (slope_run * (target - beff[idx]).abs()).clamp(t_min, t_max) };
+                    let tt = if wall { wall_t }
+                             else if steep[s] != 0 { (steep_run * (target - beff[idx]).abs()).clamp(steep_t_min, t_max) }
+                             else { (slope_run * (target - beff[idx]).abs()).clamp(t_min, t_max) };
                     // a wall: flat on one terrain step behind it (no slope in front of its face), then up
                     let u = ((d - hs - if wall { wall_flat } else { 0.0 }) / tt).clamp(0.0, 1.0);
                     let w = 1.0 - u * u * (3.0 - 2.0 * u);
@@ -1560,10 +1610,25 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                     // (a carriageway first: a road's cutting band reaching over another road's carriageway at another level
                     // (its "climb" was that road's embankment) does not pull that road's ground; a bridge's abutment sank
                     // 2.5 m under the deck into the street below, a wall cars hit, GitHub #108 Meppen)
-                    let on_other_car = carid[idx] >= 0 && carid[idx] != rid[s] && (target - carz[idx]).abs() > wall_cut;
-                    let yields = d > rh[s] && (on_other_car
-                        || (bid[idx] >= 0 && bid[idx] != rid[s] && (target - bz[idx]).abs() > wall_cut));
-                    if w > 0.0 && !drop && !yields && !(d > hs && ahead < side && target < top[idx] - wall_cut) {
+                    // (by how much: fully from wall_cut apart and yield_ramp past its carriageway, none from yield_ramp
+                    // less and at its edge; giving way at once there stepped a hairpin's lane 27 cm where its other leg
+                    // crossed wall_cut, the Stelvio, 2026-11-01)
+                    let ramp = yield_ramp.max(1e-6);
+                    let apart = |dz: f64| smooth((dz.abs() - wall_cut + ramp) / ramp);
+                    let mut yf = 0.0f64;
+                    if carid[idx] >= 0 && carid[idx] != rid[s] {
+                        yf = apart(target - carz[idx]);
+                    }
+                    // (a cutting's band: another road's alone; a pass road's legs (grading.LEG_RID_SHIFT: the same road)
+                    // blend over each other's bands, the ground between them a slope: giving way there drew a 5 m step
+                    // along the band's edge, which notches at every vertex: spikes between a hairpin's legs, the user's
+                    // report 2026-11-01. On each other's lanes they still give way, above)
+                    if bid[idx] >= 0 && bid[idx] & LEG_ROAD_MASK != rid[s] & LEG_ROAD_MASK {
+                        yf = yf.max(apart(target - bz[idx]));
+                    }
+                    yf *= smooth((d - rh[s]) / ramp);
+                    if w > 0.0 && !drop && yf < 1.0 && !(d > hs && ahead < side && target < top[idx] - wall_cut) {
+                        let w = w * (1.0 - yf);
                         let r = d / blend_r;
                         let mut wb = w / (1.0 + r * r);
                         if sep {
@@ -2215,93 +2280,155 @@ fn srgb_monotonic() -> bool {
 }
 
 /// mip_levels' levels (fartex.rs dds_levels calls it too); img (h, w, 3 or 4).
+/// Rows of out (row_len values each) filled by f(row, its values) on up to 8 threads in bands (each value from its own
+/// inputs only: the same numbers as one thread).
+fn par_rows<T: Send, F: Fn(usize, &mut [T]) + Sync>(out: &mut [T], row_len: usize, f: F) {
+    let rows = if row_len == 0 { 0 } else { out.len() / row_len };
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(rows.max(1));
+    if threads <= 1 || rows * row_len < 1 << 16 {
+        for (y, r) in out.chunks_mut(row_len.max(1)).enumerate() {
+            f(y, r);
+        }
+        return;
+    }
+    let per = rows.div_ceil(threads);
+    std::thread::scope(|sc| {
+        for (bi, band) in out.chunks_mut(per * row_len).enumerate() {
+            let f = &f;
+            sc.spawn(move || {
+                for (k, r) in band.chunks_mut(row_len).enumerate() {
+                    f(bi * per + k, r);
+                }
+            });
+        }
+    });
+}
+
 pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::ndarray::ArrayView1<f32>, sharpen: f32)
                               -> Vec<numpy::ndarray::Array3<u8>> {
     let nc = img.shape()[2];
     let (mut h, mut w) = (img.shape()[0], img.shape()[1]);
     let to_lin = |i: usize, v: u8| -> f32 { if i % nc < 3 { lut[v as usize] } else { v as f32 / 255.0f32 } };
-    let mut lin: Vec<f32> = match img.as_slice() {
-        Some(sl) => sl.iter().enumerate().map(|(i, &v)| to_lin(i, v)).collect(),
-        None => img.iter().enumerate().map(|(i, &v)| to_lin(i, v)).collect(),
+    let owned;
+    let src: &[u8] = match img.as_slice() {
+        Some(sl) => sl,
+        None => { owned = img.iter().copied().collect::<Vec<u8>>(); &owned }
     };
     let mut out = Vec::new();
+    let mut lin: Vec<f32>;
+    if h > 1 && w > 1 {
+        // level 1 from the bytes at once (the level-0 floats were 268 MB for a 4096² RGBA photo): the vertical then the
+        // horizontal averages, in that order, of the same floats
+        let (nh, nw) = (h / 2, w / 2);
+        let row0 = w * nc;
+        lin = vec![0f32; nh * nw * nc];
+        par_rows(&mut lin, nw * nc, |y, r| {
+            for x in 0..nw {
+                for c in 0..nc {
+                    let a = (2 * y) * row0 + (2 * x) * nc + c;
+                    let b = a + row0;
+                    let v0 = 0.5f32 * (to_lin(a, src[a]) + to_lin(b, src[b]));
+                    let v1 = 0.5f32 * (to_lin(a + nc, src[a + nc]) + to_lin(b + nc, src[b + nc]));
+                    r[x * nc + c] = 0.5f32 * (v0 + v1);
+                }
+            }
+        });
+        h = nh;
+        w = nw;
+        out.push(mip_finish(&lin, h, w, nc, sharpen));
+    } else {
+        lin = src.iter().enumerate().map(|(i, &v)| to_lin(i, v)).collect();
+    }
     while h.max(w) > 1 {
         let (mut nh, mut nw) = (h, w);
         if h > 1 {
             nh = h / 2;
             let mut nl = vec![0f32; nh * w * nc];
-            for y in 0..nh {
-                for x in 0..w * nc {
-                    nl[y * w * nc + x] = 0.5f32 * (lin[(2 * y) * w * nc + x] + lin[(2 * y + 1) * w * nc + x]);
+            let rl = w * nc;
+            par_rows(&mut nl, rl, |y, r| {
+                for x in 0..rl {
+                    r[x] = 0.5f32 * (lin[(2 * y) * rl + x] + lin[(2 * y + 1) * rl + x]);
                 }
-            }
+            });
             lin = nl;
         }
         if w > 1 {
             nw = w / 2;
             let mut nl = vec![0f32; nh * nw * nc];
-            for y in 0..nh {
+            par_rows(&mut nl, nw * nc, |y, r| {
                 for x in 0..nw {
                     for c in 0..nc {
-                        nl[(y * nw + x) * nc + c] =
-                            0.5f32 * (lin[(y * w + 2 * x) * nc + c] + lin[(y * w + 2 * x + 1) * nc + c]);
+                        r[x * nc + c] = 0.5f32 * (lin[(y * w + 2 * x) * nc + c] + lin[(y * w + 2 * x + 1) * nc + c]);
                     }
                 }
-            }
+            });
             lin = nl;
         }
         h = nh;
         w = nw;
-        let lev: Vec<f32> = if h.min(w) >= 4 && sharpen > 0.0 {
-            let at = |y: isize, x: isize, c: usize| -> f32 {
-                let yy = y.clamp(0, h as isize - 1) as usize;
-                let xx = x.clamp(0, w as isize - 1) as usize;
-                lin[(yy * w + xx) * nc + c]
-            };
-            let mut l2 = lin.clone();           // (alpha kept as averaged)
-            let row = w * nc;
-            // the interior: no clamping (the same sum, term by term)
-            for y in 1..h - 1 {
-                for x in 1..w - 1 {
-                    for c in 0..3 {
-                        let q = y * row + x * nc + c;
-                        let blur = (lin[q - row - nc] + lin[q - row] + lin[q - row + nc] + lin[q - nc] + lin[q]
-                            + lin[q + nc] + lin[q + row - nc] + lin[q + row] + lin[q + row + nc]) / 9.0f32;
-                        l2[q] = lin[q] + sharpen * (lin[q] - blur);
-                    }
-                }
-            }
-            for y in 0..h as isize {
-                for x in 0..w as isize {
-                    if y > 0 && y < h as isize - 1 && x > 0 && x < w as isize - 1 {
-                        continue;
-                    }
-                    for c in 0..3 {
-                        // the numpy sum's order: rows top to bottom, each left to right
-                        let blur = (at(y - 1, x - 1, c) + at(y - 1, x, c) + at(y - 1, x + 1, c) + at(y, x - 1, c)
-                            + at(y, x, c) + at(y, x + 1, c) + at(y + 1, x - 1, c) + at(y + 1, x, c)
-                            + at(y + 1, x + 1, c)) / 9.0f32;
-                        let v = at(y, x, c);
-                        l2[((y as usize) * w + x as usize) * nc + c] = v + sharpen * (v - blur);
-                    }
-                }
-            }
-            l2
-        } else {
-            lin.clone()
+        out.push(mip_finish(&lin, h, w, nc, sharpen));
+    }
+    out
+}
+
+/// A mip level's bytes from its (unsharpened) linear floats: sharpened (3 x 3 box, edge-padded) where both sides are
+/// >= 4, back to sRGB; the alpha as averaged.
+fn mip_finish(lin: &[f32], h: usize, w: usize, nc: usize, sharpen: f32) -> numpy::ndarray::Array3<u8> {
+    let lev: Vec<f32> = if h.min(w) >= 4 && sharpen > 0.0 {
+        let at = |y: isize, x: isize, c: usize| -> f32 {
+            let yy = y.clamp(0, h as isize - 1) as usize;
+            let xx = x.clamp(0, w as isize - 1) as usize;
+            lin[(yy * w + xx) * nc + c]
         };
-        let th = srgb_thresholds();
-        let bytes: Vec<u8> = lev.iter().enumerate().map(|(i, &v)| {
-            let c = v.clamp(0.0, 1.0);
-            if i % nc < 3 {
+        let mut l2 = lin.to_vec();           // (alpha kept as averaged)
+        let row = w * nc;
+        // the interior: no clamping (the same sum, term by term)
+        par_rows(&mut l2, row, |y, r| {
+            if y == 0 || y == h - 1 {
+                return;
+            }
+            for x in 1..w - 1 {
+                for c in 0..3 {
+                    let q = y * row + x * nc + c;
+                    let blur = (lin[q - row - nc] + lin[q - row] + lin[q - row + nc] + lin[q - nc] + lin[q]
+                        + lin[q + nc] + lin[q + row - nc] + lin[q + row] + lin[q + row + nc]) / 9.0f32;
+                    r[x * nc + c] = lin[q] + sharpen * (lin[q] - blur);
+                }
+            }
+        });
+        for y in 0..h as isize {
+            for x in 0..w as isize {
+                if y > 0 && y < h as isize - 1 && x > 0 && x < w as isize - 1 {
+                    continue;
+                }
+                for c in 0..3 {
+                    // the numpy sum's order: rows top to bottom, each left to right
+                    let blur = (at(y - 1, x - 1, c) + at(y - 1, x, c) + at(y - 1, x + 1, c) + at(y, x - 1, c)
+                        + at(y, x, c) + at(y, x + 1, c) + at(y + 1, x - 1, c) + at(y + 1, x, c)
+                        + at(y + 1, x + 1, c)) / 9.0f32;
+                    let v = at(y, x, c);
+                    l2[((y as usize) * w + x as usize) * nc + c] = v + sharpen * (v - blur);
+                }
+            }
+        }
+        l2
+    } else {
+        lin.to_vec()
+    };
+    let th = srgb_thresholds();
+    let mut bytes = vec![0u8; lev.len()];
+    par_rows(&mut bytes, w * nc, |y, r| {
+        for (k, b) in r.iter_mut().enumerate() {
+            let i = y * w * nc + k;
+            let c = lev[i].clamp(0.0, 1.0);
+            *b = if i % nc < 3 {
                 th.partition_point(|&t| t <= c) as u8      // the byte the formula gives (monotonic: thresholds)
             } else {
                 (c * 255.0f32 + 0.5f32) as u8
-            }
-        }).collect();
-        out.push(numpy::ndarray::Array3::from_shape_vec((h, w, nc), bytes).unwrap());
-    }
-    out
+            };
+        }
+    });
+    numpy::ndarray::Array3::from_shape_vec((h, w, nc), bytes).unwrap()
 }
 
 /// imagery.mip_arrays below level 0: the levels 1.. (uint8 [h, w, c], c 3 or 4) of a power-of-two image: linear-light
@@ -3992,28 +4119,77 @@ fn subdivide_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, tris: P
 /// roadmesh.deck's parapet test: for each deck edge point p (m, 3) of deck owner op (m,), does another deck's surface
 /// lie there: a centre-line segment a -> b (s, 3) of another owner (os, (s,)) nearer in plan than its half width hw (s,)
 /// with its height there within dz of the point's (a ramp leaving the mainline, the carriageways of one road side by
-/// side: no wall between them, 2026-10-17).
+/// side: no wall between them, 2026-10-17). ends (s,): per segment bit 0 its start, bit 1 its end is the deck's own
+/// end, square: nothing at it (within 0.1 m) or past it is under it (a deck going on from another's end at a merge on I-95
+/// by the Middle Branch, 2026-10-31: the round end hid both parapets for 7 m).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (p, op, a, b, hw, os, dz, ends=None))]
 fn deck_edges_covered<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, op: PyReadonlyArray1<'py, i64>,
                            a: PyReadonlyArray2<'py, f64>, b: PyReadonlyArray2<'py, f64>, hw: PyReadonlyArray1<'py, f64>,
-                           os: PyReadonlyArray1<'py, i64>, dz: f64) -> Bound<'py, PyArray1<bool>> {
+                           os: PyReadonlyArray1<'py, i64>, dz: f64, ends: Option<PyReadonlyArray1<'py, i64>>)
+                           -> Bound<'py, PyArray1<bool>> {
     let (pv, opv, av, bv, hv, osv) = (p.as_array(), op.as_array(), a.as_array(), b.as_array(), hw.as_array(), os.as_array());
+    let ev: Vec<i64> = match &ends {
+        Some(e) => e.as_array().iter().copied().collect(),
+        None => vec![0; av.shape()[0]],
+    };
     let out: Vec<bool> = release(py, pv.shape()[0] * av.shape()[0].max(1), || {
         let ns = av.shape()[0];
         // per segment: start, direction, squared length, half width, z at both ends, owner
-        let seg: Vec<[f64; 9]> = (0..ns).map(|k| {
+        let seg: Vec<[f64; 10]> = (0..ns).map(|k| {
             let (a0, a1, a2) = (av[[k, 0]], av[[k, 1]], av[[k, 2]]);
             let (ab0, ab1) = (bv[[k, 0]] - a0, bv[[k, 1]] - a1);
-            [a0, a1, ab0, ab1, (ab0 * ab0 + ab1 * ab1).max(1e-9), hv[k], a2, bv[[k, 2]], osv[k] as f64]
+            [a0, a1, ab0, ab1, (ab0 * ab0 + ab1 * ab1).max(1e-9), hv[k], a2, bv[[k, 2]], osv[k] as f64,
+             ev.get(k).copied().unwrap_or(0) as f64]
         }).collect();
+        const BAND_M: f64 = 0.5;        // m: the band inside hw along a deck's edges (roadmesh.PARAPET_W, 0.45)
+        const END_M: f64 = 1.0;
+        // per segment its deck's square ends (point, unit direction into the deck), where it has them: the segments
+        // from a start (bit 0) to the next end (bit 1) are one deck's
+        let mut planes: Vec<(Option<[f64; 4]>, Option<[f64; 4]>)> = vec![(None, None); ns];
+        let mut k = 0;
+        while k < ns {
+            if ev.get(k).copied().unwrap_or(0) & 1 == 0 {
+                k += 1;
+                continue;
+            }
+            let mut e = k;
+            while e < ns && ev.get(e).copied().unwrap_or(0) & 2 == 0 {
+                e += 1;
+            }
+            if e >= ns {
+                break;
+            }
+            let (gs, ge) = (&seg[k], &seg[e]);
+            let (ls, le) = (gs[4].sqrt(), ge[4].sqrt());
+            let start = [gs[0], gs[1], gs[2] / ls, gs[3] / ls];
+            let end = [ge[0] + ge[2], ge[1] + ge[3], -ge[2] / le, -ge[3] / le];
+            for q in planes.iter_mut().take(e + 1).skip(k) {
+                *q = (Some(start), Some(end));
+            }
+            k = e + 1;
+        }
         (0..pv.shape()[0]).map(|i| {
             let (p0, p1, p2, o) = (pv[[i, 0]], pv[[i, 1]], pv[[i, 2]], opv[i] as f64);
-            seg.iter().any(|g| {
+            seg.iter().zip(planes.iter()).any(|(g, pl)| {
                 if g[8] == o { return false; }
                 let t = (((p0 - g[0]) * g[2] + (p1 - g[1]) * g[3]) / g[4]).clamp(0.0, 1.0);
                 let d = (p0 - (g[0] + t * g[2])).hypot(p1 - (g[1] + t * g[3]));
-                d < g[5] && (p2 - (g[6] + t * (g[7] - g[6]))).abs() < dz
+                if !(d < g[5] && (p2 - (g[6] + t * (g[7] - g[6]))).abs() < dz) {
+                    return false;
+                }
+                // at or past the deck's square end; within END_M of it only over its slab, not its edge's band (a
+                // deck going on at a slight angle from this one's end, their outer edges flush: its corner was in
+                // the band, both parapets gone there)
+                let edge_band = d > g[5] - BAND_M;
+                for q in [pl.0, pl.1].into_iter().flatten() {
+                    let into = (p0 - q[0]) * q[2] + (p1 - q[1]) * q[3];
+                    if into < 0.1 || (edge_band && into < END_M) {
+                        return false;
+                    }
+                }
+                true
             })
         }).collect()
     });
@@ -4567,6 +4743,37 @@ fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: 
 }
 
 
+/// grading.hairpin_cores: for each of the points rows (indices into a polyline xy (k, 2)), its distance to the nearest
+/// stretch of the same line that is folded back by it: nearer than ratio x the distance along the line between them (a
+/// hairpin's other leg across its narrow middle, not the turn round it nor its own leg); infinity where none is.
+#[pyfunction]
+fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: numpy::PyReadonlyArray1<'py, i64>,
+                       ratio: f64) -> Bound<'py, PyArray1<f64>> {
+    let (p, rows) = (xy.as_array(), rows.as_array());
+    let k = p.nrows();
+    let mut s = vec![0.0f64; k];
+    for i in 1..k {
+        s[i] = s[i - 1] + (p[[i, 0]] - p[[i - 1, 0]]).hypot(p[[i, 1]] - p[[i - 1, 1]]);
+    }
+    let out: Vec<f64> = rows.iter().map(|&r| {
+        let i = r.clamp(0, k as i64 - 1) as usize;
+        let (x, y) = (p[[i, 0]], p[[i, 1]]);
+        let mut best = f64::INFINITY;
+        for j in 0..k.saturating_sub(1) {
+            let (ax, ay, bx, by) = (p[[j, 0]], p[[j, 1]], p[[j + 1, 0]], p[[j + 1, 1]]);
+            let (dx, dy) = (bx - ax, by - ay);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 1e-12 { (((x - ax) * dx + (y - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            let d = (x - ax - t * dx).hypot(y - ay - t * dy);
+            if d < best && d < ratio * (s[j] + t * (s[j + 1] - s[j]) - s[i]).abs() {
+                best = d;
+            }
+        }
+        best
+    }).collect();
+    out.into_pyarray(py)
+}
+
 /// vegetation.regional: the groups of a region from the generic ones (group, height m, lat, lon, ESA WorldCover class,
 /// a hashed [0, 1) per item) by a coarse climate. ids: the group ids (deciduous, conifer, shrub, rock, pine_west, palm,
 /// juniper, desert_shrub, desert_rock, oak_west, tropical); wc: WorldCover's (shrub, bare, grass, built) classes.
@@ -5095,6 +5302,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
     m.add_function(wrap_pyfunction!(junctionsnap::snap_junctions, m)?)?;
+    m.add_function(wrap_pyfunction!(junctionsnap::hold_junction_corridors, m)?)?;
+    m.add_function(wrap_pyfunction!(bc7_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
@@ -5110,13 +5319,22 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lamps::lamp_stations, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_beside, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_joins, m)?)?;
+    m.add_function(wrap_pyfunction!(tapers::road_tapers, m)?)?;
+    m.add_function(wrap_pyfunction!(tapers::lane_flow, m)?)?;
+    m.add_function(wrap_pyfunction!(tapers::lane_shifts, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_gaps, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_tents, m)?)?;
+    m.add_function(wrap_pyfunction!(levels::tag_level_ranges, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::gradesep_gather, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
     m.add_function(wrap_pyfunction!(islands::road_cycles, m)?)?;
     m.add_function(wrap_pyfunction!(ribbons::ribbon_edges, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::mask_segments, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::value_noises, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::pad_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(groundpaint::paint_pads, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::photo_ghosts, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::dash_pieces, m)?)?;
     m.add_function(wrap_pyfunction!(power::substation_yard, m)?)?;
@@ -5196,6 +5414,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sharp_probes, m)?)?;
     m.add_function(wrap_pyfunction!(sharp_cuts, m)?)?;
     m.add_function(wrap_pyfunction!(tight_bends, m)?)?;
+    m.add_function(wrap_pyfunction!(fold_clearance, m)?)?;
     m.add_function(wrap_pyfunction!(regional_groups, m)?)?;
     m.add_function(wrap_pyfunction!(clip_segments, m)?)?;
     m.add_function(wrap_pyfunction!(first_probe_near_lines, m)?)?;
@@ -5247,6 +5466,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
-    m.add("VERSION", 115)?;
+    m.add_class::<traffic::Routes>()?;
+    m.add("VERSION", 144)?;
     Ok(())
 }

@@ -1,5 +1,6 @@
 """osmtags.py: OpenStreetMap's road tags (lanes, width, speed limit...) joined to Overture's road segments by way id,
 and the roads using them (roads.road_specs / carriageway, navgraph lanes)."""
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -261,6 +262,50 @@ class RacewayTest(unittest.TestCase):
         wkb = struct.pack("<BII", 1, 2, 2) + struct.pack("<4d", 1.0, 2.0, 3.0, 4.0)
         np.testing.assert_allclose(osmtags._linestring(wkb), [[1, 2], [3, 4]])
         self.assertIsNone(osmtags._linestring(struct.pack("<BI", 1, 3) + b"x" * 20), "a polygon is not a line")
+
+
+class TableSaveTest(unittest.TestCase):
+    """GitHub #663: a decoded row group table is used even when its file cannot be saved (Windows: the file there is
+    open in another process, PermissionError), and the temporary file goes."""
+
+    def make(self, tmp):
+        import threading
+        import types
+        ot = osmtags.OsmTags.__new__(osmtags.OsmTags)
+        ot._lock, ot._tables = threading.Lock(), {}
+        table = {"id": np.array([7], np.int64)}
+        ot._decode = lambda *a: table
+        remote = types.SimpleNamespace(cache_dir=tmp)
+        return ot, remote, table
+
+    def check(self, there):
+        import tempfile
+        from unittest import mock
+        import staging
+        with tempfile.TemporaryDirectory() as tmp:
+            ot, remote, table = self.make(tmp)
+            d = os.path.join(tmp, osmtags.TABLE_DIR)
+            if there:                           # (a copy another process wrote and holds open)
+                os.makedirs(d)
+                with open(os.path.join(d, "3.npz"), "wb") as f:
+                    f.write(b"held")
+
+            real = os.replace
+
+            def denied(a, b):                   # (Windows: the table's file is open in another process)
+                if os.path.dirname(b) == d:
+                    raise PermissionError(5, "Access is denied")
+                return real(a, b)
+            with mock.patch("os.replace", denied), mock.patch.object(staging, "REPLACE_WAITS", (0.0,)):
+                got = ot._table(None, "uri", {}, 3, remote, "demand")
+            self.assertIs(got, table)
+            self.assertFalse([n for n in os.listdir(d) if "tmp" in n])
+
+    def test_replace_denied_with_a_copy_there(self):
+        self.check(True)
+
+    def test_replace_denied_nothing_there(self):
+        self.check(False)
 
 
 if __name__ == "__main__":

@@ -24,28 +24,35 @@ local M = {}
 local floor, abs = math.floor, math.abs
 
 M.N = 1024                         -- samples per side (the shipped layer map has the same size)
-M.SQUARE = 2.0                     -- m between samples
-M.HALF = 1024                      -- block SW corner = centre - HALF (both axes)
-M.VALID_W = (M.N - 1) * M.SQUARE   -- 2046 m collidable width (P1)
-M.COVER_W = 2 * M.HALF             -- 2048 m: the 8 x 8 L0 tiles the block sits on
-M.L0 = 256                         -- far-field L0 tile size (= the 1024² block's centre grid)
-M.GRID = 256
-M.GRID_1024 = 256                  -- block centre grid per block size (flat: modsim reads these)
-M.GRID_512 = 128
+M.SQUARE = 1.0                     -- m between samples (the server's hello.squareSize; 2 m before 2026-11-01)
+M.FAR_SQUARE = 2.0                 -- m: the far field's near tiles' lattice (every second block sample)
+M.HALF = M.N * M.SQUARE / 2        -- block SW corner = centre - HALF (both axes)
+M.VALID_W = (M.N - 1) * M.SQUARE   -- collidable width (P1)
+M.COVER_W = 2 * M.HALF             -- the L0 tiles the block sits on
+M.L0 = 256                         -- far-field L0 tile size (= the 2 km block's centre grid)
+M.GRID_1024 = 256                  -- block centre grid by the block's width: 2 km (named for 1024² at 2 m) ...
+M.GRID_512 = 128                   -- ... and 1 km (512² at 2 m, 1024² at 1 m) (flat: modsim reads these)
+M.GRID = M.GRID_512
+M.WIDTH = M.N * M.SQUARE           -- m: the block's width (1 km or 2 km: follow / rebase tables)
 M.Q_LADDER = { 1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16 } -- height quanta, m (design 1.3)
 M.Q_SCALE = 65536                  -- maxHeight = Q * Q_SCALE (P1)
 
--- The session's block size: 1024 or 512 (anything else: 1024, and false as the second value).
--- Returns the size in use.
-function M.configure(size)
-  local ok = size == 512 or size == 1024
+-- The session's block: `size` samples per side `square` m apart (hello.blockSize / squareSize), a block 1 or 2 km wide
+-- (anything else: 1024 x 1 m, and false as the second value). Returns the size in use, whether it was valid and the
+-- block's width (m).
+function M.configure(size, square)
+  square = tonumber(square) or 1.0
+  local w = (tonumber(size) or 0) * square
+  local ok = (size == 512 or size == 1024 or size == 2048) and (w == 1024 or w == 2048)
   local n = ok and size or 1024
   M.N = n
+  M.SQUARE = ok and square or 1.0
   M.HALF = n * M.SQUARE / 2
   M.VALID_W = (n - 1) * M.SQUARE
   M.COVER_W = 2 * M.HALF
-  M.GRID = n == 512 and M.GRID_512 or M.GRID_1024
-  return n, ok
+  M.WIDTH = n * M.SQUARE
+  M.GRID = M.WIDTH >= 2048 and M.GRID_1024 or M.GRID_512
+  return n, ok, M.WIDTH
 end
 
 -- TerrainBlock position (SW corner, x/y) for a block centred at (cx, cy).

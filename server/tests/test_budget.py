@@ -98,8 +98,9 @@ class PriorityTest(unittest.TestCase):
             for n in (3, 6, 9):
                 self.assertTrue(self.run_child(get.format(n=n, w=True)).startswith("None "), "a worker: as inherited")
         elif hasattr(os, "nice"):
-            self.assertEqual(self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b)"),
-                             "3")
+            # (+3, or up to the ceiling of 19 when the test itself already runs nice: a niced shell's gate run)
+            got = self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b, b)").split()
+            self.assertEqual(int(got[0]), min(3, 19 - int(got[1])))
 
 
 if __name__ == "__main__":

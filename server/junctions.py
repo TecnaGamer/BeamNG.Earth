@@ -373,6 +373,25 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if at_cluster.get((ri, k)) == cid:
                 return True
         return False
+
+    every = []                                  # (all roads' points (N, 2), each road's first) for near_c, made once
+
+    def near_c(c, skip):
+        """The indices of the roads (but skip) with a point within 60 m of c, in order: one distance pass over every
+        road's points (a pass per road at each crosswalk was ~1/3 of find(), 2026-10-25); the same distances."""
+        if not every:
+            lens = [len(rd[2]) for rd in roads]
+            if min(lens, default=1) == 0:       # (an empty line: the per-road test, as it was)
+                every.append(None)
+            else:
+                every.append((np.concatenate([np.asarray(rd[2], np.float64)[:, :2] for rd in roads]),
+                              np.concatenate(([0], np.cumsum(lens)[:-1]))))
+        if every[0] is None:
+            return [k2 for k2, rd in enumerate(roads) if k2 != skip and np.hypot(*(rd[2][:, :2] - c).T).min() < 60.0]
+        allp, first = every[0]
+        d = allp - c
+        dmin = np.minimum.reduceat(np.hypot(d[:, 0], d[:, 1]), first)
+        return [k2 for k2 in np.flatnonzero(dmin < 60.0).tolist() if k2 != skip]
     for cid in sorted(groups, key=lambda c: tuple(np.round(pos[groups[c][0]], 2))):
         inc = sorted({x for a in groups[cid] for x in jn[a]})
         X = np.mean([pos[a] for a in groups[cid]], axis=0)
@@ -505,7 +524,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 zcj = _z_along(roads[rj][2], vj, sj, cj)
                 outer = [(*(Pj + uj * cj - nj * (wj + wkj)), zcj), (*O, zo), (*(Pi + ui * ci + ni * (wi + wki)), zci)]
                 Cc = _line_x(Pi + ni * di, ui, Pj - nj * dj, uj)
-                fill = np.vstack([[*Cc, zo]] + [np.r_[arc2[m], z[len(pre) + m]] for m in range(k)]) if Cc is not None else None
+                fill = (np.vstack([[*Cc, zo], np.column_stack((arc2, z[len(pre):len(pre) + k]))])
+                        if Cc is not None else None)            # (an np.r_ per arc point: ~1/6 of find())
                 if fill is not None and math.hypot(*(Cc - X)) > 20.0 + MERGE_M:
                     if debug is not None:
                         debug.append(('needle', X.round(1).tolist()))
@@ -557,8 +577,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 others = [rd for k2, rd in enumerate(roads) if k2 != ri]
                 ends = np.array([a + nl * 0.5, b - nl * 0.5])
                 if _on_carriageway(ends, others, (X, 60.0)) is not None or any(
-                        _crosses(a, b, rd[2][:, :2]) for rd in others
-                        if np.hypot(*(rd[2][:, :2] - c).T).min() < 60.0):
+                        _crosses(a, b, roads[k2][2][:, :2]) for k2 in near_c(c, ri)):
                     continue                    # it would cross or end on another road
                 if any(min(_seg_dist(np.array([a, b, c]), np.array([q["a"][:2], q["b"][:2]]))) < 2.0
                        for q in crosswalks):

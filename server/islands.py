@@ -118,6 +118,7 @@ def ring_directions(roads_list, left_hand=False):
     both decide the same. Mapped one-way directions take precedence; missing directions follow the ring's mapped
     circulation, or the driving side when none is mapped. Sorting makes inference independent of cell/load order."""
     edges, adj = _graph(sorted(roads_list, key=lambda r: r[0]))
+    boxes = _edge_boxes(edges)
     out = {}
     for cyc in _cycles(edges, adj, RING_MAX_EDGES, RING_MAX_LOOP_M):
         L = sum(edges[k][5] for k, _ in cyc)
@@ -136,7 +137,7 @@ def ring_directions(roads_list, left_hand=False):
         if rnd >= RING_ROUND_ANY or (rnd >= RING_ROUND and oneway_ok):
             # A through road makes this a connected road loop, not a roundabout with a central island.
             members = {k for k, _ in cyc}
-            if any(_crosses(poly, e[2]) for j, e in enumerate(edges) if j not in members):
+            if any(_crosses(poly, edges[j][2]) for j in _near_edges(boxes, poly) if j not in members):
                 continue
             forward = along[0] if along else (signed_area > 0) != bool(left_hand)
             for k, fwd in cyc:
@@ -184,6 +185,7 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
     geometry)}, "ring": (k, 3) curb line counter-clockwise or None}] of roads_list [(fid, spec, pts (k, 3), lon)].
     structures: building centres (x, y); a loop round one is a block, not an island."""
     edges, adj = _graph(roads_list)
+    boxes = _edge_boxes(edges)
     found = []
     for cyc in _cycles(edges, adj, MAX_EDGES, MAX_LOOP_M):
         key = {k for k, _ in cyc}
@@ -207,7 +209,7 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
             continue
         if any(_inside(poly, c) for c in structures):
             continue                                # a building inside: a city block, not an island
-        if any(_crosses(poly, edges[j][2]) for j in range(len(edges)) if j not in key):
+        if any(_crosses(poly, edges[j][2]) for j in _near_edges(boxes, poly) if j not in key):
             continue                                # a road through it (a turn lane across the triangle, not
                                                     # joined at its corners): the AI drove into the island's curb
                                                     # and backed out, twice (Timisoara 2026-10-15)
@@ -236,6 +238,24 @@ RAY_STEP_M = 0.2
 
 
 CROSS_MARGIN_M = 2.0    # a road's point this far inside a loop's centreline polygon is through it
+
+
+def _edge_boxes(edges):
+    """(n, 4) x0, y0, x1, y1 of each edge's points (_graph's edges)."""
+    if not edges:
+        return np.zeros((0, 4))
+    xy = [np.asarray(e[2], np.float64)[:, :2] for e in edges]
+    return np.array([(*p.min(0), *p.max(0)) for p in xy], np.float64)
+
+
+def _near_edges(boxes, poly):
+    """Indices (ascending) of the edges whose box meets loop poly's: only those can have a point inside it (_crosses
+    of every edge for every candidate loop was ~390k calls on one Las Vegas road tile, 2026-11-01)."""
+    if not len(boxes):
+        return ()
+    lo, hi = poly.min(0), poly.max(0)
+    return np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 1] <= hi[1]) & (boxes[:, 2] >= lo[0])
+                          & (boxes[:, 3] >= lo[1])).tolist()
 
 
 def _crosses(poly, pts):

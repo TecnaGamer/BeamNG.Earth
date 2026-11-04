@@ -13,6 +13,7 @@ a background fetch or a road tile's process below it. A lock older than STALE_S 
 wait longer than wait_s does the work itself.
 """
 import os
+import sys
 import time
 
 STALE_S = 120.0
@@ -43,21 +44,63 @@ def take(lock, kind="demand"):
         except OSError:
             return True
         try:
-            os.write(fd, ("%d %d" % _rank(kind)).encode())
+            os.write(fd, ("%d %d %d" % (*_rank(kind), os.getpid())).encode())
         finally:
             os.close(fd)
         return True
     return False
 
 
-def _less_urgent(lock, kind):
-    """Whether lock's holder is less urgent than this process asking for kind."""
+def _holder(lock):
+    """(rank, priority, pid or None) of lock's holder, or None (released, or being written)."""
     try:
         with open(lock, "rb") as fh:
             held = fh.read().split()
-        return (int(held[0]), int(held[1])) > _rank(kind)
+        return int(held[0]), int(held[1]), (int(held[2]) if len(held) > 2 else None)
     except (OSError, ValueError, IndexError):
-        return False                        # (released, or being written)
+        return None
+
+
+def _less_urgent(lock, kind):
+    """Whether lock's holder is less urgent than this process asking for kind."""
+    h = _holder(lock)
+    return h is not None and h[:2] > _rank(kind)
+
+
+def alive(pid):
+    """Whether process pid still runs (True when it cannot be told)."""
+    if pid is None or pid <= 0 or pid == os.getpid():
+        return True
+    if sys.platform == "win32":
+        try:
+            return _alive_windows(int(pid))
+        except Exception:               # (never a reason to fail a download: waited out as before)
+            return True
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+
+
+def _alive_windows(pid):
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE          # (64-bit handles: budget.lower_priority)
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    h = k32.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return ctypes.get_last_error() == 5             # (access denied: it exists)
+    try:
+        code = wintypes.DWORD()
+        return not k32.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259     # STILL_ACTIVE
+    finally:
+        k32.CloseHandle(h)
 
 
 def once(lock, ready, wait_s, kind="demand", on_wait=None):
@@ -86,7 +129,14 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None):
             now_holder = None
         if now_holder is not None and now_holder[1] > 0 and now_holder != holder:
             holder = now_holder
-            if _less_urgent(lock, kind):
+            h = _holder(lock)
+            if h is not None and not alive(h[2]):
+                # its process is gone (the game closed mid-download: the server's processes end with it); the
+                # lock was waited out for STALE_S before, a minute a block after a quick restart
+                release(lock)
+                holder = None
+                continue
+            if h is not None and h[:2] > _rank(kind):
                 return None, False          # do it here, not wait
         if not waited:
             waited = True

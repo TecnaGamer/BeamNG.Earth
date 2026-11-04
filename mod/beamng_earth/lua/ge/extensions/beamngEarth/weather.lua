@@ -678,7 +678,10 @@ local function switchToManual()
     local ok, err = pcall(st.set, 'weatherMode', 'manual')
     if not ok then log('W', 'beamngEarth', 'weather: saving the mode failed: ' .. tostring(err)) end
   end
-  log('I', 'beamngEarth', 'weather: changed by someone else: ' .. tostring(p.values) .. ' from' .. tostring(p.by))
+  -- what changed, as a warning: the reports of GitHub #418 (Real weather back to Manual every ~2 min, nothing touched)
+  -- carried the warnings alone, never which values came in; who sent them (the stack) stays in the full log
+  log('W', 'beamngEarth', 'weather: changed by someone else: ' .. tostring(p.values))
+  log('I', 'beamngEarth', 'weather: the change came from' .. tostring(p.by))
   notify('Weather set to Manual because it was changed'
     .. (p.bwm and ' (BWM_Weather is changing the weather: set it to Clear with automatic weather off to keep real weather)' or '')
     .. '. Choose Real in the BeamNG.Earth settings to go back.')

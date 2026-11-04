@@ -198,16 +198,34 @@ def find(data_dir, env=None):
     return max(found, key=lambda p: os.path.getmtime(p))
 
 
-VERSION_RE = re.compile(r"BeamMP Launcher v([0-9][0-9.]*)")
+VERSION_RE = re.compile(r"(?:BeamMP Launcher v|Launcher Version\s*:\s*)([0-9][0-9.]*)")
 TOO_OLD = "Invalid lua communication"     # its log, again and again: the launcher cannot talk to BeamMP's mod
 
 
-def read_log(log_path):
-    try:
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            return f.read()
-    except OSError:
-        return ""
+def read_log(log_path, launcher_exe=None):
+    """Bounded current-attempt output, including BeamMP's own Windows log.
+
+    Windows BeamMP writes Launcher.log beside its executable while redirected
+    stdout can be empty. Do not report an older attempt's errors as current.
+    """
+    paths = [log_path]
+    if launcher_exe:
+        native = os.path.join(os.path.dirname(launcher_exe), "Launcher.log")
+        try:
+            if os.path.getmtime(native) >= os.path.getmtime(log_path):
+                paths.append(native)
+        except OSError:
+            pass
+    parts = []
+    for path in dict.fromkeys(paths):
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 65536))
+                parts.append(f.read(65536).decode("utf-8", errors="replace"))
+        except OSError:
+            pass
+    return "\n".join(parts)
 
 
 def log_version(text):
@@ -407,20 +425,20 @@ def start(exe, user_dir, log_path):
         # cannot find a Linux one by itself)
         args += ["--no-update", "--user-path", game_user_path(user_dir)]
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    log = open(log_path, "w", encoding="utf-8", errors="replace")
-    kw = {"cwd": os.path.dirname(exe), "stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
+    kw = {"cwd": os.path.dirname(exe), "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
     if IS_WIN:
         kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     else:
         kw["start_new_session"] = True
         kw["env"] = dict(child_env(), TERM=os.environ.get("TERM") or "xterm")
-    return subprocess.Popen(args, **kw)
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+        return subprocess.Popen(args, stdout=log, **kw)
 
 
 def wait_ready(proc, timeout=READY_S):
     """Until it listens for the game (its mod updated); False if it ended or took too long."""
-    end = time.time() + timeout
-    while time.time() < end:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
         if running():
             return True
         if proc.poll() is not None:
@@ -438,6 +456,7 @@ def stop(proc):
     except Exception:
         try:
             proc.kill()
+            proc.wait(timeout=5)
         except Exception:
             pass
 

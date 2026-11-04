@@ -20,6 +20,7 @@ Mapterhorn cannot be asked (circuit open, rate limited, failing) the same tile c
 (failover); if AWS fails too, DemUnavailable. 404s are remembered as <y>.404 markers that expire
 after the host's miss_ttl (Mapterhorn 90 days: it adds lidar areas; AWS never).
 """
+from runtimeprofiler import step as profile_step
 import contextlib
 import io
 import json
@@ -29,7 +30,7 @@ import os
 import threading
 import time
 from collections import Counter, OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 from PIL import Image
@@ -238,6 +239,11 @@ class Dem:
                                                   block=BIAS_BLOCK) if LIDARBC else None)
         self.hrdem_served = set()       # tile keys with HRDEM heights in them (the data credits)
 
+
+    def clear_memory(self):
+        """Drop the decoded tiles kept in memory (budget.maybe_shed)."""
+        with self._lock:
+            self._lru.clear()
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -963,6 +969,7 @@ class Dem:
         return a.reshape(n, block, n, block).max(axis=(1, 3))
 
     # --- sampling --------------------------------------------------------
+    @profile_step('Elevation sampling')
     def sample(self, lat, lon, zoom, progress=None):
         """Bilinear elevation (m) at arbitrary lat/lon arrays from zoom-level tiles. Points from polardem.FROM_LAT
         (84.9 deg) on (Mapterhorn's heights stop short of 85, Web Mercator at 85.05) come from the Copernicus DEM

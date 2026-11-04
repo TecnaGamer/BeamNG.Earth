@@ -583,6 +583,8 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
                                                   "secondary"])               # seg-03 v1, not the old v0
         self.assertEqual(r.attrs["subclass"][2], "sidewalk")
         self.assertEqual(r.attrs["name"][0], "Street 0")
+        self.assertEqual(r.attrs["src_record"][0], "w1@1")
+        self.assertEqual(r.attrs["src_record"][1], "w2@5", "the road's own way, not the route relation listed first")
         self.assertEqual(r.own.tolist(), [True] * 5 + [False])               # seg-edge is the east cell's
         self.assertEqual(r.rules["surface"].for_feature(1), [("paved", 0.0, 0.5), ("gravel", 0.5, 1.0)])
         self.assertEqual(r.rules["flags"].for_feature(0), [("is_bridge", 0.25, 0.5), ("is_link", 0.25, 0.5)])
@@ -895,6 +897,32 @@ class CacheTest(Sources, SmallBlocks, unittest.TestCase):
         left = [d for d, _, f in os.walk(root) if "ok" in f]
         self.assertEqual(left, [])
 
+    def test_old_mirror_folders_are_read_and_packed(self):
+        """A mirror folder from before the pack (one .npy per array) is still read, the same arrays, and on Linux
+        packed into one file for the next read (mapdata.PACK_FILE)."""
+        cache = os.path.join(self.tmp, "cache")
+        md, _ = self.mapdata(cache=cache)
+        digest = md.cell(mf.CELL).digest()
+        p = md.path(mf.CELL, "roads")
+        d = md._mirror_dir(p)
+        packed = md._mirror_load(p)
+        self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)))
+        for n in os.listdir(d):             # the folder as an older version wrote it
+            os.remove(os.path.join(d, n))
+        for n, a in packed.items():
+            np.save(os.path.join(d, n + ".npy"), np.asarray(a), allow_pickle=False)
+        with open(os.path.join(d, "ok"), "w") as fh:
+            fh.write(md._stamp(p) + "\n" + "\n".join(packed) + "\n")
+        old = md._mirror_load(p)
+        self.assertEqual(sorted(old), sorted(packed))
+        for n in packed:
+            self.assertEqual(old[n].dtype, packed[n].dtype)
+            self.assertEqual(np.asarray(old[n]).tobytes(), np.asarray(packed[n]).tobytes())
+        if os.name != "nt":
+            self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)), "packed again")
+        md2, _ = self.mapdata(cache=cache)
+        self.assertEqual(md2.cell(mf.CELL).digest(), digest)
+
     def test_corrupt_layer_files_are_rebuilt(self):
         """A damaged layer file (truncated, a flipped byte in the deflate stream, an old layout without
         provenance) is a miss: rebuilt from the raw blocks, same digest, not a permanent error."""
@@ -990,7 +1018,8 @@ class ProvenanceTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(tr["attribution"], "© OpenStreetMap contributors, Overture Maps Foundation")
         self.assertEqual(tr["release"], mf.RELEASE)
         self.assertIn("Open Database License", tr["licence"])
-        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 8}])
+        # sources counted: seg-01 lists its route relation as a second OpenStreetMap source (GitHub #683)
+        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 9}])
         bl = next(p for p in cd.provenance if p["id"] == "overture:buildings")
         self.assertIn({"dataset": "Microsoft ML Buildings", "license": "ODbL-1.0", "features": 1}, bl["datasets"])
         wc = next(p for p in cd.provenance if p["id"] == "esa-worldcover")

@@ -32,12 +32,15 @@ local rx = framing.newReassembler()
 local outQueue = {}          -- encoded frames waiting to be sent
 local outPos = 1             -- next byte of outQueue[1] to send
 local events = {}
+local profiling = false
+local profile = { receivedBytes = 0, sentBytes = 0, errors = 0, connectionAttempts = 0 }
 local attempts = 0           -- connection attempts since the last successful connection
 local everConnected = false
 
 M.lastError = nil
 
 local function closeSocket(err)
+  if profiling and err and err ~= 'closed' then profile.errors = profile.errors + 1 end
   if sock then pcall(sock.close, sock) end
   local wasConnected = state == 'connected'
   sock, state, timer = nil, 'disconnected', 0
@@ -48,6 +51,7 @@ local function closeSocket(err)
 end
 
 local function startConnect()
+  if profiling then profile.connectionAttempts = profile.connectionAttempts + 1 end
   attempts = attempts + 1
   socket = socket or require('socket')
   sock = socket.tcp()
@@ -89,6 +93,7 @@ local function flush()
   while sock and outQueue[1] do
     local data = outQueue[1]
     local last, err, partialLast = sock:send(data, outPos)
+    if profiling then profile.sentBytes = profile.sentBytes + math.max(0, (last or partialLast or (outPos - 1)) - outPos + 1) end
     if last then
       table.remove(outQueue, 1)
       outPos = 1
@@ -106,6 +111,7 @@ local function receive(out)
   local closeErr = nil
   for _ = 1, MAX_RECV_PER_FRAME do
     local data, err, partial = sock:receive(RECV_CHUNK)
+    if profiling then profile.receivedBytes = profile.receivedBytes + #(data or partial or "") end
     rx:feed(data or partial)
     -- 'timeout' = drained for this frame. Anything else ('closed', 'connection reset by
     -- peer', ...) is fatal; luasocket keeps returning it, so the socket must be closed.
@@ -154,6 +160,18 @@ function M.send(msg)
   outQueue[#outQueue + 1] = framing.encode(jsonEncode(msg))
   flush()
   return true
+end
+
+function M.setProfiling(on)
+  on = on == true
+  if on ~= profiling then profile = { receivedBytes = 0, sentBytes = 0, errors = 0, connectionAttempts = 0 } end
+  profiling = on
+end
+
+function M.profileState()
+  local out = { state = state, endpoint = M.HOST .. ":" .. tostring(M.PORT), enabled = profiling }
+  for k, v in pairs(profile) do out[k] = v end
+  return out
 end
 
 function M.state() return state end

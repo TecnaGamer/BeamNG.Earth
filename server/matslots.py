@@ -68,9 +68,16 @@ class MatSlots:
         with self.lock:
             n = self.slot.get(ck)
             if n is None:
-                if self.free:
-                    n = self.free.pop()
-                else:
+                while self.free:
+                    candidate = self.free.pop()
+                    # A reconnect's hello can restore a game hold after this
+                    # slot entered free. Recheck before handing its shape out.
+                    if self.held(candidate):
+                        self.waiting.add(candidate)
+                    else:
+                        n = candidate
+                        break
+                if n is None:
                     n = self.made
                     self.made += 1
                 self.slot[ck] = n

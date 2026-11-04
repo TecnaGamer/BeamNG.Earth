@@ -7,6 +7,10 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+-- (the v1.3.1 block, 1024² at 2 m: these checks are written for it; the 1 m default: test_lattice / test_follow)
+require('beamngEarth/lattice').configure(1024, 2.0)
+require('beamngEarth/follow').configure()
+require('beamngEarth/rebase').configure(2048)
 local farfield = require('beamngEarth/farfield')
 farfield.SPARE_MAX = 0 -- these tests check the delete pipeline; the spare pool is test_farfield_spares.lua
 local governor = require('beamngEarth/governor')

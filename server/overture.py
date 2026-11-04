@@ -16,13 +16,16 @@ Layers (LAYERS: name -> theme, type, columns): roads (transportation/segment: cl
 surface / flags / width / level / speed / subclass rules along the segment, connector ids with
 their position), connectors (transportation/connector), buildings (buildings/building: height,
 min_height, floors, roof and facade fields, class), water and land_use (base: subtype, class,
-tags), infrastructure (base: power lines and plants, towers, barriers, bridges...). Rows are
+tags), infrastructure (base: power lines and plants, towers, barriers, bridges...), places (points of interest),
+divisions and division_areas (the status bar's towns, states and countries, placenames.py: a spec with "geometry":
+False reads no geometry column, its features are points at their bbox centres; "where" filters the rows). Rows are
 deduplicated by id (highest version) and sorted by id, so a cell's content does not depend on
 which file or row group a feature came from, or in which order they were read. Water and land-use
 polygons are clipped to the cell (an ocean or a national park would otherwise repeat its whole
 outline in every cell); everything else is whole (a building or road segment that crosses the
 cell edge is listed in every cell it touches, `own` marks the one cell that owns it).
 """
+import hashlib
 import json
 import logging
 import os
@@ -30,13 +33,14 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
 import mapgeom as mg
 import netfetch
 import rangeread
+import xproc
 import staging
 
 log = logging.getLogger("earthd.mapdata")
@@ -51,6 +55,11 @@ REMOTE_FILES = 32               # open RemoteFiles kept (their blocks share rang
 # DuckDB's own prefetching reads whole row groups one after the other; Reader._plan fetches what the
 # query needs in parallel first, so DuckDB reads lazily from the block cache
 PARQUET_CONFIG = {"disable_parquet_prefetching": True}
+RG_DIR = "rows"                 # the row groups' local copies (Reader._local_rows), beside a file's blocks
+RG_ROWS = 2048                  # rows a row group of a local copy: a cell's bbox filter skips the others by their stats
+RG_WAIT_S = 60.0                # a copy another process makes is waited for this long
+META_FILE = "rowgroups.json"     # a file's parsed row groups, beside its cached blocks (_meta_load)
+BOX_ROWS = 2_000_000           # row groups' bbox rows kept per Reader (_plan: ~16 B a row as float32)
 FETCH_THREADS = 8               # parallel range requests per Reader (Overture's hosts allow 8 at once each)
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
 MERGE_GAP = 64 * 1024           # column chunks closer than this are fetched in one range
@@ -88,11 +97,18 @@ THEME_LICENCES = {
 }
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
+# A road's own source: the one for the whole feature (property ""). A road in a route relation lists the relation
+# first (property "/routes") and its way after it, and the relation's id gave osmtags.join no way: the bridge of
+# Järveküla - Jüri (Estonia) took a one-lane slip road's tags by name, 12 % of the drivable segments round Tallinn's
+# ring road and 5 % of Baltimore's came from a relation (GitHub #683).
+_OWN = "coalesce(list_filter(sources, lambda s: coalesce(s.property, '') = '')[1], sources[1])"
+_SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
+DIVISION_LANGS = ("en", "de", "fr", "it")
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
-                  cols=f"subtype, class, subclass, {_NAME}, {_SRC}",
+                  cols=f"subtype, class, subclass, {_NAME}, {_SRC_OWN}",
                   text=("subtype", "class", "subclass", "name", "src_dataset", "src_record"),
                   extra="road_flags, rail_flags, speed_limits, connectors, road_surface, width_rules, level_rules, "
                         "subclass_rules, access_restrictions",
@@ -144,6 +160,26 @@ LAYERS = {
                    text=("basic_category", "taxonomy", "brand_wikidata", "brand_name", "name", "src_dataset",
                          "src_record", "operating_status"),
                    float=("confidence",)),
+    # the status bar's town, state and country (placenames.py, GitHub #602: no outside geocoder): the towns'
+    # points (no geometry read: the bbox centre is the point) with their names in DIVISION_LANGS (names.common:
+    # geocode.LANG_OF_COUNTRY's languages and English), and the states' and countries' names (their areas' rows: the
+    # geometry, ~10 MB a row group, never read, only the bbox)
+    "divisions": dict(theme="divisions", type="division", clip=False, geometry=False,
+                      cols=f"subtype, class, country, region, population, {_NAME}, "
+                           + ", ".join(f"names.common['{lang}'] AS name_{lang}" for lang in DIVISION_LANGS)
+                           + f", {_SRC}",
+                      where="subtype IN ('locality', 'localadmin')",
+                      text=("subtype", "class", "country", "region", "name")
+                           + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
+                      float=("population",)),
+    "division_areas": dict(theme="divisions", type="division_area", clip=False, geometry=False,
+                           cols=f"subtype, country, region, division_id, {_NAME}, "
+                                + ", ".join(f"names.common['{lang}'] AS name_{lang}" for lang in DIVISION_LANGS)
+                                + f", bbox.xmin AS x0, bbox.ymin AS y0, bbox.xmax AS x1, bbox.ymax AS y1, {_SRC}",
+                           where="subtype IN ('country', 'dependency', 'region')",
+                           text=("subtype", "country", "region", "division_id", "name")
+                                + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
+                           float=("x0", "y0", "x1", "y1")),
 }
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
@@ -241,6 +277,8 @@ class StacIndex:
                              os.path.join(self._dir(theme, typ), "collection.json"), kind)
             items = [link["href"] for link in raw["links"] if link.get("rel") == "item"]
             bboxes = raw["extent"]["spatial"]["bbox"][1:]
+            if len(items) == 1 and not bboxes:  # (one file: the collection's extent is its box; divisions/division)
+                bboxes = raw["extent"]["spatial"]["bbox"][:1]
             if len(items) != len(bboxes):
                 raise OvertureError(f"STAC {theme}/{typ}: {len(items)} items but {len(bboxes)} file boxes")
             c = {"items": items, "bboxes": bboxes, "license": raw.get("license")}
@@ -269,6 +307,17 @@ class StacIndex:
 META_FILES = 2048        # files whose parsed Parquet metadata Reader keeps (a few hundred row groups each)
 
 
+def _wkb(spec):
+    """The query's WKB column of a layer: its geometry, or none for a layer that reads no geometry (spec "geometry":
+    False: points at their bbox centre, the bbox alone read; the divisions' places and areas, placenames.py)."""
+    return "NULL::BLOB" if spec.get("geometry") is False else "ST_AsWKB(geometry)"
+
+
+def _q(path):
+    """A path in a DuckDB string literal."""
+    return str(path).replace("'", "''")
+
+
 class Reader:
     """Overture layers per cell (see the module docstring). threads: DuckDB threads per query."""
 
@@ -282,6 +331,8 @@ class Reader:
         # files never change). Re-reading it for every cell was most of a map cell's CPU (the Deck's mapdata-layer
         # thread, 36 CPU-s of a teleport, 2026-10-23); osmtags._groups keeps its file's the same way.
         self._meta = OrderedDict()
+        self._boxes = OrderedDict()     # (path, row group) -> its rows' bbox (x0, x1, y0, y1) arrays (_plan)
+        self._box_rows = 0
 
     def close(self):
         self.pool.shutdown(wait=False)
@@ -298,6 +349,48 @@ class Reader:
                     self._remotes.popitem(last=False)
             self._remotes.move_to_end(key)
             return r
+
+    @staticmethod
+    def _meta_load(remote):
+        """A file's parsed row groups kept beside its blocks (_meta_save), or None. (0.15 s a file in each of the
+        server's processes, ~10-20 files a new place's layers.)"""
+        try:
+            with open(os.path.join(remote.cache_dir, META_FILE), encoding="utf-8") as f:
+                return {int(rg): {"first": g["first"], "n": g["n"],
+                                  "bbox": {k: tuple(v) for k, v in g["bbox"].items()},
+                                  "cols": {k: [tuple(r) for r in v] for k, v in g["cols"].items()}}
+                        for rg, g in json.load(f).items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    @staticmethod
+    def _meta_save(remote, pg):
+        try:
+            os.makedirs(remote.cache_dir, exist_ok=True)
+            path = os.path.join(remote.cache_dir, META_FILE)
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({str(rg): g for rg, g in pg.items()}, f)
+            os.replace(tmp, path)
+        except (OSError, TypeError, ValueError, AttributeError) as e:
+            log.debug("overture: row groups not saved: %s", e)
+
+    def _box_get(self, k):
+        with self._lock:
+            got = self._boxes.get(k)
+            if got is not None:
+                self._boxes.move_to_end(k)
+            return got
+
+    def _box_put(self, k, arrays):
+        with self._lock:
+            if k in self._boxes:
+                return
+            self._boxes[k] = arrays
+            self._box_rows += len(arrays[0])
+            while self._box_rows > BOX_ROWS and len(self._boxes) > 1:
+                _, old = self._boxes.popitem(last=False)
+                self._box_rows -= len(old[0])
 
     def _connect(self, files, kind):
         """A DuckDB connection whose filesystem serves `files` ({path: RemoteFile}) with `kind`."""
@@ -349,7 +442,7 @@ class Reader:
             if not rows:
                 return empty(layer), {}         # no row of these files lies in the cell
             t2 = time.perf_counter()
-            out = self._run(con, proto, paths, layer, spec, bounds, rows)
+            out = self._run(con, proto, paths, layer, spec, bounds, rows, files, kind)
             log.debug("mapdata %s %s: index %.2f s, plan %.2f s, query %.2f s", layer, cell, t1 - t0, t2 - t1,
                       time.perf_counter() - t2)
             return out
@@ -421,6 +514,12 @@ class Reader:
         uris = ", ".join(f"'{proto}://{p}'" for p in paths)
         with self._lock:
             new = [p for p in paths if p not in self._meta]
+        for p in list(new):             # parsed by another process or an earlier run (release files never change)
+            pg = self._meta_load(files[p])
+            if pg is not None:
+                with self._lock:
+                    self._meta[p] = pg
+                new.remove(p)
         if new:
             meta = con.execute(f"""SELECT file_name, row_group_id, row_group_num_rows, path_in_schema, stats_min,
                 stats_max, dictionary_page_offset, data_page_offset, total_compressed_size
@@ -443,6 +542,8 @@ class Reader:
                 g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
                 if top == "bbox":
                     g["bbox"][leaf] = (smin, smax)
+            for p in new:
+                self._meta_save(files[p], parsed.get(p, {}))
             with self._lock:
                 for p in new:
                     self._meta[p] = parsed.get(p, {})
@@ -469,27 +570,40 @@ class Reader:
         t1 = time.perf_counter()
         if not cand:
             return []
-        wanted = {}
-        for path, rg in cand:
-            wanted.setdefault(path, []).extend(groups[(path, rg)]["cols"].get("bbox", []))
-        self._fetch(files, wanted, kind)
-        bbox = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND "
-                f"bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}")
-        hits = con.execute(f"""SELECT DISTINCT filename, file_row_number FROM read_parquet([{uris}],
-            filename = true, file_row_number = true) WHERE {bbox}""").fetchall()
-        firsts = {}
-        for (path, rg), g in sorted(groups.items()):
-            firsts.setdefault(path, []).append((g["first"], rg))
-        rows_of = {}
-        for fname, row in hits:
-            rows_of.setdefault(fname, []).append(row)
+        # each row group's boxes decoded once (BOX_ROWS kept): a place's cells share their row groups (a fresh
+        # place's first block: 69 queries over 210 row groups of 19, 2026-10-30), and the bbox pass was ~13 s of its
+        # layer threads; compared in the column's own type, as DuckDB compares it
+        need = [k for k in cand if self._box_get(k) is None]
+        if need:
+            wanted = {}
+            for path, rg in need:
+                wanted.setdefault(path, []).extend(groups[(path, rg)]["cols"].get("bbox", []))
+            self._fetch(files, wanted, kind)
+            by_path = {}
+            for path, rg in need:
+                by_path.setdefault(path, []).append(rg)
+            for path, rgs in by_path.items():   # (a file at a time, by row number only: DuckDB skips the other row
+                # groups then; with the files' names in the filter it read every row group's boxes, block by block)
+                only = " OR ".join(f"file_row_number BETWEEN {groups[(path, rg)]['first']} AND "
+                                   f"{groups[(path, rg)]['first'] + groups[(path, rg)]['n'] - 1}" for rg in rgs)
+                got = con.execute(f"""SELECT file_row_number, bbox.xmin AS x0, bbox.xmax AS x1, bbox.ymin AS y0,
+                    bbox.ymax AS y1 FROM read_parquet('{proto}://{path}', file_row_number = true)
+                    WHERE {only}""").fetchnumpy()
+                fr = np.asarray(got["file_row_number"], np.int64)
+                cols = [np.ma.filled(np.ma.asarray(got[c]).astype(np.float64), np.nan).astype(np.asarray(got[c]).dtype)
+                        for c in ("x0", "x1", "y0", "y1")]
+                for rg in rgs:
+                    g = groups[(path, rg)]
+                    sel = (fr >= g["first"]) & (fr < g["first"] + g["n"])
+                    self._box_put((path, rg), tuple(c[sel] for c in cols))
         matched = set()
-        for fname, rows in rows_of.items():     # (each file's rows at once: one search per hit was ~0.1 s a cell)
-            path = fname.split("://", 1)[-1]
-            rgs = firsts[path]
-            ks = np.searchsorted(np.array([f for f, _ in rgs]), np.asarray(rows), side="right") - 1
-            matched.update((path, rgs[int(k)][1]) for k in np.unique(ks))
-        used = set(re.findall(r"[A-Za-z_]+", spec["cols"] + " " + spec.get("extra", ""))) | BASE_COLUMNS
+        for k in cand:
+            x0, x1, y0, y1 = self._box_get(k)
+            t = x0.dtype.type
+            if np.any((x0 <= t(lon1)) & (x1 >= t(lon0)) & (y0 <= t(lat1)) & (y1 >= t(lat0))):
+                matched.add(k)
+        used = set(re.findall(r"[A-Za-z_]+", " ".join((spec["cols"], spec.get("extra", ""), spec.get("where", "")))))
+        used |= BASE_COLUMNS - ({"geometry"} if spec.get("geometry") is False else set())
         wanted = {}
         for path, rg in sorted(matched):
             for top, chunks in groups[(path, rg)]["cols"].items():
@@ -507,7 +621,36 @@ class Reader:
             rows.append((f"{proto}://{path}", g["first"], g["first"] + g["n"] - 1))
         return rows
 
-    def _run(self, con, proto, paths, layer, spec, bounds, rows):
+    def _local_rows(self, con, layer, spec, rows, files, kind):
+        """Local copies of the row groups rows ([(uri, first row, last row)]): each one's columns the layer's query
+        reads, as one Parquet file beside the file's blocks (RG_DIR), made once (xproc: one process) and read by DuckDB
+        itself. A place's cells share their row groups (a fresh place's first block: 55 queries decoded 117 row groups
+        of 9 through the Python filesystem, 2026-10-30). Returns the files."""
+        extra = f", {spec['extra']}" if spec.get("extra") else ""
+        proj = (f"id, version, {spec['cols']}, {_wkb(spec)} AS wkb, (bbox.xmin + bbox.xmax) / 2 AS cx, "
+                f"(bbox.ymin + bbox.ymax) / 2 AS cy, sources{extra}, bbox")
+        tag = hashlib.sha1(proj.encode()).hexdigest()[:12]
+        out = []
+        for u, a, b in rows:
+            path = u.split("://", 1)[-1]
+            d = os.path.join(files[path].cache_dir, RG_DIR)
+            f = os.path.join(d, f"{layer}_{tag}_{int(a)}_{int(b)}.parquet")
+            if not os.path.exists(f):
+                got, mine = xproc.once(f + ".lock", lambda f=f: f if os.path.exists(f) else None, RG_WAIT_S, kind)
+                if got is None:
+                    try:
+                        os.makedirs(d, exist_ok=True)
+                        tmp = f"{f}.{os.getpid()}.{threading.get_ident()}.tmp"
+                        con.execute(f"""COPY (SELECT {proj} FROM read_parquet('{_q(u)}', file_row_number = true)
+                            WHERE file_row_number BETWEEN {int(a)} AND {int(b)}) TO '{_q(tmp)}' (FORMAT parquet, ROW_GROUP_SIZE {RG_ROWS})""")
+                        os.replace(tmp, f)
+                    finally:
+                        if mine:
+                            xproc.release(f + ".lock")
+            out.append(f)
+        return out
+
+    def _run(self, con, proto, paths, layer, spec, bounds, rows, files=None, kind="demand"):
         lon0, lat0, lon1, lat1 = bounds
         src = ("read_parquet([" + ", ".join(f"'{proto}://{p}'" for p in paths) + "], filename = true, "
                "file_row_number = true)")
@@ -517,14 +660,26 @@ class Reader:
         bbox = (f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND "
                 f"bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}")
         extra = f", {spec['extra']}" if spec.get("extra") else ""
+        where = f" AND ({spec['where']})" if spec.get("where") else ""
         # The scan first, the dedup (by id, highest version) and numbering from the copy: with the
         # window in the same statement DuckDB 1.5 stopped skipping row groups by their statistics and
         # read every row group of the file between the matches (12 MB more, 9 s, for a city cell).
-        con.execute(f"""CREATE TEMP TABLE s AS
-              SELECT id, version, {spec['cols']}, ST_AsWKB(geometry) AS wkb,
-                     (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
-                     sources{extra}
-              FROM {src} WHERE ({only}) AND {bbox}""")
+        local = None
+        if files is not None:
+            try:
+                local = self._local_rows(con, layer, spec, rows, files, kind)
+            except Exception as e:      # (a full disk, DuckDB's own errors: read from the files as before)
+                log.debug("mapdata %s: local row groups: %s: %s", layer, type(e).__name__, e)
+                local = None
+        if local:
+            con.execute(f"""CREATE TEMP TABLE s AS SELECT * EXCLUDE (bbox)
+                  FROM read_parquet([{", ".join(f"'{_q(f)}'" for f in local)}]) WHERE {bbox}{where}""")
+        else:
+            con.execute(f"""CREATE TEMP TABLE s AS
+                  SELECT id, version, {spec['cols']}, {_wkb(spec)} AS wkb,
+                         (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
+                         sources{extra}
+                  FROM {src} WHERE ({only}) AND {bbox}{where}""")
         con.execute("""CREATE TEMP TABLE t AS
             SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * FROM (
               SELECT * EXCLUDE (version) FROM s
@@ -533,7 +688,10 @@ class Reader:
         rows = con.execute(f"SELECT {', '.join(names)} FROM t ORDER BY fi").fetchall()
         at = {c: i for i, c in enumerate(names)}
         ids = mg.text_column([r[at["id"]] for r in rows])
-        geoms = [mg.parse_wkb(r[at["wkb"]]) for r in rows]
+        if spec.get("geometry") is False:     # (a point at the bbox centre: the geometry column is never read)
+            geoms = [(mg.POINT, [[np.array([[r[at["cx"]], r[at["cy"]]]], np.float64)]]) for r in rows]
+        else:
+            geoms = [mg.parse_wkb(r[at["wkb"]]) for r in rows]
         clipped = np.zeros(len(rows), bool)
         if spec["clip"]:
             keep = []

@@ -57,15 +57,41 @@ def version():
 
 # --- finding the BeamNG.drive user folder -------------------------------------------------------
 
-def _steam_roots():
+def homes():
+    """This user's home folders, ~ first. In a container with a home of its own inside the real one (distrobox
+    --home, Bazzite: ~ was /home/<user>/distrobox/ubuntu, GitHub #709) Steam and the game use the real one, which the
+    container still sees: the folders above ~ that hold a Steam or BeamNG folder come too."""
     home = os.path.expanduser("~")
-    roots = [
-        os.path.join(home, ".steam", "steam"),
-        os.path.join(home, ".steam", "root"),
-        os.path.join(home, ".local", "share", "Steam"),
-        os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),  # Flatpak
-        os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam"),
-    ]
+    out = [home]
+    marks = (os.path.join(".local", "share", "BeamNG"), os.path.join(".local", "share", "Steam"), ".steam",
+             os.path.join(".var", "app", "com.valvesoftware.Steam"))
+    p = os.path.abspath(home)
+    while True:
+        up = os.path.dirname(p)
+        if up == p:
+            break
+        p = up
+        if any(os.path.isdir(os.path.join(p, m)) for m in marks):
+            out.append(p)
+    seen, uniq = set(), []
+    for h in out:
+        key = os.path.realpath(h)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(h)
+    return uniq
+
+
+def _steam_roots():
+    roots = []
+    for home in homes():
+        roots += [
+            os.path.join(home, ".steam", "steam"),
+            os.path.join(home, ".steam", "root"),
+            os.path.join(home, ".local", "share", "Steam"),
+            os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),  # Flatpak
+            os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam"),
+        ]
     libs = []
     for r in roots:
         if not os.path.isdir(r):
@@ -94,18 +120,19 @@ def native_user_dirs():
     """Where the native Linux game keeps its user folder: ~/.local/share, or inside the Steam Flatpak's own home
     (~/.var/app/com.valvesoftware.Steam: the game there never sees ~/.local/share, a player's report 2026-10-17)
     or the Steam snap's. Default first; not checked for existence."""
-    home = os.path.expanduser("~")
     tail = ("BeamNG", "BeamNG.drive", "current")
-    return [os.path.join(home, ".local", "share", *tail),
-            os.path.join(home, ".var", "app", FLATPAK_STEAM, ".local", "share", *tail),
-            os.path.join(home, ".var", "app", FLATPAK_STEAM, "data", *tail),
-            os.path.join(home, "snap", "steam", "common", ".local", "share", *tail)]
+    out = []
+    for home in homes():
+        out += [os.path.join(home, ".local", "share", *tail),
+                os.path.join(home, ".var", "app", FLATPAK_STEAM, ".local", "share", *tail),
+                os.path.join(home, ".var", "app", FLATPAK_STEAM, "data", *tail),
+                os.path.join(home, "snap", "steam", "common", ".local", "share", *tail)]
+    return out
 
 
 def flatpak_steam():
     """Steam is the Flatpak (its data folder exists)."""
-    return os.path.isdir(os.path.join(os.path.expanduser("~"), ".var", "app", FLATPAK_STEAM, ".local", "share",
-                                      "Steam"))
+    return any(os.path.isdir(os.path.join(h, ".var", "app", FLATPAK_STEAM, ".local", "share", "Steam")) for h in homes())
 
 
 def candidate_user_dirs():
@@ -129,6 +156,15 @@ def candidate_user_dirs():
         if os.path.isdir(c) and key not in seen:
             seen.add(key)
             out.append(c)
+    if not IS_WIN and len(out) > 1:
+        # (the folder the game ran from last first: its beamng.log is the newest. A folder only this app made, in a
+        # container's own home the game never sees, has none: GitHub #709. Same age: the order above)
+        def ran(d):
+            try:
+                return os.path.getmtime(os.path.join(d, "beamng.log"))
+            except OSError:
+                return -1.0
+        out.sort(key=ran, reverse=True)
     return out
 
 

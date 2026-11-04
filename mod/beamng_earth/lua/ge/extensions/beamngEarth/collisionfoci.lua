@@ -9,6 +9,8 @@
 -- and trees.lua make what lies near any focus solid, so overlapping circles are one island; islands() groups them
 -- (the terrain patches for islands off the terrain block, later).
 local M = {}
+local localplayers = require('beamngEarth/localplayers')
+local controlled = {}
 
 M.PLAYER_R = 320        -- m: another player's or a player-spawned car (roads.lua COLLIDE_M min, the active car's slow radius)
 M.TRAFFIC_R = 80        -- m: an AI traffic car
@@ -91,16 +93,27 @@ function M.isWalker(o)
   return ok and name == M.WALKER_JBEAM
 end
 
--- The game's vehicles as { id, x, y, kind }: AI traffic (gameplay_traffic), parked cars (gameplay_parking), the rest
--- 'player' (spawned by a player; in BeamMP another player's car is also a vehicle of this game).
+-- The game's vehicles as { id, x, y, kind, controlled }: a locally occupied car is a player even if traffic or
+-- parking still lists it. Traffic's full data also contains player cars; its AI list does not.
 function M.vehicles()
   local out = {}
   if not be or not be.getObjectCount then return out end
+  localplayers.snapshot(controlled)
   local traffic, parked = {}, {}
   local tr = rawget(_G, 'gameplay_traffic')
-  if tr and tr.getTrafficData then
+  local haveList = false
+  if tr and tr.getTrafficList then
+    local ok, d = pcall(tr.getTrafficList)
+    if ok and type(d) == 'table' then
+      for _, id in ipairs(d) do traffic[id] = true end
+      haveList = true
+    end
+  end
+  if not haveList and tr and tr.getTrafficData then
     local ok, d = pcall(tr.getTrafficData)
-    if ok and type(d) == 'table' then for id in pairs(d) do traffic[id] = true end end
+    if ok and type(d) == 'table' then
+      for id, t in pairs(d) do if type(t) ~= 'table' or t.isAi ~= false then traffic[id] = true end end
+    end
   end
   local pk = rawget(_G, 'gameplay_parking')
   if pk and pk.getParkedCarsList then
@@ -115,7 +128,9 @@ function M.vehicles()
     if o and o.getPosition and not (floats and floats(o:getId())) and not M.isWalker(o) then
       local id = o:getId()
       local p = o:getPosition()
-      out[#out + 1] = { id = id, x = p.x, y = p.y, kind = traffic[id] and 'traffic' or parked[id] and 'parked' or 'player' }
+      local occupied = localplayers.controlled(id, o, controlled)
+      out[#out + 1] = { id = id, x = p.x, y = p.y, controlled = occupied,
+        kind = occupied and 'player' or traffic[id] and 'traffic' or parked[id] and 'parked' or 'player' }
     end
   end
   return out
