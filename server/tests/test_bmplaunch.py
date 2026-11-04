@@ -317,7 +317,8 @@ class ProcessCleanup(unittest.TestCase):
         child = mock.Mock()
         child.poll.return_value = None
         child.wait.side_effect = [subprocess.TimeoutExpired("fixture", 10), 0]
-        bmplaunch.stop(child)
+        with mock.patch.object(bmplaunch, "IS_WIN", False):     # (Windows ends the tree: StopTiedTest)
+            bmplaunch.stop(child)
         child.terminate.assert_called_once_with()
         child.kill.assert_called_once_with()
         self.assertEqual(child.wait.call_args_list, [mock.call(timeout=10), mock.call(timeout=5)])

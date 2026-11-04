@@ -364,6 +364,9 @@ do
   T.check(m.status().cars == m.MAX_CARS and m.status().planes == m.MAX_CARS * 2,
     'High restores the surrounding population without exceeding the global cap')
   hour = 4
+  -- (the work limit on a deterministic clock: on a slow CI runner the real one let fewer than 100 cars in, 2026-11-04)
+  local realClock2, workClock2 = os.clockhp, 0
+  os.clockhp = function() workClock2 = workClock2 + 0.00001; return workClock2 end
   frames(180, nil, false)
   local seen = snapshot(function() return true end)
   local born, abrupt = 0, 0
@@ -380,7 +383,9 @@ do
       end
     end
   end
-  T.check(born > 100 and abrupt == 0, 'a genuine density increase fades new cars, not ' .. abrupt .. ' immediate bright planes')
+  os.clockhp = realClock2
+  T.check(born > 100 and abrupt == 0, 'a genuine density increase fades new cars, not ' .. abrupt ..
+    ' immediate bright planes (' .. born .. ' born)')
   m.reset()
 end
 do
