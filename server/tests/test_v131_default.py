@@ -58,6 +58,7 @@ def compute(server_dir):
     sys.path.insert(0, str(server_dir))
     import earthd
     import farfield as ff
+    import cdae
     import geodesy as g
     import heightmap
     out = {}
@@ -103,7 +104,10 @@ def compute(server_dir):
                                  ("cdae", {}), ("dae", {})):
                     p = os.path.join(tmp, "t." + name.split("_")[0])
                     ff.write_built(p, b, name.split("_")[0], **kw)
-                    rec[name + "_bytes"] = os.path.getsize(p)
+                    with open(p, "rb") as fh:       # (the plain shape: they are written compressed, cdae.PACKED)
+                        data = fh.read()
+                    plain = getattr(cdae, "plain", lambda d: d)     # (an older tree: written plain)
+                    rec[name + "_bytes"] = len(plain(data)) if p.endswith(".cdae") else len(data)
                 geo[t.key] = rec
             out["tiles"] = geo
             par, kids = ff.Tile(2, 0, 0), [ff.Tile(1, i, j) for i in (0, 1) for j in (0, 1)]
