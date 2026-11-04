@@ -242,7 +242,7 @@ class BaseRoutingTest(unittest.TestCase):
         im = SimpleNamespace(chain=[SimpleNamespace(name="eox")], _fin_sigs={}, _fin_sig=lambda src: "sig1")
         tries = []
 
-        def base_in(anchor, cx, cy, pool, photo, fin):
+        def base_in(anchor, cx, cy, pool, photo, fin, rev=0):
             tries.append(fin)
             return None if fin and fail[0] else "p.png"
         s = SimpleNamespace(imagery=im, deshadow=object(), colormatch=None, _base_in=base_in)

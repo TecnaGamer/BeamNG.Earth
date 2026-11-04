@@ -2906,7 +2906,7 @@ class Server:
                 name = self.write_base(anchor, cx, cy, photo=photo, quick=quick)
         return name, photo, time.perf_counter() - t1
 
-    def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False):
+    def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False, rev=0):
         """write_base in a block process (blockworker.base_photo): the file name, or None when it lacked an imagery
         tile on disk or failed (then rendered here). With the imagery analyses on, from this process's finished tiles
         on disk (tex["fin"], Imagery.finished_only: as write_base here would render it); one not finished yet fails
@@ -2916,15 +2916,15 @@ class Server:
         im = self.imagery
         if self.deshadow is not None or self.colormatch is not None:
             name = self._base_in(anchor, cx, cy, pool, photo,
-                                 {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain})
+                                 {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}, rev)
             if name is not None or not plain:
                 return name
-        return self._base_in(anchor, cx, cy, pool, photo, None)
+        return self._base_in(anchor, cx, cy, pool, photo, None, rev)
 
-    def _base_in(self, anchor, cx, cy, pool, photo, fin):
+    def _base_in(self, anchor, cx, cy, pool, photo, fin, rev=0):
         size = self.layout.block * heightmap.SQUARE
         key = (anchor.id, cx, cy)
-        name = self.base_name(key)
+        name = self.base_name(key, rev)
         im = self.imagery
         tex = {"chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                "season_mode": im.season_mode}
@@ -6178,8 +6178,16 @@ class Connection:
         async def run():
             try:
                 pool = s.block_pools[LANE_PREFETCH][0] if s.block_pools else None     # its BC7 encode
-                name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
-                                                       next(s.base_rev))
+                rev = next(s.base_rev)
+                name = None
+                if pool is not None:
+                    # (in the block process: from the finished tiles with the analyses on; they were all rendered
+                    # here, 121 of a warm 8 min drive at 150 mph, beside the event loop, 2026-11-04)
+                    name = await self.loop.run_in_executor(s.hm_pool, s._base_elsewhere, anchor, key[1], key[2],
+                                                           pool, [], False, rev)
+                if name is None:
+                    name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
+                                                           rev)
                 info = s.hm.get(key)
                 if name is None or info is None:
                     return
