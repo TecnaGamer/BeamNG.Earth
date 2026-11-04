@@ -247,6 +247,8 @@ def _read_warm(warm_q):
                 aid, lat, lon, keys = warm_q.get_nowait()
         except queue.Empty:
             pass
+        if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
+            continue
         g, _ = _s.anchor(aid, lat, lon)
         if g is None:
             continue

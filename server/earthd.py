@@ -6912,6 +6912,10 @@ async def main_async(args):
         ctx = multiprocessing.get_context("spawn")
         for _ in (LANE_REQUEST, LANE_PREFETCH):
             warm_q = ctx.Queue(maxsize=64)
+            # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for the
+            # new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
+            # (2026-11-04; blockworker._read_warm skips the empty list)
+            warm_q.put_nowait((None, 0.0, 0.0, []))
             block_pools.append((poolsmod.RespawningPool(
                 "block", 1, mp_context=ctx, initializer=blockworker.init,
                 initargs=(args.cache_dir, args.offline, args.roads == "on",
