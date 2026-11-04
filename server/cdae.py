@@ -598,9 +598,26 @@ PACKED = os.environ.get("BNGE_CDAE_PLAIN") != "1"
 PACK_NATIVE = 145
 
 
+def pack(data):
+    """A shape file's bytes as written (compressed with PACKED; one compressed already as it is)."""
+    if not PACKED:
+        return data
+    fast.require(PACK_NATIVE, "compressed shapes (cdae_pack)")
+    return fast._ef.cdae_pack(bytes(data))
+
+
+def is_packed(data):
+    """Is this shape file's body compressed? (False for anything that is not a shape file.)"""
+    try:
+        h, _ = unpack_one(data, 8)
+    except Exception:
+        return False
+    return isinstance(h, dict) and bool(h.get("compression"))
+
+
 def plain(data):
-    """A shape file's bytes with a plain body (one compressed or not)."""
-    if not data[8:9] or not data[8] & 0x80:
+    """A shape file's bytes with a plain body (one compressed or not; anything else as it is)."""
+    if not is_packed(data):
         return data
     fast.require(PACK_NATIVE, "compressed shapes (cdae_unpack)")
     return fast._ef.cdae_unpack(bytes(data))

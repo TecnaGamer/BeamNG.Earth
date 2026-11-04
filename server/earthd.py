@@ -4147,6 +4147,9 @@ class Server:
         try:
             with open(src, "rb") as fh:
                 data = fh.read()
+            packed = pooled and cdae.is_packed(data)
+            if packed:                  # (a compressed shape: the names are inside its body; written back so)
+                data = cdae.plain(data)
             # the name in the tile's own file: the one it was built with, not info.material once it was renamed before
             # (a global far tile kept across rebases is renamed again and again: restamping info.material failed from
             # its second rename on, and the tile was sent with a name another tile had, drawing that tile's texture:
@@ -4156,6 +4159,8 @@ class Server:
                 raise ValueError(f"no pooled name in {os.path.basename(src)}")
             if new != have:
                 data = matslotsmod.restamp(data, have, new)
+            if packed:
+                data = cdae.pack(data)
             dst = os.path.join(self.out_dir, name)
             tmp = staging.tmp_for(dst)
             with open(tmp, "wb") as fh:
