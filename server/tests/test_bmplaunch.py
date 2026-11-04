@@ -339,5 +339,41 @@ class ProcessCleanup(unittest.TestCase):
             self.assertFalse(bmplaunch.wait_ready(child, timeout=1))
 
 
+
+class StopTiedTest(unittest.TestCase):
+    """GitHub #727: BeamMP's launcher kept running after BeamNG.Earth closed. Windows: stopped with its process tree
+    (taskkill /T), and tied to the app by a job object; a job that can't be made never stops the start."""
+
+    def test_windows_stop_kills_the_tree(self):
+        proc = mock.Mock(pid=4242)
+        proc.poll.return_value = None
+        with mock.patch.object(bmplaunch, "IS_WIN", True), mock.patch.object(bmplaunch.subprocess, "run") as run:
+            bmplaunch.stop(proc)
+        self.assertEqual(run.call_args[0][0], ["taskkill", "/T", "/F", "/PID", "4242"])
+        proc.terminate.assert_not_called()
+        proc.wait.assert_called()
+
+    def test_other_systems_terminate(self):
+        proc = mock.Mock(pid=4242)
+        proc.poll.return_value = None
+        with mock.patch.object(bmplaunch, "IS_WIN", False), mock.patch.object(bmplaunch.subprocess, "run") as run:
+            bmplaunch.stop(proc)
+        run.assert_not_called()
+        proc.terminate.assert_called_once()
+
+    def test_tie_without_windows_is_false(self):
+        if os.name == "nt":
+            self.skipTest("Windows: the real job object")
+        self.assertFalse(bmplaunch.tie_to_app(mock.Mock(pid=1)))      # (no kernel32: never raises)
+
+    def test_start_ties_on_windows(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(bmplaunch, "IS_WIN", True), \
+                mock.patch.object(bmplaunch.subprocess, "Popen") as popen, \
+                mock.patch.object(bmplaunch, "tie_to_app") as tie, \
+                mock.patch.object(bmplaunch.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
+            p = bmplaunch.start(os.path.join(d, "BeamMP-Launcher.exe"), d, os.path.join(d, "logs", "l.log"))
+        tie.assert_called_once_with(popen.return_value)
+        self.assertIs(p, popen.return_value)
+
 if __name__ == "__main__":
     unittest.main()
