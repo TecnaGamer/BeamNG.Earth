@@ -30,8 +30,8 @@ class LayoutTest(unittest.TestCase):
         at=sm.town_layout('Pöllau',ei.town_style('AT'))
         pl=sm.town_layout('Obiecanowo',ei.town_style('PL'))
         self.assertAlmostEqual(fr.height,.43)
-        self.assertGreaterEqual(de.height,.75)
-        self.assertLessEqual(de.width/de.height,2.5)
+        self.assertAlmostEqual(de.height,.60)
+        self.assertAlmostEqual(de.width,.90)
         self.assertGreaterEqual(at.width,.96);self.assertGreaterEqual(at.height,.63)
         self.assertAlmostEqual(pl.height,.53)
         self.assertGreater(fr.width/fr.height,de.width/de.height)
@@ -53,7 +53,24 @@ class LayoutTest(unittest.TestCase):
                     self.assertLessEqual(ink[:,2].max(),plan.top-inset)
                     rows=[line.text for line in plan.lines if line.role=='name']
                     self.assertEqual(''.join(rows).replace(' ',''),sm.clean(name,style.uppercase).replace(' ',''))
-                    self.assertGreaterEqual(min(line.cap for line in plan.lines),plan.profile.cap*.78-1e-9)
+                    if country!='DE':
+                        self.assertGreaterEqual(min(line.cap for line in plan.lines),plan.profile.cap*.78-1e-9)
+
+    def test_german_fixed_plate_and_separate_open_tube_frame(self):
+        self.assertEqual([l.text for l in sm.town_layout('Hattingen',ei.town_style('DE'),('Ennepe-Ruhr-Kreis',)).lines],
+                         ['Hattingen','Ennepe-Ruhr-Kreis'])
+        for name in ('Ulm','Hattingen','Giebelstadt','Bad Homburg vor der Höhe','A'*150):
+            for details in ((),('Gemeinde Hohenhameln','Landkreis Peine')):
+                plan=sm.town_layout(name,ei.town_style('DE'),details)
+                self.assertEqual((plan.width,plan.height),(.9,.6))
+                m=sm.Mesh();m.german_frame(.9,.6,plan.centre)
+                p=np.asarray(m.p);t=np.asarray(m.t)
+                normals=np.cross(p[t[:,1]]-p[t[:,0]],p[t[:,2]]-p[t[:,0]])
+                self.assertTrue((np.linalg.norm(normals,axis=1)>1e-10).all())
+                self.assertTrue((normals[:,1]<0).any() and (normals[:,1]>0).any())
+                # Tubular silhouette extends outside the plate, leaving real air.
+                self.assertGreater(p[:,0].max(),.5)
+                self.assertFalse(((abs(p[:,0])<.30)&(abs(p[:,2]-plan.centre)<.2)).any())
 
     def test_admin_lines_are_smaller_and_supplied_only(self):
         style=ei.town_style('DE')

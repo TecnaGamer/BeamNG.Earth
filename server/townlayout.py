@@ -6,7 +6,7 @@ anchor the families. No municipal name, translation, crest or speed is invented.
 from dataclasses import dataclass,replace
 import re
 
-VERSION='town-layout-2026-11-v2-l1'
+VERSION='town-layout-2026-11-v3-de-frame'
 
 @dataclass(frozen=True)
 class Profile:
@@ -29,7 +29,8 @@ class Profile:
     family:str='continental-name'
 
 FR=Profile('l1',.80,4.6,.43,.21,.12,.095,.018,.032,.045,8.,family='FR-EB10')
-DE=Profile('din',1.05,2.8,.75,.235,.14,.11,.022,.018,.065,2.50,family='DE-310')
+DE_LEGACY=Profile('din',1.05,2.8,.75,.235,.14,.11,.022,.018,.065,2.50,family='DE-310')
+DE=Profile('din',.90,.90,.60,.16,.065,.065,.012,.010,.035,1.50,family='DE-310')
 AT=Profile('din',.96,2.8,.63,.205,.14,.12,.018,.025,.025,3.25,family='AT-17a')
 NL=Profile('transport',1.15,3.8,.62,.235,.13,.11,.018,.018,.045,5.,family='NL-H1')
 BE=Profile('condensed',1.00,2.7,1.05,.265,.11,.09,.020,.020,.065,3.,family='BE-F1')
@@ -56,7 +57,7 @@ for codes,p in [
  ('ES',replace(CZ,font='ccrige',cap=.215,family='ES-S500')),
  ('PT',replace(UK,font='transport',family='PT-N1a')),
  ('HU',replace(CZ,cap=.235,family='HU-lakott-terulet')),
- ('LU',replace(DE,height=.66,max_width=3.8,max_ratio=5.,family='LU-E9')),
+ ('LU',replace(DE_LEGACY,height=.66,max_width=3.8,max_ratio=5.,family='LU-E9')),
  ('AD',replace(FR,font='din',tracking=.05,family='AD-locality')),
  ('AL AZ',replace(NORDIC,family='blue-locality')),
  ('BG',replace(CZ,family='BG-locality')),
@@ -113,6 +114,8 @@ def _wrap(text,width,measure):
 def compose(name,style,measure,details=()):
     country=getattr(style,'country','')or'FR'
     p=PROFILES.get(country,FR)
+    if country=='DE':
+        return _compose_de(name,p,measure,details)
     skyline=bool(getattr(style,'skyline',False))
     def width(s,key=p.font):return measure(s,key,p.letter_scale,p.tracking)[0]
     cap=p.cap
@@ -150,3 +153,32 @@ def compose(name,style,measure,details=()):
             lines.append(Line(row,p.font,ah,cursor-ah/2,p.letter_scale,None,'admin'))
             cursor-=admin_h
     return Layout(country,p,w,h,centre,tuple(lines),skyline,header)
+
+
+def _compose_de(name,p,measure,details):
+    """900 x 600 mm face: fit lettering, never stretch the plate or glyphs.
+
+    Administrative labels are displayed only when explicitly supplied. This
+    is a scenery layout, not an implementation of the full DIN lettering rules.
+    """
+    secondary=[s.strip() for s in details if isinstance(s,str) and s.strip()][:2]
+    available=p.max_width-2*p.pad_x
+    # Keep ordinary names on one line before wrapping genuinely long names.
+    natural=measure(name,p.font,1.,None)[0]
+    cap=max(.085,min(p.cap,available*.995/max(natural,.01)))
+    for _ in range(100):
+        rows=_wrap(name,available/cap,lambda s:measure(s,p.font,1.,None)[0])
+        main_h=[max(1.,measure(s,p.font,1.,None)[1])*cap for s in rows]
+        admin_caps=[min(cap*.53,available/max(measure(s,p.font,1.,None)[0],.01)) for s in secondary]
+        admin_h=[max(1.,measure(s,p.font,1.,None)[1])*c for s,c in zip(secondary,admin_caps)]
+        total=sum(main_h)+max(0,len(rows)-1)*cap*.22+sum(admin_h)+len(secondary)*.025
+        if total<=p.height-2*p.pad_y:break
+        cap*=.94
+    centre=p.bottom+p.height/2;cursor=centre+total/2;lines=[]
+    for row,rh in zip(rows,main_h):
+        lines.append(Line(row,p.font,cap,cursor-rh/2));cursor-=rh+cap*.22
+    cursor+=cap*.22
+    for row,ah,rh in zip(secondary,admin_caps,admin_h):
+        cursor-=.025
+        lines.append(Line(row,p.font,ah,cursor-rh/2,role='admin'));cursor-=rh
+    return Layout('DE',p,.90,.60,centre,tuple(lines))

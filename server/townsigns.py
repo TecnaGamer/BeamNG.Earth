@@ -145,7 +145,7 @@ def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,
         raw_details=s.get('admin_lines')
         details=tuple(signmesh.clean(x,False) for x in raw_details if isinstance(x,str))[:2] if isinstance(raw_details,(tuple,list)) else ()
         plan=signmesh.town_layout(display_name,style,details)
-        width=plan.width
+        width=plan.width+(.13 if country=='DE' else 0.)
         shoulder=right*(-1 if s.get('kind')=='end' else 1)*(-1 if country in europeinfra.LEFT_HAND else 1)
         # Mapped on-road node: move to the driver's right shoulder. An off-road
         # sign retains its mapped position if it already clears all carriageways.
@@ -175,6 +175,7 @@ def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,
         for side in ((-1,1) if w>2.4 else (0,)):
             q=p.copy();q[:2]+=right*side*w*.30
             h=plan.top-.03
+            if country=='DE':h=plan.top+.06
             if country=='FR' and signmesh.valid_route(s.get('ref','')):h=plan.top+.28
             posts.append(['fr_signpost',round(q[0],3),round(q[1],3),round(q[2],3),
                           round(math.degrees(math.atan2(right[1],right[0])),2),1.,h,0.])

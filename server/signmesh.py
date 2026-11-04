@@ -128,6 +128,32 @@ class Mesh:
         self.face(METAL,front);self.face(METAL,list(reversed(back)))
         for i,a in enumerate(front):
             j=(i+1)%len(front);self.face(METAL,[a,back[i],back[j],front[j]])
+    def german_frame(self,w,h,z):
+        """Separate rounded steel tube, open gap and four face clamps.
+
+        26 mm tube and 25 mm clear gap are visual estimates from the reference,
+        not claimed national mounting dimensions. The yellow plate stays 900x600.
+        """
+        radius=.013;gap=.025;r=.070
+        hw=w/2+.0125+gap+radius;hh=h/2+.0125+gap+radius
+        rings=[]
+        for cx,cz,start in ((hw-r,z-hh+r,-90),(hw-r,z+hh-r,0),(-hw+r,z+hh-r,90),(-hw+r,z-hh+r,180)):
+            for angle in np.linspace(start,start+90,7):
+                a=math.radians(angle);out=np.array([math.cos(a),0.,math.sin(a)])
+                c=np.array([cx+r*math.cos(a),0.,cz+r*math.sin(a)])
+                rings.append([c+radius*(math.cos(b)*out+np.array([0.,math.sin(b),0.]))
+                              for b in np.linspace(0,2*math.pi,8,endpoint=False)])
+        for i,ring in enumerate(rings):
+            following=rings[(i+1)%len(rings)]
+            for j in range(8):
+                k=(j+1)%8
+                self.face(METAL,[ring[j],ring[k],following[k],following[j]])
+        for x in (-w*.36,w*.36):
+            for side in (-1,1):
+                cz=z+side*(h/2+.012)
+                self.box(METAL,(x,-.043,cz),(.012,.009,.040))
+                self.box(BLACK,(x,-.053,cz-side*.020),(.004,.002,.004))
+
     def text(self,text,z,y,height,max_width,white=False,uppercase=True,x_offset=0,
              font_key=None,scale=1.,tracking=None,centre_ink=False):
         text=clean(text,uppercase);f=face_font(font_key);stretch=f['horizontal_scale']*scale
@@ -228,6 +254,7 @@ class Mesh:
         style=style or europeinfra.town_style('FR');plan=town_layout(name,style,details)
         self.transform(position,into)
         self.panel_body(plan.width+.025,plan.height+.025,plan.centre,plan.profile.radius+.01)
+        if plan.country=='DE':self.german_frame(plan.width,plan.height,plan.centre)
         if kind in ('both','begin'):self._town_face(name,style,False,route,details)
         if kind in ('both','end')and style.exit!='none':
             self.transform(position,-np.asarray(into))
