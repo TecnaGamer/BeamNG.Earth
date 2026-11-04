@@ -345,6 +345,7 @@ HM_THREADS = 4
 HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they wait on its block process)
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
 FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40, 10, 0.3, 5   # (fin_worker_worth)
+FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
@@ -3447,6 +3448,8 @@ class Server:
         on disk)? While most recent tries found them (a place seen before) yes; on a first visit (none finished yet:
         the try fails and the texture is rendered here after the geometry, not beside it) only every
         FIN_WORKER_PROBE-th tile, to notice when they are there."""
+        if not FIN_WORKER:
+            return False
         h = self.fin_worker_hits
         self.fin_worker_tries += 1
         if len(h) < FIN_WORKER_MIN_TRIES:
