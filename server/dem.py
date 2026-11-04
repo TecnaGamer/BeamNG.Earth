@@ -634,8 +634,9 @@ class Dem:
         return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}", str(z),
                             str(x), f"{y}.npy")
 
-    def _mirror_get(self, key):
-        """A tile from the decoded mirror (a read-only view of its memory map), or None."""
+    def _mirror_get(self, key, readback=False):
+        """A tile from the decoded mirror (a read-only view of its memory map), or None. readback: _mirror_put's
+        own read (not counted as a hit: dem:mirror counts the tiles another decode was saved for)."""
         if MIRROR_MB <= 0:
             return None
         path = self._mirror_path(key)
@@ -647,7 +648,8 @@ class Dem:
             return None
         if a.shape != (TILE, TILE) or a.dtype != np.float32:
             return None
-        self._count("dem:mirror")
+        if not readback:
+            self._count("dem:mirror")
         return a
 
     def _mirror_put(self, key, a):
@@ -666,6 +668,7 @@ class Dem:
             except OSError:
                 pass
             return None
+        self._count("dem:mirror_put")
         with Dem._mirror_lock:
             Dem._mirror_written += TILE * TILE * 4
             # (and at most every MIRROR_PRUNE_S: each prune walks the whole mirror, ~28k folders; a fresh place's
@@ -680,7 +683,7 @@ class Dem:
         import multiprocessing
         if prune and multiprocessing.current_process().name == "MainProcess":
             threading.Thread(target=self._mirror_prune, daemon=True, name="dem-mirror-prune").start()
-        return self._mirror_get(key)
+        return self._mirror_get(key, readback=True)
 
     # (a process's first write prunes: the count of a session's own writes alone never reached the threshold when
     # each run wrote less, and the mirror grew past MIRROR_MB across sessions: 6.3 GB on a Steam Deck, 2026-10-23)
