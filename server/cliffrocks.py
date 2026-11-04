@@ -6,7 +6,7 @@ both face area and footprint, so narrow coastal walls can qualify without lettin
 a single very tall DEM spike qualify.
 Unknown land cover fails closed. Visibility is controlled by in-game settings.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import logging
 import heapq
 import math
@@ -313,6 +313,7 @@ class Mesh:
     # Ephemeral build-only sampler; never serialized or sent to the engine.
     lod_ground: object = field(default=None, repr=False)
     uvs2: np.ndarray | None = None
+    lod_scale: float = 1.0  # projected piece radius / original tile radius
 
 
 def _surface_fade(h, touches, dx, dy):
@@ -863,4 +864,33 @@ def write(path, rock):
     return cdae.write(path, rock.positions, rock.tris, uvs=rock.uvs,
                       material=list(cliffmaterial.MATERIALS) if rock.tri_materials is not None else MATERIAL,
                       tri_materials=rock.tri_materials, colors=rock.colors, normals=rock.normals, object_name="cliff",
-                      split_meshes=True, lods=clifflod.levels(rock), uvs2=rock.uvs2, tangent_uvs=rock.uvs2)
+                      split_meshes=True, lods=[(px*rock.lod_scale, mesh) for px, mesh in clifflod.levels(rock)
+                            if px*rock.lod_scale > cdae.LOD_TOP_SIZE],
+                      uvs2=rock.uvs2, tangent_uvs=rock.uvs2)
+
+
+STREAM_TRIANGLES = 16384
+STREAM_PARTS_MAX = 64  # also roads.lua: bounded protocol fields cliff, cliff2..cliff64
+
+
+def stream_parts(rock):
+    """Small spatial pieces with exact shared positions, tint, UVs and normals.
+
+    Partition before LOD generation so shared batch edges remain locked at every
+    detail. The native kernel only assigns faces; it never changes the surface.
+    """
+    import fast
+    fast.require(144, "cliff_stream_parts")
+    groups = fast._ef.cliff_stream_parts(np.ascontiguousarray(rock.positions, np.float64),
+        np.ascontiguousarray(rock.tris, np.int64), STREAM_TRIANGLES, STREAM_PARTS_MAX)
+    if not groups:
+        return
+    radius = np.linalg.norm(np.ptp(rock.positions, axis=0))
+    for faces in groups:
+        faces = np.asarray(faces, np.int64)
+        vertices, triangles = np.unique(rock.tris[faces], return_inverse=True)
+        attrs = {name: None if getattr(rock, name) is None else getattr(rock, name)[vertices]
+                 for name in ("positions", "normals", "uvs", "uvs2", "colors")}
+        scale = np.linalg.norm(np.ptp(attrs["positions"], axis=0))/max(radius, 1e-9)
+        yield replace(rock, **attrs, tris=triangles.reshape(-1,3), lod_scale=rock.lod_scale*scale,
+                      tri_materials=None if rock.tri_materials is None else rock.tri_materials[faces])

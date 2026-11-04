@@ -4031,7 +4031,7 @@ class Server:
             try:
                 dst = os.path.join(self.out_dir, slot)
                 detail = getattr(conn, "cliff_detail", "normal")
-                if what in ("cliff", "x:cliff") and detail != "normal":
+                if what.removeprefix("x:").startswith("cliff") and detail != "normal":
                     # Only a fresh, unheld slot: never edit a shape the renderer uses.
                     clifflod.place(src, dst, detail)
                 else:

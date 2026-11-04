@@ -58,6 +58,7 @@ local content = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h
   bldcol = { shape = "/s/rg_bldcol.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   bld = { shape = "/s/rg_bld.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   deck = { shape = "/s/rg_deck.cdae", pos = { -118, -118, 0 }, pivot = 12, relief = 2 },
+  cliff64 = { shape = "/s/rg_rock64.cdae", pos = { -118, -118, 0 }, pivot = 60, relief = 80 },
   cliff = { shape = "/s/rg_cliff.cdae", pos = { -118, -118, 0 }, pivot = 60, relief = 80 },
   colliders = { deck = { { -10, -10, 5, 10, 10, 15 } }, bldcol = { { 50, 50, 0, 60, 60, 30 } } },
   park = { { 10, 20, 3, 90 } }, wells = { { 30, 40, 3, 45 } },
@@ -185,6 +186,16 @@ T.check(#objsWith('rs_2_road') == 1 and #objsWith('rs_1_road') == 0 and #objsWit
   'skin swapped: the new made, the old gone')
 roads.collisionRebuilt()
 T.check(roads.settledFor(2, car.x, car.y), 'settled again with the new skin')
+
+-- The final streaming piece follows anchor transforms and exact/base swaps too.
+local piece = objsWith('rg_rock64')[1]
+T.check(piece and piece.fields.collisionType=='Visible Mesh Final','last cliff piece survives rebase')
+roads.onExact({type='roads_exact',anchorId=2,key=key,parts={cliff64='/s/rx_rock64.cdae'}},2)
+run(2,B)
+T.check(#objsWith('rx_rock64')==1 and #objsWith('rg_rock64')==0,'last cliff piece exact swap')
+roads.onExact({type='roads_exact',anchorId=2,key=key,parts={cliff64=false}},2)
+run(2,B)
+T.check(#objsWith('rx_rock64')==0 and #objsWith('rg_rock64')==1,'last cliff piece base restored')
 
 -- an exact variant for B, and back to the base
 roads.onExact({ type = 'roads_exact', anchorId = 2, key = key, parts = { cliff = '/s/rx_2_cliff.cdae' } }, 2)

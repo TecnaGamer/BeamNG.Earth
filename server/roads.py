@@ -9145,6 +9145,9 @@ def shape_files(aid, tx, ty):
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
            "rail": f"rail_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae",
            "cliff": f"cliff_{aid}_{tx}_{ty}.cdae"}
+    import cliffrocks
+    for k in range(2, cliffrocks.STREAM_PARTS_MAX + 1):
+        out[f"cliff{k}"] = f"cliff_{aid}_{tx}_{ty}_{k}.cdae"
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -9256,9 +9259,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     if cliff_mesh is not None:      # fitted rock skin; client enables mesh collision near the vehicle
         import cliffrocks
         x0, y0, _, _ = tile_bbox(tx, ty)
-        shape = f"cliff_{aid}_{tx}_{ty}.cdae"
-        cliffrocks.write(os.path.join(out_dir, shape), cliff_mesh)
-        data["cliff"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        files = shape_files(aid, tx, ty)
+        for k, part in enumerate(cliffrocks.stream_parts(cliff_mesh), 1):
+            what = "cliff" if k == 1 else f"cliff{k}"
+            shape = files[what]
+            cliffrocks.write(os.path.join(out_dir, shape), part)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         if cliff_mesh.decals:
             data["cliffDecals"] = cliff_mesh.decals
         if cliff_mesh.talus:

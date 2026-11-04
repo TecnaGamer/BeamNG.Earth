@@ -358,3 +358,47 @@ The mixed-halo correction was identified and tested after this inspection.
 Validation: 92 focused geometry/PBR tests passed; El Paso harness ran 132 tests
 with 2 optional-data skips and passed its 15 km rebase checks. BeamNG cooked
 all three new near maps successfully. Local runtime updated; no release made.
+
+
+### Bounded cliff streaming (2026-11-03)
+
+All near cliff families (natural limestone, arid, canyon, and fitted road cuts)
+use the same spatial batching kernel. It partitions existing triangles rather
+than simplifying or regenerating the surface. Pieces copy positions, vertex
+normals, both UV charts, tint and material indices exactly. LOD generation locks
+the new shared boundaries; projected LOD thresholds scale with piece radius.
+The target is 16,384 triangles per piece, capped at 64 pieces per tile (extreme
+tiles can exceed the triangle target to retain this protocol bound). Small and
+legacy single-shape tiles remain supported. Far terrain materials are unchanged.
+
+The mod imports at most one cliff piece per frame under a separate measured
+`cliffMesh` budget. Range-driven collision changes use `cliffContact`; overdue
+collision rebuilds get a frame between cliff imports instead of piling onto
+one import or starving behind a long queue. Near collision still follows the
+visible mesh. LODs must remove at least 25% of the previous level's triangles;
+near-duplicates no longer inflate shape files. All cliff shaders are prewarmed
+in their UV2/colour vertex format even with road dirt strips disabled.
+
+A captured 348,652-triangle canyon tile went from 48.82 MB to 32 pieces totalling
+26.51 MB, largest 0.984 MB, preserving every finest-level face. Six fresh hidden
+TSStatic imports in the running game took 8.49–9.72 ms each; an equally fresh
+whole-shape control took 56.19 ms. These isolate synchronous shape registration,
+not whole-frame FPS or a guarantee against other engine/physics stalls. Every
+probe object was deleted immediately and the camera/lighting were untouched.
+The worktree's `build/cliff-stream-benchmark/` contains the captured results.
+
+Regression coverage includes all material families, exact face/attribute
+preservation, deterministic bounded partitions, piece publishing, LOD boundaries,
+visibility, collision deferral, overdue rebuild fairness, drop cleanup, geotile
+rebases, and exact/base variant swaps. Native version is 144. Restart the local
+server and reload the mod together to apply the new multi-piece stream; an old
+client understands only the legacy first piece. The source hash automatically
+invalidates prior generated content, so no manual cache deletion is needed.
+
+Validation: 188 focused Python tests (2 optional-data skips), all 85 Lua test
+modules, and the Rust partition regression passed. Windows native v144 was
+built and the two changed Lua modules were staged in the local unpacked mod,
+with backups under `build/cliff-stream-install-backup`. The running server/VM
+were left intact. Linux native rebuild remains pending: the referenced
+`.claude/devtools/build_native_all.sh` is absent here and WSL has no Rust/C
+toolchain. Rebuild the Linux binary before packaging a Linux release.

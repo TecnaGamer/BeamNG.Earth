@@ -76,6 +76,9 @@ M.PRIOR = { cdae = 3.0, dae = 8.0, reveal = 0.05, delete = 0.3, cdaeTex = 3.0, m
 -- A projected patch is much cheaper than loading a sidewalk/cliff TSStatic.
 -- Learn its own cost so creating decals cannot distort the road-mesh estimate.
 M.PRIOR.cliffDecal = .3
+-- Independently streamed cliff batches must not inherit the cheap road-surface EMA.
+M.PRIOR.cliffMesh = 10.0
+M.PRIOR.cliffContact = 3.0
 
 -- Unit kind of a textured .cdae import from its far_tile.tex (px): cdaeTex<px> for a size with a
 -- prior, else (FORMAT 3 tiles have no tex) 'cdaeTex'.

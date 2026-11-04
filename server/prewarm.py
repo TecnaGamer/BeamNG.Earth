@@ -65,7 +65,8 @@ def road_materials():
     import plazas
     import roadmesh
     import roads
-    out = set(EXTRA[:2]) | set(roads.DIRT_MATERIALS)
+    import cliffmaterial
+    out = set(EXTRA[:2]) | set(roads.DIRT_MATERIALS) | set(cliffmaterial.MATERIALS)
     for mod in (roads, roadmesh, junctions, airportgrade, plazas):
         for name, v in vars(mod).items():
             if name.isupper():
@@ -87,14 +88,7 @@ def _shape(path, mats, extra=False):
 
 
 def write(out_dir, vfs_dir):
-    """The shape written to out_dir (and, with the dirt strips on, its NAME_X sibling); returns its vfs path."""
-    import roads
+    """Write both vertex formats: cliffs need UV2/colour even with road dirt strips disabled."""
     _shape(os.path.join(out_dir, NAME), materials())
-    if roads.DIRT_STRIPS:
-        _shape(os.path.join(out_dir, NAME_X), road_materials(), extra=True)
-    else:
-        try:
-            os.remove(os.path.join(out_dir, NAME_X))
-        except OSError:
-            pass
+    _shape(os.path.join(out_dir, NAME_X), road_materials(), extra=True)
     return f"{vfs_dir}/{NAME}"

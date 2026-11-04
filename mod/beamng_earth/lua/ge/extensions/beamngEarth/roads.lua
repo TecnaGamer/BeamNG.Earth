@@ -24,6 +24,14 @@ local cliffdecals = require('beamngEarth/cliffdecals')
 
 local M = {}
 M.cliffsEnabled = true
+M.CLIFF_PARTS_MAX = 64 -- server cliffrocks.STREAM_PARTS_MAX
+M.CLIFF_WHATS = { 'cliff' }
+for k = 2, M.CLIFF_PARTS_MAX do M.CLIFF_WHATS[#M.CLIFF_WHATS + 1] = 'cliff' .. k end
+function M.isCliff(what) return type(what) == 'string' and (what == 'cliff' or what:match('^cliff%d+$') ~= nil) end
+function M.withCliffParts(list)
+  for k = 2, M.CLIFF_PARTS_MAX do list[#list + 1] = 'cliff' .. k end
+  return list
+end
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json',
@@ -320,7 +328,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol', 'cliff' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs(M.withCliffParts({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol', 'cliff' })) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
@@ -449,25 +457,30 @@ function M.setFoci(f) foci = f or {} end
 -- Cliff scenery stays drawn beyond the physics radius. Reuse its displaced mesh for
 -- contact near vehicles, with the same range hysteresis as the other tile colliders.
 -- No duplicate shape or simplified plane: collision follows the visible relief exactly.
-local function syncCliffCollision(key, t, id)
+local function syncCliffCollision(key, t, id, what, gov)
   local o = id and scenetree.findObjectById(id)
   if not o then return end
   local active = o:getField('collisionType', 0) ~= 'None'
   local wanted = M.cliffsEnabled and M.collideNear(t, active and M.UNCOLLIDE_M or 0)
-  if id == t.cliff then t.colWant.cliff = wanted or nil end
+  what = what or 'cliff'
+  if id == t[what] then t.colWant[what] = wanted or nil end
   if active == wanted then return end
+  if gov and not gov:try('cliffContact') then M.cliffContactsPending = true; return end
+  local started = now()
   o:setField('collisionType', 0, wanted and 'Visible Mesh Final' or 'None')
   o:postApply()
   collisionDirty = true
   if wanted then
-    t.colAt = t.colAt or {}; t.colAt.cliff = now()
-    newColliders[#newColliders + 1] = { id, { key = key, what = 'cliff', tile = t, renderOnly = true } }
+    t.colAt = t.colAt or {}; t.colAt[what] = now()
+    newColliders[#newColliders + 1] = { id, { key = key, what = what, tile = t, renderOnly = true } }
   end
+  if gov then gov:charge('cliffContact', now() - started) end
 end
 
 -- Every COLLIDE_CHECK_S: parked colliders whose tile came near queued; far tiles' colliders dropped.
-local function updateCollideRange()
-  if sinceCollideCheck() < M.COLLIDE_CHECK_S * 1000 then return end
+local function updateCollideRange(gov)
+  if not M.cliffContactsPending and sinceCollideCheck() < M.COLLIDE_CHECK_S * 1000 then return end
+  M.cliffContactsPending = false
   sinceCollideCheck = stopwatch.new()
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   local v = veh and veh.getVelocity and veh:getVelocity()
@@ -486,7 +499,7 @@ local function updateCollideRange()
     parked = keep
   end
   for key, t in pairs(tiles) do
-    syncCliffCollision(key, t, t.cliff)
+    for _, what in ipairs(M.CLIFF_WHATS) do syncCliffCollision(key, t, t[what], what, gov) end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
         if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
@@ -576,7 +589,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol', 'cliff' }
+M.CONTENT_WHATS = M.withCliffParts({ 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol', 'cliff' })
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -722,8 +735,8 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or what == 'cliff' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
-      if not q.renderOnly or (what == 'cliff' and M.cliffsEnabled and M.collideNear(t)) then t.colWant[what] = true end
+        renderOnly = what == 'wire' or M.isCliff(what) or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
+      if not q.renderOnly or (M.isCliff(what) and M.cliffsEnabled and M.collideNear(t)) then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
   end
@@ -940,7 +953,7 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what == 'wire' or what == 'cliff' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+          renderOnly = what == 'wire' or M.isCliff(what) or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
             or (t.parts.railcol ~= nil and what == 'rail') }
         walkQ[#walkQ + 1] = q
       end
@@ -1084,8 +1097,8 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
-      'railcol', 'cliff', 'exits', 'mileposts', 'merges', 'speeds' }) do
+  for _, what in ipairs(M.withCliffParts({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
+      'railcol', 'cliff', 'exits', 'mileposts', 'merges', 'speeds' })) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1168,13 +1181,13 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol', 'cliff' }) do
+  for _, what in ipairs(M.withCliffParts({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol', 'cliff' })) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
-        renderOnly = what == 'cliff' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
+        renderOnly = M.isCliff(what) or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
           or (leanRail and what == 'rail') }
-      if not q.renderOnly or (what == 'cliff' and M.cliffsEnabled and M.collideNear(tiles[key])) then
+      if not q.renderOnly or (M.isCliff(what) and M.cliffsEnabled and M.collideNear(tiles[key])) then
         tiles[key].colWant[what] = true
       end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
@@ -1589,8 +1602,8 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'railcol', 'cliff',
-  'exits', 'mileposts', 'merges', 'speeds' }
+local WHATS = M.withCliffParts({ 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'railcol', 'cliff',
+  'exits', 'mileposts', 'merges', 'speeds' })
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -1734,6 +1747,7 @@ local viewAt = nil  -- core.viewAway(): the camera's { x, y } when it is away fr
 local prewarmId, prewarmPath, prewarmWant = nil, nil, nil     -- (the materials' prewarm shape, below)
 local prewarmXId = nil      -- its sibling in the strips' vertex format (prewarm_x.cdae), when the server wrote one
 local prewarmNow
+local cliffLastFrame = false
 
 -- The last frame's update in parts (ms; diagnostics: the frame-time probes, 2026-10-29)
 M.steps = {}
@@ -1792,15 +1806,22 @@ function M.update(gov, currentAnchor, player, view, a)
   step('deletes+chunks')
   releaseHeld()
   step('held')
-  updateCollideRange()
+  updateCollideRange(gov)
   step('collideRange')
   local forced = nil
   if #walkQ > 0 and sinceUrgent >= M.URGENT_EVERY_FRAMES and not (gov.isHeavyFrame and gov:isHeavyFrame()) then
     forced = M.urgentWalk(walkQ)
   end
   sinceUrgent = sinceUrgent + 1
-  while #walkQ > 0 and (forced or gov:try('roadWalk')) do
-    local q = table.remove(walkQ, forced or M.nextWalk(walkQ))
+  local cliffLoaded = false
+  while #walkQ > 0 do
+    local index = forced or M.nextWalk(walkQ)
+    local kind = M.isCliff(walkQ[index].what) and 'cliffMesh' or 'roadWalk'
+    -- Leave a frame for an overdue physics rebuild during a long cliff queue.
+    if kind == 'cliffMesh' and cliffLastFrame and collisionDirty
+        and sinceReload() > M.URGENT_GAP_S * 1000 then break end
+    if not forced and not gov:try(kind) then break end
+    local q = table.remove(walkQ, index)
     if forced then forced, sinceUrgent, M.urgentWalks = nil, 0, (M.urgentWalks or 0) + 1 end
     local t = tiles[q.key]
     if t and q.tile and q.tile ~= t then t = nil end
@@ -1815,7 +1836,7 @@ function M.update(gov, currentAnchor, player, view, a)
     local walk = q.walk
     if t and q.geo then walk = M.geoWalk(t, q.what) end      -- (a geotile's part: placed as the tile is now)
     if t and walk then
-      walk.receiveDecals = q.what == 'cliff'
+      walk.receiveDecals = M.isCliff(q.what)
       local t0 = now()
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
@@ -1839,16 +1860,18 @@ function M.update(gov, currentAnchor, player, view, a)
           t[q.what] = id; collisionDirty = true; newColliders[#newColliders + 1] = { id, q }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
-        if q.what == 'cliff' then syncCliffCollision(q.key, t, id) end
+        if M.isCliff(q.what) then syncCliffCollision(q.key, t, id, q.what) end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
-      noteUnit(tostring(q.what), ms, walk and walk.shape)
+      gov:charge(kind, ms)
+      noteUnit(M.isCliff(q.what) and 'cliff' or tostring(q.what), ms, walk and walk.shape)
       sinceChange = stopwatch.new()
+      if M.isCliff(q.what) then cliffLoaded = true; break end
     end
   end
+  cliffLastFrame = cliffLoaded
   step('walks')
-  updateFar(gov)                -- far buildings: only with the near meshes all made (they share the budget)
+  if not cliffLoaded then updateFar(gov) end -- far buildings: only with the near meshes all made (they share the budget)
   step('far')
   if swapQuiet then
     swapQuiet.frames = swapQuiet.frames - 1
@@ -1861,7 +1884,7 @@ function M.update(gov, currentAnchor, player, view, a)
     reloadWaits = reloadWaits + 1
     due = false
   end
-  if due then
+  if due and not cliffLoaded then
     reloadWaits = 0
     local t0 = now()
     noteNewColliders()
@@ -2090,7 +2113,7 @@ function M.requestCollision() collisionDirty = true end
 -- the frame after it (terrainpatch.groundReady).
 function M.reloads() return reloads end
 
-function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ > 0 or collisionDirty or cliffdecals.hasWork() end
+function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ > 0 or collisionDirty or M.cliffContactsPending or cliffdecals.hasWork() end
 
 
 -- Somebody else just ran be:reloadCollision() (the terrain commit): the sidewalks made so far collide.
@@ -2139,6 +2162,7 @@ function M.prewarm(path)
 end
 
 function M.clear()
+  M.cliffContactsPending, cliffLastFrame = false, false
   for key in pairs(tiles) do dropTile(key) end
   for key, f in pairs(far) do
     if f.geo then M.dropFarGeo(key) end
@@ -2162,6 +2186,7 @@ end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  M.cliffContactsPending, cliffLastFrame = false, false
   cliffdecals.reset()
   -- (the level took the objects: every slot goes)
   for _, t in pairs(tiles) do for _, sl in pairs(t.slots or {}) do slotsGone[#slotsGone + 1] = { sl[1], sl[2], sl[3] } end end
@@ -2191,12 +2216,14 @@ function M.setCliffsEnabled(on)
     o:setField('decalType',0,on and 'Visible Mesh Final' or 'None')
   end
   for key, t in pairs(tiles) do
-    visibility(t.cliff)
-    visibility(t.oldPart and t.oldPart.cliff)
-    visibility(t.oldSkin and t.oldSkin.cliff)
-    syncCliffCollision(key, t, t.cliff)
-    syncCliffCollision(key, t, t.oldPart and t.oldPart.cliff)
-    syncCliffCollision(key, t, t.oldSkin and t.oldSkin.cliff)
+    for _, what in ipairs(M.CLIFF_WHATS) do
+      visibility(t[what])
+      visibility(t.oldPart and t.oldPart[what])
+      visibility(t.oldSkin and t.oldSkin[what])
+      syncCliffCollision(key, t, t[what], what)
+      syncCliffCollision(key, t, t.oldPart and t.oldPart[what], what)
+      syncCliffCollision(key, t, t.oldSkin and t.oldSkin[what], what)
+    end
   end
   cliffdecals.invalidate()
   return true

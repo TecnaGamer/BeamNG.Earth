@@ -10,6 +10,7 @@ import numpy as np
 # The server scales only these thresholds before a fresh shape slot is loaded.
 LEVELS = ((1200, 1.5), (600, 3.0), (240, 6.0))
 MIN_TRIANGLES = 128
+MIN_REDUCTION = .25  # a near-duplicate LOD adds load cost with negligible rendering benefit
 MIN_NORMAL_COS = 0.15
 # Each LOD may retreat only a small fraction of the skin clearance.
 # Averages otherwise cut across convex rock and widen the intentionally sunken rim.
@@ -119,7 +120,7 @@ def levels(rock):
     for pixels, cell in LEVELS:
         coarse = simplify(rock, cell)
         count = len(coarse['tris'])
-        if count < previous * .95 and count:
+        if count < previous * (1-MIN_REDUCTION) and count:
             result.append((pixels, coarse))
             previous = count
     return result

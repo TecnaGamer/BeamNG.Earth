@@ -1046,7 +1046,7 @@ def _shape_info(path, pos, what):
     piv = oz + float(med) if n else oz
     rel = max(abs(oz + float(hi) - piv), abs(piv - oz - float(lo))) if n else 0.0
     info = {"pivot": round(piv, 3), "relief": round(rel, 3)}
-    if what == "cliff":
+    if what.startswith("cliff"):
         # Cliff normals/UVs can change without changing its height bounds. The
         # client must replace the old mesh after reconnecting to an updated server.
         import hashlib

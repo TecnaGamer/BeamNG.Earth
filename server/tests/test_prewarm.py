@@ -53,7 +53,7 @@ class PrewarmTest(unittest.TestCase):
 
     def test_the_strips_vertex_format_has_its_own_shape(self):
         """A road mesh with a dirt or gravel strip has the second uv (roadmesh.write): prewarm_x.cdae sets up its
-        materials in that vertex format; with BNE_DIRT_STRIPS off it is not written."""
+        materials in that vertex format; cliffs need it even with BNE_DIRT_STRIPS off."""
         for m in roads.DIRT_MATERIALS:
             self.assertIn(m, prewarm.materials())
         rm = prewarm.road_materials()
@@ -70,7 +70,12 @@ class PrewarmTest(unittest.TestCase):
                 self.assertEqual(len(a["tverts2"]), len(a["verts"]))
                 roads.DIRT_STRIPS = False
                 prewarm.write(d, "/temp/x")
-                self.assertFalse(Path(d, prewarm.NAME_X).exists())
+                import cliffmaterial
+                shape = cdae.decode(Path(d, prewarm.NAME_X).read_bytes())
+                self.assertLessEqual(set(cliffmaterial.MATERIALS), {m["name"] for m in shape["materials"]})
+                mesh = shape["meshes"][0]
+                self.assertEqual(mesh["colors"][0], mesh["verts"][0])
+                self.assertEqual(mesh["tverts2"][0], mesh["verts"][0])
         finally:
             roads.DIRT_STRIPS = was
 

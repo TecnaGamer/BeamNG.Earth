@@ -232,6 +232,50 @@ roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 T.check(#statics() == 0, 'cliff drops with its tile')
 
+-- Cliff pieces use a separate budget and only one shape load per frame, even at startup.
+do
+  files['/t/pieces.json'] = '{chunks={},cliff={shape="/t/a.cdae",pos={0,0,0}},' ..
+    'cliff2={shape="/t/b.cdae",pos={0,0,0}},cliff3={shape="/t/c.cdae",pos={0,0,0}}}'
+  local budget = { denied = true, charges = {} }
+  function budget:try(kind) return not (kind == 'cliffMesh' and self.denied) end
+  function budget:charge(kind) self.charges[kind] = (self.charges[kind] or 0) + 1 end
+  function budget:chargeMotion() end
+  roads.onTile({anchorId=2,key='6_6',path='/t/pieces.json',n=0},2)
+  roads.update(budget,2)
+  T.check(#statics()==0,'cliff budget can defer loading without using roadWalk budget')
+  budget.denied=false
+  local reloads = S.calls.reloadCollision
+  roads.update(budget,2)
+  T.check(#statics()==1 and S.calls.reloadCollision==reloads,'one cliff piece and no physics rebuild in its frame')
+  elapsedMs=elapsedMs+7000
+  roads.update(budget,2)
+  T.check(#statics()==1 and S.calls.reloadCollision>reloads,'long cliff queue leaves a frame for overdue collision')
+  roads.update(budget,2)
+  roads.update(budget,2)
+  T.check(#statics()==3 and budget.charges.cliffMesh==3,'one piece per frame with unlimited governor allowance')
+  roads.update(budget,2)
+  T.check(S.calls.reloadCollision>reloads,'collision rebuild completes after loading')
+  roads.setCliffsEnabled(false)
+  for _,o in ipairs(statics()) do T.check(o.hidden and o.fields.collisionType=='None','all pieces disabled') end
+  roads.setCliffsEnabled(true)
+  for _,o in ipairs(statics()) do T.check(not o.hidden and o.fields.collisionType=='Visible Mesh Final','all pieces restored') end
+  local oldVehicle,oldCheck=getPlayerVehicle,roads.COLLIDE_CHECK_S
+  getPlayerVehicle=function() return {getPosition=function() return vec3(100000,100000,0) end} end
+  roads.COLLIDE_CHECK_S=0
+  function budget:try(kind) return kind~='cliffContact' end
+  roads.update(budget,2)
+  T.check(roads.cliffContactsPending and roads.hasWork(),'deferred cliff contact remains scheduled')
+  roads.COLLIDE_CHECK_S=1000
+  function budget:try() return true end
+  roads.update(budget,2)
+  for _,o in ipairs(statics()) do T.check(o.fields.collisionType=='None','deferred contact resumed before periodic range check') end
+  T.check(not roads.cliffContactsPending,'contact queue drained')
+  getPlayerVehicle,roads.COLLIDE_CHECK_S=oldVehicle,oldCheck
+  roads.onDrop({anchorId=2,key='6_6'})
+  roads.update(gov,2)
+  T.check(#statics()==0,'all cliff pieces removed on tile drop')
+end
+
 -- pooled shape files (server/matslots.py): the slot paths replace the tile's own files; a slot is reported gone once
 -- its tile is dropped and its object deleted (one the tile cannot use: at once)
 gov.allow, gov.tries = nil, 0
