@@ -2106,20 +2106,17 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     if got is not None:
         blobs, extra = got
         if mask and "mask.dds" in blobs:
-            _write_bytes(mask[0], blobs["mask.dds"])
-        _write_bytes(tex["path"], blobs["tex.dds"])
+            revisit.place(blobs["mask.dds"], mask[0])       # (a kept file: hard-linked, nothing written)
+        revisit.place(blobs["tex.dds"], tex["path"])
         return _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
     f0 = revisit.faults()
     built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
     if got is not None and revisit.ON and revisit.faults() == f0:
         try:
             blob, meta = _built_blob(built)
-            blobs = {"built.npz": blob}
-            with open(tex["path"], "rb") as f:
-                blobs["tex.dds"] = f.read()
+            blobs = {"built.npz": blob, "tex.dds": revisit.Side(tex["path"])}     # (linked in, not copied)
             if mask and os.path.exists(mask[0]):
-                with open(mask[0], "rb") as f:
-                    blobs["mask.dds"] = f.read()
+                blobs["mask.dds"] = revisit.Side(mask[0])
             meta.update(tex_bytes=int(got[0]), used={str(n): int(c) for n, c in (got[1] or {}).items()})
             revisit.store(_s.cache_dir, "far", k, blobs, meta,
                           where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions(),

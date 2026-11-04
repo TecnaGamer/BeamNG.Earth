@@ -3808,10 +3808,10 @@ class Server:
                 hit = revisitmod.load(self.cache_dir, "fartex", tk)
                 if hit is not None:         # (rendered in this place before: the revisit cache)
                     blobs, extra = hit
-                    if "mask.dds" in blobs:
-                        self.write_file(os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
-                                        blobs["mask.dds"])
-                    self.write_file(os.path.join(self.out_dir, texture), blobs["tex.dds"])
+                    if "mask.dds" in blobs:         # (kept files: hard-linked, nothing written)
+                        revisitmod.place(blobs["mask.dds"],
+                                         os.path.join(self.out_dir, surfacemod.road_mask_name(texture)))
+                    revisitmod.place(blobs["tex.dds"], os.path.join(self.out_dir, texture))
                     tex_bytes, used = int(extra["tex_bytes"]), extra["used"]
                 else:
                     f0 = revisitmod.faults()
@@ -3898,13 +3898,10 @@ class Server:
         if not revisitmod.ON or pending or (f0 is not None and revisitmod.faults() != f0):
             return
         try:
-            blobs = {}
-            with open(os.path.join(self.out_dir, texture), "rb") as f:
-                blobs["tex.dds"] = f.read()
+            blobs = {"tex.dds": revisitmod.Side(os.path.join(self.out_dir, texture))}     # (linked in, not copied)
             mp = os.path.join(self.out_dir, surfacemod.road_mask_name(texture))
             if os.path.exists(mp):
-                with open(mp, "rb") as f:
-                    blobs["mask.dds"] = f.read()
+                blobs["mask.dds"] = revisitmod.Side(mp)
             revisitmod.store(self.cache_dir, "fartex", tk, blobs,
                              {"tex_bytes": int(tex_bytes), "used": {str(n): int(c) for n, c in (used or {}).items()}})
         except Exception as e:          # (not kept rather than no tile)
@@ -7297,8 +7294,10 @@ def prune_own_caches(cache_dir, started=None):
                            (os.path.join("dem", "decoded"), demmod.MIRROR_MB, lambda n: n.endswith(".npy")),
                            ("peercache", peerworkmod.CACHE_BYTES / 1e6, None),
                            ("roadwidth", roadwidthmod.STORE_MB, lambda n: n.endswith(".npy")),
-                           (revisitmod.SUBDIR, revisitmod.MAX_MB,
-                            lambda n, kept=areasmod.pinned_world(cache_dir): n.endswith(".zip") and n[:-4] not in kept)):
+                           (revisitmod.SUBDIR, revisitmod.MAX_MB,       # (the zips and the files kept beside them)
+                            lambda n, kept=areasmod.pinned_world(cache_dir): (n.endswith(".zip") or
+                                                                              n.endswith(revisitmod.SIDE_SUFFIXES))
+                            and n.split(".", 1)[0] not in kept)):
         try:
             n, left = cachemod.prune_dir(os.path.join(cache_dir, sub), mb * 1e6, match=match)
             if n:
