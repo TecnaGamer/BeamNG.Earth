@@ -272,6 +272,25 @@ def lower_priority(nice, worker=False):
     return "below normal"
 
 
+
+WIN_THREAD_ABOVE_NORMAL = 1     # THREAD_PRIORITY_ABOVE_NORMAL: one step above the process's class
+
+
+def raise_thread():
+    """Windows: the calling thread one step above the others of its process (still inside the process's "below
+    normal" class, so below the game's "normal"). Returns the change or None (other systems: nothing to do)."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetCurrentThread.restype = wintypes.HANDLE
+    k32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+    k32.SetThreadPriority.restype = wintypes.BOOL
+    if not k32.SetThreadPriority(k32.GetCurrentThread(), WIN_THREAD_ABOVE_NORMAL):
+        raise OSError("SetThreadPriority(above normal) failed")
+    return "thread above normal"
+
 def road_processes(cpus=None, gb=None):
     """Road-tile processes for a desktop (ROAD_PROCESSES_BY_CPU), 2 below them."""
     cpus = (os.cpu_count() or 1) if cpus is None else cpus

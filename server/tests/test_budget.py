@@ -105,3 +105,10 @@ class PriorityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RaiseThreadTest(unittest.TestCase):
+    def test_other_systems_do_nothing(self):
+        if sys.platform == "win32":
+            self.skipTest("Windows raises the thread for real")
+        self.assertIsNone(budget.raise_thread())

@@ -347,6 +347,13 @@ LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
 FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40, 10, 0.3, 5   # (fin_worker_worth)
 FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
+# The event loop's thread a step above the server's other threads (Windows; budget.raise_thread): every message the
+# game sends waits for it. With ~20 busy threads in this process the loop lagged 0.5-1 s in the median and up to 15 s,
+# and a block built 17 s earlier held the car until its request was answered. BNGE_LOOP_RAISE=0: as the others.
+LOOP_RAISE = os.environ.get("BNGE_LOOP_RAISE", "1") != "0"
+# The interpreter lock's switch interval in ms (Python's own: 5): a thread waiting for the lock (the event loop among
+# them) waits up to this long per busy thread. 0: Python's own.
+SWITCH_MS = float(os.environ.get("BNGE_SWITCH_MS", "2") or 0)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
@@ -7107,6 +7114,14 @@ async def main_async(args):
     # logs the main thread's stack when a beat is late, so the stall names its cause.
     beat = [time.perf_counter()]
     main_ident = threading.get_ident()
+    if LOOP_RAISE:
+        try:
+            import budget
+            budget.raise_thread()
+        except (OSError, AttributeError) as e:
+            log.debug("event loop thread priority: %s", e)
+    if SWITCH_MS:
+        sys.setswitchinterval(SWITCH_MS / 1000.0)
 
     async def loop_beat():
         while True:

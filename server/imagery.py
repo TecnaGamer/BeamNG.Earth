@@ -1019,20 +1019,26 @@ class Imagery:
         done, want = set(), None    # keys of this list found done: not looked at on disk again at every wake
         while True:
             with self._warm_cv:
-                key = None
-                while key is None:
-                    if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
-                        done, want = set(), self._warm_want
-                    for k in self._warm_want:
-                        if k in done:
-                            continue
-                        if self._warm_done(k):
-                            done.add(k)
-                            continue
-                        key = k
-                        break
-                    if key is None:
+                if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
+                    done, want = set(), self._warm_want
+            # (the disk looked at outside the lock: warm(), on the server's event loop, waits for it, and 28 of the 40
+            # stalls over a second at 200 mph were this list being read, A13 2026-11-04)
+            key = None
+            for k in want:
+                if self._warm_want is not want:
+                    break
+                if k in done:
+                    continue
+                if self._warm_done(k):
+                    done.add(k)
+                    continue
+                key = k
+                break
+            if key is None:
+                with self._warm_cv:
+                    if self._warm_want is want:
                         self._warm_cv.wait()
+                continue
             src, z, x, y = key
             last = (1 << src.export) - 1
             try:
