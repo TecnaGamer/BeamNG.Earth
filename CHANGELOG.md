@@ -22,6 +22,8 @@ What changed in each release of BeamNG.Earth, newest first.
   physical block; small blocks retain their physical graph boundary.
 - Added road-class right-of-way at unsignalised junctions. Mapped signals continue to take precedence, and roundabout
   control remains unchanged.
+- Added shuffled traffic speed profiles, heading-aware legal-speed selection, delayed post-respawn AI setup and guarded
+  body/wheel spawn-speed synchronization.
 
 ## 1.8.1 beta (2026-11-04)
 

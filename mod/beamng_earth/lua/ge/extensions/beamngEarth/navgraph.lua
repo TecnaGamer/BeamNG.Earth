@@ -655,6 +655,90 @@ end
 local heldActive = nil
 local adaptiveTraffic = { applied = nil, target = nil, lastAdjust = -math.huge, lastSync = -math.huge,
                           profileSerial = nil, profile = nil }
+local trafficDriverProfiles, trafficAiLifecycle, trafficAiPending = {}, {}, {}
+local trafficAiAwaiting, trafficAiGeneration = {}, {}
+local trafficSpeedDeck, trafficSpeedDeckIndex = {}, 1
+local trafficLastAiScan, trafficLastSpeedScan = -math.huge, -math.huge
+M.TRAFFIC_SPEED_MAX_M = 100.0
+M.TRAFFIC_SPAWN_INTERSECTION_M = 20.0
+M.TRAFFIC_AI_SCAN_S = 0.15
+M.TRAFFIC_SPEED_SCAN_S = 4.0
+M.TRAFFIC_POST_REFRESH_DELAY_S = 0.12
+M.TRAFFIC_SPAWN_TIMEOUT_S = 6.0
+
+function M.speedProfileForSlot(slot)
+  local n = ((math.floor(tonumber(slot) or 1) - 1) % 20) + 1
+  if n <= 15 then return 'slightly-speeding' end
+  if n <= 19 then return 'near-limit' end
+  return 'significantly-speeding'
+end
+
+function M.speedOffsetKmh(kind, sample)
+  local r = math.max(0, math.min(1, tonumber(sample) or 0.5))
+  if kind == 'near-limit' then return 4 * r end
+  if kind == 'significantly-speeding' then return 10 + 5 * r end
+  return 5 + 5 * r
+end
+
+function M.selectTrafficRoadSpeed(edges, nodes, x, y, headingX, headingY)
+  if type(edges) ~= 'table' or type(nodes) ~= 'table' then return nil end
+  x, y, headingX, headingY = tonumber(x), tonumber(y), tonumber(headingX), tonumber(headingY)
+  if not (x and y and headingX and headingY) then return nil end
+  local hlen = math.sqrt(headingX * headingX + headingY * headingY)
+  if hlen < 1e-5 then return nil end
+  headingX, headingY = headingX / hlen, headingY / hlen
+  local maxDistance2 = M.TRAFFIC_SPEED_MAX_M * M.TRAFFIC_SPEED_MAX_M
+  local bestScore, bestSpeed, bestClass, bestDistance, bestAlignment = math.huge
+  for _, edge in ipairs(edges) do
+    local a, b = nodes[edge[1]], nodes[edge[2]]
+    local speed = tonumber(edge[9])
+    if a and b and speed and speed > 0 then
+      local dx, dy = b[1] - a[1], b[2] - a[2]
+      local length2 = dx * dx + dy * dy
+      if length2 > 1e-6 then
+        local alignment = (headingX * dx + headingY * dy) / math.sqrt(length2)
+        if tonumber(edge[3]) ~= 1 then alignment = math.abs(alignment) end
+        if alignment >= 0.35 then
+          local t = math.max(0, math.min(1, ((x - a[1]) * dx + (y - a[2]) * dy) / length2))
+          local qx, qy = a[1] + t * dx, a[2] + t * dy
+          local ex, ey = x - qx, y - qy
+          local d2 = ex * ex + ey * ey
+          if d2 <= maxDistance2 then
+            local error = 1 - alignment
+            local score = d2 + error * error * 1600
+            if score < bestScore then
+              bestScore, bestSpeed, bestClass, bestDistance, bestAlignment = score, speed, edge[10], math.sqrt(d2), alignment
+            end
+          end
+        end
+      end
+    end
+  end
+  return bestSpeed, bestClass, bestDistance, bestAlignment
+end
+
+function M.aiTargetSpeedCommand(target)
+  target = tonumber(target)
+  if not target or target ~= target or target <= 0 or target == math.huge then return nil end
+  return string.format('ai.setAvoidCars("on"); ai.setSpeed(%.3f); ai.setSpeedMode("limit")', target)
+end
+
+function M.spawnVelocityCommand(target)
+  target = tonumber(target)
+  if not target or target ~= target or target <= 1 or target == math.huge or target > 80 then return nil end
+  local threshold = math.max(0, target - 1)
+  return string.format('local _d=obj:getDirectionVector(); local _v=obj:getVelocity(); local _f=_v:dot(_d); '
+    .. 'if _f>=-1 and _f<%.3f and thrusters and type(thrusters.applyVelocity)=="function" then '
+    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then pcall(function() '
+    .. 'if not beamngEarth_spawnMotion then extensions.load("beamngEarth_spawnMotion") end; '
+    .. 'if beamngEarth_spawnMotion then beamngEarth_spawnMotion.applyRollingSpeed(%.3f) end end) end end',
+    threshold, target, target)
+end
+
+function M.trafficSpawnReady(lifecycle)
+  return type(lifecycle) == 'table' and (lifecycle.state == 'fadeIn'
+    or (lifecycle.state == 'active' and lifecycle.respawnActive ~= true))
+end
 
 local function updateAdaptiveTraffic(now)
   local gt = gameplay_traffic
@@ -710,10 +794,170 @@ local function updateAdaptiveTraffic(now)
   end
 end
 
+local function nextDriverProfile(id)
+  local saved = trafficDriverProfiles[id]
+  if saved then return saved end
+  if #trafficSpeedDeck == 0 or trafficSpeedDeckIndex > #trafficSpeedDeck then
+    trafficSpeedDeck = {}
+    for _ = 1, 15 do trafficSpeedDeck[#trafficSpeedDeck + 1] = 'slightly-speeding' end
+    for _ = 1, 4 do trafficSpeedDeck[#trafficSpeedDeck + 1] = 'near-limit' end
+    trafficSpeedDeck[#trafficSpeedDeck + 1] = 'significantly-speeding'
+    for i = #trafficSpeedDeck, 2, -1 do
+      local j = math.random(1, i)
+      trafficSpeedDeck[i], trafficSpeedDeck[j] = trafficSpeedDeck[j], trafficSpeedDeck[i]
+    end
+    trafficSpeedDeckIndex = 1
+  end
+  local kind = trafficSpeedDeck[trafficSpeedDeckIndex]
+  trafficSpeedDeckIndex = trafficSpeedDeckIndex + 1
+  saved = { kind = kind, offsetKmh = M.speedOffsetKmh(kind, math.random()) }
+  trafficDriverProfiles[id] = saved
+  return saved
+end
+
+local function nearestTrafficSpeed(obj)
+  if not graph then return nil end
+  local p, d = obj:getPosition(), obj:getDirectionVector()
+  local limit, roadClass, distance = M.selectTrafficRoadSpeed(graph.edges, graph.nodes, p.x, p.y, d.x, d.y)
+  return limit, roadClass, distance, p
+end
+
+local function nearTrafficJunction(x, y)
+  if not graph then return false end
+  local degree = {}
+  for _, e in ipairs(graph.edges) do
+    degree[e[1]] = (degree[e[1]] or 0) + 1
+    degree[e[2]] = (degree[e[2]] or 0) + 1
+  end
+  local r2 = M.TRAFFIC_SPAWN_INTERSECTION_M ^ 2
+  for name, n in pairs(graph.nodes) do
+    if (degree[name] or 0) > 2 then
+      local dx, dy = x - n[1], y - n[2]
+      if dx * dx + dy * dy < r2 then return true end
+    end
+  end
+  return false
+end
+
+local function applyTrafficDriver(obj, id, now, force, spawn)
+  if not obj or localplayers.controlled(id, obj, controlled) then return false end
+  local limit, roadClass, roadDistance = nearestTrafficSpeed(obj)
+  local profile = nextDriverProfile(id)
+  local commands = {}
+  if force or spawn or not limit then commands[#commands + 1] = 'ai.setAvoidCars("on")' end
+  if limit then
+    local target = limit + profile.offsetKmh / 3.6
+    if force or not profile.lastLimit or math.abs(limit - profile.lastLimit) > (1 / 3.6) then
+      commands[#commands + 1] = string.format('ai.setSpeed(%.3f); ai.setSpeedMode("limit")', target)
+      profile.lastLimit = limit
+    end
+    profile.target = target
+    profile.roadClass, profile.roadDistanceM = roadClass, roadDistance
+    if spawn and not nearTrafficJunction(obj:getPosition().x, obj:getPosition().y) then
+      local velocity = M.spawnVelocityCommand(target)
+      if velocity then commands[#commands + 1] = velocity end
+    end
+  end
+  if #commands == 0 then return true end
+  local ok, err = pcall(obj.queueLuaCommand, obj, table.concat(commands, '; '))
+  if not ok then
+    log('W', 'beamngEarth', 'Adaptive Traffic: AI initialization failed for vehicle ' .. tostring(id) .. ': ' .. tostring(err))
+    return false
+  end
+  profile.lastApplied = now
+  return true
+end
+
+local function queueTrafficSpawn(id, lifecycle, now)
+  local generation = (trafficAiGeneration[id] or 0) + 1
+  trafficAiGeneration[id] = generation
+  trafficAiAwaiting[id] = { generation = generation, respawnCount = lifecycle and lifecycle.respawnCount,
+    detectedAt = now, readyAt = nil, expiresAt = now + M.TRAFFIC_SPAWN_TIMEOUT_S }
+end
+
+local function updateTrafficDrivers(now)
+  local gt = gameplay_traffic
+  if not (M.choice and M.choice.traffic and gt and gt.getState and gt.getState() == 'on'
+      and gt.getTrafficData and getObjectByID) then return end
+  local scanAll = now - trafficLastSpeedScan >= M.TRAFFIC_SPEED_SCAN_S
+  local scanLifecycle = now - trafficLastAiScan >= M.TRAFFIC_AI_SCAN_S
+  if not scanAll and not scanLifecycle and next(trafficAiPending) == nil and next(trafficAiAwaiting) == nil then return end
+  if heldActive ~= nil then return end
+  if scanAll then trafficLastSpeedScan = now end
+  if scanLifecycle then trafficLastAiScan = now end
+  localplayers.snapshot(controlled)
+  local me = playerId()
+  local data = gt.getTrafficData() or {}
+  for id, entry in pairs(data) do
+    if id == me or (type(entry) == 'table' and entry.isAi == false) then
+      trafficAiPending[id], trafficAiLifecycle[id], trafficAiAwaiting[id] = nil, nil, nil
+    else
+      local pendingSpawn = trafficAiPending[id] ~= nil
+      local previous = trafficAiLifecycle[id]
+      local lifecycle = type(entry) == 'table' and { respawnCount = tonumber(entry.respawnCount), state = entry.state,
+        respawnActive = entry.respawnActive == true } or nil
+      local respawned = pendingSpawn or (lifecycle and ((lifecycle.state == 'reset' and (not previous or previous.state ~= 'reset'))
+        or (previous and lifecycle.respawnCount ~= nil and previous.respawnCount ~= nil
+            and lifecycle.respawnCount ~= previous.respawnCount)
+          ))
+      if lifecycle then trafficAiLifecycle[id] = lifecycle end
+      if respawned then
+        queueTrafficSpawn(id, lifecycle, now)
+        trafficAiPending[id] = nil
+      end
+      local awaiting = trafficAiAwaiting[id]
+      if awaiting then
+        if M.trafficSpawnReady(lifecycle) then
+          awaiting.readyAt = awaiting.readyAt or (now + M.TRAFFIC_POST_REFRESH_DELAY_S)
+          if now >= awaiting.readyAt then
+            local obj = getObjectByID(id)
+            if obj and obj.getActive and obj:getActive() then
+              applyTrafficDriver(obj, id, now, true, true)
+              trafficAiAwaiting[id] = nil
+            end
+          end
+        elseif now >= awaiting.expiresAt then
+          log('W', 'beamngEarth', 'Adaptive Traffic: vehicle ' .. tostring(id)
+            .. ' remained in native reset state; deferred AI speed was skipped')
+          trafficAiAwaiting[id] = nil
+        end
+      elseif scanAll and lifecycle and M.trafficSpawnReady(lifecycle) then
+        local obj = getObjectByID(id)
+        if obj and obj.getActive and obj:getActive() and not localplayers.controlled(id, obj, controlled) then
+          applyTrafficDriver(obj, id, now, false, false)
+        end
+      end
+    end
+  end
+  for id, expires in pairs(trafficAiPending) do
+    if now >= expires then trafficAiPending[id] = nil end
+  end
+  for id in pairs(trafficAiLifecycle) do
+    if data[id] == nil then
+      trafficAiLifecycle[id], trafficAiAwaiting[id], trafficAiGeneration[id] = nil, nil, nil
+    end
+  end
+end
+
+function M.onVehicleSpawned(id)
+  if id == nil or not (M.choice and M.choice.traffic) then return end
+  trafficDriverProfiles[id], trafficAiLifecycle[id], trafficAiAwaiting[id] = nil, nil, nil
+  trafficAiPending[id] = os.clock() + M.TRAFFIC_SPAWN_TIMEOUT_S
+end
+
+function M.onVehicleDestroyed(id)
+  trafficDriverProfiles[id], trafficAiPending[id], trafficAiLifecycle[id] = nil, nil, nil
+  trafficAiAwaiting[id], trafficAiGeneration[id] = nil, nil
+end
+
 function M.trafficStatus()
+  local profiles, pending = 0, 0
+  for _ in pairs(trafficDriverProfiles) do profiles = profiles + 1 end
+  for _ in pairs(trafficAiAwaiting) do pending = pending + 1 end
   return { target = adaptiveTraffic.target, applied = adaptiveTraffic.applied,
            profileSerial = adaptiveTraffic.profileSerial, profile = adaptiveTraffic.profile,
-           enabled = M.choice and M.choice.traffic or false }
+           enabled = M.choice and M.choice.traffic or false, driverProfiles = profiles,
+           pendingSpawnInitializations = pending }
 end
 -- A rebase (core finishRebase, xf: the old frame -> the new one): the server's graph moved into the new anchor and
 -- applied again at once, as the roads and trees are moved. It was dropped instead (its anchor no longer the current
@@ -824,6 +1068,7 @@ function M.update(aid, b, gov, player)
     return
   end
   updateAdaptiveTraffic(t0)
+  updateTrafficDrivers(t0)
   if pendingSignals then
     if not room(gov) then return end
     local pending = pendingSignals
@@ -913,6 +1158,9 @@ function M.reset()
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   adaptiveTraffic = { applied = nil, target = nil, cap = nil, lastAdjust = -math.huge, lastSync = -math.huge,
                      profileSerial = nil, profile = nil }
+  trafficDriverProfiles, trafficAiLifecycle, trafficAiPending = {}, {}, {}
+  trafficAiAwaiting, trafficAiGeneration, trafficSpeedDeck = {}, {}, {}
+  trafficSpeedDeckIndex, trafficLastAiScan, trafficLastSpeedScan = 1, -math.huge, -math.huge
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
   pendingSignals = nil
   stillSince = {}
