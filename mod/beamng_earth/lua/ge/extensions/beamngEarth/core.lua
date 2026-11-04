@@ -2249,6 +2249,7 @@ local function onUpdate(dtReal, dtSim)
   end
   drawUi(dtReal)
   t = mark('draw', t)
+  if not M._mpMarked then M._mpMarked = true; pcall(mpsession.setMark, mark, hitchClock) end
   updateBeamMP(dtReal)
   mark('beammp', t)
 end
