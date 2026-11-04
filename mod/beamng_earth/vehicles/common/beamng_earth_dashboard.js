@@ -159,7 +159,9 @@
   function restore() {
     const query = new URLSearchParams(window.location.search);
     const original = query.get('return');
-    if (original) window.location.replace(original);
+    // only a vehicle screen's own page (dashboard.lua sends its local:// href): never a javascript: or remote URL
+    // (GitHub code scanning #1, #4)
+    if (original && /^local:\/\//i.test(original)) window.location.replace(original);
   }
 
   // ui_uinavi still sends stock map updates after registration; this page intentionally uses only

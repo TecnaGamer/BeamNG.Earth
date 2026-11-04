@@ -27,7 +27,7 @@ export class Net {
       try { msg = JSON.parse(ev.data) } catch (e) { console.warn('bad message', e); return }
       if (msg.type === '_connected') { this.connected = true; this.tried = true; this.lastError = ''; this.viewerGone = false; noted = true }
       if (msg.type === '_disconnected') { this.connected = false; this.tried = true; this.lastError = msg.error || ''; this.viewerGone = false; noted = true }
-      try { this.onMessage(msg) } catch (e) { console.error(msg.type, e) }
+      try { this.onMessage(msg) } catch (e) { console.error('message handler failed:', String(msg.type), e) }   // (no format string from the message: code scanning #3)
     }
     ws.onclose = () => {
       if (this.ws !== ws) return
