@@ -17,6 +17,9 @@ What changed in each release of BeamNG.Earth, newest first.
   bridge took the deck's height from the ground at those ends, not from the embankment tops it stands on (#694), so it
   dug the road under up to 4 m too deep. Its slip roads beside it stayed at their own height, a step between them. Seen
   under Kurna - Tuhala over Tallinna ringtee and under Tartu mnt at the Jüri roundabout, Estonia.
+- **Roundabouts tilted like motorway curves:** a mapped roundabout on a trunk or motorway (the big Jüri roundabout of
+  Tallinna ringtee, Estonia) was banked 8 % into the ring, and the tilt changed at every road joining it. Real ones are
+  close to flat, so roundabout rings are now level across.
 
 ## 1.8.1 beta (2026-11-04)
 
