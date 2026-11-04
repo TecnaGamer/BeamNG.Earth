@@ -203,6 +203,32 @@ class BridgeJunctionSurfaceTest(unittest.TestCase):
         np.testing.assert_allclose([max(h) for h in asphalt],
                                    np.array([max(h) for h in combined]) + roadmesh.DECK_SKIN, atol=.002)
 
+    def test_unsupported_fourth_arm_excludes_complete_fork(self):
+        parts = [(c['fid'], roads.Spec(c['w'], 'paved', True, 'primary', False), np.array(c['n']), 7.72)
+                 for c in fork()]
+        spec = parts[0][1]
+        cases = {'long': [('d', spec, np.array([[0, 0, 20], [0, 150, 20]]), 7.72)],
+                 'multipart': [('d', spec, np.array([[0, 0, 20], [0, 25, 20]]), 7.72),
+                               ('d', spec, np.array([[80, 0, 20], [95, 0, 20]]), 7.72)]}
+        for name, extra in cases.items():
+            for box in [(-50, -30, 20, 30), (-15, -30, 50, 30)]:
+                with self.subTest(case=name, box=box):
+                    output = roads._deck_chunks(parts + extra, box)
+                    self.assertFalse(roadmesh._junction_surfaces(
+                        [c for c in output if not c.get('ctx')], [c for c in output if c.get('ctx')]))
+
+    def test_exclusion_preserves_stacked_fork_and_duplicate_order(self):
+        parts = [(c['fid'], roads.Spec(c['w'], 'paved', True, 'primary', False), np.array(c['n']), 7.72)
+                 for c in fork() + fork(40, '_upper')]
+        spec = parts[0][1]
+        extra = [('d', spec, np.array([[80, 0, 20], [95, 0, 20]]), 7.72),
+                 ('d', spec, np.array([[0, 0, 20], [0, 25, 20]]), 7.72)]
+        for order in (parts + extra, list(reversed(parts + extra))):
+            output = roads._deck_chunks(order, (-50, -30, 50, 30))
+            fields = roadmesh._junction_surfaces([c for c in output if not c.get('ctx')],
+                                                 [c for c in output if c.get('ctx')])
+            self.assertEqual(set(fields), {'a_upper', 'b_upper', 'c_upper'})
+
     def test_clipped_long_or_ambiguous_multipart_profiles_are_not_short_forks(self):
         chunks = fork()
         chunks[0]['jn'] = [[-180, 0, 27.2], [0, 0, 20]]

@@ -8219,6 +8219,19 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
             # Retain the original endpoints for exclusion too: one unsupported arm must exclude the whole fork,
             # not leave three eligible arms sharing a surface beside the fourth arm's independent surface.
             joint_excluded.add(fid)
+    # Keep only unsupported endpoints, not entire long profiles. A shared field must not
+    # omit an incident long or ambiguous multipart arm, even when three short arms qualify.
+    blocked_ends = []
+    for fid, _spec, pts, _lon in decks:
+        if fid not in joint_profiles:
+            pts = np.asarray(pts, np.float64)
+            if len(pts) >= 2:
+                blocked_ends.extend(np.round(pts[[0, -1], :3], 3))
+    for fid, profile in joint_profiles.items():
+        ends = np.asarray(profile, np.float64)[[0, -1]]
+        if any(np.linalg.norm(p[:2] - q[:2]) <= roadmesh.JUNCTION_JOIN_M and
+               abs(p[2] - q[2]) <= roadmesh.JUNCTION_JOIN_Z_M for p in ends for q in blocked_ends):
+            joint_excluded.add(fid)
     junction_margin = roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
     junction_box = (x0 - junction_margin, y0 - junction_margin, x1 + junction_margin, y1 + junction_margin)
     for i, (fid, spec, pts, lon) in enumerate(decks):

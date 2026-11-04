@@ -4,7 +4,7 @@ Status: **offline regression tests passed; physical driving in BeamNG remains un
 
 At the captured Swiss fork near 46.66729 N, 7.72157 E, independently sloped bridge slabs and junction pads overlap at different heights. The correction gives eligible connected short bridge parts, their markings and pads a shared triangulated height surface. A pad at a matching ground-road endpoint is cut out of the existing road carriageway. Separate stacked levels remain separate, and bridge collision remains enabled.
 
-Complete profile metadata survives clipping and anchor transforms. Short-branch context includes neighboring source cells; eligibility checks use that same context so a sidewalk, width taper or lane shift on any incident arm excludes the whole fork. Missing required source context fails the tile build instead of emitting a partial fork. Existing geometry remains in use for excluded arms.
+Complete profile metadata survives clipping and anchor transforms. Short-branch context includes neighboring source cells; eligibility checks use that same context so a sidewalk, width taper, lane shift, long profile or ambiguous multipart arm excludes the whole fork. Unsupported long and multipart profiles contribute only their endpoints for this check. Missing required source context fails the tile build instead of emitting a partial fork. Existing geometry remains in use for excluded arms.
 
 ## Reproducible offline replay
 
@@ -26,7 +26,7 @@ Timings are local observations and vary by machine. The added geometry and const
 python server/tests/bench_bridge_junction.py --baseline-ref 7198d96e083dc08ccbe126a5afe57ee05aeb03d3
 ```
 
-The combined 18-module road and bridge suite ran **353 tests: 352 passed, one skipped** because LuaJIT was unavailable. It includes the fixture, ground approach, stacked levels, source-cell boundaries, unsupported arms, adjacent tiles, rebase, sidewalks and width behavior. The overlap and ground-approach regression tests also failed with the original DEV mesh before the correction. Run with `server` and `server/tests` on `PYTHONPATH`:
+The combined 18-module road and bridge suite ran **354 tests: 353 passed, one skipped** because LuaJIT was unavailable. It includes the fixture, ground approach, stacked levels, source-cell boundaries, unsupported arms, adjacent tiles, rebase, sidewalks and width behavior. An additional focused run of 20 tests includes the stacked-level and multipart ordering regression. The overlap and ground-approach regression tests also failed with the original DEV mesh before the correction. Run with `server` and `server/tests` on `PYTHONPATH`:
 
 ```text
 python -m unittest test_bridge_junction_surface test_deckpad_levels test_roadmesh test_bridgeprofile test_bridge_clearance test_bridgetypes test_bridgelook test_otto_bridge test_shortdecks test_roads test_geotiles test_deckjoins test_roadwidth test_ondeck test_sidewalk_collision test_bridge_scenarios test_under_deck test_tram_bridges
