@@ -389,14 +389,17 @@ def _junction_surfaces(chunks, context=()):
                 break
         else:
             groups.append([(c, p)])
+    candidates = [group for group in groups if len({c['fid'] for c, _p in group}) >= 3]
+    # A shared span at two forks cannot use only one fork's height field: that changes its
+    # surface at the other fork. Conservatively leave all such junctions on existing geometry.
+    occurrences = {}
+    for group in candidates:
+        for fid in {c['fid'] for c, _p in group}:
+            occurrences[fid] = occurrences.get(fid, 0) + 1
     out = {}
-    for group in groups:
-        if any(c.get('jskip') for c, _p in group):
-            continue
-        if not 3 <= len({c['fid'] for c, _p in group}) <= JUNCTION_MAX_BRANCHES:
-            continue
-        # Do not join a longer network through both ends of one part: each bounded fork gets one surface.
-        if any(c['fid'] in out for c, _p in group):
+    for group in candidates:
+        if (len({c['fid'] for c, _p in group}) > JUNCTION_MAX_BRANCHES or
+                any(c.get('jskip') or occurrences[c['fid']] > 1 for c, _p in group)):
             continue
         field = _JunctionSurface(group, np.mean([p[0] for _c, p in group], axis=0))
         out.update({c['fid']: field for c, _p in group})

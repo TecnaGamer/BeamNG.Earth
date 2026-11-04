@@ -67,6 +67,15 @@ def fixture():
 
 
 class BridgeJunctionSurfaceTest(unittest.TestCase):
+    def test_connected_forks_do_not_partially_regrade_shared_span(self):
+        chunks = [chunk('a', [(-20, 0, 20), (0, 0, 20)]),
+                  chunk('b', [(0, 0, 20), (-15, 12, 20)]),
+                  chunk('c', [(0, 0, 20), (30, 0, 20)]),
+                  chunk('d', [(30, 0, 20), (45, 12, 20)]),
+                  chunk('e', [(30, 0, 20), (45, -12, 20)])]
+        self.assertEqual(roadmesh._junction_surfaces(chunks), {},
+                         'a span connecting two forks must not be regraded for only one junction')
+
     def test_captured_fork_has_no_stacked_collision_faces_in_driving_lanes(self):
         _parts, chunks, ctx, pads, ground = fixture()
         mesh = roadmesh.deck(chunks, (0, 0, 0), context=ctx, pads=pads, ground=ground)
