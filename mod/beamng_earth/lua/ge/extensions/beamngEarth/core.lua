@@ -3384,6 +3384,8 @@ M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
 end
+M.onVehicleSpawned = function(id) if st.inOurLevel then navgraph.onVehicleSpawned(id) end end
+M.onVehicleDestroyed = function(id) if st.inOurLevel then navgraph.onVehicleDestroyed(id) end end
 M.onClientEndMission = onClientEndMission
 M.onExit = function() notePlayerPos(true) end           -- the game closing (a crash or a kill: the last periodic one)
 M.onClientPostStartMission = onClientPostStartMission
