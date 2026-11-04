@@ -23,7 +23,7 @@ NONHOUSE_NAMES = ("école", "ecole", "mairie", "chapelle", "église", "eglise", 
 
 # Family, relative weight. All are varied again in roof, shutters and palette.
 FAMILIES = {
-    "alsace": (("render", 65), ("halfhip", 20), ("timber", 15)),
+    "alsace": (("render", 40), ("halfhip", 20), ("timber", 40)),
     "brittany": (("granite", 55), ("render", 45)),
     "normandy": (("render", 55), ("stone", 25), ("timber", 20)),
     "north": (("brick", 75), ("render", 25)),

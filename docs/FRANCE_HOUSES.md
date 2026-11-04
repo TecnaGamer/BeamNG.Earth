@@ -15,6 +15,20 @@ générées, rendues hors jeu. Ce n'est pas une capture d'un essai dans BeamNG.
 
 ## Installer et lancer
 
+Pour mettre à jour uniquement la fréquence des colombages sur une installation
+existante (y compris sur `french-license-plates` avec les plaques internationales),
+fermer jeu et serveur puis lancer le nouvel installateur avec :
+
+```powershell
+py -3.12 .\build\ajouter_routes_panneaux_france_173.py --alsace-only
+```
+
+Ce mode conserve la branche et les autres modifications. Il sauvegarde dans
+`build/ajustement-colombages-173`, vérifie les maisons et les bâtiments, puis
+permet de relancer le lanceur habituel. `--alsace-only --restore` revient à la
+version sauvegardée. Le changement de source invalide les clés du cache de
+génération ; les téléchargements peuvent être conservés.
+
 Fermer le jeu et l'ancien serveur. Remplacer le fichier
 `build/ajouter_routes_panneaux_france_173.py` par le nouveau, puis, depuis
 `BeamNG.Earth-PR` :
@@ -58,7 +72,7 @@ l'outre-mer conservent leurs modèles actuels.
 
 | Zone du générateur | Maisons représentatives |
 | --- | --- |
-| Alsace, Bas-Rhin et Haut-Rhin | Majorité d'enduits clairs et pastel, volets roulants fréquents, toits pentus en tuiles ; variantes en demi-croupe et minorité à colombages. |
+| Alsace, Bas-Rhin et Haut-Rhin | Enduits clairs et pastel, volets roulants fréquents, toits pentus en tuiles et davantage de colombages : poids de tirage 40 % enduit, 20 % demi-croupe enduite, 40 % colombages. Les contraintes de hauteur et les matériaux renseignés restent prioritaires ; la proportion finale peut donc différer. Les façades roses restent rares. Ces poids sont un réglage visuel, pas une statistique du parc de logements. |
 | Bretagne | Pierre grise ou enduit clair, ardoises et cheminées ; encadrements clairs. |
 | Normandie | Enduit, pierre et une part de maisons à pans de bois ; toitures sombres ou en tuiles. |
 | Nord, Aisne, Somme, Nord et Pas-de-Calais | Brique sombre et enduits ; maisons étroites adaptées à l'emprise. |

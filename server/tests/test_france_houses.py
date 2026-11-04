@@ -70,11 +70,11 @@ class HouseTest(unittest.TestCase):
         for lat, lon in ((49., 8.2), (47.56, 7.59), (43.32, -1.98), (45., -73.), (float("nan"), 3.)):
             self.assertIsNone(house_regions.profile(lat, lon, 1000.))
 
-    def test_alsace_has_mostly_rendered_houses_and_varied_colours(self):
+    def test_alsace_has_more_timber_houses_and_varied_colours(self):
         specs = [self.plan(seed_id=str(i)) for i in range(500)]
         counts = Counter(s.fr_house["family"] for s in specs)
-        self.assertGreater(counts["render"], 250)
-        self.assertTrue(35 < counts["timber"] < 130, counts)
+        self.assertTrue(150 < counts["render"] < 250, counts)
+        self.assertTrue(150 < counts["timber"] < 250, counts)
         self.assertTrue(50 < counts["halfhip"] < 170, counts)
         self.assertGreater(len({s.facade for s in specs}), 8)
         self.assertTrue(any(s.fr_house["roller"] for s in specs))
