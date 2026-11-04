@@ -134,7 +134,9 @@ MAX_TRIANGLES = 400_000         # a model with more is left out (gltf_mesh): the
 
 def _urllib_fetch(url, timeout):
     req = urllib.request.Request(url, headers={"User-Agent": netfetch.USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    # (Windows: the system's certificate check, as netfetch's own requests: OpenSSL's chain took an expired
+    # intermediate for 3dmr.eu's Let's Encrypt YE1 certificate, "certificate has expired", 2026-11-03; GitHub #567)
+    with urllib.request.urlopen(req, timeout=timeout, context=netfetch.windows_ssl_context()) as resp:
         data = resp.read(MAX_DOWNLOAD + 1)
     if len(data) > MAX_DOWNLOAD:
         raise OSError(f"reply over {MAX_DOWNLOAD >> 20} MB")
