@@ -366,8 +366,8 @@
     {
       "country": "FR",
       "family": "FR-EB10",
-      "font": "condensed",
-      "font_status": "substitute",
+      "font": "l1",
+      "font_status": "regulatory-alphabet-digitization-test-release",
       "reference_level": "primary-source-and-photos",
       "background": "white",
       "border": "red",
@@ -689,8 +689,8 @@
     {
       "country": "MC",
       "family": "FR-EB10",
-      "font": "condensed",
-      "font_status": "substitute",
+      "font": "l1",
+      "font_status": "regulatory-alphabet-digitization-test-release",
       "reference_level": "representative-family-not-independently-verified",
       "background": "white",
       "border": "red",

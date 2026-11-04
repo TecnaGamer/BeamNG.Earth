@@ -38,7 +38,7 @@ panneau, de chaque région ou de chaque époque.
 | Royaume-Uni et familles proches | AG Transport Heavy | Reconstruction des dessins DfT, avec provenance Crown/OGL. Ne prétend pas reproduire ANWB-C ou toutes les variantes locales. |
 | Espagne | CCRIGE, Javi Casas | Numérisation libre des dessins espagnols, SIL OFL 1.1. |
 | Norvège | Trafikk Regular, Aitor | Interprétation libre des spécifications norvégiennes ; quelques lettres sont volontairement modifiées. |
-| France | D-DIN Condensed, approche espacée | **Substitut**, pas la vraie L1. Les fichiers L1 trouvés n'avaient pas une autorisation de réutilisation suffisamment claire. |
+| France | Typoroute 2002 L1 100, Gwenaël Jouvin | Numérisation de l’alphabet L1 réglementaire, SIL OFL 1.1. Le TTF original est conservé, avec son crénage et ses traits d’union contextuels ; version de test signalée par son auteur. |
 | Allemagne et plusieurs familles continentales | D-DIN | **Substitut inspiré DIN**, pas une certification DIN 1451. |
 | Pologne | D-DIN Expanded | **Substitut**, pas Drogowskaz. La numérisation trouvée comporte des conditions supplémentaires de notification à l'auteur ; elle n'est pas incluse. |
 | Autriche, Slovaquie | D-DIN | **Substitut**, pas TERN, qui est proposé sous licence commerciale. |
@@ -50,6 +50,8 @@ le matériel du mod dans `regional_signs/TOWN-FONTS-NOTICE.md`. Le fichier
 `docs/TOWN_SIGN_COVERAGE.json` indique le profil et le niveau de vérification de
 chaque pays. Un alphabet national mentionné dans une liste ne signifie pas que
 sa version numérique exacte est incluse.
+
+La France utilise maintenant Typoroute L1 pour EB10/EB20 et les cartouches D. Les avances, paires de crénage et la variante contextuelle du trait d’union proviennent du fichier original. Les ligatures facultatives SUR/SOUS restent désactivées pour conserver le nom fourni. Les textures sont générées sans déformation horizontale. Voir [le dépôt de l’auteur](https://framagit.org/gwenj/typoroute).
 
 ## Noms secondaires et variantes
 

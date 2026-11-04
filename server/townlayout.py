@@ -6,7 +6,7 @@ anchor the families. No municipal name, translation, crest or speed is invented.
 from dataclasses import dataclass,replace
 import re
 
-VERSION='town-layout-2026-11-v1'
+VERSION='town-layout-2026-11-v2-l1'
 
 @dataclass(frozen=True)
 class Profile:
@@ -28,7 +28,7 @@ class Profile:
     admin_gap:float=.085
     family:str='continental-name'
 
-FR=Profile('condensed',.80,4.6,.43,.21,.12,.095,.018,.032,.045,8.,1.,.12,family='FR-EB10')
+FR=Profile('l1',.80,4.6,.43,.21,.12,.095,.018,.032,.045,8.,family='FR-EB10')
 DE=Profile('din',1.05,2.8,.75,.235,.14,.11,.022,.018,.065,2.50,family='DE-310')
 AT=Profile('din',.96,2.8,.63,.205,.14,.12,.018,.025,.025,3.25,family='AT-17a')
 NL=Profile('transport',1.15,3.8,.62,.235,.13,.11,.018,.018,.045,5.,family='NL-H1')

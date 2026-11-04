@@ -26,21 +26,62 @@ SPECS={
  'tratex_white':(SOURCES/'Tratex-White.ttf',56,1.,.02,'Tratex Vit (Transportstyrelsen)'),
  'ccrige':(SOURCES/'CCRIGE.otf',56,1.,0.,'CCRIGE (Javi Casas, Spanish drawing reconstruction)'),
  'trafikk':(SOURCES/'Trafikk-regular.ttf',56,1.,.015,'Trafikk Regular (Aitor, Norwegian specification interpretation)'),
+ 'l1':(SOURCES/'Typoroute2002-L1_100.ttf',96,1.,0.,'Typoroute 2002 L1 100 (Gwenaël Jouvin, French L1 digitization)'),
 }
+
+def l1_positioning(tt,chars,cap,size):
+ """Export this pinned font's GPOS pairs and one GSUB hyphen context offline."""
+ cmap=tt.getBestCmap();names={ch:cmap[ord(ch)]for ch in chars};factor=size/(tt['head'].unitsPerEm*cap)
+ gpos=tt['GPOS'].table
+ indices=next(f.Feature.LookupListIndex for f in gpos.FeatureList.FeatureRecord if f.FeatureTag=='kern')
+ pairs={}
+ for a,ga in names.items():
+  for b,gb in names.items():
+   amount=0
+   for index in indices:
+    lookup=gpos.LookupList.Lookup[index]
+    assert lookup.LookupType==2
+    for sub in lookup.SubTable:
+     assert sub.Format==2 and sub.ValueFormat1==4 and sub.ValueFormat2==0
+     if ga not in sub.Coverage.glyphs:continue
+     value=sub.Class1Record[sub.ClassDef1.classDefs.get(ga,0)].Class2Record[sub.ClassDef2.classDefs.get(gb,0)].Value1
+     amount+=getattr(value,'XAdvance',0) if value is not None else 0
+     break
+   if amount:pairs[a+b]=amount*factor
+ gsub=tt['GSUB'].table
+ context_index=next(f.Feature.LookupListIndex[0]for f in gsub.FeatureList.FeatureRecord if f.FeatureTag=='calt')
+ context=gsub.LookupList.Lookup[context_index].SubTable[0]
+ assert context.Format==2 and context.Coverage.glyphs==['hyphen']
+ rule=context.ChainSubClassSet[1].ChainSubClassRule[0]
+ assert rule.Backtrack==[1] and rule.LookAhead==[1] and rule.InputGlyphCount==1
+ subst=gsub.LookupList.Lookup[rule.SubstLookupRecord[0].LookupListIndex].SubTable[0].mapping
+ alt=next(ch for ch,gn in names.items()if gn==subst['hyphen'])
+ return {'kerning':pairs,'aliases':{"'":'’'},'hyphen_context':{'glyph':alt,
+  'left':''.join(ch for ch,gn in names.items()if context.BacktrackClassDef.classDefs.get(gn)==1),
+  'right':''.join(ch for ch,gn in names.items()if context.LookAheadClassDef.classDefs.get(gn)==1)}}
+
 
 def build():
  OUT.mkdir(parents=True,exist_ok=True)
  fonts={};images=[];allchars=set()
  for a,b in RANGES:allchars.update(chr(i)for i in range(a,b))
  for key,(path,size,scale,spacing,label)in SPECS.items():
-  font=ImageFont.truetype(str(path),size);cmap=TTFont(path).getBestCmap();cap=font.getbbox('H',anchor='ls')[3]-font.getbbox('H',anchor='ls')[1]
-  chars=sorted(c for c in allchars if ord(c)in cmap and (key in ('legacy','fallback')or ord(c)<592))
+  font=ImageFont.truetype(str(path),size);tt=TTFont(path);cmap=tt.getBestCmap();cap=font.getbbox('H',anchor='ls')[3]-font.getbbox('H',anchor='ls')[1]
+  chars=sorted(chr(cp)for cp in cmap)if key=='l1'else sorted(c for c in allchars if ord(c)in cmap and (key in ('legacy','fallback')or ord(c)<592))
   glyphs={};fonts[key]={'font':label,'horizontal_scale':scale,'letter_spacing':spacing,'glyphs':glyphs,'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+  if key=='l1':fonts[key].update(l1_positioning(tt,chars,cap,size))
   for ch in chars:
    l,t,r,b=font.getbbox(ch,anchor='ls');w,h=r-l,b-t
    g={'advance':font.getlength(ch)/cap,'bounds':[l/cap,-b/cap,r/cap,-t/cap],'uv':[0,0,0,0]};glyphs[ch]=g
    if w>0 and h>0:
     im=Image.new('L',(w,h));ImageDraw.Draw(im).text((-l,-t),ch,font=font,fill=255,anchor='ls')
+    if key=='l1':
+     # Typoroute has deliberate side bearings. Pillow's getbbox includes the
+     # advance box; trim to visible ink while retaining the original advance.
+     bounds=im.getbbox()
+     if bounds is not None:
+      a,bb,c,d=bounds;im=im.crop(bounds)
+      g['bounds']=[(l+a)/cap,-(t+d)/cap,(l+c)/cap,-(t+bb)/cap]
     images.append((key,ch,im))
  # One texture pair shared by every typeface, independent of settlement count.
  width=4096;x=y=rowh=0;positions=[];pad=3
@@ -65,6 +106,7 @@ def build():
   m['Stages'][0]['opacityMap']=VFS+'/sign_font_opacity.data.png'
  (OUT/'main.materials.json').write_text(json.dumps(materials,indent=2)+'\n')
  (OUT/'TOWN-FONTS-NOTICE.md').write_text((SOURCES/'NOTICE.md').read_text(),encoding='utf-8')
+ (OUT/'Typoroute-LICENSE.md').write_bytes((SOURCES/'Typoroute-LICENSE.md').read_bytes())
  print(len(fonts),'typefaces;',len(images),'glyphs;',alpha.size,'used height',y+rowh)
 
 if __name__=='__main__':build()

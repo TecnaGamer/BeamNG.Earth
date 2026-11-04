@@ -110,6 +110,10 @@ def comparison(out,ref):
             spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(spec)
             sys.modules[name]=module;spec.loader.exec_module(module);return module
         old=load('_town_preview_before_mesh',before/'signmesh.py');styles=load('_town_preview_before_styles',before/'europeinfra.py')
+        old_layout=None
+        if subprocess.run(['git','-C',str(ROOT),'cat-file','-e',ref+':server/townlayout.py'],capture_output=True).returncode==0:
+            (before/'townlayout.py').write_bytes(read('server/townlayout.py'))
+            old_layout=load('_town_preview_before_layout',before/'townlayout.py')
         countries=['FR','DE','AT','NL','BE','PL','RO','SE'];sheet=Image.new('RGB',(1500,80+len(countries)*190),'#f7f8fa')
         d=ImageDraw.Draw(sheet);title=ImageFont.truetype(str(LABEL_FONT),22);small=ImageFont.truetype(str(LABEL_FONT),15)
         d.text((16,12),'Avant / après · maillages réels, rendus hors jeu',font=title,fill='#132a39')
@@ -118,11 +122,19 @@ def comparison(out,ref):
             name=EXAMPLES[code];route='D679'if code=='FR'else'';y=80+row*190
             d.text((16,y+20),code,font=title,fill='#132a39')
             m=old.Mesh();oldstyle=None if code=='FR'else styles.town_style(code)
-            m.town((0,0,0),(0,1),name,route,'begin',oldstyle)
+            current_layout=sys.modules.get('townlayout')
+            try:
+                if old_layout is not None:sys.modules['townlayout']=old_layout
+                m.town((0,0,0),(0,1),name,route,'begin',oldstyle)
+                oldw=old.layout(name,True if oldstyle is None else oldstyle.uppercase)[1]
+                if old_layout is not None:
+                    oldplan=old.town_layout(name,oldstyle);oldw=oldplan.width;oldh=oldplan.height;oldfont=oldplan.profile.font
+                else:oldh=1.06 if oldstyle and oldstyle.skyline else .70;oldfont='alphabet commun'
+            finally:
+                if current_layout is not None:sys.modules['townlayout']=current_layout
+                else:sys.modules.pop('townlayout',None)
             sheet.paste(render(m,(650,148),folder=art),(100,y))
-            oldw=old.layout(name,True if oldstyle is None else oldstyle.uppercase)[1]
-            oldh=1.06 if oldstyle and oldstyle.skyline else .70
-            d.text((115,y+151),f'Avant : {oldw:.2f} × {oldh:.2f} m · alphabet commun',font=small,fill='#526774')
+            d.text((115,y+151),f'Avant : {oldw:.2f} × {oldh:.2f} m · {oldfont}',font=small,fill='#526774')
             m=signmesh.Mesh();style=ei.town_style(code);m.town((0,0,0),(0,1),name,route,'begin',style)
             sheet.paste(render(m,(650,148)),(820,y));p=signmesh.town_layout(name,style)
             d.text((835,y+151),f'Après : {p.width:.2f} × {p.height:.2f} m · {p.profile.font}',font=small,fill='#526774')
@@ -157,6 +169,12 @@ def main():
     sheet=Image.new('RGB',(1680,1360),'white')
     for i,(code,name)in enumerate(lengths):sheet.paste(card(code,name),((i%3)*560,(i//3)*340))
     sheet.save(out/'Noms-courts-longs.png')
+    french=[('MARCENAT','D679'),('CHEYLADE','D62'),('GŒRSDORF',''),("L’HÔPITAL",''),('SAINT-ÉTIENNE',''),('SAINT-REMY-EN-BOUZEMONT-SAINT-GENEST-ET-ISSON','')]
+    sheet=Image.new('RGB',(1920,780),'#f7f8fa');d=ImageDraw.Draw(sheet)
+    d.text((18,8),'France · Caractères L1 — Typoroute 2002 L1 100',font=ImageFont.truetype(str(LABEL_FONT),23),fill='#132a39')
+    d.text((18,37),'Rendus hors jeu des maillages du mod · lettres et crénage de la numérisation L1 · largeur adaptée au nom',font=ImageFont.truetype(str(LABEL_FONT),17),fill='#526774')
+    for i,(name,route)in enumerate(french):sheet.paste(card('FR',name,size=(640,350),route=route),((i%3)*640,80+(i//3)*350))
+    sheet.save(out/'France-L1.png')
     if args.compare:comparison(out,args.compare)
     (out/'catalogue.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     cards=''.join(f'<article><img src="{r["country"]}.png" alt="{html.escape(r["name"])}"><p>{r["country"]} · {html.escape(r["family"])}</p></article>'for r in manifest)
@@ -165,6 +183,7 @@ def main():
 <h1>Panneaux de localité · 56 pays et territoires</h1>
 <p>Rendus hors jeu des vrais maillages et de leur atlas de lettres. Chaque carte est cadrée séparément : comparer les dimensions indiquées, pas la taille à l’écran.</p>
 <p>Tratex : source suédoise officielle. Transport et CCRIGE : reconstructions des dessins nationaux. Trafikk : interprétation des spécifications norvégiennes. D-DIN et DejaVu : substituts, sans prétendre reproduire exactement les alphabets nationaux.</p>
+<p>France et Monaco : Typoroute 2002 L1 100, numérisation L1 de Gwenaël Jouvin sous licence SIL OFL 1.1, avec crénage et trait d’union contextuel. Le TTF est conservé sans modification ; son auteur le présente comme une version de test.</p>
 <p>Les petites lignes administratives visibles dans Apercu-principal.png proviennent des photos de référence. Elles ne seront affichées en jeu que si ces données sont fournies. Les autres cartes utilisent seulement le nom de localité disponible.</p>
 <p>Les variantes bilingues, écussons locaux, informations administratives et silhouettes non vérifiées ne constituent pas une reproduction homologuée. Voir docs/TOWN_SIGNS.md et les sources dans le dépôt.</p><main>'''+cards+'</main></html>',encoding='utf-8')
     print(f'{len(manifest)} country meshes previewed in {out}')

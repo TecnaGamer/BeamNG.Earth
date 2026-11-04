@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 import numpy as np
-from PIL import Image
+from PIL import Image,ImageFont
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT/'server'),str(ROOT/'tools')]
@@ -112,6 +112,37 @@ class LayoutTest(unittest.TestCase):
 
 
 class AssetsTest(unittest.TestCase):
+    def test_french_faces_use_unmodified_typoroute_l1_with_native_spacing(self):
+        path=ROOT/'tools/fonts/town/Typoroute2002-L1_100.ttf'
+        source=ImageFont.truetype(str(path),96)
+        cap=source.getbbox('H',anchor='ls')[3]-source.getbbox('H',anchor='ls')[1]
+        face=sm.face_font('l1')
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),'225b8b8eed0f0a6b59ad1ba836f2e9394ca1297386aec79709f5c0fa47057291')
+        self.assertEqual(face['sha256'],hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertEqual(sm.town_layout('MARCENAT').profile.font,'l1')
+        self.assertEqual(face['horizontal_scale'],1.)
+        for text in ('MARCENAT','CHEYLADE','AV','AA','SAINT-REMY', '-RÉMY', 'SAINT-',
+                     'SAINT-ÉTIENNE','GŒRSDORF','D 679',"L’HÔPITAL"):
+            with self.subTest(text=text):
+                self.assertAlmostEqual(sm.measure(text,'l1')[3]*cap,source.getlength(text),delta=.08)
+        self.assertNotEqual(sm.font_text('SAINT-REMY','l1'),'SAINT-REMY')
+        self.assertEqual(sm.font_text('-REMY','l1'),'-REMY')
+        self.assertEqual(sm.font_text("L'HÔPITAL",'l1'),"L’HÔPITAL")
+        self.assertEqual(sm.glyph_for('😀','l1'),sm.face_font('fallback')['glyphs']['?'])
+
+    def test_french_mesh_samples_l1_ink_and_keeps_accents_and_long_names(self):
+        for name in ('MARCENAT','CHEYLADE','ÉTÉ À GŒRSDORF',"L’HÔPITAL",'SAINT-REMY-EN-BOUZEMONT-SAINT-GENEST-ET-ISSON'):
+            plan=sm.town_layout(name);mesh=sm.Mesh();mesh.town((0,0,0),(0,1),name,kind='begin')
+            actual=[tuple(mesh.uv[i])for tri,mat in zip(mesh.t,mesh.tm)if mat==sm.GLYPH for i in tri]
+            allowed=set()
+            for line in plan.lines:
+                for ch in sm.font_text(line.text,'l1'):
+                    self.assertIn(ch,sm.face_font('l1')['glyphs'])
+                    u0,v0,u1,v1=sm.glyph_for(ch,'l1')['uv']
+                    allowed.update(((u0,v0),(u1,v0),(u1,v1),(u0,v1)))
+            self.assertTrue(set(actual)<=allowed)
+            self.assertNotEqual(sm.measure(name,'l1')[0],sm.measure(name,'condensed')[0])
+
     def test_shared_atlas_alpha_uv_and_all_font_sources(self):
         data=sm.font();w,h=data['atlas_size']
         self.assertTrue(w<=4096 and h<=4096 and w&(w-1)==0 and h&(h-1)==0)

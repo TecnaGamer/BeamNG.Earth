@@ -40,27 +40,40 @@ def face_font(key=None):
 
 def glyph_for(ch,key=None):
     face=face_font(key)
+    ch=face.get('aliases',{}).get(ch,ch)
     g=face['glyphs'].get(ch)
     if g is None:g=face_font('fallback')['glyphs'].get(ch)
-    return g if g is not None else face['glyphs']['?']
+    return g if g is not None else face['glyphs'].get('?',face_font('fallback')['glyphs']['?'])
+
+
+def font_text(text,key=None):
+    f=face_font(key);aliases=f.get('aliases',{});text=''.join(aliases.get(c,c)for c in text)
+    context=f.get('hyphen_context')
+    if context:
+        text=''.join(context['glyph']if c=='-' and 0<i<len(text)-1 and text[i-1]in context['left']and text[i+1]in context['right']else c for i,c in enumerate(text))
+    return text
 
 
 def measure(text,key=None,scale=1.,tracking=None):
     f=face_font(key);stretch=f['horizontal_scale']*scale
     spacing=f['letter_spacing']if tracking is None else tracking
     x=0.;left=bottom=right=top=0.;has_ink=False
-    for ch in text:
+    pairs=f.get('kerning',{});previous=''
+    for ch in font_text(text,key):
+        x+=pairs.get(previous+ch,0.)*stretch if previous else 0.
         g=glyph_for(ch,key);l,b,r,t=g['bounds']
         if r>l and t>b:
             if not has_ink:left,right,bottom,top=x+l*stretch,x+r*stretch,b,t;has_ink=True
             else:left=min(left,x+l*stretch);right=max(right,x+r*stretch);bottom=min(bottom,b);top=max(top,t)
         x+=(g['advance']+spacing)*stretch
+        previous=ch
     return right-left,top-bottom,(left,bottom,right,top),x
 
 
 def advance(text,key=None):
     f=face_font(key)
-    return sum(glyph_for(c,key)['advance']+f['letter_spacing']for c in text)*f['horizontal_scale']
+    text=font_text(text,key);pairs=f.get('kerning',{})
+    return (sum(glyph_for(c,key)['advance']+f['letter_spacing']for c in text)+sum(pairs.get(a+b,0.)for a,b in zip(text,text[1:])))*f['horizontal_scale']
 
 
 def town_layout(name,style=None,details=()):
@@ -125,13 +138,16 @@ class Mesh:
             z-=((b+t)/2)*h
         else:
             h=min(height,max_width/max(advance(text,font_key)*scale,.01));x=-advance(text,font_key)*scale*h/2+x_offset
-        for ch in text:
+        pairs=f.get('kerning',{});previous=''
+        for ch in font_text(text,font_key):
+            x+=pairs.get(previous+ch,0.)*stretch*h if previous else 0.
             g=glyph_for(ch,font_key);l,b,r,t=g['bounds'];u0,v0,u1,v1=g['uv']
             if r>l and t>b:
                 self.face(GLYPH_WHITE if white else GLYPH,[(x+l*h*stretch,y,z+b*h),(x+r*h*stretch,y,z+b*h),
                                  (x+r*h*stretch,y,z+t*h),(x+l*h*stretch,y,z+t*h)],
                           [(u0,v0),(u1,v0),(u1,v1),(u0,v1)])
             x+=(g['advance']+spacing)*stretch*h
+            previous=ch
 
     def _skyline(self,code,w,h,z,y):
         # Flat national sign pictograms, not invented landmarks of this town.
@@ -190,14 +206,14 @@ class Mesh:
             self.face(RED,[(q[0],-.040,q[1])for q in v])
         route=valid_route(route)if plan.country in {'FR','MC'}else''
         if route:
-            rh=.235;rw=max(.40,measure(route,'din')[0]*.145+.12);rz=plan.top+.055+rh/2
+            rh=.235;rw=max(.40,measure(route,'l1')[0]*.145+.12);rz=plan.top+.055+rh/2
             # A short rear stay also supports the cartouche on wide two-post
             # boards; the road-number plate must not float above the main face.
             self.box(METAL,(0,.045,plan.top+.105),(.020,.020,.165))
             self.rect(METAL,rw+.018,rh+.018,rz,-.026,.025)
             self.rect(BLACK,rw,rh,rz,-.028,.022)
             self.rect(YELLOW,rw-.024,rh-.024,rz,-.030,.016)
-            self.text(route,rz,-.034,.145,rw-.10,uppercase=False,font_key='din',centre_ink=True)
+            self.text(route,rz,-.034,.145,rw-.10,uppercase=False,font_key='l1',centre_ink=True)
         return w,h
 
     def town_face(self,name,exit=False,route=''):
