@@ -103,13 +103,13 @@ def simplify(rock, cell_m):
                         uvs=average(rock.uvs)[used], colors=np.rint(average(rock.colors)[used]).astype(np.uint8),
                         normals=normal, tri_materials=material[keep],
                         uvs2=None if getattr(rock,'uvs2',None) is None else average(rock.uvs2)[used],
-                        tangent_uvs=None if getattr(rock,'uvs2',None) is None else average(rock.uvs2)[used])
+                        tangent_uvs=average(rock.uvs if rock.terrain_blend else rock.uvs2)[used] if rock.uvs2 is not None else None)
         restore = np.isin(mapping, np.unique(tri[bad]))
         labels[restore] = np.arange(n)[restore]
     # Pathological input remains intact rather than producing an unsafe coarse mesh.
     return dict(positions=p, tris=t, uvs=rock.uvs, colors=rock.colors,
                 normals=rock.normals, tri_materials=material,
-                uvs2=getattr(rock,'uvs2',None), tangent_uvs=getattr(rock,'uvs2',None))
+                uvs2=getattr(rock,'uvs2',None), tangent_uvs=rock.uvs if rock.terrain_blend else getattr(rock,'uvs2',None))
 
 
 def levels(rock):

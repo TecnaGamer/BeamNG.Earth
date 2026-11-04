@@ -35,18 +35,27 @@ class CliffRocksTest(unittest.TestCase):
         keep = np.ones((20,20),bool)
         rock = cr.mesh(self.h,keep,self.x,self.x,np.zeros(keep.shape,int),
                        (0,0,160,160),(0,0,0),natural_family=cm.CANYON)
-        np.testing.assert_array_equal(rock.uvs2,rock.uvs)
+        self.assertTrue(rock.terrain_blend)
+        self.assertTrue(np.all((rock.uvs2[:,0]>=0) & (rock.uvs2[:,0]<=1)))
         cliffdetail.refine_canyon(rock, full_relief=True)
-        np.testing.assert_array_equal(rock.uvs2,rock.uvs)
+        self.assertTrue(rock.terrain_blend)
+        self.assertTrue(np.all((rock.uvs2[:,0]>=0) & (rock.uvs2[:,0]<=1)))
         for _,lod in clifflod.levels(rock):
-            np.testing.assert_array_equal(lod['uvs2'],lod['uvs'])
+            np.testing.assert_array_equal(lod['tangent_uvs'],lod['uvs'])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'aligned-normal.cdae'
             cr.write(str(path),rock)
             for mesh in cdae.read(path)['meshes']:
                 arrays = cdae.mesh_arrays(mesh)
                 self.assertTrue(np.isfinite(arrays['tangents']).all())
-                np.testing.assert_array_equal(arrays['tverts2'],arrays['tverts'])
+                self.assertTrue(np.all((arrays['tverts2'][:,0]>=0) & (arrays['tverts2'][:,0]<=1)))
+                # Normal-map tangents must use the rock chart, never the constant-Y rim UV.
+                expected=cdae.tangents(arrays['verts'],arrays['tverts'],arrays['norms'],
+                                       arrays['indices'].reshape(-1,3))
+                # Handedness on nearly degenerate UV triangles may flip when
+                # rebuilding from the file's float32 UVs; check direction instead.
+                alignment=np.sum(arrays['tangents'][:,:3]*expected[:,:3],axis=1)
+                self.assertGreater(np.quantile(alignment,.001),.999)
 
     def test_tall_canyon_backing_does_not_fold_before_surface_sampling(self):
         import cliffmaterial as cm
@@ -137,7 +146,7 @@ class CliffRocksTest(unittest.TestCase):
         self.assertEqual(set(rock.tri_materials), {cm.NATURAL, cm.LIMESTONE_CUT, cm.ARID_CUT})
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp)/'mixed.cdae'); cr.write(path, rock)
-            self.assertEqual([m['name'] for m in cdae.read(path)['materials']], list(cm.MATERIALS[:3]))
+            self.assertEqual([m['name'] for m in cdae.read(path)['materials']], list(__import__('clifftransition').MATERIALS[:3]))
         # Neighboring tile generation and order must not alter material phase.
         def tile(box):
             return cr.mesh(self.h, keep, self.x, self.x, biomes, box, (0, 0, 0), cuts=cuts)
@@ -397,7 +406,13 @@ class CliffRocksTest(unittest.TestCase):
             count, size, raw = decoded['meshes'][0]['colors']
             self.assertEqual(size, 4)
             self.assertEqual(count, len(self.make().positions))
-            self.assertEqual(raw, self.make().colors.tobytes())
+            arrays=cdae.mesh_arrays(decoded['meshes'][0])
+            expected=self.make()
+            # Spatial streaming may reorder vertices; tint stays attached to position.
+            lookup={tuple(p):tuple(c) for p,c in zip(expected.positions,expected.colors)}
+            actual=np.frombuffer(raw,np.uint8).reshape(-1,4)
+            for p,c in zip(arrays['verts'],actual):
+                self.assertEqual(tuple(c),lookup[tuple(p)])
 
     def test_enabled_build_keeps_full_road_corridor_clear(self):
         class Surface:

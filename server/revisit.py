@@ -108,7 +108,7 @@ def source_closure(here):
 def source_id(here):
     """The fingerprint of source_closure's files and the native module (a packaged app's REVISIT_ID, tools/build_app.py)."""
     h = hashlib.sha1()
-    heightmaps = ("cliff_height.png", "cliff_cut_height.png", "cliff_arid_cut_height.png", "cliff_canyon_height.png")
+    heightmaps = ("cliff_height.png", "cliff_cut_height.png", "cliff_arid_cut_height.png", "cliff_canyon_height.png", "cliff_transition_means.json")
     names = source_closure(here) + sorted(n for n in os.listdir(here)
                                          if n.startswith("earthfast") or n in heightmaps)
     for name in names:

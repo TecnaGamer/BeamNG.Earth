@@ -31,8 +31,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes.
-- Terrain-fitted cliff faces and road cuts, with regional rock colors, broken rocks, and transition
-  decals. Large cliff meshes stream in smaller pieces across frames to reduce loading stalls,
+- Terrain-fitted cliff faces and road cuts, with regional rock colors, broken rocks, and optional
+  transition decals. All near cliff families trim their grid-shaped outlines into smooth contours and
+  taper their thickness into the terrain while blending toward satellite colors, without adding decal objects. Interior rock
+  detail stays intact. Large cliff meshes stream in smaller pieces across frames to reduce loading stalls,
   with shared edges and textures preserved across rock types. Each has its own in-game switch; see the [cliff testing guide](docs/CLIFF_TESTING.md).
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
   shrubs), autumn colours in season.

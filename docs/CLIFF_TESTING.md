@@ -402,3 +402,31 @@ with backups under `build/cliff-stream-install-backup`. The running server/VM
 were left intact. Linux native rebuild remains pending: the referenced
 `.claude/devtools/build_native_all.sh` is absent here and WSL has no Rust/C
 toolchain. Rebuild the Linux binary before packaging a Linux release.
+
+## Opaque terrain transitions (2026-11-04)
+
+All four near cliff families now use inward-only corner rounding and a narrow
+satellite-colored opaque rim. No added decals or per-cliff texture objects.
+UV0 retains the original PBR detail; UV1 carries the edge mask. Distant materials
+are unchanged. See [research, implementation and measurements](CLIFF_TRANSITIONS.md).
+Native version 145 is required. Restart the server and reload the mod together;
+existing content invalidates by source/native hash. Linux binary rebuild pending.
+
+### Material activation regression
+
+The initial transition materials omitted `activeLayers: 2`, so BeamNG rendered
+only their rock layer. The follow-up fix enables the second layer in all four
+variants and asserts that property in `test_clifftransition`. Same-camera live
+captures on 2026-11-04 at 01:27 show the blend activating. Earlier import/CPU
+timings measured the inactive layer and are not evidence for its rendering cost.
+Some stepped silhouettes and smooth collars remain; do not call all seams fixed.
+
+### Continuous contours and tapered thickness
+
+All four near cliff families now cut a filtered coverage contour through their
+boundary triangles instead of retaining the replicated detection-cell outline.
+The geometry tapers to sunken sampled ground along the same band as the material.
+Later canyon heightmap relief uses the same taper, preventing a thick rebuilt rim.
+Streaming splits are proportional to the triangle budget, avoiding a doubling of
+pieces when boundary intersections add a few triangles. Rebuild/reload the server
+and regenerate the location to test native v146; material reload alone is insufficient.

@@ -153,7 +153,9 @@ class FarCliffsTest(unittest.TestCase):
                      cuts=cuts,natural_family=cm.CANYON)
         self.assertEqual(set(mesh.tri_materials),{cm.CANYON,cm.LIMESTONE_CUT})
         canyon=np.unique(mesh.tris[mesh.tri_materials==cm.CANYON])
-        self.assertTrue((mesh.colors[canyon,:3]==137).all())
+        interior=canyon[mesh.uvs2[canyon,0]<.04]
+        self.assertGreater(len(interior),0)
+        self.assertTrue((mesh.colors[interior,:3]==137).all())
         self.assertTrue((mesh.colors[canyon,3]==255).all())
 
     def test_canyon_family_does_not_rescale_roadcut_displacement(self):

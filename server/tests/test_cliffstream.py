@@ -30,6 +30,16 @@ class CliffStreamTest(unittest.TestCase):
                 self.assertEqual(boundary(part.positions,part.tris)[0],boundary(lod['positions'],lod['tris'])[0])
         self.assertEqual(sorted(actual),sorted(zip(map(tuple,rock.tris),rock.tri_materials)))
 
+    def test_small_contour_growth_does_not_double_batch_count(self):
+        rock=surface(37)
+        p=np.ascontiguousarray(rock.positions,np.float64)
+        t=np.ascontiguousarray(rock.tris,np.int64)
+        for count in (1024,1025,1100):
+            groups=fast._ef.cliff_stream_parts(p,t[:count],128,64)
+            self.assertEqual(len(groups),(count+127)//128)
+            self.assertTrue(all(len(g)<=128 for g in groups))
+            self.assertEqual(sorted(sum(groups,[])),list(range(count)))
+
     def test_cap_empty_and_invalid_input(self):
         rock = surface(15)
         p,t = np.ascontiguousarray(rock.positions,np.float64),np.ascontiguousarray(rock.tris,np.int64)

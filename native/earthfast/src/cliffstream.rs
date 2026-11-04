@@ -24,15 +24,19 @@ fn partition(
     let axis = (0..3)
         .max_by(|&a, &b| (hi[a] - lo[a]).total_cmp(&(hi[b] - lo[b])))
         .unwrap();
-    let mid = ids.len() / 2;
+    // Allocate just the pieces required by the triangle budget. Equal halving
+    // doubles every leaf when a contour adds a few faces over a power of two.
+    let slots = slots.min(ids.len().div_ceil(limit));
+    let left_slots = slots / 2;
+    let mid = ids.len() * left_slots / slots;
     ids.select_nth_unstable_by(mid, |&a, &b| {
         centers[a][axis]
             .total_cmp(&centers[b][axis])
             .then(a.cmp(&b))
     });
     let right = ids.split_off(mid);
-    partition(centers, ids, limit, slots / 2, out);
-    partition(centers, right, limit, slots - slots / 2, out);
+    partition(centers, ids, limit, left_slots, out);
+    partition(centers, right, limit, slots - left_slots, out);
 }
 
 /// Deterministic spatial batches of triangle indices. Shared vertices are copied verbatim by the caller.

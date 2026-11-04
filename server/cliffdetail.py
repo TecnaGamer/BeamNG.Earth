@@ -49,6 +49,9 @@ def refine_canyon(rock, *, full_relief=False):
     weight = np.ones((len(p),1))
     weight[np.unique(edges[counts != 2])] = 0
     weight[np.unique(t[material != cm.CANYON])] = 0
+    if rock.terrain_blend:
+        import clifftransition
+        weight = clifftransition.relief_weights(weight, uv2)
     coarse_height = cm.geometry_sample(uv[:,0],uv[:,1],family=cm.CANYON)[:,None]
     start = len(p)
     for _ in range(MAX_SPLITS):
