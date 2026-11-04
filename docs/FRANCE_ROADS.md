@@ -1,8 +1,13 @@
-# France : routes, marquages et panneaux — essai 1.7.3
+# France : routes, marquages et panneaux — essai 1.8.0
 
 Extension expérimentale de la contribution `europe-infrastructure`, préparée sur
 `df381e7fdffe557e81068b471b12eee98040f4cd` (1.7.3-beta, corrections Windows incluses).
 Elle ne reprend pas le code de la PR suédoise et n'ajoute aucune dépendance de jeu.
+
+La branche est désormais fusionnée avec la base officielle 1.8.0-beta ; voir
+[EUROPE_180_MERGE.md](EUROPE_180_MERGE.md). Les commandes de lancement ci-dessous
+restent valables après `install.py`. Les anciens installateurs portant `_173`
+correspondent à l'étape historique 1.7.3 et ne sont pas nécessaires sur ce checkout.
 
 ## Lancer sur Windows
 

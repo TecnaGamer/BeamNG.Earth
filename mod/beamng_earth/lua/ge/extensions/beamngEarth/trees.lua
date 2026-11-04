@@ -79,6 +79,17 @@ M.POOL_SPARE_CALM = 32
 -- path ('dir/./name', 'dir/././name', ...: the same file, a shape of its own), which splits the big populations (one
 -- beech ~7.7k items: a frame touching it cost ~4-9 ms). A variant's first items cost one ~12 ms frame (its load).
 M.SHAPE_VARIANTS = 4
+-- ... but a group whose items are few (props near the player only: GROUP_MAX_M) keeps one spelling: four spellings
+-- were four first loads of its shape, 40-130 ms each in the engine's tick on the Windows test PC (Manhattan,
+-- 2026-11-03: a new door / hydrant / sign / signal spelling nearly every tree frame). Vegetation, rocks, barriers,
+-- fences and lamps keep their variants (their populations reach thousands).
+M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshelter = true, billboard = true,
+  barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
+  picnicgrill = true, picnictable = true, pylon = true, tollbooth = true, watertower = true, cable = true,
+  rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
+  rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
+  sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
+  wallsign_turboburger = true }
 
 local ECA = '/levels/east_coast_usa/art/shapes/'
 local WCA = '/levels/west_coast_usa/art/shapes/'
@@ -243,6 +254,38 @@ M.CATALOG.cable = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cable_bar
 M.GROUP_MAX_M.jersey = 4000
 M.GROUP_MAX_M.jersey_end = 4000
 M.GROUP_MAX_M.cable = 1500
+-- Mapped chain-link fences and noise walls (server fences.py): West Coast USA's chain-link panel (2.04 m along
+-- its x, the origin at the forward end) and its concrete noise blocker (4 m along its y).
+M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
+M.CATALOG.noisewall = { { WCA .. 'objects/s_concrete_noiseblocker', 2.4 } }
+M.GROUP_MAX_M.chainlink = 800
+M.GROUP_MAX_M.noisewall = 2000
+-- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
+-- Coast's grill. The table's materials live with Utah's buildings.
+M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
+M.CATALOG.picnicgrill = { { ECA .. 'buildings/eca_BBQ', 1.48 } }
+M.GROUP_MAX_M.picnictable = 400
+M.GROUP_MAX_M.picnicgrill = 400
+-- Bus shelters (server shelters.py): East Coast's glass stop. Its signed face is local +x, its long
+-- side local y, and it sits 0.2 m below its origin.
+M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_ecu', 2.90 } }
+M.GROUP_MAX_M.busshelter = 600
+-- Cell and water towers, shipping containers, the drag-strip billboard (poster included) and a stock barn
+-- (server worldprops.py).
+-- The height is the mesh's vertical size, so a row of that height is the model at 1:1.
+M.CATALOG.celltower = { { JV .. 'misc/celltower', 28.93 } }
+M.CATALOG.watertower = { { WCA .. 'objects/industrial_watertower', 26.16 } }
+M.CATALOG.container = {
+  { WCA .. 'objects/s_containers_20_white', 2.59 }, { WCA .. 'objects/s_containers_20_brown', 2.59 },
+  { WCA .. 'objects/s_containers_40_white', 2.59 }, { WCA .. 'objects/s_containers_40_brown', 2.59 },
+}
+M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
+M.CATALOG.barn = { { '/levels/hirochi_raceway/art/shapes/buildings/farm_barn', 8.41 } }
+M.GROUP_MAX_M.celltower = 2500
+M.GROUP_MAX_M.watertower = 2000
+M.GROUP_MAX_M.container = 500
+M.GROUP_MAX_M.billboard = 900
+M.GROUP_MAX_M.barn = 800
 -- Pure: whether a group is a road barrier's (guard rails, jersey and cable barriers): continuous runs, not thinned
 -- below the tile cap.
 function M.isBarrier(g)
@@ -279,7 +322,9 @@ local MATERIALS = {
   IT .. 'trees/trees_italy', IT .. 'trees', IT .. 'rocks', '/levels/automation_test_track/art/shapes/objects',
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
-  UT .. 'ut_roadsigns', '/levels/driver_training/art/shapes/race',
+  UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
+  JV .. 'misc',     -- the cell tower
+  '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
   '/art/shapes/objects/windows_doors_reflective',
@@ -288,6 +333,29 @@ local MATERIALS = {
 local stopwatch = require('beamngEarth/stopwatch')
 M.clock = stopwatch.new      -- the tree frame's clock (FRAME_MS; tests: their own)
 local tiles = {}        -- key "a:tx_ty" -> { anchor, cx, cy, f (flat items), s (stride), n, made = { i -> item }, shown }
+-- ... their keys in an array too (key -> its index in tileAt), for the tree passes' loops over every tile: a numeric
+-- loop is compiled, pairs() runs in LuaJIT's interpreter (5,500 tiles: most of a pass, 2026-11-02). setTile keeps both.
+local tileList, tileAt = {}, {}
+local function setTile(key, t)
+  if t == nil then
+    local i = tileAt[key]
+    if i then
+      local n = #tileList
+      local last = tileList[n]
+      tileList[i], tileAt[last] = last, i
+      tileList[n], tileAt[key] = nil, nil
+    end
+  elseif not tileAt[key] then
+    tileList[#tileList + 1] = key
+    tileAt[key] = #tileList
+  end
+  tiles[key] = t
+end
+-- A tree pass's order (M.update): the keys, distances and targets of the tiles it changes, in arrays kept between passes, and their sort
+-- keys: the distance in quarter metres times ORDER_SLOTS plus the entry's index (plain numbers: the default sort)
+local ORDER_SLOTS = 2 ^ 20
+local passOrder = { keys = {}, d = {}, sort = {}, want = {}, band = {}, near = {}, n = 0 }
+function M.orderKey(d, i) return math.floor(math.min(d, 1e7) * 4) * ORDER_SLOTS + i end
 local foci = {}         -- other vehicles' collision foci { x, y, r, trees } (M.setFoci, collisionfoci.lua)
 local dirty = true      -- a tree pass has work (M.update: a pass with none is skipped)
 local lastPass = nil    -- { anchor, x, y, vx, vy, clock } of the last full pass (M.update)
@@ -314,6 +382,7 @@ M.groupOff = { lampglow = true }
 -- GHOST_FAR_M follows). 'normal': the defaults above. (Before the split 'trees' also set the distance: low 0.75,
 -- medium 0.9, high 1.3, ultra 1.6; settings.lua migrates a saved level so.)
 M.QUALITY_LEVELS = {
+  lowest = { rank = 0.3, cap = 0.3 },       -- (GitHub #714: ~37 fps in a forest on Low with a 3060 Ti at 1440p)
   low = { rank = 0.5, cap = 0.5 },
   medium = { rank = 0.7, cap = 0.7 },
   normal = { rank = 1.0, cap = 1.0 },
@@ -321,7 +390,7 @@ M.QUALITY_LEVELS = {
   ultra = { rank = 1.7, cap = 2.2 },
   extreme = { rank = 2.5, cap = 2.5 },      -- (rank 2.5: every item the server sends out to ~700 m x distance)
 }
-M.DISTANCES = { near = 0.75, medium = 0.9, normal = 1.0, far = 1.3, farther = 1.6, max = 2.2 }
+M.DISTANCES = { nearest = 0.6, near = 0.75, medium = 0.9, normal = 1.0, far = 1.3, farther = 1.6, max = 2.2 }
 M.TILE_SEND_M, M.TILE_DROP_M = 1280, 1536     -- the server's vegetation SEND_M / DROP_M at distance 1
 local BASE_RINGS, BASE_CAP = nil, nil   -- (the defaults, copied at the first setQuality / setDistance)
 M.quality = 'normal'
@@ -384,6 +453,11 @@ function M.setGroupEnabled(groups, on)
 end
 
 -- Pure: the n-th pool Forest's name.
+-- (tests: .claude/devtools/floattrees.py reads the tiles' made items and their Forests' transforms)
+function M.debugTiles() return tiles end
+-- Does geotile tileKey (onGeoRows' key: 'p' / 'g' .. its geotile key) have its rows here?
+function M.hasGeo(tileKey) return tiles['g:' .. tostring(tileKey)] ~= nil end
+
 function M.forestName(n)
   return M.FOREST_NAME .. '_' .. tostring(n)
 end
@@ -516,7 +590,7 @@ end
 
 local GROUPS = { 'deciduous', 'conifer', 'shrub', 'rock' }
 local releaseGhosts
-local groupBand
+local groupBand, bandCapsUpdate
 
 -- A tile's items are one flat array of numbers, STRIDE numbers an item: { group, x, y, z, yaw, scale, height, rank, ... }
 -- (server vegetation.tile_items; scale unused: M.pick scales by height). They were a table per item, and a forest holds
@@ -581,8 +655,9 @@ local function shapeOf(t, i)
   local s = t.shapes[i]
   if s then return s, t.scales[i] end
   local f, b, sc = t.f, (i - 1) * t.s, nil
-  s, sc = M.pick((t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous', f[b + F_HEIGHT], f[b + F_RANK])
-  s = spelled(s, t.variant)
+  local g = (t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous'
+  s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
+  s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or t.variant)
   t.shapes[i], t.scales[i] = s, sc
   return s, sc
 end
@@ -651,12 +726,23 @@ local function removeItem(fd, it, shape)
 end
 
 -- This frame's shapes: may an item of this shape change now? (see SHAPE_ITEMS_PER_FRAME)
-local touched, touchedItems = {}, 0
+-- A shape's first items in a session cost far more than its population: the engine loads the shape and instances its
+-- materials in that frame's tick (a Manhattan drive on the Windows test PC, 2026-11-03: tree frames making 5-740
+-- items of new door / hydrant / sign / tree variants took the tick 75-255 ms, the shapes' items almost none). New
+-- shapes (never made this session) come NEW_SHAPES_PER_FRAME a frame at most while driving; any number while the
+-- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
+M.NEW_SHAPES_PER_FRAME = 1
+local touched, touchedItems, newShapes = {}, 0, 0
+local newShapeCap = math.huge
+local everMade = {}     -- shape -> true once it had items this session (the engine keeps it loaded)
 local function allow(shape)
   if touched[shape] then return true end
   local n = pop[shape] or 0
-  if next(touched) ~= nil and touchedItems + n > M.SHAPE_ITEMS_PER_FRAME then return false end
+  local new = not everMade[shape]
+  if next(touched) ~= nil and (touchedItems + n > M.SHAPE_ITEMS_PER_FRAME
+      or (new and newShapes >= newShapeCap)) then return false end
   touched[shape], touchedItems = true, touchedItems + n
+  if new then everMade[shape], newShapes = true, newShapes + 1 end
   return true
 end
 
@@ -680,7 +766,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo)
     t.moved = old and old.moved or nil
     M.placeGeo(t)
   end
-  tiles[key] = t
+  setTile(key, t)
   dirty = true
 end
 
@@ -809,18 +895,54 @@ local function tileThreshold(d, t)
 end
 M.tileThreshold = tileThreshold
 
--- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh() re-runs every tile's rows
--- after it changes.
+-- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh(group) re-runs the rows of every
+-- tile with an item of that group (every tile without one) after it changes. navgraph applies its signals every time
+-- its graph changes, a few times a minute while driving: all 5,300 tiles of a drive through LA rescanned each time
+-- kept the tree passes at their time limit, the new tiles' trees waiting behind (2026-11-02).
 M.suppress = nil
-function M.refresh()
-  for _, t in pairs(tiles) do t.pending, t.scan = true, nil end      -- (every row again: an interrupted pass too)
+-- Pure but for its cache (t.hasGroup): does tile t hold an item of group g?
+function M.tileHasGroup(t, g)
+  t.hasGroup = t.hasGroup or {}
+  local has = t.hasGroup[g]
+  if has == nil then
+    has = false
+    local names, f, s = t.groups or GROUPS, t.f, t.s
+    local gi = nil
+    for i, name in ipairs(names) do if name == g then gi = i - 1 end end
+    if gi ~= nil and f and s then
+      for i = 1, t.n or 0 do
+        if f[(i - 1) * s + F_GROUP] == gi then has = true; break end
+      end
+    end
+    t.hasGroup[g] = has
+  end
+  return has
+end
+function M.refresh(group)
+  for _, t in pairs(tiles) do
+    if group == nil or M.tileHasGroup(t, group) then t.pending, t.scan = true, nil end   -- (every row again)
+  end
   dirty = true
 end
 
 -- Which of the capped groups a tile at distance d still shows (changes re-run its rows).
+-- (GROUP_MAX_M's caps, largest first, in bandCaps: made again at each pass, as the speed signs add their groups; a
+-- pairs() over its ~50 entries for each of 5,500 tiles was a third of a pass, 2026-11-02)
+local bandCaps = {}
+bandCapsUpdate = function()
+  local n = 0
+  for _, cap in pairs(M.GROUP_MAX_M) do n = n + 1; bandCaps[n] = cap end
+  for i = n + 1, #bandCaps do bandCaps[i] = nil end
+  table.sort(bandCaps, function(a, b) return a > b end)
+end
 groupBand = function(t, d)
+  if bandCaps[1] == nil then bandCapsUpdate() end
   local k = 0
-  for _, cap in pairs(M.GROUP_MAX_M) do if d <= cap then k = k + cap end end
+  for i = 1, #bandCaps do
+    local cap = bandCaps[i]
+    if d > cap then break end
+    k = k + cap
+  end
   return k
 end
 
@@ -983,9 +1105,13 @@ function M.update(anchorId, player, view, frameMs)
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
-  touched, touchedItems = {}, 0
+  touched, touchedItems, newShapes = {}, 0, 0
+  newShapeCap = (frameMs ~= nil and frameMs < M.LOADING_FRAME_MS) and M.NEW_SHAPES_PER_FRAME or math.huge
   releaseGhosts(anchorId, player)
-  for key, t in pairs(tiles) do
+  bandCapsUpdate()
+  for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)
+    local key = tileList[li]
+    local t = tiles[key]
     if (not t.geo and t.anchor ~= anchorId and not t.ghost) or t.drop or t.flush then
       local f = t.forestId and scenetree.findObjectById(t.forestId)
       local fd = f and f:getData()
@@ -1008,28 +1134,22 @@ function M.update(anchorId, player, view, frameMs)
         dirty = true
       elseif not left then
         releaseForest(t)
-        tiles[key] = nil
+        setTile(key, nil)
       else dirty = true end
     end
   end
   if not player then return end
-  -- nearest tiles first (to the camera when it is away: view); [3] the distance to the car (the colliding items)
-  local order = {}
+  -- nearest tiles first (to the camera when it is away: view), and the distance to the car (the colliding items).
+  -- Only the tiles with something to change are ordered: their keys, distances and targets in arrays kept from pass to
+  -- pass, sorted as plain numbers (orderKey) by the default `<`. A table per tile, every tile sorted with a Lua
+  -- comparator, cost ~4 ms a pass and 580 KB of garbage over the 5,500 tiles of a drive through LA (2026-11-02),
+  -- outside the tree frame's time limit: every third frame ~10 ms, which the frame pacer spread over every frame.
   local function boxDist(p, t)
     local h = t.half or 128
     local dx = math.max(math.abs(p.x - t.cx) - h, 0)
     local dy = math.max(math.abs(p.y - t.cy) - h, 0)
     return math.sqrt(dx * dx + dy * dy)
   end
-  for key, t in pairs(tiles) do
-    if (not t.geo and t.anchor ~= anchorId) or t.drop or t.flush then goto continue end     -- still being emptied
-    local dCar = boxDist(player, t)
-    order[#order + 1] = { key, view and math.min(boxDist(view, t), dCar) or dCar, dCar }
-    ::continue::
-  end
-  table.sort(order, function(a, b) return a[2] < b[2] end)
-  local nearMade = false
-  local rowsScanned = 0
   -- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
   local function nearFocus(t)
     for _, f in ipairs(foci) do
@@ -1037,6 +1157,35 @@ function M.update(anchorId, player, view, frameMs)
     end
     return false
   end
+  local oKeys, oD, oSort = passOrder.keys, passOrder.d, passOrder.sort
+  local oWant, oBand, oNear = passOrder.want, passOrder.band, passOrder.near
+  local nOrder = 0
+  for li = 1, #tileList do
+    local key = tileList[li]
+    local t = tiles[key]
+    if (not t.geo and t.anchor ~= anchorId) or t.drop or t.flush then goto continue end     -- still being emptied
+    do
+      local dCar = boxDist(player, t)
+      local dist = view and math.min(boxDist(view, t), dCar) or dCar
+      local want = tileThreshold(dist, t)
+      local band = groupBand(t, dist)
+      local near = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
+      if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
+        nOrder = nOrder + 1
+        oKeys[nOrder], oD[nOrder] = key, dist
+        oWant[nOrder], oBand[nOrder], oNear[nOrder] = want, band, near
+        oSort[nOrder] = M.orderKey(dist, nOrder)
+      end
+    end
+    ::continue::
+  end
+  for i = nOrder + 1, passOrder.n do
+    oKeys[i], oD[i], oSort[i], oWant[i], oBand[i], oNear[i] = nil, nil, nil, nil, nil, nil
+  end
+  passOrder.n = nOrder
+  table.sort(oSort)
+  local nearMade = false
+  local rowsScanned = 0
   local function finish()
     M.lastRows = rowsScanned                -- (diagnostics)
     if nearMade then
@@ -1053,21 +1202,23 @@ function M.update(anchorId, player, view, frameMs)
     t.scan = { from = math.min(i, skipped or i), want = want, band = band, near = near }
     finish()
   end
-  for _, o in ipairs(order) do
-    local t = tiles[o[1]]
-    local fd = nil                          -- the tile's Forest data, made when it first needs an item
-    local function data()
-      if not fd then
-        local fo = forest(t)
-        fd = fo and fo:getData()
-      end
-      return fd
+  local t, fd = nil, nil                    -- the tile looked at, and its Forest data (made when it first needs an item)
+  local function data()                     -- (one closure for the pass, not one a tile)
+    if not fd then
+      local fo = forest(t)
+      fd = fo and fo:getData()
     end
-    local want = tileThreshold(o[2], t)
-    local band = groupBand(t, o[2])
-    local near = o[3] <= M.SOLID_M or (t.near and o[3] <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
-    if near and t.moved then
-      -- a moved geotile that must collide: its items made again at its placement first (the first loop, next pass)
+    return fd
+  end
+  for oi = 1, nOrder do
+    local at = oSort[oi] % ORDER_SLOTS
+    local dist = oD[at]
+    local want, band, near = oWant[at], oBand[at], oNear[at]
+    t, fd = tiles[oKeys[at]], nil
+    if t.moved then
+      -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
+      -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
+      -- left whole tiles of rocks and shrubs floating over the valley as specks (the user, 2026-11-01)
       t.flush = true
       dirty = true
       goto nexttile
@@ -1094,14 +1245,14 @@ function M.update(anchorId, player, view, frameMs)
           -- Preserve continuous 3 m runs until a tile cap actually requires thinning.
           local rowCap
           for _, limit in ipairs(M.TILE_CAP) do
-            if o[2] <= limit[1] then rowCap = limit[2]; break end
+            if dist <= limit[1] then rowCap = limit[2]; break end
           end
-          if cap and o[2] > cap then
+          if cap and dist > cap then
             r = 2
           elseif not rowCap or t.n <= rowCap then
             r = 0
           end
-        elseif cap and o[2] > cap then
+        elseif cap and dist > cap then
           r = 2     -- this group is not shown this far out
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
@@ -1161,12 +1312,13 @@ function M.clear()
     for i, it in pairs(t.made) do if fd then removeItem(fd, it, t.madeShape[i]) end end
     releaseForest(t)
   end
-  tiles, frameN, dirty, lastPass = {}, 0, true, nil
+  tiles, tileList, tileAt, frameN, dirty, lastPass = {}, {}, {}, 0, true, nil
 end
 
 -- Level end: the level deletes its objects itself.
 function M.reset()
-  tiles, types, ready, pool, forestCount, pop = {}, {}, false, {}, 0, {}
+  tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
+  everMade = {}
   dirty, lastPass = true, nil
 end
 

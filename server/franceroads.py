@@ -10,7 +10,7 @@ import os
 import numpy as np
 
 ON = os.environ.get("BNE_FR_ROADS", "off").lower() in {"on", "1", "true"}
-VERSION = "fr-roads-signs-v3"
+VERSION = "fr-roads-signs-v4"
 PAINT_MATERIAL = "line_bne_fr_white"
 RURAL_WIDTH = {"primary": 7.0, "secondary": 6.0, "tertiary": 5.0,
                "unclassified": 4.5, "residential": 5.0, "service": 3.5}
@@ -82,7 +82,8 @@ def adjust_specs(feats, specs):
         mapped = roads._rule_value(feats.rules.get("width"), i)
         if mapped is None:
             mapped = roads._osm(feats, "width", i, *roads.OSM_WIDTH_M)
-        if (not sp.urban and not sp.link and not sp.median and not roads.is_ring(feats, i)
+        if (not sp.urban and not sp.link and not sp.median and not getattr(sp, "mountain", False)
+                and not roads.is_ring(feats, i)
                 and sp.cls in RURAL_WIDTH and mapped is None):
             if sp.lanes:
                 # Two mapped lanes describe traffic directions, not a measured
@@ -97,7 +98,7 @@ def adjust_specs(feats, specs):
 
 
 def enabled(spec):
-    return ON and bool(getattr(spec, "france", False))
+    return ON and bool(getattr(spec, "france", False)) and not getattr(spec, "mountain", False)
 
 
 def narrow(spec):

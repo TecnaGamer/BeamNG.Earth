@@ -93,6 +93,8 @@ def way_id(record):
 class OsmTags:
     """Tags by OSM way id per map cell, from the pinned Layercake version."""
 
+    DIR = "osmtags"             # the pinned version's and its blocks' folder under raw_dir (osmfuel.OsmFuel: its own)
+
     def __init__(self, raw_dir, fetcher, url=URL):
         self.raw_dir, self.fetcher, self.url = raw_dir, fetcher, url
         self._lock = threading.Lock()
@@ -107,7 +109,7 @@ class OsmTags:
         with self._lock:
             if self._remote is not None and time.time() - self._checked < VERSION_TTL_S:
                 return self._remote
-            pin = os.path.join(self.raw_dir, "osmtags", "pinned")
+            pin = os.path.join(self.raw_dir, self.DIR, "pinned")
             etag = size = None
             try:
                 with open(pin) as f:
@@ -118,7 +120,7 @@ class OsmTags:
             except (OSError, ValueError):
                 etag = None
             if etag is None:
-                down = os.path.join(self.raw_dir, "osmtags", "unreachable")
+                down = os.path.join(self.raw_dir, self.DIR, "unreachable")
                 try:
                     recent = time.time() - os.path.getmtime(down) < RETRY_S
                 except OSError:
@@ -140,7 +142,7 @@ class OsmTags:
                 with open(pin + ".tmp", "w") as f:
                     f.write(f"{etag}\n{size}\n{time.time()}\n")
                 os.replace(pin + ".tmp", pin)
-            d = os.path.join(self.raw_dir, "osmtags", re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
+            d = os.path.join(self.raw_dir, self.DIR, re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
             self._remote = (etag, rangeread.RemoteFile([self.url], size, d, self.fetcher, if_match=etag))
             self._checked = time.time()
             return self._remote
@@ -149,7 +151,7 @@ class OsmTags:
         with self._lock:
             self._remote = None
             try:
-                os.remove(os.path.join(self.raw_dir, "osmtags", "pinned"))
+                os.remove(os.path.join(self.raw_dir, self.DIR, "pinned"))
             except OSError:
                 pass
 
@@ -257,10 +259,7 @@ class OsmTags:
         if t is None:
             try:
                 t = self._decode(con, uri, groups, rg, remote, kind)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
-                np.savez_compressed(tmp, **t)
-                os.replace(tmp, path)
+                self._save_table(path, t)
             finally:
                 if mine:
                     xproc.release(path + ".lock")
@@ -269,6 +268,26 @@ class OsmTags:
             while len(self._tables) > TABLE_MEM:
                 self._tables.pop(next(iter(self._tables)))
         return t
+
+    @staticmethod
+    def _save_table(path, t):
+        """Row group table t saved at path for the other processes; the decoded table is used whether or not that
+        works. A bare os.replace failed on Windows whenever another process had the file open (it loads it, or
+        decoded it too after waiting TABLE_WAIT_S): PermissionError (WinError 5), and the whole cell lost its OpenStreetMap
+        tags (lanes, widths: cached so for good) and decoded the row group again for each of its neighbours (GitHub #663:
+        16 times in a session, each before the road workers "may be stuck")."""
+        import staging
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            np.savez_compressed(tmp, **t)
+            staging.replace_cached(tmp, path)       # (Windows: retried; a copy there and in use is kept)
+        except OSError as e:
+            log.debug("osmtags: row group table %s not saved: %s: %s", os.path.basename(path), type(e).__name__, e)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     def _decode(self, con, uri, groups, rg, remote, kind):
         g = groups[rg]

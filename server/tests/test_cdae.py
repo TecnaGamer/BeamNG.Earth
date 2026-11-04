@@ -192,6 +192,30 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(d["names"], ["buildings", "detail2"])
 
 
+class SplitCollisionTest(unittest.TestCase):
+    def test_drawn_mesh_and_collision_meshes(self):
+        """collisions=: the drawn object and an object "Colmesh<k>" per collision mesh, in a "Collision-1" detail
+        (Windows builds each collision mesh in time ~quadratic in its triangles: a big shape's collision in small
+        meshes, fine ground 2026-11-01)."""
+        P = np.array([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]], float)
+        T = np.array([[0, 1, 2], [0, 2, 3]])
+        cols = [(P[:3], np.array([[0, 1, 2]]), None), (P[[0, 2, 3]], np.array([[0, 1, 2]]), None)]
+        d = cdae.decode(cdae.encode(P, T, material="m", object_name="fine", collisions=cols))
+        self.assertEqual(d["names"][:3], ["fine", "Colmesh0", "Colmesh1"])
+        self.assertIn("Collision-1", d["names"])
+        types = [m["type"] for m in d["meshes"]]
+        self.assertEqual(types, [0, 4, 4, 0, 4, 0], "drawn, null; then each collision object's null and its own")
+        cm = [cdae.mesh_arrays(m) for m in d["meshes"] if m["type"] == 0]
+        self.assertEqual([len(m["indices"]) // 3 for m in cm], [2, 1, 1])
+        with self.assertRaises(cdae.CdaeError):
+            cdae.encode(P, T, collision_only=True, collisions=cols)
+        # (a material list the drawn mesh uses part of: the collisions' indices follow its pruning)
+        mats = ["a", "b", "c"]
+        d = cdae.decode(cdae.encode(P, T, material=mats, tri_materials=[2, 2], object_name="fine",
+                                    collisions=[(P[:3], np.array([[0, 1, 2]]), [2])]))
+        self.assertEqual(len(d["meshes"]), 4)
+
+
 if __name__ == "__main__":
     unittest.main()
 

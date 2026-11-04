@@ -2,6 +2,326 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+## 1.8.0 beta (2026-11-04)
+
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
+> develop the mod.** For help, that includes multiplayer:
+> BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working
+> with BeamMP, it's almost certainly a BeamNG.Earth problem, not a BeamMP one. Please don't contact the BeamMP team or
+> open BeamMP support tickets about it. BeamNG.Earth servers are hidden from players who don't run BeamNG.Earth
+> (BeamMP can't install it for them: it needs its own app), so they only show in the BeamNG.Earth tab of BeamMP's
+> server browser.
+
+Works with BeamNG.drive 0.40.4.
+
+### New
+- **World server CPU settings** (Settings > Performance): how many CPU cores the app builds the world on, and its
+  priority. On an older 4-core CPU, 2 cores at normal priority can load the map much faster (thanks dejvidku, #589,
+  GitHub #529).
+- **Full priority loading** (Settings > Performance, off by default): when you join the world and after a teleport,
+  the app builds the place on every CPU core and the game keeps two, until the place around you has loaded.
+- **Faster loading at high speed**: the ground photo of the block you are driving into is now made beside the rest of
+  the world's work instead of behind it, and above about 90 mph a quick version shows first, so the car is held at
+  the edge of the loaded ground far less often (blocks ready in about 1 s instead of 6 s at highway speed).
+- **Proxy support**: the app's downloads go through the HTTP/HTTPS proxy set on your computer (HTTPS_PROXY /
+  HTTP_PROXY / NO_PROXY, or the system's proxy setting), for networks that need one (thanks antonstamov, #584).
+
+- **Lane counts through merges and splits**: where the map gives a lane count for some pieces of a motorway or
+  highway but not others, the pieces without one now take theirs from the lanes flowing in and out (a 4-lane road
+  plus an on-ramp goes on with 5 lanes), so roads and bridges keep their width through interchanges instead of
+  narrowing to the default after every ramp.
+- **Smoother exits on bridges**: where a ramp's deck parts from the main road's, the two now separate at a pointed
+  gore with the barriers meeting at its tip, instead of a square slab end and a stepped wall.
+- **Smoother bridge edges at ramps**: where an on-ramp adds a lane on a bridge, the deck now widens on the ramp's
+  side only, its far edge carrying straight on, instead of stepping out on both sides.
+- **Bridge approaches from lidar** (US): the roads leading onto a bridge now follow the lidar's measured road surface
+  up to the deck, so their embankments (often narrower than the road, smoothed away by the elevation model) are there
+  and the road meets the deck at its real height instead of 2-4 m under it; side-by-side carriageways rise together.
+- **Ramps merging side by side**: where two ramps join into a new road (or a road splits in two) with no one road
+  going on, the two now lie side by side across the joined road with its edges carrying straight on, instead of
+  both starting centred on its middle with the deck's corners sticking out.
+- **Wider motorway shoulders**: motorways with three or more lanes each way have 10 ft shoulders.
+- **Medians on bridges**: the two directions of a divided highway no longer merge into one open slab on bridges:
+  close together they share a median barrier, further apart they stay separate decks with their own railings.
+- **Lane lines through merges and splits**: where a ramp adds or takes a lane, the lane lines now carry on from the
+  road before instead of jumping sideways, with the new lane opening on the ramp's side.
+- **Sidewalks on bridges**: a city street's bridge now carries the street's sidewalks across, the deck and its railings
+  that much wider, instead of the sidewalks stopping at each end.
+
+- **Mountain pass roads**: roads that climb in switchbacks (the Stelvio Pass) are now drawn about 20 ft wide with
+  edge lines only, like the real ones, between a stone retaining wall cut into the hillside and a low stone parapet
+  along the drop, instead of a wide road with a centre line on a broad graded shelf; and no made-up utility poles along them.
+- **Wider hairpins on mountain passes**: the road now widens through each hairpin as real switchbacks do (about
+  33 ft at the turn instead of 20 ft), so cars and the AI traffic can take them without running onto the island.
+
+- **Retaining walls that hold the hillside up**: the ground above a retaining wall now runs on from the wall's top
+  instead of dipping into a trench behind it, and on mountain roads the strip behind the wall's stone top is the
+  same rocky ground as the slope, not a band of grass that made the walls look several feet thick.
+
+- **Sharper ground near the car**: the ground you drive on is now made of 1 m (3 ft) squares instead of 2 m (6 ft),
+  the same detail as the stock maps, so road edges, ditches, curbs and the ground meeting walls are much closer to
+  the real shape. The block of ground around the car is now 1 km across instead of 2 km; the land beyond it is the
+  distant terrain as before.
+
+- **The graphics card does more of the world's work on Windows too**: the ground photos' and distant land's texture
+  compression and the colour matching between imagery sources now run on the GPU on Windows as on Linux and the
+  Steam Deck (they ran on the CPU there since 1.6.1), in short pieces so the game's frames are never held up.
+
+- **Keeping up at speed**: when the world falls behind a fast car, the app borrows some of the game's CPU cores for a
+  few seconds to catch up; the ground's stand-in photo is made alongside each block instead of after it; trees are
+  built beside the roads instead of in the app's busiest process; and on a first visit the ground under the car comes
+  without its road levelling first (the levelled ground follows a few seconds later) instead of the car being held.
+  On a test drive at 100 mph through Manhattan on an empty cache, the car was held for over a minute in total
+  before and not at all after; road tiles now come before trees when both are waiting, and each block's quick
+  stand-in photo is made once instead of up to five times.
+  Above about 123 mph the full ground photo is drawn only for the block you're on (the quick photo covers the rest
+  until then): before, each block's photo took 3-7 s and was often finished after the car had left it.
+  With a GPS route, the ground ahead is now built along the route, round its turns, instead of straight ahead.
+  The app's extra CPU while catching up now stays on until the world has caught up (it could be switched off for
+  the rest of the drive) and borrows less from the game (one core instead of half the game's cores).
+- **Less repeated work on first visits**: each map cell's road details (bridges, levels, lanes) are now worked out
+  once per app process instead of again every time the cell is reloaded (on a Manhattan test drive the same cells
+  were worked out up to 44 times). Building a road tile in a dense city is also quicker: on a slow test machine,
+  a set of Manhattan tiles took about half as long as before.
+- **Held at the edge, the app takes every core**: when the car is paused waiting for its ground, the app builds it
+  with all of your CPU cores (the game is paused anyway), as Full priority loading does after a teleport.
+- **Cached places stay cached across updates**: the app's saved world (road plans, road tiles, far scenery) was
+  thrown away with every update of the app; now only when the code that builds it changes. The slowest parts of it
+  (the road levelling plans and each map cell's road details) are now kept across updates unless an update changes
+  how they come out, so a place you've visited before should come back much faster after updating.
+
+- **Multiplayer: the server shares the world building** (in testing): a BeamMP server running BeamNG.Earth now keeps
+  the road levelling plans its players build (the slowest part of making a place) and sends them to every player
+  who comes there later, instead of each one working them out again: in a test with three players in Manhattan, the
+  third one got 8 of the 9 areas around it from the server. It goes over the BeamMP connection, with nothing to set
+  up; the server can also hold baked packs of areas, and its machine can build ahead of the players with the new
+  share helper (see the README).
+- **Shared road plans** (experimental, off by default; thanks redthepro, #693): `--world-cache export / serve /
+  fetch / verify` packs the road plans one machine has built into a checked bundle that other players can fetch, so
+  their app reuses them instead of planning those roads again. See docs/SHARED_WORLD.md.
+- **Ready-made BeamMP host bundles** (thanks redthepro, #693): the releases also carry a Windows and a Linux zip with
+  the BeamNG.Earth server plugin, BeamMP's own unmodified server program (v3.9.3, checked against BeamMP's published
+  checksums), its licence and source, and a config with an empty AuthKey for your own.
+- **BeamMP start limit**: if BeamMP isn't ready within 30 seconds the app now stops it and carries on in single player
+  (`--beammp-wait SECONDS` waits longer) (thanks redthepro, #693).
+
+- **Mapped world props** (thanks AnthonyGraceffa, #528): cell and water towers, containers in yards, billboards,
+  barns, chain-link fences and noise walls, picnic tables in parks, bus shelters; farmland drawn as planted rows and
+  orchards as tree rows.
+- **Gravel roads**: many more country roads should now come out as gravel instead of asphalt. The app reads
+  OpenStreetMap's own surface tag first (so "compacted" and "fine gravel" roads are gravel, not dirt), treats plain
+  "unpaved" car roads as gravel, and where the mapped minor roads around a road are mostly unpaved, its untagged
+  neighbours are gravel too (never in towns). Gravel and dirt roads are drawn as rutted strips that fade into the
+  ground (thanks AnthonyGraceffa, #455), in a lighter gravel colour. In test places: Estonia's farm roads and Iowa's
+  driveways went from asphalt to gravel.
+- **Distant traffic lights at night** (off by default; thanks COBAzBzHOCKAX, #641): moving headlights and taillights on
+  distant roads and bridge decks at night, without real cars. Settings > Distant traffic lights; Low / Medium / High
+  set how many. Its per-frame cost was cut to about a quarter of the original's in a test over Los Angeles (High: 0.8
+  -> 0.2 ms a frame).
+- **More gas stations** (thanks FluffyProgramming, #502): stations only OpenStreetMap knows about are laid out too, pumps
+  are found further out from a station's pin, and big travel centres (Buc-ee's and the like) come out at their real
+  size.
+- **3D models from 3dmr.eu** (thanks rootyandex-ux, #626): models from the open 3D Model Repository for OpenStreetMap
+  (bridges you can drive on, monuments) are placed in the world where they're mapped, and your own .stl / .glb
+  objects too (see local_models/README.md). Settings > 3D models from 3dmr.eu turns them off.
+- **Landmarks as their own models** (thanks dejvidku, #593): the Eiffel Tower, the Arc de Triomphe, Big Ben, the
+  Colosseum and the Statue of Liberty.
+- **Tram bridges** (thanks MihneaTeodorStoica, #631): mapped tram bridges are drawn as narrow concrete decks with the
+  rails set in them.
+- **Live profiler** (thanks PaperboyNZ, #678): an optional window (off by default) showing where the game's and the
+  world server's time goes: CPU, GPU, network, disk and server tabs.
+- **Web viewer for developers** (thanks whattheheckman, #701): a browser view of exactly what the world server sends
+  the game (native/viewer, run on its own).
+- **Roads load further ahead at speed**: the road meshes ahead of a fast car are now built about 30 seconds of
+  driving ahead (up to about 3 miles) instead of 14 seconds (1.2 miles). On our slowest test PC at 120 mph the roads
+  were about twice as far ahead, and the car no longer caught up with the last built road on a 9-mile drive.
+- **Lower tree settings** (GitHub #714): Tree density has a new **Lowest** (fewer trees than Low) and Tree draw
+  distance a new **Nearest** (about half a mile), for forests on mid-range PCs.
+- **Faster world building**: road tiles take less CPU to build (street props, junction corridors and the ground under
+  bridges are worked out with much less repeated work; about 5 of the 55 CPU seconds a block of city tiles took).
+### Fixed
+- Reduced the chance of being held at the edge of the ground when an imagery service keeps failing (seen in
+  Canada): a block with no stand-in photo waited for its photo for as long as the service failed; it now goes after
+  8 seconds and gets its photo when it comes.
+- Faster first visits: road tiles no longer wait for OpenStreetMap's picnic-table data (about 26 MB on the first
+  download); the tables come with the tile's next build once that data is in.
+- Reduced the chance on Windows of the 3D models from 3dmr.eu, baked area packs and the update download failing with
+  "certificate has expired": they now use Windows' own certificate check like the app's other downloads.
+- Reduced the chance of the ground flashing plain brown for a moment at speed: a block taken before its photo was
+  ready waited for that photo behind other messages from the world server (the last development builds); it now
+  gets it at once.
+- **Cache size limit and "Clear cache"**: the limit in the settings now counts the app's own built caches too (saved
+  road tiles, road plans, the sea, road-width, lidar and tree data, the map data mirror), and "Clear cache" clears
+  them, keeping only what was used in the last 10 minutes around you (before, it kept everything used since the app
+  started, so after a long drive it cleared almost nothing). The cache folder should stay near the size you set (a
+  player's was 25 GB with a 20 GB limit).
+- Reduced the chance of holds for terrain growing over a long drive (even at low speed): the game's handling of the
+  world server's messages, spread over frames in the last development builds, now takes the terrain's messages at once
+  and never lets a backlog of other messages grow.
+- **Disk space**: the game's terrain texture cache (`temp/art/terrainmaterialcache` in the game's user folder) no
+  longer fills up with old ground photos. Each block's quick stand-in and earlier versions of its photo left a 5-22 MB
+  file behind for good, and a long session at speed could leave many gigabytes. If that folder is over 5 GB, the app
+  clears it once when it starts (the game simply rebuilds what it needs, which can take a few extra seconds the next
+  time a map loads).
+- Driving should be smoother and faster where there are many trees around. The tree updates could take ~10 ms every third
+  frame once a few thousand tree tiles were loaded, and every road graph update made all of them be looked at
+  again, so new trees could also fall behind. In a test drive through Los Angeles the game went from ~55-60 to
+  ~78-87 fps at 45 mph, and trees filled in about four times faster.
+- Should fix a freeze of several seconds about 10 minutes into a session after restarting the game: the world
+  server cleared out the previous runs' files then, and the game froze while it noticed them going (twice 8.6 s in a
+  test). Old runs' files now go before the game starts, or a few at a time while it runs.
+- The world server should use less memory on long drives: OpenStreetMap's rail and lane tags are kept about nine
+  times smaller (a dense region was ~57 MB in each of the server's processes, now ~6.5 MB), which should help Steam
+  Decks and other 16 GB machines most.
+- First visits should do a little less duplicate work: map data a few road tiles ask for at once is now loaded
+  once (thanks PaperboyNZ, #676), and two server processes no longer both download the same piece of a map data
+  file (thanks redthepro, #693).
+- Reduced the chance of a distant building or bridge piece showing the wrong shape after a teleport or a reconnect:
+  a cancelled tile's worker could still be writing its pooled shape file when that file was handed to another tile
+  (thanks redthepro, #693).
+- The app should clean up after itself more reliably when the game fails to start or closes: the world server is
+  waited for before the game starts, and the processes the app started are stopped (thanks redthepro, #693).
+- Multiplayer should cope better with bad or stale positions: players' coordinates are checked before use, the date
+  line is handled, and a player who left no longer leaves their old position behind for the next one with the same
+  id (thanks redthepro, #693).
+- Roads in France and Norway should keep their surveyed heights where a neighbouring piece of the survey data is
+  broken (thanks redthepro, #693).
+- The update notice now only offers a release once it has actually been published (thanks redthepro, #693).
+- Reduced the chance of a bridge dipping to the foot of its embankment or climbing high over it where the map's bridge
+  ends part-way down the slope (thanks mitzracing, #694), and of a road under a short bridge running over a hump or
+  through a long trench where the elevation data keeps the deck as ground (thanks mitzracing, #698).
+- Reduced the chance of a trench across a wide main road where a track or small street joins it (thanks
+  ydrftgyhujiok, #682).
+- Fewer rural roads drawn as town streets because of a few map points near a farm or a petrol station (thanks
+  wyo-backroads, #634).
+- Smoother joins where a road meets a bridge deck, median barriers kept between two different decks, and fewer
+  lake tiles over dry polder land (thanks OmdevShastri, #702).
+- Bridge decks should keep their ends on the roads they join and no longer stand metres above a low abutment
+  (thanks MihneaTeodorStoica, #630).
+- Roads in route relations (numbered routes) should now get their own lane counts and widths from OpenStreetMap
+  instead of another road's of the same name, for places loaded after this update (thanks mitzracing, #689).
+- Parking stalls are checked against buildings a little faster (thanks trvxoo-glitch, #642).
+- Traffic lights and stop signs in left-hand-traffic countries (the UK, Australia, Japan...) now face the drivers
+  coming towards them instead of away (thanks trvxoo-glitch, #635, GitHub #595).
+- The GPS should now plan again when you turn round and drive back along the route, say you've arrived only at the
+  route's end (not with a corner still to go), and ask again for a route that failed instead of pointing in a
+  straight line for the rest of the drive; the Go box and the search take OpenStreetMap and Google Maps links; speed
+  limits in mph in more countries (several Caribbean and Pacific ones); the EGM2008 gravity download should no longer
+  fail with "certificate has expired" on Windows (thanks trvxoo-glitch, #640, GitHub #623, #103, #38, #567).
+- Address search now says why it found nothing (refused by the service, busy, offline) instead of always
+  "offline?" (thanks trvxoo-glitch, #637, GitHub #602); the world map and its search keep working with no saved or
+  recent places, including after deleting the last saved place (thanks MihneaTeodorStoica, #624, GitHub #601).
+- The status bar's town, state and country should now show again wherever you drive: they come from Overture Maps'
+  boundaries and places data, downloaded once per region (about 2-14 MB, kept with the map data) at low priority,
+  instead of an online lookup service (that service had started refusing the app, GitHub #602). Your position is no
+  longer sent anywhere for them; the setting is now called "Place names". Out in the countryside, away from any town,
+  the bar shows the state and country only.
+- Reduced the chance of the app's session folder growing for hours of driving: files of road and far tiles every
+  game has dropped are now deleted after two minutes, and leftovers an earlier run left in the cache's trash are
+  emptied at the next start (thanks trvxoo-glitch, #672, #640, GitHub #599: 9 GB in two days).
+- Reduced the chance on Windows of a map cell losing its OpenStreetMap road details (lanes, widths) when another of
+  the app's processes had the same file open (thanks trvxoo-glitch, #673, GitHub #663).
+- Pre-caching an area with the world built now reads the US lidar for road heights first, so its road tiles should
+  be saved on the first run instead of only after a restart (thanks jonathonbarton, #622).
+- Railway bridges over a cutting should no longer dip down its slopes into the road or motorway below: the deck stays
+  at the track's level (thanks dejvidku, #606); on the coarse elevation models outside lidar areas, a street's dip
+  under a bridge should stay on that street instead of sinking the streets round it into trenches (thanks
+  Lertov2424232, #655).
+- Roundabout and island detection is quicker on big road tiles (thanks trvxoo-glitch, #643).
+- Reduced the chance of the edge warning and of the car being held at high speed: a block that was already built is
+  now taken before the warning would show, and the next block is no longer asked for again and again while it waits.
+- Reduced the chance of the edge warning showing above about 130 mph while the ground ahead is on time: the warning
+  distance grew with the braking distance until it was past the point where the next block normally takes over,
+  so it showed on every block. It now shows only when the next block is late (a test drive at 150 mph through
+  Manhattan: from 70 % of the drive to about a quarter). The car is still paused before the edge if the ground
+  really runs out.
+- Faster loading of places you've visited before: the map data kept on disk for each area is now read as one file
+  instead of about 40, about 10 times quicker to open.
+- Reduced the chance of roads, trees and street lights not appearing for minutes on a first visit (thanks GitHub
+  #663): road tiles waiting their turn in a long queue were taken for a stuck builder after 5 minutes, and the road
+  builders were restarted, losing the work in progress.
+- Reduced the chance of a game crash right after a teleport: the sound spaces of tunnels and under bridges are now
+  kept and reused instead of deleted when their roads unload.
+- Faster ground photos where there are many parking lots: painting the lots into a block's photo took over a
+  second at the 4096 setting, now about a tenth of that.
+- Reduced the chance of a washboard feel on steep roads: the ground under a road rose and fell by about an inch every
+  13 ft on grades (mountain passes, steep city streets); the road's slope now carries on smoothly.
+- Reduced the chance of small bumps on roads in the mountains: in places with big mountains nearby (the Alps, the
+  Rockies) the ground's heights were stored in steps of about 2.5 inches, which made a staircase on every steep road;
+  they are now stored in steps half that size wherever the ground allows (most mountain areas).
+- Reduced the chance of sudden bumps and dips in hairpin turns on mountain passes (up to about a foot, where one leg
+  of the hairpin pulled on the ground of the leg beside it); and roads next to each other at different heights now
+  part smoothly instead of with a step.
+- Reduced the chance of ramps that don't connect to their bridge: a ramp held at the height of the road beside it
+  past its own start or joint, one bridge drawn twice at two heights (one map cell seeing it differently from the
+  next), and a ramp starting at the ground under the decks it meets at a junction.
+- Reduced the chance of gaps in a bridge's railing, and of its slab bulging out past the road, where one deck goes
+  on from another's end at a merge or split.
+- Reduced the chance of pale patches and a sawtooth edge on a bridge deck between two carriageways.
+- Reduced the chance of trees standing in clumps of near-identical copies, which also put trees on the road beside
+  some bridges: each tree crown now gives one tree (about 40 % fewer tree objects in a city, for the same canopy).
+- Reduced the chance of street lights, utility poles, street trees and guard rails near the car going missing after
+  the BeamNG.Earth app restarts while the game stays open (power line wires were left hanging without their poles).
+- Reduced the chance of buildings disappearing after the BeamNG.Earth app restarts while the game stays open (they
+  vanished about 10 minutes later, leaving empty building plots).
+- Reduced the chance of street trees growing out of buildings (looking like trees on the roofs from the street):
+  where a street's mapped sidewalk runs into the houses beside it, no street tree is placed there now.
+- Reduced the chance of trees and bushes hanging over or sunk into the steep sides of road cuttings and embankments:
+  none is placed where the road's grading reshaped the ground (as real cuttings are cleared).
+- Reduced the chance of trees floating over rivers or growing up through bridges: no tree is placed on or right
+  beside a bridge deck now.
+- **Ships**: museum and moored ships mapped as buildings (USS Constellation and USS Torsk in Baltimore, HMS Belfast,
+  the Queen Mary, USS Iowa) are drawn as hulls on the water instead of grey blocks (thanks jonathonbarton, #585).
+- **Multiplayer server descriptions**: the BeamNG.Earth tab in BeamMP's server browser now shows each server's own
+  description from its ServerConfig.toml, instead of always "The world around ...". Server owners need this release's
+  BeamMP server plugin (BeamNG.Earth-BeamMP-Server zip); servers without a description still show where their players are.
+- The BeamNG.Earth tab now also shows each server's tags, mods, mod download size, player names and BeamMP version,
+  like BeamMP's own list (with the new server plugin).
+
+- Reduced the game log's noise: the hidden water block under the car no longer logs "Texture missing" each move, and the
+  big map no longer logs "Could not find spawnpoint object!" for every saved place (thanks Lertov2424232, #542).
+- Reduced the chance of a guard rail standing across a road's lanes under a bridge (thanks dejvidku, #572, GitHub #463).
+- Reduced the chance of roads by the sea being dug under the water at an underpass (thanks dejvidku, #570; #515, #518,
+  #561).
+- Reduced the chance of a power line pylon standing on a road between a divided road's two carriageways (thanks
+  dejvidku, #568).
+- Reduced the chance of a road under a bridge being dug into a trench where lidar shows it level with the bridge's
+  ends (thanks byrnes, #504; Pittsburgh's 28th Street Bridge).
+- Reduced the chance of the big map stopping drawing in a multiplayer session with no other players (thanks
+  Astel123457, #509).
+- **Bridge widths**: a bridge on a divided road is now as wide as that road's carriageway; before, it could be drawn
+  half again as wide as the road leading onto it.
+- **Smoother width changes**: where a road meets its bridge at another width (a city street's parking lanes end at
+  the bridge) or goes on as a road with more or fewer lanes, its lane lines, edge lines, curbs, sidewalks and the
+  painted asphalt now widen or narrow gradually over 50 to 300 feet instead of stepping sideways at the joint. Across
+  junctions the width changes as before, as on real streets.
+- **Fewer stutters at highway speed**: when a block of ground gets its sharper aerial photo a moment after it
+  loaded, that swap rebuilds the game's ground textures, a short freeze of its own (around a tenth of a second, more
+  on some Windows PCs). Above about 78 mph the sharper photo now waits until you slow down, since the next block
+  replaces the ground within seconds anyway. This should take away roughly one stutter per ground block at speed.
+- **Linux containers** (GitHub #709): when the app runs inside a container with a home folder of its own (distrobox
+  on Bazzite and similar), it now also looks for the game's folder in your real home folder, and picks the one the
+  game last ran from, so the mod should reach the game.
+- **Fewer stutters in cities with trees and street props**: while driving, new kinds of trees and props (doors,
+  hydrants, signs, lamps) now appear one kind per frame instead of many at once. Each new kind makes the game load a
+  model, and several in one frame froze it for a quarter second at times on our Windows test PC in Manhattan.
+  Street props (doors, hydrants, bins, signs, signals and the like) also load once each instead of up to four times.
+- **Ground under bridges**: each bridge's width is now read from the bridge itself. Before, many bridges used another
+  bridge's width when the ground under them and their carriageways were shaped, which should look more right now.
+  Road plans you already built are made again once.
+- **Vehicle swaps**: replacing your car from the vehicle selector no longer keeps sending map updates to the old car's
+  navigation screen (each failed call wrote an error line; thousands in a session could fill the game's log).
+
+### Known issues
+- **Address search**: photon.komoot.io, the service the map's address search uses, now refuses requests from
+  BeamNG.Earth, so search shows "refused". We're replacing it (a fallback search that runs when you press Enter, then
+  our own place index) in the next updates.
+
+### Development builds
+- Only the newest three development builds are kept on the releases page, so the betas are easier to find.
+
 ## 1.7.3 beta (2026-10-30)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

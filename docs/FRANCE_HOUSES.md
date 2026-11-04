@@ -1,4 +1,9 @@
-# Maisons françaises régionales — essai 1.7.3
+# Maisons françaises régionales — essai 1.8.0
+
+La branche intègre désormais la base officielle 1.8.0-beta ; voir
+[EUROPE_180_MERGE.md](EUROPE_180_MERGE.md). Sur ce checkout, utiliser `install.py`
+puis le lancement décrit dans [FRANCE_ROADS.md](FRANCE_ROADS.md). La section
+d'installation `_173` ci-dessous documente l'étape historique précédente.
 
 Cet ajout construit de nouveaux modèles de maisons à partir des emprises réelles
 déjà utilisées par BeamNG.Earth. Il choisit leur apparence à la position de

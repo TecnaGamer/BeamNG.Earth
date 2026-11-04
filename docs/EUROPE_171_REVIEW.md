@@ -1,12 +1,14 @@
-# European infrastructure contribution — v4, integrated with 1.7.2
+# European infrastructure contribution — v4, integrated with 1.8.0
 
-Current base: public v1.7.2-beta, `8375d5171454dcc8ca9005f9a34bf37229ff9523`.
+Current base: official v1.8.0-beta, `239e5f5d73d7914123303fa2b9dc91b5c2bf6c57`.
 Originally submitted against v1.7.1-beta, `8aaf4ebdd0485facadc755a612f4b0a2b55e4c57`.
 Enable with `python start.py -- --regional-poles europe`; default is `off`.
 The model and geographic-data set remains Europe v4. The runtime now uses
-1.7.2's retained geotile content, area/route prebuilding and native sidewalk
-geometry. See [EUROPE_172_MERGE.md](EUROPE_172_MERGE.md) for the integration and
-new regression checks. This filename is kept so existing PR links still work.
+1.8.0's retained geotile content, area/route prebuilding, custom 3D models and
+native sidewalk geometry. See [EUROPE_180_MERGE.md](EUROPE_180_MERGE.md) for the
+current integration, validation and limitations. The 1.7.2 and 1.7.3 integration
+notes and the evidence below are historical. This filename is kept so existing
+PR links still work.
 
 ## Review map
 

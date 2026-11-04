@@ -286,7 +286,7 @@ class HouseTest(unittest.TestCase):
             def cell(self, key, layers=(), kind="demand"):
                 calls.append(layers)
                 return SimpleNamespace(layers={})
-        self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(), lambda la, lo: np.zeros(np.shape(la))), [])
+        self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(), lambda la, lo: np.zeros(np.shape(la))), ([], []))
         self.assertFalse(any("land_use" in ls for ls in calls))
 
     def test_mesh_builder_accepts_an_iterator_without_losing_buildings(self):
@@ -316,7 +316,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_live_prebuilt_reuse_and_rebase_keep_house_models(self):
         scratch = self.root / "prebuilt"
-        key = bw.prebuild_geo(self.gx, self.gy, 15, str(scratch), True, False, False, False, 0., None, "FR", self.profile)
+        key = bw.prebuild_geo(self.gx, self.gy, 15, str(scratch), True, False, False, False, 0., None, "FR", pole_profile=self.profile)
         self.assertIsNotNone(key)
         out = self.root / "live";out.mkdir()
         with patch.object(bw, "_tile_parts", side_effect=AssertionError("must reuse prebuild")):

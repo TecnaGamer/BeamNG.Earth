@@ -79,6 +79,9 @@ def small(gb=None):
     return gb is not None and gb < SMALL_GB
 
 
+SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~24 cells; a Steam Deck: ~9 server processes)
+
+
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
@@ -90,6 +93,8 @@ def apply(is_small=None):
         dem.MEM_TILES = SMALL_DEM_TILES
         mapdata.MEM_MB = SMALL_MAPDATA_MB
         roadwidth.WALL_CELLS = SMALL_WALL_CELLS
+        import roads
+        roads.FACTS_MEM_KEPT = SMALL_FACTS_CELLS   # (~0.5 MB a city cell's facts, in each process)
         import imagery
         gb = total_gb() or 16.0
         imagery.MEM_FINISHED_MB = int(min(imagery.MEM_FINISHED_MB, max(SMALL_FIN_MB, round(FIN_MB_PER_GB * gb))))

@@ -1,6 +1,8 @@
 """peerwork.py: compute sharing's wire format (no pickle), the job checks, the Built round trip, and a requester using
 a helper (and building locally when the helper is gone or of another code)."""
+import os
 import socket
+import subprocess
 import tempfile
 from unittest import mock
 import sys
@@ -67,6 +69,40 @@ class CheckTest(unittest.TestCase):
                     header(lat="39"), header(op="far_tile", tex={"px": 256, "chain": ["http://evil"]})):
             with self.assertRaises(ValueError, msg=str(bad)[:80]):
                 peerwork.check_job(bad)
+
+
+class PinnedHelperTest(unittest.TestCase):
+    def test_pinned_helper_rejected_before_resources(self):
+        import pools
+        with mock.patch.dict(os.environ):
+            os.environ.pop("BNGE_WORLD_BUNDLE", None)
+            helper = peerwork.Helper("unused-cache", 1, "unused-out")
+            os.environ["BNGE_WORLD_BUNDLE"] = "must-not-be-opened"
+            with mock.patch.object(peerwork.threading, "Lock") as lock, \
+                    mock.patch.object(peerwork.os, "makedirs") as makedirs, \
+                    mock.patch.object(peerwork.socketserver, "ThreadingTCPServer") as server, \
+                    mock.patch.object(pools, "RespawningPool") as pool:
+                for start in (lambda: peerwork.Helper("unused-cache", 1, "unused-out"),
+                              lambda: peerwork.main(["serve", "--cache-dir", "unused-cache"]),
+                              lambda: helper.pool((True, True, False, False, False, True)),
+                              lambda: helper.serve("127.0.0.1", 0), helper.hello):
+                    with self.assertRaisesRegex(ValueError, "do not negotiate BNGE_WORLD_BUNDLE"):
+                        start()
+                lock.assert_not_called()
+                makedirs.assert_not_called()
+                server.assert_not_called()
+                pool.assert_not_called()
+
+    def test_pinned_helper_cli_exits_without_creating_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "unused-cache"
+            env = dict(os.environ, BNGE_WORLD_BUNDLE="must-not-be-opened")
+            result = subprocess.run([sys.executable, str(Path(peerwork.__file__)), "serve", "--host", "127.0.0.1",
+                                     "--port", "0", "--cache-dir", str(cache)], env=env,
+                                    capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("do not negotiate BNGE_WORLD_BUNDLE", result.stderr)
+            self.assertFalse(cache.exists())
 
 
 class TextureSizeTest(unittest.TestCase):

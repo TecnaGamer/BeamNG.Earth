@@ -224,7 +224,7 @@ class PipelineTest(unittest.TestCase):
     def test_live_prebuilt_and_reused_content_keep_poles_and_native_wires(self):
         scratch = self.root / "prebuilt"
         key = bw.prebuild_geo(self.gx, self.gy, 15, str(scratch), True, False, False,
-                              False, 0., None, "FR", self.profile)
+                              False, 0., None, "FR", pole_profile=self.profile)
         self.assertIsNotNone(key)
         out = self.root / "live"
         out.mkdir()

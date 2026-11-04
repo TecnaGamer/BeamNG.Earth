@@ -73,11 +73,29 @@ class MeasureTest(unittest.TestCase):
         # (3 m over the DTM until x = 40 + 5 / 0.06 = 123)
         self.assertGreater(e, 112.0)
         self.assertLess(e, 126.0)
-        self.assertEqual(len(rows), 2, "the stretch is measured as a deck too")
+        self.assertEqual(len([r for r in rows if r[2] > 0]), 2, "the stretch is measured as a deck too")
 
     def test_at_grade_ramp_stays_ground(self):
         rows, gaps = self.measure(lambda x: np.full(len(x), DTM + 0.2), lambda x: np.full(len(x), DTM + 0.1))
         self.assertEqual(gaps, [])
+
+    def test_approach_embankment_measured(self):
+        # a deck 3 m over the DTM at its end, the road going on from it on an embankment falling back to the DTM in
+        # 40 m (our DTM smooths it away): a ground line from the deck's end to there (roadz APPROACH_*)
+        rows, gaps = self.measure(lambda x: np.full(len(x), DTM + 3.0),
+                                  lambda x: DTM + 3.0 * np.clip(1.0 - x / 40.0, 0.0, None))
+        self.assertEqual(gaps, [], "under LIDAR_GAP_RISE_M: no deck")
+        ground = [r for r in rows if r[2] == 0]
+        self.assertEqual(len(ground), 1)
+        lonlat, z = ground[0][0], ground[0][1]
+        e = FRAME.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.0)[0]
+        self.assertAlmostEqual(float(z[0]), DTM + 3.0, delta=0.3, msg="from the deck's measured end")
+        self.assertLess(float(e[-1]), 60.0, "to where it is back on the DTM")
+        self.assertGreater(float(e[-1]), 36.0)
+
+    def test_approach_on_the_dtm_not_kept(self):
+        rows, _ = self.measure(lambda x: np.full(len(x), DTM + 0.1), lambda x: np.full(len(x), DTM + 0.1))
+        self.assertEqual([r for r in rows if r[2] == 0], [], "the DTM is right: nothing to add")
 
     def test_kernel(self):
         s = np.arange(0.0, 40.0, 4.0)
@@ -102,10 +120,15 @@ class RangesTest(unittest.TestCase):
     """A viaduct p0 (y -300..0) going on as a ground road p1 (y 0..200)."""
 
     def setUp(self):
-        self.old = roadz.PROVIDER, roads.LIDAR_GAPS_ON
+        self.old = (roadz.PROVIDER, roads.LIDAR_GAPS_ON, os.environ.pop("BNGE_PLAN_RUN", None), revisit.CACHE_DIR)
+        revisit.CACHE_DIR = None            # (no cell facts on disk: another test's under the same cell id)
+        roads._FACTS_MEM.clear()            # (each test's provider its own: no facts of another test's)
 
     def tearDown(self):
-        roadz.PROVIDER, roads.LIDAR_GAPS_ON = self.old
+        roadz.PROVIDER, roads.LIDAR_GAPS_ON, run, revisit.CACHE_DIR = self.old
+        if run is not None:
+            os.environ["BNGE_PLAN_RUN"] = run
+        roads._FACTS_MEM.clear()
 
     def feats(self):
         f = features([[(0, -300), (0, 0)], [(0, 0), (0, 200)]], ["motorway", "motorway"],
@@ -141,6 +164,41 @@ class RangesTest(unittest.TestCase):
         roadz.PROVIDER = StubProvider([("p1", ll(0, 0), ll(0, 80))])
         roads.LIDAR_GAPS_ON = False
         self.assertEqual(roads.level_ranges(self.feats(), 1), [])
+
+
+class CellFactsTest(unittest.TestCase):
+    """roads._cell_ranges: a cell's facts made once per process (_FACTS_MEM, beyond the layer object) and once per
+    server run for its processes (_run_facts_path), the lidar rule's too (2026-11-02: 787 makings of 89 cells)."""
+
+    def setUp(self):
+        self.old = roadz.PROVIDER, roads.LIDAR_GAPS_ON, revisit.CACHE_DIR, os.environ.get("BNGE_PLAN_RUN")
+        self.tmp = tempfile.mkdtemp()
+        revisit.CACHE_DIR = self.tmp
+        os.environ["BNGE_PLAN_RUN"] = "test_run"
+        roadz.PROVIDER = StubProvider(None)             # (no lidar: the rule, a session's answer)
+        roads._FACTS_MEM.clear()
+
+    def tearDown(self):
+        roadz.PROVIDER, roads.LIDAR_GAPS_ON, revisit.CACHE_DIR, run = self.old
+        if run is None:
+            os.environ.pop("BNGE_PLAN_RUN", None)
+        else:
+            os.environ["BNGE_PLAN_RUN"] = run
+        roads._FACTS_MEM.clear()
+
+    def feats(self):
+        return RangesTest.feats(self)
+
+    def test_made_once(self):
+        from unittest import mock
+        first = [roads.level_ranges(self.feats(), i) for i in range(2)]
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp, "plans", "test_run", "facts")), "kept for the run")
+        with mock.patch.object(roads, "_level_ranges", side_effect=AssertionError("made again")):
+            self.assertEqual([roads.level_ranges(self.feats(), i) for i in range(2)], first, "this process's")
+            roads._FACTS_MEM.clear()        # (another process: the run's file)
+            f0 = revisit.faults()
+            self.assertEqual([roads.level_ranges(self.feats(), i) for i in range(2)], first, "the run's")
+            self.assertGreater(revisit.faults(), f0, "on the rule: what is built on it is still not kept")
 
 
 DECIDE = """

@@ -15,7 +15,8 @@ PHOTON_URL = "https://photon.komoot.io/api/"
 LIMIT = 7
 MIN_CHARS = 3
 ATTRIBUTION = "Search: Photon by komoot, data (c) OpenStreetMap contributors (ODbL)"
-# Names in the language of the country the player is in, where Photon has it (en, de, fr, it): Photon's lang="en"
+# Names in the language of the country the player is in, where Photon has it (en, de, fr, it; the status bar's
+# place names too, placenames.py): Photon's lang="en"
 # showed "Cologne", "Switzerland" to players in Cologne (SwissCheese26's PR #275: German names for DACH). By the
 # country's main language, from the player's country (earthd: navgraph.country_near, ISO code); English elsewhere.
 LANG_OF_COUNTRY = {**dict.fromkeys(("DE", "AT", "CH", "LI"), "de"), **dict.fromkeys(("FR", "MC", "LU"), "fr"),
@@ -71,6 +72,42 @@ def parse(data):
     return out
 
 
+# What the map's search box says when the search has no answer (the user's "Address search unavailable (offline?)" for
+# every failure: photon.komoot.io answered 403 to the app's User-Agent and the player was told to check their
+# connection, GitHub #602). A refusal opens the host's circuit breaker after a few tries, and the requests after it
+# fail without a status (HostUnavailable): the last refusal is kept so they still say why.
+REFUSED_KEEP_S = 600.0
+_refused = {}                   # "status" -> (HTTP status, time.monotonic() it came)
+
+
+def error_text(e, now=None):
+    """The search box's words for e, the exception search() raised (netfetch's errors; anything else: a
+    bad answer). Pure but for the last refusal it remembers."""
+    import time
+    now = time.monotonic() if now is None else now
+    status = getattr(e, "status", None)
+    if isinstance(e, netfetch.FetchFailed) and status in (401, 403, 451):
+        _refused["status"] = (status, now)
+    if isinstance(e, netfetch.Offline):
+        return "Address search unavailable (offline mode)"
+    if isinstance(e, netfetch.RateLimited):
+        return "Address search busy (too many requests): try again in a minute"
+    if isinstance(e, netfetch.BudgetExceeded):
+        return "Address search limit for today reached"
+    held = _refused.get("status")
+    if isinstance(e, netfetch.HostUnavailable):
+        if held is not None and now - held[1] < REFUSED_KEEP_S:
+            return f"Address search service refused the request (HTTP {held[0]})"
+        return "Address search service not answering: try again in a minute"
+    if isinstance(e, netfetch.FetchFailed) and status in (401, 403, 451):
+        return f"Address search service refused the request (HTTP {status})"
+    if isinstance(e, netfetch.FetchFailed) and status is not None:
+        return f"Address search service error (HTTP {status})"
+    if isinstance(e, netfetch.FetchError):
+        return "Address search unavailable (offline?)"
+    return "Address search gave an answer the map cannot read"
+
+
 def search(q, lat=None, lon=None, net=None, country=None):
     """Results for q (blocking; [] for a short query), names in country's language (lang_for). Raises
     netfetch.FetchError on network trouble."""
@@ -82,39 +119,11 @@ def search(q, lat=None, lon=None, net=None, country=None):
 
 
 # ------------------------------------------------------------------------------------------- where am I
-# The status bar (the user, 2026-10-15: "location info like street, city, country"): the town, state and country
-# from Photon's reverse geocoding, asked with the position ROUNDED to REVERSE_ROUND decimals (~1 km: the bar needs the
-# town, not the house) and only when the mod's setting allows it; the street comes from our own map data (nearest_street).
-REVERSE_URL = "https://photon.komoot.io/reverse"
-REVERSE_ROUND = 2
+# The status bar (the user, 2026-10-15: "location info like street, city, country"): the street from our own map data
+# (nearest_street); the town, state and country from our own copy of Overture's divisions (placenames.py). Photon's
+# reverse geocoding is no longer asked (GitHub #602: komoot refused the app's requests; the user, 2026-11-03: the
+# status bar's names come from local data, the search box keeps Photon).
 STREET_M = 40.0                 # the nearest named road within this is "the street"
-
-
-def reverse_url(lat, lon, lang="en"):
-    """The Photon reverse request for (lat, lon) rounded to REVERSE_ROUND decimals. Pure."""
-    return REVERSE_URL + "?" + urllib.parse.urlencode(
-        [("lat", f"{round(float(lat), REVERSE_ROUND):.{REVERSE_ROUND}f}"),
-         ("lon", f"{round(float(lon), REVERSE_ROUND):.{REVERSE_ROUND}f}"), ("lang", lang), ("limit", "1")])
-
-
-def parse_place(data):
-    """{place, region, country} of a Photon reverse response (the first feature; missing parts ''). Pure."""
-    feats = (data or {}).get("features") or []
-    p = (feats[0].get("properties") or {}) if feats else {}
-    place = p.get("city") or p.get("town") or p.get("village") or p.get("district") or p.get("county") or ""
-    if not place and p.get("type") in ("city", "town", "village", "locality"):
-        place = p.get("name") or ""
-    return {"place": place, "region": p.get("state") or "", "country": p.get("country") or ""}
-
-
-def reverse(lat, lon, net=None, country=None):
-    """The town, state and country around (lat, lon) (blocking), in country's language (lang_for). Raises
-    netfetch.FetchError on network trouble."""
-    net = net if net is not None else netfetch.default_fetcher()
-    # (a lane of its own: the status bar asks as the player moves, and its timeouts opened the host's breaker and
-    # shut the map's search out, "Address search unavailable", GitHub #350)
-    return parse_place(json.loads(net.get(reverse_url(lat, lon, lang=lang_for(country)), kind="demand", lane="reverse")
-                                  .body.decode("utf-8")))
 
 
 def nearest_street(roads_layers, lat, lon, max_m=STREET_M):

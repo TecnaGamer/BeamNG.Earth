@@ -601,3 +601,30 @@ mod tests {
         assert_eq!(fill_gaps(&line, &[], [true, true], &[], 120.0, 1.5), vec![[0.0, 100.0]]);
     }
 }
+
+/// roads._tents: max over points i of z_i - grade * |s - s_i| (every requirement reached at `grade` and left at it), as
+/// a forward and a backward running max. Python's max(a, b) (a unless b > a) and numpy's maximum kept.
+/// It was 4.7 s of a 27 s first build of a Queensboro Bridge tile (3,680 calls, 9 M max()), 2026-11-02.
+#[pyfunction]
+pub fn deck_tents<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, z: PyReadonlyArray1<'py, f64>,
+                       grade: f64) -> Bound<'py, numpy::PyArray1<f64>> {
+    let (s, z) = (s.as_array(), z.as_array());
+    let n = z.len().min(s.len());
+    let mut f: Vec<f64> = z.iter().take(n).copied().collect();
+    let mut b = f.clone();
+    for i in 1..n {
+        let c = f[i - 1] - grade * (s[i] - s[i - 1]);
+        if c > f[i] {
+            f[i] = c;
+        }
+    }
+    for i in (0..n.saturating_sub(1)).rev() {
+        let c = b[i + 1] - grade * (s[i + 1] - s[i]);
+        if c > b[i] {
+            b[i] = c;
+        }
+    }
+    // (numpy's maximum: a when a >= b or a is NaN, else b)
+    let out: Vec<f64> = f.iter().zip(&b).map(|(&x, &y)| if x >= y || x.is_nan() { x } else { y }).collect();
+    out.into_pyarray(py)
+}

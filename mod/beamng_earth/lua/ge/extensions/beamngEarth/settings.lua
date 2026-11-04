@@ -43,11 +43,15 @@ M.SCHEMA = {
     label = 'Quality' },
   -- tree density (trees.lua QUALITY_LEVELS: ranks and tile caps) and draw distance (DISTANCES: the rings and the
   -- server's tree tile reach), split 2026-10-28 (the user: "give player much more control in the graphics settings")
-  trees = { kind = 'enum', default = 'normal', values = { 'low', 'medium', 'normal', 'high', 'ultra', 'extreme' },
+  trees = { kind = 'enum', default = 'normal', values = { 'lowest', 'low', 'medium', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Tree density' },
-  treeDistance = { kind = 'enum', default = 'normal', values = { 'near', 'medium', 'normal', 'far', 'farther', 'max' },
+  treeDistance = { kind = 'enum', default = 'normal', values = { 'nearest', 'near', 'medium', 'normal', 'far', 'farther', 'max' },
     label = 'Tree draw distance' },
   nightLights = { kind = 'enum', default = 'normal', values = { 'few', 'normal', 'many' }, label = 'Street lamp lights' },
+  distantTraffic = { kind = 'bool', default = false, label = 'Distant traffic lights' },    -- (off by default: its fps cost, PR #641)
+  distantTrafficWithoutTraffic = { kind = 'bool', default = false, label = 'Distant lights without traffic' },
+  distantTrafficQuality = { kind = 'enum', default = 'high', values = { 'low', 'medium', 'high' },
+    label = 'Distant traffic quality' },
   -- the far field's terrain detail: the server's K table times M.TERRAIN_DETAIL (the 'graphics' message's lodScale)
   terrainDetail = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Terrain detail' },
@@ -83,13 +87,18 @@ M.SCHEMA = {
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
   -- signstream.py, from cody196's PR #363); needs Roads
   highwaySigns = { kind = 'bool', default = true, label = 'Highway signs' },
+  -- the 3D models of landmarks from the open library 3dmr.eu (server threedmr.py; cpupin.player_settings reads it from
+  -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
+  models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
+  profilerMode = { kind = 'enum', default = 'essential', values = { 'essential', 'full' }, label = 'Profiler mode' },
+  runtimeProfiler = { kind = 'bool', default = false, label = 'Detailed performance profiler' },
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
-  placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar (online)' },
+  placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar' },
   -- BeamMP started by the BeamNG.Earth app with the game (launcher.py reads this file: bmplaunch.on_launch; its
   -- "don't ask again" writes it off)
   beammpOnLaunch = { kind = 'bool', default = true, label = 'Start BeamMP with BeamNG.Earth' },
@@ -103,6 +112,14 @@ M.SCHEMA = {
   cacheCapGb = { kind = 'number', default = 20, min = 0, max = 100000, label = 'Download cache size (GB, 0: unlimited)' },
   -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily
   framePacing = { kind = 'bool', default = true, label = 'Even frame pacing' },
+  -- the world server's share of the CPU (server cpupin.player_settings reads them from this file when it starts;
+  -- GitHub #529: an i5-3470 loaded the map in a few seconds instead of 10-20 with 2 of its 4 cores at normal priority)
+  serverCores = { kind = 'enum', default = 'auto', values = { 'auto', '1', '2', '3', '4', '6', '8' },
+    label = 'World server CPU cores' },
+  serverPriority = { kind = 'enum', default = 'low', values = { 'low', 'normal' }, label = 'World server priority' },
+  -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
+  -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
+  teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
   -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles
   -- (20 km), or the whole route (up to 300 miles)
   routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
@@ -116,11 +133,14 @@ M.SCHEMA = {
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
-  'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
-  'hudVisible', 'statusBar',
+  'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
+  'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'models3dmr',
+  'dashboardSatellite',
+  'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'devOutlineKm', 'devMapKm' }
+  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
+  'devMapKm' }
 
 -- Stored but not on the settings page
 M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true }
@@ -130,24 +150,24 @@ M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, q
 -- pick) thins the trees too: the same trees as 'high' gave it only 32.2. 'extreme' (the user, 2026-10-28: "an extreme
 -- quality setting that puts everything at max quality to the real horizon"): every knob at its most, never picked by
 -- the first run (M.detectQuality).
-M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights',
+M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights', 'distantTrafficQuality',
   'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail' }
 M.PRESETS = {
   low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
-    buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game' },
+    buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low' },
   medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game' },
+    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium' },
   high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game' },
+    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high' },
   ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
-    buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game' },
+    buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high' },
   extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme' },
+    terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high' },
 }
 M.PRESET_ORDER = { 'low', 'medium', 'high', 'ultra', 'extreme' }
 
@@ -231,7 +251,7 @@ function M.load(path)
   if read and (not FS or not FS.fileExists or FS:fileExists(path or M.FILE)) then ok, data = pcall(read, path or M.FILE) end
   if ok and type(data) == 'table' then
     for k, v in pairs(data) do
-      if k ~= 'version' and not M.RETIRED[k] then
+      if k ~= 'version' and k ~= 'runtimeProfiler' and k ~= 'profilerMode' and not M.RETIRED[k] then
         local val, err = M.validate(k, v)
         if val ~= nil then values[k] = val else warnings[#warnings + 1] = err end
       end
@@ -314,6 +334,8 @@ function M.save(path)
   if not write then return false end
   local out = { version = M.VERSION }
   for k, v in pairs(values) do out[k] = v end
+  -- Profiling requires a fresh opt-in after restarting/reloading the extension.
+  out.runtimeProfiler = false
   local ok, err = pcall(write, path or M.FILE, out, true)
   if not ok then log('W', 'beamngEarth', 'settings: write failed: ' .. tostring(err)) end
   return ok and err ~= false
@@ -448,6 +470,9 @@ M.APPLY = {
   grassDistance = function(v) require('beamngEarth/groundcover').setDistance(v) end,
   objectDetail = function(v) require('beamngEarth/enginepref').setLevel(v, inOurLevel()) end,
   nightLights = function(v) require('beamngEarth/nightlights').setLightCount(v) end,
+  distantTraffic = function(v) require('beamngEarth/trafficvisuals').setEnabled(v) end,
+  distantTrafficWithoutTraffic = function(v) require('beamngEarth/trafficvisuals').setWithoutTraffic(v) end,
+  distantTrafficQuality = function(v) require('beamngEarth/trafficvisuals').setQuality(v) end,
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
@@ -467,6 +492,8 @@ M.APPLY = {
     if M.pageExists() then ui.visible = v end
   end,
   creditsVisible = function(v) credits.setEnabled(v) end,
+  profilerMode = function(v) require('beamngEarth/profiler').setMode(v) end,
+  runtimeProfiler = function(v) require('beamngEarth/profiler').setEnabled(v) end,
   statusBar = function(v) require('beamngEarth/statusbar').enabled = v and true or false end,
   creditsCorner = function(v) credits.setCorner(v) end,
   creditsSize = function(v) credits.setSize(v) end,
@@ -746,7 +773,8 @@ local function otherPlayers()
   local okB, inMP = pcall(function() return require('beamngEarth/beammp').inSession() end)
   if not okB or not inMP then return nil end
   local ok, list = pcall(function() return require('beamngEarth/mpsession').others() end)
-  return ok and list or nil
+  -- (none: nil, an empty Lua table reaches the map as {} and not [])
+  return ok and type(list) == 'table' and next(list) ~= nil and list or nil
 end
 
 -- The map's weather + local-time badge (the player's spot): sky.lua's real local clock for the lat/lon, and the

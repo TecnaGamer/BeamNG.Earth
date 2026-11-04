@@ -170,3 +170,34 @@ class OffRoadsTest(unittest.TestCase):
         self.assertAlmostEqual(e2[0], 10.0)
         self.assertAlmostEqual(e2[1], 20.0)
         self.assertEqual((e2[2], n2[2]), (30.0, 40.0))  # (far off it: where it is mapped)
+
+    def moved(self, roads, e, n):
+        import gasstations
+        import geodesy
+        frame = geodesy.EnuFrame(49.4, 17.45)
+        old = gasstations.drive_lines
+        gasstations.drive_lines = lambda frame, layers, x, y, r: roads
+        try:
+            class Md:
+                def cell(self, key, layers, kind):
+                    raise OSError("not here")
+            e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+            la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
+            return powerlines._off_roads(frame, Md(), e, n, np.stack([lo, la], -1))
+        finally:
+            gasstations.drive_lines = old
+
+    def test_between_dual_carriageways(self):
+        # GitHub #550: a tower 0.8 m off one of the D1's carriageways, the other 13 m away: pushed off the one onto
+        # the other and back, it stood on the motorway. Now clear of both.
+        roads = [(np.array([[-300.0, 0.0], [300.0, 0.0]]), 4.0), (np.array([[-300.0, 13.0], [300.0, 13.0]]), 4.0)]
+        e2, n2 = self.moved(roads, [0.0], [0.8])
+        m = powerlines._margin(np.array([[e2[0], n2[0]]]), roads)[0]
+        self.assertGreaterEqual(m, -1e-6)
+        self.assertLess(np.hypot(e2[0], n2[0] - 0.8), 15.0)       # the nearest clear spot: just off the one road
+
+    def test_in_a_junction_corner(self):
+        # a tower in the corner of a crossroads: clear of both roads
+        roads = [(np.array([[-300.0, 0.0], [300.0, 0.0]]), 5.0), (np.array([[0.0, -300.0], [0.0, 300.0]]), 5.0)]
+        e2, n2 = self.moved(roads, [3.0], [4.0])
+        self.assertGreaterEqual(powerlines._margin(np.array([[e2[0], n2[0]]]), roads)[0], -1e-6)

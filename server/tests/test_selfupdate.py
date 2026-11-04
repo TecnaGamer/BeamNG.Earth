@@ -52,7 +52,7 @@ class FakeResp(io.BytesIO):
 
 
 def opener(rel, body=DATA):
-    def urlopen(req, timeout=None):
+    def urlopen(req, timeout=None, context=None):
         u = req.full_url
         if u == selfupdate.API_URL:
             return FakeResp(json.dumps(rel).encode(), u)

@@ -235,19 +235,32 @@ def drop_huge(f, max_m2):
     n = len(f)
     if not n or not len(f.lonlat):
         return f
+    # every outer ring's area at once (a Python loop per building was ~0.14 s of each city layer's load, and the layers
+    # are loaded again and again: 2026-11-02)
+    part_off = np.asarray(f.part_off, np.int64)
+    ring_off = np.asarray(f.ring_off, np.int64)
+    coord_off = np.asarray(f.coord_off, np.int64)
+    ok = (np.asarray(f.kind)[:n] == POLYGON) & (part_off[1:n + 1] > part_off[:n])
+    cand = np.flatnonzero(ok)
+    r0 = ring_off[part_off[cand]]
+    a, b = coord_off[r0], coord_off[r0 + 1]
+    keep = (b - a) >= 3
+    cand, a, b = cand[keep], a[keep], b[keep]
     huge = []
-    for i in range(n):
-        if f.kind[i] != POLYGON or f.part_off[i + 1] == f.part_off[i]:
-            continue
-        r0 = f.ring_off[f.part_off[i]]
-        a, b = f.coord_off[r0], f.coord_off[r0 + 1]
-        if b - a < 3:
-            continue
-        ll = f.lonlat[a:b]
-        k = math.cos(math.radians(float(ll[:, 1].mean())))
-        x, y = ll[:, 0] * (111320.0 * k), ll[:, 1] * 110540.0
-        if 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) > max_m2:
-            huge.append(i)
+    if len(cand):
+        ln = b - a
+        first = np.concatenate([[0], np.cumsum(ln)[:-1]])
+        idx = np.repeat(a - first, ln) + np.arange(int(ln.sum()))
+        nxt = idx + 1
+        ends = np.cumsum(ln) - 1
+        nxt[ends] = a                               # (the ring's last point to its first)
+        ll = np.asarray(f.lonlat, np.float64)
+        lat_mean = np.add.reduceat(ll[idx, 1], first) / ln
+        k = np.repeat(np.cos(np.radians(lat_mean)) * 111320.0, ln)
+        x, y = ll[idx, 0] * k, ll[idx, 1] * 110540.0
+        xn, yn = ll[nxt, 0] * k, ll[nxt, 1] * 110540.0
+        area = 0.5 * np.abs(np.add.reduceat(x * yn - y * xn, first))
+        huge = [int(i) for i in cand[area > max_m2]]
     if not huge:
         return f
     lonlat = np.array(f.lonlat, np.float64, copy=True)

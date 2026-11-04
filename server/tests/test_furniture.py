@@ -1,6 +1,7 @@
 """furniture: street lights along sidewalk runs at fixed stations of their road, utility poles and their
 wires along country roads; the same stations whichever tile draws them."""
 import ast
+import math
 import re
 import sys
 import unittest
@@ -69,6 +70,21 @@ class LampTest(unittest.TestCase):
         self.assertGreaterEqual(groups.count(furniture.G_POLE), 5)
         self.assertGreaterEqual(groups.count(furniture.G_POLELAMP), 2)
         self.assertTrue(wires)
+
+    def test_no_poles_along_a_mountain_pass_road(self):
+        """A pass road (roads.Spec.mountain, the Stelvio): no utility poles nor wires, as a road in the hills
+        without the flag has them."""
+        fid, spec, pts, lon = road("m", "secondary", False)
+        rows, wires = [], []
+        for sp in (spec, spec._replace(mountain=True)):
+            got, w = [], []
+            for side in (1, -1):
+                got += furniture.place([(fid, sp, pts, lon)], self.walks((fid, sp, pts, lon), side), (0, 0, 256, 256),
+                                       wires=w, town=True)
+            rows.append([x[0] for x in got].count(furniture.G_POLE))
+            wires.append(len(w))
+        self.assertGreater(rows[0], 0)
+        self.assertEqual((rows[1], wires[1]), (0, 0))
 
     def test_hydrants_on_town_streets(self):
         r = road("h", "residential", True, x0=-300, x1=900)
@@ -241,6 +257,49 @@ class JunctionTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertLess(rows[0][1], 100.0, "on the left of northbound drivers (west side)")
 
+    @staticmethod
+    def front(yaw):
+        """The way a junction prop's face looks after its yaw (the stock boom's and the signs' local -y; _yaw turns local
+        +x toward (cos, sin) of the yaw, as trees.lua and navgraph.lua turn them): the way right-hand traffic's props have
+        always faced their drivers."""
+        a = math.radians(yaw)
+        return np.array([math.sin(a), -math.cos(a)])
+
+    def test_left_hand_traffic_faces_the_drivers(self):
+        """GitHub #595 (the UK: "every time you pass a traffic light, it's facing away from the driver"): the yaw was
+        turned with the kerb side for left-hand traffic, which stood every head and sign with its back to the drivers.
+        Each faces the drivers coming in (out along the arm the approach comes from) on either side of the road."""
+        cross = [self.arm(f"a{i}", "tertiary", dx, dy) for i, (dx, dy) in enumerate([(1, 0), (-1, 0), (0, 1), (0, -1)])]
+        tee = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0),
+               self.arm("s", "residential", 0, -1)]
+        for rs, what in ((cross, furniture.G_SIGNAL), (tee, furniture.G_STOP)):
+            for lh in (False, True):
+                rows = furniture.junction_props(rs, (0, 0, 256, 256), left_hand=lh)
+                self.assertTrue(rows and all(r[0] == what for r in rows), (what, lh))
+                for r in rows:
+                    # the arm it stands at: the one whose direction from the junction is nearest the prop's
+                    away = np.array([r[1] - 100.0, r[2] - 100.0])
+                    u = max(([1, 0], [-1, 0], [0, 1], [0, -1]), key=lambda v: float(np.dot(v, away)))
+                    self.assertGreater(float(np.dot(self.front(r[4]), u)), 0.99,
+                                       f"{what} at {r[1:3]} (left-hand: {lh}) faces the drivers coming in")
+
+    def test_left_hand_signals_keep_their_boom_over_the_road(self):
+        """The stock boom's arm reaches to the drivers' left from its pole (a turn cannot mirror it): facing them, its
+        pole stands on their right in left-hand traffic too, so the arm hangs over the road, not the pavement. The signs
+        stand on the left (test_left_hand_traffic_stands_them_on_the_left)."""
+        rs = [self.arm(f"a{i}", "tertiary", dx, dy) for i, (dx, dy) in enumerate([(1, 0), (-1, 0), (0, 1), (0, -1)])]
+        key = lambda r: (r[1], r[2], r[4])
+        self.assertEqual(sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256), left_hand=True))),
+                         sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256)))))
+
+    def test_approach_pose(self):
+        u = np.array([0.0, -1.0])           # the arm to the south: northbound drivers come in
+        for what in (furniture.G_SIGNAL, furniture.G_STOP, furniture.G_YIELD):
+            rh, lh = furniture.approach_pose(u, what), furniture.approach_pose(u, what, left_hand=True)
+            self.assertEqual(rh[1], lh[1], f"{what}: one yaw on either side of the road")
+            np.testing.assert_allclose(rh[0], [1.0, 0.0], err_msg="right-hand: the east kerb")
+            np.testing.assert_allclose(lh[0], [1.0, 0.0] if what == furniture.G_SIGNAL else [-1.0, 0.0])
+
     def test_stop_on_the_stem_of_a_minor_t(self):
         rs = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0), self.arm("s", "residential", 0, -1)]
         rows = furniture.junction_props(rs, (0, 0, 256, 256))
@@ -331,3 +390,18 @@ class SignClearance(unittest.TestCase):
         big = (40.0, np.array([[-100.0, 0.0], [100.0, 0.0]]))
         self.assertIsNone(furniture._off_carriageways(np.zeros(2), np.array([0.0, 1.0]), np.array([1.0, 0.0]),
                                                       2.0, 4.0, [big]))
+
+
+class StreetTreesOffBuildings(unittest.TestCase):
+    def test_tree_in_a_rowhouse_goes_others_stay(self):
+        """A sidewalk run a metre into a rowhouse row (Canton, Baltimore): its street tree goes, one clear of the
+        walls stays, and a lamp in the same footprint is not this rule's."""
+        from types import SimpleNamespace
+        house = SimpleNamespace(ring=np.array([[10.0, 10.0], [30.0, 10.0], [30.0, 25.0], [10.0, 25.0]]))   # (tile-local)
+        rows = [[furniture.G_STREET_TREE, 120.0, 211.0, 0.0, 0.0, 1.0, 7.0, 0.5],     # 1 m into the house
+                [furniture.G_STREET_TREE, 120.0, 209.5, 0.0, 0.0, 1.0, 7.0, 0.5],     # 0.5 m from its wall
+                [furniture.G_STREET_TREE, 145.0, 205.0, 0.0, 0.0, 1.0, 7.0, 0.5],     # clear
+                [furniture.G_LAMP, 115.0, 215.0, 0.0, 0.0, 1.0, 9.0, 0.0]]
+        out = furniture.off_buildings(rows, [house.ring + [100.0, 200.0]])
+        self.assertEqual([(r[0], r[1], r[2]) for r in out],
+                         [(furniture.G_STREET_TREE, 145.0, 205.0), (furniture.G_LAMP, 115.0, 215.0)])

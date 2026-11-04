@@ -40,6 +40,7 @@ import json
 import logging
 import math
 import os
+import ioprofiler
 import queue
 import socket
 import socketserver
@@ -47,7 +48,8 @@ import struct
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
@@ -93,7 +95,8 @@ def source_id(server_dir=None):
     for name in sorted(os.listdir(here)):
         if name.endswith(".py"):
             with open(os.path.join(here, name), "rb") as f:
-                h.update(name.encode() + b"\0" + f.read())
+                # Git's Windows CRLF checkout must identify the same generator as the LF Linux checkout.
+                h.update(name.encode() + b"\0" + f.read().replace(b"\r\n", b"\n"))
     return h.hexdigest()[:16]
 
 
@@ -132,6 +135,7 @@ def _recv_exact(sock, n):
         if not chunk:
             raise ConnectionError("closed")
         buf += chunk
+        ioprofiler.peer_received(len(chunk))
     return bytes(buf)
 
 
@@ -144,7 +148,9 @@ def encode_msg(header, blobs=()):
 
 
 def send_msg(sock, header, blobs=()):
-    sock.sendall(encode_msg(header, blobs))
+    data = encode_msg(header, blobs)
+    sock.sendall(data)
+    ioprofiler.peer_sent(len(data))
 
 
 class _Bytes:
@@ -170,6 +176,7 @@ def recv_msg(sock):
     if n > MAX_HEADER:
         raise ValueError("header too large")
     header = json.loads(_recv_exact(sock, n).decode())
+    ioprofiler.peer_headers()
     if not isinstance(header, dict):
         raise ValueError("bad header")
     k = struct.unpack("<H", _recv_exact(sock, 2))[0]
@@ -473,16 +480,23 @@ def _anchor_id(lat, lon):
 
 
 # --- the helper ----------------------------------------------------------------------------------------------------
+def _require_unpinned_helper():
+    if os.environ.get("BNGE_WORLD_BUNDLE"):
+        raise ValueError("Legacy compute helpers do not negotiate BNGE_WORLD_BUNDLE; unset it before serving")
+
+
 class Helper:
     """A helper's worker pools, one per settings combination (made on first use), and its TCP service."""
 
     def __init__(self, cache_dir, workers, out_dir):
+        _require_unpinned_helper()
         self.cache_dir, self.workers, self.out_dir = cache_dir, workers, out_dir
         self.pools = {}
         self.lock = threading.Lock()
         self.done = 0
 
     def pool(self, settings):
+        _require_unpinned_helper()
         import multiprocessing
         import blockworker
         import pools
@@ -500,6 +514,7 @@ class Helper:
             return p
 
     def hello(self):
+        _require_unpinned_helper()
         return {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "workers": self.workers}
 
     def handle(self, sock, addr):
@@ -535,6 +550,7 @@ class Helper:
                 pass
 
     def serve(self, host, port):
+        _require_unpinned_helper()
         helper = self
 
         class H(socketserver.BaseRequestHandler):
@@ -614,6 +630,7 @@ class _Conn:
         self.host, self.port = host, port
         self.sock = None
 
+    @ioprofiler.peer_operation
     def open(self):
         s = socket.create_connection((self.host, self.port), timeout=CONNECT_S)
         s.settimeout(JOB_TIMEOUT_S)
@@ -627,6 +644,7 @@ class _Conn:
         self.sock = s
         return int(h.get("workers") or 1)
 
+    @ioprofiler.peer_operation
     def call(self, header):
         if self.sock is None:
             self.open()
@@ -959,6 +977,7 @@ def main(argv=None):
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     a = ap.parse_args(argv)
+    _require_unpinned_helper()  # before directories, sockets, locks or worker processes exist
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     out = os.path.join(a.cache_dir, "peer-out")
     os.makedirs(out, exist_ok=True)

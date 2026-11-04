@@ -19,6 +19,14 @@ M.MATERIALS = {
   -- the street lamps' lenses (furniture.py G_LENS; tools/build_lamp_lens.py): sodium-warm, bright
   bne_lamp_lens = { '1 0.66 0.33', 4000 },
   bne_fr_glass = { '1 0.68 0.12', 900 },
+  -- the Eiffel Tower's lamps (server landmarks.py, on its lattice: its iron stays dark): its gold lighting since 1985,
+  -- sodium-warm points of light all night, static (no sparkle: the hourly light show is not drawn)
+  bne_lm_lamp = { '1 0.72 0.36', 1500 },
+  -- ... and the Colosseum's (in its arches and along its storeys' edges: its stone, bne_lm_stone, stays dark). The
+  -- floodlit stone (the Arc de Triomphe, Big Ben): warm white and dim, as their floodlights wash them; Big Ben's dials,
+  -- lit from behind: whiter
+  bne_lm_floodlit = { '1 0.86 0.66', 25 },
+  bne_lm_dial = { '1 0.97 0.88', 160 },
 }
 
 -- The street lamps' light: a pool of LIGHTS_MAX spot lights (no shadows), every LIGHTS_S moved to the lamps nearest

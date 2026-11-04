@@ -207,25 +207,32 @@ class RemoteFile:
                 err = e
                 continue
             body = r.body
+            learned_size = None
             if self.if_match and r.headers.get("etag", self.if_match).strip() != self.if_match:
                 raise Changed(f"{url}: {r.headers.get('etag')} is not {self.if_match}")
             if r.status == 206:
-                m = CONTENT_RANGE.match(r.headers.get("content-range", ""))
-                if not m or int(m.group(1)) != start:
+                m = CONTENT_RANGE.fullmatch(r.headers.get("content-range", "").strip())
+                if not m or int(m.group(1)) != start or int(m.group(2)) < start:
                     raise RangeError(f"{url}: bad Content-Range {r.headers.get('content-range')!r}")
                 if m.group(3) != "*":
                     total = int(m.group(3))
+                    if int(m.group(2)) >= total:
+                        raise RangeError(f"{url}: Content-Range extends beyond file size {total}")
                     if self.size is None:
-                        self._learn_size(total)
+                        learned_size = total
                         end = min(end, total)
                     elif total != self.size:
                         raise RangeError(f"{url}: size {total} differs from the index's {self.size}")
+                if int(m.group(2)) != end - 1:
+                    raise RangeError(f"{url}: Content-Range does not cover {start}-{end - 1}")
             elif not (r.status == 200 and start == 0 and self.size is not None and len(body) == self.size):
                 raise RangeError(f"{url}: HTTP {r.status} without the range")
             else:
                 body = body[:end]
             if len(body) != end - start:
                 raise RangeError(f"{url}: {len(body)} bytes for range {start}-{end - 1}")
+            if learned_size is not None:
+                self._learn_size(learned_size)    # persist only after the entire answer is validated
             with self._lock:
                 self.stats["requests"] += 1
                 self.stats["net_bytes"] += len(body)
@@ -278,8 +285,17 @@ class RemoteFile:
             held = [i for i in need if xproc.take(self._lock_path(i), kind)]
             later = sorted(set(need) - set(held))
             try:
+                # A different process may have stored the block after our cache look and released its
+                # lock just before take(). Check while holding the lock, as xproc.once() does.
+                pending = []
+                for i in held:
+                    b = self._block_from_cache(i)
+                    if b is not None:
+                        out[i] = b
+                    else:
+                        pending.append(i)
                 run = []
-                for i in held + [None]:
+                for i in pending + [None]:
                     if run and (i is None or i != run[-1] + 1 or len(run) >= MAX_RUN):
                         out.update(self._fetch_run(run[0], run[-1] + 1, kind))
                         run = []
@@ -319,12 +335,20 @@ class RemoteFile:
             return b""
         i0, i1 = start // self.block, (end - 1) // self.block + 1
         got = self.blocks(i0, i1, kind)
-        buf = b"".join(got[i] for i in range(i0, i1) if i in got)
+        # An unknown size can become known during blocks(); a genuine EOF is a valid short read.
+        if self.size is not None:
+            end = min(end, self.size)
+            if end <= start:
+                return b""
+            i1 = (end - 1) // self.block + 1
+        missing = [i for i in range(i0, i1) if i not in got]
+        if missing:
+            raise RangeError(f"missing blocks {missing} for range {start}-{end - 1}")
+        buf = b"".join(got[i] for i in range(i0, i1))
         out = buf[start - i0 * self.block:end - i0 * self.block]
         # (a block left out mid-range would shift every byte after it: a corrupt page for DuckDB, not an error)
-        if len(out) != end - start and (self.size is not None or i1 - 1 in got):
-            log.warning("rangeread: short read of %s [%d, %d): %d bytes, blocks %s of %d..%d, size %s",
-                        self.cache_dir, start, end, len(out), sorted(got), i0, i1 - 1, self.size)
+        if len(out) != end - start:
+            raise RangeError(f"short read for range {start}-{end - 1}: {len(out)} bytes")
         return out
 
 

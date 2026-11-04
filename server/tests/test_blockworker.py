@@ -196,8 +196,8 @@ class BasePhotoTest(unittest.TestCase):
 
 
 class BaseRoutingTest(unittest.TestCase):
-    """earthd: the base photo goes to the other lane's block process when the server has no imagery analyses; with
-    them (or a tile missing on disk) it is rendered in the server (write_base)."""
+    """earthd: the base photo goes to the other lane's block process when the server has no imagery analyses, or the
+    player waits for its block (URGENT_ELSEWHERE); else (or a tile missing on disk) it is rendered in the server."""
 
     def test_routing_and_fallback(self):
         import earthd
@@ -207,8 +207,19 @@ class BaseRoutingTest(unittest.TestCase):
         self.assertEqual(S._base_process(s, earthd.LANE_REQUEST), "prefetch")
         self.assertEqual(S._base_process(s, earthd.LANE_PREFETCH), "request")
         for k in ("deshadow", "colormatch"):
-            self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), k: object()}), earthd.LANE_REQUEST), k)
+            # (with the analyses on: a requested block's photo there all the same, rendered again here with them;
+            # a prefetched one's here)
+            self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), k: object()}), earthd.LANE_PREFETCH), k)
+            self.assertEqual(S._base_process(SimpleNamespace(**{**vars(s), k: object()}), earthd.LANE_REQUEST),
+                             "prefetch" if earthd.URGENT_ELSEWHERE else None, k)
         self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), "block_pools": []}), earthd.LANE_REQUEST))
+        # the photo process (PHOTO_PROCESS_MIN_CPUS): a requested block's photo there below FAST_BASE_V; faster, it
+        # makes the stand-in first and the photo goes to the other lane as before
+        p = SimpleNamespace(**{**vars(s), "photo_pool": "photo", "fast": False})
+        self.assertEqual((S._base_process(p, earthd.LANE_REQUEST), S._base_process(p, earthd.LANE_PREFETCH)),
+                         ("photo", "request"))
+        p.fast = True
+        self.assertEqual(S._base_process(p, earthd.LANE_REQUEST), "prefetch")
         calls = []
 
         def write_base(anchor, cx, cy, photo=None, quick=False):

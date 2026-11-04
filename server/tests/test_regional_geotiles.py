@@ -22,6 +22,7 @@ import revisit
 import roads
 import sidewalks
 import townsigns
+import threedmr
 from test_blockworker import FakeDem, FakeMapData
 from test_roads import features
 
@@ -50,6 +51,7 @@ class RegionalGeoTest(unittest.TestCase):
                                               'centre': [float(clo), float(cla)]}], 'places': []})
         for mocker in (patch.object(bw, '_s', state), patch.object(revisit, 'ON', True),
                        patch.object(bw, '_geo_inputs', {}),
+                       patch.object(threedmr, 'region_ids', return_value=[]),
                        patch.object(townsigns, 'bundled_europe', return_value=signs),
                        patch.object(directionsigns, 'bundled', return_value=SimpleNamespace(nearby=lambda box: []))):
             mocker.start()
@@ -87,7 +89,7 @@ class RegionalGeoTest(unittest.TestCase):
     def test_prebuilt_content_is_reused_and_off_has_separate_cache(self):
         scratch = self.root / 'prebuild'
         key = bw.prebuild_geo(self.gx, self.gy, 15, str(scratch), True, False, False,
-                             False, 0., None, 'FR', self.profile)
+                             False, 0., None, 'FR', pole_profile=self.profile)
         self.assertIsNotNone(key)
         self.assertFalse(list(scratch.iterdir()), 'prebuilding cleans session artifacts')
         with patch.object(bw, '_tile_parts', side_effect=AssertionError('must hit prebuilt content')):
@@ -108,7 +110,7 @@ class RegionalGeoTest(unittest.TestCase):
             server = SimpleNamespace(
                 anchors={1: SimpleNamespace(lat=49.026, lon=7.816, zooms=[15])},
                 mapdata=bw._s.md, road_pool=pool, out_dir=str(out), vfs_dir='/test',
-                cache_dir=bw._s.cache_dir, regional_poles='europe', sidewalks=True,
+                cache_dir=bw._s.cache_dir, root=str(self.root), regional_poles='europe', sidewalks=True,
                 buildings=True, gas_stations=False, near_visual='off',
                 geo_rules=lambda gx, gy: (False, False, 0., None, 'FR', 15),
                 keep_fuel_pads=lambda pads: None, imagery=None, layout=None, tone=1.,

@@ -13,6 +13,7 @@ import os
 import numpy as np
 
 NAME = "prewarm.cdae"
+NAME_X = "prewarm_x.cdae"     # the road meshes' other vertex format (road_materials); the mod loads it beside NAME
 # materials the code names at run time, not in a constant the scan below finds
 EXTRA = ("line_yellow", "line_white", "bne_wire", "bne_cable_steel", "bne_cable_reflector")   # (the median cable barrier's: medians.py)
 
@@ -49,21 +50,51 @@ def materials():
         for name, v in vars(mod).items():
             if name.isupper():
                 _marks(v, out)
-    for name in ("DECK_SIDE", "TRUSS_STEEL", "TUNNEL_INNER", "TUNNEL_STONE", "TUNNEL_STONE_IN", "TUNNEL_SOIL",
+    for name in ("DECK_SIDE", "TRUSS_STEEL", "TUNNEL_INNER", "TUNNEL_STONE", "TUNNEL_STONE_IN", "TUNNEL_SOIL", "WALL_SCREE",
                  "TUNNEL_LIGHT"):
         out.add(getattr(roadmesh, name))
+    out |= set(roads.DIRT_MATERIALS)            # (the dirt and gravel strips: roads.DIRT_LOOK, one variation per road)
     return sorted(out)
 
 
-def write(out_dir, vfs_dir):
-    """The shape (a tiny triangle per material, far below anything) written to out_dir; returns its vfs path."""
+def road_materials():
+    """The sorted materials a road mesh with a dirt or gravel strip may use: such a mesh has the second uv and colour
+    (roadmesh.write), another vertex format, whose material instances the plain prewarm shape does not set up."""
+    import airportgrade
+    import junctions
+    import plazas
+    import roadmesh
+    import roads
+    out = set(EXTRA[:2]) | set(roads.DIRT_MATERIALS)
+    for mod in (roads, roadmesh, junctions, airportgrade, plazas):
+        for name, v in vars(mod).items():
+            if name.isupper():
+                _marks(v, out)
+    return sorted(out)
+
+
+def _shape(path, mats, extra=False):
+    """A tiny triangle per material, far below anything; extra: with the second uv and a colour (road_materials)."""
     import cdae
-    mats = materials()
     n = len(mats)
     k = np.arange(n, dtype=np.float64)[:, None] * 0.1
     P = np.concatenate([np.hstack([k, np.zeros((n, 2))]), np.hstack([k + 0.05, np.zeros((n, 2))]),
                         np.hstack([k, np.full((n, 1), 0.05), np.zeros((n, 1))])])
     T = np.stack([np.arange(n), np.arange(n) + n, np.arange(n) + 2 * n], axis=1)
-    cdae.write(os.path.join(out_dir, NAME), P, T, uvs=np.zeros((3 * n, 2)), material=mats,
-               tri_materials=np.arange(n), object_name="prewarm")
+    kw = dict(uvs2=np.full((3 * n, 2), 0.5), colors=np.full((3 * n, 4), 255, np.uint8)) if extra else {}
+    cdae.write(path, P, T, uvs=np.zeros((3 * n, 2)), material=mats, tri_materials=np.arange(n), object_name="prewarm",
+               **kw)
+
+
+def write(out_dir, vfs_dir):
+    """The shape written to out_dir (and, with the dirt strips on, its NAME_X sibling); returns its vfs path."""
+    import roads
+    _shape(os.path.join(out_dir, NAME), materials())
+    if roads.DIRT_STRIPS:
+        _shape(os.path.join(out_dir, NAME_X), road_materials(), extra=True)
+    else:
+        try:
+            os.remove(os.path.join(out_dir, NAME_X))
+        except OSError:
+            pass
     return f"{vfs_dir}/{NAME}"
