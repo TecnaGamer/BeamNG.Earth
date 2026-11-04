@@ -17,6 +17,10 @@ What changed in each release of BeamNG.Earth, newest first.
   bridge took the deck's height from the ground at those ends, not from the embankment tops it stands on (#694), so it
   dug the road under up to 4 m too deep. Its slip roads beside it stayed at their own height, a step between them. Seen
   under Kurna - Tuhala over Tallinna ringtee and under Tartu mnt at the Jüri roundabout, Estonia.
+- **Buildings missing all but a small piece** (Ülemiste keskus, Tallinn's biggest mall, #608): a building mapped with
+  parts was drawn as its parts alone, so one stray 452 m² part erased the 51,000 m² mall around it. Where the parts
+  cover less than half of a building with its own mapped height, and none of them stands off the ground, the building
+  is drawn too, with its parts on it.
 
 ## 1.8.1 beta (2026-11-04)
 
