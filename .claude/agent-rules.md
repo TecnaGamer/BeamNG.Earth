@@ -28,6 +28,7 @@
 - **VirusTotal:** ask before every upload.
 - **Changelog / release notes:** hedge fixes ("Reduced the chance of ..."), no "Known issues" section, end with the Discord line.
   - Draft: `.claude/work/notes_next_release.md`. Copy it there from an older scratchpad if missing.
+  - Every release's notes END with the launch steps (the user, 2026-11-04: "Add this at the end to every future release change log"): build them with `python3 tools/release_notes.py <version>` (CHANGELOG section + docs/LAUNCH_STEPS.md); the release workflow appends them too. Keep docs/LAUNCH_STEPS.md in step with README "Install and play".
 - **README.md:** keep it current with every update (the user, 2026-10-21: "dont forget to update it with each update"): features, settings, requirements, install steps. Check it when drafting release notes.
 - **Units:** speeds and distances to the user in mph and miles.
 - **Live game:**
