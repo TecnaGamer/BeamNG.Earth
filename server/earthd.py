@@ -7284,6 +7284,34 @@ def set_app_path(what, path):
     return {"what": what, "ok": True, "text": f"{exe}: used from the next start of BeamNG.Earth"}
 
 
+
+def machine_profile(args, small):
+    """The worker processes and analyses for the machine (budget.small): a small one (a Steam Deck, a 16 GB PC) fewer
+    worker processes, each with smaller caches (budget.py), the imagery analyses off, where the player left the
+    defaults; a desktop its road-tile processes by threads and memory. From 1.7.3 to 1.8.1 the small branch sat under
+    the BNGE_FAST_BASE_V override (an A/B switch put in the middle of it), so small machines ran a desktop's processes
+    and analyses: a Steam Deck's server at ~7 GB with 6 GB of swap (2026-11-04)."""
+    import budget
+    global FAST_BASE_V
+    if small:
+        # ... and "fast" (FAST_BASE_V: prefetched blocks without their photo until used, the chain ahead) from a lower
+        # speed: at 87 mph a Steam Deck's server drew a full ground photo for every block (several CPU-s each) and the
+        # road collision fell behind the car (2026-10-30)
+        FAST_BASE_V = SMALL_FAST_BASE_V
+        if args.road_processes == ROAD_PROCESSES:
+            args.road_processes = budget.SMALL_ROAD_PROCESSES
+        if args.workers == WORKERS:
+            args.workers = budget.SMALL_FAR_WORKERS
+        if budget.SMALL_ANALYSES_OFF:
+            args.deshadow, args.colormatch = "off", "off"
+        log.info("small machine (%.1f GB): %d far-tile and %d road-tile processes, smaller caches, imagery analyses "
+                 "off (budget.py; BNGE_BUDGET=desktop for the desktop sizes)", budget.total_gb() or 0, args.workers,
+                 args.road_processes)
+    elif args.road_processes == ROAD_PROCESSES:
+        args.road_processes = budget.road_processes()
+        log.info("road-tile processes: %d (%d threads, %.0f GB)", args.road_processes, os.cpu_count() or 0,
+                 budget.total_gb() or 0)
+
 def main():
     # (this run's id, inherited by its worker processes: roadz keeps one lidar decision per map cell and run in it)
     os.environ.setdefault("BNGE_ROADZ_SESSION", f"{os.getpid()}.{int(time.time())}")
@@ -7526,29 +7554,9 @@ def main():
         tracemalloc.start(1)
     game_cpus = server_cpus = None
     small = budget.apply()
-    if small:
-        # ... and "fast" (FAST_BASE_V: prefetched blocks without their photo until used, the chain ahead) from a lower
-        # speed: at 87 mph a Steam Deck's server drew a full ground photo for every block (several CPU-s each) and the
-        # road collision fell behind the car (2026-10-30)
-        global FAST_BASE_V
-        FAST_BASE_V = SMALL_FAST_BASE_V
+    machine_profile(args, small)
     if os.environ.get("BNGE_FAST_BASE_V"):     # (A/B: FAST_BASE_V in m/s)
         globals()["FAST_BASE_V"] = float(os.environ["BNGE_FAST_BASE_V"])
-        # a small machine (a Steam Deck): fewer worker processes, each with smaller caches (budget.py), where the
-        # player left the defaults
-        if args.road_processes == ROAD_PROCESSES:
-            args.road_processes = budget.SMALL_ROAD_PROCESSES
-        if args.workers == WORKERS:
-            args.workers = budget.SMALL_FAR_WORKERS
-        if budget.SMALL_ANALYSES_OFF:
-            args.deshadow, args.colormatch = "off", "off"
-        log.info("small machine (%.1f GB): %d far-tile and %d road-tile processes, smaller caches, imagery analyses "
-                 "off (budget.py; BNGE_BUDGET=desktop for the desktop sizes)", budget.total_gb() or 0, args.workers,
-                 args.road_processes)
-    elif args.road_processes == ROAD_PROCESSES:
-        args.road_processes = budget.road_processes()
-        log.info("road-tile processes: %d (%d threads, %.0f GB)", args.road_processes, os.cpu_count() or 0,
-                 budget.total_gb() or 0)
     if args.pin == "on" and (sys.platform.startswith("linux") or sys.platform == "win32"):   # (Windows: KyzoFox, PR #112)
         try:
             server_cpus, game_cpus = cpupin.split(budget.SMALL_SERVER_SHARE if small else cpupin.SERVER_SHARE)
