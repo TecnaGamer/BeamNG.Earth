@@ -95,5 +95,24 @@ class PrewarmTest(unittest.TestCase):
         self.assertTrue(seen, "the road mesh has the strips' second uv")
 
 
+
+class RailMaterialsTest(unittest.TestCase):
+    """The 3D tracks' materials (railways.py names them as plain strings) are prewarmed: the first rail tile of a
+    session instanced them mid-drive (a 104 ms import at 120 mph, 2026-11-04)."""
+
+    def test_rail_materials_prewarmed(self):
+        import prewarm
+        import railways
+        got = set(prewarm.materials())
+        for m in railways.BALLAST_WORN + railways.STEEL_WORN + railways.SLEEPER_WORN + (railways.CONCRETE,):
+            self.assertIn(m, got)
+
+    def test_no_looks(self):
+        import prewarm
+        got = set(prewarm.materials())
+        self.assertNotIn("bne_bld_fac_blue", got)       # (a look: FACADE with a tint, no material of its own)
+        self.assertNotIn("bne_precast", got)
+
+
 if __name__ == "__main__":
     unittest.main()
