@@ -1990,12 +1990,16 @@ def _imagery(tex):
     (tex["online"], peerwork.py), fetched as needed."""
     import imagery as imagerymod
     online = bool(tex.get("online"))
-    key = (tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"], online)
+    fin = tuple(sorted((tex.get("fin") or {}).items()))
+    key = (tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"], online, fin)
     if _s.imagery is None or _s.imagery[0] != key:
         im = imagerymod.Imagery(os.path.join(_s.cache_dir, "imagery"), key[0], fetch_workers=4 if online else 1,
                                 mem_tiles=WORKER_IMAGERY_TILES, tone=key[1],
                                 fetcher=netfetch.Fetcher(offline=not online), leaf_on=key[2], season_mode=key[3])
         im.strict = not online
+        if fin:         # (the server's analyses on: its finished tiles alone, Imagery.finished_only)
+            im._fin_sigs.update(dict(fin))
+            im.finished_only = True
         _s.imagery = (key, im)
     return _s.imagery[1]
 
@@ -2093,7 +2097,8 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
     k = revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                     mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
-                    bool(tex.get("online")), _s.widths is not None, _s.surface is not None)
+                    bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
+                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()))
     got = revisit.load(_s.cache_dir, "far", k)
     if got is not None:
         blobs, extra = got

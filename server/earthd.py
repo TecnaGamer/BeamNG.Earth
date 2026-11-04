@@ -344,6 +344,7 @@ TILE_CACHE = {32: 6000, 64: 2500}
 HM_THREADS = 4
 HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they wait on its block process)
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
+FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40, 10, 0.3, 5   # (fin_worker_worth)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
@@ -878,6 +879,8 @@ class Server:
                         if imagery else None)
         self.imagery_failures = 0           # tiles that fell back to the palette (network trouble)
         self.imagery_worker = 0             # far textures the far-tile processes rendered (blockworker.far_tile)
+        self.fin_worker_hits = deque(maxlen=FIN_WORKER_WINDOW)     # (fin_worker_worth: recent tries found them?)
+        self.fin_worker_tries = 0
         self.base_worker = 0                # base photos the block processes rendered (blockworker.base_photo)
         self.map_port = None                # the in-game map's tile endpoint (maptiles.py), hello.mapPort
         self.map_tiles = None               # its MapTiles: also written as files on request (map_tiles message)
@@ -3439,6 +3442,17 @@ class Server:
     def tile_name(self, aid, key):
         return f"far_{aid}_{key}.{self.far_format}"
 
+    def fin_worker_worth(self):
+        """With the imagery analyses on: try this far tile's texture in its far-tile process (from the finished tiles
+        on disk)? While most recent tries found them (a place seen before) yes; on a first visit (none finished yet:
+        the try fails and the texture is rendered here after the geometry, not beside it) only every
+        FIN_WORKER_PROBE-th tile, to notice when they are there."""
+        h = self.fin_worker_hits
+        self.fin_worker_tries += 1
+        if len(h) < FIN_WORKER_MIN_TRIES:
+            return True
+        return sum(h) >= FIN_WORKER_SHARE * len(h) or self.fin_worker_tries % FIN_WORKER_PROBE == 0
+
     def attribution_rest(self):
         """The credit line's sources other than the imagery (weather, elevation)."""
         parts = [weathermod.CREDIT] if self.weather is not None else []
@@ -3705,9 +3719,13 @@ class Server:
             if self.sea is not None:
                 base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
             src = gradingmod.GradedDem(base, g) if g is not None else base
-            if self.far_pool is not None and self.imagery is not None and self.deshadow is None \
-                    and self.colormatch is None and node is tile:
-                # the texture in the far-tile process too, from the imagery on disk (no analyses to apply here)
+            analyses = self.deshadow is not None or self.colormatch is not None
+            if self.far_pool is not None and self.imagery is not None and node is tile and \
+                    (not analyses or self.fin_worker_worth()):
+                # the texture in the far-tile process too, from the imagery on disk; with the analyses on (de-shadow,
+                # colour match) from this process's finished tiles on disk alone (tex["fin"]: their directories), a
+                # tile not finished yet (or with a correction to come) rendered here. They were all rendered here:
+                # 81 s of one interpreter's time in a 10 min first visit beside the event loop (2026-11-04)
                 texture = self.texture_name(anchor.id, tile.key, self.tex_rev.get(ck, 0))
                 im = self.imagery
                 tex = {"path": os.path.join(self.out_dir, texture), "px": self.tex_size(lvl),
@@ -3715,10 +3733,14 @@ class Server:
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                        "season_mode": im.season_mode}
+                if analyses:
+                    tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
                 args = (blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile, zoom, q,
                         ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout, tex)
                 built, got = self.far_pool.submit(*args).result()
-                if got is None:
+                if analyses:
+                    self.fin_worker_hits.append(got is not None)
+                if got is None and not analyses:
                     # a photo tile was not on disk (its prefetch dropped: a host at its daily budget, GitHub #116, or a
                     # fast drive): fetched here, the render goes back to the workers (rendered in this process, one
                     # interpreter for every far thread, the far field waited on it); here only if that fails too

@@ -443,6 +443,11 @@ class Imagery:
     # standing in, so a far-tile worker's texture (blockworker.far_tile, from the disk alone) is the one the server
     # would render, or none (the server renders it)
     strict = False
+    # finished_only: the finished tiles on disk alone (their directories the server's, _fin_sigs preset: its de-shadow
+    # and colour match applied): one missing, or with a correction still to come, fails the render (ImageryError) and
+    # nothing is made from a raw tile here (that would be the uncorrected picture, kept under the server's names).
+    # A far-tile worker's texture with the analyses on (blockworker._imagery, tex["fin"])
+    finished_only = False
 
     def __init__(self, cache_dir, chain=DEFAULT_CHAIN, fetch_workers=FETCH_WORKERS, mem_tiles=None,
                  tone=1.0, deshadow=None, colormatch=None, fetcher=None, leaf_on=True, season_mode="off"):
@@ -1287,6 +1292,8 @@ class Imagery:
             need.append(k)
         if not need:
             return out
+        if self.finished_only:
+            raise ImageryError(f"{len(need)} finished tile(s) not on disk")
         raw = self.tiles(need)
         for k in need:
             t = raw.get(k)
