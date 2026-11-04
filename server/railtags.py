@@ -105,8 +105,24 @@ class Shards:
         self.down_at = 0.0
 
     def known(self):
-        """The build in use as far as known without asking the network (versions(): every tile's cache key)."""
-        return self.built
+        """The build in use as far as known without asking the network (versions(): every tile's cache key); before
+        this run has asked for it, the last build pinned on disk. (None until the manifest came: the tiles built in
+        a run's first minutes had other keys than the same tiles built later, in the revisit cache: a warm drive
+        rebuilt and stored again ~1.5 GB of far tiles, 2026-11-04.)"""
+        if self.built is not None or not ON:
+            return self.built
+        got = getattr(self, "_pinned", False)
+        if got is False:
+            got = None
+            pin = os.path.join(self.dir, "manifest.json") if self.dir else None
+            if pin and os.path.exists(pin):
+                try:
+                    with open(pin, encoding="utf-8") as fh:
+                        got = json.load(fh).get("built")
+                except (OSError, ValueError):
+                    got = None
+            self._pinned = got
+        return self.built if self.built is not None else got
 
     def version(self):
         """The build in use ("built" of its manifest), or None (none reachable yet)."""
