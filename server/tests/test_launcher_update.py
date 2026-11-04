@@ -18,7 +18,7 @@ class UpdateAtStart(unittest.TestCase):
         self.addCleanup(tty.stop)
         self.started, self.downloads = [], []
 
-    def go(self, answer="", got=NEWER, packaged=True, args=None, fail=None):
+    def go(self, answer="", got=NEWER, packaged=True, args=None, fail=None, popup=None):
         def download(net, current, path, progress):
             if fail:
                 raise fail
@@ -30,7 +30,8 @@ class UpdateAtStart(unittest.TestCase):
         def ask(q):
             asked.append(q)
             return answer
-        r = launcher.update_at_start(args or argparse.Namespace(no_update_check=False), ask=ask, packaged=packaged,
+        r = launcher.update_at_start(args or argparse.Namespace(no_update_check=False), ask=ask, popup=popup or (lambda text: None),
+                                     packaged=packaged,
                                      check=lambda current, net: got, download=download,
                                      start=lambda: self.started.append(1) or True)
         return r, asked
@@ -65,6 +66,30 @@ class UpdateAtStart(unittest.TestCase):
     def test_no_window_to_answer_in_asks_nothing(self):
         with mock.patch.object(sys, "stdin", mock.Mock(isatty=lambda: False)):
             self.assertEqual(self.go(), (False, []))
+
+    def test_the_popup_answers_first(self):
+        shown = []
+        r, asked = self.go(popup=lambda text: shown.append(text) or True)
+        self.assertTrue(r)
+        self.assertEqual(asked, [])
+        self.assertIn("1.1.0 is out (you have 1.0.0)", shown[0])
+        self.started.clear()
+        r, asked = self.go(popup=lambda text: False)
+        self.assertFalse(r)
+        self.assertEqual((asked, self.started), ([], []))
+
+    def test_the_popup_works_in_a_window_with_no_console_input(self):
+        with mock.patch.object(sys, "stdin", mock.Mock(isatty=lambda: False)):
+            r, _ = self.go(popup=lambda text: True)
+        self.assertTrue(r)
+
+
+class Popup(unittest.TestCase):
+    def test_linux_zenity_yes_no_and_none_installed(self):
+        run = lambda code: (lambda cmd, timeout: mock.Mock(returncode=code))
+        self.assertTrue(launcher.update_popup("t", run=run(0), which=lambda n: n == "zenity", windows=False))
+        self.assertFalse(launcher.update_popup("t", run=run(1), which=lambda n: n == "kdialog", windows=False))
+        self.assertIsNone(launcher.update_popup("t", run=run(0), which=lambda n: None, windows=False))
 
 
 if __name__ == "__main__":
