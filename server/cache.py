@@ -60,7 +60,9 @@ INDEX_FILE = "index.tsv"
 INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
-MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache")
+MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
+           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn")
+CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
 MIRRORED = ("mapdata-mirror",)      # counted and cleared, never evicted file by file (a cell's files and its "ok" go
                                     # together: mapdata prunes it whole, MIRROR_MB)
 KEPT = ("gravity", "airports")                              # counted only
@@ -527,13 +529,15 @@ class Cache(NoCache):
             return e[0] or 0
 
     def clear(self, wait=60.0):
-        """"Clear cache": every MANAGED file but the ones this server process used (the current
-        session's, however long ago: tiles read at its start may still be in the producers' memory
-        caches; gravity/ and netstats/ stay). Waits up to `wait` s for the start-up walk. Returns
+        """"Clear cache": every MANAGED (and MIRRORED) file but the ones used within CLEAR_KEEP_S (the place around the
+        player; a file still in a producer's memory is fetched or built again if it is needed after all; gravity/,
+        airports/ and netstats/ stay). Waits up to `wait` s for the start-up walk. Returns
         (files, bytes)."""
         if not self.managed or not self._ready_ev.wait(wait):
             return 0, 0
-        floor = self.started
+        # (only the last CLEAR_KEEP_S: everything this session had used stayed, and after a long drive "Clear cache"
+        # cleared nearly nothing, a player 2026-11-03)
+        floor = self.now() - CLEAR_KEEP_S
         with self._lock:
             keys = [k for k, e in self._entries.items() if e[1] < floor and k.split("/", 1)[0] in MANAGED + MIRRORED]
         keys = self._unpinned(keys, lambda k: k)

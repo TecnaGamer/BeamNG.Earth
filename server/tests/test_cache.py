@@ -380,21 +380,22 @@ class ClearTest(Base):
         self.assertFalse(exists(self.root, "mapdata/raw/overture/2026-09-23.1/part-0/0.blk"), "cleared")
         self.assertFalse(exists(self.root, "mapdata/raw/overture/2026-09-23.1/part-1/404"), "markers too")
 
-    def test_clear_keeps_everything_this_session_used(self):
-        """Clear keeps the current session's files (ROADMAP "Caching": "everything except gravity/ and the
-        current session's files"), also those used more than an hour ago, which eviction may take: a
-        tile read at the start of a long drive may still be in the server's memory caches."""
+    def test_clear_keeps_only_what_was_used_lately(self):
+        """Clear keeps the files used within CLEAR_KEEP_S (the place around the player), not everything the session
+        ever used: after a long drive "Clear cache" cleared nearly nothing (a player, 2026-11-03)."""
         old = T0 - 3 * DAY
         early = put(self.root, "imagery/usgs/16/1/0.jpg", MB, old)
         put(self.root, "imagery/usgs/16/1/1.jpg", MB, old)
+        recent = put(self.root, "imagery/usgs/16/1/2.jpg", MB, old)
         c = self.make()
         c.used(early)                                   # at the start of the session
         self.clock.t += 2 * cachemod.PROTECT_S
-        self.assertEqual(c.clear(), (1, MB))
-        self.assertTrue(exists(self.root, "imagery/usgs/16/1/0.jpg"), "used this session: kept")
+        c.used(recent)                                  # around the player now
+        self.clock.t += cachemod.CLEAR_KEEP_S / 2
+        self.assertEqual(c.clear(), (2, 2 * MB))
+        self.assertFalse(exists(self.root, "imagery/usgs/16/1/0.jpg"), "used two hours ago: cleared")
         self.assertFalse(exists(self.root, "imagery/usgs/16/1/1.jpg"))
-        c.set_cap(0.0001)
-        self.assertEqual(c.evict(), (1, MB), "eviction protects the last hour only")
+        self.assertTrue(exists(self.root, "imagery/usgs/16/1/2.jpg"), "used minutes ago: kept")
 
     def test_clear_waits_for_the_walk(self):
         put(self.root, "imagery/usgs/16/1/0.jpg", MB, T0 - DAY)
