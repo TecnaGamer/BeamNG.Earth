@@ -184,7 +184,7 @@ class BasePhotoTest(unittest.TestCase):
             ys = y0 + np.arange(n) * (size / (n - 1))
             _, U = heightmap.surface(FRAME, lambda la, lo: FakeDem().sample(la, lo, 15), xs, ys)
             rgb = rockface.rock(np.asarray(rgb, np.uint8), FRAME, x0, y0, size, U, x0, y0, size / (n - 1))
-            Path(out, "server.png").write_bytes(terraincache.stored_png(rgb))     # (as earthd.write_base)
+            Path(out, "server.png").write_bytes(terraincache.stored_photo(rgb))   # (as earthd.write_base)
             got = blockworker.base_photo(*args)
             self.assertIsNotNone(got, "the tiles on disk now")
             np.testing.assert_array_equal(got[0], rgb)

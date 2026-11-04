@@ -1126,7 +1126,8 @@ class Server:
         they go with it (blocks evicted during a run took theirs, prune; whatever a run left behind stayed for good,
         ~1.4 MB a block, 3.9 GB of them by 2026-10-18)."""
         out = []
-        for path in glob.glob(os.path.join(self.root, sid, "*_base*.png")):
+        for path in glob.glob(os.path.join(self.root, sid, "*_base*.png")) + \
+                glob.glob(os.path.join(self.root, sid, "*_base*.jpg")):       # (.png: before 2026-11-04)
             for px in BASE_SIZES:           # (whichever size it was made at)
                 key = terraincache.base_key(f"/temp/beamngEarth/{sid}/{os.path.basename(path)}", base_ao_vfs(px))
                 p = os.path.join(terraincache.cache_dir(self.user_dir), key + ".dds")
@@ -3118,10 +3119,11 @@ class Server:
             pass                                # (the loop has closed)
 
     def base_name(self, key, rev=0):
-        return self.hm_name(key)[:-4] + ("_base.png" if not rev else f"_base_r{rev}.png")
+        ext = terraincache.PHOTO_EXT
+        return self.hm_name(key)[:-4] + (f"_base{ext}" if not rev else f"_base_r{rev}{ext}")
 
     def quick_base_name(self, key):
-        return self.hm_name(key)[:-4] + "_base_q.png"
+        return self.hm_name(key)[:-4] + "_base_q" + terraincache.PHOTO_EXT
 
     def _stand_in(self, anchor, cx, cy):
         """A requested block's stand-in photo made beside its heights (fast): in the prefetch lane's process, else
@@ -3258,7 +3260,7 @@ class Server:
             path = os.path.join(self.out_dir, name)
             tmp = staging.tmp_for(path)
             with open(tmp, "wb") as f:
-                f.write(terraincache.stored_png(rgb))
+                f.write(terraincache.stored_photo(rgb))
             staging.replace(tmp, path)
             tq.append(("png", time.perf_counter()))
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
@@ -3345,10 +3347,9 @@ class Server:
             self.recent_full.append((anchor.id, cx, cy, rgb))
         t1 = time.perf_counter()
         tmp = staging.tmp_for(path)
-        # stored, not deflated: the game reads the packed cache entry (terraincache), this file only if that is stale;
-        # level 1 was 0.15 s of a block photo on a Steam Deck, level 0 0.08 (3 MB, a session keeps a few)
+        # (terraincache.stored_photo: the game reads the packed cache entry, this file only if that is stale)
         with open(tmp, "wb") as f:
-            f.write(terraincache.stored_png(rgb))
+            f.write(terraincache.stored_photo(rgb))
         staging.replace(tmp, path)
         t2 = time.perf_counter()
         try:            # after the photo: the cache entry must be the newer file
