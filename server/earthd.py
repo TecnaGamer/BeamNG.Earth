@@ -901,6 +901,7 @@ class Server:
         # blocks' (each holds a base-photo thread until its block process renders it; a teleport's photo waited
         # ~20 s behind the old place's on a Deck, 2026-10-23)
         self.urgent_base_pool = ThreadPoolExecutor(2, thread_name_prefix="base-urgent")
+        self.geo_list_pool = None           # (geo_dropped: the session folder listed off the event loop)
         self.prov_pool = ThreadPoolExecutor(2, thread_name_prefix="provisional")    # follow blocks sent provisional
         self.prov_info = {}             # (aid, cx, cy) -> a provisional follow block's info (until the graded one)
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
@@ -1376,11 +1377,14 @@ class Server:
                 return []
             pat = re.compile(rf"{pre}_{re.escape(key)}([._].*)?")
             stems = (f"{pre}_",)
-        out = []
-        for stem in stems:
-            out += [p for p in glob.glob(os.path.join(self.out_dir, f"{stem}*{key}*"))
-                    if pat.fullmatch(os.path.basename(p))]
-        return sorted(set(out))
+        # (one listing, filtered by the key first: glob listed the session folder once per stem in Python, ~52 ms a
+        # call over 16k files, 89 s of the event loop in a 10 min first visit, 2026-11-04; this ~10 ms, off the loop)
+        try:
+            names = os.listdir(self.out_dir)
+        except OSError:
+            return []
+        return sorted(os.path.join(self.out_dir, n) for n in names
+                      if key in n and n.startswith(stems) and pat.fullmatch(n))
 
     def geo_dropped(self, kind, k, key, grace=None):
         """A connection dropped geotile k (gx, gy; key its geotiles.key) of kind: its session files are deleted after
@@ -1391,12 +1395,22 @@ class Server:
         except RuntimeError:
             return
 
+        def listed(fut):
+            try:
+                files = fut.result()
+            except Exception as e:
+                log.debug("geotile %s %s files: %s", kind, key, e)
+                return
+            if files and not self.geo_held(kind, k):
+                self.queue_delete(files, lambda: self.geo_held(kind, k))
+
         def run():
             if self.geo_held(kind, k):
                 return
-            files = self.geo_files(kind, key)
-            if files:
-                self.queue_delete(files, lambda: self.geo_held(kind, k))
+            # (the folder listed on a thread of its own: thousands of session files, every dropped geotile)
+            if self.geo_list_pool is None:
+                self.geo_list_pool = ThreadPoolExecutor(1, thread_name_prefix="geo-files")
+            loop.run_in_executor(self.geo_list_pool, self.geo_files, kind, key).add_done_callback(listed)
         loop.call_later(GEO_FILES_GRACE_S if grace is None else grace, run)
 
     def queue_delete(self, paths, ck=None):
