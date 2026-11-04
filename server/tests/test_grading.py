@@ -741,6 +741,32 @@ class UnderpassShortfallTest(unittest.TestCase):
         self.assertLess(float(g.apply(la, lo, np.full(1, 10.0))[0]), 10.0 - 0.6 * grading.UNDER_CLEAR_M,
                         "lidar, a motorway's deck: the road under dips")
 
+    def test_a_deck_on_its_embankments_is_not_taken_for_one_down_their_slopes(self):
+        """Tartu mnt's decks over the Jüri roundabout and Kurna - Tuhala over Tallinna ringtee (Estonia): the decks'
+        map lines end part-way down their embankments, and the decks stand on the embankments' tops (fill_abutment,
+        #684). The dip under them took the decks' heights from the ground at their lines' ends, 1.5-4.4 m lower: the
+        roads under were dug 2.8-3.8 m, and their slip roads beside them not, a step between them."""
+        lines = [[(-300, 0), (300, 0)], [(0, -28), (0, 28)], [(0, -260), (0, -28)], [(0, 28), (0, 260)]]
+        classes = ["residential", "motorway", "motorway", "motorway"]
+        top = 9.0       # the embankment over the road under; its slopes from 20 m to 40 m either side of the road
+
+        def elev(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
+            bank = top * np.clip((np.abs(np.asarray(n)) - 20.0) / 20.0, 0.0, 1.0)
+            return 10.0 + np.where(np.abs(np.asarray(e)) < 15.0, bank, 0.0)
+
+        def z_at(e, n):
+            g = grading.Grader(FRAME, FakeMD(features(lines, classes, flags=[(1, "is_bridge")])), elev)
+            la, lo, _ = FRAME.enu_to_geodetic(np.array(e, float), np.array(n, float), 0.0)
+            return g.apply(la, lo, elev(la, lo))
+        deck_end, under = (float(v) for v in z_at([0.0, 0.0], [28.0, 0.0]))
+        self.assertGreater(deck_end, 10.0 + top - 0.5, "(the deck's end on its embankment)")
+        depth = roads.deck_depth(56.0)
+        self.assertGreater(deck_end - 10.0, roads.deck_road_clear(depth) + grading.ROAD_LIFT, "(room enough)")
+        self.assertAlmostEqual(under, 10.0, delta=0.3, msg="the road under keeps its ground")
+        with unittest.mock.patch.object(grading, "ABUT_FILL_ON", False):
+            self.assertLess(float(z_at([0.0], [0.0])[0]), 10.0 - 2.0, "(BNE_ABUT_FILL=off: dug as before)")
+
 
 class StreetRunsTest(unittest.TestCase):
     # a street from x -60 to 60 in two pieces (the second drawn backwards) between junctions with side streets

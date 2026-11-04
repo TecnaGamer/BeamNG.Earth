@@ -2236,6 +2236,8 @@ class _Planner:
                 if not fixed or (XS_ON and not rail and self._xsolve(b) is not None):
                     got[0] += self._end_raised(b[0])
                     got[1] += self._end_raised(b[-1])
+                if not rail:        # (or on its embankment's top, where its line ends down the slope: #684's fill)
+                    got = np.maximum(got, [self._end_filled(b, False), self._end_filled(b, True)])
                 ez[j] = got
             return got
         cands, decks, cand_xs, cand_cw = [], [], [], []
@@ -2973,6 +2975,28 @@ class _Planner:
             if a is not None:
                 best = max(best, float(a[-1] if at_end else a[0]))
         return best
+
+    def _end_filled(self, line, at_end):
+        """m: the ground at a bridge's first (at_end False) or last end as fill_abutment lays its approach there, read
+        straight on past the end (the approach roads' own plans are not made yet): its embankment's top where the
+        line ends down the slope, else the ground at the end. -inf when ABUT_FILL_ON is off."""
+        if not ABUT_FILL_ON:
+            return -np.inf
+        b = np.asarray(line, np.float64)[:, :2]
+        p, q = (b[-1], b[-2]) if at_end else (b[0], b[1])
+        u = p - q
+        n = float(np.hypot(*u))
+        if n < 1e-9:
+            return -np.inf
+        d = np.arange(0.0, ABUT_FAR_M + 1e-6, PROFILE_STEP)
+        pts = p[None] + d[:, None] * (u / n)[None]
+        la, lo, _ = self.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+        try:
+            z = np.asarray(self.elev(np.asarray(la), np.asarray(lo)), np.float64).reshape(-1)
+        except Exception as e:      # (ground past the end unread: the end's own estimate, as before)
+            log.debug("grading: fill past bridge end %s: %s: %s", np.round(p), type(e).__name__, e)
+            return -np.inf
+        return float(fill_abutment(z, False)[0])
 
     def _end_lift(self, xy):
         """(lift m, other road lines [(xy (k, 2), half width)], the roads leading onto it [(xy, half width)]) when the
