@@ -14,6 +14,7 @@ import pools  # noqa: E402
 class ShedTest(unittest.TestCase):
     def setUp(self):
         self._old = (budget.SHED_MB, list(budget._shedders), budget.shed_count)
+        budget._last_shed = None
         self.calls = []
         budget._shedders[:] = [lambda: self.calls.append(1)]
 
@@ -36,6 +37,15 @@ class ShedTest(unittest.TestCase):
             self.assertTrue(budget.maybe_shed())
         self.assertEqual(self.calls, [1])
 
+    def test_at_most_every_min_s(self):
+        budget.SHED_MB = 1
+        with mock.patch.object(budget, "memory_mb", return_value=5000.0):
+            self.assertTrue(budget.maybe_shed())
+            self.assertFalse(budget.maybe_shed())          # (SHED_MIN_S not over yet)
+            budget._last_shed -= budget.SHED_MIN_S + 1
+            self.assertTrue(budget.maybe_shed())
+        self.assertEqual(self.calls, [1, 1])
+
     def test_failing_shedder_does_not_stop_others(self):
         budget.SHED_MB = 1
         budget._shedders[:] = [lambda: 1 / 0, lambda: self.calls.append(2)]
@@ -52,6 +62,7 @@ class ShedTest(unittest.TestCase):
         budget.SHED_MB = 1
         with mock.patch.object(budget, "memory_mb", return_value=5000.0):
             self.assertEqual(pools._call(lambda a, b=0: a + b, (2,), {"b": 3}), 5)
+            budget._last_shed = None
             with self.assertRaises(ZeroDivisionError):        # (a failed job sheds too, and its error goes on)
                 pools._call(lambda: 1 / 0, (), {})
         self.assertEqual(self.calls, [1, 1])

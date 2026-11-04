@@ -129,9 +129,11 @@ _trimming = False
 # server to ~5 GB PSS with 6.7 GB of swap until the system killed the game's UI (2026-11-04); the caches' own caps
 # count entries, and the results kept on cached map features are counted nowhere. 0 = off (a desktop: apply()).
 SHED_MB = 0
-SMALL_SHED_MB = 1200     # (PC bench, 32 Manhattan road tiles: 1200 dropped twice, +17 % time, peak 1.25 GB not 1.67; 600 every tile, 3x)
+SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
+SHED_MIN_S = 90.0        # a worker drops its caches at most this often (a dense city's working set comes straight back)
 _shedders = []
 shed_count = 0
+_last_shed = None
 
 
 def register_shed(fn):
@@ -180,9 +182,14 @@ def maybe_shed():
     global shed_count
     if not SHED_MB or not _shedders:
         return False
+    import time
+    global _last_shed
+    if _last_shed is not None and time.monotonic() - _last_shed < SHED_MIN_S:
+        return False
     mb = memory_mb()
     if mb is None or mb < SHED_MB:
         return False
+    _last_shed = time.monotonic()
     import gc
     import logging
     for fn in list(_shedders):
