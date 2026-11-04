@@ -15,9 +15,10 @@
 --     (a relative, world-frame rotation as tech/techCore.lua:909-912 and rebase.lua use it), and set
 --     the velocity with veh:applyClusterVelocityScaleAdd(-1, 0, vx, vy, vz) (scale 0 = replace,
 --     spawn.lua:534; funstuff.lua adds with scale 1);
---   - height: ground profiles ray down with castRayStatic from RAY_UP above the last ground (only
---     static collision: the TerrainBlock, never the render-only far tiles) and add the clearance
---     measured at install; a miss is a 'fall' (logged, the last ground height is kept). Flight
+--   - height: ground profiles ray down with castRayStatic from HEAD_M above the last ground (only
+--     static collision: the TerrainBlock, never the render-only far tiles; RAY_UP above it when
+--     that misses) and add the clearance measured at install; a miss is a 'fall' (logged, the
+--     last ground height is kept). Flight
 --     profiles (points with `alt`, m AGL) fly at the start ground height + alt until M5's
 --     pose_reply.groundZ exists;
 --   - inputs are zeroed at install and at uninstall; the camera is never touched (it stays on the
@@ -41,7 +42,13 @@ _G.BNGE_DRIVE = D
 local floor, abs, sqrt, min, max = math.floor, math.abs, math.sqrt, math.min, math.max
 local sin, cos, atan2, rad, deg = math.sin, math.cos, math.atan2, math.rad, math.deg
 
-D.RAY_UP = 1000          -- m above the last ground height where the ground ray starts
+D.RAY_UP = 1000          -- m above the last ground height where the fallback ground ray starts
+-- The ground ray starts this far above the last ground (+ HEAD_GRADE per m moved in the frame, at most HEAD_MAX_M):
+-- under an overpass deck (its underside 5-6 m over the road, roads.MIN_BRIDGE_HEADROOM_M) or a tunnel's ground. From
+-- RAY_UP it hit the deck's top and the driver set the car on it, 7-10 m up in one frame, and back down past it: the
+-- 150 mph I-10 Phoenix runs' "vehicle unstable: v = nan" under the arterial overpasses (and the car lifted onto the
+-- Deck Park Tunnel's park), 2026-11-03.
+D.HEAD_M, D.HEAD_GRADE, D.HEAD_MAX_M = 3.0, 0.15, 4.5
 D.RAY_LEN = 3000         -- m of ray (a miss: castRayStatic returns >= the length)
 D.MAX_VZ = 30            -- m/s; |vz| clamp of a ground profile (slope changes, rebase frames)
 D.JUMP_M = 500           -- m between the placed and the actual position that is not a rebase: stop
@@ -181,6 +188,15 @@ local function groundAt(x, y, zTop)
   local d = castRayStatic(vec3(x, y, zTop), vec3(0, 0, -1), D.RAY_LEN)
   if d and d < D.RAY_LEN then return zTop - d end
 end
+
+-- The ground under (x, y) near zRef (the last ground, or the car's height): the first static collision under
+-- zRef + the head room (ds: m moved since zRef was measured), else (the ground rose over the ray's start) under
+-- zRef + RAY_UP; nil: none. D.groundNear for the tests.
+local function groundNear(x, y, zRef, ds)
+  local head = min(D.HEAD_MAX_M, D.HEAD_M + D.HEAD_GRADE * (ds or 0))
+  return groundAt(x, y, zRef + head) or groundAt(x, y, zRef + D.RAY_UP)
+end
+D.groundNear = groundNear
 
 local function governor()
   local core = rawget(_G, 'beamngEarth_core')
@@ -336,7 +352,7 @@ function D.tick(dtReal, dtSim)
       z = s.base + alt
       vz = vz or (z - s.z) / dtSim
     else
-      local g = groundAt(s.x, s.y, s.ground + D.RAY_UP)
+      local g = groundNear(s.x, s.y, s.ground, ds)
       if g then
         s.ground = g
       else
@@ -464,7 +480,7 @@ function D.install(cfg)
   if not veh then return fail('no player vehicle') end
   if not rawget(_G, 'newExtensionProxy') then return fail('newExtensionProxy missing') end
   local p = veh:getPosition()
-  local g = groundAt(p.x, p.y, p.z + D.RAY_UP)
+  local g = groundNear(p.x, p.y, p.z)
   if not g then return fail('no ground under the player') end
   local d = veh:getDirectionVector()
   local h0 = D.headingOf(d.x, d.y)
@@ -562,7 +578,7 @@ function D.uninstall()
     pcall(function()
       -- park on the ground under the car, at rest, inputs zero
       local p = veh:getPosition()
-      local g = groundAt(p.x, p.y, p.z + D.RAY_UP)
+      local g = groundNear(p.x, p.y, p.z)
       if g and D.state then veh:setClusterPosRelRot(-1, p.x, p.y, g + D.state.clearance, 0, 0, 0, 1) end
       park(veh)
     end)

@@ -14,8 +14,12 @@ local DRIVER = dir .. '/../../tools/drive_driver.lua'
 
 local function ground(x, y) return 100 + 0.02 * x - 0.01 * y end
 local MISS_X = 5000 -- no static collision beyond x = 5000 (off the terrain block)
+local deck = nil    -- { x0, x1, top }: an overpass deck over the ground (its top surface; hit from above only)
 function castRayStatic(pos, dirv, len)
   if pos.x > MISS_X then return len end
+  if deck and pos.x >= deck[1] and pos.x <= deck[2] and pos.z >= deck[3] and pos.z - deck[3] <= len then
+    return pos.z - deck[3]
+  end
   local d = pos.z - ground(pos.x, pos.y)
   if d < 0 or d > len then return len end
   return d
@@ -246,6 +250,21 @@ T.check(D.state.x == px, 'paused: nothing moves')
 pt = D.pollTable()
 T.check(pt.drive.resets == 1, 'player resets counted (others ignored)')
 T.check(pt.frames.flags[#pt.frames.flags] % (2 * D.FLAG_SKIP) >= D.FLAG_SKIP, 'paused frame flagged skip')
+
+-- under an overpass deck 8 m over the ground: the car stays on the road under it (a ray from far above hit the deck's
+-- top and set the car on it: the 150 mph I-10 NaN runs, 2026-11-03)
+do
+  local x = D.state.x
+  deck = { x - 50, x + 200, ground(x, D.state.y) + 8 }
+  frame(); frame()
+  T.near(veh.pos.z, ground(D.state.x, D.state.y) + 0.6, 1e-6, 'under an overpass deck: placed on the ground under it')
+  T.near(D.groundNear(x, D.state.y, ground(x, D.state.y) + 20), deck[3], 1e-6,
+    'the deck from above it (the car on the deck)')
+  deck = nil
+  T.near(D.groundNear(x, D.state.y, ground(x, D.state.y) - 10), ground(x, D.state.y), 1e-6,
+    'ground risen over the head room: found from RAY_UP')
+  D.pollTable()
+end
 
 -- fall: off the static collision the last ground height is kept
 D.state.x = MISS_X + 10
