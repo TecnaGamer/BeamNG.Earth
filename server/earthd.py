@@ -1103,6 +1103,8 @@ class Server:
                 self.orphans[sid] = now
                 log.info("session %s of an earlier run (%.0f min old) kept until the game says whether it still "
                          "shows its tiles", sid, age / 60)
+        if no_game:
+            self._wipe_leaked_packs_once()
         self.trash_thread = self._empty_trash()
 
     def _base_cache_files(self, sid):
@@ -1117,6 +1119,48 @@ class Server:
                 if os.path.exists(p):
                     out.append(p)
         return out
+
+    def _remove_base(self, name):
+        """A base photo name in out_dir gone with its packed copies in the game's terrain texture cache (whichever size it
+        was made at). A replaced stand-in or earlier refresh lost only its photo, its 5.6-22 MB pack stayed for good:
+        one a block at speed, 165 GB in the cache of a test PC by 2026-11-03."""
+        self._remove(os.path.join(self.out_dir, name))
+        for px in BASE_SIZES:
+            self._remove(os.path.join(terraincache.cache_dir(self.user_dir),
+                                      terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(px)) + ".dds"))
+
+    PACK_WIPE_MARK = "terrainpacks_wiped_v1"   # in the cache dir: the one wipe of the leaked packs done
+    PACK_WIPE_MIN_BYTES = 5 * 1024 ** 3
+
+    def _wipe_leaked_packs_once(self):
+        """Once (no game running): the game's terrain texture cache moved to the trash when it holds over
+        PACK_WIPE_MIN_BYTES, the base photo packs earlier builds leaked (_remove_base). It is a cache: the game packs
+        what it needs again (a few seconds at the next level load, stock maps' materials at their next use)."""
+        mark = os.path.join(self.cache_dir, self.PACK_WIPE_MARK)
+        if os.path.exists(mark):
+            return
+        d = terraincache.cache_dir(self.user_dir)
+        total = 0
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        total += e.stat().st_size
+                    except OSError:
+                        pass
+                    if total > self.PACK_WIPE_MIN_BYTES:
+                        break
+        except OSError:
+            pass
+        if total > self.PACK_WIPE_MIN_BYTES:
+            log.info("terrain texture cache over %.0f GB (leaked base photo packs): moved out, deleted in the background",
+                     self.PACK_WIPE_MIN_BYTES / 1024 ** 3)
+            self._rmtree_outside(d, later=True)
+        try:
+            os.makedirs(self.cache_dir, exist_ok=True)
+            open(mark, "w").close()
+        except OSError:
+            pass
 
     def _rmtree_session(self, sid, later=False):
         """Session sid's folders (and its base photos' terrain cache copies) removed at once: moved out of the user
@@ -3339,18 +3383,14 @@ class Server:
         for key in [k for k in self.hm if k not in keep][:max(0, len(self.hm) - HM_CACHE)]:
             info = self.hm.pop(key)
             self._remove(os.path.join(self.out_dir, self.hm_name(key)))
-            self._remove(os.path.join(self.out_dir, self.base_name(key)))
             self.base_stale.discard(key)
             self.base_pending.pop(key, None)
-            if info.get("base") and info["base"] != self.base_name(key):     # a refreshed photo
-                self._remove(os.path.join(self.out_dir, info["base"]))
+            # its photos (the base, a refreshed one, the stand-in) with their packed copies in the game's terrain
+            # texture cache
+            for name in {self.base_name(key), info.get("base") or self.base_name(key), self.quick_base_name(key)}:
+                self._remove_base(name)
             if info.get("ter"):
                 self._remove(os.path.join(self.out_dir, info["ter"]))
-            if self.near_visual == "detail":     # its packed copies in the game's terrain texture cache
-                for name in {self.base_name(key), info.get("base") or self.base_name(key)}:
-                    for px in BASE_SIZES:       # (whichever size it was made at)
-                        self._remove(os.path.join(terraincache.cache_dir(self.user_dir), terraincache.base_key(
-                            f"{self.vfs_dir}/{name}", base_ao_vfs(px)) + ".dds"))
             if self.surface is not None:        # its surface masks (only read at import)
                 for name in surfacemod.mask_names(self.hm_name(key)[:-4]):
                     self._remove(os.path.join(self.out_dir, name))
@@ -6025,7 +6065,7 @@ class Connection:
                     return
                 old, info["base"] = info.get("base"), name
                 if old and old != name and old != s.base_name(key):
-                    s._remove(os.path.join(s.out_dir, old))
+                    s._remove_base(old)         # (with its pack: only the photo went before, its pack stayed)
                 log.info("base photo of %s rendered again with its NAIP (%s)", key, name)
                 self.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
                            "base": f"{s.vfs_dir}/{name}", "baseSize": size})
