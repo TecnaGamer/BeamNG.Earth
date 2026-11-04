@@ -57,6 +57,7 @@ URGENT_WORKERS = 16         # Dem.urgent(): its own fetch threads (with the 16 s
 # older than MIRROR_MAX_AGE_S it is made again (Mapterhorn adds lidar areas). DECODED_VERSION: raise it when what a
 # tile holds changes (the decoding, the ground filter).
 MIRROR_MB = 1024
+CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
@@ -721,24 +722,63 @@ class Dem:
 
     def _load_tile(self, key):
         """A decoded tile: from the mirror, else made (_make_tile) and, when it is all Mapterhorn's data as it will
-        stay (no failover, no fetch failed on the way), written to the mirror."""
+        stay (no failover, no fetch failed on the way), written to the mirror. One process makes and writes a tile
+        (its claim, _mirror_claim); another one asking meanwhile waits for it at most CLAIM_WAIT_S, then makes it
+        without writing: the server's processes decoded and wrote the same tiles side by side, 3083 writes of 1 MB
+        for ~1144 tiles in a warm 8 min drive (2026-11-04: the mirror's SSD writes)."""
         got = self._mirror_get(key)
         if got is not None:
             self.served.setdefault(key, MAPTERHORN["name"])
             return got
+        claim = self._mirror_claim(key) if MIRROR_MB > 0 else False
+        if claim is None:               # another process is making it
+            end = time.monotonic() + CLAIM_WAIT_S
+            while time.monotonic() < end:
+                time.sleep(CLAIM_POLL_S)
+                got = self._mirror_get(key)
+                if got is not None:
+                    self._count("dem:mirror_waited")
+                    self.served.setdefault(key, MAPTERHORN["name"])
+                    return got
+            claim = False
         prev = getattr(self._local, "partial", False)
         self._local.partial = False
         partial = True
         try:
             a = self._make_tile(key)
             partial = self._local.partial
+            if claim and not partial and a is not None and self.served.get(key) == MAPTERHORN["name"]:
+                got = self._mirror_put(key, a)
+                if got is not None:
+                    return got
+            return a
         finally:
             self._local.partial = prev or partial
-        if not partial and a is not None and self.served.get(key) == MAPTERHORN["name"] and MIRROR_MB > 0:
-            got = self._mirror_put(key, a)
-            if got is not None:
-                return got
-        return a
+            if claim:
+                try:
+                    os.remove(self._mirror_path(key) + ".claim")
+                except OSError:
+                    pass
+
+    def _mirror_claim(self, key):
+        """True: this process makes key's tile (its claim file made); None: another one is (a claim younger than
+        CLAIM_STALE_S); False: no claims here (the folder cannot be written: made and not written, as before)."""
+        path = self._mirror_path(key) + ".claim"
+        for _ in range(2):
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return True
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(path) < CLAIM_STALE_S:
+                        return None
+                    os.remove(path)         # (a process that ended mid-tile)
+                except OSError:
+                    pass
+            except OSError:
+                return False
+        return None
 
     def _make_tile(self, key):
         return self._canada(key, self._make_tile0(key))

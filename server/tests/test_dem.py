@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -278,6 +279,67 @@ class DemPrefetchTest(unittest.TestCase):
             self.assertEqual(z15[0][1:], (int(cx), int(cy)), "nearest first")
             self.assertEqual(keys[0][0], demmod.GLOBAL_ZOOM, "z12 ground parents first (ground filter)")
 
+
+
+class MirrorClaimTest(unittest.TestCase):
+    """One process makes and writes a mirrored tile (its claim); another asking meanwhile waits for it and maps it, or
+    after CLAIM_WAIT_S makes it without writing; a stale claim (a process that ended) is taken over."""
+
+    def test_waits_for_the_claimer(self):
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            key = (15, 9400, 12500)
+            maker, waiter = demmod.Dem(d, fetcher=TerrariumFetcher()), demmod.Dem(d, fetcher=TerrariumFetcher())
+            self.assertTrue(maker._mirror_claim(key))                 # (the other process is making it)
+            made = maker._make_tile(key)
+
+            def finish():
+                maker._mirror_put(key, made)
+                os.remove(maker._mirror_path(key) + ".claim")
+            threading.Timer(0.05, finish).start()
+            got = []
+            orig = demmod.decode_terrarium
+            demmod.decode_terrarium = lambda *a_: got.append(1) or orig(*a_)
+            try:
+                b = waiter._load_tile(key)
+            finally:
+                demmod.decode_terrarium = orig
+            self.assertEqual(got, [], "not decoded again: waited for the claimer's")
+            self.assertEqual(waiter.stats["dem:mirror_waited"], 1)
+            self.assertFalse(b.flags.owndata or b.flags.writeable, "the mirror's mapping")
+            del b
+            gc.collect()
+
+    def test_claimer_too_slow_makes_without_writing(self):
+        with tempfile.TemporaryDirectory() as d:
+            key = (15, 9401, 12500)
+            other = demmod.Dem(d, fetcher=TerrariumFetcher())
+            self.assertTrue(other._mirror_claim(key))                 # never finishes
+            old = demmod.CLAIM_WAIT_S
+            demmod.CLAIM_WAIT_S = 0.05
+            try:
+                me = demmod.Dem(d, fetcher=TerrariumFetcher())
+                a = me._load_tile(key)
+            finally:
+                demmod.CLAIM_WAIT_S = old
+            self.assertEqual(float(a[0, 0]), 100 + 9401 % 1000)
+            self.assertFalse(Path(me._mirror_path(key)).exists(), "the claimer writes it, not this one")
+            self.assertEqual(me.stats["dem:mirror_put"], 0)
+
+    def test_stale_claim_taken_over(self):
+        with tempfile.TemporaryDirectory() as d:
+            key = (15, 9402, 12500)
+            dem = demmod.Dem(d, fetcher=TerrariumFetcher())
+            claim = dem._mirror_path(key) + ".claim"
+            os.makedirs(os.path.dirname(claim), exist_ok=True)
+            open(claim, "w").close()
+            old = time.time() - demmod.CLAIM_STALE_S - 5
+            os.utime(claim, (old, old))
+            a = dem._load_tile(key)
+            self.assertTrue(Path(dem._mirror_path(key)).exists())
+            self.assertFalse(Path(claim).exists())
+            del a
+            gc.collect()
 
 if __name__ == "__main__":
     unittest.main()
