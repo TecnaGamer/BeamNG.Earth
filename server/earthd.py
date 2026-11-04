@@ -7291,7 +7291,8 @@ def prune_own_caches(cache_dir, started=None):
     except Exception as e:
         log.warning("cache: mapdata-mirror not cut back: %s", e)
     for sub, mb, match in (("seacarve", seacarvemod.RAW_MB, lambda n: n.endswith(".raw.npy")),
-                           (os.path.join("dem", "decoded"), demmod.MIRROR_MB, lambda n: n.endswith(".npy")),
+                           (os.path.join("dem", "decoded"), demmod.MIRROR_MB,
+                            lambda n: n.endswith((".npy", ".f32z"))),
                            ("peercache", peerworkmod.CACHE_BYTES / 1e6, None),
                            ("roadwidth", roadwidthmod.STORE_MB, lambda n: n.endswith(".npy")),
                            (revisitmod.SUBDIR, revisitmod.MAX_MB,       # (the zips and the files kept beside them)

@@ -128,7 +128,7 @@ class MirrorTest(unittest.TestCase):
                 demmod.decode_terrarium = orig
             self.assertEqual((len(f.calls), got), (n, []), "neither fetched nor decoded")
             np.testing.assert_array_equal(a, b)
-            self.assertFalse(b.flags.owndata or b.flags.writeable, "the mirror's mapping")
+            self.assertTrue(demmod.MIRROR_ZSTD or not (b.flags.owndata or b.flags.writeable), "the mirror's mapping")
             self.assertEqual(other.served[key], demmod.MAPTERHORN["name"])
             k2 = (15, 9301, 12500)
             down = demmod.Dem(d, fetcher=TerrariumFetcher(mapterhorn_fails=True))
@@ -306,7 +306,7 @@ class MirrorClaimTest(unittest.TestCase):
                 demmod.decode_terrarium = orig
             self.assertEqual(got, [], "not decoded again: waited for the claimer's")
             self.assertEqual(waiter.stats["dem:mirror_waited"], 1)
-            self.assertFalse(b.flags.owndata or b.flags.writeable, "the mirror's mapping")
+            self.assertTrue(demmod.MIRROR_ZSTD or not (b.flags.owndata or b.flags.writeable), "the mirror's mapping")
             del b
             gc.collect()
 

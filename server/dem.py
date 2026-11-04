@@ -68,6 +68,11 @@ def _mirror_mb():
 
 
 MIRROR_MB = _mirror_mb()
+# (an experiment, off: the mirror's tiles packed, earthfast f32z.rs, ~11 % of the .npy, ~3 ms to unpack, but each
+# process's own array instead of shared mapped pages: measure the memory on a Steam Deck before turning it on)
+MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD") == "1"
+if MIRROR_ZSTD:
+    fast.require(146, "the packed DEM mirror (f32_pack)")
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
@@ -644,7 +649,7 @@ class Dem:
     def _mirror_path(self, key):
         z, x, y = key
         return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}", str(z),
-                            str(x), f"{y}.npy")
+                            str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 
     def _mirror_get(self, key, readback=False):
         """A tile from the decoded mirror (a read-only view of its memory map), or None. readback: _mirror_put's
@@ -655,7 +660,11 @@ class Dem:
         try:
             if time.time() - os.path.getmtime(path) > MIRROR_MAX_AGE_S:
                 return None
-            a = np.asarray(np.load(path, mmap_mode="r", allow_pickle=False))
+            if MIRROR_ZSTD:             # (packed: this process's own array, not a shared mapping)
+                with open(path, "rb") as fh:
+                    a = fast._ef.f32_unpack(fh.read()).reshape(TILE, TILE)
+            else:
+                a = np.asarray(np.load(path, mmap_mode="r", allow_pickle=False))
         except (OSError, ValueError, EOFError):
             return None
         if a.shape != (TILE, TILE) or a.dtype != np.float32:
@@ -671,7 +680,10 @@ class Dem:
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(tmp, "wb") as f:
-                np.save(f, np.ascontiguousarray(a, np.float32), allow_pickle=False)
+                if MIRROR_ZSTD:
+                    f.write(fast._ef.f32_pack(np.ascontiguousarray(a, np.float32).ravel()))
+                else:
+                    np.save(f, np.ascontiguousarray(a, np.float32), allow_pickle=False)
             staging.replace_cached(tmp, path)
         except OSError as e:
             log.debug("dem mirror %s: %s", path, e)
@@ -695,6 +707,8 @@ class Dem:
         import multiprocessing
         if prune and multiprocessing.current_process().name == "MainProcess":
             threading.Thread(target=self._mirror_prune, daemon=True, name="dem-mirror-prune").start()
+        if MIRROR_ZSTD:                 # (its own array either way: not read back)
+            return np.ascontiguousarray(a, np.float32)
         return self._mirror_get(key, readback=True)
 
     # (a process's first write prunes: the count of a session's own writes alone never reached the threshold when
@@ -708,7 +722,7 @@ class Dem:
         files = []
         for dirpath, _, names in os.walk(os.path.join(self.cache_dir, "decoded")):
             for n in names:
-                if n.endswith(".npy"):
+                if n.endswith((".npy", ".f32z")):
                     p = os.path.join(dirpath, n)
                     try:
                         st = os.stat(p)
