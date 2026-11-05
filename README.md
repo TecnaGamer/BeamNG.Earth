@@ -165,7 +165,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 
 **Interface and tools**
 - A slim status bar (street, town, country, and under it the loading progress of the ground, roads & buildings, trees and
-  distant land after a teleport), the Earth coordinates above the minimap, a connection banner when something is
+  distant land after a teleport; the names come from the map data the app downloads, your position is not sent to a
+  lookup service), the Earth coordinates above the minimap, a connection banner when something is
   wrong and the data credits on screen, as BeamNG UI apps in a ".Earth" app layout (based on Freeroam's;
   move or resize them in the UI apps editor), and a one-time welcome page about the project.
 - Settings in the pause menu, keybinds, in-game reports (notes and performance recordings to share), and a
@@ -239,7 +240,8 @@ connection (the map is downloaded while you play).
      "Allow executing", or `chmod +x`).
 2. **Run it** (with Steam running). A console window opens (like BeamMP's launcher); it copies the mod into the
    game, starts the world server and starts BeamNG.drive. Closing the game stops the server.
-   - **Linux, native game:** started with the grass patch (`tools/gcpatch`) already applied, no Steam launch
+   - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
+     with two more opt-in patches for testing) already applied, no Steam launch
      options needed.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
@@ -298,6 +300,8 @@ network you trust: the connection is not encrypted.
    carries it built for Linux x86-64 (`server/earthfast.abi3.so`) and Windows (`server/earthfast.pyd`); after
    changing `native/earthfast`, or on another system, build it with `python3 tools/build_native.py` (Rust's cargo;
    `--windows` cross-builds the `.pyd` with cargo-zigbuild).
+   This development branch requires native API 147, combining cliff transitions with upstream compression.
+   The Windows module is rebuilt; Linux users must rebuild the checked-in older `.so` before starting.
 2. Copy (or sync) `mod/beamng_earth/` to
    `<BeamNG user folder>/current/mods/unpacked/beamng_earth/`.
 3. Start the server: `python3 server/earthd.py`

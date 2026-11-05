@@ -71,7 +71,7 @@ class FarCliffsTest(unittest.TestCase):
             count=sum(len(cdae.mesh_arrays(m)['indices'])//3 for m in shape['meshes'] if m['type']!=4)
             self.assertEqual(count,len(b.tris))
             import matslots
-            data=Path(path).read_bytes()
+            data=cdae.plain(Path(path).read_bytes())
             moved=cdae.decode(matslots.restamp(data,'bngEarthFar_ab12_00001','bngEarthFar_ab12_00002'))
             self.assertEqual([m['name'] for m in moved['materials']],
                              ['bngEarthFar_ab12_00002','bne_far_cliff_canyon_blend'])

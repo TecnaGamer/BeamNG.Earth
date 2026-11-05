@@ -30,6 +30,22 @@ def _marks(v, out):
             _marks(x, out)
 
 
+def _named(v, out):
+    """Every "bne_..." material name in v (a constant, or nested in dicts' keys and values, lists, tuples): modules
+    that name their materials as plain strings (railways.BALLAST, buildings' tint tables) rather than {"m": ...}.
+    Their first tile instanced them mid-drive: a 104 ms rail import at 120 mph, 2026-11-04."""
+    if isinstance(v, str):
+        if v.startswith("bne_") and not v.endswith("_"):
+            out.add(v)
+    elif isinstance(v, dict):
+        for k, x in v.items():
+            _named(k, out)
+            _named(x, out)
+    elif isinstance(v, (list, tuple, set, frozenset)):
+        for x in v:
+            _named(x, out)
+
+
 def materials():
     """The sorted material names the server's shapes may use."""
     import airportgrade
@@ -54,6 +70,14 @@ def materials():
                  "TUNNEL_LIGHT"):
         out.add(getattr(roadmesh, name))
     out |= set(roads.DIRT_MATERIALS)            # (the dirt and gravel strips: roads.DIRT_LOOK, one variation per road)
+    import rails
+    import railways
+    # (not buildings / ships: their "bne_bld_fac_..." / "bne_precast" names are looks, a base material and a tint)
+    for mod in (rails, railways, roadmesh):
+        for name, v in vars(mod).items():
+            if name.isupper():
+                _marks(v, out)
+                _named(v, out)
     return sorted(out)
 
 

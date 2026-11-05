@@ -168,3 +168,16 @@ objects were restored. Exports in build/cliff-rim-noise-preview/ grew from
 adaptive relief refinement; both versions used 31 pieces total. No FPS claim is
 made from this comparison. Restart the server and regenerate the location to load
 these new baked weights; already loaded meshes are unchanged.
+
+
+## Upstream dev integration (2026-11-04)
+
+Merged upstream dev d46e07b8. Native API 147 combines the cliff streaming and
+transition kernels with upstream CDAE and float-grid compression. Cliff detail
+threshold changes and the distant-cliff toggle now unpack shapes before editing
+and retain compression when writing them. Split-cliff object names remain intact.
+
+Windows native rebuilt and cliff, compression, upstream server and Lua regression
+checks passed. Linux native rebuild remains pending: the local WSL installation
+has no Rust/C toolchain and Docker is not running. The minimum-version check
+rejects the older Linux binary until it is rebuilt.

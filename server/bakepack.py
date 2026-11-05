@@ -164,11 +164,14 @@ def _expect_for(md, signature):
 
 def _get(net, url, path, cap):
     import urllib.request
+    import netfetch
     tmp = path + ".part"
     with net.session(url, kind="demand") as s:
         req = urllib.request.Request(url, headers=s.headers)
         n = 0
-        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:
+        # (Windows: the system's certificate check, as netfetch's own requests, GitHub #567)
+        with urllib.request.urlopen(req, timeout=60, context=netfetch.windows_ssl_context()) as resp, \
+                open(tmp, "wb") as out:
             s.status = resp.status
             while True:
                 chunk = resp.read(1 << 20)

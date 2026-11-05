@@ -312,20 +312,94 @@ def compact(cache_dir, before=None):
         COMPACTED.set()
 
 
+# A far tile's texture (and its road mask) kept as a file beside its zip, not in it: a hit hard-links it into the
+# session folder (place) and keeping one hard-links the session's file in (Side on store), so neither writes its
+# bytes again: every warm visit unzipped and wrote each far texture, ~0.5 GB of a warm 8 min drive at 150 mph
+# (2026-11-04, Discord: "hard on the drive"). Zips of before keep them inside and still load.
+SIDE_KINDS = frozenset({"far", "fartex"})
+SIDE_NAMES = ("tex.dds", "mask.dds")
+SIDE_SUFFIXES = tuple("." + n for n in SIDE_NAMES)
+
+
+class Side:
+    """A blob that is a file: its path (load: the kept file; store: a file to keep, linked in)."""
+    __slots__ = ("path",)
+
+    def __init__(self, path):
+        self.path = path
+
+    def read(self):
+        with open(self.path, "rb") as f:
+            return f.read()
+
+
+def _side(path, name):
+    return f"{path[:-4]}.{name}"
+
+
+def _link_or_copy(src, dst):
+    """dst becomes src's content atomically: a hard link (nothing written), a copy where links fail (another volume)."""
+    import shutil
+    tmp = f"{dst}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.link(src, tmp)
+    except OSError:
+        shutil.copyfile(src, tmp)
+    os.replace(tmp, dst)
+
+
+def place(blob, dst):
+    """A loaded blob written to dst (atomically, staging): a Side hard-linked, bytes written."""
+    import staging
+    tmp = staging.tmp_for(dst)
+    if isinstance(blob, Side):
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        # (a link only through a unique staging name: the fallback name, dst + ".tmp", is the one every writer opens
+        # with "wb", and a link left there by a crash would have been truncated with the cache's file behind it)
+        linked = False
+        if tmp != dst + ".tmp":
+            try:
+                os.link(blob.path, tmp)
+                linked = True
+            except OSError:
+                pass
+        if not linked:
+            import shutil
+            shutil.copyfile(blob.path, tmp)
+    else:
+        with open(tmp, "wb") as f:
+            f.write(blob)
+    staging.replace(tmp, dst)
+
+
 def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
-    """Keep an item under key k: blobs {name: bytes}, extra JSON data; where (where()): the place it stands, for the
-    map's cache view (a sidecar line; code: its code value there, format_marker's for a format-keyed item, else
-    code_key). Never raises; False when not kept."""
+    """Keep an item under key k: blobs {name: bytes, or Side(path): a file linked in}, extra JSON data; where (where()):
+    the place it stands, for the map's cache view (a sidecar line; code: its code value there, format_marker's for a
+    format-keyed item, else code_key). Never raises; False when not kept."""
     if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return False
     path = _path(cache_dir, kind, k)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        side = [n for n in SIDE_NAMES if n in blobs] if kind in SIDE_KINDS else []
+        for n in side:          # (before the zip: a zip there means its files are)
+            b = blobs[n]
+            if isinstance(b, Side):
+                _link_or_copy(b.path, _side(path, n))
+            else:
+                st = f"{_side(path, n)}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(st, "wb") as f:
+                    f.write(b)
+                os.replace(st, _side(path, n))
+        inside = {n: (b.read() if isinstance(b, Side) else b) for n, b in blobs.items() if n not in side}
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
-            for name, data in blobs.items():
+            for name, data in inside.items():
                 z.writestr(name, data)
-            z.writestr("meta.json", json.dumps({"names": list(blobs), "extra": extra}))
+            z.writestr("meta.json", json.dumps({"names": list(inside), "side": side, "extra": extra}))
         os.replace(tmp, path)
         if where is not None:
             _note(cache_dir, kind, k, where, code)
@@ -349,10 +423,16 @@ def load(cache_dir, kind, k):
         with zipfile.ZipFile(path) as z:
             meta = json.loads(z.read("meta.json"))
             blobs = {name: z.read(name) for name in meta["names"]}
-        try:
-            os.utime(path, None)            # (used: kept longest when cut back)
-        except OSError:
-            pass
+        for n in meta.get("side") or ():
+            sp = _side(path, n)
+            if not os.path.exists(sp):      # (its file cut back alone: built again)
+                return None
+            blobs[n] = Side(sp)
+        for p in [path] + [_side(path, n) for n in meta.get("side") or ()]:
+            try:
+                os.utime(p, None)           # (used: kept longest when cut back, the zip and its files alike)
+            except OSError:
+                pass
         return blobs, meta.get("extra")
     except Exception:
         return None

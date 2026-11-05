@@ -35,6 +35,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -647,6 +648,79 @@ class RestartDriveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeakedPacksTest(unittest.TestCase):
+    """A replaced stand-in / earlier refresh lost only its photo, its pack stayed (165 GB on a test PC, 2026-11-03):
+    _remove_base takes both; the packs earlier builds leaked go once, at a start with no game running."""
+
+    def server(self, root):
+        s = earthd.Server(root, os.path.join(root, "cache"), imagery=None)
+        self.addCleanup(s.tile_pool.shutdown)
+        self.addCleanup(s.hm_pool.shutdown)
+        return s
+
+    def test_a_photo_goes_with_its_pack(self):
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: True):
+            s = self.server(root)
+            name = "hm_1_0_0_base_q.png"
+            open(os.path.join(s.out_dir, name), "w").close()
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir, exist_ok=True)
+            pack = os.path.join(cdir, terraincache.base_key(f"{s.vfs_dir}/{name}", earthd.BASE_AO_VFS) + ".dds")
+            other = os.path.join(cdir, "0123456789abcdef.dds")
+            for p in (pack, other):
+                open(p, "w").close()
+            s._remove_base(name)
+            self.assertFalse(os.path.exists(os.path.join(s.out_dir, name)) or os.path.exists(pack))
+            self.assertTrue(os.path.exists(other), "the game's own packs stay")
+
+    def test_replaced_photos_stay_until_their_block_goes(self):
+        # a refreshed block's old photo (its stand-in) may still be on screen (the refresh deferred at speed): its
+        # pack stays until the block is evicted (deleted at the refresh, the game packed it again: ~0.75 s frames)
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: True), \
+                mock.patch.object(earthd, "HM_CACHE", 0):
+            s = self.server(root)
+            key = (1, 0.0, 0.0)
+            names = [s.base_name(key), s.quick_base_name(key), s.base_name(key, 2)]
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir, exist_ok=True)
+            packs = [os.path.join(cdir, terraincache.base_key(f"{s.vfs_dir}/{n}", earthd.BASE_AO_VFS) + ".dds")
+                     for n in names]
+            for p in [os.path.join(s.out_dir, n) for n in names] + packs:
+                open(p, "w").close()
+            s.hm[key] = {"base": names[2], "old_bases": [names[1]]}
+            s.hm_committed, s.hm_sent = [], []
+            s.evict_heightmaps(fresh=None)
+            self.assertNotIn(key, s.hm)
+            self.assertFalse(any(os.path.exists(p) for p in packs), "every photo of the block goes with it")
+
+    def test_leaked_packs_wiped_once_with_no_game(self):
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: False), \
+                mock.patch.object(earthd.Server, "PACK_WIPE_MIN_BYTES", 10):
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir)
+            with open(os.path.join(cdir, "aaaaaaaaaaaaaaaa.dds"), "wb") as f:
+                f.write(b"x" * 100)
+            self.server(root)
+            self.assertFalse(os.path.exists(os.path.join(cdir, "aaaaaaaaaaaaaaaa.dds")), "over the size: wiped")
+            os.makedirs(cdir, exist_ok=True)
+            with open(os.path.join(cdir, "bbbbbbbbbbbbbbbb.dds"), "wb") as f:
+                f.write(b"x" * 100)
+            self.server(root)
+            self.assertTrue(os.path.exists(os.path.join(cdir, "bbbbbbbbbbbbbbbb.dds")), "once only")
+
+    def test_a_small_cache_is_kept(self):
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: False):
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir)
+            open(os.path.join(cdir, "cccccccccccccccc.dds"), "w").close()
+            self.server(root)
+            self.assertTrue(os.path.exists(os.path.join(cdir, "cccccccccccccccc.dds")))
 
 
 class TerrainCacheGoesWithItsSessionTest(unittest.TestCase):

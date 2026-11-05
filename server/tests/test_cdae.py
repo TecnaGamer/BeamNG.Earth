@@ -50,7 +50,7 @@ class GoldenTest(unittest.TestCase):
         ours_bytes = cdae.encode(src["positions"], src["tris"], normals=src["normals"], uvs=src["uvs"],
                                  material=src["material"])
         ours = cdae.decode(ours_bytes)
-        self.assertEqual(len(ours_bytes), os.path.getsize(FIX / f"{name}.cdae"))
+        self.assertEqual(len(cdae.plain(ours_bytes)), os.path.getsize(FIX / f"{name}.cdae"))   # (written packed)
         self.assertEqual(ours["version"], gold["version"])
         self.assertEqual(gold["version"], cdae.VERSION_WORD)
         self.assertEqual(ours["header"], gold["header"])
@@ -215,6 +215,27 @@ class SplitCollisionTest(unittest.TestCase):
                                     collisions=[(P[:3], np.array([[0, 1, 2]]), [2])]))
         self.assertEqual(len(d["meshes"]), 4)
 
+
+
+class PackedTest(unittest.TestCase):
+    """Shapes are written with their body as one zstd frame (the game reads them as its own compressed shapes,
+    earthfast cdaez.rs); they decode as the plain file does, and plain() gives that file back."""
+
+    def test_packed_round_trip(self):
+        P = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 1], [10, 10, 2]], float)
+        T = np.array([[0, 1, 2], [1, 3, 2]])
+        data = cdae.encode(P, T, uvs=np.zeros((4, 2)), material="m")
+        h, end = cdae.unpack_one(data, 8)
+        self.assertTrue(h["compression"])
+        self.assertEqual(data[end:end + 4], b"\x28\xb5\x2f\xfd")
+        self.assertEqual(h["bodysize"], len(data) - end)
+        flat = cdae.plain(data)
+        self.assertFalse(cdae.unpack_one(flat, 8)[0]["compression"])
+        a, b = cdae.decode(data), cdae.decode(flat)
+        self.assertEqual(a["materials"], b["materials"])
+        np.testing.assert_array_equal(cdae.mesh_arrays(a["meshes"][0])["verts"],
+                                      cdae.mesh_arrays(b["meshes"][0])["verts"])
+        self.assertEqual(cdae.plain(flat), flat)
 
 if __name__ == "__main__":
     unittest.main()

@@ -69,6 +69,30 @@ class RailTagsTest(unittest.TestCase):
         self.assertNotIn("osm_railway", f.attrs)
 
 
+
+class KnownPinnedTest(unittest.TestCase):
+    """Shards.known(): the pinned manifest's build before this run asked for it (the tiles' cache keys the same from
+    a run's start: None until the manifest came before, 2026-11-04)."""
+
+    def test_pinned_build_known_at_once(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            s = railtags.Shards(d, None, "rail")
+            self.assertIsNone(s.known())
+            s2 = railtags.Shards(d, None, "rail")
+            os.makedirs(s2.dir)
+            with open(os.path.join(s2.dir, "manifest.json"), "w") as fh:
+                json.dump({"built": "2026-11-01T00:00Z"}, fh)
+            on = railtags.ON
+            railtags.ON = True
+            try:
+                self.assertEqual(s2.known(), "2026-11-01T00:00Z")
+                s2.built = "2026-11-08T00:00Z"           # (the run's own, once asked)
+                self.assertEqual(s2.known(), "2026-11-08T00:00Z")
+            finally:
+                railtags.ON = on
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -432,7 +432,60 @@ def start(exe, user_dir, log_path):
         kw["start_new_session"] = True
         kw["env"] = dict(child_env(), TERM=os.environ.get("TERM") or "xterm")
     with open(log_path, "w", encoding="utf-8", errors="replace") as log:
-        return subprocess.Popen(args, stdout=log, **kw)
+        proc = subprocess.Popen(args, stdout=log, **kw)
+    if IS_WIN:
+        tie_to_app(proc)
+    return proc
+
+
+_JOB = None     # Windows: the job BeamMP's launcher runs in (its handle open for the app's life, closed at its end)
+
+
+def tie_to_app(proc):
+    """Windows: BeamMP's launcher (and whatever it starts) in a job object that ends it when this app ends, however it
+    ends: a closed console window gives the app no time for its own stop. It kept running after BeamNG.Earth was
+    closed, Steam showing the game as running and the cache's files held open (GitHub #727). True when tied."""
+    global _JOB
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.OpenProcess.restype = wintypes.HANDLE
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in ("r", "w", "o", "rb", "wb", "ob")]
+
+        class Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", IoCounters),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+        if _JOB is None:
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                return False
+            info = Extended()
+            info.BasicLimitInformation.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info)):
+                k32.CloseHandle(wintypes.HANDLE(job))
+                return False                                        # (9: JobObjectExtendedLimitInformation)
+            _JOB = job
+        h = k32.OpenProcess(0x0001 | 0x0100, False, proc.pid)      # PROCESS_TERMINATE | PROCESS_SET_QUOTA
+        if not h:
+            return False
+        try:
+            return bool(k32.AssignProcessToJobObject(wintypes.HANDLE(_JOB), wintypes.HANDLE(h)))
+        finally:
+            k32.CloseHandle(wintypes.HANDLE(h))
+    except Exception:           # (never the start's business: the app's own stop still ends it)
+        return False
 
 
 def wait_ready(proc, timeout=READY_S):
@@ -451,7 +504,10 @@ def stop(proc):
     if proc is None or proc.poll() is not None:
         return
     try:
-        proc.terminate()
+        if IS_WIN:      # (with what it started: a self-updated launcher runs on as its child, GitHub #727)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
+        else:
+            proc.terminate()
         proc.wait(timeout=10)
     except Exception:
         try:

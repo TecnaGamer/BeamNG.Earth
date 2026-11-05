@@ -330,7 +330,7 @@ class SeaCarver:
                     return None, True
                 r = (f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32),
                      f["outline"].astype(bool))
-            _write_raw(raw, r)          # (a cell cached before the raw files: once)
+            self._second_use(x, y, raw, r)
             return r, True
         r = self._build(x, y)
         complete = r is None or r[3]
@@ -347,8 +347,19 @@ class SeaCarver:
                                         outline=r[2])
             staging.replace_cached(tmp, p)
             if r is not None:
-                _write_raw(raw, r)
+                self._second_use(x, y, raw, r)
         return r, complete
+
+    def _second_use(self, x, y, raw, r):
+        """The uncompressed raster (memory-mapped, shared) written only once this process needs the cell a second time
+        (out of its MEM_CELLS meanwhile): the copy is for the cells looked up again and again (a Steam Deck's teleport
+        decoded them ~30 s, 2026-10-20). Written at every first load it was ~9.4 MB a lake cell, 1.3 GB of SSD writes
+        in a 13 km first visit in Iceland, most cells never read again (2026-11-04)."""
+        seen = self.__dict__.setdefault("_loaded_once", set())
+        if (x, y) in seen:
+            _write_raw(raw, r)
+        else:
+            seen.add((x, y))
 
     def _build(self, x, y):
         own = self._water((mapcells.ZOOM, x, y))

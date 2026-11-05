@@ -26,6 +26,7 @@ URL = "https://data.openstreetmap.us/layercake/pois.parquet"
 PATH = "osm/pois.parquet"
 VERSION_TTL_S = 7 * 86400
 RETRY_S = 3600
+LATER_WAIT_S = 0.5          # a road tile waits this long for a cell's picnic rows (cells(wait=False))
 COLUMNS = ("id", "leisure", "amenity", "tourism")
 TABLES = {"picnic_table"}
 SITES = {"picnic_site"}
@@ -44,15 +45,44 @@ class Source:
         self._meta = None           # (RemoteFile, row groups)
         self._cells = {}            # (etag, z, x, y) -> Features
         self._down = False
+        self._ready = {}            # (z, x, y) -> Features read (cells(wait=False))
+        self._threads = {}          # (z, x, y) -> its background read
 
-    def cells(self, keys, kind="demand"):
-        """Features of the picnic rows in these map cells (an empty list when the file cannot be read)."""
+    def cells(self, keys, kind="demand", wait=True):
+        """Features of the picnic rows in these map cells (an empty list when the file cannot be read). wait=False (a
+        road tile): only cells already read in this process; the others are read in the background, for the tile's
+        next build (a first visit's road tiles waited for this file's ~26 MB, 2026-11-03: minutes on a slow line)."""
         found = []
         for key in keys or ():
-            feats = self._cell(key, kind)
+            if wait:
+                feats = self._cell(key, kind)
+            else:
+                k = (key.z, key.x, key.y)
+                feats = self._ready.get(k)
+                if feats is None:
+                    t = self._later(key)
+                    if t is not None:
+                        t.join(LATER_WAIT_S)    # (on disk already: read at once; a download: the next build)
+                    feats = self._ready.get(k)
             if feats is not None and len(feats):
                 found.append(feats)
         return found
+
+    def _later(self, key):
+        """The background read of cell key (started once): its thread, or None (the file is down)."""
+        k = (key.z, key.x, key.y)
+        with self._lock:
+            if self._down:
+                return None
+            t = self._threads.get(k)
+            if t is None:
+                def run():
+                    feats = self._cell(key, "demand")
+                    if feats is not None:
+                        self._ready[k] = feats
+                t = self._threads[k] = threading.Thread(target=run, name="picnic-osm", daemon=True)
+                t.start()
+            return t
 
     def _cell(self, key, kind):
         if self._down:

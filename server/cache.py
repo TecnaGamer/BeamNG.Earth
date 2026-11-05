@@ -14,9 +14,9 @@ Layout of the cache root (~/.cache/beamng-earth by default):
   gravity/            counted, never evicted or cleared (the 145 MB EGM2008 model, downloaded once)
   airports/           the same (airports.py: OurAirports' CSV files, ~17 MB, the last good copy kept for
                       offline use; airports.py replaces it weekly and deletes the old generation itself)
-  seacarve/ (its raw rasters) peercache/ roadwidth/   their own limits (seacarve.RAW_MB, peerwork.CACHE_BYTES,
-                      roadwidth.STORE_MB), cut back at server start (prune_dir; their readers touch_once what they use)
-  mapdata-mirror/ dem's mirror            their own limits, pruned by their writers (a process's first write too)
+  revisit/ seacarve/ peercache/ roadwidth/   MANAGED as well (since 2026-11-03), besides their own limits
+                      (revisit's, seacarve.RAW_MB, peerwork.CACHE_BYTES, roadwidth.STORE_MB, cut back at server start)
+  mapdata-mirror/     counted and cleared (MIRRORED), not evicted file by file: pruned whole by mapdata (MIRROR_MB)
   netstats/ (and anything else)           not tracked: the daily request budgets must survive a clear
 
 Last use = the server's own record of every disk hit and write (dem.py, imagery.py, the de-shadow and
@@ -58,7 +58,13 @@ LAYOUT_VERSION = 1
 VERSION_FILE = "VERSION"
 INDEX_FILE = "index.tsv"
 INDEX_HEADER = "# beamng-earth cache index 1"
-MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata")     # evicted and cleared
+# evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
+# left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
+MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
+           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn")
+CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
+MIRRORED = ("mapdata-mirror",)      # counted and cleared, never evicted file by file (a cell's files and its "ok" go
+                                    # together: mapdata prunes it whole, MIRROR_MB)
 KEPT = ("gravity", "airports")                              # counted only
 DEFAULT_CAP_GB = 20.0
 MAX_CAP_GB = 1e6            # 1 PB: anything above is a mistake (and would overflow)
@@ -214,7 +220,7 @@ class Cache(NoCache):
             key = key.replace(os.sep, "/")
         top = key.split("/", 1)[0]
         # a file being written: "<path>.<pid>.<thread>.tmp", or mapdata's "....tmp.npz" (numpy appends .npz)
-        if top not in MANAGED and top not in KEPT or key.endswith((".tmp", ".tmp.npz")):
+        if top not in MANAGED and top not in KEPT and top not in MIRRORED or key.endswith((".tmp", ".tmp.npz")):
             return None
         return key
 
@@ -361,7 +367,7 @@ class Cache(NoCache):
         """Walk the tracked directories once: sizes, and the mtime as the last use of files the index
         does not know; index entries without a file are dropped; files past their LIFETIMES go."""
         found = {}
-        for top in MANAGED + KEPT:
+        for top in MANAGED + MIRRORED + KEPT:
             stack = [os.path.join(self.root, top)]
             while stack:
                 d = stack.pop()
@@ -495,13 +501,15 @@ class Cache(NoCache):
                     out.append((k, e[0]))
             return out
 
-    def _remove(self, key, floor, empty_too):
+    def _remove(self, key, floor, empty_too, mirrored_too=False):
         """Delete one tracked file unless it was used since `floor` (checked under the lock, so a
-        producer's used() a moment earlier wins). Bytes removed, or None."""
+        producer's used() a moment earlier wins). mirrored_too: MIRRORED files too (clear). Bytes removed, or None."""
         with self._lock:
             e = self._entries.get(key)
+            top = key.split("/", 1)[0]
             if e is None or e[1] >= floor or not (self._evictable(key, e[0]) or
-                                                  empty_too and e[0] == 0 and key.split("/", 1)[0] in MANAGED):
+                                                  empty_too and e[0] == 0 and top in MANAGED or
+                                                  mirrored_too and top in MIRRORED):
                 return None
             path = self._path(key)
             if not _inside(path, self.root):       # (never a file whose real place is outside this cache)
@@ -521,19 +529,21 @@ class Cache(NoCache):
             return e[0] or 0
 
     def clear(self, wait=60.0):
-        """"Clear cache": every MANAGED file but the ones this server process used (the current
-        session's, however long ago: tiles read at its start may still be in the producers' memory
-        caches; gravity/ and netstats/ stay). Waits up to `wait` s for the start-up walk. Returns
+        """"Clear cache": every MANAGED (and MIRRORED) file but the ones used within CLEAR_KEEP_S (the place around the
+        player; a file still in a producer's memory is fetched or built again if it is needed after all; gravity/,
+        airports/ and netstats/ stay). Waits up to `wait` s for the start-up walk. Returns
         (files, bytes)."""
         if not self.managed or not self._ready_ev.wait(wait):
             return 0, 0
-        floor = self.started
+        # (only the last CLEAR_KEEP_S: everything this session had used stayed, and after a long drive "Clear cache"
+        # cleared nearly nothing, a player 2026-11-03)
+        floor = self.now() - CLEAR_KEEP_S
         with self._lock:
-            keys = [k for k, e in self._entries.items() if e[1] < floor and k.split("/", 1)[0] in MANAGED]
+            keys = [k for k, e in self._entries.items() if e[1] < floor and k.split("/", 1)[0] in MANAGED + MIRRORED]
         keys = self._unpinned(keys, lambda k: k)
         n = b = 0
         for key in keys:
-            got = self._remove(key, floor, empty_too=True)
+            got = self._remove(key, floor, empty_too=True, mirrored_too=True)
             if got is not None:
                 n, b = n + 1, b + got
         self.stats["cleared"] += n

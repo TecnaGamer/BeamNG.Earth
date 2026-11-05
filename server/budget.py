@@ -85,6 +85,10 @@ SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
+    global SHED_MB
+    SHED_MB = SMALL_SHED_MB if is_small else 0
+    if os.environ.get("BNGE_SHED_MB"):              # (A/B: the ceiling in MB, 0 off)
+        SHED_MB = int(os.environ["BNGE_SHED_MB"])
     if is_small:
         import dem
         import farfield
@@ -119,6 +123,87 @@ def _libc():
 
 
 _trimming = False
+
+# A worker process over SHED_MB (resident + swapped) after a job drops its caches (each module registers how:
+# register_shed) and gives the memory back: on a Steam Deck two Manhattan drives took a road worker to 1.6 GB and the
+# server to ~5 GB PSS with 6.7 GB of swap until the system killed the game's UI (2026-11-04); the caches' own caps
+# count entries, and the results kept on cached map features are counted nowhere. 0 = off (a desktop: apply()).
+SHED_MB = 0
+SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
+SHED_MIN_S = 90.0        # a worker drops its caches at most this often (a dense city's working set comes straight back)
+_shedders = []
+shed_count = 0
+_last_shed = None
+
+
+def register_shed(fn):
+    """fn(): drop a cache of this process (called between jobs, in the worker's own thread)."""
+    _shedders.append(fn)
+
+
+def memory_mb():
+    """This process's resident + swapped memory in MB (Linux /proc; Windows: private bytes), or None."""
+    try:
+        rss = swap = 0
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1])
+                elif line.startswith("VmSwap:"):
+                    swap = int(line.split()[1])
+        return (rss + swap) / 1024.0
+    except (OSError, ValueError):
+        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                    (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                                   "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                                   "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
+                                                   "PrivateUsage")]
+            c = PMC()
+            c.cb = ctypes.sizeof(c)
+            k32 = ctypes.WinDLL("kernel32")
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi = ctypes.WinDLL("psapi")
+            if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+                return c.PrivateUsage / 2 ** 20
+        except Exception:
+            pass
+    return None
+
+
+def maybe_shed():
+    """Between jobs: the registered caches dropped when this process is over SHED_MB. True when it shed."""
+    global shed_count
+    if not SHED_MB or not _shedders:
+        return False
+    import time
+    global _last_shed
+    if _last_shed is not None and time.monotonic() - _last_shed < SHED_MIN_S:
+        return False
+    mb = memory_mb()
+    if mb is None or mb < SHED_MB:
+        return False
+    _last_shed = time.monotonic()
+    import gc
+    import logging
+    for fn in list(_shedders):
+        try:
+            fn()
+        except Exception:
+            pass
+    gc.collect()
+    trim()
+    shed_count += 1
+    after = memory_mb()
+    logging.getLogger("earthd.worker").info("memory: pid %d at %.0f MB (over %d): caches dropped, now %.0f MB",
+                                            os.getpid(), mb, SHED_MB, after or 0)
+    return True
 
 
 def _malloc_small():

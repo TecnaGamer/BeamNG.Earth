@@ -402,7 +402,7 @@ class CliffRocksTest(unittest.TestCase):
             name = roads.shape_files(1, 0, 0)['cliff']
             self.assertEqual(data['cliff']['shape'], '/test/' + name)
             decoded = cdae.read(str(Path(tmp, name)))
-            self.assertIn(cr.MATERIAL.encode(), Path(tmp, name).read_bytes())
+            self.assertIn(cr.MATERIAL.encode(), cdae.plain(Path(tmp, name).read_bytes()))
             count, size, raw = decoded['meshes'][0]['colors']
             self.assertEqual(size, 4)
             self.assertEqual(count, len(self.make().positions))

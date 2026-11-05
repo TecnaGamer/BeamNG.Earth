@@ -294,7 +294,8 @@ SERVER_TO_MOD = {
     # data credits for the tiles around the player (credits.py; additive, protocol 4, --credits on)
     "credits": {"v": F(int), "near": F(str), "far": F(str), "ids": F(list), "farIds": F(list)},
     # the loading line's counts (Connection.send_progress, the mod's loadprogress.lua): [done, wanted] each
-    "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list)},
+    "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list),
+                      "net": F(list)},     # (the downloads in flight: loadprogress.downloadText)
     # road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks
     "roads_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
                    "data": F(dict, OPT),       # the file's JSON, so the game need not open it (staging.inline_json)

@@ -89,7 +89,8 @@ class LoadTimeThresholdTest(unittest.TestCase):
         for level, scale in clifflod.SCALES.items():
             adjusted = cdae.scale_lod_thresholds(data, scale)
             decoded = cdae.decode(adjusted)
-            self.assertEqual(len(data), len(adjusted))
+            self.assertEqual(cdae.is_packed(data), cdae.is_packed(adjusted))
+            self.assertEqual(len(cdae.plain(data)), len(cdae.plain(adjusted)))
             old = original["details"][2]
             new = decoded["details"][2]
             for i in range(original["details"][0]):

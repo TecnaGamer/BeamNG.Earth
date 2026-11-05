@@ -2259,3 +2259,32 @@ class BridgeDeckTest(unittest.TestCase):
         P = got["P"]
         base = self.P[:, 2] - threedmr._support_z(self.P[:, 2]) - 0.2
         np.testing.assert_allclose(P[:, 2] - base, -2.0 + 0.01 * (P[:, 0] + 100.0), atol=1e-9)
+
+
+class DownloadTlsTest(unittest.TestCase):
+    """3dmr.eu's requests take the system's certificate check (netfetch.windows_ssl_context), as the gravity download
+    (GitHub #567): Python's own chain picked an expired intermediate for its Let's Encrypt YE1 certificate on Windows."""
+
+    def test_the_platform_tls_context_is_used(self):
+        import io
+        from unittest import mock
+        import netfetch
+        import threedmr
+        seen = []
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def urlopen(req, timeout=None, context=None):
+            seen.append(context)
+            return Resp(b"[1, 2]")
+
+        ctx = object()
+        with mock.patch.object(netfetch, "windows_ssl_context", return_value=ctx), \
+                mock.patch.object(threedmr.urllib.request, "urlopen", urlopen):
+            self.assertEqual(threedmr._urllib_fetch("https://3dmr.eu/api/search/0/0/100", 5), b"[1, 2]")
+        self.assertEqual(seen, [ctx])

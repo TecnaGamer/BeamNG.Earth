@@ -307,7 +307,13 @@ local function noteUnit(kind, ms, shape)
   if not u then u = { n = 0, ms = 0, max = 0 }; unitStats[kind] = u end
   u.n, u.ms = u.n + 1, u.ms + ms
   if ms > u.max then u.max = ms end
+  -- (one slow unit in the game's log: players' logs named "roads 80-220 ms" hitches but not what, 2026-11-04)
+  if ms >= M.SLOW_UNIT_MS then
+    log('I', 'beamngEarth', string.format('roads: slow unit %s %.0f ms%s', tostring(kind), ms,
+      shape and (' (' .. tostring(shape) .. ')') or ''))
+  end
 end
+M.SLOW_UNIT_MS = 60
 
 local function dropTile(key)
   local t = tiles[key]

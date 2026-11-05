@@ -10,7 +10,7 @@ MEANS = json.loads(Path(__file__).with_name('cliff_transition_means.json').read_
 
 
 def prepare(surface, heights, keep, dx, dy, scale, sink, rgb=None, cache_dir=None):
-    fast.require(146, 'cliff_transition_surface')
+    fast.require(147, 'cliff_transition_surface')
     fitted, weights, contour = fast._ef.cliff_transition_surface(
         np.ascontiguousarray(surface.reshape(-1,3),float), np.ascontiguousarray(heights,float),
         np.ascontiguousarray(keep,bool), float(dx), float(dy), float(scale), float(sink))
@@ -29,19 +29,19 @@ def prepare(surface, heights, keep, dx, dy, scale, sink, rgb=None, cache_dir=Non
 
 
 def attributes(colors, weights, target, family):
-    fast.require(146, 'cliff_transition_attributes')
+    fast.require(147, 'cliff_transition_attributes')
     return fast._ef.cliff_transition_attributes(np.ascontiguousarray(colors.reshape(-1,4),float),
         np.ascontiguousarray(target,float), np.ascontiguousarray(weights,float), MEANS[family])
 
 
 def clip(points, triangles, attributes, contour, ground):
-    fast.require(146, 'cliff_transition_clip')
+    fast.require(147, 'cliff_transition_clip')
     return fast._ef.cliff_transition_clip(np.ascontiguousarray(points,float),
         np.ascontiguousarray(triangles,np.int32), np.ascontiguousarray(attributes,float),
         np.ascontiguousarray(contour,float), np.ascontiguousarray(ground,float))
 
 
 def relief_weights(weights, uvs):
-    fast.require(146, 'cliff_transition_relief_weights')
+    fast.require(147, 'cliff_transition_relief_weights')
     return fast._ef.cliff_transition_relief_weights(np.ascontiguousarray(weights,float),
                                                   np.ascontiguousarray(uvs,float))

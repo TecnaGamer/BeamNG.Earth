@@ -80,6 +80,17 @@ M.POOL_SPARE_CALM = 32
 -- path ('dir/./name', 'dir/././name', ...: the same file, a shape of its own), which splits the big populations (one
 -- beech ~7.7k items: a frame touching it cost ~4-9 ms). A variant's first items cost one ~12 ms frame (its load).
 M.SHAPE_VARIANTS = 4
+-- ... but a group whose items are few (props near the player only: GROUP_MAX_M) keeps one spelling: four spellings
+-- were four first loads of its shape, 40-130 ms each in the engine's tick on the Windows test PC (Manhattan,
+-- 2026-11-03: a new door / hydrant / sign / signal spelling nearly every tree frame). Vegetation, rocks, barriers,
+-- fences and lamps keep their variants (their populations reach thousands).
+M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshelter = true, billboard = true,
+  barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
+  picnicgrill = true, picnictable = true, pylon = true, tollbooth = true, watertower = true, cable = true,
+  rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
+  rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
+  sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
+  wallsign_turboburger = true }
 
 local ECA = '/levels/east_coast_usa/art/shapes/'
 local WCA = '/levels/west_coast_usa/art/shapes/'
@@ -622,8 +633,9 @@ local function shapeOf(t, i)
   local s = t.shapes[i]
   if s then return s, t.scales[i] end
   local f, b, sc = t.f, (i - 1) * t.s, nil
-  s, sc = M.pick((t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous', f[b + F_HEIGHT], f[b + F_RANK])
-  s = spelled(s, t.variant)
+  local g = (t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous'
+  s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
+  s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or t.variant)
   t.shapes[i], t.scales[i] = s, sc
   return s, sc
 end

@@ -879,7 +879,14 @@ local function slotsGoneNow()
 end
 
 -- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
-M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24 }
+M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
+  -- handled at once, ahead of the queue: the terrain's and the UI's answers (a player on dev.151, 2026-11-03: holds for
+  -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
+  -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
+  -- taken at once brought the road / green / road ground flicker back, the same player)
+  urgent = { terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
+    block_base = true, terrain_patch = true, ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true,
+    route_result = true, random_place_result = true, runtime_profiler_pong = true } }
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
 -- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
 M.BASE_LATER_MS, M.BASE_NOW_MS = 35, 30         -- m/s (78 / 67 mph; the server skips a block's photo wait over 89 mph)
@@ -1135,8 +1142,10 @@ local function onMessage(msg)
         -- (a new base photo rebuilds every terrain material the next frame, as a block swap does: 55-140 ms, on
         -- Windows twice that. At speed the next block replaces this one in seconds, so the refresh waits until the
         -- car slows: M.applyBaseLater)
+        -- (only a photo replacing another: a block taken without one (the level's flat brown base, its photo not
+        -- ready at speed) takes its first at once; deferred, the ground stayed brown until the car slowed down)
         local pl = st.player
-        if pl and (pl.speed or 0) > M.BASE_LATER_MS then
+        if pl and (pl.speed or 0) > M.BASE_LATER_MS and terrain.base() ~= nil then
           M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize) }
         else
           M._baseLater = nil
@@ -1693,6 +1702,8 @@ local function updateBanner(dt)
   i.dropHold = (dropHold.active or (st.guard.healthy and st.guard.pausedByUs)) or nil
   -- connected and said hello, yet the guard runs: the server does not (yet) build the terrain
   i.stuck = (i.session and net.isConnected()) and true or false
+  local lp = st.loadProgress
+  i.download = (lp and lp.anchorId == st.anchorId) and loadprogress.downloadText(lp.net) or nil
   banner.update(dt, i)
 end
 
@@ -2117,13 +2128,7 @@ local function onUpdate(dtReal, dtSim)
   -- 2026-11-03. The rest waits for the next frames. Each type's cost is kept (M.netCosts).
   do
     local nq = M._netq
-    for _, msg in ipairs(net.update(dtReal)) do nq.q[#nq.q + 1] = msg end
-    local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
-    local budget = loadingNow and math.huge or ((#nq.q - nq.head + 1 >= nq.busyN) and nq.busyMs or nq.budgetMs)
-    local n0 = hitchClock()
-    while nq.head <= #nq.q do
-      local msg = nq.q[nq.head]
-      nq.head = nq.head + 1       -- (the slot kept: holes would make #nq.q, where the next ones go, unreliable)
+    local function handle(msg)
       local m0 = hitchClock()
       local ok, err = pcall(onMessage, msg)
       if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
@@ -2131,7 +2136,22 @@ local function onUpdate(dtReal, dtSim)
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
-      if hitchClock() - n0 >= budget then break end
+    end
+    for _, msg in ipairs(net.update(dtReal)) do
+      if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
+    end
+    local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
+    local waiting = #nq.q - nq.head + 1
+    local budget = loadingNow and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
+    local minN, done = math.ceil(waiting / nq.drainDiv), 0
+    local n0 = hitchClock()
+    while nq.head <= #nq.q do
+      local msg = nq.q[nq.head]
+      nq.head = nq.head + 1       -- (the slot kept: holes would make #nq.q, where the next ones go, unreliable)
+      handle(msg)
+      done = done + 1
+      if done >= minN and hitchClock() - n0 >= budget then break end
     end
     if nq.head > #nq.q then
       nq.q, nq.head = {}, 1
@@ -2231,6 +2251,7 @@ local function onUpdate(dtReal, dtSim)
   end
   drawUi(dtReal)
   t = mark('draw', t)
+  if not M._mpMarked then M._mpMarked = true; pcall(mpsession.setMark, mark, hitchClock) end
   updateBeamMP(dtReal)
   mark('beammp', t)
 end
@@ -2835,6 +2856,9 @@ M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
 M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
+M.onVehicleSwitched = function(oldId, newId, player)
+  if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
+end
 M.onClientEndMission = onClientEndMission
 M.onExit = function() notePlayerPos(true) end           -- the game closing (a crash or a kill: the last periodic one)
 M.onClientPostStartMission = onClientPostStartMission

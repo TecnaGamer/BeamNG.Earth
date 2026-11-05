@@ -1175,8 +1175,9 @@ class ColorMatch:
             except Exception as e:      # network trouble: tried again later
                 if self._closed:
                     return
-                # deferred: the imagery host's bucket is kept for demand (a cold start): not a fault
-                (log.debug if getattr(e, "deferred", False) else log.warning)(
+                # deferred: the imagery host's bucket is kept for demand (a cold start): not a fault; unavailable: the
+                # host's circuit breaker is open, netfetch said so once (a warning a region a retry flooded the log)
+                (log.debug if getattr(e, "deferred", False) or getattr(e, "unavailable", False) else log.warning)(
                     "colormatch region %s: %s: %s", rk, type(e).__name__, e)
                 with self._lock:
                     self._failed[rk] = time.monotonic()

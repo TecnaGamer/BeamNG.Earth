@@ -47,6 +47,7 @@ WALK_NARROW_MIN = 0.6   # m: keep narrow streets within their measured building-
 BUCKET = 16.0           # m, wall segment buckets
 
 
+MEMO_MAX = 200000        # roads' widths kept per process (RoadWidths.memo), then forgotten all at once
 WALL_CELLS = 48          # cells of building walls kept per process (budget.py: fewer on a small machine)
 # A cell's walls also on disk (store_dir), float32 in the cell's frame (within a few km of its centre: sub-mm): every
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
@@ -275,12 +276,19 @@ class RoadWidths:
         """store_dir: the walls' files (the map data release's own folder), or None (none kept on disk)."""
         self.cell_fn = cell_fn
         self.store_dir = store_dir
-        self.memo = {}                          # fid -> (carriageway, walk) or None
+        self.memo = {}                          # fid -> (carriageway, walk) or None (MEMO_MAX at most)
         self.walls = OrderedDict()              # cell key -> (frame, Walls), the WALL_CELLS last used
         self.combos = OrderedDict()             # cell keys -> (frame, Walls) of a road near cells' edges
         self.lock = threading.Lock()
         self.key_locks = {}                     # cell key -> Lock: one thread builds a cell's walls
 
+
+    def clear_memory(self):
+        """Drop the walls and widths kept in memory (budget.maybe_shed)."""
+        with self.lock:
+            self.walls.clear()
+            self.combos.clear()
+            self.memo.clear()
     def _walls(self, key):
         """The walls of the buildings in cell key, in a frame at the cell's centre."""
         with self.lock:
@@ -403,5 +411,7 @@ class RoadWidths:
             row = measure_row(np.c_[e, n], walls)
             res = split(row) if row is not None else None
         with self.lock:
+            if len(self.memo) >= MEMO_MAX:      # (unbounded, it grew for a whole session in every road worker)
+                self.memo.clear()
             self.memo.setdefault(fid, res)
             return self.memo[fid]

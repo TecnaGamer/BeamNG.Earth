@@ -57,6 +57,27 @@ def _tags(feats, i):
     return got
 
 
+def _kept(feats, name, frame, make):
+    """make() kept on a layer (per frame when frame is given, two at a time like mapgeom.Features.xy_in): the decoded
+    cells serve many tiles, and each tile went through every feature of its cells (~1 s over 16 Penn Station tiles,
+    2026-11-03). Shared, not to be changed."""
+    memo = feats.__dict__.setdefault("_picnic_memo", {})
+    if frame is None:
+        got = memo.get(name)
+        if got is None:
+            got = memo[name] = make()
+        return got
+    per = memo.setdefault(name, {})
+    key = (frame.lat0, frame.lon0, frame.h0)
+    got = per.get(key)
+    if got is None:
+        got = make()
+        if len(per) >= 2:
+            per.pop(next(iter(per), None), None)
+        per[key] = got
+    return got
+
+
 def _cls(feats, i):
     classes = feats.attrs.get("class")
     return str(classes[i]).strip().lower() if classes is not None else ""
@@ -171,34 +192,43 @@ def _drawn_building(feats, i):
 
 def _covers(frame, bld_fn, keys):
     """(xmin, xmax, ymin, ymax, outer, holes) of drawn building footprints in these cells."""
-    import buildings
     covers, seen = [], set()
     for feats in _load(bld_fn, keys):
-        ids = getattr(feats, "ids", None)
-        for i in range(len(feats)):
-            fid = str(ids[i]) if ids is not None else None
+        for fid, got in _kept(feats, "covers", frame, lambda: _layer_covers(frame, feats)):
             if fid is not None and fid in seen:
-                continue
-            if not _drawn_building(feats, i):
                 continue
             if fid is not None:
                 seen.add(fid)
-            for part in feats.parts(i):
-                if not part or len(part[0]) < 3:
-                    continue
-                outer = _open(_xy_ring(feats, frame, part[0]))
-                if len(outer) < 3 or _area(outer) < buildings.MIN_AREA_M2:
-                    continue
-                holes = []
-                for hole in part[1:]:
-                    if len(hole) < 3:
-                        continue
-                    h = _open(_xy_ring(feats, frame, hole))
-                    if len(h) >= 3:
-                        holes.append(h)
-                covers.append((float(outer[:, 0].min()), float(outer[:, 0].max()),
-                               float(outer[:, 1].min()), float(outer[:, 1].max()), outer, holes))
+            covers.extend(got)
     return covers
+
+
+def _layer_covers(frame, feats):
+    """[(id or None, its covers)] of the layer's drawn buildings, in row order."""
+    import buildings
+    out = []
+    ids = getattr(feats, "ids", None)
+    for i in range(len(feats)):
+        if not _drawn_building(feats, i):
+            continue
+        covers = []
+        out.append((str(ids[i]) if ids is not None else None, covers))
+        for part in feats.parts(i):
+            if not part or len(part[0]) < 3:
+                continue
+            outer = _open(_xy_ring(feats, frame, part[0]))
+            if len(outer) < 3 or _area(outer) < buildings.MIN_AREA_M2:
+                continue
+            holes = []
+            for hole in part[1:]:
+                if len(hole) < 3:
+                    continue
+                h = _open(_xy_ring(feats, frame, hole))
+                if len(h) >= 3:
+                    holes.append(h)
+            covers.append((float(outer[:, 0].min()), float(outer[:, 0].max()),
+                           float(outer[:, 1].min()), float(outer[:, 1].max()), outer, holes))
+    return out
 
 
 def _xy_ring(feats, frame, ring):
@@ -312,6 +342,32 @@ def _load(fn, keys):
     return found
 
 
+def _layer_parks(frame, feats):
+    """[((id, rounded box), open ring)] of the layer's park polygons' outer rings, in row order."""
+    out = []
+    for i in range(len(feats)):
+        if not is_park(feats, i) or int(feats.kind[i]) != mapgeom.POLYGON:
+            continue
+        fid = str(feats.ids[i])
+        for ring in _outers(feats, frame, i):
+            if len(ring) < 3:
+                continue
+            key = (fid, round(float(ring[:, 0].min()), 1), round(float(ring[:, 1].min()), 1),
+                   round(float(ring[:, 0].max()), 1), round(float(ring[:, 1].max()), 1))
+            out.append((key, _open(ring)))
+    return out
+
+
+def _layer_marks(feats):
+    """[(row, 'table' / 'site' / 'grill')] of the layer's picnic points and polygons, in row order."""
+    out = []
+    for i in range(len(feats)):
+        mark = marked(feats, i)
+        if mark is not None and int(feats.kind[i]) in (mapgeom.POINT, mapgeom.POLYGON):
+            out.append((i, mark))
+    return out
+
+
 def rows(frame, infra_fn, land_fn, box, elev, osm_fn=None, bld_fn=None):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of picnic tables and grills whose
     mapped spot is inside box and inside a park. osm_fn(keys) is the OpenStreetMap picnic features
@@ -336,31 +392,23 @@ def rows(frame, infra_fn, land_fn, box, elev, osm_fn=None, bld_fn=None):
     for feats in loaded:
         if feats.attrs.get("class") is None and feats.attrs.get("tags") is None:
             continue
-        for i in range(len(feats)):
-            if not is_park(feats, i) or int(feats.kind[i]) != mapgeom.POLYGON:
+        for key, ring in _kept(feats, "parks", frame, lambda: _layer_parks(frame, feats)):
+            if key in seen_park:
                 continue
-            fid = str(feats.ids[i])
-            for ring in _outers(feats, frame, i):
-                if len(ring) < 3:
-                    continue
-                key = (fid, round(float(ring[:, 0].min()), 1), round(float(ring[:, 1].min()), 1),
-                       round(float(ring[:, 0].max()), 1), round(float(ring[:, 1].max()), 1))
-                if key in seen_park:
-                    continue
-                seen_park.add(key)
-                parks.append(_open(ring))
+            seen_park.add(key)
+            parks.append(ring)
     tables, sites, grills = [], [], []
     seen = set()
     for feats in loaded:
         if feats.attrs.get("class") is None and feats.attrs.get("tags") is None:
             continue
+        marks = _kept(feats, "marks", None, lambda: _layer_marks(feats))
+        if not marks:
+            continue
         boxes = feats.boxes(frame)
-        for i in range(len(feats)):
+        for i, mark in marks:
             fid = str(feats.ids[i])
             kind = int(feats.kind[i])
-            mark = marked(feats, i)
-            if mark is None or kind not in (mapgeom.POINT, mapgeom.POLYGON):
-                continue
             b = boxes[i]
             if b[2] < x0 or b[0] >= x1 or b[3] < y0 or b[1] >= y1:
                 continue

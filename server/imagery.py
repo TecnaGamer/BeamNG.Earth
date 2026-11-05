@@ -194,9 +194,10 @@ class ImageryError(IOError):
     """Imagery could not be fetched (network or server errors, not a missing tile). deferred: a
     prefetch / background request the limiter dropped (a demand fetch may still get it)."""
 
-    def __init__(self, msg, deferred=False):
+    def __init__(self, msg, deferred=False, unavailable=False):
         super().__init__(msg)
         self.deferred = deferred
+        self.unavailable = unavailable      # the host's circuit breaker was open (netfetch logged that once)
 
 
 # netfetch errors of a non-demand request that a demand request would not get
@@ -443,6 +444,11 @@ class Imagery:
     # standing in, so a far-tile worker's texture (blockworker.far_tile, from the disk alone) is the one the server
     # would render, or none (the server renders it)
     strict = False
+    # finished_only: the finished tiles on disk alone (their directories the server's, _fin_sigs preset: its de-shadow
+    # and colour match applied): one missing, or with a correction still to come, fails the render (ImageryError) and
+    # nothing is made from a raw tile here (that would be the uncorrected picture, kept under the server's names).
+    # A far-tile worker's texture with the analyses on (blockworker._imagery, tex["fin"])
+    finished_only = False
 
     def __init__(self, cache_dir, chain=DEFAULT_CHAIN, fetch_workers=FETCH_WORKERS, mem_tiles=None,
                  tone=1.0, deshadow=None, colormatch=None, fetcher=None, leaf_on=True, season_mode="off"):
@@ -594,7 +600,8 @@ class Imagery:
             deferred = kind not in ("demand", "urgent") and isinstance(e, _DEFERRED)
             self._count(src.name + (":deferred" if deferred else ":skipped" if isinstance(e, netfetch.HostUnavailable)
                                     else ":error"))
-            raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred) from None
+            raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred,
+                               unavailable=isinstance(e, netfetch.HostUnavailable)) from None
         data = r.body
         with self._lock:
             self.fetch_ms.append(r.elapsed * 1000)
@@ -643,7 +650,8 @@ class Imagery:
                 deferred = kind not in ("demand", "urgent") and isinstance(e, _DEFERRED)
                 self._count(src.name + (":deferred" if deferred else ":skipped" if isinstance(e, netfetch.HostUnavailable)
                                         else ":error"))
-                raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred) from None
+                raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred,
+                               unavailable=isinstance(e, netfetch.HostUnavailable)) from None
             with self._lock:
                 self.fetch_ms.append(r.elapsed * 1000)
                 del self.fetch_ms[:-2000]
@@ -1311,6 +1319,14 @@ class Imagery:
         if not need:
             return out
         raw = self.tiles(need)
+        if self.finished_only:
+            # (no data there, a remembered 404 or outside the coverage probes: none, as for the server; one with
+            # data but not finished as the server finishes it fails the render)
+            if any(raw.get(k) is not None for k in need):
+                raise ImageryError(f"{sum(raw.get(k) is not None for k in need)} finished tile(s) not on disk")
+            for k in need:
+                out[k] = None
+            return out
         for k in need:
             t = raw.get(k)
             if t is None:

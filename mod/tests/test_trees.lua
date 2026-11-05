@@ -206,6 +206,23 @@ do
     'neighbouring tiles: different variants')
 end
 
+-- a rare prop's group keeps one spelling in every tile (each spelling is a first load: 40-130 ms on Windows); trees
+-- keep the tile's variant
+do
+  T.check(trees.tileVariant('5:1_0') > 0, 'a tile with a variant')
+  files['/t/dv'] = '{ groups = { "door", "deciduous" }, items = { {0, 5, 10, 5, 0, 1, 2.2, 0.0}, {1, 6, 10, 5, 0, 1, 12, 0.0} } }'
+  trees.onTile({ anchorId = 5, key = '1_0', path = '/t/dv', n = 2 }, 5)
+  trees.update(5, { x = 300, y = 50 })
+  local door, tree = nil, nil
+  for it in pairs(items) do
+    local name = tostring(it.d and (it.d.shapeFile or it.d.name or it.d))
+    if name:find('door') then door = name elseif name:find('tree') then tree = name end
+  end
+  T.check(door ~= nil and not door:find('___', 1, true), 'a door: its one spelling (' .. tostring(door) .. ')')
+  T.check(tree ~= nil and tree:find('___', 1, true) ~= nil, 'a tree: the tile\'s variant (' .. tostring(tree) .. ')')
+  trees.clear()
+end
+
 -- bushes only near the player
 files['/t/b'] = '{ items = { {2, 5, 10, 5, 0, 1, 1.5, 0.0}, {0, 6, 10, 5, 0, 1, 12, 0.0} } }'
 trees.onTile({ anchorId = 4, key = '0_0', path = '/t/b', n = 2 }, 4)

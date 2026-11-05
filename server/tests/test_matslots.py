@@ -122,6 +122,25 @@ class ServerTest(unittest.TestCase):
             self.s.slots_let_go([n])
         self.assertIn(path,self.s.tile_files(self.s.tile_name(*ck)), 'variant pruned with its tile')
 
+    def test_photo_only_packed_far_shape_preserves_mesh_and_source(self):
+        import cdae
+        import numpy as np
+        ck, original = self.add('1_0_0')
+        path = os.path.splitext(os.path.join(self.s.out_dir, self.s.tile_name(*ck)))[0] + '_plain.cdae'
+        source = cdae.encode(np.array([[0, 0, 0], [10, 0, 0], [0, 10, 1.]]),
+                             np.array([[0, 1, 2]]), material=original)
+        with open(path, 'wb') as fh:
+            fh.write(source)
+        off = Conn()
+        off.distant_cliff_faces = False
+        variant = self.s.plain_far_shape(off, ck, self.s.tiles[ck])
+        with open(os.path.join(self.s.out_dir, matslots.MatSlots.file(variant['material'])), 'rb') as fh:
+            result = fh.read()
+        self.assertEqual(cdae.is_packed(result), cdae.is_packed(source))
+        self.assertEqual(cdae.plain(result), cdae.plain(source).replace(original.encode(), variant['material'].encode()))
+        with open(path, 'rb') as fh:
+            self.assertEqual(fh.read(), source)
+
     def test_idle_tiles_reclaimed_lru_first_and_reslotted(self):
         cks = [self.add(f"0_{i}_0") for i in range(matslots.TARGET + 20)]
         busy = cks[0][0]
@@ -296,6 +315,26 @@ class ServerTest(unittest.TestCase):
         self.s.prune(2)
         self.assertEqual(self.s.matslots.stats()["owned"], 0)
 
+
+
+class PackedReslotTest(unittest.TestCase):
+    """A compressed shape (cdae.PACKED) renamed by reslot: unpacked, its name restamped, packed again (the name lives
+    in the zstd body: 'material name not renewed' for every tile before, the gate's drives 2026-11-04)."""
+
+    def test_packed_shape_renamed(self):
+        import numpy as np
+        import cdae
+        P = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 1]], float)
+        old = "bngEarthFar_edc9_00007"
+        data = cdae.encode(P, np.array([[0, 1, 2]]), uvs=np.zeros((3, 2)), material=old)
+        self.assertTrue(cdae.is_packed(data))
+        self.assertNotIn(old.encode(), data)
+        flat = cdae.plain(data)
+        new = old[:-5] + "00042"
+        again = cdae.pack(matslots.restamp(flat, old, new))
+        self.assertTrue(cdae.is_packed(again))
+        self.assertIn(new.encode(), cdae.plain(again))
+        self.assertNotIn(old.encode(), cdae.plain(again))
 
 if __name__ == "__main__":
     unittest.main()

@@ -104,7 +104,7 @@ M.SCHEMA = {
   runtimeProfiler = { kind = 'bool', default = false, label = 'Detailed performance profiler' },
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
-  placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar (online)' },
+  placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar' },
   -- BeamMP started by the BeamNG.Earth app with the game (launcher.py reads this file: bmplaunch.on_launch; its
   -- "don't ask again" writes it off)
   beammpOnLaunch = { kind = 'bool', default = true, label = 'Start BeamMP with BeamNG.Earth' },

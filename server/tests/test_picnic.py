@@ -234,3 +234,30 @@ class PlaceTest(unittest.TestCase):
         flat = self.footprint("plaza-1", [_square(30, 30, 50, 50)], height=0.05)
         self.assertEqual([r[0] for r in self.rows(park, table, bld=roof)], ["picnictable", "picnicgrill"])
         self.assertEqual([r[0] for r in self.rows(park, table, bld=flat)], ["picnictable", "picnicgrill"])
+
+
+class NoWaitTest(unittest.TestCase):
+    """A road tile does not wait for the OSM picnic file's download (cells(wait=False)): a cell not read yet is read in
+    the background, used once it is there (a first visit waited for ~26 MB, 2026-11-03)."""
+
+    def test_a_slow_cell_is_left_for_the_next_build(self):
+        import threading
+        import time
+        import picnicsource
+        src = picnicsource.Source.__new__(picnicsource.Source)
+        src._lock, src._down, src._ready, src._threads = threading.Lock(), False, {}, {}
+        gate = threading.Event()
+
+        def slow(key, kind):
+            gate.wait(5)
+            return ["feats"]
+        src._cell = slow
+
+        class Key:
+            z, x, y = 14, 1, 2
+        t0 = time.monotonic()
+        self.assertEqual(src.cells([Key()], wait=False), [], "not there yet: none, no long wait")
+        self.assertLess(time.monotonic() - t0, picnicsource.LATER_WAIT_S + 0.5)
+        gate.set()
+        src._threads[(14, 1, 2)].join(5)
+        self.assertEqual(src.cells([Key()], wait=False), [["feats"]], "read in the background: used next time")

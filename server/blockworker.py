@@ -85,6 +85,23 @@ class _State:
         self.lock = threading.Lock()
         self.want = []              # (grader, cell key) to plan, most urgent first
         self.cv = threading.Condition()
+        # the caches a worker over its memory ceiling drops between jobs (budget.maybe_shed: small machines)
+        import budget
+        budget.register_shed(self.dem.clear_memory)
+        if md is not None:
+            budget.register_shed(md.clear_memory)
+        rw = getattr(self.widths, "__self__", None)
+        if rw is not None:
+            budget.register_shed(rw.clear_memory)
+        import roads as _roads
+        budget.register_shed(_roads.clear_facts_memory)
+        budget.register_shed(self._clear_chunks)
+
+    def _clear_chunks(self):
+        with self.lock:
+            for c in self.chunks.values():
+                with c.lock:
+                    c.chunks.clear()
 
     def anchor(self, aid, lat, lon):
         """(Grader or None, ChunkCache) of an anchor; only the last few anchors are kept."""
@@ -125,7 +142,7 @@ def load_airports(cache_dir, dem):
     except (airportsmod.AirportsUnavailable, OSError, ValueError) as e:
         log.warning("airports: no runway grading (%s)", e)
         return None
-    return airportgrade.AirportGrader(db, dem)
+    return airportgrade.AirportGrader(db.lean(), dem)      # (runways only: the grading's)
 
 
 def _rss_mb():
@@ -230,6 +247,8 @@ def _read_warm(warm_q):
                 aid, lat, lon, keys = warm_q.get_nowait()
         except queue.Empty:
             pass
+        if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
+            continue
         g, _ = _s.anchor(aid, lat, lon)
         if g is None:
             continue
@@ -936,7 +955,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         osm = getattr(_s.md, "picnic_osm", None)
         try:
             props.extend(picnic.rows(frame, infra_fn, land_fn, box, elev,
-                                     osm.cells if osm is not None else None, bld_fn))
+                                     (lambda keys: osm.cells(keys, wait=False)) if osm is not None else None, bld_fn))
         except Exception as ex:
             log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import shelters
@@ -1982,14 +2001,22 @@ def _imagery(tex):
     (tex["online"], peerwork.py), fetched as needed."""
     import imagery as imagerymod
     online = bool(tex.get("online"))
-    key = (tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"], online)
-    if _s.imagery is None or _s.imagery[0] != key:
+    fin = tuple(sorted((tex.get("fin") or {}).items()))
+    key = (tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"], online, fin)
+    ims = _s.imagery if isinstance(_s.imagery, dict) else {}
+    if key not in ims:
+        while len(ims) >= 2:            # (with the analyses on: its finished-only one and a plain one, _base_elsewhere)
+            ims.pop(next(iter(ims)))
         im = imagerymod.Imagery(os.path.join(_s.cache_dir, "imagery"), key[0], fetch_workers=4 if online else 1,
                                 mem_tiles=WORKER_IMAGERY_TILES, tone=key[1],
                                 fetcher=netfetch.Fetcher(offline=not online), leaf_on=key[2], season_mode=key[3])
         im.strict = not online
-        _s.imagery = (key, im)
-    return _s.imagery[1]
+        if fin:         # (the server's analyses on: its finished tiles alone, Imagery.finished_only)
+            im._fin_sigs.update(dict(fin))
+            im.finished_only = True
+        ims[key] = im
+        _s.imagery = ims
+    return ims[key]
 
 
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
@@ -2030,7 +2057,7 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         rgb = np.array(surfacemod.enlarge(rgb, out_px or px), np.uint8)
         tmp = staging.tmp_for(path)
         with open(tmp, "wb") as f:
-            f.write(terraincache.stored_png(rgb))
+            f.write(terraincache.stored_photo(rgb))
         staging.replace(tmp, path)
         user_dir, base_vfs, ao_vfs, ao_value = cache
         terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
@@ -2064,10 +2091,9 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     except Exception as e:
         log.debug("base photo: rock faces: %s", e)
     tmp = staging.tmp_for(path)
-    # stored, not deflated: the game reads the packed cache entry (terraincache), this file only if that is stale;
-    # level 1 was 0.15 s of a block photo on a Steam Deck, level 0 0.08 (3 MB, a session keeps a few)
+    # (terraincache.stored_photo: the game reads the packed cache entry, this file only if that is stale)
     with open(tmp, "wb") as f:
-        f.write(terraincache.stored_png(rgb))
+        f.write(terraincache.stored_photo(rgb))
     staging.replace(tmp, path)
     user_dir, base_vfs, ao_vfs, ao_value = cache
     terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
@@ -2085,25 +2111,23 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
     k = revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                     mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
-                    bool(tex.get("online")), _s.widths is not None, _s.surface is not None)
+                    bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
+                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()))
     got = revisit.load(_s.cache_dir, "far", k)
     if got is not None:
         blobs, extra = got
         if mask and "mask.dds" in blobs:
-            _write_bytes(mask[0], blobs["mask.dds"])
-        _write_bytes(tex["path"], blobs["tex.dds"])
+            revisit.place(blobs["mask.dds"], mask[0])       # (a kept file: hard-linked, nothing written)
+        revisit.place(blobs["tex.dds"], tex["path"])
         return _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
     f0 = revisit.faults()
     built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
     if got is not None and revisit.ON and revisit.faults() == f0:
         try:
             blob, meta = _built_blob(built)
-            blobs = {"built.npz": blob}
-            with open(tex["path"], "rb") as f:
-                blobs["tex.dds"] = f.read()
+            blobs = {"built.npz": blob, "tex.dds": revisit.Side(tex["path"])}     # (linked in, not copied)
             if mask and os.path.exists(mask[0]):
-                with open(mask[0], "rb") as f:
-                    blobs["mask.dds"] = f.read()
+                blobs["mask.dds"] = revisit.Side(mask[0])
             meta.update(tex_bytes=int(got[0]), used={str(n): int(c) for n, c in (got[1] or {}).items()})
             revisit.store(_s.cache_dir, "far", k, blobs, meta,
                           where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions(),
@@ -2175,6 +2199,10 @@ def _accounted(fn):
                 _cpu_logged[0] = now
                 shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
                           if g is not None and g.shared is not None]
+                if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
+                    # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
+                    st = getattr(_s.dem, "stats", {}) or {}
+                    log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
                 log.debug("worker %d cpu: %s%s", os.getpid(),
                           ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
                           "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
