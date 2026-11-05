@@ -766,11 +766,16 @@ def profile(rails, ground, underpasses=()):
             if got is not None and got[0] > level.get(node, (-np.inf, 0.0))[0]:
                 level[node] = got
     zb = []
-    for (_, _, kind, _), zg, (a, b, s) in zip(rails, zgs, edges):
+    shared = {}                                 # (a double track's beds are smoothed from one profile: railxing.py)
+    if railxing.ENABLED:
+        gi = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "ground"]
+        if len(gi) > 1:
+            shared = dict(zip(gi, railxing.corridor_ground([rails[n][3] for n in gi], [zgs[n] for n in gi])))
+    for n, ((_, _, kind, _), zg, (a, b, s)) in enumerate(zip(rails, zgs, edges)):
         if kind != "ground":
             zb.append(zg.copy())
             continue
-        lifted = zg
+        lifted = shared.get(n, zg)
         for node, dist in ((a, s), (b, s[-1] - s)):     # (the track on at that level up to the bridge, not down the
             if node in level:                           # slope under it: lifted before the bed's smoothing)
                 lv, reach = level[node]

@@ -229,3 +229,41 @@ def rail_obstacles(frame, cells, box):
         if kind == "ground" and len(xy) >= 2:
             out.append(("rail:" + str(fid), BED_KEEP_M, np.c_[xy, np.zeros(len(xy))]))
     return out
+
+
+PARALLEL_M = 14.0       # m: tracks this close and running the same way are one corridor (a double track, a yard's throat)
+PARALLEL_COS = 0.9      # |cos| of the angle between their directions at least
+CORRIDOR_MIN_STEP = 1e-6
+
+
+def _tangents(xy):
+    d = np.gradient(xy, axis=0)
+    n = np.hypot(d[:, 0], d[:, 1])
+    return d / np.maximum(n, CORRIDOR_MIN_STEP)[:, None]
+
+
+def corridor_ground(lines, zs):
+    """The ground heights zs (per line (k,)) of ground track lines (k, 2) with the parallel neighbours' mixed in: each
+    point takes the mean of its own height and of the nearest point of every other line within PARALLEL_M that runs the
+    same way, so the beds of a double track are smoothed from one profile, not each from its own bumps (the user,
+    2026-11-05, Kalynivka: parallel tracks at different heights, one in a trench). Pure; the same lines in the same
+    order give every tile and the grader the same answer."""
+    out = [np.asarray(z, np.float64).copy() for z in zs]
+    pts = [np.asarray(l, np.float64)[:, :2] for l in lines]
+    tan = [_tangents(p) if len(p) >= 2 else np.zeros_like(p) for p in pts]
+    box = [(p[:, 0].min() - PARALLEL_M, p[:, 1].min() - PARALLEL_M, p[:, 0].max() + PARALLEL_M,
+            p[:, 1].max() + PARALLEL_M) for p in pts]
+    for i, pi in enumerate(pts):
+        acc, cnt = np.asarray(zs[i], np.float64).copy(), np.ones(len(pi))
+        for j, pj in enumerate(pts):
+            if i == j or box[i][0] > box[j][2] or box[j][0] > box[i][2] or box[i][1] > box[j][3] or                     box[j][1] > box[i][3]:
+                continue
+            d = np.hypot(pi[:, None, 0] - pj[None, :, 0], pi[:, None, 1] - pj[None, :, 1])
+            k = np.argmin(d, axis=1)
+            near = d[np.arange(len(pi)), k]
+            cos = np.abs((tan[i] * tan[j][k]).sum(1))
+            ok = (near <= PARALLEL_M) & (cos >= PARALLEL_COS)
+            acc[ok] += np.asarray(zs[j], np.float64)[k[ok]]
+            cnt[ok] += 1.0
+        out[i] = acc / cnt
+    return out

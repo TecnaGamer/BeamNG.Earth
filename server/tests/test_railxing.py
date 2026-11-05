@@ -137,6 +137,35 @@ class RailXingTest(unittest.TestCase):
         _P, _T, _UV, mats, _M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
         self.assertIn(railways.BALLAST, mats, "off: the stock gravel as before")
 
+    def test_parallel_tracks_share_a_profile(self):
+        """Two tracks 5 m apart over a ground with a bump under one: their beds agree; a track 60 m off keeps its own."""
+        def ground(xy):
+            xy = np.asarray(xy, np.float64)
+            return 10.0 + 1.5 * np.exp(-((xy[:, 0] - 120.0) ** 2 / 200.0 + (xy[:, 1] - 100.0) ** 2 / 4.0))
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 105.0), (250.0, 105.0)], [(0.0, 190.0), (250.0, 190.0)]],
+                     ["standard_gauge"] * 3, subtypes=["rail"] * 3)
+        rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0), clip=True)
+        gap = lambda prof: np.abs(prof[0][0] - prof[1][0]).max()    # noqa: E731
+        railxing.ENABLED = False
+        before = railways.profile(rails, ground)
+        railxing.ENABLED = True
+        after = railways.profile(rails, ground)
+        self.assertGreater(gap(before), 0.2, "the bump alone under track one")
+        self.assertLess(gap(after), gap(before) * 0.5)
+        np.testing.assert_allclose(after[2][0], before[2][0], atol=1e-9)    # (the far track: untouched)
+
+    def test_corridor_ground_is_deterministic_and_symmetric(self):
+        a = np.c_[np.arange(0.0, 100.0, 2.0), np.zeros(50)]
+        b = np.c_[np.arange(0.0, 100.0, 2.0), np.full(50, 5.0)]
+        za, zb = np.linspace(10, 12, 50), np.linspace(10.4, 12.4, 50)
+        ra, rb = railxing.corridor_ground([a, b], [za, zb])
+        np.testing.assert_allclose(ra, rb)
+        np.testing.assert_allclose(ra, (za + zb) / 2)
+        far = np.c_[np.arange(0.0, 100.0, 2.0), np.full(50, 80.0)]
+        r = railxing.corridor_ground([a, far], [za, zb])
+        np.testing.assert_allclose(r[0], za)
+        np.testing.assert_allclose(r[1], zb)
+
     def test_abandoned_none_and_disused_cross(self):
         f, _ = crossing([100.0])
         f.rules["flags"] = _flags([(0, "is_abandoned")])
