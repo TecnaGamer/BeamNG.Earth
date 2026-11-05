@@ -12,6 +12,12 @@ What changed in each release of BeamNG.Earth, newest first.
 - **"Highest bridge in Switzerland"**: the search answers questions like this (highest and longest bridges, longest
   tunnels, highest passes and dams, by country or for the world) from a table that comes with the app.
 
+### Fixed
+- **Roads under an overpass dug into trenches when the bridge's map line ends down its embankments:** the dip under a
+  bridge took the deck's height from the ground at those ends, not from the embankment tops it stands on (#694), so it
+  dug the road under up to 4 m too deep. Its slip roads beside it stayed at their own height, a step between them. Seen
+  under Kurna - Tuhala over Tallinna ringtee and under Tartu mnt at the Jüri roundabout, Estonia.
+
 ## 1.8.1 beta (2026-11-04)
 
 Works with BeamNG.drive 0.40.4.
