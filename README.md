@@ -125,7 +125,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the
   vehicle menu work on it.
 - **Traffic**: stock BeamNG traffic and police can be switched on, and parked cars line the streets and fill
-  parking lots (stock BeamNG parking).
+  parking lots (stock BeamNG parking). On highways the traffic's road map reaches past the loaded ground, so cars
+  ahead no longer see the road end and turn round, and a car put back near you joins at the road's speed instead of
+  from a standstill (from ProxyFirewall202's contribution, PR #728). On highways of two or more lanes each way, traffic
+  held behind a slower vehicle (a truck) moves over and passes it when the next lane is clear, then keeps right again
+  (the game's AI does not overtake by itself; the map's Autodrive does not pass yet). On divided highways every other
+  car put back near you comes on the other carriageway, towards you, so there is traffic both ways. The number of
+  traffic cars is the game's own setting (Options > Gameplay > Traffic > Traffic amount; 0, automatic, is at most 10):
+  a fast CPU can take more.
 - Distant headlights and taillights move along the mapped roads at night while traffic is on, with density
   following the local time. Returning to a recently viewed road keeps established lights bright.
 
