@@ -242,6 +242,7 @@ AHEAD_MOVE_M = 150.0            # m the player moves before the next round
 AHEAD_MARGIN_M = 250.0          # m around the block's half width at each point
 # the road tiles' cells (landcover: surface.prefetch). With roads (surface.prefetch has them within 3 km, with the land
 # cover on) and water, which a road tile otherwise fetched itself when it needed it (from KyzoFox's 1.5.4, PR #64)
+AHEAD_CELLS = 4                 # map cells download_ahead fetches at once
 AHEAD_LAYERS = ("roads", "buildings", "building_parts", "infrastructure", "water", "land_use")
 # route_download: like download_ahead, but along the planned GPS route's own geometry (routeahead.py)
 # instead of the player's current heading, since a road route can wander off that heading entirely.
@@ -2534,13 +2535,20 @@ class Server:
                     if deferred:
                         self.ahead_stats["deferred"] += 1
                         break
+                jobs = []
                 for la, lo in pts if layers else ():
                     dlat = reach / 111320.0
                     dlon = reach / (111320.0 * max(0.05, math.cos(math.radians(la))))
                     for key in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                         todo = tuple(ly for ly in layers if not self.mapdata.has(key, ly))
-                        if todo:
-                            self.mapdata.cell(key, layers=todo, kind="prefetch")
+                        if todo and all(key != j[0] for j in jobs):
+                            jobs.append((key, todo))
+                # (AHEAD_CELLS cells at once, nearest first: one after another, a slow connection's round fell behind
+                # the car, 48 cells in a 20 km first visit while its road tiles waited for theirs, 2026-11-04)
+                if jobs:
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(AHEAD_CELLS, thread_name_prefix="download-ahead-cell") as pool:
+                        for _ in pool.map(lambda j: self.mapdata.cell(j[0], layers=j[1], kind="prefetch"), jobs):
                             cells_n += 1
                 self.ahead_stats["dem"] += dem_n
                 self.ahead_stats["cells"] += cells_n
