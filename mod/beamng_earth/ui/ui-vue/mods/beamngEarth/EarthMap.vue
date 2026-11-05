@@ -707,7 +707,7 @@ const placeLabels = computed(() => {
 // (Tann2019, 2026-11-05). Drawn up to HW_MAX_Z (Natural Earth's 1:10m lines are ~a pixel off there; closer in, the
 // Roads & labels overlay has the real roads); the data (~1.2 MB) is only loaded once the layer is on.
 const HW_MAX_Z = 10.5, HW_I_MIN_Z = 3.5, HW_US_MIN_Z = 6
-const highwaysOn = ref(stored("beamngEarthMapHighways", "1") !== "0")
+const highwaysOn = ref(stored("beamngEarthMapHighways", "0") === "1")     // (off by default: Layers > Highways)
 watch(highwaysOn, on => store("beamngEarthMapHighways", on ? "1" : "0"))
 const hw = shallowRef(null)               // { interstates, iBoxes, iNorm, us, usBoxes, usNorm, shields, shieldNorm }
 let hwLoading = false
