@@ -402,6 +402,12 @@ def _junction_surfaces(chunks, context=()):
                 any(c.get('jskip') or occurrences[c['fid']] > 1 for c, _p in group)):
             continue
         field = _JunctionSurface(group, np.mean([p[0] for _c, p in group], axis=0))
+        # Each far endpoint is pinned to its ground approach. Nearby outgoing arms
+        # can pull it up or down; the 2 m lattice can also move an off-grid grade knot.
+        # Reject the whole shared field if any transition would gain a visible step.
+        free = np.asarray([p[-1] for _c, p in group])
+        if np.max(np.abs(field.at(free[:, :2]) - free[:, 2])) > 0.01:
+            continue
         out.update({c['fid']: field for c, _p in group})
     return out
 
@@ -1766,11 +1772,12 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
     _rb lets deck() share its already-computed ribbons. Returned dictionaries are ordered by deck
     chunk and edge, and include the points deck() uses verbatim.
     """
+    junctions = _junction_surfaces(chunks, context)
     if _rb is None:
         dch = [c for c in chunks if c.get("deck")]
         cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all,
-                           _junction_surfaces(chunks, context))
+                           junctions)
     else:
         rb = _rb
     if not rb:
@@ -1828,7 +1835,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
                         "line": (edge_run + inner_run) * 0.5,
                         "edge": edge_run,
                         "inner": inner_run,
-                        "z": z[sl],
+                        "z": junctions[c['fid']].at(edge_run) if c.get('fid') in junctions else z[sl],
                         "v": v[sl],
                         "out": u[sl] * sgn,
                         "nose": bool(nz[sl].any()),     # (a gore nose's: a full barrier, never the low curb)

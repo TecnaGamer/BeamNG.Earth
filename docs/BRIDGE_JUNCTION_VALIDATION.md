@@ -2,6 +2,22 @@
 
 Status: **offline regression tests passed; physical driving in BeamNG remains unverified**.
 
+## Follow-up review
+
+Three review findings were addressed after the first PR version. The shared surface is
+now rejected if its sampled height at any free bridge end differs from the pinned
+ground-approach height by more than 1 cm. This prevents close outgoing arms from
+creating a new step at the end of a bridge. Tiles fetch and emit context out to
+three short-part lengths plus 24 m (204 m), so a bridge connecting two forks makes
+the same eligibility decision on neighboring tiles. This wider context can increase
+tile preparation work near bridge networks; it has not been benchmarked as a general
+loading-time change. Exported guardrail runs now use the corrected deck-edge height.
+
+The updated 18-module road and bridge suite ran **359 tests: 358 passed, one skipped**
+for unavailable LuaJIT. Targeted regressions cover nearby abutments, connected forks
+across tile boxes, and the exported rail height. These checks are geometric and do
+not replace an in-game drive.
+
 At the captured Swiss fork near 46.66729 N, 7.72157 E, independently sloped bridge slabs and junction pads overlap at different heights. The correction gives eligible connected short bridge parts, their markings and pads a shared triangulated height surface. A pad at a matching ground-road endpoint is cut out of the existing road carriageway. Separate stacked levels remain separate, and bridge collision remains enabled.
 
 Complete profile metadata survives clipping and anchor transforms. Short-branch context includes neighboring source cells; eligibility checks use that same context so a sidewalk, width taper, lane shift, long profile or ambiguous multipart arm excludes the whole fork. Unsupported long and multipart profiles contribute only their endpoints for this check. Missing required source context fails the tile build instead of emitting a partial fork. Existing geometry remains in use for excluded arms.

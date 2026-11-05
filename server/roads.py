@@ -7726,13 +7726,13 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                for _fid, _sp, p, _lon in got):
             # A short branch can meet its fork outside the usual parapet context. Both tiles need all incident
             # complete profiles, even the tile holding only that branch's far abutment. parts() adds NEAR_M.
-            margin = max(0.0, roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M - NEAR_M)
+            reach = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+            margin = max(0.0, reach - NEAR_M)
             x0, y0, x1, y1 = exact
             cell_fn = getattr(bridges, 'cell_fn', None)
             if cell_fn is not None:
                 # Enlarging only the geometric filter is insufficient: parts() enumerates the supplied cells,
                 # so a fork just across a source-cell boundary would still be missing from one tile's surface.
-                reach = roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
                 la, lo, _ = frame.enu_to_geodetic(np.array([x0-reach, x1+reach, x0-reach, x1+reach]),
                                                   np.array([y0-reach, y0-reach, y1+reach, y1+reach]), 0.0)
                 keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
@@ -8232,7 +8232,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         if any(np.linalg.norm(p[:2] - q[:2]) <= roadmesh.JUNCTION_JOIN_M and
                abs(p[2] - q[2]) <= roadmesh.JUNCTION_JOIN_Z_M for p in ends for q in blocked_ends):
             joint_excluded.add(fid)
-    junction_margin = roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+    junction_margin = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
     junction_box = (x0 - junction_margin, y0 - junction_margin, x1 + junction_margin, y1 + junction_margin)
     for i, (fid, spec, pts, lon) in enumerate(decks):
         pts = shifted[i]

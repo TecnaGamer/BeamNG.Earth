@@ -67,6 +67,38 @@ def fixture():
 
 
 class BridgeJunctionSurfaceTest(unittest.TestCase):
+    def test_close_free_abutments_keep_their_pinned_heights(self):
+        parts = [chunk('in', [(-25, 0, 21), (0, 0, 20)]),
+                 chunk('exit1', [(0, 0, 20), (25, 5, 19)]),
+                 chunk('exit2', [(0, 0, 20), (25, 8, 18.5)])]
+        self.assertEqual(roadmesh._junction_surfaces(parts), {},
+                         'nearby free ends with different grades must keep their ground approach heights')
+
+    def test_guardrail_runs_follow_the_corrected_deck_edge(self):
+        _parts, chunks, context, pads, _ground = fixture()
+        fields = roadmesh._junction_surfaces(chunks, context)
+        runs = roadmesh.parapet_runs(chunks, context, pads=pads)
+        matched = [run for run in runs if chunks[run['deck']]['fid'] in fields]
+        self.assertTrue(matched)
+        for run in matched:
+            field = fields[chunks[run['deck']]['fid']]
+            np.testing.assert_allclose(run['z'], field.at(run['edge']), atol=1e-6)
+
+    def test_connected_forks_have_same_eligibility_across_tile_boxes(self):
+        parts = [chunk('a', [(20, 0, 20), (40.5, 0, 20)]),
+                 chunk('b', [(20, 12, 20), (40.5, 0, 20)]),
+                 chunk('link', [(40.5, 0, 20), (100.5, 0, 20)]),
+                 chunk('d', [(100.5, 0, 20), (158.5, 12, 20)]),
+                 chunk('e', [(100.5, 0, 20), (158.5, -12, 20)])]
+        specs = [(c['fid'], roads.Spec(c['w'], 'paved', True, 'primary', False),
+                  np.asarray(c['n'], float), 7.72) for c in parts]
+        for box in ((-256, -100, 0, 100), (0, -100, 256, 100)):
+            with self.subTest(box=box):
+                output = roads._deck_chunks(specs, box)
+                self.assertTrue({'d', 'e'} <= {c['fid'] for c in output if c.get('ctx')})
+                self.assertFalse(roadmesh._junction_surfaces(
+                    [c for c in output if not c.get('ctx')], [c for c in output if c.get('ctx')]))
+
     def test_connected_forks_do_not_partially_regrade_shared_span(self):
         chunks = [chunk('a', [(-20, 0, 20), (0, 0, 20)]),
                   chunk('b', [(0, 0, 20), (-15, 12, 20)]),
