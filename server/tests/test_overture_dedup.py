@@ -18,6 +18,8 @@ def _rows(data, dedup_if_repeated):
 
 
 class NumberRowsTest(unittest.TestCase):
+    """The same rows with the dedup skipped as with it always on; a repeated id keeps its highest version."""
+
     UNIQUE = [("c", 1, b"\x01", 3.0, "x"), ("a", 2, b"\x02", 1.0, "y"), ("b", 1, b"\x03", 2.0, None)]
 
     def test_unique_ids_same_rows(self):

@@ -50,12 +50,12 @@ log = logging.getLogger("earthd.mapdata")
 # pinned release that is gone raises ReleaseGone for cells not cached yet.
 RELEASE = "2026-10-21.0"
 STAC_ROOT = "https://stac.overturemaps.org"
-# DuckDB worker threads per query (the server is niced; the game comes first). 1 (2 until 2026-11-04): the server runs
-# many queries side by side on its few cores, where a query's second thread only cost CPU: a fresh place's 60 road
-# cells on one core 7.0 -> 4.8 CPU-s (buildings 2.4 -> 1.8); on two idle cores two threads took 4.6 s for 6.6 CPU-s,
-# one 5.1 s for 5.0. BNGE_DUCKDB_THREADS=2: as before.
+# DuckDB worker threads per query (the server is niced; the game comes first). One: the server runs many queries side
+# by side on its few cores, where a query's second thread only cost CPU (a fresh place's 60 road cells on one core:
+# 7.0 -> 4.8 CPU-s, 2026-11-04). BNGE_DUCKDB_THREADS=2: as before
 DUCKDB_THREADS = int(os.environ.get("BNGE_DUCKDB_THREADS", "1") or 1)
-# Reader._run's dedup by id (highest version) only where an id repeats (BNGE_OVERTURE_DEDUP_ALWAYS=1: always, as before)
+# Reader._run's dedup by id (highest version) only where an id repeats (_number_rows). BNGE_OVERTURE_DEDUP_ALWAYS=1:
+# always, as before
 DEDUP_IF_REPEATED = os.environ.get("BNGE_OVERTURE_DEDUP_ALWAYS", "0") == "0"
 REMOTE_FILES = 32               # open RemoteFiles kept (their blocks share rangeread's memory LRU)
 # DuckDB's own prefetching reads whole row groups one after the other; Reader._plan fetches what the
