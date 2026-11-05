@@ -282,17 +282,21 @@ class FaceTest(unittest.TestCase):
         keys = sorted({k for _, marks, _ in content for k, _ in marks})
         return dirsigns._face(self.dir, "vfs", self.st["countries"][cc], keys, kind, content, self.face)
 
-    def test_a_face_is_a_png_of_the_boards_size_named_by_its_content(self):
+    def test_a_face_is_a_dds_of_the_boards_size_named_by_its_content(self):
+        """A DXT1 DDS with mips (imagery.write_dds), never a PNG: the engine's texture cooker crashed the game as it
+        started importing the session folder's sign PNGs (2026-11-05)."""
+        import imagery
         content = [(0, [("m", "М-07"), ("e", "E 373")], [("Ковель", "Kovel", "65")])]
         name, tex, w, h = self.make(content)
-        path = os.path.join(self.dir, name + ".color.png")
+        path = os.path.join(self.dir, name + ".dds")
         self.assertTrue(os.path.exists(path))
-        with open(path, "rb") as f:
-            self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(tex, f"vfs/{name}.color.png")
+        self.assertFalse(any(f.endswith(".png") for f in os.listdir(self.dir)), "no PNG written")
+        self.assertEqual(tex, f"vfs/{name}.dds")
         self.assertTrue(2.0 <= w <= 6.0 and 0.5 < h < 3.0, (w, h))
         with open(path, "rb") as f:
-            wpx, hpx = struct.unpack(">II", f.read(24)[16:24])
+            wpx, hpx, mips, fourcc, _sizes = imagery.read_dds_info(f.read())
+        self.assertEqual(fourcc, b"DXT1")
+        self.assertGreater(mips, 1)
         self.assertTrue(wpx & (wpx - 1) == 0 and hpx & (hpx - 1) == 0 and min(wpx, hpx) >= 16,
                         f"the engine's texture cooker takes only power-of-two sizes: {wpx}x{hpx}")
         self.assertGreaterEqual(wpx, w * self.face["px_per_m"] - 1, "stretched up, never down")

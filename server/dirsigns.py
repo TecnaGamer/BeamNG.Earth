@@ -247,16 +247,21 @@ def _face(out_dir, vfs_dir, style, plate_keys, kind, content, face):
     h = hashlib.sha1(json.dumps([FACE_VERSION, flat, plates, rows, face["px_per_m"]], sort_keys=True,
                                 ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
     name = f"bne_dir_{h}"
-    png = os.path.join(out_dir, name + ".color.png")
+    dds = os.path.join(out_dir, name + ".dds")
     spec = [[float(p[0]), *map(float, p[1]), *map(float, p[2]), *map(float, p[3])] for p in plates]
     # (drawn every time, written once: the board's size in m is the drawing's, the picture a power-of-two stretch of it)
     data, w_m, h_m = fast._ef.dirsign_face(rows, flat, spec, float(face["px_per_m"]))
-    if not os.path.exists(png):
-        tmp = staging.tmp_for(png)
-        with open(tmp, "wb") as f:
-            f.write(bytes(data))
-        staging.replace(tmp, png)
-    return name, f"{vfs_dir}/{name}.color.png", w_m, h_m
+    if not os.path.exists(dds):
+        # a DDS (DXT1 with its mips, imagery.write_dds), as every other texture the server writes: a PNG in the session
+        # folder went through the engine's texture cooker at run time, and the game crashed as it started importing
+        # ("TextureCooker| Texture[] started importing", twice at Heide on a 100 mph drive, 2026-11-05)
+        import io
+        import imagery
+        from PIL import Image
+        with Image.open(io.BytesIO(bytes(data))) as im:
+            rgb = np.asarray(im.convert("RGB"), np.uint8)
+        imagery.write_dds(dds, rgb)
+    return name, f"{vfs_dir}/{name}.dds", w_m, h_m
 
 
 def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True):
