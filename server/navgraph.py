@@ -50,6 +50,91 @@ RING_MS = 30.0 / 3.6
 # the edge; the AI ran its outer wheels onto the verge on the Stelvio's hairpins and hit a parapet's end, 2026-11-01)
 MOUNTAIN_EDGE_M = 0.4
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
+# A median crossover: a short service road whose two ends are both on a motorway's main carriageways (the paved U-turns
+# for police and road crews across an Interstate's median, mapped as service roads, often access=no). As a service
+# road (0.4) random traffic could take it: cars on I-94 near Huntley MT turned across the median and into the ditch
+# (Tann2019, 2026-11-05). It takes a track's drivability instead: below the stock traffic's own minimum, still there
+# for a chase or route AI. (Ramps' connectors do not count: a rest area's roads between two ramps stay service roads.)
+CROSSOVER_M = 150.0
+
+
+# A US motorway with no mapped limit: its state's maximum posted limit on interstates, (rural, urban) mph, cars (IIHS,
+# "Maximum posted speed limits", November 2026: each state's general limit, not its "80 on specified segments", which
+# OSM maps where they are). The flat 65 had Montana's I-94 driven at 65 where it is 80 (Tann2019, 2026-11-05). The state
+# from the bundled Census outlines (signstates.py) at the road's middle; DC has no rural interstate (its urban 55).
+US_MOTORWAY_MPH = {
+    "AL": (70, 70), "AK": (65, 55), "AZ": (75, 65), "AR": (75, 65), "CA": (70, 65), "CO": (75, 65), "CT": (65, 55),
+    "DE": (65, 55), "DC": (55, 55), "FL": (70, 65), "GA": (70, 70), "HI": (60, 60), "ID": (75, 75), "IL": (70, 55),
+    "IN": (70, 55), "IA": (70, 65), "KS": (75, 75), "KY": (65, 65), "LA": (75, 70), "ME": (75, 75), "MD": (70, 70),
+    "MA": (65, 65), "MI": (70, 70), "MN": (70, 65), "MS": (70, 70), "MO": (75, 60), "MT": (80, 65), "NE": (75, 70),
+    "NV": (80, 65), "NH": (65, 65), "NJ": (65, 55), "NM": (75, 75), "NY": (65, 65), "NC": (70, 70), "ND": (80, 75),
+    "OH": (70, 65), "OK": (75, 70), "OR": (65, 55), "PA": (70, 70), "RI": (65, 55), "SC": (70, 70), "SD": (80, 80),
+    "TN": (70, 70), "TX": (75, 75), "UT": (75, 70), "VT": (65, 55), "VA": (70, 70), "WA": (70, 60), "WV": (70, 55),
+    "WI": (70, 70), "WY": (75, 75),
+}
+# ... the urban one only near a city (a Natural Earth populated place of scalerank <= CITY_RANK, the world map's place
+# names: maplayers.js) within CITY_KM: the road specs' `urban` (built up along the road: sidewalks, parking) took I-94
+# past Huntley MT (a few hundred people) for a city's interstate, 65 where the state's limit is 80 outside its
+# urbanized areas (Billings, rank 4).
+CITY_RANK = 6
+CITY_KM = 12.0
+_state_memo = {}
+_cities = None
+
+
+def _city_points():
+    """(lat (k,), lon (k,)) of the populated places of scalerank <= CITY_RANK, read once (empty when missing)."""
+    global _cities
+    if _cities is None:
+        import json
+        import os
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mod", "beamng_earth", "ui",
+                            "ui-vue", "mods", "beamngEarth", "maplayers.js")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            places = json.loads(text[text.index("export default ") + len("export default "):].rstrip().rstrip(";"))
+            rows = [(float(p[2]), float(p[1])) for p in places.get("places", []) if int(p[3]) <= CITY_RANK]
+        except (OSError, ValueError, KeyError, IndexError, TypeError):
+            rows = []
+        _cities = (np.array([r[0] for r in rows], np.float64), np.array([r[1] for r in rows], np.float64))
+    return _cities
+
+
+def _near_city(lat, lon):
+    la, lo = _city_points()
+    if not len(la):
+        return False
+    d = np.hypot((la - lat) * 111.32, (lo - lon) * 111.32 * math.cos(math.radians(lat)))
+    return bool(d.min() <= CITY_KM)
+
+
+def _us_place(feats, i):
+    """(US state postal code ('' outside the states), near a city (CITY_*)) at road feature i's middle (its cx, cy).
+    Memoized by place."""
+    cx, cy = feats.attrs.get("cx"), feats.attrs.get("cy")
+    if cx is None or cy is None:
+        return "", False
+    try:
+        lon, lat = float(cx[i]), float(cy[i])
+    except (TypeError, ValueError):
+        return "", False
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        return "", False
+    key = (round(lon, 3), round(lat, 3))
+    got = _state_memo.get(key)
+    if got is None:
+        import signstates
+        got = (str(signstates.states(lat, lon).item()), _near_city(lat, lon))
+        if len(_state_memo) > 50000:
+            _state_memo.clear()
+        _state_memo[key] = got
+    return got
+
+
+def _us_state(feats, i):
+    """The US state (postal code) at road feature i's middle, '' outside the states."""
+    return _us_place(feats, i)[0]
 
 
 def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
@@ -65,6 +150,10 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
                 value = float(speed.value[r])
                 if math.isfinite(value) and value > 0:
                     return value / 1.609344
+    if country == "US" and spec.cls == "motorway" and not getattr(spec, "link", False):     # (not a ramp)
+        state, city = _us_place(feats, i)
+        if state in US_MOTORWAY_MPH:
+            return float(US_MOTORWAY_MPH[state][1 if spec.urban and city else 0])
     if country == "SE" and spec.cls == "motorway":
         return 110.0 / 1.609344
     if country == "SE" and spec.cls in SE_ROADS:
@@ -201,6 +290,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     # the minimap's only (the AI's graph broke at every tunnel since they were built, 1.4.20; the user, 2026-11-05)
     tunnel_node = {}        # name -> fid of the tunnel its height is read from
     tube_edges = set()      # id() of the edges through a tunnel (portal_taper)
+    mainline = _mainline_connectors(feats_list)     # (CROSSOVER_M)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -314,6 +404,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             # this road's edge attributes
             mid = 0.5
             driv = DRIVE[spec.cls][0]
+            if spec.cls == "service" and L <= CROSSOVER_M and _crossover(con, i, mainline):
+                driv = DRIVE["track"][0]
             direction = 0
             if ow is not None:
                 for r in ow.rows(i):
@@ -468,6 +560,38 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
 
 
 PORTAL_LEAD_M = 60.0        # m before a tunnel's portal over which the AI's road narrows to the tube's (portal_taper)
+
+
+def _mainline_connectors(feats_list):
+    """The connector ids on the motorways' main carriageways (class motorway, not a link) of the roads layers."""
+    out = set()
+    for feats in feats_list:
+        if feats is None or len(feats) == 0:
+            continue
+        cls = feats.attrs.get("class")
+        con = feats.rules.get("connectors")
+        if cls is None or con is None:
+            continue
+        sub = feats.rules.get("subclass")
+        for i in np.flatnonzero(np.asarray(cls).astype(str) == "motorway").tolist():
+            if roads._rule_value(sub, i) == "link":
+                continue
+            out.update(str(con.value[r]) for r in con.rows(i))
+    return out
+
+
+def _crossover(con, i, mainline):
+    """Do road i's two ends (its connectors at its start and end) both lie on motorway main carriageways?"""
+    if con is None or not mainline:
+        return False
+    ends = {}
+    for r in con.rows(i):
+        at = float(con.start[r])
+        if at <= 0.001:
+            ends[0] = str(con.value[r])
+        elif at >= 0.999:
+            ends[1] = str(con.value[r])
+    return len(ends) == 2 and ends[0] != ends[1] and ends[0] in mainline and ends[1] in mainline
 
 
 def portal_taper(nodes, edges, tube_edges, inside):

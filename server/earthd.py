@@ -4989,7 +4989,7 @@ class Connection:
         if self.s.surface is not None:
             def street():
                 layers, _ = self.s.surface.roads(lat, lon)
-                return geocodemod.nearest_street(layers, lat, lon)
+                return geocodemod.nearest_street(layers, lat, lon, routes=self.s.surface.road_routes(lat, lon))
             try:
                 out["street"] = await loop.run_in_executor(self.s.ui_pool, street)
             except Exception as e:      # a cell being written, an odd feature: no street this time
