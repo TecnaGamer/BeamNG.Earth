@@ -498,6 +498,7 @@ SESSION_ORPHAN_S = 600.0
 # is sent it again meanwhile (geo_dropped). Before (GitHub #599, 2026-10-31) they stayed until the server stopped: the
 # geotiles are anchor-free, so prune never took them, and two days' driving left 9 GB in the session folder.
 GEO_FILES_GRACE_S = 120.0
+GEO_LIST_BATCH_S = 1.0          # geo_dropped: tiles whose grace ends within this share one listing of the folder
 GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
@@ -1377,7 +1378,15 @@ class Server:
                 return True
         return False
 
-    def geo_files(self, kind, key):
+    def geo_files_many(self, wanted):
+        """geo_files of several (kind, key) at once: the session folder listed once. [files] in their order."""
+        try:
+            names = os.listdir(self.out_dir)
+        except OSError:
+            return [[] for _ in wanted]
+        return [self.geo_files(kind, key, names) for kind, key in wanted]
+
+    def geo_files(self, kind, key, names=None):
         """The session files of geotile key (geotiles.key) of kind: a road geotile's content (rg_), every anchor's skin
         (rs_) and exact variants (rx_); a far geotile's json, shape and pieces (blockworker.FAR_GEO prefixes)."""
         if kind == "roads":
@@ -1391,10 +1400,11 @@ class Server:
             stems = (f"{pre}_",)
         # (one listing, filtered by the key first: glob listed the session folder once per stem in Python, ~52 ms a
         # call over 16k files, 89 s of the event loop in a 10 min first visit, 2026-11-04; this ~10 ms, off the loop)
-        try:
-            names = os.listdir(self.out_dir)
-        except OSError:
-            return []
+        if names is None:
+            try:
+                names = os.listdir(self.out_dir)
+            except OSError:
+                return []
         return sorted(os.path.join(self.out_dir, n) for n in names
                       if key in n and n.startswith(stems) and pat.fullmatch(n))
 
@@ -1407,22 +1417,37 @@ class Server:
         except RuntimeError:
             return
 
-        def listed(fut):
-            try:
-                files = fut.result()
-            except Exception as e:
-                log.debug("geotile %s %s files: %s", kind, key, e)
-                return
-            if files and not self.geo_held(kind, k):
-                self.queue_delete(files, lambda: self.geo_held(kind, k))
-
         def run():
             if self.geo_held(kind, k):
                 return
-            # (the folder listed on a thread of its own: thousands of session files, every dropped geotile)
+            # (the tiles whose grace ran out together share one listing of the session folder, on a thread of its
+            # own: 32 road tiles expiring at once listed ~27k entries 32 times; GitHub #758 measured the old
+            # per-tile globs on the event loop at 8.5 s for 32 tiles)
+            batch = self.__dict__.setdefault("geo_expired", [])
+            batch.append((kind, k, key))
+            if len(batch) > 1:
+                return
+            loop.call_later(GEO_LIST_BATCH_S, flush)
+
+        def flush():
+            items, self.geo_expired = self.geo_expired, []
+            items = [it for it in items if not self.geo_held(it[0], it[1])]
+            if not items:
+                return
             if self.geo_list_pool is None:
                 self.geo_list_pool = ThreadPoolExecutor(1, thread_name_prefix="geo-files")
-            loop.run_in_executor(self.geo_list_pool, self.geo_files, kind, key).add_done_callback(listed)
+
+            def listed(fut):
+                try:
+                    found = fut.result()
+                except Exception as e:
+                    log.debug("geotile files: %s", e)
+                    return
+                for (kd, kk, _key), files in zip(items, found):
+                    if files and not self.geo_held(kd, kk):
+                        self.queue_delete(files, (lambda kd=kd, kk=kk: self.geo_held(kd, kk)))
+            loop.run_in_executor(self.geo_list_pool, self.geo_files_many, [(kd, ky) for kd, _kk, ky in items]
+                                 ).add_done_callback(listed)
         loop.call_later(GEO_FILES_GRACE_S if grace is None else grace, run)
 
     def queue_delete(self, paths, ck=None):
