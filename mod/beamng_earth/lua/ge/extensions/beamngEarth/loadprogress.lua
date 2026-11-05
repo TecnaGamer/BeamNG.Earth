@@ -3,7 +3,7 @@
 -- terrain"). A load starts the moment a teleport is asked for (or the session's first place) and lasts until the
 -- ground, the roads and buildings, the trees and the distant land round the player are all in and have stayed so for
 -- QUIET_S. While it lasts:
---   Loading 64%  |  roads & buildings 34/52  ·  trees 10/40  ·  distant land 120/405  ·  downloading 14 files · 1.1 MB/s
+--   Loading 64%  |  downloading 14 files · 1.1 MB/s  ·  roads & buildings 34/52  ·  trees 10/40  ·  distant land 120/405
 -- each part's tiles done of those wanted (the world server's load_progress) and still listed while the mod is still
 -- placing what came; "ground" while the block under the car is still to be replaced (the graded first block, its full
 -- photo with the roads painted in: the user saw the road texture change after the loading line had gone); before the
@@ -85,7 +85,7 @@ function M.line(now, info)
   end
   load.quietSince = nil
   local dl = M.downloadText(prog.net)
-  if dl then parts[#parts + 1] = dl end          -- (shown, but it does not keep a load on by itself)
+  if dl then table.insert(parts, 1, dl) end      -- (first, the user, 2026-11-04; it does not keep a load on by itself)
   local pct = math.min(99, math.floor(100 * sumD / sumN))
   local head = string.format('Loading %d%%', pct)
   if #parts == 0 then return head end

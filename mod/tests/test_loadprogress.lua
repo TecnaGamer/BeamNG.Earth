@@ -39,7 +39,7 @@ T.check(L.downloadText({ 0, 5, 2 }) == nil and L.downloadText(nil) == nil, 'noth
 L.start(2000)
 line = L.line(2001, { placed = true, progress = { roads = { 3, 9 }, trees = { 1, 1 }, far = { 9, 9 }, net = { 2, 4.5, 0.9 } },
   pending = {} })
-T.check(line and line:find('roads & buildings 3/9  ·  downloading 2 files · 0.9 MB/s', 1, true), 'the part after the tiles: '
+T.check(line and line:find('|  downloading 2 files · 0.9 MB/s  ·  roads & buildings 3/9', 1, true), 'the part first: '
   .. tostring(line))
 line = L.line(2002, { placed = true, progress = { roads = { 9, 9 }, trees = { 1, 1 }, far = { 9, 9 }, net = { 2, 4.5, 0.9 } },
   pending = {} })
