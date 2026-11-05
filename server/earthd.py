@@ -253,6 +253,7 @@ ROUTE_AHEAD_MAX_M = 20000.0      # --route-prefetch-km * 1000 (15-25 km is sane;
 # route"): the route message's "download": off, ahead (ROUTE_AHEAD_MAX_M) or the whole route (at most this far)
 ROUTE_DOWNLOAD_MODES = ("off", "ahead", "route")
 ROUTE_WHOLE_MAX_M = 500000.0
+ROUTE_IMG_TRIES = 5               # a route download's ground-photo tile the limiter deferred: asked this often
 ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long before the next one in the corridor
 # (70 m/s until 2026-10-31: at 130-157 mph each block waited 2.5 s for its photo, then its stand-in, the edge guard
 # holding the car; the user: "lower it or do whatever you need to do to get high speed driving viable". The stand-in
@@ -4710,17 +4711,33 @@ class Connection:
         layers = (AHEAD_LAYERS if self.s.buildings else ("roads",)) if self.s.mapdata is not None else ()
         pts = routeaheadmod.arc_length_points(points, ROUTE_WHOLE_MAX_M if mode == "route" else ROUTE_AHEAD_MAX_M)
         dem_keys, cell_layer_pairs = routeaheadmod.need(self.s.dem, self.s.mapdata, pts, reach, zoom, layers)
-        total = len(dem_keys) + len(cell_layer_pairs)
-        if total == 0:
+        imagery = getattr(self.s, "imagery", None)
+        if len(dem_keys) + len(cell_layer_pairs) == 0 and imagery is None:
             self.send(empty)
             return
         dem, mapdata = self.s.dem, self.s.mapdata
+        texel = self.s.layout.block * heightmap.SQUARE / BASE_RENDER_PX
 
         def run():
+            # the ground photo's high-resolution tiles along the corridor too (Imagery.route_keys, the blocks' base
+            # photo zoom): the pre-cache fetched only heights and map cells, and a pre-cached long drive still
+            # stopped to download every few km at 40-55 mph (GitHub #755); listed here, off the event loop
+            img_keys = []
+            if imagery is not None and pts:
+                try:
+                    img_keys = imagery.route_keys(np.array([p[0] for p in pts]), np.array([p[1] for p in pts]), reach,
+                                                  texel)
+                except Exception as e:
+                    log.debug("route download: imagery keys: %s: %s", type(e).__name__, e)
+            total = len(dem_keys) + len(cell_layer_pairs) + len(img_keys)
+            if total == 0:
+                self.loop.call_soon_threadsafe(self.send, empty)
+                return
             # counted once, up front: an already-cached key is skipped below (has() is re-checked only to
             # decide what to fetch), never re-counted, or a route with nothing left to do would inflate past
             # total and spam a push every iteration (push's own throttle only skips while done < total)
             done = routeaheadmod.done_count(dem, mapdata, dem_keys, cell_layer_pairs)
+            done += sum(1 for k in img_keys if imagery.key_done(k))
             last_push = [0.0]
 
             def push(active):
@@ -4762,6 +4779,22 @@ class Connection:
                     time.sleep(ROUTE_RETRY_S)
                 except Exception as e:
                     log.debug("route download: %s: %s", type(e).__name__, e)
+            for key in img_keys:
+                for _try in range(ROUTE_IMG_TRIES):     # (a deferred one asked again: an overnight pre-cache left no holes)
+                    if self.route_dl_version != version:
+                        return
+                    try:
+                        if imagery.fetch_key(key):
+                            done += 1
+                            push(True)
+                        break
+                    except imagerymod.ImageryError as e:
+                        if not e.deferred:
+                            break
+                        time.sleep(ROUTE_RETRY_S)
+                    except Exception as e:
+                        log.debug("route download: imagery: %s: %s", type(e).__name__, e)
+                        break
             push(False)
         self.s.route_pool.submit(run)
 
