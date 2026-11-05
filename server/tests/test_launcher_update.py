@@ -1,11 +1,13 @@
 """The launcher's update question before the game starts (launcher.update_at_start)."""
 import argparse
+import os
 from pathlib import Path
 import sys
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))       # (server/: selfupdate)
 import launcher
 
 NEWER = {"current": "1.0.0", "latest": "1.1.0", "url": "https://github.com/TecnaGamer/BeamNG.Earth/releases/tag/v1.1.0"}
@@ -82,6 +84,73 @@ class UpdateAtStart(unittest.TestCase):
         with mock.patch.object(sys, "stdin", mock.Mock(isatty=lambda: False)):
             r, _ = self.go(popup=lambda text: True)
         self.assertTrue(r)
+
+
+class HandOver(unittest.TestCase):
+    """hand_over: the downloaded newer copy starts instead of this one, unless it dies at once (an antivirus, a damaged
+    download: every start flashed a window and closed, Discord 2026-11-05)."""
+
+    def go(self, wait=None, popen_error=None):
+        import subprocess
+        import selfupdate
+        proc = mock.Mock()
+        if isinstance(wait, BaseException):
+            proc.wait.side_effect = wait
+        else:
+            proc.wait.return_value = wait
+        dropped = []
+        with mock.patch.object(launcher, "FROZEN", True), \
+                mock.patch.object(selfupdate, "staged", lambda current: "/x/BeamNG.Earth-new.exe"), \
+                mock.patch.object(selfupdate, "drop_staged", lambda path=None: dropped.append(1)), \
+                mock.patch.object(subprocess, "Popen", side_effect=popen_error, return_value=proc) as popen, \
+                mock.patch.object(launcher, "problem", lambda *a, **k: None):
+            r = launcher.hand_over()
+        return r, dropped, popen
+
+    def test_the_new_copy_running_takes_over(self):
+        import subprocess
+        r, dropped, popen = self.go(wait=subprocess.TimeoutExpired("x", 5))
+        self.assertTrue(r)
+        self.assertEqual(dropped, [])
+        self.assertEqual(popen.call_args[0][0][0], "/x/BeamNG.Earth-new.exe")
+
+    def test_a_new_copy_that_dies_at_once_is_dropped_and_this_one_runs(self):
+        r, dropped, _ = self.go(wait=1)
+        self.assertFalse(r)
+        self.assertEqual(dropped, [1])
+
+    def test_a_new_copy_that_cannot_start(self):
+        r, dropped, _ = self.go(popen_error=OSError("blocked"))
+        self.assertFalse(r)
+        self.assertEqual(dropped, [1])
+
+
+class TeeLog(unittest.TestCase):
+    def test_windows_output_also_in_the_log_appended_and_trimmed(self):
+        import io
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        out, err = sys.stdout, sys.stderr
+        self.addCleanup(setattr, sys, "stdout", out)
+        self.addCleanup(setattr, sys, "stderr", err)
+        self.assertIsNone(launcher.tee_log(d, windows=False))
+        for n in range(2):
+            sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+            path = launcher.tee_log(d, windows=True)
+            print(f"start {n}")
+            self.assertIn(f"start {n}", sys.stdout._stream.getvalue())     # the console still gets it
+            sys.stdout._log.close()
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("start 0", text)
+        self.assertIn("start 1", text)
+        with open(path, "a") as f:
+            f.write("x" * (launcher.LOG_KEEP_BYTES + 10))
+        sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+        launcher.tee_log(d, windows=True)
+        sys.stdout._log.close()
+        self.assertLess(os.path.getsize(path), launcher.LOG_KEEP_BYTES)
 
 
 class Popup(unittest.TestCase):

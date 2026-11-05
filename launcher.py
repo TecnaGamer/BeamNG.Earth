@@ -1052,6 +1052,61 @@ def open_terminal():
     return False
 
 
+LOG_KEEP_BYTES = 512 * 1024     # launcher.log: the last starts kept (a start appends; trimmed at the next start)
+
+
+class _Tee:
+    """sys.stdout / stderr written to the console and to the log file too (attributes otherwise the console's)."""
+
+    def __init__(self, stream, log):
+        self._stream, self._log = stream, log
+
+    def write(self, text):
+        try:
+            self._log.write(text)
+            self._log.flush()
+        except (OSError, ValueError):
+            pass
+        return self._stream.write(text) if self._stream is not None else len(text)
+
+    def flush(self):
+        if self._stream is not None:
+            self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def tee_log(dd=None, windows=None):
+    """Windows: what the launcher prints also goes to <data dir>/logs/launcher.log (appended per start, the last
+    LOG_KEEP_BYTES kept), so a window that closed at once still leaves a log to send (a player's .exe opened "for a
+    split second then closes", Discord 2026-11-05). Linux without a terminal logs there already (main). The log
+    file's path, or None."""
+    if not (IS_WIN if windows is None else windows):
+        return None
+    try:
+        path = os.path.join(dd or data_dir(), "logs", "launcher.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            if os.path.getsize(path) > LOG_KEEP_BYTES:
+                with open(path, "rb") as f:
+                    f.seek(-LOG_KEEP_BYTES // 2, os.SEEK_END)
+                    tail = f.read()
+                with open(path, "wb") as f:
+                    f.write(tail)
+        except OSError:
+            pass
+        log = open(path, "a", encoding="utf-8", errors="replace")
+        import datetime
+        log.write(f"\n===== {datetime.datetime.now().isoformat(timespec='seconds')} {sys.executable} "
+                  f"{' '.join(sys.argv[1:])}\n")
+        log.flush()
+        sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
+        return path
+    except Exception:           # never a reason not to start
+        return None
+
+
 def windows_console():
     """Windows: a console window of our own when there is none (Wine / Proton started us without one)."""
     try:
@@ -1060,7 +1115,11 @@ def windows_console():
         if not k32.GetConsoleWindow():
             k32.FreeConsole()
             if k32.AllocConsole():
-                sys.stdout = sys.stderr = open("CONOUT$", "w", buffering=1, encoding="utf-8", errors="replace")
+                con = open("CONOUT$", "w", buffering=1, encoding="utf-8", errors="replace")
+                if isinstance(sys.stdout, _Tee):        # (tee_log: the log goes on)
+                    sys.stdout._stream = sys.stderr._stream = con
+                else:
+                    sys.stdout = sys.stderr = con
                 sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
         k32.SetConsoleTitleW("BeamNG.Earth")
     except (OSError, AttributeError):
@@ -1216,15 +1275,33 @@ def hand_over():
     if not new:
         return False
     env = {k: v for k, v in os.environ.items() if k not in ("APPDIR", "APPIMAGE", "ARGV0", "OWD")}
-    try:
-        subprocess.Popen([new] + sys.argv[1:], env=env, cwd=os.path.dirname(new),
-                         **({"creationflags": subprocess.CREATE_NEW_CONSOLE} if IS_WIN else {"start_new_session": True}))
-    except OSError:
-        return False
     print(f"Starting the updated BeamNG.Earth: {os.path.basename(new)}", flush=True)
-    return True
+    try:
+        proc = subprocess.Popen([new] + sys.argv[1:], env=env, cwd=os.path.dirname(new),
+                                **({"creationflags": subprocess.CREATE_NEW_CONSOLE} if IS_WIN
+                                   else {"start_new_session": True}))
+    except OSError as e:
+        code = str(e)
+    else:
+        # (a new copy that dies at once, blocked or removed by an antivirus, or a damaged download, made every start
+        # of this one flash a window and close: "the .exe opens for a split second then closes", Discord 2026-11-05)
+        try:
+            code = proc.wait(timeout=HANDOVER_CHECK_S)
+        except subprocess.TimeoutExpired:
+            return True
+        if code == 0:
+            return True
+    problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
+            "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
+            "About) downloads it again.")
+    try:
+        selfupdate.drop_staged()
+    except Exception:
+        pass
+    return False
 
 
+HANDOVER_CHECK_S = 5.0          # hand_over: the new copy must still run this long after its start (else: this one)
 UPDATE_TITLE = "BeamNG.Earth update"
 
 
@@ -1317,6 +1394,7 @@ def beammp_wait_seconds(value):
 
 
 def main():
+    tee_log()
     ensure_ca_certs()
     if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
         from tools import world_cache
