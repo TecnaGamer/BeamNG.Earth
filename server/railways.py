@@ -20,6 +20,7 @@ import os
 import numpy as np
 
 import mapgeom
+import railxing
 import roads
 
 # the ballasted classes drawn (Overture's rail classes); ground trams stay in rails.py,
@@ -1098,7 +1099,7 @@ AMERICAS_LON = -30.0            # west of this the crossbuck (the Americas), els
 CROSSING_DATA_ONLY = {"light_rail"}
 
 
-def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None):
+def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, country=None):
     """Prop rows ([group, x, y, z, yaw, scale, height, 0]) of the level crossings in road tile (tx, ty): where a drawn
     line's ground part crosses a road's (cells: the road layers around the tile; ground(xy (n, 2)) -> z). kits: an
     optional fn(xy (2,), road class) -> "gate" / "flash" / "cross" / None from crossing data (the FRA's inventory in
@@ -1129,6 +1130,13 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None):
     if not roads:
         return []
     americas = float(frame.lon0 if hasattr(frame, "lon0") else 0.0) < AMERICAS_LON
+    if railxing.ENABLED:        # (a crossing of several tracks is one: railxing.py, BNE_RAIL_XING)
+        usage = {str(f.ids[i]): str(u) for f in cells if f is not None and len(f)
+                 for u, i in ((f.attrs.get("osm_usage", [None] * len(f))[i], i) for i in range(len(f))) if u}
+        return railxing.crossing_rows(box, rails, roads, ground, worn=worn, usage=usage,
+                                      nodes=railxing.node_lookup(frame, cells), fra=kits, country=country,
+                                      lon=float(frame.lon0 if hasattr(frame, "lon0") else 0.0), left_hand=left_hand,
+                                      owns=lambda x, y: roadsmod.box_owns(box, x, y))
     osm_kit = _osm_kits(frame, cells)
     rows, done = [], set()
     for (rfid, sp, line), crs in zip(roads, roadsmod._crossings_by([xy for _f, xy, _c in rails],

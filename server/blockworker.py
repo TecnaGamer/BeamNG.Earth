@@ -951,7 +951,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             fra_kits = _s.fra.kits(frame, roadsmod.cells_of_tile(frame, tx, ty))
         except Exception as e:
             log.debug("fra kits: %s: %s", type(e).__name__, e)
-    rr_kits = railways.crossing_props(frame, tx, ty, rcells, rground, left_hand, fra_kits)   # level crossings
+    rr_kits = railways.crossing_props(frame, tx, ty, rcells, rground, left_hand, fra_kits, country)   # level crossings
     if rr_kits:
         props = (props or []) + rr_kits
     P.rmesh = railways.tile_mesh(frame, tx, ty, rcells, rground,
