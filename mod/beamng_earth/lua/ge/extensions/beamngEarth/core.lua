@@ -1702,6 +1702,8 @@ local function updateBanner(dt)
   i.dropHold = (dropHold.active or (st.guard.healthy and st.guard.pausedByUs)) or nil
   -- connected and said hello, yet the guard runs: the server does not (yet) build the terrain
   i.stuck = (i.session and net.isConnected()) and true or false
+  local lp = st.loadProgress
+  i.download = (lp and lp.anchorId == st.anchorId) and loadprogress.downloadText(lp.net) or nil
   banner.update(dt, i)
 end
 

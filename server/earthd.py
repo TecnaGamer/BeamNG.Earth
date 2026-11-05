@@ -142,6 +142,7 @@ import geocode as geocodemod  # noqa: E402
 import routing as routingmod  # noqa: E402
 import updates as updatesmod  # noqa: E402
 import cpupin  # noqa: E402
+import netstate as netstatemod  # noqa: E402
 import netfetch  # noqa: E402
 import protocol  # noqa: E402
 import weather as weathermod  # noqa: E402
@@ -4982,13 +4983,18 @@ class Connection:
         trees = self.veg.progress() if self.s.veg is not None else (0, 0)
         want = len(self.desired)
         far = (want - self.backlog(), want)
-        counts = (self.ground_progress(aid), roads, trees, far)
+        meter = self.__dict__.setdefault("net_meter", netstatemod.Meter())
+        act, mb, rate = meter.read()
+        # (the downloads the world waits on, across the server's processes: the loading line's and the edge hold's
+        # "downloading" part; the user, 2026-11-04)
+        net = [int(act), round(mb, 1), round(rate, 2)]
+        counts = (self.ground_progress(aid), roads, trees, far, tuple(net))
         now = time.monotonic()
         if counts == getattr(self, "progress_sent", None) or now - getattr(self, "progress_at", 0.0) < PROGRESS_S:
             return
         self.progress_sent, self.progress_at = counts, now
         self.send({"type": "load_progress", "anchorId": aid, "ground": list(counts[0]), "roads": list(roads),
-                   "trees": list(trees), "far": list(far)})
+                   "trees": list(trees), "far": list(far), "net": net})
 
     def ground_progress(self, aid):
         """(1, 1) once the ground under the player is final, else (0, 1): a teleport's graded first block still on its
@@ -6971,6 +6977,10 @@ async def main_async(args):
     AHEAD_ON = args.download_ahead == "on"
     ROUTE_AHEAD_ON = args.route_prefetch == "on" and args.route_prefetch_km > 0
     ROUTE_AHEAD_MAX_M = args.route_prefetch_km * 1000.0
+    # (before any worker process starts: they find the downloads' shared counters by name, netstate.ENV)
+    if netstatemod.init():
+        import atexit
+        atexit.register(netstatemod.close)
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":

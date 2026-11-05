@@ -206,4 +206,16 @@ if jit then jit.on() end
 id, level, text = banner.compute(info({ net = 'connected', session = true, everConnected = true, dropHold = true }), 100)
 T.check(id == 'drophold' and level == 'info' and text == banner.DROP_HOLD_TEXT, 'drop hold: its line ' .. tostring(id) .. ' ' .. tostring(text))
 
+
+-- what a held car waits on: the downloads in flight (loadprogress.downloadText), under the hold's line
+local dl = 'downloading 12.4 MB · 1.1 MB/s'
+id, level, text = banner.compute(info({ net = 'connected', everConnected = true, session = true, edge = 'hold',
+  stuck = true, download = dl }), 100)
+T.check(id == 'edge' and text:find('\nThe world is ' .. dl, 1, true) ~= nil, 'edge hold: its downloads ' .. tostring(text))
+id, _, text = banner.compute(info({ net = 'connected', everConnected = true, session = true, dropHold = true,
+  download = dl }), 100)
+T.check(text == banner.DROP_HOLD_TEXT .. '\nThe world is ' .. dl, 'drop hold: its downloads ' .. tostring(text))
+id, _, text = banner.compute(info({ net = 'connected', everConnected = true, session = true, download = dl }), 100)
+T.check(id == 'ok' and text == '', 'no hold: no download line (the loading line has it)')
+
 T.done('test_banner')

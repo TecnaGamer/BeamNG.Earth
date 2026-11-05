@@ -41,6 +41,7 @@ user name, e-mail, machine name, location or session id is ever sent.
 """
 import collections
 import ioprofiler
+import netstate
 import email.utils
 import http.client
 import json
@@ -1016,6 +1017,8 @@ class Fetcher:
                 try:
                     self._count(h, "requests")
                     t0 = self.clock()
+                    netstate.begin()        # (the loading line's "downloading" part, across the server's processes)
+                    body = None
                     try:
                         status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
                     except (http.client.HTTPException, OSError) as e:
@@ -1031,6 +1034,7 @@ class Fetcher:
                     if NETLOG:
                         _netlog(url, hd, status, body)
                 finally:
+                    netstate.end(len(body) if body else 0)
                     sem.release()
                 res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
                 probe = False               # the breaker has its verdict

@@ -31,4 +31,18 @@ T.check(L.line(1001, { placed = true, progress = { roads = { 0, 0 }, trees = { 0
   == 'Loading 100%', 'parts with nothing wanted (trees off) count as done')
 L.reset()
 T.check(not L.active(), 'reset')
+
+-- the downloads the world waits on (the server's net: in flight, MB of this burst, MB/s)
+T.check(L.downloadText({ 3, 12.4, 1.1 }) == 'downloading 12.4 MB · 1.1 MB/s', 'downloads: MB and rate')
+T.check(L.downloadText({ 1, 0.2, 0 }) == 'downloading 0.2 MB', 'no rate yet: MB alone')
+T.check(L.downloadText({ 0, 5, 2 }) == nil and L.downloadText(nil) == nil, 'nothing in flight: no part')
+L.start(2000)
+line = L.line(2001, { placed = true, progress = { roads = { 3, 9 }, trees = { 1, 1 }, far = { 9, 9 }, net = { 2, 4.5, 0.9 } },
+  pending = {} })
+T.check(line and line:find('roads & buildings 3/9  ·  downloading 4.5 MB · 0.9 MB/s', 1, true), 'the part after the tiles: '
+  .. tostring(line))
+line = L.line(2002, { placed = true, progress = { roads = { 9, 9 }, trees = { 1, 1 }, far = { 9, 9 }, net = { 2, 4.5, 0.9 } },
+  pending = {} })
+T.check(line == 'Loading 100%', 'downloads alone do not keep a load on (photos stream all the time): ' .. tostring(line))
+L.reset()
 T.done('test_loadprogress')
