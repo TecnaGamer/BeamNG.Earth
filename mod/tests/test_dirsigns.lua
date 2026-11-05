@@ -6,7 +6,7 @@ local S = dofile(dir .. '/stubs.lua')
 local dirsigns = require('beamngEarth/dirsigns')
 local settings = require('beamngEarth/settings')
 
-T.check(settings.defaults().directionSigns == false, 'direction signs are off by default')
+T.check(settings.defaults().directionSigns == true, 'direction signs are on by default (the user, 2026-11-05)')
 T.check(dirsigns.valid({ bne_dir_a = '/t/a.dds' }), 'a name -> path table is valid')
 T.check(not dirsigns.valid({ 'x' }) and not dirsigns.valid('x') and not dirsigns.valid({ a = 1 }), 'anything else is not')
 

@@ -70,7 +70,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
-- Direction signs (opt-in, Settings > World > Direction signs, off by default; or `BNE_DIRSIGNS=on`): a blue, green
+- Direction signs (on by default; Settings > World > Direction signs): a blue, green
   or yellow advance board beside the road before junctions of major roads, with each way's road numbers (national
   and European), the places it leads to, and their distances; Ukraine, Czechia, Poland and Germany for now. Cities
   and towns are written in the local language with their English name under it, villages in the local language
