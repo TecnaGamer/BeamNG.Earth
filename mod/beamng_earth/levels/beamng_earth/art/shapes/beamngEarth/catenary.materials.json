@@ -1,0 +1,68 @@
+{
+  "bne_cat_concrete": {
+    "name": "bne_cat_concrete",
+    "mapTo": "bne_cat_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6d31c3a5-7878-5b9b-8abe-91d63e8dce2c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.61,
+          0.58,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_cat_galv": {
+    "name": "bne_cat_galv",
+    "mapTo": "bne_cat_galv",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "79e4eda1-73df-5115-ad24-10eac5d53320",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.8,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_cat_insulator": {
+    "name": "bne_cat_insulator",
+    "mapTo": "bne_cat_insulator",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "00131e92-b9fd-5b01-8549-a36a927d2e81",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.66,
+          0.6,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

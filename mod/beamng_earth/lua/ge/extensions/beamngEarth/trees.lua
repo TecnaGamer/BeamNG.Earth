@@ -33,7 +33,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
 M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
-  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
+  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, catmast = 700, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
@@ -88,7 +88,7 @@ M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshe
   barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
   picnicgrill = true, picnictable = true, pylon = true, hvpole = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
-  rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
+  rrgate_eu_l = true, rrgate_l = true, catmast = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_turboburger = true }
 
@@ -227,6 +227,8 @@ M.CATALOG = {
   rrflash = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher', 4.7 } }, rrflash_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher_eu', 4.7 } },
   rrgate = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate', 8.25 } }, rrgate_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_l', 8.25 } },
   rrgate_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu', 8.25 } }, rrgate_eu_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu_l', 8.25 } },
+  -- railway catenary mast with its cantilever (server catenary.py; tools/blender/build_catenary.py); its +x toward the track
+  catmast = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_mast', 9.0 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },

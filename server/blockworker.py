@@ -954,6 +954,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     rr_kits = railways.crossing_props(frame, tx, ty, rcells, rground, left_hand, fra_kits, country)   # level crossings
     if rr_kits:
         props = (props or []) + rr_kits
+    import catenary
+    if catenary.ENABLED and wires is not None:      # masts and wires along the electrified lines (BNE_CATENARY)
+        try:
+            c_rows, c_wires = catenary.build(frame, tx, ty, rcells, rground)
+            if c_rows:
+                props = (props or []) + c_rows
+            wires.extend(c_wires)
+        except Exception as e:
+            log.debug("catenary: %s: %s", type(e).__name__, e)
     P.rmesh = railways.tile_mesh(frame, tx, ty, rcells, rground,
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
