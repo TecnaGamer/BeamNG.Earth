@@ -477,6 +477,16 @@ class LotTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[2, 2], [200, 200, 200]) and np.array_equal(rgb[30, 30], [200, 200, 200]))
 
 
+    def test_dirt_track_visible_on_pale_ground(self):
+        """A dirt track painted into a pale field photo stays clearly darker than it (a farm track near Suchy Dul read
+        as nothing at 0.45), yet keeps a trace of the photo: less opaque than gravel's and the asphalt's paint."""
+        r, g, b, op = sf.PHOTO_ROAD_RGBA["dirt"]
+        pale = 200.0
+        blended = [pale * (1 - op) + c * op for c in (r, g, b)]
+        self.assertTrue(all(pale - v >= 50.0 for v in blended), blended)
+        self.assertLess(op, sf.PHOTO_ROAD_RGBA["paved"][3])
+        self.assertTrue(r > b, "an earth brown, not grey")
+
     def test_square_painted_paving(self):
         """A land-use square (subtype pedestrian) is paving (the Zocalo read as dirt); a park is not."""
         lat0, lon0 = 19.43, -99.13
