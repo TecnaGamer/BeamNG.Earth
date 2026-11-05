@@ -195,6 +195,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     # through one is the AI's too, its nodes at the tunnel's floor; a tunnel not built (under water, none at hand) stays
     # the minimap's only (the AI's graph broke at every tunnel since they were built, 1.4.20; the user, 2026-11-05)
     tunnel_node = {}        # name -> fid of the tunnel its height is read from
+    tube_edges = set()      # id() of the edges through a tunnel (portal_taper)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -375,6 +376,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     half = max(1.5, min(half, spec.width / 2 + roadmesh.TUNNEL_SHOULDER - TUNNEL_AI_WALL_M))
                 edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2)])
                 edge_fids.append(fid)
+                if in_tunnel:
+                    tube_edges.add(id(edges[-1]))
     # The static props use 3D solved roads/decks. A 2D graph clearance line would falsely block every level below
     # a viaduct, suppressing the switchable head while leaving the static signal behind.
     if carriage_ll:
@@ -453,8 +456,66 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         if k not in pairs:
             pairs.add(k)
             uniq.append(e)
+    if tube_edges:
+        portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
     return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines}
+
+
+PORTAL_LEAD_M = 60.0        # m before a tunnel's portal over which the AI's road narrows to the tube's (portal_taper)
+
+
+def portal_taper(nodes, edges, tube_edges, inside):
+    """In place: the roads leading to a tunnel narrow to its tube's AI half width at the portal, over PORTAL_LEAD_M.
+    A portal node (an end of a tube edge outside the tunnel) took the widest of its roads' half widths, so the AI
+    spread its lanes over the approach's (Fort Pitt Tunnel's west portal: carriageways 11.6 m wide and shoulders into
+    openings of ~9 m, an AI car 5 m off its line into the pier between the tubes three times, 2026-11-05). An edge
+    near a portal gets its two ends' radii (edge[7] at edge[0], an added edge[8] at edge[1]: the stock AI's
+    inRadius / outRadius, map.getEdgeRadii); the portal node's own radius is the tube's."""
+    portal = {}
+    for e in edges:
+        if id(e) in tube_edges:
+            for nm in e[:2]:
+                if nm not in inside and nm in nodes:
+                    portal[nm] = min(portal.get(nm, math.inf), e[7])
+    if not portal:
+        return
+    # how far each node near a portal is from it along the roads outside (Dijkstra, PORTAL_LEAD_M at most), with the
+    # nearest portal's half width
+    adj = {}
+    for e in edges:
+        if id(e) not in tube_edges and e[0] in nodes and e[1] in nodes:
+            pa, pb = nodes[e[0]], nodes[e[1]]
+            d = math.hypot(pa[0] - pb[0], pa[1] - pb[1])
+            adj.setdefault(e[0], []).append((e[1], d))
+            adj.setdefault(e[1], []).append((e[0], d))
+    import heapq
+    best = {nm: (0.0, r) for nm, r in portal.items()}
+    heap = [(0.0, nm) for nm in portal]
+    while heap:
+        d, nm = heapq.heappop(heap)
+        if d > best[nm][0]:
+            continue
+        for ot, dd in adj.get(nm, ()):
+            nd = d + dd
+            if nd < PORTAL_LEAD_M and (ot not in best or nd < best[ot][0]):
+                best[ot] = (nd, best[nm][1])
+                heapq.heappush(heap, (nd, ot))
+
+    def at(nm, half):
+        b = best.get(nm)
+        if b is None or b[1] >= half:
+            return half
+        return round(b[1] + (half - b[1]) * b[0] / PORTAL_LEAD_M, 2)
+    for e in edges:
+        if id(e) in tube_edges:
+            continue
+        r0, r1 = at(e[0], e[7]), at(e[1], e[7])
+        if r0 != e[7] or r1 != e[7]:
+            e[7] = r0
+            e.append(r1)
+    for nm, r in portal.items():
+        nodes[nm][3] = min(nodes[nm][3], r)
 
 
 STOP_BACK_M = 2.0           # the stop point: this far before the junction's widest road edge

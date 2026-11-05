@@ -144,6 +144,35 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(any(130 < m < 200 for m in mids), "an edge through it")
         self.assertFalse(g["lines"], "nothing left for the minimap alone")
 
+    def test_the_approach_narrows_to_the_tube_at_the_portal(self):
+        """A road wider than its tunnel's tube narrows to the tube's AI half width at the portal over PORTAL_LEAD_M
+        (Fort Pitt: the AI spread its lanes over the wide approach into the pier): the portal node's radius is the
+        tube's, the edges near it carry both ends' radii (edge[7] at edge[0], edge[8] at edge[1])."""
+        L = navgraph.PORTAL_LEAD_M
+        xs = [-200.0, -100.0, -L, -L / 2, 0.0, 50.0, 100.0]       # the portal at 0, the tube from 0 to 100
+        nodes = {f"n{k}": [x, 0.0, 0.0, 6.0] for k, x in enumerate(xs)}
+        edges = [[f"n{k}", f"n{k + 1}", 0, 2, 2, 25.0, 1.0, 6.0] for k in range(4)]
+        tube = [[f"n{k}", f"n{k + 1}", 0, 2, 2, 25.0, 1.0, 4.0] for k in (4, 5)]
+        side = ["n9", "n0", 0, 1, 1, 10.0, 1.0, 3.0]         # a narrower road: never widened
+        nodes["n9"] = [-200.0, 50.0, 0.0, 3.0]
+        navgraph.portal_taper(nodes, edges + tube + [side], {id(e) for e in tube}, {"n5"})
+
+        def r(e):
+            return e[7], (e[8] if len(e) > 8 else e[7])
+        self.assertEqual(r(edges[0]), (6.0, 6.0), "farther than PORTAL_LEAD_M: as it was")
+        self.assertEqual(r(edges[1]), (6.0, 6.0))
+        self.assertEqual(r(edges[2]), (6.0, 5.0), "a straight taper")
+        self.assertEqual(r(edges[3]), (5.0, 4.0), "the tube's at the portal")
+        self.assertEqual(nodes["n4"][3], 4.0, "the portal node's own radius")
+        self.assertEqual(nodes["n2"][3], 6.0)
+        self.assertEqual([r(e) for e in tube], [(4.0, 4.0)] * 2, "the tube's own edges as they were")
+        self.assertEqual(r(side), (3.0, 3.0))
+        # a road narrower than the tube: nothing changes
+        n2 = {k: list(v) for k, v in nodes.items()}
+        e2 = [[f"n{k}", f"n{k + 1}", 0, 1, 1, 25.0, 1.0, 3.0] for k in range(4)]
+        navgraph.portal_taper(n2, e2 + tube, {id(e) for e in tube}, {"n5"})
+        self.assertTrue(all(len(e) == 8 for e in e2))
+
     def test_nodes_on_a_bridge_take_its_deck(self):
         f = features([[(0, 0), (200, 0)]], ["primary"])
         f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
