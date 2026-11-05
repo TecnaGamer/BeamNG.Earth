@@ -1,0 +1,1070 @@
+{
+  "date": "2026-11-04",
+  "scope": "56 existing country and territory selectors; representative scenery profiles",
+  "countries": [
+    {
+      "country": "AD",
+      "family": "AD-locality",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "red",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        0.8,
+        0.43
+      ],
+      "max_width_m": 4.6,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "AL",
+      "family": "blue-locality",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "AM",
+      "family": "Caucasus-locality",
+      "font": "fallback",
+      "font_status": "unicode-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.88,
+        0.6
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "AT",
+      "family": "AT-17a",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-and-photos",
+      "background": "white",
+      "border": "blue",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.96,
+        0.63
+      ],
+      "max_width_m": 2.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "AX",
+      "family": "Nordic-blue-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": false,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "AZ",
+      "family": "blue-locality",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "BA",
+      "family": "Balkan-yellow-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        0.64
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "BE",
+      "family": "BE-F1",
+      "font": "condensed",
+      "font_status": "substitute",
+      "reference_level": "primary-source-and-photos",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.0,
+        1.05
+      ],
+      "max_width_m": 2.7,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "BG",
+      "family": "BG-locality",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "blue",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "BY",
+      "family": "Cyrillic-locality",
+      "font": "fallback",
+      "font_status": "unicode-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "CH",
+      "family": "CH-4.27/4.29",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "CY",
+      "family": "Mediterranean-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "CZ",
+      "family": "CZ-IS12a",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "DE",
+      "family": "DE-310",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-and-photos",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.05,
+        0.75
+      ],
+      "max_width_m": 2.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "DK",
+      "family": "name-and-built-up-symbol",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        1.02
+      ],
+      "max_width_m": 3.1,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "EE",
+      "family": "name-and-built-up-symbol",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        1.02
+      ],
+      "max_width_m": 3.1,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "ES",
+      "family": "ES-S500",
+      "font": "ccrige",
+      "font_status": "drawing-reconstruction",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "FI",
+      "family": "Nordic-blue-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": false,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "FO",
+      "family": "name-and-built-up-symbol",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        1.02
+      ],
+      "max_width_m": 3.1,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "FR",
+      "family": "FR-EB10",
+      "font": "l1",
+      "font_status": "regulatory-alphabet-digitization-test-release",
+      "reference_level": "primary-source-and-photos",
+      "background": "white",
+      "border": "red",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        0.8,
+        0.43
+      ],
+      "max_width_m": 4.6,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "GB",
+      "family": "UK-boundary-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "GE",
+      "family": "Caucasus-locality",
+      "font": "fallback",
+      "font_status": "unicode-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.88,
+        0.6
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "GG",
+      "family": "UK-boundary-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "GI",
+      "family": "UK-boundary-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "GR",
+      "family": "GR-locality",
+      "font": "fallback",
+      "font_status": "unicode-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "HR",
+      "family": "Balkan-yellow-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        0.64
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "HU",
+      "family": "HU-lakott-terulet",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "IE",
+      "family": "IE-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.6
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "IM",
+      "family": "UK-boundary-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "IS",
+      "family": "IS-built-up",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        1.02
+      ],
+      "max_width_m": 3.1,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "IT",
+      "family": "IT-centro-abitato",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "JE",
+      "family": "UK-boundary-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "LI",
+      "family": "CH-4.27/4.29",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "LT",
+      "family": "Baltic-blue-place-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "LU",
+      "family": "LU-E9",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.05,
+        0.66
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "LV",
+      "family": "Baltic-blue-place-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "MC",
+      "family": "FR-EB10",
+      "font": "l1",
+      "font_status": "regulatory-alphabet-digitization-test-release",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "red",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        0.8,
+        0.43
+      ],
+      "max_width_m": 4.6,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "MD",
+      "family": "Cyrillic-locality",
+      "font": "fallback",
+      "font_status": "unicode-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "ME",
+      "family": "Balkan-yellow-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        0.64
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "MK",
+      "family": "Balkan-yellow-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        0.64
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "MT",
+      "family": "Mediterranean-name",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "NL",
+      "family": "NL-H1",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "primary-source-and-photos",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": false,
+      "minimum_m": [
+        1.15,
+        0.62
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "NO",
+      "family": "NO-727.1",
+      "font": "trafikk",
+      "font_status": "specification-inspired",
+      "reference_level": "primary-source-family",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "PL",
+      "family": "PL-E17a",
+      "font": "wide",
+      "font_status": "substitute",
+      "reference_level": "primary-source-and-photos",
+      "background": "green",
+      "border": "white",
+      "ink": "white",
+      "uppercase": false,
+      "minimum_m": [
+        1.0,
+        0.53
+      ],
+      "max_width_m": 4.3,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "PT",
+      "family": "PT-N1a",
+      "font": "transport",
+      "font_status": "drawing-reconstruction-or-substitute",
+      "reference_level": "primary-source-family",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.9,
+        0.52
+      ],
+      "max_width_m": 4.2,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "RO",
+      "family": "RO-locality",
+      "font": "condensed",
+      "font_status": "substitute",
+      "reference_level": "user-photo",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        0.88,
+        0.6
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "RS",
+      "family": "Balkan-yellow-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        0.64
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "RU",
+      "family": "Cyrillic-locality",
+      "font": "fallback",
+      "font_status": "unicode-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "SE",
+      "family": "SE-F10",
+      "font": "tratex_white",
+      "font_status": "publisher-font",
+      "reference_level": "primary-source-family",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "SI",
+      "family": "Balkan-yellow-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        0.64
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "SK",
+      "family": "CZ-IS12a",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "blue",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "SM",
+      "family": "IT-centro-abitato",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "TR",
+      "family": "TR-B9",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "primary-source-family",
+      "background": "blue",
+      "border": "white",
+      "ink": "white",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.56
+      ],
+      "max_width_m": 3.8,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "UA",
+      "family": "Cyrillic-locality",
+      "font": "fallback",
+      "font_status": "unicode-substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "VA",
+      "family": "IT-centro-abitato",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "white",
+      "border": "black",
+      "ink": "black",
+      "uppercase": true,
+      "minimum_m": [
+        1.0,
+        0.55
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    },
+    {
+      "country": "XK",
+      "family": "Balkan-yellow-name",
+      "font": "din",
+      "font_status": "substitute",
+      "reference_level": "representative-family-not-independently-verified",
+      "background": "yellow",
+      "border": "black",
+      "ink": "black",
+      "uppercase": false,
+      "minimum_m": [
+        1.1,
+        0.64
+      ],
+      "max_width_m": 4.0,
+      "regulatory_dimensions_claim": false,
+      "secondary_lines": "only-explicit-input",
+      "bilingual_names": "not-invented"
+    }
+  ]
+}

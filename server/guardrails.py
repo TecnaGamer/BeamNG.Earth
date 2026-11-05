@@ -26,6 +26,13 @@ BBOX_PAD_M = 2.0
 # mod's cable barrier (tools/build_median_props.py). medians.py's rows use the same groups.
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
           "guardrail_back_end", "jersey", "jersey_end", "cable")
+STOCK_GROUPS = GROUPS
+import euguardrails
+ALL_GROUPS = GROUPS + euguardrails.GROUPS
+
+
+def groups_for(rows):
+    return ALL_GROUPS if any(int(r[0])>=len(STOCK_GROUPS)for r in rows) else STOCK_GROUPS
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
@@ -677,7 +684,7 @@ def _self_doubles(rows, dist=0.9, dot=0.8, dz=1.5):
 
 
 
-def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
                 supported_decks_out=None, roads=()):
     """Return Forest-item rows for the stock Italy guardrail model.
 
@@ -1067,3 +1074,10 @@ def bridge_rows(parapets, frame=None):
                          float(back[0]), float(back[1]), float(back[2]),
                          float(up[0]), float(up[1]), float(up[2])])
     return rows
+
+
+def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+                supported_decks_out=None, roads=()):
+    rows=_mapped_forest_rows(frame,infra_fn,exact,elev,decks,parapets,bridge_rails,supported_decks_out,roads)
+    if not euguardrails.enabled():return rows
+    return euguardrails.extend(frame,roads,exact,elev,rows,decks)

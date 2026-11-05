@@ -368,6 +368,9 @@ def tile(rows, box, draw_pavement, country=None, left_hand=False, rings=(), no_d
                             chunks.append(roads._chunk(roads.EDGE_DECAL, roads.EDGE_DECAL["w"], ch))
         if not all(sp.cls in edge_classes for sp in specs):
             continue
+        import franceroads
+        if any(franceroads.enabled(sp) and franceroads.edge_pattern(sp) is None for sp in specs):
+            continue
         # the curved edge line: inset like each road's straight one (roads.extras), its ends on them exactly
         inset = [_edge_inset(sp) for sp in specs]
         line = arc.copy()
@@ -381,10 +384,16 @@ def tile(rows, box, draw_pavement, country=None, left_hand=False, rings=(), no_d
             mats.append(st.left_edge if (st.left_edge and sp.oneway and side == travel_left) else "line_white")
         look = {"m": mats[0] if mats[0] == mats[1] else "line_white", "tl": roads.EDGE_LINE["tl"],
                 "p": roads.CENTRE["p"]}
-        for piece in roads.clip_polyline(line, x0, y0, x1, y1):
-            for ch in roads.split(roads.densify(piece)):
-                if len(ch) >= 2:
-                    chunks.append(roads._chunk(look, width, ch))
+        french = all(franceroads.enabled(sp) for sp in specs)
+        if french:
+            look["m"] = franceroads.PAINT_MATERIAL
+        pattern = franceroads.edge_pattern(specs[0]) if french else None
+        runs = markings.dashes(line, pattern) if pattern else [line]
+        for run in runs:
+            for piece in roads.clip_polyline(run, x0, y0, x1, y1):
+                for ch in roads.split(roads.densify(piece)):
+                    if len(ch) >= 2:
+                        chunks.append(roads._chunk(look, width, ch))
     return chunks, cuts
 
 
