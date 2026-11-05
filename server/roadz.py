@@ -1038,6 +1038,19 @@ class RoadZ:
                 out[key] = got
         return out
 
+    def _lidar_skipped(self, keys):
+        """Does this server run go without the lidar of one of these cells? Its decision for each (gap_answers, the cells
+        at once: the lidar built
+        within LIDAR_GAPS_WAIT_S, else the rule for the whole run, the same in every process), so a road tile never
+        waits for a cell's whole read: up to LIDAR_NODES_MAX nodes, ~50 MB a cell, ~1.5 GB of a 20 km drive through
+        Seattle, and its tiles waited 18 s on average, 86 s at most, on a slow connection (BNGE_NET_MBPS=1,
+        2026-11-04). The read goes on and is kept for the next run; a tile built without it is not cached."""
+        try:
+            return any(v is None for v in self.gap_answers(keys).values())
+        except Exception as e:
+            log.debug("roadz lidar decision %s: %s: %s", keys, type(e).__name__, e)
+            return False
+
     # ---- heights for a map road ----
     def _dem_raw(self, la, lo):
         d = getattr(self.md, "dem", None) if self.md is not None else None
@@ -1117,6 +1130,8 @@ class RoadZ:
         qdir = np.ascontiguousarray(d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None])
         for src in srcs:
             segs, segz, oks, cells = [], [], [], []
+            if src == "lidar" and self._lidar_skipped(keys):
+                return None                 # (this run goes without a cell's lidar: the inference, every process)
             for k in keys:
                 ln = self.lines(src, k)
                 if ln is None:
