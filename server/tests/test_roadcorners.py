@@ -82,7 +82,10 @@ class PavementCornerTest(unittest.TestCase):
     def test_corner_grading_holds_the_new_pavement_on_a_hillside(self):
         # a road with a narrow flat shoulder (grading.shoulder: a motorway's ramp terminal, an expressway) meets a
         # secondary: its 12 m corners' fans reach past the roads' graded ground
-        f = features([[(-100, 0), (0, 0), (100, 0)], [(0, -100), (0, 0), (0, 100)]], ["motorway", "secondary"])
+        # Keep this grading fixture's original 13 m carriageway explicit: lane defaults must not change the
+        # geometry whose corner blending is measured here.
+        f = features([[(-100, 0), (0, 0), (100, 0)], [(0, -100), (0, 0), (0, 100)]],
+                     ["motorway", "secondary"], widths=[(0, 13.0)])
         _, rows, corners = roadcorners.source([f], frame=FRAME)
         rows = [(fid, sp, np.c_[p[:, :2], np.full(len(p), 10.0)], lon) for fid, sp, p, lon in rows]
         plans = [(fid, grading.Plan(p[:, :2], p[:, 2], sp.width / 2 + grading.shoulder(sp), road_half=sp.width / 2))

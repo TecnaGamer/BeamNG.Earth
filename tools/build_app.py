@@ -171,7 +171,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}.",
            # server/data/ (billboardsource.PATH: the mapped billboards; missing from 1.8.0's exe, a warning per worker)
-           "--add-data", f"{os.path.join(server, 'data')}{SEP}data"]
+           "--add-data", f"{os.path.join(server, 'data')}{SEP}data",
+           "--add-data", f"{os.path.join(server, 'mile_markers_us.json')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}."]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork

@@ -94,9 +94,9 @@ class GraphTest(unittest.TestCase):
         sp2 = roads.road_specs(__import__("test_roads").features([[(0, 0), (300, 0)]], ["secondary"]))[0]
         self.assertEqual({round(e[7], 2) for e in flat_["edges"]}, {round(navgraph.driving_width(sp2) / 2, 2)})
 
-    def test_rural_motorway_two_lanes(self):
+    def test_motorway_defaults_two_lanes(self):
         import roads
-        for urban, n in ((False, 2), (True, 3)):
+        for urban, n in ((False, 2), (True, 2)):
             sp = roads.Spec(roads.carriageway("motorway", "paved", urban, None, True), "paved", urban, "motorway", True)
             self.assertEqual(navgraph._lanes(navgraph.driving_width(sp), True), (n, 0), urban)
         ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True)
@@ -172,7 +172,7 @@ class SignalsTest(unittest.TestCase):
         approaches = {("cJ", "n", 1): ("cN", True), ("cJ", "s", 0): ("cS", True), ("cJ", "w", 1): ("cW", True),
                       ("cJ", "e", 0): ("cE", True)}
         orig = furniture.junction_controls
-        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None: [(x, furniture.G_SIGNAL)
+        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None, **_kw: [(x, furniture.G_SIGNAL)
                                                                                           for x in a]
         try:
             rh = {ap[0]: ap for ap in navgraph._signals(arms, approaches, nodes)[0]["app"]}

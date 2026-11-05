@@ -15,6 +15,8 @@ sys.path.insert(0, str(ROOT / "server"))
 
 import exitsigns
 import signstates
+import milemarkers
+import medianbarriers
 from tools import build_app, package
 
 
@@ -56,12 +58,31 @@ class PackagedExitSignsTest(unittest.TestCase):
                     self.assertEqual(uvs.shape, (len(positions), 2))
                     self.assertTrue(np.isfinite(positions).all())
                     self.assertGreater(len(triangles), 0)
-                    self.assertTrue(np.any(indices == materials.index("bne_exit_letters")))
+                    # Both gore and advance panels now use compact guide lettering.
+                    self.assertTrue(np.any(indices == materials.index("bne_guide_letters")))
                 finally:
                     exitsigns.lettering.cache_clear()
 
 
 class PackagedMileMarkersTest(unittest.TestCase):
+    def test_frozen_inventory_and_corridors_load_without_source_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = frozen_data(tmp)
+            caches = (milemarkers.references, medianbarriers._data, medianbarriers.inventory,
+                      medianbarriers.direction_stations)
+            with mock.patch.object(milemarkers, 'DATA', bundle / 'mile_markers_us.json'), \
+                 mock.patch.object(medianbarriers, 'DATA', bundle / 'ky_interstate_medians.json'):
+                for cache in caches:
+                    cache.cache_clear()
+                try:
+                    refs, _ = milemarkers.references()
+                    self.assertGreater(len(refs), 3000)
+                    self.assertGreater(len(medianbarriers.inventory()[0]), 800)
+                    self.assertTrue(any(o['mile_marker']['mile'] == 46.2 for o in refs))
+                finally:
+                    for cache in caches:
+                        cache.cache_clear()
+
     def test_state_styles_and_client_assets_are_packaged(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundle = frozen_data(tmp)
@@ -74,7 +95,7 @@ class PackagedMileMarkersTest(unittest.TestCase):
                     signstates._polygons.cache_clear()
         client = set(package.tree_files('mod/beamng_earth'))
         scenery = 'levels/beamng_earth/art/shapes/beamngEarth/roadside/'
-        for name in ('exit.materials.json', 'merge.materials.json', 'sign_letters_o.data.png',
+        for name in ('exit.materials.json', 'merge.materials.json', 'median.materials.json', 'sign_letters_o.data.png',
                      'Roadgeek-LICENSE.txt'):
             self.assertIn(scenery + name, client)
         for name in ('exit.materials.json', 'merge.materials.json'):

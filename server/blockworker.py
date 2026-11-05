@@ -895,8 +895,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         low_parapet_decks.clear()
         guardrail_rows = []
     mark("guardrails")
+    import medianbarriers
+    barrier_mesh, barrier_chunks = medianbarriers.tile(_s.md, frame, tx, ty, elev, urban, _s.widths, left_hand)
+    guardrail_rows = medianbarriers.mapped_rows(guardrail_rows, barrier_chunks)
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
-                                                   tx, ty, deck_parts)
+                                                   tx, ty, deck_parts, barrier_chunks)
     wide = {}                           # (the wider cells' ways, both of these want the same)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
                                                      country, guardrail_rows, tx, ty, chunks, wide)
@@ -977,6 +980,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
+    P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     return P
 
 
@@ -999,7 +1003,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings)) + (P.fuel_pads,)
+                              custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
+                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -1011,7 +1016,7 @@ GEO_FRAMES_KEPT = 64        # geotile frames' grading views kept per process (_f
 GEO_INPUTS_KEPT = 96        # geotiles' skin inputs kept in memory per process (_skin_inputs)
 EXACT_TOL_COL_M = 0.03      # m a colliding part placed rigidly may be off before it gets its exact variant ...
 EXACT_TOL_M = 0.10          # ... and a render-only part
-GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail")     # parts the car hits ("bld*" too without a bldcol)
+GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail", "barrier")    # parts the car hits ("bld*" too without a bldcol)
 _geo_lock = threading.Lock()
 _geo_graders = {}           # (lat0, lon0) -> grading.Grader view of a geotile's frame
 _geo_inputs = {}            # geotile key -> its skin inputs (dict), the most recently used last
@@ -1099,7 +1104,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                                    custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
-                                   decals=False)
+                                   decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
+                                   barrier_chunks=getattr(P, "barrier_chunks", ()))
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)
@@ -1537,12 +1543,12 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         watch.cancel()
 
 
-def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, ty, decks=()):
+def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, ty, decks=(), custom=()):
     """The median barriers' Forest rows of a road tile (medians.tile_rows; none where the mapped rows have one; decks:
     the bridges' parts near it), [] if they fail (logged: the tile goes on without them)."""
     import medians
     try:
-        return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks)
+        return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks, custom)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []

@@ -2165,9 +2165,13 @@ class Server:
             # A failed mapped-data pass cannot establish that a bridge needs rails.
             low_parapet_decks.clear()
             guardrail_rows = []
+        import medianbarriers
+        barrier_mesh, barrier_chunks = medianbarriers.tile(
+            self.mapdata, anchor.frame, tx, ty, elev, urban, self.road_widths, self.left_hand(anchor))
+        guardrail_rows = medianbarriers.mapped_rows(guardrail_rows, barrier_chunks)
         guardrail_rows = guardrail_rows + blockworker._median_rows(
             anchor.frame, near_roads, box, elev, self.left_hand(anchor), self.country(anchor), guardrail_rows, tx, ty,
-            deck_parts)
+            deck_parts, barrier_chunks)
         wide = {}                       # (the wider cells' ways, both of these want the same)
         guardrail_rows = guardrail_rows + blockworker._motesfri_rows(
             anchor.frame, cell_fn, near_roads, box, elev, urban, self.road_widths, self.left_hand(anchor),
@@ -2242,7 +2246,8 @@ class Server:
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
-                                   custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings))
+                                   custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings),
+                                   barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their

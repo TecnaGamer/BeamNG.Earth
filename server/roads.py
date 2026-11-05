@@ -162,7 +162,8 @@ Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median l
 # _mountain_roads)
 # (sides: the sidewalk sides OpenStreetMap's sidewalk tag gives (_osm_sidewalks; walk_sides' +1 left / -1 right of the
 # geometry, () none), None where it has none: the class and land-cover rule, has_sidewalks; from mpsteppe's PR #292)
-# (lanes: OpenStreetMap's lane count, both directions on a two-way road, None unknown: osmtags.py; surf: the surface
+# (lanes: resolved count, both directions on a two-way road, including highway/ramp defaults; None unknown elsewhere.
+# osmtags.py / roadlanes.py retain the mapped evidence separately; surf: the surface
 # rule value's base token, e.g. "concrete": the look's concrete, roads.py look_of; link: a ramp / slip road, Overture's
 # subclass "link", its class the road's it leads to)
 # road_specs' result per feature (walk: the sidewalk width, measured from the buildings where known: roadwidth.py;
@@ -244,7 +245,7 @@ NEAR_M = 40.0                   # roads this far outside the tile still cut its 
 # rule, where Overture has one, is the carriageway already.
 PARKING_M = 2.3
 # Rural motorways: two lanes a direction (most rural Interstates and European motorways; every US Interstate was drawn
-# with three, GitHub #43) between paved shoulders, the edge line along each; urban ones keep STYLE's three lanes.
+# with three, GitHub #43) between paved shoulders, the edge line along each. Untagged urban highways also get two.
 # Overture has no lane counts.
 MOTORWAY_RURAL_M = 7.4
 SHOULDER_M = 2.2
@@ -695,12 +696,12 @@ def _structure_width(feats, i):
     rule_w = float(width) if width is not None and 1.0 <= float(width) <= 40.0 else None
     if rule_w is None:
         rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)
-    lanes = _osm(feats, "lanes", i, *OSM_LANES)
-    lanes = int(lanes) if lanes is not None else None
+    lanes = _lane_count(feats, i, cls, flow=False)
     kind = surface_kind(cls, _surface_value(feats, i))
     ow = _rule_value(rules.get("oneway"), i) is not None
-    if rule_w is None and _rule_value(rules.get("subclass"), i) == "link" and lanes is None:
-        rule_w = LINK_M[1] if ow else LINK_M[2]
+    import roadlanes
+    if rule_w is None and roadlanes.is_link(feats, i):
+        rule_w = _link_width(lanes or (1 if ow else 2))
     return carriageway(cls, kind, False, rule_w, ow, lanes)
 
 
@@ -1667,11 +1668,14 @@ def _regional_gravel(feats, i, cls, surf):
 
 def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
     """Paved / dirt width (m) of a road: the width rule if any, else the driving width (OpenStreetMap's lanes x the
-    class's LANE_W when known, else the class's) plus parking lanes (urban paved streets; one side on a one-way street)
+    class's LANE_W when known, two lanes for untagged highways, else the class's) plus parking lanes (urban paved
+    streets; one side on a one-way street)
     or edge strips (rural paved roads). One-way: ONEWAY_STYLE's driving width (motorways and trunks are per carriageway
     already). Pure."""
     if rule_width is not None:
         return rule_width
+    if lanes is None and cls in ("motorway", "trunk"):
+        lanes = 2
     w = STYLE.get(cls, STYLE["unknown"])[0]
     if oneway and cls in ONEWAY_STYLE:
         w = ONEWAY_STYLE[cls]
@@ -1692,6 +1696,42 @@ def carriageway(cls, kind, urban, rule_width=None, oneway=False, lanes=None):
     return w
 
 
+def _link_width(lanes):
+    """Existing ramp pavement widths, extended by a travel lane for larger counts."""
+    return LINK_M.get(lanes, LINK_M[2] + (lanes - 2) * LINK_LANE_M)
+
+
+def _lane_count(feats, i, cls, flow=True):
+    """A road's lane count: a correction (rampoverrides), OpenStreetMap's own count, PR #471's validated ones (a
+    geometry match, a gap between two agreeing ends: roadlanes.generated_counts), then (flow) the one-way roads joined
+    to it (lane_flow), else two lanes per motorway / trunk way, one on a one-way ramp (PR #471), None otherwise."""
+    import roadlanes
+    over = _lane_overrides(feats).get(i)
+    if over is not None:
+        return over
+    lanes = _osm(feats, "lanes", i, *OSM_LANES)
+    if lanes is not None:
+        return int(lanes)
+    lanes = roadlanes.generated_counts(feats)[i]
+    if lanes is None and flow:
+        lanes = lane_flow(feats)[i]
+    if lanes is None and not is_ring(feats, i):
+        if roadlanes.is_link(feats, i):
+            return 1 if _rule_value(feats.rules.get("oneway"), i) is not None else 2
+        if cls in roadlanes.HIGHWAYS:
+            return 2
+    return lanes
+
+
+def _lane_overrides(feats):
+    """{feature: lanes} of rampoverrides (PR #471), once per Features."""
+    d = feats.__dict__.get("_lane_overrides")
+    if d is None:
+        import rampoverrides
+        d = feats.__dict__["_lane_overrides"] = rampoverrides.lane_counts(feats)
+    return d
+
+
 def rural_motorway(spec):
     """One carriageway of a rural motorway: two lanes between shoulders (carriageway)."""
     return spec.cls == "motorway" and spec.oneway and not spec.urban and spec.kind in BUILT
@@ -1700,16 +1740,20 @@ def rural_motorway(spec):
 def edge_margin(spec):
     """m of a drawn carriageway beside its driving lanes on each side, parking aside: a rural road's edge strip or
     a rural motorway's shoulder (carriageway), 0 in towns."""
+    if spec.link and spec.kind in BUILT:
+        return motorway_shoulder(spec)
     if spec.urban or spec.kind not in BUILT or spec.cls == "service" or getattr(spec, "mountain", False):
         return 0.0
     return motorway_shoulder(spec) if rural_motorway(spec) else EDGE_STRIP_CLASS_M.get(spec.cls, EDGE_STRIP_M)
 
 
 def motorway_shoulder(spec):
-    """A rural motorway carriageway's shoulder: SHOULDER_M, or on a ramp (one lane, LINK_M) what one LINK_LANE_M lane
-    leaves (GitHub #107: a 6 m ramp's edge lines stood 1.6 m apart, inside the motorway's 2.2 m shoulders)."""
+    """A rural motorway carriageway's shoulder: SHOULDER_M (SHOULDER_WIDE_M on a wide one), or beside a ramp's mapped
+    number of LINK_LANE_M lanes what they leave (GitHub #107: a 6 m ramp's edge lines stood 1.6 m apart, inside the
+    motorway's 2.2 m shoulders; PR #471: a ramp's own lane count)."""
     cap = SHOULDER_WIDE_M if (spec.lanes or 0) >= SHOULDER_WIDE_LANES else SHOULDER_M     # (its carriageway's)
-    return float(np.clip((spec.width - LINK_LANE_M) / 2, EDGE_LINE["inset"], cap))
+    drive = (spec.lanes or 1) * LINK_LANE_M if spec.link else LINK_LANE_M
+    return float(np.clip((spec.width - drive) / 2, EDGE_LINE["inset"], cap))
 
 
 def _dir_kmh(feats, i, ncon, lengths=None):
@@ -1825,9 +1869,11 @@ def dual_carriageways(feats, specs, left_hand=False):
             if sp.oneway:               # the map's own one-way carriageway: its direction stands
                 out[i] = sp._replace(median=gap, width=_dual_width(sp, sp.width, gap, feats, i))
                 continue
-            if sp.lanes:                # OpenStreetMap counts this way's lanes as a two-way road (a divided road's
-                continue                # carriageways are one-way ways there): Portland's Rosa Parks Way, 1+1 lanes and
-                                        # a turn lane, was drawn as two one-ways of 3 lanes each (2026-10-27)
+            import roadlanes
+            # A mapped two-way count is evidence against dividing this road (Portland's Rosa Parks Way,
+            # 1+1 lanes and a turn lane). The highway fallback supplies no such evidence.
+            if roadlanes.generated_counts(feats)[i]:
+                continue
             d = (1 if best[1] > 0 else -1) * (-1 if left_hand else 1)
             w = sp.width if (not sp.parking or _rule_value(feats.rules.get("width"), i) is not None
                              or _osm(feats, "width", i, *OSM_WIDTH_M) is not None) else \
@@ -2448,16 +2494,16 @@ def _road_specs(feats, urban_fn, left_hand):
         rule_w = float(width) if width is not None and 1.0 <= float(width) <= 40.0 else None
         if rule_w is None:
             rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)      # OpenStreetMap's width (osmtags.py)
-        lanes = _osm(feats, "lanes", i, *OSM_LANES)
-        lanes = int(lanes) if lanes is not None else lane_flow(feats)[i]     # (through merges / splits: lane_flow)
+        lanes = _lane_count(feats, i, cls)     # (through merges / splits: lane_flow)
         surf = _surface_value(feats, i)
         kind = surface_kind(cls, surf)
         if _regional_gravel(feats, i, cls, surf):
             regional.add(len(out))          # (gravel unless the town test finds it urban, below)
         ow = _rule_value(rules.get("oneway"), i) is not None
-        link = _rule_value(rules.get("subclass"), i) == "link"
-        if rule_w is None and link and lanes is None:
-            rule_w = LINK_M[1] if ow else LINK_M[2]
+        import roadlanes
+        link = roadlanes.is_link(feats, i)
+        if rule_w is None and link:
+            rule_w = _link_width(lanes or (1 if ow else 2))
         dk = _dir_kmh(feats, i, ncon, lens)
         if dk[1] is None:                       # OpenStreetMap's speed limit where Overture has none
             ms = _osm(feats, "maxspeed", i, 5.0, 200.0)
@@ -2814,14 +2860,14 @@ def _bridge_specs(feats, want="bridge"):
         # each way, Kommunalny Bridge in Perm, GitHub #378 by RiDexSS; tunnels too)
         if rule_w is None:
             rule_w = _osm(feats, "width", i, *OSM_WIDTH_M)
-        lanes = _osm(feats, "lanes", i, *OSM_LANES)
-        lanes = int(lanes) if lanes is not None else lane_flow(feats)[i]     # (through merges / splits: lane_flow)
+        lanes = _lane_count(feats, i, cls)     # (through merges / splits: lane_flow)
         surf = _surface_value(feats, i)
         kind = surface_kind(cls, surf)
         ow = _rule_value(rules.get("oneway"), i) is not None
-        link = _rule_value(rules.get("subclass"), i) == "link"
-        if rule_w is None and link and lanes is None:
-            rule_w = LINK_M[1] if ow else LINK_M[2]
+        import roadlanes
+        link = roadlanes.is_link(feats, i)
+        if rule_w is None and link:
+            rule_w = _link_width(lanes or (1 if ow else 2))
         ov = _rule_value(rules.get("oneway"), i)
         out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes), kind, False, cls, ow, lanes=lanes,
                         surf=surface_token(surf), link=link, dir=(-1 if float(ov) < 0 else 1) if ov is not None else 0))
@@ -4698,6 +4744,8 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     drive, lanes = lane_layout(spec)
     # (tapered: the lanes' lines spread with the driving width)
     scale = 1.0 if ws is None else np.maximum(drive + (wv - w), 0.5) / max(drive, 0.5)
+    if not spec.oneway and spec.lanes and lanes >= 3 and lanes % 2:
+        osm = {**(osm or {}), "lanes": lanes}    # keep odd mapped totals in the paint as well as the AI
     plan = markings.lane_plan(osm, not spec.oneway, drive, lanes, left_hand) \
         if kind == "paved" and (cls in CENTRE_CLASSES or cls in LANE_CLASSES) else None
     if plan is not None and not spec.oneway and w - (2 * PARKING_M if parked else 0.0) < st.min_centre_m:
@@ -5247,10 +5295,10 @@ def lane_tags(feats, i):
     import railtags
     out = {}
     for k in railtags.LANE_COLUMNS:
-        if k == "junction":
-            continue                            # (a ring's tag, not lane data: roads._rings reads it)
+        if k in ("junction", "lanes"):
+            continue                            # (read by roads._rings / roadlanes.generated_counts)
         col = feats.attrs.get(railtags.lane_attr(k))
-        if col is not None and col[i] is not None:
+        if col is not None and col[i] not in (None, ""):
             out[k] = col[i]
     return out or None
 
@@ -9399,7 +9447,8 @@ def shape_files(aid, tx, ty):
            "walk": f"walks_{aid}_{tx}_{ty}.cdae", "walkcol": f"walkcol_{aid}_{tx}_{ty}.cdae",
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
-           "rail": f"rail_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae"}
+           "rail": f"rail_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae",
+           "barrier": f"barrier_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -9471,7 +9520,7 @@ def sound_boxes(chunks):
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
-               bld_none=False):
+               bld_none=False, barrier_mesh=None, barrier_chunks=()):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -9544,6 +9593,13 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             b.write_collision(os.path.join(out_dir, shape))
             data["walkcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     boxes = collider_boxes(walks if data.get("walk") else None, chunks if data.get("deck") else None)
+    if barrier_mesh is not None:
+        import medianbarriers
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        shape = shape_files(aid, tx, ty)["barrier"]
+        roadmesh.write(os.path.join(out_dir, shape), barrier_mesh)
+        data["barrier"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        boxes["barrier"] = medianbarriers.collider_boxes(barrier_chunks)
     if "walk" in boxes and data.get("walkcol"):
         boxes["walkcol"] = boxes["walk"]
     if bld is None and bld_none:
