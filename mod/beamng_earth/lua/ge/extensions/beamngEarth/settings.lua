@@ -90,6 +90,7 @@ M.SCHEMA = {
   -- the 3D models of landmarks from the open library 3dmr.eu (server threedmr.py; cpupin.player_settings reads it from
   -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
   models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
+  directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -135,7 +136,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
@@ -479,6 +480,10 @@ M.APPLY = {
   highwaySigns = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end
+  end,
+  directionSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setDirectionSigns then core.setDirectionSigns(v) end
   end,
   roads = function(v)
     local core = ext('beamngEarth_core')
@@ -842,13 +847,13 @@ end
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else
 -- { results = {{name, detail, kind, lat, lon}...}, error }). Biased toward the player.
 local geocodeId = 0
-function M.uiGeocode(q)
+function M.uiGeocode(q, full)
   local core = ext('beamngEarth_core')
   if not core or not core.requestGeocode then return { error = 'BeamNG.Earth is not loaded' } end
   local st = core._state and core._state() or nil
   local pl = st and st.player
   geocodeId = geocodeId + 1
-  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon) then
+  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon, full) then
     return { error = 'Companion server not connected' }
   end
   return { id = geocodeId }

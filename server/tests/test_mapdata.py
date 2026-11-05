@@ -584,7 +584,8 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(r.attrs["subclass"][2], "sidewalk")
         self.assertEqual(r.attrs["name"][0], "Street 0")
         self.assertEqual(r.attrs["src_record"][0], "w1@1")
-        self.assertEqual(r.attrs["src_record"][1], "w2@5", "the road's own way, not the route relation listed first")
+        self.assertEqual(r.attrs["src_record"][1], "w3@1",
+                         "the road's own way (the one covering most of it), not the route relation listed first")
         self.assertEqual(r.own.tolist(), [True] * 5 + [False])               # seg-edge is the east cell's
         self.assertEqual(r.rules["surface"].for_feature(1), [("paved", 0.0, 0.5), ("gravel", 0.5, 1.0)])
         self.assertEqual(r.rules["flags"].for_feature(0), [("is_bridge", 0.25, 0.5), ("is_link", 0.25, 0.5)])
@@ -597,6 +598,10 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(len(speed.for_feature(0)), 1)
         self.assertAlmostEqual(speed.for_feature(1)[0][0], 50.0)
         self.assertEqual([v for v, a, b in r.rules["connectors"].for_feature(0)], ["con-a", "con-b"])
+        # each segment's OpenStreetMap way, past a numbered road's relation; of several the one covering most of it
+        self.assertEqual(r.attrs["src_record"].tolist()[:5], ["w1@1", "w3@1", "w1@1", "w4@1", "r67531@98"])
+        self.assertEqual(r.rules["src_ways"].for_feature(1), [("w2@1", 0.0, 0.25), ("w3@1", 0.25, 1.0)])
+        self.assertEqual(r.rules["src_ways"].for_feature(3), [], "one way: src_record says it all")
         # geometry: lon/lat and local metres (north-south line ~0.6 of the cell long)
         line = r.parts(0, r.en)[0][0]
         self.assertAlmostEqual(abs(line[1, 1] - line[0, 1]), 0.6 * mf.CELL.size_m()[1], delta=15)
@@ -1018,8 +1023,8 @@ class ProvenanceTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(tr["attribution"], "© OpenStreetMap contributors, Overture Maps Foundation")
         self.assertEqual(tr["release"], mf.RELEASE)
         self.assertIn("Open Database License", tr["licence"])
-        # sources counted: seg-01 lists its route relation as a second OpenStreetMap source (GitHub #683)
-        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 9}])
+        # sources counted: seg-01, seg-03 and seg-04 list their route relation as another OpenStreetMap source (GitHub #683)
+        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 11}])
         bl = next(p for p in cd.provenance if p["id"] == "overture:buildings")
         self.assertIn({"dataset": "Microsoft ML Buildings", "license": "ODbL-1.0", "features": 1}, bl["datasets"])
         wc = next(p for p in cd.provenance if p["id"] == "esa-worldcover")

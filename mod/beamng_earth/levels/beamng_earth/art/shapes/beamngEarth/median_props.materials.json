@@ -42,5 +42,49 @@
       {},
       {}
     ]
+  },
+  "bne_post_white": {
+    "name": "bne_post_white",
+    "mapTo": "bne_post_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8c65066b-23f9-5197-b6ad-04ee58f5971c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.86,
+          0.87,
+          0.85,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_post_black": {
+    "name": "bne_post_black",
+    "mapTo": "bne_post_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2614cc19-0d6c-5b84-87a0-b7ae73135aed",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.02,
+          0.02,
+          0.02,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }

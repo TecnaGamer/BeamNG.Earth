@@ -313,6 +313,17 @@ class ProcessCleanup(unittest.TestCase):
                                                      os.path.join(d, "output.log")), mock.sentinel.child)
                 self.assertTrue(handles[0].closed)
 
+    def test_read_only_launcher_folder_runs_in_the_log_folder(self):
+        # (tie_to_app too: on Windows it hands the mocked process's handle to the job object API, and the test run
+        # stopped there on the CI's Windows runner, 2026-11-05)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bmplaunch.os, "access", return_value=False), \
+                mock.patch.object(bmplaunch, "tie_to_app"), \
+                mock.patch.object(bmplaunch.subprocess, "Popen") as popen:
+            log = os.path.join(d, "logs", "output.log")
+            bmplaunch.start(os.path.join("/usr/bin", bmplaunch.EXE), d, log)
+        self.assertEqual(popen.call_args.kwargs["cwd"], os.path.dirname(log))
+
     def test_forced_stop_reaps_owned_child(self):
         child = mock.Mock()
         child.poll.return_value = None

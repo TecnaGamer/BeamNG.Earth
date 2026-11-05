@@ -48,7 +48,7 @@ log = logging.getLogger("earthd.mapdata")
 # The pinned Overture release (update path: docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest`
 # prints the newest one). Overture removes old releases from the buckets after some months: a
 # pinned release that is gone raises ReleaseGone for cells not cached yet.
-RELEASE = "2026-09-23.1"
+RELEASE = "2026-10-21.0"
 STAC_ROOT = "https://stac.overturemaps.org"
 # DuckDB worker threads per query (the server is niced; the game comes first). 1: the server runs many queries side by
 # side on its few cores, where a query's second thread only cost CPU: a fresh place's 60 road cells on one core 7.0 ->
@@ -177,6 +177,11 @@ LAYERS = {
                       text=("subtype", "class", "country", "region", "name")
                            + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
                       float=("population",)),
+    # ... and the countries' borders as lines (placenames.pick: a town across one is not the place, Windsor ON read
+    # "Detroit, Michigan"; Discord 2026-11-04), clipped to the cell by placenames
+    "division_boundaries": dict(theme="divisions", type="division_boundary", clip=False,
+                                cols=f"subtype, class, {_SRC}", where="subtype = 'country'",
+                                text=("subtype", "class", "src_dataset", "src_record")),
     "division_areas": dict(theme="divisions", type="division_area", clip=False, geometry=False,
                            cols=f"subtype, country, region, division_id, {_NAME}, "
                                 + ", ".join(f"names.common['{lang}'] AS name_{lang}" for lang in DIVISION_LANGS)
@@ -185,6 +190,18 @@ LAYERS = {
                            text=("subtype", "country", "region", "division_id", "name")
                                 + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
                            float=("x0", "y0", "x1", "y1")),
+    # the route numbers of the roads (direction signs, dirsigns.py): transportation/segment's `routes` (a road's route
+    # memberships: national / regional numbers, the European E-roads) flattened to one text column "network|ref|from|to;..."
+    # (from, to: the share of the segment a membership covers). Its own layer, joined to `roads` by id, so the roads
+    # layer (and every player's cached roads) is untouched. `where`: only the segments of the roads a sign names.
+    "road_routes": dict(theme="transportation", type="segment", clip=False,
+                        cols="subtype, class, array_to_string(list_transform(list_filter(routes, r -> r.ref IS NOT NULL), "
+                             "r -> lower(coalesce(r.network, '')) || '|' || r.ref || '|' || "
+                             "CAST(coalesce(r.\"between\"[1], 0.0) AS VARCHAR) || '|' || "
+                             "CAST(coalesce(r.\"between\"[2], 1.0) AS VARCHAR)), ';') AS routes_txt",
+                        text=("subtype", "class", "routes_txt"),
+                        where="subtype = 'road' AND class IN ('motorway', 'trunk', 'primary', 'secondary', 'tertiary') "
+                              "AND routes_txt <> ''"),
 }
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
@@ -787,6 +804,36 @@ class Reader:
             ORDER BY fi, k""").fetchall()
         feats.rules["connectors"] = mg.rule_table(
             [(int(fmap[fi]), cid, [a, a]) for fi, cid, a in rows if keep[fi]], "text")
+        rows = con.execute("""SELECT fi, unnest(sources) AS s, generate_subscripts(sources, 1) AS k FROM t
+            ORDER BY fi, k""").fetchall()
+        by_feature = {}
+        for fi, s, _k in rows:
+            if keep[fi]:
+                by_feature.setdefault(int(fmap[fi]), []).append(s)
+        record, multi = list(feats.attrs["src_record"].tolist()), []
+        for f in sorted(by_feature):
+            ways = way_sources(by_feature[f])
+            if ways:
+                record[f] = max(ways, key=lambda w: _span(w[1]))[0]     # (the first of equals)
+            if len(ways) > 1:
+                multi += [(f, r, b) for r, b in ways]
+        feats.attrs["src_record"] = mg.text_column(record)
+        feats.rules["src_ways"] = mg.rule_table(multi, "text")
+
+
+def _span(between):
+    return 1.0 if not between else float(between[1]) - float(between[0])
+
+
+def way_sources(sources):
+    """[(record, between)] of the OpenStreetMap ways a road segment was made from, along it. A segment on a numbered
+    road lists the route's relation first (property "/routes", record "r67531@98": 130 of 155 main-road segments around
+    Sweden's väg 41, 351 of 1800 in Stockholm, 1820 of 3640 in Newark, Overture 2026-09-23.1, read 2026-11-01), and
+    Overture merges the ways between two junctions into one segment, each with its "between" (a fifth of main-road
+    segments have 2-14), so sources[1] alone is often no way at all. A relation's source carries a property: only the
+    feature's own (no property) count."""
+    return [(s["record_id"], s.get("between")) for s in sources or ()
+            if str(s.get("record_id") or "").startswith("w") and not s.get("property")]
 
 
 def empty(layer):
@@ -809,6 +856,7 @@ def empty(layer):
         f.rules["max_speed_kmh"] = mg.rule_table([], "float")
         f.rules["connectors"] = mg.rule_table([], "text")
         f.rules["oneway"] = mg.rule_table([], "float")
+        f.rules["src_ways"] = mg.rule_table([], "text")
     return f
 
 

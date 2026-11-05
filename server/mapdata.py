@@ -78,6 +78,8 @@ LAYER_THREADS = 12              # layers built at once, every cell and caller of
 OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at once (alongside their Overture roads)
 OSM_FUEL = os.environ.get("BNGE_OSM_FUEL", "1") != "0"     # OpenStreetMap's fuel stations per cell (osmfuel.py; the
                                 # user, 2026-10-28: "lets test OSM if it is too laggy we will revert")
+OSM_POI_VERSION = 2             # the cells' rows: 2 = fuel and charging stations, with their amenity (EV chargers,
+                                # 2026-10-29); a new version is a new folder, and part of versions()
 # (cell, layer)s built ahead at once by warm() (a fresh place's first road tile asked for ~70 of them one after another:
 # 56 s in Marseille, GitHub #241): half the CPUs, at most 8, and none on 8 or fewer: each is a DuckDB query and a
 # decode of its own, and on a Steam Deck (4 cores, 8 threads) the work done ahead kept the CPUs from the road tiles
@@ -96,16 +98,22 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # (osmtags osm_highway, construction/proposed roads left out, GitHub #184: only cells fetched after it; the cached
 # ones get it with the next Overture release bump, not a roads 7 here: every player's roads fetched again)
 # roads 7: a way without lanes takes the same-named way's (osmtags.join); one-way ends at their own lane (oneway_joins)
-# (a segment's own way, not the route relation Overture lists before it, overture._SRC_OWN, GitHub #683: only cells
-# fetched after it; the cached ones get it with the next Overture release bump, as #184 above)
-LAYER_VERSIONS = {"roads": 7}
+# (roads 7 kept for GitHub #683, a segment's own way, not the route relation Overture lists before it,
+# overture._SRC_OWN: only cells fetched after it; the cached ones get it with the next Overture release bump, as #184)
+# roads 8: a segment's src_record is its OpenStreetMap way, the one covering most of it, also on numbered roads (the
+# route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
+# the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
+# (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
+LAYER_VERSIONS = {"roads": 8}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
-VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places")
+VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
+                 "road_routes")
 RASTER_LAYERS = ("landcover", "canopy")
-OPTIONAL_LAYERS = ("building_parts", "places")   # built only when asked for by name (buildings.py, gasstations.py)
+OPTIONAL_LAYERS = ("building_parts", "places", "road_routes")   # built only when asked for by name (buildings.py,
+                                                                    # gasstations.py, dirsigns.py)
 LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LAYERS
 ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
@@ -323,7 +331,7 @@ class MapData:
                 "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
                 "lanes": lanes.known() if lanes is not None else None,
                 "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
-                "osmfuel": OSM_FUEL}
+                "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
 
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.
@@ -431,7 +439,8 @@ class MapData:
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
-                feats = self._osm(feats, osm.result())
+                feats = self._osm(feats, osm.result(),
+                                  lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need))
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -484,7 +493,7 @@ class MapData:
             return {}, []
 
     def osm_fuel_path(self, key):
-        return os.path.join(self.raw_dir, "osmfuel_cells", f"{_key(key)}.json")
+        return os.path.join(self.raw_dir, "osmfuel_cells", f"v{OSM_POI_VERSION}", f"{_key(key)}.json")
 
     def osm_fuel_cached(self, key):
         """The cell's OpenStreetMap fuel stations (osmfuel.OsmFuel.cell rows) as fetched by osm_fuel_fetch, or None when
@@ -538,7 +547,7 @@ class MapData:
         self.osmfuel.warm(kind)
 
     @staticmethod
-    def _osm(feats, got):
+    def _osm(feats, got, geometry=None):
         """The roads with the cell's OpenStreetMap tags joined in and its raceways appended (Overture has none,
         GitHub #143)."""
         import mapgeom
@@ -546,7 +555,7 @@ class MapData:
         tags, ways = got
         if ways:
             feats = mapgeom.concat(feats, osmtags.raceway_features(ways))
-        osmtags.join(feats, tags)
+        osmtags.join(feats, tags, geometry)
         import oneway_joins
         oneway_joins.apply(feats)
         return feats

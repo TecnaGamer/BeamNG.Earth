@@ -198,6 +198,7 @@ T.check(tb and tb.lastImport.sq == SQ and tb.pos.x == -1024 and tb.pos.y == -102
 frames(3)
 T.check(#received('hello') == 1 and received('hello')[1].protocol == 4 and received('hello')[1].format == 4,
   'hello (protocol 4, format 4: the newest the mod reads) sent on connect')
+T.check(received('hello')[1].turbineGeo == 1, 'far turbine geotile capability sent on connect')
 T.check(calls.safeTeleport == 1, 'player placed on flat ground')
 
 -- capture the mod's warnings (the stub log() drops everything)

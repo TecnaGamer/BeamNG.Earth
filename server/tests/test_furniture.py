@@ -308,6 +308,53 @@ class JunctionTest(unittest.TestCase):
         self.assertLess(rows[0][2], 100.0, "on the southern stem")
         self.assertGreater(rows[0][1], 100.0, "on its right for northbound drivers (east side)")
 
+    def test_sweden_has_give_way_where_a_street_meets_a_main_road(self):
+        rs = [self.arm("e", "primary", 1, 0), self.arm("w", "primary", -1, 0), self.arm("s", "residential", 0, -1)]
+        self.assertEqual([r[0] for r in furniture.junction_props(rs, (0, 0, 256, 256))], [furniture.G_STOP])
+        rows = furniture.junction_props(rs, (0, 0, 256, 256), country="SE")
+        self.assertEqual([(r[0], r[6]) for r in rows], [(furniture.G_B1, furniture.B1_TOP)])
+        self.assertLess(rows[0][2], 100.0, "on the side road")
+
+    def test_sweden_keeps_the_right_hand_rule_between_minor_roads(self):
+        t = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0), self.arm("s", "residential", 0, -1)]
+        self.assertEqual(furniture.junction_props(t, (0, 0, 256, 256), country="SE"), [])
+
+    def test_sweden_has_give_way_in_the_country_too(self):
+        rs = [self.arm("e", "primary", 1, 0), self.arm("w", "primary", -1, 0), self.arm("s", "residential", 0, -1)]
+        rs = [(fid, spec._replace(urban=False), pts, lon) for fid, spec, pts, lon in rs]
+        self.assertEqual(furniture.junction_props(rs, (0, 0, 256, 256)), [], "elsewhere: no signs in the country")
+        self.assertEqual([r[0] for r in furniture.junction_props(rs, (0, 0, 256, 256), country="SE")], [furniture.G_B1])
+
+    def test_sweden_a_lesser_main_road_gives_way_too(self):
+        arms = [self.arm(f, c, x, y) for f, c, x, y in (("e", "primary", 1, 0), ("w", "secondary", -1, 0), ("s", "tertiary", 0, -1))]
+        arms = [(fid, spec, np.array([x, y], float), pts[0]) for (fid, spec, pts, _), (x, y) in zip(arms, ((1, 0), (-1, 0), (0, -1)))]
+        got = furniture.junction_controls(arms, None, signals=np.zeros((0, 2)), country="SE")
+        self.assertEqual([(a[0], w) for a, w in got], [("s", furniture.G_YIELD)])
+
+    def test_b1_height_is_the_models(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import build_median_props as props
+        self.assertAlmostEqual(furniture.B1_TOP, props.B1_TOP, 2)
+        edge = props.b1_outline(8)
+        self.assertAlmostEqual(max(x for x, _ in edge) - min(x for x, _ in edge), props.B1_W, 3,
+                               "S1 is measured across the rounded corners")
+        self.assertAlmostEqual(max(z for _, z in edge) - min(z for _, z in edge), props.B1_TOP - props.B1_LOW, 3)
+        self.assertGreaterEqual(props.B1_LOW, 1.0)      # TSFS 2019:74 1 kap. 13 §: 1.0-2.0 m up
+        self.assertLessEqual(props.B1_LOW, 2.0)
+
+    def test_b1_face_is_on_the_sheet(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import build_median_props as props
+        from PIL import Image
+        sheet = np.asarray(Image.open(Path(props.OUT) / "bne_se_signs.png").convert("RGB")).astype(int)
+        px = lambda x, z: sheet[int(props.B1_CELL[1] - z * props.B1_PX), int(props.B1_CELL[0] + x * props.B1_PX)]  # noqa: E731
+        r, g, b = px(0.0, 0.05)
+        self.assertTrue(r > 200 and g > 170 and b < 60, "the middle is yellow")
+        for x, z in props.b1_outline(2):
+            r, g, b = px(x * 0.97, z * 0.97)
+            self.assertTrue(r > 200 and g < 110, "the edge is the border's red")
+        self.assertEqual(max(abs(z) for _, z in props.b1_outline(6)) * props.B1_PX // 1, 107.0, "405 px of 458 at 244")
+
 
 
 class SignAssetsTest(unittest.TestCase):

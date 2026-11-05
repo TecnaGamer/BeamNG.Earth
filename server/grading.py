@@ -502,7 +502,8 @@ def field_heights(frame, elev, xy, r, sigma):
     return (wts[:, None] * z).sum(axis=0)
 
 
-def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None):
+def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
+               rings=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -510,7 +511,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     road ending on a more smoothed one meets it at its height); obs(xy (m, 2), spec) -> measured heights (m,) of a
     part's samples (NaN where none) or None: they stand in for the DEM's (roadz.py, on coarse elevation: Grader._obs);
     decks: [(line (k, 2) in the frame, half width)] crossing over the roads, their ground read beside them
-    (deck_capped; not on coarse elevation). Pure given elev and obs."""
+    (deck_capped; not on coarse elevation); rings: per part, True for a mapped roundabout's ring (roads.is_ring: not
+    banked, RING_LEVEL_ON). Pure given elev and obs."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -616,7 +618,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             bank_after = bank_after[:0]
         bank_xy = np.concatenate([bank_before, xy, bank_after])
         out.append(_plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
-                         bank_ext=(len(bank_before), len(bank_after))))
+                         bank_ext=(len(bank_before), len(bank_after)),
+                         banked=not (RING_LEVEL_ON and rings is not None and rings[j])))
     if SHARP_ON and cuts:           # (cuts False: the profile alone, Grader._stronger_z)
         _add_cuts(frame, [p if p is not None and sp.kind in roadsmod.BUILT else None
                           for p, (_ll, sp) in zip(out, parts)], elev)
@@ -722,9 +725,10 @@ def profile_sigma(spec):
     return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M)) if not getattr(spec, "link", False) else SIGMA_M
 
 
-def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_xy=None, bank_ext=None):
+def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_xy=None, bank_ext=None, banked=True):
     """ext: (before, after), samples of z past the part's ends (plan_roads): smoothed with it, then dropped. step: m
-    between the samples. bank_xy: the matching extended geometry, trimmed after the curvature/runoff pass."""
+    between the samples. bank_xy: the matching extended geometry, trimmed after the curvature/runoff pass. banked
+    False: level across (a roundabout's ring)."""
     built = spec.kind in roadsmod.BUILT
     zs = smooth_profile(median_profile(z, step, MEDIAN_M if built else DIRT_MEDIAN_M), step,
                         profile_sigma(spec))[ext[0]:len(z) - ext[1]]
@@ -741,7 +745,7 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     plan.max_wall = wall_max_h(spec)
     plan.steep = bool(getattr(spec, "mountain", False))
     bext = ext if bank_ext is None else bank_ext
-    b = bank(xy if bank_xy is None else bank_xy, spec, abut, bext)
+    b = bank(xy if bank_xy is None else bank_xy, spec, abut, bext) if banked else None
     if b is not None:
         if bank_xy is not None:
             b = b[bext[0]:len(bank_xy) - bext[1]]
@@ -767,6 +771,10 @@ BANK_STENCIL_M = 100.0      # 200 m baseline
 BANK_RUNOFF_M = 100.0       # full 8 % transition at <= 0.08 / 100 m away from ends
 BANK_FADE_M = 100.0         # smoothstep to level at a bridge / loose end; no deck-height changes
 BANK_SIGMA_M = 12.0         # remove discrete box-window steps in cross slope, not road elevation
+# ... but not a mapped roundabout's ring (roads.is_ring): the Jüri roundabout of Tallinna ringtee (59.3535 N 24.8820 E,
+# trunk, about 190 m across) was banked 8 % into the ring as a trunk's curve; the real one falls 2.4-2.9 % outward (the
+# Estonian lidar). Rings are graded level across. BNE_RING_LEVEL=off: banked as before.
+RING_LEVEL_ON = os.environ.get("BNE_RING_LEVEL", "on") != "off"
 
 
 def bank(xy, spec, abut=(False, False), ext=(0, 0)):
@@ -1529,7 +1537,7 @@ class _Planner:
         plans = []
         if feats is not None and len(feats):
             specs = roadsmod.road_specs(feats, None, self.widths)
-            parts, ids, clipped = [], [], []
+            parts, ids, clipped, rings = [], [], [], []
             box = self._clip_box(key)
             keeps = []
             for i in range(len(feats)):
@@ -1547,6 +1555,7 @@ class _Planner:
                         parts.append((r, specs[i]))
                         ids.append(str(feats.ids[i]))
                         clipped.append(len(pieces) > 1 or r is not ring)
+                        rings.append(roadsmod.is_ring(feats, i))
             pspecs = []
             abut = None
             if (ABUT_FILL_ON or APPROACH_ON) and parts:
@@ -1569,7 +1578,7 @@ class _Planner:
             coarse = COARSE_EASE_ON and self._coarse(key)
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
-                                                                         decks=self._decks_near(key))):
+                                                                         decks=self._decks_near(key), rings=rings)):
                 if p is not None:
                     p.rid = road_id(fid)
                     plans.append((fid, p))
@@ -2236,6 +2245,8 @@ class _Planner:
                 if not fixed or (XS_ON and not rail and self._xsolve(b) is not None):
                     got[0] += self._end_raised(b[0])
                     got[1] += self._end_raised(b[-1])
+                if not rail:        # (or on its embankment's top, where its line ends down the slope: #684's fill)
+                    got = np.maximum(got, [self._end_filled(b, False), self._end_filled(b, True)])
                 ez[j] = got
             return got
         cands, decks, cand_xs, cand_cw = [], [], [], []
@@ -2716,8 +2727,11 @@ class _Planner:
             for b in range(a + 1, len(ends)):
                 na, ia, pa = ends[a]
                 nb, ib, pb = ends[b]
-                if na != nb and np.hypot(*(pa - pb)) <= _cw.TOUCH_M:
+                if na != nb and np.hypot(*(pa - pb)) <= _cw.COUPLE_M:
                     couplings.append((na, ia, nb, ib, "eq", 0.0))
+        # (an end meeting the inside of another chain: a slip road at its overpass road's node, solved with it)
+        joined = _cw.branch_ties([x[0] for x in samples], [x[3] for x in samples])
+        couplings += [(na, ia, nb, jb, "eq", 0.0) for na, ia, nb, jb in joined]
         cross = []
         boxes = [(x[0].min(0), x[0].max(0)) for x in samples]
         for na in range(len(chains)):
@@ -2767,6 +2781,13 @@ class _Planner:
             pa_ = chains[a_][0][int(samples[a_][2][i_])]
             pb_ = chains[b_][0][int(samples[b_][2][j_])]
             if pa_[4] is not None and pa_[4] == pb_[4]:
+                par[root(a_)] = root(b_)
+        for na, _ia, nb, _jb in joined:
+            par[root(na)] = root(nb)
+        # (the roads leaving a deck's end: its approaches rise with it. Solved first, on the ground, they pinned the deck to
+        # it, a 95 m span that must clear a road 7 m under it left 2 m over its own approaches)
+        for a_, i_, b_, j_, kind, _v in couplings:
+            if kind == "eq" and bool(samples[a_][3][i_]) != bool(samples[b_][3][j_]):
                 par[root(a_)] = root(b_)
         top = {}
         for n in range(len(chains)):
@@ -2973,6 +2994,28 @@ class _Planner:
             if a is not None:
                 best = max(best, float(a[-1] if at_end else a[0]))
         return best
+
+    def _end_filled(self, line, at_end):
+        """m: the ground at a bridge's first (at_end False) or last end as fill_abutment lays its approach there, read
+        straight on past the end (the approach roads' own plans are not made yet): its embankment's top where the
+        line ends down the slope, else the ground at the end. -inf when ABUT_FILL_ON is off."""
+        if not ABUT_FILL_ON:
+            return -np.inf
+        b = np.asarray(line, np.float64)[:, :2]
+        p, q = (b[-1], b[-2]) if at_end else (b[0], b[1])
+        u = p - q
+        n = float(np.hypot(*u))
+        if n < 1e-9:
+            return -np.inf
+        d = np.arange(0.0, ABUT_FAR_M + 1e-6, PROFILE_STEP)
+        pts = p[None] + d[:, None] * (u / n)[None]
+        la, lo, _ = self.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+        try:
+            z = np.asarray(self.elev(np.asarray(la), np.asarray(lo)), np.float64).reshape(-1)
+        except Exception as e:      # (ground past the end unread: the end's own estimate, as before)
+            log.debug("grading: fill past bridge end %s: %s: %s", np.round(p), type(e).__name__, e)
+            return -np.inf
+        return float(fill_abutment(z, False)[0])
 
     def _end_lift(self, xy):
         """(lift m, other road lines [(xy (k, 2), half width)], the roads leading onto it [(xy, half width)]) when the

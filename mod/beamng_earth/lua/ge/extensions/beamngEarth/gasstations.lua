@@ -11,7 +11,8 @@ local M = {}
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/shapes/buildings/main.materials.json',     -- m_gasstation_tyrannos
   '/levels/west_coast_usa/art/shapes/objects/main.materials.json',                          -- corrugation
-  '/levels/east_coast_usa/art/shapes/buildings/main.materials.json' }                       -- (US East's units)
+  '/levels/east_coast_usa/art/shapes/buildings/main.materials.json',                        -- (US East's units)
+  '/levels/italy/art/shapes/buildings/main.materials.json' }    -- (Europe's EV chargers: docs/research/2026-10-29-ev-chargers.md)
 M.CLEAR_S = 0.5            -- the POI list gathered again at most this often (s)
 M.ENERGY = { 'gasoline', 'diesel' }
 M.now = os.clock
@@ -290,8 +291,10 @@ function M.pois(levelIdentifier, elements)
       local r = st.rec
       elements[#elements + 1] = freeroam_gasStations.formatGasStationPoi({
         id = 'bne_fuel_' .. id, type = 'gasStation',
-        name = (r.name and r.name ~= '') and r.name or 'Gas station', description = r.brand or '',
-        energyTypes = M.ENERGY, pumps = st.pumps })
+        name = (r.name and r.name ~= '') and r.name or (r.energy and 'EV charger' or 'Gas station'),
+        description = r.brand or '',
+        -- (an EV charger's record says electricEnergy: the stock charge prompt and bolt icon, freeroam/gasStations.lua)
+        energyTypes = r.energy or M.ENERGY, pumps = st.pumps })
     end
   end
 end

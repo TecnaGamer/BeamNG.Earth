@@ -1,0 +1,145 @@
+{
+  "source": "Read-only local BeamNG.drive stock archives; exact member SHA-256 values recorded below.",
+  "method": "Transform geometry nodes through the visual-scene ancestors; triangulate indexed Colmesh faces; clip collision triangles at the listed z bands. Exact bounds below are independently covered by the outward-rounded placement boxes. STOP, giveway, polelamp have no Colmesh nodes: their fallback envelopes include all transformed visual geometry and agree with the previously captured native ObjectBoxes. No game runtime or profile is needed.",
+  "assets": {
+    "streetlight": {
+      "archive": "art_shapes.zip",
+      "member": "art/shapes/garage_and_dealership/Clutter/eca_lamppost.dae",
+      "sha256": "5c9078fa23a6da7c289271d2846c7f3e94e4c44a46c0a99b2560adf508bde863",
+      "envelopes": [
+        [
+          -0.20296735249999998,
+          -0.199793827,
+          -0.4198163868,
+          0.14344174750000002,
+          0.200205173,
+          7.124
+        ],
+        [
+          -0.20296735249999998,
+          -0.199793827,
+          7.124,
+          1.7747874474999998,
+          0.200205173,
+          8.2705817132
+        ]
+      ]
+    },
+    "signal": {
+      "archive": "art_shapes.zip",
+      "member": "art/shapes/objects/s_trafficlight_boom_sn.dae",
+      "sha256": "4b8995a577420ce275bace7934709db9060eeb33b5de3a229303dbb488513ed5",
+      "envelopes": [
+        [
+          -0.27684200000000025,
+          -0.32685289,
+          -0.396773019,
+          0.26247700000000007,
+          0.29589920999999997,
+          9.364492081
+        ]
+      ]
+    },
+    "pylon": {
+      "archive": "levels/automation_test_track.zip",
+      "member": "levels/automation_test_track/art/shapes/objects/pylon.dae",
+      "sha256": "c57f69381342d2534209e657d0929c240448455c49474786706effd9c8eab3f4",
+      "envelopes": [
+        [
+          -3.8927542883587627,
+          -4.151576317322729,
+          -5.872508468413258,
+          3.8927552883372454,
+          4.151580297716945,
+          29.817953175286107
+        ]
+      ]
+    },
+    "pole": {
+      "archive": "levels/automation_test_track.zip",
+      "member": "levels/automation_test_track/art/shapes/objects/s_powerpole_3wire.dae",
+      "sha256": "e4a51466961b08d8812afa8430b1a8d45f7f51ee7028ab4c8daf139973fb44f7",
+      "envelopes": [
+        [
+          -0.2598076,
+          -0.3,
+          -1.0,
+          0.2598076,
+          0.3,
+          7.772
+        ],
+        [
+          -0.9,
+          -0.3473914,
+          7.772,
+          0.9000001,
+          0.3,
+          8.0
+        ]
+      ]
+    },
+    "bench": {
+      "archive": "levels/east_coast_usa.zip",
+      "member": "levels/east_coast_usa/art/shapes/clutter/clutter_city_bench_wood.dae",
+      "sha256": "3b63ad40d4760b49f20924b1261a17340e5959ffcf38f2a1ea9a6ad74ff55fe7",
+      "envelopes": [
+        [
+          -1.0,
+          -0.3282277,
+          0.0,
+          1.0,
+          0.2048297,
+          0.85
+        ]
+      ]
+    },
+    "bin": {
+      "archive": "art_shapes.zip",
+      "member": "art/shapes/garage_and_dealership/Clutter/clutter_city_bin_round.dae",
+      "sha256": "cc2fc7b7489ad33cc545a2a84041b789ace1ed8424fed4715883473dd62ce222",
+      "envelopes": [
+        [
+          -0.2633545,
+          -0.2633545,
+          -0.002591848,
+          0.2633545,
+          0.2633545,
+          1.110433
+        ]
+      ]
+    },
+    "hydrant": {
+      "archive": "levels/west_coast_usa.zip",
+      "member": "levels/west_coast_usa/art/shapes/objects/hydrant1.dae",
+      "sha256": "3f6e7a2241531fe75be6747eebd1dd72919fe02e5710b83ded2f6a77f10406c5",
+      "envelopes": [
+        [
+          -0.3261302325937,
+          -0.376487006625,
+          -0.144248950136,
+          0.3263210674063,
+          0.376898993375,
+          1.3236048498639998
+        ]
+      ]
+    },
+    "stop": {
+      "archive": "levels/east_coast_usa.zip",
+      "member": "levels/east_coast_usa/art/shapes/signs_usa/sign_stop.dae",
+      "sha256": "45d15f2490420c1ee69ebd28c0d4b0971df589cd8c51e3380913e990a08f3ba7",
+      "envelopes": [[-0.45937063649516, -0.027403517556835, -0.986384550326, 0.43594464086886997, 0.028892032410114, 3.0030913672689996]]
+    },
+    "giveway": {
+      "archive": "art_shapes.zip",
+      "member": "art/shapes/garage_and_dealership/Clutter/italy_traf_sign_give_way.dae",
+      "sha256": "32579a18c3c6e80631e80112623eb8f57df679a632594ba79bbcabfb8c317c3c",
+      "envelopes": [[-0.3559757, -0.04135811, -0.07430672, 0.3560116, 0.03188133, 3.335757]]
+    },
+    "polelamp": {
+      "archive": "levels/east_coast_usa.zip",
+      "member": "levels/east_coast_usa/art/shapes/buildings/electrical_pole_lamp.dae",
+      "sha256": "9686c2793dcce2b73fbf5e8ea30563e28237c485cf062d605e1701929a087769",
+      "envelopes": [[-2.8903141851000003, -0.109110361, -0.3649445833, 0.038223104900000006, 0.109349739, 0.6984900167]]
+    }
+  }
+}

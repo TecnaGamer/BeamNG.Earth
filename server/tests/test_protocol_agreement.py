@@ -103,6 +103,8 @@ MOD_TO_SERVER = {
               "roadGeo": F(int, OPT),
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
+              # mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads
+              "turbineGeo": F(int, OPT),
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
               "globalFar": F(int, OPT),
               # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
@@ -149,12 +151,13 @@ MOD_TO_SERVER = {
     "gas_stations": {"on": F(bool)},
     # highway signs (signstream.py; additive): the settings page's switch, sent after every hello and when changed
     "highway_signs": {"on": F(bool)},
+    "direction_signs": {"on": F(bool)},
     # the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the
     # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px
     "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),
                  "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
-    "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT)},   # the map's search box
+    "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
     # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /
     # imagery / mapdata (world: not asked by the map yet)
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
@@ -194,7 +197,7 @@ SERVER_TO_MOD = {
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "share_info": {"code": F(str), "weight": F(NUM)},     # BeamMP sharing v2: our share code for the poses
     "share_out": {"to": F(str), "d": F(str)},             # ... a message for the plugin ("S") or a player
-    "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT), "text": F(str, OPT)},   # geocode.py (Photon)
+    "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT), "text": F(str, OPT)},   # geocode.py
     # covermap.py: w x h levels (base64, north row first) for the asked box, clipped to the world; gen changes with
     # the index; ready: false while the index is being built
     "cache_map_result": {"id": F(int), "z": F(int), "x0": F(int), "y0": F(int), "w": F(int), "h": F(int),
@@ -235,6 +238,7 @@ SERVER_TO_MOD = {
               "trafficVisuals": F(int, OPT),    # visual roads, independent of the AI graph's physics window
               "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
               "farGeo": F(int, OPT),            # far buildings / skyline / far bridges as geotiles (hello.farGeo)
+              "turbineGeo": F(int, OPT),        # mapped turbine geotiles (zoom 15; native stock shapes)
               "globalFar": F(int, OPT),         # far levels >= 3 as global tiles (hello.globalFar, --global-far)
               "deshadow": F(str, OPT),          # --deshadow lambert|full only (the settings page shows it)
               "colormatch": F(str, OPT),        # --colormatch s2 only (likewise)
@@ -294,7 +298,8 @@ SERVER_TO_MOD = {
     # data credits for the tiles around the player (credits.py; additive, protocol 4, --credits on)
     "credits": {"v": F(int), "near": F(str), "far": F(str), "ids": F(list), "farIds": F(list)},
     # the loading line's counts (Connection.send_progress, the mod's loadprogress.lua): [done, wanted] each
-    "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list)},
+    "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list),
+                      "net": F(list)},     # (the downloads in flight: loadprogress.downloadText)
     # road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks
     "roads_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
                    "data": F(dict, OPT),       # the file's JSON, so the game need not open it (staging.inline_json)
@@ -320,6 +325,9 @@ SERVER_TO_MOD = {
     "traffic_far_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
                          "frame": F(list), "pivot": F(NUM)},
     "traffic_far_drop": {"anchorId": F(int), "key": F(str)},
+    "turbines_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int),
+                      "data": F(dict, OPT), "frame": F(list), "pivot": F(NUM)},
+    "turbines_drop": {"anchorId": F(int), "key": F(str)},
     # far buildings (buildings.far_tile, --buildings on): a JSON file naming a render-only mesh
     # (a geotile, key "g17_x_y", hello.farGeo: frame [lat, lon] of its centre and pivot, m in that frame: the mod
     # places it and keeps it across rebases; the skyline's and far bridges' keys "g15_x_y")
@@ -362,6 +370,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "block_base",                                 # a lazy imagery source (test_detail)
                        "sea",                                        # --sea on: needs map data (test_seacarve)
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
+                       "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data

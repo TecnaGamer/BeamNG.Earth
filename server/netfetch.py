@@ -41,6 +41,7 @@ user name, e-mail, machine name, location or session id is ever sent.
 """
 import collections
 import ioprofiler
+import netstate
 import email.utils
 import http.client
 import json
@@ -81,6 +82,10 @@ DAY = 86400.0
 TOKEN_EPS = 1e-4                # a token short by rounding (clock resolution) counts as a token
 OFFLINE_TEXT = "Offline - using cached data"
 
+# testing a slow connection (a player's large downloads ran at ~1 MB/s each, 2026-11-04): every response takes at least
+# its size at this many MB/s, plus BNGE_NET_LATENCY_MS, while it holds its connection slot. Off without the variable.
+TEST_MBPS = float(os.environ.get("BNGE_NET_MBPS") or 0)
+TEST_LATENCY_S = float(os.environ.get("BNGE_NET_LATENCY_MS") or 0) / 1000.0
 NETLOG = os.environ.get("BNGE_NETLOG")      # debugging: every network request, one line each, from every process
 
 
@@ -213,6 +218,16 @@ POLICIES = {
     # debounced and cached; a modest rate, a daily cap (fair use of a free public service)
     "photon.komoot.io": HostPolicy(rate=2.0, burst=4.0, max_conc=1, daily_budget=2000, daily_hard=3000,
                                    cache_ttl=7 * DAY, miss_ttl=None, max_wait=5.0, timeout=12.0, max_attempts=1, optional=True),
+    # Nominatim (OpenStreetMap's own geocoder; geocode.py): streets and house numbers when the player presses Enter.
+    # Its usage policy: one request a second at most, no autocomplete, a User-Agent that names the app
+    "nominatim.openstreetmap.org": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
+                                              cache_ttl=7 * DAY, miss_ttl=None, max_wait=2.5, timeout=8.0,
+                                              max_attempts=1, optional=True),
+    # Wikidata and Wikipedia (geocode.py): landmarks as you type, debounced by the map; a modest rate and a User-Agent
+    # that names the app, as their API etiquette asks (the Wikipedias: WIKIPEDIA_LANGS below)
+    "www.wikidata.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                   cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0, max_attempts=1,
+                                   optional=True),
     # OSRM on OpenStreetMap by FOSSGIS (routing.py): one request per GPS destination or re-route; their fair use:
     # ~1 request a second at most, no bulk
     "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=2.0, max_conc=1, daily_budget=300, daily_hard=500,
@@ -253,6 +268,12 @@ POLICIES = {
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
     "build.protomaps.com": HostPolicy(denied=True, daily_hard=0),
 }
+# The Wikipedias the map's search asks (geocode.wiki_langs): by the player's country and the computer's language
+WIKIPEDIA_LANGS = ("en", "de", "fr", "it", "es", "pt", "nl", "pl", "cs", "sk", "sv", "no", "da", "fi", "hu", "ro", "el",
+                   "tr", "ru", "uk", "ja", "ko", "zh", "hr", "sl", "bg", "sr")
+POLICIES.update({f"{lang}.wikipedia.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                                     cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0,
+                                                     max_attempts=1, optional=True) for lang in WIKIPEDIA_LANGS})
 # Any other host: the conservative WMS-type row of §5.2 (2/s, 2 at once, no prefetch).
 # Regional orthophoto services (imagery_regional.py): tile caches at a modest shared rate, exports one at a time.
 # Optional: the global imagery stands in while one is down (Lower Saxony's WMS answered a maintenance page for hours,
@@ -309,13 +330,18 @@ ROLES = {
     "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
-    "photon.komoot.io": "the map's address search",
+    "photon.komoot.io": "the map's address search (the other search sources stand in)",
+    "nominatim.openstreetmap.org": "street and address search on Enter",
+    "www.wikidata.org": "landmarks in the map's search",
     "routing.openstreetmap.de": "GPS routes",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
     "api.github.com": "one-click updates",
     "github.com": "one-click updates",
 }
+
+
+ROLES.update({f"{lang}.wikipedia.org": "landmarks in the map's search" for lang in WIKIPEDIA_LANGS})
 
 
 def role_of(host):
@@ -1016,6 +1042,8 @@ class Fetcher:
                 try:
                     self._count(h, "requests")
                     t0 = self.clock()
+                    netstate.begin()        # (the loading line's "downloading" part, across the server's processes)
+                    body = None
                     try:
                         status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
                     except (http.client.HTTPException, OSError) as e:
@@ -1025,12 +1053,18 @@ class Fetcher:
                         err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
                         continue
                     elapsed = self.clock() - t0
+                    if TEST_MBPS > 0 or TEST_LATENCY_S > 0:       # (testing: a slow connection)
+                        want = TEST_LATENCY_S + (len(body or b"") / (TEST_MBPS * 1e6) if TEST_MBPS > 0 else 0.0)
+                        if want > elapsed:
+                            time.sleep(want - elapsed)
+                            elapsed = want
                     if body and len(body) >= RATE_MIN_BYTES and elapsed > 0:
                         with self._lock:
                             self._rates.append((t0 + elapsed, len(body) / elapsed / 1e6))
                     if NETLOG:
                         _netlog(url, hd, status, body)
                 finally:
+                    netstate.end(len(body) if body else 0)
                     sem.release()
                 res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
                 probe = False               # the breaker has its verdict

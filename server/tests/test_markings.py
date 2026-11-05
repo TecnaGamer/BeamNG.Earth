@@ -1,6 +1,7 @@
 """markings: country styles, real dashes and the lines lane by lane from OpenStreetMap's lane tags."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,7 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(markings.style("GB").lane_urban, (1.0, 5.0))
         self.assertEqual(markings.style(None, -100.0).centre, "line_yellow", "unknown: by longitude")
         self.assertEqual(markings.style(None, 10.0).centre, "line_white")
+        self.assertEqual(markings.style("SE").centre_rural, (3.0, 9.0))
 
 
 class DashTest(unittest.TestCase):
@@ -63,12 +65,118 @@ class LanePlanTest(unittest.TestCase):
         self.assertEqual(sorted(set(lk)), [("centre", -0.12), ("centre", 0.12)], "a double solid yellow line")
 
 
+class SwedenTest(unittest.TestCase):
+    LINE = np.array([[0.0, 0, 0], [118, 0, 0]])     # (no dash ends right at its end)
+
+    @staticmethod
+    def lines(ex, kind):
+        return [(round(float(w), 2), round(float(ln[0][1]), 2), round(float(np.hypot(*(ln[-1] - ln[0])[:2])), 1))
+                for lk, w, ln in ex if lk.get("kind") == kind]
+
+    def extras(self, width=9.0, cls="primary", urban=False, oneway=False, osm=None, kmh=None):
+        sp = roads.Spec(width, "paved", urban, cls, oneway)._replace(kmh=kmh)
+        return roads.extras(sp, self.LINE, 12.0, country="SE", osm=osm)
+
+    def test_a_rural_road_has_broken_edge_lines(self):
+        ex = self.extras()
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "edge")}, {(0.15, 1.0)}, "M2: 1 m dashes, 0.15 m")
+        self.assertEqual(len(self.lines(ex, "edge")), 2 * 40, "1 + 2 m both sides")
+        self.assertEqual({n for _, _, n in self.lines(ex, "centre")}, {3.0})
+        self.assertEqual(len(self.lines(ex, "centre")), 10, "M1: 3 + 9 m")
+
+    def test_a_town_road_is_1_to_1_and_narrower(self):
+        got = self.lines(self.extras(urban=True), "centre")
+        self.assertEqual({w for w, _, _ in got}, {0.10})
+        self.assertEqual(len(got), 20)
+
+    def test_a_motorway_edge_is_solid(self):
+        self.assertEqual({(w, n) for w, _, n in self.lines(self.extras(14.0, "motorway", oneway=True), "edge")},
+                         {(0.30, 118.0)})
+
+    def test_no_overtaking_is_a_double_line_or_a_warning_line_on_a_narrow_road(self):
+        osm = {"lanes:forward": "1", "lanes:backward": "1", "overtaking": "no"}
+        self.assertEqual(sorted(self.lines(self.extras(osm=osm), "centre")), [(0.15, -0.15, 118.0), (0.15, 0.15, 118.0)])
+        got = self.lines(self.extras(6.0, osm=osm), "centre")
+        self.assertEqual(({n for _, _, n in got}, len(got)), ({9.0}, 10), "M3: 9 + 3 m")
+
+    def test_a_2_plus_1_road_has_solid_lines_round_its_barrier(self):
+        osm = {"lanes": "3", "lanes:forward": "2", "lanes:backward": "1"}
+        ex = self.extras(11.0, osm=osm, kmh=100.0)
+        centre = self.lines(ex, "centre")
+        self.assertEqual({(w, n) for w, _, n in centre}, {(0.30, 118.0)}, "no centre line: the left edge lines")
+        self.assertAlmostEqual(abs(centre[0][1] - centre[1][1]), 2 * markings.BARRIER_LINE_M, 1)
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "edge")}, {(0.20, 118.0)})
+        self.assertEqual({n for _, _, n in self.lines(ex, "lane")}, {3.0})
+
+    def test_a_2_plus_1_segments_lines_follow_each_way(self):
+        class Feats:
+            attrs = {}
+            rules = {}
+        sp = roads.Spec(11.0, "paved", False, "primary", False)._replace(kmh=100.0, lanes=3)
+        a = {"lanes": "3", "lanes:forward": "2", "lanes:backward": "1"}
+        b = {"lanes": "3", "lanes:forward": "1", "lanes:backward": "2"}
+        parts = [(0.0, 0.5, "w1", a), (0.5, 1.0, "w2", b)]
+        with mock.patch.object(roads, "lane_tag_parts", return_value=parts), \
+                mock.patch.object(roads, "level_ranges", return_value=[]):
+            ex = roads.way_lines(roads.extras(sp, self.LINE, 12.0, country="SE", osm=a), Feats, 0, sp, self.LINE, 12.0,
+                                 False, "SE")
+        mids = {round(float(ln[0][1]), 1) for lk, _, ln in ex if lk.get("kind") == "centre"}
+        self.assertEqual(len(mids), 4, f"each way's two lines, on its own side of the middle: {mids}")
+
+
 class AiLanesTest(unittest.TestCase):
     def test_the_ai_drives_the_painted_lanes(self):
         import navgraph
         for sp in (roads.Spec(12.8, "paved", True, "tertiary", False), roads.Spec(13.2, "paved", False, "primary", False),
                    roads.Spec(11.0, "paved", False, "motorway", True, 2.5, 1)):
             self.assertAlmostEqual(navgraph.driving_width(sp), roads.lane_layout(sp)[0])
+
+
+class GiveWayLineTest(unittest.TestCase):
+    """M14, TSFS 2010:171 4 kap. 7 §: triangles 0.70 m high on a 0.50 m base, 0.50 m apart."""
+
+    def arm(self, width=8.0, oneway=False, wide=5.0):
+        spec = roads.Spec(width, "paved", True, "residential", oneway)
+        return ("a", spec, np.array([[0.0, 0.0, 3.0], [0.0, 60.0, 3.0]]), wide)    # the road runs north from the junction
+
+    def test_triangles_across_the_lanes_coming_in(self):
+        teeth, gone = markings.give_way_lines([self.arm()], [])
+        self.assertEqual(gone, set())
+        self.assertEqual(len(teeth), 4, "3.5 m of lane: four teeth at 1 m")
+        pts = np.concatenate(teeth)
+        self.assertTrue((pts[:, 0] < 0).all(), "traffic heading south keeps to the west half")
+        self.assertAlmostEqual(pts[:, 1].min(), 6.0, 3, "1 m back from the crossing road's edge")
+        self.assertAlmostEqual(pts[:, 1].max(), 6.7, 3, "0.70 m high")
+        self.assertAlmostEqual(np.ptp(teeth[0][:2, 0]), 0.5, 6, "on a 0.50 m base")
+        self.assertAlmostEqual(teeth[0][2, 1], 6.7, 3, "pointing at the drivers")
+        self.assertTrue(np.allclose(np.diff(sorted(t[:, 0].mean() for t in teeth)), 1.0), "0.50 m apart")
+        self.assertTrue((pts[:, 2] == 3.0).all())
+
+    def test_left_hand_and_one_way(self):
+        self.assertTrue((np.concatenate(markings.give_way_lines([self.arm()], [], True)[0])[:, 0] > 0).all())
+        self.assertEqual(len(markings.give_way_lines([self.arm(oneway=True)], [])[0]), 7, "the whole width")
+
+    def test_it_takes_the_place_of_a_stop_line_behind_a_crosswalk(self):
+        at = lambda y, w, **kw: {"a": np.array([-4.0, y, 3.0]), "b": np.array([4.0, y, 3.0]), "w": w, **kw}
+        teeth, gone = markings.give_way_lines([self.arm()], [at(9.0, 3.0), at(12.0, 0.45, stop=True)])
+        self.assertEqual(gone, {1})
+        self.assertGreaterEqual(np.concatenate(teeth)[:, 1].min(), 11.5)
+
+    def test_a_stub_has_no_line(self):
+        fid, spec, _, wide = self.arm()
+        self.assertEqual(markings.give_way_lines([(fid, spec, np.array([[0.0, 0.0, 0.0], [0.0, 6.0, 0.0]]), wide)], [])[0], [])
+
+
+class M20Test(unittest.TestCase):
+    def test_arrow_ends_at_its_tip_and_points_right_of_the_lane(self):
+        polys = markings.m20((10.0, 20.0), (0.0, 1.0))       # heading north
+        pts = np.concatenate(polys)
+        self.assertAlmostEqual(pts[:, 1].max(), 20.0, 6, "its tip is the most forward")
+        self.assertAlmostEqual(pts[:, 1].min(), 12.5, 6, "7.5 m long")
+        tail = pts[pts[:, 1] < 13.0]
+        tip = pts[np.argmax(pts[:, 1])]
+        self.assertLess(tail[:, 0].mean(), tip[0], "the tail on the left: it turns right")
+        self.assertAlmostEqual(np.ptp(tail[:, 0]), 0.30, 6, "0.30 m wide")
 
 
 if __name__ == "__main__":

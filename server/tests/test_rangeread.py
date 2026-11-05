@@ -105,5 +105,40 @@ class RangeIntegrityTest(unittest.TestCase):
         self.assertEqual(len(self.fetcher.calls), 1)
 
 
+
+class ParallelRunsTest(unittest.TestCase):
+    """A read of more than PAR_BLOCKS blocks of a file of known size goes out as PAR_BLOCKS-block requests at once
+    (a far host's single connection can be slow while the line is not); a failed one raises here, counted a fault
+    of this thread too."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(rangeread.clear_memory)
+        self.data = bytes(i % 251 for i in range(20 * 16))
+        self.fetcher = Fetcher(self.data)
+        self.remote = rangeread.RemoteFile("https://example.invalid/big", len(self.data), self.temp.name,
+                                          self.fetcher, block=16)
+
+    def test_split_and_whole(self):
+        got = self.remote.read(0, len(self.data))
+        self.assertEqual(got, self.data)
+        sizes = sorted(e - s for s, e in self.fetcher.calls)
+        self.assertEqual(sizes, sorted([8 * 16, 8 * 16, 4 * 16]), self.fetcher.calls)
+
+    def test_failure_raises_here_and_counts(self):
+        import revisit
+        real = self.fetcher.get
+
+        def get(url, *, kind, headers):
+            if headers["Range"].startswith("bytes=128-"):
+                raise netfetch.FetchFailed("broken", url, "example.invalid")
+            return real(url, kind=kind, headers=headers)
+        self.fetcher.get = get
+        before = revisit.thread_faults()
+        with self.assertRaises(netfetch.FetchFailed):
+            self.remote.read(0, len(self.data))
+        self.assertGreater(revisit.thread_faults(), before)
+
 if __name__ == "__main__":
     unittest.main()
