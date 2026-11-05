@@ -262,7 +262,8 @@ def _kerb_clear(pts, areas, blds, roads, service=()):
         if (gs._seg_dist(pts, line[:-1], line[1:]) < half + KERB_OFF_M - 0.05).any():
             return False
     for line in service:
-        if (gs._seg_dist(pts, line[:-1], line[1:]) < DRIVE_CLEAR_M).any() or                 (gs._seg_dist(areas, line[:-1], line[1:]) < STALL_M / 2 + DRIVE_HALF_M).any():
+        if ((gs._seg_dist(pts, line[:-1], line[1:]) < DRIVE_CLEAR_M).any() or
+                (gs._seg_dist(areas, line[:-1], line[1:]) < STALL_M / 2 + DRIVE_HALF_M).any()):
             return False
     return gs._clear(pts, blds, []) and gs._clear(areas, blds, [])
 
