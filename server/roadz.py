@@ -595,6 +595,34 @@ class RoadZ:
                         log.debug("roadz warm %s %s: %s", src, k, e)
         threading.Thread(target=run, name="roadz-warm", daemon=True).start()
 
+    def warm_ahead(self, keys):
+        """The cells ahead of the player (earthd download_ahead, every round): their sources' cells built on disk by
+        one background thread, nearest first; each call's list replaces the one not yet done (the player moved on).
+        On a cold visit the road tiles waited for the bridges' lidar (gap_answers) and, past LIDAR_GAPS_WAIT_S, went
+        without it (2026-11-05): fetched ahead, it is on disk when they ask. Returns at once."""
+        if not self.enabled or self.fetcher is None or not keys:
+            return
+        with self._lock:
+            self._ahead = [mapcells.CellKey(int(k[0]), int(k[1]), int(k[2])) for k in keys]
+            if getattr(self, "_ahead_thread", None) is not None and self._ahead_thread.is_alive():
+                return
+
+            def run():
+                while True:
+                    with self._lock:
+                        if not self._ahead:
+                            self._ahead_thread = None
+                            return
+                        k = self._ahead.pop(0)
+                    la, lo = k.center()
+                    for src in sources_at(la, lo, self.lidar):
+                        try:
+                            self.lines(src, k)
+                        except Exception as e:      # (the road processes ask again)
+                            log.debug("roadz ahead %s %s: %s", src, k, e)
+            self._ahead_thread = threading.Thread(target=run, name="roadz-ahead", daemon=True)
+            self._ahead_thread.start()
+
     def _get_json(self, url, headers=None, lane=None):
         return json.loads(self._fetch(url, headers, lane).decode("utf-8"))
 

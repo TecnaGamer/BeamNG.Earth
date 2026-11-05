@@ -454,3 +454,33 @@ class SlowGapsTest(unittest.TestCase):
         self.assertEqual(list(second.values()), [None])
         self.assertGreaterEqual(t1 - t0, 0.55)
         self.assertLess(t2 - t1, 0.4, "the second cell waited the full time again")
+
+
+class WarmAheadTest(unittest.TestCase):
+    """warm_ahead: one background thread builds the cells ahead nearest first; a new list replaces the rest."""
+
+    def test_one_thread_latest_list(self):
+        import tempfile
+        import threading
+        import time
+        from unittest import mock
+        seen, gate = [], threading.Event()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(roadz, "sources_at", lambda la, lo, lidar=None: ["lidar"]):
+            rz = roadz.RoadZ(d, object())
+            rz.enabled = True
+
+            def lines(src, key):
+                seen.append((key.x, threading.current_thread().name))
+                gate.wait(2)
+            rz.lines = lines
+            rz.warm_ahead([(14, 1, 0), (14, 2, 0), (14, 3, 0)])
+            time.sleep(0.2)
+            rz.warm_ahead([(14, 7, 0), (14, 8, 0)])     # (the player moved on: 2 and 3 not done any more)
+            gate.set()
+            for _ in range(50):
+                if len(seen) >= 3 and rz._ahead_thread is None:
+                    break
+                time.sleep(0.05)
+        self.assertEqual([x for x, _ in seen], [1, 7, 8])
+        self.assertEqual({n for _, n in seen}, {"roadz-ahead"})
