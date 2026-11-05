@@ -857,6 +857,20 @@ def steam_launch_options(roots=None):
     return "" if seen else None
 
 
+def steam_user_path(line):
+    """The version folder of a -userpath in Steam's launch options line (quoted or not), or None: -userpath names the
+    folder the game puts its version folder in ("current"; a folder without one as it is)."""
+    import re
+    m = re.search(r'(?:^|\s)-userpath\s+(?:"([^"]+)"|(\S+))', line or "")
+    if not m:
+        return None
+    p = apppaths.clean(m.group(1) or m.group(2))
+    if not p or not os.path.isdir(p):
+        return None
+    cur = os.path.join(p, "current")
+    return cur if os.path.isdir(cur) else p
+
+
 def split_launch_options(line):
     """(env, wrapper, options) of Steam's launch options line: NAME=VALUE tokens before %command% are variables for
     the game's environment, other tokens before it are a command that wraps it (gamemoderun, mangohud), the tokens
@@ -1683,6 +1697,14 @@ def run(args):
     else:
         user_dir = user_folder()
     tool = steam_compat_tool() if not IS_WIN and not args.user_dir else None
+    if not args.user_dir and build != "proton":
+        # the player's own -userpath in Steam's launch options: the game uses that folder whatever we pass, so the
+        # mod and the world's files go there too (GitHub #770; Discord 2026-11-05: "the fix was removing the custom
+        # launch option from steam")
+        own = steam_user_path(steam_launch_options())
+        if own and not apppaths.same_dir(own, user_dir):
+            row("Game folder", f"{own}  (your Steam launch options' -userpath)")
+            user_dir = own
     steam_args = ({}, [], [])
     if not IS_WIN:
         line = steam_launch_options()

@@ -65,5 +65,21 @@ class CheckTest(unittest.TestCase):
             self.assertEqual(os.path.normpath(launcher.user_folder()), os.path.normpath(self.theirs))
 
 
+class SteamUserPathTest(unittest.TestCase):
+    def test_the_launch_options_user_folder(self):
+        """A -userpath in Steam's launch options wins in the game (Discord 2026-11-05: "the fix was removing the custom
+        launch option from steam"): the launcher uses it too."""
+        import launcher
+        with tempfile.TemporaryDirectory() as d:
+            base = os.path.join(d, "My Games", "BeamNG.drive")
+            os.makedirs(os.path.join(base, "current"))
+            self.assertEqual(launcher.steam_user_path(f'-userpath "{base}" -gfx dx11'), os.path.join(base, "current"))
+            plain = os.path.join(d, "plain")
+            os.makedirs(plain)
+            self.assertEqual(launcher.steam_user_path(f"-gfx dx11 -userpath {plain}"), plain)
+        for line in (None, "", "-gfx dx11", "-userpath /no/such/folder"):
+            self.assertIsNone(launcher.steam_user_path(line))
+
+
 if __name__ == "__main__":
     unittest.main()
