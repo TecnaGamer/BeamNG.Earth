@@ -157,6 +157,8 @@ def pins(frame, layers):
             fid = str(f.ids[i])
             if fid in seen:
                 continue
+            if _is_ev(name) or _is_ev(brand):
+                continue        # (a charger filed as a gas station is a charger site: evchargers.charger_pins)
             seen.add(fid)
             if xy is None:
                 xy = f.xy_in(frame)
@@ -987,12 +989,14 @@ def _eca_site(st, lanes, others, roads):
 def style_shapes(style):
     """Every shape a station of that style (style_of) can use: the ones the mod preloads for the anchor's region
     (earthd anchor_ready fuelShapes; only that region's: a Steam Deck's memory, the user, 2026-10-23)."""
+    import evchargers                           # (and the style's EV chargers: evchargers.CHARGER_SHAPES)
+    ev = list(dict.fromkeys(evchargers.CHARGER_SHAPES.get(style, evchargers.CHARGER_SHAPES["default"])))
     west = [*PUMP_KIT["pump"], _ROOF, _PILLAR, BOLLARD]
     if style == "europe":
-        return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD]
+        return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD, *ev]
     if style == "us_east":
-        return [ECA_UNIT, *west]                # (West Coast's islands under a small canopy, and the pump pairs)
-    return west
+        return [ECA_UNIT, *west, *ev]           # (West Coast's islands under a small canopy, and the pump pairs)
+    return west + ev
 
 
 def _lanes_box(lanes):
@@ -1664,6 +1668,36 @@ def buildings_near(frame, layers, x, y, r):
     return out
 
 
+def buildings_touching(frame, layers, x, y, r):
+    """Bld of the buildings whose outline's bounding box comes within r of (x, y) in frame, each once: buildings_near
+    by the outline, not its centre (EV chargers, in game in Berlin, 2026-10-29: chargers drawn inside a long block whose
+    centre was far off; the stations keep buildings_near, their layouts unchanged)."""
+    out, seen = [], set()
+    for f in layers:
+        if f is None or len(f) == 0:
+            continue
+        a = f.attrs
+        xy = f.xy_in(frame)
+        bb = f.boxes(frame)
+        near = np.flatnonzero((bb[:, 0] <= x + r) & (bb[:, 2] >= x - r) & (bb[:, 1] <= y + r) & (bb[:, 3] >= y - r))
+        for i in near.tolist():
+            fid = str(f.ids[i])
+            if fid in seen or f.part_off[i + 1] == f.part_off[i]:
+                continue
+            ring = np.asarray(_outer(f, i, xy), np.float64)
+            if len(ring) < 4:
+                continue
+            seen.add(fid)
+
+            def txt(k):
+                v = a[k][i] if k in a else None
+                return "" if v is None else str(v)
+            h = a["height"][i] if "height" in a else None
+            out.append(Bld(fid, ring, txt("class"), txt("name"), txt("src_dataset"),
+                           float(h) if h is not None and np.isfinite(h) else None))
+    return out
+
+
 def drive_lines(frame, layers, x, y, r):
     """(centreline (k, 2), half carriageway width) of the public roads (buildings.THROUGH_CLASSES) with a point within
     r of (x, y) in frame, each road once; the width as the road mesh draws it (roads.road_specs: lane counts, width
@@ -1771,7 +1805,10 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
     elev(lat, lon) the physics ground. cuts: a list that gets every laid-out station's made-up driveways
     (Site.drives: roads.build_tile walk_cuts, the sidewalks they cross cut; a neighbour tile's station's too). pads: a
     list that gets (station id, [(lat (k,), lon (k,))]) of this tile's stations' forecourt pads (forecourt_pad; the
-    ground's painters: surface.Surface.add_fuel_pads). Without places data (offline, no file): no stations."""
+    ground's painters: surface.Surface.add_fuel_pads). Without places data (offline, no file): no stations.
+    The EV chargers near the tile (evchargers.py) are laid out after the stations: their records carry "energy":
+    ["electricEnergy"], a charger by a laid-out station stands off its forecourt's edge (_beside_station)."""
+    import evchargers
     import roads
     box = roads.tile_bbox(tx, ty)
     x0, y0, x1, y1 = box
@@ -1779,6 +1816,7 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
         keys = station_cells(frame, tx, ty)
         places = [md.cell(k, layers=("places",), kind="demand").layers.get("places") for k in keys]
         stations = merge(pins(frame, places))
+        osm = []
         osm_cached = getattr(md, "osm_fuel_cached", None)       # (OpenStreetMap's: cached cells only, never waited for)
         if osm_cached is not None:
             osm = [osm_cached(k) for k in keys]
@@ -1786,6 +1824,8 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
                 import revisit                      # and this build is not kept for the next visit)
                 revisit.fault()
             stations = with_osm(stations, _osm_points(frame, osm))
+        chargers = evchargers.merge(evchargers.charger_pins(frame, places),
+                                    _osm_points(frame, osm, amenity="charging_station"))
     except Exception as e:      # an unreachable source costs the stations, not the tile
         log.debug("gas stations of road tile %s_%s: %s", tx, ty, e)
         return [], frozenset()
@@ -1808,7 +1848,8 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
         if site is not None:
             sites.append(site)
     recs, skip = [], set()
-    for site in _one_per_shop(sites):
+    kept = list(_one_per_shop(sites))      # (twice: the stations, then the chargers beside them)
+    for site in kept:
         skip.update(site.drop_ids)
         if cuts is not None:
             cuts.extend(site.drives)
@@ -1817,7 +1858,68 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
             recs.append(_record(site, frame, elev))
             if pads is not None and site.pad:
                 pads.append((st.id, _pad_ll(site.pad, frame)))
+    for ch in chargers:
+        r = evchargers.reach_of(ch)
+        if not (x0 - r <= ch.x < x1 + r and y0 - r <= ch.y < y1 + r) or not roads.box_owns(box, ch.x, ch.y):
+            continue            # (a charger's record is its own position's tile's: one record, no ghost)
+        try:
+            site = _charger_site(frame, md, ch, kept)
+        except Exception as e:
+            log.debug("EV charger %s: %s", ch.id, e)
+            continue
+        if site is None:
+            continue
+        rec = _record(site, frame, elev)
+        rec["energy"] = list(evchargers.ENERGY)
+        recs.append(rec)
+        if pads is not None and site.pad:
+            pads.append((site.station.id, _pad_ll(site.pad, frame)))
     return recs, frozenset(skip)
+
+
+def _charger_site(frame, md, ch, stations):
+    """An EV charger's site (evchargers.layout) among its buildings and roads; a charger within MERGE_M of a laid-out
+    station's forecourt is laid out from the forecourt's edge (_beside_station), the forecourt kept clear."""
+    import evchargers
+    beside = _beside_station(ch, stations)
+    at, pads = (beside if beside is not None else (ch, []))
+    r = evchargers.reach_of(at)
+    cds = [md.cell(k, layers=("buildings", "roads"), kind="demand") for k in _cells_near(frame, at.x, at.y, r)]
+    rls = [c.layers.get("roads") for c in cds]
+    blds = buildings_touching(frame, [c.layers.get("buildings") for c in cds], at.x, at.y, r) + pads
+    la, lo, _ = frame.enu_to_geodetic(at.x, at.y, 0.0)
+    return evchargers.layout(at, blds, drive_lines(frame, rls, at.x, at.y, r + 50.0),
+                             service_lines(frame, rls, at.x, at.y, r), style_of(float(la), float(lo)))
+
+
+BESIDE_OUT_M = 5.0          # a charger by a station: this far out from the nearest point of its forecourt
+
+
+def _beside_station(ch, sites):
+    """(the charger moved off the edge of the nearest laid-out station's forecourt, that forecourt as obstacles (Bld))
+    when ch is within MERGE_M of one, else None (the user, 2026-10-29: a charger by a gas station stands at its
+    forecourt's edge, its own site and POI)."""
+    import dataclasses
+    p = np.array([ch.x, ch.y], np.float64)
+    best = None
+    for site in sites:
+        for ring in site.pad:
+            d = float(_seg_dist(p[None], ring[:-1], ring[1:])[0])
+            if d <= MERGE_M and (best is None or d < best[0]):
+                best = (d, ring, site)
+    if best is None:
+        return None
+    _, ring, site = best
+    a, b = ring[:-1], ring[1:]
+    seg = b - a
+    t = np.clip(((p - a) * seg).sum(1) / np.maximum((seg * seg).sum(1), 1e-12), 0.0, 1.0)
+    q = a + seg * t[:, None]
+    q = q[int(np.argmin(np.hypot(*(q - p).T)))]
+    out = q - ring[:-1].mean(0)
+    out = out / max(float(np.hypot(*out)), 1e-9)
+    at = q + out * BESIDE_OUT_M
+    pads = [Bld(f"pad:{site.station.id}:{k}", rg, "pad", "", "", None) for k, rg in enumerate(site.pad)]
+    return dataclasses.replace(ch, x=float(at[0]), y=float(at[1])), pads
 
 
 def _pad_ll(polys, frame):
@@ -1829,13 +1931,14 @@ def _pad_ll(polys, frame):
     return out
 
 
-def _osm_points(frame, cells):
-    """[{"id", "x", "y", "name", "brand"}] in frame of the cached OSM cells' fuel stations (osmfuel rows; None: a cell
-    not fetched yet), each once (a station in two cells), at its bbox's centre."""
+def _osm_points(frame, cells, amenity="fuel"):
+    """[{"id", "x", "y", "name", "brand"}] in frame of the cached OSM cells' rows of that amenity (osmfuel rows: fuel
+    or charging stations; a row without one is fuel; None: a cell not fetched yet), each once (a station in two
+    cells), at its bbox's centre."""
     out, seen = [], set()
     for rows in cells:
         for r in rows or ():
-            if r["id"] in seen:
+            if r.get("amenity", "fuel") != amenity or r["id"] in seen:
                 continue
             seen.add(r["id"])
             x0, y0, x1, y1 = r["bbox"]

@@ -274,4 +274,23 @@ T.check(count('TSStatic') == 2, 'made again from the new frame: ' .. count('TSSt
 T.near(scenetree.findObject('bne_fuel_rs_a1').pos.x, 502, 1e-9, 'at the new place')
 G.reset()
 
+-- an EV charger (evchargers.py, the user 2026-10-29: "real life ev stations ... real recharging in the game"): its
+-- record's energy handed to the stock POI (the charge prompt, the bolt icon); unnamed: 'EV charger'
+do
+  local evr = rec('evx', 50)
+  evr.name, evr.energy = '', { 'electricEnergy' }
+  G.onRows(1, '1:1_0', { evr, rec('gas1', 90) })
+  G.update(gov)
+  local got = {}
+  G.pois('beamng_earth', got)
+  local byId = {}
+  for _, e in ipairs(got) do byId[e.id] = e end
+  local f = byId['bne_fuel_evx'] and byId['bne_fuel_evx'].data.facility
+  T.check(f ~= nil and f.energyTypes[1] == 'electricEnergy' and #f.energyTypes == 1, 'a charger: electric energy only')
+  T.check(f ~= nil and f.name == 'EV charger', 'an unnamed charger: EV charger')
+  T.check(byId['bne_fuel_gas1'] ~= nil and byId['bne_fuel_gas1'].data.facility.energyTypes[1] == 'gasoline',
+    'a gas station beside it: gasoline')
+  G.reset()
+end
+
 T.done('test_gasstations')
