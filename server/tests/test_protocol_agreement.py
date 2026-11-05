@@ -108,7 +108,9 @@ MOD_TO_SERVER = {
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
               "globalFar": F(int, OPT),
               # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
-              "readySet": F(int, OPT)},
+              "readySet": F(int, OPT),
+              # the game's own user folder (FS:getUserPath: Server.check_user_dir, GitHub #770)
+              "userPath": F(str, OPT)},
     "traffic_visuals": {"enabled": F(bool), "reset": F(bool, OPT)},
     "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
                        # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
@@ -298,6 +300,8 @@ SERVER_TO_MOD = {
     # data credits for the tiles around the player (credits.py; additive, protocol 4, --credits on)
     "credits": {"v": F(int), "near": F(str), "far": F(str), "ids": F(list), "farIds": F(list)},
     # the loading line's counts (Connection.send_progress, the mod's loadprogress.lua): [done, wanted] each
+    # the server writes where the game does not look (Server.check_user_dir, GitHub #770)
+    "user_dir_mismatch": {"game": F(str), "server": F(str)},
     "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list),
                       "net": F(list)},     # (the downloads in flight: loadprogress.downloadText)
     # road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks
@@ -371,6 +375,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "sea",                                        # --sea on: needs map data (test_seacarve)
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
                        "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
+                       "user_dir_mismatch",                          # another user folder than the game's (test_user_dir)
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data

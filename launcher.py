@@ -633,13 +633,24 @@ def _ini(path):
     """key = value lines of an ini file (BeamNG's own, with a BOM)."""
     out = {}
     try:
-        with open(path, encoding="utf-8-sig", errors="replace") as f:
-            for line in f:
-                if "=" in line and not line.lstrip().startswith((";", "#", "[")):
-                    k, v = line.split("=", 1)
-                    out[k.strip()] = os.path.expandvars(v.strip())
+        with open(path, "rb") as f:
+            raw = f.read()
     except OSError:
-        pass
+        return out
+    # UTF-8, else the Windows ANSI code page (a user folder named in it, "C:\Users\Mikołaj\..." in cp1250, read with
+    # errors="replace" named a folder that did not exist: GitHub #770)
+    for enc in ("utf-8-sig", "mbcs", "cp1252"):
+        try:
+            text = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        if "=" in line and not line.lstrip().startswith((";", "#", "[")):
+            k, v = line.split("=", 1)
+            out[k.strip()] = os.path.expandvars(v.strip())
     return out
 
 
@@ -1279,6 +1290,11 @@ def linux_build(force=None):
 
 def user_folder():
     import install
+    # (first the folder the game itself said it uses, when it ever differed from ours: the world server saves it,
+    # apppaths.set_user_dir; GitHub #770: the game's user folder elsewhere, our files written where it never looked)
+    told = apppaths.saved_user_dir()
+    if told and os.path.isdir(os.path.join(told, "mods")):
+        return told
     if IS_WIN:
         uf = windows_beamng_ini().get("userFolder")       # a user folder moved in the game's launcher
         if uf and os.path.isdir(uf):

@@ -928,6 +928,8 @@ local function onMessage(msg)
       turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
+      -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
+      userPath = (FS and FS.getUserPath) and FS:getUserPath() or nil,
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
@@ -1045,6 +1047,14 @@ local function onMessage(msg)
     st.serverBacklog = tonumber(msg.backlog)
     -- M1h: the far-field radius rides on every status in horizon mode (the view distance follows it)
     if msg.radius ~= nil then M.setFarRadius(msg.radius) end
+  elseif t == 'user_dir_mismatch' then  -- the server writes its files where this game does not look (GitHub #770)
+    st.userDirMismatch = msg
+    log('E', 'beamngEarth', 'the world server writes to ' .. tostring(msg.server) .. ' but the game uses '
+      .. tostring(msg.game) .. ': close BeamNG.Earth and the game and start it again (it uses the game\'s folder then)')
+    guihooks.trigger('Message', { ttl = 60, category = 'bngEarthUserDir', icon = 'warning',
+      msg = 'BeamNG.Earth is writing the world to a different BeamNG user folder than the game uses, so the map '
+        .. 'cannot load. Close the game and BeamNG.Earth and start BeamNG.Earth again: it will use the game\'s folder '
+        .. '(' .. tostring(msg.game) .. ').' })
   elseif t == 'load_progress' then      -- the loading line's counts (server Connection.send_progress)
     st.loadProgress = msg
   elseif t == 'share_info' then        -- BeamMP shared generation v2: our share code and weight (mpsession poses)

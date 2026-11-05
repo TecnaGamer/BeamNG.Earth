@@ -1248,6 +1248,32 @@ class Server:
             out |= c.sessions
         return out
 
+    def check_user_dir(self, conn, game_path):
+        """The game's own user folder (hello.userPath) against the one this server writes into: a game whose user
+        folder is elsewhere (moved in BeamNG's launcher, its own -userpath, a folder name the launcher misread) never
+        finds our tiles: the car on a flat plane, "loading terrain" for good (GitHub #770). Told to the player, and
+        saved for the launcher's next start (apppaths.set_user_dir)."""
+        if not isinstance(game_path, str) or not game_path.strip():
+            return
+        game = os.path.normpath(game_path.strip())
+        if not os.path.isdir(game):     # (a path we cannot see: Proton's C:/users/steamuser/..., a Flatpak sandbox's
+            return                      # home: not ours to judge)
+        try:
+            apppaths, _ = _app_modules()
+            same = apppaths.same_dir(game, self.user_dir)
+        except Exception:           # (no apppaths: compared as text)
+            apppaths, same = None, os.path.normcase(game) == os.path.normcase(os.path.normpath(self.user_dir))
+        if same:
+            return
+        log.error("the game's user folder is %s, but this server writes into %s: the game cannot find the world's "
+                  "files (GitHub #770); the next start uses the game's folder", game, self.user_dir)
+        if apppaths is not None:
+            try:
+                apppaths.set_user_dir(game)
+            except OSError as e:
+                log.warning("could not save the game's user folder: %s", e)
+        conn.send({"type": "user_dir_mismatch", "game": game, "server": self.user_dir})
+
     def claim_sessions(self, conn, sessions):
         """hello / pose `sessions` of a connection: the session folders whose files the game's objects
         still use. Earlier runs' folders among them are adopted (kept, their markers touched); one this
@@ -5340,6 +5366,7 @@ class Connection:
                 self.distant_traffic.sent.clear()
                 self.distant_traffic_far.sent.clear()
         elif kind == "hello":
+            self.s.check_user_dir(self, msg.get("userPath"))
             lay = self.s.layout
             fmt = msg.get("format", lay.format)
             if msg.get("protocol") != PROTOCOL:
