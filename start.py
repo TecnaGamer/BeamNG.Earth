@@ -95,11 +95,62 @@ def main():
         install.say(f"  (this server version has no {', '.join(skipped)}; left out)")
     install.say("  Leave this window open while you play; close it (or press Ctrl+C) to stop the server.")
     install.say("  Now start BeamNG.drive and pick the 'BeamNG.Earth' level in Freeroam.")
+    log_path = server_log_path()
+    if log_path:
+        install.say(f"  Server log: {log_path}")
     install.say("")
     try:
-        sys.exit(subprocess.call(cmd, cwd=ROOT))
+        sys.exit(run_logged(cmd, log_path))
     except KeyboardInterrupt:
         sys.exit(0)
+
+
+def server_log_path():
+    """The server's log file: the launcher's (apppaths.data_dir()/logs/server.log, the downloaded app's), with the last
+    two runs kept beside it; None when its folder cannot be made. (Tann2019, 2026-11-05: a source run's log was only in
+    its console window, which cannot be copied from easily.)"""
+    try:
+        import apppaths
+        path = os.path.join(apppaths.data_dir(), "logs", "server.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except (ImportError, OSError):
+        return None
+    try:                                # (the launcher's keep_previous_log: server.log.1, .2)
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            if os.path.isfile(path + ".1"):
+                os.replace(path + ".1", path + ".2")
+            os.replace(path, path + ".1")
+    except OSError:
+        pass                            # (still open somewhere: overwritten)
+    return path
+
+
+def run_logged(cmd, log_path):
+    """Run the server, its output shown here as before and written to log_path too; its exit code."""
+    if not log_path:
+        return subprocess.call(cmd, cwd=ROOT)
+    env = dict(os.environ, PYTHONUNBUFFERED="1")    # (lines as they come, not in blocks through the pipe)
+    try:
+        log = open(log_path, "wb")
+    except OSError:
+        return subprocess.call(cmd, cwd=ROOT)
+    with log:
+        proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out = getattr(sys.stdout, "buffer", None)
+        try:
+            for line in iter(proc.stdout.readline, b""):
+                log.write(line)
+                log.flush()
+                if out is not None:
+                    out.write(line)
+                    out.flush()
+        except KeyboardInterrupt:       # (Ctrl+C reaches the server too: it stops, its last lines still logged)
+            for line in proc.stdout:
+                log.write(line)
+            raise
+        finally:
+            proc.stdout.close()
+        return proc.wait()
 
 
 if __name__ == "__main__":
