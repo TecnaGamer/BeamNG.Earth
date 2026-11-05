@@ -14,6 +14,7 @@ import time
 
 import numpy as np
 
+import bgsigns
 import highwaysigns
 import mergesigns
 import roadmesh
@@ -72,6 +73,8 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                 pts = np.column_stack(frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.))
                 decks.append({'deck': True, 'n': pts, 'w': spec.width})
     speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us))
+    if str(country or '').upper() in bgsigns.COUNTRIES:      # (Bulgaria's С7 and Д11 / Д12, with the speed signs)
+        speeds = bgsigns.merge(speeds, _bulgaria(md, frame, tx, ty, elev, context, decks, left_hand))
     if not (WORLD or us):
         return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds))     # (not the US: no guide signs)
     exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths)
@@ -80,6 +83,22 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
 
 
 _warned = -float('inf')
+_bg_warned = -float('inf')
+
+
+def _bulgaria(md, frame, tx, ty, elev, context, decks, left_hand):
+    """bgsigns.build_tile, or None: optional scenery never stops the other signs."""
+    global _bg_warned
+    try:
+        box = roads.tile_bbox(tx, ty)
+        return bgsigns.build_tile(frame, box, elev, bgsigns.roads_near(frame, box, context, left_hand),
+                                  context.urban, bgsigns.places(md), decks)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _bg_warned >= 60.:
+            _bg_warned = now
+            log.warning('Bulgarian signs unavailable; roads continue: %s: %s', type(error).__name__, error)
+        return None
 
 
 def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face):
