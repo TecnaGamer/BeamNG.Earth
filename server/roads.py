@@ -1713,7 +1713,10 @@ def _lane_count(feats, i, cls, flow=True):
     if lanes is not None:
         return int(lanes)
     lanes = roadlanes.generated_counts(feats)[i]
-    if lanes is None and flow and cls not in roadlanes.HIGHWAYS:     # (a motorway's gaps: PR #471's agreeing ends only)
+    # what flows in or out (lane_flow): a motorway's / trunk's only where a ramp merges or splits at its end beside a
+    # through road (I-95 by the Middle Branch: the deck after a ramp's merge at the 2-lane default, a 4.3 m step), not
+    # from a ramp alone, the other direction, a crossing road or a fork (PR #471: two agreeing ends, roadlanes)
+    if lanes is None and flow and (cls not in roadlanes.HIGHWAYS or _ramp_junction(feats)[i]):
         lanes = lane_flow(feats)[i]
     if lanes is None and not is_ring(feats, i):
         if roadlanes.is_link(feats, i):
@@ -1721,6 +1724,46 @@ def _lane_count(feats, i, cls, flow=True):
         if cls in roadlanes.HIGHWAYS:
             return 2
     return lanes
+
+
+RAMP_JOIN_DEG = 1e-5        # (~1 m) a ramp's end this close to a road's end: they meet (_ramp_junction)
+
+
+def _ramp_junction(feats):
+    """Per feature: a motorway / trunk (not a ramp) one of whose ends meets both a ramp's end and another through
+    motorway / trunk's (a merge or a split), in this cell. Pure; once per Features."""
+    got = feats.__dict__.get("_ramp_junction")
+    if got is not None and len(got) == len(feats):
+        return got
+    import roadlanes
+    n = len(feats)
+    cls = feats.attrs.get("class", [""] * n)
+    ends = {}                   # rounded end point -> [(feature, is a ramp)]
+    mine = [[] for _ in range(n)]
+    for i in range(n):
+        if cls[i] not in roadlanes.HIGHWAYS:
+            continue
+        parts = feats.parts(i)
+        if not parts or not parts[0] or len(parts[0][0]) < 2:
+            continue
+        ll = np.asarray(parts[0][0], np.float64)
+        link = roadlanes.is_link(feats, i)
+        for p in (ll[0], ll[-1]):
+            k = (int(round(p[0] / RAMP_JOIN_DEG)), int(round(p[1] / RAMP_JOIN_DEG)))
+            ends.setdefault(k, []).append((i, link))
+            mine[i].append(k)
+    out = np.zeros(n, bool)
+    for i in range(n):
+        if cls[i] not in roadlanes.HIGHWAYS or roadlanes.is_link(feats, i):
+            continue
+        for k in mine[i]:
+            near = [e for dk in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))
+                    for e in ends.get((k[0] + dk[0], k[1] + dk[1]), ()) if e[0] != i]
+            if any(lk for _j, lk in near) and any(not lk for _j, lk in near):
+                out[i] = True
+                break
+    feats.__dict__["_ramp_junction"] = out
+    return out
 
 
 def _lane_overrides(feats):
