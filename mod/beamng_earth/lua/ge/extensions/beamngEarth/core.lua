@@ -2049,6 +2049,7 @@ end
 local function onUpdate(dtReal, dtSim)
   dtReal = dtReal or 0
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
+  net.setIdle(not st.inOurLevel and not st.active)
   if not st.inOurLevel and not st.active then
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
     -- launcher's sign that the game still runs, launcher.game_connected; its messages only store what the
