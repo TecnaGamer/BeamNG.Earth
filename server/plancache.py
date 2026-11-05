@@ -61,7 +61,7 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 7      # 7: PR #471 and #686 lanes (wider / narrower roads graded); 6: the dip under a deck takes its ends on their embankments (#684's fill); 5: one half width a bridge (each was appended twice: under-deck ground and carriageways read the wrong bridge's); 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
+PLANS_FORMAT = 8      # 8: PR #753 (a deck end's approaches rise with it, slip roads tied to their overpass road); 7: PR #471 and #686 lanes (wider / narrower roads graded); 6: the dip under a deck takes its ends on their embankments (#684's fill); 5: one half width a bridge (each was appended twice: under-deck ground and carriageways read the wrong bridge's); 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
                       # bridge ends on embankments (#694), the ground under decks (#698), junction corridors (#682)
 
 
