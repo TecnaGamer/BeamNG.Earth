@@ -683,26 +683,47 @@ class RoadClearance:
         self.half = np.asarray(widths, np.float64)
         self.bottom = np.asarray(bottoms, np.float64)
         self.max_half = float(self.half.max()) if len(self.half) else 0.0
-        self.index = roadwidth.Walls(np.column_stack([self.a[:, :2], self.b[:, :2]]))
+        # (the checks in Rust: earthfast.Clearance, the same rules; numpy per call cost ~2 s per 36 LA road tiles)
+        import fast
+        fast.require(147, "RoadClearance")
+        self._fast = fast._ef.Clearance(np.ascontiguousarray(self.a), np.ascontiguousarray(self.b),
+                                        np.ascontiguousarray(self.half), np.ascontiguousarray(self.bottom),
+                                        float(roadwidth.BUCKET))
+        self._boxes = {}
+        self._index = None
 
     def candidates(self, low, high):
+        """The segments in the grid cells round low..high (tests: the index finds a long segment's middle)."""
         import roadwidth
+        if self._index is None:
+            self._index = roadwidth.Walls(np.column_stack([self.a[:, :2], self.b[:, :2]]))
         lo = np.floor(np.asarray(low) / roadwidth.BUCKET).astype(np.int64)
         hi = np.floor(np.asarray(high) / roadwidth.BUCKET).astype(np.int64)
         bx, by = np.meshgrid(np.arange(lo[0], hi[0] + 1), np.arange(lo[1], hi[1] + 1))
         keys = roadwidth.Walls._key(bx.ravel(), by.ravel())
-        slots = [int(k) for key, k in zip(keys, np.searchsorted(self.index.keys, keys))
-                 if k < len(self.index.keys) and self.index.keys[k] == key]
+        idx = self._index
+        slots = [int(k) for key, k in zip(keys, np.searchsorted(idx.keys, keys))
+                 if k < len(idx.keys) and idx.keys[k] == key]
         if not slots:
             return np.zeros(0, np.int64)
-        return np.unique(np.concatenate([self.index.seg_of[self.index.first[k]:
-                                                          self.index.first[k] + self.index.counts[k]] for k in slots]))
+        return np.unique(np.concatenate([idx.seg_of[idx.first[k]:idx.first[k] + idx.counts[k]] for k in slots]))
 
     def clear(self, row, margin=ROAD_PROP_GAP_M):
-        """Whether every scaled collider box clears the traffic envelope and a deck's structural underside."""
+        """Whether every scaled collider box clears the traffic envelope and a deck's structural underside: each road
+        segment clipped to the object's vertical collision interval first (a second hairpin branch or a rising road
+        beside an overhead arm), then the box's distance to it in the object's frame (earthfast.Clearance)."""
         shape = COLLISION_BOXES.get(row[0])
         if shape is None:
             return True
+        import roads
+        headroom = roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
+        scale = max(0.3, min(2.5, float(row[6]) / shape[0]))  # trees.lua:M.pick (row[5] is unused)
+        k = (row[0], scale)
+        boxes = self._boxes.get(k)
+        if boxes is None:
+            boxes = self._boxes[k] = np.ascontiguousarray(np.asarray(shape[1], np.float64) * scale)
+        return bool(self._fast.clear(float(row[1]), float(row[2]), float(row[3]), math.radians(float(row[4])), boxes,
+                                     float(margin), float(headroom)))
         import roads
         headroom = roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
         scale = max(0.3, min(2.5, float(row[6]) / shape[0]))  # trees.lua:M.pick (row[5] is unused)
@@ -794,39 +815,34 @@ def under_decks(rows, decks, wires=None):
     under a deck closer than the headroom."""
     if not decks:
         return rows
-    segs = []
+    aa, bb, rr = [], [], []
     for pts, half in decks:
         p = np.asarray(pts, np.float64)
         if len(p) >= 2:
-            segs.append((p[:-1], p[1:], np.asarray(half, np.float64) + DECK_SIDE_M))
-
-    def deck_levels(x, y):
-        """Every overlapping deck surface over (x, y), not just the lowest of a stacked interchange."""
-        for a, b, reach in segs:
-            d = b[:, :2] - a[:, :2]
-            L2 = np.maximum((d * d).sum(1), 1e-12)
-            t = np.clip(((np.array([x, y]) - a[:, :2]) * d).sum(1) / L2, 0, 1)
-            q = a[:, :2] + t[:, None] * d
-            near = np.hypot(q[:, 0] - x, q[:, 1] - y) < reach
-            if near.any():
-                yield a[near, 2] + t[near] * (b[near, 2] - a[near, 2])
-    out = []
-    for r in rows:
-        if any(((r[3] < z) & (r[3] + r[6] > z - DECK_HEADROOM_M)).any()
-               for z in deck_levels(r[1], r[2])):
-            continue
-        out.append(r)
+            aa.append(p[:-1, :3])
+            bb.append(p[1:, :3])
+            rr.append(np.broadcast_to(np.asarray(half, np.float64) + DECK_SIDE_M, (len(p) - 1,)))
+    if not aa:
+        return rows
+    import fast
+    import roadwidth
+    fast.require(147, "under_decks")
+    # every overlapping deck surface over a spot, not just the lowest of a stacked interchange (PR #629), in Rust
+    # (earthfast.DeckLevels: per prop / wire point in numpy it was ~1 s per 36 LA road tiles)
+    levels = fast._ef.DeckLevels(np.ascontiguousarray(np.concatenate(aa)), np.ascontiguousarray(np.concatenate(bb)),
+                                 np.ascontiguousarray(np.concatenate(rr)), float(roadwidth.BUCKET))
+    out = rows
+    if rows:
+        r = np.asarray([[q[1], q[2], q[3], q[3] + q[6]] for q in rows], np.float64)
+        hit = levels.blocked(np.ascontiguousarray(r[:, 0]), np.ascontiguousarray(r[:, 1]),
+                             np.ascontiguousarray(r[:, 2]), np.ascontiguousarray(r[:, 3]), float(DECK_HEADROOM_M))
+        out = [q for q, h in zip(rows, hit) if not h]
     if wires is not None:
         keep = []
         for w in wires:
             w = np.asarray(w, np.float64)
-            hit = False
-            for x, y, wz in w[:, :3]:
-                if any(((z - DECK_WIRE_M < wz) & (wz < z + DECK_HEADROOM_M)).any()
-                       for z in deck_levels(x, y)):
-                    hit = True
-                    break
-            if not hit:
+            if not levels.wire_hit(np.ascontiguousarray(w[:, 0]), np.ascontiguousarray(w[:, 1]),
+                                   np.ascontiguousarray(w[:, 2]), float(DECK_WIRE_M), float(DECK_HEADROOM_M)):
                 keep.append(w)
         wires[:] = keep
     return out

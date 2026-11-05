@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod cdaez;
+mod clearance;
 mod f32z;
 mod gpu;
 mod traffic;
@@ -5473,6 +5474,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
     m.add_class::<traffic::Routes>()?;
-    m.add("VERSION", 146)?;
+    m.add_class::<clearance::Clearance>()?;
+    m.add_class::<clearance::DeckLevels>()?;
+    m.add("VERSION", 147)?;
     Ok(())
 }
