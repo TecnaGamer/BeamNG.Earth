@@ -214,3 +214,18 @@ def node_lookup(frame, cells):
         j = int(np.argmin(d))
         return pts[j][2] if d[j] <= OSM_NODE_M else None
     return look
+
+
+BED_KEEP_M = 2.6        # m from a track's axis the street poles and lamps keep out of (the ballast's foot ~2.3 m)
+BED_REACH_M = 12.0      # m round the tile its tracks are taken from
+
+
+def rail_obstacles(frame, cells, box):
+    """[(id, half width, polyline (k, 3))] the railway tracks on the ground round a road tile box, for furniture.place:
+    a utility pole stood on the ballast and between two tracks (Kalynivka, 2026-11-05)."""
+    import railways
+    out = []
+    for fid, _cls, kind, xy in railways.parts(frame, cells, box, reach=BED_REACH_M):
+        if kind == "ground" and len(xy) >= 2:
+            out.append(("rail:" + str(fid), BED_KEEP_M, np.c_[xy, np.zeros(len(xy))]))
+    return out
