@@ -881,14 +881,16 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
-          clearance=None):
+          clearance=None, development=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
     width)]: nothing tall under them (under_decks). buried: the share of the country's low-voltage lines that are
     underground (buried_share): that share of the roads (hashed) get no utility poles (a town's street its lamps
     instead). region: lamp_region's (the lamps' spacing). clearance: the tile's shared RoadClearance, including
-    sampled tapers and the generated decks' shifts / sidewalks; None builds one from these roads and decks."""
+    sampled tapers and the generated decks' shifts / sidewalks; None builds one from these roads and decks.
+    development: local built-environment samples (development.py) for the street trees, hydrants, benches and bins;
+    None: none of those. Lighting and mapped infrastructure stay independent."""
     spacing_of = lamp_spacing(region, dense=not town)
     lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
     x0, y0, x1, y1 = box
@@ -913,10 +915,32 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         side = wk["side"]
         w = wk.get("w", 2.5)
 
-        def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M):
+        def decorated(group, p, out, k):
+            if development is None:             # (no context given: the old rule, town streets only)
+                return bool(spec.urban)
+            # Runs follow the sidewalk's middle; frontage offsets are measured from the road centreline.
+            centre = p[:2] - out * (spec.width / 2 + w / 2)
+            context = development.sample(centre, out, spec.width / 2)
+            if context is None:                 # (no map data for the context: the old rule)
+                return bool(spec.urban)
+            if context.tier == 0:
+                return False
+            if group == G_STREET_TREE:
+                weight = .25 * context.limited + .75 * context.urban
+            elif group == G_HYDRANT:
+                weight = .5 * context.limited + .5 * context.urban
+            else:  # residential streets get benches/bins only with local pedestrian commercial evidence
+                weight = .25 * context.limited * context.commercial + .75 * context.urban
+            return _h01(fid, side, k, group, "development") < weight
+
+        def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M, optional=False):
             for p, out in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
                 if _owns(box, q[0], q[1]):
+                    if optional:
+                        k = int(round((float(_project(line, p[None, :2])[0]) - phase) / spacing))
+                        if not decorated(group, p, out, k):
+                            continue
                     rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
                                  round(yaw_fn(out), 1), 1.0, height, 0.0])
         rule = spacing_of.get(spec.cls)
@@ -956,7 +980,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 lit.add(fid)
                 phase = _h01(fid, "phase") * spacing + (spacing / 2 if (both and side < 0) else 0.0)
                 put(G_LAMP, spacing, phase, LAMP_CURB_M, 9.0, lambda out: _yaw(-out[0], -out[1]))
-        if spec.urban and spec.cls in STREET_TREE_CLASSES and _h01(fid, "trees") < STREET_TREE_SHARE:
+        if (development is not None or spec.urban) and spec.cls in STREET_TREE_CLASSES \
+                and _h01(fid, "trees") < STREET_TREE_SHARE:
             # street trees in pits along the curb (the photos' dense streets have rows of them; the canopy
             # model has few there): small broadleaves, both sides, clear of the junctions
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
@@ -966,19 +991,22 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
                     k = int(round((float(_project(line, p[None, :2])[0]) - tph) / STREET_TREE_SPACING))
+                    if not decorated(G_STREET_TREE, p, out, k):
+                        continue
                     h = 6.5 + 3.5 * _h01(fid, side, k, "th")
                     rows.append([G_STREET_TREE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
                                  round(_h01(fid, side, k, "ty") * 360.0, 1), 1.0, round(h, 1),
                                  round(_h01(fid, side, k, "tr"), 3)])
-        if spec.urban:
+        if development is not None or spec.urban:
             # fire hydrants at the curb (US practice ~90-150 m apart), alternating sides
             put(G_HYDRANT, HYDRANT_SPACING, _h01(fid, "hyd") * HYDRANT_SPACING + (HYDRANT_SPACING / 2 if side < 0 else 0),
-                0.45, 0.9, lambda out: _h01(fid, "hy") * 360.0)
-        if spec.urban and spec.cls in MAJOR:
+                0.45, 0.9, lambda out: _h01(fid, "hy") * 360.0, optional=True)
+        if (development is not None or spec.urban) and spec.cls in MAJOR:
             # benches at the back of the sidewalk facing the street, bins at the curb
             put(G_BENCH, BENCH_SPACING, _h01(fid, side, "bench") * BENCH_SPACING, w - 0.45, 0.9,
-                lambda out: _yaw(-out[0], -out[1]) + BENCH_YAW)
-            put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1, lambda out: _yaw(-out[0], -out[1]))
+                lambda out: _yaw(-out[0], -out[1]) + BENCH_YAW, optional=True)
+            put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1,
+                lambda out: _yaw(-out[0], -out[1]), optional=True)
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals, country, priority, ground, clearance))
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:

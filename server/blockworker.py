@@ -23,6 +23,7 @@ import numpy as np
 
 import secrossings
 import dem as demmod
+import development as developmentmod
 import farfield
 import furniture
 import geodesy
@@ -843,6 +844,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
+                                 development=developmentmod.for_tile(_s.md, frame, tx, ty),
                                  clearance_out=clearance)
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
