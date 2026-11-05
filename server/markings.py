@@ -139,11 +139,11 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
             out.append((drive / 2 - k * lw, "lane", solid))
         return out
     import roadlanes
-    # the mapped total first (OpenStreetMap's lanes, or its lanes:forward + backward + both_ways), then the road's:
-    # a narrow road's 1 + 1 (its width alone gives one lane) and a 2 + 1 road's lanes (two by its width) are the map's
+    # the mapped total first (OpenStreetMap's lanes), then the road's count, then lanes:forward + backward + both_ways
+    # where the road's is under two (a narrow road's 1 + 1: its width alone gives one lane; a 2 + 1 road's "lanes" 3)
     f, b = roadlanes.count(osm.get("lanes:forward")), roadlanes.count(osm.get("lanes:backward"))
-    total = roadlanes.count(osm.get("lanes")) or \
-        (f + b + (roadlanes.count(osm.get("lanes:both_ways"), 0) or 0) if f and b else None) or lanes
+    total = roadlanes.count(osm.get("lanes")) or (lanes if (lanes or 0) >= 2 else None) or \
+        (f + b + (roadlanes.count(osm.get("lanes:both_ways"), 0) or 0) if f and b else None)
     if not total or total < 2:
         return None
     fwd, bwd, both = roadlanes.directions(total, osm)

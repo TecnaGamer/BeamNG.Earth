@@ -1713,7 +1713,7 @@ def _lane_count(feats, i, cls, flow=True):
     if lanes is not None:
         return int(lanes)
     lanes = roadlanes.generated_counts(feats)[i]
-    if lanes is None and flow:
+    if lanes is None and flow and cls not in roadlanes.HIGHWAYS:     # (a motorway's gaps: PR #471's agreeing ends only)
         lanes = lane_flow(feats)[i]
     if lanes is None and not is_ring(feats, i):
         if roadlanes.is_link(feats, i):

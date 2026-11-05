@@ -81,7 +81,7 @@ def join(feats, tags, ids):
     scale = np.array([111320. * np.cos(np.radians(origin[1])), 110574.])
     candidates = []
     for wid, tag in tags.items():
-        p, lanes, cls = tag.get("_coords"), count(tag.get("lanes")), tag.get("lane_hw") or ""
+        p, lanes, cls = tag.get("_coords"), count(tag.get("lanes")), (tag.get("lane_hw") or tag.get("_highway") or "")
         if lanes is None or p is None or len(p) < 2 or cls.removesuffix("_link") not in HIGHWAYS:
             continue
         p = (np.asarray(p) - origin) * scale
