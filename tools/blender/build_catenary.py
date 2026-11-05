@@ -1,4 +1,8 @@
-"""build_catenary.py: the railway catenary mast (mod/.../art/shapes/beamngEarth/bne_cat_mast.dae) in Blender.
+"""build_catenary.py: the railway catenary masts (mod/.../art/shapes/beamngEarth/bne_cat_*.dae) in Blender:
+  bne_cat_mast   concrete spun mast with a cantilever (ex-USSR, Poland, Czechia ...: catenary.STYLE "su")
+  bne_cat_steel  steel H-beam mast with the same cantilever (Germany and most of Europe: "eu")
+  bne_cat_post_su / bne_cat_post_eu   the plain posts of a rigid portal (concrete / steel); its truss girder is drawn
+                 by the tile's wire mesh (catenary.portal_lines), as its length is the tracks' width
 
     D:/blender-4.5/blender.exe --background --python tools/blender/build_catenary.py
 
@@ -16,8 +20,8 @@ import bpy
 import bmesh
 from mathutils import Vector
 
-OUT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "mod", "beamng_earth", "levels",
-                                   "beamng_earth", "art", "shapes", "beamngEarth", "bne_cat_mast.dae"))
+OUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "mod", "beamng_earth", "levels",
+                                       "beamng_earth", "art", "shapes", "beamngEarth"))
 NAME = "bne_cat_mast"
 H = 9.0                     # m: the mast's top over the ground
 R0, R1 = 0.175, 0.105       # m: its radius at the foot and the top
@@ -155,6 +159,83 @@ def build(seg, detail):
     return bm
 
 
+
+def box(bm, c, hx, hy, hz, mi):
+    """An axis-aligned box centred at c (Vector) with half sizes, UVs per face 0..1."""
+    uv = bm.loops.layers.uv.verify()
+    vs = [bm.verts.new(c + Vector((sx * hx, sy * hy, sz * hz))) for sz in (-1, 1) for sy in (-1, 1) for sx in (-1, 1)]
+    for idx in ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)):
+        f = bm.faces.new([vs[i] for i in idx])
+        f.material_index = mi
+        for loop, uvc in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
+            loop[uv].uv = uvc
+
+
+def ibeam(bm, z0, z1, mi, depth=0.30, width=0.20, web=0.014, fl=0.018):
+    """A vertical steel I-beam (web along x, flanges across y... the section's depth along x) from z0 to z1 at the origin."""
+    box(bm, Vector((0, 0, (z0 + z1) / 2)), depth / 2 - fl, web / 2, (z1 - z0) / 2, mi)          # the web (across x)
+    for sx in (-1, 1):
+        box(bm, Vector((sx * (depth / 2 - fl / 2), 0, (z0 + z1) / 2)), fl / 2, width / 2, (z1 - z0) / 2, mi)
+
+
+def cantilever(bm, ts, detail, attach_r):
+    """The cantilever of build(): tube, registration arm, tie, holders; attach_r: the mast's half depth (the clamps)."""
+    frustum(bm, Vector((attach_r, 0, Z_MESS)), Vector((ARM_X + 0.15, 0, Z_MESS)), 0.036, 0.030, ts, 1)
+    frustum(bm, Vector((attach_r, 0, Z_REG)), Vector((ARM_X + 0.10, 0, Z_REG)), 0.028, 0.024, ts, 1)
+    frustum(bm, Vector((attach_r, 0, Z_TIE)), Vector((ARM_X - 0.1, 0, Z_MESS + 0.03)), 0.022, 0.022, ts, 1)
+    if not detail:
+        return
+    for z in (Z_MESS, Z_REG, Z_TIE):
+        box(bm, Vector((attach_r, 0, z)), 0.04, 0.08, 0.06, 1)
+    a_ = Vector((attach_r, 0, Z_TIE))
+    b_ = Vector((ARM_X - 0.1, 0, Z_MESS + 0.03))
+    d_ = (b_ - a_).normalized()
+    for t in (0.30, 0.62):
+        ribbed(bm, a_.lerp(b_, t), d_, 0.34, ts)
+    ribbed(bm, Vector((attach_r + 0.55, 0, Z_MESS)), Vector((1, 0, 0)), 0.40, ts, discs=6)
+    ribbed(bm, Vector((attach_r + 0.45, 0, Z_REG)), Vector((1, 0, 0)), 0.34, ts, discs=5)
+    for p0, w in ((Vector((ARM_X + 0.15, 0, Z_MESS + 0.32)), 0.05), (Vector((ARM_X + 0.10, 0, Z_REG + 0.24)), 0.045)):
+        frustum(bm, p0, p0 + Vector((0, 0, 0.07)), w * 1.5, w * 1.5, 4, 2)
+    hold = Vector((ARM_X + 0.10, 0, Z_REG))
+    frustum(bm, hold, hold - Vector((0, 0, 0.16)), 0.016, 0.016, ts, 2)
+    frustum(bm, hold - Vector((0.04, 0, 0.17)), hold - Vector((-0.04, 0, 0.17)), 0.028, 0.028, ts, 2)
+
+
+def build_steel(seg, detail):
+    """A steel H-beam mast (0.30 x 0.20 section, 9.3 m, a base plate with bolts) with the cantilever."""
+    bm = bmesh.new()
+    ts = max(5, seg // 2)
+    box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 0)    # the foundation's head
+    box(bm, Vector((0, 0, 0.36)), 0.22, 0.22, 0.02, 1)                       # the base plate
+    ibeam(bm, 0.38, 9.3, 1)
+    if detail:
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                frustum(bm, Vector((sx * 0.17, sy * 0.17, 0.38)), Vector((sx * 0.17, sy * 0.17, 0.46)), 0.016, 0.016, 6, 1)
+        plate(bm, Vector((0.16, 0, 2.2)), Vector((1, 0, 0)), 0.30, 3)
+        plate(bm, Vector((-0.16, 0, 2.2)), Vector((-1, 0, 0)), 0.30, 3)
+    cantilever(bm, ts, detail, 0.15)
+    return bm
+
+
+def build_post(kind, seg, detail):
+    """A portal's post: concrete (kind "su": the tapered mast, 10.4 m) or steel (an I-beam), with a top seat for the truss."""
+    bm = bmesh.new()
+    if kind == "su":
+        frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 0)
+        frustum(bm, Vector((0, 0, 0.35)), Vector((0, 0, 10.4)), 0.19, 0.12, seg, 0, uv_len=1.1)
+        if detail:
+            joint_rings(bm, seg)
+        box(bm, Vector((0, 0, 10.4)), 0.14, 0.30, 0.05, 1)
+    else:
+        box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 0)
+        box(bm, Vector((0, 0, 0.36)), 0.22, 0.22, 0.02, 1)
+        ibeam(bm, 0.38, 10.4, 1, depth=0.36, width=0.24)
+        box(bm, Vector((0, 0, 10.4)), 0.14, 0.30, 0.05, 1)
+    if detail:
+        plate(bm, Vector((0.0, 0.20 if kind == "su" else 0.13, 2.2)), Vector((0, 1, 0)), 0.30, 3)
+    return bm
+
 def make(name, bm, parent):
     ob = new_object(name, parent)
     bm.to_mesh(ob.data)
@@ -164,7 +245,7 @@ def make(name, bm, parent):
     return ob
 
 
-def main():
+def export(name, lod_hi, lod_lo, col):
     for ob in list(bpy.data.objects):
         bpy.data.objects.remove(ob, do_unlink=True)
     base = bpy.data.objects.new("base00", None)
@@ -172,21 +253,33 @@ def main():
     start = bpy.data.objects.new("start01", None)
     bpy.context.collection.objects.link(start)
     start.parent = base
-    make(f"{NAME}64", build(14, True), start)
-    make(f"{NAME}8", build(6, False), start)
-    bm = bmesh.new()
-    frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, H)), 0.22, 0.12, 6, 0)
-    col = make(f"Colmesh_{NAME}-1", bm, start)
-    col.data.materials.clear()
+    make(f"{name}64", lod_hi, start)
+    make(f"{name}8", lod_lo, start)
+    c = make(f"Colmesh_{name}-1", col, start)
+    c.data.materials.clear()
     coll = bpy.data.objects.new("collision-1", None)
     bpy.context.collection.objects.link(coll)
     coll.parent = base
     bpy.ops.object.select_all(action="SELECT")
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    bpy.ops.wm.collada_export(filepath=OUT, apply_modifiers=True, selected=False, triangulate=True,
+    path = os.path.join(OUT_DIR, name + ".dae")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    bpy.ops.wm.collada_export(filepath=path, apply_modifiers=True, selected=False, triangulate=True,
                               use_texture_copies=False, export_global_forward_selection="Y",
                               export_global_up_selection="Z")
-    print("wrote", OUT)
+    print("wrote", path)
+
+
+def column(h, r0, r1, seg):
+    bm = bmesh.new()
+    frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, h)), r0, r1, seg, 0)
+    return bm
+
+
+def main():
+    export(NAME, build(14, True), build(6, False), column(H, 0.22, 0.12, 6))
+    export("bne_cat_steel", build_steel(8, True), build_steel(4, False), column(9.3, 0.20, 0.15, 6))
+    export("bne_cat_post_su", build_post("su", 14, True), build_post("su", 6, False), column(10.4, 0.22, 0.12, 6))
+    export("bne_cat_post_eu", build_post("eu", 8, True), build_post("eu", 4, False), column(10.4, 0.2, 0.15, 6))
 
 
 main()

@@ -85,6 +85,55 @@ class CatenaryTest(unittest.TestCase):
         self.assertTrue(catenary.near_ring(q, [hut]) and catenary.near_ring(np.array([q[0] + 4.0, q[1]]), [hut]))
         self.assertFalse(catenary.near_ring(np.array([q[0] + 6.0, q[1]]), [hut]))
 
+    def test_style_by_country(self):
+        self.assertEqual(catenary.style_of("UA"), "su")
+        self.assertEqual(catenary.style_of("pl"), "su")
+        self.assertEqual(catenary.style_of("CZ"), "su")
+        self.assertEqual(catenary.style_of("DE"), "eu")
+        self.assertEqual(catenary.style_of("FR"), "eu")
+        self.assertEqual(catenary.style_of(None), "eu")
+        f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
+        ms = masts(f)
+        ow = lambda x, y: BOX[0] <= x < BOX[2] and BOX[1] <= y < BOX[3]    # noqa: E731
+        self.assertTrue(all(r[0] == "catmast" for r in catenary.rows_and_wires(ms, ow, "su")[0]))
+        self.assertTrue(all(r[0] == "catmast_eu" for r in catenary.rows_and_wires(ms, ow, "eu")[0]))
+
+    def test_third_rail_has_no_catenary(self):
+        f = electrified([[(-300.0, 100.0), (550.0, 100.0)]], tags=["rail"])
+        self.assertEqual(masts(f), [])
+
+    def test_three_tracks_get_a_portal_not_cantilevers(self):
+        f = electrified([[(-300.0, y), (700.0, y)] for y in (100.0, 106.0, 112.0)])
+        ms = masts(f)
+        portals = [m for m in ms if m.get("portal")]
+        self.assertTrue(portals)
+        self.assertFalse([m for m in ms if not m.get("portal") and not m.get("virtual")], "no cantilever between tracks")
+        for pt in portals:
+            (a, _za), (b, _zb) = pt["posts"]
+            ys = sorted([a[1], b[1]])
+            self.assertLess(ys[0], 100.0 - 2.5, "posts outside the outer tracks")
+            self.assertGreater(ys[1], 112.0 + 2.5)
+            self.assertAlmostEqual(abs(a[0] - b[0]), 0.0, delta=0.5, msg="across the tracks")
+            self.assertEqual(len(pt["tracks"]), 3)
+        virtual = [m for m in ms if m.get("virtual")]
+        self.assertEqual(len(virtual), 3 * len(portals))
+        ow = lambda x, y: True    # noqa: E731
+        rows, wires = catenary.rows_and_wires(ms, ow, "su")
+        self.assertEqual(sorted(r[0] for r in rows), ["catpost"] * (2 * len(portals)))
+        bars = [w for w, r in wires if r in (catenary.CHORD_R, catenary.DIAG_R)]
+        self.assertEqual(len(bars), 3 * len(portals))
+        for w, r in wires:
+            if r == catenary.CHORD_R:
+                self.assertIn(round(float(w[0, 2]), 1), (10.0 + catenary.PORTAL_Z, 10.0 + catenary.PORTAL_Z + catenary.PORTAL_H))
+        contact = [w for w, r in wires if r == catenary.CONTACT_R]
+        self.assertTrue(contact, "the contact wires run on between the portals")
+
+    def test_two_tracks_stay_cantilevers_and_a_wide_yard_gets_none(self):
+        f = electrified([[(-300.0, 100.0), (700.0, 100.0)], [(-300.0, 106.0), (700.0, 106.0)]])
+        self.assertFalse([m for m in masts(f) if m.get("portal")])
+        wide = electrified([[(-300.0, y), (700.0, y)] for y in (60.0, 80.0, 100.0, 120.0, 140.0)])
+        self.assertFalse([m for m in masts(wide) if m.get("portal")], "wider than PORTAL_MAX_W_M")
+
     def test_curve_shortens_the_span(self):
         r = 400.0
         th = np.linspace(0.0, math.pi / 3, 60)

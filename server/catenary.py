@@ -44,7 +44,22 @@ MAST_Z_BAND = (-0.5, 0.2)       # the mast's base over the track's bed at most t
 MESSENGER_SAG_M = 1.3           # at mid-span
 DROPPER_EVERY_M = 10.0
 CONTACT_R, MESSENGER_R, DROPPER_R = 0.016, 0.013, 0.007
-ELECTRIC = {"contact_line", "yes", "rail"}
+# the style of a country's masts (plan 015): "su" the concrete spun mast (ex-USSR, and where concrete is the usual: Poland,
+# Czechia, Slovakia, Hungary, Romania, the Baltics), "eu" the steel H-beam mast (Germany and the rest: DB uses both,
+# Bane NOR steel; the others' norms were not found: a guess, agreed with the user 2026-11-05). STYLE_GROUPS: mast, post.
+SU_COUNTRIES = frozenset("AM AZ BY EE GE KG KZ LT LV MD RU TJ TM UA UZ PL CZ SK HU RO".split())
+STYLE_GROUPS = {"su": ("catmast", "catpost"), "eu": ("catmast_eu", "catpost_eu")}
+PORTAL_MIN_TRACKS = 3           # a rigid portal (a truss girder on two posts) where this many tracks run side by side
+PORTAL_BAND_M = 24.0            # m across: tracks this close and parallel are one corridor
+PORTAL_COS = 0.9
+PORTAL_MAX_W_M = 60.0           # a wider corridor (a yard's fan) gets none
+PORTAL_POST_OFF_M = 3.4         # m from the outer tracks' axes to the posts
+PORTAL_Z = 8.0                  # m: the truss's lower chord over the tracks' bed (the contact wires hang from it)
+PORTAL_H = 1.0                  # m the truss girder is deep
+PORTAL_PANEL_M = 1.0            # m of a diagonal's panel
+POST_H = 10.4                   # m (the post models' height)
+CHORD_R, DIAG_R = 0.05, 0.025   # the girder's bars' half widths (drawn as the tile's wire ribbons)
+ELECTRIC = {"contact_line", "yes"}     # (not "rail": a third rail has no overhead line)
 MIN_SPAN_DRAWN_M = 8.0
 MAX_SPAN_DRAWN_M = 110.0
 
@@ -190,6 +205,69 @@ def _clear_of_roads(p, roads):
     return all(_dist_to_lines(p, [ln]) > hw + ROAD_CLEAR_M for ln, hw in roads)
 
 
+def style_of(country):
+    """"su" or "eu" for an ISO alpha-2 country (None: "eu")."""
+    return "su" if str(country or "").upper() in SU_COUNTRIES else "eu"
+
+
+def _nearest(xy, arc, p):
+    """(arc s, point, unit direction, distance) of polyline xy at its point nearest p."""
+    a, b = xy[:-1], xy[1:]
+    d = b - a
+    seg = np.maximum((d * d).sum(1), 1e-12)
+    t = np.clip(((p - a) * d).sum(1) / seg, 0.0, 1.0)
+    q = a + t[:, None] * d
+    dist = np.hypot(*(q - p).T)
+    j = int(np.argmin(dist))
+    return float(arc[j] + t[j] * math.sqrt(seg[j])), q[j], d[j] / math.sqrt(seg[j]), float(dist[j])
+
+
+def corridor(parts, arcs, i, p, u):
+    """[(index, arc, point, unit direction)] of the other parts running side by side with part i at point p (direction
+    u): within PORTAL_BAND_M and parallel (PORTAL_COS). Pure."""
+    out = []
+    for j, (_f, xy) in enumerate(parts):
+        if j == i:
+            continue
+        s, q, uj, d = _nearest(xy, arcs[j], p)
+        if d <= PORTAL_BAND_M and abs(float(u @ uj)) >= PORTAL_COS and 0.0 < s < arcs[j][-1]:
+            out.append((j, s, q, uj))
+    return out
+
+
+def _portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground):
+    """The entries of a rigid portal at arc s0 of part pi: a "portal" entry (its two posts) and a virtual mast of each
+    track of the corridor (its wires start over its axis from the girder); [] where its posts cannot stand (roads,
+    buildings) or the corridor is wider than PORTAL_MAX_W_M."""
+    n = np.array([-u0[1], u0[0]])
+    members = [(pi, s0, p0, u0)] + list(mates)
+    lat = [float((q - p0) @ n) for _j, _s, q, _u in members]
+    lo, hi = min(lat) - PORTAL_POST_OFF_M, max(lat) + PORTAL_POST_OFF_M
+    if hi - lo > PORTAL_MAX_W_M + 2 * PORTAL_POST_OFF_M:
+        return []
+    got = None
+    for shift in SHIFT_M:
+        c = p0 + u0 * shift
+        a, b = c + n * lo, c + n * hi
+        if all(_clear_of_roads(q, roads) and not (rings and near_ring(q, rings)) for q in (a, b)):
+            got = (a, b)
+            break
+    if got is None:
+        return []
+
+    def z_at(q):
+        return float(np.asarray(ground(np.array([q])), np.float64).ravel()[0])
+    zs = [z_at(q) for _j, _s, q, _u in members]
+    zm = float(np.mean(zs))
+    posts = [(q, float(np.clip(z_at(q), zm - 0.5, zm + 0.2))) for q in got]
+    out = [{"portal": True, "fid": "portal", "s": s0, "q": got[0], "axis": got[0], "posts": posts, "z": zm,
+            "tracks": [(q, z) for (_j, _s, q, _u), z in zip(members, zs)]}]
+    for (j, s, q, uj), z in zip(members, zs):
+        out.append({"fid": parts[j][0], "s": s, "q": q, "axis": q, "z": z, "zax": z, "dir": np.zeros(2), "u": uj,
+                    "virtual": True})
+    return out
+
+
 def masts_of(frame, cells, box, ground, rings=()):
     """The masts of the electrified lines round box: [dict(fid, xy, s, side, dir, z, base)] one per mast of a line,
     with 'tip' the contact wire's attach point and 'axis' the track's axis point. Not clipped to the tile: the spans'
@@ -204,9 +282,10 @@ def masts_of(frame, cells, box, ground, rings=()):
         return []
     roads = _road_lines(frame, cells, box, REACH_M)
     all_xy = [xy for _f, xy in parts]
+    arcs = [_arc(xy) for xy in all_xy]
     mapped = mapped_masts(frame, cells)
     out = []
-    for fid, xy in parts:
+    for pi, (fid, xy) in enumerate(parts):
         others = [o for o in all_xy if o is not xy]
         stn, arc = stations(xy, fid)
         placed = {}
@@ -220,6 +299,12 @@ def masts_of(frame, cells, box, ground, rings=()):
                         stn.append(s)
                         placed[len(stn) - 1] = (1 if lat >= 0 else -1, float(np.clip(d, 2.5, 6.0)))
         for k, s0 in enumerate(stn):
+            p0, u0 = _frame_at(xy, s0, arc)
+            mates = corridor(parts, arcs, pi, p0, u0)
+            if len(mates) + 1 >= PORTAL_MIN_TRACKS:          # side by side: a portal, from the corridor's first part
+                if all(pi < j for j, *_ in mates):
+                    out.extend(_portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground))
+                continue                                      # (no cantilever masts between the tracks)
             side0, off = placed.get(k, (1 if _h01(fid, "side") < 0.5 else -1, MAST_OFF_M))
             got = None
             for shift in SHIFT_M:
@@ -250,12 +335,42 @@ def masts_of(frame, cells, box, ground, rings=()):
     return out
 
 
-def rows_and_wires(masts, box_owns):
+def portal_wires(pt):
+    """The girder of a portal entry as wire-ribbon polylines: two chords, a zigzag of diagonals and a hanger down to
+    each track's contact wire. Pure."""
+    (a, za), (b, zb) = pt["posts"]
+    zbot = pt["z"] + PORTAL_Z
+    ztop = zbot + PORTAL_H
+    L = float(np.hypot(*(b - a)))
+    n = max(2, int(round(L / PORTAL_PANEL_M)))
+    ts = np.linspace(0.0, 1.0, n + 1)
+    xy = np.array([a + (b - a) * t for t in ts])
+    wires = [(np.c_[xy[[0, -1]], [zbot, zbot]], CHORD_R), (np.c_[xy[[0, -1]], [ztop, ztop]], CHORD_R)]
+    zz = np.where(np.arange(n + 1) % 2 == 0, zbot, ztop)
+    wires.append((np.c_[xy, zz], DIAG_R))
+    for q, z in pt["tracks"]:
+        wires.append((np.array([[q[0], q[1], zbot], [q[0], q[1], z + Z_CONTACT]]), DROPPER_R))
+    return wires
+
+
+def rows_and_wires(masts, box_owns, style="su"):
     """(prop rows, wire polylines) of the masts: a mast row for each the tile holds, each span of a line whose first
-    mast the tile holds: contact wire, messenger with its sag, droppers."""
+    mast the tile holds: contact wire, messenger with its sag, droppers. A portal entry: its posts (rows) and its girder
+    (wires), by the tile that holds its first post; a virtual mast (a portal's track) only anchors the wires."""
     rows, wires = [], []
+    g_mast, g_post = STYLE_GROUPS[style]
     by_line = {}
     for m in masts:
+        if m.get("portal"):
+            if box_owns(float(m["q"][0]), float(m["q"][1])):
+                wires.extend(portal_wires(m))
+            d = m["posts"][1][0] - m["posts"][0][0]
+            yaw = round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1)
+            for q, z in m["posts"]:
+                if box_owns(float(q[0]), float(q[1])):
+                    rows.append([g_post, round(float(q[0]), 2), round(float(q[1]), 2), round(z, 2), yaw, 1.0, POST_H,
+                                 0.0])
+            continue
         by_line.setdefault(m["fid"], []).append(m)
     for fid, ms in by_line.items():
         ms.sort(key=lambda m: m["s"])
@@ -287,17 +402,19 @@ def rows_and_wires(masts, box_owns):
                 if top[2] - bot[2] > 0.15:
                     wires.append((np.array([bot, top]), DROPPER_R))
     for m in masts:
+        if m.get("portal") or m.get("virtual"):
+            continue
         if box_owns(float(m["q"][0]), float(m["q"][1])):
             yaw = math.degrees(math.atan2(m["dir"][1], m["dir"][0])) % 360.0
-            rows.append([GROUP, round(float(m["q"][0]), 2), round(float(m["q"][1]), 2), round(m["z"], 2),
+            rows.append([g_mast, round(float(m["q"][0]), 2), round(float(m["q"][1]), 2), round(m["z"], 2),
                          round(yaw, 1), 1.0, MAST_H, 0.0])
     return rows, wires
 
 
-def build(frame, tx, ty, cells, ground, rings=()):
+def build(frame, tx, ty, cells, ground, rings=(), country=None):
     """(prop rows, wire lines) of road tile (tx, ty): the catenary of the electrified lines round it. rings: the
     buildings' footprints (anchor frame) the masts keep off."""
     import roads as roadsmod
     box = roadsmod.tile_bbox(tx, ty)
     masts = masts_of(frame, cells, box, ground, rings)
-    return rows_and_wires(masts, lambda x, y: roadsmod.box_owns(box, x, y))
+    return rows_and_wires(masts, lambda x, y: roadsmod.box_owns(box, x, y), style_of(country))

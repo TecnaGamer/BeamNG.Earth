@@ -964,7 +964,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 roadsmod.tile_bbox(tx, ty))
             _bx, _by = roadsmod.tile_bbox(tx, ty)[:2]
             c_rows, c_wires = catenary.build(frame, tx, ty, rcells, c_ground,
-                                             [np.asarray(sp.ring, np.float64) + [_bx, _by] for sp, _g0, _g1 in (items or [])])
+                                             [np.asarray(sp.ring, np.float64) + [_bx, _by] for sp, _g0, _g1 in (items or [])], country)
             if c_rows:
                 props = (props or []) + c_rows
             wires.extend(c_wires)
