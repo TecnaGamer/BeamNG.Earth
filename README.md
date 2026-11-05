@@ -166,7 +166,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Pre-cached areas (Places panel) show their progress, can be paused or deleted, and their data is kept when the cache
   is full or cleared. Tick **Build the world too** (areas and routes up to 155 square miles) to have the roads,
   sidewalks, bridges, buildings and street furniture built ahead as well, so they load at once when you arrive;
-  otherwise the world itself is built when you get there.
+  otherwise the world itself is built when you get there. Tick **Fast** (or press **Fast** on a pre-cached area in the
+  Places panel) to have it done in minutes instead: the game pauses and the download and building get every CPU core
+  until it is done (each map host's own limits still apply); the game goes on by itself when it ends, or press
+  **Stop fast**.
 - In multiplayer the map has a **Players** list: follow a player, show everyone, or set the GPS to them. Teleport
   works without a car too (the free camera goes there).
 - **Autodrive**: the car drives itself along the GPS route (in lane, legal speed, minding traffic).

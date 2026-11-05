@@ -898,15 +898,17 @@ function M.uiAreaPlanResult(id)
   local core = ext('beamngEarth_core')
   return core and core.takeAreaPlan and core.takeAreaPlan(tonumber(id)) or nil
 end
-function M.uiAreaAdd(s, w, n, e, name, mode)
-  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode))
+-- fast: the fast pre-cache (the game paused, every core: server areas.py fast mode)
+function M.uiAreaAdd(s, w, n, e, name, mode, fast)
+  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode),
+    fast == true)
 end
 -- A saved route: the GPS's planned route with half m each side (the estimate, then the download, as an area's).
 function M.uiRoutePlan(half, mode)
   return areaSend('requestRoutePlan', tonumber(half), areaMode(mode))
 end
-function M.uiRouteAdd(half, name, mode)
-  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode))
+function M.uiRouteAdd(half, name, mode, fast)
+  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode), fast == true)
 end
 function M.uiAreaCmd(area, op)
   return areaSend('areaCmd', tostring(area or ''), tostring(op or ''))
@@ -918,7 +920,7 @@ end
 function M.uiAreas()
   local core = ext('beamngEarth_core')
   local a = core and core.areasState and core.areasState()
-  return { areas = a and a.areas or {}, pinnedBytes = a and a.pinnedBytes or nil }
+  return { areas = a and a.areas or {}, pinnedBytes = a and a.pinnedBytes or nil, fast = a and a.fast or '' }
 end
 
 -- "lat, lon" typed in the map's search box -> { lat, lon } or { error }.

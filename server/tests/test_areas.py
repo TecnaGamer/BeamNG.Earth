@@ -350,6 +350,58 @@ class AreasTest(unittest.TestCase):
         self.assertTrue(b.command(aid, "delete"))
         self.assertEqual(areas.pinned_world(self.tmp.name), set(), "deleted: unpinned")
 
+    def test_fast_mode(self):
+        # Tann2019 2026-11-05: "instead of an hour for the route i want it to be done in minutes, use all my cores,
+        # pause the game physics": the gates go (the game is paused), a phase's steps run at once, the world's
+        # geotiles only after every download; the server's side (its own road processes, every core) on meanwhile
+        class SlowDem(StubDem):
+            def __init__(self):
+                super().__init__()
+                self.lock, self.now, self.most = threading.Lock(), 0, 0
+
+            def predownload(self, z, x, y):
+                with self.lock:
+                    self.now += 1
+                    self.most = max(self.most, self.now)
+                time.sleep(0.01)
+                with self.lock:
+                    self.now -= 1
+                return super().predownload(z, x, y)
+
+        s = StubServer()
+        s.dem = SlowDem()
+        s.busy = True                       # (live pools busy and the player driving: both ignored in fast mode)
+        s.driving = lambda: True
+        calls = []
+        s.fast_precache = calls.append
+        order = []
+        build = s.prebuild_geo
+        s.prebuild_geo = lambda gx, gy: (order.append(("geo", len(s.dem.got) + len(s.mapdata.got))), build(gx, gy))[1]
+        a, _ = self.make(server=s, start=True)
+        ok, aid = a.add(*BOX, mode="world", fast=True)
+        self.assertTrue(ok, aid)
+        self.assertEqual(a.message()["fast"], aid)
+        self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done", 30.0))
+        downloads = sum(1 for st in a.steps(BOX) if st[0] in ("dem", "cell"))
+        self.assertEqual(len(s.dem.got) + len(s.mapdata.got), downloads, "every download, though busy and driving")
+        self.assertGreater(s.dem.most, 4, "the steps at once")
+        self.assertTrue(order and all(n == downloads for _, n in order), "the world's geotiles after the downloads")
+        self.assertTrue(wait_for(lambda: a.message()["fast"] == ""), "fast mode ends with the area done")
+        self.assertEqual((calls[0], calls[-1]), (True, False))
+        # fast, then slow / pause / delete: fast mode ends; a done area cannot be made fast
+        self.assertFalse(a.command(aid, "fast"))
+        s.busy = True                       # (a box not on disk, held by the busy gate while slow)
+        ok, b2 = a.add(BOX[0] + 0.1, BOX[1], BOX[2] + 0.1, BOX[3])
+        self.assertTrue(ok, b2)
+        self.assertTrue(a.command(b2, "fast"))
+        self.assertEqual(a.message()["fast"], b2)
+        self.assertTrue(a.command(b2, "slow"))
+        self.assertEqual(a.message()["fast"], "")
+        self.assertTrue(a.command(b2, "fast"))
+        self.assertTrue(a.command(b2, "delete"))
+        self.assertEqual(a.message()["fast"], "")
+        self.assertIs(calls[-1], False)
+
     def test_world_mode_reads_the_road_lidar_first(self):
         # the road builds wait only seconds for the lidar: without it on disk a cold area stored no geotile at all
         # (downtown Portland, 2026-10-31: 0 of 72, every pass until a restart)

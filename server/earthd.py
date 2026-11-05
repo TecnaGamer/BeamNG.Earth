@@ -1079,6 +1079,9 @@ class Server:
         self.cache = cache
         self.covermap = None            # the map's cache view (covermap.CoverMap; main_async, with a Cache)
         self.areas = None               # saved areas downloaded ahead (areas.Areas; main_async, with a Cache)
+        self.fast_pool = None           # the saved areas' fast mode: its own road processes (fast_precache)
+        self.make_fast_pool = None      # n -> such a pool (main_async: the road pool's initializer), or None
+        self._fast_lock = threading.Lock()
         if cache is not None:
             for producer in (self.dem, self.imagery, self.deshadow, self.colormatch):
                 if producer is not None:
@@ -2116,6 +2119,30 @@ class Server:
         k = self.geo_content_key(gx, gy)
         return k if k is not None and os.path.exists(revisitmod._path(self.cache_dir, "roadsg", k)) else None
 
+    def fast_precache(self, on):
+        """The saved areas' fast mode (areas.py; the mod pauses the game meanwhile): road processes of its own for the
+        world phase (FAST_POOL_*) and the full priority split (every core for the server, the game on its first
+        ones), or both back. Any thread."""
+        with self._fast_lock:
+            if on:
+                if self.fast_pool is None and self.make_fast_pool is not None:
+                    n = fast_pool_size()
+                    try:
+                        self.fast_pool = self.make_fast_pool(n)
+                        log.info("fast pre-cache: %d road processes of its own", n)
+                    except Exception as e:      # (no processes: the road pool builds the world phase)
+                        log.warning("fast pre-cache: no road processes of its own: %s: %s", type(e).__name__, e)
+                self.split_boost(True, "fast pre-cache")
+                return
+            pool, self.fast_pool = self.fast_pool, None
+            if pool is not None:
+                try:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                except Exception:
+                    pass
+                log.info("fast pre-cache: its road processes closed")
+            self.split_boost(False, "fast pre-cache")
+
     def prebuild_geo(self, gx, gy):
         """Saved areas' world phase: geotile (gx, gy)'s road content built into the revisit cache in a road process
         (blockworker.prebuild_geo), the game sent nothing. -> its revisit key, or None (not complete: tried later)."""
@@ -2125,7 +2152,9 @@ class Server:
         # (beside the session folders, as a session's: a 3dmr.eu model baked there finds the models' cache, its textures'
         # game path and the mod's materials file where the game's own tiles do: buildings._custom_tile_entries, PR #626)
         scratch = os.path.join(self.root, "areas_scratch")
-        return poolsmod.result_running(getattr(self.road_pool, "submit_low", self.road_pool.submit)(
+        fast = self.fast_pool           # (fast mode: its own processes, the game paused: no need to stand back)
+        submit = fast.submit if fast is not None else getattr(self.road_pool, "submit_low", self.road_pool.submit)
+        return poolsmod.result_running(submit(
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
             lamps, country, "/temp/beamngEarth/areas_scratch"), ROAD_TILE_TIMEOUT_S)
 
@@ -5155,18 +5184,19 @@ class Connection:
         name = msg.get("name")
         name = name if isinstance(name, str) else ""
         mode = msg.get("mode") if isinstance(msg.get("mode"), str) else areasmod.DEFAULT_MODE
+        fast = msg.get("fast") is True      # (fast mode: areas.py; the mod pauses the game while it runs)
         route = self._area_route(msg)
         if route is not None:
             ok, info = await asyncio.get_running_loop().run_in_executor(
-                None, self.s.areas.add_route, route[0], route[1], msg.get("half"), name, mode)
+                None, self.s.areas.add_route, route[0], route[1], msg.get("half"), name, mode, fast)
         else:
             ok, info = await asyncio.get_running_loop().run_in_executor(
-                None, self.s.areas.add, msg.get("s"), msg.get("w"), msg.get("n"), msg.get("e"), name, mode)
+                None, self.s.areas.add, msg.get("s"), msg.get("w"), msg.get("n"), msg.get("e"), name, mode, fast)
         res = {"id": msg.get("id"), "ok": ok, ("area" if ok else "error"): info}
         self.send(self.s.areas_message(res))
 
     async def area_cmd(self, msg):
-        """{"id", "area", "op": pause | resume | delete} -> areas {..., "result": {"id", "ok"}}."""
+        """{"id", "area", "op": pause | resume | delete | fast | slow} -> areas {..., "result": {"id", "ok"}}."""
         if self.s.areas is None:
             return
         area, op = msg.get("area"), msg.get("op")
@@ -7278,6 +7308,14 @@ async def main_async(args):
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
+    make_fast_pool = None
+    if road_pool is not None:
+        def make_fast_pool(n):          # (the saved areas' fast mode: Server.fast_precache)
+            return poolsmod.RespawningPool(
+                "fast pre-cache", n, mp_context=ctx, initializer=blockworker.init,
+                initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
+                          args.surface == "on", None, logging.getLogger().level,
+                          args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
     far_bld_pool = None
     if road_pool is not None and args.buildings == "on":
         far_bld_pool = poolsmod.RespawningPool(   # far building tiles (blockworker.far_buildings_tile)
@@ -7309,6 +7347,7 @@ async def main_async(args):
                     far_bld_pool=far_bld_pool,
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
+    server.make_fast_pool = make_fast_pool
     server.update_check = args.update_check == "on"
     server.geo_tiles = args.geo_tiles == "on"
     server.global_far = args.global_far == "on"
@@ -7675,6 +7714,19 @@ def machine_profile(args, small):
         args.road_processes = budget.road_processes()
         log.info("road-tile processes: %d (%d threads, %.0f GB)", args.road_processes, os.cpu_count() or 0,
                  budget.total_gb() or 0)
+
+FAST_POOL_KEEP = 2          # the saved areas' fast mode: its road processes, one per CPU thread but these ...
+FAST_POOL_GB = 2.0          # ... and at most one per this much memory (a road process holds ~1-1.5 GB at work) ...
+FAST_POOL_MAX = 24          # ... and at most this many
+
+
+def fast_pool_size(cpus=None, gb=None):
+    """The road processes of the saved areas' fast mode on this computer (FAST_POOL_*). Pure given its arguments."""
+    import budget
+    cpus = (os.cpu_count() or 2) if cpus is None else cpus
+    gb = (budget.total_gb() or 8.0) if gb is None else gb
+    return max(2, min(FAST_POOL_MAX, cpus - FAST_POOL_KEEP, int(gb / FAST_POOL_GB)))
+
 
 def main():
     # (this run's id, inherited by its worker processes: roadz keeps one lidar decision per map cell and run in it)
