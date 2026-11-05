@@ -41,6 +41,7 @@ MATS = {
     "concrete": mat("bne_cat_concrete", (0.62, 0.61, 0.58), 0.0, 0.9),
     "galv": mat("bne_cat_galv", (0.62, 0.64, 0.65), 0.85, 0.45),
     "insulator": mat("bne_cat_insulator", (0.55, 0.66, 0.6), 0.0, 0.15),
+    "plate": mat("bne_cat_plate", (0.9, 0.85, 0.1), 0.0, 0.5),
 }
 
 
@@ -81,24 +82,64 @@ def frustum(bm, p0, p1, r0, r1, seg, mi, cap=True, uv_len=2.0):
     return rings
 
 
+
+def radius_at(z):
+    return R0 + (R1 - R0) * (z - 0.35) / (H - 0.35)
+
+
+def ribbed(bm, p, d, length, ts, discs=5):
+    """A glass insulator string: discs of alternating radius along unit direction d, centred on p."""
+    for k in range(discs):
+        t0 = -length / 2 + length * k / discs
+        t1 = -length / 2 + length * (k + 0.8) / discs
+        r = 0.062 if k % 2 == 0 else 0.046
+        frustum(bm, p + d * t0, p + d * t1, r, r * 0.92, ts, 2)
+    frustum(bm, p - d * length / 2 - d * 0.02, p + d * length / 2 + d * 0.02, 0.022, 0.022, ts, 1)
+
+
+def plate(bm, centre, normal, size, mi):
+    """A thin square plate (the mast's warning / number plate) on the mast, its UVs the whole texture."""
+    uv = bm.loops.layers.uv.verify()
+    n = normal.normalized()
+    x = n.cross(Vector((0, 0, 1))).normalized()
+    z = Vector((0, 0, 1))
+    h = size / 2
+    c = centre + n * 0.006
+    vs = [bm.verts.new(c + x * a * h + z * b * h) for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    f = bm.faces.new(vs)
+    f.material_index = mi
+    for loop, uvc in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
+        loop[uv].uv = uvc
+
+
+def joint_rings(bm, seg):
+    """The concrete mast's section joints: a collar 3 cm proud at each."""
+    for z in (3.2, 6.0):
+        frustum(bm, Vector((0, 0, z - 0.06)), Vector((0, 0, z + 0.06)), radius_at(z) + 0.03, radius_at(z) + 0.03, seg, 0,
+                uv_len=1.1)
+
 def build(seg, detail):
     bm = bmesh.new()
     # the mast: foot collar (concrete foundation) and the tapered pole
     frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 0)
-    frustum(bm, Vector((0, 0, 0.35)), Vector((0, 0, H)), R0, R1, seg, 0, uv_len=2.5)
+    frustum(bm, Vector((0, 0, 0.35)), Vector((0, 0, H)), R0, R1, seg, 0, uv_len=1.1)
     ts = max(5, seg // 2)
     # the cantilever: the horizontal tube, the registration arm (thinner), the inclined tie
     frustum(bm, Vector((0.10, 0, Z_MESS)), Vector((ARM_X + 0.15, 0, Z_MESS)), 0.036, 0.030, ts, 1)
     frustum(bm, Vector((0.10, 0.0, Z_REG)), Vector((ARM_X + 0.10, 0.0, Z_REG)), 0.028, 0.024, ts, 1)
     frustum(bm, Vector((0.10, 0, Z_TIE)), Vector((ARM_X - 0.1, 0, Z_MESS + 0.03)), 0.022, 0.022, ts, 1)
     if detail:
+        joint_rings(bm, seg)
+        for sx in (1.0, -1.0):          # the plates on the track side and the field side, at eye height
+            plate(bm, Vector((sx * (radius_at(2.2) + 0.0), 0, 2.2)), Vector((sx, 0, 0)), 0.30, 3)
         # the cantilever's clamps on the mast and glass insulators along the tie and at the arm's tip
         for z in (Z_MESS, Z_REG, Z_TIE):
             frustum(bm, Vector((-0.06, 0, z - 0.06)), Vector((-0.06, 0, z + 0.06)), 0.12, 0.12, ts, 1)
-        for t in (0.35, 0.55, 0.75):
-            p = Vector((0.10, 0, Z_TIE)).lerp(Vector((ARM_X - 0.1, 0, Z_MESS + 0.03)), t)
-            d = Vector((ARM_X - 0.2, 0, Z_MESS - Z_TIE + 0.03)).normalized()
-            frustum(bm, p - d * 0.11, p + d * 0.11, 0.05, 0.05, ts, 2)
+        a_ = Vector((0.10, 0, Z_TIE))
+        b_ = Vector((ARM_X - 0.1, 0, Z_MESS + 0.03))
+        d_ = (b_ - a_).normalized()
+        for t in (0.30, 0.62):
+            ribbed(bm, a_.lerp(b_, t), d_, 0.34, ts)
         tip = Vector((ARM_X + 0.15, 0, Z_MESS))
         frustum(bm, tip + Vector((0, 0, 0.02)), tip + Vector((0, 0, 0.30)), 0.055, 0.045, ts, 2)
         frustum(bm, Vector((ARM_X + 0.1, 0, Z_REG)) + Vector((0, 0, 0.02)), Vector((ARM_X + 0.1, 0, Z_REG + 0.22)), 0.05, 0.04, ts, 2)
@@ -109,7 +150,7 @@ def make(name, bm, parent):
     ob = new_object(name, parent)
     bm.to_mesh(ob.data)
     bm.free()
-    for k in ("concrete", "galv", "insulator"):
+    for k in ("concrete", "galv", "insulator", "plate"):
         ob.data.materials.append(MATS[k])
     return ob
 

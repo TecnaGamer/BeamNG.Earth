@@ -98,6 +98,25 @@ def roughness_map(a, lo, hi):
     return ((hi - (hi - lo) * g) * 255.0 + 0.5).astype(np.uint8)
 
 
+TEX_VFS = "/levels/beamng_earth/art/shapes/beamngEarth/"
+# texture set -> (materials file, material) whose maps it becomes
+LINKS = {"concrete": ("catenary.materials.json", "bne_cat_concrete"), "galv": ("catenary.materials.json", "bne_cat_galv")}
+
+
+def link_material(file, material, base, tint=(1.0, 1.0, 1.0)):
+    """Point material (in the mod's materials file) at the texture set <base>_b / _nm / _r."""
+    import json
+    path = os.path.join(OUT, file)
+    with open(path, encoding="utf8") as f:
+        d = json.load(f)
+    st = d[material]["Stages"][0]
+    st.update({"baseColorMap": TEX_VFS + base + "_b.color.png", "normalMap": TEX_VFS + base + "_nm.normal.png",
+               "roughnessMap": TEX_VFS + base + "_r.data.png", "baseColorFactor": [*tint, 1.0]})
+    st.pop("roughnessFactor", None)
+    with open(path, "w", encoding="utf8") as f:
+        json.dump(d, f, indent=2)
+
+
 def ingest(key):
     cfg = TEXTURES[key]
     src = os.path.join(INBOX, cfg["src"])
@@ -115,6 +134,8 @@ def ingest(key):
     im.save(base + "_b.color.png")
     Image.fromarray(normal_map(a, cfg["normal"])).save(base + "_nm.normal.png")
     Image.fromarray(roughness_map(a, *cfg["rough"]), "L").save(base + "_r.data.png")
+    if key in LINKS:
+        link_material(*LINKS[key], cfg["out"] + OUT_SUFFIX)
     print(f"{key}: seam LR/TB {before[0]:.2f}/{before[1]:.2f} -> {after[0]:.2f}/{after[1]:.2f}, "
           f"mean {a.mean():.1f} -> {os.path.basename(base)}_*.png")
     return True

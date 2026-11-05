@@ -64,5 +64,29 @@
       {},
       {}
     ]
+  },
+  "bne_cat_plate": {
+    "name": "bne_cat_plate",
+    "mapTo": "bne_cat_plate",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f8ca06f1-98c8-5bdb-98ff-386e2778aeaa",
+    "Stages": [
+      {
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_b.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_nm.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_r.data.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }
