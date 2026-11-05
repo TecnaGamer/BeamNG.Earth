@@ -4635,12 +4635,22 @@ def has_sidewalks(spec):
         return spec.kind in BUILT and bool(spec.sides)
     if spec.oneway and spec.kmh is not None and spec.kmh >= NO_WALK_KMH:
         return False
-    return spec.kind in BUILT and spec.urban and (spec.cls in SIDEWALK_CLASSES
-                                                  or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
+    return spec.kind in BUILT and spec.urban and not limited_access(spec) and (
+        spec.cls in SIDEWALK_CLASSES or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
+
+
+def limited_access(spec):
+    """A road no pedestrian walks beside whatever the land cover says: a motorway's or trunk's ramp (a ramp has few
+    junctions, so _arterial's spacing rule read it as a town street: a cloverleaf's ramps had a sidewalk each), or a
+    one-way carriageway of a primary / trunk with a mapped limit over ARTERIAL_KMH. An unmapped limit leaves the
+    class rule. Pure."""
+    if spec.link and spec.cls in ("motorway", "trunk"):
+        return True
+    return bool(spec.oneway and spec.cls in ("primary", "trunk") and spec.kmh is not None and spec.kmh > ARTERIAL_KMH)
 
 
 def _arterial(spec):
-    if not spec.oneway:
+    if not spec.oneway or limited_access(spec):
         return False
     if spec.kmh is not None:
         return spec.kmh <= ARTERIAL_KMH

@@ -131,6 +131,20 @@ class RulesTest(unittest.TestCase):
         rural = roads.road_specs(features([[(0, 0), (100, 0)]], ["residential"]))[0]
         self.assertFalse(roads.has_sidewalks(rural))                                     # untagged, rural: none
 
+    def test_limited_access_roads_get_no_sidewalks_in_a_built_up_cover(self):
+        # a cloverleaf's ramps (few junctions) and a fast one-way primary beside a town's edge were drawn with
+        # sidewalks; a slow one-way primary / trunk, a town street and a tagged sidewalk keep theirs
+        classes = ["trunk", "trunk", "primary", "primary", "trunk", "residential", "trunk"]
+        f = features([[(0, 0), (100, 0)]] * 7, classes)
+        f.rules["oneway"] = rules([(i, 1.0) for i in range(6)], "float")
+        f.rules["subclass"] = rules([(0, "link")])
+        f.rules["max_speed_kmh"] = rules([(2, 90.0), (3, 50.0), (4, 60.0)], "float")
+        f.attrs["osm_sidewalk"] = np.array(["", "", "", "", "", "", "both"], object)
+        s = roads.road_specs(f, urban_fn=lambda lat, lon: np.ones(len(lat), bool))
+        #                                         ramp   fast-less  90      50    60     street  tagged
+        self.assertEqual([roads.has_sidewalks(sp) for sp in s], [False, False, False, True, True, True, True])
+        self.assertTrue(s[0].link and s[0].oneway)
+
     def test_rock_and_grass_live_in_the_ground_layer(self):
         def spec(surf):
             return roads.Spec(6.0, "dirt", False, "residential", False, 2.5, 0, None, surf=surf)
