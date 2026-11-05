@@ -344,11 +344,11 @@ def _q(path):
 def _number_rows(con, dedup_if_repeated=None):
     """Temp table t from s (Reader._run): one row per id (its highest version), numbered fi in id order. The window
     dedup only where an id repeats (DEDUP_IF_REPEATED): none did in a fresh place's 60 road cells, and the window was
-    ~3/4 of the statement's ~33 ms a cell, ~16 % of a road cell's query CPU. Without repeats both give the same rows."""
+    ~3/4 of the statement's ~33 ms a cell (2026-11-04). Without repeats both give the same rows."""
     if dedup_if_repeated is None:
         dedup_if_repeated = DEDUP_IF_REPEATED
-    n, u = con.execute("SELECT count(*), count(DISTINCT id) FROM s").fetchone() if dedup_if_repeated else (1, 0)
-    if n == u:
+    dedup = not dedup_if_repeated or con.execute("SELECT count(*) > count(DISTINCT id) FROM s").fetchone()[0]
+    if not dedup:
         con.execute("""CREATE TEMP TABLE t AS
             SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * EXCLUDE (version) FROM s""")
     else:
