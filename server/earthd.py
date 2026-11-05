@@ -2338,6 +2338,15 @@ class Server:
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
         import windturbines
         turbine_rows = windturbines.tile_turbines(anchor.frame, tx, ty, elev)
+        if self.mapdata is not None:
+            import golf
+            try:
+                land_fn = lambda key: self.mapdata.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
+                flag_rows = golf.rows(anchor.frame, land_fn, box, elev)
+                if flag_rows:
+                    props = (props or []) + flag_rows
+            except Exception as ex:
+                log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
@@ -2922,6 +2931,7 @@ class Server:
             lots = (self.surface.lots(keep["lat"], keep["lon"]) if hasattr(self.surface, "lots") else None)
             if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
                 idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
+                idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], lots)   # (golf over it: courses win)
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,

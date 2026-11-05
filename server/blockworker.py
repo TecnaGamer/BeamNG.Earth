@@ -415,6 +415,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         lots = _s.surface.lots(keep["lat"], keep["lon"]) if hasattr(_s.surface, "lots") else None
         if lots:                        # farmland under the carriageways (a field does not cover the asphalt)
             idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
+            idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], lots)   # (golf over it: courses win)
         if road_feats:
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
@@ -990,6 +991,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         mark("powerlines")
     import windturbines
     turbine_rows = windturbines.tile_turbines(frame, tx, ty, elev)
+    if getattr(_s, "md", None) is not None:
+        import golf
+        try:
+            land_fn = lambda key: _s.md.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
+            flag_rows = golf.rows(frame, land_fn, box, elev)
+            if flag_rows:
+                props = (props or []) + flag_rows
+        except Exception as ex:
+            log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads

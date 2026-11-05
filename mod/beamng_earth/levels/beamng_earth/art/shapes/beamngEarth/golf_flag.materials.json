@@ -1,0 +1,37 @@
+{
+  "bne_golf_pole": {
+    "name": "bne_golf_pole",
+    "mapTo": "bne_golf_pole",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c4e1a7b2-6d30-4f18-9a55-0e7b2c8d14a1",
+    "Stages": [
+      {
+        "baseColorFactor": [0.28, 0.28, 0.30, 1.0],
+        "metallicFactor": 0.15,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_golf_flag": {
+    "name": "bne_golf_flag",
+    "mapTo": "bne_golf_flag",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c4e1a7b2-6d30-4f18-9a55-0e7b2c8d14a2",
+    "Stages": [
+      {
+        "baseColorFactor": [0.93, 0.16, 0.12, 1.0],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  }
+}

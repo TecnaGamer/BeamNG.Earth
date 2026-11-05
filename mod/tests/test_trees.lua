@@ -622,4 +622,11 @@ do
   T.check(table.concat(at, ',') == '4,2,5,3,1', 'pass order: ' .. table.concat(at, ','))
   T.check(trees.orderKey(1e9, 7) % 2 ^ 20 == 7 and trees.orderKey(1e9, 7) < 2 ^ 53, 'pass order: far tiles capped')
 end
+do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is not a barrier
+  local shape, sc = trees.pick('golfflag', 2.05, 0.3)
+  T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,
+    'golfflag: its model at 1:1')
+  T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
+end
+
 T.done('test_trees')
