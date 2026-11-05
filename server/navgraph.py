@@ -532,7 +532,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 divided = trafficmod.is_divided_road(spec.cls, getattr(spec, "median", 0.0),
                                                      getattr(spec, "link", False), spec.oneway)
                 edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2),
-                              round(float(legal), 2), str(spec.cls), bool(divided), bool(getattr(spec, "urban", False))])
+                              round(float(legal), 2), str(spec.cls), bool(divided),
+                              bool(getattr(spec, "urban", False))])
                 edge_fids.append(fid)
                 if in_tunnel:
                     tube_edges.add(id(edges[-1]))
