@@ -166,6 +166,22 @@ class RailXingTest(unittest.TestCase):
         np.testing.assert_allclose(r[0], za)
         np.testing.assert_allclose(r[1], zb)
 
+    def test_buildings_keep_off_the_railway_bed(self):
+        import buildings
+        f = features([[(-100.0, 100.0), (400.0, 100.0)], [(-100.0, 140.0), (400.0, 140.0)]],
+                     ["standard_gauge", "tram"], subtypes=["rail", "rail"])
+        x0, y0 = roads.tile_bbox(0, 0)[:2]
+        rl = buildings.rail_lines(FRAME, [f], x0, y0)
+        self.assertEqual(len(rl), 1, "the railway, not the tram")
+        hut = np.array([[50.0, 101.5], [58.0, 101.5], [58.0, 106.0], [50.0, 106.0]]) - [x0, y0]
+        far = np.array([[50.0, 112.0], [58.0, 112.0], [58.0, 118.0], [50.0, 118.0]]) - [x0, y0]
+        astride = np.array([[50.0, 95.0], [58.0, 95.0], [58.0, 105.0], [50.0, 105.0]]) - [x0, y0]
+        self.assertTrue(buildings.on_rail_bed(hut, rl), "its wall within the bed's reach")
+        self.assertTrue(buildings.on_rail_bed(astride, rl), "across the track")
+        self.assertFalse(buildings.on_rail_bed(far, rl))
+        railxing.ENABLED = False
+        self.assertEqual(buildings.rail_lines(FRAME, [f], x0, y0), [], "off: nothing")
+
     def test_abandoned_none_and_disused_cross(self):
         f, _ = crossing([100.0])
         f.rules["flags"] = _flags([(0, "is_abandoned")])
