@@ -43,6 +43,14 @@ export const settingsSchema = [
     ],
   },
   {
+    name: "Traffic AI",
+    intro: "Experimental Earth lane-following cars use OpenStreetMap lane geometry and the mapped speed limit. They continue straight through junctions and despawn at the end of the mapped road. They do not avoid traffic or obstacles. This system is independent of BeamNG traffic and is off by default.",
+    items: [
+      { id: "earthLaneAI", type: "bool", default: false, name: "Earth lane-following AI", desc: "Spawn experimental cars that follow the Earth road lanes. This does not change BeamNG's Traffic or Chase modes." },
+      { id: "earthLaneAICount", type: "number", default: 8, min: 0, max: 32, unit: "cars", name: "Earth lane AI vehicles", desc: "Desired number of experimental cars. Spawning and removal are gradual. Cars you enter are kept when the AI population is reduced.", showIf: c => c.earthLaneAI === true },
+    ],
+  },
+  {
     name: "World",
     items: [
       { id: "skyMode", type: "select", default: "real", name: "Sun and stars", desc: "Real time: the sun, moon and stars follow the real clock and date where you are. Manual: use the game's own Time & Weather controls. Changing the time in the pause menu switches this to Manual by itself; choose Real time to go back.",

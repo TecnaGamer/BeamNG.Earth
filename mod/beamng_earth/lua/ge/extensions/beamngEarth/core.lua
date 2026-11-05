@@ -87,6 +87,7 @@ nightlights.providers.gas = function() return gasstations.lightPoints() end
 nightlights.providers.tunnel = function() return ambience.tunnelLights() end
 gasstations.onCollide = roads.markCollisionDirty
 local navgraph = require('beamngEarth/navgraph')
+M._earthai = require('beamngEarth/earthai')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
 local collisionfoci = require('beamngEarth/collisionfoci') -- other vehicles' collision islands
@@ -1216,6 +1217,9 @@ local function onMessage(msg)
   elseif t == 'navgraph' then
     -- the AI road graph around the player (server navgraph.py, --traffic on): map.reset (navgraph.lua)
     navgraph.onMessage(msg, st.anchorId)
+  elseif t == 'earth_ai_graph' then
+    -- the standalone OSM lane follower's nearby route candidates (earthai.py); no native traffic graph involved
+    M._earthai.onMessage(msg, st.anchorId)
   elseif t == 'sea' then
     -- the sea's water tiles near the player (server seatiles.py, --sea on): sea.lua
     sea.onMessage(msg)
@@ -1499,8 +1503,11 @@ local function updateWorld(dt)
     local c = st.cam
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
     -- ids are another server's); sessions: every session folder in use
+    local aiPose = M._earthai.poseFields()
     net.send({ type = 'pose', anchorId = st.anchorId, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy,
       lat = pl.lat, lon = pl.lon, speed = pl.speed, follow = not st.followHeld,
+      earthAI = aiPose.earthAI, earthAICount = aiPose.earthAICount,
+      earthAIActive = aiPose.earthAIActive, earthAIQueued = aiPose.earthAIQueued,
       held = (farfield.session() == st.sessionId) and farfield.heldAnchors() or {},
       sessions = roads.allHeldSessions(),
       slotsGone = slotsGoneNow(), -- pooled shape slots let go (server/matslots.py)
@@ -2244,6 +2251,9 @@ local function onUpdate(dtReal, dtSim)
     t = mark('navgraph', t)
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)
+    local ok, err = pcall(M._earthai.update, dtReal, st)
+    if not ok then log('E', 'beamngEarth', 'earth lane AI: ' .. tostring(err)) end
+    t = mark('earthai', t)
     do
       local ok, err = pcall(M._trafficvisuals.update, dtReal, dtSim, st, pb, gov)
       if not ok then M._trafficvisuals.reset(); log('E', 'beamngEarth', 'distant traffic: ' .. tostring(err)) end
@@ -2403,6 +2413,7 @@ local function onClientEndMission()
   nightlights.reset()
   parking.reset()
   navgraph.reset()
+  M._earthai.reset()
   M._trafficvisuals.reset()
   local sessionId, nextRequestId, mapPort = st.sessionId, st.nextRequestId, st.mapPort
   resetState()
@@ -2861,6 +2872,9 @@ M.onUiChangedState = onUiChangedState
 M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
+M.setEarthAIEnabled = function(on, count) return M._earthai.setEnabled(on, count) end
+M.setEarthAICount = function(count) return M._earthai.setAmount(count) end
+M.earthAIStatus = function() return M._earthai.status() end
 M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end

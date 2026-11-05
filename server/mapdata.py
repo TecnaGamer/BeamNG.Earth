@@ -490,6 +490,22 @@ class MapData:
             log.warning("mapdata: OSM road tags of %s: %s: %s", key, type(e).__name__, e)
             return {}, []
 
+    def earth_ai_ways(self, bounds, kind="demand"):
+        """Independent OSM road geometry for BeamNG Earth's lane-following AI.
+
+        This query deliberately bypasses Overture road features and their spatial streaming
+        window. The globally indexed Layercake OSM source is asked directly for the requested
+        geographic bounds.
+        """
+        import osmtags
+        if self.fetcher is None:
+            return []
+        with self._lock:
+            if getattr(self, "osmtags", None) is None:
+                self.osmtags = osmtags.OsmTags(self.raw_dir, self.fetcher)
+            source = self.osmtags
+        return source.earth_ways(bounds, kind)
+
     def osm_fuel_path(self, key):
         return os.path.join(self.raw_dir, "osmfuel_cells", f"v{OSM_POI_VERSION}", f"{_key(key)}.json")
 

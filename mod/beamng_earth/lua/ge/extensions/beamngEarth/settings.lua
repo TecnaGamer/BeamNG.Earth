@@ -52,6 +52,8 @@ M.SCHEMA = {
   distantTrafficWithoutTraffic = { kind = 'bool', default = false, label = 'Distant lights without traffic' },
   distantTrafficQuality = { kind = 'enum', default = 'high', values = { 'low', 'medium', 'high' },
     label = 'Distant traffic quality' },
+  earthLaneAI = { kind = 'bool', default = false, label = 'Earth lane-following AI' },
+  earthLaneAICount = { kind = 'number', default = 8, min = 0, max = 32, label = 'Earth lane AI vehicles' },
   -- the far field's terrain detail: the server's K table times M.TERRAIN_DETAIL (the 'graphics' message's lodScale)
   terrainDetail = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Terrain detail' },
@@ -133,7 +135,8 @@ M.SCHEMA = {
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
-  'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
+  'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality',
+  'earthLaneAI', 'earthLaneAICount', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'models3dmr',
   'dashboardSatellite',
@@ -473,6 +476,14 @@ M.APPLY = {
   distantTraffic = function(v) require('beamngEarth/trafficvisuals').setEnabled(v) end,
   distantTrafficWithoutTraffic = function(v) require('beamngEarth/trafficvisuals').setWithoutTraffic(v) end,
   distantTrafficQuality = function(v) require('beamngEarth/trafficvisuals').setQuality(v) end,
+  earthLaneAI = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setEarthAIEnabled then core.setEarthAIEnabled(v, values.earthLaneAICount) end
+  end,
+  earthLaneAICount = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setEarthAICount then core.setEarthAICount(v) end
+  end,
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
