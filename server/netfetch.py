@@ -228,16 +228,6 @@ POLICIES = {
     "www.wikidata.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
                                    cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0, max_attempts=1,
                                    optional=True),
-    # Nominatim (OpenStreetMap's own geocoder; geocode.py): streets and house numbers when the player presses Enter.
-    # Its usage policy: one request a second at most, no autocomplete, a User-Agent that names the app
-    "nominatim.openstreetmap.org": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
-                                              cache_ttl=7 * DAY, miss_ttl=None, max_wait=2.5, timeout=8.0,
-                                              max_attempts=1, optional=True),
-    # Wikidata and Wikipedia (geocode.py): landmarks as you type, debounced by the map; a modest rate and a User-Agent
-    # that names the app, as their API etiquette asks (the Wikipedias: WIKIPEDIA_LANGS below)
-    "www.wikidata.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
-                                   cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0, max_attempts=1,
-                                   optional=True),
     # OSRM on OpenStreetMap by FOSSGIS (routing.py): one request per GPS destination or re-route; their fair use:
     # ~1 request a second at most, no bulk
     "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=2.0, max_conc=1, daily_budget=300, daily_hard=500,
