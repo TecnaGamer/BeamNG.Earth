@@ -66,6 +66,8 @@ SLEEPER = "bne_rail_sleeper"        # weathered concrete sleepers (bne_bridge_co
 STEEL = "bne_rail_steel"            # rust-brown rails
 # per wear (wear()): a disused line's ballast weedy, an abandoned one's grown over, their rails and sleepers older, and
 # a share of an abandoned line's sleepers gone (SLEEPERS_GONE)
+BALLAST_STONE = "bne_rail_ballast_stone"    # crushed granite (BNE_RAIL_XING; tools/ingest_rail_textures.py): a track in use
+BALLAST_TILE_M = 0.8        # m one tile of it covers (stones of 5-10 cm); the stock gravel's 3 m
 BALLAST_WORN = (BALLAST, "bne_rail_ballast_weedy", "bne_rail_ballast_grown")
 STEEL_WORN = (STEEL, "bne_rail_steel_old", "bne_rail_steel_old")
 SLEEPER_WORN = (SLEEPER, "bne_rail_sleeper_old", "bne_rail_sleeper_old")
@@ -1000,16 +1002,17 @@ def _sited(pr, crossers, ground):
     return c, along, across, np.minimum(z0, zg - PIER_FOOT_M), z1
 
 
-def _ballast_bed(mesh, p, uu, t, v, foot_l, foot_r, zl, zr, mat):
+def _ballast_bed(mesh, p, uu, t, v, foot_l, foot_r, zl, zr, mat, tile=3.0):
     up = np.array([0.0, 0.0, 1.0])
+    v = v * 3.0 / tile                  # (v: arc / 3 m)
     out_l = np.c_[uu, np.zeros(len(p))]
     L = np.c_[p + uu * BALLAST_TOP_M, t]
     R = np.c_[p - uu * BALLAST_TOP_M, t]
     Lf = np.c_[p + uu * foot_l[:, None], np.minimum(zl, t) - BALLAST_FOOT_M]
     Rf = np.c_[p - uu * foot_r[:, None], np.minimum(zr, t) - BALLAST_FOOT_M]
-    mesh.strip(L, R, 0.0, 2 * BALLAST_TOP_M / 3.0, v, mat, up)
-    mesh.strip(L, Lf, 0.0, 0.8, v, mat, out_l + up)
-    mesh.strip(R, Rf, 0.0, 0.8, v, mat, -out_l + up)
+    mesh.strip(L, R, 0.0, 2 * BALLAST_TOP_M / tile, v, mat, up)
+    mesh.strip(L, Lf, 0.0, 0.8 * 3.0 / tile, v, mat, out_l + up)
+    mesh.strip(R, Rf, 0.0, 0.8 * 3.0 / tile, v, mat, -out_l + up)
 
 
 def _deck(mesh, p, uu, t, v, ballast, concrete):
@@ -1295,7 +1298,11 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
             p, uu, t, v = xy[sl], u[sl], top[sl], s[sl] / 3.0
             if kind == "ground":
                 (fl, zl), (fr, zr) = feet
-                _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], ballast_w)
+                if railxing.ENABLED and w == 0:         # (a track in use: crushed stone, its own scale)
+                    _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], mesh.mat(BALLAST_STONE),
+                                 BALLAST_TILE_M)
+                else:
+                    _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], ballast_w)
             else:
                 if cls == "tram":
                     _tram_deck(mesh, p, uu, t, v, concrete)

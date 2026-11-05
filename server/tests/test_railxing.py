@@ -124,6 +124,19 @@ class RailXingTest(unittest.TestCase):
         ch = rails.tile_chunks(FRAME, 0, 0, cells)
         self.assertTrue([c for c in ch if c["m"] == rails.STREET_TRACK["m"]], "off: the decal as before")
 
+    def test_crushed_stone_ballast_on_a_track_in_use(self):
+        f = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        self.assertIn(railways.BALLAST_STONE, mats)
+        self.assertFalse((M == mats.index(railways.BALLAST)).any(), "no stock gravel triangles")
+        top = np.unique(T[M == mats.index(railways.BALLAST_STONE)])
+        u, v = UV[top, 0], UV[top, 1]
+        self.assertAlmostEqual(float(u.max() - u.min()), 2 * railways.BALLAST_TOP_M / railways.BALLAST_TILE_M, delta=1.0)
+        self.assertGreater(float(v.max() - v.min()), 200.0 / railways.BALLAST_TILE_M * 0.8, "tiled every 0.8 m")
+        railxing.ENABLED = False
+        _P, _T, _UV, mats, _M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        self.assertIn(railways.BALLAST, mats, "off: the stock gravel as before")
+
     def test_abandoned_none_and_disused_cross(self):
         f, _ = crossing([100.0])
         f.rules["flags"] = _flags([(0, "is_abandoned")])
