@@ -962,7 +962,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             c_ground = railways._mixed(rground, railways.point_ground(
                 frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), ("raw",) + tuple(rkey)),
                 roadsmod.tile_bbox(tx, ty))
-            c_rows, c_wires = catenary.build(frame, tx, ty, rcells, c_ground)
+            _bx, _by = roadsmod.tile_bbox(tx, ty)[:2]
+            c_rows, c_wires = catenary.build(frame, tx, ty, rcells, c_ground,
+                                             [np.asarray(sp.ring, np.float64) + [_bx, _by] for sp, _g0, _g1 in (items or [])])
             if c_rows:
                 props = (props or []) + c_rows
             wires.extend(c_wires)

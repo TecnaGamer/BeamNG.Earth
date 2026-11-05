@@ -28,6 +28,7 @@ SPAN_MIN_M = 30.0
 CURVE_K = 0.4                   # m: the pull-off allowed on a curve, a span's sagitta: span = sqrt(8 R k) ...
 SPAN_MAX_M = 62.0               # ... at most this
 ROAD_CLEAR_M = 2.0              # m a mast keeps off a carriageway's edge
+BUILDING_CLEAR_M = 1.5          # m a mast keeps off a building's outline (it stood in a hut's wall, Kalynivka)
 BETWEEN_M = 3.0                 # m a mast keeps off another track's axis (not between two tracks)
 SHIFT_M = (0.0, 3.0, -3.0, 6.0, -6.0, 9.0, -9.0)    # m along the track a mast moves off a road or a track
 MAPPED_NEAR_M = 8.0             # m from a line a mapped mast node belongs to it
@@ -167,11 +168,29 @@ def _road_lines(frame, cells, box, reach):
     return out
 
 
+def near_ring(p, rings, m=BUILDING_CLEAR_M):
+    """Whether point p (2,) is inside one of the footprints rings (k, 2) or within m of its outline."""
+    for r in rings:
+        if p[0] < r[:, 0].min() - m or p[0] > r[:, 0].max() + m or p[1] < r[:, 1].min() - m or p[1] > r[:, 1].max() + m:
+            continue
+        a, b = r, np.roll(r, -1, axis=0)
+        d = b - a
+        t = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
+        if float(np.hypot(*(a + t[:, None] * d - p).T).min()) <= m:
+            return True
+        # (inside: an even number of the outline's edges cross a ray to +x)
+        y0, y1 = a[:, 1], b[:, 1]
+        hit = ((y0 > p[1]) != (y1 > p[1])) & (p[0] < (b[:, 0] - a[:, 0]) * (p[1] - y0) / np.where(y1 == y0, 1e-12, y1 - y0) + a[:, 0])
+        if int(hit.sum()) % 2 == 1:
+            return True
+    return False
+
+
 def _clear_of_roads(p, roads):
     return all(_dist_to_lines(p, [ln]) > hw + ROAD_CLEAR_M for ln, hw in roads)
 
 
-def masts_of(frame, cells, box, ground):
+def masts_of(frame, cells, box, ground, rings=()):
     """The masts of the electrified lines round box: [dict(fid, xy, s, side, dir, z, base)] one per mast of a line,
     with 'tip' the contact wire's attach point and 'axis' the track's axis point. Not clipped to the tile: the spans'
     ends are needed (rows_and_wires picks the tile's)."""
@@ -213,7 +232,7 @@ def masts_of(frame, cells, box, ground):
                     q = p + n * side * off
                     if others and _dist_to_lines(q, others) < BETWEEN_M:
                         continue
-                    if not _clear_of_roads(q, roads):
+                    if not _clear_of_roads(q, roads) or (rings and near_ring(q, rings)):
                         continue
                     got = (s, p, u, q, side)
                     break
@@ -275,9 +294,10 @@ def rows_and_wires(masts, box_owns):
     return rows, wires
 
 
-def build(frame, tx, ty, cells, ground):
-    """(prop rows, wire lines) of road tile (tx, ty): the catenary of the electrified lines round it."""
+def build(frame, tx, ty, cells, ground, rings=()):
+    """(prop rows, wire lines) of road tile (tx, ty): the catenary of the electrified lines round it. rings: the
+    buildings' footprints (anchor frame) the masts keep off."""
     import roads as roadsmod
     box = roadsmod.tile_bbox(tx, ty)
-    masts = masts_of(frame, cells, box, ground)
+    masts = masts_of(frame, cells, box, ground, rings)
     return rows_and_wires(masts, lambda x, y: roadsmod.box_owns(box, x, y))

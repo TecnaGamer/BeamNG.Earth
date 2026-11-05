@@ -73,6 +73,18 @@ class CatenaryTest(unittest.TestCase):
         for m in masts(f):
             self.assertGreater(abs(float(m["q"][0]) - 120.0), half + catenary.ROAD_CLEAR_M - 0.5)
 
+    def test_masts_keep_off_buildings(self):
+        f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
+        free = masts(f)
+        m0 = [m for m in free if 0.0 < m["q"][0] < 256.0][2]
+        q = m0["q"]
+        hut = np.array([[q[0] - 3.0, q[1] - 2.0], [q[0] + 3.0, q[1] - 2.0], [q[0] + 3.0, q[1] + 2.0], [q[0] - 3.0, q[1] + 2.0]])
+        kept = catenary.masts_of(FRAME, [f], BOX, flat, [hut])
+        for m in kept:
+            self.assertFalse(catenary.near_ring(m["q"], [hut]), "no mast in the hut's wall")
+        self.assertTrue(catenary.near_ring(q, [hut]) and catenary.near_ring(np.array([q[0] + 4.0, q[1]]), [hut]))
+        self.assertFalse(catenary.near_ring(np.array([q[0] + 6.0, q[1]]), [hut]))
+
     def test_curve_shortens_the_span(self):
         r = 400.0
         th = np.linspace(0.0, math.pi / 3, 60)
