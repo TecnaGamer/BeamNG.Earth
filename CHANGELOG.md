@@ -4,6 +4,14 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ## Unreleased
 
+### Added
+- **Place search works again, and finds more** (GitHub #602): the map's search no longer depends on one service. It asks
+  Wikipedia and Wikidata as you type, Photon while it answers, and OpenStreetMap's Nominatim for streets and house
+  numbers when you press Enter. Their answers are ranked together, so "Ganter Bridge", "Ganterbruecke" and
+  "Ganterbrücke Simplon" all find the same bridge.
+- **"Highest bridge in Switzerland"**: the search answers questions like this (highest and longest bridges, longest
+  tunnels, highest passes and dams, by country or for the world) from a table that comes with the app.
+
 ## 1.8.1 beta (2026-11-04)
 
 Works with BeamNG.drive 0.40.4.

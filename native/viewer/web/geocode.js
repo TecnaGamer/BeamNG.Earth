@@ -1,13 +1,13 @@
 // Place search and "where am I", the mod's way: the viewer never calls a geocoder itself. It sends earthd the
 // same messages the mod sends (server/geocode.py: Photon by komoot, OpenStreetMap data; earthd's netfetch limits
 // and caches the requests):
-//   geocode {id, q, lat, lon}     -> geocode_result {id, results: [{name, detail, kind, lat, lon}], error?}
+//   geocode {id, q, lat, lon, full?} -> geocode_result {id, results: [{name, detail, kind, lat, lon}], error?}
 //       the in-game map's search box (EarthMap.vue liveSearch): 300 ms after the last key, 3+ characters,
 //       biased toward the camera; a typed "lat, lon" goes straight there on Enter
 //   where {id, lat, lon, online}  -> where_result {id, street, place, region, country}
 //       the status bar (statusbar.lua M.request): the street from earthd's map data, the town / region /
 //       country from Photon's reverse geocoding (position rounded to ~1 km) only when `online`
-export const ATTRIBUTION = 'Search: Photon by komoot, data © OpenStreetMap contributors (ODbL)'
+export const ATTRIBUTION = 'Search: OpenStreetMap (Nominatim, Photon by komoot), Wikipedia, Wikidata'
 export const MIN_CHARS = 3
 export const DEBOUNCE_MS = 300
 export const LATLON_RE = /^\s*([-+]?\d+(?:\.\d+)?)\s*[°]?\s*([NSns])?\s*[,;\s]\s*([-+]?\d+(?:\.\d+)?)\s*[°]?\s*([EWew])?\s*$/
@@ -107,9 +107,10 @@ export class Search {
     this.pending = new Map()      // id -> resolve
   }
   // a promise of {results, error}; rejects after timeoutMs without an answer
-  query(q, lat, lon, timeoutMs = 8000) {
+  query(q, lat, lon, timeoutMs = 15000, full = false) {
     const id = ++this.nextId
     const msg = { type: 'geocode', id, q }
+    if (full) msg.full = true
     if (lat != null && lon != null) { msg.lat = lat; msg.lon = lon }
     return new Promise((resolve, reject) => {
       if (!this.send(msg)) { reject(new Error('Not connected to earthd')); return }
