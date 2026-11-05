@@ -112,6 +112,15 @@ class GraphTest(unittest.TestCase):
         drop = 10000.0 ** 2 / (2 * 6371000.0)
         np.testing.assert_allclose(zs, 10.0 - drop, atol=0.15)
 
+    def test_tracks_for_the_follow_ai_not_for_traffic(self):
+        """A track is in the graph (GitHub #756: an AI following the player down one drove into the trees) below the
+        stock traffic's spawn floor (0.5) and its cars' minimum (0.25), at a slow speed."""
+        f = features([[(0, 0), (300, 0)]], ["track"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0))
+        self.assertTrue(g["edges"])
+        self.assertTrue(all(e[6] < 0.25 and e[5] <= 15 * navgraph.MPH + 0.01 for e in g["edges"]), g["edges"][:2])
+
     def test_tunnel_stretch_left_out(self):
         f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
         f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])

@@ -45,6 +45,8 @@ C31_MOUNT_RURAL, C31_MOUNT_TOWN, C31_MIN_GROUND = 1.52, 2.0, 1.2
 _lock = threading.Lock()
 
 
+NO_SIGN_CLASSES = {"track"}     # in the AI's graph (navgraph.DRIVE, GitHub #756) but never signed
+
 def posted(mph_value, mph=True, face=STYLE_VIENNA):
     """The number on the sign of a limit of mph_value mph: mph (to 5) where mph are posted, else km/h (to 5), in Sweden
     to 10 from 30 to 120 (slower: no sign); 0 for none."""
@@ -98,7 +100,8 @@ def _cell_rows(feats, frame, urban, widths, left_hand, mph, face=STYLE_VIENNA):
     picked, lines = [], []
     for i in range(len(feats)):
         sp = specs[i] if specs[i] is not None else bspecs[i]
-        if sp is None or sp.cls not in navgraph.DRIVE or roads._rule_value(sub, i) in navgraph.SKIP_SUBCLASSES:
+        if (sp is None or sp.cls not in navgraph.DRIVE or sp.cls in NO_SIGN_CLASSES
+                or roads._rule_value(sub, i) in navgraph.SKIP_SUBCLASSES):
             continue
         parts = feats.parts(i)
         if not parts or not len(parts[0]) or len(parts[0][0]) < 2:

@@ -21,7 +21,12 @@ import staging
 # classes the AI drives on: drivability (path cost divisor) and a default speed limit (mph, US practice)
 DRIVE = {"motorway": (1.0, 65), "trunk": (1.0, 55), "primary": (1.0, 45), "secondary": (1.0, 40),
          "tertiary": (0.9, 35), "residential": (0.8, 25), "unclassified": (0.8, 30), "living_street": (0.5, 15),
-         "service": (0.4, 15), "unknown": (0.6, 25)}
+         "service": (0.4, 15), "unknown": (0.6, 25),
+         # tracks too (GitHub #756: an AI car following the player down one drove into the trees beside it): below the
+         # stock traffic's spawn floor (trafficUtils minDrivability 0.5) and its cars' own minimum (>= 0.25), so random
+         # traffic stays off them while a follow / chase / route AI can use them. Rural Europe: the box's nodes about
+         # double (Czech farmland 136 -> 235, Black Forest 141 -> 288; a city block has ~700-1000)
+         "track": (0.2, 15)}
 SKIP_SUBCLASSES = {"driveway", "parking_aisle", "sidewalk", "crosswalk", "cycle_crossing"}
 URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (spec.urban) unless mapped
 # the km/h countries' rural defaults for the fast classes (Europe's 120-130 motorways: Bavaria's A9, unmapped, was

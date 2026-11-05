@@ -246,5 +246,17 @@ class GlueTest(unittest.TestCase):
         self.assertEqual(Feats.calls, 1)
 
 
+
+class ClassTest(unittest.TestCase):
+    def test_tracks_are_never_signed(self):
+        """Tracks are in the AI's graph (navgraph.DRIVE, GitHub #756) but get no speed signs."""
+        from test_roads import features, FRAME
+        import navgraph
+        self.assertIn("track", navgraph.DRIVE)
+        f = features([[(0, 0), (400, 0)], [(0, 50), (400, 50)]], ["primary", "track"])
+        got = speedsigns._cell_rows(f, FRAME, None, None, False, True)
+        self.assertEqual(sorted(got), [str(f.ids[0])])
+
+
 if __name__ == "__main__":
     unittest.main()
