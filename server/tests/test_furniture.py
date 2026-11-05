@@ -6,6 +6,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -17,6 +18,14 @@ import roads  # noqa: E402
 def road(fid, cls, urban, x0=-300.0, x1=600.0, y=50.0, width=8.0):
     pts = np.array([(x0, y, 0.0), (x1, y, 0.0)])
     return (fid, roads.Spec(width, "paved", urban, cls, False), pts, 0.0)
+
+
+class ConstantDevelopment:
+    def __init__(self, tier=2, limited=1., urban=1., commercial=1.):
+        self.value = SimpleNamespace(tier=tier, limited=limited, urban=urban, commercial=commercial)
+
+    def sample(self, point, outward, half_width):
+        return self.value
 
 
 
@@ -90,10 +99,118 @@ class LampTest(unittest.TestCase):
         r = road("h", "residential", True, x0=-300, x1=900)
         rows = []
         for side in (1, -1):
-            rows += furniture.place([r], self.walks(r, side), (0, 0, 600, 256))
+            rows += furniture.place([r], self.walks(r, side), (0, 0, 600, 256), development=ConstantDevelopment())
         hy = sorted(x[1] for x in rows if x[0] == furniture.G_HYDRANT)
         self.assertGreaterEqual(len(hy), 8)
         self.assertTrue(np.allclose(np.diff(hy), furniture.HYDRANT_SPACING / 2, atol=1.0), "alternating sides")
+
+
+class DevelopmentDecorationTest(unittest.TestCase):
+    OPTIONAL = {furniture.G_STREET_TREE, furniture.G_HYDRANT, furniture.G_BENCH, furniture.G_BIN}
+
+    def street(self, urban=True):
+        # Select a street from the existing deterministic share that receives procedural trees.
+        fid = next(f"dev{k}" for k in range(100) if furniture._h01(f"dev{k}", "trees") < furniture.STREET_TREE_SHARE)
+        r = road(fid, "tertiary", urban, x1=2000.)
+        walks = [wk for side in (1, -1) for wk in LampTest.walks(None, r, side)]
+        return r, walks
+
+    def optional(self, rows):
+        return sorted(tuple(r) for r in rows if r[0] in self.OPTIONAL)
+
+    def test_rural_or_missing_context_keeps_exact_lighting_and_wires(self):
+        r, walks = self.street()
+        for town, buried in ((False, 0.), (True, 0.), (True, 1.)):
+            for lit in (None, "yes", "no"):
+                settings = dict(town=town, buried=buried, region="na:sparse", lighting={r[0]: lit})
+                rich_wires = []
+                rich = furniture.place([r], walks, (0, 0, 512, 256), wires=rich_wires,
+                                       development=ConstantDevelopment(), **settings)
+                infrastructure = [row for row in rich if row[0] not in self.OPTIONAL]
+                # (None: no context given or readable, the old town rule: tested below)
+                for context in (ConstantDevelopment(tier=0),):
+                    with self.subTest(town=town, buried=buried, lit=lit, context=context):
+                        wires = []
+                        rows = furniture.place([r], walks, (0, 0, 512, 256), wires=wires,
+                                               development=context, **settings)
+                        self.assertEqual(self.optional(rows), [])
+                        self.assertEqual(rows, infrastructure)
+                        self.assertEqual(len(wires), len(rich_wires))
+                        for actual, expected in zip(wires, rich_wires):
+                            np.testing.assert_array_equal(actual, expected)
+
+    def test_without_a_context_the_town_rule(self):
+        """development None (a caller without it, or the tile's cells unreadable): street trees, hydrants, benches and
+        bins as before the context, on town streets only (merge of PR #670)."""
+        r, walks = self.street()
+        town = furniture.place([r], walks, (0, 0, 512, 256), development=None)
+        self.assertTrue({row[0] for row in town} & self.OPTIONAL, "a town street keeps its decoration")
+        r, walks = self.street(urban=False)
+        rural = furniture.place([r], walks, (0, 0, 512, 256), development=None)
+        self.assertEqual({row[0] for row in rural} & self.OPTIONAL, set(), "none on a country road")
+
+    def test_existing_rural_sidewalk_can_follow_local_development(self):
+        r, walks = self.street(urban=False)
+        rows = furniture.place([r], walks, (0, 0, 1000, 256), development=ConstantDevelopment())
+        self.assertEqual({row[0] for row in rows} & self.OPTIONAL, self.OPTIONAL)
+
+    def test_context_cannot_decorate_without_walks_or_on_medians(self):
+        class Unused:
+            def sample(self, *args):
+                raise AssertionError("no eligible sidewalk: context must not be sampled")
+        r, walks = self.street()
+        for runs in ([], [dict(wk, median=True) for wk in walks]):
+            rows = furniture.place([r], runs, (0, 0, 512, 256), development=Unused())
+            self.assertEqual(self.optional(rows), [])
+
+    def test_limited_decoration_is_a_stable_subset_across_tile_boxes(self):
+        r, walks = self.street()
+        limited = ConstantDevelopment(tier=1, urban=0., commercial=0.)
+        medium = furniture.place([r], walks, (0, 0, 1000, 256), development=limited)
+        rich = furniture.place([r], walks, (0, 0, 1000, 256), development=ConstantDevelopment())
+        self.assertTrue(self.optional(medium))
+        self.assertLess(len(self.optional(medium)), len(self.optional(rich)))
+        self.assertTrue(set(self.optional(medium)) <= set(self.optional(rich)))
+        self.assertFalse({row[0] for row in medium} & {furniture.G_BENCH, furniture.G_BIN},
+                         "residential context alone does not infer benches or bins")
+        for context in (limited, ConstantDevelopment()):
+            whole = furniture.place([r], walks, (0, 0, 512, 256), development=context)
+            parts = furniture.place([r], walks, (0, 0, 256, 256), development=context)
+            parts += furniture.place([r], walks, (256, 0, 512, 256), development=context)
+            self.assertEqual(self.optional(whole), self.optional(parts))
+
+    def test_procedural_trees_still_respect_bridge_headroom(self):
+        r, walks = self.street()
+        deck = (np.array([[-400., 50., 5.], [2100., 50., 5.]]), 20.)
+        rows = furniture.place([r], walks, (0, 0, 512, 256), development=ConstantDevelopment(), decks=[deck])
+        self.assertNotIn(furniture.G_STREET_TREE, [row[0] for row in rows])
+        self.assertIn(furniture.G_HYDRANT, [row[0] for row in rows], "low decoration fits under the deck")
+
+    def test_real_context_samples_shallow_storefronts_from_the_road_centre(self):
+        import development
+        from test_development import FRAME, buildings, ring
+
+        # Close shallow shops, with dense development behind them. Adding the road half-width a second time
+        # from the sidewalk's middle would jump over the streetfront and report no frontage.
+        f = buildings([ring(-160, 8, 160, 12), ring(-160, -12, 160, -8),
+                       ring(-160, 50, 160, 85), ring(-160, -85, 160, -50)], "retail", "commercial")
+
+        class Observed(development.Context):
+            def sample(self, point, out, half):
+                got = super().sample(point, out, half)
+                samples.append((np.asarray(point).copy(), got))
+                return got
+
+        samples = []
+        context = Observed(FRAME, (-256, -256, 256, 256), {"buildings": [f]})
+        r = road("storefront", "tertiary", True, y=0.)
+        walks = [wk for side in (1, -1) for wk in LampTest.walks(None, r, side)]
+        rows = furniture.place([r], walks, (-100, -20, 100, 20), development=context)
+        self.assertTrue(samples)
+        self.assertTrue(all(abs(point[1]) < 1e-9 for point, _ in samples))
+        self.assertGreater(max(got.frontage for _, got in samples), .9)
+        self.assertIn(2, [got.tier for _, got in samples])
+        self.assertIn(furniture.G_BIN, [row[0] for row in rows])
 
 
 class PoleTest(unittest.TestCase):
