@@ -248,7 +248,9 @@ class JunctionTest(unittest.TestCase):
               seg("wb_e", "primary", (180, 120), (100, 120), True), seg("wb_w", "primary", (100, 120), (20, 120), True),
               seg("s", "tertiary", (100, 100), (100, 20)), seg("link", "tertiary", (100, 100), (100, 120)),
               seg("n", "tertiary", (100, 120), (100, 200))]
-        rows = furniture.junction_props(rs, (0, 0, 256, 256))
+        # Mapped signal data outranks inferred road-class priority at both close junctions.
+        rows = furniture.junction_props(rs, (0, 0, 256, 256),
+                                        signals=np.array([[100.0, 100.0], [100.0, 120.0]]))
         self.assertEqual([r[0] for r in rows], [furniture.G_SIGNAL] * 4, "the two carriageways' and the street's ways in")
 
     def test_left_hand_traffic_stands_them_on_the_left(self):
@@ -322,7 +324,9 @@ class JunctionTest(unittest.TestCase):
     def test_sweden_has_give_way_in_the_country_too(self):
         rs = [self.arm("e", "primary", 1, 0), self.arm("w", "primary", -1, 0), self.arm("s", "residential", 0, -1)]
         rs = [(fid, spec._replace(urban=False), pts, lon) for fid, spec, pts, lon in rs]
-        self.assertEqual(furniture.junction_props(rs, (0, 0, 256, 256)), [], "elsewhere: no signs in the country")
+        # Road-class priority now applies outside Sweden too; only the visible sign
+        # type is country-specific (generic stop elsewhere, Swedish give-way in SE).
+        self.assertEqual([r[0] for r in furniture.junction_props(rs, (0, 0, 256, 256))], [furniture.G_STOP])
         self.assertEqual([r[0] for r in furniture.junction_props(rs, (0, 0, 256, 256), country="SE")], [furniture.G_B1])
 
     def test_sweden_a_lesser_main_road_gives_way_too(self):

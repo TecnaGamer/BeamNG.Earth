@@ -51,6 +51,28 @@ T.check(ab.speedLimit == 11.2 and ab.lanes == '-+' and not ab.oneWay and ab.inRa
 local bc = nodes.b.links.c
 T.check(bc.oneWay and bc.lanes == '+' and bc.inNode == 'b', 'one-way: in -> out is the allowed direction')
 T.check(N.inside(nil, 1e9, 0, 60) and not N.inside({ 0, 0, 100, 100 }, 50, 50, 60), 'inside')
+local routeOnly = { nodes = { a = { 0, 0, 0, 3 }, b = { 1000, 0, 0, 3 } },
+  edges = { { 'a', 'b', 0, 1, 1, 10, 1, 3 } } }
+local physicalNodes = N.toNodes(routeOnly, { -500, -500, 500, 500 }, 60, false)
+local routeNodes, _, routeEdges = N.toNodes(routeOnly, { -500, -500, 500, 500 }, 60, false, nil, 650)
+T.check(physicalNodes.b == nil and routeNodes.b ~= nil and routeEdges == 1,
+  'route halo extends navigation links without changing the physical clip')
+T.check(N.routeHalo({ -1000, -1000, 1000, 1000 }) == 650 and N.routeHalo({ -500, -500, 500, 500 }) == 0,
+  'route halo applies only to the large terrain block')
+T.check(N.speedProfileForSlot(1) == 'slightly-speeding' and N.speedProfileForSlot(15) == 'slightly-speeding'
+  and N.speedProfileForSlot(16) == 'near-limit' and N.speedProfileForSlot(20) == 'significantly-speeding',
+  'driver speed profile uses a 15/4/1 mix')
+T.check(N.speedOffsetKmh('slightly-speeding', 0) == 5 and N.speedOffsetKmh('significantly-speeding', 1) == 15,
+  'speed profile offsets stay within their configured ranges')
+local speedNodes = { a = { -20, 2 }, b = { 20, 2 }, c = { 0, -20 }, d = { 0, 20 } }
+local speedEdges = { { 'a', 'b', 0, 1, 1, 20, 1, 4, 25, 'primary' },
+  { 'c', 'd', 0, 1, 1, 10, 1, 4, 10, 'residential' } }
+local chosenSpeed, chosenClass = N.selectTrafficRoadSpeed(speedEdges, speedNodes, 0, 0, 1, 0)
+T.check(chosenSpeed == 25 and chosenClass == 'primary', 'speed selection follows the heading-aligned road')
+T.check(N.trafficSpawnReady({ state = 'fadeIn' }) and not N.trafficSpawnReady({ state = 'reset' })
+  and not N.trafficSpawnReady({ state = 'active', respawnActive = true }), 'AI speed changes wait for native refresh')
+T.check(N.spawnVelocityCommand(15):find('thrusters.applyVelocity', 1, true) ~= nil
+  and N.spawnVelocityCommand(81) == nil, 'spawn impulse is one-shot and rejects out-of-range targets')
 
 -- a new signals table keeps the junctions a car may still remember (ai.lua reads them unchecked)
 local got

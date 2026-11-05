@@ -17,6 +17,13 @@ What changed in each release of BeamNG.Earth, newest first.
   bridge took the deck's height from the ground at those ends, not from the embankment tops it stands on (#694), so it
   dug the road under up to 4 m too deep. Its slip roads beside it stayed at their own height, a step between them. Seen
   under Kurna - Tuhala over Tallinna ringtee and under Tartu mnt at the Jüri roundabout, Estonia.
+- Added a settlement and local-road based adaptive traffic target, with gradual native pool adjustments.
+- Extended the AI navigation graph by up to 650 m on large terrain blocks while keeping traffic controls within the
+  physical block; small blocks retain their physical graph boundary.
+- Added road-class right-of-way at unsignalised junctions. Mapped signals continue to take precedence, and roundabout
+  control remains unchanged.
+- Added shuffled traffic speed profiles, heading-aware legal-speed selection, delayed post-respawn AI setup and guarded
+  body/wheel spawn-speed synchronization.
 
 ## 1.8.1 beta (2026-11-04)
 
