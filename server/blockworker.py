@@ -957,7 +957,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import catenary
     if catenary.ENABLED and wires is not None:      # masts and wires along the electrified lines (BNE_CATENARY)
         try:
-            c_rows, c_wires = catenary.build(frame, tx, ty, rcells, rground)
+            # (the graded ground only near the tile, as the track's mesh reads it: the masts' spans reach 130 m out, and
+            # asking the graded ground there made the grader plan every cell round the tile first)
+            c_ground = railways._mixed(rground, railways.point_ground(
+                frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), ("raw",) + tuple(rkey)),
+                roadsmod.tile_bbox(tx, ty))
+            c_rows, c_wires = catenary.build(frame, tx, ty, rcells, c_ground)
             if c_rows:
                 props = (props or []) + c_rows
             wires.extend(c_wires)
