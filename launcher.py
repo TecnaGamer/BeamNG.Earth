@@ -946,7 +946,8 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
 # A game update turns every mod off (core_modmanager.getModsDisabledAfterUpdate: "Mods will be disabled after updating
 # from version ...") until the player turns them back on in the main menu; without that BeamNG.Earth is just not there
 # (BeamNG 0.40, 2026-10-19). The game's log is read while it starts and the player told what to do.
-MODS_OFF_LINE = "Mods will be disabled after updating"
+MODS_OFF_LINES = ("Mods will be disabled after updating",       # (the first start after the update)
+                  "Mods disabled by setting disableModsAfterUpdate")  # (each start while the setting is on)
 GAME_LOG_WATCH_S = 600       # s after the game's start the log is watched
 
 
@@ -969,10 +970,11 @@ def watch_game_log(user_dir, since):
                     pos += len(data)
             except OSError:
                 continue
-            if MODS_OFF_LINE.encode() in data:
+            if any(line.encode() in data for line in MODS_OFF_LINES):
                 problem("BeamNG.drive was updated and turned all mods off, BeamNG.Earth too.",
                         "In the game's main menu, choose to enable your mods again (or Mods > Manage, turn "
-                        "BeamNG.Earth on), then pick Freeroam > BeamNG.Earth. The world server keeps running.")
+                        "BeamNG.Earth on), then pick Freeroam > BeamNG.Earth. The world server keeps running; "
+                        "from the next start BeamNG.Earth turns them back on itself.")
                 return
 
     threading.Thread(target=run, name="watch-game-log", daemon=True).start()
@@ -1669,7 +1671,7 @@ def run(args):
         install.clear_reload_files(user_dir)
     reload_game = False
     if not args.keep_mod:
-        status = install.install_mod(user_dir, True, dry_run=False, quiet=True)
+        status = install.install_mod(user_dir, True, dry_run=False, quiet=True, game_running=running)
         # the game read its mod list without this copy: its Lua is reloaded once the server runs (install.py)
         reload_game = running and status in ("updated", "installed", "enabled")
         row("Mod", {"current": "up to date", "enabled": "turned back on", "updated": "updated",
