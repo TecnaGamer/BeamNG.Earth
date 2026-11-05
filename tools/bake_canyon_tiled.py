@@ -20,7 +20,7 @@ from bake_scan_cliff_material import periodic
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT/'tools/assets/canyon_generated/tiled-v5'
 ALBEDO = 'canyon_v5_base.color.png'
-PBR_PREFIX = 'canyon_v5_near'
+PBR_PREFIX = 'canyon_v5_faceted_near'
 # Keep large beds and the previously approved terrain palette; add resolved
 # detail at shorter wavelengths. This corrects generator exposure/palette drift.
 PALETTE_SIGMA_PX = 24.0

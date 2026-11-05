@@ -160,8 +160,6 @@ def bake():
         mats[name]=dict(name=name,mapTo=name,**{'class':'Material'},version=1.5,
                        Stages=[stage,{},{},{}],groundType='ROCK',translucent=False)
     path.write_text(json.dumps(mats,indent=2)+'\n')
-    from bake_canyon_near_pbr import bake as bake_near_pbr
-    bake_near_pbr(ALBEDO_NAME, 'canyon_v4_near')
     # Preserve the approved distant bake, then install reconstructed 4K near detail.
     from bake_canyon_tiled import bake as bake_tiled_near
     bake_tiled_near()
