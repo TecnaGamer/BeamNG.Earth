@@ -153,6 +153,16 @@ class TeeLog(unittest.TestCase):
         self.assertLess(os.path.getsize(path), launcher.LOG_KEEP_BYTES)
 
 
+class GameStillRunning(unittest.TestCase):
+    def test_a_closing_game_is_not_already_running(self):
+        seq = iter([True, True, False])
+        self.assertFalse(launcher.game_still_running(alive=lambda: next(seq), sleep=lambda s: None))
+
+    def test_a_running_game_and_none(self):
+        self.assertTrue(launcher.game_still_running(alive=lambda: True, sleep=lambda s: None))
+        self.assertFalse(launcher.game_still_running(alive=lambda: False, sleep=lambda s: None))
+
+
 class Popup(unittest.TestCase):
     def test_linux_zenity_yes_no_and_none_installed(self):
         run = lambda code: (lambda cmd, timeout: mock.Mock(returncode=code))

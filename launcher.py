@@ -489,6 +489,25 @@ def game_alive():
     return bool(game_pids()) or game_connected()
 
 
+GAME_CLOSING_S = 8.0            # game_still_running: a game seen at the start is watched this long for closing
+
+
+def game_still_running(alive=None, wait_s=GAME_CLOSING_S, step_s=1.5, sleep=time.sleep):
+    """A game running when the launcher starts, still running a moment later: one that was closing (the app
+    started again right after the game was closed) is not "already running" (the launcher then waited for a game
+    that never came, telling the player to start it from Steam; seen 2026-11-05)."""
+    alive = alive or game_alive
+    if not alive():
+        return False
+    waited = 0.0
+    while waited < wait_s:
+        sleep(step_s)
+        waited += step_s
+        if not alive():
+            return False
+    return True
+
+
 def steam_running():
     import install
     pidfiles = []
@@ -1645,7 +1664,7 @@ def run(args):
             row("GPU", gpu_note)
     row("Game folder", user_dir + ("  (the Windows build, Proton)" if build == "proton" else "")
         + (f"  (Steam compatibility tool: {tool})" if tool else ""))       # (which was read: GitHub #56)
-    running = game_alive()
+    running = game_still_running()
     if not running:
         install.clear_reload_files(user_dir)
     reload_game = False
