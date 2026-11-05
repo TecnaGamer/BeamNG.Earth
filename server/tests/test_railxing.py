@@ -100,6 +100,30 @@ class RailXingTest(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(all(r[0].startswith("rrgate") for r in rows), rows)
 
+    def test_deck_across_the_road_with_rails_on_it(self):
+        """A main line over a primary street: a rubber deck and two rails across the carriageway, not the tram decal; a
+        tram keeps the street decal."""
+        import rails
+        cells = [features([[(-50.0, 128.0), (300.0, 128.0)], [(100.0, -50.0), (100.0, 300.0)]],
+                          ["primary", "standard_gauge"], subtypes=["road", "rail"])]
+        half = roads.road_specs(cells[0])[0].width / 2
+        ch = rails.tile_chunks(FRAME, 0, 0, cells)
+        deck = [c for c in ch if c["m"] == rails.DECK["m"]]
+        self.assertEqual(len(deck), 1)
+        y = np.asarray(deck[0]["n"])[:, 1]
+        self.assertLess(abs(y.min() - (128 - half)), rails.MIN_RUN_M + 1.0)
+        self.assertLess(abs(y.max() - (128 + half)), rails.MIN_RUN_M + 1.0)
+        self.assertEqual(deck[0]["w"], rails.DECK_W)
+        self.assertFalse([c for c in ch if c["m"] == rails.STREET_TRACK["m"]], "no tram decal on a railway")
+        on = [c for c in ch if c["m"] == rails.RAIL["m"] and np.asarray(c["n"])[:, 1].min() > 128 - half - 1.0
+              and np.asarray(c["n"])[:, 1].max() < 128 + half + 1.0]
+        self.assertEqual(len(on), 2, "both rails across the deck")
+        names = [c["m"] for c in ch]
+        self.assertLess(names.index(rails.DECK["m"]), names.index(rails.RAIL["m"]), "the deck drawn first")
+        railxing.ENABLED = False
+        ch = rails.tile_chunks(FRAME, 0, 0, cells)
+        self.assertTrue([c for c in ch if c["m"] == rails.STREET_TRACK["m"]], "off: the decal as before")
+
     def test_abandoned_none_and_disused_cross(self):
         f, _ = crossing([100.0])
         f.rules["flags"] = _flags([(0, "is_abandoned")])

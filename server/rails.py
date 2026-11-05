@@ -13,6 +13,8 @@ import math
 
 import numpy as np
 
+import railxing
+
 KINDS = {"standard_gauge": "rail", "narrow_gauge": "narrow", "light_rail": "tram", "tram": "tram"}   # (no "unknown":
 # OpenStreetMap's proposed and unbuilt lines, railways.DRAWN)
 GAUGE_M = {"rail": 1.435, "narrow": 1.0, "tram": 1.435}
@@ -26,6 +28,10 @@ TRACK = {                       # ballast top width, sleeper length, sleeper wid
 BALLAST = {"m": "road_gravel", "tl": 8.0, "p": 19, "layer": "base"}
 SLEEPER = {"m": "m_gm_concrete_plain", "tl": 2.0, "p": 4, "layer": "gutter"}
 RAIL = {"m": "m_gm_metal_hotspotting", "tl": 4.0, "p": 1, "layer": "mark"}
+# a level crossing's deck (BNE_RAIL_XING, railxing.py): a rubber panel strip along each track across the carriageway, its
+# two rails on it (from ingest_rail_textures.py's rubber tile)
+DECK = {"m": "bne_rail_xing_rubber", "tl": 3.2, "p": 2, "layer": "gutter"}
+DECK_W = 3.2                    # m: the rails' gauge and 0.9 m of panel outside each
 STREET_TRACK = {"m": "road_tramline", "tl": 30.0, "p": 1, "layer": "mark", "w": 1.8}
 ON_ROAD_INSET_M = 0.3           # a track point this far inside a carriageway's edge is on the street
 SAMPLE_M = 1.0                  # m between the points tested for that
@@ -241,6 +247,11 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                 if len(run) < 2:
                     continue
                 if street:
+                    if railxing.ENABLED and meshed and kind in ("rail", "narrow"):
+                        sleepers.append(_chunk(DECK, DECK_W, run))
+                        for side in (off, -off):
+                            rails.append(_chunk(RAIL, HEAD_M, roads.offset_polyline(run, side)))
+                        continue
                     rails.append(_chunk(STREET_TRACK, STREET_TRACK["w"], run))
                     continue
                 if meshed:
