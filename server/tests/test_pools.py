@@ -8,10 +8,34 @@ from concurrent.futures.process import BrokenProcessPool
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import pools  # noqa: E402
 
+import multiprocessing  # noqa: E402
+
+# The server's pools spawn their processes (earthd); forked here, a pool made again right after its worker was killed
+# could fork while another thread held a lock, and the new worker never started: test_a_hung_worker_is_restarted hung
+# the CI 600 s (2026-11-05, ubuntu-22.04, Python 3.12) in the final shutdown
+SPAWN = multiprocessing.get_context("spawn")
+
+
+class NameTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "process names: Linux /proc")
+    def test_workers_are_named_after_their_pool(self):
+        import pathlib
+        p = pools.RespawningPool("far building", 1, mp_context=SPAWN)
+        try:
+            comm = p.submit(pathlib.Path.read_text, pathlib.Path("/proc/self/comm")).result(timeout=60).strip()
+            self.assertEqual(comm, "bnge:farbuildin")       # (15 bytes at most)
+        finally:
+            p.shutdown()
+
+    def test_the_initializer_still_runs(self):
+        seen = []
+        pools._named_init("test", seen.append, 7)
+        self.assertEqual(seen, [7])
+
 
 class RespawnTest(unittest.TestCase):
     def test_a_dead_worker_is_replaced(self):
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             self.assertEqual(p.submit(abs, -3).result(), 3)
             with self.assertRaises(BrokenProcessPool):
@@ -23,7 +47,7 @@ class RespawnTest(unittest.TestCase):
             p.shutdown()
 
     def test_not_made_again_and_again(self):
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             with unittest.mock.patch.object(pools, "RESPAWN_S", 3600.0):
                 for _ in range(2):
@@ -41,7 +65,7 @@ class RespawnTest(unittest.TestCase):
         """A worker that never answers (alive, so the pool is not broken) is killed by recycle(): the call in flight
         ends with BrokenProcessPool and the next one is served (a road tile hung for minutes, 1.7.0-beta)."""
         import time
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             hung = p.submit(time.sleep, 3600)
             time.sleep(0.5)                     # (it is running)
@@ -59,7 +83,7 @@ class RespawnTest(unittest.TestCase):
         backlog taken for hung workers), one that runs too long is."""
         import concurrent.futures
         import time
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             # (4 s behind them, more than its 2.5 s; a process pool marks a job running once it is in the worker's call
             # queue, one job ahead of where it runs: the margin covers that and a slow Windows runner's start,
@@ -77,7 +101,7 @@ class RespawnTest(unittest.TestCase):
         """submit_low: handed over while a process is free of the other jobs, else one at a time beside them; the
         other jobs go first (trees geotiles after the road tiles, 2026-11-02)."""
         import time
-        p = pools.RespawningPool("test", 2)
+        p = pools.RespawningPool("test", 2, mp_context=SPAWN)
         try:
             busy = [p.submit(time.sleep, 1.0) for _ in range(4)]
             low = [p.submit_low(abs, -i) for i in range(1, 4)]
@@ -97,7 +121,7 @@ class RespawnTest(unittest.TestCase):
         """inflight (Server.live_busy: the saved areas' downloads wait for it): up at a submit, down when the job ends,
         fails or is cancelled, also when a pool made again cancels its futures (its own lock: no deadlock)."""
         import time
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             self.assertEqual(p.inflight, 0)
             f = p.submit(time.sleep, 0.3)
