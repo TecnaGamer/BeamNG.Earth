@@ -586,7 +586,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
 STACK_DUMP_S = float(os.environ.get("BNGE_STACK_DUMP_S", "") or 75.0)   # s before a slow tile's stacks go to the log
 
 
-def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None):
+def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False):
     """signstream.build_tile here: the highway signs of a road tile the mod has (from cody196's PR #363), in a road
     process: its map cells are warm there. Returns (vfs path of the sign tile's JSON, number of meshes)."""
     import signstream
@@ -598,7 +598,7 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     return signstream.build_tile(_s.md, frame, aid, tx, ty, elev, out_dir, vfs_dir,
                                  _s.surface.urban if _s.surface is not None else None, _s.widths, left_hand, mph,
-                                 country)
+                                 country, dirs)
 
 
 def _stack_watch(what):

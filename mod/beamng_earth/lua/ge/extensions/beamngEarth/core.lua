@@ -982,6 +982,12 @@ local function onMessage(msg)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
+    -- the direction signs' switch (settings directionSigns, off by default): sign tiles with boards only while it is on
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
+      net.send({ type = 'direction_signs', on = M.directionSigns })
+    end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
@@ -2863,6 +2869,15 @@ end
 -- The highway signs on / off (settings highwaySigns): shown or hidden at once, built by the server only while on.
 function M.setHighwaySigns(on)
   if roads.setSignsEnabled(on) then net.send({ type = 'highway_signs', on = roads.signsEnabled }) end
+end
+
+-- The direction signs on / off (settings directionSigns): the server builds the sign tiles again with or without the
+-- boards (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setDirectionSigns(on)
+  on = on == true
+  if M.directionSigns == on then return end
+  M.directionSigns = on
+  net.send({ type = 'direction_signs', on = on })
 end
 
 M.onUpdate = onUpdate

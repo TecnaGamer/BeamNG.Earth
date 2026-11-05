@@ -185,6 +185,18 @@ LAYERS = {
                            text=("subtype", "country", "region", "division_id", "name")
                                 + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
                            float=("x0", "y0", "x1", "y1")),
+    # the route numbers of the roads (direction signs, dirsigns.py): transportation/segment's `routes` (a road's route
+    # memberships: national / regional numbers, the European E-roads) flattened to one text column "network|ref|from|to;..."
+    # (from, to: the share of the segment a membership covers). Its own layer, joined to `roads` by id, so the roads
+    # layer (and every player's cached roads) is untouched. `where`: only the segments of the roads a sign names.
+    "road_routes": dict(theme="transportation", type="segment", clip=False,
+                        cols="subtype, class, array_to_string(list_transform(list_filter(routes, r -> r.ref IS NOT NULL), "
+                             "r -> lower(coalesce(r.network, '')) || '|' || r.ref || '|' || "
+                             "CAST(coalesce(r.\"between\"[1], 0.0) AS VARCHAR) || '|' || "
+                             "CAST(coalesce(r.\"between\"[2], 1.0) AS VARCHAR)), ';') AS routes_txt",
+                        text=("subtype", "class", "routes_txt"),
+                        where="subtype = 'road' AND class IN ('motorway', 'trunk', 'primary', 'secondary', 'tertiary') "
+                              "AND routes_txt <> ''"),
 }
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range

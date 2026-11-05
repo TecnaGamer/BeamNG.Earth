@@ -19,11 +19,12 @@ import mergesigns
 import roadmesh
 import roads
 import signstates
+import dirsigns
 import speedsigns
 import staging
 
 log = logging.getLogger('earthd.signs')
-KINDS = ('exits', 'mileposts', 'merges', 'speeds')
+KINDS = ('exits', 'mileposts', 'merges', 'speeds', 'dirs')
 WORKERS = 1                     # sign tiles in flight per connection (Tracker): a road tile waits behind one at most
 WORLD = os.environ.get("BNE_SIGNS_WORLD") == "1"
 
@@ -32,7 +33,7 @@ def shape_files(aid, tx, ty):
     return {kind: f'{kind}_{aid}_{tx}_{ty}.cdae' for kind in KINDS}
 
 
-def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes):
+def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes, dirs_faces=None):
     x, y, _, _ = roads.tile_bbox(tx, ty)
     data = {'v': roads.VERSION, 'chunks': []}
     for kind, mesh in zip(KINDS, meshes):
@@ -41,6 +42,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes):
         name = shape_files(aid, tx, ty)[kind]
         roadmesh.write(os.path.join(out_dir, name), mesh)
         data[kind] = {'shape': f'{vfs_dir}/{name}', 'pos': [x, y, 0.]}
+    if dirs_faces:                  # the direction boards' pictures: the mod makes their Materials first (dirsigns.lua)
+        data['dirs_faces'] = dirs_faces
     # An empty replacement is intentional: it retires signs from an older index.
     name = f'signs_{aid}_{tx}_{ty}.json'
     path = os.path.join(out_dir, name)
@@ -48,11 +51,11 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes):
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(json.dumps(data, separators=(',', ':')))
     staging.replace(tmp, path)
-    return f'{vfs_dir}/{name}', len(data) - 2
+    return f'{vfs_dir}/{name}', sum(1 for kind in KINDS if kind in data)
 
 
 def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, widths=None,
-               left_hand=False, mph=True, country=None):
+               left_hand=False, mph=True, country=None, dirs=False):
     source = getattr(md, 'highway_signs', None)
     if source is None:
         return None
@@ -72,11 +75,13 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                 pts = np.column_stack(frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.))
                 decks.append({'deck': True, 'n': pts, 'w': spec.width})
     speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us))
+    dir_mesh, dir_faces = _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir)         if dirs else (None, {})
     if not (WORLD or us):
-        return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds))     # (not the US: no guide signs)
+        # (not the US: no guide signs)
+        return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds, dir_mesh), dir_faces)
     exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths)
     merges = mergesigns.build_tile(frame, tx, ty, [feats], elev, decks, urban, widths, left_hand, context)
-    return write_tile(out_dir, vfs_dir, aid, tx, ty, (exits, miles, merges, speeds))
+    return write_tile(out_dir, vfs_dir, aid, tx, ty, (exits, miles, merges, speeds, dir_mesh), dir_faces)
 
 
 _warned = -float('inf')
@@ -93,6 +98,23 @@ def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face):
             _warned = now
             log.warning('Speed-limit signs unavailable; roads continue: %s: %s', type(error).__name__, error)
         return None
+
+
+def _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir):
+    """dirsigns.build_tile: (mesh, faces) or (None, {}): optional scenery never stops the other signs."""
+    global _warned_dirs
+    try:
+        return dirsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _warned_dirs >= 60.:
+            _warned_dirs = now
+            log.warning('Direction signs unavailable; roads continue: %s: %s', type(error).__name__, error,
+                        exc_info=True)
+        return None, {}
+
+
+_warned_dirs = -float('inf')
 
 
 class Tracker:

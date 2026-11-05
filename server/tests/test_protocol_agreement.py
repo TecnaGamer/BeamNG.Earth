@@ -151,6 +151,7 @@ MOD_TO_SERVER = {
     "gas_stations": {"on": F(bool)},
     # highway signs (signstream.py; additive): the settings page's switch, sent after every hello and when changed
     "highway_signs": {"on": F(bool)},
+    "direction_signs": {"on": F(bool)},
     # the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the
     # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px
     "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),
