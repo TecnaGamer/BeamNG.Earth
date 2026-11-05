@@ -1589,7 +1589,8 @@ def surface_kind(cls, surface):
 
 def _surface_value(feats, i):
     """Feature i's surface value: the map's (_map_surface_value), else, for a road the map says nothing about, what the
-    regional photo's colour says (photosurface.py, BNE_PHOTO_SURFACE=1: "asphalt" for a road that is grey like it)."""
+    regional photo's colour says (photosurface.py, BNE_PHOTO_SURFACE=1: "asphalt" for a road that is grey like it, "grass"
+    for a lane as green as its verges)."""
     v = _map_surface_value(feats, i)
     if v is None and photosurface.ON:
         v = _photo_surface(feats).get(i)
@@ -1597,7 +1598,7 @@ def _surface_value(feats, i):
 
 
 def _photo_surface(feats):
-    """{feature index: "asphalt"} of feats' roads the photo says are paved, remembered on feats. A candidate whose photo
+    """{feature index: "asphalt" or "grass"} of feats' roads the photo says are paved or grass lanes, remembered on feats. A candidate whose photo
     tile is not on the disk yet is not known: the verdicts stand for FACTS_SHORT_S s and revisit.fault says nothing
     built from them is kept (the specs' disk cache included: PR #634's idiom), so they are made again once it is."""
     st = feats.__dict__
@@ -1614,7 +1615,7 @@ def _photo_surface(feats):
         v, missing = photosurface.verdicts(feats, lambda i: _map_surface_value(feats, i))
     finally:
         st["_photo_busy"] = False
-    v = {i: "asphalt" for i in v}
+    v = {i: "asphalt" if k == "paved" else "grass" for i, k in v.items()}
     if missing:
         import revisit
         revisit.fault()

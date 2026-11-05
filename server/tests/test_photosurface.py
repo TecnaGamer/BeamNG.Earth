@@ -4,6 +4,7 @@ called; what the map says is never overruled; a road's specs are not kept while 
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -98,8 +99,14 @@ class MeasureTest(unittest.TestCase):
         st, _ = self.measure(t)
         self.assertIsNone(photosurface.classify(st))
 
-    def test_green_lane_is_not(self):
-        t = Tiles((95, 135, 65))
+    def test_green_lane_is_grass(self):
+        t = Tiles((105, 118, 92), field=(100, 114, 88))                # (the field's own colour, a real meadow's dull green)
+        self.addCleanup(t.close)
+        st, _ = self.measure(t)
+        self.assertEqual(photosurface.classify(st), "grass")
+
+    def test_green_lane_in_a_brown_field_is_not_grass(self):
+        t = Tiles((105, 118, 92), field=(120, 95, 70))                 # (set against bare soil: not a grass lane's blend)
         self.addCleanup(t.close)
         st, _ = self.measure(t)
         self.assertIsNone(photosurface.classify(st))
@@ -162,8 +169,10 @@ class HookTest(unittest.TestCase):
         photosurface.ON, photosurface.verdicts = self.on, self.verdicts
 
     def test_only_the_unmapped_road_takes_the_photo(self):
-        photosurface.verdicts = lambda feats, surface_of, root=None: ({0: "paved", 1: "paved"}, False)
-        f = Feats(["track", "track"], ["", "gravel"])
+        photosurface.verdicts = lambda feats, surface_of, root=None: ({0: "paved", 1: "paved", 2: "grass"}, False)
+        f = Feats(["track", "track", "track"], ["", "gravel", ""])
+        self.assertEqual(roads._surface_value(f, 2), "grass")           # (a grass lane: the ground layer's, no decal)
+        self.assertEqual(roads.terrain_surface(types.SimpleNamespace(surf="grass")), "grass")
         self.assertEqual(roads._surface_value(f, 0), "asphalt")          # nothing mapped: the photo's
         self.assertEqual(roads._surface_value(f, 1), "gravel")           # mapped: never overruled
         self.assertEqual(roads.surface_kind("track", roads._surface_value(f, 0)), "paved")

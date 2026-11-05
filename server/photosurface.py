@@ -5,7 +5,8 @@ A road of PHOTO_CLASSES with no surface value (OpenStreetMap's, Overture's) is r
 contrast, its verges) in the z17 tiles of a regional tile-cache source (imagery_regional.REGIONAL kind "xyz": ~0.75 m a
 pixel in Czechia) that are on the disk already (never fetched here; a tile not there yet is "not known yet", and the
 caller says so with revisit.fault so nothing built from it is kept). Grey, unsaturated, not green, neither dark nor
-glaring: asphalt. A verdict is only "paved" or None (the road stays as it was: dirt); Sentinel-2's 10 m pixels, a
+glaring: asphalt. A verdict is "paved", "grass" (a lane as green as its verges: the ground's grass layer, no dirt strip) or None (the road
+stays as it was: dirt); Sentinel-2's 10 m pixels, a
 source that is not a tile cache and a road in no regional box give None without a fault.
 
 The colour is measured (statistics of the samples, stats()) and classified (classify()) apart, so the rule is tuned
@@ -43,6 +44,14 @@ PAVED_L = (105.0, 205.0)
 VERGE_MAX_SAT = 0.06
 VERGE_MAX_EXG = 0.015
 VERGE_CONTRAST = 0.03
+# grass: a lane as green as the verges (task 010, "draw the grass lanes", the user 2026-11-05): excess green of the
+# centre samples at least this, within GRASS_MATCH of the verges' (the road is the field's own colour), not a forest
+# track's deep saturation. Of 271 mapped roads, 27 pass: 22 mapped dirt (a grown-over track), 1 gravel, 4 mapped
+# grass; 2 paved and 2 cobble roads too (green-tinted: the paved rule is asked first). 0.08 missed the lane at the
+# junction in Suchy Dul that started this (excess green 0.066).
+GRASS_MIN_EXG = 0.06
+GRASS_MATCH = 0.035
+GRASS_MAX_SAT = 0.25
 MEM_TILES = 96
 
 _LOCK = threading.Lock()
@@ -163,17 +172,22 @@ def stats(rgb, valid):
 
 
 def classify(st):
-    """"paved" for a road whose centre samples are grey asphalt, else None (st: stats())."""
+    """"paved" for a road whose centre samples are grey asphalt, "grass" for one as green as its verges, else None (st:
+    stats())."""
     if st is None or st["n"] < MIN_SAMPLES:
         return None
-    if not PAVED_L[0] <= st["lum"] <= PAVED_L[1]:
-        return None
-    if st["sat"] <= PAVED_MAX_SAT and abs(st["exg"]) <= PAVED_MAX_EXG:
-        return "paved"
     v = st.get("vexg")
-    if v is not None and st["sat"] <= VERGE_MAX_SAT and abs(st["exg"]) <= VERGE_MAX_EXG             and v - st["exg"] >= VERGE_CONTRAST:
+    if PAVED_L[0] <= st["lum"] <= PAVED_L[1] and _paved(st, v):
         return "paved"
+    if v is not None and st["exg"] >= GRASS_MIN_EXG and st["sat"] <= GRASS_MAX_SAT             and abs(v - st["exg"]) <= GRASS_MATCH:
+        return "grass"
     return None
+
+
+def _paved(st, v):
+    if st["sat"] <= PAVED_MAX_SAT and abs(st["exg"]) <= PAVED_MAX_EXG:
+        return True
+    return v is not None and st["sat"] <= VERGE_MAX_SAT and abs(st["exg"]) <= VERGE_MAX_EXG         and v - st["exg"] >= VERGE_CONTRAST
 
 
 def measure(ring, root=None):
@@ -212,8 +226,8 @@ def measure(ring, root=None):
 
 
 def verdicts(feats, surface_of, root=None):
-    """({feature index: "paved"}, missing): the candidates of feats (a roads layer: a class of PHOTO_CLASSES and
-    surface_of(i) None) the photo says are paved. missing: a candidate's tile is not on disk yet (not known: the
+    """({feature index: "paved" or "grass"}, missing): the candidates of feats (a roads layer: a class of PHOTO_CLASSES and
+    surface_of(i) None) the photo says are paved, or a grass lane. missing: a candidate's tile is not on disk yet (not known: the
     caller keeps nothing built from this)."""
     cls = feats.attrs.get("class")
     out, missing = {}, False
@@ -231,6 +245,7 @@ def verdicts(feats, surface_of, root=None):
                 missing |= miss
                 if st is not None and (best is None or st["n"] > best["n"]):
                     best = st
-        if classify(best) == "paved":
-            out[i] = "paved"
+        c = classify(best)
+        if c is not None:
+            out[i] = c
     return out, missing
