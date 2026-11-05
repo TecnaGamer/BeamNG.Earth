@@ -130,6 +130,16 @@ class LotTest(unittest.TestCase):
         self.assertEqual(len(a) + len(b), len(parking.lot_spots([self.LOT], (0, 0, 256, 256), z)))
 
 
+    def test_no_stall_on_a_road_through_the_lot(self):
+        # a parking polygon drawn over a road (Montana's I-94 / I-90, 2026-11-05: parked cars across the lanes)
+        z = lambda x, y: np.zeros(len(x))
+        road = np.array([(-50.0, 20.0), (120.0, 20.0)])
+        spots = parking.lot_spots([self.LOT], (0, 0, 256, 256), z, roads_xy=[road])
+        self.assertTrue(spots, "the stalls away from it stay")
+        self.assertTrue(all(abs(s[1] - 20.0) >= parking.LOT_ROAD_CLEAR_M for s in spots))
+        self.assertLess(len(spots), len(parking.lot_spots([self.LOT], (0, 0, 256, 256), z)))
+
+
 class AisleTest(unittest.TestCase):
     def test_stalls_both_sides_nose_out(self):
         aisle = ("a", roads.Spec(6.0, "paved", True, "service", False), np.array([(0.0, 50.0, 0.0), (80.0, 50.0, 0.0)]), 0.0)

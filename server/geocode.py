@@ -566,22 +566,69 @@ def search(q, lat=None, lon=None, net=None, country=None, full=False):
 STREET_M = 40.0                 # the nearest named road within this is "the street"
 
 
-def nearest_street(roads_layers, lat, lon, max_m=STREET_M):
-    """The name of the nearest named road (mapgeom "roads" Features) within max_m of (lat, lon), or ''. Pure."""
+# The route number a road is known by (overture "road_routes": its memberships "network|ref|from|to;..."): an Interstate
+# or a US freeway has a number and often no name (I-94 across Montana: the status bar said only "Montana, United
+# States", Tann2019 2026-11-05). On the fast classes the number comes first, as drivers call them.
+ROUTE_FIRST_CLASSES = {"motorway", "trunk"}
+
+
+def route_label(network, ref):
+    """A route membership as drivers write it: us:i 94 -> "I-94", us:us 212 -> "US 212", us:mt 3 -> "MT 3"; any other
+    network its ref as mapped ("A 9", "E 45"). Pure."""
+    net, ref = str(network or "").lower(), str(ref or "").strip()
+    if not ref:
+        return ""
+    if net == "us:i":
+        return f"I-{ref}"
+    if net == "us:us":
+        return f"US {ref}"
+    if len(net) == 5 and net.startswith("us:") and net[3:].isalpha():
+        return f"{net[3:].upper()} {ref}"
+    return ref
+
+
+def _route_rank(network):
+    net = str(network or "").lower()
+    return 0 if net == "us:i" else 1 if net == "us:us" else 2 if net.startswith("us:") else 3
+
+
+def road_route(routes_txt):
+    """The label of a road_routes row's first-ranked route (an Interstate before a US route before a state route), or
+    ''. Pure."""
+    best = None
+    for part in str(routes_txt or "").split(";"):
+        bits = part.split("|")
+        if len(bits) >= 2 and bits[1]:
+            if best is None or _route_rank(bits[0]) < _route_rank(best[0]):
+                best = (bits[0], bits[1])
+    return route_label(*best) if best else ""
+
+
+def nearest_street(roads_layers, lat, lon, max_m=STREET_M, routes=None):
+    """The label of the nearest named or numbered road (mapgeom "roads" Features) within max_m of (lat, lon), or ''.
+    routes: {segment id: routes_txt} (Surface.road_routes): a motorway or trunk road with a number is called by it
+    (ROUTE_FIRST_CLASSES), any other road by its name, else its number. Pure."""
     import math
 
     import numpy as np
     mx = 111320.0 * math.cos(math.radians(lat))
     best, bd = "", max_m
+    routes = routes or {}
     for f in roads_layers:
         if f is None or len(f.kind) == 0:
             continue
         names = f.attrs.get("name")
-        if names is None:
+        classes = f.attrs.get("class")
+        ids = getattr(f, "ids", None) if routes else None
+        if names is None and ids is None:
             continue
         for i in range(len(f.kind)):
-            nm = names[i]
-            if nm is None or str(nm) in ("", "None", "nan"):
+            nm = names[i] if names is not None else None
+            nm = "" if nm is None or str(nm) in ("", "None", "nan") else str(nm)
+            num = road_route(routes.get(str(ids[i]))) if ids is not None else ""
+            first = num and classes is not None and str(classes[i]) in ROUTE_FIRST_CLASSES
+            label = num if first else (nm or num)
+            if not label:
                 continue
             a = f.coord_off[f.ring_off[f.part_off[i]]]
             b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
@@ -595,5 +642,5 @@ def nearest_street(roads_layers, lat, lon, max_m=STREET_M):
             t = np.clip(-(p * d).sum(1) / L2, 0.0, 1.0)
             dist = float(np.min(np.hypot(*(p + d * t[:, None]).T)))
             if dist < bd:
-                best, bd = str(nm), dist
+                best, bd = label, dist
     return best

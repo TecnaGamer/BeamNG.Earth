@@ -1579,6 +1579,27 @@ class Surface:
                 complete = False
         return out, complete
 
+    def road_routes(self, lat, lon):
+        """{segment id: routes_txt} of the road_routes layers (Overture's route numbers, overture "road_routes":
+        "network|ref|from|to;...") of the cached cells around the point, for the status bar's road (an Interstate has
+        a number, often no name). Never waits: missing cells are fetched in the background."""
+        out = {}
+        for key in mapcells.cells_for_points(np.asarray([lat], np.float64), np.asarray([lon], np.float64)):
+            if not self.md.has(key, "road_routes"):
+                self._queue(key, ("road_routes",))
+                continue
+            try:
+                layer = self.md.cell(key, layers=("road_routes",), kind="background").layers.get("road_routes")
+            except Exception as e:      # an unreadable cache file: no numbers this time
+                log.debug("surface: road routes of %s: %s: %s", key, type(e).__name__, e)
+                continue
+            if layer is None or not len(layer) or layer.attrs.get("routes_txt") is None:
+                continue
+            txt = layer.attrs["routes_txt"]
+            for i, fid in enumerate(layer.ids):
+                out.setdefault(str(fid), str(txt[i]))
+        return out
+
     def add_fuel_pads(self, items):
         """Keep gas station forecourt pads [(station id, [(lat (k,), lon (k,))])]: the road tiles' own
         (gasstations.tile_sites pads), handed over by earthd (and to a block's process with its job). No other process
