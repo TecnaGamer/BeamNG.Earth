@@ -603,6 +603,40 @@ class WaitForGameTest(unittest.TestCase):
             self.assertGreaterEqual(clock[0], 700 + launcher.WINDOWS_GAME_GONE_S)
             say.assert_not_called()
 
+    def test_windows_a_failed_query_is_not_a_closed_game(self):
+        """A player's launcher (1.8.1, Windows, i5-8600K) closed and stopped the world server minutes in with the game
+        still running: a tasklist that failed or timed out under load read as "no game" for the 3 s grace. Now an
+        unknown answer (None) neither starts nor ends the wait; the game closes only after WINDOWS_GAME_GONE_S of
+        answers that do not find it."""
+        clock = [0.0]
+
+        def fake_sleep(s):
+            clock[0] += 1.0
+
+        def alive():                    # running, its queries failing for 60 s, running, then really closed
+            t = clock[0]
+            if t < 10 or 70 <= t < 100:
+                return True
+            if t < 70:
+                return None
+            return False
+        with mock.patch.object(launcher, "IS_WIN", True), \
+                mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(launcher.time, "sleep", side_effect=fake_sleep), \
+                mock.patch.object(launcher, "game_alive", side_effect=alive), \
+                mock.patch.object(launcher, "game_launcher_running", return_value=False), \
+                mock.patch.object(launcher, "say"):
+            self.assertTrue(launcher.wait_for_game(None))
+            self.assertGreaterEqual(clock[0], 100 + launcher.WINDOWS_GAME_GONE_S, "only once really gone")
+
+    def test_windows_tasklist_timeout_is_unknown(self):
+        import subprocess
+        with mock.patch.object(launcher, "IS_WIN", True), \
+                mock.patch.object(launcher.subprocess, "run", side_effect=subprocess.TimeoutExpired("tasklist", 10)), \
+                mock.patch.object(launcher, "game_connected", return_value=False):
+            self.assertIsNone(launcher.game_pids())
+            self.assertIsNone(launcher.game_alive())
+
     def test_linux_close_after_a_while_is_quick(self):
         """Linux: a game gone during its start gets GAME_GONE_S (Steam's container restarts it); one that ran past
         GAME_RESTART_WINDOW_S and is gone was closed: GAME_CLOSED_S (the launcher sat 30 s after the player closed)."""

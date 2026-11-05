@@ -52,10 +52,12 @@ SERVER_PORT = 47613         # earthd's default
 GAME_GONE_S = 30            # no game process this long: the game closed (wait_for_game) ...
 GAME_RESTART_WINDOW_S = 120  # ... while it starts (Steam's container restarts it then); after that GAME_CLOSED_S:
 GAME_CLOSED_S = 5           # the launcher sat 30 s after the player closed the game (the user, 2026-11-04)
-WINDOWS_GAME_GONE_S = 3     # Windows has no Steam container restart gap; allow prompt relaunch
+WINDOWS_GAME_GONE_S = 8     # Windows has no Steam container restart gap; prompt, but a few queries long (a player's
+                            # launcher closed with the game still running, 2026-11-05: see game_pids)
 GAME_START_S = 180          # waiting for the game's process after asking Steam
 SERVER_START_S = 120        # imports/startup must finish before the game is launched
 PROCESS_QUERY_S = 3         # a stuck process query must not hang the launcher
+GAME_QUERY_S = 10           # tasklist for the game: slow on a loaded machine (the game and the server on 6 cores)
 DIRECT_FAIL_S = 20          # a direct start that ends this soon did not work (no Steam client): through Steam
 
 
@@ -422,16 +424,21 @@ def windows_game_main_pids(pids):
 
 
 def game_pids():
-    """The game's main processes (not its CEF helpers)."""
+    """The game's main processes (not its CEF helpers); None when Windows could not be asked (unknown)."""
     if IS_WIN:
         # bytes, decoded leniently: on a non-English Windows tasklist's "no tasks" message is in the console's code
         # page (German "ü" = 0x81 in cp850), which text=True's cp1252 could not decode (a player's report,
         # 2026-10-17: the launcher stopped with UnicodeDecodeError and r.stdout None)
+        # (None, not []: a query that failed or ran out of time does not say the game is gone. A player's launcher,
+        # 1.8.1 on a French Windows 11, i5-8600K: it closed and stopped the world server a few minutes in with the
+        # game still running, the next start the same; one slow tasklist under load was "no game" for the 3 s grace)
         try:
             r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {GAME_EXE_WIN}", "/FO", "CSV", "/NH"],
-                               capture_output=True, timeout=PROCESS_QUERY_S)
+                               capture_output=True, timeout=GAME_QUERY_S)
         except (OSError, subprocess.TimeoutExpired):
-            return []
+            return None
+        if r.returncode != 0:
+            return None
         text = (r.stdout or b"").decode("utf-8", errors="replace")
         out = []
         for line in text.splitlines():
@@ -486,7 +493,11 @@ def game_connected():
 
 
 def game_alive():
-    return bool(game_pids()) or game_connected()
+    """True / False, or None when it could not be told (a process query that failed: not "gone")."""
+    pids = game_pids()
+    if pids is None:
+        return True if game_connected() else None
+    return bool(pids) or game_connected()
 
 
 GAME_CLOSING_S = 8.0            # game_still_running: a game seen at the start is watched this long for closing
@@ -1005,7 +1016,11 @@ def wait_for_game(proc, server=None):
             return False
         now = time.monotonic()
         direct_alive = proc is not None and proc.poll() is None
-        if game_alive() or (not IS_WIN and direct_alive):
+        alive = game_alive()
+        if alive is None:               # (could not be told: neither seen nor gone, the clocks keep their state)
+            time.sleep(1 if IS_WIN else 3)
+            continue
+        if alive or (not IS_WIN and direct_alive):
             started = True
             gone_since = None
             if first_seen is None:
