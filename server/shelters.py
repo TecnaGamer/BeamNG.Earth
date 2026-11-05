@@ -26,7 +26,9 @@ STREET_X = 0.74
 LIFT = 0.20
 SHELTER_H = 2.90
 NEAR_ROAD_M = 30.0          # a stop farther from every carriageway is not turned toward one
-CURB_PAD_M = 0.6            # m past the carriageway edge: the signed face, when the point is in the road
+CURB_PAD_M = 1.2            # m past the carriageway edge: the signed face, when the point is in the road. 0.6 left the
+                            # roof over the edge line and the posts on the paved shoulder (Suchy Dul, 2026-11-05)
+LONG_HALF = 1.45            # the shape's half length along the curb (local y)
 POLY_MAX = 80.0             # m²: a bus stop drawn as a polygon is still one shelter
 NO_SHELTER = {"no", "none"}
 TRANSIT_SHELTER = {"public_transport", "public_transit", "bus_stop", "bus", "bus_shelter", "transit"}
@@ -171,6 +173,26 @@ def _place(fid, x, y, roads):
     return fx - STREET_X * toward[0], fy - STREET_X * toward[1], (_yaw(toward[0], toward[1]) + 180.0) % 360.0
 
 
+def _base_heights(frame, elev, xy, yaw):
+    """Local z of each shelter: the lowest ground under its four posts (and its centre). One height at the centre
+    left the posts of a shelter on a bank hanging in the air; the lowest point sets the base on the ground and
+    buries the uphill posts in the bank instead."""
+    rad = np.radians(yaw)
+    ux, uy = np.cos(rad), np.sin(rad)           # local +x (away from the road)
+    vx, vy = -uy, ux                            # local +y (along the curb)
+    n = len(xy)
+    px = [xy[:, 0]]
+    py = [xy[:, 1]]
+    for sx in (-STREET_X, STREET_X):
+        for sy in (-LONG_HALF, LONG_HALF):
+            px.append(xy[:, 0] + sx * ux + sy * vx)
+            py.append(xy[:, 1] + sx * uy + sy * vy)
+    px, py = np.concatenate(px), np.concatenate(py)
+    lat, lon, _ = frame.enu_to_geodetic(px, py, np.zeros(len(px)))
+    _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    return np.asarray(z, np.float64).reshape(5, n).min(axis=0)
+
+
 def rows(frame, infra_fn, box, elev, roads=()):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the bus shelters whose stop is inside box."""
     if infra_fn is None:
@@ -208,10 +230,9 @@ def rows(frame, infra_fn, box, elev, roads=()):
     if not pending:
         return []
     xy = np.array([[p[0], p[1]] for p in pending], np.float64)
-    lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
-    _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    zz_all = _base_heights(frame, elev, xy, np.array([p[2] for p in pending], np.float64))
     out = []
-    for (ox, oy, yaw), zz in zip(pending, np.asarray(z, np.float64)):
+    for (ox, oy, yaw), zz in zip(pending, zz_all):
         out.append([G_SHELTER, round(ox, 2), round(oy, 2), round(float(zz) + LIFT, 2), round(yaw, 1) % 360.0,
                     1.0, SHELTER_H, 0.0])
     return out

@@ -63,6 +63,23 @@ class PlaceTest(unittest.TestCase):
         self.assertAlmostEqual(got[0][1], 50.0, delta=0.02)
         self.assertGreater(got[0][2], 8.0)
 
+    def test_the_shelter_stands_clear_of_the_carriageway(self):
+        # the signed face (origin - STREET_X) must lie at least CURB_PAD_M past the edge of an 8 m road
+        got = self.rows(self.stop([[50.0, 4.2]]), self.road())
+        self.assertEqual(len(got), 1)
+        self.assertGreaterEqual(got[0][2] - shelters.STREET_X, 4.0 + shelters.CURB_PAD_M - 0.02)
+
+    def test_the_base_sits_on_the_lowest_ground_under_the_posts(self):
+        # a bank rising away from the road (y): the posts uphill are in the ground, the downhill ones touch it
+        def elev(la, lo):
+            _, y, _ = self.frame.geodetic_to_enu(la, lo, np.zeros(np.shape(la)))[:3]
+            return 2.0 + 0.5 * (y - 8.0)
+        got = shelters.rows(self.frame, lambda key: self.stop([[50.0, 8.0]]), (0.0, 0.0, 100.0, 100.0), elev,
+                            self.road())
+        y0 = got[0][2]
+        low = 2.0 + 0.5 * (y0 - shelters.STREET_X - 8.0)       # the street-side posts, the lowest
+        self.assertAlmostEqual(got[0][3], low + shelters.LIFT, delta=0.05)
+
     def test_a_stop_in_the_carriageway_is_set_back_to_the_curb(self):
         got = self.rows(self.stop([[50.0, 1.0]]), self.road())
         self.assertEqual(len(got), 1)
