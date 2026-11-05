@@ -71,7 +71,7 @@ local EDGE_TEXT = {
 --   info.session     the server's hello arrived (a session id)
 --   info.everConnected, info.attempts (net.lua)
 --   info.note, info.noteDetail  (noteOf of the server's last status)
---   info.download    nil | the downloads in flight ('downloading 12.4 MB · 1.1 MB/s', loadprogress.downloadText)
+--   info.download    nil | the downloads in flight ('downloading 14 files · 1.1 MB/s', loadprogress.downloadText)
 --   info.edge        nil | 'warn' | 'hold' (edgeguard), info.stuck: the server does not answer
 --                    terrain requests (rather than: no server)
 --   t                s since the mod loaded
