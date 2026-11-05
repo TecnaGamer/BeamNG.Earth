@@ -2588,18 +2588,6 @@ class Server:
                     with ThreadPoolExecutor(AHEAD_CELLS, thread_name_prefix="download-ahead-cell") as pool:
                         for _ in pool.map(lambda j: self.mapdata.cell(j[0], layers=j[1], kind="prefetch"), jobs):
                             cells_n += 1
-                # the roads' measured heights (the bridges' lidar) of those cells too, on disk before the road
-                # tiles ask (roadz.RoadZ.warm_ahead: one thread, this round's list replacing the last)
-                import roadz
-                if roadz.PROVIDER is not None and layers:
-                    ahead_keys = []
-                    for la, lo in pts:
-                        dlat = reach / 111320.0
-                        dlon = reach / (111320.0 * max(0.05, math.cos(math.radians(la))))
-                        for key in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
-                            if key not in ahead_keys:
-                                ahead_keys.append(key)
-                    roadz.PROVIDER.warm_ahead(ahead_keys)
                 self.ahead_stats["dem"] += dem_n
                 self.ahead_stats["cells"] += cells_n
                 if dem_n or cells_n:
