@@ -130,6 +130,29 @@ def cells_near(frame, box, reach=REACH_M):
     return mapcells.cells_for_bbox(float(np.min(lat)), float(np.min(lon)), float(np.max(lat)), float(np.max(lon)))
 
 
+def _flushed(frame, cells, box, rails, prof, ground, tunnels):
+    """prof (profile's [(bed, ground)] per part) with the ground parts' beds brought flush with the roads they cross at
+    grade (_flush, as tile_mesh does when it builds the track), for the grader's plans: the terrain is then graded to the
+    bed the mesh really has, not to the smoothed ground under a bed that tile_mesh lowers to a road's level (the ballast
+    and sleepers sank under the terrain by the road, Kalynivka 2026-11-05)."""
+    cr = crossings(frame, cells, box, reach=GRADE_REACH_M) + list(tunnels)
+    if not cr:
+        return prof
+    zc = np.asarray(ground(np.concatenate([ln for ln, _ in cr])), np.float64)
+    crossers, k = [], 0
+    for line, hw in cr:
+        crossers.append((line, hw, zc[k:k + len(line)]))
+        k += len(line)
+    out = []
+    for (_fid, _c, kind, xy), (zb, zg) in zip(rails, prof):
+        if kind == "ground":
+            blk = _blocked(xy, zb, crossers)
+            if blk.any():
+                zb = _flush(_arc(xy), zb, blk, np.asarray(ground(xy[blk]), np.float64))
+        out.append((zb, zg))
+    return out
+
+
 def grade_plans(frame, cells, box, elev):
     """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
     the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
@@ -160,7 +183,10 @@ def grade_plans(frame, cells, box, elev):
     pad = GRADE_HALF_M + 15.0
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
-    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, profile(rails, ground, tunnels)):
+    prof = profile(rails, ground, tunnels)
+    if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
+        prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
+    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
         if kind != "ground":
             continue
         if _box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),

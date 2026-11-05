@@ -115,9 +115,14 @@ class RailXingTest(unittest.TestCase):
         self.assertLess(abs(y.max() - (128 + half)), rails.MIN_RUN_M + 1.0)
         self.assertEqual(deck[0]["w"], rails.DECK_W)
         self.assertFalse([c for c in ch if c["m"] == rails.STREET_TRACK["m"]], "no tram decal on a railway")
-        on = [c for c in ch if c["m"] == rails.RAIL["m"] and np.asarray(c["n"])[:, 1].min() > 128 - half - 1.0
-              and np.asarray(c["n"])[:, 1].max() < 128 + half + 1.0]
+        ext = rails.DECK_EXT + 1.0
+        on = [c for c in ch if c["m"] == rails.RAIL["m"] and np.asarray(c["n"])[:, 1].min() > 128 - half - ext
+              and np.asarray(c["n"])[:, 1].max() < 128 + half + ext]
         self.assertEqual(len(on), 2, "both rails across the deck")
+        for c in on:
+            y = np.asarray(c["n"])[:, 1]
+            self.assertGreater(y.max() - y.min(), 2 * half + 2.0, "the rails run on past the road's edge")
+            self.assertEqual(c["w"], rails.DECK_RAIL_W)
         names = [c["m"] for c in ch]
         self.assertLess(names.index(rails.DECK["m"]), names.index(rails.RAIL["m"]), "the deck drawn first")
         railxing.ENABLED = False
@@ -181,6 +186,25 @@ class RailXingTest(unittest.TestCase):
         self.assertFalse(buildings.on_rail_bed(far, rl))
         railxing.ENABLED = False
         self.assertEqual(buildings.rail_lines(FRAME, [f], x0, y0), [], "off: nothing")
+
+    def test_the_grader_plans_the_bed_flush_with_the_road(self):
+        """The bed the terrain is graded to is lowered to the road's level at a level crossing, as the mesh lays it (else
+        the ballast and sleepers lay under the ground): lower than the smoothed ground by the rail's height there."""
+        from test_roads import flat as dem
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"])
+        box = roads.tile_bbox(0, 0)
+        railxing.ENABLED = False
+        before = railways.grade_plans(FRAME, [f], box, dem)
+        railxing.ENABLED = True
+        after = railways.grade_plans(FRAME, [f], box, dem)
+        zb0, zb1 = before[0][2], after[0][2]
+        xy = before[0][1]
+        at = np.argmin(np.abs(xy[:, 0] - 120.0))
+        self.assertAlmostEqual(float(zb0[at]), 10.0, delta=0.05)
+        self.assertLess(float(zb1[at]), 10.0 - 0.3, "lowered to the road's level at the crossing")
+        far = np.argmin(np.abs(xy[:, 0] - 20.0))
+        self.assertAlmostEqual(float(zb1[far]), float(zb0[far]), delta=0.05)
 
     def test_abandoned_none_and_disused_cross(self):
         f, _ = crossing([100.0])
