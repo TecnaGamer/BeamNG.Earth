@@ -1,0 +1,78 @@
+{
+  "_comment": "Direction boards' styles by country (server/dirsigns.py). Colours are [r, g, b]. 'verified': false = from memory or a summary, not from the legal text or a photo: check against real boards (docs/research/direction_signs.md, section 1) before trusting. board: the board's colours by where it stands (freeway / road: outside built-up / urban); plates: the road-number plates (shape 0 rectangle, 1 pill; fill, ink, edge); networks: Overture route memberships (lower-case network, ref pattern) -> plate, first match wins, the order is the order on the board.",
+  "version": 1,
+  "placement": {
+    "advance_urban_m": 80.0, "advance_rural_m": 250.0, "advance_freeway_m": 1000.0,
+    "lateral_urban_m": 0.5, "lateral_rural_m": 1.5, "lateral_freeway_m": 1.5,
+    "panel_w_m": 3.2, "cone_deg": 30.0,
+    "near_min_m": 3000.0, "near_max_m": 60000.0, "far_max_m": 120000.0,
+    "near_min_pop": 4000, "far_min_pop": 50000, "mount_m": 1.8,
+    "detour_factor": 1.25,
+    "repeat_m": 2000.0,
+    "verified": false
+  },
+  "face": {
+    "px_per_m": 256.0, "cap_m": 0.20, "en_share": 0.72, "min_w_m": 2.0, "max_w_m": 6.0,
+    "inset_m": 0.015, "trim_w_m": 0.022
+  },
+  "distance_round": [[20, 1], [100000, 5]],
+  "countries": {
+    "UA": {
+      "verified": false,
+      "board": {"freeway": {"bg": [0, 110, 60], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "road":    {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "urban":   {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]}},
+      "plates": {"m": [0, [196, 30, 36], [255, 255, 255], [255, 255, 255]],
+                 "h": [0, [196, 30, 36], [255, 255, 255], [255, 255, 255]],
+                 "p": [0, [255, 255, 255], [0, 0, 0], [0, 0, 0]],
+                 "t": [0, [255, 255, 255], [0, 0, 0], [0, 0, 0]],
+                 "e": [0, [0, 128, 64], [255, 255, 255], [255, 255, 255]]},
+      "networks": [
+        {"network": "ua:international", "plate": "m"}, {"network": "ua:national", "plate": "h"},
+        {"network": "ua:regional", "plate": "p"}, {"network": "ua:territorial", "plate": "t"},
+        {"network": "e-road", "plate": "e"}]
+    },
+    "CZ": {
+      "verified": false,
+      "board": {"freeway": {"bg": [0, 110, 60], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "road":    {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "urban":   {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]}},
+      "plates": {"d": [0, [196, 30, 36], [255, 255, 255], [255, 255, 255]],
+                 "i": [0, [255, 255, 255], [0, 0, 0], [0, 0, 0]],
+                 "ii": [0, [255, 255, 255], [0, 0, 0], [0, 0, 0]],
+                 "e": [0, [0, 128, 64], [255, 255, 255], [255, 255, 255]]},
+      "networks": [
+        {"network": "cz:national", "ref": "^D\\d", "plate": "d"},
+        {"network": "cz:national", "plate": "i"}, {"network": "cz:regional", "plate": "ii"},
+        {"network": "e-road", "plate": "e"}]
+    },
+    "PL": {
+      "verified": false,
+      "board": {"freeway": {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "road":    {"bg": [0, 110, 60], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "urban":   {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]}},
+      "plates": {"a": [0, [255, 205, 0], [0, 0, 0], [0, 0, 0]],
+                 "s": [0, [196, 30, 36], [255, 255, 255], [255, 255, 255]],
+                 "dk": [0, [196, 30, 36], [255, 255, 255], [255, 255, 255]],
+                 "dw": [0, [255, 205, 0], [0, 0, 0], [0, 0, 0]],
+                 "e": [0, [0, 128, 64], [255, 255, 255], [255, 255, 255]]},
+      "networks": [
+        {"network": "pl:motorway", "plate": "a"}, {"network": "pl:expressway", "plate": "s"},
+        {"network": "pl:national", "plate": "dk"}, {"network": "pl:regional", "plate": "dw"},
+        {"network": "e-road", "plate": "e"}]
+    },
+    "DE": {
+      "verified": false,
+      "board": {"freeway": {"bg": [0, 85, 165], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "road":    {"bg": [255, 205, 0], "ink": [0, 0, 0], "trim": [0, 0, 0]},
+                "urban":   {"bg": [255, 255, 255], "ink": [0, 0, 0], "trim": [0, 0, 0]}},
+      "plates": {"a": [0, [0, 85, 165], [255, 255, 255], [255, 255, 255]],
+                 "b": [0, [255, 205, 0], [0, 0, 0], [0, 0, 0]],
+                 "l": [0, [255, 255, 255], [0, 0, 0], [0, 0, 0]],
+                 "e": [0, [0, 128, 64], [255, 255, 255], [255, 255, 255]]},
+      "networks": [
+        {"network": "bab", "plate": "a"}, {"network": "de:national", "plate": "b"},
+        {"network": "", "ref": "^[LK]\\s?\\d", "plate": "l"}, {"network": "e-road", "plate": "e"}]
+    }
+  }
+}

@@ -32,9 +32,11 @@ in a few minutes. No programming needed.
 ## Going places
 - Press **M** (the game's map key) or open **Map** in the pause menu for the **world map**:
   satellite imagery, your car's position and heading, and your saved places. Drag to pan, scroll
-  to zoom. The search box looks up real addresses and places as you type (OpenStreetMap data
-  through Photon by komoot: what you type and your position are sent to it), plus your saved places
-  and a typed "latitude, longitude". M or Esc closes it.
+  to zoom. The search box looks up landmarks and places as you type, in any language (Wikipedia,
+  Wikidata, and Photon by komoot where it answers: what you type is sent to them, and your position
+  to Photon). Enter searches streets and house numbers too (OpenStreetMap's Nominatim: what you type
+  and an area around your position), then Enter again takes the first line. It also answers
+  "highest bridge in Switzerland", and takes your saved places and a typed "latitude, longitude". M or Esc closes it.
 - **Left-click** the map (or a saved place, or a search result) to plan a GPS route there: the whole
   road route is planned online (OSRM on OpenStreetMap; your start and destination are sent to it)
   and drawn on the map with the distance and driving time left; the game's own route arrows follow
@@ -69,11 +71,11 @@ or low fps, press **Ctrl+Shift+Y** instead while it happens: the **performance p
 of frame times, then opens the same window.
 
 Each report is a folder (the window shows where) with `issue.md`, a ready-to-post GitHub issue you
-can edit first. To post it, run `python3 tools/reports.py issue` (the newest report; `python3
-tools/reports.py` lists them all): it opens issue.md in your editor, then the new-issue page on
-<https://github.com/TecnaGamer/BeamNG.Earth/issues> with your text, and the report folder, so you
-can drag `screenshot.jpg` into the issue. The "Open GitHub issue page" button in the game does the
-same without the edit step.
+can edit first. The **Open GitHub issue page** button in the game opens the new-issue page on
+<https://github.com/TecnaGamer/BeamNG.Earth/issues> with your text; **Open folder** shows the report folder, so you
+can drag `screenshot.jpg` into the issue. If the page opens without the text, copy issue.md's text into it.
+(From a source copy, `python3 tools/reports.py issue` does the same with an edit step first; `python3
+tools/reports.py` lists the reports.)
 
 **The log file.** For freezes, stutters or anything slow, the world server's log is the most useful thing to send
 (Discord or the GitHub issue): `%LOCALAPPDATA%\beamng-earth\logs\server.log` on Windows,

@@ -1222,6 +1222,33 @@ class GeoFilesTest(unittest.TestCase):
                          ["bb_g15_2_3.json", "bb_g15_2_3_g17_8_12.cdae"])
         self.assertEqual(s.geo_files("veg", "g15_2_3"), [])
 
+    def setUp(self):
+        p = mock.patch.object(earthd, "GEO_LIST_BATCH_S", 0.01)      # (the tests' short graces)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_tiles_expiring_together_share_one_listing(self):
+        """GitHub #758: 32 road tiles expiring at once scanned the session folder 96 times; now once per batch."""
+        s = self.make()
+        names = [f"rg_g17_{x}_7.json" for x in range(5, 9)]
+        self.touch(s, *names)
+        calls = []
+        real = os.listdir
+
+        def counted(d):
+            calls.append(d)
+            return real(d)
+
+        async def run():
+            with mock.patch.object(earthd.os, "listdir", counted):
+                for x in range(5, 9):
+                    s.geo_dropped("roads", (x, 7), f"g17_{x}_7", grace=0.02)
+                await asyncio.sleep(1.0)
+        asyncio.run(run())
+        self.assertEqual(len([c for c in calls if c == s.out_dir]), 1, calls)
+        for n in names:
+            self.assertFalse(os.path.exists(os.path.join(s.out_dir, n)), n)
+
     def test_dropped_then_deleted_unless_held(self):
         s = self.make()
         gone = ["rg_g17_5_7.json", "rg_g17_5_7_road.cdae"]

@@ -160,6 +160,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}.",     # (bridgetypes.WD_PATH)
            "--add-data", f"{os.path.join(server, 'koppen_1991_2020_0p1.png')}{SEP}.",  # (climate.PATH)
            "--add-data", f"{os.path.join(server, 'oil_wells.npz')}{SEP}.",  # (oilwells.PATH)
+           "--add-data", f"{os.path.join(server, 'wind_turbine_phase1.json')}{SEP}.",  # (windturbines.DATA_PATH)
+           "--add-data", f"{os.path.join(server, 'wind_turbines.npz')}{SEP}.",  # (windturbines.INDEX_PATH)
+           "--add-data", f"{os.path.join(server, 'wind_turbines.provenance.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'refineries.npz')}{SEP}.",  # (industry.PATH)
            # (overture.BUNDLED: the pinned release's STAC index, tools/build_stac_index.py)
            "--add-data", f"{os.path.join(server, 'overture_stac_' + _overture_release() + '.json.gz')}{SEP}.",
@@ -171,7 +174,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}.",
            # server/data/ (billboardsource.PATH: the mapped billboards; missing from 1.8.0's exe, a warning per worker)
-           "--add-data", f"{os.path.join(server, 'data')}{SEP}data"]
+           "--add-data", f"{os.path.join(server, 'data')}{SEP}data",
+           "--add-data", f"{os.path.join(server, 'mile_markers_us.json')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}."]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork

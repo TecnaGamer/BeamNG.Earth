@@ -178,6 +178,13 @@ def staged(current, path=None):
     return new
 
 
+def drop_staged(path=None):
+    """Forget the downloaded copy (its note): it would not start (launcher.hand_over), so this one runs from now on."""
+    path = path or packaged_path()
+    if path:
+        _remove(os.path.join(os.path.dirname(os.path.abspath(path)), STAGED))
+
+
 def _remove(p):
     try:
         os.remove(p)

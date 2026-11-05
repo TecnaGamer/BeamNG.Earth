@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest import mock
 
@@ -543,6 +544,44 @@ class PartsTest(unittest.TestCase):
         self.assertEqual(len({s.seed for s, _, _ in items}), 1, "one look")
         P = bld.build(items)[0]
         self.assertAlmostEqual(P[:, 2][P[:, 2] < 90.5].max(), 90.0, delta=0.01)
+
+    def _items(self, part_rect, part_bottom=np.nan, height=10.0):
+        import geodesy
+        f = geodesy.EnuFrame(59.42, 24.79)
+
+        def ll(x, y, w, d):
+            e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+            la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+            return np.stack([lo, la], 1)
+        b = Feats(["B"], [ll(-100, -125, 200, 250)], **{"class": ["retail"], "height": [height], "has_parts": [1.0],
+                                                         "min_height": [np.nan]})
+        parts = Feats(["p1"], [ll(*part_rect)], building_id=["B"], height=[5.0], min_height=[part_bottom],
+                      num_floors=[np.nan], min_floor=[np.nan])
+        return bld.tile_buildings(f, -256, -256, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)),
+                                  part_layers=[parts])
+
+    def test_a_stray_part_does_not_erase_its_building(self):
+        """Ülemiste keskus, Tallinn (GitHub #608): a 51,000 m² mall mapped with height 10 and one 452 m² building
+        part (height 5) was drawn as that part alone, the rest of it bare ground. Parts covering under PARTS_COVER_MIN
+        of the outline: the outline is drawn too, the parts on it."""
+        items = self._items((60, 60, 21, 22))
+        tops = sorted(round(s.height + (s.min_h or 0.0)) for s, _, _ in items)
+        self.assertEqual(tops, [5, 10], "the part and the building")
+        whole = max(items, key=lambda it: abs(bld._area2(it[0].ring)))
+        self.assertAlmostEqual(abs(bld._area2(whole[0].ring)) / 2, 50000.0, delta=500.0)
+        with unittest.mock.patch.object(bld, "PARTS_COVER_ON", False):
+            self.assertEqual([round(s.height) for s, _, _ in self._items((60, 60, 21, 22))], [5], "(off: as before)")
+
+    def test_parts_covering_most_of_it_still_draw_it(self):
+        items = self._items((-100, -125, 200, 150))         # (60 % of the outline)
+        self.assertEqual([round(s.height) for s, _, _ in items], [5], "the parts, not the footprint")
+
+    def test_a_structure_in_parts_off_the_ground_keeps_its_gaps(self):
+        """A part off the ground (an arcade's roof, a tower's platform): the building is modelled in parts, its
+        outline its overall box: not drawn, however little the parts cover."""
+        items = self._items((60, 60, 21, 22), part_bottom=3.0)
+        self.assertEqual(len(items), 1, "the part alone")
+        self.assertEqual(len(self._items((60, 60, 21, 22), height=1.0)), 1, "(an outline mapped as a base: its part)")
 
 
 class OverRoadTest(unittest.TestCase):

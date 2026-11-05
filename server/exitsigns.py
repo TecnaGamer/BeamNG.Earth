@@ -35,6 +35,7 @@ WAY_KEYS = EXIT_KEYS + ('highway', 'oneway', 'lanes', 'lanes:forward', 'lanes:ba
                        'width', 'bridge', 'layer', 'tunnel', 'access', 'service')
 MATERIALS = ['bne_exit_green', 'bne_exit_white', 'bne_exit_metal', 'bne_exit_letters', 'bne_exit_blue']
 GUIDE_MATERIALS = MATERIALS + ['bne_guide_red', 'bne_guide_black', 'bne_guide_letters', 'bne_guide_letters_black']
+GUIDE_ASPECT = .88       # compact guide lettering, retaining the glyph cap height
 STATE_CODES = set('AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC'.split())
 
 
@@ -43,6 +44,14 @@ def sign_style(label):
     names = label['names']
     rest = re.compile(r'(?:.*\s)?(?:rest[\s_-]+(?:area|stop)|welcome[\s_-]+cent(?:er|re))(?:\s+\d+)?', re.I)
     return 'rest_area' if names and not label['ref'] and all(rest.fullmatch(n) for n in names) else 'exit'
+
+
+def support_offsets(label, kind):
+    """Large multi-destination panels keep a centre post; compact signs use two."""
+    destinations = label['names'] or label['routes']
+    if kind in ('advance', 'decision') and sign_style(label) == 'exit' and len(destinations) > 1:
+        return (-.32, 0., .32)
+    return (-.32, .32)
 
 
 def labels(node, ramp, backwards=False):
@@ -359,7 +368,7 @@ def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, 
         la, lo, _ = frame.enu_to_geodetic(float(centre[0]), float(centre[1]), 0.)
         import signstates
         state = str(signstates.states(la, lo).item())
-    offsets = (-.32, 0., .32) if portrait(state) and kind != 'ramp' and sign_style(obj['exit']['label']) == 'exit' else (-.32, .32)
+    offsets = support_offsets(obj['exit']['label'], kind)
     posts = np.array([centre + right * width * off for off in offsets])
     bases = np.array([_ground_z(frame, elev, p) for p in posts])
     z = _ground_z(frame, elev, centre)
@@ -367,6 +376,7 @@ def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, 
     label = obj['exit']['label']
     return dict(id=obj['id'], kind=kind, label=label, style=sign_style(label), state=state,
                 centre=[float(centre[0]), float(centre[1]), z], travel=travel.tolist(), side=side,
+                road_point=np.asarray(road_point[:2]).tolist(),
                 bottom=bottom, width=width, height=height, bases=bases.tolist(), post_offsets=list(offsets),
                 distance=distance_text, advance_m=distance_m)
 
@@ -497,7 +507,7 @@ def guide_glyph(char):
 
 
 def guide_width(value, height):
-    return sum(glyph['advance']/data['capHeight'] for data, glyph in map(guide_glyph, _text(value)))*height
+    return sum(glyph['advance']/data['capHeight'] for data, glyph in map(guide_glyph, _text(value)))*height*GUIDE_ASPECT
 
 
 def route_symbols(routes, state=''):
@@ -534,30 +544,42 @@ def portrait(state):
     return state in STATE_CODES and state != 'MI'
 
 
+def stacked(label, state):
+    return portrait(state) or any(r['kind'] == 'text' for r in route_symbols(label['routes'], state))
+
+
+def route_size(route):
+    """Text-only route references need a readable row, not a shield-sized box."""
+    if route['kind'] == 'text':
+        return min(6.3, guide_width(route['number'], .40)), .46, .76
+    width = 1.08 if route['kind'] in ('interstate', 'us') and len(route['number']) >= 3 else .86
+    return width, .90, 1.20
+
+
 def portrait_layout(sign):
     """Reference-photo arrangement: stacked shields, destinations, then distance/arrow."""
     label, w, h = sign['label'], sign['width'], sign['height']
     routes = route_symbols(label['routes'], sign.get('state', ''))
     names = label['names'] or ([] if routes else ['EXIT '+label['ref']])
-    top = h-.40
+    top = h-.35
     symbols, lines, directions = [], [], []
     for route in routes:
-        sw = 1.08 if route['kind'] in ('interstate', 'us') and len(route['number']) >= 3 else .86
+        sw, sh, pitch = route_size(route)
+        sw = min(sw, w-.65)
         compass = route['qualifier'] in ('NORTH', 'SOUTH', 'EAST', 'WEST')
         word = route['qualifier'].title() if compass else ''
         dw = guide_width(word, .46) if word else 0.
         group = sw + (.28+dw if word else 0.)
         y = -group/2+sw/2
         symbols.append(dict(route, qualifier='' if compass else route['qualifier'],
-                            y=y, bottom=top-.90, width=sw, height=.90))
+                            y=y, bottom=top-sh, width=sw, height=sh))
         if word:
             directions.append(dict(value=word,y=-group/2+sw+.28+dw/2,
                                    baseline=top-.65,height=.46,max_width=dw+.01))
-        top -= 1.20
-    top -= .10
+        top -= pitch
     for name in names:
-        lines.append(dict(value=name,y=0.,baseline=top-.58,height=.58,max_width=w-.65))
-        top -= .85
+        lines.append(dict(value=name,y=0.,baseline=top-.64,height=.64,max_width=w-.65))
+        top -= .96
     return dict(lines=lines,routes=symbols,directions=directions,arrow=advance_arrow(sign),
                 arrow_y=0.,arrow_bottom=.28,arrow_size=1.35,
                 distance=dict(value=sign.get('distance',''),y=0.,baseline=.30,height=.42,max_width=w-.8))
@@ -565,7 +587,7 @@ def portrait_layout(sign):
 
 def advance_layout(sign):
     """One shared layout for sign geometry, placement tests and the authoring preview."""
-    if portrait(sign.get('state', '')):
+    if stacked(sign['label'], sign.get('state', '')):
         return portrait_layout(sign)
     label, w, h = sign['label'], sign['width'], sign['height']
     routes = route_symbols(label['routes'], sign.get('state', ''))
@@ -596,23 +618,26 @@ def dimensions(label, kind, state=''):
     if sign_style(label) == 'rest_area':
         return (2.25, 3.05) if kind == 'ramp' else (3.0, 3.6)
     if kind == 'ramp':
-        return max(2.3, min(4.3, text_width(label['ref'], .76)+1.1)), 2.15
-    if portrait(state):
+        return max(2.3, min(4.3, guide_width(label['ref'], .76)+1.1)), 2.15
+    if stacked(label, state):
         routes = route_symbols(label['routes'], state)
         names = label['names'] or ([] if routes else ['EXIT '+label['ref']])
-        groups = [(1.08 if r['kind'] in ('us','interstate') and len(r['number']) >= 3 else .86)
+        groups = [route_size(r)[0]
                   + (.28+guide_width(r['qualifier'].title(),.46)
                      if r['qualifier'] in ('NORTH','SOUTH','EAST','WEST') else 0.) for r in routes]
-        width = min(6.0, max(3.5, max([guide_width(s,.58) for s in names]+groups+[0.])+.65))
-        # (its content's height, a little taller for the portrait look: width * 1.22 alone made a long one-name panel
-        # ~6 m tall and nearly empty, the Guilford Avenue exit, Baltimore 2026-10-29)
-        content = .6+len(routes)*1.20+len(names)*.85+1.1
-        return width, max(content, min(width*1.22, content*1.35))
+        width = min(7.0, max(2.65, max([guide_width(s,.64) for s in names]+groups+[0.])+.65,
+                             guide_width('1/4 MILE',.42)+.8))
+        # Size the panel to the rows, independent of its width. A short town
+        # name must not force a tall blank panel; long names can be landscape.
+        footer = 1.24 if kind == 'decision' else .94
+        return width, .35+sum(route_size(r)[2] for r in routes)+len(names)*.96+footer
     lines = label['names'] or ([] if label['routes'] else ['EXIT '+label['ref']])
-    longest = max([guide_width(s, .64) for s in lines]+[2.7])
-    width = min(8.5, max(5., longest+.76+.95+(1.45 if label['routes'] else 0.)))
+    longest = max([guide_width(s, .64) for s in lines]+[0.])
+    route_width = max([route_size(r)[0] for r in route_symbols(label['routes'],state)]+[0.])
+    width = min(8.5, max(2.65, longest+.76+(max(1.45,route_width+.35) if label['routes'] else 0.),
+                            guide_width('1/4 MILE',.38)+.8))
     content = max(.64+max(0,len(lines)-1)*.89, len(route_symbols(label['routes']))*1.24-.28)
-    return width, max(2.65, content+1.22)
+    return width, max(2.35, content+1.22)
 
 
 class Mesh:
@@ -711,13 +736,14 @@ class Mesh:
         for char in value:
             data, glyph = guide_glyph(char)
             scale = height*fit/data['capHeight']
+            xscale = scale*GUIDE_ASPECT
             l,t,r,b = glyph['bbox'];u0,v0,u1,v1 = glyph['uv']
             if r>l and b>t:
                 material = 8 if black else 7 if char in guide_lettering()['glyphs'] else 3
-                self.quad([(.079,cursor+l*scale,baseline-b*scale),(.079,cursor+r*scale,baseline-b*scale),
-                           (.079,cursor+r*scale,baseline-t*scale),(.079,cursor+l*scale,baseline-t*scale)],
+                self.quad([(.079,cursor+l*xscale,baseline-b*scale),(.079,cursor+r*xscale,baseline-b*scale),
+                           (.079,cursor+r*xscale,baseline-t*scale),(.079,cursor+l*xscale,baseline-t*scale)],
                           material,[(u0,v0),(u1,v0),(u1,v1),(u0,v1)])
-            cursor += glyph['advance']*scale
+            cursor += glyph['advance']*xscale
 
     def distance_text(self, row, bottom, stacked=False):
         value = row['value']
@@ -741,7 +767,7 @@ class Mesh:
         y,bottom,w,h = route['y'],route['bottom']+bottom_offset,route['width'],route['height']
         kind = route['kind']
         if kind=='text':
-            self.guide_text(route['number'],y,bottom+h*.35,.30,w+.1)
+            self.guide_text(route['number'],y,bottom+.04,min(.40,h*.8),w)
             return
         profile=routeshields.marker(route.get('state','')) if kind=='state' else None
         if profile is not None:
@@ -830,7 +856,7 @@ class Mesh:
         width, height = sign['width'], sign['height']
         bottom = sign['bottom']-self.centre[2]
         label = sign['label']
-        offsets = sign.get('post_offsets', (-.32, .32))
+        offsets = sign.get('post_offsets', support_offsets(label, sign['kind']))
         for off, base in zip(offsets,sign.get('bases',[self.centre[2]]*len(offsets))):
             y = width*off
             self.box((-.12,y-.07,base-self.centre[2]-.2),(.02,y+.07,bottom+height-.1),2)
@@ -839,20 +865,20 @@ class Mesh:
             self.rounded_panel(width,bottom,height,4)
             welcome = all('welcome' in n.casefold() for n in label['names'])
             first,second = ('WELCOME','CENTER') if welcome else ('REST','AREA')
-            self.text(first,0.,bottom+height-.83,.53,width-.4)
-            self.text(second,0.,bottom+height-1.62,.53,width-.4)
+            self.guide_text(first,0.,bottom+height-.83,.53,width-.4)
+            self.guide_text(second,0.,bottom+height-1.62,.53,width-.4)
             if sign['kind'] in ('ramp', 'decision'):
                 self.arrow(0.,bottom+.34,side<0,1.25)
             else:
-                self.text(sign['distance'],-.3*side,bottom+.36,.38,width-1.35)
+                self.guide_text(sign['distance'],0.,bottom+.36,.38,width-.5)
                 if advance_arrow(sign):
                     self.arrow((width/2-.62)*side,bottom+.52,side<0,.75)
             return
         if sign['kind'] == 'ramp':
             self.rounded_panel(width,bottom,height,0)
-            self.text('EXIT',0.,bottom+1.47,.43,width-.4)
+            self.guide_text('EXIT',0.,bottom+1.47,.43,width-.4)
             if label['ref']:
-                self.text(label['ref'],-.39*side,bottom+.35,.76,width-1.1)
+                self.guide_text(label['ref'],-.39*side,bottom+.35,.76,width-1.1)
                 self.arrow((width/2-.64)*side,bottom+.43,side<0,.75)
             else:
                 self.arrow(0.,bottom+.43,side<0,1.1)

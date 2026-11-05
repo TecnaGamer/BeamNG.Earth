@@ -175,6 +175,22 @@ sent, then the rest, nearest first (in mesh mode there is no block class: the L-
 player come first by distance). The imagery of the next 12 queued tiles is fetched ahead of their
 build.
 
+## Wind turbine geotiles
+
+The client's optional `hello.turbineGeo: 1` enables mapped turbine landmarks independently of the road/building
+capabilities. The server answers `turbineGeo: 1`, then uses the existing vegetation tile tracker on a zoom-15 grid:
+4 km send, 5 km drop, at most two builds in flight. `turbines_tile` carries `{anchorId,key,path,n,frame:[lat,lon],pivot}`;
+`turbines_drop` carries `{anchorId,key}`. The file contains `{sid,key,frame,pivot,turbines:[...]}`. Every turbine
+record preserves `osm:<node|way>:<id>`, lat/lon, XYZ, yaw, uniform scale, dimension basis, and `collide:false`.
+The mod rejects a different server session, maps source-frame records into its current anchor, and retains them
+across rebases. Nearby road records share these identities, provide graded height/collision, and take placement
+priority; the last owner removes the two stock parts. Models use native LOD/ambient animation. Empty cells do no
+DEM sampling. `windturbines.py` reads the bundled, fingerprinted worldwide index; there is no runtime OSM query.
+
+The global index and provenance are rebuilt by `tools/build_windturbines.py --download`, then the resulting
+SHA256 must replace `windturbines.INDEX_SHA256` so source-fingerprinted revisit entries are invalidated normally.
+See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) for source and validation details.
+
 ## Terrain block (§1, §12 P1)
 
 - `hm_<anchorId>_<cx>_<cy>.png`: 1024² 16-bit grayscale, row 0 = north, `squareSize` = 2.0.
@@ -699,6 +715,20 @@ Steam Deck's memory), and the ground's three painters use them: the ground model
 photo (`photo_pads`, the paved roads' colour, under the roads) and the near tiles' asphalt mask (`road_mask`). Only
 with `--gas-stations on` (`Surface.gas_pads`, set by `Server` and `blockworker.init`).
 
+### EV chargers (`server/evchargers.py`; the user, 2026-10-29: "real life ev stations mapped like the gas stations are but using beam assets to have real recharging in the game")
+
+Every charger near the road tile, from Overture's places (`basic_category` / `taxonomy` `ev_charging_station`, and a
+gas listing named as a charger: Shell Recharge, BP Pulse) and OpenStreetMap's `amenity=charging_station` (`osmfuel.py`
+reads it in the same pass as the fuel stations: same columns, no more requests; cells under `osmfuel_cells/v2`). Records
+within 60 m are one site. A known fast network (Tesla, Electrify America, Ionity, EVgo, Fastned ...) or two records is a
+big site: a row of 4-8 chargers (Tesla's 8) along the nearest parking aisle within 30 m, each facing a 5.5 m stall;
+anything else gets 2 at its position facing the nearest road. A row is shortened to fit clear of buildings and roads;
+a charger with no clear spot (in a parking garage) is skipped. A charger within 60 m of a laid-out station stands off
+its forecourt's edge. One plain asphalt pad per site (the gas stations' pad store), no markings. Models: West Coast's
+2020 / 2022 units, East Coast's in the US East, Italy's in Europe (docs/research/2026-10-29-ev-chargers.md). The
+records go with the station records (`fuel`), with `"energy": ["electricEnergy"]`: the mod hands that to the stock
+POI (the charge prompt, the bolt icon). They come and go with the gas stations; OSM's with `BNGE_OSM_FUEL`.
+
 ## Airports and runways (`server/airports.py`, `runwaygeom.py`, `runwaymarks.py`; docs/research/2026-10-11-airports.md)
 
 Not used by earthd yet. OurAirports' `airports.csv` / `runways.csv` (public domain) are downloaded through
@@ -731,7 +761,7 @@ determinism, queries, the download / weekly refresh / last-good-copy store behin
 the CLI), the grading on synthetic DEMs (limits, data ends, steep / relaxed / coarse, crossings, no steps,
 footprint, determinism, `heightmap.grid_u` with the graded sampler) and the markings (classes, stripe counts,
 designators, on the pavement, no overlaps, mirrored ends, displaced thresholds, closed runways).
-`test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
+`test_evchargers.py` the EV chargers: their sites from both sources, sizes, layouts, records and pads. `test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
 tests. `test_farfield.py` selection, hysteresis, swap groups, err/sink/skirt and the shipped mod
 assets. `test_mesh.py` mesh mode: selection down to L-2 with the min-level radii (no gaps/overlaps on
 64 m cells), the 25 % hysteresis at 150/400 m, L-2 vertices == terrain PNG heights (float64 and the

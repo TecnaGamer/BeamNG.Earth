@@ -2341,6 +2341,49 @@ def _hulls_nearby(frame, layers, x0, y0, x1, y1, water_xy, reach=ships.PIER_REAC
     return out
 
 
+# A building is drawn as its parts (OSM's Simple 3D Buildings: the outline is not rendered where parts exist), but its
+# parts must cover it: Ülemiste keskus, Tallinn (GitHub #608), a 51,000 m² mall mapped with height 10, has a single
+# 452 m² part (height 5), and was drawn as that part alone, the rest of it bare ground. Of 409 buildings drawn as their
+# parts in a player's cache (Tallinn, Baltimore, ...), 63 had parts over less than half their outline. Under
+# PARTS_COVER_MIN the outline is drawn as well, the parts standing on it (one lower stays inside it), when it has a
+# height or levels of its own (PARTS_COVER_MIN_H) and every part stands on the ground: a part off the ground (min_height)
+# is a structure modelled in parts, its gaps open on purpose (a tower's legs, an arcade: its outline is its overall box).
+PARTS_COVER_ON = os.environ.get("BNE_PARTS_COVER", "on") != "off"
+PARTS_COVER_MIN = 0.5           # share of the outline the parts cover (grid samples inside it), below which it is drawn
+PARTS_COVER_SAMPLES = 400       # about this many samples inside an outline
+PARTS_COVER_MIN_H = 2.5         # m: an outline mapped lower than this is a base or an area, not drawn under its parts
+PARTS_GROUND_M = 0.5            # m: a part whose bottom is higher than this is off the ground
+
+
+def parts_cover(outline, part_rings):
+    """The share of outline (k, 2) that any of part_rings [(m, 2)] covers (same frame), from about
+    PARTS_COVER_SAMPLES grid points inside it; 1.0 for an outline too small to sample. Pure."""
+    from polygon import Path
+    o = np.asarray(outline, np.float64)[:, :2]
+    area = abs(_area2(o)) / 2.0
+    lo, hi = o.min(0), o.max(0)
+    step = max(math.sqrt(area / PARTS_COVER_SAMPLES), 0.25)
+    gx, gy = np.meshgrid(np.arange(lo[0] + step / 2, hi[0], step), np.arange(lo[1] + step / 2, hi[1], step))
+    g = np.stack([gx.ravel(), gy.ravel()], 1)
+    g = g[Path(o).contains_points(g)] if len(g) else g
+    if not len(g):
+        return 1.0
+    hit = np.zeros(len(g), bool)
+    for r in part_rings:
+        hit |= np.asarray(Path(np.asarray(r, np.float64)[:, :2]).contains_points(g), bool)
+    return float(hit.mean())
+
+
+def _outline_under_parts(at, bparts):
+    """May a building drawn as its parts (bparts: [(ring, (own height, bottom) or None, ...)]) have its outline drawn
+    under them where they cover too little of it: its own height (or levels) mapped, PARTS_COVER_MIN_H or more, and
+    no part off the ground."""
+    h, fl = at.get("height"), at.get("num_floors")
+    own = (h is not None and np.isfinite(h) and h >= PARTS_COVER_MIN_H) or \
+        (h is None or not np.isfinite(h)) and fl is not None and np.isfinite(fl) and fl >= 1
+    return bool(own) and all(p[1] is None or p[1][1] <= PARTS_GROUND_M for p in bparts)
+
+
 @profile_step('Building site selection')
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
@@ -2466,7 +2509,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     mins.append(pmh)
                 if key is not None:
                     seen.add(key)
-                continue
+                if not (PARTS_COVER_ON and _outline_under_parts(at, bparts)
+                        and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
+                    continue
+                # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
             ring = clean_ring(np.stack([e - x0, n - y0], 1))
             if ring is None or _area2(ring) / 2 < MIN_AREA_M2:
                 continue

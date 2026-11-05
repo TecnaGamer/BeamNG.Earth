@@ -11,6 +11,7 @@ are in the anchor frame, z the ground (elev); the mod clips the graph to the ter
 Pure given the map cells and elev; deterministic.
 """
 import math
+import re
 
 import numpy as np
 
@@ -20,12 +21,20 @@ import staging
 # classes the AI drives on: drivability (path cost divisor) and a default speed limit (mph, US practice)
 DRIVE = {"motorway": (1.0, 65), "trunk": (1.0, 55), "primary": (1.0, 45), "secondary": (1.0, 40),
          "tertiary": (0.9, 35), "residential": (0.8, 25), "unclassified": (0.8, 30), "living_street": (0.5, 15),
-         "service": (0.4, 15), "unknown": (0.6, 25)}
+         "service": (0.4, 15), "unknown": (0.6, 25),
+         # tracks too (GitHub #756: an AI car following the player down one drove into the trees beside it): below the
+         # stock traffic's spawn floor (trafficUtils minDrivability 0.5) and its cars' own minimum (>= 0.25), so random
+         # traffic stays off them while a follow / chase / route AI can use them. Rural Europe: the box's nodes about
+         # double (Czech farmland 136 -> 235, Black Forest 141 -> 288; a city block has ~700-1000)
+         "track": (0.2, 15)}
 SKIP_SUBCLASSES = {"driveway", "parking_aisle", "sidewalk", "crosswalk", "cycle_crossing"}
 URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (spec.urban) unless mapped
 # the km/h countries' rural defaults for the fast classes (Europe's 120-130 motorways: Bavaria's A9, unmapped, was
 # driven at the US 65 mph, 2026-10-15)
 KMH_DEFAULT = {"motorway": 120, "trunk": 100, "primary": 80, "secondary": 70}
+# Sweden's limits by law where no sign says otherwise, whatever the class: 50 km/h in a built-up area, 70 outside it
+# (bashastighet, Trafikförordningen 1998:1276 3 kap. 17 §), 110 on a motorway (9 kap. 1 §). Slower classes as above.
+SE_ROADS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
 MPH = 0.44704
 LANE_W_M = 3.3
 SIMPLIFY_M = 0.6            # a shape point is kept where the chord would be off by more than this
@@ -43,7 +52,7 @@ MOUNTAIN_EDGE_M = 0.4
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
 
 
-def road_mph(feats, i, spec, mph=True, at=0.5):
+def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
     signs (speedsigns.py), so a sign shows what the traffic drives."""
@@ -56,6 +65,10 @@ def road_mph(feats, i, spec, mph=True, at=0.5):
                 value = float(speed.value[r])
                 if math.isfinite(value) and value > 0:
                     return value / 1.609344
+    if country == "SE" and spec.cls == "motorway":
+        return 110.0 / 1.609344
+    if country == "SE" and spec.cls in SE_ROADS:
+        return (50.0 if spec.urban else 70.0) / 1.609344
     v = DRIVE[spec.cls][1]
     if not mph and spec.cls in KMH_DEFAULT:
         v = KMH_DEFAULT[spec.cls] / 1.609344
@@ -130,14 +143,6 @@ def driving_width(spec):
     return float(min(spec.width, w))
 
 
-def _osm_count(v):
-    try:
-        n = int(str(v).split(";")[0])
-        return n if 1 <= n <= 8 else None
-    except (TypeError, ValueError):
-        return None
-
-
 def _lanes(width, oneway, known=None):
     """Lanes (with the direction, against it) of a road whose driving lanes are `width` wide (known: OpenStreetMap's
     lane count, both directions, osmtags.py): the same number each way on a two-way road (a lopsided split put the AI's
@@ -150,10 +155,11 @@ def _lanes(width, oneway, known=None):
 
 
 def _deck_z(decks, fid, x, y):
-    """The deck height at (x, y) of feature fid's bridge parts (decks: fid -> [(xy (k, 2), z (k,))]), or None
-    when the point is not on one (more than 1.5 m off its line)."""
+    """The height at (x, y) of feature fid's bridge parts (decks: fid -> [(xy, z, depth)]), or None when the
+    point is not on one (more than 1.5 m off its line). Existing (xy, z) parts are accepted when depth is unknown."""
     best = None
-    for xy, z in decks.get(fid, ()):
+    for part in decks.get(fid, ()):
+        xy, z = part[:2]
         a, b = xy[:-1], xy[1:]
         d = b - a
         L2 = np.maximum((d * d).sum(1), 1e-12)
@@ -166,25 +172,35 @@ def _deck_z(decks, fid, x, y):
     return None if best is None else best[1]
 
 
-def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, widths=None, left_hand=False,
-          mph=True, signals=None):
+def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
+          mph=True, signals=None, country=None, priority=None):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
-    are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z)] of the bridge parts (roads.BridgeProfiles):
-    nodes on a bridge take its deck height (else traffic would spawn on the ground under it), and roads that are
-    bridge all along are in the graph (road_specs leaves them to the bridge builder). widths: the road tiles'
+    are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z, structural depth)] of the bridge parts
+    (roads.BridgeProfiles; existing (xy, z) entries leave the depth unknown). Nodes on a bridge take its deck height
+    (else traffic would spawn on the ground under it), and roads that are bridge all along are in the graph. widths:
     measured street widths (roadwidth.py), so the AI's lanes are on the carriageway the road mesh draws. signals:
     the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them."""
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
-    carriage = []           # (half width, centreline (k, 2)) of every road and bridge here (the signal heads keep off them)
+    carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
+    signal_parts, signal_walks, signal_depths = [], {}, {}
+    copies = roads.copies_of(feats_list)
     prop_arms = {}          # connector name -> [(fid, spec, unit vector away, point, end, length)] (the props' view)
     ring_cands = []         # the roads the road tiles draw (fid, spec, pts, None): roundabout rings (islands.ring_fids)
     approaches = {}         # (connector, fid, end) -> (graph node next to it, traffic comes in)
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
     node_fid = {}           # name -> the feature it was made on (its deck, if any)
     pending_by = {}         # name -> (-width, fid) of the road whose point it is (the widest's, then the lower id)
+    # the stretches through tunnels, left out of the graph (no ground there for the AI), for the minimap only
+    # (minimaproads.lua: its lines broke at every tunnel and every underpass mapped as one; the user, 2026-11-04)
+    lines = []              # [x1, y1, x2, y2, drivability]
+    # tunnels: fid -> [(xy (k, 2), floor z (k,))] of the tunnels the road tiles build (roads.TunnelProfiles): a stretch
+    # through one is the AI's too, its nodes at the tunnel's floor; a tunnel not built (under water, none at hand) stays
+    # the minimap's only (the AI's graph broke at every tunnel since they were built, 1.4.20; the user, 2026-11-05)
+    tunnel_node = {}        # name -> fid of the tunnel its height is read from
+    tube_edges = set()      # id() of the edges through a tunnel (portal_taper)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -219,7 +235,27 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             L = float(s[-1])
             if L < 1.0:
                 continue
-            carriage.append((spec.width / 2, p))     # (the signal heads keep off every carriageway, decks too)
+            if rspecs[i] is not None:
+                tp = roads.joint_desc(copies.get(fid, [(feats, i)]),
+                                      lambda f: roads.road_tapers(f, urban_fn, widths, left_hand))
+                for ring_ll in roads.ground_parts(feats, i):
+                    ring_ll = np.asarray(ring_ll, np.float64)
+                    if len(ring_ll) < 2:
+                        continue
+                    ge, gn, _ = frame.geodetic_to_enu(ring_ll[:, 1], ring_ll[:, 0], 0.0)
+                    ws = roads.taper_widths(rspecs[i].width, tp, ring_ll[:, 0], ring_ll[:, 1])
+                    half = rspecs[i].width / 2 if ws is None else (ws[:-1] + ws[1:]) / 4
+                    carriage.append((half, np.column_stack([ge, gn])))
+                    carriage_ll.append(ring_ll)
+            if bspecs[i] is not None and decks and fid in decks:
+                for part in decks[fid]:
+                    dxy, dz = part[:2]
+                    depth = float(part[2]) if len(part) > 2 else roads.DECK_FULL_DEPTH
+                    signal_depths[fid] = max(signal_depths.get(fid, 0.0), depth)
+                    signal_parts.append((fid, bspecs[i], np.column_stack([dxy, dz]), float(np.mean(ll[:, 0]))))
+                walk = roads.deck_walks(feats, i, rspecs, left_hand)
+                if walk:
+                    signal_walks[fid] = walk
             # the junction arms as the road tiles' props see them (every road they draw: service roads, driveways
             # and tracks too, no bridge-only roads), so furniture.junction_controls decides the same there and here
             if rspecs[i] is not None and con is not None:
@@ -236,7 +272,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                             (fid, rspecs[i], dd / dl, np.array([p[j0][0], p[j0][1], 0.0]), end, L))
             if spec.cls not in DRIVE or roads._rule_value(sub, i) in SKIP_SUBCLASSES:
                 continue
-            tunnels = [(a_, b_) for a_, b_, k_ in roads.level_ranges(feats, i) if k_ == "tunnel"]
+            tunnel_ranges = [(a_, b_) for a_, b_, k_ in roads.level_ranges(feats, i) if k_ == "tunnel"]
             # the nodes along it: connectors at their arc length, shape points that bend it, long gaps split
             marks = {}
             if con is not None:
@@ -287,11 +323,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 direction = int(spec.dir)
             if spec.kind == "paved" and spec.cls in roads.LANE_CLASSES:     # (the painted lanes: roads.lane_layout)
                 n = roads.lane_layout(spec)[1]
-                lo, li = (n, 0) if direction != 0 else (max(1, n // 2), max(1, n // 2))
                 tags = roads.lane_tags(feats, i) or {}
-                f_, b_ = _osm_count(tags.get("lanes:forward")), _osm_count(tags.get("lanes:backward"))
-                if direction == 0 and f_ and b_ and not tags.get("lanes:both_ways"):
-                    lo, li = f_, b_         # (an uneven split: markings.lane_plan moves the centre line the same)
+                import roadlanes
+                lo, li = ((n, 0) if direction else roadlanes.directions(n, tags)[:2]
+                          if spec.lanes or tags else _lanes(w, False, n))
             else:
                 lo, li = _lanes(w, direction != 0, spec.lanes)
             profile = _speed_profile(xy, w, direction != 0, urban=bool(getattr(spec, "urban", True)))
@@ -309,8 +344,20 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 a, b = names[j], names[j + 1]
                 if a == b:
                     continue
-                if tunnels and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnels):
-                    continue                # no ground over a tunnel: its stretch is left out
+                in_tunnel = False
+                if tunnel_ranges and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnel_ranges):
+                    # each end inside the tunnel on its built floor (an end past a portal is on the ground)
+                    ends_in = [(nm_, q_) for nm_, q_, at_ in ((a, xy[j], full[j]), (b, xy[j + 1], full[j + 1]))
+                               if any(t0 * L < at_ < t1 * L for t0, t1 in tunnel_ranges)]
+                    if AI_TUNNELS and tunnels and fid in tunnels and w >= TUNNEL_AI_MIN_W and all(
+                            _deck_z(tunnels, fid, float(q_[0]), float(q_[1])) is not None for _, q_ in ends_in):
+                        for nm_, _q in ends_in:
+                            tunnel_node[nm_] = fid      # (the AI's too: through the built tunnel)
+                        in_tunnel = True
+                    else:
+                        lines.append([round(float(xy[j][0]), 1), round(float(xy[j][1]), 1),
+                                      round(float(xy[j + 1][0]), 1), round(float(xy[j + 1][1]), 1), driv])
+                        continue            # no tunnel built there: the minimap's line only
                 if direction < 0:
                     a, b = b, a
                 pa, pb = xy[j] if direction >= 0 else xy[j + 1], xy[j + 1] if direction >= 0 else xy[j]
@@ -324,12 +371,43 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         pending[nm] = (float(q[0]), float(q[1]))
                         node_fid[nm] = fid
                         pending_by[nm] = (-w, fid)
-                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L)) * MPH
+                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv,
-                              round(w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0)
-                                    + float(max(hxm[j], hxm[j + 1])), 2)])
+                half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
+                if in_tunnel:
+                    # (the AI keeps TUNNEL_AI_WALL_M off the tube's walls, roadmesh.tunnel's road + shoulders: with the
+                    # road's half width it ran 5.3 m off its line at 56 mph into the Fort Pitt Tunnel's portal frame)
+                    import roadmesh
+                    half = max(1.5, min(half, spec.width / 2 + roadmesh.TUNNEL_SHOULDER - TUNNEL_AI_WALL_M))
+                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2)])
                 edge_fids.append(fid)
+                if in_tunnel:
+                    tube_edges.add(id(edges[-1]))
+    # The static props use 3D solved roads/decks. A 2D graph clearance line would falsely block every level below
+    # a viaduct, suppressing the switchable head while leaving the static signal behind.
+    if carriage_ll:
+        ll = np.concatenate(carriage_ll)
+        heights = np.asarray(frame.geodetic_to_enu(
+            ll[:, 1], ll[:, 0], np.asarray(elev(ll[:, 1], ll[:, 0]), np.float64))[2], np.float64)
+        at = 0
+        for i, (half, xy) in enumerate(carriage):
+            carriage[i] = (half, np.column_stack([xy, heights[at:at + len(xy)]]))
+            at += len(xy)
+    signal_decks = []
+    if signal_parts:
+        chunks = roads._deck_chunks(
+            signal_parts, (cx - window - 200, cy - window - 200, cx + window + 200, cy + window + 200),
+            depths=signal_depths, walks=signal_walks,
+            shift_of=roads.deck_shift_fn(frame, feats_list, urban_fn, widths, left_hand),
+            width_of=roads.deck_width_fn(frame, feats_list))
+        for ch in chunks:
+            if ch.get("deck"):
+                signal_decks.append(roads._deck_clearance(ch))
+
+    def signal_ground(x, y):
+        la, lo, _ = frame.enu_to_geodetic(np.asarray([x]), np.asarray([y]), 0.0)
+        return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
+
     import islands
     ring = islands.ring_directions(ring_cands, left_hand)
     ring_nodes = {nm for fid, e in zip(edge_fids, edges) if fid in ring for nm in e[:2]}
@@ -362,13 +440,20 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 dz = _deck_z(decks, node_fid.get(nm), X[k], Y[k])
                 if dz is not None:
                     Z[k] = dz
+        if tunnel_node:
+            for k, nm in enumerate(used):
+                if nm in tunnel_node:
+                    tz = _deck_z(tunnels, tunnel_node[nm], X[k], Y[k])
+                    if tz is not None:
+                        Z[k] = tz
         radius = {}
         for e in edges:
             for nm in e[:2]:
                 radius[nm] = max(radius.get(nm, 0.0), e[7])
         for nm, x, y, z in zip(used, X, Y, Z):
             nodes[nm] = [round(float(x), 2), round(float(y), 2), round(float(z), 2), radius[nm]]
-    signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals)
+    signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals, country, priority,
+                       decks=signal_decks, ground=signal_ground)
     # one edge per node pair (two segments joining the same connectors: keep the first)
     uniq, pairs = [], set()
     for e in edges:
@@ -376,7 +461,66 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         if k not in pairs:
             pairs.add(k)
             uniq.append(e)
-    return {"nodes": nodes, "edges": uniq, "signals": signals}
+    if tube_edges:
+        portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
+    lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
+    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines}
+
+
+PORTAL_LEAD_M = 60.0        # m before a tunnel's portal over which the AI's road narrows to the tube's (portal_taper)
+
+
+def portal_taper(nodes, edges, tube_edges, inside):
+    """In place: the roads leading to a tunnel narrow to its tube's AI half width at the portal, over PORTAL_LEAD_M.
+    A portal node (an end of a tube edge outside the tunnel) took the widest of its roads' half widths, so the AI
+    spread its lanes over the approach's (Fort Pitt Tunnel's west portal: carriageways 11.6 m wide and shoulders into
+    openings of ~9 m, an AI car 5 m off its line into the pier between the tubes three times, 2026-11-05). An edge
+    near a portal gets its two ends' radii (edge[7] at edge[0], an added edge[8] at edge[1]: the stock AI's
+    inRadius / outRadius, map.getEdgeRadii); the portal node's own radius is the tube's."""
+    portal = {}
+    for e in edges:
+        if id(e) in tube_edges:
+            for nm in e[:2]:
+                if nm not in inside and nm in nodes:
+                    portal[nm] = min(portal.get(nm, math.inf), e[7])
+    if not portal:
+        return
+    # how far each node near a portal is from it along the roads outside (Dijkstra, PORTAL_LEAD_M at most), with the
+    # nearest portal's half width
+    adj = {}
+    for e in edges:
+        if id(e) not in tube_edges and e[0] in nodes and e[1] in nodes:
+            pa, pb = nodes[e[0]], nodes[e[1]]
+            d = math.hypot(pa[0] - pb[0], pa[1] - pb[1])
+            adj.setdefault(e[0], []).append((e[1], d))
+            adj.setdefault(e[1], []).append((e[0], d))
+    import heapq
+    best = {nm: (0.0, r) for nm, r in portal.items()}
+    heap = [(0.0, nm) for nm in portal]
+    while heap:
+        d, nm = heapq.heappop(heap)
+        if d > best[nm][0]:
+            continue
+        for ot, dd in adj.get(nm, ()):
+            nd = d + dd
+            if nd < PORTAL_LEAD_M and (ot not in best or nd < best[ot][0]):
+                best[ot] = (nd, best[nm][1])
+                heapq.heappush(heap, (nd, ot))
+
+    def at(nm, half):
+        b = best.get(nm)
+        if b is None or b[1] >= half:
+            return half
+        return round(b[1] + (half - b[1]) * b[0] / PORTAL_LEAD_M, 2)
+    for e in edges:
+        if id(e) in tube_edges:
+            continue
+        r0, r1 = at(e[0], e[7]), at(e[1], e[7])
+        if r0 != e[7] or r1 != e[7]:
+            e[7] = r0
+            e.append(r1)
+    for nm, r in portal.items():
+        nodes[nm][3] = min(nodes[nm][3], r)
 
 
 STOP_BACK_M = 2.0           # the stop point: this far before the junction's widest road edge
@@ -386,7 +530,8 @@ STOP_BACK_M = 2.0           # the stop point: this far before the junction's wid
 SHORT_APPROACH_M = 15.0
 
 
-def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None):
+def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None, country=None, priority=None,
+             decks=(), ground=None):
     """[{"j": junction node, "kind": "signal" | "stop", "app": [[approach node, x, y, z, dir x, dir y, phase, prop x,
     prop y, prop z, prop yaw]]}] of the urban junctions furniture.junction_controls controls, decided on the arms
     the road tiles' props see (arms) and built for the graph's approaches into them (approaches): per incoming
@@ -398,11 +543,16 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
     farms = {name: [(x[0], x[1], x[2], x[3], x[4] == 0, x[5] if len(x) > 5 else math.inf) for x in a]
              for name, a in arms.items()}
     link_ok = furniture._link_check(farms, signals)
+    # Restrict index construction to this graph's nodes (some source ways extend many kilometres beyond it).
+    xy = np.asarray([v[:2] for v in nodes.values()], np.float64).reshape(-1, 2)
+    bounds = (*xy.min(0), *xy.max(0)) if len(xy) else (0.0, 0.0, 0.0, 0.0)
+    clearance = furniture.RoadClearance(lines, decks, bounds=bounds)
     for name, a in arms.items():
         if name not in nodes or len(a) < 3 or not furniture._controlled_here(farms[name], signals):
             continue
         put = [(arm, what) for arm, what in furniture.junction_controls(farms[name], None, link_ok, ring=ring,
-                                                                         signals=signals)
+                                                                         signals=signals, country=country,
+                                                                         priority=priority)
                if what != furniture.G_YIELD]    # give-way uses edge priority; a stop controller would force a stop
         if not put:
             continue
@@ -424,11 +574,14 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
             right = np.array([inc[1], -inc[0]]) * (-1 if left_hand else 1)     # the side traffic keeps to
             q = np.array([jx, jy]) + u * (wide + STOP_BACK_M) + right * (spec.width / 4)
             phase = 0 if abs(float(u @ axis)) > 0.7 else 1
+            def support(x, y):
+                return float(np.asarray(ground(x, y)).reshape(-1)[0]) + 0.15 if ground is not None else jz + 0.15
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none
             # where no spot is clear of the carriageways (no prop there either)
             side, yaw = furniture.approach_pose(u, what, left_hand)
-            pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines)
-            head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(jz + 0.15, 2),
+            pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines,
+                                       group=what, base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
+            head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(support(*pp), 2),
                                                   yaw]
             app.append([nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
                         round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head)
@@ -483,6 +636,19 @@ def region_near(db, lat, lon):
     return getattr(ap, "region", None) or None
 
 
+def part_fid(pid):
+    """The road feature's id of a chain part's id (roads.ChainView: "<fid>.<part>#<section>")."""
+    return re.sub(r"(\.\d+)?(#\d+)?$", "", str(pid))
+
+
+# The AI through built tunnels: off until their portals fit the roads leading in (Fort Pitt Tunnel, 2026-11-05: the
+# approach carriageways, shoulders and all, are wider than the tube openings and lead into the pier between the twin
+# tubes; an AI car hit it at 38-56 mph three times). Off, every tunnel stretch is the minimap's line only, as before.
+AI_TUNNELS = False
+TUNNEL_AI_WALL_M = 2.5     # m the AI's road half width in a tunnel stays inside the tube's walls (a car's half width + room)
+TUNNEL_AI_MIN_W = 5.0       # m of driving width a tunnel needs to be the AI's: a one-lane one (3.4 m, the Park Avenue
+                            # Tunnel's south portal in Manhattan) was entered at an angle off the wider approach and the
+                            # car hit the portal's pier (2026-11-05); narrower ones stay the minimap's only
 REBUILD_M = 400.0           # a new graph once the player is this far from the last one's centre
 
 

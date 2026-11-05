@@ -242,11 +242,14 @@ class RailTags(Shards):
 LANES_ON = os.environ.get("BNE_LANETAGS", "on") != "off"
 # OpenStreetMap's lane-level road tags (tools/build_lane_tags.py), attrs osm_<key with ':' as '_'>: the road markings'
 # lane-by-lane data (markings.py)
-LANE_COLUMNS = ("turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
+LANE_COLUMNS = ("lanes", "turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
                 "change:lanes:forward", "change:lanes:backward", "placement", "placement:forward", "placement:backward",
                 "lanes:forward", "lanes:backward", "lanes:both_ways", "overtaking", "overtaking:forward",
                 "overtaking:backward", "divider", "lane_markings", "bus:lanes", "busway", "hov:lanes",
                 "junction")     # (roundabout rings: roads._rings, attrs osm_junction)
+
+
+LANE_PARTS = "osm_lane_parts"   # per road feature of several ways: [(start, end, way id, its tags)], else None
 
 
 def _tags_of(ways, keys):
@@ -257,6 +260,8 @@ def _tags_of(ways, keys):
 
 
 def lane_attr(key):
+    if key == "lanes":
+        return "osm_lane_total"     # preserve the independently downloaded Layercake count
     return "osm_" + key.replace(":", "_")
 
 
@@ -287,6 +292,17 @@ class LaneTags(Shards):
                             cols[c][i] = t[c]
         for c in LANE_COLUMNS:
             feats.attrs[lane_attr(c)] = cols[c]
+        # (the columns above hold the way covering most of a feature; a feature of several ways keeps each one's tags)
+        table = feats.rules.get("src_ways")
+        parts = np.full(len(feats), None, object)
+        if table is not None and len(table):
+            for i in road:
+                rows = table.for_feature(int(i))
+                if rows:
+                    parts[i] = [(a, b, way_id(r), dict(ways.get(way_id(r)) or {})) for r, a, b in rows]
+        feats.attrs[LANE_PARTS] = parts
+        import roadlanes
+        roadlanes.invalidate(feats)
 
 
 SIGNS_ON = os.environ.get("BNE_SIGNTAGS", "on") != "off"

@@ -99,6 +99,27 @@ class BankTest(unittest.TestCase):
         self.assertLess(float(body.max() - body.min()), 0.012)       # (it was 0 % between vertices, 8 % at them)
         self.assertLess(float(body.max()), -0.05)
 
+    def test_a_mapped_roundabout_is_not_banked(self):
+        """The Jüri roundabout of Tallinna ringtee (59.3535 N 24.8820 E, a trunk ring about 190 m across): banked as a
+        trunk's curve, 8 % into the ring, where the real one falls 2.4-2.9 % outward (the national lidar). A mapped
+        roundabout ring (roads.is_ring) is graded level across."""
+        def ring_z(junction):
+            a = np.linspace(0.0, np.pi, 60)
+            halves = [[(190 * np.cos(t), 190 * np.sin(t)) for t in a],
+                      [(190 * np.cos(t), -190 * np.sin(t)) for t in a[::-1]]]
+            f = features(halves, ["trunk", "trunk"])
+            f.attrs["osm_junction"] = np.array([junction, junction], object)
+            g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 50.0))
+            t = np.pi / 2
+            pts = np.array([(186.0 * np.cos(t), 186.0 * np.sin(t)), (194.0 * np.cos(t), 194.0 * np.sin(t))])
+            la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            z = g.apply(la, lo, np.full(2, 50.0))
+            return float(z[1] - z[0])           # outer edge minus inner, 8 m apart
+        self.assertGreater(ring_z(""), 0.4, "(a trunk's curve: banked into it)")
+        self.assertAlmostEqual(ring_z("roundabout"), 0.0, delta=0.05, msg="the roundabout level across")
+        with unittest.mock.patch.object(grading, "RING_LEVEL_ON", False):
+            self.assertGreater(ring_z("roundabout"), 0.4, "(BNE_RING_LEVEL=off: banked as before)")
+
     def test_straight_and_city_streets_level(self):
         xy = np.stack([np.arange(0, 300, 2.0), np.zeros(150)], axis=1)
         self.assertIsNone(grading.bank(xy, roads.Spec(11.0, "paved", False, "motorway"), ext=(1, 1)))
@@ -740,6 +761,32 @@ class UnderpassShortfallTest(unittest.TestCase):
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
         self.assertLess(float(g.apply(la, lo, np.full(1, 10.0))[0]), 10.0 - 0.6 * grading.UNDER_CLEAR_M,
                         "lidar, a motorway's deck: the road under dips")
+
+    def test_a_deck_on_its_embankments_is_not_taken_for_one_down_their_slopes(self):
+        """Tartu mnt's decks over the Jüri roundabout and Kurna - Tuhala over Tallinna ringtee (Estonia): the decks'
+        map lines end part-way down their embankments, and the decks stand on the embankments' tops (fill_abutment,
+        #684). The dip under them took the decks' heights from the ground at their lines' ends, 1.5-4.4 m lower: the
+        roads under were dug 2.8-3.8 m, and their slip roads beside them not, a step between them."""
+        lines = [[(-300, 0), (300, 0)], [(0, -28), (0, 28)], [(0, -260), (0, -28)], [(0, 28), (0, 260)]]
+        classes = ["residential", "motorway", "motorway", "motorway"]
+        top = 9.0       # the embankment over the road under; its slopes from 20 m to 40 m either side of the road
+
+        def elev(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
+            bank = top * np.clip((np.abs(np.asarray(n)) - 20.0) / 20.0, 0.0, 1.0)
+            return 10.0 + np.where(np.abs(np.asarray(e)) < 15.0, bank, 0.0)
+
+        def z_at(e, n):
+            g = grading.Grader(FRAME, FakeMD(features(lines, classes, flags=[(1, "is_bridge")])), elev)
+            la, lo, _ = FRAME.enu_to_geodetic(np.array(e, float), np.array(n, float), 0.0)
+            return g.apply(la, lo, elev(la, lo))
+        deck_end, under = (float(v) for v in z_at([0.0, 0.0], [28.0, 0.0]))
+        self.assertGreater(deck_end, 10.0 + top - 0.5, "(the deck's end on its embankment)")
+        depth = roads.deck_depth(56.0)
+        self.assertGreater(deck_end - 10.0, roads.deck_road_clear(depth) + grading.ROAD_LIFT, "(room enough)")
+        self.assertAlmostEqual(under, 10.0, delta=0.3, msg="the road under keeps its ground")
+        with unittest.mock.patch.object(grading, "ABUT_FILL_ON", False):
+            self.assertLess(float(z_at([0.0], [0.0])[0]), 10.0 - 2.0, "(BNE_ABUT_FILL=off: dug as before)")
 
 
 class StreetRunsTest(unittest.TestCase):

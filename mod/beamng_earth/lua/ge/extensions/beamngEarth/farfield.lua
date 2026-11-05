@@ -1284,6 +1284,20 @@ end
 
 -- gov: governor instance (governor.lua); dt: s since the last frame (wall); cam: nil or
 -- {x,y,z,fx,fy,fz,fovDeg} for the off-screen test; player: nil or {x,y,z} (the exactMiss metric).
+-- A single unit (a swap group's start, a spawn, a material, a removal) this slow is logged, a few per session: the
+-- governor charges a unit after it ran, so one can take a whole frame ("far 78.9" ms in one hitch of a 150 mph NYC
+-- drive, 2026-11-05, with nothing saying which)
+M.SLOW_UNIT_MS = 30
+M.SLOW_UNIT_LOGS = 20
+local slowLogged = 0
+local function slowUnit(kind, ms, what)
+  if ms < M.SLOW_UNIT_MS then return end
+  counters.slowUnits = (counters.slowUnits or 0) + 1
+  if slowLogged >= M.SLOW_UNIT_LOGS then return end
+  slowLogged = slowLogged + 1
+  log('W', 'beamngEarth', string.format('far field: one %s took %.1f ms (%s)', kind, ms, what))
+end
+
 function M.update(gov, dt, cam, player)
   clock = clock + min(max(dt or 0, 0), M.MAX_DT)
   local now = gov.clock
@@ -1325,7 +1339,9 @@ function M.update(gov, dt, cam, player)
         if gov:try('reveal') then
           local t1 = now()
           if startGroup(g, cam) then
-            gov:charge('reveal', now() - t1)
+            local ms = now() - t1
+            gov:charge('reveal', ms)
+            slowUnit('swap group start', ms, string.format('group %s: %d adds, %d removes', tostring(g.id), #g.add, #g.remove))
             units = units + 1
           end -- else: waits for a crossover slot; its keys stay busy, other groups go on
         else
@@ -1356,7 +1372,9 @@ function M.update(gov, dt, cam, player)
           live[r.inst.key] = nil
         end
         doom(r.inst, true)
-        gov:charge('reveal', now() - t1)
+        local ms = now() - t1
+        gov:charge('reveal', ms)
+        slowUnit('removal', ms, tostring(r.inst.key))
         units = units + 1
       end
       removals[rH] = nil
@@ -1378,7 +1396,9 @@ function M.update(gov, dt, cam, player)
         local t1 = now()
         local ok, err = pcall(satmat.create, inst.material, inst.texture, inst.detail)
         if not ok then log('E', 'beamngEarth', 'far tile material failed: ' .. tostring(err)) end
-        gov:charge('material', now() - t1)
+        local ms = now() - t1
+        gov:charge('material', ms)
+        slowUnit('material', ms, tostring(inst.material))
         units = units + 1
         if satmat.exists(inst.material) then counters.materials = counters.materials + 1 end
       end
@@ -1404,6 +1424,7 @@ function M.update(gov, dt, cam, player)
       nQueued = nQueued - 1
       inst.importMs = now() - t1 -- shown by the dev tools' mini-map
       gov:charge(kind, inst.importMs)
+      slowUnit('spawn', inst.importMs, string.format('%s %s, material %s', kind, tostring(inst.key), tostring(inst.mat or inst.material)))
       units = units + 1
       imported = true
     end

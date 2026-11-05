@@ -4,6 +4,27 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ## Unreleased
 
+### Added
+- **Place search works again, and finds more** (GitHub #602): the map's search no longer depends on one service. It asks
+  Wikipedia and Wikidata as you type, Photon while it answers, and OpenStreetMap's Nominatim for streets and house
+  numbers when you press Enter. Their answers are ranked together, so "Ganter Bridge", "Ganterbruecke" and
+  "Ganterbrücke Simplon" all find the same bridge.
+- **"Highest bridge in Switzerland"**: the search answers questions like this (highest and longest bridges, longest
+  tunnels, highest passes and dams, by country or for the world) from a table that comes with the app.
+
+### Fixed
+- **Roads under an overpass dug into trenches when the bridge's map line ends down its embankments:** the dip under a
+  bridge took the deck's height from the ground at those ends, not from the embankment tops it stands on (#694), so it
+  dug the road under up to 4 m too deep. Its slip roads beside it stayed at their own height, a step between them. Seen
+  under Kurna - Tuhala over Tallinna ringtee and under Tartu mnt at the Jüri roundabout, Estonia.
+- **Buildings missing all but a small piece** (Ülemiste keskus, Tallinn's biggest mall, #608): a building mapped with
+  parts was drawn as its parts alone, so one stray 452 m² part erased the 51,000 m² mall around it. Where the parts
+  cover less than half of a building with its own mapped height, and none of them stands off the ground, the building
+  is drawn too, with its parts on it.
+- **Roundabouts tilted like motorway curves:** a mapped roundabout on a trunk or motorway (the big Jüri roundabout of
+  Tallinna ringtee, Estonia) was banked 8 % into the ring, and the tilt changed at every road joining it. Real ones are
+  close to flat, so roundabout rings are now level across.
+
 ## 1.8.1 beta (2026-11-04)
 
 Works with BeamNG.drive 0.40.4.

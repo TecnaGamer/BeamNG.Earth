@@ -19,6 +19,17 @@ local steep = { nodes = { j = { 0, 0, 22.7, 4 }, d = { 8, 0, 29.1, 3 }, h = { 0,
   edges = { { 'j', 'd', 0, 1, 1, 11.2, 1, 3 }, { 'j', 'h', 0, 1, 1, 11.2, 1, 3 } } }
 local sn, _, sne = N.toNodes(steep, { -500, -500, 500, 500 }, 60, false)
 T.check(sne == 1 and sn.j.links.h and not sn.j.links.d, 'a link steeper than MAX_GRADE left out; 37 % kept: ' .. sne)
+-- a halo (route planning past the box): the far node kept, the cut still at the box's edge
+do
+  local hn, hnn, hne, hcuts = N.toNodes(g, { -500, -500, 500, 500 }, 60, false, nil, 5000)
+  T.check(hnn == 4 and hne == 3 and hn.far ~= nil, 'halo: the node past the box kept, its road too')
+  T.check(#hcuts == 1 and hcuts[1][1] == 100, 'halo: the cut stays where the box ends (c)')
+end
+-- GitHub #353: a car ahead of a player on the move, going its way, is not respawned for the cut ahead
+T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'ahead, same way')
+T.check(not N.followsPlayer({ x = -200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'behind: not')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = -1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'oncoming: not')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 2, y = 0 }), 'player slow: not')
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')
@@ -43,6 +54,12 @@ T.check(ab and nodes.b.links.a == ab, 'one edge table shared by both ends (doubl
 T.check(ab.inNode == 'a' and ab.outNode == 'b' and ab.inPos == nodes.a.pos and ab.outPos == nodes.b.pos, 'in / out nodes and positions')
 T.check(ab.speedLimit == 11.2 and ab.lanes == '-+' and not ab.oneWay and ab.inRadius == 4 and ab.outRadius == 4, 'edge fields')
 local bc = nodes.b.links.c
+do      -- a road narrowing to a tunnel's portal: the edge's end radii (e[8] at its in node, e[9] at its out node)
+  local g2 = { nodes = { p = { 0, 0, 0, 6 }, q = { 50, 0, 0, 3 } }, edges = { { 'p', 'q', 0, 1, 1, 20, 1, 6, 3 } } }
+  local n2 = N.toNodes(g2, nil, 60, false)
+  local pq = n2.p.links.q
+  T.check(pq.inRadius == 6 and pq.outRadius == 3, 'per-end radii: ' .. tostring(pq.inRadius) .. ' ' .. tostring(pq.outRadius))
+end
 T.check(bc.oneWay and bc.lanes == '+' and bc.inNode == 'b', 'one-way: in -> out is the allowed direction')
 T.check(N.inside(nil, 1e9, 0, 60) and not N.inside({ 0, 0, 100, 100 }, 50, 50, 60), 'inside')
 
@@ -98,7 +115,7 @@ do
   N.enabled = true
   local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
   jsonDecode = function() return { nodes = { a = { 100, 200, 5, 3 }, b = { 150, 200, 5, 3 } },
-                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } } } end
+                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, lines = { { 10, 20, 30, 40, 1 } } } end
   readFile = function() return '{}' end
   T.check(N.onMessage({ anchorId = 7, path = 'x', serial = 1 }, 7), 'a graph for anchor 7')
   local xf = { apply = function(_, x, y, z) return x - 1000, y + 50, z - 2 end }
@@ -106,6 +123,8 @@ do
   local g = N.currentGraph()
   T.check(g.anchor == 8 and g.nodes.a[1] == -900 and g.nodes.a[2] == 250 and g.nodes.a[3] == 3 and g.nodes.a[4] == 3,
     'its nodes in the new frame, radius kept')
+  T.check(g.lines and g.lines[1][1] == -990 and g.lines[1][2] == 70 and g.lines[1][3] == -970 and g.lines[1][5] == 1,
+    'its tunnel lines (the minimap) too')
   T.check(not N.transform(nil, 9) and N.currentGraph().anchor == 8, 'no transform: nothing')
   jsonDecode, readFile = jd, rf
 end

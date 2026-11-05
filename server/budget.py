@@ -107,6 +107,9 @@ def apply(is_small=None):
             farfield.K_TABLE[cells] = {lvl: k * SMALL_FAR_K for lvl, k in table.items()}
         for cells, tex in farfield.TEX_DEFAULT.items():
             farfield.TEX_DEFAULT[cells] = tuple(min(t, SMALL_FAR_TEX) for t in tex)
+    if os.environ.get("BNGE_DEM_MEM_TILES"):        # (A/B: decoded DEM tiles kept per process)
+        import dem
+        dem.MEM_TILES = int(os.environ["BNGE_DEM_MEM_TILES"])
     # every machine: a desktop's server held 13-17 GB in its eleven processes (1-1.5 GB a worker, mostly freed memory
     # its 40-65 threads' arenas kept), next to the game; a 32 GB PC with 4 cores swapped (GitHub #496, 2026-10-30)
     _malloc_small()

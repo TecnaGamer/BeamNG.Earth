@@ -78,6 +78,7 @@ local ambience = require('beamngEarth/ambience') -- forest wind and room tone (t
 local pumpjacks = require('beamngEarth/pumpjacks') -- oil wells' pump jacks (server oilwells.py)
 local nightlights = require('beamngEarth/nightlights') -- the buildings' windows lit at night
 pumpjacks.onCollide = roads.markCollisionDirty
+require('beamngEarth/windturbines').onCollide = roads.markCollisionDirty
 local parking = require('beamngEarth/parking') -- parked cars on the road tiles' spots (stock gameplay_parking)
 local gasstations = require('beamngEarth/gasstations') -- pumps and the stock refuel prompt (server gasstations.py)
 -- (the stations' pump islands: lit at night)
@@ -558,6 +559,7 @@ local function commitTeleport(msg)
 
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
+  require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(msg.lat, msg.lon)
@@ -589,6 +591,8 @@ local function finishRebase()
   trees.transform(xf, geodesy, rb.newAnchor)    -- (geotiles: placed into the new anchor, nothing sent again)
   ambience.transform(xf)
   pumpjacks.transform(xf)
+  require('beamngEarth/windturbines').transform(xf)
+  require('beamngEarth/turbinestream').reanchor(rb.newAnchor)
   nightlights.transform(xf)
   gasstations.transform(xf)
   -- road geotiles: their content placed exactly into the new anchor (its rows' modules after their transforms above),
@@ -921,6 +925,7 @@ local function onMessage(msg)
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
       farGeo = roads.FAR_GEO,          -- (and the far buildings, skyline and far bridges: roads.lua)
+      turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
@@ -956,6 +961,7 @@ local function onMessage(msg)
     if roadsSession ~= msg.sessionId then
       -- (road geotiles stay: the new session's content with the same hash keeps them, the rest go once far or old)
       roads.newSession()
+      require('beamngEarth/turbinestream').reset() -- the new server does not own the previous far tile keys
       roadsSession = msg.sessionId
     end
     roads.prewarm(msg.prewarm)  -- the materials of the server's shapes set up now, not at their first tile
@@ -976,6 +982,12 @@ local function onMessage(msg)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
+    -- the direction signs' switch (settings directionSigns, off by default): sign tiles with boards only while it is on
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
+      net.send({ type = 'direction_signs', on = M.directionSigns })
+    end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
@@ -1165,6 +1177,10 @@ local function onMessage(msg)
   elseif t == 'veg_drop' then
     trees.onDrop(msg)
     ambience.onDrop(msg.anchorId, msg.key)
+  elseif t == 'turbines_tile' then
+    require('beamngEarth/turbinestream').onTile(msg, st.anchor, st.sessionId)
+  elseif t == 'turbines_drop' then
+    require('beamngEarth/turbinestream').onDrop(msg)
   elseif t == 'bldfar_tile' then
     -- far buildings (server buildings.far_tile, --buildings on): render-only, roads.lua
     roads.onFarTile(msg, st.anchorId)
@@ -1702,6 +1718,8 @@ local function updateBanner(dt)
   i.dropHold = (dropHold.active or (st.guard.healthy and st.guard.pausedByUs)) or nil
   -- connected and said hello, yet the guard runs: the server does not (yet) build the terrain
   i.stuck = (i.session and net.isConnected()) and true or false
+  local lp = st.loadProgress
+  i.download = (lp and lp.anchorId == st.anchorId) and loadprogress.downloadText(lp.net) or nil
   banner.update(dt, i)
 end
 
@@ -1878,6 +1896,7 @@ local function drawUi(dt)
   if st.inOurLevel then
     hudapps.hookCityZone(minimapName)
     hudapps.hookMinimapNorth(minimapNorth)
+    require('beamngEarth/minimaproads').hook()
     levelinfo.hookSpawnPois()
   end
   if updateInfo and st.inOurLevel and st.active and not credits.hiddenByUi()
@@ -2046,6 +2065,7 @@ end
 local function onUpdate(dtReal, dtSim)
   dtReal = dtReal or 0
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
+  net.setIdle(not st.inOurLevel and not st.active)
   if not st.inOurLevel and not st.active then
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
     -- launcher's sign that the game still runs, launcher.game_connected; its messages only store what the
@@ -2238,6 +2258,8 @@ local function onUpdate(dtReal, dtSim)
     t = mark('parking', t)
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
+    require('beamngEarth/minimaproads').update(navgraph.currentGraph())
+    t = mark('minimaproads', t)
     do
       local ok, err = pcall(M._trafficvisuals.update, dtReal, dtSim, st, pb, gov)
       if not ok then M._trafficvisuals.reset(); log('E', 'beamngEarth', 'distant traffic: ' .. tostring(err)) end
@@ -2372,6 +2394,7 @@ local function onClientEndMission()
   notePlayerPos(true)
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
+  require('beamngEarth/minimaproads').unhook()
   levelinfo.unhookSpawnPois()
   postfx.restore()
   require('beamngEarth/enginepref').restore()
@@ -2393,6 +2416,8 @@ local function onClientEndMission()
   trees.reset()
   ambience.reset()
   pumpjacks.reset()
+  require('beamngEarth/windturbines').reset()
+  require('beamngEarth/turbinestream').reset()
   nightlights.reset()
   parking.reset()
   navgraph.reset()
@@ -2431,6 +2456,7 @@ local function onExtensionUnloaded()
   M._trafficvisuals.reset()
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
+  require('beamngEarth/minimaproads').unhook()
   levelinfo.unhookSpawnPois()
   groundcover.enginePatch(false)
   net.close()
@@ -2687,9 +2713,9 @@ function M.appPath(what, pick, path)
 end
 
 -- The world map's search box: addresses and places from the server (geocode.py); the answer is geocode_result.
-function M.requestGeocode(id, q, lat, lon)
+function M.requestGeocode(id, q, lat, lon, full)
   if not net.isConnected() then return false end
-  net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon })
+  net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
@@ -2843,6 +2869,15 @@ end
 -- The highway signs on / off (settings highwaySigns): shown or hidden at once, built by the server only while on.
 function M.setHighwaySigns(on)
   if roads.setSignsEnabled(on) then net.send({ type = 'highway_signs', on = roads.signsEnabled }) end
+end
+
+-- The direction signs on / off (settings directionSigns): the server builds the sign tiles again with or without the
+-- boards (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setDirectionSigns(on)
+  on = on == true
+  if M.directionSigns == on then return end
+  M.directionSigns = on
+  net.send({ type = 'direction_signs', on = on })
 end
 
 M.onUpdate = onUpdate

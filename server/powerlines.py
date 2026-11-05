@@ -184,9 +184,13 @@ def _off_roads(frame, md, e, n, ll):
     return e, n
 
 
-def tile_lines(frame, tx, ty, md, elev, props, wires):
+def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
     """Add road tile (tx, ty)'s towers, gantries, substation yards (props rows, furniture.place's form) and conductors
-    (wires polylines) of the power lines near it; elev(lat, lon): the ground."""
+    (wires polylines) of the power lines near it; elev(lat, lon): the ground. clearance is build_tile's shared
+    RoadClearance: sampled tapers and actual shifted / sidewalk-expanded decks, never tunnel vaults. Full stock
+    colliders are checked AFTER native layout (which decides tower yaw). Unlike moving a point away from one road,
+    this also covers crossroads, a rotated tower's corners and services. A tower with no safe footprint is omitted;
+    its overhead conductors remain, not cut at a tile boundary."""
     import roads
     from polygon import Path
     if md is None:
@@ -231,8 +235,10 @@ def tile_lines(frame, tx, ty, md, elev, props, wires):
         towers, ends, wp, wo = fast._ef.power_line_layout(pts, off, stop, ARMS, SAG, SEG_M, MIN_SPAN_M, MAX_SPAN_M,
                                                           DEDUPE_M, END_MERGE_M, GANTRY_FRONT, [x0, y0, x1, y1])
         for x, y, zz, yaw in towers:
-            props.append([G_PYLON, round(float(x), 2), round(float(y), 2), round(float(zz), 2), round(float(yaw), 1),
-                          1.0, PYLON_H, 0.0])
+            row = [G_PYLON, round(float(x), 2), round(float(y), 2), round(float(zz), 2), round(float(yaw), 1),
+                   1.0, PYLON_H, 0.0]
+            if clearance is None or clearance.clear(row):
+                props.append(row)
         for a, b in zip(wo[:-1], wo[1:]):
             wires.append((np.asarray(wp[a:b]), WIRE_R))
     if not subs:

@@ -36,6 +36,9 @@ PATH = "osm/pois.parquet"
 BLOCKS_CAP = 64 * 1024 * 1024       # the POI file's cached blocks kept (prune_blocks: 461 MB for 54 places without it)
 KEEP_TAIL = 16 * 1024 * 1024        # ... besides its last 16 MB: the footer (row-group index, 4.9 MB; 40 s to read again)
 PRUNE_EVERY_S = 30.0                # (MapData.osm_fuel_fetch prunes at most this often)
+# the amenities kept: fuel stations, and EV charging stations (the user, 2026-10-29: "real life ev stations mapped like
+# the gas stations are"), found in the same pass: the same columns, no more requests
+AMENITIES = ("fuel", "charging_station")
 FIND = ("bbox", "amenity")                              # step 1: the cell's fuel rows (no id: a third of
                                                         # the bytes; ids with the names in step 2)
 DETAIL = ("id", "brand", "name", "building")           # step 2: of the row groups that have any (no geometry:
@@ -51,8 +54,8 @@ class OsmFuel(osmtags.OsmTags):
         super().__init__(raw_dir, fetcher, url)
 
     def cell(self, bounds, kind="demand"):
-        """[{"id", "brand", "name", "building", "bbox": (lon0, lat0, lon1, lat1)}] of the fuel
-        stations whose bbox touches bounds (lon0, lat0, lon1, lat1). A version that changed under the reads is dropped
+        """[{"id", "amenity", "brand", "name", "building", "bbox": (lon0, lat0, lon1, lat1)}] of the fuel and
+        charging stations (AMENITIES) whose bbox touches bounds (lon0, lat0, lon1, lat1). A version that changed under the reads is dropped
         and the cell asked once more on the new one."""
         for attempt in (0, 1):
             etag, remote = self.version(kind)
@@ -94,7 +97,7 @@ class OsmFuel(osmtags.OsmTags):
             # amenity compared here, not in the query: amenity = 'fuel' there made DuckDB read the amenity bloom filter
             # of each of the file's 509 row groups, block by block (2026-10-29: 133 of a cell's 144 requests, 35 MB)
             hits = [int(r[0]) for r in con.execute(f"""SELECT file_row_number, amenity FROM read_parquet({uri},
-                file_row_number = true) WHERE ({only}) AND {box}""").fetchall() if r[1] == "fuel"]
+                file_row_number = true) WHERE ({only}) AND {box}""").fetchall() if r[1] in AMENITIES]
             if not hits:
                 return []
             hit = sorted({rg for r in hits for rg in cand
@@ -104,7 +107,7 @@ class OsmFuel(osmtags.OsmTags):
                 con.execute("SET enable_geoparquet_conversion = false")
             except Exception:
                 pass
-            rows = con.execute(f"""SELECT id, brand, name, building, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
+            rows = con.execute(f"""SELECT id, amenity, brand, name, building, bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax
                 FROM read_parquet({uri},
                 file_row_number = true) WHERE file_row_number IN ({', '.join(map(str, hits))})""").fetchall()
         except Exception:
@@ -115,12 +118,13 @@ class OsmFuel(osmtags.OsmTags):
         finally:
             con.close()
         out = []
-        for fid, brand, name, building, x0, y0, x1, y1 in rows:
+        for fid, amenity, brand, name, building, x0, y0, x1, y1 in rows:
             if x0 is None:
                 continue
             if isinstance(name, (list, tuple)):
                 name = name[0] if name else None
-            out.append({"id": int(fid), "brand": brand or "", "name": name or "", "building": building or "",
+            out.append({"id": int(fid), "amenity": amenity, "brand": brand or "", "name": name or "",
+                        "building": building or "",
                         "bbox": (float(x0), float(y0), float(x1), float(y1))})
         return out
 

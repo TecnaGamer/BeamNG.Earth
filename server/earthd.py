@@ -87,6 +87,7 @@ import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
 import credits as creditsmod  # noqa: E402
+import secrossings  # noqa: E402
 import covermap as covermapmod  # noqa: E402
 import areas as areasmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
@@ -109,6 +110,7 @@ import roadmesh as roadmeshmod  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
 import revisit as revisitmod  # noqa: E402
 import signstream  # noqa: E402
+import dirsigns as dirsignsmod  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
@@ -142,6 +144,7 @@ import geocode as geocodemod  # noqa: E402
 import routing as routingmod  # noqa: E402
 import updates as updatesmod  # noqa: E402
 import cpupin  # noqa: E402
+import netstate as netstatemod  # noqa: E402
 import netfetch  # noqa: E402
 import protocol  # noqa: E402
 import weather as weathermod  # noqa: E402
@@ -241,6 +244,7 @@ AHEAD_MOVE_M = 150.0            # m the player moves before the next round
 AHEAD_MARGIN_M = 250.0          # m around the block's half width at each point
 # the road tiles' cells (landcover: surface.prefetch). With roads (surface.prefetch has them within 3 km, with the land
 # cover on) and water, which a road tile otherwise fetched itself when it needed it (from KyzoFox's 1.5.4, PR #64)
+AHEAD_CELLS = 4                 # map cells download_ahead fetches at once
 AHEAD_LAYERS = ("roads", "buildings", "building_parts", "infrastructure", "water", "land_use")
 # route_download: like download_ahead, but along the planned GPS route's own geometry (routeahead.py)
 # instead of the player's current heading, since a road route can wander off that heading entirely.
@@ -250,6 +254,7 @@ ROUTE_AHEAD_MAX_M = 20000.0      # --route-prefetch-km * 1000 (15-25 km is sane;
 # route"): the route message's "download": off, ahead (ROUTE_AHEAD_MAX_M) or the whole route (at most this far)
 ROUTE_DOWNLOAD_MODES = ("off", "ahead", "route")
 ROUTE_WHOLE_MAX_M = 500000.0
+ROUTE_IMG_TRIES = 5               # a route download's ground-photo tile the limiter deferred: asked this often
 ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long before the next one in the corridor
 # (70 m/s until 2026-10-31: at 130-157 mph each block waited 2.5 s for its photo, then its stand-in, the edge guard
 # holding the car; the user: "lower it or do whatever you need to do to get high speed driving viable". The stand-in
@@ -346,6 +351,7 @@ HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they w
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
 FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40, 10, 0.3, 5   # (fin_worker_worth)
 FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
+NAV_LEAD_S, NAV_LEAD_MAX_M = 12.0, 500.0     # the nav graph's centre ahead of a moving car (navgraph.WINDOW_M 1100)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
 # The event loop's thread a step above the server's other threads (Windows; budget.raise_thread): every message the
 # game sends waits for it. With ~20 busy threads in this process the loop lagged 0.5-1 s in the median and up to 15 s,
@@ -500,6 +506,7 @@ SESSION_ORPHAN_S = 600.0
 # is sent it again meanwhile (geo_dropped). Before (GitHub #599, 2026-10-31) they stayed until the server stopped: the
 # geotiles are anchor-free, so prune never took them, and two days' driving left 9 GB in the session folder.
 GEO_FILES_GRACE_S = 120.0
+GEO_LIST_BATCH_S = 1.0          # geo_dropped: tiles whose grace ends within this share one listing of the folder
 GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
@@ -771,6 +778,13 @@ def osm_fuel_tiles(frame, key, tiles, geo=False):
     return {t for t in tiles if any(str(c) == k for c in osm_fuel_cells(frame, t, geo))}
 
 
+TURBINE_GEO = 1
+TURBINE_Z = 15             # about 1 km cells at mid-latitudes; existing far-content tracker
+TURBINE_SEND_M = 4000.0
+TURBINE_DROP_M = 5000.0
+TURBINE_PER_POSE = 2       # bounded batches: only populated cells request terrain elevations
+
+
 class Server:
     def __init__(self, user_dir, cache_dir, tile_workers=3, kfun=None,
                  hysteresis=farfield.HYSTERESIS, radius=farfield.RADIUS, far_format="cdae",
@@ -919,6 +933,8 @@ class Server:
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
         self.ui_pool = ThreadPoolExecutor(2, thread_name_prefix="map-ui")
+        # the search box's own: a search can take seconds, and must not hold up a route or the map's tiles
+        self.search_pool = ThreadPoolExecutor(4, thread_name_prefix="map-search")
         # the status bar's place names (placenames.py): a thread of their own, a region's first fetch takes seconds
         self.place_pool = ThreadPoolExecutor(1, thread_name_prefix="place-names")
         self._place_names_lock = threading.Lock()
@@ -1047,6 +1063,7 @@ class Server:
             self.osm_fuel = ThreadPoolExecutor(OSM_FUEL_THREADS, thread_name_prefix="osm-fuel")
             self.osm_fuel_done, self.osm_fuel_wait = set(), {}
             self.osm_fuel.submit(self._osm_fuel_warm)
+        self.dirs_on = False        # the settings page's Direction signs (dirsigns.enabled; BNE_DIRSIGNS=on forces it)
         if self.gas_stations and surface is not None and hasattr(surface, "gas_pads"):
             surface.gas_pads = True     # their forecourts painted asphalt (surface.Surface.fuel_pads)
         self.traffic = bool(traffic) and mapdata is not None   # the AI road graph around the player (navgraph.py)
@@ -1377,7 +1394,15 @@ class Server:
                 return True
         return False
 
-    def geo_files(self, kind, key):
+    def geo_files_many(self, wanted):
+        """geo_files of several (kind, key) at once: the session folder listed once. [files] in their order."""
+        try:
+            names = os.listdir(self.out_dir)
+        except OSError:
+            return [[] for _ in wanted]
+        return [self.geo_files(kind, key, names) for kind, key in wanted]
+
+    def geo_files(self, kind, key, names=None):
         """The session files of geotile key (geotiles.key) of kind: a road geotile's content (rg_), every anchor's skin
         (rs_) and exact variants (rx_); a far geotile's json, shape and pieces (blockworker.FAR_GEO prefixes)."""
         if kind == "roads":
@@ -1391,10 +1416,11 @@ class Server:
             stems = (f"{pre}_",)
         # (one listing, filtered by the key first: glob listed the session folder once per stem in Python, ~52 ms a
         # call over 16k files, 89 s of the event loop in a 10 min first visit, 2026-11-04; this ~10 ms, off the loop)
-        try:
-            names = os.listdir(self.out_dir)
-        except OSError:
-            return []
+        if names is None:
+            try:
+                names = os.listdir(self.out_dir)
+            except OSError:
+                return []
         return sorted(os.path.join(self.out_dir, n) for n in names
                       if key in n and n.startswith(stems) and pat.fullmatch(n))
 
@@ -1407,22 +1433,37 @@ class Server:
         except RuntimeError:
             return
 
-        def listed(fut):
-            try:
-                files = fut.result()
-            except Exception as e:
-                log.debug("geotile %s %s files: %s", kind, key, e)
-                return
-            if files and not self.geo_held(kind, k):
-                self.queue_delete(files, lambda: self.geo_held(kind, k))
-
         def run():
             if self.geo_held(kind, k):
                 return
-            # (the folder listed on a thread of its own: thousands of session files, every dropped geotile)
+            # (the tiles whose grace ran out together share one listing of the session folder, on a thread of its
+            # own: 32 road tiles expiring at once listed ~27k entries 32 times; GitHub #758 measured the old
+            # per-tile globs on the event loop at 8.5 s for 32 tiles)
+            batch = self.__dict__.setdefault("geo_expired", [])
+            batch.append((kind, k, key))
+            if len(batch) > 1:
+                return
+            loop.call_later(GEO_LIST_BATCH_S, flush)
+
+        def flush():
+            items, self.geo_expired = self.geo_expired, []
+            items = [it for it in items if not self.geo_held(it[0], it[1])]
+            if not items:
+                return
             if self.geo_list_pool is None:
                 self.geo_list_pool = ThreadPoolExecutor(1, thread_name_prefix="geo-files")
-            loop.run_in_executor(self.geo_list_pool, self.geo_files, kind, key).add_done_callback(listed)
+
+            def listed(fut):
+                try:
+                    found = fut.result()
+                except Exception as e:
+                    log.debug("geotile files: %s", e)
+                    return
+                for (kd, kk, _key), files in zip(items, found):
+                    if files and not self.geo_held(kd, kk):
+                        self.queue_delete(files, (lambda kd=kd, kk=kk: self.geo_held(kd, kk)))
+            loop.run_in_executor(self.geo_list_pool, self.geo_files_many, [(kd, ky) for kd, _kk, ky in items]
+                                 ).add_done_callback(listed)
         loop.call_later(GEO_FILES_GRACE_S if grace is None else grace, run)
 
     def queue_delete(self, paths, ck=None):
@@ -1551,6 +1592,47 @@ class Server:
                     reader=md.overture if md is not None else None)
             return pn
 
+    def build_turbines_geo(self, gx, gy):
+        """Mapped wind turbines through the existing geotile tracker, without building distant roads.
+
+        Empty cells do no DEM work. Populated cells sample their exact mapped points in one batch, with the
+        existing airport/sea ground rules; nearby road-owned records provide the graded installation height.
+        The tracker limits simultaneous batches, and this session memo keeps delivered heights stable.
+        """
+        import geotiles
+        import windturbines
+        memo = self.__dict__.setdefault("_turbines_geo_done", {})
+        key = geotiles.key(gx, gy, TURBINE_Z)
+        filename = "turbines_" + key + ".json"
+        path = os.path.join(self.out_dir, filename)
+        cached = memo.get(key)
+        if cached is not None and os.path.exists(path):
+            return cached
+        clat, clon, south, west, north, east = geotiles.info(gx, gy, TURBINE_Z)
+        frame = geotiles.frame(gx, gy, TURBINE_Z)
+        features = tuple(f for f in windturbines.near(south, west, north, east)
+                         if geotiles.tile_of(f.lat, f.lon, TURBINE_Z) == (gx, gy))
+        rows = []
+        if features:
+            zoom = demmod.zoom_for(clat, 1.25, demmod.FINE_ZOOM)
+
+            def elev(la, lo):
+                return self.ground(frame, la, lo, self.dem.sample(la, lo, zoom))
+            rows = windturbines.rows_for_features(frame, features, elev, collide=False)
+            if len(rows) != len(features):     # unavailable heights retry; never memoize a partial farm
+                return None
+        pivot = float(np.mean([r["z"] for r in rows])) if rows else 0.0
+        data = {"key": key, "sid": self.sid, "frame": [clat, clon], "pivot": pivot, "turbines": rows}
+        tmp = staging.tmp_for(path)
+        with open(tmp, "w", encoding="utf-8") as target:
+            json.dump(data, target, separators=(",", ":"))
+        staging.replace(tmp, path)
+        result = (f"{self.vfs_dir}/{filename}", len(rows), (clat, clon), pivot)
+        if len(memo) >= 4096:
+            memo.clear()
+        memo[key] = result
+        return result
+
     def country_at(self, lat, lon):
         """The ISO country code at (lat, lon) (its nearest airport's: navgraph.country_near), or None."""
         try:
@@ -1642,12 +1724,28 @@ class Server:
                 if anchor.bridges is None:
                     anchor.bridges = self.chain_view(anchor, "bridges", elev)
             for fid, _spec, xy, z, _lon in anchor.bridges.parts(feats, (x - w, y - w, x + w, y + w)):
-                decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)))
+                decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64),
+                                                  anchor.bridges.depth_of(fid)))
         except Exception as e:          # no decks: the graph follows the ground under bridges
             log.debug("navgraph decks: %s: %s", type(e).__name__, e)
-        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, widths=self.road_widths,
+        nodes = secrossings.read(self.mapdata, anchor.frame, keys) if str(self.country(anchor) or "").upper() == "SE" else None
+        tun = {}
+        try:            # (the tunnels the road tiles build: the AI drives through them; off: navgraph.AI_TUNNELS)
+            if not navgraphmod.AI_TUNNELS:
+                raise LookupError("AI tunnels off")
+            with self.grader_lock:
+                if anchor.tunnels is None:
+                    anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
+            for fid, _spec, xy, z, _lon in anchor.tunnels.parts(feats, (x - w, y - w, x + w, y + w)):
+                tun.setdefault(navgraphmod.part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2],
+                                                                   np.asarray(z, np.float64)))
+        except Exception as e:
+            log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
+        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun,
+                                  widths=self.road_widths,
                                   left_hand=self.left_hand(anchor), mph=self.mph(anchor),
-                                  signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys))
+                                  signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys),
+                                  country=self.country(anchor), priority=None if nodes is None else nodes["priority"])
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
         graph["rules"] = navgraphmod.road_rules(navgraphmod.country_near(self.airports_db, float(cla), float(clo)))
         for old in glob.glob(os.path.join(self.out_dir, f"navgraph_{aid}_*.json")):    # one file at a time
@@ -1778,7 +1876,8 @@ class Server:
         if self.sign_pool is not None:
             return poolsmod.result_running(self.sign_pool.submit(
                 blockworker.signs_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
-                self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor)), ROAD_TILE_TIMEOUT_S)
+                self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor), dirsignsmod.enabled(self)),
+                ROAD_TILE_TIMEOUT_S)
         g = self.grader_for(anchor)
         zoom = anchor.zooms[0]
 
@@ -1788,7 +1887,7 @@ class Server:
         urban = self.surface.urban if self.surface is not None and hasattr(self.surface, "urban") else None
         return signstream.build_tile(self.mapdata, anchor.frame, aid, tx, ty, elev, self.out_dir, self.vfs_dir,
                                      urban, self.road_widths, self.left_hand(anchor), self.mph(anchor),
-                                     self.country(anchor))
+                                     self.country(anchor), dirsignsmod.enabled(self))
 
     def build_sky_tile(self, aid, ux, uy):
         """buildings.skyline_tile: a skyline (render-only) tile of anchor aid, or None (its cells not at hand: asked
@@ -2092,6 +2191,10 @@ class Server:
         cover = []                      # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
         marks = []                  # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
         near_roads = []             # the ground carriageways near the tile (the median barriers': medians.tile_rows)
+        nkeys = roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)
+        sign_nodes = secrossings.read(self.mapdata, anchor.frame, nkeys) if str(self.country(anchor) or "").upper() == "SE" \
+            else None
+        clearance = [] if self.buildings else None     # (build_tile's RoadClearance, PR #629: the powerlines' too)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
@@ -2102,11 +2205,10 @@ class Server:
                                      ground=lambda x, y: roadmeshmod.drawn_ground(anchor.frame, drawn, np.c_[x, y],
                                                                                   self.anchor_q(anchor)),
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
-                                     roads_out=near_roads,
-                                     signals=furnituremod.signals_for(
-                                         self.mapdata, anchor.frame,
-                                         roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)))
-        chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells)     # railway and tram tracks on the ground
+                                     roads_out=near_roads, signals=furnituremod.signals_for(self.mapdata, anchor.frame, nkeys),
+                                     nodes=sign_nodes, clearance_out=clearance)
+        # (railway and tram tracks on the ground)
+        chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
@@ -2162,9 +2264,22 @@ class Server:
             # A failed mapped-data pass cannot establish that a bridge needs rails.
             low_parapet_decks.clear()
             guardrail_rows = []
+        import medianbarriers
+        barrier_mesh, barrier_chunks = medianbarriers.tile(
+            self.mapdata, anchor.frame, tx, ty, elev, urban, self.road_widths, self.left_hand(anchor))
+        guardrail_rows = medianbarriers.mapped_rows(guardrail_rows, barrier_chunks)
         guardrail_rows = guardrail_rows + blockworker._median_rows(
             anchor.frame, near_roads, box, elev, self.left_hand(anchor), self.country(anchor), guardrail_rows, tx, ty,
-            deck_parts)
+            deck_parts, barrier_chunks)
+        wide = {}                       # (the wider cells' ways, both of these want the same)
+        guardrail_rows = guardrail_rows + blockworker._motesfri_rows(
+            anchor.frame, cell_fn, near_roads, box, elev, urban, self.road_widths, self.left_hand(anchor),
+            self.country(anchor), guardrail_rows, tx, ty, chunks, wide)
+        guardrail_rows = guardrail_rows + blockworker._kantstolpe_rows(
+            anchor.frame, near_roads, box, elev, self.country(anchor), guardrail_rows, tx, ty)
+        guardrail_rows = guardrail_rows + blockworker._sign_rows(
+            anchor.frame, cell_fn, near_roads, sign_nodes, box, elev, urban, self.road_widths, self.left_hand(anchor),
+            self.country(anchor), tx, ty, wide)
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                                  clip=box, follow=True, q=self.anchor_q(anchor), drawn=drawn)
@@ -2203,7 +2318,8 @@ class Server:
                                                            roadsmod.SOUND_GARAGE)
             oil_wells = oilwells.tile_wells(anchor.frame, tx, ty, elev)     # (the mod's pump jacks)
             import powerlines
-            powerlines.tile_lines(anchor.frame, tx, ty, self.mapdata, elev, props, wires)    # high-voltage lines
+            powerlines.tile_lines(anchor.frame, tx, ty, self.mapdata, elev, props, wires,
+                                  clearance=clearance[0] if clearance else None)    # high-voltage lines
             import fences
             try:
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev))
@@ -2227,10 +2343,21 @@ class Server:
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
+        import windturbines
+        turbine_rows = windturbines.tile_turbines(anchor.frame, tx, ty, elev)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
-                                   custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings))
+                                   custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings),
+                                   barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,
+                                   turbines=turbine_rows)
+
+    def set_dirs(self, on):
+        """The settings page's Direction signs switch (message direction_signs): True when it changed."""
+        on = bool(on)
+        changed = on != self.dirs_on
+        self.dirs_on = on
+        return changed
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
@@ -2540,13 +2667,20 @@ class Server:
                     if deferred:
                         self.ahead_stats["deferred"] += 1
                         break
+                jobs = []
                 for la, lo in pts if layers else ():
                     dlat = reach / 111320.0
                     dlon = reach / (111320.0 * max(0.05, math.cos(math.radians(la))))
                     for key in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                         todo = tuple(ly for ly in layers if not self.mapdata.has(key, ly))
-                        if todo:
-                            self.mapdata.cell(key, layers=todo, kind="prefetch")
+                        if todo and all(key != j[0] for j in jobs):
+                            jobs.append((key, todo))
+                # (AHEAD_CELLS cells at once, nearest first: one after another, a slow connection's round fell behind
+                # the car, 48 cells in a 20 km first visit while its road tiles waited for theirs, 2026-11-04)
+                if jobs:
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(AHEAD_CELLS, thread_name_prefix="download-ahead-cell") as pool:
+                        for _ in pool.map(lambda j: self.mapdata.cell(j[0], layers=j[1], kind="prefetch"), jobs):
                             cells_n += 1
                 self.ahead_stats["dem"] += dem_n
                 self.ahead_stats["cells"] += cells_n
@@ -2895,8 +3029,12 @@ class Server:
         disk (_base_elsewhere), else it is rendered here."""
         if not self.block_pools or self.imagery is None:
             return None
-        if lane == LANE_REQUEST and getattr(self, "photo_pool", None) is not None and not getattr(self, "fast", False):
-            return self.photo_pool      # (fast: the photo process makes its stand-in first, _stand_in)
+        photo = getattr(self, "photo_pool", None)
+        if photo is not None and (lane != LANE_REQUEST or not getattr(self, "fast", False)):
+            # (fast: the photo process makes a requested block's stand-in first, _stand_in.) A prefetched block's photo
+            # there too: in the request lane's process it held the next block the game asked for, 0.2-1.8 s each
+            # (a cold Chicago drive at 100 mph: requested blocks queued 2-4 s, the edge warning on, 2026-11-05)
+            return photo
         return self.block_pools[LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST][0]
 
     def _base_photo(self, anchor, cx, cy, pool=None, urgent=False, quick=False):
@@ -4543,6 +4681,9 @@ class Connection:
         self.building_scale = 1.0
         self.bldfar = self.bldsky = self.brfar = None
         self.make_far_trackers(False)
+        self.turbine_geo = False               # separate capability; no road/building radius increase
+        self.turbines = vegetationmod.Tracker(TURBINE_SEND_M, TURBINE_DROP_M, TURBINE_PER_POSE, "turbines",
+                                              geo=True, z=TURBINE_Z)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
         self.traffic_visuals = False            # negotiated visual routes, requested only at night with traffic on
         self.traffic_on = False
@@ -4666,17 +4807,33 @@ class Connection:
         layers = (AHEAD_LAYERS if self.s.buildings else ("roads",)) if self.s.mapdata is not None else ()
         pts = routeaheadmod.arc_length_points(points, ROUTE_WHOLE_MAX_M if mode == "route" else ROUTE_AHEAD_MAX_M)
         dem_keys, cell_layer_pairs = routeaheadmod.need(self.s.dem, self.s.mapdata, pts, reach, zoom, layers)
-        total = len(dem_keys) + len(cell_layer_pairs)
-        if total == 0:
+        imagery = getattr(self.s, "imagery", None)
+        if len(dem_keys) + len(cell_layer_pairs) == 0 and imagery is None:
             self.send(empty)
             return
         dem, mapdata = self.s.dem, self.s.mapdata
+        texel = self.s.layout.block * heightmap.SQUARE / BASE_RENDER_PX
 
         def run():
+            # the ground photo's high-resolution tiles along the corridor too (Imagery.route_keys, the blocks' base
+            # photo zoom): the pre-cache fetched only heights and map cells, and a pre-cached long drive still
+            # stopped to download every few km at 40-55 mph (GitHub #755); listed here, off the event loop
+            img_keys = []
+            if imagery is not None and pts:
+                try:
+                    img_keys = imagery.route_keys(np.array([p[0] for p in pts]), np.array([p[1] for p in pts]), reach,
+                                                  texel)
+                except Exception as e:
+                    log.debug("route download: imagery keys: %s: %s", type(e).__name__, e)
+            total = len(dem_keys) + len(cell_layer_pairs) + len(img_keys)
+            if total == 0:
+                self.loop.call_soon_threadsafe(self.send, empty)
+                return
             # counted once, up front: an already-cached key is skipped below (has() is re-checked only to
             # decide what to fetch), never re-counted, or a route with nothing left to do would inflate past
             # total and spam a push every iteration (push's own throttle only skips while done < total)
             done = routeaheadmod.done_count(dem, mapdata, dem_keys, cell_layer_pairs)
+            done += sum(1 for k in img_keys if imagery.key_done(k))
             last_push = [0.0]
 
             def push(active):
@@ -4718,6 +4875,22 @@ class Connection:
                     time.sleep(ROUTE_RETRY_S)
                 except Exception as e:
                     log.debug("route download: %s: %s", type(e).__name__, e)
+            for key in img_keys:
+                for _try in range(ROUTE_IMG_TRIES):     # (a deferred one asked again: an overnight pre-cache left no holes)
+                    if self.route_dl_version != version:
+                        return
+                    try:
+                        if imagery.fetch_key(key):
+                            done += 1
+                            push(True)
+                        break
+                    except imagerymod.ImageryError as e:
+                        if not e.deferred:
+                            break
+                        time.sleep(ROUTE_RETRY_S)
+                    except Exception as e:
+                        log.debug("route download: imagery: %s: %s", type(e).__name__, e)
+                        break
             push(False)
         self.s.route_pool.submit(run)
 
@@ -4865,14 +5038,14 @@ class Connection:
             return
 
     async def geocode(self, msg):
-        """The map's search {"id", "q", "lat"?, "lon"?} -> geocode_result {"id", "results": [...], "error"?}."""
+        """The map's search {"id", "q", "lat"?, "lon"?, "full"?} -> geocode_result {"id", "results": [...], "error"?}."""
         q = str(msg.get("q") or "")[:200]
         lat, lon = msg.get("lat"), msg.get("lon")
         out = {"type": "geocode_result", "id": msg.get("id"), "results": []}
         try:
             out["results"] = await asyncio.get_running_loop().run_in_executor(
-                self.s.ui_pool, geocodemod.search, q, lat, lon, self.s.net,
-                self.s.country_at(lat, lon) if lat is not None and lon is not None else None)
+                self.s.search_pool, geocodemod.search, q, lat, lon, self.s.net,
+                self.s.country_at(lat, lon) if lat is not None and lon is not None else None, bool(msg.get("full")))
         except Exception as e:          # offline, rate limited, refused, a bad answer: the map says which (GitHub #602)
             out["error"] = f"{type(e).__name__}: {e}"[:200]
             out["text"] = geocodemod.error_text(e)
@@ -4989,13 +5162,18 @@ class Connection:
         trees = self.veg.progress() if self.s.veg is not None else (0, 0)
         want = len(self.desired)
         far = (want - self.backlog(), want)
-        counts = (self.ground_progress(aid), roads, trees, far)
+        meter = self.__dict__.setdefault("net_meter", netstatemod.Meter())
+        act, mb, rate = meter.read()
+        # (the downloads the world waits on, across the server's processes: the loading line's and the edge hold's
+        # "downloading" part; the user, 2026-11-04)
+        net = [int(act), round(mb, 1), round(rate, 2)]
+        counts = (self.ground_progress(aid), roads, trees, far, tuple(net))
         now = time.monotonic()
         if counts == getattr(self, "progress_sent", None) or now - getattr(self, "progress_at", 0.0) < PROGRESS_S:
             return
         self.progress_sent, self.progress_at = counts, now
         self.send({"type": "load_progress", "anchorId": aid, "ground": list(counts[0]), "roads": list(roads),
-                   "trees": list(trees), "far": list(far)})
+                   "trees": list(trees), "far": list(far), "net": net})
 
     def ground_progress(self, aid):
         """(1, 1) once the ground under the player is final, else (0, 1): a teleport's graded first block still on its
@@ -5047,7 +5225,7 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, self.nav,
+            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "turbines", None), self.nav,
                        self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
@@ -5236,6 +5414,9 @@ class Connection:
                 self.make_far_trackers(far_geo)
             if far_geo:
                 m["farGeo"] = buildingsmod.FAR_GEO
+            self.turbine_geo = msg.get("turbineGeo") == TURBINE_GEO
+            if self.turbine_geo:
+                m["turbineGeo"] = TURBINE_GEO
             # ... and the far field's levels from 3 up as global tiles when it places those (hello.globalFar:
             # farfield.lua's GLOBAL_FAR; geotiles phase 3b, --global-far): built once, kept across rebases
             self.ready_set = msg.get("readySet") == 1      # (the mod takes 'terrain_ready_set': follow.preferReady)
@@ -5350,6 +5531,9 @@ class Connection:
             self.signs = signstream.Tracker()
         elif kind == "highway_signs":           # the settings page's switch: no sign tiles built while it is off
             self.signs_on = bool(msg.get("on", True))
+        elif kind == "direction_signs":         # the settings page's switch: the sign tiles again, with or without
+            if self.s.set_dirs(msg.get("on")):
+                self.signs.refresh()
         elif kind == "graphics":                # the settings page's graphics knobs (set_graphics)
             self.set_graphics(msg)
         elif kind == "gas_stations":            # the settings page's switch: the road tiles again, with or without
@@ -6079,6 +6263,11 @@ class Connection:
             if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
                                    ready, version=source.tags.known())
+        if self.turbine_geo and aid == self.active:
+            anchor = self.s.anchors.get(aid)
+            if anchor is not None:
+                self.turbines.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_turbines_geo,
+                                      view=self.view_at, frame=anchor.frame)
         if self.s.veg is not None and aid == self.active:
             anchor = self.s.anchors.get(aid)
             if anchor is not None:                            # a teleport's cells built at once, ahead
@@ -6105,7 +6294,13 @@ class Connection:
                                    self.build_far_geo("brfar") if geo else self.s.build_far_bridge_tile,
                                    view=self.view_at, frame=frame)
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
-            self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
+            # (centred ahead of a moving car: the minimap's roads, the AI's and the GPS's graph, ran out in front at
+            # speed, a graph built round where the car was when it started; the user, 2026-11-04)
+            vx, vy = getattr(self, "vel", (0.0, 0.0))
+            lead = min(NAV_LEAD_S * math.hypot(vx, vy), NAV_LEAD_MAX_M)
+            sp = max(math.hypot(vx, vy), 1e-6)
+            cx, cy = self.focus[0] + vx / sp * lead, self.focus[1] + vy / sp * lead
+            self.nav.on_pose(self, aid, cx, cy, asyncio.get_running_loop(), self.s.build_navgraph)
         if self.traffic_on and aid == self.active and self.nav_may_start(aid):
             self.distant_traffic.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_traffic_geo,
                                          view=self.view_at, frame=self.s.anchors[aid].frame)
@@ -6186,7 +6381,9 @@ class Connection:
 
         async def run():
             try:
-                pool = s.block_pools[LANE_PREFETCH][0] if s.block_pools else None     # its BC7 encode
+                # its BC7 encode: in the photo process when there is one (in the prefetch lane's, a block ahead waited
+                # behind it and came late, 2026-11-05)
+                pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
                 name = None
                 if pool is not None:
@@ -6978,6 +7175,10 @@ async def main_async(args):
     AHEAD_ON = args.download_ahead == "on"
     ROUTE_AHEAD_ON = args.route_prefetch == "on" and args.route_prefetch_km > 0
     ROUTE_AHEAD_MAX_M = args.route_prefetch_km * 1000.0
+    # (before any worker process starts: they find the downloads' shared counters by name, netstate.ENV)
+    if netstatemod.init():
+        import atexit
+        atexit.register(netstatemod.close)
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
@@ -7305,7 +7506,8 @@ def prune_own_caches(cache_dir, started=None):
             log.info("cache: mapdata-mirror cut back: %d layer files' mirrors removed", n)
     except Exception as e:
         log.warning("cache: mapdata-mirror not cut back: %s", e)
-    for sub, mb, match in (("seacarve", seacarvemod.RAW_MB, lambda n: n.endswith(".raw.npy")),
+    for sub, mb, match in (("seacarve", seacarvemod.RAW_MB, lambda n: n.endswith(".rawb.npy")),
+                           ("seacarve", 0, lambda n: n.endswith(".raw.npy")),  # (whole rasters, before 2026-11-05)
                            (os.path.join("dem", "decoded"), demmod.MIRROR_MB,
                             lambda n: n.endswith((".npy", ".f32z"))),
                            ("peercache", peerworkmod.CACHE_BYTES / 1e6, None),

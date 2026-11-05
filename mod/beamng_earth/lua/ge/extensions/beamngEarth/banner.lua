@@ -71,6 +71,7 @@ local EDGE_TEXT = {
 --   info.session     the server's hello arrived (a session id)
 --   info.everConnected, info.attempts (net.lua)
 --   info.note, info.noteDetail  (noteOf of the server's last status)
+--   info.download    nil | the downloads in flight ('downloading 14 files · 1.1 MB/s', loadprogress.downloadText)
 --   info.edge        nil | 'warn' | 'hold' (edgeguard), info.stuck: the server does not answer
 --                    terrain requests (rather than: no server)
 --   t                s since the mod loaded
@@ -115,6 +116,10 @@ function M.compute(info, t)
     text = (text ~= '') and (text .. '\n' .. M.DROP_HOLD_TEXT) or M.DROP_HOLD_TEXT
     if M.LEVEL_RANK.info > M.LEVEL_RANK[level] then level = 'info' end
     if id == 'ok' then id = 'drophold' end
+  end
+  if info.download and (info.edge or info.dropHold) then   -- (what the held car waits on: loadprogress.downloadText)
+    local line = 'The world is ' .. info.download
+    text = (text ~= '') and (text .. '\n' .. line) or line
   end
   return id, level, text
 end
