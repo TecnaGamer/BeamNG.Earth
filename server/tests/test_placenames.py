@@ -187,6 +187,8 @@ class FakeReader:
             for c in pn.TOWN_COLS:
                 f.attrs[c] = mg.text_column([r[c] for r in rows])
             return f, {("OpenStreetMap", "ODbL-1.0"): len(rows)}
+        if layer == "division_boundaries":
+            return mg.build("division_boundaries", mg.text_column([]), []), {}
         rows = [MD, US]
         f = mg.build("division_areas", mg.text_column([r["division_id"] for r in rows]),
                      [(mg.POINT, [[np.array([[0.0, 0.0]])]]) for _ in rows])
@@ -209,14 +211,14 @@ class PlaceNamesTest(unittest.TestCase):
         want = {"place": "Baltimore", "region": "Maryland", "country": "United States"}
         self.assertEqual(p.lookup(LAT, LON), want)
         cells = pn.cells_for(LAT, LON)
-        self.assertEqual(len(r.calls), 2 * len(cells))
+        self.assertEqual(len(r.calls), 3 * len(cells))      # (towns, areas, borders)
         self.assertTrue(all(kind == "background" for _, _, kind in r.calls))
         self.assertTrue(p.ready(LAT, LON))
         for k in cells:
             self.assertTrue(os.path.exists(p.path(k)))
             self.assertIn(f"f{pn.PLACES_FORMAT}", p.path(k))
         p.lookup(LAT + 0.001, LON)
-        self.assertEqual(len(r.calls), 2 * len(cells))          # (memory)
+        self.assertEqual(len(r.calls), 3 * len(cells))          # (memory)
         r2 = FakeReader()
         p2 = pn.PlaceNames(self.tmp, None, reader=r2)
         self.assertTrue(p2.ready(LAT, LON))

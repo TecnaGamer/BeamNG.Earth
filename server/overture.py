@@ -172,6 +172,11 @@ LAYERS = {
                       text=("subtype", "class", "country", "region", "name")
                            + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
                       float=("population",)),
+    # ... and the countries' borders as lines (placenames.pick: a town across one is not the place, Windsor ON read
+    # "Detroit, Michigan"; Discord 2026-11-04), clipped to the cell by placenames
+    "division_boundaries": dict(theme="divisions", type="division_boundary", clip=False,
+                                cols=f"subtype, class, {_SRC}", where="subtype = 'country'",
+                                text=("subtype", "class", "src_dataset", "src_record")),
     "division_areas": dict(theme="divisions", type="division_area", clip=False, geometry=False,
                            cols=f"subtype, country, region, division_id, {_NAME}, "
                                 + ", ".join(f"names.common['{lang}'] AS name_{lang}" for lang in DIVISION_LANGS)

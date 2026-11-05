@@ -212,8 +212,11 @@ DIV_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, co
     record_id VARCHAR)[]"""
 DIV_AREA_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, country VARCHAR, region VARCHAR, division_id VARCHAR,
     {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
+DIV_BOUNDARY_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, sources STRUCT(property VARCHAR,
+    dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
 SCHEMAS = {
     ("divisions", "division"): DIV_SCHEMA,
+    ("divisions", "division_boundary"): DIV_BOUNDARY_SCHEMA,
     ("divisions", "division_area"): DIV_AREA_SCHEMA,
     ("transportation", "segment"): SEG_SCHEMA,
     ("transportation", "connector"): CON_SCHEMA,
@@ -329,10 +332,17 @@ def features():
                  sources=[OSM], wkt=_wkt_poly([_box(-200, -100, 200, 100)])),
             dict(id="area-county", version=1, subtype="county", country="US", region="US-MD", division_id="d-c",
                  names={"primary": "Baltimore County"}, sources=[OSM], wkt=_wkt_poly([_box(-5, -5, 5, 5)]))]
+    # a country border across the cell's far corner (placenames.pick: towns across it left out), and a region's
+    # border, which the layer's filter leaves out
+    bnd = [dict(id="bnd-us-ca", version=1, subtype="country", **{"class": "land"}, sources=[OSM],
+                wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.9, 0.0), *_cell_xy(1.0, 0.1))),
+           dict(id="bnd-md-pa", version=1, subtype="region", **{"class": "land"}, sources=[OSM],
+                wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.0, 0.9), *_cell_xy(1.0, 0.9)))]
     return {("transportation", "segment"): seg, ("transportation", "connector"): con,
             ("buildings", "building"): bld, ("base", "water"): wat, ("base", "land_use"): lu,
             ("base", "infrastructure"): inf, ("places", "place"): pla,
-            ("divisions", "division"): div, ("divisions", "division_area"): area}
+            ("divisions", "division"): div, ("divisions", "division_area"): area,
+            ("divisions", "division_boundary"): bnd}
 
 
 def _coords(wkt):
