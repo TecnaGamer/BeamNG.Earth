@@ -40,6 +40,28 @@ def cross(a, b):
 
 
 class RoundaboutTraffic(unittest.TestCase):
+    def test_unsignalised_hierarchy_stops_only_lower_priority_approaches(self):
+        major = roads.Spec(8.0, "paved", False, "primary", False)
+        minor = roads.Spec(6.0, "paved", False, "residential", False)
+        arms = [("p1", major, np.array([1.0, 0.0]), np.zeros(3), True, 100.0),
+                ("p2", major, np.array([-1.0, 0.0]), np.zeros(3), True, 100.0),
+                ("r1", minor, np.array([0.0, 1.0]), np.zeros(3), True, 100.0),
+                ("r2", minor, np.array([0.0, -1.0]), np.zeros(3), True, 100.0)]
+        controls = furniture.junction_controls(arms, None)
+        self.assertEqual({arm[0] for arm, kind in controls if kind == furniture.G_STOP}, {"r1", "r2"})
+        self.assertNotIn(furniture.G_SIGNAL, [kind for _, kind in controls],
+                         "road hierarchy should take precedence over guessed signals")
+
+    def test_mapped_signal_overrides_guessed_priority_controls(self):
+        major = roads.Spec(8.0, "paved", False, "primary", False)
+        minor = roads.Spec(6.0, "paved", False, "residential", False)
+        arms = [("p1", major, np.array([1.0, 0.0]), np.zeros(3), True, 100.0),
+                ("p2", major, np.array([-1.0, 0.0]), np.zeros(3), True, 100.0),
+                ("r1", minor, np.array([0.0, 1.0]), np.zeros(3), True, 100.0),
+                ("r2", minor, np.array([0.0, -1.0]), np.zeros(3), True, 100.0)]
+        controls = furniture.junction_controls(arms, None, signals=np.array([[0.0, 0.0]]))
+        self.assertEqual([kind for _, kind in controls], [furniture.G_SIGNAL] * 4)
+
     def test_unmapped_ring_follows_the_driving_side_in_either_geometry_direction(self):
         f = roundabout(reverse_alternate=True)
         for left_hand in (False, True):

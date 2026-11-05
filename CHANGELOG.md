@@ -4,6 +4,12 @@ What changed in each release of BeamNG.Earth, newest first.
 
 ## 1.8.2 beta (2026-11-05)
 
+### In development
+- **Adaptive traffic and AI profiles** (PR #728, ProxyFirewall202): traffic population follows settlement proximity and
+  local road density, adjusts progressively, and gives traffic drivers varied speed targets based on mapped limits.
+- **Highway traffic lanes**: traffic drivers use speed-aware lane preferences on multi-lane freeways, following the
+  local driving side.
+
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
 > develop the mod.** For help, that includes multiplayer:
 > BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working

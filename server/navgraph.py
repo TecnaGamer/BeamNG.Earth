@@ -10,6 +10,7 @@ are in the anchor frame, z the ground (elev); the mod clips the graph to the ter
 
 Pure given the map cells and elev; deterministic.
 """
+import logging
 import math
 import re
 
@@ -17,6 +18,8 @@ import numpy as np
 
 import roads
 import staging
+import settlements as settlementsmod
+import traffic as trafficmod
 
 # classes the AI drives on: drivability (path cost divisor) and a default speed limit (mph, US practice)
 DRIVE = {"motorway": (1.0, 65), "trunk": (1.0, 55), "primary": (1.0, 45), "secondary": (1.0, 40),
@@ -39,7 +42,7 @@ MPH = 0.44704
 LANE_W_M = 3.3
 SIMPLIFY_M = 0.6            # a shape point is kept where the chord would be off by more than this
 MAX_EDGE_M = 80.0           # long straight edges are split (the AI and the spawner like shorter ones)
-WINDOW_M = 1100.0           # half size of the square around the player the graph covers
+WINDOW_M = 1800.0           # 1100 m traffic window plus a route-only lookahead halo
 CURVE_ACCEL = 2.0           # m/s^2: comfortable lateral acceleration, a driving target rather than a posted limit
 BRAKE_ACCEL = 2.5           # m/s^2: spread a tight bend's target back along its approaches
 NARROW_M = 5.5              # narrower two-way town streets need slower encounters with oncoming traffic (parked cars,
@@ -135,6 +138,45 @@ def _us_place(feats, i):
 def _us_state(feats, i):
     """The US state (postal code) at road feature i's middle, '' outside the states."""
     return _us_place(feats, i)[0]
+TRAFFIC_SAMPLE_RADIUS_M = trafficmod.SAMPLE_RADIUS_M
+_TRAFFIC_GEO_WARNED = False
+_TRAFFIC_CALC_WARNED = False
+
+
+def _length_within_radius(xy, centre, radius):
+    """Length in metres of a road polyline inside a player-centred circle."""
+    points = np.asarray(xy, np.float64)
+    if len(points) < 2 or radius <= 0:
+        return 0.0
+    a = points[:-1] - np.asarray(centre, np.float64)
+    d = np.diff(points, axis=0)
+    seg = np.hypot(d[:, 0], d[:, 1])
+    aa = np.einsum("ij,ij->i", d, d)
+    valid = aa > 1e-12
+    if not valid.any():
+        return 0.0
+    bb = 2.0 * np.einsum("ij,ij->i", a, d)
+    cc = np.einsum("ij,ij->i", a, a) - radius * radius
+    disc = bb * bb - 4.0 * aa * cc
+    hit = valid & (disc >= 0.0)
+    if not hit.any():
+        return 0.0
+    root = np.sqrt(np.maximum(disc[hit], 0.0))
+    denom = 2.0 * aa[hit]
+    lo = np.maximum(0.0, (-bb[hit] - root) / denom)
+    hi = np.minimum(1.0, (-bb[hit] + root) / denom)
+    return float(np.sum(seg[hit] * np.maximum(0.0, hi - lo)))
+
+
+def _nearest_polyline_distance(xy, point):
+    points = np.asarray(xy, np.float64)
+    if len(points) < 2:
+        return math.inf
+    a, d = points[:-1], np.diff(points, axis=0)
+    l2 = np.maximum(np.einsum("ij,ij->i", d, d), 1e-12)
+    t = np.clip(np.einsum("ij,ij->i", np.asarray(point) - a, d) / l2, 0.0, 1.0)
+    q = a + t[:, None] * d
+    return float(np.hypot(*(q - point).T).min())
 
 
 def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
@@ -291,6 +333,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     tunnel_node = {}        # name -> fid of the tunnel its height is read from
     tube_edges = set()      # id() of the edges through a tunnel (portal_taper)
     mainline = _mainline_connectors(feats_list)     # (CROSSOVER_M)
+    traffic_total_m = traffic_urban_m = traffic_major_m = traffic_local_m = 0.0
+    nearest_road = (math.inf, "unknown", 0.0, False, False)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -346,6 +390,20 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 walk = roads.deck_walks(feats, i, rspecs, left_hand)
                 if walk:
                     signal_walks[fid] = walk
+            if spec.cls in DRIVE and roads._rule_value(sub, i) not in SKIP_SUBCLASSES:
+                local_length = _length_within_radius(p, (cx, cy), TRAFFIC_SAMPLE_RADIUS_M)
+                if local_length > 0.0:
+                    traffic_total_m += local_length
+                    if bool(getattr(spec, "urban", False)):
+                        traffic_urban_m += local_length
+                    if spec.cls in trafficmod.MAJOR_CLASSES:
+                        traffic_major_m += local_length
+                    if spec.cls in trafficmod.LOCAL_CLASSES:
+                        traffic_local_m += local_length
+                road_distance = _nearest_polyline_distance(p, (cx, cy))
+                if road_distance < nearest_road[0]:
+                    nearest_road = (road_distance, spec.cls, float(getattr(spec, "median", 0.0) or 0.0),
+                                    bool(getattr(spec, "link", False)), bool(getattr(spec, "oneway", False)))
             # the junction arms as the road tiles' props see them (every road they draw: service roads, driveways
             # and tracks too, no bridge-only roads), so furniture.junction_controls decides the same there and here
             if rspecs[i] is not None and con is not None:
@@ -471,7 +529,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     # road's half width it ran 5.3 m off its line at 56 mph into the Fort Pitt Tunnel's portal frame)
                     import roadmesh
                     half = max(1.5, min(half, spec.width / 2 + roadmesh.TUNNEL_SHOULDER - TUNNEL_AI_WALL_M))
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2)])
+                divided = trafficmod.is_divided_road(spec.cls, getattr(spec, "median", 0.0),
+                                                     getattr(spec, "link", False), spec.oneway)
+                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2),
+                              round(float(legal), 2), str(spec.cls), bool(divided), bool(getattr(spec, "urban", False))])
                 edge_fids.append(fid)
                 if in_tunnel:
                     tube_edges.add(id(edges[-1]))
@@ -515,6 +576,32 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             # Yield through the stock AI's priority mechanism, not action 4 (which it ignores).
             e[6] = min(e[6], ENTRY_DRIVABILITY)
             e[5] = min(e[5], round(RING_MS, 2))
+    # Give unsignalised approaches the same road-class priority as the stop signs
+    # emitted below. Mapped signal junctions remain governed by their signals.
+    import furniture
+    for junction, raw_arms in prop_arms.items():
+        if junction not in pending or len(raw_arms) < 3:
+            continue
+        if sum(1 for arm in raw_arms if arm[0] in ring) >= 2:
+            continue
+        if signals is not None and furniture._is_signalled(raw_arms, signals):
+            continue
+        arms = [(fid, spec, u, point, end == 0, length)
+                for fid, spec, u, point, end, length in raw_arms]
+        if not furniture.priority_stop_arms(arms, ring):
+            continue
+        incoming = furniture.priority_incoming_arms(arms, ring)
+        top_rank = max(furniture.priority_rank(arm[1]) for arm in incoming)
+        for fid, spec, _u, _point, at_start, _length in arms:
+            nb, is_incoming = approaches.get((junction, fid, 0 if at_start else -1), (None, False))
+            if not is_incoming or nb is None:
+                continue
+            for edge, edge_fid in zip(edges, edge_fids):
+                if edge_fid == fid and {edge[0], edge[1]} == {junction, nb}:
+                    edge[6] = furniture.priority_drivability(spec)
+                    if furniture.priority_rank(spec) == top_rank:
+                        edge[5] = round(max(6.0, edge[5] - 2.0), 2)
+                    break
     # keep the edges with both ends in the window; z of their nodes from the ground
     inside = {nm for nm, (x, y) in pending.items() if abs(x - cx) <= window and abs(y - cy) <= window}
     edges = [e for e in edges if e[0] in inside and e[1] in inside]
@@ -556,7 +643,40 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     if tube_edges:
         portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
-    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines}
+    global _TRAFFIC_GEO_WARNED, _TRAFFIC_CALC_WARNED
+    try:
+        la, lo, _ = frame.enu_to_geodetic(float(cx), float(cy), 0.0)
+        settlement = settlementsmod.nearest(float(la), float(lo))
+    except Exception as exc:
+        settlement = None
+        if not _TRAFFIC_GEO_WARNED:
+            logging.getLogger("earthd.navgraph").warning(
+                "adaptive traffic: player coordinates unavailable (%s: %s); using mapped-road fallback",
+                type(exc).__name__, exc)
+            _TRAFFIC_GEO_WARNED = True
+    road_distance, road_class, median_m, road_link, road_oneway = nearest_road
+    divided = road_distance <= 100.0 and trafficmod.is_divided_road(road_class, median_m, road_link, road_oneway)
+    try:
+        traffic_profile = trafficmod.calculate(
+            traffic_total_m, traffic_urban_m, traffic_major_m, traffic_local_m,
+            settlement=settlement, road_class=road_class if road_distance <= 100.0 else "unknown",
+            divided=divided, sample_radius_m=TRAFFIC_SAMPLE_RADIUS_M,
+            max_traffic=trafficmod.SERVER_TARGET_MAX,
+        )
+    except Exception as exc:
+        if not _TRAFFIC_CALC_WARNED:
+            logging.getLogger("earthd.navgraph").exception(
+                "adaptive traffic target calculation failed (%s: %s); using zero-traffic fallback",
+                type(exc).__name__, exc)
+            _TRAFFIC_CALC_WARNED = True
+        traffic_profile = trafficmod.calculate(0.0, 0.0, 0.0, 0.0, settlement=None,
+                                               road_class="unknown", divided=False,
+                                               sample_radius_m=TRAFFIC_SAMPLE_RADIUS_M,
+                                               max_traffic=trafficmod.SERVER_TARGET_MAX)
+        traffic_profile["error"] = "target calculation failed; zero-traffic fallback"
+    traffic_profile["roadDistanceM"] = round(road_distance, 1) if road_distance < math.inf else None
+    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines,
+            "trafficProfile": traffic_profile}
 
 
 PORTAL_LEAD_M = 60.0        # m before a tunnel's portal over which the AI's road narrows to the tube's (portal_taper)
@@ -672,7 +792,9 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
     bounds = (*xy.min(0), *xy.max(0)) if len(xy) else (0.0, 0.0, 0.0, 0.0)
     clearance = furniture.RoadClearance(lines, decks, bounds=bounds)
     for name, a in arms.items():
-        if name not in nodes or len(a) < 3 or not furniture._controlled_here(farms[name], signals):
+        priority_controlled = bool(furniture.priority_stop_arms(farms[name], ring))
+        if name not in nodes or len(a) < 3 or (not furniture._controlled_here(farms[name], signals)
+                                                and not priority_controlled):
             continue
         put = [(arm, what) for arm, what in furniture.junction_controls(farms[name], None, link_ok, ring=ring,
                                                                          signals=signals, country=country,

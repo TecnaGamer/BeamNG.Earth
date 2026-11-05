@@ -365,7 +365,9 @@ class JunctionTest(unittest.TestCase):
               seg("wb_e", "primary", (180, 120), (100, 120), True), seg("wb_w", "primary", (100, 120), (20, 120), True),
               seg("s", "tertiary", (100, 100), (100, 20)), seg("link", "tertiary", (100, 100), (100, 120)),
               seg("n", "tertiary", (100, 120), (100, 200))]
-        rows = furniture.junction_props(rs, (0, 0, 256, 256))
+        # Mapped signal data outranks inferred road-class priority at both close junctions.
+        rows = furniture.junction_props(rs, (0, 0, 256, 256),
+                                        signals=np.array([[100.0, 100.0], [100.0, 120.0]]))
         self.assertEqual([r[0] for r in rows], [furniture.G_SIGNAL] * 4, "the two carriageways' and the street's ways in")
 
     def test_left_hand_traffic_stands_them_on_the_left(self):
