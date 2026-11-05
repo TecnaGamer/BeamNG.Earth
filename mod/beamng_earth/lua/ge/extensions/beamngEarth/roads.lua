@@ -342,6 +342,7 @@ local function dropTile(key)
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
+  if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
   tiles[key] = nil
 end
 
@@ -644,6 +645,23 @@ function M.mapStations(pl, recs)
   return out
 end
 
+-- A mapped turbine's identity and dimensions stay intact; only its base and heading belong to the anchor.
+function M.mapTurbines(pl, recs)
+  local out, dyaw = {}, geotile.yawOf(pl)
+  for i, r in ipairs(type(recs) == 'table' and recs or {}) do
+    if type(r) == 'table' then
+      local n = {}
+      for k, v in pairs(r) do n[k] = v end
+      if type(r.x) == 'number' and type(r.y) == 'number' and type(r.z) == 'number' then
+        n.x, n.y, n.z = geotile.apply(pl, r.x, r.y, r.z)
+      end
+      if type(r.yaw) == 'number' then n.yaw = r.yaw + dyaw end
+      out[i] = n
+    end
+  end
+  return out
+end
+
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
@@ -678,6 +696,10 @@ local function geoRows(key, t, data, replacing)
     if t.wells and pj.placeRows then pj.placeRows(key, rows) else pj.onRows(key, rows) end
     t.wells = true
   end
+  local turbines = require('beamngEarth/windturbines')
+  local turbineRows = M.mapTurbines(pl, data.turbines)
+  if replacing then turbines.placeRows(key, turbineRows) else turbines.onRows(key, turbineRows) end
+  t.turbines = #turbineRows > 0
   if type(data.sound) == 'table' and data.sound[1] then
     local amb = require('beamngEarth/ambience')
     local flat = M.mapFlat(pl, data.sound, 8, 2, 8)
@@ -1099,6 +1121,8 @@ function M.onTile(msg, currentAnchor, a)
     require('beamngEarth/pumpjacks').onRows(key, data.wells)
     tiles[key].wells = true
   end
+  require('beamngEarth/windturbines').onRows(key, type(data.turbines) == 'table' and data.turbines or {})
+  tiles[key].turbines = type(data.turbines) == 'table' and #data.turbines > 0
   if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
     require('beamngEarth/ambience').onSpaces(key, data.sound)
     tiles[key].sound = true

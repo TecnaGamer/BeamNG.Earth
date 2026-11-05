@@ -27,6 +27,11 @@ stopwatch.clock = function()
   return function() return elapsedMs - start end
 end
 stopwatch.new = stopwatch.clock
+local turbineRows, turbineDrops = {}, {}
+package.loaded['beamngEarth/windturbines'] = {
+  onRows = function(key, rows) turbineRows[#turbineRows + 1] = { key, rows } end,
+  dropKey = function(key) turbineDrops[#turbineDrops + 1] = key end,
+}
 local roads = require('beamngEarth/roads')
 local update = roads.update
 roads.update = function(...)
@@ -42,7 +47,8 @@ function gov:chargeMotion() end
 local function chunk(x)
   return string.format('{ m = "road_asphalt_2lane", w = 6, tl = 11, p = 20, n = { {%d, 0, 10}, {%d, 10, 10}, {%d, 20, 10} } }', x, x, x)
 end
-files['/t/a.json'] = '{ chunks = { ' .. chunk(0) .. ', ' .. chunk(5) .. ' } }'
+files['/t/a.json'] = '{ chunks = { ' .. chunk(0) .. ', ' .. chunk(5) .. [[ },
+  turbines = { { id = "osm:node:1175681635", x = 1, y = 2, z = 1800, yaw = 30, scale = 1 } } }]]
 files['/t/b.json'] = '{ chunks = { ' .. chunk(50) .. ' } }'
 
 local function decalRoads()
@@ -60,6 +66,8 @@ T.check(f.drivability == '-1' and f.overObjects == 'false', 'not in the navgraph
 -- a tile: queued, then made one chunk per governor unit
 T.check(roads.onTile({ anchorId = 1, key = '0_0', path = '/t/a.json', n = 2 }, 1) == true, 'tile accepted')
 T.check(roads.status().queued == 2 and decalRoads() == 0, 'queued, nothing made yet')
+T.check(turbineRows[1][1] == '1:0_0' and turbineRows[1][2][1].id == 'osm:node:1175681635'
+  and turbineRows[1][2][1].z == 1800, 'legacy road tile passes turbine identity and world base')
 gov.allow, gov.tries = 1, 0
 roads.update(gov, 1)
 T.check(decalRoads() == 1 and roads.status().queued == 1, 'one chunk per allowed unit')
@@ -75,11 +83,13 @@ T.check(roads.onTile({ anchorId = 9, key = '0_0', path = '/t/b.json', n = 1 }, 1
 
 -- drop
 roads.onTile({ anchorId = 1, key = '1_0', path = '/t/b.json', n = 1 }, 1)
+T.check(#turbineRows[#turbineRows][2] == 0, 'legacy road tile without turbines reconciles an empty list')
 roads.update(gov, 1)
 T.check(decalRoads() == 3, 'second tile made')
 roads.onDrop({ anchorId = 1, key = '0_0' })
 roads.update(gov, 1)
 T.check(decalRoads() == 1 and roads.status().tiles == 1, 'dropped tile deleted')
+T.check(turbineDrops[1] == '1:0_0', 'legacy tile drop releases its turbine owner')
 
 -- a re-sent tile replaces its old roads
 roads.onTile({ anchorId = 1, key = '1_0', path = '/t/b.json', n = 1 }, 1)

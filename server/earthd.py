@@ -770,6 +770,13 @@ def osm_fuel_tiles(frame, key, tiles, geo=False):
     return {t for t in tiles if any(str(c) == k for c in osm_fuel_cells(frame, t, geo))}
 
 
+TURBINE_GEO = 1
+TURBINE_Z = 15             # about 1 km cells at mid-latitudes; existing far-content tracker
+TURBINE_SEND_M = 4000.0
+TURBINE_DROP_M = 5000.0
+TURBINE_PER_POSE = 2       # bounded batches: only populated cells request terrain elevations
+
+
 class Server:
     def __init__(self, user_dir, cache_dir, tile_workers=3, kfun=None,
                  hysteresis=farfield.HYSTERESIS, radius=farfield.RADIUS, far_format="cdae",
@@ -1576,6 +1583,47 @@ class Server:
                     reader=md.overture if md is not None else None)
             return pn
 
+    def build_turbines_geo(self, gx, gy):
+        """Mapped wind turbines through the existing geotile tracker, without building distant roads.
+
+        Empty cells do no DEM work. Populated cells sample their exact mapped points in one batch, with the
+        existing airport/sea ground rules; nearby road-owned records provide the graded installation height.
+        The tracker limits simultaneous batches, and this session memo keeps delivered heights stable.
+        """
+        import geotiles
+        import windturbines
+        memo = self.__dict__.setdefault("_turbines_geo_done", {})
+        key = geotiles.key(gx, gy, TURBINE_Z)
+        filename = "turbines_" + key + ".json"
+        path = os.path.join(self.out_dir, filename)
+        cached = memo.get(key)
+        if cached is not None and os.path.exists(path):
+            return cached
+        clat, clon, south, west, north, east = geotiles.info(gx, gy, TURBINE_Z)
+        frame = geotiles.frame(gx, gy, TURBINE_Z)
+        features = tuple(f for f in windturbines.near(south, west, north, east)
+                         if geotiles.tile_of(f.lat, f.lon, TURBINE_Z) == (gx, gy))
+        rows = []
+        if features:
+            zoom = demmod.zoom_for(clat, 1.25, demmod.FINE_ZOOM)
+
+            def elev(la, lo):
+                return self.ground(frame, la, lo, self.dem.sample(la, lo, zoom))
+            rows = windturbines.rows_for_features(frame, features, elev, collide=False)
+            if len(rows) != len(features):     # unavailable heights retry; never memoize a partial farm
+                return None
+        pivot = float(np.mean([r["z"] for r in rows])) if rows else 0.0
+        data = {"key": key, "sid": self.sid, "frame": [clat, clon], "pivot": pivot, "turbines": rows}
+        tmp = staging.tmp_for(path)
+        with open(tmp, "w", encoding="utf-8") as target:
+            json.dump(data, target, separators=(",", ":"))
+        staging.replace(tmp, path)
+        result = (f"{self.vfs_dir}/{filename}", len(rows), (clat, clon), pivot)
+        if len(memo) >= 4096:
+            memo.clear()
+        memo[key] = result
+        return result
+
     def country_at(self, lat, lon):
         """The ISO country code at (lat, lon) (its nearest airport's: navgraph.country_near), or None."""
         try:
@@ -2285,11 +2333,14 @@ class Server:
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
+        import windturbines
+        turbine_rows = windturbines.tile_turbines(anchor.frame, tx, ty, elev)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings),
-                                   barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks)
+                                   barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,
+                                   turbines=turbine_rows)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their
@@ -4613,6 +4664,9 @@ class Connection:
         self.building_scale = 1.0
         self.bldfar = self.bldsky = self.brfar = None
         self.make_far_trackers(False)
+        self.turbine_geo = False               # separate capability; no road/building radius increase
+        self.turbines = vegetationmod.Tracker(TURBINE_SEND_M, TURBINE_DROP_M, TURBINE_PER_POSE, "turbines",
+                                              geo=True, z=TURBINE_Z)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
         self.traffic_visuals = False            # negotiated visual routes, requested only at night with traffic on
         self.traffic_on = False
@@ -5154,7 +5208,7 @@ class Connection:
             self.s.connections.discard(self)
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, self.nav,
+            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, self.turbines, self.nav,
                        self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
@@ -5343,6 +5397,9 @@ class Connection:
                 self.make_far_trackers(far_geo)
             if far_geo:
                 m["farGeo"] = buildingsmod.FAR_GEO
+            self.turbine_geo = msg.get("turbineGeo") == TURBINE_GEO
+            if self.turbine_geo:
+                m["turbineGeo"] = TURBINE_GEO
             # ... and the far field's levels from 3 up as global tiles when it places those (hello.globalFar:
             # farfield.lua's GLOBAL_FAR; geotiles phase 3b, --global-far): built once, kept across rebases
             self.ready_set = msg.get("readySet") == 1      # (the mod takes 'terrain_ready_set': follow.preferReady)
@@ -6186,6 +6243,11 @@ class Connection:
             if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
                                    ready, version=source.tags.known())
+        if self.turbine_geo and aid == self.active:
+            anchor = self.s.anchors.get(aid)
+            if anchor is not None:
+                self.turbines.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_turbines_geo,
+                                      view=self.view_at, frame=anchor.frame)
         if self.s.veg is not None and aid == self.active:
             anchor = self.s.anchors.get(aid)
             if anchor is not None:                            # a teleport's cells built at once, ahead

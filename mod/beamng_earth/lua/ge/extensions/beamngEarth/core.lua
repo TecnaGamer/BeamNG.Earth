@@ -78,6 +78,7 @@ local ambience = require('beamngEarth/ambience') -- forest wind and room tone (t
 local pumpjacks = require('beamngEarth/pumpjacks') -- oil wells' pump jacks (server oilwells.py)
 local nightlights = require('beamngEarth/nightlights') -- the buildings' windows lit at night
 pumpjacks.onCollide = roads.markCollisionDirty
+require('beamngEarth/windturbines').onCollide = roads.markCollisionDirty
 local parking = require('beamngEarth/parking') -- parked cars on the road tiles' spots (stock gameplay_parking)
 local gasstations = require('beamngEarth/gasstations') -- pumps and the stock refuel prompt (server gasstations.py)
 -- (the stations' pump islands: lit at night)
@@ -558,6 +559,7 @@ local function commitTeleport(msg)
 
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
+  require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(msg.lat, msg.lon)
@@ -589,6 +591,8 @@ local function finishRebase()
   trees.transform(xf, geodesy, rb.newAnchor)    -- (geotiles: placed into the new anchor, nothing sent again)
   ambience.transform(xf)
   pumpjacks.transform(xf)
+  require('beamngEarth/windturbines').transform(xf)
+  require('beamngEarth/turbinestream').reanchor(rb.newAnchor)
   nightlights.transform(xf)
   gasstations.transform(xf)
   -- road geotiles: their content placed exactly into the new anchor (its rows' modules after their transforms above),
@@ -921,6 +925,7 @@ local function onMessage(msg)
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
       farGeo = roads.FAR_GEO,          -- (and the far buildings, skyline and far bridges: roads.lua)
+      turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
@@ -956,6 +961,7 @@ local function onMessage(msg)
     if roadsSession ~= msg.sessionId then
       -- (road geotiles stay: the new session's content with the same hash keeps them, the rest go once far or old)
       roads.newSession()
+      require('beamngEarth/turbinestream').reset() -- the new server does not own the previous far tile keys
       roadsSession = msg.sessionId
     end
     roads.prewarm(msg.prewarm)  -- the materials of the server's shapes set up now, not at their first tile
@@ -1165,6 +1171,10 @@ local function onMessage(msg)
   elseif t == 'veg_drop' then
     trees.onDrop(msg)
     ambience.onDrop(msg.anchorId, msg.key)
+  elseif t == 'turbines_tile' then
+    require('beamngEarth/turbinestream').onTile(msg, st.anchor, st.sessionId)
+  elseif t == 'turbines_drop' then
+    require('beamngEarth/turbinestream').onDrop(msg)
   elseif t == 'bldfar_tile' then
     -- far buildings (server buildings.far_tile, --buildings on): render-only, roads.lua
     roads.onFarTile(msg, st.anchorId)
@@ -2400,6 +2410,8 @@ local function onClientEndMission()
   trees.reset()
   ambience.reset()
   pumpjacks.reset()
+  require('beamngEarth/windturbines').reset()
+  require('beamngEarth/turbinestream').reset()
   nightlights.reset()
   parking.reset()
   navgraph.reset()

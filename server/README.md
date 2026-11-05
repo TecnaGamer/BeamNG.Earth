@@ -175,6 +175,22 @@ sent, then the rest, nearest first (in mesh mode there is no block class: the L-
 player come first by distance). The imagery of the next 12 queued tiles is fetched ahead of their
 build.
 
+## Wind turbine geotiles
+
+The client's optional `hello.turbineGeo: 1` enables mapped turbine landmarks independently of the road/building
+capabilities. The server answers `turbineGeo: 1`, then uses the existing vegetation tile tracker on a zoom-15 grid:
+4 km send, 5 km drop, at most two builds in flight. `turbines_tile` carries `{anchorId,key,path,n,frame:[lat,lon],pivot}`;
+`turbines_drop` carries `{anchorId,key}`. The file contains `{sid,key,frame,pivot,turbines:[...]}`. Every turbine
+record preserves `osm:<node|way>:<id>`, lat/lon, XYZ, yaw, uniform scale, dimension basis, and `collide:false`.
+The mod rejects a different server session, maps source-frame records into its current anchor, and retains them
+across rebases. Nearby road records share these identities, provide graded height/collision, and take placement
+priority; the last owner removes the two stock parts. Models use native LOD/ambient animation. Empty cells do no
+DEM sampling. `windturbines.py` reads the bundled, fingerprinted worldwide index; there is no runtime OSM query.
+
+The global index and provenance are rebuilt by `tools/build_windturbines.py --download`, then the resulting
+SHA256 must replace `windturbines.INDEX_SHA256` so source-fingerprinted revisit entries are invalidated normally.
+See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) for source and validation details.
+
 ## Terrain block (§1, §12 P1)
 
 - `hm_<anchorId>_<cx>_<cy>.png`: 1024² 16-bit grayscale, row 0 = north, `squareSize` = 2.0.
