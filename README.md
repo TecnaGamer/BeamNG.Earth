@@ -146,7 +146,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - World map (**M**): pan and zoom the globe, satellite or street map (EOX) with a roads & labels overlay,
   borders and place names (the **Layers** button), search for landmarks and places as you type and streets and
   addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Works with a controller,
-  laid out like the stock map.
+  laid out like the stock map. Layers > **Highways** (on by default) draws the US Interstates and US routes with their
+  shields while zoomed out, so you can see which highways a GPS route takes (closer in, Roads & labels shows every road).
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
   route's map data and elevation download ahead while you drive, with a progress bar on the map (Settings >
