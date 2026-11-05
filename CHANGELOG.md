@@ -21,6 +21,9 @@ What changed in each release of BeamNG.Earth, newest first.
   parts was drawn as its parts alone, so one stray 452 m² part erased the 51,000 m² mall around it. Where the parts
   cover less than half of a building with its own mapped height, and none of them stands off the ground, the building
   is drawn too, with its parts on it.
+- **Roundabouts tilted like motorway curves:** a mapped roundabout on a trunk or motorway (the big Jüri roundabout of
+  Tallinna ringtee, Estonia) was banked 8 % into the ring, and the tilt changed at every road joining it. Real ones are
+  close to flat, so roundabout rings are now level across.
 
 ## 1.8.1 beta (2026-11-04)
 

@@ -99,6 +99,27 @@ class BankTest(unittest.TestCase):
         self.assertLess(float(body.max() - body.min()), 0.012)       # (it was 0 % between vertices, 8 % at them)
         self.assertLess(float(body.max()), -0.05)
 
+    def test_a_mapped_roundabout_is_not_banked(self):
+        """The Jüri roundabout of Tallinna ringtee (59.3535 N 24.8820 E, a trunk ring about 190 m across): banked as a
+        trunk's curve, 8 % into the ring, where the real one falls 2.4-2.9 % outward (the national lidar). A mapped
+        roundabout ring (roads.is_ring) is graded level across."""
+        def ring_z(junction):
+            a = np.linspace(0.0, np.pi, 60)
+            halves = [[(190 * np.cos(t), 190 * np.sin(t)) for t in a],
+                      [(190 * np.cos(t), -190 * np.sin(t)) for t in a[::-1]]]
+            f = features(halves, ["trunk", "trunk"])
+            f.attrs["osm_junction"] = np.array([junction, junction], object)
+            g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 50.0))
+            t = np.pi / 2
+            pts = np.array([(186.0 * np.cos(t), 186.0 * np.sin(t)), (194.0 * np.cos(t), 194.0 * np.sin(t))])
+            la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            z = g.apply(la, lo, np.full(2, 50.0))
+            return float(z[1] - z[0])           # outer edge minus inner, 8 m apart
+        self.assertGreater(ring_z(""), 0.4, "(a trunk's curve: banked into it)")
+        self.assertAlmostEqual(ring_z("roundabout"), 0.0, delta=0.05, msg="the roundabout level across")
+        with unittest.mock.patch.object(grading, "RING_LEVEL_ON", False):
+            self.assertGreater(ring_z("roundabout"), 0.4, "(BNE_RING_LEVEL=off: banked as before)")
+
     def test_straight_and_city_streets_level(self):
         xy = np.stack([np.arange(0, 300, 2.0), np.zeros(150)], axis=1)
         self.assertIsNone(grading.bank(xy, roads.Spec(11.0, "paved", False, "motorway"), ext=(1, 1)))
