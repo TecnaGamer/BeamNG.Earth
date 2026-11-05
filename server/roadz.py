@@ -111,6 +111,10 @@ LIDAR_GAP_END_TOL_M = 1.5
 LIDAR_GAP_MISS = 1
 LIDAR_GAP_MIN_M = 8.0
 LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
+# once a cell's lidar has missed LIDAR_GAPS_WAIT_S in this process (a slow connection, a busy source), the next cells
+# wait this long at most: each call of a road tile's cells waited 8 s anew, 43 s of one cold Denver road tile's 132 s
+# (2026-11-05); those left to the rule are faults (built again with their lidar on a later visit)
+LIDAR_GAPS_SLOW_WAIT_S = 1.0
 GAP_NATIVE = 107            # earthfast.VERSION of lidar_gap_stretch
 # The approaches (the user, 2026-10-31: "use the lidar data to improve how ramps connect"): every drawn road going on
 # from a measured deck end (the gap candidates) is measured too, from that end while its surface starts within
@@ -1034,9 +1038,11 @@ class RoadZ:
                 t = threading.Thread(target=build, args=(key,), name="roadz-gaps", daemon=True)
                 t.start()
                 threads.append(t)
-            end = time.monotonic() + LIDAR_GAPS_WAIT_S
+            end = time.monotonic() + (LIDAR_GAPS_SLOW_WAIT_S if getattr(self, "_gaps_slow", False) else LIDAR_GAPS_WAIT_S)
             for t in threads:
                 t.join(max(0.0, end - time.monotonic()))
+            if any(t.is_alive() for t in threads):
+                self._gaps_slow = True          # (LIDAR_GAPS_SLOW_WAIT_S from now on)
             for key in todo:
                 got = self._decide(key, done.get(str(key)))     # (not built in time: None, the rule)
                 if got is None:
