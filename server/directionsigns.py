@@ -13,12 +13,14 @@ from geotiles import box_owns
 
 DATA_PATH=Path(__file__).with_name('data')/'fr_direction_signs.json.gz'
 DATA_SHA256='be2a2a625ef55710c34c55f11a9ff05ac691d20775d6690da7c374b00702397f'
+ROAD_DATA_PATH=DATA_PATH.with_name('fr_road_direction_signs.json.gz')
+ROAD_DATA_SHA256='998beeb3fad9b48f029dcaafebab391b45acb8f6e571543479cc1bd43f79d874'
 
-@lru_cache(maxsize=1)
-def bundled():
+@lru_cache(maxsize=2)
+def bundled(expanded=False):
     from townsigns import SignData
-    raw=DATA_PATH.read_bytes()
-    if hashlib.sha256(raw).hexdigest()!=DATA_SHA256:raise ValueError('Direction-sign data checksum mismatch')
+    raw=(ROAD_DATA_PATH if expanded else DATA_PATH).read_bytes()
+    if hashlib.sha256(raw).hexdigest()!=(ROAD_DATA_SHA256 if expanded else DATA_SHA256):raise ValueError('Direction-sign data checksum mismatch')
     doc=json.loads(gzip.decompress(raw));doc['places']=[]
     return SignData(doc)
 
@@ -26,7 +28,8 @@ def bundled():
 def add(frame,roads,box,french,mesh,ground=None,data=None):
     import furniture as f
     from townsigns import _nearest
-    data=bundled() if data is None else data;x0,y0,x1,y1=box;posts=[];records=[]
+    import euguardrails
+    data=bundled(euguardrails.enabled()) if data is None else data;x0,y0,x1,y1=box;posts=[];records=[]
     la,lo,_=frame.enu_to_geodetic(np.array([x0-50,x1+50]),np.array([y0-50,y1+50]),np.zeros(2))
     near=data.nearby((float(min(lo)),float(min(la)),float(max(lo)),float(max(la))))
     lines=[(r[1].width/2,np.asarray(r[2])[:,:2]) for r in roads if len(r[2])>=2]
@@ -63,8 +66,9 @@ def add(frame,roads,box,french,mesh,ground=None,data=None):
         if not labels:continue
         support_rows[support]=first+len(labels)
         ref=s.get('ref','') if first==0 else ''
-        mesh.direction(p,travel,labels,'right',ref,start_row=first)
-        mesh.direction(p,-travel,labels,'left',ref,body=False,start_row=first)
+        colour=s.get('colour','white')
+        mesh.direction(p,travel,labels,'right',ref,start_row=first,colour=colour)
+        mesh.direction(p,-travel,labels,'left',ref,body=False,start_row=first,colour=colour)
         if first==0:
             posts.append(['fr_signpost',round(p[0],3),round(p[1],3),round(p[2],3),0.,1.,3. if ref else 2.7,0.])
         records.append({'id':s['id'],'name':'; '.join(labels),'kind':'direction',

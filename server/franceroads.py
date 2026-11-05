@@ -10,7 +10,7 @@ import os
 import numpy as np
 
 ON = os.environ.get("BNE_FR_ROADS", "off").lower() in {"on", "1", "true"}
-VERSION = "fr-roads-signs-v4"
+VERSION = "fr-roads-signs-v5"
 PAINT_MATERIAL = "line_bne_fr_white"
 RURAL_WIDTH = {"primary": 7.0, "secondary": 6.0, "tertiary": 5.0,
                "unclassified": 4.5, "residential": 5.0, "service": 3.5}
@@ -293,7 +293,7 @@ def paint(spec, pts, osm=None):
     if length < .01:
         return out
 
-    def line(kind, offset, pattern=None, a=0., b=None, side=None):
+    def line(kind, offset, pattern=None, a=0., b=None, side=None, arrows=None):
         run = segment(pts, a, length if b is None else b)
         if abs(offset) > 1e-8:
             run = roads.offset_polyline(run, offset)
@@ -301,6 +301,11 @@ def paint(spec, pts, osm=None):
         if side is not None:
             look["side"] = side
         for p in [run] if pattern is None else markings.dashes(run, pattern, phase=a):
+            if arrows is not None and any(
+                not arrows.visible(start, end, width / 2 + .025)
+                for start, end in zip(p[:-1], p[1:])
+            ):
+                continue              # a recall arrow takes the place of the overlapping dash
             out.append((look.copy(), 3 * unit(spec) if kind == "edge" else width, p))
 
     drive, lanes = roads.lane_layout(spec)
@@ -326,6 +331,17 @@ def paint(spec, pts, osm=None):
                 line("centre", off + sign * gap)
                 line("centre", off - sign * gap, pattern)
             elif events:
+                import signplacement
+
+                recall = [
+                    q
+                    for s, _ in events
+                    for direction in (1, -1)
+                    for back in (210., 185., 160.)
+                    if 4. <= s - direction * back <= length - 4.
+                    for q in recall_polygons(pts, s - direction * back, direction)
+                ]
+                arrows = signplacement.Context(recall) if recall else None
                 cuts = sorted({0., length} | {float(np.clip(s + d, 0, length))
                                              for s, _ in events for d in (-225., -150., -35., 35., 150., 225.)})
                 for a, b in zip(cuts[:-1], cuts[1:]):
@@ -340,18 +356,11 @@ def paint(spec, pts, osm=None):
                     elif fwd or bwd:
                         sign = -1 if fwd else 1
                         line("centre", off + sign * gap, a=a, b=b)
-                        line("centre", off - sign * gap, T3, a, b)
+                        line("centre", off - sign * gap, T3, a, b, arrows=arrows)
                     else:
-                        line("centre", off, T3 if warning else pattern, a, b)
-                for s, _ in events:
-                    for direction in (1, -1):
-                        for back in (210., 185., 160.):
-                            station = s - direction * back
-                            if station < 4 or station > length - 4:
-                                continue
-                            for q in recall_polygons(pts, station, direction):
-                                out.append(({"m": PAINT_MATERIAL, "tl": 1., "p": 5,
-                                             "kind": "recall", "polygon": True}, 0., q))
+                        line("centre", off, T3 if warning else pattern, a, b, arrows=arrows)
+                out.extend(({"m": PAINT_MATERIAL, "tl": 1., "p": 5, "kind": "recall", "polygon": True}, 0., q)
+                           for q in recall)
             else:
                 line("centre", off, pattern)
         elif role == "twltl":

@@ -306,7 +306,20 @@ for group, a in pairs(require('beamngEarth/europeAssets')) do
   M.GROUP_MAX_M[group] = a[3]
   if a[4] then M.NO_COLLIDE[group] = true end
 end
+for group, a in pairs(require('beamngEarth/europeRoadAssets')) do
+  M.CATALOG[group] = { { a[1], a[2] } }
+  M.GROUP_MAX_M[group] = a[3]
+  M.ONE_SPELLING[group] = true
+  if a[4] then M.NO_COLLIDE[group] = true end
+end
+for group, a in pairs(require('beamngEarth/europeStopAssets')) do
+  M.CATALOG[group] = { { a[1], a[2] } }
+  M.GROUP_MAX_M[group] = a[3]
+  M.ONE_SPELLING[group] = true
+end
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth/europe_stops',
+  '/levels/beamng_earth/art/shapes/beamngEarth/europe_road_details',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles',

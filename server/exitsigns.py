@@ -250,9 +250,11 @@ def _gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
     return result
 
 
-def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
+def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel, max_distance=GORE_SEARCH_M,
+                  *, clearance=GORE_CLEAR_M, candidate_clear=None):
     import signroads as roadlanes
-    ramp_rows = [r for r in pavements if r[1].link and _way_id(r[0]) == extra['ramp_id']]
+    ramp_ids = set(extra.get('ramp_ids', [extra['ramp_id']]))
+    ramp_rows = [r for r in pavements if r[1].link and _way_id(r[0]) in ramp_ids]
     if not ramp_rows:
         # A ramp segment without its OSM way id (not from OSM, or the map data's OSM differs from the
         # sign shards' week): the spatial association, requiring both proximity and the ramp's direction.
@@ -277,8 +279,8 @@ def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
     polygons = ramp_polys+[_outline(r[2], r[3]) for r in main_rows]
     direction = _station(approach, 1e12)[1]
     length = _station(ramp, 1e12)[2]
-    radius = width_panel/2+GORE_CLEAR_M
-    for distance in np.arange(8., min(GORE_SEARCH_M, length)+.01, 2.):
+    radius = width_panel/2+clearance
+    for distance in np.arange(8., min(max_distance, length)+.01, 2.):
         q = _station(ramp, distance)[0]
         choices = []
         for fid, sp, line, width in main_rows:
@@ -303,7 +305,7 @@ def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
         if inner-edge < 2.*radius:
             continue
         centre = at[:2]+outward*(edge+inner)/2
-        if _clear(centre, radius, polygons):
+        if _clear(centre, radius, polygons) and (candidate_clear is None or candidate_clear(centre)):
             return sp, at, travel, centre
     return None                          # a narrow/unsuitable gore never falls back onto the ramp shoulder
 

@@ -2083,7 +2083,15 @@ class Server:
         cover = []                      # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
         marks = []                  # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
         near_roads = []             # the ground carriageways near the tile (the median barriers': medians.tile_rows)
+        roadside_jobs = []
+        drives = []
+        import euguardrails
+        sign_obstacles=None
+        if self.buildings and euguardrails.enabled():
+            import signplacement
+            sign_obstacles=signplacement.for_tile(anchor.frame,tx,ty,self.mapdata,items,skip)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     sign_obstacles=sign_obstacles,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor), buried=self.buried(anchor),
@@ -2093,7 +2101,7 @@ class Server:
                                      ground=lambda x, y: roadmeshmod.drawn_ground(anchor.frame, drawn, np.c_[x, y],
                                                                                   self.anchor_q(anchor)),
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
-                                     roads_out=near_roads,
+                                     roads_out=near_roads, roadside_jobs=roadside_jobs,
                                      signals=furnituremod.signals_for(
                                          self.mapdata, anchor.frame,
                                          roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)))
@@ -2105,7 +2113,6 @@ class Server:
             # (no street tree in a house: its own or the next tile's)
             rings = buildingsmod.near_rings(anchor.frame, tx, ty, self.mapdata, skip=skip)
             props[:] = furnituremod.off_buildings(props, rings)
-            drives = []
             props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
             props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
@@ -2118,7 +2125,8 @@ class Server:
         if _bridge_fps:                 # (the model bridge is the road there: its deck slab)
             chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
             ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
-            props = buildingsmod.bridge_stub_props(_bridge_fps, props)
+            if props is not None:
+                props[:] = buildingsmod.bridge_stub_props(_bridge_fps, props)
 
         # Share the bridge mesh's exact parapet geometry with the tile builder.
         # Mapped rails on a deck are replaced by guardrails.bridge_rows(); the parapet runs also feed the fallback matching.
@@ -2156,6 +2164,8 @@ class Server:
         guardrail_rows = guardrail_rows + blockworker._median_rows(
             anchor.frame, near_roads, box, elev, self.left_hand(anchor), self.country(anchor), guardrail_rows, tx, ty,
             deck_parts)
+        for finish in roadside_jobs:
+            finish(guardrail_rows, [(np.asarray(ch['n']), ch['w'] / 2) for ch in drives if 'n' in ch and 'w' in ch])
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                                  clip=box, follow=True, q=self.anchor_q(anchor), drawn=drawn)

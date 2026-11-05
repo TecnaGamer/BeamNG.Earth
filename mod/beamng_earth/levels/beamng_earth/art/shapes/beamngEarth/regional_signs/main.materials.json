@@ -200,5 +200,26 @@
     "alphaTest": true,
     "alphaRef": 80,
     "castShadows": false
+  },
+  "bne_fr_road_orange": {
+    "name": "bne_fr_road_orange",
+    "mapTo": "bne_fr_road_orange",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "675ea957-d757-5b95-b7bc-730b2e961d88",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.22,
+          0.01,
+          1.0
+        ],
+        "roughnessFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }

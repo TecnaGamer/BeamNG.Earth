@@ -13,7 +13,7 @@ import countrybounds
 CAR={'primary','secondary','tertiary','unclassified','residential','living_street',
      'primary_link','secondary_link','tertiary_link'}
 
-def build(source,output):
+def build(source,output,all_colours=False,metadata=None):
     doc=json.loads(gzip.decompress(Path(source).read_bytes()));idx=countrybounds.bundled()
     if doc.get('remark'):raise ValueError(doc['remark'])
     nodes={e['id']:e for e in doc['elements'] if e['type']=='node'}
@@ -26,9 +26,13 @@ def build(source,output):
     for r in sorted((e for e in doc['elements'] if e['type']=='relation'),key=lambda e:e['id']):
         tags=r.get('tags',{});name=tags.get('destination','').strip()
         if not name:skipped['no_destination']+=1;continue
-        if any(tags.get(k,default).lower() not in allowed for k,default,allowed in (
-            ('colour:back','white',{'white','#ffffff'}),('colour:arrow','black',{'black','#000000'}),
-            ('colour:text','black',{'black','#000000'}))):skipped['other_colour_system']+=1;continue
+        colours={'white':'white','#ffffff':'white','blue':'blue','#0000ff':'blue','green':'green','#008000':'green'}
+        colour=colours.get(tags.get('colour:back','white').lower())
+        ink={'black','#000000'}if colour=='white'else {'white','#ffffff'}
+        if (colour is None or (not all_colours and colour!='white') or
+            tags.get('colour:arrow','black'if colour=='white'else 'white').lower()not in ink or
+            tags.get('colour:text','black'if colour=='white'else 'white').lower()not in ink):
+            skipped['other_colour_system']+=1;continue
         members=r.get('members',[])
         travelways=[ways.get(m['ref']) for m in members if m['type']=='way' and m['role'] in ('from','to')]
         if travelways and not any(w and w.get('tags',{}).get('highway') in CAR for w in travelways):
@@ -60,9 +64,10 @@ def build(source,output):
             target=min(targets,key=lambda c:dist(c,origin))
             out.append({'id':str(r['id'])+'/'+str(ident),'relation':r['id'],'lat':pos[1],'lon':pos[0],
                         'origin':origin,'towards':target,'labels':[s.strip() for s in name.split(';') if s.strip()],
-                        'ref':tags.get('destination:ref',''),'mapped_position':ident!='junction'})
+                        'ref':tags.get('destination:ref',''),'mapped_position':ident!='junction',
+                        **({'colour':colour}if all_colours else {})})
     result={'format':1,'source':'OpenStreetMap destination_sign relations via Overpass','license':'ODbL-1.0',
-            'timestamp':doc.get('osm3s',{}).get('timestamp_osm_base'),'signs':out,'skipped':dict(skipped)}
+            'timestamp':doc.get('osm3s',{}).get('timestamp_osm_base'),**(metadata or {}),'signs':out,'skipped':dict(skipped)}
     data=gzip.compress(json.dumps(result,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode(),mtime=0)
     Path(output).write_bytes(data)
     print(json.dumps({'signs':len(out),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'skipped':dict(skipped)},indent=2))

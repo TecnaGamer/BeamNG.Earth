@@ -260,7 +260,11 @@ class Mesh:
             self.transform(position,-np.asarray(into))
             self._town_face(name,style,True,route,details)
         return plan.width
-    def direction(self,position,travel,labels,arrow='right',route='',body=True,start_row=0):
+    def direction(self,position,travel,labels,arrow='right',route='',body=True,start_row=0,colour='white'):
+        import euguardrails
+        if euguardrails.enabled():
+            from frroadmesh import direction
+            return direction(self,position,travel,labels,arrow,route,body,start_row,colour)
         self.transform(position,travel)
         for row,label in enumerate(labels[:4]):
             label=clean(label)
@@ -284,7 +288,7 @@ class Mesh:
         if len(self.p)>60000:raise ValueError('Regional sign tile exceeds vertex budget')
         import cdae
         cdae.write(str(path),np.asarray(self.p),np.asarray(self.t),uvs=np.asarray(self.uv),
-                   material=MATERIALS,tri_materials=np.asarray(self.tm),object_name='regionalSigns')
+                   material=getattr(self,'materials',MATERIALS),tri_materials=np.asarray(self.tm),object_name='regionalSigns')
         return True
 
 

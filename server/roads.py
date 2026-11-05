@@ -8282,7 +8282,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None, country=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, pole_profile=None, signs=None):
+               signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, pole_profile=None, signs=None,
+               sign_obstacles=None, roadside_jobs=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -8669,12 +8670,19 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             chunks.extend(drains(wk["pts"], side, ends, w))
     if lines is not None:                           # the centrelines near the tile (buildings' front doors)
         lines.extend((pts[:, :2], spec.width / 2, spec.cls, spec.urban) for _, spec, pts, _ in roads)
+    sign_decks = [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in chunks if ch.get("deck")] if props is not None else ()
+    detailed_signs = False
+    if props is not None and (walks is not None or signs is not None):
+        import euguardrails
+        import poleprofiles
+        detailed_signs = euguardrails.enabled() and poleprofiles.kit_enabled(pole_profile)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
         # (the speed-limit signs are the sign tiles' since 2026-10-28: speedsigns.py)
         import furniture
-        decks = [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in chunks if ch.get("deck")]
+        if sign_obstacles is not None:sign_obstacles.ground=ground
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
-                                     decks=decks, signals=signals, buried=buried, region=lamp_region, pole_profile=pole_profile, pole_frame=frame,
+                                     decks=sign_decks, signals=signals, buried=buried, region=lamp_region, pole_profile=pole_profile, pole_frame=frame,
+                                     sign_obstacles=sign_obstacles, defer_gore=detailed_signs,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     if signs is not None and props is not None:
@@ -8682,26 +8690,105 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import osmtags
         way_ids = {fid: osmtags.way_id(str(f.attrs.get("src_record", [""] * len(f))[i]))
                    for fid, (f, i, sp) in seen.items()}
+        local_plans = []
+        advance_context = []
+        direction_margin = 0.0
+        if detailed_signs and roads:
+            import frlocaldirections
+            reach = frlocaldirections.ADVANCE_REACH_M
+            local_plans = frlocaldirections.nearby(frame, own_box, reach)
+            if local_plans:
+                ring_data = ring_dir or any("exit" in p for plan in local_plans for p in plan["panels"])
+                direction_margin = 200.0 if ring_data else 48.0
         # Short features need their neighbours to test a sustained town approach.
         # Context only: these lines never add carriageways, poles or junctions.
         sign_context = list(roads)
         own_fids = {r[0] for r in roads}
         for fid, (f, i, sp) in sorted(seen.items()):
-            if fid in own_fids or sp.cls not in townsigns.CLASSES or sp.link:
+            town_approach = sp.cls in townsigns.CLASSES and not sp.link
+            advance_road = direction_margin > 0 and sp.cls in frlocaldirections.LOCAL and sp.kind == 'paved'
+            if fid in own_fids or not (town_approach or advance_road):
                 continue
             fb = f.boxes(frame)[i]
             if fb[2] < x0-200 or fb[0] > x1+200 or fb[3] < y0-200 or fb[1] > y1+200:
                 continue
+            if advance_road:
+                m = direction_margin
+                advance_road = fb[2] >= x0-m and fb[0] <= x1+m and fb[3] >= y0-m and fb[1] <= y1+m
+            if not (town_approach or advance_road):
+                continue
             for ring in ground_parts(f, i):
                 ex, ny = mapgeom.enu_xy(f, frame, ring)
-                if len(ex) > 1:
-                    sign_context.append((fid, sp, np.c_[ex, ny, np.zeros(len(ex))], float(np.mean(ring[:, 0]))))
+                if len(ex) <= 1:
+                    continue
+                lon = float(np.mean(ring[:, 0]))
+                if town_approach:
+                    sign_context.append((fid, sp, np.c_[ex, ny, np.zeros(len(ex))], lon))
+                if advance_road:
+                    advance_context.append((fid, sp, np.c_[ex, ny], ring, lon))
+        if advance_context:
+            lon, lat = np.concatenate([row[3] for row in advance_context]).T
+            heights = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))[2]
+            start = 0
+            extra = []
+            for fid, sp, xy, _, lon in advance_context:
+                end = start + len(xy)
+                extra.append((fid, sp, np.c_[xy, heights[start:end]], lon))
+                start = end
+            roundabouts = {**ring_dir, **islands.ring_directions([*roads, *extra], left_hand)}
+            advance_context = [(fid, sp._replace(oneway=True, dir=roundabouts[fid]) if fid in roundabouts else sp,
+                                line, lon) for fid, sp, line, lon in extra]
+        else:
+            roundabouts = ring_dir
         sign_mesh, sign_posts, sign_records = townsigns.place(frame, roads, own_box, pole_profile,
                                                            ground=ground, urban=urban_fn, way_ids=way_ids,
-                                                           context_roads=sign_context)
+                                                           context_roads=sign_context,
+                                                           sign_obstacles=sign_obstacles, decks=sign_decks,
+                                                           local_directions=detailed_signs,
+                                                           street_names={fid:str(f.attrs.get('name',['']*len(f))[i]or'')
+                                                                         for fid,(f,i,sp)in seen.items()})
         if sign_mesh is not None:
             signs.append((sign_mesh, sign_records))
-            props.extend(sign_posts)
+        props.extend(sign_posts)
+    if detailed_signs:
+        def finish_roadside(guardrail_rows, extra_pavement=()):
+            import frgore
+            import frlocaldirections
+            import signmesh
+
+            country_at = poleprofiles.country_selector(pole_profile, frame)
+            if walks is not None:
+                props.extend(frgore.place(frame, roads, own_box, country_at, ground, sign_decks,
+                                         guardrails=guardrail_rows, obstacles=sign_obstacles))
+            if signs is not None:
+                mesh = sign_mesh if sign_mesh is not None else signmesh.Mesh((x0, y0, 0.))
+                added = frlocaldirections.add(
+                    frame, roads, own_box, poleprofiles.kit_selector(pole_profile, frame), mesh,
+                    way_ids=way_ids, ground=ground, obstacles=sign_obstacles, decks=[*sign_decks, *extra_pavement],
+                    guardrails=guardrail_rows, roundabouts=roundabouts, props=props, records=sign_records,
+                    urban_fn=urban_fn, data=local_plans, context_roads=advance_context,
+                    pavement_rings=[np.asarray(ch['poly'])[:, :2] for ch in chunks if len(ch.get('poly', ())) >= 3])
+                if sum(sp.cls == "motorway" and sp.oneway and not sp.link for _, sp, _, _ in roads) >= 2:
+                    import frmotorwaymarkers
+                    import signplacement
+
+                    markers = frmotorwaymarkers.nearby(frame, own_box)
+                    if markers:
+                        pavement = signplacement.pavement([(sp.width / 2, line) for _, sp, line, _ in roads]
+                                                         + [(half, line) for line, half in [*sign_decks, *extra_pavement]])
+                        obstacles = sign_obstacles if sign_obstacles is not None else signplacement.Context(ground=ground)
+                        added.extend(frmotorwaymarkers.add(
+                            frame, roads, own_box, poleprofiles.kit_selector(pole_profile, frame), mesh,
+                            pavement, obstacles, frlocaldirections.barrier_context(guardrail_rows),
+                            guardrails_rows=guardrail_rows, decks=[*sign_decks, *extra_pavement], data=markers))
+                sign_records.extend(added)
+                if sign_mesh is None and added:
+                    signs.append((mesh, sign_records))
+
+        if roadside_jobs is None:
+            finish_roadside(())
+        else:
+            roadside_jobs.append(finish_roadside)
     aisles = {fid for fid, (f, i, sp) in seen.items()
               if sp.kind == "paved" and _rule_value(f.rules.get("subclass"), i) == "parking_aisle"}
     if (park is not None and walks is not None) or (marks is not None and aisles):
@@ -9326,7 +9413,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if guardrail_rows:              # mapped guard rails and the median barriers (guardrails / medians): Forest rows
         import guardrails
-        data["guardrails"] = {"items": guardrail_rows, "groups": list(guardrails.GROUPS)}
+        data["guardrails"] = {"items": guardrail_rows, "groups": list(guardrails.groups_for(guardrail_rows))}
     if rail_mesh is not None:       # railways.tile_mesh: ballast, sleepers and rails
         import cdae
         import railways

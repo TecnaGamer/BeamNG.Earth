@@ -119,7 +119,7 @@ def _nearest(point,roads,way=None,way_ids=None):
     return best
 
 
-def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,context_roads=None):
+def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,context_roads=None,street_names=None,sign_obstacles=None,decks=(),local_directions=False):
     """(mesh, Forest post rows, diagnostic records) for one road tile, half-open ownership."""
     if not poleprofiles.kit_enabled(profile):return None,[],[]
     import furniture as f
@@ -199,9 +199,15 @@ def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,
             emit(s,p,d,spec,source)
     if urban is not None:
         _estimated(frame,context_roads if context_roads is not None else roads,box,urban,data,emit,country_at)
-    import directionsigns
-    direction_posts, direction_records = directionsigns.add(frame,roads,box,french,mesh,ground)
-    posts.extend(direction_posts); records.extend(direction_records)
+    if not local_directions:
+        import directionsigns
+        direction_posts, direction_records = directionsigns.add(frame,roads,box,french,mesh,ground)
+        posts.extend(direction_posts); records.extend(direction_records)
+    import euguardrails
+    if euguardrails.enabled():
+        import frstreets
+        new_posts,new_records=frstreets.place(frame,roads,box,country_at,mesh,street_names,ground,sign_obstacles,decks)
+        posts.extend(new_posts);records.extend(new_records)
     return (mesh if mesh.t else None),posts,records
 
 

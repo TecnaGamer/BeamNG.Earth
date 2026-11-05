@@ -82,6 +82,13 @@ def geographic_profile(mode):
         import signmesh
         fingerprint += ":" + townsigns.DATA_SHA256 + ":" + directionsigns.DATA_SHA256 + ":" + FR_KIT + ":" + EU_KIT
         fingerprint += ':'+townsigns.VERSION+':'+signmesh.font_signature()
+        import euguardrails
+        if euguardrails.enabled():
+            import frlocaldirections
+            import frmotorwaymarkers
+            import roadphones
+            fingerprint += ':'.join(('', euguardrails.VERSION, roadphones.signature(), directionsigns.ROAD_DATA_SHA256,
+                                     frlocaldirections.SIGNATURE, frmotorwaymarkers.SIGNATURE))
         if mode=='europe':
             import regionalstops
             import delineatorprofiles

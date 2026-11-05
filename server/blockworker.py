@@ -798,7 +798,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
+    roadside_jobs = []                  # sign placement after the rendered barriers and driveways
+    drives = []
+    import euguardrails
+    sign_obstacles=None
+    if buildings and euguardrails.enabled():
+        import signplacement
+        sign_obstacles=signplacement.for_tile(frame,tx,ty,_s.md,items,skip)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
+                                 sign_obstacles=sign_obstacles,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region, country=country,
@@ -807,7 +815,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
-                                 pole_profile=pole_profile, signs=signs,
+                                 pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
                                  signals=furniture.signals_for(_s.md, frame,
                                                                roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
     mark("build_tile")
@@ -819,7 +827,6 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     x0, y0, _, _ = box
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
         props[:] = furniture.off_buildings(props, buildingsmod.near_rings(frame, tx, ty, _s.md, skip=skip))     # (no street tree in a house)
-        drives = []
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
@@ -839,7 +846,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         _n0 = len(chunks)
         chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
         ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
-        props = buildingsmod.bridge_stub_props(_bridge_fps, props)
+        if props is not None:
+            props[:] = buildingsmod.bridge_stub_props(_bridge_fps, props)
         log.info("3dmr: %d procedural bridge chunk(s) left out under model bridge(s) %s", _n0 - len(chunks),
                  [m for _fp, _c, m in _bridge_fps])
     # Share the bridge mesh's exact parapet geometry with the tile builder.
@@ -879,6 +887,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts)
     mark("medians")
+    for finish in roadside_jobs:
+        finish(guardrail_rows, [(np.asarray(ch['n']), ch['w'] / 2) for ch in drives if 'n' in ch and 'w' in ch])
+    mark("roadside_signs")
     _piers, _beams = bridges.piers_in(box), bridges.beams_in(box)
     if _bridge_fps:
         _piers, _beams = buildingsmod.bridge_stub_piers(_bridge_fps, _piers, _beams)
@@ -1520,7 +1531,9 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
     the bridges' parts near it), [] if they fail (logged: the tile goes on without them)."""
     import medians
     try:
-        return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks)
+        rows=medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks)
+        import euguardrails
+        return euguardrails.localize(frame,rows)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []

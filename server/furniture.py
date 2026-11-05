@@ -402,7 +402,7 @@ def signal_spot(c, u, right, wide, half, lines):
     return _off_carriageways(c, u, right, wide + 2.5, half + 1.0, near)
 
 
-def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None):
+def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None, sign_obstacles=None):
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
@@ -416,6 +416,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     ring = islands.ring_fids(roads)
     lines = [(spec.width / 2, np.asarray(pts, np.float64)[:, :2]) for _, spec, pts, _ in roads if len(pts) >= 2]
     lines += [(float(h), np.asarray(pts, np.float64)[:, :2]) for pts, h in decks if len(pts) >= 2]
+    paved = arm_lines = None
     for k, arms in junctions.items():
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
         if len(arms) < 3 or (not on_ring and not _controlled_here(arms, signals)):
@@ -427,14 +428,46 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
         if not put:
             continue
         wide = max(a[1].width for a in arms) / 2
-        for (fid, spec, u, c, *_), what in put:
-            side, yaw = approach_pose(u, what, left_hand)
-            q = signal_spot(c, u, side, wide, spec.width / 2, lines)
+        for arm, what in put:
+            _, spec, u, c, *_ = arm
+            z = c[2]+curb_h
+            if sign_obstacles is not None and what in (G_STOP, G_YIELD):
+                import signplacement
+                if paved is None:
+                    paved = signplacement.pavement(lines)
+                    arm_lines = {}
+                    for fid, _, p, _ in roads:
+                        if len(p)>=2:arm_lines.setdefault(fid,[]).append(np.asarray(p))
+                line = signplacement.arm_line(arm_lines,arm)
+                q, yaw, z = _visible_sign_spot(line, spec, wide, what, left_hand, paved, sign_obstacles, curb_h)
+            else:
+                side, yaw = approach_pose(u, what, left_hand)
+                q = signal_spot(c, u, side, wide, spec.width / 2, lines)
             if q is None or not (x0 - 20 <= q[0] < x1 + 20 and y0 - 20 <= q[1] < y1 + 20):
                 continue
-            rows.append([what, round(float(q[0]), 2), round(float(q[1]), 2), round(float(c[2] + curb_h), 2),
+            rows.append([what, round(float(q[0]), 2), round(float(q[1]), 2), round(float(z), 2),
                          yaw, 1.0, 9.4 if what == G_SIGNAL else 3.0, 0.0])
     return rows
+
+
+def _visible_sign_spot(line, spec, wide, what, left_hand, paved, obstacles, curb_h):
+    """Look farther along the same approach, keeping the sign on its kerb side."""
+    from signplacement import span
+    if line is None:return None,0.,0.
+    length = _arclen(line)[-1]
+    width = .94 if what == G_STOP else .82  # includes the European sign's metal rim
+    for distance in (wide+2.5,wide+4.5,wide+6.5,wide+8.5,wide+10.5):
+        if distance+.5>length:break
+        points, tangents = _at(line,np.array([distance,distance+12.,distance+25.]))
+        u = tangents[0]
+        side, yaw = approach_pose(u,what,left_hand)
+        for extra in (1.,1.8,2.6,3.5):
+            q = points[0,:2]+side*(spec.width/2+extra)
+            a,_,b = span(q,u,width)
+            if not paved.visible(a,b,SIGN_CLEAR_M):continue
+            if obstacles.post(q,u,width,points[1:,:2]):
+                return q,yaw,obstacles.z(q,points[0,2]+curb_h)
+    return None,0.,0.
 
 
 # The mod's round km/h sign models (trees.lua's speedk<n>, tools/generate_kmh_speed_signs.py; PR #195). Not placed since
@@ -635,7 +668,8 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 
 
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
-          signals=None, buried=0.0, region=None, lighting=None, pole_profile=None, pole_frame=None):
+          signals=None, buried=0.0, region=None, lighting=None, pole_profile=None, pole_frame=None,sign_obstacles=None,
+          defer_gore=False):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -738,7 +772,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BENCH, BENCH_SPACING, _h01(fid, side, "bench") * BENCH_SPACING, w - 0.45, 0.9,
                 lambda out: _yaw(-out[0], -out[1]) + BENCH_YAW)
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1, lambda out: _yaw(-out[0], -out[1]))
-    rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals))
+    rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals,sign_obstacles))
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
@@ -811,6 +845,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         import regionaltraffic
         rows=regionaltraffic.localize(rows,country_at)
         rows.extend(regionaltraffic.place(roads,box,country_at))
+        import euguardrails
+        if euguardrails.enabled() and not defer_gore:
+            import frgore
+            rows.extend(frgore.place(pole_frame,roads,box,country_at,
+                                    ground=sign_obstacles.ground if sign_obstacles is not None else None,decks=decks))
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
