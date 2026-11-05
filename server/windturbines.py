@@ -217,6 +217,50 @@ def _load():
         return ()
 
 
+def _mirror_dir():
+    """The uncompressed copy's folder in the server's cache (revisit.CACHE_DIR, set in every server process), keyed by
+    the index's hash, or None outside a server run."""
+    import revisit
+    base = getattr(revisit, "CACHE_DIR", None)
+    return os.path.join(base, "turbines", INDEX_SHA256[:16]) if base else None
+
+
+def _mapped():
+    """The index's columns memory-mapped read-only from the cache's uncompressed copy (one copy in the page cache for
+    all the server's processes: the bundled npz is deflated, 17.5 MB decompressed in each road process otherwise), or
+    None (no cache folder, not written yet, damaged)."""
+    d = _mirror_dir()
+    if d is None:
+        return None
+    try:
+        return {name: np.asarray(np.load(os.path.join(d, name + ".npy"), mmap_mode="r", allow_pickle=False))
+                for name in INDEX_COLUMNS}
+    except (OSError, ValueError, EOFError):
+        return None
+
+
+def _decompressed():
+    """The index's columns read from the bundled npz (its hash checked by the caller), written to the cache's copy
+    for the next processes (atomically, each column)."""
+    with np.load(INDEX_PATH, allow_pickle=False) as data:
+        arrays = {name: np.array(data[name]) for name in INDEX_COLUMNS}
+    d = _mirror_dir()
+    if d is not None:
+        try:
+            import staging
+            os.makedirs(d, exist_ok=True)
+            for name, a in arrays.items():
+                path = os.path.join(d, name + ".npy")
+                if not os.path.exists(path):
+                    tmp = staging.tmp_for(path)
+                    with open(tmp, "wb") as f:
+                        np.save(f, a, allow_pickle=False)
+                    staging.replace(tmp, path)
+        except OSError as error:        # (no room: each process keeps its own copy, as before)
+            log.debug("wind turbine index copy not written: %s", error)
+    return arrays
+
+
 @lru_cache(maxsize=1)
 def _index():
     """Read the global index once per worker, with no pickle or runtime network."""
@@ -227,8 +271,7 @@ def _index():
                 digest.update(block)
             if digest.hexdigest() != INDEX_SHA256:
                 raise ValueError("global turbine index differs from its source fingerprint")
-        with np.load(INDEX_PATH, allow_pickle=False) as data:
-            arrays = {name: np.array(data[name]) for name in INDEX_COLUMNS}
+        arrays = _mapped() or _decompressed()
         n = len(arrays["lat"])
         if not n or any(a.shape != (n,) for a in arrays.values()):
             raise ValueError("invalid global turbine array lengths")
