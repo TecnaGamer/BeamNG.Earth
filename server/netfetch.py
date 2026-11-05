@@ -82,6 +82,10 @@ DAY = 86400.0
 TOKEN_EPS = 1e-4                # a token short by rounding (clock resolution) counts as a token
 OFFLINE_TEXT = "Offline - using cached data"
 
+# testing a slow connection (a player's large downloads ran at ~1 MB/s each, 2026-11-04): every response takes at least
+# its size at this many MB/s, plus BNGE_NET_LATENCY_MS, while it holds its connection slot. Off without the variable.
+TEST_MBPS = float(os.environ.get("BNGE_NET_MBPS") or 0)
+TEST_LATENCY_S = float(os.environ.get("BNGE_NET_LATENCY_MS") or 0) / 1000.0
 NETLOG = os.environ.get("BNGE_NETLOG")      # debugging: every network request, one line each, from every process
 
 
@@ -1028,6 +1032,11 @@ class Fetcher:
                         err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
                         continue
                     elapsed = self.clock() - t0
+                    if TEST_MBPS > 0 or TEST_LATENCY_S > 0:       # (testing: a slow connection)
+                        want = TEST_LATENCY_S + (len(body or b"") / (TEST_MBPS * 1e6) if TEST_MBPS > 0 else 0.0)
+                        if want > elapsed:
+                            time.sleep(want - elapsed)
+                            elapsed = want
                     if body and len(body) >= RATE_MIN_BYTES and elapsed > 0:
                         with self._lock:
                             self._rates.append((t0 + elapsed, len(body) / elapsed / 1e6))
