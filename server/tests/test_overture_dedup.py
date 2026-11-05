@@ -1,8 +1,10 @@
-import os
+"""overture._number_rows: the window dedup by id skipped where no id repeats (DEDUP_IF_REPEATED) gives the same table
+as the dedup always; repeated ids keep their highest version."""
 import sys
 import unittest
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import duckdb  # noqa: E402
 import overture  # noqa: E402
 
@@ -16,8 +18,6 @@ def _rows(data, dedup_if_repeated):
 
 
 class NumberRowsTest(unittest.TestCase):
-    """_number_rows: skipping the window dedup where no id repeats gives the same table as the dedup always."""
-
     UNIQUE = [("c", 1, b"\x01", 3.0, "x"), ("a", 2, b"\x02", 1.0, "y"), ("b", 1, b"\x03", 2.0, None)]
 
     def test_unique_ids_same_rows(self):
