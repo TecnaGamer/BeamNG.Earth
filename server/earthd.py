@@ -353,12 +353,12 @@ FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40
 FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
 NAV_LEAD_S, NAV_LEAD_MAX_M = 12.0, 500.0     # the nav graph's centre ahead of a moving car (navgraph.WINDOW_M 1100)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
-# The event loop's thread a step above the server's other threads (Windows; budget.raise_thread): every message the
-# game sends waits for it. With ~20 busy threads in this process the loop lagged 0.5-1 s in the median and up to 15 s,
-# and a block built 17 s earlier held the car until its request was answered. BNGE_LOOP_RAISE=0: as the others.
+# The event loop's thread a step above the server's other threads (budget.raise_thread, Windows): a block built 17 s
+# earlier held the car at the edge until the loop answered its request (A13 at 200 mph, 2 server cores, 2026-11-04;
+# GitHub #725). BNGE_LOOP_RAISE=0: as the others, as before
 LOOP_RAISE = os.environ.get("BNGE_LOOP_RAISE", "1") != "0"
-# The interpreter lock's switch interval in ms (Python's own: 5): a thread waiting for the lock (the event loop among
-# them) waits up to this long per busy thread. 0: Python's own.
+# ms the interpreter lock is held before a waiting thread is let in (Python's own: 5): the event loop waits up to this
+# long behind each busy thread. BNGE_SWITCH_MS=0: Python's own, as before
 SWITCH_MS = float(os.environ.get("BNGE_SWITCH_MS", "2") or 0)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
@@ -7315,12 +7315,14 @@ async def main_async(args):
     # logs the main thread's stack when a beat is late, so the stall names its cause.
     beat = [time.perf_counter()]
     main_ident = threading.get_ident()
-    if LOOP_RAISE:
+    if LOOP_RAISE:          # (this thread: the event loop's)
+        import budget
         try:
-            import budget
-            budget.raise_thread()
+            how = budget.raise_thread()
+            if how:
+                log.info("event loop priority: %s", how)
         except (OSError, AttributeError) as e:
-            log.debug("event loop thread priority: %s", e)
+            log.warning("could not raise the event loop's priority: %s", e)
     if SWITCH_MS:
         sys.setswitchinterval(SWITCH_MS / 1000.0)
 

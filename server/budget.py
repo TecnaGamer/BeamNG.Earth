@@ -275,24 +275,29 @@ def lower_priority(nice, worker=False):
     return "below normal"
 
 
-
-WIN_THREAD_ABOVE_NORMAL = 1     # THREAD_PRIORITY_ABOVE_NORMAL: one step above the process's class
+# The server's event loop answers every message the game sends (a pose, a block request). In the "below normal" class
+# its thread waited for the interpreter lock like the ~20 busy others of the process: at 200 mph on a first visit (A13,
+# 2 server cores, Windows; 2026-11-04) it lagged 0.5-1 s in the median and up to 15 s (GitHub #725). One step above
+# them it is still inside the process's class, below the game's "normal".
+WIN_THREAD_ABOVE_NORMAL = 1     # THREAD_PRIORITY_ABOVE_NORMAL
 
 
 def raise_thread():
-    """Windows: the calling thread one step above the others of its process (still inside the process's "below
-    normal" class, so below the game's "normal"). Returns the change or None (other systems: nothing to do)."""
+    """The calling thread one step above the others of its process (Windows; the event loop's, earthd.LOOP_RAISE).
+    Returns the change made, for the log ("thread above normal", None: nothing to do elsewhere)."""
     if sys.platform != "win32":
         return None
     import ctypes
     from ctypes import wintypes
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # (64-bit handles, as lower_priority's)
     k32.GetCurrentThread.restype = wintypes.HANDLE
     k32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
     k32.SetThreadPriority.restype = wintypes.BOOL
     if not k32.SetThreadPriority(k32.GetCurrentThread(), WIN_THREAD_ABOVE_NORMAL):
         raise OSError("SetThreadPriority(above normal) failed")
     return "thread above normal"
+
 
 def road_processes(cpus=None, gb=None):
     """Road-tile processes for a desktop (ROAD_PROCESSES_BY_CPU), 2 below them."""
