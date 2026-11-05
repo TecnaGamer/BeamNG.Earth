@@ -247,7 +247,17 @@ def world_run():
 def tearDownModule():
     if "run" in _RUN:
         _RUN["run"][4].close()
-        _RUN.pop("run")[0].cleanup()
+        tmp = _RUN.pop("run")[0]
+        # (a background fetch of the imagery can still write a tile as the folder goes: "Directory not empty" under
+        # a gate's load, 2026-11-05; tried again a moment later)
+        for i in range(10):
+            try:
+                tmp.cleanup()
+                break
+            except OSError:
+                if i == 9:
+                    raise
+                time.sleep(0.3)
 
 
 # --- 1. the cut blur -------------------------------------------------------------------------
