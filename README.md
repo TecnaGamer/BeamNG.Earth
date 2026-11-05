@@ -34,7 +34,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Terrain-fitted cliff faces and road cuts, with regional rock colors, broken rocks, and optional
   transition decals. All near cliff families trim their grid-shaped outlines into smooth contours and
   taper their thickness into the terrain with a subtly irregular, noise-varied blend toward satellite colors, without adding decal objects. Interior rock
-  detail stays intact. Large cliff meshes stream in smaller pieces across frames to reduce loading stalls,
+  detail stays intact. Contact vertices target sampled satellite shadows and lose added rock relief; small enclosed
+  slope-detection gaps are repaired without covering road/water exclusions. Nearby canyon material adds
+  a restrained fine-grain color and normal layer, using locally bundled 1K rocky-terrain color, normal, AO and roughness detail maps
+  at a 3.0 m repeat independently of its broad geological beds. Its near
+  canyon material has 4096-pixel detail reconstructed from 16 overlapping generated patches, with
+  aligned 4K normal, roughness and ambient-occlusion maps. Large cliff meshes stream in smaller pieces across frames to reduce loading stalls,
   with shared edges and textures preserved across rock types. Their switches also skip the disabled
   generation stages on the server, including distant cliff faces. Existing nearby objects hide immediately;
   generation changes apply to new builds, and jobs already running may finish. Reload the level after enabling
@@ -304,7 +309,7 @@ network you trust: the connection is not encrypted.
    carries it built for Linux x86-64 (`server/earthfast.abi3.so`) and Windows (`server/earthfast.pyd`); after
    changing `native/earthfast`, or on another system, build it with `python3 tools/build_native.py` (Rust's cargo;
    `--windows` cross-builds the `.pyd` with cargo-zigbuild).
-   This development branch requires native API 147, combining cliff transitions with upstream compression.
+   This development branch requires native API 148 for terrain-matched cliff contact attributes and bounded slope-gap repair.
    The Windows module is rebuilt; Linux users must rebuild the checked-in older `.so` before starting.
 2. Copy (or sync) `mod/beamng_earth/` to
    `<BeamNG user folder>/current/mods/unpacked/beamng_earth/`.

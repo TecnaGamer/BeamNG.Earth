@@ -198,24 +198,38 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_base.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_base.color.png",
         "baseColorFactor": [
-          1.1824551753070842,
-          1.3869410192552947,
-          1.6041860783866533,
+          1.182453762295748,
+          1.3869361526467974,
+          1.604173021096044,
           1
         ],
         "metallicFactor": 0,
         "roughnessFactor": 1,
         "vertColor": true,
         "useAnisotropic": true,
-        "normalMapStrength": 0.65,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near_roughness.data.png",
+        "normalMapStrength": 0.3,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_faceted_near.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_faceted_near_roughness.data.png",
         "roughnessMapUseUV": 0,
         "normalMapUseUV": 0,
-        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near_ao.data.png",
-        "ambientOcclusionMapUseUV": 0
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_faceted_near_ao.data.png",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.data.png",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.normal.dds",
+        "detailNormalMapStrength": 0.22,
+        "detailScale": [
+          30.48,
+          60.96
+        ],
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_ao.data.png",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_roughness.data.png",
+        "detailRoughnessMapStrength": 0.35
       },
       {},
       {},
@@ -549,24 +563,38 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_base.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_base.color.png",
         "baseColorFactor": [
-          1.1824551753070842,
-          1.3869410192552947,
-          1.6041860783866533,
+          1.182453762295748,
+          1.3869361526467974,
+          1.604173021096044,
           1
         ],
         "metallicFactor": 0,
         "roughnessFactor": 1,
         "vertColor": true,
         "useAnisotropic": true,
-        "normalMapStrength": 0.65,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near_roughness.data.png",
+        "normalMapStrength": 0.3,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_faceted_near.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_faceted_near_roughness.data.png",
         "roughnessMapUseUV": 0,
         "normalMapUseUV": 0,
-        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v4_near_ao.data.png",
-        "ambientOcclusionMapUseUV": 0
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v5_faceted_near_ao.data.png",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.data.png",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.normal.dds",
+        "detailNormalMapStrength": 0.22,
+        "detailScale": [
+          30.48,
+          60.96
+        ],
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_ao.data.png",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_roughness.data.png",
+        "detailRoughnessMapStrength": 0.35
       },
       {
         "baseColorFactor": [

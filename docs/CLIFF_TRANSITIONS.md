@@ -218,3 +218,274 @@ suites passed 361 and 331 assertions. The distant upgrade test retains a held
 material slot and checks its source and pooled shape bytes remain unchanged.
 No in-game frame-time measurement was made for this batch. Restart the server
 and reload the game to load the updated generation controls.
+
+
+## Near detail and contact corrections (2026-11-05)
+
+The approved canyon source is 1254 x 1254, enlarged to a 4096 x 4096 runtime
+albedo. Its diffuse-derived PBR maps are also 4096 x 4096; this does not make
+the source native 4K. A final built-in image generation attempt explicitly
+requested native 4096 x 4096 but again returned 1254 x 1254. The candidate is
+not installed and no native-4K claim is made. The paid API fallback was not used.
+
+Near canyon material now uses a restrained independently tiled grain/detail
+normal at a square 1.2 m physical repeat, while preserving the large geological
+beds. Broad normal strength is reduced from .65 to .42. Distant materials and
+assets are unchanged. This adds material texture samples, not meshes or decals.
+BeamNG supports these independent detail maps and scale controls:
+https://docs.beamng.com/modding/materials/materials_1.5/
+https://documentation.beamng.com/modding/materials/vehicle/common-detail/
+Detail maps are preferable here to increasing geometry or adding parallax
+marching. Triplanar projection needs extra texture samples; virtual-texture
+terrain blending would require engine support rather than just material JSON.
+https://dev.epicgames.com/documentation/unreal-engine/adding-detail-textures-to-unreal-engine-materials
+https://developer.nvidia.com/gpugems/gpugems3/part-i-geometry/chapter-1-generating-complex-procedural-terrains-using-gpu
+
+Native API 148 fixes contour intersections to use full terrain-weight attributes
+rather than partially faded endpoint attributes, blends geometric normals toward
+the ground normal, and samples color at ground coordinates rather than displaced
+rock coordinates. Shared by all near cliff material families. A coarse-grid
+flood fill repairs only enclosed sloping detection dips up to 64 square metres
+and 12 metres across, preserving road/water/city/unknown/flat/boundary exclusions.
+
+Validation: the combined 108-test geometry/detail/transition/generation/LOD/
+far-material suite passed against the installed native API 148.
+Windows native 148 built and installed; server restarted without closing the
+game or moving the camera. Live rebuilt geometry was inspected in screenshot
+shot_20261105_010804_3.png. Lighting changed during the comparison. Visible pale
+rims and larger holes remain; this is not a complete seam fix. The rim still
+samples cached source imagery, whereas terrain uses finished tone/deshadow
+processing. Matching that finished pipeline is outstanding. Linux native rebuild
+remains pending because the local toolchain is unavailable. No push/release.
+
+## Reconstructed 4K canyon material (2026-11-05)
+
+The earlier single-image 4K limitation above is now resolved with the user's
+requested crop/regenerate/stitch workflow. Sixteen independently generated
+1254 x 1254 patches cover a 4 x 4 grid. Each patch is downsampled to 1152 square,
+with a 1024-pixel core and 128-pixel overlap. No generated patch is enlarged.
+The assembled albedo contains newly generated fine rock detail at 4096 x 4096;
+it is not a single native-4K generation or an enlargement of the old full image.
+
+tools/bake_canyon_tiled.py reproduces the assembly, using broad palette
+correction against the approved v4 image, cosine overlap weights, and an
+8-pixel periodic border. Patches, exact generation prompt, dimensions and hashes
+are in tools/assets/canyon_generated/tiled-v5/. The original layered composition
+and mean reflected colour are retained. The 1-pixel high-frequency RMS increased
+from 0.00761 to 0.03238; opposing albedo borders match exactly. This metric confirms
+added fine content, not measured geological accuracy.
+
+Normal, roughness and cavity AO are computed at 4096 square from the complete
+assembled albedo using wrap-aware filters. They are approximate inferred PBR,
+not measured channels. The material remains nonmetallic and retains its existing
+normal strength and independent 1.2 m detail repeat. No extra meshes, decals,
+texture samples or per-frame generation work were added by this replacement.
+The runtime dimensions match the previous upsampled maps, so pixel storage is
+unchanged; compressed asset sizes can differ.
+
+Only bne_cliff_canyon_sat and its terrain-transition variant use the new v5
+maps. Distant material definitions and their approved v4 assets are unchanged.
+The full legacy canyon baker finishes by applying this reconstructed near bake,
+so it cannot silently restore the upsampled near material.
+
+Validation: 31 transition/far-material tests passed, including four 4096-square
+runtime maps and all 16 source patches being at least their output footprint.
+Installed the new maps into the unpacked mod and reloaded both near materials.
+Live fields verified all four v5 maps; screenshot shot_20261105_020335_4.png
+was inspected without moving the camera. The pale contact rims and larger
+threshold holes documented above are still visible and remain separate work.
+
+
+## Canyon close-up material refinement (2026-11-05)
+
+Compared paired Utah, Italy, East Coast and desert detail maps from the installed
+BeamNG archives in the same nearby view. Italy's irregular fine grain was the
+best fit; Utah/desert were softer and East Coast flakes competed with the beds.
+The selected color/normal DDS files are copied unchanged into the mod as
+canyon_detail_italy_v1.*, including their mip chains. Source archive paths and
+SHA-256 hashes are recorded in canyon_detail_italy_v1.sources.json, with asset
+attribution in STOCK_TEXTURES.md. Runtime references use /levels/beamng_earth/,
+not the stock archives or generated temporary files.
+
+The pair repeats every 0.9 m in both physical directions despite the main chart's
+91.44 x 182.88 m footprint. Color strength is .10 and detail normal strength .24.
+Use the actual BeamNG normalDetailMapUseUV field (verified against live fields),
+not detailNormalMapUseUV. Anisotropic filtering is enabled. Official controls:
+https://documentation.beamng.com/modding/materials/vehicle/common-detail/
+https://docs.beamng.com/modding/materials/materials_1.5/
+
+Rebuilt the aligned 4096-square normal, roughness and AO from the accepted v5
+albedo. Locally normalized contrast at several scales emphasizes coherent stone
+faces, cracks and ledges; fine grain contributes little to the main relief.
+Normal strength .30 was selected after checking grazing sunlight. Roughness
+varies with granular/recessed areas and exposed faces; bounded multi-scale
+cavity AO darkens inferred recesses. These are approximate albedo-derived
+channels, not measured PBR. The accepted albedo pixels are unchanged.
+
+Both near canyon variants use these maps. Distant materials remain unchanged.
+The copied detail pair totals 699380 bytes and replaces the previous two detail
+samples; no additional draw calls, geometry or texture samples were introduced
+by this refinement. No frame-time improvement is claimed.
+
+Validation: 36 canyon PBR, transition and far-cliff tests passed. Installed and
+reloaded both near materials in game; compared all four stock pairs and old/new
+PBR at identical camera positions. Camera restored afterward. Evidence lives in
+build/canyon-detail-study/, including final-wide-comparison.png and
+final-close-comparison.png. Existing contact-rim and large threshold-hole issues
+remain separate from this material refinement.
+
+
+## 2026-11-05: larger detail and sharper normal edges
+Following feedback, enlarged near canyon detail repeat from 0.9 to 2.4 m in both
+physical axes (2.67x larger features). Main normal strength remains .30 and detail
+strength remains .24. Replaced Gaussian face averaging with wrap-aware bilateral
+filtering of locally normalized relief. Denoises within faces without rounding
+across high-contrast joints; the initial 1.2-pixel grain prefilter still limits
+pixel noise. Roughness/AO rebaked from the revised relief. Albedo and far materials
+unchanged. All filtering occurs offline, with no added runtime shader samples.
+37 focused PBR/transition/far tests pass, including sharp step preservation without
+height overshoot. Installed/reloaded live and compared identical camera view;
+camera never moved. Backup and screenshot pair: build/canyon-hard-edge-study/.
+Broad albedo softness at extremely close range remains; enlarged detail does not
+replace missing broad diffuse information. No commit or push.
+
+
+## 2026-11-05: separate broad canyon relief from detail grain
+Shifted the near canyon main normal toward larger blocks and ledges: area-reduce
+and median-filter the face signal before edge-preserving reconstruction, remove
+pores from main height, and weight broad bedding/block variation more strongly.
+A first pass flattened broad relief too far, so broad components were increased
+before final installation. Main material strength stays .30. Small grain belongs
+to the independently tiled detail normal, now .42 strength (was .24), with a
+3.0 m physical repeat (was 2.4 m, features 25% larger). Color strength stays .10.
+Rebaked aligned 4K normal/roughness/AO; diffuse and distant definitions unchanged.
+No new shader samples or geometry. 38 focused tests passed, including broad
+normal frequency response relative to fine grain. Installed and reloaded both
+near variants; inspected live screenshots in build/canyon-scale-study/.
+Camera was not moved by this work. No commit/push.
+
+
+## 2026-11-05: visually verified normal balance
+Feedback: coarse normal became flat/rounded, while .42 detail strength appeared
+noisy. Captured unchanged-camera before, detail-only isolation, initial candidate,
+and refined final screenshots in build/canyon-balance-study/. First candidate
+restored too much small pebbling and failed fine-frequency rejection; refined it
+before final installation. Face reduction now uses 2-pixel stride, 5-sample median
+and 2.5-pixel prefilter at 4K, retaining medium fractures lost by the previous
+4-pixel stride. Relief weights: facets 1.4, ledges 1.2, macro 1.0, recess -.25.
+Main strength remains .30. Detail strength .16 replaces .42; repeat remains 3 m.
+Final screenshot shows clearer medium fractures and less speckled highlight noise.
+38 focused tests pass, including frequency rejection and sharp boundary checks.
+Rebaked normal/roughness/AO and installed/reloaded both near canyon variants.
+Distant definitions unchanged; camera not moved. Final visual comparison:
+build/canyon-balance-study/final-comparison.png. No commit/push.
+
+
+## 2026-11-05: sharper 2K close-up detail layer
+The 512-square Italy pair remained soft at the enlarged 3 m repeat. Compared
+stronger Italy color contributions (.10/.35/.60), inspected a soft 1K stock detail
+candidate, and inspected six stock rock albedos. West Coast's tileable 2048-square
+surface/normal gave much sharper close-up cracks than the Italy detail pair.
+Selected a moderate .28 color-data blend and .12 detail normal strength at 3 m;
+main canyon normal, roughness, AO, albedo and distant definitions are unchanged.
+
+Pinned t_wca_rock_b.color.dds and t_wca_rock_nm.normal.dds from rocks.zip locally.
+Runtime canyon_detail_wca_v1.data.png is neutral RGB linear shader data derived
+from source luminance, with broad color/illumination removed and mean .5. The
+2048-square normal DDS is copied unchanged, with existing mips. Stock provenance
+and hashes in canyon_detail_wca_v1.sources.json; attribution in STOCK_TEXTURES.md.
+Reproduce detail data with tools/bake_canyon_detail.py; near PBR baker invokes it.
+A single-channel draft was rejected during screenshot checks because the shader
+needs RGB detail. Final validation explicitly checks RGB neutrality and size.
+
+Captured before/after from exactly the same 3 m view and inspected screenshots:
+build/canyon-detail-color-study/final-comparison.png. Clear small fractures now
+break up the soft base instead of relying on noisy normal strength. Installed
+both near material variants; original camera restored. 38 focused tests pass.
+Texture resolution/memory increases from 512 to 2048 per detail map; shader sample
+count, geometry and draw count are unchanged. Broad underlying albedo resolution
+is unchanged. No commit/push.
+
+
+## 2026-11-05: balance detail relief against painted cracks
+Confirmed the pinned West Coast detail normal is loaded in both near canyon
+materials. The cooked main normal and bundled detail normal both use BC5; the
+shader decodes and applies the detail correctly. Live normal-off/.45/.70 captures
+show its contribution. The previous .12 normal was too weak beside .28 color.
+Selected .12 detail color and .45 detail normal, retaining the 3 m repeat and all
+main PBR maps. This reduces the tan crack overlay while exposing angular surface
+relief. Stronger .70 was rejected in favor of the restrained .45 comparison.
+Installed/reloaded both near variants and verified their live fields. Screenshot
+comparison: build/canyon-detail-relief-study/comparison.png (before, normal off,
+selected moderate, stronger). Final original camera view saved alongside it.
+Original camera restored; all other material definitions are unchanged. No new
+texture samples, geometry, or draw calls. Existing contact seam/holes remain a
+separate unresolved issue. No commit/push.
+
+
+## 2026-11-05: use the selected t_dirt_rocky terrain detail pair
+Confirmed the previous t_wca_rock pair is the main mesh surface in West Coast's
+wca_rock Material (mapTo wca_rock1), which has its own separate detail pair.
+It was unsuitable as small-scale canyon detail: its broad planar normals were
+more apparent after increasing strength. The earlier description of it as a
+stock detail material was incorrect.
+Inspected actual TerrainMaterial sources from Italy, West Coast, and terrain.zip.
+User selected t_dirt_rocky. Bundled its original 1024-square color and BC5 normal
+from terrain.zip / assets/materials/terrain/rock/t_dirt_rocky/. The normal retains
+stock mipmaps; color is converted into neutral RGB detail data. No upsampling.
+Updated the detail baker, pinned provenance/hash manifest, material bindings,
+README and validation to use this pair. Main 4K canyon maps are unchanged.
+
+Final settings: 3 m repeat on both axes, color .18, detail normal .22. Compared
+2 m/3 m and normal-off views; kept 3 m so individual stones remain readable.
+Installed both near variants and verified live paths and strengths. During hot
+import the engine temporarily retained its missing-texture fallback; reloading
+both materials after import completed cleared it. Inspected the new final-close
+screenshot to verify the fallback was gone and granular relief was visible.
+Evidence: build/canyon-terrain-detail-study/final-close.png and
+final-original-view.png. Camera restored. All other materials and all main PBR
+bindings unchanged; no extra shader samples, geometry or draw calls. The detail
+maps now use 1K rather than 2K. 38 focused tests pass; no commit/push.
+
+
+## 2026-11-05: requested t_rock_b terrain trial
+Switched both near canyon variants from t_dirt_rocky to West Coast terrain
+Rock_cliff's t_rock_b.png / t_rock_nm.png pair, copied locally at native 1024.
+The source is levels/west_coast_usa/art/terrains/ in west_coast_usa.zip, not the
+previous t_wca_rock mesh material. Neutral detail conversion and provenance are
+reproducible through tools/bake_canyon_detail.py. The near PBR baker now binds it.
+Kept color .18, normal .22 and 3 m repeat for a direct comparison. No other
+material fields changed. Original t_dirt_rocky assets retained for rollback.
+Installed and reloaded after texture import; verified the normal's cooked mip
+chain and inspected the close screenshot. Broader connected cracks replace the
+previous granular pebble pattern. Same-view before/after and restored-camera view
+are in build/canyon-t-rock-study/. Camera restored; 38 focused tests pass.
+No commit/push. This is the active user-requested trial, pending visual feedback.
+
+
+## 2026-11-05: restore rocky dirt PBR and refine canyon fractures
+Restored t_dirt_rocky at 3 m, color .18 and normal .22 in both near canyon
+variants. Copied its native 1K stock AO and roughness into the mod, with provenance
+and hashes. Derived shader-detail data: AO is half the source (only subtracts
+occlusion; white does not erase the main cavity map), roughness is mean-centered
+around .5. Strengths .22 AO and .35 roughness. Local engine shader/editor confirms
+ambientOcclusionDetailMap/detailAoMapStrength and roughnessDetailMap/
+detailRoughnessMapStrength; both use the same detail UVs and scale as color.
+Two extra near-material texture samples, no extra geometry or draw calls.
+
+Main 4K maps now use canyon_v5_faceted_near: tighter bilateral face filtering
+(.035 range sigma vs .055) retains fractured edges; local relief below -.20
+retains only 15% of its former slope, creating flatter deep recess floors without
+quantized terraces. Main strength stays .30. AO and roughness rebaked from that
+relief. These remain inferred PBR, not measured surface height. An initial
+1.6-pixel preblur experiment reintroduced fine noise and was rejected; retained
+2.5-pixel preblur and median grain rejection. Main albedo and all far materials
+unchanged. Bake default uses the new map names for reproducibility.
+
+Installed and checked in BeamNG after texture cooking/reload. Same-camera
+before/final full screenshots and native-pixel normal-comparison.png are in
+build/canyon-angular-pbr-study/. The change is subtle: crisper joint transitions
+and flatter concave floors, not stronger broad bumps. Camera was not moved.
+Focused material, far-cliff and transition validation: 40 tests pass.
+Existing geometry gaps/satellite shadow seams are outside this material edit.
+No commit/push.

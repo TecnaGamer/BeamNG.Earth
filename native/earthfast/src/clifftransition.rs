@@ -199,6 +199,7 @@ pub fn cliff_transition_surface<'py>(
 /// Cut only crossing triangles; share edge intersections and retain attribute charts.
 /// New boundary vertices use the sampled ground, avoiding a raised rectangular lip.
 #[pyfunction]
+#[pyo3(signature = (points, triangles, attributes, field, ground, boundary_attributes=None))]
 pub fn cliff_transition_clip<'py>(
     py: Python<'py>,
     points: PyReadonlyArray2<'py, f64>,
@@ -206,6 +207,7 @@ pub fn cliff_transition_clip<'py>(
     attributes: PyReadonlyArray2<'py, f64>,
     field: PyReadonlyArray2<'py, f64>,
     ground: PyReadonlyArray2<'py, f64>,
+    boundary_attributes: Option<PyReadonlyArray2<'py, f64>>,
 ) -> PyResult<(
     Bound<'py, PyArray2<f64>>,
     Bound<'py, PyArray2<i32>>,
@@ -218,12 +220,17 @@ pub fn cliff_transition_clip<'py>(
         || field.shape() != [n, 1]
         || attributes.shape()[0] != n
         || triangles.shape()[1] != 3
+        || boundary_attributes
+            .as_ref()
+            .is_some_and(|b| b.shape() != [n, width])
     {
         return Err(PyValueError::new_err("invalid cliff contour arrays"));
     }
     let p = points.as_array();
     let g = ground.as_array();
     let a = attributes.as_array();
+    let boundary = boundary_attributes.as_ref().map(|b| b.as_array());
+    let edge = boundary.as_ref().unwrap_or(&a);
     let f = field.as_array();
     let tris = triangles.as_array();
     if tris.iter().any(|v| *v < 0 || *v as usize >= n)
@@ -231,6 +238,7 @@ pub fn cliff_transition_clip<'py>(
             .chain(g.iter())
             .chain(a.iter())
             .chain(f.iter())
+            .chain(edge.iter())
             .any(|v| !v.is_finite())
     {
         return Err(PyValueError::new_err("invalid cliff contour values"));
@@ -248,8 +256,10 @@ pub fn cliff_transition_clip<'py>(
                 if f[[u, 0]] >= 0. {
                     let id = *vertices.entry((u, u)).or_insert_with(|| {
                         let id = (out_p.len() / 3) as i32;
-                        out_p.extend(p.row(u));
-                        out_a.extend(a.row(u));
+                        // Exact-zero endpoints obey the same contact contract as new cuts.
+                        let contact = f[[u, 0]] == 0. && boundary.is_some();
+                        out_p.extend(if contact { g.row(u) } else { p.row(u) });
+                        out_a.extend(if contact { edge.row(u) } else { a.row(u) });
                         id
                     });
                     poly.push(id);
@@ -265,7 +275,7 @@ pub fn cliff_transition_clip<'py>(
                             out_p.push(g[[lo, axis]] + (g[[hi, axis]] - g[[lo, axis]]) * t);
                         }
                         for c in 0..width {
-                            out_a.push(a[[lo, c]] + (a[[hi, c]] - a[[lo, c]]) * t);
+                            out_a.push(edge[[lo, c]] + (edge[[hi, c]] - edge[[lo, c]]) * t);
                         }
                         id
                     });
@@ -393,6 +403,187 @@ pub fn cliff_transition_relief_weights<'py>(
             .collect()
     });
     Ok(Array2::from_shape_vec((n, 1), out)
+        .unwrap()
+        .into_pyarray(py))
+}
+
+/// Match the terrain's slope at contact, rather than lighting the buried collar
+/// with the displaced cliff normal. Central differences use physical spacing.
+#[pyfunction]
+pub fn cliff_transition_normals<'py>(
+    py: Python<'py>,
+    normals: PyReadonlyArray2<'py, f64>,
+    heights: PyReadonlyArray2<'py, f64>,
+    weights: PyReadonlyArray2<'py, f64>,
+    dx: f64,
+    dy: f64,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    let (h, w) = (heights.shape()[0], heights.shape()[1]);
+    if h < 2
+        || w < 2
+        || normals.shape() != [h * w, 3]
+        || weights.shape() != [h * w, 1]
+        || ![dx, dy].iter().all(|v| v.is_finite() && *v > 0.)
+    {
+        return Err(PyValueError::new_err("invalid cliff normal grid"));
+    }
+    let (z, n, blend) = (heights.as_array(), normals.as_array(), weights.as_array());
+    if z.iter()
+        .chain(n.iter())
+        .chain(blend.iter())
+        .any(|v| !v.is_finite())
+    {
+        return Err(PyValueError::new_err("nonfinite cliff normal grid"));
+    }
+    let (mixed, ground) = py.allow_threads(|| {
+        let mut mixed = Vec::with_capacity(h * w * 3);
+        let mut ground = Vec::with_capacity(h * w * 3);
+        for y in 0..h {
+            for x in 0..w {
+                let (x0, x1, y0, y1) = (
+                    x.saturating_sub(1),
+                    (x + 1).min(w - 1),
+                    y.saturating_sub(1),
+                    (y + 1).min(h - 1),
+                );
+                let gx = (z[[y, x1]] - z[[y, x0]]) / ((x1 - x0) as f64 * dx);
+                let gy = (z[[y1, x]] - z[[y0, x]]) / ((y1 - y0) as f64 * dy);
+                let len = (gx * gx + gy * gy + 1.).sqrt();
+                let normal = [-gx / len, -gy / len, 1. / len];
+                let i = y * w + x;
+                let b = blend[[i, 0]].clamp(0., 1.);
+                let value: [f64; 3] = std::array::from_fn(|c| n[[i, c]] * (1. - b) + normal[c] * b);
+                let norm = value.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-12);
+                mixed.extend(value.map(|v| v / norm));
+                ground.extend(normal);
+            }
+        }
+        (mixed, ground)
+    });
+    Ok((
+        Array2::from_shape_vec((h * w, 3), mixed)
+            .unwrap()
+            .into_pyarray(py),
+        Array2::from_shape_vec((h * w, 3), ground)
+            .unwrap()
+            .into_pyarray(py),
+    ))
+}
+
+const GAP_AREA_M2: f64 = 64.;
+const GAP_SPAN_M: f64 = 12.;
+const GAP_MIN_SLOPE_DEG: f64 = 30.;
+
+/// Close only small, enclosed detection dips on safe sloping ground. Never
+/// bridge a road/water/city exclusion, a sampling boundary, or a broad bench.
+#[pyfunction]
+pub fn cliff_transition_fill_gaps<'py>(
+    py: Python<'py>,
+    keep: PyReadonlyArray2<'py, bool>,
+    heights: PyReadonlyArray2<'py, f64>,
+    classes: PyReadonlyArray2<'py, i32>,
+    blocked: PyReadonlyArray2<'py, bool>,
+    dx: f64,
+    dy: f64,
+    city_buffer: f64,
+) -> PyResult<Bound<'py, PyArray2<bool>>> {
+    let (h, w) = (keep.shape()[0], keep.shape()[1]);
+    if h == 0
+        || w == 0
+        || heights.shape() != [h + 1, w + 1]
+        || classes.shape() != [h + 1, w + 1]
+        || blocked.shape() != [h, w]
+        || ![dx, dy].iter().all(|v| v.is_finite() && *v > 0.)
+        || !city_buffer.is_finite()
+        || city_buffer < 0.
+    {
+        return Err(PyValueError::new_err("invalid cliff gap grid"));
+    }
+    let (k, z, c, b) = (
+        keep.as_array(),
+        heights.as_array(),
+        classes.as_array(),
+        blocked.as_array(),
+    );
+    let result = py.allow_threads(|| {
+        let mut out: Vec<bool> = k.iter().copied().collect();
+        let mut seen = vec![false; w * h];
+        let radius = (city_buffer / dx.min(dy)).ceil() as usize;
+        let min_slope = GAP_MIN_SLOPE_DEG.to_radians().tan();
+        for start in 0..w * h {
+            if out[start] || seen[start] {
+                continue;
+            }
+            let mut cells = vec![start];
+            seen[start] = true;
+            let mut cursor = 0;
+            let mut enclosed = true;
+            let (mut xmin, mut xmax, mut ymin, mut ymax) = (w, 0, h, 0);
+            while cursor < cells.len() {
+                let i = cells[cursor];
+                cursor += 1;
+                let (x, y) = (i % w, i / w);
+                xmin = xmin.min(x);
+                xmax = xmax.max(x);
+                ymin = ymin.min(y);
+                ymax = ymax.max(y);
+                if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+                    enclosed = false;
+                }
+                for (nx, ny) in [
+                    (x.wrapping_sub(1), y),
+                    (x + 1, y),
+                    (x, y.wrapping_sub(1)),
+                    (x, y + 1),
+                ] {
+                    if nx < w && ny < h {
+                        let ni = ny * w + nx;
+                        if !out[ni] && !seen[ni] {
+                            seen[ni] = true;
+                            cells.push(ni);
+                        }
+                    }
+                }
+            }
+            if !enclosed
+                || cells.len() as f64 * dx * dy > GAP_AREA_M2
+                || (xmax - xmin + 1) as f64 * dx > GAP_SPAN_M
+                || (ymax - ymin + 1) as f64 * dy > GAP_SPAN_M
+            {
+                continue;
+            }
+            let safe = cells.iter().all(|&i| {
+                let (x, y) = (i % w, i / w);
+                if b[[y, x]] {
+                    return false;
+                }
+                for (vx, vy) in [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)] {
+                    if !z[[vy, vx]].is_finite() || !matches!(c[[vy, vx]], 10 | 20 | 30 | 60 | 100) {
+                        return false;
+                    }
+                }
+                for vy in y.saturating_sub(radius)..=(y + 1 + radius).min(h) {
+                    for vx in x.saturating_sub(radius)..=(x + 1 + radius).min(w) {
+                        if c[[vy, vx]] == 50 {
+                            return false;
+                        }
+                    }
+                }
+                let gx =
+                    ((z[[y, x + 1]] - z[[y, x]]) + (z[[y + 1, x + 1]] - z[[y + 1, x]])) / (2. * dx);
+                let gy =
+                    ((z[[y + 1, x]] - z[[y, x]]) + (z[[y + 1, x + 1]] - z[[y, x + 1]])) / (2. * dy);
+                gx.hypot(gy) >= min_slope
+            });
+            if safe {
+                for i in cells {
+                    out[i] = true;
+                }
+            }
+        }
+        out
+    });
+    Ok(Array2::from_shape_vec((h, w), result)
         .unwrap()
         .into_pyarray(py))
 }

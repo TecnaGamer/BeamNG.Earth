@@ -1,0 +1,172 @@
+{
+  "method": "Overlapping built-in imagegen detail reconstruction, not a whole-image upscale",
+  "guide": "mod\\beamng_earth\\levels\\beamng_earth\\art\\shapes\\beamngEarth\\cliff\\canyon_v4_base.color.png",
+  "size": 4096,
+  "grid": 4,
+  "core": 1024,
+  "halo": 64,
+  "guide_patch_size": 384,
+  "patches": [
+    {
+      "row": 0,
+      "column": 0,
+      "file": "patch-0-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-08be3ada-6bf8-4b5f-85e6-33c5f4f64566.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 0,
+      "column": 1,
+      "file": "patch-0-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-8955d7f6-431e-4f52-b218-162e2c82f40c.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 0,
+      "column": 2,
+      "file": "patch-0-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-a94f5202-a477-4366-bde8-f3ec0e251955.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 0,
+      "column": 3,
+      "file": "patch-0-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-93608c20-b00a-4b61-b09d-018ed8d09f35.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 0,
+      "file": "patch-1-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-a81ac298-940e-496f-a533-3b0aae388687.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 1,
+      "file": "patch-1-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-d76e9530-7265-45ab-95e7-7eb9dbdfb319.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 2,
+      "file": "patch-1-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-aeaad618-9045-4bc5-94bd-0f0f8debbc62.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 3,
+      "file": "patch-1-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-74ddec76-e4c2-4785-84a3-afc5371fa692.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 0,
+      "file": "patch-2-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-e648ccbf-446c-484c-a937-4ba2efb9a48f.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 1,
+      "file": "patch-2-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-73facce7-846b-4dfb-bc46-bbef2247d949.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 2,
+      "file": "patch-2-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-64404048-0766-4ecf-a452-db018e6e1bd1.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 3,
+      "file": "patch-2-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-016ba593-2062-441d-90ba-84c42bd0a5c0.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 0,
+      "file": "patch-3-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-2426cfaa-0b62-4c99-a39b-d354fd6dda01.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 1,
+      "file": "patch-3-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-79bfd917-33a9-4b17-93a9-b87e97a3ba22.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 2,
+      "file": "patch-3-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-38d3b96e-9217-4b8d-9e52-5529cca900dd.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 3,
+      "file": "patch-3-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-6ebfa9c3-306a-42fa-9ce1-8f4dcf9efa4e.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    }
+  ],
+  "prompt": "Edit this exact cropped canyon-rock ALBEDO patch into a sharply detailed high-resolution reconstruction. Output a square image at maximum native resolution (at least 1254 pixels each side; preferably 1536 or larger). Preserve EXACT framing, every major crack/stone position, bed boundaries, and existing dusty warm brown/rose/beige colors. Do not move, enlarge, invent or rearrange the geological layers. Fill the existing stone faces with newly resolved photographic microdetail: fine mineral color grains, tiny pores, hairline fractures and very small angular chipped facets. Crisp naturally irregular surface detail, no blur or painted smoothing. Neutral diffuse illumination, no added cast shadows, no bright edge highlights, no wet gloss. Keep the relatively subdued contrast of the source. This is ONE crop of a larger rock texture and will be stitched to neighboring crops: preserve the outer content, do not make this crop independently tileable, do not add borders. Orthographic front view, exactly the same rock composition, no text or labels. Render new fine detail throughout at the native output pixel resolution, not merely interpolated enlargement."
+}

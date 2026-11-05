@@ -362,7 +362,7 @@ class FarCliffsTest(unittest.TestCase):
                 self.assertEqual(stage['detailMapUseUV'],0)
             else:
                 self.assertIn('baseColorMap',stage,'near cliffs retain full authored color detail')
-                self.assertNotIn('detailMap',stage)
+                self.assertIn('detailMap',stage,'near cliffs add grain independently of the broad beds')
                 # New geological detail keeps the established near palette:
                 # compare rendered mean including the intentional near exposure reduction.
                 base=mod/stage['baseColorMap'].lstrip('/')
@@ -376,8 +376,24 @@ class FarCliffsTest(unittest.TestCase):
                     mean_rgb(previous)*cm.CANYON_COLOR_FACTOR*cm.SATELLITE_HEADROOM*cm.NEAR_CANYON_EXPOSURE,atol=.006)
                 with Image.open(base) as im:
                     self.assertEqual(im.size,(4096,4096))
+                for channel in ('normalMap','roughnessMap','ambientOcclusionMap'):
+                    with Image.open(mod/stage[channel].lstrip('/')) as im:
+                        self.assertEqual(im.size,(4096,4096),channel)
+                source=root/'tools/assets/canyon_generated/tiled-v5'
+                manifest=json.loads((source/'manifest.json').read_text())
+                self.assertEqual(len(manifest['patches']),16)
+                footprint=manifest['core']+2*manifest['halo']
+                for patch in manifest['patches']:
+                    with Image.open(source/patch['file']) as im:
+                        self.assertGreaterEqual(min(im.size),footprint,
+                            '4K assembly must not enlarge generated patches')
+
             for key,value in stage.items():
                 if key.endswith('Map'):
+                    if value.startswith('/temp/'):
+                        self.assertEqual(value,'/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds')
+                        self.assertIn("'detail.data.dds'",(mod/'lua/ge/extensions/beamngEarth/clifftalus.lua').read_text())
+                        continue  # private copy of an installed stock texture, not distributable
                     with Image.open(mod/value.lstrip('/')) as im:
                         self.assertGreater(im.width,100)
                         for dimension in im.size:

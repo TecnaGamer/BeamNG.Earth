@@ -484,19 +484,20 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     surface, gx, gy = (displaced_surface(h, keep, xs, ys, biomes, horizontal_scale, cuts, natural_family)
                        if surface_data is None else surface_data)
     import clifftransition
+    rim_ground = np.stack((xx, yy, h-EDGE_SINK_M),axis=-1).reshape(-1,3)
     surface, rim_weights, rim_rgb, contour = clifftransition.prepare(surface, h, keep, dx, dy,
-        horizontal_scale, EDGE_SINK_M, rgb, cache_dir)
+        horizontal_scale, EDGE_SINK_M, rgb, cache_dir, ground=rim_ground)
     # Normals of the displaced parametric surface, including horizontal motion.
     physical = surface.copy()
     physical[..., 0] *= horizontal_scale
     along_y, along_x = np.gradient(physical, dy, dx*horizontal_scale, axis=(0, 1))
     normals = np.cross(along_x, along_y)
     normals /= np.linalg.norm(normals, axis=-1, keepdims=True)
+    normals, terrain_normals = clifftransition.normals(normals, h, rim_weights, dx*horizontal_scale, dy)
     vertex_rgb = None if rgb is None else np.pad(rgb, ((0, 1), (0, 1), (0, 0)), mode='edge')
     colors = rock_colors(vb, vertex_rgb)
     colors = np.concatenate((colors, np.full((*h.shape, 1), 255, np.uint8)), axis=-1)
     p = surface.reshape(-1, 3)
-    rim_ground = np.stack((xx, yy, h-EDGE_SINK_M),axis=-1).reshape(-1,3)
     if project is not None:
         p = project(p)
         rim_ground = project(rim_ground)
@@ -534,9 +535,13 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
             chart_colors = cliffcolors.canyon_tint(vb, vertex_rgb)
         else:
             chart_colors = colors
+        # Contact attributes must be evaluated at full terrain weight. Interpolating
+        # a partially faded endpoint leaves a bright lip and reintroduces relief.
+        edge_colors, edge_uv = clifftransition.attributes(chart_colors, np.ones_like(rim_weights), rim_rgb, family)
+        boundary = np.column_stack((uv, terrain_normals, edge_colors, edge_uv))
         chart_colors, rim_uv = clifftransition.attributes(chart_colors, rim_weights, rim_rgb, family)
         attributes = np.column_stack((uv, normals.reshape(-1, 3), chart_colors.reshape(-1, 4), rim_uv))
-        material_points, selected, attributes = clifftransition.clip(p, selected, attributes, contour, rim_ground)
+        material_points, selected, attributes = clifftransition.clip(p, selected, attributes, contour, rim_ground, boundary)
         if road_segments is not None:
             import cliffcuts
             if cut_material and road_clearance is not None:
@@ -718,6 +723,9 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     centers = np.asarray(elev(lat, lon), float)
     blocked |= ~np.isfinite(centers)
     keep = qualifying_cells(h, classes, blocked, step=step)
+    if faces and keep.any():
+        import clifftransition
+        keep = clifftransition.fill_gaps(keep, h, classes, blocked, step, CITY_BUFFER_M)
     cuts = np.zeros_like(keep)
     cut_domain = np.zeros_like(keep)
     urban_domain = np.zeros_like(keep)

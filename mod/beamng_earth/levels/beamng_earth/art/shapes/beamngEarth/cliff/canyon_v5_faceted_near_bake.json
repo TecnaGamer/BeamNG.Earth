@@ -1,0 +1,26 @@
+{
+  "source": "canyon_v5_base.color.png",
+  "size": [
+    4096,
+    4096
+  ],
+  "uv": 0,
+  "method": "Median-filtered fractured faces, narrow joint edges and flattened deep recess floors; diffuse-derived approximate PBR",
+  "normal_orientation": "OpenGL +Y",
+  "detail_repeat_metres": 3.0,
+  "roughness_percentiles": [
+    0.8028445839881897,
+    0.8574875593185425,
+    0.8994709253311157,
+    0.9800000190734863,
+    0.9800000190734863
+  ],
+  "ao_percentiles": [
+    0.7599999904632568,
+    0.7599999904632568,
+    0.9736519157886505,
+    1.0,
+    1.0
+  ],
+  "limitation": "Approximate PBR inferred from albedo, not measured surface channels."
+}

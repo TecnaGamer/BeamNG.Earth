@@ -1,0 +1,25 @@
+{
+  "author": "BeamNG GmbH",
+  "origin": "Installed BeamNG.drive stock Rock_cliff terrain detail material (t_rock_b / t_rock_nm)",
+  "files": [
+    {
+      "file": "canyon_detail_terrain_rock_source.color.png",
+      "sha256": "75b64f874c725df612ca49e8c71426d68b8ca82504b4334b666bb785ed89f313",
+      "source_archive": "west_coast_usa.zip",
+      "source_path": "levels/west_coast_usa/art/terrains/t_rock_b.png"
+    },
+    {
+      "file": "canyon_detail_terrain_rock_v1.normal.png",
+      "sha256": "988d690fb0f566baa26119704fb05dd84abbeb105be16cb2e6b1fc14e5440321",
+      "source_archive": "west_coast_usa.zip",
+      "source_path": "levels/west_coast_usa/art/terrains/t_rock_nm.png"
+    },
+    {
+      "file": "canyon_detail_terrain_rock_v1.data.png",
+      "sha256": "12e39c163c16413adfd8a2245484f6e8586cd1977998609ad8a34478f4a7e074",
+      "derived_from": "canyon_detail_terrain_rock_source.color.png",
+      "method": "linear luminance, local normalization, zero-mean detail at 0.5, RGB data"
+    }
+  ],
+  "notes": "Source albedo and normal copied unchanged. Detail data derived by tools/bake_canyon_detail.py. BeamNG-owned assets and derivatives excluded from the project MIT license."
+}

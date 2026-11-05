@@ -161,7 +161,10 @@ def bake():
                        Stages=[stage,{},{},{}],groundType='ROCK',translucent=False)
     path.write_text(json.dumps(mats,indent=2)+'\n')
     from bake_canyon_near_pbr import bake as bake_near_pbr
-    bake_near_pbr()
-    print(f'Baked canyon albedo {ALBEDO_SIZE} square; normals {TEXTURE_SIZE} square. Source is resampled, not native 4K.')
+    bake_near_pbr(ALBEDO_NAME, 'canyon_v4_near')
+    # Preserve the approved distant bake, then install reconstructed 4K near detail.
+    from bake_canyon_tiled import bake as bake_tiled_near
+    bake_tiled_near()
+    print(f'Baked distant canyon from legacy source; near material uses reconstructed 4K patches.')
 
 if __name__=='__main__': bake()

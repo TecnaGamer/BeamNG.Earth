@@ -48,6 +48,54 @@ class CliffTransitionTest(unittest.TestCase):
         self.assertGreater(np.count_nonzero((delta[:,0]>1e-5)&(delta[:,1]>1e-5)),20)
         np.testing.assert_allclose(pts,attrs) # shared edge interpolation is consistent
 
+    def test_new_boundary_is_full_satellite_and_cannot_regain_relief(self):
+        ground=np.array([[0,0,0],[1,0,0],[0,1,0]],float)
+        p=ground.copy();p[:,2]=5
+        colors=np.tile([190,150,130,255],(3,1))
+        # A baked photo shadow must survive at the contact, for every rock family.
+        target=np.tile([24,28,35],(3,1))
+        for family in range(4):
+            for field in ([-.1,.4,.4],[0,.4,-.1]):
+                c,u=ct.attributes(colors,np.array([[1],[0],[0]],float),target,family)
+                ec,eu=ct.attributes(colors,np.ones((3,1)),target,family)
+                q,t,a=ct.clip(p,np.array([[0,1,2]]),np.c_[c,u],np.array(field)[:,None],ground,np.c_[ec,eu])
+                edge=q[:,2]==0
+                self.assertTrue(edge.any())
+                np.testing.assert_allclose(a[edge,:3],np.broadcast_to(target[0],a[edge,:3].shape))
+                relief=ct.relief_weights(np.ones((len(a),1)),a[:,-2:])
+                np.testing.assert_allclose(relief[edge],0,atol=1e-12)
+                self.assertTrue(np.all(q[~edge,2]==5))
+
+    def test_contact_normals_match_physical_terrain_slope(self):
+        h=np.tile(np.arange(4)*4.,(3,1))
+        normals=np.tile([0,0,1.],(h.size,1))
+        weights=np.linspace(0,1,h.size)[:,None]
+        mixed,ground=ct.normals(normals,h,weights,2,1)
+        expected=np.array([-2,0,1])/np.sqrt(5)
+        np.testing.assert_allclose(ground,np.broadcast_to(expected,ground.shape))
+        np.testing.assert_allclose(mixed[0],normals[0])
+        np.testing.assert_allclose(mixed[-1],expected)
+        np.testing.assert_allclose(np.linalg.norm(mixed,axis=1),1)
+
+    def test_small_threshold_gaps_preserve_hard_exclusions_and_large_benches(self):
+        h=np.tile(np.arange(17)*4.,(17,1))
+        classes=np.full(h.shape,60)
+        keep=np.ones((16,16),bool);keep[7,7]=False
+        blocked=np.zeros_like(keep)
+        self.assertTrue(ct.fill_gaps(keep,h,classes,blocked,(4,4),4).all())
+        for exclusion in ('road','water','city','unknown','flat'):
+            b=blocked.copy();c=classes.copy();z=h.copy()
+            if exclusion=='road':b[7,7]=True
+            if exclusion=='water':c[7,7]=80
+            if exclusion=='city':c[6,6]=50
+            if exclusion=='unknown':c[7,7]=0
+            if exclusion=='flat':z[7:9,7:9]=28
+            np.testing.assert_array_equal(ct.fill_gaps(keep,z,c,b,(4,4),4),keep)
+        large=keep.copy();large[5:10,5:10]=False
+        np.testing.assert_array_equal(ct.fill_gaps(large,h,classes,blocked,(4,4),4),large)
+        notch=keep.copy();notch[:8,7]=False
+        np.testing.assert_array_equal(ct.fill_gaps(notch,h,classes,blocked,(4,4),4),notch)
+
     def test_contour_endpoint_is_not_duplicated(self):
         p=np.array([[0,0,0],[1,0,0],[0,1,0]],float)
         for f,count in (([0,-1,1],1),([0,-1,-1],0),([1,1,1],1),([-1,-1,-1],0)):
@@ -124,6 +172,20 @@ class CliffTransitionTest(unittest.TestCase):
         rock=cr.mesh(h,k,x,x,np.zeros(k.shape,int),(0,0,x[-1],x[-1]),(0,0,0))
         for _,lod in clifflod.levels(rock):
             np.testing.assert_array_equal(lod['tangent_uvs'],lod['uvs'])
+
+    def test_near_canyon_grain_has_square_physical_repeat(self):
+        root=Path(__file__).resolve().parents[2]
+        mats=json.loads((root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json').read_text())
+        stage=mats['bne_cliff_canyon_sat']['Stages'][0]
+        repeat=np.array([cm.WIDTH_M,cm.CANYON_HEIGHT_M])/stage['detailScale']
+        np.testing.assert_allclose(repeat[0],repeat[1])
+        self.assertGreaterEqual(repeat[0],.25)
+        self.assertLessEqual(repeat[0],3.0)
+        self.assertEqual(stage['detailMapUseUV'],0)
+        self.assertEqual(stage['normalDetailMapUseUV'],0)
+        self.assertLessEqual(stage['detailNormalMapStrength'],.5)
+        for name in ('bne_far_cliff_canyon_sat','bne_far_cliff_canyon_blend'):
+            self.assertNotIn('detailNormalMap',mats[name]['Stages'][0])
 
     def test_all_families_share_one_opaque_mask_and_preserve_pbr(self):
         root=Path(__file__).resolve().parents[2]

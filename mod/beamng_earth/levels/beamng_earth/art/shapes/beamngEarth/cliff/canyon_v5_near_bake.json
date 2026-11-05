@@ -1,0 +1,26 @@
+{
+  "source": "canyon_v5_base.color.png",
+  "size": [
+    4096,
+    4096
+  ],
+  "uv": 0,
+  "method": "Coarse edge-preserving stone faces with broad ledge/block relief; diffuse-derived approximate PBR",
+  "normal_orientation": "OpenGL +Y",
+  "detail_repeat_metres": 3.0,
+  "roughness_percentiles": [
+    0.8028084635734558,
+    0.8580408096313477,
+    0.8996349275112152,
+    0.9800000190734863,
+    0.9800000190734863
+  ],
+  "ao_percentiles": [
+    0.7599999904632568,
+    0.7599999904632568,
+    0.9751692414283752,
+    1.0,
+    1.0
+  ],
+  "limitation": "Approximate PBR inferred from albedo, not measured surface channels."
+}

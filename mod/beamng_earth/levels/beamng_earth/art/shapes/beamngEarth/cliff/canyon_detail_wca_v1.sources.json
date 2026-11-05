@@ -1,0 +1,25 @@
+{
+  "author": "BeamNG GmbH",
+  "origin": "Installed BeamNG.drive stock West Coast rock material",
+  "files": [
+    {
+      "file": "canyon_detail_wca_source.color.dds",
+      "sha256": "da13ec38f54b0dc456c05bd6be58a5e9580ed8a36b5c97cd3df5c94fa7644913",
+      "source_archive": "rocks.zip",
+      "source_path": "assets/materials/rocks/t_wca_rock/t_wca_rock_b.color.dds"
+    },
+    {
+      "file": "canyon_detail_wca_v1.normal.dds",
+      "sha256": "8e4e322de4ef895f362024aecdad46c29ab3b2480371d334b04a0ffa397ce862",
+      "source_archive": "rocks.zip",
+      "source_path": "assets/materials/rocks/t_wca_rock/t_wca_rock_nm.normal.dds"
+    },
+    {
+      "file": "canyon_detail_wca_v1.data.png",
+      "sha256": "f82ccd8a9dccdad53e8c503cc6fab46f5b58c478c60a0b6eeb1a69de9203b92e",
+      "derived_from": "canyon_detail_wca_source.color.dds",
+      "method": "linear luminance, local normalization, zero-mean detail at 0.5, RGB data"
+    }
+  ],
+  "notes": "Source albedo and normal copied unchanged. Detail data derived by tools/bake_canyon_detail.py. BeamNG-owned assets and derivatives excluded from the project MIT license."
+}

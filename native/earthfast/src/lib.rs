@@ -5480,6 +5480,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_attributes, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_clip, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_relief_weights, m)?)?;
-    m.add("VERSION", 147)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_fill_gaps, m)?)?;
+    m.add("VERSION", 148)?;
     Ok(())
 }

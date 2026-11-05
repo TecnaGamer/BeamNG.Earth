@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 147 # combined cliff transitions and upstream compression kernels
+MIN_VERSION = 148 # combined cliff transitions and upstream compression kernels
 
 
 class NativeMissing(RuntimeError):
