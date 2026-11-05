@@ -662,13 +662,15 @@ def _refine(xs, ys, keep, biomes, box, elev, color_at, shore=None, horizontal_sc
     return rx, ry, h, rk, rb, rgb
 
 
-def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, cache_dir=None, source_elev=None):
+def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, cache_dir=None, source_elev=None,
+          features=(True, True, True)):
     """Build one streamed tile, or None. Missing classification never permits rocks.
 
     color_at(lat, lon) can override the cached regional imagery sampler. No
     imagery download is added to the critical road build.
     """
-    if surface is None:
+    faces, rocks, decals = features
+    if surface is None or not any(features):
         return None
     import climate
     import surface as surfacemod
@@ -768,6 +770,17 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
         rubble_color_at = lambda la, lo: cliffcolors.sample(cache_dir, la, lo, grid_m=256, radius_m=192)
     import clifftalus
     coarse = (xs, ys, keep, classes, blocked, b)
+    if not faces:
+        # Only detection is shared with props. No render-grid resampling, relief,
+        # PBR/tint work, contour meshing, canyon refinement or LODs without faces.
+        result = Mesh(np.empty((0, 3)), np.empty((0, 3), np.int32),
+                      np.empty((0, 2)), np.empty((0, 4)))
+        if rocks:
+            result.talus = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at)
+        if decals:
+            import cliffdecals
+            result.decals = cliffdecals.rows(frame, box, *coarse, elev, rubble_color_at)
+        return result
     shore = (classes[:-1, :-1] == 80) | (classes[:-1, 1:] == 80) | (classes[1:, :-1] == 80) | (classes[1:, 1:] == 80)
     natural_family = int(cliffmaterial.natural_family(float(la.mean()), float(lo.mean())))
     coarse_canyon_grid = natural_family == cliffmaterial.CANYON and not cuts.any()
@@ -821,8 +834,10 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     h = np.nan_to_num(h, nan=0, posinf=0, neginf=0)
     natural_family = int(cliffmaterial.natural_family(float(la.mean()), float(lo.mean())))
     surface_data = displaced_surface(h, keep, xs, ys, b, scale, fine_cuts, natural_family)
-    skin_at = clifftalus.surface_sampler(xs, ys, h, surface_data[0])
-    rubble = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, skin_at)
+    rubble = []
+    if rocks:
+        skin_at = clifftalus.surface_sampler(xs, ys, h, surface_data[0])
+        rubble = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, skin_at)
 
     def project(p):
         return np.column_stack(frame.geodetic_to_enu(p[:, 1]/WORLD_M_PER_DEG,
@@ -845,8 +860,9 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
             import cliffdetail
             result = cliffdetail.refine_canyon(result, full_relief=True)
         result.talus = rubble
-        import cliffdecals
-        result.decals = cliffdecals.rows(frame, box, *coarse, elev, rubble_color_at)
+        if decals:
+            import cliffdecals
+            result.decals = cliffdecals.rows(frame, box, *coarse, elev, rubble_color_at)
     return result
 
 
@@ -885,6 +901,8 @@ def stream_parts(rock):
     Partition before LOD generation so shared batch edges remain locked at every
     detail. The native kernel only assigns faces; it never changes the surface.
     """
+    if not len(rock.tris):
+        return
     import fast
     fast.require(144, "cliff_stream_parts")
     groups = fast._ef.cliff_stream_parts(np.ascontiguousarray(rock.positions, np.float64),

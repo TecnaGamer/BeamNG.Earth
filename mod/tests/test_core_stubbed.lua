@@ -837,8 +837,10 @@ do -- the window gets its view only while it is shown: it is hidden by default (
 end
 do -- Changing only cliff detail must survive graphics-message deduplication.
   local level, distant = 'normal', true
+  local flags = {cliffFaces=true, cliffRocks=true, cliffDecals=true}
   beamngEarth_settings.serverGraphics = function()
-    return {lodScale=1, treeScale=1, buildingScale=1, photoPx=2048, viewM=0, cliffDetail=level, distantCliffFaces=distant}
+    return {lodScale=1, treeScale=1, buildingScale=1, photoPx=2048, viewM=0, cliffDetail=level, distantCliffFaces=distant,
+      cliffFaces=flags.cliffFaces, cliffRocks=flags.cliffRocks, cliffDecals=flags.cliffDecals}
   end
   for _,v in ipairs({'normal', 'low', 'extreme', 'medium', 'high', 'normal'}) do
     level = v
@@ -852,6 +854,14 @@ do -- Changing only cliff detail must survive graphics-message deduplication.
     T.check(core.sendGraphics(),'distant cliff-only change sent')
     T.check(last('graphics').distantCliffFaces==v,'distant cliff boolean on the wire')
     T.check(not core.sendGraphics(),'unchanged distant cliff switch deduped')
+  end
+  for _,key in ipairs({'cliffFaces','cliffRocks','cliffDecals'}) do
+    for _,value in ipairs({false,true}) do
+      flags[key]=value
+      T.check(core.sendGraphics(),'generation switch-only change sent: '..key)
+      T.check(last('graphics')[key]==value,'generation switch boolean on wire: '..key)
+      T.check(not core.sendGraphics(),'unchanged generation switch deduped: '..key)
+    end
   end
 end
 -- The connection survives a level reload; its negotiated capability must survive the scene reset too.

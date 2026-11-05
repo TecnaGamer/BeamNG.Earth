@@ -567,6 +567,8 @@ class TileInfo:
     retex_repeat: int = 0
     credits: frozenset = frozenset()    # data-credit source ids (credits.tile_sources; --credits on only)
     shape: str | None = None    # its shape file when not tile_name(): a copy under a new material name (reslot)
+    source: str | None = None   # immutable source when upgraded from a photo-only tile
+    cliff_faces: bool = True    # whether the distant-cliff stage was enabled at build time
     tile: object = None         # the farfield tile it was built for (Tile, GTile, Piece)
     frame: tuple | None = None  # a global tile's frame (lat, lon): its geometry is in that frame's world
 
@@ -1930,6 +1932,16 @@ class Server:
             memo[(gx, gy, far)] = got
         return got
 
+    def cliff_generation(self):
+        """Shared generation switches: keep only features requested by a connected player.
+
+        With no players, explicit offline area builds retain full scenery. Workers
+        receive an immutable snapshot so a cache key always describes its output.
+        """
+        clients = tuple(self.connections)
+        return tuple(not clients or any(getattr(c, name, True) for c in clients)
+                     for name in ("cliff_faces", "cliff_rocks", "cliff_decals", "distant_cliff_faces"))
+
     def build_roads_geo(self, aid, gx, gy, content=True, skin=True, exact=None):
         """blockworker.roads_geo in a road process: geotile (gx, gy)'s content (once: kept by the mod across
         rebases), anchor aid's skin and exact variants. Its gas station pads kept for the ground's painters. None
@@ -1942,7 +1954,7 @@ class Server:
             blockworker.roads_geo, aid, anchor.lat, anchor.lon, anchor.zooms[0], gx, gy, gzoom, self.out_dir,
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
-            country, content, skin, exact)
+            country, content, skin, exact, self.cliff_generation()[:3])
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
@@ -1979,7 +1991,7 @@ class Server:
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         return blockworker._geo_content_key(geotiles.geobox(gx, gy).key, gzoom, self.buildings, lh, mph,
                                             self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
-                                            models_dir=self.root)
+                                            models_dir=self.root, cliffs=self.cliff_generation()[:3])
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker, no network)? -> its key or None."""
@@ -1997,7 +2009,7 @@ class Server:
         scratch = os.path.join(self.root, "areas_scratch")
         return poolsmod.result_running(getattr(self.road_pool, "submit_low", self.road_pool.submit)(
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
-            lamps, country, "/temp/beamngEarth/areas_scratch"), ROAD_TILE_TIMEOUT_S)
+            lamps, country, "/temp/beamngEarth/areas_scratch", self.cliff_generation()[:3]), ROAD_TILE_TIMEOUT_S)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -2011,7 +2023,8 @@ class Server:
                 blockworker.roads_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                 self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
-                self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor))
+                self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor),
+                self.cliff_generation()[:3])
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
@@ -2226,7 +2239,8 @@ class Server:
         import cliffrocks
         cliff = cliffrocks.tile_mesh(anchor.frame, box, drawn, self.surface, cells, self.road_widths,
                                     cache_dir=self.cache_dir,
-                                    source_elev=lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)))
+                                    source_elev=lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+                                    features=self.cliff_generation()[:3])
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
@@ -3541,7 +3555,9 @@ class Server:
         stem = os.path.splitext(name)[0]
         out = [os.path.join(self.out_dir, name), os.path.join(self.out_dir, stem + ".dds"),
                os.path.join(self.out_dir, stem + "_road.dds"),
-               os.path.join(self.out_dir, stem + "_plain.cdae")]
+               os.path.join(self.out_dir, stem + "_plain.cdae"),
+               os.path.join(self.out_dir, stem + "_cliffs." + self.far_format),
+               os.path.join(self.out_dir, stem + "_cliffs_plain.cdae")]
         out += [os.path.join(self.out_dir, f"{stem}_r{r}.dds") for r in range(1, rev + 1)]
         if texture is not None and os.path.join(self.out_dir, texture) not in out:
             out.append(os.path.join(self.out_dir, texture))
@@ -3728,11 +3744,11 @@ class Server:
                   for k in used.keys() | close_used.keys()}
         return np.rint(np.clip(rgb,0,1)*255).astype(np.uint8), counts
 
-    def make_tile(self, anchor, tile, prev=None):
+    def make_tile(self, anchor, tile, prev=None, cliff_upgrade=False):
         urgencymod.wait_turn()          # (a block the game waits for first: urgency.py)
-        return self._make_tile(anchor, tile, prev)
+        return self._make_tile(anchor, tile, prev, cliff_upgrade)
 
-    def _make_tile(self, anchor, tile, prev=None):
+    def _make_tile(self, anchor, tile, prev=None, cliff_upgrade=False):
         """Worker thread: build and write one far tile (and its texture). Returns its TileInfo.
         prev: the tile's stale TileInfo (--colormatch): only its texture is rendered again.
         A global tile (farfield.GTile) is built in its own frame, the same for every anchor (ck (GLOBAL_AID, key));
@@ -3741,10 +3757,14 @@ class Server:
             return self.retexture(anchor, tile, prev)
         t0 = time.perf_counter()
         lvl = tile.level
+        distant_cliffs = cliff_upgrade or self.cliff_generation()[3]
         is_global = isinstance(tile, farfield.GTile)
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         ck = self.far_ck(anchor.id, tile.key)
-        path = os.path.join(self.out_dir, self.tile_name(*ck))
+        source = self.tile_name(*ck)
+        if cliff_upgrade:
+            source = os.path.splitext(source)[0] + "_cliffs." + self.far_format
+        path = os.path.join(self.out_dir, source)
         done = None             # (texture file, bytes, sources used) when the worker rendered it (blockworker.far_tile)
         geo = None              # the geometry's future while this thread renders the texture
         if is_global:
@@ -3883,7 +3903,7 @@ class Server:
         t2 = time.perf_counter()
         size = farfield.write_built(path, built, self.far_format, material or farfield.MATERIAL,
                                     textured=material is not None, tex_px=self.tex_size(lvl),
-                                    cliff_frame=self.tile_where(anchor, tile)[0] if lvl > 0 else None,
+                                    cliff_frame=self.tile_where(anchor, tile)[0] if lvl > 0 and distant_cliffs else None,
                                     cliff_surface=self.surface,
                                     cliff_texture=os.path.join(self.out_dir, texture) if material else None,
                                     plain_path=os.path.splitext(path)[0] + "_plain.cdae")
@@ -3899,6 +3919,9 @@ class Server:
         info = TileInfo(built.pos, built.err, built.sink, built.skirt, built.grid, size, dt,
                         material, texture, tex_bytes, tex_s, credits=sources)
         info.tile = tile
+        info.cliff_faces = distant_cliffs or lvl <= 0
+        if cliff_upgrade:
+            info.source = info.shape = source
         if is_global:
             info.frame = farfield.global_frame_ll(tile.z, tile.x, tile.y)
         if material is not None and self.far_format == "cdae":    # the pooled shape path (matslots.py)
@@ -4035,16 +4058,27 @@ class Server:
         ck = self.far_ck(anchor.id, tile.key)
         loop = self.loop = asyncio.get_running_loop()
         prev = None
+        upgrade = False
         if ck in self.tiles:
             self.tiles.move_to_end(ck)
-            if not self.tiles[ck].stale:
+            upgrade = not self.tiles[ck].cliff_faces and self.cliff_generation()[3]
+            if not self.tiles[ck].stale and not upgrade:
                 f = loop.create_future()
                 f.set_result(self.tiles[ck])
                 return f
-            prev = self.tiles[ck]           # --colormatch: its texture is rendered again
+            if not upgrade:
+                prev = self.tiles[ck]       # --colormatch: its texture is rendered again
         fut = self.tile_inflight.get(ck)
         if fut is None:
-            fut = self.tile_inflight[ck] = loop.run_in_executor(self.tile_pool, self.make_tile, anchor, tile, prev)
+            if upgrade:
+                # An off-built tile is not a complete cliff cache hit. Its old
+                # slot may still be rendered by another player: reserve a fresh
+                # one and write a different source path, never edit a live shape.
+                self.matslots.release(ck)
+                fut = loop.run_in_executor(self.tile_pool, self.make_tile, anchor, tile, None, True)
+            else:
+                fut = loop.run_in_executor(self.tile_pool, self.make_tile, anchor, tile, prev)
+            self.tile_inflight[ck] = fut
             fut.add_done_callback(lambda f: self._tile_done(ck, f))
         # A connection may stop waiting at a rebase or disconnect. Cancelling the
         # executor Future does not stop a running thread: it can still write its
@@ -4149,6 +4183,8 @@ class Server:
         if self.far_format != "cdae":
             return out
         for what, fname in files.items():
+            if what.removeprefix("x:").startswith("cliff") and not getattr(conn, "cliff_faces", True):
+                continue
             src = os.path.join(self.out_dir, fname)
             if not os.path.exists(src):
                 continue
@@ -4180,9 +4216,9 @@ class Server:
         Each off variant keeps the original terrain UVs and obtains its own
         material/shape slot, released through the normal slotsGone lifecycle.
         """
-        if conn.distant_cliff_faces:
+        if conn.distant_cliff_faces or not info.cliff_faces:
             return None
-        src = os.path.splitext(os.path.join(self.out_dir, self.tile_name(*ck)))[0] + "_plain.cdae"
+        src = os.path.splitext(os.path.join(self.out_dir, info.source or self.tile_name(*ck)))[0] + "_plain.cdae"
         if not os.path.exists(src):  # no cliff triangles, or the DAE fallback
             return None
         if info.material is None:
@@ -4220,7 +4256,7 @@ class Server:
         tile by now).
         On failure the tile keeps its name: the caller builds it again rather than send it with another tile's name."""
         new = self.matslots.take(ck)
-        src = os.path.join(self.out_dir, self.tile_name(*ck))
+        src = os.path.join(self.out_dir, info.source or self.tile_name(*ck))
         pooled = self.far_format == "cdae"
         name = matslotsmod.MatSlots.file(new) if pooled else f"{os.path.splitext(self.tile_name(*ck))[0]}_s{next(self.reslot_serial)}.{self.far_format}"
         try:
@@ -4646,6 +4682,7 @@ class Connection:
         self.lod_scale = self.tree_scale = self.building_scale = 1.0
         self.cliff_detail = "normal"
         self.distant_cliff_faces = True
+        self.cliff_faces = self.cliff_rocks = self.cliff_decals = True
         self.view_cap = None                    # the far field's radius at most (m): the mod's fixed view distance
 
     async def map_tiles(self, msg):
@@ -5459,6 +5496,10 @@ class Connection:
             return min(GRAPHICS_SCALE[1], max(GRAPHICS_SCALE[0], float(v)))
         lod, tree, bld = (scale("lodScale", self.lod_scale), scale("treeScale", self.tree_scale),
                           scale("buildingScale", self.building_scale))
+        for key, attr in (("cliffFaces", "cliff_faces"), ("cliffRocks", "cliff_rocks"),
+                          ("cliffDecals", "cliff_decals")):
+            if isinstance(msg.get(key), bool):
+                setattr(self, attr, msg[key])
         distant_cliffs = msg.get("distantCliffFaces")
         if isinstance(distant_cliffs, bool):
             self.distant_cliff_faces = distant_cliffs

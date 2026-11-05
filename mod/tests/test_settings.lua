@@ -596,6 +596,7 @@ do
   for _,key in ipairs({'cliffFaces','cliffRocks','cliffDecals','distantCliffFaces'}) do
     T.check(settings.get(key)==true,'cliff component defaults on: '..key)
     T.check(settings.set(key,false).ok,'cliff component accepts UI boolean: '..key)
+    T.check(settings.serverGraphics()[key]==false,'disabled cliff component reaches server: '..key)
   end
   T.check(not roads.cliffsEnabled and trees.groupOff.cliff_rock and not decals.enabled,'all three switches reach independent runtime owners')
   T.check(settings.get('rocks')==true and not trees.groupOff.rock,'cliff switches leave world rocks on')

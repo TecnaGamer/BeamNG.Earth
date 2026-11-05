@@ -181,3 +181,40 @@ Windows native rebuilt and cliff, compression, upstream server and Lua regressio
 checks passed. Linux native rebuild remains pending: the local WSL installation
 has no Rust/C toolchain and Docker is not running. The minimum-version check
 rejects the older Linux binary until it is rebuilt.
+
+
+## Generation switches (2026-11-05)
+
+The graphics message carries nearby faces, scattered rocks, transition decals and
+existing distant-face preferences. The shared server snapshots the union of
+connected players' requests for each worker job; explicit offline area builds
+without players retain all scenery. An off switch therefore skips its generation
+unless another player on the same server needs it. Already running jobs finish;
+no cancellation of native code or mutation of loaded shapes is attempted.
+
+All nearby components off returns before terrain/classification sampling. Props
+without faces retain coarse cliff detection but skip render-grid resampling,
+relief, terrain transitions, PBR/tint work, canyon refinement, streaming partitions
+and LOD generation. Rocks-only sit on the terrain, since there is no rock skin to
+fit them to. With faces enabled, disabled rock/decal stages are skipped separately.
+Road and geotile revisit keys include all three flags. Revisit bundles and pooled
+slots use only the current content manifest, excluding obsolete cliff files.
+
+Distant faces off bypasses farcliffs.geometry. Terrain geometry, satellite texture
+and ordinary terrain shading remain. If an off-built cached tile is requested
+after enabling, it is rebuilt with cliffs using a new source path/material slot;
+its old rendered shape is left intact. Nearby objects already present toggle
+immediately. Reload the level after enabling to populate tiles built while off;
+distant appearance continues to apply as tiles load, as before.
+
+Open upstream PR titles, descriptions and file lists were checked; no matching
+cliff generation gate was found. No outside implementation was imported. This
+change only routes settings and gates existing kernels; native API stays 147.
+
+Validation: 29 focused generation/cache/material-slot tests passed, plus the
+existing cliff geometry, distant cliff, worker, graphics, revisit, road-geotile
+and protocol suites (optional real-data fixtures disabled). Lua settings and core
+suites passed 361 and 331 assertions. The distant upgrade test retains a held
+material slot and checks its source and pooled shape bytes remain unchanged.
+No in-game frame-time measurement was made for this batch. Restart the server
+and reload the game to load the updated generation controls.

@@ -9089,7 +9089,7 @@ class GeoTracker:
             if pool is not None:
                 import blockworker
                 names = blockworker.geo_names(gkey)
-                files = {w: n_ for w, n_ in names.items() if w not in ("json", "inputs") and w not in ex}
+                files = {w: n_ for w, n_ in names.items() if w in info.get("parts", {}) and w not in ex}
                 files.update({f"x:{w}": os.path.basename(p) for w, p in ex.items()})
                 slots = pool(conn, files)
                 if slots:

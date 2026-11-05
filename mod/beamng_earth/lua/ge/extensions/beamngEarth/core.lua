@@ -2833,11 +2833,13 @@ function M.sendGraphics()
   local settings = rawget(_G, 'beamngEarth_settings')
   local g = settings and settings.serverGraphics and settings.serverGraphics()
   if type(g) ~= 'table' or not net.isConnected() or not st.sessionId then return false end
-  local sig = string.format('%s/%s/%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
-    tostring(g.photoPx), tostring(g.viewM), tostring(g.cliffDetail), tostring(g.distantCliffFaces))
+  local sig = string.format('%s/%s/%s/%s/%s/%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
+    tostring(g.photoPx), tostring(g.viewM), tostring(g.cliffDetail), tostring(g.distantCliffFaces),
+    tostring(g.cliffFaces), tostring(g.cliffRocks), tostring(g.cliffDecals))
   if sig == M.graphicsSent then return false end
   net.send({ type = 'graphics', lodScale = g.lodScale, treeScale = g.treeScale, buildingScale = g.buildingScale,
-    photoPx = g.photoPx, viewM = g.viewM, cliffDetail = g.cliffDetail, distantCliffFaces = g.distantCliffFaces })
+    photoPx = g.photoPx, viewM = g.viewM, cliffDetail = g.cliffDetail, distantCliffFaces = g.distantCliffFaces,
+    cliffFaces = g.cliffFaces, cliffRocks = g.cliffRocks, cliffDecals = g.cliffDecals })
   M.graphicsSent = sig
   return true
 end

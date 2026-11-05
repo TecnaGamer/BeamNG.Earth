@@ -417,6 +417,9 @@ function M.serverGraphics()
   return {
     cliffDetail = values.cliffDetail,
     distantCliffFaces = values.distantCliffFaces,
+    cliffFaces = values.cliffFaces,
+    cliffRocks = values.cliffRocks,
+    cliffDecals = values.cliffDecals,
     lodScale = M.TERRAIN_DETAIL[values.terrainDetail] or 1.0,
     treeScale = okT and trees.distanceScale and trees.distanceScale(values.treeDistance) or 1.0,
     buildingScale = M.BUILDING_DISTANCE[values.buildingDistance] or 1.0,
@@ -486,9 +489,9 @@ M.APPLY = {
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
   cliffDetail = sendGraphics,
   distantCliffFaces = sendGraphics,
-  cliffFaces = function(v) require('beamngEarth/roads').setCliffsEnabled(v) end,
-  cliffRocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'cliff_rock' }, v) end,
-  cliffDecals = function(v) require('beamngEarth/cliffdecals').setEnabled(v) end,
+  cliffFaces = function(v) require('beamngEarth/roads').setCliffsEnabled(v); sendGraphics() end,
+  cliffRocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'cliff_rock' }, v); sendGraphics() end,
+  cliffDecals = function(v) require('beamngEarth/cliffdecals').setEnabled(v); sendGraphics() end,
   highwaySigns = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end

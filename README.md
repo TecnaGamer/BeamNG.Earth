@@ -35,7 +35,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   transition decals. All near cliff families trim their grid-shaped outlines into smooth contours and
   taper their thickness into the terrain with a subtly irregular, noise-varied blend toward satellite colors, without adding decal objects. Interior rock
   detail stays intact. Large cliff meshes stream in smaller pieces across frames to reduce loading stalls,
-  with shared edges and textures preserved across rock types. Each has its own in-game switch; see the [cliff testing guide](docs/CLIFF_TESTING.md).
+  with shared edges and textures preserved across rock types. Their switches also skip the disabled
+  generation stages on the server, including distant cliff faces. Existing nearby objects hide immediately;
+  generation changes apply to new builds, and jobs already running may finish. Reload the level after enabling
+  to populate tiles built while off. Shared servers retain features another connected player requests.
+  Each has its own in-game switch; see the [cliff testing guide](docs/CLIFF_TESTING.md).
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
   shrubs), autumn colours in season.
 - Forest and river sounds: the stock maps' wind in the trees (louder and fuller in dense, tall forest) and background

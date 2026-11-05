@@ -269,6 +269,18 @@ class ServerTest(unittest.TestCase):
         earthd.Connection.slots_gone(c, [[n, serial]])
         self.assertEqual(self.s.matslots.stats()["free"], 1)
 
+    def test_disabled_faces_skip_pooled_copies_and_lod_edits(self):
+        from unittest.mock import patch
+        path=os.path.join(self.s.out_dir,'old_cliff.cdae')
+        with open(path,'wb') as fh:
+            fh.write(b'cached shape')
+        c=Conn()
+        c.cliff_faces=False
+        c.cliff_detail='low'
+        with patch('clifflod.place',side_effect=AssertionError('disabled LOD copy')):
+            self.assertEqual(self.s.pool_shapes(c,{'cliff':'old_cliff.cdae','x:cliff2':'old_cliff.cdae'}),{})
+        self.assertEqual(self.s.matslots.stats()['made'],0)
+
     def test_cliff_quality_never_rewrites_a_held_shape_or_shared_source(self):
         import cdae
         import clifflod
