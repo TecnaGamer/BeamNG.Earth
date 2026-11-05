@@ -40,7 +40,7 @@ def mat(name, rgb, metallic=0.0, rough=0.6):
 MATS = {
     "concrete": mat("bne_cat_concrete", (0.62, 0.61, 0.58), 0.0, 0.9),
     "galv": mat("bne_cat_galv", (0.62, 0.64, 0.65), 0.85, 0.45),
-    "insulator": mat("bne_cat_insulator", (0.55, 0.66, 0.6), 0.0, 0.15),
+    "insulator": mat("bne_cat_insulator", (0.03, 0.03, 0.035), 0.0, 0.3),   # black: composite / glazed holders
     "plate": mat("bne_cat_plate", (0.9, 0.85, 0.1), 0.0, 0.5),
 }
 
@@ -143,6 +143,15 @@ def build(seg, detail):
         tip = Vector((ARM_X + 0.15, 0, Z_MESS))
         frustum(bm, tip + Vector((0, 0, 0.02)), tip + Vector((0, 0, 0.30)), 0.055, 0.045, ts, 2)
         frustum(bm, Vector((ARM_X + 0.1, 0, Z_REG)) + Vector((0, 0, 0.02)), Vector((ARM_X + 0.1, 0, Z_REG + 0.22)), 0.05, 0.04, ts, 2)
+        # black holders: a ribbed insulator at the root of the horizontal tube and of the registration arm, a clamp block
+        # at the messenger's tip and a wire holder (a hook plate under the arm's tip) at the contact wire
+        ribbed(bm, Vector((0.62, 0, Z_MESS)), Vector((1, 0, 0)), 0.40, ts, discs=6)
+        ribbed(bm, Vector((0.55, 0, Z_REG)), Vector((1, 0, 0)), 0.34, ts, discs=5)
+        for p0, w in ((Vector((ARM_X + 0.15, 0, Z_MESS + 0.32)), 0.05), (Vector((ARM_X + 0.10, 0, Z_REG + 0.24)), 0.045)):
+            frustum(bm, p0, p0 + Vector((0, 0, 0.07)), w * 1.5, w * 1.5, 4, 2)         # the clamp
+        hold = Vector((ARM_X + 0.10, 0, Z_REG))
+        frustum(bm, hold + Vector((0, 0, 0.0)), hold - Vector((0, 0, 0.16)), 0.016, 0.016, ts, 2)     # the hanger
+        frustum(bm, hold - Vector((0.04, 0, 0.17)), hold - Vector((-0.04, 0, 0.17)), 0.028, 0.028, ts, 2)  # the wire's clip
     return bm
 
 

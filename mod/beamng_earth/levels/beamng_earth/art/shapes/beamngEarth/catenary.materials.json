@@ -52,13 +52,13 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.55,
-          0.66,
-          0.6,
+          0.03,
+          0.03,
+          0.035,
           1.0
         ],
         "metallicFactor": 0.0,
-        "roughnessFactor": 0.15
+        "roughnessFactor": 0.3
       },
       {},
       {},
