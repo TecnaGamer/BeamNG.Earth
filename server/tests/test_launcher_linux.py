@@ -602,3 +602,22 @@ class WaitForGameTest(unittest.TestCase):
             self.assertTrue(launcher.wait_for_game(None))
             self.assertGreaterEqual(clock[0], 700 + launcher.WINDOWS_GAME_GONE_S)
             say.assert_not_called()
+
+    def test_linux_close_after_a_while_is_quick(self):
+        """Linux: a game gone during its start gets GAME_GONE_S (Steam's container restarts it); one that ran past
+        GAME_RESTART_WINDOW_S and is gone was closed: GAME_CLOSED_S (the launcher sat 30 s after the player closed)."""
+        for runs, want in ((10, launcher.GAME_GONE_S), (600, launcher.GAME_CLOSED_S)):
+            clock = [0.0]
+
+            def fake_sleep(s):
+                clock[0] += 1.0
+            with self.subTest(runs=runs), mock.patch.object(launcher, "IS_WIN", False), \
+                    mock.patch.object(launcher.time, "monotonic", side_effect=lambda: clock[0]), \
+                    mock.patch.object(launcher.time, "sleep", side_effect=fake_sleep), \
+                    mock.patch.object(launcher, "game_alive", side_effect=lambda r=runs: clock[0] < r), \
+                    mock.patch.object(launcher, "game_launcher_running", return_value=False), \
+                    mock.patch.object(launcher, "say"):
+                self.assertTrue(launcher.wait_for_game(None))
+                self.assertLessEqual(clock[0] - runs, want + 1)
+                self.assertGreaterEqual(clock[0] - runs, want)
+

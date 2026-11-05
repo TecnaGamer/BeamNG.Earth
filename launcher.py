@@ -49,7 +49,9 @@ GCPATCH_NAME = "libbngearth_gcpatch.so"
 RECOMMENDED = ["--deshadow", "full", "--near-visual", "detail", "--airports", "on", "--sea", "on", "--trees", "on",
                "--buildings", "on", "--gas-stations", "on"]
 SERVER_PORT = 47613         # earthd's default
-GAME_GONE_S = 30            # no game process this long: the game closed (wait_for_game)
+GAME_GONE_S = 30            # no game process this long: the game closed (wait_for_game) ...
+GAME_RESTART_WINDOW_S = 120  # ... while it starts (Steam's container restarts it then); after that GAME_CLOSED_S:
+GAME_CLOSED_S = 5           # the launcher sat 30 s after the player closed the game (the user, 2026-11-04)
 WINDOWS_GAME_GONE_S = 3     # Windows has no Steam container restart gap; allow prompt relaunch
 GAME_START_S = 180          # waiting for the game's process after asking Steam
 SERVER_START_S = 120        # imports/startup must finish before the game is launched
@@ -975,7 +977,7 @@ def wait_for_game(proc, server=None):
     deadline = time.monotonic() + GAME_START_S
     grace = WINDOWS_GAME_GONE_S if IS_WIN else GAME_GONE_S
     started, dialog_seen, said = False, False, False
-    gone_since = dialog_closed_since = None
+    gone_since = dialog_closed_since = first_seen = None
     while True:
         if server is not None and server.poll() is not None:
             say("The world server stopped. See its log for details; restart BeamNG.Earth to reconnect.")
@@ -985,10 +987,15 @@ def wait_for_game(proc, server=None):
         if game_alive() or (not IS_WIN and direct_alive):
             started = True
             gone_since = None
+            if first_seen is None:
+                first_seen = now
         elif started:
+            # (the long grace only while the game starts: Steam's container restarts it then; a game that ran a
+            # while and is gone was closed)
+            wait = grace if IS_WIN or now - first_seen < GAME_RESTART_WINDOW_S else min(grace, GAME_CLOSED_S)
             if gone_since is None:
                 gone_since = now
-            elif now - gone_since >= grace:
+            elif now - gone_since >= wait:
                 return True
         elif game_launcher_running() or (IS_WIN and direct_alive):
             # Never time out an open BeamNG launch dialog. Once the game has been seen, its bootstrap
