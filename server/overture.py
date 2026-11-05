@@ -768,6 +768,36 @@ class Reader:
             ORDER BY fi, k""").fetchall()
         feats.rules["connectors"] = mg.rule_table(
             [(int(fmap[fi]), cid, [a, a]) for fi, cid, a in rows if keep[fi]], "text")
+        rows = con.execute("""SELECT fi, unnest(sources) AS s, generate_subscripts(sources, 1) AS k FROM t
+            ORDER BY fi, k""").fetchall()
+        by_feature = {}
+        for fi, s, _k in rows:
+            if keep[fi]:
+                by_feature.setdefault(int(fmap[fi]), []).append(s)
+        record, multi = list(feats.attrs["src_record"].tolist()), []
+        for f in sorted(by_feature):
+            ways = way_sources(by_feature[f])
+            if ways:
+                record[f] = max(ways, key=lambda w: _span(w[1]))[0]     # (the first of equals)
+            if len(ways) > 1:
+                multi += [(f, r, b) for r, b in ways]
+        feats.attrs["src_record"] = mg.text_column(record)
+        feats.rules["src_ways"] = mg.rule_table(multi, "text")
+
+
+def _span(between):
+    return 1.0 if not between else float(between[1]) - float(between[0])
+
+
+def way_sources(sources):
+    """[(record, between)] of the OpenStreetMap ways a road segment was made from, along it. A segment on a numbered
+    road lists the route's relation first (property "/routes", record "r67531@98": 130 of 155 main-road segments around
+    Sweden's väg 41, 351 of 1800 in Stockholm, 1820 of 3640 in Newark, Overture 2026-09-23.1, read 2026-11-01), and
+    Overture merges the ways between two junctions into one segment, each with its "between" (a fifth of main-road
+    segments have 2-14), so sources[1] alone is often no way at all. A relation's source carries a property: only the
+    feature's own (no property) count."""
+    return [(s["record_id"], s.get("between")) for s in sources or ()
+            if str(s.get("record_id") or "").startswith("w") and not s.get("property")]
 
 
 def empty(layer):
@@ -790,6 +820,7 @@ def empty(layer):
         f.rules["max_speed_kmh"] = mg.rule_table([], "float")
         f.rules["connectors"] = mg.rule_table([], "text")
         f.rules["oneway"] = mg.rule_table([], "float")
+        f.rules["src_ways"] = mg.rule_table([], "text")
     return f
 
 

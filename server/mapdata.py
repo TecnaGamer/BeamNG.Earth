@@ -98,9 +98,12 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # (osmtags osm_highway, construction/proposed roads left out, GitHub #184: only cells fetched after it; the cached
 # ones get it with the next Overture release bump, not a roads 7 here: every player's roads fetched again)
 # roads 7: a way without lanes takes the same-named way's (osmtags.join); one-way ends at their own lane (oneway_joins)
-# (a segment's own way, not the route relation Overture lists before it, overture._SRC_OWN, GitHub #683: only cells
-# fetched after it; the cached ones get it with the next Overture release bump, as #184 above)
-LAYER_VERSIONS = {"roads": 7}
+# (roads 7 kept for GitHub #683, a segment's own way, not the route relation Overture lists before it,
+# overture._SRC_OWN: only cells fetched after it; the cached ones get it with the next Overture release bump, as #184)
+# roads 8: a segment's src_record is its OpenStreetMap way, the one covering most of it, also on numbered roads (the
+# route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
+# the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
+LAYER_VERSIONS = {"roads": 8}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,

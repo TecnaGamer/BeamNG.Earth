@@ -8,6 +8,7 @@ import sys
 import tempfile
 import math
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -364,6 +365,69 @@ class BuildTileTest(unittest.TestCase):
         f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 0.5, 0.5), (0, "C", 1.0, 1.0)])
         self.assertAlmostEqual(roads.road_specs(f)[0].gap, 150.0, delta=1.0)
         self.assertEqual(len(walks(roads.Spec(9.0, "paved", True, "trunk", False))), 2, "a two-way main street")
+
+    def _centre_covered(self, geom, classes, country="SE"):
+        """m of x (0..255) along y = 100 with a line of the first road's centre on it."""
+        f = features(geom, classes)
+        import markings
+        with mock.patch.object(markings, "dashes", lambda pts, pattern, phase=0.0: [pts]):
+            chunks = roads.build_tile(FRAME, 0, 0, [f], flat, None, walks=[], country=country)
+        xs = [x for c in chunks if c.get("layer") == "mark" or c["m"].startswith("line_")
+              for a, b in zip(c.get("n", []), c.get("n", [])[1:]) if abs(a[1] - 100) < .6 and abs(b[1] - 100) < .6
+              for x in np.arange(min(a[0], b[0]), max(a[0], b[0]), 0.5)]
+        return len({round(x * 2) for x in xs if 0 <= x < 255}) / 2
+
+    def test_a_road_split_in_two_keeps_its_centre_line(self):
+        whole = self._centre_covered([[(-300, 100), (500, 100)]], ["primary"])
+        split = self._centre_covered([[(-300, 100), (120, 100)], [(120, 100), (500, 100)]], ["primary"] * 2)
+        self.assertGreater(whole, 240)
+        self.assertGreater(split, whole - 2, "the map's way split is not a gap in the line")
+
+    def test_centre_line_runs_past_a_side_road(self):
+        for side in ("tertiary", "primary"):            # a lesser road, and the stem of a T of one class
+            got = self._centre_covered([[(-300, 100), (120, 100)], [(120, 100), (500, 100)],
+                                        [(120, 100), (120, 400)]], ["primary", "primary", side])
+            self.assertGreater(got, 240, side)
+        got = self._centre_covered([[(-300, 100), (500, 100)], [(120, 100), (120, 400)]], ["primary", "service"])
+        self.assertGreater(got, 240, "a drive the map does not split the road at")
+
+    def test_edge_dashes_survive_a_second_road_in_the_tile(self):
+        def dashes(geom, classes):
+            chunks = roads.build_tile(FRAME, 0, 0, [features(geom, classes)], flat, None, walks=[], country="SE")
+            return [c for c in chunks if c["m"] == "line_white" and abs(abs(c["n"][0][1] - 100) - 3) < 2
+                    and roads._length(np.array(c["n"])) < 1.5]
+        alone = dashes([[(-300, 100), (500, 100)]], ["primary"])
+        near = dashes([[(-300, 100), (500, 100)], [(-300, 200), (500, 200)]], ["primary", "residential"])
+        self.assertGreater(len(alone), 100, "edge dashes every 3 m, both sides")
+        self.assertEqual(len(near), len(alone), "a second road in the tile takes none of them away")
+
+    def test_centre_line_stops_at_a_crossing(self):
+        got = self._centre_covered([[(-300, 100), (500, 100)], [(120, -300), (120, 500)]], ["primary", "primary"])
+        self.assertLess(got, 248)
+
+    def test_a_through_road_between_two_close_junctions_keeps_its_lines(self):
+        got = self._centre_covered([[(-300, 100), (100, 100)], [(100, 100), (112, 100)], [(112, 100), (500, 100)],
+                                    [(100, 100), (100, 400)], [(112, 100), (112, -300)]],
+                                   ["primary", "primary", "primary", "tertiary", "tertiary"])
+        self.assertGreater(got, 240)
+
+    def test_dual_cap_shares_the_room_by_lanes(self):
+        self.assertAlmostEqual(roads.dual_cap(7.0, 20.0, 2, 1), 2 * 6.4 * 2 / 3)
+        self.assertAlmostEqual(roads.dual_cap(7.0, 20.0, 1, 2), 2 * 6.4 / 3)
+        self.assertAlmostEqual(roads.dual_cap(7.0, 20.0), 6.4)
+        self.assertEqual(roads.dual_cap(7.0, 5.0, 2, 1), 5.0)
+        self.assertEqual(roads.dual_cap(2.0, 20.0, 1, 1), roads.DUAL_MIN_W)
+
+    def test_no_lanes_painted_where_they_do_not_fit(self):
+        pts = np.array([[0.0, 0, 0], [100, 0, 0]])
+        lane = lambda sp, osm: [e for e in roads.extras(sp, pts, 13.0, False, "SE", osm)        # noqa: E731
+                                if e[0].get("kind") in ("lane", "centre")]
+        one = roads.Spec(4.5, "paved", False, "primary", True, lanes=2)
+        self.assertEqual(lane(one, {"lanes": "2"}), [], "4.5 m: one lane, whatever the tag")
+        self.assertTrue(lane(one._replace(width=8.6), {"lanes": "2"}))
+        two = roads.Spec(4.5, "paved", False, "tertiary", False, lanes=2)
+        self.assertEqual(lane(two, {"lanes": "2"}), [], "too narrow for a centre line, as without the tag")
+        self.assertTrue(lane(two._replace(width=6.2), {"lanes": "2"}))
 
     def test_city_street_sidewalks_and_lines_stop_at_crossings(self):
         f = features([[(-300, 100), (300, 100)], [(120, -100), (120, 300)]], ["secondary", "residential"])
@@ -1346,6 +1410,27 @@ class RingWidthTest(unittest.TestCase):
         self.assertTrue(sp[2].urban)                    # a street beside it as before
 
 
+class NamelessCarriagewaysTest(unittest.TestCase):
+    def test_a_numbered_road_s_carriageways_do_not_overlap(self):
+        sp = roads.Spec(11.0, "paved", False, "trunk", True, 2.5, 1, 100.0)
+        f = features([[(0, 0), (0, 400)], [(7, 400), (7, 0)]], ["trunk", "trunk"], subtypes=["road", "road"])
+        f.attrs["name"] = np.array(["", ""], dtype=object)
+        got = roads.dual_carriageways(f, [sp, sp])
+        self.assertAlmostEqual(got[0].width, 6.4, 1)
+        self.assertAlmostEqual(got[1].width, 6.4, 1)
+        self.assertIsNone(got[0].median, "no town median between them")
+
+    def test_a_fast_carriageway_past_houses_has_no_sidewalks(self):
+        sp = roads.Spec(7.0, "paved", True, "primary", True, 2.5, 1, 100.0)
+        self.assertFalse(roads.has_sidewalks(sp))
+        self.assertTrue(roads.has_sidewalks(sp._replace(kmh=50.0)))
+        self.assertTrue(roads.has_sidewalks(sp._replace(sides=(1,))), "the map says so")
+
+    def test_a_wide_median_changes_nothing(self):
+        sp = roads.Spec(9.0, "paved", False, "trunk", True, 2.5, 1, 100.0)
+        f = features([[(0, 0), (0, 400)], [(20, 400), (20, 0)]], ["trunk", "trunk"], subtypes=["road", "road"])
+        f.attrs["name"] = np.array(["", ""], dtype=object)
+        self.assertEqual(roads.dual_carriageways(f, [sp, sp]), [sp, sp])
 
 
 class MedianTest(unittest.TestCase):

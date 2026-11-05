@@ -21,6 +21,7 @@ import time
 
 import numpy as np
 
+import secrossings
 import dem as demmod
 import farfield
 import furniture
@@ -535,8 +536,10 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     except Exception as e:          # no decks: the graph follows the ground under bridges
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
+    nodes = secrossings.read(_s.md, frame, keys) if str(rules.get("country") or "").upper() == "SE" else None
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, widths=_s.widths, left_hand=left_hand,
-                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys))
+                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
+                              priority=None if nodes is None else nodes["priority"])
     graph["rules"] = rules
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])
@@ -814,6 +817,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
+    near_cells = roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)
+    nodes = secrossings.read(_s.md, frame, near_cells) if str(country or "").upper() == "SE" else None
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
@@ -823,10 +828,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
-                                 signals=furniture.signals_for(_s.md, frame,
-                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+                                 signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes)
     mark("build_tile")
-    chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
+    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
     mark("rails")
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -893,6 +897,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("guardrails")
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts)
+    wide = {}                           # (the wider cells' ways, both of these want the same)
+    guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
+                                                     country, guardrail_rows, tx, ty, chunks, wide)
+    guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
+    guardrail_rows = guardrail_rows + _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, _s.widths, left_hand,
+                                                 country, tx, ty, wide)
     mark("medians")
     _piers, _beams = bridges.piers_in(box), bridges.beams_in(box)
     if _bridge_fps:
@@ -1535,6 +1545,61 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
         return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
+    """Sweden's roadside posts' Forest rows of a road tile (kantstolpar.tile_rows), [] if they fail (logged)."""
+    import kantstolpar
+    try:
+        return kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
+    except Exception as ex:
+        log.warning("kantstolpar: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _wide_ways(wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty):
+    """motesfri._ways of a tile, read once in dict wide."""
+    import motesfri
+    import roads as roadsmod
+    if "ways" not in wide:
+        cells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, motesfri.REACH_M)]
+        wide["ways"] = motesfri._ways(frame, cells, box, urban, widths, left_hand)
+    return wide["ways"]
+
+
+def _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, widths, left_hand, country, tx, ty, wide=None):
+    """Sweden's signs' Forest rows of a road tile (sesigns.tile_rows; only there are the wider cells read), [] if they
+    fail (logged). After every barrier's rows: medians takes all that come before them for barriers."""
+    import sesigns
+    try:
+        if str(country or "").upper() not in sesigns.COUNTRIES:
+            return []
+        ways = None
+        if sesigns.wanted(country, near_roads):
+            ways = _wide_ways({} if wide is None else wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty)
+        return sesigns.tile_rows(frame, ways, near_roads, nodes, box, elev, country)
+    except Exception as ex:
+        log.warning("signs: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_hand, country, mapped, tx, ty, chunks=None,
+                   wide=None):
+    """The centre barriers' Forest rows of a road tile on Sweden's 2+1 roads (motesfri.tile_rows; only there are the
+    wider cells read), [] if they fail (logged: the tile goes on without them). chunks gets the lane drops' arrows and
+    its lines bent to them."""
+    import motesfri
+    try:
+        if not motesfri.wanted(country, near_roads):
+            return []
+        ways = _wide_ways({} if wide is None else wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty)
+        if chunks is not None:
+            motesfri.bend_lines(chunks, ways)
+            chunks.extend(motesfri.drop_marks(ways, box))
+        return motesfri.tile_rows(frame, None, box, elev, urban, widths, left_hand, mapped, ways)
+    except Exception as ex:
+        log.warning("2+1 centre barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []
 
 

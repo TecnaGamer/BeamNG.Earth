@@ -11,8 +11,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import mapcells  # noqa: E402
+import mapgeom  # noqa: E402
 import netfetch  # noqa: E402
 import railtags  # noqa: E402
+import roads  # noqa: E402
 from test_roads import features  # noqa: E402
 
 
@@ -116,6 +118,28 @@ class LaneTagsTest(unittest.TestCase):
         self.assertEqual(f.attrs["osm_overtaking"][0], "no")
         self.assertIsNone(f.attrs["osm_change_lanes"][0])
 
+    def test_a_segment_of_several_ways_keeps_each_ways_tags(self):
+        f = features([[(0.0, 100.0), (900.0, 100.0)], [(0.0, 0.0), (5.0, 5.0)]], ["primary", "residential"],
+                     subtypes=["road", "road"])
+        f.attrs["src_record"] = np.array(["w31@1", "w33@1"])
+        f.rules["src_ways"] = mapgeom.rule_table([(0, "w30@1", [0.0, 0.25]), (0, "w31@1", [0.25, 0.75]),
+                                                  (0, "w99@1", [0.75, 1.0])])
+        lo, la = f.lonlat[0]
+        key = mapcells.cell_of(float(la), float(lo))
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+        shard = {"ways": {"30": {"lanes:forward": "1", "lanes:backward": "2", "lanes": "3"},
+                          "31": {"lanes:forward": "2", "lanes:backward": "1", "lanes": "3"}}}
+        fetch = _Fetcher({"lanes/manifest.json": json.dumps({"built": "2026-10-30T03:00:00Z"}).encode(),
+                          f"lanes/{sx}/{sy}.json.gz": gzip.compress(json.dumps(shard).encode())})
+        with tempfile.TemporaryDirectory() as d:
+            railtags.LaneTags(d, fetch).join(f, key)
+        self.assertEqual(f.attrs["osm_lanes_forward"][0], "2", "the columns: the way covering most of it")
+        got = roads.lane_tag_parts(f, 0)
+        self.assertEqual([(a, b, w) for a, b, w, _t in got], [(0.0, 0.25, "30"), (0.25, 0.75, "31"), (0.75, 1.0, "99")])
+        self.assertEqual(got[0][3]["lanes:backward"], "2")
+        self.assertEqual(got[1][3]["lanes:forward"], "2")
+        self.assertIsNone(got[2][3], "a way without lane tags, not its neighbour's")
+        self.assertEqual(roads.lane_tag_parts(f, 1), [(0.0, 1.0, "33", None)], "one way: the whole segment")
 
 class WaysTest(unittest.TestCase):
     """A shard's ways kept compact (railtags.Ways): the same lookups as the dict, the distinct tag sets once."""
