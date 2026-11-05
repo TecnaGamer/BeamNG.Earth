@@ -215,11 +215,14 @@ class BaseRoutingTest(unittest.TestCase):
         self.assertIsNone(S._base_process(SimpleNamespace(**{**vars(s), "block_pools": []}), earthd.LANE_REQUEST))
         # the photo process (PHOTO_PROCESS_MIN_CPUS): a requested block's photo there below FAST_BASE_V; faster, it
         # makes the stand-in first and the photo goes to the other lane as before
+        # (a prefetched block's photo there too, at any speed: in the request lane's process it held the next block the
+        # game asked for)
         p = SimpleNamespace(**{**vars(s), "photo_pool": "photo", "fast": False})
         self.assertEqual((S._base_process(p, earthd.LANE_REQUEST), S._base_process(p, earthd.LANE_PREFETCH)),
-                         ("photo", "request"))
+                         ("photo", "photo"))
         p.fast = True
-        self.assertEqual(S._base_process(p, earthd.LANE_REQUEST), "prefetch")
+        self.assertEqual((S._base_process(p, earthd.LANE_REQUEST), S._base_process(p, earthd.LANE_PREFETCH)),
+                         ("prefetch", "photo"))
         calls = []
 
         def write_base(anchor, cx, cy, photo=None, quick=False):

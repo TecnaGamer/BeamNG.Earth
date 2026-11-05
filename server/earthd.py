@@ -2922,8 +2922,12 @@ class Server:
         disk (_base_elsewhere), else it is rendered here."""
         if not self.block_pools or self.imagery is None:
             return None
-        if lane == LANE_REQUEST and getattr(self, "photo_pool", None) is not None and not getattr(self, "fast", False):
-            return self.photo_pool      # (fast: the photo process makes its stand-in first, _stand_in)
+        photo = getattr(self, "photo_pool", None)
+        if photo is not None and (lane != LANE_REQUEST or not getattr(self, "fast", False)):
+            # (fast: the photo process makes a requested block's stand-in first, _stand_in.) A prefetched block's photo
+            # there too: in the request lane's process it held the next block the game asked for, 0.2-1.8 s each
+            # (a cold Chicago drive at 100 mph: requested blocks queued 2-4 s, the edge warning on, 2026-11-05)
+            return photo
         return self.block_pools[LANE_PREFETCH if lane == LANE_REQUEST else LANE_REQUEST][0]
 
     def _base_photo(self, anchor, cx, cy, pool=None, urgent=False, quick=False):
@@ -6224,7 +6228,9 @@ class Connection:
 
         async def run():
             try:
-                pool = s.block_pools[LANE_PREFETCH][0] if s.block_pools else None     # its BC7 encode
+                # its BC7 encode: in the photo process when there is one (in the prefetch lane's, a block ahead waited
+                # behind it and came late, 2026-11-05)
+                pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
                 name = None
                 if pool is not None:
