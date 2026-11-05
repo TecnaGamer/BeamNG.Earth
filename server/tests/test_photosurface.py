@@ -71,14 +71,25 @@ class ClassifyTest(unittest.TestCase):
 
     def test_a_little_warmer_needs_green_verges(self):
         warm = self.st(sat=0.055, exg=0.0)
-        self.assertIsNone(photosurface.classify(warm))                                    # (no verge: not enough)
-        self.assertIsNone(photosurface.classify(dict(warm, vexg=0.01)))                   # (verges as grey as it)
+        self.assertNotEqual(photosurface.classify(warm), "paved")                         # (no verge: not enough)
+        self.assertNotEqual(photosurface.classify(dict(warm, vexg=0.01)), "paved")        # (verges as grey as it)
         self.assertEqual(photosurface.classify(dict(warm, vexg=0.08)), "paved")           # (set against green)
-        self.assertIsNone(photosurface.classify(dict(warm, sat=0.07, vexg=0.08)))         # (too warm still)
+        self.assertNotEqual(photosurface.classify(dict(warm, sat=0.07, vexg=0.08)), "paved")   # (too warm still)
+
+    def test_pale_neutral_is_gravel(self):
+        pale = self.st(sat=0.09, lum=170.0, vexg=0.10)                  # (grey-beige, not green, not asphalt-grey)
+        self.assertEqual(photosurface.classify(pale), "gravel")
+        self.assertIsNone(photosurface.classify(self.st(sat=0.09, lum=120.0)))      # (darker: dirt)
+        self.assertIsNone(photosurface.classify(self.st(sat=0.15, lum=170.0)))      # (warmer: dirt)
+        self.assertIsNone(photosurface.classify(self.st(sat=0.09, lum=170.0, exg=0.05)))   # (greenish, not grass-matched)
+
+    def test_asphalt_and_grass_come_first(self):
+        self.assertEqual(photosurface.classify(self.st(sat=0.04, lum=170.0)), "paved")
+        self.assertEqual(photosurface.classify(self.st(sat=0.15, exg=0.1, vexg=0.1, lum=170.0)), "grass")
 
     def test_the_limit(self):
         self.assertEqual(photosurface.classify(self.st(sat=photosurface.PAVED_MAX_SAT)), "paved")
-        self.assertIsNone(photosurface.classify(self.st(sat=photosurface.PAVED_MAX_SAT + 0.01)))
+        self.assertNotEqual(photosurface.classify(self.st(sat=photosurface.PAVED_MAX_SAT + 0.01)), "paved")
 
 
 class MeasureTest(unittest.TestCase):
@@ -169,8 +180,10 @@ class HookTest(unittest.TestCase):
         photosurface.ON, photosurface.verdicts = self.on, self.verdicts
 
     def test_only_the_unmapped_road_takes_the_photo(self):
-        photosurface.verdicts = lambda feats, surface_of, root=None: ({0: "paved", 1: "paved", 2: "grass"}, False)
-        f = Feats(["track", "track", "track"], ["", "gravel", ""])
+        photosurface.verdicts = lambda feats, surface_of, root=None: ({0: "paved", 1: "paved", 2: "grass", 3: "gravel"}, False)
+        f = Feats(["track", "track", "track", "track"], ["", "gravel", "", ""])
+        self.assertEqual(roads._surface_value(f, 3), "gravel")
+        self.assertEqual(roads.surface_kind("track", roads._surface_value(f, 3)), "gravel")
         self.assertEqual(roads._surface_value(f, 2), "grass")           # (a grass lane: the ground layer's, no decal)
         self.assertEqual(roads.terrain_surface(types.SimpleNamespace(surf="grass")), "grass")
         self.assertEqual(roads._surface_value(f, 0), "asphalt")          # nothing mapped: the photo's

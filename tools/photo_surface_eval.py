@@ -83,6 +83,13 @@ def main():
         by.setdefault((r[1], r[3]), []).append(r)
     for (c, t), rs in sorted(by.items()):
         print(f"  {c:13s} mapped {t:7s}: {len(rs):4d} roads, called paved {sum(1 for r in rs if r[4] == 'paved'):4d}")
+    print("verdicts by mapped surface:")
+    for t in ("paved", "gravel", "dirt", "cobble"):
+        c = {}
+        for r in rows:
+            if r[3] == t:
+                c[r[4]] = c.get(r[4], 0) + 1
+        print(f"  mapped {t:7s}: {dict(sorted(c.items(), key=lambda kv: str(kv[0])))}")
     bad = [r for r in rows if (r[3] == "paved") != (r[4] == "paved")]
     bad.sort(key=lambda r: (r[3] != "paved", -r[5]["n"]))
     for r in bad[:a.list_misses]:

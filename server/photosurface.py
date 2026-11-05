@@ -5,8 +5,8 @@ A road of PHOTO_CLASSES with no surface value (OpenStreetMap's, Overture's) is r
 contrast, its verges) in the z17 tiles of a regional tile-cache source (imagery_regional.REGIONAL kind "xyz": ~0.75 m a
 pixel in Czechia) that are on the disk already (never fetched here; a tile not there yet is "not known yet", and the
 caller says so with revisit.fault so nothing built from it is kept). Grey, unsaturated, not green, neither dark nor
-glaring: asphalt. A verdict is "paved", "grass" (a lane as green as its verges: the ground's grass layer, no dirt strip) or None (the road
-stays as it was: dirt); Sentinel-2's 10 m pixels, a
+glaring: asphalt. A verdict is "paved", "grass" (a lane as green as its verges: the ground's grass layer, no dirt strip), "gravel" (pale and
+neutral) or None (the road stays as it was: dirt); Sentinel-2's 10 m pixels, a
 source that is not a tile cache and a road in no regional box give None without a fault.
 
 The colour is measured (statistics of the samples, stats()) and classified (classify()) apart, so the rule is tuned
@@ -22,7 +22,7 @@ import numpy as np
 import imagery_regional
 
 ON = os.environ.get("BNE_PHOTO_SURFACE", "").lower() in ("1", "on", "true")
-TAG = "ps1"                     # in the road specs' cache key while on (roads.road_specs): bump with a rule change
+TAG = "ps2"                     # in the road specs' cache key while on (roads.road_specs): bump with a rule change
 ZOOM = 17
 PHOTO_CLASSES = {"track", "service", "unclassified"}     # (a residential street is built up: the land cover's call)
 SAMPLE_M = 1.0                  # m between samples along the road
@@ -52,6 +52,13 @@ VERGE_CONTRAST = 0.03
 GRASS_MIN_EXG = 0.06
 GRASS_MATCH = 0.035
 GRASS_MAX_SAT = 0.25
+# gravel (task 012): what is left pale and neutral: not green, not brown, light, a little warm. Of 271 mapped roads 50 are
+# (L >= 140, saturation 0.05-0.12, |excess green| <= 0.03) beside the paved and grass rules: 30 paved, 17 gravel, 2
+# cobble, 1 dirt. Colour cannot tell worn asphalt from gravel, but it tells either from a brown dirt track with ruts,
+# which is what these roads were drawn as; gravel (a light strip, the loose layer) is the near miss for both.
+GRAVEL_MIN_L = 140.0
+GRAVEL_SAT = (0.05, 0.12)
+GRAVEL_MAX_EXG = 0.03
 MEM_TILES = 96
 
 _LOCK = threading.Lock()
@@ -172,8 +179,8 @@ def stats(rgb, valid):
 
 
 def classify(st):
-    """"paved" for a road whose centre samples are grey asphalt, "grass" for one as green as its verges, else None (st:
-    stats())."""
+    """"paved" for a road whose centre samples are grey asphalt, "grass" for one as green as its verges, "gravel" for a
+    pale neutral one that is neither, else None (st: stats())."""
     if st is None or st["n"] < MIN_SAMPLES:
         return None
     v = st.get("vexg")
@@ -181,6 +188,8 @@ def classify(st):
         return "paved"
     if v is not None and st["exg"] >= GRASS_MIN_EXG and st["sat"] <= GRASS_MAX_SAT             and abs(v - st["exg"]) <= GRASS_MATCH:
         return "grass"
+    if st["lum"] >= GRAVEL_MIN_L and GRAVEL_SAT[0] <= st["sat"] <= GRAVEL_SAT[1] and abs(st["exg"]) <= GRAVEL_MAX_EXG:
+        return "gravel"
     return None
 
 
@@ -226,8 +235,8 @@ def measure(ring, root=None):
 
 
 def verdicts(feats, surface_of, root=None):
-    """({feature index: "paved" or "grass"}, missing): the candidates of feats (a roads layer: a class of PHOTO_CLASSES and
-    surface_of(i) None) the photo says are paved, or a grass lane. missing: a candidate's tile is not on disk yet (not known: the
+    """({feature index: "paved", "grass" or "gravel"}, missing): the candidates of feats (a roads layer: a class of
+    PHOTO_CLASSES and surface_of(i) None) the photo says are paved, a grass lane or gravel. missing: a candidate's tile is not on disk yet (not known: the
     caller keeps nothing built from this)."""
     cls = feats.attrs.get("class")
     out, missing = {}, False
