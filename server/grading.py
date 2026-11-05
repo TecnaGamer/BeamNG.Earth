@@ -54,7 +54,9 @@ SIGMA_MAJOR_M = float(os.environ.get("BNE_GRADE_MAJOR", "40"))
 # and walls on flat land, GitHub #335. Not secondary yet: Otto Road's junction with I-80's ramps came out 0.29 m apart
 # once its dip under I-80 (underpass_offsets) was laid on the longer smoothing; the ramps' pins need a look first)
 MAJOR_CLASSES = ("motorway", "trunk", "primary")      # (not their slip roads: Overture's subclass "link", Spec.link)
-DIRT_SIGMA_M = 8.0          # m, profile smoothing of gravel / dirt roads (5 followed the DEM's bumps: GitHub #414)
+DIRT_SIGMA_M = 8.0          # m, profile smoothing of gravel / dirt roads (the main ones: they stay smooth)
+# a minor dirt road follows the elevation data closely instead, so it is bumpy and cannot be taken flat out
+DIRT_SIGMA_MINOR_M = float(os.environ.get("BNE_DIRT_SIGMA", "2.5"))   # (5 followed the DEM's bumps: GitHub #414)
 # longer smoothing for the mid classes too (mpsteppe's PR #289: real roads have long vertical curves, the larger the
 # longer; 12 m left bumps the roads do not have); MAJOR_CLASSES keep SIGMA_MAJOR_M
 CLASS_SIGMA_M = {"secondary": 25.0, "tertiary": 20.0, "unclassified": 16.0, "residential": 14.0}
@@ -719,10 +721,122 @@ def _point_along(line, d):
 def profile_sigma(spec):
     """m: the profile smoothing of a road of this spec."""
     if spec.kind not in roadsmod.BUILT:
-        return DIRT_SIGMA_M
+        if spec.cls in DIRT_SOFT_CLASSES:
+            return DIRT_SIGMA_M          # a main dirt road stays as smooth as it was (dirt_bumps' "main" ones too)
+        return DIRT_SIGMA_MINOR_M        # a minor one keeps the ground's own bumps
     if spec.cls in MAJOR_CLASSES and not getattr(spec, "link", False):
         return max(SIGMA_M, SIGMA_MAJOR_M)
     return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M)) if not getattr(spec, "link", False) else SIGMA_M
+
+
+DIRT_ROUGH = float(os.environ.get("BNE_DIRT_BUMP", "1.0"))    # strength of a minor dirt road's damage (1: as below)
+DIRT_MAJOR_SHARE = float(os.environ.get("BNE_DIRT_MAJOR", "0.2"))  # a MAIN dirt road is this much of it (softer)
+# which dirt roads count as "main" (the ones kept soft): the classes a country road is signed as, not just the
+# motorway ones (a mapped `secondary` gravel road is a main road where you drive it at 80 km/h)
+DIRT_SOFT_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
+# a forest track (highway=track) is worse than any of them: "you cannot even get up to speed on it" (the user, 2026-11-02)
+DIRT_TRACK_SHARE = float(os.environ.get("BNE_DIRT_TRACK", "2.5"))
+DIRT_TRACK_WAVE_SHARE = float(os.environ.get("BNE_DIRT_TRACK_WAVE", "0.5"))   # ... but less of the soft undulation:
+                                                                              # waves read as a pattern, holes do not
+DIRT_VERTEX_STEP = 2.0          # m between a dirt road's plan vertices (4 m smoothed a pothole away)
+DIRT_UNDULATION_M = 0.15        # m: the soft rise and fall a country road keeps between its potholes
+DIRT_UNDULATION_WAVES = ((10.0, 1.0), (6.0, 0.8))
+DIRT_POTHOLE_EVERY_M = 5.0      # m of road per pothole, on average
+DIRT_POTHOLE_W_M = (3.0, 6.0)   # m: a pothole's width
+DIRT_POTHOLE_D_M = (0.18, 0.32)  # m: its depth
+DIRT_PATCH_EVERY_M = 10.0       # m of road per broken patch (a step of a few cm with soft edges)
+DIRT_PATCH_W_M = (3.0, 7.0)
+DIRT_PATCH_D_M = (0.12, 0.22)
+DIRT_PIT_EVERY_M = 150.0        # m of road per deep pit
+DIRT_PIT_W_M = (2.0, 4.5)
+DIRT_PIT_D_M = (0.30, 0.50)
+DIRT_STEP_MAX_M = float(os.environ.get("BNE_DIRT_STEP", "0.35"))   # m: the steepest step between two 2 m samples
+DIRT_BASE_M = 25.0             # m: the bump pattern's own long waves are removed over this length, so a road keeps
+                               # the terrain's course instead of sinking into it (the roads sat in a ditch, further in
+                               # the worse it got: the damage's mean pulled them down along their length)
+DIRT_TAPER_M = 22.0            # m at each end of a dirt road where its damage fades out: a junction meets the road it
+                               # joins at that road's height, not on a berm of its own potholes
+
+
+def dirt_taper(s_, length):
+    """(n,) 0 at a dirt part's two ends (s_ from 0 to length) rising smoothly to 1 within DIRT_TAPER_M (half a short
+    part's length): its damage and lean fade out where it meets another road, whatever its length."""
+    s_ = np.asarray(s_, np.float64)
+    if length <= 0.0 or DIRT_TAPER_M <= 0.0:
+        return np.zeros(len(s_)) if length <= 0.0 else np.ones(len(s_))
+    tap = np.clip(np.minimum(s_, length - s_) / min(DIRT_TAPER_M, 0.5 * length), 0.0, 1.0)
+    return tap * tap * (3.0 - 2.0 * tap)
+
+
+def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
+    """What a minor dirt road is really like, one value per profile sample (n samples, ext: how many lie past the
+    part's ends): a soft undulation plus discrete damage -- potholes, broken patches (a step with soft edges) and the
+    odd deep pit -- placed from the road's own position, so every process builds the same ones. None for a built road
+    or a main one. The sizes are metres; BNE_DIRT_BUMP scales the lot (1: as here, 0: off)."""
+    if spec.kind in roadsmod.BUILT or DIRT_ROUGH <= 0.0:
+        return None
+    if spec.cls == "track":
+        scale, wave = DIRT_TRACK_SHARE, DIRT_TRACK_WAVE_SHARE
+    elif spec.cls in DIRT_SOFT_CLASSES:
+        scale = wave = DIRT_MAJOR_SHARE
+    else:
+        scale = wave = 1.0
+    if scale <= 0.0 and wave <= 0.0:
+        return None
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 2 or n <= 0:
+        return None
+    s_ = (np.arange(n, dtype=np.float64) - float(ext[0])) * float(step)
+    seed = (int(round(float(xy[0, 0]) * 7.0)) * 7919 + int(round(float(xy[0, 1]) * 7.0)) * 104729) & 0x7FFFFFFF
+    rng = np.random.default_rng(seed)
+    out = np.zeros(n)
+    share2 = 0.0
+    for knot_m, wshare in DIRT_UNDULATION_WAVES:           # the road's own soft rise and fall
+        if s_[-1] < knot_m:
+            continue
+        knots = rng.normal(0.0, 1.0, int(s_[-1] / knot_m) + 3)
+        t = s_ / knot_m
+        i0 = np.clip(np.floor(t).astype(int), 0, len(knots) - 2)
+        f = t - i0
+        f = f * f * (3.0 - 2.0 * f)
+        out += wshare * (knots[i0] * (1.0 - f) + knots[i0 + 1] * f)
+        share2 += wshare * wshare
+    if float(out.std()) > 1e-9:
+        out *= DIRT_UNDULATION_M * wave / math.sqrt(share2)
+
+    i_of = lambda pos: pos / float(step) + float(ext[0])    # (sample index of a distance along the part)
+
+    def add(c, half, fn):                                  # a feature's few metres only (it is ~0 farther out):
+        i0 = max(0, int(math.floor(i_of(c - half))))       # the whole road per pothole was O(length^2)
+        i1 = min(n, int(math.ceil(i_of(c + half))) + 1)
+        if i1 > i0:
+            out[i0:i1] += fn(s_[i0:i1])
+
+    def bowl(c, w, d):                                     # a rounded hole: full depth in the middle, soft rim
+        add(c, 1.5 * w, lambda x: -d * np.exp(-((x - c) / (0.45 * w)) ** 2))
+
+    length = float(s_[-1]) if len(s_) else 0.0
+    if length > 10.0:
+        for _ in range(int(rng.poisson(max(1.0, length / DIRT_POTHOLE_EVERY_M)))):
+            bowl(float(rng.uniform(0.0, length)), float(rng.uniform(*DIRT_POTHOLE_W_M)),
+                 float(rng.uniform(*DIRT_POTHOLE_D_M)) * DIRT_ROUGH * scale)
+        for _ in range(int(rng.poisson(max(1.0, length / DIRT_PATCH_EVERY_M)))):   # broken patch: a step, soft edges
+            c = float(rng.uniform(0.0, length))
+            w = float(rng.uniform(*DIRT_PATCH_W_M))
+            d = float(rng.uniform(*DIRT_PATCH_D_M)) * DIRT_ROUGH * scale * (1.0 if rng.random() < 0.5 else -1.0)
+            edge = 0.35 * w
+            add(c, 0.5 * w + 4.0 * edge, lambda x, c=c, w=w, d=d, edge=edge:
+                d * 0.5 * (np.tanh((x - (c - 0.5 * w)) / edge) - np.tanh((x - (c + 0.5 * w)) / edge)))
+        for _ in range(int(rng.poisson(max(0.3, length / DIRT_PIT_EVERY_M)))):      # the odd deep pit
+            bowl(float(rng.uniform(0.0, length)), float(rng.uniform(*DIRT_PIT_W_M)),
+                 float(rng.uniform(*DIRT_PIT_D_M)) * DIRT_ROUGH * scale)
+        if DIRT_BASE_M > 0.0 and length > 1.5 * DIRT_BASE_M:   # keep the terrain's own course: no net rise or fall
+            k = max(1, int(DIRT_BASE_M / max(step, 1e-6)))
+            pad = k // 2
+            padded = np.r_[np.full(pad, out[0]), out, np.full(k - pad - 1, out[-1])]
+            out = out - np.convolve(padded, np.ones(k) / k, mode="valid")[:len(out)]
+    out *= dirt_taper(s_, length)       # (nothing right at a junction, short parts too: that road sets the height)
+    return out
 
 
 def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_xy=None, bank_ext=None, banked=True):
@@ -732,8 +846,32 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     built = spec.kind in roadsmod.BUILT
     zs = smooth_profile(median_profile(z, step, MEDIAN_M if built else DIRT_MEDIAN_M), step,
                         profile_sigma(spec))[ext[0]:len(z) - ext[1]]
-    # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass)
-    every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
+    bumps = dirt_bumps(xy, spec, len(z), ext, step)
+    if bumps is not None:                       # (not smoothed again: a pothole's edge is sharp, that is the point)
+        z0 = zs + bumps[ext[0]:len(z) - ext[1]]
+        cap = DIRT_STEP_MAX_M
+        if bumps is not None and spec.cls == "track":       # a forest track may be steeper: it is a track, not a road
+            cap = DIRT_STEP_MAX_M * 1.6
+        if cap > 0.0 and len(z0) > 1:               # but no walls: a pothole's far side is a slope, not a cliff
+            d = np.clip(np.diff(z0), -cap, cap)
+            capped = np.r_[z0[0], z0[0] + np.cumsum(d)]
+            # (clipping loses height where it bites: give it back smoothed, so it stays local -- a straight tilt across
+            # the whole road leaned it into the ground, the further the deeper)
+            lost = z0 - capped
+            if float(np.abs(lost).max()) > 1e-6:
+                back = smooth_profile(lost, step, 40.0)
+                back += float(np.mean(lost - back))
+                capped += back
+            z0 = capped
+        # (the give-back is smoothed over 40 m and shifted: tapered again, so the ends stay at the smooth profile's
+        # height, where the joining road meets this one)
+        sp = (np.arange(len(zs), dtype=np.float64)) * float(step)
+        zs = zs + (z0 - zs) * dirt_taper(sp, float(sp[-1]) if len(sp) else 0.0)
+    # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass); a minor dirt road keeps
+    # every sample, or its potholes would be smoothed away by the linear stretches between the vertices
+    minor_dirt = bumps is not None and spec.cls not in DIRT_SOFT_CLASSES
+    vstep = DIRT_VERTEX_STEP if minor_dirt else VERTEX_STEP
+    every = max(1, int(round(vstep / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
     # the carriageway as a city street would have it (never from the land cover), or the measured one
     # (a mountain pass road its own: no town on a pass, roads._mountain_roads)
@@ -749,6 +887,9 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     if b is not None:
         if bank_xy is not None:
             b = b[bext[0]:len(bank_xy) - bext[1]]
+        if not built:           # a dirt road's lean: level across where it meets another road (after the trim: the
+            sp = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(xy, np.float64)[:, :2], axis=0).T))]  # ramp
+            b = b * dirt_taper(sp, float(sp[-1]))                                      # was trimmed away with ext)
         plan.bank = b[keep]
     return plan
 
@@ -777,9 +918,51 @@ BANK_SIGMA_M = 12.0         # remove discrete box-window steps in cross slope, n
 RING_LEVEL_ON = os.environ.get("BNE_RING_LEVEL", "on") != "off"
 
 
+DIRT_BANK_M = float(os.environ.get("BNE_DIRT_BANK", "0.2"))   # cross slope a broken dirt road leans to (m per m)
+DIRT_BANK_WAVES = ((27.0, 1.0), (13.0, 0.6), (7.0, 0.35))      # how often the lean changes sides (m)
+
+
+def dirt_bank(xy, spec, ext=(0, 0), step=PROFILE_STEP):
+    """The cross slope a dirt road leans to along itself (m per m toward its left): now the left side is low, now the
+    right, at a few scales -- a pothole on one side of the road rather than a wave across the whole of it. Seeded by the
+    road's own position, so every process builds the same. None for a built road or BNE_DIRT_BANK 0."""
+    if spec.kind in roadsmod.BUILT or DIRT_BANK_M <= 0.0:
+        return None
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 3:
+        return None
+    s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    seed = (int(round(float(xy[0, 0]) * 11.0)) * 2654435761 + int(round(float(xy[0, 1]) * 11.0)) * 40503) & 0x7FFFFFFF
+    rng = np.random.default_rng(seed)
+    out = np.zeros(len(xy))
+    norm = 0.0
+    for size, share in DIRT_BANK_WAVES:
+        if s_[-1] < size:
+            continue
+        knots = rng.uniform(-1.0, 1.0, int(s_[-1] / size) + 3)
+        t = s_ / size
+        i0 = np.clip(np.floor(t).astype(int), 0, len(knots) - 2)
+        f = t - i0
+        f = f * f * (3.0 - 2.0 * f)
+        out += share * (knots[i0] * (1.0 - f) + knots[i0 + 1] * f)
+        norm += share * share
+    if float(out.std()) > 1e-9:
+        out *= DIRT_BANK_M / math.sqrt(norm)
+    if ext[0] or ext[1]:                      # a junction is level across: the lean fades out at the ends
+        n = len(out)
+        k = max(1, int(min(n, 12)))
+        ramp = np.ones(n)
+        ramp[:k] = np.linspace(0.0, 1.0, k)
+        ramp[-k:] = np.linspace(1.0, 0.0, k)
+        out *= ramp
+    return out
+
+
 def bank(xy, spec, abut=(False, False), ext=(0, 0)):
     """(n,) the cross slope of a road part's centreline xy (n, 2) (m per m toward its left), or None (not banked)."""
-    if not BANK_ON or spec.kind not in roadsmod.BUILT or spec.cls not in BANK_DESIGN or len(xy) < 3:
+    if spec.kind not in roadsmod.BUILT:
+        return dirt_bank(xy, spec, ext)
+    if not BANK_ON or spec.cls not in BANK_DESIGN or len(xy) < 3:
         return None
     v, f = BANK_LINK if getattr(spec, "link", False) else BANK_DESIGN[spec.cls]
     r_min = v * v / (127.0 * (BANK_E_MAX + f))
@@ -4742,6 +4925,62 @@ def _never_raised(spec):
     return spec.cls in APPROACH_SKIP and not _is_link(spec)
 
 
+TERRAIN_ROUGH_M = float(os.environ.get("BNE_TERRAIN_BUMP", "0.35"))   # off-road roughness (std), about twice a minor
+                                                                       # dirt road's: beside it is rougher than on it
+TERRAIN_ROUGH_WAVES = ((9.0, 1.0), (4.5, 0.6), (2.4, 0.3))             # (feature size m, share)
+
+
+def _hash01(i, j, salt=0):
+    """A stable pseudo-random value in [0, 1) for lattice points (Python's hash() is randomised per process)."""
+    i = np.asarray(i, np.int64)
+    j = np.asarray(j, np.int64)
+    h = (i * np.int64(73856093)) ^ (j * np.int64(19349663)) ^ np.int64(int(salt) * 83492791)
+    h = h.astype(np.uint64)
+    h ^= h >> np.uint64(13)
+    h *= np.uint64(1274126177)
+    h ^= h >> np.uint64(16)
+    return (h & np.uint64(0xFFFFFF)).astype(np.float64) / float(0x1000000)
+
+
+# The land off the roads roughened (PR #677): opt-in (BNE_TERRAIN_BUMPS=on) until it is one kernel applied the same way
+# on every ground path (provisional blocks and far tiles too) and kept off towns, water and building sites; on, it is
+# ~0.3-0.5 s of numpy per million samples on every block, road tile and far tile (2026-11-05 merge review).
+TERRAIN_BUMPS_ON = os.environ.get("BNE_TERRAIN_BUMPS", "off") == "on"
+
+
+def terrain_bumps(lat, lon):
+    """World-locked roughness of the land off the roads (m), the same value whatever process or tile asks: value noise
+    at a few sizes, about TERRAIN_ROUGH_M (std). 0.0 (nothing added) unless TERRAIN_BUMPS_ON, or when BNE_TERRAIN_BUMP
+    is 0."""
+    if not TERRAIN_BUMPS_ON or TERRAIN_ROUGH_M <= 0.0:
+        return 0.0
+    la = np.asarray(lat, np.float64)
+    lo = np.asarray(lon, np.float64)
+    y = la * 110574.0
+    x = lo * 111320.0 * np.cos(np.radians(la))
+    out = np.zeros(np.shape(la), np.float64)
+    norm = 0.0
+    for size, share in TERRAIN_ROUGH_WAVES:
+        fx = x / size
+        fy = y / size
+        i0 = np.floor(fx)
+        j0 = np.floor(fy)
+        tx = fx - i0
+        ty = fy - j0
+        sx = tx * tx * (3.0 - 2.0 * tx)
+        sy = ty * ty * (3.0 - 2.0 * ty)
+        i0 = i0.astype(np.int64)
+        j0 = j0.astype(np.int64)
+        v00 = _hash01(i0, j0, size)
+        v10 = _hash01(i0 + 1, j0, size)
+        v01 = _hash01(i0, j0 + 1, size)
+        v11 = _hash01(i0 + 1, j0 + 1, size)
+        v = (v00 * (1.0 - sx) + v10 * sx) * (1.0 - sy) + (v01 * (1.0 - sx) + v11 * sx) * sy
+        out += share * (v - 0.5)
+        norm += share * share
+    return out * (TERRAIN_ROUGH_M / (0.1875 * math.sqrt(norm)))
+
+
 class GradedDem:
     """dem.Dem with sample() graded under the roads; everything else passes through."""
 
@@ -4750,6 +4989,8 @@ class GradedDem:
 
     def sample(self, lat, lon, zoom, progress=None):
         base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
+        # the land off the roads is rougher than the roads themselves (the grading flattens the road's own strip)
+        base = np.asarray(base, np.float64) + terrain_bumps(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
         return self._grader.apply(lat, lon, base)
 
     def __getattr__(self, name):

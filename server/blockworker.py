@@ -299,7 +299,9 @@ def plan_ahead(g, frame, cx, cy, half):
 
 def ground(frame, la, lo, z):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
-    the sea floor carved in (--sea on)."""
+    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
+    import grading
+    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
     if _s.sea is not None:
