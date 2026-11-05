@@ -34,6 +34,7 @@ import numpy as np
 import junctions
 import mapcells
 import mapgeom
+import photosurface
 import roadmesh
 import staging
 
@@ -1587,6 +1588,41 @@ def surface_kind(cls, surface):
 
 
 def _surface_value(feats, i):
+    """Feature i's surface value: the map's (_map_surface_value), else, for a road the map says nothing about, what the
+    regional photo's colour says (photosurface.py, BNE_PHOTO_SURFACE=1: "asphalt" for a road that is grey like it)."""
+    v = _map_surface_value(feats, i)
+    if v is None and photosurface.ON:
+        v = _photo_surface(feats).get(i)
+    return v
+
+
+def _photo_surface(feats):
+    """{feature index: "asphalt"} of feats' roads the photo says are paved, remembered on feats. A candidate whose photo
+    tile is not on the disk yet is not known: the verdicts stand for FACTS_SHORT_S s and revisit.fault says nothing
+    built from them is kept (the specs' disk cache included: PR #634's idiom), so they are made again once it is."""
+    st = feats.__dict__
+    got = st.get("_photo_surface")
+    if got is not None and (got[1] is None or time.monotonic() < got[1]):
+        if got[1] is not None:
+            import revisit
+            revisit.fault()
+        return got[0]
+    if st.get("_photo_busy"):           # (asked again from inside its own making: the map's value alone)
+        return {}
+    st["_photo_busy"] = True
+    try:
+        v, missing = photosurface.verdicts(feats, lambda i: _map_surface_value(feats, i))
+    finally:
+        st["_photo_busy"] = False
+    v = {i: "asphalt" for i in v}
+    if missing:
+        import revisit
+        revisit.fault()
+    st["_photo_surface"] = (v, time.monotonic() + FACTS_SHORT_S if missing else None)
+    return v
+
+
+def _map_surface_value(feats, i):
     """Feature i's surface value: OpenStreetMap's own (osm_surface, joined by way id: osmtags.py), else Overture's
     rule. Overture keeps a short list and folds OSM's compacted / fine_gravel into "unpaved" (drawn as dirt): Finland's
     compacted-gravel forest roads came out as dirt tracks (the user 2026-11-03: players asking for gravel roads)."""
@@ -1627,7 +1663,7 @@ def _regional_rows(feats):
             c = str(cls_a[i])
             if c not in REGIONAL_CLASSES:
                 continue
-            v = _surface_value(feats, i)
+            v = _map_surface_value(feats, i)
             if v is None:
                 continue
             ids.append(str(feats.ids[i]))
@@ -2016,7 +2052,8 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     got = memo.get(k)
     if got is None:             # (the measured widths on the specs without them: those are asked for too, _bridge_reach)
         keep = True             # (specs made while a download failed are not remembered: asked again, PR #634)
-        extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ())
+        extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ()) + (
+            (photosurface.TAG,) if photosurface.ON else ())
         cid = feats.__dict__.get("_bnge_cell")
         # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
         # specs with its parking widths were ~0.37 s of each of its road tiles after every reload, 2026-11-02)
