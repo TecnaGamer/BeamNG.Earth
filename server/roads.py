@@ -7942,7 +7942,12 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                     if str(key) not in known:
                         features = cell_fn(key)
                         if features is None:
-                            raise OSError(f'bridge junction context roads unavailable: {key}')
+                            # (a neighbour cell not at hand, a slow first visit or offline: the tile is built without
+                            # its fork and not cached as complete, built again next visit; raising failed the whole
+                            # road tile, PR #720's first version)
+                            import revisit
+                            revisit.fault()
+                            continue
                         cells.append(features)
             if context_of is not None:
                 walks, shift_of, width_of = context_of(cells)

@@ -423,14 +423,18 @@ class BridgeJunctionSurfaceTest(unittest.TestCase):
                 self.assertFalse(roadmesh._junction_surfaces(west_skip))
                 self.assertFalse(roadmesh._junction_surfaces(east_skip))
 
-    def test_missing_source_context_fails_tile_instead_of_emitting_partial_fork(self):
+    def test_missing_source_context_is_a_fault_not_a_failed_tile(self):
+        """A neighbour cell not at hand: the tile is built (no hole in the roads on a slow first visit) and counted a
+        fault, so it is not cached as complete (revisit) and is built again with its fork next time."""
+        import revisit
         from types import SimpleNamespace
         c = fork()[0]
         part = ('a', roads.Spec(8, 'paved', True, 'primary', False), np.array(c['n'])[:, :2],
                 np.array(c['n'])[:, 2], 0)
-        profile = SimpleNamespace(parts=lambda cells, box: [part], cell_fn=lambda key: None)
-        with self.assertRaisesRegex(OSError, 'bridge junction context roads unavailable'):
-            roads._bridge_chunks(FRAME, {}, flat, (-40, -10, -30, 10), profile, [])
+        profile = SimpleNamespace(parts=lambda cells, box: [part], cell_fn=lambda key: None, _ground=None)
+        before = revisit.faults()
+        roads._bridge_chunks(FRAME, {}, flat, (-40, -10, -30, 10), profile, [])
+        self.assertGreater(revisit.faults(), before)
 
 
 if __name__ == '__main__':
