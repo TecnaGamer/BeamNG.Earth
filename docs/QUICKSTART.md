@@ -71,11 +71,11 @@ or low fps, press **Ctrl+Shift+Y** instead while it happens: the **performance p
 of frame times, then opens the same window.
 
 Each report is a folder (the window shows where) with `issue.md`, a ready-to-post GitHub issue you
-can edit first. To post it, run `python3 tools/reports.py issue` (the newest report; `python3
-tools/reports.py` lists them all): it opens issue.md in your editor, then the new-issue page on
-<https://github.com/TecnaGamer/BeamNG.Earth/issues> with your text, and the report folder, so you
-can drag `screenshot.jpg` into the issue. The "Open GitHub issue page" button in the game does the
-same without the edit step.
+can edit first. The **Open GitHub issue page** button in the game opens the new-issue page on
+<https://github.com/TecnaGamer/BeamNG.Earth/issues> with your text; **Open folder** shows the report folder, so you
+can drag `screenshot.jpg` into the issue. If the page opens without the text, copy issue.md's text into it.
+(From a source copy, `python3 tools/reports.py issue` does the same with an edit step first; `python3
+tools/reports.py` lists the reports.)
 
 **The log file.** For freezes, stutters or anything slow, the world server's log is the most useful thing to send
 (Discord or the GitHub issue): `%LOCALAPPDATA%\beamng-earth\logs\server.log` on Windows,

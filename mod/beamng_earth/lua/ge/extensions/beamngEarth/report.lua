@@ -351,8 +351,10 @@ local function drawSaved()
   if im.Begin('BeamNG.Earth report saved##bngeSaved', nil, im.WindowFlags_AlwaysAutoResize) then
     im.TextUnformatted(saved.kind .. ' report saved in:')
     im.TextUnformatted(saved.folder)
-    wrapped('issue.md there is a ready-to-post GitHub issue: edit it, then post it with the screenshot '
-      .. '(or run: python3 tools/reports.py issue).')
+    -- (no "python3 tools/reports.py" here: the packaged app has no Python or tools folder for players to run, and
+    -- one tried to and asked how to fix Python, GitHub #744)
+    wrapped('issue.md there is a ready-to-post GitHub issue: "Open GitHub issue page" fills in the text; drag '
+      .. 'screenshot.jpg from the folder into it. If the page opens empty, paste issue.md\'s text into it.')
     if im.Button('Open folder') then
       pcall(Engine.Platform.exploreFolder, '/' .. saved.dir)
       saved.untilT = now() + M.SAVED_S
