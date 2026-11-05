@@ -263,8 +263,8 @@ def _portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground):
     out = [{"portal": True, "fid": "portal", "s": s0, "q": got[0], "axis": got[0], "posts": posts, "z": zm,
             "tracks": [(q, z) for (_j, _s, q, _u), z in zip(members, zs)]}]
     for (j, s, q, uj), z in zip(members, zs):
-        out.append({"fid": parts[j][0], "s": s, "q": q, "axis": q, "z": z, "zax": z, "dir": np.zeros(2), "u": uj,
-                    "virtual": True})
+        out.append({"fid": parts[j][0], "part": j, "s": s, "q": q, "axis": q, "z": z, "zax": z, "dir": np.zeros(2),
+                    "u": uj, "virtual": True})
     return out
 
 
@@ -330,8 +330,8 @@ def masts_of(frame, cells, box, ground, rings=()):
             zq = float(np.asarray(ground(np.array([q])), np.float64).ravel()[0])
             z = float(np.clip(zq, zax + MAST_Z_BAND[0], zax + MAST_Z_BAND[1]))
             toward = (p - q) / max(float(np.hypot(*(p - q))), 1e-9)
-            out.append({"fid": fid, "s": s, "q": q, "axis": p, "z": z, "zax": zax, "dir": toward, "u": u,
-                        "pos": len(out)})
+            out.append({"fid": fid, "part": pi, "s": s, "q": q, "axis": p, "z": z, "zax": zax, "dir": toward,
+                        "u": u, "pos": len(out)})
     return out
 
 
@@ -371,7 +371,9 @@ def rows_and_wires(masts, box_owns, style="su"):
                     rows.append([g_post, round(float(q[0]), 2), round(float(q[1]), 2), round(z, 2), yaw, 1.0, POST_H,
                                  0.0])
             continue
-        by_line.setdefault(m["fid"], []).append(m)
+        # (by part: one feature's pieces each have their own arc lengths, mixed they joined masts of different pieces
+        # with diagonal wires, Vinnytsia 2026-11-05)
+        by_line.setdefault(m.get("part", m["fid"]), []).append(m)
     for fid, ms in by_line.items():
         ms.sort(key=lambda m: m["s"])
         for a, b in zip(ms[:-1], ms[1:]):

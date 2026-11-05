@@ -134,6 +134,19 @@ class CatenaryTest(unittest.TestCase):
         wide = electrified([[(-300.0, y), (700.0, y)] for y in (60.0, 80.0, 100.0, 120.0, 140.0)])
         self.assertFalse([m for m in masts(wide) if m.get("portal")], "wider than PORTAL_MAX_W_M")
 
+    def test_pieces_of_one_feature_are_not_joined(self):
+        """Masts of two pieces of a feature (their arc lengths each from 0) are never one span: no diagonal wire."""
+        def mast(part, s, x, y):
+            q = np.array([x, y])
+            return {"fid": "same", "part": part, "s": s, "q": q, "axis": q + [0.0, 3.45], "z": 10.0, "dir": np.array([0.0, 1.0]),
+                    "u": np.array([1.0, 0.0])}
+        ms = [mast(0, 0.0, 0.0, 100.0), mast(0, 60.0, 60.0, 100.0), mast(1, 30.0, 30.0, 200.0), mast(1, 90.0, 90.0, 200.0)]
+        rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
+        for w, r in wires:
+            if r == catenary.CONTACT_R:
+                self.assertLess(abs(float(w[0, 1]) - float(w[-1, 1])), 1.0, "each span stays on its own piece")
+        self.assertEqual(len([w for w, r in wires if r == catenary.CONTACT_R]), 2)
+
     def test_curve_shortens_the_span(self):
         r = 400.0
         th = np.linspace(0.0, math.pi / 3, 60)
