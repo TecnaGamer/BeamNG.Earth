@@ -266,6 +266,19 @@ class RulesTest(unittest.TestCase):
         self.assertAlmostEqual(kmh(roads.Spec(6.0, "paved", True, "residential", False)), 50.0)
         self.assertLess(kmh(roads.Spec(4.0, "paved", True, "service", False)), 25.0)
 
+    def test_bulgarian_defaults_are_the_law(self):
+        """ЗДвП чл. 21 (1), category B: 50 km/h in a populated place, 90 outside it, 140 on a motorway; a mapped limit
+        still wins."""
+        class F:
+            rules = {}
+        kmh = lambda spec: navgraph.road_mph(F, 0, spec, mph=False, country="BG") * 1.609344    # noqa: E731
+        self.assertAlmostEqual(kmh(roads.Spec(11.0, "paved", False, "motorway", True)), 140.0)
+        self.assertAlmostEqual(kmh(roads.Spec(9.0, "paved", False, "primary", False)), 90.0)
+        self.assertAlmostEqual(kmh(roads.Spec(6.0, "paved", False, "unclassified", False)), 90.0)
+        self.assertAlmostEqual(kmh(roads.Spec(9.0, "paved", True, "primary", False)), 50.0)
+        self.assertAlmostEqual(kmh(roads.Spec(6.0, "paved", True, "residential", False)), 50.0)
+        self.assertLess(kmh(roads.Spec(4.0, "paved", True, "service", False)), 25.0)
+
     def test_driving_side_and_signals_by_country(self):
         self.assertEqual(navgraph.road_rules("US"), {"rightHandDrive": False, "turnOnRed": True, "redYellow": False,
                                                      "country": "US", "mph": True})

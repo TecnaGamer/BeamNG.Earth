@@ -18,10 +18,12 @@ import fast
 # double_centre_urban: a town's two-way road gets a double solid centre line (the US practice on arterials) instead of
 # a broken one; double_gap: the space between the two lines of a double line; edge_pattern: a broken edge line (dash,
 # gap) off the main roads; warning: the broken line in place of a double solid one on a narrow road; w_urban: a line's
-# width in town (else w).
+# width in town (else w); double_multi: a two-way road of four lanes or more has a double solid centre line, not a
+# single one; edge_wide_lanes: a road of this many lanes or more (both directions) has the motorway's edge line width.
 Style = namedtuple("Style", "centre w w_motorway edge edge_motorway centre_rural centre_urban lane_rural lane_urban "
                             "lane_motorway left_edge double_centre_urban double_gap min_centre_m edge_classes ladder "
-                            "edge_pattern warning w_urban", defaults=(None, False, None, None, None))
+                            "edge_pattern warning w_urban double_multi edge_wide_lanes",
+                   defaults=(None, False, None, None, None, False, None))
 
 _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
             centre_rural=(3.05, 9.14), centre_urban=(3.05, 9.14), lane_rural=(3.05, 9.14), lane_urban=(3.05, 9.14),
@@ -48,7 +50,16 @@ _FR = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_motorw
 _SE = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.30,
             centre_rural=(3.0, 9.0), centre_urban=(3.0, 3.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 3.0),
             lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.15, min_centre_m=5.5,
-            edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10)
+            edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10, double_multi=True)
+# Bulgaria: Наредба № 2 от 17.01.2001 (as amended to ДВ 32/2019). Lines 0.10 m, 0.15 on motorways and expressways (чл. 11
+# (4), 12 (2)); a double line's gap its line's width (чл. 12 (2)); broken lines (annex 3): two-lane roads and town streets
+# 3 / 6, between the lanes of a road of more than three lanes 3 / 9, motorways 4 / 12; more than three lanes without a
+# median: a double solid centre line M2 (чл. 12 (1) 1, чл. 45 (1)); edge lines solid, 0.15, on motorways, expressways and
+# roads of more than three lanes 0.25 (чл. 18 (3)). Town magistrals' 3 / 9 is not here (no street class says which).
+_BG = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.15, edge_motorway=0.25,
+            centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 6.0),
+            lane_motorway=(4.0, 12.0), left_edge=None, double_centre_urban=False, double_gap=0.10, min_centre_m=5.5,
+            double_multi=True, edge_wide_lanes=4)
 MIN_LANE_M = 2.75           # no line leaving a lane narrower than the least VGU 2024 allows (K233046; K233040: under 5.5 m none)
 WARNING_BELOW_M = 6.5       # a narrower road has a warning line, not a double solid one (TSFS 2010:171 2 kap. 7 §)
 # a 2+1 road (VGU 2024 table 12.5, K237686): no centre line, a solid left edge line each side of the barrier, its outer
@@ -70,7 +81,7 @@ _YELLOW = _WHITE._replace(centre="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE}
+          "SE": _SE, "BG": _BG}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",

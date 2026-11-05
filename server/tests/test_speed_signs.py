@@ -10,6 +10,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import fast  # noqa: E402
 import signroads  # noqa: E402
+import roads  # noqa: E402
 import speedsigns  # noqa: E402
 
 M_LAT = 111320.0
@@ -164,6 +165,21 @@ class GlueTest(unittest.TestCase):
         self.assertEqual(speedsigns.style("GB", False), speedsigns.STYLE_VIENNA)
         self.assertEqual(speedsigns.style(None, False), speedsigns.STYLE_VIENNA)
         self.assertEqual(speedsigns.style("se", False), speedsigns.STYLE_SWEDEN)
+        self.assertEqual(speedsigns.style("bg", False), speedsigns.STYLE_BULGARIA)
+        self.assertEqual(speedsigns._kernel_style(speedsigns.STYLE_BULGARIA), speedsigns.STYLE_VIENNA,
+                         "В26 is the Vienna sign")
+
+    def test_bulgarian_signs_show_the_legal_defaults(self):
+        """An unsigned rural road posts what the AI drives there (ЗДвП чл. 21: 90 outside a populated place, 50 in
+        one, 140 on a motorway), not the generic class defaults."""
+        class F:
+            rules = {}
+        for spec, want in ((roads.Spec(9.0, "paved", False, "secondary", False), 90.0),
+                           (roads.Spec(9.0, "paved", True, "secondary", False), 50.0),
+                           (roads.Spec(11.0, "paved", False, "motorway", True), 140.0)):
+            self.assertEqual(speedsigns._limits(F, 0, spec, False, speedsigns.STYLE_BULGARIA), [(0.0, want)], spec)
+        self.assertEqual(speedsigns._limits(F, 0, roads.Spec(9.0, "paved", False, "secondary", False), False,
+                                            speedsigns.STYLE_VIENNA), [(0.0, 70.0)], "elsewhere: the class default")
 
     def test_swedish_values_are_the_legal_steps(self):
         posted = lambda kmh: speedsigns.posted(kmh / 1.609344, False, speedsigns.STYLE_SWEDEN)  # noqa: E731
