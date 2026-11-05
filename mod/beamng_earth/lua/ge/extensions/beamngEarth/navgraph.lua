@@ -168,7 +168,8 @@ function M.onMessage(msg, currentAnchor)
   local ok, g = pcall(jsonDecode, readFile(msg.path) or '')
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
-            signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil }
+            signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
+            lines = type(g.lines) == 'table' and g.lines or nil }      -- (tunnel stretches: the minimap's, minimaproads)
   dirty = true
   return true
 end
@@ -650,8 +651,17 @@ function M.transform(xf, anchorId)
     m[1], m[2], m[3] = xf:apply(n[1], n[2], n[3])
     nodes[name] = m
   end
+  local lines
+  if graph.lines then
+    lines = {}
+    for i, l in ipairs(graph.lines) do
+      local x1, y1 = xf:apply(l[1], l[2], 0)
+      local x2, y2 = xf:apply(l[3], l[4], 0)
+      lines[i] = { x1, y1, x2, y2, l[5] }
+    end
+  end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
-            rules = graph.rules, moved = true }
+            rules = graph.rules, lines = lines, moved = true }
   dirty, urgent = true, true
   if applied then applied.box = nil end
   return true

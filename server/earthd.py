@@ -348,6 +348,7 @@ HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they w
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
 FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40, 10, 0.3, 5   # (fin_worker_worth)
 FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
+NAV_LEAD_S, NAV_LEAD_MAX_M = 12.0, 500.0     # the nav graph's centre ahead of a moving car (navgraph.WINDOW_M 1100)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
@@ -6112,7 +6113,13 @@ class Connection:
                                    self.build_far_geo("brfar") if geo else self.s.build_far_bridge_tile,
                                    view=self.view_at, frame=frame)
         if self.s.traffic and aid == self.active and self.nav_may_start(aid):
-            self.nav.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_navgraph)
+            # (centred ahead of a moving car: the minimap's roads, the AI's and the GPS's graph, ran out in front at
+            # speed, a graph built round where the car was when it started; the user, 2026-11-04)
+            vx, vy = getattr(self, "vel", (0.0, 0.0))
+            lead = min(NAV_LEAD_S * math.hypot(vx, vy), NAV_LEAD_MAX_M)
+            sp = max(math.hypot(vx, vy), 1e-6)
+            cx, cy = self.focus[0] + vx / sp * lead, self.focus[1] + vy / sp * lead
+            self.nav.on_pose(self, aid, cx, cy, asyncio.get_running_loop(), self.s.build_navgraph)
         if self.traffic_on and aid == self.active and self.nav_may_start(aid):
             self.distant_traffic.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_traffic_geo,
                                          view=self.view_at, frame=self.s.anchors[aid].frame)

@@ -119,6 +119,10 @@ class GraphTest(unittest.TestCase):
             mid = (g["nodes"][e[0]][0] + g["nodes"][e[1]][0]) / 2
             self.assertFalse(130 < mid < 200, "an edge over the tunnel")
         self.assertTrue(g["edges"])
+        # ... but drawn on the minimap (its "lines"): the stretch from 120 to 210 m covered, end to end
+        xs = sorted(x for ln in g["lines"] for x in (ln[0], ln[2]))
+        self.assertTrue(g["lines"] and xs[0] <= 130 and xs[-1] >= 200, g["lines"])
+        self.assertTrue(all(len(ln) == 5 and abs(ln[1]) < 1 and abs(ln[3]) < 1 for ln in g["lines"]))
 
     def test_nodes_on_a_bridge_take_its_deck(self):
         f = features([[(0, 0), (200, 0)]], ["primary"])

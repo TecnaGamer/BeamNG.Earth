@@ -185,6 +185,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
     node_fid = {}           # name -> the feature it was made on (its deck, if any)
     pending_by = {}         # name -> (-width, fid) of the road whose point it is (the widest's, then the lower id)
+    # the stretches through tunnels, left out of the graph (no ground there for the AI), for the minimap only
+    # (minimaproads.lua: its lines broke at every tunnel and every underpass mapped as one; the user, 2026-11-04)
+    lines = []              # [x1, y1, x2, y2, drivability]
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -310,7 +313,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 if a == b:
                     continue
                 if tunnels and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnels):
-                    continue                # no ground over a tunnel: its stretch is left out
+                    lines.append([round(float(xy[j][0]), 1), round(float(xy[j][1]), 1),
+                                  round(float(xy[j + 1][0]), 1), round(float(xy[j + 1][1]), 1), driv])
+                    continue                # no ground over a tunnel: its stretch is left out (the AI's)
                 if direction < 0:
                     a, b = b, a
                 pa, pb = xy[j] if direction >= 0 else xy[j + 1], xy[j + 1] if direction >= 0 else xy[j]
@@ -376,7 +381,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         if k not in pairs:
             pairs.add(k)
             uniq.append(e)
-    return {"nodes": nodes, "edges": uniq, "signals": signals}
+    lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
+    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines}
 
 
 STOP_BACK_M = 2.0           # the stop point: this far before the junction's widest road edge
