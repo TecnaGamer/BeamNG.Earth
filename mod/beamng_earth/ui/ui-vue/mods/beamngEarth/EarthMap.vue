@@ -208,6 +208,12 @@
       <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
     </div>
 
+    <!-- fast pre-cache running (server areas.py fast mode): the game paused meanwhile -->
+    <div v-if="fastArea" class="fast-banner" @mousedown.stop @wheel.stop>
+      <span>Fast pre-cache: <b>{{ fastArea.name }}</b> &middot; {{ areaStateText(fastArea) }} &middot; the game is paused</span>
+      <div class="area-bar"><span class="area-bar-fill running" :style="{ width: areaPct(fastArea) + '%' }"></span></div>
+      <button class="map-btn small" @click="areaCmd(fastArea, 'slow')" title="Go on in the background as before, and unpause the game">Stop fast</button>
+    </div>
     <!-- the cache view's legend (bumpers: the next view) -->
     <div v-if="cacheOn" class="cache-legend" @mousedown.stop @wheel.stop>
       <div class="cache-legend-title">Cache: {{ mm.CACHE_MODE_NAMES[cacheMode] }}</div>
@@ -316,6 +322,9 @@
       <label class="layer-opt area-world" title="Also build the roads, sidewalks, bridges, buildings and street furniture ahead of time, so arriving there loads them instead of building them (more disk space and time; rebuilt after a BeamNG.Earth update)">
         <input type="checkbox" :checked="areaWorld" :disabled="areaAsk.busy" @change="setAreaWorld($event.target.checked)" />
         Build the world too <span class="layer-hint">(roads and buildings ready when you arrive)</span></label>
+      <label class="layer-opt area-world" title="Pauses the game and gives the download and the building every CPU core until it is done (minutes instead of an hour; each map host's own limits still apply). The game goes on by itself when it ends, or press Stop fast.">
+        <input type="checkbox" v-model="areaFast" :disabled="areaAsk.busy" />
+        Fast <span class="layer-hint">(pause the game, use every CPU core)</span></label>
       <div v-if="areaAsk.error" class="confirm-warn">{{ areaAsk.error }}</div>
       <div class="confirm-btns">
         <button class="map-btn primary" :disabled="!areaAsk.plan || !areaAsk.plan.ok || areaAsk.busy" @click="confirmArea">Pre-cache{{ padMode ? " (X)" : "" }}</button>
@@ -381,6 +390,8 @@
             <div class="area-bar"><span class="area-bar-fill" :class="a.state" :style="{ width: areaPct(a) + '%' }"></span></div>
           </div>
           <div class="item-btns">
+            <button v-if="a.state !== 'done' && areas.fast !== a.id" class="map-btn small" @click="areaCmd(a, 'fast')"
+                    title="Pause the game and finish this one on every CPU core">Fast</button>
             <button v-if="a.state !== 'done'" class="map-btn small" @click="areaCmd(a, a.state === 'paused' ? 'resume' : 'pause')">
               {{ a.state === "paused" ? "Resume" : "Pause" }}</button>
             <button class="map-btn small" :class="{ danger: confirmAreaId === a.id }" @click="deleteArea(a)"
@@ -1310,6 +1321,13 @@ const ROUTE_WIDTHS = [
 const routeHalf = ref(805)
 // "Build the world too" (server areas.py mode "world"): the estimate asked again with it
 const areaWorld = ref(false)
+// the fast pre-cache (server areas.py fast mode: the game paused, every CPU core; Tann2019 2026-11-05), remembered
+const areaFast = ref(stored("beamngEarthAreaFast", "0") === "1")
+watch(areaFast, on => store("beamngEarthAreaFast", on ? "1" : "0"))
+const fastArea = computed(() => {
+  const id = areas.value && areas.value.fast
+  return id ? toArray(areas.value.areas).find(a => a.id === id) || null : null
+})
 const areaMode = () => (areaWorld.value ? "world" : "data")
 function setAreaWorld(on) {
   areaWorld.value = !!on
@@ -1379,8 +1397,8 @@ function confirmArea() {
   areaAsk.value = { ...a, busy: true }
   const b = a.box
   const call = a.route
-    ? `beamngEarth_settings.uiRouteAdd and beamngEarth_settings.uiRouteAdd(${a.half}, ${luaStr(areaName.value)}, ${luaStr(areaMode())})`
-    : `beamngEarth_settings.uiAreaAdd and beamngEarth_settings.uiAreaAdd(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaName.value)}, ${luaStr(areaMode())})`
+    ? `beamngEarth_settings.uiRouteAdd and beamngEarth_settings.uiRouteAdd(${a.half}, ${luaStr(areaName.value)}, ${luaStr(areaMode())}, ${areaFast.value ? "true" : "false"})`
+    : `beamngEarth_settings.uiAreaAdd and beamngEarth_settings.uiAreaAdd(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaName.value)}, ${luaStr(areaMode())}, ${areaFast.value ? "true" : "false"})`
   engineLua(`beamngEarth_settings and ${call} or nil`, r => {
     if (!r || r.error) { areaAsk.value = { ...a, busy: false, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
     let tries = 0
@@ -1390,7 +1408,8 @@ function confirmArea() {
         if (!res.ok) { areaAsk.value = { ...a, busy: false, error: String(res.error || "Not saved") }; return }
         cancelSelect()
         panelOpen.value = true
-        areaMsg.value = a.route ? "Downloading along the route in the background" : "Downloading the area in the background"
+        areaMsg.value = areaFast.value ? "Fast pre-cache: the game is paused until it is done"
+          : a.route ? "Downloading along the route in the background" : "Downloading the area in the background"
         areaMsgError.value = false
         pollAreas()
       })
@@ -1434,7 +1453,7 @@ function areaStateText(a) {
     waiting: "waiting", done: "downloaded" }[a.state] || a.state
   return a.msg ? `${pct} · ${what}: ${a.msg}` : `${pct} · ${what}`
 }
-areaTimer = setInterval(() => { if (panelOpen.value || cacheOn.value || selecting.value) pollAreas() }, 2000)
+areaTimer = setInterval(() => { if (panelOpen.value || cacheOn.value || selecting.value || fastArea.value) pollAreas() }, 2000)
 pollAreas()
 onUnmounted(() => { clearInterval(areaTimer); clearTimeout(confirmAreaTimer); areaSeq++ })
 
@@ -1992,6 +2011,12 @@ const fmtLatLon = mm.fmtLatLon
   background: rgba(15, 18, 22, 0.88); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 5px; cursor: default;
 }
 .cache-legend-title { font-weight: 600; margin-bottom: 4px; }
+.fast-banner {
+  position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); z-index: 12; display: flex; align-items: center;
+  gap: 10px; padding: 8px 12px; color: #fff; font-size: 13px; background: rgba(15, 18, 22, 0.92);
+  border: 1px solid rgba(54, 163, 255, 0.6); border-radius: 5px;
+}
+.fast-banner .area-bar { width: 160px; }
 .cache-legend-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; white-space: nowrap; }
 .cache-swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid rgba(255, 255, 255, 0.35); flex-shrink: 0; }
 .cache-legend-hint { margin-top: 3px; font-size: 11px; color: #9aa4ae; }
