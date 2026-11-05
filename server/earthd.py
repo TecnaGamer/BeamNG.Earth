@@ -1646,7 +1646,20 @@ class Server:
         except Exception as e:          # no decks: the graph follows the ground under bridges
             log.debug("navgraph decks: %s: %s", type(e).__name__, e)
         nodes = secrossings.read(self.mapdata, anchor.frame, keys) if str(self.country(anchor) or "").upper() == "SE" else None
-        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, widths=self.road_widths,
+        tun = {}
+        try:            # (the tunnels the road tiles build: the AI drives through them; off: navgraph.AI_TUNNELS)
+            if not navgraphmod.AI_TUNNELS:
+                raise LookupError("AI tunnels off")
+            with self.grader_lock:
+                if anchor.tunnels is None:
+                    anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
+            for fid, _spec, xy, z, _lon in anchor.tunnels.parts(feats, (x - w, y - w, x + w, y + w)):
+                tun.setdefault(navgraphmod.part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2],
+                                                                   np.asarray(z, np.float64)))
+        except Exception as e:
+            log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
+        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun,
+                                  widths=self.road_widths,
                                   left_hand=self.left_hand(anchor), mph=self.mph(anchor),
                                   signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys),
                                   country=self.country(anchor), priority=None if nodes is None else nodes["priority"])

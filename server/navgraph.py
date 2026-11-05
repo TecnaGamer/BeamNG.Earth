@@ -11,6 +11,7 @@ are in the anchor frame, z the ground (elev); the mod clips the graph to the ter
 Pure given the map cells and elev; deterministic.
 """
 import math
+import re
 
 import numpy as np
 
@@ -166,7 +167,7 @@ def _deck_z(decks, fid, x, y):
     return None if best is None else best[1]
 
 
-def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, widths=None, left_hand=False,
+def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
           mph=True, signals=None, country=None, priority=None):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
@@ -190,6 +191,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     # the stretches through tunnels, left out of the graph (no ground there for the AI), for the minimap only
     # (minimaproads.lua: its lines broke at every tunnel and every underpass mapped as one; the user, 2026-11-04)
     lines = []              # [x1, y1, x2, y2, drivability]
+    # tunnels: fid -> [(xy (k, 2), floor z (k,))] of the tunnels the road tiles build (roads.TunnelProfiles): a stretch
+    # through one is the AI's too, its nodes at the tunnel's floor; a tunnel not built (under water, none at hand) stays
+    # the minimap's only (the AI's graph broke at every tunnel since they were built, 1.4.20; the user, 2026-11-05)
+    tunnel_node = {}        # name -> fid of the tunnel its height is read from
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -261,7 +266,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                             (fid, rspecs[i], dd / dl, np.array([p[j0][0], p[j0][1], 0.0]), end, L))
             if spec.cls not in DRIVE or roads._rule_value(sub, i) in SKIP_SUBCLASSES:
                 continue
-            tunnels = [(a_, b_) for a_, b_, k_ in roads.level_ranges(feats, i) if k_ == "tunnel"]
+            tunnel_ranges = [(a_, b_) for a_, b_, k_ in roads.level_ranges(feats, i) if k_ == "tunnel"]
             # the nodes along it: connectors at their arc length, shape points that bend it, long gaps split
             marks = {}
             if con is not None:
@@ -333,10 +338,20 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 a, b = names[j], names[j + 1]
                 if a == b:
                     continue
-                if tunnels and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnels):
-                    lines.append([round(float(xy[j][0]), 1), round(float(xy[j][1]), 1),
-                                  round(float(xy[j + 1][0]), 1), round(float(xy[j + 1][1]), 1), driv])
-                    continue                # no ground over a tunnel: its stretch is left out (the AI's)
+                in_tunnel = False
+                if tunnel_ranges and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnel_ranges):
+                    # each end inside the tunnel on its built floor (an end past a portal is on the ground)
+                    ends_in = [(nm_, q_) for nm_, q_, at_ in ((a, xy[j], full[j]), (b, xy[j + 1], full[j + 1]))
+                               if any(t0 * L < at_ < t1 * L for t0, t1 in tunnel_ranges)]
+                    if AI_TUNNELS and tunnels and fid in tunnels and w >= TUNNEL_AI_MIN_W and all(
+                            _deck_z(tunnels, fid, float(q_[0]), float(q_[1])) is not None for _, q_ in ends_in):
+                        for nm_, _q in ends_in:
+                            tunnel_node[nm_] = fid      # (the AI's too: through the built tunnel)
+                        in_tunnel = True
+                    else:
+                        lines.append([round(float(xy[j][0]), 1), round(float(xy[j][1]), 1),
+                                      round(float(xy[j + 1][0]), 1), round(float(xy[j + 1][1]), 1), driv])
+                        continue            # no tunnel built there: the minimap's line only
                 if direction < 0:
                     a, b = b, a
                 pa, pb = xy[j] if direction >= 0 else xy[j + 1], xy[j + 1] if direction >= 0 else xy[j]
@@ -352,9 +367,13 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         pending_by[nm] = (-w, fid)
                 legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv,
-                              round(w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0)
-                                    + float(max(hxm[j], hxm[j + 1])), 2)])
+                half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
+                if in_tunnel:
+                    # (the AI keeps TUNNEL_AI_WALL_M off the tube's walls, roadmesh.tunnel's road + shoulders: with the
+                    # road's half width it ran 5.3 m off its line at 56 mph into the Fort Pitt Tunnel's portal frame)
+                    import roadmesh
+                    half = max(1.5, min(half, spec.width / 2 + roadmesh.TUNNEL_SHOULDER - TUNNEL_AI_WALL_M))
+                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2)])
                 edge_fids.append(fid)
     # The static props use 3D solved roads/decks. A 2D graph clearance line would falsely block every level below
     # a viaduct, suppressing the switchable head while leaving the static signal behind.
@@ -413,6 +432,12 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 dz = _deck_z(decks, node_fid.get(nm), X[k], Y[k])
                 if dz is not None:
                     Z[k] = dz
+        if tunnel_node:
+            for k, nm in enumerate(used):
+                if nm in tunnel_node:
+                    tz = _deck_z(tunnels, tunnel_node[nm], X[k], Y[k])
+                    if tz is not None:
+                        Z[k] = tz
         radius = {}
         for e in edges:
             for nm in e[:2]:
@@ -545,6 +570,19 @@ def region_near(db, lat, lon):
     return getattr(ap, "region", None) or None
 
 
+def part_fid(pid):
+    """The road feature's id of a chain part's id (roads.ChainView: "<fid>.<part>#<section>")."""
+    return re.sub(r"(\.\d+)?(#\d+)?$", "", str(pid))
+
+
+# The AI through built tunnels: off until their portals fit the roads leading in (Fort Pitt Tunnel, 2026-11-05: the
+# approach carriageways, shoulders and all, are wider than the tube openings and lead into the pier between the twin
+# tubes; an AI car hit it at 38-56 mph three times). Off, every tunnel stretch is the minimap's line only, as before.
+AI_TUNNELS = False
+TUNNEL_AI_WALL_M = 2.5     # m the AI's road half width in a tunnel stays inside the tube's walls (a car's half width + room)
+TUNNEL_AI_MIN_W = 5.0       # m of driving width a tunnel needs to be the AI's: a one-lane one (3.4 m, the Park Avenue
+                            # Tunnel's south portal in Manhattan) was entered at an angle off the wider approach and the
+                            # car hit the portal's pier (2026-11-05); narrower ones stay the minimap's only
 REBUILD_M = 400.0           # a new graph once the player is this far from the last one's centre
 
 

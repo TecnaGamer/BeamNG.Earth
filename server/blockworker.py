@@ -537,9 +537,17 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
                                              bridges.depth_of(fid)))
     except Exception as e:          # no decks: the graph follows the ground under bridges
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
+    tun = {}
+    try:            # (the tunnels the road tiles build: the AI drives through them, navgraph.build; off: AI_TUNNELS)
+        for fid, _spec, xy, z, _lon in () if not navgraphmod.AI_TUNNELS else tunnel_profiles(aid, frame, elev, g).parts(feats, (x - w, y - w, x + w, y + w)):
+            tun.setdefault(navgraphmod.part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2],
+                                                               np.asarray(z, np.float64)))
+    except Exception as e:          # no tunnels: their stretches stay the minimap's only
+        log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
     nodes = secrossings.read(_s.md, frame, keys) if str(rules.get("country") or "").upper() == "SE" else None
-    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, widths=_s.widths, left_hand=left_hand,
+    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
+                              left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
                               priority=None if nodes is None else nodes["priority"])
     graph["rules"] = rules

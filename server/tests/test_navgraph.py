@@ -2,6 +2,7 @@
 lanes, speed limits, clipped to the window."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -123,6 +124,25 @@ class GraphTest(unittest.TestCase):
         xs = sorted(x for ln in g["lines"] for x in (ln[0], ln[2]))
         self.assertTrue(g["lines"] and xs[0] <= 130 and xs[-1] >= 200, g["lines"])
         self.assertTrue(all(len(ln) == 5 and abs(ln[1]) < 1 and abs(ln[3]) < 1 for ln in g["lines"]))
+
+    def test_a_built_tunnel_is_the_ais_at_its_floor(self):
+        """A tunnel the road tiles build (roads.TunnelProfiles' parts: tunnels=) is driven through, its nodes at the
+        tunnel's floor; one not built (none given) stays the minimap's line only."""
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        fid = str(f.ids[0])
+        floor = (np.array([[110.0, 0.0], [220.0, 0.0]]), np.array([3.0, 3.0]))
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), tunnels={fid: [floor]})
+        if not navgraph.AI_TUNNELS:     # (off until the portals fit their roads: the minimap's line only)
+            self.assertTrue(g["lines"])
+            with mock.patch.object(navgraph, "AI_TUNNELS", True):
+                g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), tunnels={fid: [floor]})
+        inside = [n for n in g["nodes"].values() if 130 < n[0] < 200]
+        self.assertTrue(inside, "nodes in the tunnel")
+        self.assertTrue(all(abs(n[2] - 3.0) < 0.05 for n in inside), [n[2] for n in inside])
+        mids = [(g["nodes"][e[0]][0] + g["nodes"][e[1]][0]) / 2 for e in g["edges"]]
+        self.assertTrue(any(130 < m < 200 for m in mids), "an edge through it")
+        self.assertFalse(g["lines"], "nothing left for the minimap alone")
 
     def test_nodes_on_a_bridge_take_its_deck(self):
         f = features([[(0, 0), (200, 0)]], ["primary"])
