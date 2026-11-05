@@ -140,3 +140,31 @@ mesh regeneration, server restart, or cache deletion.
 - This is generated geometry, so the running server must reload native v146 and
   regenerate the location. Old loaded shapes cannot acquire it through a material
   reload. Cache identity includes the source/native binary; no manual cache purge.
+
+
+## Irregular rim variation
+
+The same South Rim aerial and supplied canyon photographs show patchy soil/rock
+contact rather than a uniform fade. Open PR titles, bodies and file lists were
+checked again; no matching cliff implementation was found (no outside code used).
+
+Two octaves of the existing native 3D value noise modulate the transition weight
+before smoothstep. Coordinates are the global source grid and source height, so
+neighbouring tiles share a deterministic pattern. Coarse/fine lattice spacing is
+6/2 source units, weighted 70/30; amplitude is bounded by 0.8*t*(1-t). Both endpoints
+remain exact, preserving the buried contour and full interior rock. Geometry,
+material blending and later relief still share the same weight. Only transitional
+vertices evaluate noise. No additional shader work, textures, layers or decals.
+
+Windows native rebuilt (unchanged v146 API). 194 tests passed, two optional-data
+cases skipped, including repeatability, bounded variation, unchanged endpoints,
+halo independence and tile seam continuity. Linux rebuild is still pending.
+
+Same-camera temporary probes were inspected in shot_20261104_022617_7.jpg (before)
+and shot_20261104_022619_8.jpg (after). Variation is deliberately subtle at this
+viewing distance; broad collars and terrain-lighting differences remain. Original
+objects were restored. Exports in build/cliff-rim-noise-preview/ grew from
+220130/273055 to 220837/273062 triangles (0.32% / 0.003%), through the existing
+adaptive relief refinement; both versions used 31 pieces total. No FPS claim is
+made from this comparison. Restart the server and regenerate the location to load
+these new baked weights; already loaded meshes are unchanged.

@@ -8,6 +8,12 @@ const CONTOUR_SIGMA_M: f64 = 2.0;
 const CONTOUR_RADIUS_M: f64 = 4.0;
 const COVERAGE_THRESHOLD: f64 = 0.60;
 const EXCLUDED_MARGIN: f64 = 0.01;
+// Global source-grid coordinates, not tile-relative or per-tile latitude scale.
+// Two modest scales make patchy contact zones without speckled rims.
+const RIM_NOISE_COARSE: f64 = 6.0;
+const RIM_NOISE_FINE: f64 = 2.0;
+const RIM_NOISE_FINE_WEIGHT: f64 = 0.3;
+const RIM_NOISE_STRENGTH: f64 = 0.8;
 const MASK_HALF_TEXEL: f64 = 0.5 / 16.0;
 
 fn blur_axis(input: &[f64], w: usize, h: usize, step: f64, vertical: bool) -> Vec<f64> {
@@ -106,6 +112,18 @@ fn prepare(
     let mut weights = Vec::with_capacity(w * h);
     for v in 0..w * h {
         let t = (field[v] / (1. - COVERAGE_THRESHOLD)).clamp(0., 1.);
+        // Preserve both endpoints and the contour itself. Only transition weights
+        // vary; geometry, material opacity and later relief all share this taper.
+        let t = if t > 0. && t < 1. {
+            let x = surface[0][0] + (v % w) as f64 * dx;
+            let y = surface[0][1] + (v / w) as f64 * dy;
+            let sample = |size: f64| crate::rf_noise3(x / size, y / size, heights[v] / size);
+            let noise = (1. - RIM_NOISE_FINE_WEIGHT) * sample(RIM_NOISE_COARSE)
+                + RIM_NOISE_FINE_WEIGHT * sample(RIM_NOISE_FINE);
+            t + RIM_NOISE_STRENGTH * (2. * noise - 1.) * t * (1. - t)
+        } else {
+            t
+        };
         let fade = t * t * (3. - 2. * t);
         weights.push(if touch[v] == 0 || fade > 1. - 1e-12 {
             0.

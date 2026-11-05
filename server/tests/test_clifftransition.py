@@ -72,6 +72,29 @@ class CliffTransitionTest(unittest.TestCase):
         self.assertEqual(float(relief[w[:,0]==1].max()),0.)
         self.assertTrue(np.all(relief[w[:,0]==0]==1))
 
+    def test_rim_noise_varies_contact_without_moving_contour_or_endpoints(self):
+        x,h,p,k=self.grid(161)
+        h[:]=0; p[:,:,2]=5
+        k[:]=False; k[12:-12,12:-12]=True
+        out,w,_,field=ct.prepare(p,h,k,.5,.5,1,.35)
+        repeated,rw,_,rf=ct.prepare(p,h,k,.5,.5,1,.35)
+        np.testing.assert_array_equal(out,repeated)
+        np.testing.assert_array_equal(w,rw)
+        np.testing.assert_array_equal(field,rf)
+        t=np.clip(field[:,0]/.4,0,1)
+        smooth=1-t*t*(3-2*t)
+        transition=(t>0)&(t<1)
+        self.assertGreater(np.std((w[:,0]-smooth)[transition]),.02)
+        self.assertLess(np.max(np.abs((w[:,0]-smooth)[transition])),.3)
+        self.assertTrue(np.all((w>=0)&(w<=1)))
+        self.assertTrue(np.all(w[t==1]==0))
+        # The cut still terminates at buried ground, regardless of noise.
+        rim=(field[:,0]<0)&(w[:,0]>0)
+        np.testing.assert_allclose(out.reshape(-1,3)[rim,2],-.35)
+        # Vary along a straight, constant-distance boundary, not just its corners.
+        strip=w.reshape(h.shape)[16,30:-30]
+        self.assertGreater(np.ptp(strip),.04)
+
     def test_halo_independence_and_tile_seams(self):
         x,h,p,k=self.grid(81)
         full,w,_,_=ct.prepare(p,h,k,.5,.5,1,.35)
