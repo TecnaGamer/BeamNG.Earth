@@ -134,6 +134,7 @@ import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
 import routeahead as routeaheadmod  # noqa: E402
 import furniture as furnituremod  # noqa: E402
+import townsigns as townsignsmod  # noqa: E402
 import heightmap  # noqa: E402
 import staging  # noqa: E402
 import imagery as imagerymod  # noqa: E402
@@ -2137,6 +2138,14 @@ class Server:
         sign_nodes = secrossings.read(self.mapdata, anchor.frame, nkeys) if str(self.country(anchor) or "").upper() == "SE" \
             else None
         clearance = [] if self.buildings else None     # (build_tile's RoadClearance, PR #629: the powerlines' too)
+        town_faces = {}                 # the town signs' faces the tile's props use (BNE_TOWNSIGNS)
+        towns = None
+        if props is not None and townsignsmod.ON and self.mapdata is not None and self.surface is not None:
+            if getattr(self, "towns", None) is None:
+                self.towns = townsignsmod.Towns(self.mapdata, self.surface)
+            towns = self.towns.maker(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
+                                                                          blockworker.TOWNS_MARGIN_M),
+                                     self.out_dir, self.vfs_dir, town_faces)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
@@ -2148,7 +2157,7 @@ class Server:
                                                                                   self.anchor_q(anchor)),
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
                                      roads_out=near_roads, signals=furnituremod.signals_for(self.mapdata, anchor.frame, nkeys),
-                                     nodes=sign_nodes, clearance_out=clearance)
+                                     nodes=sign_nodes, clearance_out=clearance, towns=towns)
         # (railway and tram tracks on the ground)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
@@ -2289,7 +2298,7 @@ class Server:
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings),
-                                   barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks)
+                                   barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks, towns=town_faces)
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their

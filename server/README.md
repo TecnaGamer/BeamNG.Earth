@@ -713,6 +713,25 @@ its forecourt's edge. One plain asphalt pad per site (the gas stations' pad stor
 records go with the station records (`fuel`), with `"energy": ["electricEnergy"]`: the mod hands that to the stock
 POI (the charge prompt, the bolt icon). They come and go with the gas stations; OSM's with `BNGE_OSM_FUEL`.
 
+### Town signs (`server/townsigns.py`; `BNE_TOWNSIGNS=on`, off by default)
+
+Each country's own town entry and exit signs where a paved road enters a town's built-up land. The towns are
+Overture's divisions (`mapdata` layers `town_areas`, the areas: communes, municipalities, districts; and
+`town_points`, the villages' points), per country the level that is a town there (`VILLAGE_COUNTRIES`,
+`DISTRICT_AREAS` and the tables beside them); their built-up land is the land cover's (`commune_agglomeration`: 40 m
+past the last houses, gaps under 300 m closed). A sign stands where a paved road (no motorway, trunk, link, service
+road or track; no roundabout ring) crosses that edge, the exit sign on the entry sign's back. With it off, neither
+layer is fetched and no tile changes.
+
+A road tile's props carry the signs as rows of groups `townin_<cc>_<hash>` / `townout_<cc>_<hash>` (`<cc>_` only for a
+country with a plate of its own, `PLATES`), and the tile's JSON `"townsigns": {group: {shape, texture, material}}`: each
+face's quad (`.dae`) and texture (`.png`, `face_image`: the country's sign drawn with Pillow, 400 px a metre) written in
+the session's folder (`write_face`). Additive: an older mod ignores it. The mod (`townsigns.lua`) makes each face's
+Material once a session and its `trees.lua` catalog entry before the props; `trees.lua` puts the face (never colliding)
+and the shared body (`sign_town_body[_<cc>].dae`, the posts and the plate's back, `tools/generate_town_signs.py`) at one
+spot, as the speed-limit signs'. A road tile waits for its village points and land cover at most `POINTS_WAIT_S` (45 s)
+once, and is built without signs when they have not come.
+
 ## Airports and runways (`server/airports.py`, `runwaygeom.py`, `runwaymarks.py`; docs/research/2026-10-11-airports.md)
 
 Not used by earthd yet. OurAirports' `airports.csv` / `runways.csv` (public domain) are downloaded through
