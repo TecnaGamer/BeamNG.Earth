@@ -159,6 +159,22 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo)
   return nodes, nn, ne, cutList
 end
 
+M.FOLLOW_MS = 8         -- m/s the player moves at least for a car ahead going its way to keep going (followsPlayer)
+M.FOLLOW_DOT = 0.7
+
+-- Pure-ish (vectors with x, y): a traffic car at p moving along dir, ahead of a player at pp moving at pu, going the
+-- player's way: the cut it heads for is the block's edge, which moves on with the player, so it is not respawned
+-- for it (on a highway at 30 m/s a car ~200 m ahead was within the cut's reach and vanished in front of the player,
+-- GitHub #353); it still is when it leaves the box (guard's GUARD_M).
+function M.followsPlayer(p, dir, pp, pu)
+  local ps = math.sqrt(pu.x * pu.x + pu.y * pu.y)
+  local dl = math.sqrt(dir.x * dir.x + dir.y * dir.y)
+  if ps < M.FOLLOW_MS or dl < 1e-6 then return false end
+  local ux, uy = pu.x / ps, pu.y / ps
+  if (dir.x * ux + dir.y * uy) / dl < M.FOLLOW_DOT then return false end
+  return (p.x - pp.x) * ux + (p.y - pp.y) * uy > 0
+end
+
 -- Pure: is a car at (px, py) moving along unit (dx, dy) heading for one of the cuts within reach m (45 degrees)?
 function M.headingToCut(px, py, dx, dy, list, reach)
   for _, c in ipairs(list) do
@@ -453,6 +469,9 @@ local function guard(b, all)
         seenAt[id] = { p.x, p.y, s0[3] }
         local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
+        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity()) then
+          toCut = false     -- (the block goes on with the player: the guard's box check stays; GitHub #353)
+        end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
