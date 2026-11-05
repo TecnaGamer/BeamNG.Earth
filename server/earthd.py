@@ -92,6 +92,7 @@ import covermap as covermapmod  # noqa: E402
 import areas as areasmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
 import navgraph as navgraphmod  # noqa: E402
+import earthai as earthaimod  # noqa: E402
 import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
@@ -1674,6 +1675,34 @@ class Server:
         log.debug("navgraph %d of anchor %d: %d nodes in %.2f s", serial, aid, len(graph["nodes"]),
                  time.perf_counter() - t0)
         return path, len(graph["nodes"]), len(graph["edges"])
+
+    def build_earth_ai(self, aid, lat, lon, amount):
+        """Build standalone lane-follow spawn routes from OSM ways near a geodetic player position."""
+        anchor = self.anchors.get(aid)
+        if anchor is None:
+            return []
+        ways = []
+        for bounds in earthaimod.geographic_bounds(lat, lon, earthaimod.QUERY_RADIUS_M):
+            ways.extend(self.mapdata.earth_ai_ways(bounds, "urgent"))
+        if not ways:
+            return []
+        frame = anchor.frame
+        projected = earthaimod.project_ways(ways, frame)
+        graph = earthaimod.build_lane_graph(projected, left_hand=self.left_hand(anchor))
+        px, py, _ = frame.geodetic_to_enu(float(lat), float(lon), 0.0)
+        plan = earthaimod.spawn_plan(graph, (float(px), float(py)), int(amount),
+                                     min_distance=earthaimod.SPAWN_MIN_M,
+                                     max_distance=earthaimod.SPAWN_MAX_M,
+                                     route_distance=earthaimod.ROUTE_M)
+        if not plan:
+            return []
+        zoom = anchor.zooms[0]
+
+        def elevation(latitudes, longitudes):
+            dem_height = self.dem.sample(latitudes, longitudes, zoom)
+            return np.asarray(self.ground(anchor.frame, latitudes, longitudes, dem_height), dtype=np.float64)
+
+        return earthaimod.geographic_plan(plan, frame, elevation)
 
     boost_on = False
     boost_cpus = server_cpus = None
@@ -4588,6 +4617,7 @@ class Connection:
         self.bldfar = self.bldsky = self.brfar = None
         self.make_far_trackers(False)
         self.nav = navgraphmod.Tracker()        # the AI road graph around the player (--traffic on)
+        self.earth_ai = earthaimod.Tracker()    # independent OSM lane-follow system, enabled only by its own mode
         self.traffic_visuals = False            # negotiated visual routes, requested only at night with traffic on
         self.traffic_on = False
         self.distant_traffic = vegetationmod.Tracker(distanttraffic.SEND_M, distanttraffic.DROP_M, 1, "traffic",
@@ -5097,7 +5127,7 @@ class Connection:
             self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
             for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, self.nav,
-                       self.distant_traffic, self.distant_traffic_far):
+                       self.distant_traffic, self.distant_traffic_far, self.earth_ai):
                 if tr is not None:
                     tr.close()
             self.s.drop_claims(self)
@@ -6169,6 +6199,10 @@ class Connection:
                 self.distant_traffic_far.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                                 functools.partial(self.s.build_traffic_geo, far=True),
                                                 view=self.view_at, frame=self.s.anchors[aid].frame)
+        if aid == self.active and isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
+            self.earth_ai.on_pose(self, aid, msg["lat"], msg["lon"], msg.get("earthAI") is True,
+                                  msg.get("earthAICount", 0), msg.get("earthAIActive", 0),
+                                  msg.get("earthAIQueued", 0), asyncio.get_running_loop(), self.s.build_earth_ai)
         if aid == self.active:
             self.send_progress(aid)
         self.refresh_status()

@@ -18,6 +18,9 @@ What changed in each release of BeamNG.Earth, newest first.
   dug the road under up to 4 m too deep. Its slip roads beside it stayed at their own height, a step between them. Seen
   under Kurna - Tuhala over Tallinna ringtee and under Tartu mnt at the Jüri roundabout, Estonia.
 
+### New
+- **Experimental Earth lane-following AI** (off by default): an independent follower can populate nearby roads from the globally indexed OpenStreetMap highways dataset, track lane-centre routes, and use mapped or road-class speed limits. It does not use BeamNG's Traffic/Chase AI or the streamed traffic graph. Junctions continue straight; cars that leave their route or reach its end are removed. It does not avoid other vehicles or obstacles. See [docs/EARTH_LANE_AI.md](docs/EARTH_LANE_AI.md).
+
 ## 1.8.1 beta (2026-11-04)
 
 Works with BeamNG.drive 0.40.4.

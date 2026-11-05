@@ -79,6 +79,9 @@ FLOATS = ("lanes", "width", "maxspeed", "osm_layer")
 TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_highway")
 GEOMETRY_MARGIN_M = 6.0    # m round a tagged highway's bbox a replaced way's line may reach (roadlanes.join's 6 m)
 UNBUILT = ("construction", "proposed")      # osm_highway's values: not drawn (roads.unbuilt)
+DRIVABLE_HIGHWAYS = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",
+                     "secondary", "secondary_link", "tertiary", "tertiary_link", "unclassified",
+                     "residential", "living_street", "service", "track", "road"}
 NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the same-named way it takes the tags of
 ONEWAY_YES = ("yes", "1", "-1", "true")
 
@@ -240,6 +243,76 @@ class OsmTags:
         finally:
             con.close()
         return out
+    def earth_ways(self, bounds, kind="demand"):
+        """OSM highway ways with full geometry and lane-driving tags inside geographic bbox.
+
+        Unlike cell(), this query does not join OSM ways to Overture features. It is the source
+        for BeamNG Earth's independent lane graph. The global Layercake Parquet index is read by
+        spatial row groups; only row groups intersecting this request are fetched and decoded.
+        """
+        lon0, lat0, lon1, lat1 = map(float, bounds)
+        if not all(math.isfinite(v) for v in (lon0, lat0, lon1, lat1)) or lon0 >= lon1 or lat0 >= lat1:
+            return []
+        for attempt in (0, 1):
+            etag, remote = self.version(kind)
+            files = {PATH: remote}
+            con, proto, errors = self._reader._connect(files, kind)
+            try:
+                uri = f"'{proto}://{PATH}'"
+                groups = self._groups(con, uri, remote, kind)
+                candidates = self._candidates(groups, bounds)
+                rows = []
+                wanted = ("id", "highway", "oneway", "lanes", "lanes:forward", "lanes:backward",
+                          "maxspeed", "name", "width", "access", "motor_vehicle", "service", "junction",
+                          "bridge", "tunnel", "layer", "geometry")
+                try:
+                    con.execute("SET enable_geoparquet_conversion = false")
+                except Exception:
+                    pass
+                for rg in candidates:
+                    group = groups[rg]
+                    present = set(group["cols"])
+                    cols = [c for c in (*wanted, "bbox") if c in present]
+                    # Include the raw remote ranges before DuckDB reads this row group. This keeps
+                    # the request inside the existing fetch/cache/rate-control path.
+                    self._reader._fetch(files, {PATH: [r for c in cols for r in group["cols"].get(c, [])]}, kind)
+                    select = ["file_row_number", '"id"']
+                    for name in wanted[1:-1]:
+                        select.append(f'"{name}"' if name in present else f'NULL AS "{name}"')
+                    select.extend(('bbox.xmin', 'bbox.ymin', 'bbox.xmax', 'bbox.ymax', '"geometry"'))
+                    first, last = int(group["first"]), int(group["first"] + group["n"] - 1)
+                    query = (f"SELECT {', '.join(select)} FROM read_parquet({uri}, file_row_number = true) "
+                             f"WHERE file_row_number BETWEEN {first} AND {last} "
+                             f"AND highway IN ({', '.join(repr(v) for v in sorted(DRIVABLE_HIGHWAYS))}) "
+                             f"AND bbox.xmin <= {lon1:.12g} AND bbox.xmax >= {lon0:.12g} "
+                             f"AND bbox.ymin <= {lat1:.12g} AND bbox.ymax >= {lat0:.12g}")
+                    rows.extend(con.execute(query).fetchall())
+            except Exception as error:
+                changed = next((e for e in errors if isinstance(e, rangeread.Changed)), None)
+                if attempt == 0 and (isinstance(error, rangeread.Changed) or changed is not None):
+                    log.info("osmtags: %s changed (was %s), retrying Earth lane query", self.url, etag)
+                    self._forget()
+                    continue
+                if changed is not None:
+                    raise changed
+                raise
+            finally:
+                con.close()
+            ways = []
+            for row in rows:
+                # File row, id, tags in wanted[1:-1], bbox, WKB.
+                highway = str(row[2] or "")
+                if highway not in DRIVABLE_HIGHWAYS:
+                    continue
+                coords = _linestring(bytes(row[-1])) if row[-1] is not None else None
+                if coords is None or len(coords) < 2:
+                    continue
+                tags = {name: value for name, value in zip(wanted[1:-1], row[2:2 + len(wanted[1:-1])])
+                        if value is not None}
+                tags.update(id=str(row[1]), points=coords)
+                ways.append(tags)
+            return ways
+        return []
 
     def _groups(self, con, uri, remote, kind):
         """{row group: {"first", "n", "bbox": {leaf: (min, max)}, "cols": {column: [byte ranges]}}} of the file,
