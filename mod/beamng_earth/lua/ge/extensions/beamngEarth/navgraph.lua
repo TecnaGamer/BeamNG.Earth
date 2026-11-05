@@ -14,6 +14,10 @@ local controlled = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
 M.MIN_GAP_S = 1.0
+-- m past the block's ground box (less EDGE_M) the graph's nodes are kept for the AI's route planning (GitHub #657 /
+-- #279: the map ended a few hundred metres ahead, the AI planned back the other way and turned round in the road);
+-- the cuts (headingToCut) and the guard stay at the box: a car is respawned before it leaves the ground. 0: off.
+M.HALO_M = 0
 -- An apply (or its signals' second step) waits for a light frame (governor roomFor: at most APPLY_ROOM_MS of streaming
 -- and other work spent in it, not a terrain commit's), APPLY_WAIT_FRAMES at most
 M.APPLY_ROOM_MS = 4.0
@@ -103,9 +107,10 @@ end
 -- Pure-ish (needs vec3): the stock map's node table of graph g clipped to box b: {name = {pos, radius,
 -- links = {other = edge}}}, every edge shared by both ends (double-sided) with in/out nodes, positions and radii.
 -- Returns nodes, node count, edge count and the cuts: { x, y } of each kept node with a road to a node left out.
-function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
+function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo)
   local nodes, nn, ne = {}, 0, 0
   local keep = {}
+  local phys = {}         -- (halo: the nodes kept past the box's edge for the AI's route planning; the cuts stay at it)
   local steps = 0
   local function step()       -- (in a coroutine: a pause every yieldEvery items, buildNodes)
     if yieldEvery then
@@ -114,7 +119,8 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
     end
   end
   for name, n in pairs(g.nodes) do
-    if M.inside(b, n[1], n[2], edgeM) then keep[name] = n end
+    if M.inside(b, n[1], n[2], edgeM) then keep[name], phys[name] = n, true
+    elseif halo and halo > 0 and M.inside(b, n[1], n[2], edgeM - halo) then keep[name] = n end
     step()
   end
   local function node(name)
@@ -133,7 +139,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
     local a, bb = e[1], e[2]
     for _, pair in ipairs({ { a, bb }, { bb, a } }) do
       local k = pair[1]
-      if keep[k] and not keep[pair[2]] and g.nodes[pair[2]] and not cut[k] then
+      if phys[k] and not phys[pair[2]] and g.nodes[pair[2]] and not cut[k] then
         cut[k] = true
         cutList[#cutList + 1] = { keep[k][1], keep[k][2] }
       end
@@ -285,7 +291,7 @@ local function apply(b, pre, moved)
   local tN = os.clock()
   local nodes, nn, ne, cl
   if pre then nodes, nn, ne, cl = pre[1], pre[2], pre[3], pre[4]
-  else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive) end
+  else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.HALO_M) end
   stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
@@ -703,7 +709,7 @@ local function buildNodes(b)
     setRules()
     local g, box, rh = graph, b and { b[1], b[2], b[3], b[4] } or nil, M.rules.rightHandDrive
     prep = { graph = g, box = box, co = coroutine.create(function()
-      return { M.toNodes(g, box, M.EDGE_M, rh, M.PREP_YIELD) }
+      return { M.toNodes(g, box, M.EDGE_M, rh, M.PREP_YIELD, M.HALO_M) }
     end) }
   end
   if prep.result then return prep.result end
@@ -764,7 +770,7 @@ function M.update(aid, b, gov)
   local pre
   if urgent then
     setRules()
-    pre = { M.toNodes(graph, b and { b[1], b[2], b[3], b[4] } or nil, M.EDGE_M, M.rules.rightHandDrive) }
+    pre = { M.toNodes(graph, b and { b[1], b[2], b[3], b[4] } or nil, M.EDGE_M, M.rules.rightHandDrive, nil, M.HALO_M) }
   else
     pre = buildNodes(b)
     if not pre or not room(gov) then return end

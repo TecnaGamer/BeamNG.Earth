@@ -19,6 +19,12 @@ local steep = { nodes = { j = { 0, 0, 22.7, 4 }, d = { 8, 0, 29.1, 3 }, h = { 0,
   edges = { { 'j', 'd', 0, 1, 1, 11.2, 1, 3 }, { 'j', 'h', 0, 1, 1, 11.2, 1, 3 } } }
 local sn, _, sne = N.toNodes(steep, { -500, -500, 500, 500 }, 60, false)
 T.check(sne == 1 and sn.j.links.h and not sn.j.links.d, 'a link steeper than MAX_GRADE left out; 37 % kept: ' .. sne)
+-- a halo (route planning past the box): the far node kept, the cut still at the box's edge
+do
+  local hn, hnn, hne, hcuts = N.toNodes(g, { -500, -500, 500, 500 }, 60, false, nil, 5000)
+  T.check(hnn == 4 and hne == 3 and hn.far ~= nil, 'halo: the node past the box kept, its road too')
+  T.check(#hcuts == 1 and hcuts[1][1] == 100, 'halo: the cut stays where the box ends (c)')
+end
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')
