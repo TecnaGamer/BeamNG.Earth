@@ -103,6 +103,9 @@ LOOK = {
     "gravel": {"m": "m_dirt_road", "tl": 88.0, "p": 21},
     "dirt": {"m": "m_dirt_road", "tl": 88.0, "p": 21},
 }
+# Sofia's yellow paving (bgpaving.py): the cobble look in BeamNG.Earth's yellow copy of its material
+YELLOW_PAVING = {**LOOK["cobble"], "m": "bne_yellow_paving"}
+YELLOW_SURF = "yellow_paving"          # (bgpaving.SURF)
 # a `surface=concrete` street is still a paved one (markings, widths, the tyres' asphalt feel) but is drawn with
 # gridmap v2's plain concrete instead of asphalt (the user, 2026-10-22: "for concrete road surfaces")
 CONCRETE = {"m": "m_gm_concrete_plain", "tl": 11.0, "p": 20}
@@ -148,6 +151,8 @@ def look_of(spec, fid=None):
     texture length its aspect times the width, one variation per road id fid), else its kind's (LOOK)."""
     if spec.kind == "paved" and spec.surf == "concrete":
         return CONCRETE
+    if spec.kind == "cobble" and spec.surf == YELLOW_SURF:
+        return YELLOW_PAVING
     look = DIRT_LOOK.get(spec.kind) if DIRT_STRIPS else None
     if look is None:
         return LOOK[spec.kind]
@@ -445,7 +450,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 3      # 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 4      # 4: Sofia's yellow paving (Spec.surf "yellow_paving", bgpaving.py); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -2585,6 +2590,8 @@ def _road_specs(feats, urban_fn, left_hand):
             out[j] = Spec(carriageway(cls, kind, urban, rule_w, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token, link=link)
     out = _swedish_specs(feats, out)
+    import bgpaving
+    out = bgpaving.apply(feats, out)        # (Sofia's yellow paving: by OpenStreetMap way)
     out = _rings(feats, out)
     out = dual_carriageways(feats, out, left_hand)
     # A primary's opposite carriageway can supply all of its apparent development
