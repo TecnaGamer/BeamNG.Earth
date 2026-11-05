@@ -6842,6 +6842,7 @@ class ChainView:
 
     def __init__(self, cs, frame, prefer=None):
         self.cs, self.frame, self.prefer = cs, frame, prefer
+        self.cell_fn = cs.cell_fn
         self.elev = cs.elev
         self.lock = threading.Lock()
         self._mapped = {}           # (store region, pid, id(xy)) -> (xy ref, mapped part)
@@ -7911,7 +7912,8 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     return out
 
 
-def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=None, shift_of=None, width_of=None):
+def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=None, shift_of=None, width_of=None,
+                   context_of=None):
     """The chunks of the bridges crossing the tile box `exact` (deck surfaces flagged "deck", their
     centre / edge lines; every bridge chunk "fixed": its z is the deck's, not the ground's). Deck
     heights: from `bridges` (BridgeProfiles: whole chains, shared by every tile), else from the
@@ -7919,6 +7921,34 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
     if bridges is not None:
         got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, exact)
                if np.isfinite(z).all()]
+        if any(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
+               for _fid, _sp, p, _lon in got):
+            # A short branch can meet its fork outside the usual parapet context. Both tiles need all incident
+            # complete profiles, even the tile holding only that branch's far abutment. parts() adds NEAR_M.
+            reach = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+            margin = max(0.0, reach - NEAR_M)
+            x0, y0, x1, y1 = exact
+            cell_fn = getattr(bridges, 'cell_fn', None)
+            if cell_fn is not None:
+                # Enlarging only the geometric filter is insufficient: parts() enumerates the supplied cells,
+                # so a fork just across a source-cell boundary would still be missing from one tile's surface.
+                la, lo, _ = frame.enu_to_geodetic(np.array([x0-reach, x1+reach, x0-reach, x1+reach]),
+                                                  np.array([y0-reach, y0-reach, y1+reach, y1+reach]), 0.0)
+                keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
+                cells = list(cells or ())
+                known = {str(meta[0]) for f in cells if f is not None
+                         for meta in [getattr(f, '_bnge_cell', None)] if meta}
+                for key in keys:
+                    if str(key) not in known:
+                        features = cell_fn(key)
+                        if features is None:
+                            raise OSError(f'bridge junction context roads unavailable: {key}')
+                        cells.append(features)
+            if context_of is not None:
+                walks, shift_of, width_of = context_of(cells)
+            got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in
+                   bridges.parts(cells, (x0 - margin, y0 - margin, x1 + margin, y1 + margin))
+                   if np.isfinite(z).all()]
         dd = getattr(bridges, "depth_of", None)
         return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
                             shift_of, width_of)
@@ -8014,6 +8044,7 @@ PADS_ON = os.environ.get("BNE_DECK_PADS", "on") != "off"
 PAD_REACH_M = 12.0
 PAD_STEP_M = 2.0
 PAD_JOIN_M = 0.75           # m: ends this near are one joint (_skew_decks' tolerance)
+PAD_JOIN_Z_M = 0.75         # m: the full endpoint height spread of a physical joint, never a stacked crossing
 PAD_GROUND_M = 1.0          # m: a ground road's end this near a joint goes on from it
 PAD_STRAIGHT_COS = -0.97    # two parts leaving a joint this straight need none
 # The pad reaches PAD_MARGIN_M past the carriageways (a turn cut across the corner stays that far from its rim); the
@@ -8085,11 +8116,27 @@ def shifted_parts(parts, shift_of):
     return out
 
 
+def _pad_height_groups(parts):
+    """Split XY-coincident incident roads by endpoint height, with no transitive joins between levels.
+
+    Height ordering makes membership independent of deck input order. Keep the original order within each
+    group so an ordinary connected junction retains the native hull's existing input and tie behavior.
+    """
+    groups = []
+    for i in sorted(range(len(parts)), key=lambda k: float(parts[k][1][0])):
+        z = float(parts[i][1][0])
+        if not groups or z - float(parts[groups[-1][0]][1][0]) > PAD_JOIN_Z_M:
+            groups.append([])
+        groups[-1].append(i)
+    return [[parts[i] for i in sorted(group)] for group in groups]
+
+
 def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     """[(ring (k, 3), centre (3,), walls [(pts (m, 3), out (m, 2))])] of the junction pads of the joints of decks
     [(fid, spec, xy (k, 2), z (k,))] (the bridge parts round tile box, as bridges.parts gives them) whose joint the box
     owns (own False: every joint, the parapets' test round the tile); ground_roads [(fid, spec, pts (k, 2+), _)] the
     ground carriageways near it (build_tile roads_out), the ground's heights ground_fn(xy) (the decks' abutments').
+    Only endpoints at matching elevations share a pad; XY-coincident stacked roads stay separate.
     walls: the rim's railings (PAD_*). earthfast.deck_pad, deck_pad_rim. Pure given ground_fn."""
     if not PADS_ON or not decks:
         return []
@@ -8111,11 +8158,12 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     out = []
     gl = [(np.asarray(pts, np.float64)[:, :2], spec.width / 2) for _fid, spec, pts, _ in ground_roads
           if spec is not None and len(pts) >= 2]
-    for nd, parts in sorted(inc.items()):
+    joints = []
+    for nd, incident in sorted(inc.items()):
         q = nodes[nd]
         if own and not box_owns(box, float(q[0]), float(q[1])):
             continue
-        parts = list(parts)
+        groups = _pad_height_groups(incident)
         for line, half in gl:
             for at in (0, -1):
                 if np.hypot(*(line[at] - q)) < PAD_GROUND_M:
@@ -8123,7 +8171,20 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
                     s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln, axis=0).T))]
                     keep = s <= PAD_REACH_M + 2 * PAD_STEP_M
                     ln = ln[keep] if keep.sum() >= 2 else ln[:2]
-                    parts.append((ln, np.asarray(ground_fn(ln), np.float64), half))
+                    zz = np.asarray(ground_fn(ln), np.float64)
+                    if not np.isfinite(zz).all():
+                        continue
+                    # A street underneath an elevated endpoint is not its approach. If a street could match
+                    # two nearby groups, attach it only to the nearest one; it must not join them transitively.
+                    matches = []
+                    for k, group in enumerate(groups):
+                        heights = [float(p[1][0]) for p in group]
+                        if max(max(heights), zz[0]) - min(min(heights), zz[0]) <= PAD_JOIN_Z_M:
+                            matches.append((abs(float(zz[0]) - float(np.mean(heights))), k))
+                    if matches:
+                        groups[min(matches)[1]].append((ln, zz, half))
+        joints.extend((q, parts) for parts in groups)
+    for q, parts in joints:
         if len(parts) < 2:
             continue
         if len(parts) == 2:
@@ -8172,9 +8233,14 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     return out
 
 
-def pad_inside(pads, xy, shrink=0.3):
-    """Per point of xy (n, 2): inside a pad of pads (deck_pads) by shrink m or more (its interior: no parapet). Pure."""
+def pad_inside(pads, xy, shrink=0.3, z=None):
+    """Inside a junction pad by shrink m; with z, only at its local surface height.
+
+    The optional height check uses the same centre fan as the pad mesh. A pad on a lower street must not
+    remove an overpass's parapets, even if the pad's height range reaches the overpass elsewhere. Pure.
+    """
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    heights = None if z is None else np.broadcast_to(np.asarray(z, np.float64), (len(xy),))
     out = np.zeros(len(xy), bool)
     for pad in pads:
         r = np.asarray(pad[0], np.float64)[:, :2]
@@ -8184,7 +8250,21 @@ def pad_inside(pads, xy, shrink=0.3):
         # signed distance inside every edge (counter-clockwise: left of each edge is inside)
         d = ((e[None, :, 0] * (xy[:, None, 1] - a[None, :, 1]) - e[None, :, 1] * (xy[:, None, 0] - a[None, :, 0]))
              / ln[None, :])
-        out |= (d >= shrink).all(1)
+        inside = (d >= shrink).all(1)
+        if heights is not None and inside.any():
+            ring, centre = np.asarray(pad[0], np.float64), np.asarray(pad[1], np.float64)
+            aa, bb = ring[:, :2] - centre[:2], np.roll(ring[:, :2], -1, axis=0) - centre[:2]
+            det = aa[:, 0] * bb[:, 1] - aa[:, 1] * bb[:, 0]
+            valid = np.abs(det) > 1e-10
+            aa, bb, det = aa[valid], bb[valid], det[valid]
+            delta = xy[:, None] - centre[:2]
+            wa = (delta[:, :, 0] * bb[:, 1] - delta[:, :, 1] * bb[:, 0]) / det
+            wb = (aa[:, 0] * delta[:, :, 1] - aa[:, 1] * delta[:, :, 0]) / det
+            wc = 1.0 - wa - wb
+            triangle = (wa >= -1e-8) & (wb >= -1e-8) & (wc >= -1e-8)
+            local_z = wa * ring[valid, 2] + wb * np.roll(ring[:, 2], -1)[valid] + wc * centre[2]
+            inside &= (triangle & (np.abs(local_z - heights[:, None]) <= PAD_JOIN_Z_M)).any(1)
+        out |= inside
     return out
 
 
@@ -8320,14 +8400,51 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
     for i, (fid, spec, pts, lon) in enumerate(decks):
         sh = shift_of(fid, pts) if shift_of else None
         shifted[i] = offset_polyline(pts, sh) if sh is not None else pts
+    # Complete profiles survive tile clipping. The bounded common field currently covers constant-width,
+    # unshifted carriageways; keep existing sidewalk/taper/lane-shift geometry on its current surface.
+    counts = {}
+    for fid, _sp, _pts, _lon in decks:
+        counts[fid] = counts.get(fid, 0) + 1
+    joint_profiles, joint_excluded = {}, set()
+    for i, (fid, spec, pts, _lon) in enumerate(decks):
+        pts = np.asarray(pts, np.float64)
+        if (counts[fid] != 1 or
+                np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1).sum() > roadmesh.JUNCTION_MAX_PART_M):
+            continue
+        joint_profiles[fid] = np.round(pts[:, :3], 3).tolist()
+        ws = width_of(fid, pts) if width_of else None
+        if (walks.get(fid) or not np.allclose(shifted[i], pts, rtol=0, atol=1e-6) or
+                (ws is not None and not np.allclose(ws, spec.width, rtol=0, atol=1e-6))):
+            # Retain the original endpoints for exclusion too: one unsupported arm must exclude the whole fork,
+            # not leave three eligible arms sharing a surface beside the fourth arm's independent surface.
+            joint_excluded.add(fid)
+    # Keep only unsupported endpoints, not entire long profiles. A shared field must not
+    # omit an incident long or ambiguous multipart arm, even when three short arms qualify.
+    blocked_ends = []
+    for fid, _spec, pts, _lon in decks:
+        if fid not in joint_profiles:
+            pts = np.asarray(pts, np.float64)
+            if len(pts) >= 2:
+                blocked_ends.extend(np.round(pts[[0, -1], :3], 3))
+    for fid, profile in joint_profiles.items():
+        ends = np.asarray(profile, np.float64)[[0, -1]]
+        if any(np.linalg.norm(p[:2] - q[:2]) <= roadmesh.JUNCTION_JOIN_M and
+               abs(p[2] - q[2]) <= roadmesh.JUNCTION_JOIN_Z_M for p in ends for q in blocked_ends):
+            joint_excluded.add(fid)
+    junction_margin = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+    junction_box = (x0 - junction_margin, y0 - junction_margin, x1 + junction_margin, y1 + junction_margin)
     for i, (fid, spec, pts, lon) in enumerate(decks):
         pts = shifted[i]
         dw, dc = _deck_frame(spec, walks.get(fid))
-        for piece in clip_polyline(offset_polyline(pts, dc) if dc else pts, *wide):
+        for piece in clip_polyline(offset_polyline(pts, dc) if dc else pts,
+                                   *(junction_box if fid in joint_profiles else wide)):
             for c in split(densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
                 if len(c) >= 2:
                     ch = _chunk({**_deck_look(spec), "deck": True}, dw, c)
                     ch.update(fixed=True, deck=True, fid=fid, ctx=True, tdir=_travel(spec))
+                    if fid in joint_profiles:
+                        ch['jn'] = joint_profiles[fid]
+                        ch['jskip'] = fid in joint_excluded
                     ws = width_of(fid, c) if width_of else None
                     if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
                         ch["ws"] = [round(float(x + dw - spec.width), 3) for x in ws]
@@ -8358,10 +8475,14 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     if len(c) >= 2:
                         ch = _chunk(look, w, c)
                         ch["fixed"] = True
+                        ch['fid'] = fid
                         if ch["m"] == DECK_CONCRETE["m"]:    # (its tile two lanes wide: DECK_CONCRETE_TILE_M)
                             ch["tu"] = round(max(1.0, w / DECK_CONCRETE_TILE_M), 3)
                         if look.get("deck"):
                             ch["deck"] = True
+                            if fid in joint_profiles:
+                                ch['jn'] = joint_profiles[fid]
+                                ch['jskip'] = fid in joint_excluded
                             ch["fid"] = fid             # (roadmesh.deck: no parapet between parts side by side)
                             ws = width_of(fid, c) if width_of else None
                             if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
@@ -8652,7 +8773,24 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     deck_shift = deck_shift_fn(frame, cells, urban_fn, widths, left_hand)   # (a deck at a merge / split)
     road_copies = copies_of(cells)              # (a joint's taper / shift from its own cell: joint_desc)
     deck_width = deck_width_fn(frame, cells)    # (a deck tapering into another deck)
-    for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width):
+    def bridge_context(source_cells):
+        # Eligibility must use the same complete source cells as the incident profiles.
+        expanded_walk = {}
+        for bf in source_cells:
+            if bf is None or len(bf) == 0:
+                continue
+            specs = road_specs(bf, urban_fn, widths, left_hand)
+            for bi, bs in enumerate(bridge_specs(bf)):
+                fid = str(bf.ids[bi])
+                if bs is not None and fid not in expanded_walk:
+                    dwk = deck_walks(bf, bi, specs, left_hand)
+                    if dwk:
+                        expanded_walk[fid] = dwk
+        return (expanded_walk, deck_shift_fn(frame, source_cells, urban_fn, widths, left_hand),
+                deck_width_fn(frame, source_cells))
+
+    for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width,
+                             bridge_context):
         if ch.get("deck"):
             decks_near.append(ch)
         if not ch.get("ctx"):

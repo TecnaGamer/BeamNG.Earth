@@ -1290,6 +1290,11 @@ def _map_chunks(src, dst, chunks):
         return []
     pts, idx = [], []
     for k, c in enumerate(chunks):
+        jn = c.get('jn')
+        if jn is not None and len(jn):
+            a = np.asarray(jn, np.float64)
+            pts.append(a[:, :3])
+            idx.append((k, 'jn', len(a), 3))
         n = c.get("n")
         if n is not None and len(n):
             a = np.asarray(n, np.float64)
