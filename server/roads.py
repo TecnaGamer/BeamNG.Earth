@@ -7913,13 +7913,16 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
 
 
 def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=None, shift_of=None, width_of=None,
-                   context_of=None):
+                   context_of=None, context_m=None):
     """The chunks of the bridges crossing the tile box `exact` (deck surfaces flagged "deck", their
     centre / edge lines; every bridge chunk "fixed": its z is the deck's, not the ground's). Deck
     heights: from `bridges` (BridgeProfiles: whole chains, shared by every tile), else from the
-    chains found among the given cells (deck_heights; tests)."""
+    chains found among the given cells (deck_heights; tests). context_m: surrounding decks to retain (default
+    DECK_CONTEXT_M); furniture needs enough context to decide the next support of an owned wire span."""
     if bridges is not None:
-        got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, exact)
+        margin = DECK_CONTEXT_M if context_m is None else float(context_m)
+        near = (exact[0] - margin, exact[1] - margin, exact[2] + margin, exact[3] + margin)
+        got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, near)
                if np.isfinite(z).all()]
         if any(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
                for _fid, _sp, p, _lon in got):
@@ -7956,7 +7959,7 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                    if np.isfinite(z).all()]
         dd = getattr(bridges, "depth_of", None)
         return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                            shift_of, width_of)
+                            shift_of, width_of, context_m)
     if not bseen:
         return []
     parts = []                                  # (fid, spec, xy (k, 2), lon)
@@ -7991,7 +7994,7 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
             import grading
             z = np.maximum(_smooth_pinned(z, DECK_STEP, grading.SIGMA_M), g)
         decks.append((fid, spec, np.c_[xy, z], lon))
-    return _deck_chunks(decks, exact, ground, walks=walks, shift_of=shift_of, width_of=width_of)
+    return _deck_chunks(decks, exact, ground, walks=walks, shift_of=shift_of, width_of=width_of, context_m=context_m)
 
 
 DECK_CONTEXT_M = 24.0   # m around a tile its bridges' decks are passed as context (roadmesh.deck: whether an edge has
@@ -8378,9 +8381,9 @@ def deck_walks(feats, i, ground_specs, left_hand=False):
     return None
 
 
-def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None):
+def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
-    within DECK_CONTEXT_M of it as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
+    within context_m (default DECK_CONTEXT_M) as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
     ground_fn(xy) -> heights: a part's ends on the ground are its abutments (each deck chunk's "abut" points: the
     parapets ramp down there). walks: {fid: (sidewalk m, sides)} of the decks that carry sidewalks (deck_walks).
     shift_of(fid, pts): its lane lines' shift at each point (lane_shifts) or None. width_of(fid, pts): its carriageway's
@@ -8400,7 +8403,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
             if not any(j != i and np.hypot(*(q - q2)) < DECK_JOIN_M for j, _, q2 in ends):
                 abut[fid].append((float(q[0]), float(q[1])))
     x0, y0, x1, y1 = exact
-    wide = (x0 - DECK_CONTEXT_M, y0 - DECK_CONTEXT_M, x1 + DECK_CONTEXT_M, y1 + DECK_CONTEXT_M)
+    margin = DECK_CONTEXT_M if context_m is None else float(context_m)
+    wide = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
     shifted = {}                                # (the deck itself shifted at a merge / split: lane_shifts)
     for i, (fid, spec, pts, lon) in enumerate(decks):
         sh = shift_of(fid, pts) if shift_of else None
@@ -8499,6 +8503,14 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                                 ch["abut"] = abut[fid]
                         out.append(ch)
     return out
+
+
+def _deck_clearance(ch):
+    """A generated deck chunk's (points, half-width per segment, slab-plus-girder depth) for RoadClearance."""
+    half = np.asarray(ch.get("ws", ch["w"]), np.float64) / 2
+    if half.ndim:
+        half = np.maximum(half[:-1], half[1:])
+    return np.asarray(ch["n"], np.float64), half, float(ch.get("dd") or DECK_FULL_DEPTH)
 
 
 def _on_box(p, box, eps=1e-6):
@@ -8651,7 +8663,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None, country=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
-               signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None):
+               signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
+               clearance_out=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -8666,12 +8679,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     blockworker.roads_geo): the draped surfaces' pieces (sidewalk runs and corners, markings, crosswalks, corner fills)
     taken this far past the tile's box, its own, the skin clipping them exactly at the tile's quad in the anchor's
     world (a seam-straddling crosswalk drawn by both tiles, each its half); walks_raw: a list that gets the sidewalk
-    pieces before they are put on the ground (the skin drapes them on its anchor's). Pure given its inputs (sorted by
-    feature id)."""
+    pieces before they are put on the ground (the skin drapes them on its anchor's). clearance_out: a list that gets
+    the shared furniture.RoadClearance for this tile's tapered ground roads and generated bridge decks (not tunnel
+    vaults), also used by powerlines.tile_lines. Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
+    import furniture
+    traffic_context = clearance_out is not None or (props is not None and walks is not None)
+    context_m = max(NEAR_M, furniture.POLE_SPACING + 32.0) if traffic_context else NEAR_M
     box = (x0 - OVERLAP, y0 - OVERLAP, x1 + OVERLAP, y1 + OVERLAP)
-    near = (x0 - NEAR_M, y0 - NEAR_M, x1 + NEAR_M, y1 + NEAR_M)
+    near = (x0 - context_m, y0 - context_m, x1 + context_m, y1 + context_m)
     seen, bseen = {}, {}
     for feats in cells:
         if feats is None or len(feats) == 0:
@@ -8769,6 +8786,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     if len(c) >= 2:
                         chunks.append(_chunk(look, lw, c))
     decks_near = []                             # (retaining_walls: none under a bridge)
+    traffic_decks = []                          # genuine bridge geometry only, never the tunnel vaults below
     deck_walk = {}                              # the bridges that carry sidewalks (deck_walks)
     for fid in bseen:
         bf, bi, _ = bseen[fid]
@@ -8795,9 +8813,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 deck_width_fn(frame, source_cells))
 
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width,
-                             bridge_context):
+                             bridge_context, context_m=context_m if traffic_context else None):
         if ch.get("deck"):
             decks_near.append(ch)
+            traffic_decks.append(_deck_clearance(ch))
         if not ch.get("ctx"):
             chunks.append(ch)
         elif deck_context is not None:          # the decks around the tile (roadmesh.deck's parapet test)
@@ -8956,13 +8975,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     chunks.extend(corner_chunks)
     going_on = _going_on(roads)
     straight, stems, whole = line_through(roads)
+    traffic_lines = []
     for fid, spec, pts, lon in roads:
         ws = None                               # (tapered where it meets a road of another width: road_tapers)
-        if fid in seen and fid not in jinternal:
+        if fid in seen:
             tp = joint_desc(road_copies.get(fid, [seen[fid][:2]]), lambda f: road_tapers(f, urban_fn, widths, left_hand))
             if tp:
                 tla, tlo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
                 ws = taper_widths(spec.width, tp, tlo, tla)
+        half = spec.width / 2 if ws is None else (ws[:-1] + ws[1:]) / 4  # surface paints each segment at its mean
+        traffic_lines.append((half, pts))
         sh = None                               # (its lines shifted at a merge / split: lane_shifts)
         if fid in seen and fid not in jinternal:
             ls = joint_desc(road_copies.get(fid, [seen[fid][:2]]), lambda f: lane_shifts(f, urban_fn, widths, left_hand))
@@ -9068,13 +9090,18 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             chunks.extend(drains(wk["pts"], side, ends, w))
     if lines is not None:                           # the centrelines near the tile (buildings' front doors)
         lines.extend((pts[:, :2], spec.width / 2, spec.cls, spec.urban) for _, spec, pts, _ in roads)
+    clearance = None
+    if clearance_out is not None or (props is not None and walks is not None):
+        import furniture
+        clearance = furniture.RoadClearance(traffic_lines, traffic_decks, bounds=own_box)
+        if clearance_out is not None:
+            clearance_out.append(clearance)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
         # (the speed-limit signs are the sign tiles' since 2026-10-28: speedsigns.py)
-        import furniture
-        decks = [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in chunks if ch.get("deck")]
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
-                                     decks=decks, signals=signals, buried=buried, region=lamp_region, country=country,
-                                     priority=priority,
+                                     decks=[(p, h) for p, h, _depth in traffic_decks], clearance=clearance,
+                                     signals=signals, buried=buried, region=lamp_region, country=country,
+                                     priority=priority, ground=ground,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     aisles = {fid for fid, (f, i, sp) in seen.items()

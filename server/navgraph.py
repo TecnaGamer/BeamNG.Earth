@@ -149,10 +149,11 @@ def _lanes(width, oneway, known=None):
 
 
 def _deck_z(decks, fid, x, y):
-    """The deck height at (x, y) of feature fid's bridge parts (decks: fid -> [(xy (k, 2), z (k,))]), or None
-    when the point is not on one (more than 1.5 m off its line)."""
+    """The height at (x, y) of feature fid's bridge parts (decks: fid -> [(xy, z, depth)]), or None when the
+    point is not on one (more than 1.5 m off its line). Existing (xy, z) parts are accepted when depth is unknown."""
     best = None
-    for xy, z in decks.get(fid, ()):
+    for part in decks.get(fid, ()):
+        xy, z = part[:2]
         a, b = xy[:-1], xy[1:]
         d = b - a
         L2 = np.maximum((d * d).sum(1), 1e-12)
@@ -170,14 +171,16 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
-    are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z)] of the bridge parts (roads.BridgeProfiles):
-    nodes on a bridge take its deck height (else traffic would spawn on the ground under it), and roads that are
-    bridge all along are in the graph (road_specs leaves them to the bridge builder). widths: the road tiles'
+    are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z, structural depth)] of the bridge parts
+    (roads.BridgeProfiles; existing (xy, z) entries leave the depth unknown). Nodes on a bridge take its deck height
+    (else traffic would spawn on the ground under it), and roads that are bridge all along are in the graph. widths:
     measured street widths (roadwidth.py), so the AI's lanes are on the carriageway the road mesh draws. signals:
     the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them."""
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
-    carriage = []           # (half width, centreline (k, 2)) of every road and bridge here (the signal heads keep off them)
+    carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
+    signal_parts, signal_walks, signal_depths = [], {}, {}
+    copies = roads.copies_of(feats_list)
     prop_arms = {}          # connector name -> [(fid, spec, unit vector away, point, end, length)] (the props' view)
     ring_cands = []         # the roads the road tiles draw (fid, spec, pts, None): roundabout rings (islands.ring_fids)
     approaches = {}         # (connector, fid, end) -> (graph node next to it, traffic comes in)
@@ -221,7 +224,27 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             L = float(s[-1])
             if L < 1.0:
                 continue
-            carriage.append((spec.width / 2, p))     # (the signal heads keep off every carriageway, decks too)
+            if rspecs[i] is not None:
+                tp = roads.joint_desc(copies.get(fid, [(feats, i)]),
+                                      lambda f: roads.road_tapers(f, urban_fn, widths, left_hand))
+                for ring_ll in roads.ground_parts(feats, i):
+                    ring_ll = np.asarray(ring_ll, np.float64)
+                    if len(ring_ll) < 2:
+                        continue
+                    ge, gn, _ = frame.geodetic_to_enu(ring_ll[:, 1], ring_ll[:, 0], 0.0)
+                    ws = roads.taper_widths(rspecs[i].width, tp, ring_ll[:, 0], ring_ll[:, 1])
+                    half = rspecs[i].width / 2 if ws is None else (ws[:-1] + ws[1:]) / 4
+                    carriage.append((half, np.column_stack([ge, gn])))
+                    carriage_ll.append(ring_ll)
+            if bspecs[i] is not None and decks and fid in decks:
+                for part in decks[fid]:
+                    dxy, dz = part[:2]
+                    depth = float(part[2]) if len(part) > 2 else roads.DECK_FULL_DEPTH
+                    signal_depths[fid] = max(signal_depths.get(fid, 0.0), depth)
+                    signal_parts.append((fid, bspecs[i], np.column_stack([dxy, dz]), float(np.mean(ll[:, 0]))))
+                walk = roads.deck_walks(feats, i, rspecs, left_hand)
+                if walk:
+                    signal_walks[fid] = walk
             # the junction arms as the road tiles' props see them (every road they draw: service roads, driveways
             # and tracks too, no bridge-only roads), so furniture.junction_controls decides the same there and here
             if rspecs[i] is not None and con is not None:
@@ -333,6 +356,31 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                               round(w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0)
                                     + float(max(hxm[j], hxm[j + 1])), 2)])
                 edge_fids.append(fid)
+    # The static props use 3D solved roads/decks. A 2D graph clearance line would falsely block every level below
+    # a viaduct, suppressing the switchable head while leaving the static signal behind.
+    if carriage_ll:
+        ll = np.concatenate(carriage_ll)
+        heights = np.asarray(frame.geodetic_to_enu(
+            ll[:, 1], ll[:, 0], np.asarray(elev(ll[:, 1], ll[:, 0]), np.float64))[2], np.float64)
+        at = 0
+        for i, (half, xy) in enumerate(carriage):
+            carriage[i] = (half, np.column_stack([xy, heights[at:at + len(xy)]]))
+            at += len(xy)
+    signal_decks = []
+    if signal_parts:
+        chunks = roads._deck_chunks(
+            signal_parts, (cx - window - 200, cy - window - 200, cx + window + 200, cy + window + 200),
+            depths=signal_depths, walks=signal_walks,
+            shift_of=roads.deck_shift_fn(frame, feats_list, urban_fn, widths, left_hand),
+            width_of=roads.deck_width_fn(frame, feats_list))
+        for ch in chunks:
+            if ch.get("deck"):
+                signal_decks.append(roads._deck_clearance(ch))
+
+    def signal_ground(x, y):
+        la, lo, _ = frame.enu_to_geodetic(np.asarray([x]), np.asarray([y]), 0.0)
+        return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
+
     import islands
     ring = islands.ring_directions(ring_cands, left_hand)
     ring_nodes = {nm for fid, e in zip(edge_fids, edges) if fid in ring for nm in e[:2]}
@@ -371,7 +419,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 radius[nm] = max(radius.get(nm, 0.0), e[7])
         for nm, x, y, z in zip(used, X, Y, Z):
             nodes[nm] = [round(float(x), 2), round(float(y), 2), round(float(z), 2), radius[nm]]
-    signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals, country, priority)
+    signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals, country, priority,
+                       decks=signal_decks, ground=signal_ground)
     # one edge per node pair (two segments joining the same connectors: keep the first)
     uniq, pairs = [], set()
     for e in edges:
@@ -390,7 +439,8 @@ STOP_BACK_M = 2.0           # the stop point: this far before the junction's wid
 SHORT_APPROACH_M = 15.0
 
 
-def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None, country=None, priority=None):
+def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None, country=None, priority=None,
+             decks=(), ground=None):
     """[{"j": junction node, "kind": "signal" | "stop", "app": [[approach node, x, y, z, dir x, dir y, phase, prop x,
     prop y, prop z, prop yaw]]}] of the urban junctions furniture.junction_controls controls, decided on the arms
     the road tiles' props see (arms) and built for the graph's approaches into them (approaches): per incoming
@@ -402,6 +452,10 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
     farms = {name: [(x[0], x[1], x[2], x[3], x[4] == 0, x[5] if len(x) > 5 else math.inf) for x in a]
              for name, a in arms.items()}
     link_ok = furniture._link_check(farms, signals)
+    # Restrict index construction to this graph's nodes (some source ways extend many kilometres beyond it).
+    xy = np.asarray([v[:2] for v in nodes.values()], np.float64).reshape(-1, 2)
+    bounds = (*xy.min(0), *xy.max(0)) if len(xy) else (0.0, 0.0, 0.0, 0.0)
+    clearance = furniture.RoadClearance(lines, decks, bounds=bounds)
     for name, a in arms.items():
         if name not in nodes or len(a) < 3 or not furniture._controlled_here(farms[name], signals):
             continue
@@ -429,11 +483,14 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
             right = np.array([inc[1], -inc[0]]) * (-1 if left_hand else 1)     # the side traffic keeps to
             q = np.array([jx, jy]) + u * (wide + STOP_BACK_M) + right * (spec.width / 4)
             phase = 0 if abs(float(u @ axis)) > 0.7 else 1
+            def support(x, y):
+                return float(np.asarray(ground(x, y)).reshape(-1)[0]) + 0.15 if ground is not None else jz + 0.15
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none
             # where no spot is clear of the carriageways (no prop there either)
             side, yaw = furniture.approach_pose(u, what, left_hand)
-            pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines)
-            head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(jz + 0.15, 2),
+            pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines,
+                                       group=what, base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
+            head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(support(*pp), 2),
                                                   yaw]
             app.append([nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
                         round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head)
