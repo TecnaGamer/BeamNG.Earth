@@ -155,6 +155,24 @@ class HighwayLanesTest(unittest.TestCase):
             self.assertEqual(f.attrs["lane_source"][0], "osm-geometry")
             self.assertEqual(f.attrs["lane_osm_way"][0], 99)
 
+    def test_geometry_read_only_when_a_highways_own_way_is_gone(self):
+        """osmtags.join's geometry callback (the highways' geometry column, ~33 MB of a cold LA visit) is asked only
+        when a motorway's own way id is not among the tags; then it gives the count as the tags' _coords did."""
+        asked = []
+
+        def geometry(need):
+            asked.append(need)
+            return {99: highway().lonlat}
+        f = highway([[(20, 0), (80, 0)]])
+        osmtags.join(f, {99: {"lanes": 4, "lane_hw": "motorway", "osm_oneway": "yes"}}, geometry)
+        self.assertEqual((len(asked), roads.road_specs(f)[0].lanes), (1, 4))
+        g = highway([[(20, 0), (80, 0)]])
+        own = osmtags.way_id(str(g.attrs["src_record"][0])) if "src_record" in g.attrs else None
+        if own is not None:
+            asked.clear()
+            osmtags.join(g, {own: {"lanes": 3, "lane_hw": "motorway", "osm_oneway": "yes"}}, geometry)
+            self.assertEqual((len(asked), roads.road_specs(g)[0].lanes), (0, 3), "its own way: not asked")
+
     def test_geometry_rejects_ambiguous_or_unrelated_ways(self):
         for mode in ("opposing", "two_way", "far", "ambiguous", "ramp", "class"):
             f = highway()

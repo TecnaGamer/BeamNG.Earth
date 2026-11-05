@@ -53,16 +53,22 @@ class HighwayTagReaderTest(unittest.TestCase):
                 def execute(self, sql):
                     return con.execute(sql.replace("fixture://osm/highways.parquet", path))
 
-                def close(self):
-                    con.close()
+                def close(self):        # (two reads: the tags, then the geometry; closed with the test)
+                    pass
 
             store = osmtags.OsmTags(tmp, None)
             store._reader = SimpleNamespace(_connect=lambda *args: (LocalConnection(), "fixture", []), _fetch=mock.Mock())
             groups = {0: {"first": 0, "n": 4, "cols": {c: [] for c in columns + ["id", "bbox", "geometry"]}}}
             with mock.patch.object(store, "_groups", return_value=groups):
                 # (dev's reader decodes a row group once into the version's folder: remote.cache_dir)
-                tags, raceways = store._cell(SimpleNamespace(cache_dir=tmp), (bbox["xmin"], bbox["ymin"], bbox["xmax"],
-                                                                             bbox["ymax"]), "demand")
+                remote = SimpleNamespace(cache_dir=tmp)
+                tags, raceways = store._cell(remote, (bbox["xmin"], bbox["ymin"], bbox["xmax"], bbox["ymax"]), "demand")
+                # (the highways' geometry only when asked: roadlanes.join, a highway whose own way is gone)
+                self.assertFalse(any("_coords" in t for t in tags.values()))
+                with mock.patch.object(store, "version", return_value=("e", remote)):
+                    geom = store.highway_geometry((bbox["xmin"], bbox["ymin"], bbox["xmax"], bbox["ymax"]), "demand")
+                for wid, p in geom.items():
+                    tags[wid]["_coords"] = p
             self.assertEqual(tags[1]["lanes"], 3)
             self.assertEqual(tags[1]["lane_hw"], "motorway")
             np.testing.assert_allclose(tags[1]["_coords"], coords)

@@ -437,7 +437,8 @@ class MapData:
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
-                feats = self._osm(feats, osm.result())
+                feats = self._osm(feats, osm.result(),
+                                  lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need))
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -544,7 +545,7 @@ class MapData:
         self.osmfuel.warm(kind)
 
     @staticmethod
-    def _osm(feats, got):
+    def _osm(feats, got, geometry=None):
         """The roads with the cell's OpenStreetMap tags joined in and its raceways appended (Overture has none,
         GitHub #143)."""
         import mapgeom
@@ -552,7 +553,7 @@ class MapData:
         tags, ways = got
         if ways:
             feats = mapgeom.concat(feats, osmtags.raceway_features(ways))
-        osmtags.join(feats, tags)
+        osmtags.join(feats, tags, geometry)
         import oneway_joins
         oneway_joins.apply(feats)
         return feats

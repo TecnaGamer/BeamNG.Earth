@@ -77,6 +77,7 @@ TABLE_WAIT_S = 60.0     # a row group another process decodes is waited for this
 USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name"}
 FLOATS = ("lanes", "width", "maxspeed", "osm_layer")
 TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_highway")
+GEOMETRY_MARGIN_M = 6.0    # m round a tagged highway's bbox a replaced way's line may reach (roadlanes.join's 6 m)
 UNBUILT = ("construction", "proposed")      # osm_highway's values: not drawn (roads.unbuilt)
 NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the same-named way it takes the tags of
 ONEWAY_YES = ("yes", "1", "-1", "true")
@@ -173,6 +174,72 @@ class OsmTags:
                 log.info("osmtags: %s changed (was %s), taking the new version", self.url, etag)
                 self._forget()
         return {}, []
+
+    def highway_geometry(self, bounds, kind="demand", need=None):
+        """{way id: (k, 2) lon/lat} of the tagged motorways / trunks (and their links) with a lane count whose bbox
+        touches bounds: PR #471's match for a highway whose Overture way id OSM no longer has (roadlanes.join). Asked
+        only then (roadlanes.join's geometry callback): the geometry column of their row groups was ~33 MB more of a
+        cold downtown Los Angeles visit (4 road tiles, 2026-11-04) when every cell read it. need: [(lon0, lat0, lon1,
+        lat1)] of the highways to match: only the ways whose bbox (GEOMETRY_MARGIN_M round it) holds one of them
+        (roadlanes.join's own first test) and their row groups' geometry are read; none: nothing is read."""
+        lon0, lat0, lon1, lat1 = bounds
+        etag, remote = self.version(kind)
+        rd = self._reader
+        files = {PATH: remote}
+        con, proto, errors = rd._connect(files, kind)
+        out = {}
+        try:
+            uri = f"'{proto}://{PATH}'"
+            groups = self._groups(con, uri, remote, kind)
+            cand = self._candidates(groups, bounds)
+            names = list(COLUMNS)
+            hw = names.index("lane_hw")
+            lanes = names.index("lanes")
+            lane_rows = []
+            for rg in cand:
+                t = self._table(con, uri, groups, rg, remote, kind)
+                if not len(t["id"]):
+                    continue
+                b = np.float32
+                m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
+                                   & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
+                for r in _rows(t, m):
+                    if r[3 + lanes] is None or r[3 + hw] is None:
+                        continue
+                    if need is not None:
+                        x0, y0, x1, y1 = (r[3 + names.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
+                        dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
+                        dy = GEOMETRY_MARGIN_M / 110574.0
+                        if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
+                                   for a0, b0, a1, b1 in need):
+                            continue
+                    lane_rows.append(r[2])
+            if not lane_rows or not any('geometry' in groups[rg]['cols'] for rg in cand):
+                return out
+            hit = sorted({rg for r in lane_rows for rg in cand
+                          if groups[rg]['first'] <= r < groups[rg]['first'] + groups[rg]['n']})
+            rd._fetch(files, {PATH: [v for rg in hit for v in groups[rg]['cols'].get('geometry', [])]}, kind)
+            try:
+                con.execute('SET enable_geoparquet_conversion = false')
+            except Exception:
+                pass
+            wanted = ', '.join(str(int(r)) for r in lane_rows)
+            for wid, wkb in con.execute(f'SELECT id, geometry FROM read_parquet({uri}, file_row_number=true) '
+                                        f'WHERE file_row_number IN ({wanted})').fetchall():
+                if wkb is not None:
+                    p = _linestring(bytes(wkb))
+                    if p is not None:
+                        out[int(wid)] = p
+        except rangeread.Changed:
+            raise
+        except Exception as e:
+            for err in errors:
+                if isinstance(err, rangeread.Changed):
+                    raise err
+            log.warning('osmtags: highway geometry unavailable; keeping way tags: %s', e)
+        finally:
+            con.close()
+        return out
 
     def _groups(self, con, uri, remote, kind):
         """{row group: {"first", "n", "bbox": {leaf: (min, max)}, "cols": {column: [byte ranges]}}} of the file,
@@ -349,34 +416,6 @@ class OsmTags:
                                    & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
                 rows.extend(_rows(t, m))
             race = [r[2] for r in rows if r[1]]
-            # Current highway geometry can recover source way IDs replaced since
-            # the Overture release. Fetch only the tagged highways' row groups.
-            geometry = {}
-            hw = 3 + list(COLUMNS).index("lane_hw")
-            lane_rows = [r[2] for r in rows if r[3] is not None and r[hw] is not None]
-            if lane_rows and any('geometry' in groups[rg]['cols'] for rg in cand):
-                try:
-                    hit = sorted({rg for r in lane_rows for rg in cand
-                                  if groups[rg]['first'] <= r < groups[rg]['first'] + groups[rg]['n']})
-                    rd._fetch(files, {PATH: [v for rg in hit for v in groups[rg]['cols'].get('geometry', [])]}, kind)
-                    try:
-                        con.execute('SET enable_geoparquet_conversion = false')
-                    except Exception:
-                        pass
-                    wanted = ', '.join(str(int(r)) for r in lane_rows)
-                    for wid, wkb in con.execute(f'SELECT id, geometry FROM read_parquet({uri}, file_row_number=true) '
-                                                f'WHERE file_row_number IN ({wanted})').fetchall():
-                        if wkb is not None:
-                            p = _linestring(bytes(wkb))
-                            if p is not None:
-                                geometry[int(wid)] = p
-                except rangeread.Changed:
-                    raise
-                except Exception as e:
-                    for err in errors:
-                        if isinstance(err, rangeread.Changed):
-                            raise err
-                    log.warning('osmtags: highway geometry unavailable; keeping way tags: %s', e)
             got = []
             if race:            # (rare: the raceways' own columns and geometry, of their row groups only)
                 hit = sorted({rg for r in race for rg in cand
@@ -400,8 +439,6 @@ class OsmTags:
             con.close()
         names = list(COLUMNS)
         tags = {int(r[0]): {k: v for k, v in zip(names, r[3:]) if v is not None} for r in rows}
-        for wid, p in geometry.items():
-            tags[wid]["_coords"] = p
         ways = []
         for row in got:
             coords = _linestring(bytes(row[-1]))
@@ -517,7 +554,7 @@ def _named_way(feats, i, by_name):
     return best[1] if best else None
 
 
-def join(feats, tags):
+def join(feats, tags, geometry=None):
     """The tags of each road feature (its source record's way id) as attrs columns: floats (NaN where unknown) for
     FLOATS, text ('' where unknown) for TEXTS. feats: an Overture roads Features (attrs src_record). A segment without a
     known way (from a relation) takes the tags of the same-named way around it (_named_way), but its oneway: that way may
@@ -560,5 +597,5 @@ def join(feats, tags):
             w = _named_way(feats, i, {nm: sense.get((nm, str(ows[i]) in ONEWAY_YES), [])})
             if w is not None:
                 lanes[i] = roadlanes.count(tags[w]["lanes"]) or np.nan
-    roadlanes.join(feats, tags, ids)
+    roadlanes.join(feats, tags, ids, geometry)
     return feats

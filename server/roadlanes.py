@@ -70,9 +70,30 @@ def _project(line, points):
     return dist[np.arange(len(points)), k], delta[k] / length[k, None]
 
 
-def join(feats, tags, ids):
-    """Keep highway evidence separate from osmtags' legacy named-street fallback."""
+def join(feats, tags, ids, geometry=None):
+    """Keep highway evidence separate from osmtags' legacy named-street fallback. geometry() -> {way id: (k, 2)
+    lon/lat} of the tagged highways (osmtags.OsmTags.highway_geometry), asked only when a motorway / trunk's own way
+    id is not among the tags (replaced since the Overture release): its count from a way along the same line.
+    geometry(need): need, the lon/lat boxes (lon0, lat0, lon1, lat1) of those highways."""
     n = len(feats)
+    if geometry is not None:
+        classes_ = feats.attrs.get("class", [""] * n)
+        need = []           # (lon0, lat0, lon1, lat1) of each highway whose own way is not among the tags
+        for i in range(n):
+            if classes_[i] in HIGHWAYS and ids[i] not in tags:
+                parts = feats.parts(i)
+                if len(parts) == 1 and len(parts[0]) == 1 and len(parts[0][0]) >= 2:
+                    ll = np.asarray(parts[0][0], np.float64)
+                    need.append((float(ll[:, 0].min()), float(ll[:, 1].min()), float(ll[:, 0].max()),
+                                 float(ll[:, 1].max())))
+        if need:
+            try:
+                for wid, p in (geometry(need) or {}).items():
+                    if wid in tags:
+                        tags[wid]["_coords"] = p
+            except Exception as e:      # (the counts from the ways' own ids only)
+                import logging
+                logging.getLogger("earthd.roadlanes").warning("highway geometry: %s: %s", type(e).__name__, e)
     counts = np.array([count(v) or np.nan for v in feats.attrs.get("osm_lanes", [None] * n)])
     sources = ["osm-way" if np.isfinite(v) else "" for v in counts]
     matched = np.array([w or 0 for w in ids], dtype=np.int64)
