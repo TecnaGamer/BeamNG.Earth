@@ -843,22 +843,29 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rbc = list(trim_overlaps(rbc, ctx, junctions))
+    # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
+    # a like width only; the nearest of any kind gave a ground centre line (0.12 m) the deck asphalt's 7.1 m edges at
+    # a Pittsburgh bridge's end, GitHub #739)
     deck_abuts = []
-    for r, _c in rbc:
+    for r, _c in rbc + (ribbon_pairs(list(context)) if context else []):
         if r[5] is not None:
             l_d, r_d = r[0], r[1]
             if len(l_d) >= 2:
-                deck_abuts.append(((l_d[0] + r_d[0]) * 0.5, l_d[0].copy(), r_d[0].copy()))
-                deck_abuts.append(((l_d[-1] + r_d[-1]) * 0.5, l_d[-1].copy(), r_d[-1].copy()))
-    if context:
-        for r, _c in ribbon_pairs(list(context)):
-            if r[5] is not None:
-                l_d, r_d = r[0], r[1]
-                if len(l_d) >= 2:
-                    deck_abuts.append(((l_d[0] + r_d[0]) * 0.5, l_d[0].copy(), r_d[0].copy()))
-                    deck_abuts.append(((l_d[-1] + r_d[-1]) * 0.5, l_d[-1].copy(), r_d[-1].copy()))
+                for e in (0, -1):
+                    deck_abuts.append(((l_d[e] + r_d[e]) * 0.5, l_d[e].copy(), r_d[e].copy(), r[4],
+                                       float(np.hypot(*(l_d[e] - r_d[e])))))
 
     ab_pts = np.array([a[0] for a in deck_abuts], np.float64) if deck_abuts else np.zeros((0, 2), np.float64)
+    ab_layer = [a[3] for a in deck_abuts]
+    ab_w = np.array([a[4] for a in deck_abuts], np.float64) if deck_abuts else np.zeros(0)
+
+    def _abut(d, layer, w):
+        """The deck end a ground ribbon's end (distances d to every deck end) takes: of its layer, its width within half
+        to double of the ground's, within 0.75 m; None."""
+        ok = (d <= 0.75) & np.array([ly == layer for ly in ab_layer]) & (ab_w <= 2.0 * max(w, 0.05)) & (ab_w >= 0.5 * w)
+        if not ok.any():
+            return None
+        return int(np.where(ok, d, np.inf).argmin())
     if len(deck_abuts):
         new_rbc = []
         for r, c in rbc:
@@ -869,16 +876,16 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 mid1 = (left[-1] + right[-1]) * 0.5
                 d0 = np.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
                 d1 = np.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
-                if d0.min() <= 0.75:
-                    hit0 = int(d0.argmin())
-                    _, l_ab, r_ab = deck_abuts[hit0]
+                hit0 = _abut(d0, layer, float(np.hypot(*(left[0] - right[0]))))
+                hit1 = _abut(d1, layer, float(np.hypot(*(left[-1] - right[-1]))))
+                if hit0 is not None:
+                    _, l_ab, r_ab = deck_abuts[hit0][:3]
                     if (np.hypot(*(left[0] - l_ab)) + np.hypot(*(right[0] - r_ab))) <= (np.hypot(*(left[0] - r_ab)) + np.hypot(*(right[0] - l_ab))):
                         left[0], right[0] = l_ab, r_ab
                     else:
                         left[0], right[0] = r_ab, l_ab
-                if d1.min() <= 0.75:
-                    hit1 = int(d1.argmin())
-                    _, l_ab, r_ab = deck_abuts[hit1]
+                if hit1 is not None:
+                    _, l_ab, r_ab = deck_abuts[hit1][:3]
                     if (np.hypot(*(left[-1] - l_ab)) + np.hypot(*(right[-1] - r_ab))) <= (np.hypot(*(left[-1] - r_ab)) + np.hypot(*(right[-1] - l_ab))):
                         left[-1], right[-1] = l_ab, r_ab
                     else:
