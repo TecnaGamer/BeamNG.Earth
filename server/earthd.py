@@ -7491,7 +7491,8 @@ def prune_own_caches(cache_dir, started=None):
             log.info("cache: mapdata-mirror cut back: %d layer files' mirrors removed", n)
     except Exception as e:
         log.warning("cache: mapdata-mirror not cut back: %s", e)
-    for sub, mb, match in (("seacarve", seacarvemod.RAW_MB, lambda n: n.endswith(".raw.npy")),
+    for sub, mb, match in (("seacarve", seacarvemod.RAW_MB, lambda n: n.endswith(".rawb.npy")),
+                           ("seacarve", 0, lambda n: n.endswith(".raw.npy")),  # (whole rasters, before 2026-11-05)
                            (os.path.join("dem", "decoded"), demmod.MIRROR_MB,
                             lambda n: n.endswith((".npy", ".f32z"))),
                            ("peercache", peerworkmod.CACHE_BYTES / 1e6, None),
