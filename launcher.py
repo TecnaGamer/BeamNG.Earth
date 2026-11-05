@@ -1225,6 +1225,86 @@ def hand_over():
     return True
 
 
+UPDATE_TITLE = "BeamNG.Earth update"
+
+
+def update_popup(text, run=None, which=None, windows=None):
+    """A pop-up the player sees before the game starts (yes / no): True, False, or None when none could be shown
+    (then the question goes to the console window). Windows: the system's message box, in front of everything;
+    Linux: zenity or kdialog when installed."""
+    windows = IS_WIN if windows is None else windows
+    if windows:
+        try:
+            import ctypes
+            # MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST; IDYES = 6
+            return ctypes.windll.user32.MessageBoxW(None, text, UPDATE_TITLE, 0x4 | 0x20 | 0x10000 | 0x40000) == 6
+        except Exception:
+            return None
+    which, run = which or shutil.which, run or subprocess.run
+    for cmd in (["zenity", "--question", "--title", UPDATE_TITLE, "--text", text, "--no-wrap"],
+                ["kdialog", "--title", UPDATE_TITLE, "--yesno", text]):
+        if not which(cmd[0]):
+            continue
+        try:
+            code = run(cmd, timeout=600).returncode
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if code in (0, 1):
+            return code == 0
+    return None
+
+
+def update_at_start(args, ask=input, popup=update_popup, packaged=None, check=None, download=None, start=None):
+    """Before the game starts: when GitHub has a newer BeamNG.Earth, ask in a pop-up (update_popup; the console window
+    when no pop-up can be shown) whether to install it now; yes downloads it beside this file (selfupdate.download,
+    the same as the in-game "Update now") and starts it instead. True when the new copy was started. Offline, up to
+    date, a source copy, --no-update-check or nowhere to ask: False and nothing asked."""
+    packaged = (FROZEN or bool(os.environ.get("APPIMAGE"))) if packaged is None else packaged
+    if getattr(args, "no_update_check", False) or not packaged:
+        return False
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import install
+        import netfetch
+        import selfupdate
+        import updates
+        net = netfetch.default_fetcher()
+        current = install.version()
+        got = (check or updates.check)(current, net)
+    except Exception:                   # never a reason not to start
+        return False
+    if not got:
+        return False
+    row("Update", f"BeamNG.Earth {got['latest']} is out (you have {got['current']})")
+    yes = popup(f"BeamNG.Earth {got['latest']} is out (you have {got['current']}).\n\n"
+                "Install it now, before the game starts?\n\n"
+                "Yes downloads it and starts the new version.\nNo starts this version.")
+    if yes is None:
+        if not (sys.stdin and sys.stdin.isatty()):
+            return False
+        try:
+            yes = ask("Install it now, before the game starts? [Y/n] ").strip().lower() in ("", "y", "yes")
+        except (EOFError, OSError, KeyboardInterrupt):
+            return False
+    if not yes:
+        say("Starting this version. (The game offers the update too: Settings, About.)")
+        return False
+
+    def progress(done, total):
+        if total:
+            _out(f"\r  Downloading... {done * 100 // total}% ({done >> 20} of {total >> 20} MB)")
+
+    try:
+        version, _ = (download or selfupdate.download)(net, current, None, progress)
+    except Exception as e:              # selfupdate.UpdateError or anything else: this version starts
+        say()
+        problem(f"The update could not be downloaded: {e}", "Starting this version instead.")
+        return False
+    say()
+    row("Update", f"BeamNG.Earth {version} downloaded")
+    return (start or hand_over)()
+
+
 def beammp_wait_seconds(value):
     import math
     try:
@@ -1277,6 +1357,8 @@ def main():
                          "integrated one), discrete forces that, off never steers; a GPU variable you or Steam's "
                          "launch options already set wins")
     ap.add_argument("--no-terminal", action="store_true", help="Linux: no terminal window (log to a file)")
+    ap.add_argument("--no-update-check", action="store_true",
+                    help="do not ask GitHub for a newer BeamNG.Earth before the game starts")
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for the server")
     args = ap.parse_args()
     if IS_WIN:
@@ -1459,6 +1541,8 @@ def run(args):
     import install
     title(f"BeamNG.Earth {install.version()}")
     support_notice()
+    if update_at_start(args):           # the new copy runs now (in its own window)
+        return
     wine = under_wine()
     build = "native"
     if args.user_dir:
