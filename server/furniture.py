@@ -526,6 +526,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     clearance = clearance if clearance is not None else RoadClearance(lines, decks, bounds=box)
     for k, arms in junctions.items():
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
+        here = _controlled_here(arms, signals)
         if len(arms) < 3 or not (on_ring or here or sweden or priority_stop_arms(arms, ring)):
             continue
         p = arms[0][3]
