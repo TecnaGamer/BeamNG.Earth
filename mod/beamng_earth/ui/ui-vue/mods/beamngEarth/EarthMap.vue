@@ -432,7 +432,8 @@ const w = ref(1280), h = ref(720)
 const view = ref({ lat: 20, lon: 0, z: 3 })
 // what the view follows until the user pans: true the car, a player's pid (the Players list) that player, false nothing
 const follow = ref(true)
-const state = ref({ places: [], recent: [] })
+// (loading: no answer from Lua yet: no "not connected" notice for that, the first open showed one for its first poll)
+const state = ref({ places: [], recent: [], loading: true })
 const target = ref(null)              // { lat, lon, name } waiting for "Teleport here?"
 const teleportMsg = ref("")
 const busy = ref(false)
@@ -567,6 +568,7 @@ function onTileError(ev, t) {
 
 const notice = computed(() => {
   const s = state.value
+  if (s.loading) return ""
   if (s.missing) return "BeamNG.Earth is not loaded"
   if (!s.connected) return "Companion server not connected: map tiles unavailable (places and the grid still work)"
   if (!s.mapPort) return "Map tiles unavailable (the companion server is older or has --map-tiles off)"
