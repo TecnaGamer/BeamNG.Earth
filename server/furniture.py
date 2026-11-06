@@ -906,8 +906,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         fid = wk.get("fid")
         if fid is None or "pts" not in wk or fid not in by_fid:
             continue
-        if wk.get("median"):        # a divided road's median: no lamps, poles, benches or bins on it (Boston
-            continue                # Street's is a bare curb, Mapillary 2026-10-17)
+        if wk.get("median") or wk.get("foot"):   # a divided road's median: no lamps, poles, benches or bins on it
+            continue                # (Boston Street's is a bare curb, Mapillary 2026-10-17); fork: nor on an Australian
+                                    # footpath (roads.au_verge): all of it stands on the kerb run, in the grass strip
         spec, line = by_fid[fid]
         run = np.asarray(wk["pts"], np.float64)
         if len(run) < 2:
@@ -986,7 +987,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             # model has few there): small broadleaves, both sides, clear of the junctions
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
             for p, out in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
-                q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
+                # (fork: an Australian street's trees in the middle of the nature strip, roads.au_verge)
+                q = p[:2] - out * (w / 2 - (min(1.5, wk["strip"] / 2) if wk.get("strip") else STREET_TREE_CURB_M))
                 if _owns(box, q[0], q[1]):
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)

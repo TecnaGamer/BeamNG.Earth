@@ -254,6 +254,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     segs = {k: ([], []) for k in ROAD_ORDER}    # kind -> (segments (m, 4) in samples, half widths in samples)
     lawn, verge = ([], []), ([], [])
     seen = set()
+    au = bool(climate.in_australia(la_c, lo_c))     # fork: Australia's nature strips (roads.au_verge)
 
     def add(dst, c, r, half):
         if len(c) >= 2:
@@ -261,7 +262,31 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             half = np.asarray(half, np.float64)         # (per point where the road tapers: each segment's mean)
             dst[1].append(np.full(len(c) - 1, half / square) if half.ndim == 0 else (half[:-1] + half[1:]) / 2 / square)
 
-    def line(x, y, spec, aisle, tapers=()):
+    def au_bands(x, y, width, v):
+        """fork: the grass of an Australian verge (v: roads.au_verge) as lawn bands and each footpath's ground as asphalt
+        (nothing grows through a slab): [(cols, rows, half width m, is lawn)], each band's middle line in the samples.
+        x, y: the road's line (lon, lat); width: the carriageway's (a scalar, or per point)."""
+        hw = np.asarray(width, np.float64) / 2
+        lat0 = float(np.mean(y))
+        sc = np.array([111320.0 * math.cos(math.radians(lat0)), 110540.0])
+        xy = (np.c_[x, y] - np.array([x[0], y[0]])) * sc
+        base = np.c_[xy, np.zeros(len(xy))]
+        out = []
+        for side in v["sides"]:
+            if side in v["foot"]:
+                bands = [(roadsmod.AU_KERB_W, v["strip"], True), (v["strip"], v["total"], False)]
+            else:
+                bands = [(roadsmod.AU_KERB_W, v["total"], True)]
+            for a, b, is_lawn in bands:
+                # (lawn a sample wider each way than its edges: the road's asphalt, painted after it, trims it)
+                pad = square if is_lawn else 0.25
+                mid, half = (a + b) / 2, (b - a) / 2 + pad
+                off = roadsmod.offset_polyline(base, side * (hw + mid))[:, :2] / sc + np.array([x[0], y[0]])
+                c, r = to_px(off[:, 0], off[:, 1])
+                out.append((np.asarray(c, np.float64), np.asarray(r, np.float64), half, is_lawn))
+        return out
+
+    def line(x, y, spec, aisle, tapers=(), fid=None):
         width, kind = spec.width, roadsmod.surface_material_kind(spec)
         ws = roadsmod.taper_widths(spec.width, tapers, x, y)     # (its width along it where it tapers: road_tapers)
         if ws is not None:
@@ -269,16 +294,24 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         if aisle:
             width += 2 * AISLE_STALLS_M         # the stalls either side (parking.aisle_spots): no grass under cars
         walks = roadsmod.has_sidewalks(spec)
-        if walks:
+        au_v = roadsmod.au_verge(spec, "AU", fid) if au and walks and fid is not None else None      # fork
+        if au_v:
+            width0 = width              # (fork: the asphalt only under the kerb; the strip is lawn, the footpath asphalt)
+            width = width + 2 * roadsmod.AU_KERB_W
+        elif walks:
             width += 2 * (spec.walk + square)   # the sidewalks (+ a sample: tufts at the outer edge): grass grew up
                                                 # through them (ground cover is the terrain's: Lauterbrunnen, Baltimore
                                                 # 2026-10-15)
         c, r = to_px(x, y)
         c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
-        reach = (float(np.max(width)) / 2 + ROAD_EDGE_M + (0 if walks else VERGE_M)) / square + 2
+        reach = (float(np.max(width)) / 2 + ROAD_EDGE_M
+                 + (au_v["total"] + square if au_v else 0 if walks else VERGE_M)) / square + 2
         if c.max() < -reach or c.min() > w + reach or r.max() < -reach or r.min() > h + reach:
             return
         add(segs[kind], c, r, width / 2 + ROAD_EDGE_M)
+        if au_v:                                # fork: the nature strip's lawn, the footpath's asphalt
+            for bc, br, half, is_lawn in au_bands(x, y, width0, au_v):
+                add(lawn if is_lawn else segs[kind], bc, br, half)
         if not walks:
             add(verge, c, r, width / 2 + ROAD_EDGE_M + VERGE_M)    # (VERGE_M past the road's material)
 
@@ -310,7 +343,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             ms = roadsmod.median_side(specs[i])
             for ring in roadsmod.ground_parts(feats, i):      # not bridges / tunnels
                 line(ring[:, 0], ring[:, 1], specs[i], aisle,
-                     roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of))
+                     roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of), fid)
                 if ms is not None and mw > roadsmod.MEDIAN_SLAB_M and len(ring) >= 2:
                     # the median's ground: lawn (report #48, Boston Street, 2026-10-17)
                     sc = np.array([111320.0 * math.cos(math.radians(float(ring[0, 1]))), 110540.0])
