@@ -11,6 +11,12 @@
 3. **Don't start your old `BeamNG.Earth-….exe` launcher.** It reinstalls the upstream mod over the fork's. (The fork's
    `launcher.py` does the same with the fork mod, so `.venv\Scripts\python.exe launcher.py` also works.)
 
+**Stopping the server:** press **Ctrl+C** in its window, wait for "The server has stopped", then close it. Closing the
+window directly kills its helper processes mid-run, and each one shows a "Python has stopped working" dialog.
+
+**After pulling new fork changes:** restart the server. If the change touched the mod (materials, Lua), re-run
+`.venv\Scripts\python.exe install.py --yes --no-venv` with the game closed.
+
 ## Getting around
 Press **M** for the world map. Type `latitude, longitude` into its search box to teleport.
 
