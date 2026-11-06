@@ -934,6 +934,7 @@ local function onMessage(msg)
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
+    M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
     cacheInfo = nil
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
@@ -2794,18 +2795,30 @@ end
 -- Fast pre-cache (server areas.py fast mode; Tann2019, 2026-11-05: "use all my cores, pause the game physics"): while
 -- the 'areas' message names an area running fast the game's physics are paused (simhold: in BeamMP our own car held),
 -- and let go when it no longer does (done, waiting, stopped); only a pause we made is let go.
+-- (M._fastPaused: whether the pause is ours; one the player or a drop hold already made is left as it was when fast
+-- mode ends, and the app going away ends it too: '_disconnected', PR #773's merge review 2026-11-06)
 M._fastHeld = false
+M._fastPaused = false
 function M.fastAreaPause(fastId)
   local on = type(fastId) == 'string' and fastId ~= ''
   if on == M._fastHeld then return end
   M._fastHeld = on
   local simhold = require('beamngEarth/simhold')
   if on then
-    log('I', 'beamngEarth', 'fast pre-cache of ' .. fastId .. ': the game paused while it runs')
-    simhold.pause(true)
+    if simhold.paused() then
+      M._fastPaused = false
+      log('I', 'beamngEarth', 'fast pre-cache of ' .. fastId .. ': the game was paused already')
+    else
+      M._fastPaused = true
+      log('I', 'beamngEarth', 'fast pre-cache of ' .. fastId .. ': the game paused while it runs')
+      simhold.pause(true)
+    end
   else
-    log('I', 'beamngEarth', 'fast pre-cache over: the game goes on')
-    simhold.pause(false)
+    if M._fastPaused and simhold.paused() then
+      log('I', 'beamngEarth', 'fast pre-cache over: the game goes on')
+      simhold.pause(false)
+    end
+    M._fastPaused = false
   end
 end
 function M.areaAdd(id, s, w, n, e, name, mode, fastOn)

@@ -180,10 +180,17 @@ def lot_spots(rings, box, z_at, blockers=(), roads_xy=()):
         b = np.asarray(b, np.float64)
         if len(b) >= 3:
             keep &= ~Path(b).contains_points(pts)
-    if len(roads_xy):
-        for i in np.flatnonzero(keep):
-            if buildings._line_dist(pts[i], roads_xy) < LOT_ROAD_CLEAR_M:
-                keep[i] = False
+    lines = [np.asarray(ln, np.float64)[:, :2] for ln in roads_xy if len(ln) >= 2]
+    if lines and keep.any():        # (one Rust pass for every stall against every road segment: earthfast's grid)
+        import fast
+        fast.require(0, "points_near_segments")
+        a = np.concatenate([ln[:-1] for ln in lines])
+        b = np.concatenate([ln[1:] for ln in lines])
+        idx = np.flatnonzero(keep)
+        near = np.asarray(fast._ef.points_near_segments(np.ascontiguousarray(pts[idx], np.float64),
+                                                        np.ascontiguousarray(a), np.ascontiguousarray(b),
+                                                        np.full(len(a), LOT_ROAD_CLEAR_M)), bool)
+        keep[idx[near]] = False
     cand = [cnd for cnd, k in zip(cand, keep) if k][:LOT_MAX_PER_TILE]
     if not cand:
         return []

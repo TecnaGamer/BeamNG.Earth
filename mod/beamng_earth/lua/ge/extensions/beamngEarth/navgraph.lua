@@ -953,7 +953,7 @@ end
 -- Overtaking on multi-lane highways (overtake.lua): the traffic cars and the player's car while it autodrives.
 local function overtakeScan(now)
   local gt = gameplay_traffic
-  if not overtake.enabled or not gt or not gt.getState or gt.getState() ~= 'on' then return end
+  if not overtake.due(now) or not gt or not gt.getState or gt.getState() ~= 'on' then return end
   local ids = {}
   for id, t in pairs(gt.getTrafficData() or {}) do
     if type(t) == 'table' and t.isAi ~= false then ids[id] = true end

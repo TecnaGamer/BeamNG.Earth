@@ -7718,14 +7718,20 @@ def machine_profile(args, small):
 FAST_POOL_KEEP = 2          # the saved areas' fast mode: its road processes, one per CPU thread but these ...
 FAST_POOL_GB = 2.0          # ... and at most one per this much memory (a road process holds ~1-1.5 GB at work) ...
 FAST_POOL_MAX = 24          # ... and at most this many
+FAST_POOL_FREE_GB = 1.5     # ... and one per this much of the memory free when it starts (the game, paused, keeps its
+                            # own; sized from the total alone, a 32 GB PC with the game and the normal road pool running
+                            # could be pushed into swap: PR #773's merge review, 2026-11-06)
 
 
-def fast_pool_size(cpus=None, gb=None):
-    """The road processes of the saved areas' fast mode on this computer (FAST_POOL_*). Pure given its arguments."""
+def fast_pool_size(cpus=None, gb=None, free=None):
+    """The road processes of the saved areas' fast mode on this computer (FAST_POOL_*): by its CPU threads, its memory
+    and the memory free now. Pure given its arguments."""
     import budget
     cpus = (os.cpu_count() or 2) if cpus is None else cpus
     gb = (budget.total_gb() or 8.0) if gb is None else gb
-    return max(2, min(FAST_POOL_MAX, cpus - FAST_POOL_KEEP, int(gb / FAST_POOL_GB)))
+    free = budget.free_gb() if free is None else free
+    by_free = int(free / FAST_POOL_FREE_GB) if free is not None else FAST_POOL_MAX
+    return max(2, min(FAST_POOL_MAX, cpus - FAST_POOL_KEEP, int(gb / FAST_POOL_GB), by_free))
 
 
 def main():
