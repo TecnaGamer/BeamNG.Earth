@@ -72,7 +72,9 @@ until python3 "$HERE/mcp.py" call run_lua '{"code":"return 1"}' 2>/dev/null | gr
 done
 echo "MCP up after ${i} s; loading the BeamNG.Earth level"
 sleep 10    # let the main menu finish loading
-python3 "$HERE/mcp.py" call load_level '{"name":"beamng_earth"}'
+# (freeroam's start, as the menu: MCP's load_level is core_levels.startLevel alone, without the game mode's extensions --
+# no stock gas station refuel prompt, facilities, special triggers; 2026-11-05)
+python3 "$HERE/mcp.py" lua "freeroam_freeroam.startFreeroamByName('beamng_earth') return 1"
 i=0
 until python3 "$HERE/mcp.py" call run_lua '{"code":"return tostring(beamngEarth_core ~= nil and getPlayerVehicle(0) ~= nil)"}' 2>/dev/null | grep -q true; do
     sleep 5; i=$((i + 5))
