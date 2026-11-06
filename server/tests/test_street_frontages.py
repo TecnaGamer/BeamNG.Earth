@@ -163,8 +163,12 @@ class FrenchBoundaryTest(unittest.TestCase):
             self.assertTrue(all(abs(r[1] - 10.5) > 1.6 and r[2] == 4. for r in rows))
             drive = {"n": [[6., 0., 0.], [6., 13., 0.]], "w": 2.8}
             self.assertFalse(fences.inferred_rows(*args, [drive], flat, green))
+            house.door = None
+            self.assertTrue(fences.inferred_rows(*args, [], flat, None))
+            self.assertFalse(fences.inferred_rows(*args, [drive], flat, None))
         hedge = feature([[0., 10.], [10., 10.]], "hedge", mapgeom.LINE)
         with patch("house_regions.profile", return_value="alsace"):
             rows = fences.rows(FRAME, lambda _: hedge, BOX, flat, french=True)
-        self.assertGreater(len(rows), 8)
+        self.assertGreaterEqual(len(rows), 8)
         self.assertEqual({row[0] for row in rows}, {fences.G_HEDGE})
+        self.assertTrue(all(1.6 <= row[6] <= 2. for row in rows))

@@ -28,6 +28,7 @@ CHAIN_TYPES = {"chain_link", "chainlink", "chain-link", "chain"}
 NOISE_TYPES = {"noise_barrier", "noisebarrier", "sound_barrier"}
 BBOX_PAD_M = 8.0
 PANEL_M = 2.2
+HEDGE_STEP_M = 1.15
 FR_HEIGHTS = {"limestone": .95, "dark_stone": .94, "brick": 1.05, "iron": 1.23, "mesh": 1.14,
               "wood": 1.16, "slats": 1.12, "rails": 1.19}
 FR_PALETTES = {
@@ -170,7 +171,7 @@ def _french_panel_row(style, centre, direction, length):
     if style == "hedge":
         # The stock East Coast shrub has a broad crown. Use its height for a planted row and
         # overlap the foliage, so a mapped hedge reads continuously along bends and slopes.
-        return G_HEDGE, *centre, _yaw(*direction), 1.22 + .18 * math.sin(float(centre.sum()) * .7), 0.
+        return G_HEDGE, *centre, _yaw(*direction), 1.8 + .18 * math.sin(float(centre.sum()) * .7), 0.
     return ("fr_fence_" + style, *centre, _yaw(*direction),
             FR_HEIGHTS[style] * length / PANEL_M, 0.)
 
@@ -178,7 +179,7 @@ def _french_panel_row(style, centre, direction, length):
 def _french_panels(style, line):
     if style == "hedge":
         # Place along the whole arc instead of one shrub per short vertex-to-vertex span.
-        return ((centre, tangent, .98) for centre, tangent in _centres(line, .98))
+        return ((centre, tangent, HEDGE_STEP_M) for centre, tangent in _centres(line, HEDGE_STEP_M))
     return _panels(line)
 
 
@@ -187,103 +188,161 @@ def _forest_rows(pending, z):
             for (group, x, y, yaw, height, lift), zz in zip(pending, z)]
 
 
-def inferred_rows(frame, houses, rings, walks, carriageways, barriers, paved, green, drives, z_at, photo, *,
-                  residential=()):
-    """Supplement mapped French boundaries at suitable residential setbacks."""
+def _street_segments(carriageways):
     import europewalks
+    import roads
+
+    starts, ends, widths, local = [], [], [], []
+    for _, spec, line, _ in carriageways:
+        if spec.cls not in europewalks.STREETS or spec.kind != "paved" or spec.link or spec.median:
+            continue
+        line = roads.simplify(line, .12)[:, :2]
+        if len(line) < 2:
+            continue
+        starts.extend(line[:-1])
+        ends.extend(line[1:])
+        widths.extend([spec.width / 2] * (len(line) - 1))
+        local.extend([spec.cls in {"residential", "living_street", "unclassified"}] * (len(line) - 1))
+    a, b = np.asarray(starts).reshape(-1, 2), np.asarray(ends).reshape(-1, 2)
+    delta = b - a
+    length = np.linalg.norm(delta, axis=1)
+    keep = length > .01
+    return a[keep], delta[keep] / length[keep, None], length[keep], np.asarray(widths)[keep], np.asarray(local)[keep]
+
+
+def _street_front(ring, streets, door):
+    """The nearest plausible street-facing wall, even when its house has no modelled door."""
+    from buildings import _area2
+
+    start, direction, length, half, local = streets
+    ends = np.roll(ring, -1, axis=0)
+    mid = (ring + ends) / 2
+    edges = ends - ring
+    widths = np.linalg.norm(edges, axis=1)
+    along = edges / np.maximum(widths, 1e-9)[:, None]
+    toward = np.c_[along[:, 1], -along[:, 0]] * (1 if _area2(ring) > 0 else -1)
+    rel = mid[:, None, :] - start
+    station = np.sum(rel * direction, axis=2)
+    q = start + np.clip(station, 0., length)[..., None] * direction
+    delta = mid[:, None, :] - q
+    gap = np.linalg.norm(delta, axis=2)
+    setback = gap - half
+    faces = (np.sum(delta * toward[:, None, :], axis=2) <= -.57 * gap)
+    parallel = np.abs(along @ direction.T) >= .58
+    # A parallel street ending well before the wall is not its frontage.
+    abreast = (station >= -2.5) & (station <= length + 2.5)
+    eligible = faces & parallel & abreast & (setback >= 1.7) & (setback <= 22.) & (widths[:, None] >= 3.8)
+    if not eligible.any():
+        return None
+    rank = np.where(eligible, setback - .45 * local, np.inf)
+    if door is not None and door[0] < len(ring):
+        rank[door[0]] -= 1.1
+    edge, road = np.unravel_index(rank.argmin(), rank.shape)
+    tangent = direction[road] * (1 if direction[road] @ along[edge] > 0 else -1)
+    return (edge, mid[edge], along[edge], widths[edge], q[edge, road], delta[edge, road] / gap[edge, road],
+            tangent, half[road], setback[edge, road], local[road])
+
+
+def inferred_rows(frame, houses, rings, walks, carriageways, barriers, paved, green, drives, z_at, photo, *,
+                  residential=(), public=(), driveways=()):
+    """Supplement mapped French boundaries at suitable residential setbacks."""
     import furniture
     import roads
     import streetfront
+    from francehouses import HOUSE_CLASSES
     from house_regions import profile
 
-    streets = [(spec, road) for _, spec, road, _ in carriageways
-               if spec.cls in europewalks.STREETS and spec.kind == "paved" and not spec.link and not spec.median]
-    if not houses or not streets:
+    streets = _street_segments(carriageways)
+    if not houses or not len(streets[0]):
         return []
-    streets = [(spec, road, road[:, :2].min(axis=0) - 25., road[:, :2].max(axis=0) + 25.)
-               for spec, road in streets]
     road_blocks = roads._blocker_segments([(road[:, :2], spec.width / 2 + .30)
                                           for _, spec, road, _ in carriageways])
     access = [(road[:, :2], spec.width / 2 + .3) for _, spec, road, _ in carriageways if spec.cls == "service"]
     access.extend((np.asarray(d["n"])[:, :2], d["w"] / 2 + .3) for d in drives)
+    access.extend((road[:, :2], spec.width / 2 + .3) for _, spec, road in driveways)
     access_blocks = roads._blocker_segments(access)
     footways = [(np.asarray(w["pts"]), w["w"] / 2) for w in walks if "pts" in w]
     foot_blocks = roads._blocker_segments([(p[:, :2], hw + .15) for p, hw in footways])
-    footways = [(p, hw, p[:, :2].min(axis=0) - 8., p[:, :2].max(axis=0) + 8.) for p, hw in footways]
-    exclusion = streetfront._walls(paved, barriers)
+    walk_edges, corners = [], []
+    for walk in walks:
+        if "pts" in walk or "corner" in walk:
+            curb, back = streetfront._walk_outline(walk)
+            walk_edges.extend(line for line in (curb, back) if len(line) >= 2)
+            if "corner" in walk:
+                corners.append(np.concatenate([curb, back[::-1]]))
+    walk_walls = streetfront._walls([], walk_edges)
+    blocked_ground = [*paved, *public]
+    exclusion = streetfront._walls(blocked_ground, barriers)
     building_walls = streetfront._walls(rings)
+    corner_walls = streetfront._walls(corners)
     pending = []
     for spec, ring in houses:
         seed = spec.seed
         chance = furniture._h01("fr-yard-fence", seed)
-        if chance >= .72:
+        if chance >= .9:
             continue
-        edge, door = spec.door
+        door = getattr(spec, "door", None)
+        front = _street_front(ring, streets, door)
+        if front is None:
+            continue
+        edge, mid, along, width, q, out, tangent, half, setback, local = front
         a, b = ring[edge], ring[(edge + 1) % len(ring)]
-        mid = (a + b) / 2
-        width = float(np.linalg.norm(b - a))
-        if not 5.0 <= width <= 22.:
-            continue
-        along = (b - a) / width
-        nearest = None
-        for road_spec, line, lo, hi in streets:
-            if np.any(mid < lo) or np.any(mid > hi):
-                continue
-            p, v = furniture._at(line, furniture._project(line, mid[None]))
-            gap = float(np.linalg.norm(mid - p[0, :2]))
-            if nearest is None or gap < nearest[0]:
-                nearest = gap, p[0, :2], v[0], road_spec.width / 2
-        if nearest is None:
-            continue
-        gap, kerb, tangent, half = nearest
-        if not half + 2.7 < gap < half + 20. or abs(float(tangent @ along)) < .69:
-            continue
-        out = (mid - kerb) / gap
         offset = half + 1.
-        for line, hw, lo, hi in footways:
-            if np.any(kerb < lo) or np.any(kerb > hi):
-                continue
-            q, _ = furniture._at(line, furniture._project(line, kerb[None]))
-            delta = q[0, :2] - kerb
-            if half - .25 < float(delta @ out) < half + 4. and np.linalg.norm(delta - (delta @ out) * out) < 2.:
-                offset = max(offset, float(delta @ out) + hw + .55)
-        if not 1.8 <= gap - offset <= 15.:
+        curb = q + (half - .15) * out
+        first = walk_walls.ray(curb, out, min(4., setback))
+        if first is not None:
+            second = walk_walls.ray(curb + (first + .04) * out, out, min(4.9, setback - first + .1))
+            edge_of_walk = first if second is None else first + .04 + second
+            offset = max(offset, half - .15 + edge_of_walk + .53)
+        depth = setback + half - offset
+        if not 1. <= depth <= 18.:
             continue
-        centre = kerb + offset * out
-        tangent = tangent if tangent @ along > 0 else -tangent
-        length = min(width - .6, 16.)
+        centre = q + offset * out
+        hidden = building_walls.ray(centre, out, depth - .45)
+        if hidden is not None:
+            continue
+        length = min(width * abs(along @ tangent) - .4, 20.)
         ends = np.array([centre - tangent * length / 2, centre + tangent * length / 2])
-        front = np.array([a + .18 * (mid - a), b + .18 * (mid - b)]) - .24 * out
-        yard = np.array([*ends, front[1], front[0]])[None]
-        if (streetfront._green_overlap(yard, paved, exclusion, barriers)[0]
+        near_wall = np.array([a + .18 * (mid - a), b + .18 * (mid - b)]) - .22 * out
+        yard = np.array([*ends, near_wall[1], near_wall[0]])[None]
+        if (streetfront._green_overlap(yard, blocked_ground, exclusion, barriers)[0]
                 or streetfront._road_overlap(yard, access_blocks)[0]):
-            continue
-        # The boundary itself must clear the road, the sidewalk and all neighbouring buildings.
-        strip = np.array([ends[0] - .38 * out, ends[1] - .38 * out,
-                          ends[1] + .38 * out, ends[0] + .38 * out])[None]
-        if (streetfront._road_overlap(strip, road_blocks)[0] or streetfront._road_overlap(strip, foot_blocks)[0]
-                or streetfront._green_overlap(strip, rings, building_walls)[0]):
             continue
         yard_centre = np.array([(centre + mid) * .5])
         garden = streetfront._inside(yard_centre, green)[0]
         if photo is not None:
             garden |= photo.strip_share(yard, photo.green)[0] >= .23
-            if not garden and photo.strip_share(yard, photo.mask)[0] >= .64:
+            if not garden and photo.strip_share(yard, photo.mask)[0] >= .71:
                 continue
         if not garden:
             known_residential = streetfront._inside(yard_centre, residential)[0]
-            if gap - offset < (3.2 if known_residential else 4.3) or chance >= (.52 if known_residential else .38):
+            likely_home = getattr(spec, "cls", None) in HOUSE_CLASSES or getattr(spec, "roof", None) != "flat"
+            if known_residential or local:
+                minimum, density = (1.15, .84) if likely_home else (1.7, .66)
+            else:
+                minimum, density = (1.7, .71) if likely_home else (2.7, .46)
+            if depth < minimum or chance >= density:
                 continue
+        # The boundary itself must clear curbs, footways, existing barriers and nearby walls.
+        strip = np.array([ends[0] - .36 * out, ends[1] - .36 * out,
+                          ends[1] + .36 * out, ends[0] + .36 * out])[None]
+        if (streetfront._road_overlap(strip, road_blocks)[0] or streetfront._road_overlap(strip, foot_blocks)[0]
+                or streetfront._green_overlap(strip, rings, building_walls)[0]
+                or streetfront._green_overlap(strip, blocked_ground, exclusion, barriers)[0]
+                or corners and streetfront._green_overlap(strip, corners, corner_walls)[0]):
+            continue
         lat, lon, _ = frame.enu_to_geodetic(*centre, 0.)
         region = profile(float(lat), float(lon))
         if region is None:
             continue
-        style = ("hedge" if garden and furniture._h01("fr-yard-hedge", seed) < .20
+        style = ("hedge" if garden and depth > 3. and furniture._h01("fr-yard-hedge", seed) < .20
                  else french_panel("fence", {}, region, seed))
-        entry = float((a + door * along - centre) @ tangent)
-        # Reserve a usable opening, including on an unmapped driveway. Keep the hedge's
-        # foliage out of it as well.
-        gap_half = 1.85 if style == "hedge" else 1.6
+        if door is not None and door[0] == edge:
+            entry = float((a + door[1] * along - centre) @ tangent)
+        else:
+            entry = length * (.32 if furniture._h01("fr-yard-entry", seed) < .5 else -.32)
+        # An open gate stays wide enough for a car, with clearance for the shrub's crown.
+        gap_half = 2.2 if style == "hedge" else 1.6
         for start, finish in ((-length / 2, entry - gap_half), (entry + gap_half, length / 2)):
             start, finish = max(start, -length / 2), min(finish, length / 2)
             if finish - start >= (.9 if style == "hedge" else .72):
@@ -381,7 +440,8 @@ def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
         else:
             cross = np.zeros(len(centres), bool)
         for (style, centre, direction, length), bad in zip(fr_pending, cross):
-            if bad or any(np.linalg.norm(centre - gate) < 1.3 + length / 2 for gate in gates):
+            clearance = 1.7 if style == "hedge" else 1.3
+            if bad or any(np.linalg.norm(centre - gate) < clearance + length / 2 for gate in gates):
                 continue
             pending.append(_french_panel_row(style, centre, direction, length))
     if not pending:

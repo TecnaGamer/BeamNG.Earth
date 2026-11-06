@@ -23,8 +23,8 @@ import numpy as np
 import cdae
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
-LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01}   # m above the physics ground (lifted under roads
-                                                        # by grading.ROAD_LIFT over the visible ground)
+# Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
+LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01, "frontage": 0.03}
 
 # Dirt and gravel strips (from PR #455 by AnthonyGraceffa; roads.DIRT_STRIPS): BeamNG's continuous rutted road strips
 # (roads.DIRT_LOOK, our copies in dirtroad.materials.json) over the ground photo's tint, fading into the ground.
@@ -678,24 +678,31 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         dr = np.isfinite(TL)
         if dr.any():
             grid, i0, j0 = _height_grid(frame, drawn or elev, P[:, :2], q, tris=T[dr])
-            # Independent 2 cm approximations can bury paint lifted only 1 cm.
-            # A shared 2 mm tolerance keeps the combined error below that gap.
-            tol = .002 if "line_bne_fr_white" in mats else None
-            fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[dr], grid, i0, j0, tol=tol)
-            if len(fT):
-                lifts = TL[dr][src]
+            # Keep paint on the road and the paved frontage over the road's gravel shoulder.
+            # Tighten only the frontage where the road can use its usual tolerance.
+            front = TL == LIFT["frontage"] + lift
+            if "line_bne_fr_white" in mats:
+                batches = [(dr, .002)]
+            else:
+                batches = [(dr & ~front, None), (front, .004)]
+            points, uvs, tris, materials, ribbons = [P], [UV], [T[~dr]], [M[~dr]], [RI[~dr]]
+            n0 = len(P)
+            for mask, tol in batches:
+                if not mask.any():
+                    continue
+                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol)
+                lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
                     vl[fT[:, kk]] = lifts
                 fP[:, 2] += vl
-                n0 = len(P)
-                P = np.concatenate([P, fP])
-                UV = np.concatenate([UV, fUV])
-                T = np.concatenate([T[~dr], fT + n0])
-                M = np.concatenate([M[~dr], M[dr][src]])
-                RI = np.concatenate([RI[~dr], RI[dr][src]])
-            else:
-                T, M, RI = T[~dr], M[~dr], RI[~dr]
+                points.append(fP)
+                uvs.append(fUV)
+                tris.append(fT + n0)
+                materials.append(M[mask][src])
+                ribbons.append(RI[mask][src])
+                n0 += len(fP)
+            P, UV, T, M, RI = (np.concatenate(parts) for parts in (points, uvs, tris, materials, ribbons))
             if not len(T):
                 return None
         P, UV, T = _shared(P, UV, T)

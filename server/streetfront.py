@@ -11,8 +11,10 @@ import polygon
 import roadwidth
 
 MAX_GAP_M = 2.4
-BUILT_FRONT_M = 15.0
+BUILT_FRONT_M = 18.0
 STEP_M = 1.5
+FRONTAGE_JOIN_M = 7.5
+FRONTAGE_FLANK_M = 4.
 GREEN = {"garden", "grass", "flowerbed", "grassland", "meadow", "park", "village_green",
          "allotments", "hedge", "orchard", "wood", "forest", "cemetery", "farmland",
          "playground", "recreation_ground", "water", "wetland"}
@@ -41,13 +43,23 @@ class PhotoPaving:
         inside = (x >= 0) & (x < cols) & (y >= 0) & (y < rows)
         return mask[np.clip(y, 0, rows - 1), np.clip(x, 0, cols - 1)] & inside
 
-    def depths(self, xy, outward):
-        steps = np.arange(.5, PHOTO_WIDTH_M + .01, .5)
+    def _transects(self, mask, xy, outward, steps, half_width):
         tangent = np.c_[outward[:, 1], -outward[:, 0]]
         samples = xy[:, None, None, :] + steps[None, :, None, None] * outward[:, None, None, :]
-        samples = samples + np.array([-.32, 0., .32])[None, None, :, None] * tangent[:, None, None, :]
-        valid = self.sample(self.mask, samples)
-        return .5 * np.logical_and.accumulate(valid.sum(axis=2) >= 2, axis=1).sum(axis=1)
+        samples = samples + np.array([-half_width, 0., half_width])[None, None, :, None] * tangent[:, None, None, :]
+        return self.sample(mask, samples).sum(axis=2)
+
+    def depths(self, xy, outward):
+        steps = np.arange(.5, PHOTO_WIDTH_M + .01, .5)
+        paved = self._transects(self.mask, xy, outward, steps, .32) >= 2
+        return .5 * np.logical_and.accumulate(paved, axis=1).sum(axis=1)
+
+    def lawn_edges(self, xy, outward):
+        """Stop at a sustained patch of vegetation seen across a whole strip."""
+        steps = np.arange(.25, BUILT_FRONT_M + .5, .5)
+        green = self._transects(self.green, xy, outward, steps, .55) >= 2
+        spans = green[:, :-2] & green[:, 1:-1] & green[:, 2:]
+        return np.where(spans.any(axis=1), .5 * spans.argmax(axis=1), np.inf)
 
     def strip_share(self, strips, mask):
         """Share of matching pixels over each four-corner strip, away from its edges."""
@@ -106,7 +118,7 @@ def _areas(frame, cells, box):
     import plazas
     import surface
 
-    paved, protected, explicit, commercial, residential = [], [], [], [], []
+    paved, protected, explicit, commercial, residential, public_green = [], [], [], [], [], []
     seen = set()
     x0, y0, x1, y1 = box
     for feats in cells:
@@ -144,6 +156,8 @@ def _areas(frame, cells, box):
                 rings = [np.column_stack(mapgeom.enu_xy(feats, frame, ring)) for ring in part]
                 if green:
                     protected.append(rings[0])
+                    if cls in GREEN - {"grass", "flowerbed", "garden", "hedge"} or tags.get("access") == "public":
+                        public_green.append(rings[0])
                 elif hard:
                     paved.append(rings[0])
                     protected.extend(rings[1:])
@@ -153,7 +167,7 @@ def _areas(frame, cells, box):
                     commercial.append(rings[0])
                 else:
                     residential.append(rings[0])
-    return paved, protected, explicit, commercial, residential
+    return paved, protected, explicit, commercial, residential, public_green
 
 
 def _walls(rings, lines=()):
@@ -228,7 +242,7 @@ def _paving(poly, surface):
     import sidewalks
     repeat = sidewalks.BRICK_REPEAT_M if surface == "brick" else 2.
     return {"m": sidewalks.MATERIALS[sidewalks.EU_SLAB[surface]], "w": 0., "tl": repeat, "u_m": repeat,
-            "p": 17, "layer": "edge", "poly": poly.tolist(), "n": [], "frontage": True}
+            "p": 17, "layer": "frontage", "poly": poly.tolist(), "n": [], "frontage": True}
 
 
 def pad_items(frame, box, tile_key, paving, grass=()):
@@ -247,32 +261,6 @@ def pad_items(frame, box, tile_key, paving, grass=()):
     return [(surface.FRONTAGE_PAD_PREFIX + tile_key,
              rings_in_tile(c["poly"] for c in paving if c.get("frontage"))),
             (surface.FRONTAGE_GRASS_PREFIX + tile_key, rings_in_tile(grass))]
-
-
-def _mapped_paving(explicit, protected, road_blocks):
-    import buildings
-    import europewalks
-    import plazas
-    result = []
-    for rings, raw in explicit:
-        outline, *holes = rings
-        if np.linalg.norm(outline[0] - outline[-1]) < 1e-4:
-            outline = outline[:-1]
-        if len(outline) < 3:
-            continue
-        triangles = buildings.triangulate(outline)
-        if len(triangles) == 0:
-            continue
-        points, triangles = plazas._subdivide(outline, triangles, 2.)
-        pieces = points[triangles]
-        exclusions = protected + holes
-        if exclusions and len(pieces):
-            pieces = pieces[~_green_overlap(pieces, exclusions, _walls(exclusions))]
-        if len(pieces):
-            pieces = pieces[~_road_overlap(pieces, road_blocks)]
-        surface = europewalks.MAPPED_SURFACE.get(raw, "pavers")
-        result.extend(_paving(piece, surface) for piece in pieces)
-    return result
 
 
 def _road_overlap(pieces, blockers):
@@ -358,7 +346,7 @@ def _road_edges(carriageways, box):
                 or not (spec.urban or spec.street and spec.street.village)):
             continue
         for side in (1, -1):
-            edge = roads.offset_polyline(points, side * (spec.width / 2 + .12))
+            edge = roads.offset_polyline(points, side * spec.width / 2)
             for piece in roads.clip_polyline(edge, *box):
                 yield {"pts": piece, "side": side, "w": 0., "fid": fid, "road_edge": True}
 
@@ -379,100 +367,173 @@ def _street_edge_distance(points, carriageways):
     return distance
 
 
+def _walk_outline(walk):
+    """The two sides of the slab, including its corner pieces."""
+    import sidewalks
+
+    if "corner" in walk:
+        corner = walk["corner"]
+        return np.asarray(corner["arc"])[:, :2], np.asarray(corner["outer"])[::-1, :2]
+    width = walk["w"]
+    curb, out = sidewalks.run_geometry(walk["pts"], walk.get("side", 1), width)
+    return curb[:, :2], curb[:, :2] + width * out
+
+
+def _band(a, b):
+    """Strips between paired outlines, combining straight runs before clipping."""
+    import sidewalks
+
+    keep = sidewalks.simplify(np.c_[a, b], .015)
+    a, b = a[keep], b[keep]
+    return zip(a[:-1], a[1:], b[1:], b[:-1])
+
+
+def _coverage(box, walks, buildings, green, roads_and_drives):
+    import frontage_geometry
+    import roads
+
+    coverage = frontage_geometry.Coverage(box)
+    for line, half in roads_and_drives:
+        for strip in _band(roads.offset_polyline(line, half)[:, :2], roads.offset_polyline(line, -half)[:, :2]):
+            coverage.reserve(strip)
+    for walk in walks:
+        if "corner" in walk or "pts" in walk:
+            curb, back = _walk_outline(walk)
+            if "corner" in walk:
+                coverage.reserve(np.concatenate([curb, back[::-1]]))
+                corner = walk["corner"]
+                for fill in (corner.get("fill"), *corner.get("fills", ())):
+                    if fill is not None:
+                        coverage.reserve(fill)
+            else:
+                for strip in _band(curb, back):
+                    coverage.reserve(strip)
+    for ring in (*buildings, *green):
+        coverage.reserve(ring)
+    return coverage
+
+
+def _connected_depths(back, depth):
+    """Join nearby setbacks along a street and ease the ends around a building's flank."""
+    known = np.flatnonzero(np.isfinite(depth))
+    if not len(known):
+        return depth
+    arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(back, axis=0), axis=1))]
+    unknown = np.flatnonzero(~np.isfinite(depth))
+    j = np.searchsorted(known, unknown)
+    left, right = known[np.maximum(j - 1, 0)], known[np.minimum(j, len(known) - 1)]
+    a, b = np.abs(arc[unknown] - arc[left]), np.abs(arc[right] - arc[unknown])
+    between = (left != right) & (a + b <= FRONTAGE_JOIN_M)
+    near = np.minimum(a, b)
+    flank = near < FRONTAGE_FLANK_M
+    taper = np.where(a <= b, depth[left], depth[right]) * (1 - near / FRONTAGE_FLANK_M)
+    depth[unknown[flank]] = taper[flank]
+    depth[unknown[between]] = np.interp(arc[unknown[between]], arc[known], depth[known])
+    return depth
+
+
+def _back_edge(walk, carriageways):
+    import buildings
+    import roads
+    import sidewalks
+
+    curb, back = _walk_outline(walk)
+    if len(back) < 2:
+        return None, None
+    if "corner" in walk:
+        side = -1 if buildings._area2(np.concatenate([curb, back[::-1]])) < 0. else 1
+    else:
+        side = _outside_side(back, carriageways) if walk.get("mapped") else walk["side"]
+    if side is None:
+        return None, None
+    back = back[sidewalks.simplify(back, .025)]
+    back = roads.densify(np.c_[back, np.zeros(len(back))], STEP_M)[:, :2]
+    normal = sidewalks._normals_2d(back) * side
+    normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
+    return back, normal
+
+
 def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=(), barriers=(),
-           extend=True, residential=True, areas=None, photo=None, driveways=(), grass=None):
-    """Draped paving between a developed street edge and its buildings or mapped hard ground."""
+           extend=True, residential=True, areas=None, photo=None, grass=None, bays=()):
+    """Give the developed part of the street a continuous surface from the curb to the frontage."""
     import europewalks
     import roads
     import sidewalks
 
-    candidates = [w for w in walks if w.get("surface") in sidewalks.EU_SLAB and "pts" in w
+    candidates = [w for w in walks if w.get("surface") in sidewalks.EU_SLAB
                   and (not w.get("detached") or w.get("mapped")) and not w.get("median")]
-    paved, green, explicit, retail, _ = _areas(frame, lots, box) if areas is None else areas
+    paved, green, explicit, retail, *_ = _areas(frame, lots, box) if areas is None else areas
     targets = (list(buildings) if residential else list(shops)) + paved
+    access = _access_chunks([w for w in candidates if "pts" in w], paved, green, carriageways)
+    if not (targets or explicit):
+        return access
     walls = _walls(targets)
     hard_walls = _walls(list(shops) + paved)
     green_walls = _walls(green, barriers)
-    blockers = [(p[:, :2], spec.width / 2) for _, spec, p, _ in carriageways]
-    blockers += [(np.asarray(d["n"], np.float64)[:, :2], float(d["w"]) / 2) for d in drives]
-    blocks = roads._blocker_segments(blockers) if blockers else None
-    walk_blocks = roads._blocker_segments([(w["pts"][:, :2], w["w"] / 2 + .13) for w in walks
-                                          if "pts" in w and not w.get("median")])
-    driveway_styles = {}
-    for _, spec, points in driveways:
-        style = europewalks.MAPPED_SURFACE.get(spec.surf)
-        if style in PAVER_SURFACES:
-            driveway_styles.setdefault(style, []).append((points[:, :2], spec.width / 2 + 1.2))
-    driveway_styles = {style: roads._blocker_segments(lines) for style, lines in driveway_styles.items()}
-    result = _mapped_paving(explicit, green + list(buildings), blocks)
-    result.extend(_access_chunks(candidates, paved, green, carriageways))
-    if not targets:
-        return result
+    street_sides = [roads.offset_polyline(p, side * spec.width / 2)[:, :2]
+                    for _, spec, p, _ in carriageways if spec.cls != "service" for side in (1, -1)]
+    street_walls = _walls([], street_sides)
+    bands = [(p, spec.width / 2) for _, spec, p, _ in carriageways]
+    bands += [(np.asarray(d["n"], np.float64), float(d["w"]) / 2) for d in (*drives, *access)]
+    explicit_outlines = {id(rings[0]) for rings, _ in explicit}
+    reserved = [ring for ring in paved if id(ring) not in explicit_outlines]
+    reserved.extend(rings[0] for _, _, rings, _ in bays)
+    reserved.extend(hole for rings, _ in explicit for hole in rings[1:])
+    coverage = _coverage(box, walks, buildings, [*green, *reserved], bands)
+    result = list(access)
+    for rings, raw in explicit:
+        surface = europewalks.MAPPED_SURFACE.get(raw, "pavers")
+        result.extend(_paving(part, surface) for part in coverage.claim(rings[0]))
+    # Mapped paving is continuous with its sidewalk. Inferred sidewalks and
+    # street edges share one finish for the rest of the frontage.
+    candidates.sort(key=lambda w: not w.get("mapped"))
     if extend and residential:
         candidates.extend(_road_edges(carriageways, box))
     for walk in candidates:
-        line = roads.densify(np.asarray(walk["pts"]), STEP_M)
-        side = _outside_side(line, carriageways) if walk.get("mapped") else walk["side"]
-        if side is None:
+        back, normal = _back_edge(walk, carriageways)
+        if back is None:
             continue
-        curb, normal = sidewalks.run_geometry(line, side, walk["w"])
-        back = curb[:, :2] + walk["w"] * normal
-        normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
         limit = BUILT_FRONT_M if extend else MAX_GAP_M
         if walk.get("road_edge"):
-            limit = min(limit, 10.)
+            limit = min(limit, 15.)
         dist = walls.rays(back, normal, limit)
-        limit_depth = green_walls.rays(back, normal, limit)
-        hard_dist = hard_walls.rays(back, normal, limit) if shops or paved else np.full(len(back), np.inf)
-        hard_target = np.isfinite(dist) & np.isclose(hard_dist, dist, rtol=0., atol=.08)
         free = ~_inside(back, targets + green)
         valid = free & np.isfinite(dist) & (dist >= .18)
         if walk.get("mapped"):
             # A mapped sidewalk's position must agree with the street edge.
+            hard_dist = hard_walls.rays(back, normal, limit)
             road_edge = _street_edge_distance(back, carriageways)
-            valid &= _inside(back, retail) | hard_target | (road_edge <= 2.8)
-        observed = np.zeros(len(back), bool)
-        depth = np.fmin(dist, limit_depth)
-        if photo is not None and extend:
-            photo_depth = np.fmin(photo.depths(back, normal), depth)
-            observed = free & ~valid & (photo_depth >= .9) & (np.isfinite(dist) | _inside(back, retail))
+            valid &= _inside(back, retail) | np.isclose(hard_dist, dist, rtol=0., atol=.08) | (road_edge <= 3.2)
+        depth = np.where(valid, dist, np.nan)
+        if photo is not None and extend and retail:
+            photo_depth = photo.depths(back, normal)
+            observed = free & ~valid & (photo_depth >= 1.5) & _inside(back, retail)
             depth[observed] = photo_depth[observed]
-            valid |= observed
-        valid &= (depth >= .18) & np.isfinite(depth)
-        depth = np.where(valid, depth, 0.)
-        end = back + normal * np.maximum(depth - .07, 0.)[:, None]
-        i = np.flatnonzero(valid[:-1] & valid[1:] & (np.abs(np.diff(depth)) <= 1.65))
+        if extend:
+            depth = _connected_depths(back, depth)
+        limits = green_walls.rays(back, normal, limit)
+        across = street_walls.rays(back + .06 * normal, normal, limit)
+        limits = np.fmin(limits, across + .06)
+        depth = np.where(free, np.minimum(depth, np.where(np.isnan(limits), limit, limits)), np.nan)
+        i = np.flatnonzero(np.isfinite(depth[:-1]) & np.isfinite(depth[1:]))
         if not len(i):
             continue
-        middle = (back[i] + back[i + 1]) * .5
-        outward = (normal[i] + normal[i + 1]) * .5
-        outward /= np.maximum(np.linalg.norm(outward, axis=1), 1e-9)[:, None]
-        mid_dist = np.fmin(walls.rays(middle, outward, limit), green_walls.rays(middle, outward, limit))
-        expected = np.minimum(depth[i], depth[i + 1])
-        connected = np.isfinite(mid_dist) & (np.abs(mid_dist - expected) <= 1.8)
-        if photo is not None and (observed[i] | observed[i + 1]).any():
-            connected |= ((observed[i] | observed[i + 1])
-                          & (photo.depths(middle, outward) + .15 >= expected))
-        i = i[connected]
-        quads = np.stack([back[i], back[i + 1], end[i + 1], end[i]], axis=1)
-        if len(quads):
-            quads = quads[~_road_overlap(quads, blocks)]
-        if len(quads) and walk.get("road_edge"):
-            quads = quads[~_road_overlap(quads, walk_blocks)]
-        if len(quads) and (green or barriers):
-            quads = quads[~_green_overlap(quads, green, green_walls, barriers)]
-        if len(quads) and photo is not None:
-            share = photo.strip_share(quads, photo.green)
+        end = back + normal * np.maximum(depth - .07, 0.)[:, None]
+        if photo is not None:
+            lawn = np.minimum(photo.lawn_edges(back, normal), depth)
+            boundary = back + normal * np.maximum(lawn - .07, 0.)[:, None]
             if grass is not None:
-                grass.extend(quads[share >= .64])
-            quads = quads[share < .23]
-        if not len(quads):
-            continue
+                j = i[(depth[i] - lawn[i] >= .35) & (depth[i + 1] - lawn[i + 1] >= .35)]
+                lawns = np.stack([boundary[j], boundary[j + 1], end[j + 1], end[j]], axis=1)
+                if len(lawns):
+                    grass.extend(lawns[photo.strip_share(lawns, photo.green) >= .58])
+            end = boundary
         style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else "concrete"
-        styles = np.full(len(quads), style, dtype=object)
-        for driveway_style, bounds in driveway_styles.items():
-            styles[_road_overlap(quads, bounds)] = driveway_style
-        result.extend(_paving(quad, style) for quad, style in zip(quads, styles))
+        start = back - .035 * normal
+        for run in np.split(i, np.flatnonzero(np.diff(i) != 1) + 1):
+            at = slice(run[0], run[-1] + 2)
+            for strip in _band(start[at], end[at]):
+                result.extend(_paving(part, style) for part in coverage.claim(strip))
     return result
 
 
@@ -526,11 +587,14 @@ def tile(frame, box, features, walks, rings, items, carriageways, driveways, dri
         ring = buildings.drawn_ring(spec) + origin
         if spec.cls in COMMERCIAL:
             shops.append(ring)
-        if (spec.cls or "") in HOUSE_CLASSES | UNTYPED and (spec.floors or 0) <= 3:
+        cls = spec.cls or ""
+        if cls in HOUSE_CLASSES | UNTYPED and (spec.floors or 0) <= 3:
             homes.append(ring)
-            if (country == "FR" and props is not None and getattr(spec, "door", None) is not None
-                    and not spec.shop and spec.cls != "terrace" and (spec.cls in HOUSE_CLASSES or spec.roof != "flat")
-                    and 35. <= abs(buildings._area2(ring)) / 2 <= 340.):
+            # An unclassified footprint is common even for an ordinary house.
+            # Small single-storey flat-roofed outbuildings stay out of the candidate set.
+            minimum = 42. if cls in UNTYPED and spec.roof == "flat" and spec.floors == 1 else 28.
+            if (country == "FR" and props is not None and not spec.shop
+                    and minimum <= abs(buildings._area2(ring)) / 2 <= 410.):
                 yards.append((spec, ring))
     lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.)
     open_verge = europewalks.grassy_verges(country, float(lon), float(lat))
@@ -544,14 +608,15 @@ def tile(frame, box, features, walks, rings, items, carriageways, driveways, dri
         import roads
         roads.drape_walks(frame, None, walks, z_at)
     paved = chunks(frame, walks, rings, features, carriageways, drives, near, shops=shops, barriers=barriers,
-                   extend=not open_verge, residential=not open_verge, areas=areas, photo=photo, driveways=driveways,
-                   grass=grass)
+                   extend=not open_verge, residential=not open_verge, areas=areas, photo=photo, grass=grass, bays=bays)
     spots, marks = streetparking.tile_layout(frame, box, features, carriageways, driveways, walks, rings, homes,
                                             barriers, areas[1], z_at, left_hand, bays)
     if yards:
         import fences
-        props.extend(fences.inferred_rows(frame, yards, rings, walks, carriageways, barriers, areas[0],
-                                         areas[1], drives, z_at, photo, residential=areas[4]))
+        occupied = areas[0] + [parts[0] for _, _, parts, _ in bays]
+        props.extend(fences.inferred_rows(frame, yards, rings, walks, carriageways, barriers, occupied,
+                                         areas[1], drives, z_at, photo, residential=areas[4],
+                                         public=areas[3] + areas[5], driveways=driveways))
     return paved + marks, spots
 
 

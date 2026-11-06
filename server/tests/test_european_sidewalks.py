@@ -166,14 +166,14 @@ class EuropeanSidewalksTest(unittest.TestCase):
         road = [("r", roads.Spec(6., "paved", True, "residential"), np.array([[0., 0., 0.], [40., 0., 0.]]), 7.8)]
         drive = {"n": [[4.5, 0., 0.], [4.5, 8., 0.]], "w": 1.}
         chunks = streetfront.chunks(frame, [walk], [house, set_back], [lots], road, [drive], (-10, -10, 50, 20))
-        quads = np.array([c["poly"] for c in chunks])
-        self.assertTrue(np.any(quads[:, :, 0].max(axis=1) <= 12.))
-        self.assertTrue(np.any(quads[:, :, 0].min(axis=1) >= 15.))
-        self.assertTrue(np.any(quads[:, :, 0].min(axis=1) >= 24.), "pave up to the house set back 5.2 m")
-        self.assertTrue(np.all(quads[:, :, 1].min(axis=1) == 4.5))
-        for x in (4.5, 20.):
-            self.assertFalse(np.any((quads[:, :, 0].min(axis=1) < x) & (quads[:, :, 0].max(axis=1) > x)))
-        self.assertTrue(all(c["m"] == "bne_eu_walk_pavers" for c in chunks))
+        # The shallow frontage joins the parking lot and the deeper frontage on
+        # the same sidewalk, while the drive, sidewalk and flowerbed stay clear.
+        import polygon
+        points = np.array([[2., 4.75], [14.1, 5.1], [19.6, 5.025], [34., 9.5],
+                           [4.5, 4.8], [19.95, 5.025], [5., 4.2], [18., 6.5]])
+        hits = [(c["m"], polygon.contains_points(np.asarray(c["poly"]), points)) for c in chunks]
+        np.testing.assert_array_equal(np.sum([mask for _, mask in hits], axis=0), [1, 1, 1, 1, 0, 0, 0, 0])
+        self.assertEqual({m for m, mask in hits if mask.any()}, {"bne_eu_walk_pavers"})
 
         service = ("a", roads.Spec(2.5, "paved", True, "service"), np.array([[22., 0., 0.], [22., 7., 0.]]), 7.8)
         with mock.patch.object(roads, "ROADS_IN_GROUND", True):
