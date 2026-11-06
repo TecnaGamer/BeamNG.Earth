@@ -215,6 +215,23 @@ class ChainTest(unittest.TestCase):
         np.testing.assert_array_equal(rgb, rgb_all)
         self.assertEqual(used, used_all)
 
+    def test_open_sea_is_data(self):
+        """EOX serves open sea as one deep blue (imagery.SEA_RGB): that is the picture, not a blank, so the next layer
+        is not fetched for the same water (Bergen: 374 such tiles of EOX 2023, each fetched again from 2016)."""
+        sea = np.zeros((256, 256, 3), np.uint8) + np.array(imagery.SEA_RGB, np.uint8)
+        self.assertFalse(imagery.is_uniform(sea))
+        self.assertTrue(imagery.is_uniform(np.full((256, 256, 3), 255, np.uint8)), "a white blank stays a blank")
+
+        def serve(name, z, x, y):
+            if name == "eox2023":
+                return 200, png(sea)
+            return self.tile(name, z, x, y)
+        im = FakeNet(self.tmp.name, serve, chain=("eox2023", "eox2016"), tone=0.0)
+        rgb, used = self.render(im)
+        self.assertIn("eox2023", used)
+        self.assertNotIn("eox2016", used)
+        self.assertFalse([r for r in im.requests if r[0] == "eox2016"])
+
     def test_coverage_probe(self):
         """usgs tiles are only asked for where their z10 and z12 ancestors have data, and never
         below z10 (its global low-zoom basemap would differ from EOX on the far rings)."""
