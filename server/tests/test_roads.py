@@ -1738,6 +1738,17 @@ class MountainRoadTest(unittest.TestCase):
         self.assertFalse(sp[3].mountain, "a mapped width stands")
         self.assertEqual(sp[3].width, 7.5)
 
+    def test_two_mapped_lanes_still_a_pass_road(self):
+        """A mapped lanes=2 is a two-way road's count, not its width (the Stelvio, 2026-11-05: its way got lanes=2 and
+        lost the pass road's 6 m); a third lane is a wider road."""
+        f = features([_zigzag(4), _zigzag(4)], ["secondary", "secondary"])
+        base = [sp._replace(mountain=False, width=7.1) for sp in roads.road_specs(f)]
+        got = roads._mountain_roads(f, [base[0]._replace(lanes=2), base[1]._replace(lanes=3)])
+        self.assertTrue(got[0].mountain)
+        self.assertEqual(got[0].width, roads.MOUNTAIN_ROAD_M)
+        self.assertFalse(got[1].mountain)
+        self.assertEqual(got[1].width, 7.1)
+
     def test_no_centre_line(self):
         line = np.array([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0)])
         kinds = lambda sp: {look.get("kind") for look, _w, _p in roads.extras(sp, line, LON, country="IT")}  # noqa: E731

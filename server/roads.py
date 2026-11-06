@@ -445,7 +445,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 3      # 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 4      # 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -2605,7 +2605,8 @@ def _road_specs(feats, urban_fn, left_hand):
 # centre line, a dry-stone retaining wall right at the uphill edge and a stone parapet along the valley's; drawn 8 m
 # wide with a centre line on a 20-24 m graded bench, the walls and the parapets set back off the road or missing). A
 # rural road whose line has MOUNTAIN_SWITCHBACKS switchbacks or more (MOUNTAIN_TURN_DEG of turn within 2 x
-# MOUNTAIN_SPAN_M: earthfast.tight_bends) and no mapped width or lane count is MOUNTAIN_ROAD_M wide, without edge strips
+# MOUNTAIN_SPAN_M: earthfast.tight_bends), no mapped width and no more than MOUNTAIN_MAX_LANES mapped lanes is
+# MOUNTAIN_ROAD_M wide, without edge strips
 # or a centre line, and the grading keeps no verge beside it (grading.shoulder). Its whole line counts: the map's road
 # is one feature over the pass, the same in every cell.
 MOUNTAIN_CLASSES = {"secondary", "tertiary", "unclassified"}
@@ -2613,6 +2614,9 @@ MOUNTAIN_SWITCHBACKS = 3
 MOUNTAIN_SPAN_M = 20.0
 MOUNTAIN_TURN_DEG = 150.0
 MOUNTAIN_ROAD_M = 6.0
+MOUNTAIN_MAX_LANES = 2     # a mapped lanes=2 is any two-way road's count, not a width: the Stelvio's own way got it
+                           # with the per-way lane tags (2026-11-04), and the pass was 7.1 m again with a centre line,
+                           # a 20 m bench and walls standing between its hairpin legs (the user, 2026-11-05)
 MOUNTAIN_ON = os.environ.get("BNE_MOUNTAIN_ROADS", "on") != "off"
 
 
@@ -2682,7 +2686,7 @@ def _mountain_roads(feats, specs):
     out = list(specs)
     for i, sp in enumerate(specs):
         if sp is None or sp.urban or sp.cls not in MOUNTAIN_CLASSES or sp.kind != "paved" or sp.oneway \
-                or sp.median or sp.lanes is not None:
+                or sp.median or (sp.lanes or 0) > MOUNTAIN_MAX_LANES:
             continue
         if _rule_value(rules.get("width"), i) is not None or _osm(feats, "width", i, *OSM_WIDTH_M) is not None:
             continue
