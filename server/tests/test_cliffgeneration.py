@@ -3,6 +3,7 @@ import asyncio
 import itertools
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -11,6 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import blockworker
 import cliffrocks
 import earthd

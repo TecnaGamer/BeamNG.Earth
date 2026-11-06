@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+import sys
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cdae, cliffrocks, clifflod, cliffmaterial, fast, roads
 from test_clifflod import surface, boundary
 

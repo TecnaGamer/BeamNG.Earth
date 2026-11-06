@@ -1,8 +1,11 @@
 """Cliff contours trim inward with shared intersections and no tile seams."""
 import json
 from pathlib import Path
+import sys
 import unittest
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cliffrocks as cr
 import clifftransition as ct
 import cliffmaterial as cm
