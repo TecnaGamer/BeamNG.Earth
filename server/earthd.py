@@ -2420,7 +2420,10 @@ class Server:
             return True
         for c in list(self.connections):
             counts = getattr(c, "progress_sent", None)
-            if counts and any(d < w for d, w in counts):
+            # (the (done, wanted) pairs only: send_progress's counts end with the downloads [in flight, MB, MB/s]
+            # since the loading line shows them, and unpacking that as a pair raised ValueError here, every minute,
+            # so the saved areas never downloaded)
+            if counts and any(len(p) == 2 and p[0] < p[1] for p in counts):
                 return True
         return False
 
