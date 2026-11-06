@@ -70,12 +70,14 @@ class StreetParkingTest(unittest.TestCase):
 
 
 class PavementTest(unittest.TestCase):
-    def test_default_concrete_reaches_a_setback_without_a_sidewalk_but_spares_green(self):
+    def test_default_asphalt_reaches_a_setback_without_a_sidewalk_but_spares_green(self):
+        import roadmesh
+
         house = rectangle(0., 11., 24., 21.)
         args = (FRAME, [], [house], [], STREETS, [], BOX)
         paved = streetfront.chunks(*args)
         self.assertTrue(paved)
-        self.assertEqual({c["m"] for c in paved}, {"bne_eu_walk_concrete"})
+        self.assertEqual({c["m"] for c in paved}, {roadmesh.FRONTAGE_ASPHALT})
         self.assertAlmostEqual(max(max(y for _, y in c["poly"]) for c in paved), 11. - .07)
         self.assertFalse(streetfront.chunks(*args, extend=False, residential=False))
         green = streetfront.PhotoPaving(np.full((80, 80, 3), [65, 100, 60], np.uint8), -16., -16., 60.)
@@ -141,6 +143,17 @@ class PavementTest(unittest.TestCase):
 
 
 class FrenchBoundaryTest(unittest.TestCase):
+    def test_hedge_crowns_clear_the_road_and_the_crossing(self):
+        along = feature([[0., 3.2], [14., 3.2]], "hedge", mapgeom.LINE)
+        across = feature([[0., -.2], [0., 9.]], "hedge", mapgeom.LINE)
+        with patch("house_regions.profile", return_value="alsace"):
+            for hedge in (along, across):
+                rows = fences.rows(FRAME, lambda _: hedge, BOX, flat, french=True, carriageways=STREETS)
+                self.assertTrue(rows)
+                self.assertTrue(all(r[2] >= 3. + r[6] * fences.HEDGE_CROWN_PER_M + .14 for r in rows))
+                if hedge is across:
+                    self.assertTrue(all(abs(r[1]) < .01 for r in rows))
+
     def test_regional_models_follow_mapped_boundaries_only(self):
         line = feature([[0., 10.], [10., 10.]], "fence", mapgeom.LINE, {"material": "wood"})
         with patch("house_regions.profile", return_value="alsace"):

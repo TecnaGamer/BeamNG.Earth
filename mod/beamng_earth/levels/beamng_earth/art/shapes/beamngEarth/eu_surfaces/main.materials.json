@@ -41,6 +41,32 @@
     ],
     "doubleSided": false
   },
+  "bne_eu_frontage_asphalt": {
+    "name": "bne_eu_frontage_asphalt",
+    "mapTo": "bne_eu_frontage_asphalt",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a0a8621b-4a8c-4f03-b894-978f1490662b",
+    "translucent": true,
+    "translucentZWrite": true,
+    "Stages": [
+      {
+        "baseColorFactor": [0.35, 0.35, 0.35, 1],
+        "detailMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_b.png",
+        "detailMapUseUV": 0,
+        "detailScale": [1, 1],
+        "detailBaseColorMapStrength": 1,
+        "detailNormalMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_nm.png",
+        "normalDetailMapUseUV": 0,
+        "detailNormalMapStrength": 0.8,
+        "roughnessFactor": 0.9,
+        "metallicFactor": 0,
+        "useAnisotropic": true,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMapUseUV": 1
+      }
+    ]
+  },
   "bne_eu_tactile": {
     "name": "bne_eu_tactile",
     "mapTo": "bne_eu_tactile",

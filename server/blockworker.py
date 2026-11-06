@@ -1007,7 +1007,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings)) + (P.fuel_pads,)
+                              signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
+                              walk_ground=lambda x, y: roadmeshmod.drawn_ground(frame, P.drawn, np.c_[x, y], q)) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -1427,10 +1428,12 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
                           for c in chunks if not c.get("tube_only")]
     walks = _map_walks(tile.frame, frame, inputs.get("walks") or []) if sidewalks else []
     if walks:
-        roadsmod.drape_walks(frame, elev, walks,
-                             lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q))
+        def walk_ground(x, y):
+            return roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q)
+
+        roadsmod.drape_walks(frame, elev, walks, walk_ground)
         mark("drape")
-        b = sidewalksmod.Builder(origin, collision=True)
+        b = sidewalksmod.Builder(origin, collision=True, ground=walk_ground)
         for wk in walks:
             b.add_walk(wk, roadsmod.SIDEWALK["w"])
         mark("walks")

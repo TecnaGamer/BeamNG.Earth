@@ -2251,7 +2251,9 @@ class Server:
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
-                                   custom_entries=custom_entries, signs=signs, wells=oil_wells, bld_none=bool(self.buildings))
+                                   custom_entries=custom_entries, signs=signs, wells=oil_wells, bld_none=bool(self.buildings),
+                                   walk_ground=lambda x, y: roadmeshmod.drawn_ground(
+                                       anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)))
 
     def set_gas_stations(self, on):
         """The settings page's "Gas stations" switch (the mod's gas_stations; the user, 2026-10-23: off saves their

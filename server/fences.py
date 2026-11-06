@@ -29,6 +29,10 @@ NOISE_TYPES = {"noise_barrier", "noisebarrier", "sound_barrier"}
 BBOX_PAD_M = 8.0
 PANEL_M = 2.2
 HEDGE_STEP_M = 1.15
+# The Forest instance scales the stock shrub uniformly, including its crown.
+HEDGE_CROWN_PER_M = 1.0
+HEDGE_ROAD_MARGIN_M = .15
+HEDGE_SHIFT_M = 2.5
 FR_HEIGHTS = {"limestone": .95, "dark_stone": .94, "brick": 1.05, "iron": 1.23, "mesh": 1.14,
               "wood": 1.16, "slats": 1.12, "rails": 1.19}
 FR_PALETTES = {
@@ -188,6 +192,58 @@ def _forest_rows(pending, z):
             for (group, x, y, yaw, height, lift), zz in zip(pending, z)]
 
 
+def _clear_hedges(rows, carriageways):
+    """Leave room for the entire crown. Recede from a roadside edge, and leave crossings open."""
+    import roads
+
+    hedges = [i for i, r in enumerate(rows) if r[0] == G_HEDGE]
+    if not hedges or not carriageways:
+        return rows
+    segments, starts, half = roads._blocker_segments(carriageways)
+    if not len(segments):
+        return rows
+    a, b = segments[:, :2], segments[:, 2:]
+    span = np.hypot(*(b - a).T)
+    half = np.repeat(half, np.diff(starts))
+    keep = span > 1e-6
+    a, b, half = a[keep], b[keep], half[keep]
+    span = span[keep]
+    direction = (b - a) / span[:, None]
+    reach = half[:, None] + HEDGE_SHIFT_M + 2.5
+    low, high = np.minimum(a, b) - reach, np.maximum(a, b) + reach
+    adjusted = list(rows)
+    for i in hedges:
+        group, x, y, yaw, height, lift = rows[i]
+        p = np.array([x, y])
+        near = np.all((p >= low) & (p <= high), axis=1)
+        if not near.any():
+            continue
+        u, d, s, hw = a[near], direction[near], span[near], half[near]
+
+        def distances(q):
+            along = np.clip(np.sum((q - u) * d, axis=1), 0., s)
+            delta = q - (u + along[:, None] * d)
+            return delta, np.hypot(*delta.T)
+
+        radius = height * HEDGE_CROWN_PER_M + HEDGE_ROAD_MARGIN_M
+        delta, distance = distances(p)
+        gaps = distance - hw
+        j = int(gaps.argmin())
+        if gaps[j] >= radius:
+            continue
+        tangent = np.array([math.cos(math.radians(yaw)), math.sin(math.radians(yaw))])
+        move = radius - gaps[j] + .06
+        if gaps[j] < -.45 or move > HEDGE_SHIFT_M or abs(d[j] @ tangent) < .65:
+            adjusted[i] = None
+            continue
+        p = p + move * delta[j] / max(distance[j], 1e-6)
+        if np.any(distances(p)[1] - hw < radius):
+            adjusted[i] = None
+        else:
+            adjusted[i] = (group, *p, yaw, height, lift)
+    return adjusted
+
+
 def _street_segments(carriageways):
     import europewalks
     import roads
@@ -255,8 +311,8 @@ def inferred_rows(frame, houses, rings, walks, carriageways, barriers, paved, gr
     streets = _street_segments(carriageways)
     if not houses or not len(streets[0]):
         return []
-    road_blocks = roads._blocker_segments([(road[:, :2], spec.width / 2 + .30)
-                                          for _, spec, road, _ in carriageways])
+    road_bands = [(road[:, :2], spec.width / 2) for _, spec, road, _ in carriageways]
+    road_blocks = roads._blocker_segments([(line, half + .30) for line, half in road_bands])
     access = [(road[:, :2], spec.width / 2 + .3) for _, spec, road, _ in carriageways if spec.cls == "service"]
     access.extend((np.asarray(d["n"])[:, :2], d["w"] / 2 + .3) for d in drives)
     access.extend((road[:, :2], spec.width / 2 + .3) for _, spec, road in driveways)
@@ -349,6 +405,7 @@ def inferred_rows(frame, houses, rings, walks, carriageways, barriers, paved, gr
                 line = np.array([centre + start * tangent, centre + finish * tangent])
                 pending.extend(_french_panel_row(style, p, d, panel_m)
                                for p, d, panel_m in _french_panels(style, line))
+    pending = [r for r in _clear_hedges(pending, road_bands + access) if r is not None]
     if not pending:
         return []
     x, y = np.array([(r[1], r[2]) for r in pending]).T
@@ -439,11 +496,15 @@ def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
             cross = streetfront._road_overlap(np.stack((centres - offsets, centres + offsets), axis=1), bounds)
         else:
             cross = np.zeros(len(centres), bool)
-        for (style, centre, direction, length), bad in zip(fr_pending, cross):
-            clearance = 1.7 if style == "hedge" else 1.3
-            if bad or any(np.linalg.norm(centre - gate) < clearance + length / 2 for gate in gates):
+        drawn = [_french_panel_row(style, centre, direction, length) for style, centre, direction, length in fr_pending]
+        bands = [(line[:, :2], spec.width / 2) for _, spec, line, _ in carriageways]
+        for (style, _, _, length), bad, row in zip(fr_pending, cross, _clear_hedges(drawn, bands)):
+            if row is None or (bad and style != "hedge"):
                 continue
-            pending.append(_french_panel_row(style, centre, direction, length))
+            clearance = (row[4] * HEDGE_CROWN_PER_M + .75) if style == "hedge" else 1.3 + length / 2
+            if any(np.linalg.norm(np.array(row[1:3]) - gate) < clearance for gate in gates):
+                continue
+            pending.append(row)
     if not pending:
         return []
     xy = np.array([[p[1], p[2]] for p in pending], np.float64)

@@ -239,9 +239,14 @@ def _access_chunks(walks, paved, green, carriageways):
 
 
 def _paving(poly, surface):
+    import roadmesh
     import sidewalks
-    repeat = sidewalks.BRICK_REPEAT_M if surface == "brick" else 2.
-    return {"m": sidewalks.MATERIALS[sidewalks.EU_SLAB[surface]], "w": 0., "tl": repeat, "u_m": repeat,
+    if surface == "road_asphalt":
+        material, repeat = roadmesh.FRONTAGE_ASPHALT, roadmesh.FRONTAGE_REPEAT_M
+    else:
+        material = sidewalks.MATERIALS[sidewalks.EU_SLAB[surface]]
+        repeat = sidewalks.BRICK_REPEAT_M if surface == "brick" else 2.
+    return {"m": material, "w": 0., "tl": repeat, "u_m": repeat,
             "p": 17, "layer": "frontage", "poly": poly.tolist(), "n": [], "frontage": True}
 
 
@@ -371,12 +376,7 @@ def _walk_outline(walk):
     """The two sides of the slab, including its corner pieces."""
     import sidewalks
 
-    if "corner" in walk:
-        corner = walk["corner"]
-        return np.asarray(corner["arc"])[:, :2], np.asarray(corner["outer"])[::-1, :2]
-    width = walk["w"]
-    curb, out = sidewalks.run_geometry(walk["pts"], walk.get("side", 1), width)
-    return curb[:, :2], curb[:, :2] + width * out
+    return sidewalks._slab_edges(walk)
 
 
 def _band(a, b):
@@ -528,7 +528,7 @@ def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=()
                 if len(lawns):
                     grass.extend(lawns[photo.strip_share(lawns, photo.green) >= .58])
             end = boundary
-        style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else "concrete"
+        style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else "road_asphalt"
         start = back - .035 * normal
         for run in np.split(i, np.flatnonzero(np.diff(i) != 1) + 1):
             at = slice(run[0], run[-1] + 2)
@@ -604,9 +604,12 @@ def tile(frame, box, features, walks, rings, items, carriageways, driveways, dri
     shifted = streetparking.adjust_walks(walks, bays, list(rings) + areas[1], barriers)
     widened = widen_walks(walks, photo if not open_verge else None, rings,
                          areas[1] + [parts[0] for _, _, parts, _ in bays], barriers, carriageways)
-    if (shifted or widened) and redrape:
-        import roads
-        roads.drape_walks(frame, None, walks, z_at)
+    if shifted or widened:
+        import sidewalks
+        walks[:] = sidewalks.clear_overlaps(walks)
+        if redrape:
+            import roads
+            roads.drape_walks(frame, None, walks, z_at)
     paved = chunks(frame, walks, rings, features, carriageways, drives, near, shops=shops, barriers=barriers,
                    extend=not open_verge, residential=not open_verge, areas=areas, photo=photo, grass=grass, bays=bays)
     spots, marks = streetparking.tile_layout(frame, box, features, carriageways, driveways, walks, rings, homes,

@@ -148,6 +148,25 @@ class FollowTest(unittest.TestCase):
 
         self.assertGreater(float((height(apron["m"]) - height(gravel["m"])).min()), .002)
 
+    def test_asphalt_blends_at_the_boundary_but_not_at_the_internal_join(self):
+        from streetfront import _paving
+
+        def flat(la, lo):
+            return np.zeros_like(la)
+
+        chunks = [_paving(np.array([[a, 2.], [b, 2.], [b, 8.], [a, 8.]]), "road_asphalt")
+                  for a, b in [(0., 6.), (6., 12.)]]
+        P, T, _, mats, M, opacity = roadmesh.build(FRAME, chunks, flat, (0., 0., 0.), .025, follow=True, q=1 / 32)
+        self.assertEqual(mats, [roadmesh.FRONTAGE_ASPHALT])
+        used = np.unique(T[M == 0])
+        at_border = used[np.isclose(P[used, 1], 2.)]
+        join = used[np.isclose(P[used, 0], 6.) & (P[used, 1] > 3.) & (P[used, 1] < 7.)]
+        self.assertTrue(len(at_border) and len(join))
+        self.assertLess(float(opacity[at_border, 0].max()), .05)
+        self.assertLess(float(np.abs(P[at_border, 2]).max()), .005)
+        self.assertGreater(float(opacity[join, 0].min()), .49)
+        self.assertGreater(float(P[join, 2].min()), .04)
+
     def test_on_the_ground_everywhere(self):
         elev = self.bumpy()
         chunks = [chunk("road_asphalt_2lane", 9.0, [(3.3, 1.7, 0), (61.9, 40.2, 0), (90.0, 20.0, 0)])]

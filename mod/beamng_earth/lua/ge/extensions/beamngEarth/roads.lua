@@ -1851,6 +1851,7 @@ M.PLAYER_DZ = 2.5   -- m above / below
 -- curb held the whole tile's sidewalk collision (one mesh a tile), and a tile made again while the car drove its
 -- streets had no solid sidewalks at all (the user, 2026-10-27: "sidewalks are missing collision", Fells Point)
 M.WALK_PLAYER_R = 0.0
+M.WALK_URGENT_M = 25
 M.DECK_BOX_BELOW_M = 2.2    -- a deck box's floor is this far under its lowest surface (server roads.collider_boxes:
                             -- roadmesh.DECK_DEPTH 1.2 + 1.0)
 M.DECK_ON_M = 0.2           -- the car's position this far under that surface or less: on the deck (not held)
@@ -1864,18 +1865,42 @@ function M.nearPlayer(p, r)
   return dx * dx + dy * dy <= r * r
 end
 
+local function colliderPosition(p, t, what)
+  local pp = t and t.geo and t.pls and t.pls[what]
+  if not pp then return p end
+  local x, y, z = pp.inv:apply(p.x, p.y, p.z)
+  return { x = x, y = y, z = z }
+end
+
+local function overWalk(p, outline)
+  if type(outline) ~= 'table' or #outline < 6 then return true end
+  local inside = false
+  local x, y = outline[#outline - 1], outline[#outline]
+  for i = 1, #outline, 2 do
+    local u, v = outline[i], outline[i + 1]
+    if (y > p.y) ~= (v > p.y) and p.x < x + (u - x) * (p.y - y) / (v - y) then
+      inside = not inside
+    end
+    local dx, dy = u - x, v - y
+    local l2 = dx * dx + dy * dy
+    if l2 > 0 then
+      local t = math.max(0, math.min(1, ((p.x - x) * dx + (p.y - y) * dy) / l2))
+      local ex, ey = p.x - x - t * dx, p.y - y - t * dy
+      if ex * ex + ey * ey < 0.18 * 0.18 then return true end
+    end
+    x, y = u, v
+  end
+  return inside
+end
+
 playerIn = function(boxes, what, t)
   -- (a drop hold: the car does not move until its ground and colliders are in, then it is set on top of them)
   if holdActive or type(boxes) ~= 'table' or #boxes == 0 then return false end
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   if not veh then return false end
-  local p = veh:getPosition()
-  local pp = t and t.geo and t.pls and t.pls[what]
-  if pp then      -- a geotile's content: its boxes are in the tile's frame, the player mapped into it
-    local x, y, z = pp.inv:apply(p.x, p.y, p.z)
-    p = { x = x, y = y, z = z }
-  end
-  local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
+  local p = colliderPosition(veh:getPosition(), t, what)
+  local walk = what == 'walk' or what == 'walkcol'
+  local r, dz = walk and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
       if what == 'deck' then
@@ -1884,7 +1909,7 @@ playerIn = function(boxes, what, t)
         -- through it (I-95, Baltimore, a Deck test drive 2026-10-20)
         local surf = b[3] + M.DECK_BOX_BELOW_M
         if p.z < surf - M.DECK_ON_M and p.z > surf - M.DECK_BOX_BELOW_M - dz then return true end
-      elseif p.z >= b[3] - dz and p.z <= b[6] + dz then
+      elseif p.z >= b[3] - dz and p.z <= b[6] + dz and (not walk or overWalk(p, b[7])) then
         return true
       end
     end
@@ -1964,20 +1989,29 @@ function M.nextWalk(q)
   return best
 end
 
--- The walkQ index of a bridge deck's or tunnel's collider the car reaches within URGENT_S (150 m at least; not behind a
--- fast car), the nearest, or nil.
+-- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading.
 function M.urgentWalk(q)
   local p, dir = playerNow()
   if not p then return nil end
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   local best, bd = nil, math.huge
   for i, e in ipairs(q) do
+    local t = tiles[e.key]
     if e.what == 'deck' or e.what == 'tunnel' then
-      local t = tiles[e.key]
       if t and t.cx and not t.ghost and (not e.tile or e.tile == t) then
         local dx, dy = t.cx - p.x, t.cy - p.y
         local d = math.sqrt(dx * dx + dy * dy)
         if d <= reach and d < bd and (not dir or dx * dir.x + dy * dir.y > -M.TILE_M / 2) then best, bd = i, d end
+      end
+    elseif e.what == 'walkcol' and t and not t.ghost and (not e.tile or e.tile == t) then
+      local at = colliderPosition(p, t, e.what)
+      for _, b in ipairs(t.colliders.walkcol or {}) do
+        if b[7] and at.z >= b[3] - 2 and at.z <= b[6] + 2 then
+          local dx = math.max(b[1] - at.x, at.x - b[4], 0)
+          local dy = math.max(b[2] - at.y, at.y - b[5], 0)
+          local d = math.sqrt(dx * dx + dy * dy)
+          if d <= M.WALK_URGENT_M and d < bd then best, bd = i, d end
+        end
       end
     end
   end

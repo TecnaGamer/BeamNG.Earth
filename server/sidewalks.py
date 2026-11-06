@@ -16,7 +16,7 @@ line (offset 0) outwards, heights above the road:
     top    -> (CURB_W, h)                     curbs, light
     slab   -> (W, h + W * CROSS_SLOPE)        sidewalk1 (rising away from the road, as built)
     back   -> (W, -SINK)                      curbs, dark
-with flat end caps (curbs). Heights follow the road's (graded) centreline z, carried by the runs.
+with capped ends, or a short descent to the ground at the free ends of European sidewalks.
 The mod shows it as a TSStatic that collides with its visible mesh. Pure functions; deterministic.
 """
 import numpy as np
@@ -118,6 +118,7 @@ CURB_STRIPS = STRIPS[:3]
 LEAN = (0, 2, 5, 6, 7)
 LEAN_STRIPS = tuple((i, i + 1, 0, 0.0, 0.0) for i in range(len(LEAN) - 1))
 LEAN_TOL_M = 0.03
+END_TAPER_M = 1.35
 
 
 def simplify(pts, tol=LEAN_TOL_M):
@@ -151,13 +152,83 @@ def simplify(pts, tol=LEAN_TOL_M):
     return np.nonzero(keep)[0]
 
 
+def _soft_parts(p):
+    """Keep the native sweep in the middle and sample its free ends more closely."""
+    kind, curb, out, _, ramps, w, h, caps, slab, europe, surface, taper = p
+    if not taper or not any(caps):
+        return p, []
+    stations = np.r_[0., np.cumsum(np.hypot(*np.diff(curb[:, :2], axis=0).T))]
+    length = stations[-1]
+    reach = min(END_TAPER_M, length * .4)
+    lo = min(reach, min((a - RAMP_FLARE for a, _ in ramps), default=reach)) if caps[0] else 0.
+    hi = min(reach, min((length - b - RAMP_FLARE for _, b in ramps), default=reach)) if caps[1] else 0.
+    lo = lo if lo >= .25 else 0.
+    hi = hi if hi >= .25 else 0.
+    if not (lo or hi):
+        return p, []
+
+    def sample(s):
+        columns = np.c_[curb, out]
+        a = np.column_stack([np.interp(s, stations, v) for v in columns.T])
+        return a[:, :3], a[:, 3:]
+
+    def section(a, b, steps):
+        return np.unique(np.r_[np.linspace(a, b, steps), stations[(stations > a) & (stations < b)]])
+
+    mid = section(lo, length - hi, 2)
+    mid_curb, mid_out = sample(mid)
+    centre = (kind, mid_curb, mid_out, None, [(a - lo, b - lo) for a, b in ramps], w, h,
+              (caps[0] and not lo, caps[1] and not hi), slab, europe, surface, False)
+    tips = []
+    for width, a, b, start in ((lo, 0., lo, True), (hi, length - hi, length, False)):
+        if not width:
+            continue
+        s = section(a, b, 6)
+        tip, direction = sample(s)
+        pr = profile(h, w)
+        points = tip[:, None, :] + np.concatenate(
+            [direction[:, None, :] * pr[None, :, :1], np.broadcast_to(pr[None, :, 1:], (len(s), len(pr), 1))],
+            axis=2)
+        t = (s - a) / width if start else (b - s) / width
+        weight = t ** 2 * (3 - 2 * t)
+        tips.append((points, weight, s - lo, direction, pr, slab))
+    return centre, tips
+
+
+def _tip_mesh(points, stations, direction, pr, strips, origin, slab=1):
+    """The two meshes use the same end profile and heights."""
+    k = len(points)
+    P, T, UV, M = [], [], [], []
+    i = np.arange(k - 1)
+    tris = np.r_[np.c_[i, k + i + 1, i + 1], np.c_[i, k + i, k + i + 1]]
+    for a, b, material, va, vb in strips:
+        p = np.concatenate((points[:, a], points[:, b])) - origin
+        delta = pr[b] - pr[a]
+        want = np.c_[-delta[1] * direction[:-1], np.full(k - 1, delta[0])]
+        tri = tris.copy()
+        normal = np.cross(p[tri[:, 1]] - p[tri[:, 0]], p[tri[:, 2]] - p[tri[:, 0]])
+        reverse = np.sum(normal * np.tile(want, (2, 1)), axis=1) < 0
+        tri[reverse] = tri[reverse, ::-1]
+        T.append(tri + len(P) * 2 * k)
+        P.append(p)
+        if material == 1 and slab == BRICK:
+            material, repeat = BRICK, BRICK_REPEAT_M
+            va, vb = pr[[a, b], 0] / repeat
+        else:
+            repeat = CURB_REPEAT_M if material == 0 else SLAB_REPEAT_M
+        UV.append(np.c_[np.tile(stations / repeat, 2), np.repeat([va, vb], k)])
+        M.append(np.full(len(tri), material, np.int64))
+    return tuple(np.concatenate(a) for a in (P, T, UV, M))
+
+
 class Builder:
     """Accumulates sidewalk runs and corners into one mesh (positions relative to `origin`), swept in Rust
     (earthfast.sidewalk_mesh: the profile, ramps, tactile pads, caps and corner slabs, in the old Python's arithmetic
     and order) when its arrays are asked for; collision: the lean collision mesh beside it (self.col.arrays())."""
 
-    def __init__(self, origin, collision=False):
+    def __init__(self, origin, collision=False, ground=None):
         self.origin = np.asarray(origin, np.float64)
+        self.ground = ground
         self.pieces = []            # (kind 0 run / 1 corner, points (k, 3), dirs (k, 2), outer (m, 3), ramps, w, h, caps,
         self._built = None          # slab, europe, surface); the Rust meshes once built (full, lean)
         self.col = _Lean(self) if collision else None
@@ -177,9 +248,10 @@ class Builder:
         curb, out = run_geometry(walk["pts"], walk["side"], width)
         slab = BRICK if walk.get("brick") and style["surface"] is None else 1
         ramps = walk.get("ramps", ()) if style["h"] > LOW_EDGE_HEIGHT else ()
-        self.add_run(curb, out, width, caps=walk["caps"], ramps=ramps, slab=slab, **style)
+        self.add_run(curb, out, width, caps=walk["caps"], ramps=ramps, slab=slab, taper=style["europe"], **style)
 
-    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False, surface=None):
+    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False, surface=None,
+                taper=False):
         """One sidewalk run: curb (k, 3) the curb line (z = the road there), toward_out (k, 2) unit
         vectors from the curb outwards (scaled by the miter), w its width; caps: end caps at the
         (start, end) (not where the run goes on in the next tile or meets a corner piece); ramps:
@@ -188,7 +260,7 @@ class Builder:
         if len(curb) < 2:
             return
         self.pieces.append((0, curb[:, :3], np.asarray(toward_out, np.float64)[:, :2], None, list(ramps), float(w),
-                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe), surface))
+                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe), surface, taper))
         self._built = None
 
     def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False, surface=None):
@@ -197,9 +269,14 @@ class Builder:
         the curb top to the outer corner points [(x, y, z) ...] (from the second sidewalk's end round
         to the first's), and the back faces along the outer edges. ramps: [(s0, s1)] arc lengths
         where the curb is lowered (the slab then slopes up from it toward the outer corner)."""
+        outer = np.asarray(outer, np.float64).reshape(-1, 3)
+        if europe and len(outer) == 3:
+            # Native corners with exactly three outer points use a fan from the
+            # middle one. At a concave corner, use its polygon triangulation instead.
+            outer = np.vstack((outer[0], (outer[0] + outer[1]) / 2, outer[1:]))
         self.pieces.append((1, np.asarray(arc, np.float64)[:, :3], np.asarray(inward, np.float64)[:, :2],
-                            np.asarray(outer, np.float64).reshape(-1, 3), list(ramps), 2.5, float(h), (False, False),
-                            1, bool(europe), surface))
+                            outer, list(ramps), 2.5, float(h), (False, False),
+                            1, bool(europe), surface, False))
         self._built = None
 
     def empty(self):
@@ -242,7 +319,14 @@ class Builder:
                 batches = [((False, None), [])]
             full, lean = [], []
             for (european, surface), ps in batches:
-                drawn, collision = self._native(ps)
+                pieces, tips = [], []
+                for p in ps:
+                    middle, ends = _soft_parts(p)
+                    pieces.append(middle)
+                    tips.extend(ends)
+                drawn, collision = self._native(pieces)
+                if tips:
+                    drawn, collision = self._with_tips(drawn, collision, tips)
                 if european:
                     P, T, UV, M = drawn
                     UV = UV.copy()
@@ -261,6 +345,21 @@ class Builder:
                 lean.append(collision)       # palette never changes collision geometry/materials
             self._built = self._join(full), self._join(lean)
         return self._built
+
+    def _with_tips(self, drawn, collision, tips):
+        samples = np.concatenate([points.reshape(-1, 3) for points, *_ in tips])
+        z = np.asarray(self.ground(samples[:, 0], samples[:, 1])) if self.ground is not None else None
+        full, lean, k = [drawn], [collision], 0
+        for points, weight, stations, direction, pr, slab in tips:
+            count = points.shape[0] * points.shape[1]
+            ground = points[:, :1, 2] + SINK if z is None else z[k:k + count].reshape(points.shape[:2])
+            ground = np.where(np.isfinite(ground), ground, points[:, :1, 2] + SINK)
+            points[:, :, 2] = weight[:, None] * points[:, :, 2] + (1 - weight[:, None]) * (ground - .005)
+            full.append(_tip_mesh(points, stations, direction, pr, STRIPS, self.origin, slab))
+            if self.col is not None:
+                lean.append(_tip_mesh(points[:, LEAN], stations, direction, pr[list(LEAN)], LEAN_STRIPS, self.origin))
+            k += count
+        return self._join(full), self._join(lean)
 
     def arrays(self):
         P, T, UV, M = self._build()[0]
@@ -299,3 +398,87 @@ def run_geometry(walk_line, side, w):
     curb = np.array(walk_line, np.float64)
     curb[:, :2] = xy - out * (w / 2)
     return curb, out
+
+
+def _slab_edges(walk):
+    if "corner" in walk:
+        corner = walk["corner"]
+        return np.asarray(corner["arc"])[:, :2], np.asarray(corner["outer"])[::-1, :2]
+    curb, out = run_geometry(walk["pts"], walk.get("side", 1), walk["w"])
+    return curb[:, :2], curb[:, :2] + walk["w"] * out
+
+
+def _slab_quads(curb, back):
+    return np.stack((curb[:-1], curb[1:], back[1:], back[:-1]), axis=1)
+
+
+def _cut_slab(walk, edges, coverage):
+    """Trim the length of a run where any part of its slab crosses an earlier sidewalk."""
+    from buildings import _area2
+
+    pts = np.asarray(walk["pts"], np.float64)
+    step = np.diff(pts[:, :2], axis=0)
+    distance = np.hypot(*step.T)
+    arc = np.r_[0., np.cumsum(distance)]
+    blocked = []
+    for i, quad in enumerate(_slab_quads(*edges)):
+        if distance[i] <= 1e-6:
+            continue
+        direction = step[i] / distance[i]
+        # At a mitre the cross section is oblique. Include its reach along
+        # the centreline so a trimmed end cannot poke back into the slab.
+        skew = max(abs((quad[0] - pts[i, :2]) @ direction), abs((quad[1] - pts[i + 1, :2]) @ direction))
+        for hit in coverage.overlaps(quad):
+            if _area2(hit) < .025:
+                continue
+            s = (hit - pts[i, :2]) @ direction + arc[i]
+            blocked.append((max(0., float(s.min()) - skew - .04), min(arc[-1], float(s.max()) + skew + .04)))
+    if not blocked:
+        return [walk]
+    spans = []
+    start = 0.
+    for lo, hi in sorted(blocked) + [(arc[-1], arc[-1])]:
+        if lo - start >= .8:
+            spans.append((start, lo))
+        start = max(start, hi)
+    out = []
+    for lo, hi in spans:
+        s = np.r_[lo, arc[(arc > lo) & (arc < hi)], hi]
+        first, last = lo <= 1e-6, hi >= arc[-1] - 1e-6
+        caps = walk["caps"]
+        w = dict(walk, pts=np.column_stack([np.interp(s, arc, v) for v in pts.T]),
+                 caps=(caps[0] or not first, caps[1] or not last),
+                 ramps=[(max(a, lo) - lo, min(b, hi) - lo) for a, b in walk.get("ramps", ()) if b > lo and a < hi])
+        if "drain_ends" in w:
+            a, b = w["drain_ends"]
+            w["drain_ends"] = a and first, b and last
+        out.append(w)
+    return out
+
+
+def clear_overlaps(walks):
+    """A junction slab, then a surveyed path, takes precedence over an intersecting inferred run."""
+    if len(walks) < 2 or not any(w.get("europe") for w in walks):
+        return walks
+    from frontage_geometry import Coverage
+
+    edges = [_slab_edges(w) for w in walks]
+    points = np.concatenate([p for pair in edges for p in pair])
+    coverage = Coverage(np.r_[points.min(axis=0), points.max(axis=0)])
+    priority = sorted(range(len(walks)), key=lambda i: (
+        "corner" not in walks[i], not walks[i].get("median"), not walks[i].get("mapped"), str(walks[i].get("fid", ""))))
+    kept = [[] for _ in walks]
+    for i in priority:
+        walk = walks[i]
+        if "corner" in walk:
+            curb, back = edges[i]
+            outline = np.concatenate((curb, back[::-1]))
+            if not any(True for _ in coverage.overlaps(outline)):
+                kept[i] = [walk]
+                coverage.reserve(outline)
+            continue
+        kept[i] = _cut_slab(walk, edges[i], coverage)
+        for piece in kept[i]:
+            for quad in _slab_quads(*_slab_edges(piece)):
+                coverage.reserve(quad)
+    return [w for run in kept for w in run]

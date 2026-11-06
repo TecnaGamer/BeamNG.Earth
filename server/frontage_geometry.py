@@ -59,6 +59,19 @@ def _subtract(poly, normals, offsets):
     return outside
 
 
+def _intersection(poly, normals, offsets):
+    distances = poly @ normals.T - offsets
+    if np.any(distances.max(axis=0) <= EPS):
+        return None
+    for j in np.flatnonzero(distances.min(axis=0) < -EPS):
+        d = poly @ normals[j] - offsets[j]
+        if d.max() <= EPS:
+            return None
+        if d.min() < -EPS:
+            poly, _ = _split(poly, d)
+    return poly if len(poly) >= 3 and _area2(poly) > MIN_AREA2 else None
+
+
 class Coverage:
     """Reserve surveyed surfaces first, then claim any free ground for each new strip."""
 
@@ -89,16 +102,28 @@ class Coverage:
         for piece in _convex_parts(ring):
             self._reserve(piece)
 
-    def _free(self, piece):
+    def _nearby(self, piece):
         lo, hi = piece.min(axis=0), piece.max(axis=0)
         nearby = {idx for key in self._keys(lo, hi) for idx in self._cells.get(key, ())}
         x0, y0 = lo
         x1, y1 = hi
-        parts = [piece]
         for idx in sorted(nearby):
             a, b, c, d, normals, offsets = self._shapes[idx]
             if x1 <= a + EPS or y1 <= b + EPS or x0 >= c - EPS or y0 >= d - EPS:
                 continue
+            yield normals, offsets
+
+    def overlaps(self, ring):
+        """Positive-area intersections with the reserved footprints."""
+        for piece in _convex_parts(ring):
+            for normals, offsets in self._nearby(piece):
+                inter = _intersection(piece, normals, offsets)
+                if inter is not None:
+                    yield inter
+
+    def _free(self, piece):
+        parts = [piece]
+        for normals, offsets in self._nearby(piece):
             parts = [p for part in parts for p in _subtract(part, normals, offsets)]
             if not parts:
                 break
