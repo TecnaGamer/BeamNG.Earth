@@ -164,9 +164,9 @@ M.CATALOG = {
     { JV .. 'trees/deserttrees/deserttree_bush_medium', 2.9 },
   },
   desert_rock = {
-    { UT .. 'rocks/rock_01_a_small_a', 0.3 }, { UT .. 'rocks/utah_rock_flat_a', 0.5 }, { UT .. 'rocks/utah_boulder_5', 0.6 },
+    { UT .. 'rocks/rock_01_a_small_a', 0.3 }, { UT .. 'rocks/utah_rock_flat_a', 0.5 },
     { JV .. 'rocks/s_rocks_desert_small_01', 0.9 }, { JV .. 'rocks/s_rocks_desert_medium_03', 1.4 },
-    { UT .. 'rocks/utah_boulder_3', 1.7 }, { UT .. 'rocks/utah_boulder_1', 1.9 }, { JV .. 'rocks/s_rocks_desert_medium_01', 2.1 },
+    { JV .. 'rocks/s_rocks_desert_medium_01', 2.1 },
   },
   door = {     -- the stock Building Architect kit (art_shapes.zip; global materials)
     { '/art/shapes/common/building_architect_modules/doors/R_HS_A_DR_01_100x210', 2.2 },
@@ -562,7 +562,7 @@ function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
   if clifftalus.isGroup(group) then
     local v = list[math.floor(rank * 7919) % #list + 1]
-    return v[1], math.max(0.3, math.min(1.0, h / v[2]))
+    return v[1], math.max(0.10, math.min(2.0, h / v[2]))
   end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider

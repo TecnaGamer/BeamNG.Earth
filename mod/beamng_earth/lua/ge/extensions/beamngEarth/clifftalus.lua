@@ -8,6 +8,10 @@ M.SOURCE_MAPS = '/assets/materials/decal/rock/rocks_desert_ca/'
 -- multi-rock clusters with LODs. One Forest instance draws a whole collection.
 M.SHAPES = { { 's_rocks_desert_collection_01', 3.655 },
   { 's_rocks_desert_collection_02', 1.703 }, { 's_rocks_desert_collection_03', 2.253 } }
+M.UTAH = '/levels/utah/art/shapes/rocks/'
+M.SHAPES[#M.SHAPES+1] = {'utah_boulder_1',1.885,M.UTAH,'utah'}
+M.SHAPES[#M.SHAPES+1] = {'utah_boulder_3',1.698,M.UTAH,'utah'}
+M.SHAPES[#M.SHAPES+1] = {'utah_boulder_5',.560,M.UTAH,'utah'}
 local loaded, texturesReady = {}, false
 
 function M.isGroup(g)
@@ -21,7 +25,9 @@ function M.tint(g)
 end
 
 function M.remapDae(text, name)
-  if type(text) ~= 'string' or not text:find('rocks_desert_ca',1,true) then return nil end
+  if type(text) ~= 'string' then return nil end
+  if text:find('utah_rocks_b',1,true) then return (text:gsub('utah_rocks_b',name..'_utah')) end
+  if not text:find('rocks_desert_ca',1,true) then return nil end
   -- Keep authored LODs and collision; both close and vertex-colour LOD materials
   -- are private. No stock material is changed when another region arrives.
   return (text:gsub('rocks_desert_ca',name):gsub('lod_vertcol',name..'_lod'))
@@ -44,6 +50,12 @@ function M.prepareTextures()
     { M.SOURCE_MAPS..'t_rocks_pac_detail_b.data.dds', 'detail.data.dds' },
     { M.SOURCE_MAPS..'t_rocks_pac_detail_n.normal.dds', 'detail.normal.dds' },
   }
+  local utah = '/assets/materials/rocks/utah_rocks_b/t_rocks_utah_'
+  for _, pair in ipairs({{'b.color','base.color'},{'nm.normal','normal.normal'},
+    {'r.data','roughness.data'},{'ao.data','ao.data'},
+    {'detail_b.data','detail.data'},{'detail_nm.normal','detail.normal'}}) do
+    maps[#maps+1] = {utah..pair[1]..'.dds','utah_'..pair[2]..'.dds'}
+  end
   local changed = {}
   for _, pair in ipairs(maps) do
     local path = M.ROOT..pair[2]
@@ -58,25 +70,42 @@ function M.prepareTextures()
   return true
 end
 
+local function linear(v)
+  return v <= .04045 and v/12.92 or ((v+.055)/1.055)^2.4
+end
+local function srgb(v)
+  return v <= .0031308 and v*12.92 or 1.055*v^(1/2.4)-.055
+end
+
 function M.materials(group)
   local tint = M.tint(group)
   if not tint then return nil end
-  local name = 'bne_'..group
-  -- Use the cliff's regional mineral multiplier, with restrained brightness.
-  -- Atlas-wide medians include unused UV padding and overbrighten lit rock faces.
-  local calibration = { 2.4, 2.4, 2.4 }
-  local factor = { tint[1]*calibration[1],tint[2]*calibration[2],tint[3]*calibration[3],1 }
-  return {
-    [name] = { name=name, mapTo=name, class='Material', version=1.5, groundType='ROCK',
-      Stages={ { baseColorMap=M.ROOT..'base.color.dds', normalMap=M.ROOT..'normal.normal.dds',
-        roughnessMap=M.ROOT..'roughness.data.dds', ambientOcclusionMap=M.ROOT..'ao.data.dds',
-        baseColorFactor=factor, metallicFactor=0, roughnessFactor=1, useAnisotropic=true,
-        detailMap=M.ROOT..'detail.data.dds', detailNormalMap=M.ROOT..'detail.normal.dds',
-        detailNormalMapStrength=.22, detailScale={16,16} },{},{},{} } },
-    [name..'_lod'] = { name=name..'_lod', mapTo=name..'_lod', class='Material', version=1.5,
-      Stages={ { baseColorFactor={tint[1]*2,tint[2]*2,tint[3]*2,1},vertColor=true,
-        roughnessFactor=1,metallicFactor=0 },{},{},{} } },
-  }
+  local name, result = 'bne_'..group, {}
+  -- Linear, surface-area-weighted albedo means sampled through the authored UVs.
+  -- Compensate each substrate's colour, especially Utah's orange/red rock, so
+  -- both families reproduce the source cliff's mean without whitening it.
+  for _, source in ipairs({{'', {.18946,.18067,.17330}},
+                          {'utah_', {.24181,.11078,.08191}}}) do
+    local prefix, mean = source[1],source[2]
+    local id = name..(prefix == '' and '' or '_utah')
+    local factor = {srgb(linear(tint[1])/mean[1]),srgb(linear(tint[2])/mean[2]),
+                    srgb(linear(tint[3])/mean[3]),1}
+    result[id] = {name=id,mapTo=id,class='Material',version=1.5,groundType='ROCK',
+      Stages={{baseColorMap=M.ROOT..prefix..'base.color.dds',
+        normalMap=M.ROOT..prefix..'normal.normal.dds',
+        roughnessMap=M.ROOT..prefix..'roughness.data.dds',
+        ambientOcclusionMap=M.ROOT..prefix..'ao.data.dds',
+        baseColorFactor=factor,metallicFactor=0,roughnessFactor=1,useAnisotropic=true,
+        detailMap=M.ROOT..prefix..'detail.data.dds',
+        detailNormalMap=M.ROOT..prefix..'detail.normal.dds',
+        detailNormalMapStrength=.22,detailScale={16,16}},{},{},{}}}
+  end
+  -- The coarse collection LOD is shaded geometry with the same mean albedo;
+  -- its baked vertex colours belong to the original desert, not this cliff.
+  result[name..'_lod'] = {name=name..'_lod',mapTo=name..'_lod',class='Material',version=1.5,
+    Stages={{baseColorFactor={tint[1],tint[2],tint[3],1},vertColor=false,
+      roughnessFactor=1,metallicFactor=0},{},{},{}}}
+  return result
 end
 
 function M.catalog(group)
@@ -89,7 +118,7 @@ function M.catalog(group)
   for _, source in ipairs(M.SHAPES) do
     local path = M.ROOT..group..'_'..source[1]
     if not FS:fileExists(path..'.dae') then
-      local text = M.remapDae(readFile(M.STOCK..source[1]..'.dae'),name)
+      local text = M.remapDae(readFile((source[3] or M.STOCK)..source[1]..'.dae'),name)
       if not text then return nil end
       writeFile(path..'.dae',text)
     end

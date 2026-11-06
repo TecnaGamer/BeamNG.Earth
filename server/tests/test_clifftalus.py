@@ -18,32 +18,36 @@ class TalusTest(unittest.TestCase):
             keep[5:35,20:25] = True
         if classes is None: classes = np.full((41,41),60)
         if blocked is None: blocked = np.zeros((40,40),bool)
-        def elev(lat,lon): return np.asarray(lon)*cr.WORLD_M_PER_DEG*np.tan(np.radians(48))+20
+        def elev(lat,lon): return 20+np.clip(np.asarray(lon)*cr.WORLD_M_PER_DEG-80,0,20)*3
         return talus.rows(geodesy.EnuFrame(0,0),box,x,x,keep,classes,blocked,
                           np.zeros((40,40),int),elev)
 
-    def test_density_needs_high_slope_and_nearby_cliff(self):
-        p = talus.probability(np.array((0,25,39.9,40,44,48,52,78,85)),0)
-        np.testing.assert_array_equal(p[:4],0)
-        self.assertTrue((np.diff(p[3:7]) > 0).all())
-        np.testing.assert_array_equal(p[7:],0)
-        self.assertEqual(talus.probability(52,13),0)
+    def test_density_favors_stable_ground_below_cliff(self):
+        p = talus.probability(np.array((0,25,28,35,44,78,85)),0)
+        np.testing.assert_allclose(p[:3],talus.MAX_DENSITY)
+        self.assertGreater(p[2],p[3])
+        np.testing.assert_array_equal(p[4:],0)
+        self.assertEqual(talus.probability(0,talus.REACH_M),0)
         self.assertEqual(self.fixture(keep=np.zeros((40,40),bool)),[])
 
-    def test_deterministic_slope_aligned_instances_only_at_cliff_rim(self):
+    def test_deterministic_settled_instances_only_below_cliff(self):
         rows = self.fixture()
         self.assertGreater(len(rows),20)
         self.assertEqual(rows,self.fixture())
         for r in rows:
             self.assertEqual(len(r),17)
             self.assertTrue(r[0].startswith('talus_'))
-            self.assertGreater(r[1],64)
-            self.assertLess(r[1],116)
+            self.assertGreater(r[1],80-talus.REACH_M)
+            self.assertLess(r[1],80)  # no wall or high plateau/crest rocks
+            self.assertGreater(r[2],20-talus.SCATTER_M)
+            self.assertLess(r[2],140+talus.SCATTER_M)
             basis = np.array(r[8:]).reshape(3,3)
             np.testing.assert_allclose(basis@basis.T,np.eye(3),atol=2e-6)
-            tilt = np.degrees(np.arccos(basis[2,2]))
-            self.assertLessEqual(tilt,talus.MAX_TILT_DEG)
-            self.assertGreater(tilt,10)
+            tilt = np.degrees(np.arccos(np.clip(basis[2,2],-1,1)))
+            self.assertLessEqual(tilt,talus.MAX_TILT_DEG+.01)
+        self.assertTrue(any(r[1]<70 for r in rows))  # downslope runout
+        self.assertTrue(any(r[1]>76 for r in rows))  # scattered toe contact
+        self.assertGreater(np.std([r[1] for r in rows]),3)
 
     def test_seating_samples_faded_skin_instead_of_full_displacement(self):
         xs = np.arange(9)*.5
@@ -65,17 +69,24 @@ class TalusTest(unittest.TestCase):
         expected = np.array([1.4,1.1,2.8])+.2*offset[2,2]+.6*offset[2,3]+.2*offset[3,3]
         np.testing.assert_allclose(p,expected,atol=1e-10)
 
-    def test_tints_cannot_inherit_green_or_magenta_satellite_casts(self):
+    def test_tints_match_canyon_and_classic_cliff_albedo(self):
+        import json
+        import cliffcolors as cc
+        import cliffmaterial as cm
+        means = np.asarray(json.loads(Path(cr.__file__).with_name('cliff_transition_means.json').read_text()))
         rgb = np.array([[90,140,80],[110,75,110],[180,170,150],[200,165,115],[0,0,0]])
-        tints = talus.mineral_tints(np.zeros(5,int),rgb)
-        # Green lies between red and blue; no independent green/magenta bucket.
-        np.testing.assert_allclose(tints[:,1],(tints[:,0]+tints[:,2])/2,atol=1)
-        self.assertLessEqual(np.max(np.ptp(tints,axis=1)),80)
-        self.assertFalse(np.array_equal(tints[2],tints[3]))
+        biome = np.zeros(5,int)
+        for family in (cm.NATURAL,cm.CANYON):
+            tint = (cc.canyon_tint(biome,rgb) if family==cm.CANYON else cr.rock_colors(biome,rgb))[:,:3]
+            expected = cc.srgb(cc.linear(tint/255)*means[family])*255
+            actual = talus.mineral_tints(biome,rgb,family)
+            np.testing.assert_allclose(actual,expected,atol=talus.TINT_STEP/2)
+        self.assertFalse(np.array_equal(talus.mineral_tints(biome,rgb,cm.NATURAL),
+                                        talus.mineral_tints(biome,rgb,cm.CANYON)))
 
     def test_adjacent_tiles_own_each_instance_once(self):
         whole = self.fixture()
-        left,right = self.fixture((0,0,88,160)),self.fixture((88,0,160,160))
+        left,right = self.fixture((0,0,70,160)),self.fixture((70,0,160,160))
         freeze = lambda rows: {tuple(r) for r in rows}
         self.assertFalse(freeze(left)&freeze(right))
         self.assertEqual(freeze(whole),freeze(left)|freeze(right))

@@ -15,6 +15,10 @@ T.check(stage.baseColorMap:find('/temp/beamngEarth/',1,true) ~= nil,'uses copied
 T.check(stage.baseColorFactor[1] > stage.baseColorFactor[3],'regional warm tint retained')
 T.check(stage.detailNormalMapStrength < .3,'micro normals restrained')
 
+local utah = materials['bne_'..group..'_utah'].Stages[1]
+T.check(utah.baseColorMap:find('utah_base',1,true) ~= nil,'Utah uses its own copied PBR maps')
+T.check(utah.baseColorFactor[3]>stage.baseColorFactor[3],'Utah red substrate receives blue compensation')
+T.check(talus.remapDae('<material id="utah_rocks_b"/>','bne_'..group):find('bne_'..group..'_utah',1,true) ~= nil,'Utah material remapped')
 local files, copies, loads, notifications = {}, 0, 0, 0
 FS = {
  fileExists=function(_,p) return files[p] ~= nil end,
@@ -22,14 +26,14 @@ FS = {
  triggerFilesChanged=function(_,paths) notifications=notifications+#paths end,
  copyFile=function(_,src,dst) copies=copies+1; files[dst]='copied '..src end,
 }
-for _,shape in ipairs(talus.SHAPES) do files[talus.STOCK..shape[1]..'.dae']=text end
+for _,shape in ipairs(talus.SHAPES) do files[(shape[3] or talus.STOCK)..shape[1]..'.dae']=shape[4]=='utah' and '<material id="utah_rocks_b"/>' or text end
 readFile=function(p) return files[p] end
 writeFile=function(p,t) files[p]=t end
 jsonEncode=function() return '{}' end
 loadJsonMaterialsFile=function() loads=loads+1 end
 local catalog = talus.catalog(group)
-T.check(#catalog==3 and copies==6,'three copied collections share six copied maps')
-T.check(notifications==6,'resource cache notified before initial material load')
-T.check(talus.catalog(group)==catalog and copies==6 and loads==1,'cached assets are not copied per instance')
+T.check(#catalog==6 and copies==12,'three clusters and three Utah boulders share twelve copied maps')
+T.check(notifications==12,'resource cache notified before initial material load')
+T.check(talus.catalog(group)==catalog and copies==12 and loads==1,'cached assets are not copied per instance')
 T.check(files[talus.STOCK..talus.SHAPES[1][1]..'.dae']==text,'installed game mesh never overwritten')
 T.done('clifftalus')

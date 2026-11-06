@@ -430,3 +430,38 @@ Later canyon heightmap relief uses the same taper, preventing a thick rebuilt ri
 Streaming splits are proportional to the triangle budget, avoiding a doubling of
 pieces when boundary intersections add a few triangles. Rebuild/reload the server
 and regenerate the location to test native v146; material reload alone is insufficient.
+
+
+## Cliff-base Forest rubble (2026-11-06)
+
+The natural cliff mask now seeds rubble only at downhill exits. The candidate
+surface must be below the toe and below 44 degrees (full density through 28).
+A deterministic, jittered 2 m lattice creates clusters with at most 5 m lateral
+scatter and a thinning 22 m downslope runout. Density and size decline with
+travel distance. Uphill crests and cliff walls do not qualify. Road, water,
+unknown-cover and city exclusions still apply; adjacent tiles own instances once.
+The same algorithm serves canyon and classic natural cliffs and is skipped when
+cliff rock generation is disabled.
+
+Three Johnson Valley collections and Utah boulders 1, 3 and 5 are copied into the
+user's temp asset directory with private materials and their authored LODs. Utah
+boulders were removed from the generic desert scatter so they only appear in
+these base aprons. Normal, roughness, AO and detail maps are copied from the
+installed game; no game-owned files are modified or redistributed.
+
+Rubble RGB now represents the source cliff's final mean albedo: its regional
+vertex tint multiplied by the measured texture/material mean in linear light.
+Classic and canyon use their respective tint pipelines, sampled at the source
+cliff rather than beneath the fallen rock. A 16-level RGB step limits material
+variants. Private materials compensate the UV/surface-area-weighted linear mean
+of each substrate (desert .18946/.18067/.17330; Utah .24181/.11078/.08191).
+The coarse collection LOD uses the same target mean instead of stock vertex color.
+
+Validation: 92 Python cliff tests, 15 Lua talus checks and 141 Forest checks pass.
+The 1 km synthetic wall benchmark, three warm runs, changed from 20.6-21.7 ms /
+2,232 instances to 16.7-16.9 ms / 1,029 instances. This measures placement only,
+not total streaming or render time. Screenshots in local `build/cliff-talus/`
+show the same live canyon view before/after and a close inspection: the old bright
+crest clusters are removed and tinted boulders/collections now occupy lower
+benches and spread downhill. This is a visual sample, not an exhaustive seating
+or color match across every biome.

@@ -786,7 +786,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     if color_at is None and cache_dir is not None:
         import cliffcolors
         color_at = lambda la, lo: cliffcolors.sample(cache_dir, la, lo)
-        rubble_color_at = lambda la, lo: cliffcolors.sample(cache_dir, la, lo, grid_m=256, radius_m=192)
+        rubble_color_at = color_at
     import clifftalus
     coarse = (xs, ys, keep, classes, blocked, b)
     if not faces:
