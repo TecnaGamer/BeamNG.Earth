@@ -401,6 +401,48 @@ class MeshTest(unittest.TestCase):
             self.assertGreater(P[:, 2].max(), spec.height + 1.5, "a ridge above the eaves")
 
 
+    # domes from the map's roof:shape (#593's thread: landmarks from the map data, not hand-made); a gable before
+    @staticmethod
+    def circle(r, n=24):
+        a = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
+        return np.column_stack((r * np.cos(a), r * np.sin(a)))
+
+    def test_a_mapped_dome_is_a_dome(self):
+        ring = self.circle(10.0)
+        spec, P = self.check_outward(ring, {"class": "church", "height": 30.0, "roof_shape": "dome",
+                                            "roof_height": 9.0})
+        self.assertEqual(spec.roof, "dome")
+        self.assertAlmostEqual(spec.height, 21.0, delta=0.01)            # the drum: the mapped height less the roof's
+        self.assertAlmostEqual(P[:, 2].max(), 30.0, delta=0.05)          # its top where the map puts it
+        top = P[P[:, 2] > spec.height + 0.01]
+        r = np.hypot(top[:, 0], top[:, 1])
+        self.assertLessEqual(r.max(), 10.0 + 0.01)                       # never wider than its drum
+        # a sphere's quarter: at half the rise its radius is ~cos(asin(0.5)) of the drum's
+        mid = top[np.abs(top[:, 2] - (spec.height + 4.5)) < 1.2]
+        self.assertTrue(len(mid))
+        far = bld.build([(spec, 0.0, 0.0)], lite=True)[0]
+        self.assertAlmostEqual(far[:, 2].max(), 30.0, delta=0.05)        # far away the same dome
+
+    def test_an_onion_dome_bulges_and_comes_to_a_point(self):
+        ring = self.circle(4.0)
+        spec, P = self.check_outward(ring, {"class": "church", "height": 20.0, "roof_shape": "onion"})
+        self.assertEqual(spec.roof, "onion")
+        rise = 20.0 - spec.height
+        self.assertAlmostEqual(rise, bld.DOME_RISE["onion"] * 4.0, delta=0.4)   # no roof:height: 1.6 x its radius
+        top = P[P[:, 2] > spec.height + 0.01]
+        self.assertGreater(np.hypot(top[:, 0], top[:, 1]).max(), 4.0 * 1.1)     # the bulge over the drum
+        self.assertAlmostEqual(P[:, 2].max(), 20.0, delta=0.05)
+
+    def test_a_dome_in_the_skyline(self):
+        spec = bld.plan(self.circle(12.0), {"class": "church", "height": 40.0, "roof_shape": "dome"})
+        P = bld._sky_mesh([(spec, 0.0, 0.0)])[0]
+        self.assertAlmostEqual(P[:, 2].max(), 40.0, delta=0.05)
+
+    def test_a_round_roof_is_still_a_gable(self):
+        spec = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "round"})
+        self.assertEqual(spec.roof, "gabled")
+
+
 class DoorTest(unittest.TestCase):
     def test_door_faces_the_road(self):
         spec = bld.plan(rect(0, 0, 10, 8), {"class": "house"})

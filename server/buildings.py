@@ -601,7 +601,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         roof = roof_given
     elif roof_given in ("pyramidal", "half-hipped", "mansard", "gambrel"):
         roof = "hipped"
-    elif roof_given in ("skillion", "dome", "onion", "round", "saltbox"):
+    elif roof_given in DOME_ROOFS:
+        roof = roof_given
+    elif roof_given in ("skillion", "round", "saltbox"):
         roof = "gabled"
     else:
         detached_house = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not industrial and not row
@@ -625,8 +627,13 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             roof = "flat"
     # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
-    if roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
-                           or hw > (18.0 if barn else 20.0 if church else 14.0)):
+    # (a mapped dome follows its own outline: round parts and the largest domes keep it; a sliver or a dome over
+    # DOME_MAX_HW is more likely a mapping slip: flat)
+    if roof in DOME_ROOFS:
+        if hw < 1.0 or hw > DOME_MAX_HW:
+            roof = "flat"
+    elif roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
+                             or hw > (18.0 if barn else 20.0 if church else 14.0)):
         roof = "flat"
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
@@ -640,7 +647,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         if west_town and roof == "flat" and nf == 1 and area >= 80 and not (shed or barn):
             h += FALSE_FRONT_M                      # a main-street shop's tall parapet
     else:
-        if attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
+        if roof in DOME_ROOFS:
+            h = max(2.5, h - dome_rise(roof, hw, attrs.get("roof_height")))
+        elif attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
         elif roof != "flat":
             h = max(2.5, h - hw * math.tan(math.radians(style.pitch or PITCH[roof])))
@@ -814,8 +823,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         porch = area >= 0.9 * 4 * hl * hw
     return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
-                windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch)
+                windows=windows, steeple=church and area < 2500 and roof not in DOME_ROOFS, porch=porch, cls=cls,
+                deck=garage and roof == "flat",
+                pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
+                else style.pitch)
 
 
 class Mesh:
@@ -1038,7 +1049,7 @@ def drawn_ring(spec):
     porch go on these walls (on the map's outline they stood off a box wall at an angle, or inside it, only the
     door's frame showing: Stelvio pass, the user's reports 2026-10-17)."""
     ring = spec.ring
-    if spec.roof != "flat":
+    if spec.roof != "flat" and spec.roof not in DOME_ROOFS:     # (a dome stands on its own round drum)
         c, u, hl, hw = oriented_box(ring)
         v = np.array([-u[1], u[0]])
         ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
@@ -1170,8 +1181,60 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
         _box(m, p, u, hx, hy, z_eave, z_eave + h, mat)
 
 
-def _roof(m, spec, ring, z_eave, mat_idx):
+# Domes and onion domes from the map's roof:shape (GitHub #593's thread: "a dedicated landmark procedural generator"
+# instead of hand-made models): a cathedral's, a mosque's or a capitol's dome is mapped as a building part with
+# roof:shape=dome / onion and often its roof:height; drawn as a gable before. The footprint's own outline shrinks to
+# a point up the profile (a round part: a dome; a square one: a cloister vault), (radius share, rise share) per ring.
+DOME_ROOFS = ("dome", "onion")
+DOME_RISE = {"dome": 1.0, "onion": 1.6}     # the rise over the footprint's half width when roof:height is not mapped
+DOME_MAX_HW = 80.0          # m: the largest half width drawn as a dome (St. Peter's is ~21 m, the Pantheon's 22 m)
+DOME_PROFILE = {
+    "dome": tuple((math.cos(a), math.sin(a)) for a in np.linspace(0.0, math.pi / 2, 9)),
+    "onion": ((1.0, 0.0), (1.18, 0.15), (1.22, 0.3), (1.1, 0.45), (0.8, 0.6), (0.45, 0.75), (0.2, 0.88),
+              (0.06, 0.96), (0.0, 1.0)),
+}
+
+
+def dome_rise(roof, hw, roof_height=None):
+    """m a dome / onion roof rises over its eaves: the mapped roof:height, else DOME_RISE x the half width."""
+    if roof_height is not None and np.isfinite(roof_height) and roof_height > 0:
+        return float(roof_height)
+    return DOME_RISE.get(roof, 1.0) * float(hw)
+
+
+def _dome(m, ring, z_eave, rise, mat, shape="dome", lite=False):
+    """A dome (or onion dome) of `rise` on the footprint ring at z_eave: the ring scaled toward its centre up
+    DOME_PROFILE (every other ring when lite). mat: a material index (or the skyline's (index, colour))."""
+    ring = np.asarray(ring, np.float64)[:, :2]
+    if len(ring) < 3 or rise <= 0:
+        return
+    if _area2(ring) < 0:
+        ring = ring[::-1]
+    c = ring.mean(0)
+    prof = DOME_PROFILE.get(shape, DOME_PROFILE["dome"])
+    if lite:
+        prof = prof[::2] if len(prof) % 2 else prof[::2] + prof[-1:]
+    n = len(ring)
+    levels = [[(float(c[0] + (p[0] - c[0]) * s), float(c[1] + (p[1] - c[1]) * s), float(z_eave + rise * t))
+               for p in ring] for s, t in prof]
+
+    def uv(q):
+        return (q[0] / ROOF_UV_M, q[1] / ROOF_UV_M)
+    for lo, hi in zip(levels[:-1], levels[1:]):
+        for i in range(n):
+            a, b, bu, au = lo[i], lo[(i + 1) % n], hi[(i + 1) % n], hi[i]
+            if au == bu:                    # (the apex)
+                m.tri(a, b, au, uv(a), uv(b), uv(au), mat)
+            else:
+                m.quad(a, b, bu, au, uv(a), uv(b), uv(bu), uv(au), mat)
+
+
+def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     rm = mat_idx[spec.roof_mat]
+    if spec.roof in DOME_ROOFS:
+        _c, _u, _hl, hw = oriented_box(ring)
+        _dome(m, ring, z_eave, hw * math.tan(math.radians(roof_pitch(spec))), rm, spec.roof, lite)
+        return
     if spec.roof == "flat":
         pts = [(p[0], p[1], z_eave) for p in ring]
         uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
@@ -1541,7 +1604,7 @@ def build(specs_and_ground, lite=False):
         _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
-        _roof(m, spec, ring, z_eave, mat_idx)
+        _roof(m, spec, ring, z_eave, mat_idx, lite)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
             _cornice(m, spec, ring, z_eave, mat_idx)
         if not lite:
@@ -3988,6 +4051,9 @@ def _sky_mesh(items):
             else:
                 m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, wall)
         m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
+        if spec.roof in DOME_ROOFS:     # (a mapped dome: far away too, on its drum)
+            _dome(m, ring, z1, oriented_box(ring)[3] * math.tan(math.radians(roof_pitch(spec))), roof, spec.roof,
+                  lite=True)
     if not m.n:
         return None
     P, UV, T, M, C = m.arrays()
