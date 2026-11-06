@@ -1347,6 +1347,68 @@ class FarLampTest(unittest.TestCase):
 
 
 
+
+class MappedRoofShapesTest(unittest.TestCase):
+    """roof:shape forms drawn as what they are, not bent to a gable or a hip."""
+    SHAPES = ("skillion", "half-hipped", "pyramidal", "mansard", "gambrel")
+
+    def spec(self, shape, seed=None):
+        ring = np.array([[0.0, 0.0], [14.0, 0.0], [14.0, 9.0], [0.0, 9.0]])
+        return bld.plan(ring, {"class": "house", "roof_shape": shape, "height": 11.0}, lat=50.0, lon=9.0, look=seed)
+
+    def faces(self, spec):
+        P, _, T, *_ = bld.build([(spec, 0.0, 0.0)])
+        return P[T]
+
+    def test_the_mapped_shape_is_kept(self):
+        for shape in self.SHAPES:
+            self.assertEqual(self.spec(shape).roof, shape)
+
+    def test_the_mapped_height_is_the_ridge(self):
+        for shape in self.SHAPES + ("gabled",):
+            s = self.spec(shape)
+            rise = bld.roof_rise(s.roof, bld.oriented_box(s.ring)[3], bld.roof_pitch(s))
+            self.assertAlmostEqual(s.height + rise, 11.0, delta=0.01, msg=shape)
+            self.assertAlmostEqual(self.faces(s)[:, :, 2].max(), 11.0, delta=0.15, msg=shape)
+
+    def test_every_face_looks_outwards(self):
+        for shape in self.SHAPES:
+            for seed in (0.2, 0.8):
+                s = self.spec(shape, seed)
+                f = self.faces(s)
+                f = f[f[:, :, 2].min(1) >= s.height - 0.5]          # the roof and the walls under it
+                n = np.cross(f[:, 1] - f[:, 0], f[:, 2] - f[:, 0])
+                f, n = f[np.linalg.norm(n, axis=1) > 1e-6], n[np.linalg.norm(n, axis=1) > 1e-6]
+                out = (f.mean(1) - np.array([7.0, 4.5, 0.0]))[:, :2]
+                ok = (n[:, 2] > 1e-6) | ((n[:, :2] * out).sum(1) > 0)
+                self.assertTrue(ok.all(), f"{shape}: {int((~ok).sum())} of {len(ok)} faces look inwards")
+
+    def test_each_form_is_its_own_shape(self):
+        tops = {}
+        for shape in self.SHAPES + ("gabled", "hipped"):
+            f = self.faces(self.spec(shape, 0.2))
+            v = np.unique(np.round(f.reshape(-1, 3), 2), axis=0)
+            tops[shape] = len(v)
+        self.assertEqual(len({tops[s] for s in ("pyramidal", "mansard", "half-hipped")}), 3, tops)
+
+    def test_a_lean_to_rises_from_one_wall_to_the_other(self):
+        lows = []
+        for seed in (0.2, 0.8):
+            s = self.spec("skillion", seed)
+            f = self.faces(s).reshape(-1, 3)
+            top = f[np.argmax(f[:, 2])]
+            lows.append(top[1] > 4.5)
+        self.assertEqual(set(lows), {True, False}, "the high side differs from building to building")
+
+    def test_a_nearly_square_house_can_be_a_pyramid(self):
+        ring = np.array([[0.0, 0.0], [9.0, 0.0], [9.0, 9.0], [0.0, 9.0]])
+        s = bld.plan(ring, {"class": "house", "roof_shape": "pyramidal"}, lat=50.0, lon=9.0)
+        f = self.faces(s).reshape(-1, 3)
+        top = f[np.argmax(f[:, 2])]
+        self.assertAlmostEqual(top[0], 4.5, delta=0.01)
+        self.assertAlmostEqual(top[1], 4.5, delta=0.01)
+
+
 if __name__ == "__main__":
     unittest.main()
 
