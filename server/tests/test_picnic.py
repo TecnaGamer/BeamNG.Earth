@@ -261,3 +261,31 @@ class NoWaitTest(unittest.TestCase):
         gate.set()
         src._threads[(14, 1, 2)].join(5)
         self.assertEqual(src.cells([Key()], wait=False), [["feats"]], "read in the background: used next time")
+
+
+    def test_prefetch_reads_ahead_without_waiting(self):
+        import threading
+        import time
+        import picnicsource
+        src = picnicsource.Source.__new__(picnicsource.Source)
+        src._lock, src._down, src._ready, src._threads = threading.Lock(), False, {}, {}
+        gate, calls = threading.Event(), []
+
+        def slow(key, kind):
+            calls.append((key.z, key.x, key.y))
+            gate.wait(5)
+            return ["feats"]
+        src._cell = slow
+
+        class Key:
+            z, x, y = 14, 3, 4
+        t0 = time.monotonic()
+        src.prefetch([Key()])
+        self.assertLess(time.monotonic() - t0, 0.2, "the read starts in the background")
+        gate.set()
+        src._threads[(14, 3, 4)].join(5)
+        t0 = time.monotonic()
+        self.assertEqual(src.cells([Key()], wait=False), [["feats"]], "read ahead: there when the tile asks")
+        self.assertLess(time.monotonic() - t0, 0.2)
+        src.prefetch([Key()])
+        self.assertEqual(calls, [(14, 3, 4)], "read once")

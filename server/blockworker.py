@@ -765,6 +765,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                    1 + seacarvemod.LINE_CELLS if _s.sea is not None else 0))
     if getattr(_s, "fra", None) is not None:       # (the US's level crossings' devices, alongside)
         _s.fra.prefetch(roadsmod.cells_of_tile(frame, tx, ty))
+    if buildings:                                   # (the picnic tables' OSM cells, read while the tile is built)
+        import picnic
+        picnic.prefetch(_s.md, frame, roadsmod.tile_bbox(tx, ty))
     mark("warm")
     cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
              for k in roadsmod.cells_of_tile(frame, tx, ty)]
