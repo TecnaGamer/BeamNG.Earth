@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 165 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 166 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -100,3 +100,10 @@ def gpu():
         except Exception:
             _GPU = ""
     return _GPU or None
+
+
+def md_html(text, base, fold_details=False):
+    """(html, [url, ...]): an add-on's Markdown (README, release notes) as the Add-ons page's safe HTML (native
+    mdhtml.rs: our own tags only, links as indexes into the URL list; addons.py)."""
+    require(150, "md_html")
+    return _ef.md_html(str(text), str(base), bool(fold_details))
