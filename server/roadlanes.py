@@ -54,9 +54,23 @@ def is_link(feats, i):
 
 
 def invalidate(feats):
-    """Enrichment can arrive after specs were requested; discard derived facts."""
-    for key in ("_road_specs", "_bridge_specs", "_tunnel_specs", "_generated_lanes",
-                "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_overrides"):
+    """Enrichment can arrive after specs were requested; discard derived facts.
+
+    Keep 1.8's cell identity and neighbour hook: they make lane-flow and deck
+    joints consistent across cell boundaries. Evict this cell's in-memory
+    facts too, so a reloaded feature cannot resurrect its previous widths.
+    """
+    import roads
+    feats._road_revision = getattr(feats, "_road_revision", 0) + 1
+    cid = feats.__dict__.get("_bnge_cell")
+    if cid is not None:
+        with roads._FACTS_LOCK:
+            for key in list(roads._FACTS_MEM):
+                if key[0] == cid:
+                    roads._FACTS_MEM.pop(key, None)
+    for key in ("_road_specs", "_sign_specs", "_sign_rows", "_bridge_specs", "_tunnel_specs", "_generated_lanes",
+                "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_flow_rows", "_lane_flow",
+                "_lane_flow_home", "_lane_shifts", "_road_tapers", "_deck_tapers", "_lane_overrides", "_ramp_junction"):
         feats.__dict__.pop(key, None)
 
 

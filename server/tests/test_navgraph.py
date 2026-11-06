@@ -100,8 +100,9 @@ class GraphTest(unittest.TestCase):
         for urban, n in ((False, 2), (True, 2)):
             sp = roads.Spec(roads.carriageway("motorway", "paved", urban, None, True), "paved", urban, "motorway", True)
             self.assertEqual(navgraph._lanes(navgraph.driving_width(sp), True), (n, 0), urban)
-        ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True)
-        self.assertEqual(navgraph._lanes(navgraph.driving_width(ramp), True), (1, 0), "a ramp: one lane (GitHub #107)")
+        ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True, link=True, lanes=1)
+        self.assertAlmostEqual(navgraph.driving_width(ramp), 4.8)
+        self.assertEqual(navgraph._lanes(navgraph.driving_width(ramp), True, ramp.lanes), (1, 0), "a ramp: one lane (GitHub #107)")
 
     def test_nodes_on_the_curve_of_the_earth(self):
         """10 km from the anchor the ground drawn lies ~7.8 m under the flat plane (the anchor frame's up): the nodes

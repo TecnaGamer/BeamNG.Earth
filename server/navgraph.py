@@ -192,6 +192,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     approaches = {}         # (connector, fid, end) -> (graph node next to it, traffic comes in)
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
     node_fid = {}           # name -> the feature it was made on (its deck, if any)
+    deck_centres = {}       # original centreline point for deck/tunnel height lookup
     pending_by = {}         # name -> (-width, fid) of the road whose point it is (the widest's, then the lower id)
     # the stretches through tunnels, left out of the graph (no ground there for the AI), for the minimap only
     # (minimaproads.lua: its lines broke at every tunnel and every underpass mapped as one; the user, 2026-11-04)
@@ -310,6 +311,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         full.append(sj)
             full.append(order[-1])
             xy = np.stack([np.interp(full, s, p[:, 0]), np.interp(full, s, p[:, 1])], 1)
+            deck_xy = xy.copy()
+            offset = roads.driving_offset(spec)
+            if abs(offset) > 1e-6:
+                xy = roads.offset_polyline(np.c_[xy, np.zeros(len(xy))], offset)[:, :2]
             names = [marks[v] for v in full]
             # this road's edge attributes
             mid = 0.5
@@ -347,7 +352,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 in_tunnel = False
                 if tunnel_ranges and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnel_ranges):
                     # each end inside the tunnel on its built floor (an end past a portal is on the ground)
-                    ends_in = [(nm_, q_) for nm_, q_, at_ in ((a, xy[j], full[j]), (b, xy[j + 1], full[j + 1]))
+                    ends_in = [(nm_, q_) for nm_, q_, at_ in ((a, deck_xy[j], full[j]), (b, deck_xy[j + 1], full[j + 1]))
                                if any(t0 * L < at_ < t1 * L for t0, t1 in tunnel_ranges)]
                     if AI_TUNNELS and tunnels and fid in tunnels and w >= TUNNEL_AI_MIN_W and all(
                             _deck_z(tunnels, fid, float(q_[0]), float(q_[1])) is not None for _, q_ in ends_in):
@@ -361,7 +366,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 if direction < 0:
                     a, b = b, a
                 pa, pb = xy[j] if direction >= 0 else xy[j + 1], xy[j + 1] if direction >= 0 else xy[j]
-                for nm, q in ((a, pa), (b, pb)):
+                for nm, q, dk in ((a, pa, j if direction >= 0 else j + 1),
+                                  (b, pb, j + 1 if direction >= 0 else j)):
                     # a connector the map's lines reach at different points (a ramp's end 3.3 m off the motorway's
                     # joint, I-83 in Baltimore: the AI's lanes stood 3 m east of the drawn ones, their edge on the
                     # parapet, 2026-10-29) stands where the widest road's line reaches it (then the lower id): not
@@ -370,6 +376,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     if nm not in nodes and (old is None or (-w, fid) < old):
                         pending[nm] = (float(q[0]), float(q[1]))
                         node_fid[nm] = fid
+                        deck_centres[nm] = deck_xy[dk]
                         pending_by[nm] = (-w, fid)
                 legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
@@ -437,13 +444,13 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         Z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64).copy()
         if decks:
             for k, nm in enumerate(used):
-                dz = _deck_z(decks, node_fid.get(nm), X[k], Y[k])
+                dz = _deck_z(decks, node_fid.get(nm), *deck_centres.get(nm, (X[k], Y[k])))
                 if dz is not None:
                     Z[k] = dz
         if tunnel_node:
             for k, nm in enumerate(used):
                 if nm in tunnel_node:
-                    tz = _deck_z(tunnels, tunnel_node[nm], X[k], Y[k])
+                    tz = _deck_z(tunnels, tunnel_node[nm], *deck_centres.get(nm, (X[k], Y[k])))
                     if tz is not None:
                         Z[k] = tz
         radius = {}
