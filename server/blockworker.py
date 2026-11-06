@@ -556,7 +556,8 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
                               left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
-                              priority=None if nodes is None else nodes["priority"])
+                              priority=None if nodes is None else nodes["priority"],
+                              de_on=bool(rules.get("de_junctions")))
     graph["rules"] = rules
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])
@@ -576,7 +577,8 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
 
 
 def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings=False, left_hand=False,
-               mph=True, q=None, gas_stations=False, buried=0.0, lamp_region=None, country=None, pole_profile=None):
+               mph=True, q=None, gas_stations=False, buried=0.0, lamp_region=None, country=None, pole_profile=None,
+               de_junctions=False):
     """earthd.Server.build_roads_tile here (road-tile pool): the anchor's road tile (tx, ty) built and
     written; returns roads.write_tile's (vfs path, chunks) and its stations' pads (gasstations.tile_sites pads: the
     server keeps them for the ground's painters). In the server's process its Python made up
@@ -585,7 +587,8 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
     watch = _stack_watch(f"road tile {tx}_{ty}")
     try:
         return _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings,
-                                  left_hand, mph, q, gas_stations, buried, lamp_region, country, pole_profile)
+                                  left_hand, mph, q, gas_stations, buried, lamp_region, country, pole_profile,
+                                  de_junctions=de_junctions)
     finally:
         watch.cancel()
 
@@ -593,7 +596,8 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
 STACK_DUMP_S = float(os.environ.get("BNGE_STACK_DUMP_S", "") or 75.0)   # s before a slow tile's stacks go to the log
 
 
-def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False):
+def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False,
+               dej=False):
     """signstream.build_tile here: the highway signs of a road tile the mod has (from cody196's PR #363), in a road
     process: its map cells are warm there. Returns (vfs path of the sign tile's JSON, number of meshes)."""
     import signstream
@@ -605,7 +609,7 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     return signstream.build_tile(_s.md, frame, aid, tx, ty, elev, out_dir, vfs_dir,
                                  _s.surface.urban if _s.surface is not None else None, _s.widths, left_hand, mph,
-                                 country, dirs)
+                                 country, dirs, dej)
 
 
 def _stack_watch(what):
@@ -617,19 +621,22 @@ def _stack_watch(what):
 
 
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
-                       gas_stations, buried, lamp_region, country=None, pole_profile=None):
+                       gas_stations, buried, lamp_region, country=None, pole_profile=None, de_junctions=False):
     import revisit
     import threedmr
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
-                    pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)))
+                    pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
+                    bool(de_junctions))
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
-                    gas_stations=bool(gas_stations), md=_md_versions(), pole_profile=pole_profile)
+                    gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), md=_md_versions(),
+                    pole_profile=pole_profile)
     return _revisit_tile("roads", k, aid, tx, ty, out_dir, vfs_dir, f"roads_{aid}_{tx}_{ty}.json",
                          lambda: _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings,
-                                             left_hand, mph, q, gas_stations, buried, lamp_region, country, pole_profile),
+                                             left_hand, mph, q, gas_stations, buried, lamp_region, country, pole_profile,
+                                             de_junctions=de_junctions),
                          lambda res: {"n": int(res[1]), "pads": [[sid, [[np.asarray(la).tolist(), np.asarray(lo).tolist()]
                                                                        for la, lo in rs]] for sid, rs in res[2]]},
                          lambda path, extra: (path, int(extra.get("n", 0)),
@@ -737,7 +744,8 @@ class _Parts:
 
 @profile_step('Road tile assembly')
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
-                q, rkey, centre, skin_margin=0.0, walks_raw=None, cache_dir=None, out_dir=None, vfs_dir=None, pole_profile=None):
+                q, rkey, centre, skin_margin=0.0, walks_raw=None, cache_dir=None, out_dir=None, vfs_dir=None, pole_profile=None,
+                de_junctions=False):
     """A road tile's parts in frame: tile (tx, ty) of an anchor, or a geotiles.GeoBox (its own frame, no anchor in
     it). g: the frame's grading.Grader view (None: no grading); q: the height quantum the sidewalks' curbs are put on
     (None: the ground as it is: a geotile's content); rkey: the railways' ground cache key; centre (lat, lon): the
@@ -851,7 +859,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
-                                 clearance_out=clearance, towns=towns)
+                                 clearance_out=clearance, towns=towns, de_on=de_junctions)
     P.town_faces = town_faces
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
@@ -1028,7 +1036,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
 
 
 def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
-                gas_stations, buried=0.0, lamp_region=None, country=None, pole_profile=None):
+                gas_stations, buried=0.0, lamp_region=None, country=None, pole_profile=None, de_junctions=False):
     """An anchor's road tile (tx, ty) built and written (the anchor tiles: --geo-tiles off, an older mod)."""
     import roadmesh as roadmeshmod
     import roads as roadsmod
@@ -1037,7 +1045,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     g, _ = _s.anchor(aid, lat, lon)
     P = _tile_parts(mark, frame, (tx, ty), zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
                     country, q, (aid, lat, lon), (lat, lon),
-                    pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir)
+                    pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir,
+                    de_junctions=de_junctions)
     mesh = roadmeshmod.build(frame, P.chunks, P.elev, P.origin, lift, clip=P.box, follow=True, q=q, drawn=P.drawn,
                              context=P.ctx)
     mark("mesh")
@@ -1203,7 +1212,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
 
 
 def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None, pole_profile=None,
-                     models_dir=None):
+                     models_dir=None, de_junctions=False):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
     check, earthd.Server.geo_prebuilt; models_dir: the folder of the 3dmr.eu models' cache, whose local models are
     built in: threedmr.local_signature)."""
@@ -1211,11 +1220,11 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     import threedmr
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
-                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir))
+                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), bool(de_junctions))
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
-                 country=None, scratch_vfs="/x", pole_profile=None):
+                 country=None, scratch_vfs="/x", pole_profile=None, de_junctions=False):
     """Saved areas' world phase (areas.py, the user 2026-10-29: "pre generate along a route or area"): geotile (gx, gy)'s
     road content (_geo_content: roads, sidewalks, bridges, buildings, street furniture) built into the revisit cache
     ahead of play; nothing for the game (its files written to scratch, then removed). The revisit key when the content
@@ -1224,13 +1233,13 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     import revisit
     tile_key = geotiles.geobox(gx, gy).key
     k = _geo_content_key(tile_key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
-                         pole_profile=pole_profile, models_dir=os.path.dirname(scratch))
+                         pole_profile=pole_profile, models_dir=os.path.dirname(scratch), de_junctions=de_junctions)
     path = revisit._path(_s.cache_dir, "roadsg", k)
     if not os.path.exists(path):
         os.makedirs(scratch, exist_ok=True)
         try:
             _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
-                         lamp_region, country, pole_profile=pole_profile)
+                         lamp_region, country, pole_profile=pole_profile, de_junctions=de_junctions)
         finally:
             for name in geo_names(tile_key).values():
                 try:
@@ -1244,7 +1253,7 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
 
 @profile_step('Road geometry')
 def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                 country, pole_profile=None):
+                 country, pole_profile=None, de_junctions=False):
     """Geotile (gx, gy)'s content (_write_geo_content), from the revisit cache (kind "roadsg": its key, settings and
     code; no anchor, no height quantum, no lift) or built in its own frame. (vfs path, chunks, info, fuel pads)."""
     import geotiles
@@ -1252,7 +1261,7 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
     tile = geotiles.geobox(gx, gy)
     names = geo_names(tile.key)
     k = _geo_content_key(tile.key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
-                         pole_profile=pole_profile, models_dir=os.path.dirname(out_dir))
+                         pole_profile=pole_profile, models_dir=os.path.dirname(out_dir), de_junctions=de_junctions)
     got = revisit.load(_s.cache_dir, "roadsg", k)
     if got is not None:
         blobs, extra = got
@@ -1269,7 +1278,8 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
     walks_raw = []
     P = _tile_parts(mark, tile.frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
                     country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw,
-                    pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir)
+                    pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir,
+                    de_junctions=de_junctions)
     P.walks_raw = walks_raw
     path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
     mark("write")
@@ -1298,7 +1308,7 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
             s, w, nn, e = geotiles.info(gx, gy)[2:]
             wh = revisit.where(*geotiles.centre(gx, gy), s, w, nn, e,
                                revisit.sig(buildings=bool(buildings), gas_stations=bool(gas_stations),
-                                           md=_md_versions(), pole_profile=pole_profile))
+                                           de_junctions=bool(de_junctions), md=_md_versions(), pole_profile=pole_profile))
             revisit.store(_s.cache_dir, "roadsg", k, blobs,
                           {"n": int(n), "info": info,
                            "pads": [[sid, [[np.asarray(la).tolist(), np.asarray(lo).tolist()] for la, lo in rs]]
@@ -1560,7 +1570,8 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
 
 
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
-              gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None):
+              gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
+              de_junctions=False):
     """earthd.Server.build_roads_geo here (road-tile pool): geotile (gx, gy)'s content (content: built in its own
     frame, or from the revisit cache; gzoom its DEM zoom, the rules its own place's), anchor aid's skin (skin) and its
     parts' exact variants for that anchor (exact: {what: {pivot}}, or "auto": those of the content built here that its
@@ -1574,7 +1585,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
 
         def build_content():
             return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
-                                lamp_region, country, pole_profile)
+                                lamp_region, country, pole_profile, de_junctions=de_junctions)
         if content:
             out["content"] = build_content()
             out["stages"]["content"] = last_tile_stages()

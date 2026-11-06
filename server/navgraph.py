@@ -263,7 +263,7 @@ def _deck_z(decks, fid, x, y):
 
 
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
-          mph=True, signals=None, country=None, priority=None):
+          mph=True, signals=None, country=None, priority=None, de_on=False):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells

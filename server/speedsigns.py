@@ -276,7 +276,7 @@ def sweden_mesh(table, origin):
     return np.vstack(P), np.vstack(T), np.vstack(UV), MATERIALS_C31, np.concatenate(M)
 
 
-def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA):
+def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA, de_on=False):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s speed-limit signs, or None (none)."""
     box = roads.tile_bbox(tx, ty)
     signs = place(frame, box, context, left_hand, mph, face)

@@ -116,7 +116,8 @@ class RegionalGeoTest(unittest.TestCase):
                 buildings=True, gas_stations=False, near_visual='off',
                 geo_rules=lambda gx, gy: (False, False, 0., None, 'FR', 15),
                 keep_fuel_pads=lambda pads: None, imagery=None, layout=None, tone=1.,
-                road_widths=None, sea=None, fast_pool=None)
+                road_widths=None, sea=None, fast_pool=None,
+                dej_on=True)        # (the German junction signs' setting, its default)
             expected = Server.geo_content_key(server, self.gx, self.gy)
             self.assertEqual(Server.prebuild_geo(server, self.gx, self.gy), expected)
             with patch.object(bw, '_tile_parts', side_effect=AssertionError('must reuse prebuild')):

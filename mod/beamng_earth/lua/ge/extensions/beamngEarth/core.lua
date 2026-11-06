@@ -1039,6 +1039,14 @@ local function onMessage(msg)
       M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
       net.send({ type = 'direction_signs', on = M.directionSigns })
     end
+    -- the German junction signs' switch (settings germanJunctionSigns, on by default)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('germanJunctionSigns')
+      if v == nil then v = M.germanJunctionSigns end
+      M.germanJunctionSigns = v ~= false
+      net.send({ type = 'german_junctions', on = M.germanJunctionSigns })
+    end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
@@ -3026,6 +3034,15 @@ function M.setDirectionSigns(on)
   if M.directionSigns == on then return end
   M.directionSigns = on
   net.send({ type = 'direction_signs', on = on })
+end
+
+-- The German junction signs on / off (settings germanJunctionSigns): the server builds the road and sign tiles again
+-- with or without them (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setGermanJunctionSigns(on)
+  on = on == true
+  if M.germanJunctionSigns == on then return end
+  M.germanJunctionSigns = on
+  net.send({ type = 'german_junctions', on = on })
 end
 
 M.onUpdate = onUpdate

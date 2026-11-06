@@ -463,7 +463,7 @@ def give_way_arms(roads, signals=None, country=None, priority=None, stops=False)
 
 
 def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None, country=None, priority=None,
-                   ground=None, clearance=None, sign_obstacles=None):
+                   ground=None, clearance=None, sign_obstacles=None, de_on=False):
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
@@ -927,7 +927,7 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
-          sign_obstacles=None, defer_gore=False):
+          sign_obstacles=None, defer_gore=False, de_on=False):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -1066,7 +1066,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1,
                 lambda out: _yaw(-out[0], -out[1]), optional=True)
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals, country, priority, ground, clearance,
-                                sign_obstacles=sign_obstacles))
+                                sign_obstacles=sign_obstacles, de_on=de_on))
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
