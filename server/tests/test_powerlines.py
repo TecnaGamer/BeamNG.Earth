@@ -141,6 +141,20 @@ class YardTest(unittest.TestCase):
         self.assertEqual(yaws, {30.0})
 
 
+
+class VoltageTest(unittest.TestCase):
+    """Lines under HV_MIN_V left out (GitHub #787: a 66 kV line on street poles in Shepparton drawn as lattice pylons)."""
+
+    def test_low_voltage(self):
+        import powerlines as pl
+        self.assertTrue(pl.low_voltage('{"power":"line","voltage":"66000"}'))
+        self.assertTrue(pl.low_voltage('{"voltage":"33000;11000"}'))
+        self.assertFalse(pl.low_voltage('{"voltage":"132000;66000"}'), "a circuit at 132 kV: the towers")
+        self.assertFalse(pl.low_voltage('{"voltage":"220000"}'))
+        self.assertFalse(pl.low_voltage('{"power":"line"}'), "no voltage mapped: the towers")
+        self.assertFalse(pl.low_voltage('{"voltage":"high"}'))
+        self.assertFalse(pl.low_voltage(""))
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -12,6 +12,28 @@ import numpy as np
 import fast
 
 G_PYLON = "pylon"
+# Lines under HV_MIN_V are left out: our only model is a 36 m lattice tower, and a 66 kV line runs on poles along the
+# street in town (Shepparton, Victoria: MNA-STN on concrete poles down the main road, drawn as pylons over the houses;
+# GitHub #787); 69 kV in North America likewise. A line without a mapped voltage keeps its towers.
+HV_MIN_V = 100000.0
+
+
+def low_voltage(tags):
+    """Is a power line's mapped voltage (OSM "voltage", ';'-separated circuits) all under HV_MIN_V? False when unknown."""
+    import json
+    try:
+        v = json.loads(tags).get("voltage") if isinstance(tags, str) and tags.startswith("{") else None
+    except ValueError:
+        v = None
+    if not v:
+        return False
+    kv = []
+    for part in str(v).replace(",", ";").split(";"):
+        try:
+            kv.append(float(part.strip()))
+        except ValueError:
+            return False
+    return bool(kv) and max(kv) < HV_MIN_V
 PYLON_H = 35.8              # m (the shape's height: trees.lua scales to it)
 # the conductors' attachment: the bottoms of the shape's insulator strings (lateral m, height m over its origin, which
 # sits on the ground with the legs 5.9 m below it; read from pylon.dae 2026-10-26: 3.27 m out at 12.43 / 16.20 / 20.01,
@@ -206,7 +228,7 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
         for i in np.flatnonzero((cls == "power_line") & (f.kind == 2)):
             fid = str(f.ids[i])
             t = str(tags[i]) if tags is not None else ""
-            if fid in seen or any(u in t for u in UNDERGROUND):
+            if fid in seen or any(u in t for u in UNDERGROUND) or low_voltage(t):
                 continue
             seen.add(fid)
             for part in f.parts(i):
