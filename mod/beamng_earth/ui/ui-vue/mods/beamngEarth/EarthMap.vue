@@ -1111,8 +1111,9 @@ const cacheEl = ref(null)
 const cacheOn = ref(stored("beamngEarth.map.cache", "0") === "1")
 const storedCacheMode = stored("beamngEarth.map.cacheMode", "summary")
 const cacheMode = ref(mm.CACHE_MODES.includes(storedCacheMode) ? storedCacheMode : "summary")
-watch(cacheOn, on => store("beamngEarth.map.cache", on ? "1" : "0"))
-watch(cacheMode, v => store("beamngEarth.map.cacheMode", v))
+// Persist before a same-tick map close disposes the component's queued watchers.
+watch(cacheOn, on => store("beamngEarth.map.cache", on ? "1" : "0"), { flush: "sync" })
+watch(cacheMode, v => store("beamngEarth.map.cacheMode", v), { flush: "sync" })
 const cacheModeOptions = mm.CACHE_MODES.map(v => ({ label: mm.CACHE_MODE_NAMES[v], value: v }))
 const cacheSelectConfig = { value: o => o.value, label: o => o.label }
 const cacheGrid = ref(null)               // { z, x0, y0, w, h, cells: Uint8Array, mode }

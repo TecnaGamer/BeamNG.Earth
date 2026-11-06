@@ -1024,10 +1024,18 @@ function M.mapControls(on)
     end
     pcall(pushActionMap, 'BigMap')
     local am = scenetree.findObject('BigMapActionMap')
-    if am then am.trapHandledEvents = false end      -- (as the stock map: nothing else gets stuck behind it)
+    if am then
+      -- A handled zoom must not reach the menu action map too: its filter bindings can change the cache view.
+      -- Unhandled menu navigation still passes through. Restore the map's previous policy on close.
+      mapCtl.actionMap, mapCtl.trapHandledEvents = am, am.trapHandledEvents
+      am.trapHandledEvents = true
+    end
   elseif not on and mapCtl then
     if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
-    for f, fn in pairs(mapCtl) do if f ~= 'bm' and f ~= 'vt' and f ~= 'vtOrig' then mapCtl.bm[f] = fn end end
+    -- (pcall: the action map may be gone by now, a level unload)
+    if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
+    for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
+        'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
     mapCtl = nil
     pcall(popActionMap, 'BigMap')
     if filter and filter.addAction then pcall(filter.addAction, 0, 'beamngEarthMapBlocked', false) end
