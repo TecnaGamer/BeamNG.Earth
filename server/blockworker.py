@@ -102,8 +102,7 @@ class _State:
     def _clear_chunks(self):
         with self.lock:
             for c in self.chunks.values():
-                with c.lock:
-                    c.chunks.clear()
+                c.clear()
 
     def anchor(self, aid, lat, lon):
         """(Grader or None, ChunkCache) of an anchor; only the last few anchors are kept."""
