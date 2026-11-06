@@ -588,7 +588,19 @@ def _cell_ranges(feats, load_only=False):
     t0 = time.perf_counter()
     try:
         raw = [raw_level_ranges(feats, i) for i in range(len(feats))]
-        lvl = [level_ranges(feats, i, _home=False) for i in range(len(feats))]
+        # (most roads have no range, no end near a bridge's and no lidar answer: their level ranges are [] whatever the
+        # chain below does, and its per-feature calls were ~1 s of CPU a cell on first visits, Fells Point 2026-11-06)
+        near = _near_bridge_ends(feats)
+        answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
+        lvl_memo = st.setdefault("_level_ranges", {})
+        lvl = []
+        for i in range(len(feats)):
+            if (near is not None and not raw[i] and not near[i] and not answers.get(str(feats.ids[i]))
+                    and i not in lvl_memo):
+                lvl_memo[i] = []
+                lvl.append([])
+            else:
+                lvl.append(level_ranges(feats, i, _home=False))
     except BaseException:
         if mine:
             import xproc
