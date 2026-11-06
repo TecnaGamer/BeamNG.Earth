@@ -176,6 +176,14 @@ for _k, _c in enumerate(QLD_SIDING):
     LOOKS[f"{SIDING}|q{_k}"] = (SIDING, _c)
 for _k, _c in enumerate(QLD_BRICK):
     LOOKS[f"bne_bld_fac_qbrick{_k}"] = (FACADE, _c)
+    LOOKS[f"{BRICK_WALL}|q{_k}"] = (BRICK_WALL, _c)       # the same face brick on the plain brick texture: a gable end
+# fork: a Queensland gable end continues the wall below it (plan() sets Spec.gable = (look, m per texture repeat)): the wall's
+# own plain material and tint at the wall's scale (SIDING_UV_M), or on a face-brick house (the window sheet has no
+# window-free brick to stretch over a triangle) plain brick of the same tint (QLD_GABLE_BRICK) or a light weatherboard
+# (QLD_GABLE_SIDING: white, cream, pale grey), the other very common brick-veneer gable
+QLD_GABLE_BRICK = 0.6       # of face-brick houses: brick gable ends
+QLD_GABLE_SIDING = (0, 1, 2)    # (indices into QLD_SIDING)
+GABLE_BRICK_UV_M = 2.0      # m per repeat of the stock red brick texture (a gable end's brick courses)
 
 
 def _weighted(names, weights):
@@ -380,7 +388,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "gable")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -890,10 +898,21 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if porch:   # pitched roofs draw the walls on the oriented box: an L-shaped house's door wall can be inside it
         _, _, hl, hw = oriented_box(ring)
         porch = area >= 0.9 * 4 * hl * hw
+    gable = None
+    if style.name == "queensland" and roof == "gabled":     # fork: the gable end continues the wall (_roof)
+        if (wall is not None and facade == wall) or (plain and facade.startswith(SIDING)):
+            gable = (facade, SIDING_UV_M)                   # weatherboard, render, ...: the wall's own plain look
+        elif band is BAND_BRICK and facade.startswith("bne_bld_fac_qbrick"):
+            k = int(facade[len("bne_bld_fac_qbrick"):])
+            if _hash01(seed, "gable") < QLD_GABLE_BRICK:
+                gable = (f"{BRICK_WALL}|q{k}", GABLE_BRICK_UV_M)
+            else:
+                gable = (f"{SIDING}|q{QLD_GABLE_SIDING[int(_hash01(seed, 'gable tint') * len(QLD_GABLE_SIDING))]}",
+                         SIDING_UV_M)
     return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch)
+                deck=garage and roof == "flat", pitch=style.pitch, gable=gable)
 
 
 class Mesh:
@@ -1278,10 +1297,17 @@ def _roof(m, spec, ring, z_eave, mat_idx):
                uv(hl2, hw2), uv(-hl2, hw2), uv(-r, 0), uv(r, 0), rm)
         # the gable ends: wall triangles from the eave line up to the ridge, the facade's plain colour
         fac = mat_idx[spec.facade]
+        gk = getattr(spec, "gable", None)       # fork: Queensland: the wall's look at the wall's scale (see plan())
+        if gk:
+            gmat, gu = mat_idx[gk[0]], gk[1]
         for sgn in (-1, 1):
             s = sgn * hl
             a, b, top = at(s, -sgn * hw, z_eave), at(s, sgn * hw, z_eave), at(s, 0, zr - EAVE_M * 0.2)
-            if sgn > 0:
+            if gk:
+                # u along the wall (a to b, counter-clockwise like the walls' own), v the height: the walls' z / scale,
+                # so weatherboards and brick courses run on across the corner
+                m.tri(a, b, top, (0.0, z_eave / gu), (2 * hw / gu, z_eave / gu), (hw / gu, top[2] / gu), gmat)
+            elif sgn > 0:
                 m.tri(a, b, top, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
             else:
                 m.tri(a, b, top, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
