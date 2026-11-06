@@ -725,9 +725,14 @@ class HttpsTransport:
     def request(self, url, headers, timeout):
         """(status, {lower-case header: value}, body)."""
         u = urlsplit(url)
+        # Keep source URLs as cache, quota and NO_PROXY identities. Only the actual public S3 connection changes.
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        import fast
+        fast.require(152, "S3 dual-stack endpoints")
+        url = fast._ef.s3_dualstack_url(url, any(k.lower() == "authorization" for k in headers))
+        u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
         if proxy is None:
             key = (u.scheme, u.netloc, None)
         else:

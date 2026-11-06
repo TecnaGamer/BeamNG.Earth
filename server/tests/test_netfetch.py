@@ -310,13 +310,18 @@ class TransportTest(unittest.TestCase):
                 return b"ok"
 
         class Conn:
-            def __init__(self, netloc, timeout=None, context=None, **kwargs):
+            def __init__(self, netloc, port=None, timeout=None, context=None, **kwargs):
                 made.append(self)
                 self.sent = 0
                 self.context = context
+                self.netloc, self.requests, self.tunnel = netloc, [], None
+
+            def set_tunnel(self, host, port, headers=None):
+                self.tunnel = (host, port, headers)
 
             def request(self, method, path, headers=None):
                 self.sent += 1
+                self.requests.append((method, path, headers))
                 e = errors.pop(0) if errors else None
                 if e is not None:
                     raise e
@@ -360,6 +365,34 @@ class TransportTest(unittest.TestCase):
             tr, made = self.transport([])
         self.assertEqual(tr.request(url(), {}, 20.0)[0], 200)
         self.assertIs(made[0].context, context)
+
+    def test_public_s3_uses_dualstack_without_changing_source_accounting(self):
+        tr, made = self.transport([])
+        source = "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/a%20b?versionId=abc"
+        headers = {"Range": "bytes=0-15", "If-Match": '"etag"'}
+        f = nf.Fetcher(transport=tr)
+        with mock.patch.object(tr, "_resolve_proxy", return_value=None) as proxy:
+            f.get(source, headers=headers)
+        proxy.assert_called_once_with("https", nf.host_of(source))
+        self.assertEqual(made[0].netloc, "overturemaps-us-west-2.s3.dualstack.us-west-2.amazonaws.com")
+        self.assertEqual(made[0].requests[0][1], "/release/a%20b?versionId=abc")
+        self.assertEqual({k: made[0].requests[0][2][k] for k in headers}, headers)
+        self.assertEqual(set(f.snapshot()), {nf.host_of(source)})
+        self.assertEqual(f.snapshot()[nf.host_of(source)]["requests"], 1)
+
+    def test_s3_proxy_tunnel_targets_dualstack(self):
+        tr, made = self.transport([])
+        with mock.patch.object(tr, "_resolve_proxy", return_value=("proxy.test", 8080, None, None)):
+            tr.request("https://copernicus-dem-30m.s3.amazonaws.com/a.tif", {"Range": "bytes=0-15"}, 20)
+        self.assertEqual(made[0].netloc, "proxy.test")
+        self.assertEqual(made[0].tunnel[:2], ("copernicus-dem-30m.s3.dualstack.eu-central-1.amazonaws.com", 443))
+        self.assertEqual(made[0].requests[0][1], "/a.tif")
+
+    def test_authorized_s3_requests_keep_the_signed_host(self):
+        tr, made = self.transport([])
+        source = "https://copernicus-dem-30m.s3.amazonaws.com/a.tif"
+        tr.request(source, {"Authorization": "AWS4-HMAC-SHA256 test"}, 20)
+        self.assertEqual(made[0].netloc, nf.host_of(source))
 
 
 class RetryTest(unittest.TestCase):

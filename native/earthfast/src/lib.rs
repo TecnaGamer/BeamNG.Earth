@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devraster;
+mod s3url;
 mod spaceclouds;
 mod cdaez;
 mod clearance;
@@ -48,6 +49,11 @@ use pyo3::prelude::*;
 /// it again behind the interpreter's busy threads, up to the switch interval (5 ms), so a call of a few microseconds
 /// cost milliseconds (the server's event loop on a Steam Deck spent ~22 s of a Baltimore teleport there, 2026-10-20).
 const RELEASE_MIN: usize = 200_000;
+
+#[pyfunction]
+fn s3_dualstack_url(url: &str, authorized: bool) -> String {
+    s3url::dualstack_url(url, authorized)
+}
 
 fn release<T, F>(py: Python<'_>, work: usize, f: F) -> T
 where
@@ -5488,6 +5494,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 151)?;
+    m.add("VERSION", 152)?;
+    m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     Ok(())
 }
