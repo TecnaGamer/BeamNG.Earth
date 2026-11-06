@@ -5906,7 +5906,7 @@ class Connection:
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")
-        if gz is not None:
+        if gz is not None and declared:     # (a player's teleport: not a rebase while driving, nor the level start)
             self.spawn(self.tunnel_floor_late(anchor, place or (0.0, 0.0), gz))
         if provisional:
             self.spawn(self.refine_first(anchor, cx, cy, info.get("ter"), t0))
