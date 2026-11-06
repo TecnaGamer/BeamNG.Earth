@@ -81,8 +81,8 @@ deleted under a live tile renders as nothing), so it is kept until the game says
 touched) and deleted, through the rate-limited delete queue with the folder last, once no pose names
 them any more; one nobody claims goes (removed in a worker thread) `SESSION_ORPHAN_S` (10 min) after the server found it and after
 its marker was last touched (a live server touches its own marker every `SESSION_HEARTBEAT_S`, 60 s,
-so a second server never deletes a running one's folder). A connection that closes makes its claims
-orphans again, with a fresh grace. The mod resyncs at its current origin meanwhile (a new session:
+so a second server never deletes a running one's folder). A game lease keeps these claims across
+transport closure until its complete reconnect snapshot releases them. The mod resyncs at its current origin meanwhile (a new session:
 anchor ids start at 1 again; the mod keys the old session's tiles by session, and sends no `pose` or
 `prepare_terrain` until the resync commits: its anchor id is the old session's and may name one of the
 new server's anchors), so nothing on screen loses its files and no level reload is needed
@@ -94,6 +94,15 @@ DEM LRU holds 512 decoded 512² tiles (~512 MB at most), the imagery LRU 512 dec
 (~100 MB).
 
 ## Protocol 4 (as implemented)
+
+Reconnect ownership is an additive `hello` capability, `streamLease=1`. The server
+returns `leaseId`; the mod retains it across TCP and level resets and sends it
+back with `leaseSession`, `slotSession`, the complete `slotsHeld` snapshot and
+`held` anchor IDs (including its current anchor). An empty Lua array may encode
+as `{}`. The snapshot is validated before replacing the old connection; EOF does
+not release game-owned slots, anchors or adopted session folders. See
+[streaming reliability](../docs/STREAMING_RELIABILITY.md) for the wire contract,
+queue limits, legacy behavior and offline validation limits.
 
 Changes from protocol 3 (V1_3_SPEC §E): `hello.protocol = 4`; the server's `hello` gains
 `nearVisual` and `attribution`; `far_tile` gains `material`, `texture`, `detail` (all three, or

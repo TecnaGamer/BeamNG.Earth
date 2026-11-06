@@ -103,6 +103,7 @@ import urgency as urgencymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import placenames as placenamesmod  # noqa: E402
 import runtimeprofiler
+import streamleases
 import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
@@ -152,6 +153,8 @@ import protocol  # noqa: E402
 import weather as weathermod  # noqa: E402
 
 PROTOCOL = 4
+SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
+                                    # more room for a teleport's burst before a reconnect)
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
 SERVER_LIST_URL = "https://earth.tgforever.net/servers"
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
@@ -514,6 +517,7 @@ GEO_LIST_BATCH_S = 1.0          # geo_dropped: tiles whose grace ends within thi
 GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
+LEASE_GRACE_S = 900.0       # a disconnected game's stream lease (PR #817) kept this long for it to reconnect
 # Live retexture (--colormatch / --deshadow): when a region a shown tile was rendered without becomes
 # ready, the tile's texture is rendered again under its next revision's name and the mod is told
 # (far_retex) to point the tile's material at it. At most RETEX_INFLIGHT such renders on the tile pool
@@ -1011,6 +1015,7 @@ class Server:
         self.anchors = {}
         self._next_anchor = 1
         self.connections = set()
+        self.stream_leases = streamleases.Registry()
         # Heightmaps: (anchorId, cx, cy) -> info, LRU order.
         self.hm = OrderedDict()
         self.hm_inflight = {}
@@ -1267,10 +1272,11 @@ class Server:
             pass
 
     def claimed_sessions(self):
-        """Earlier runs' sessions some connected game says its objects still use."""
-        out = set()
+        """Earlier runs' sessions still owned by connected or reconnecting games."""
+        out = self.stream_leases.sessions()
         for c in self.connections:
-            out |= c.sessions
+            if getattr(c, "lease", None) is None:
+                out |= c.sessions
         return out
 
     def check_user_dir(self, conn, game_path):
@@ -1322,6 +1328,8 @@ class Server:
         """A connection closed: the sessions it claimed are orphans again (the game may come back,
         perhaps to yet another server), their grace starting now. Called once the connection left
         self.connections."""
+        if getattr(conn, "lease", None) is not None:
+            return                      # TCP EOF does not mean that the game's objects disappeared
         others = self.claimed_sessions()
         now = time.monotonic()
         for sid in conn.sessions - others:
@@ -1373,10 +1381,29 @@ class Server:
         (a whole session is ~11k files, the streaming must not wait) and deleted through the rate-limited queue, as a
         released session's are: a game is running, and its file watcher took a whole session moved out of the user
         folder at once as an 8.6 s frame (2026-11-02)."""
+        self.expire_leases()
         gone = self.sweep_sessions(remove=False)
         for sid in gone:
             self.queue_delete(await asyncio.to_thread(self._session_paths, sid))
         return gone
+
+    def expire_leases(self, now=None):
+        """Release the stream leases of games gone longer than LEASE_GRACE_S (event loop, sweep_sessions_async):
+        their pooled slots go back to the pool, their anchors' files and their sessions' folders follow the usual
+        rules (the sessions' grace starts now, as drop_claims's)."""
+        now = time.monotonic() if now is None else now
+        gone = self.stream_leases.expire(now, LEASE_GRACE_S)
+        if not gone:
+            return 0
+        others = self.claimed_sessions()
+        for lease in gone:
+            log.info("stream lease %s: its game gone %.0f s: released (%d slots, %d anchors, %d sessions)",
+                     lease.token[:8], now - lease.detached_at, len(lease.slots), len(lease.anchors), len(lease.sessions))
+            self.slots_let_go(set(lease.slots))
+            for sid in lease.sessions - others:
+                if sid in self.orphans:
+                    self.orphans[sid] = now
+        return len(gone)
 
     def snap(self, v):
         """Nearest block centre coordinate on the layout's grid (256 m; M4 512²: 128 m)."""
@@ -4292,7 +4319,7 @@ class Server:
         prune_delay ago: after a far_swap / far_remove the mod still shows the tile until the
         swap has run (its adds load within the governor budget, then a 0.5 s crossover) and
         deletes it time-sliced, and a shape file must not vanish under a live TSStatic."""
-        out = set()
+        out = self.matslots.held_owners()
         now = time.monotonic()
         for c in self.connections:
             out |= set(c.shown)
@@ -4322,19 +4349,50 @@ class Server:
         """Does some game still hold pooled slot n (a far_tile with it not reported gone)?"""
         # Allocation can query this from a tile worker while the event loop
         # connects/disconnects clients; do not iterate the mutable set directly.
-        return any(n in c.slot_holds for c in tuple(self.connections))
+        return self.stream_leases.held(n) or any(n in c.slot_holds for c in tuple(self.connections)
+                                                 if getattr(c, "lease", None) is None)
+
+    def attach_stream(self, conn, msg):
+        """Reconcile a game's complete resource snapshot before sending it new pooled files."""
+        resumable = msg.get("streamLease") == 1
+        token = msg.get("leaseId") if msg.get("leaseSession") == self.sid else None
+        if not isinstance(token, str):
+            token = None
+        same_session = msg.get("slotSession") == self.sid
+        try:
+            if resumable and token in self.stream_leases.entries and not same_session:
+                raise ValueError("resuming a stream requires its complete slot snapshot")
+            slots = streamleases.snapshot(msg.get("slotsHeld"), self.matslots.made) if same_session else None
+            held = msg.get("held", []) if same_session else []
+            if held == {}:
+                held = []
+            if not isinstance(held, list) or any(not streamleases.integer(n) for n in held):
+                raise ValueError("held anchors must be an array of integers")
+            anchors = {int(n) for n in held if n in self.anchors}
+        except ValueError as e:
+            # (lenient: a bad snapshot starts a fresh lease rather than failing the hello; the old lease, if any,
+            # stays detached and expires: expire_leases)
+            log.warning("client %s: stream snapshot not resumed (%s): a new lease", getattr(conn, "peer", None), e)
+            token, slots, anchors = None, None, set()
+        lease, released, previous = self.stream_leases.attach(conn, token, slots, anchors, resumable)
+        if previous is not None:
+            previous.abort_stream("replaced by this game's reconnect")
+        self.slots_let_go(released)
+        return lease.token
 
     def slots_let_go(self, slots):
-        """Event loop: these slots' holds ended (reported gone, or a connection closed)."""
+        """Event loop: these slots were reported gone or excluded by a complete reconnect snapshot."""
         for n in slots:
             if not self.slot_held(n):
                 self.matslots.unheld(n)
 
     def held_anchors(self):
         """Previous anchors whose tile objects some mod still has (pose.held): their files stay."""
-        out = set()
+        out = self.stream_leases.anchors()
         for c in self.connections:
-            out |= c.held
+            lease = getattr(c, "lease", None)
+            if lease is None or lease.connection is c:
+                out |= c.held
         out.discard(GLOBAL_AID)
         return out
 
@@ -4380,6 +4438,9 @@ class Server:
         gone (pose.slotsGone). Returns {what: [vfs path, serial]} for the message's `slots` (files that do not exist
         are left out; a slot that cannot be placed too: the mod then loads the tile's own file)."""
         out = {}
+        lease = getattr(conn, "lease", None)
+        if getattr(conn, "closing", False) or (lease is not None and lease.connection is not conn):
+            return out
         if self.far_format != "cdae":
             return out
         for what, fname in files.items():
@@ -4730,6 +4791,8 @@ class Connection:
         self.loop = asyncio.get_running_loop()
         self.peer = writer.get_extra_info("peername")
         self.tasks = set()
+        self.lease = None
+        self.closing = False
         self.active = None              # committed anchor id
         self.block = None               # farfield.Block of the committed terrain
         self.pending_block = None       # the last prepare_terrain of the active anchor
@@ -5265,8 +5328,32 @@ class Connection:
         self.send(self.s.areas_message({"id": msg.get("id"), "ok": bool(ok)}))
 
     def send(self, msg):
-        if not self.writer.is_closing():
-            self.writer.write(protocol.encode(msg))
+        lease = getattr(self, "lease", None)
+        if not getattr(self, "closing", False) and (lease is None or lease.connection is self) and not self.writer.is_closing():
+            data = protocol.encode(msg)
+            transport = getattr(self.writer, "transport", None)
+            pending = transport.get_write_buffer_size() if transport is not None else 0
+            if pending + len(data) > SEND_BUFFER_MAX:
+                self.abort_stream("outgoing buffer limit exceeded")
+                return False
+            self.writer.write(data)
+            return True
+        return False
+
+    def abort_stream(self, reason):
+        """Close this transport, preserving ownership until the game's next complete snapshot."""
+        if self.closing:
+            return
+        self.closing = True
+        log.info("client %s: %s", self.peer, reason)
+        self.writer.close()
+        transport = getattr(self.writer, "transport", None)
+        if transport is not None:
+            transport.abort()            # a blocked peer must not keep a closing connection alive indefinitely
+        if self.streamer is not None:
+            self.streamer.cancel()
+        for task in tuple(self.tasks):
+            task.cancel()
 
     def backlog(self):
         """status.backlog: desired tiles of the current anchor that are not shown yet (V1_4_SPEC §4)."""
@@ -5353,9 +5440,11 @@ class Connection:
         except (protocol.ProtocolError, ConnectionError) as e:
             log.warning("client %s: %s", self.peer, e)
         finally:
+            self.closing = True
             self.route_dl_version += 1          # (a running route_download stops: no one to show its bar to)
             self.s.connections.discard(self)
-            self.s.slots_let_go(list(self.slot_holds))
+            if not self.s.stream_leases.detach(self):
+                self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
             for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "turbines", None), self.nav,
                        self.distant_traffic, self.distant_traffic_far):
@@ -5364,12 +5453,14 @@ class Connection:
             self.s.drop_claims(self)
             self.streamer.cancel()
             self.credits.close()
-            for t in list(self.tasks):
+            pending_tasks = list(self.tasks)
+            for t in pending_tasks:
                 t.cancel()
             self.writer.close()
             # The streamer owns a separate Event.wait task; let its finally
             # finish before this connection (including a readiness probe) goes.
             await asyncio.gather(self.streamer, return_exceptions=True)
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
             log.info("client disconnected %s", self.peer)
 
     def build_veg_tile(self, aid, tx, ty):
@@ -5452,13 +5543,20 @@ class Connection:
             await asyncio.sleep(min(wait if wait is not None else 0.05, max(0.005, tick_at - time.monotonic())))
 
     def spawn(self, coro):
+        if self.closing:
+            coro.close()
+            return None
         t = asyncio.create_task(coro)
         self.tasks.add(t)
         t.add_done_callback(self.tasks.discard)
         return t
 
     def dispatch(self, msg):
+        if getattr(self, "closing", False):
+            return
         kind = msg["type"]
+        if getattr(self, "lease", None) is None and kind in ("prepare_anchor", "commit_anchor", "prepare_terrain", "commit_terrain", "pose"):
+            raise ValueError("hello must complete before world requests")
         if kind == "traffic_visuals":
             self.traffic_on = self.traffic_visuals and msg.get("enabled") is True
             if self.traffic_on and msg.get("reset") is True:
@@ -5466,6 +5564,7 @@ class Connection:
                 self.distant_traffic.sent.clear()
                 self.distant_traffic_far.sent.clear()
         elif kind == "hello":
+            lease_id = self.s.attach_stream(self, msg)
             self.s.check_user_dir(self, msg.get("userPath"))
             lay = self.s.layout
             fmt = msg.get("format", lay.format)
@@ -5476,7 +5575,8 @@ class Connection:
                 self.status(f"format mismatch: mod {msg.get('format')}, server {lay.format}")
             m = {"type": "hello", "protocol": PROTOCOL, "format": lay.format, "serverVersion": SERVER_VERSION,
                  "runtimeProfiler": 2, "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
-                 "sessionId": self.s.sid, "farFormat": self.s.far_format, "material": farfield.MATERIAL,
+                 "sessionId": self.s.sid, "streamLease": 1, "leaseId": lease_id,
+                 "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
             if self.s.imagery is not None:      # the world map credits the sources its view shows
                 m["imageryCredits"] = self.s.imagery.credits_by_area()
@@ -5506,11 +5606,6 @@ class Connection:
                         self.s.prewarm_vfs = ""
                 if self.s.prewarm_vfs:
                     m["prewarm"] = self.s.prewarm_vfs
-            # a mod reconnecting to this server: the pooled slots its objects still hold (matslots.py)
-            if msg.get("slotSession") == self.s.sid and isinstance(msg.get("slotsHeld"), list):
-                for g in msg["slotsHeld"]:
-                    if isinstance(g, list) and len(g) == 2 and isinstance(g[0], (int, float)):
-                        self.slot_holds[int(g[0])] = g[1]
             # a game that outlived its server: keep the session folders its tiles still use
             self.s.claim_sessions(self, msg.get("sessions"))
             # a mod that reads a vegetation tile as one flat array of numbers (no table per item in its Lua: trees.lua);
@@ -6315,6 +6410,9 @@ class Connection:
     def slots_gone(self, gone):
         """pose.slotsGone [[slot, serial], ...]: the mod's objects (or never-spawned instances) of those far_tile
         messages are gone; a slot whose latest send is among them is no longer held by this game."""
+        lease = getattr(self, "lease", None)
+        if lease is not None and lease.connection is not self:
+            return
         if isinstance(gone, dict):      # an empty Lua table may encode as {}
             gone = list(gone.values())
         if not isinstance(gone, list):
@@ -6326,7 +6424,7 @@ class Connection:
             if not isinstance(g, (list, tuple)) or len(g) != 2:
                 continue
             n, serial = g
-            if isinstance(n, (int, float)) and self.slot_holds.get(int(n)) == serial:
+            if streamleases.integer(n) and streamleases.integer(serial) and self.slot_holds.get(int(n)) == serial:
                 del self.slot_holds[int(n)]
                 let_go.append(int(n))
         self.s.slots_let_go(let_go)

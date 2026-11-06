@@ -844,16 +844,30 @@ do
     reset = function() seen = {} end,
     hasWork = function() return false end, update = function() end, onTeleport = function() end }
   serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+    streamLease = 1, leaseId = 'game-owner',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
   frames(3)
   T.check(seen.available, 'hello negotiates distant traffic before the level reload')
   core.onClientEndMission()
   core.onClientStartMission()
   T.check(seen.id == 'traffic-reload' and seen.available, 'level start restores the live connection capability')
+  local leaseSession, leaseId = require('beamngEarth/net').lease()
+  T.check(leaseSession == 'traffic-reload' and leaseId == 'game-owner', 'level reset preserves resource ownership')
   core._trafficvisuals = actual
 end
 core.reconnect()
 T.check(core.cacheState() == nil and not core.cacheClear(), 'disconnected: numbers gone, no request sent')
+do
+  local n = #received('hello')
+  T.check(pumpUntil(function() return #received('hello') > n end, 10), 'reconnect sends a new hello')
+  local h = received('hello')[#received('hello')]
+  T.check(h.streamLease == 1 and h.leaseId == 'game-owner' and h.leaseSession == 'traffic-reload',
+    'reconnect names the same game resource owner')
+  T.check(h.slotSession == 'traffic-reload' and type(h.slotsHeld) == 'table' and type(h.held) == 'table',
+    'reconnect includes complete snapshots, including an empty scene')
+  T.check(not core._netq.urgent._connected and not core._netq.urgent._disconnected,
+    'ownership snapshots remain ordered after incoming tile messages')
+end
 beamngEarth_settings = nil
 
 core.onExtensionUnloaded()
