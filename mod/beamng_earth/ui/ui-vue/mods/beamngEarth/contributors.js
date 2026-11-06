@@ -23,6 +23,7 @@ export const CONTRIBUTORS = [
   { login: "Lertov2424232", prs: [542, 655] },
   { login: "Misnik1337", prs: [213, 214] },
   { login: "PaperboyNZ", prs: [676, 678] },
+  { login: "redthepro", prs: [693, 720] },
   { login: "yahms", prs: [482, 671] },
   { login: "akariiirl", prs: [371] },
   { login: "amccoy-crypto", prs: [95] },
@@ -39,7 +40,6 @@ export const CONTRIBUTORS = [
   { login: "MAKAKAIglitch", prs: [205] },
   { login: "Mob1K7105", prs: [686] },
   { login: "mpsteppe", prs: [289] },
-  { login: "redthepro", prs: [693] },
   { login: "RiDexSS", prs: [677] },
   { login: "rootyandex-ux", prs: [626] },
   { login: "soifaxa", prs: [468] },
@@ -50,5 +50,6 @@ export const CONTRIBUTORS = [
   { login: "veilednet", prs: [207] },
   { login: "whattheheckman", prs: [701] },
   { login: "xstraok", prs: [747] },
-  { login: "ydrftgyhujiok", prs: [682] }
+  { login: "ydrftgyhujiok", prs: [682] },
+  { login: "EoDGaming2026", prs: [] }
 ]

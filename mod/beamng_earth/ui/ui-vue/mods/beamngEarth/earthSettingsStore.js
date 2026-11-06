@@ -127,9 +127,9 @@ export const settingsSchema = [
       { id: "player", type: "info", name: "Your position", desc: "Your latitude / longitude and the distance from the world origin." },
       { id: "weather", type: "info", name: "Weather data", desc: "Real weather from Open-Meteo.com, every 10 min or 25 km." },
       { id: "gravity", type: "info", name: "Gravity", desc: "The gravity in use: the real value (WGS84 normal plus EGM2008) or normal gravity by latitude." },
+      { id: "contributors", type: "contributors", name: "Contributors", desc: "The GitHub users whose code is merged into this version. Thank you! Click a name to open their GitHub page." },
       { id: "credits", type: "text", name: "Data credits now", desc: "The data credits for what is around you now, as drawn in the screen corner." },
       { id: "attribution", type: "text", name: "Data sources", desc: "Credits for the elevation and imagery sources in use." },
-      { id: "contributors", type: "contributors", name: "Contributors", desc: "The GitHub users whose code is merged into this version. Thank you! Click a name to open their GitHub page." },
     ],
   },
   {

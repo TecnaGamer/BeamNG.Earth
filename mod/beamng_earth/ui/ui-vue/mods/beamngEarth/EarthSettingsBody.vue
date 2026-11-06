@@ -83,7 +83,7 @@
           :key="c.login"
           class="earth-person"
           tabindex="0"
-          :title="'github.com/' + c.login + ' (' + c.prs.length + (c.prs.length === 1 ? ' pull request)' : ' pull requests)')"
+          :title="'github.com/' + c.login + (c.prs.length ? ' (' + c.prs.length + (c.prs.length === 1 ? ' pull request)' : ' pull requests)') : ' (commits merged)')"
           @click="openLink('https://github.com/' + c.login)"
           @keydown.enter="openLink('https://github.com/' + c.login)"
         >{{ c.login }}</span>
