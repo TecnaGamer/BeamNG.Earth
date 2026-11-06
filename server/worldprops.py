@@ -55,10 +55,12 @@ BILL_ROAD_M = 120.0
 ROAD_MARGIN_M = 140.0
 
 
-def tile_props(frame, tx, ty, md, elev):
+def tile_props(frame, tx, ty, md, elev, *, include_communications=True):
     """(rows, barn ids) of road tile (tx, ty). barn ids are the footprints replaced by the stock barn
     (buildings.road_tile_items skip). elev(lat, lon) is the ground. md None, or a cell that cannot be
-    read, yields nothing of that layer."""
+    read, yields nothing of that layer. Production disables legacy communications
+    here and uses antennas.tile_rows with the final drawn terrain after road generation.
+    """
     import buildings
     import roads
     if md is None:
@@ -75,7 +77,7 @@ def tile_props(frame, tx, ty, md, elev):
     bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
     for feats, rows in infra:
-        _towers(frame, feats, rows, (x0, y0, x1, y1), placed)
+        _towers(frame, feats, rows, (x0, y0, x1, y1), placed, include_communications=include_communications)
         _billboards(frame, feats, rows, (x0, y0, x1, y1), roads_xy, placed)
     for feats, rows in land:
         _containers(frame, feats, rows, (x0, y0, x1, y1), bld_rings, roads_xy, boxes)
@@ -247,14 +249,14 @@ def _ll(frame, x, y):
     return float(la[0]), float(lo[0])
 
 
-def _towers(frame, feats, rows, box, placed):
+def _towers(frame, feats, rows, box, placed, *, include_communications=True):
     cls = _cls(feats)
     if cls is None:
         return
     ids = getattr(feats, "ids", None)
     for i in (range(len(feats.kind)) if rows is None else rows.tolist()):
         kind = str(cls[i])
-        if kind in CELL_CLASSES:
+        if kind in CELL_CLASSES and include_communications:
             group, h, lift = "celltower", CELL_H, CELL_LIFT
         elif kind in WATER_CLASSES:
             group, h, lift = "watertower", WATER_H, WATER_LIFT

@@ -1,0 +1,160 @@
+{
+  "note": "Read-only snapshot of actual active-world cached plans, including built neighbor/junction/bridge context. No planning or regeneration of active cache performed. Not an independent fresh full-world build.",
+  "captured": "2026-11-05",
+  "frames": "r10",
+  "signature": "w1s1",
+  "region": [
+    213,
+    383
+  ],
+  "plans": [
+    {
+      "key": [
+        14,
+        3418,
+        6132
+      ],
+      "file": "cached_plans/r10/w1s1/14_3418_6132.npz",
+      "sha256": "8ae65a69ae8c0c9d7aed88f63b12f1f21c77115e28607ff863f8e133d5697fae",
+      "complete": {
+        "frames": "r10",
+        "generator": {
+          "code": "64151d7bc30ef143-144-599dde557875ff50",
+          "native": 144
+        },
+        "key": [
+          14,
+          3418,
+          6132
+        ],
+        "schema": 2,
+        "sha256": "8ae65a69ae8c0c9d7aed88f63b12f1f21c77115e28607ff863f8e133d5697fae",
+        "signature": "w1s1",
+        "sources": {
+          "canopy": "v2-ml3",
+          "gradesep": [
+            1,
+            "tunnels"
+          ],
+          "lanes": "2026-10-30T13:14:16Z",
+          "osmfuel": true,
+          "overture": "2026-09-23.1",
+          "pipeline": 2,
+          "rails": "2026-10-30T12:17:56Z",
+          "worldcover": "v200-2021"
+        }
+      }
+    },
+    {
+      "key": [
+        14,
+        3419,
+        6132
+      ],
+      "file": "cached_plans/r10/w1s1/14_3419_6132.npz",
+      "sha256": "2270cea10ae5f6ca5f2f4dfb4d935fc3f8efa4a6fe318da70c437c51be5b2caf",
+      "complete": {
+        "frames": "r10",
+        "generator": {
+          "code": "64151d7bc30ef143-144-599dde557875ff50",
+          "native": 144
+        },
+        "key": [
+          14,
+          3419,
+          6132
+        ],
+        "schema": 2,
+        "sha256": "2270cea10ae5f6ca5f2f4dfb4d935fc3f8efa4a6fe318da70c437c51be5b2caf",
+        "signature": "w1s1",
+        "sources": {
+          "canopy": "v2-ml3",
+          "gradesep": [
+            1,
+            "tunnels"
+          ],
+          "lanes": "2026-10-30T13:14:16Z",
+          "osmfuel": true,
+          "overture": "2026-09-23.1",
+          "pipeline": 2,
+          "rails": "2026-10-30T12:17:56Z",
+          "worldcover": "v200-2021"
+        }
+      }
+    },
+    {
+      "key": [
+        14,
+        3418,
+        6133
+      ],
+      "file": "cached_plans/r10/w1s1/14_3418_6133.npz",
+      "sha256": "11060caf684dca98a03e48158ff73a1bbb53c660c8e0e7e7f77d2e972861a257",
+      "complete": {
+        "frames": "r10",
+        "generator": {
+          "code": "64151d7bc30ef143-144-599dde557875ff50",
+          "native": 144
+        },
+        "key": [
+          14,
+          3418,
+          6133
+        ],
+        "schema": 2,
+        "sha256": "11060caf684dca98a03e48158ff73a1bbb53c660c8e0e7e7f77d2e972861a257",
+        "signature": "w1s1",
+        "sources": {
+          "canopy": "v2-ml3",
+          "gradesep": [
+            1,
+            "tunnels"
+          ],
+          "lanes": "2026-10-30T13:14:16Z",
+          "osmfuel": true,
+          "overture": "2026-09-23.1",
+          "pipeline": 2,
+          "rails": "2026-10-30T12:17:56Z",
+          "worldcover": "v200-2021"
+        }
+      }
+    },
+    {
+      "key": [
+        14,
+        3419,
+        6133
+      ],
+      "file": "cached_plans/r10/w1s1/14_3419_6133.npz",
+      "sha256": "ff507a2966e5acb0bc356376f08b3ce25ee0ebcc3db9702b18f52e2f9ebdb4e6",
+      "complete": {
+        "frames": "r10",
+        "generator": {
+          "code": "64151d7bc30ef143-144-599dde557875ff50",
+          "native": 144
+        },
+        "key": [
+          14,
+          3419,
+          6133
+        ],
+        "schema": 2,
+        "sha256": "ff507a2966e5acb0bc356376f08b3ce25ee0ebcc3db9702b18f52e2f9ebdb4e6",
+        "signature": "w1s1",
+        "sources": {
+          "canopy": "v2-ml3",
+          "gradesep": [
+            1,
+            "tunnels"
+          ],
+          "lanes": "2026-10-30T13:14:16Z",
+          "osmfuel": true,
+          "overture": "2026-09-23.1",
+          "pipeline": 2,
+          "rails": "2026-10-30T12:17:56Z",
+          "worldcover": "v200-2021"
+        }
+      }
+    }
+  ]
+}

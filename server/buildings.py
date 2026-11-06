@@ -3825,7 +3825,13 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
     import furniture
     import roads as roadsmod
     import fast
-    if not built:
+    # Road lighting tags also apply to the distant glow: an explicitly illuminated rural road needs no
+    # surrounding buildings, while lit=no must override the building-count and ramp guesses below.
+    def explicit_lighting(f):
+        return f.attrs.get("osm_lit") if f is not None else None
+
+    if not built and not any(any(str(v).strip().lower() == "yes" for v in tags)
+                             for f in road_layers if (tags := explicit_lighting(f)) is not None):
         return []
     table = furniture.lamp_spacing(region)
     hw = "na" if furniture._na(region) else None
@@ -3841,8 +3847,13 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
             sp = specs[i]
             if sp is None:
                 continue
+            tags = explicit_lighting(f)
+            lighting = str(tags[i]).strip().lower() if tags is not None else ""
+            if lighting == "no":
+                continue
+            explicit_lit = lighting == "yes"
             highway = sp.cls in furniture.HIGHWAY_CLASSES
-            if highway and not furniture.highway_lit(region, sp.link, True):
+            if highway and not explicit_lit and not furniture.highway_lit(region, sp.link, True):
                 continue
             if highway:
                 every = (furniture.LINK_LAMP_SPACING if sp.link else furniture.HIGHWAY_LAMP_SPACING)[hw]
@@ -3872,7 +3883,7 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
                     spacing.append(every)
                     phase.append(ph0 * every + shift)
                     side.append(sd * reach)
-                    lit_any.append(bool(highway and sp.link))
+                    lit_any.append(explicit_lit or bool(built and highway and sp.link))
     if not pts:
         return []
     fast.require(87, "lamp_stations")

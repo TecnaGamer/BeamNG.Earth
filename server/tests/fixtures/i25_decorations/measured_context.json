@@ -1,0 +1,257 @@
+{
+  "note": "Production Surface.warp applied. original_vertex_rule reproduces original 30m source-vertex voting; outer diagnostic shares use revised production uniform sampling/pavement mask.",
+  "features": [
+    {
+      "name": "frontage",
+      "id": "a78eea09-d357-4e35-a893-37ad22f6bf47",
+      "source_record": "w6169603@8",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 331,
+      "centre_share": 0.9788519637462235,
+      "raw_beside_share": 1.0,
+      "raw_both_share": 0.0030211480362537764,
+      "beside_share": 0.0030211480362537764,
+      "both_share": 0.0,
+      "pavement_excluded_share": 1.0,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 20,
+        "centre_share": 1.0,
+        "beside_share": 1.0,
+        "both_share": 0.05,
+        "urban": true,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "mainline_south_repro",
+      "id": "a1c551c7-fefa-4e8f-99fe-5b22aed021ac",
+      "source_record": "r14534451@50",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 449,
+      "centre_share": 1.0,
+      "raw_beside_share": 0.9977728285077951,
+      "raw_both_share": 0.799554565701559,
+      "beside_share": 0.42538975501113585,
+      "both_share": 0.031180400890868598,
+      "pavement_excluded_share": 0.9665924276169265,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 24,
+        "centre_share": 1.0,
+        "beside_share": 1.0,
+        "both_share": 0.7916666666666666,
+        "urban": true,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "opposite_south_repro",
+      "id": "a18f6a47-bdef-4358-b8d1-a1d775bf904a",
+      "source_record": "r14534450@60",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 446,
+      "centre_share": 0.9932735426008968,
+      "raw_beside_share": 0.9910313901345291,
+      "raw_both_share": 0.1031390134529148,
+      "beside_share": 0.29596412556053814,
+      "both_share": 0.011210762331838564,
+      "pavement_excluded_share": 0.9910313901345291,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 24,
+        "centre_share": 0.9583333333333334,
+        "beside_share": 1.0,
+        "both_share": 0.16666666666666666,
+        "urban": true,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "mainline_north_carr",
+      "id": "b2e7862d-2d20-4c41-9b41-b6b8b4247c5c",
+      "source_record": "r14534451@50",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 356,
+      "centre_share": 1.0,
+      "raw_beside_share": 0.9410112359550562,
+      "raw_both_share": 0.008426966292134831,
+      "beside_share": 0.019662921348314606,
+      "both_share": 0.0,
+      "pavement_excluded_share": 0.9297752808988764,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 30,
+        "centre_share": 1.0,
+        "beside_share": 0.9,
+        "both_share": 0.03333333333333333,
+        "urban": false,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "opposite_north_carr",
+      "id": "4aa565b1-a06d-48af-b48d-f8059ebdc6a7",
+      "source_record": "r14534450@60",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 353,
+      "centre_share": 0.9886685552407932,
+      "raw_beside_share": 1.0,
+      "raw_both_share": 0.0028328611898017,
+      "beside_share": 0.0028328611898017,
+      "both_share": 0.0,
+      "pavement_excluded_share": 1.0,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 30,
+        "centre_share": 0.9666666666666667,
+        "beside_share": 1.0,
+        "both_share": 0.0,
+        "urban": false,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "mainline_rural_north",
+      "id": "5f43e7c5-0f0f-4c23-a95f-567fbbfb42de",
+      "source_record": "r14534451@50",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 470,
+      "centre_share": 0.9936170212765958,
+      "raw_beside_share": 0.9851063829787234,
+      "raw_both_share": 0.5723404255319149,
+      "beside_share": 0.6361702127659574,
+      "both_share": 0.002127659574468085,
+      "pavement_excluded_share": 0.9191489361702128,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 41,
+        "centre_share": 1.0,
+        "beside_share": 0.975609756097561,
+        "both_share": 0.5121951219512195,
+        "urban": true,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "border_mainline",
+      "id": "1491fa3f-6a83-4c43-97f7-ab9019cc7d28",
+      "source_record": "r14534451@50",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 25,
+      "centre_share": 1.0,
+      "raw_beside_share": 1.0,
+      "raw_both_share": 0.64,
+      "beside_share": 0.88,
+      "both_share": 0.0,
+      "pavement_excluded_share": 0.68,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 3,
+        "centre_share": 1.0,
+        "beside_share": 1.0,
+        "both_share": 0.0,
+        "urban": false,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "mainline_wyoming",
+      "id": "e60c1ea3-f062-4c23-9bd7-d76ec65d0c0f",
+      "source_record": "r17336122@4",
+      "urban_after": false,
+      "has_sidewalks": false,
+      "samples": 168,
+      "centre_share": 1.0,
+      "raw_beside_share": 0.7321428571428571,
+      "raw_both_share": 0.23214285714285715,
+      "beside_share": 0.07738095238095238,
+      "both_share": 0.0,
+      "pavement_excluded_share": 0.7202380952380952,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 12,
+        "centre_share": 1.0,
+        "beside_share": 0.9166666666666666,
+        "both_share": 0.3333333333333333,
+        "urban": true,
+        "offset_m": 30
+      }
+    },
+    {
+      "name": "cheyenne_sidewalk",
+      "id": "00ba1603-9f35-4908-99d2-260b36d4ea4f",
+      "source_record": "w15732998@25",
+      "urban_after": true,
+      "has_sidewalks": true,
+      "samples": 7,
+      "centre_share": 1.0,
+      "raw_beside_share": 1.0,
+      "raw_both_share": 0.8571428571428571,
+      "beside_share": 0.7142857142857143,
+      "both_share": 0.7142857142857143,
+      "pavement_excluded_share": 0.2857142857142857,
+      "source": "WorldCover 50 excluding mapped transportation pavement",
+      "offsets_m": [
+        30.0,
+        60.0
+      ],
+      "pavement_margin_m": 10.0,
+      "original_vertex_rule": {
+        "samples": 5,
+        "centre_share": 1.0,
+        "beside_share": 1.0,
+        "both_share": 0.6,
+        "urban": true,
+        "offset_m": 30
+      }
+    }
+  ]
+}

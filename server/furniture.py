@@ -81,6 +81,25 @@ def highway_lit(region, link, urban):
     """Is a highway (HIGHWAY_CLASSES) lit: every ramp (in the country only at its ends: PARTIAL_END_M); the mainline in
     built-up land, except where the state lights its interchanges only."""
     return bool(link) or (bool(urban) and region != "na:ramps")
+
+
+def lighting_eligibility(spec, lit=None, *, region=None, has_walk=False):
+    """Road lighting policy, independent of the presence of a sidewalk run.
+
+    Explicit OSM way lighting wins; otherwise development supports town lighting
+    and mainline lighting, and rural links retain partial interchange lighting.
+    Individual mapped streetlamp nodes are not ingested by this generator.
+    """
+    tag = str(lit or "").strip().lower()
+    if tag in ("yes", "no"):
+        return {"eligible": tag == "yes", "rule": "osm.lit." + tag, "policy_source": "mapped_way_tag"}
+    if spec.cls in HIGHWAY_CLASSES:
+        enabled = highway_lit(region, spec.link, spec.urban)
+        rule = "highway.partial_rural_link" if spec.link and not spec.urban else "highway.developed_mainline"
+    else:
+        enabled = spec.urban and (spec.cls in TOWN_POLE_CLASSES or (has_walk and spec.cls in lamp_spacing(region)))
+        rule = "street.developed_context"
+    return {"eligible": bool(enabled), "rule": rule, "policy_source": "inferred"}
 LAMP_CURB_M = 0.5           # m from the curb onto the sidewalk
 POLE_SPACING = 45.0
 POLE_CLASSES = {"secondary", "tertiary", "residential", "unclassified"}
@@ -881,7 +900,7 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
-          clearance=None, development=None):
+          clearance=None, development=None, trace=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -890,9 +909,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     instead). region: lamp_region's (the lamps' spacing). clearance: the tile's shared RoadClearance, including
     sampled tapers and the generated decks' shifts / sidewalks; None builds one from these roads and decks.
     development: local built-environment samples (development.py) for the street trees, hydrants, benches and bins;
-    None: none of those. Lighting and mapped infrastructure stay independent."""
+    None: none of those. Lighting and mapped infrastructure stay independent.
+    ground(x,y) also supplies roadside pole/lamp support at emitted XY; sidewalk
+    objects retain their draped slab support. trace is opt-in placement evidence."""
     spacing_of = lamp_spacing(region, dense=not town)
-    lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
+    lighting = {fid: str(value or "").strip().lower() for fid, value in (lighting or {}).items()}
     x0, y0, x1, y1 = box
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
 
@@ -901,6 +922,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     clearance = clearance if clearance is not None else RoadClearance(
         [(spec.width / 2, pts) for _, spec, pts, _ in roads], decks, bounds=box)
     rows = []
+    grounded_bases = {} if trace is not None else None
     lit = set()
     for wk in walks:
         fid = wk.get("fid")
@@ -909,6 +931,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         if wk.get("median"):        # a divided road's median: no lamps, poles, benches or bins on it (Boston
             continue                # Street's is a bare curb, Mapillary 2026-10-17)
         spec, line = by_fid[fid]
+        trace_start = len(rows)
         run = np.asarray(wk["pts"], np.float64)
         if len(run) < 2:
             continue
@@ -943,7 +966,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                             continue
                     rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2] + curb_h), 2),
                                  round(yaw_fn(out), 1), 1.0, height, 0.0])
-        rule = spacing_of.get(spec.cls)
+        lamps_allowed = lighting_eligibility(spec, lighting.get(fid), region=region, has_walk=True)["eligible"]
+        rule = spacing_of.get(spec.cls) if lamps_allowed else None
         # (none along a mountain pass road: no line follows the Stelvio's hairpins, Mapillary 2026-10-31; nor the
         # country roads' below)
         if town and spec.cls in TOWN_POLE_CLASSES and overhead(fid) and not getattr(spec, "mountain", False):
@@ -967,13 +991,13 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     if _owns(box, q[0], q[1]):
                         rows.append(pole)
                         k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
-                        if lighting.get(fid) != "no" and pole_lamp(spec.cls, k, region):
+                        if lamps_allowed and pole_lamp(spec.cls, k, region):
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                          round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
                 if wires is not None and len(run_poles) > 1:
                     wires.extend(_own_spans(run_poles, box))
             rule = None
-        if rule is not None and lighting.get(fid) != "no":
+        if rule is not None:
             spacing, both = rule
             lamp_side = 1 if _h01(fid, "side") < 0.5 else -1
             if both or side == lamp_side:
@@ -1007,17 +1031,17 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 lambda out: _yaw(-out[0], -out[1]) + BENCH_YAW, optional=True)
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1,
                 lambda out: _yaw(-out[0], -out[1]), optional=True)
+        if trace is not None and fid in trace:
+            trace[fid].extend(rows[trace_start:])
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals, country, priority, ground, clearance))
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
+        trace_start = len(rows)
         # a street in built-up land (spec.urban: the land cover; the tile's `town` is only "not a dense core", true in
         # the countryside too) with no sidewalk run: lit from its edge; a country road: utility poles alone
-        highway = spec.cls in HIGHWAY_CLASSES and (lighting.get(fid) == "yes"
-                                                   or highway_lit(region, spec.link, spec.urban))
-        lamps = lighting.get(fid) != "no" and (highway or lighting.get(fid) == "yes"
-                                                or (spec.urban and spec.cls in TOWN_POLE_CLASSES))
-        highway = highway and lamps
+        lamps = lighting_eligibility(spec, lighting.get(fid), region=region)["eligible"]
+        highway = spec.cls in HIGHWAY_CLASSES and lamps
         poles = not highway and overhead(fid) and (lamps or (not spec.urban and spec.cls in POLE_CLASSES)) \
             and not getattr(spec, "mountain", False)        # (a pass road's: none, as in town above)
         if not (lamps or poles):
@@ -1033,12 +1057,30 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         phase = _h01(fid, "pphase") * spacing
         L = _arclen(line)[-1]
         s = phase + spacing * np.arange(0, int((L - phase) // spacing) + 1)
-        if highway and spec.link and not spec.urban:    # a rural ramp: partial interchange lighting, at its ends
+        if highway and spec.link and not spec.urban and lighting.get(fid) != "yes":
+            # Partial interchange lighting is inferred only; explicit lit=yes describes the entire way.
             s = (np.array([PARTIAL_END_M, L - PARTIAL_END_M]) if L > 2 * PARTIAL_END_M + spacing / 2
                  else np.array([L / 2]))
         if not len(s):
             continue
         P, D = _at(line, s)
+        if ground is not None:
+            normal = np.column_stack([-D[:, 1], D[:, 0]]) * side
+            locations = P[:, :2] + normal * (spec.width / 2 + (POLE_OFF_M if poles else LAMP_EDGE_M))
+            owned = np.fromiter((_owns(box, q[0], q[1]) for q in locations), bool, len(locations))
+            needed = owned.copy()
+            if poles and wires is not None:
+                needed[1:] |= owned[:-1]  # the far endpoint of a span whose first pole this tile owns
+            if needed.any():
+                # Rows serialize xy to centimetres. Read their support at that same position; wire anchors retain
+                # their original geographic xy and use the same pole-base elevations.
+                query = np.round(locations[needed], 2)
+                heights = np.broadcast_to(np.asarray(ground(query[:, 0], query[:, 1]), np.float64), (len(query),))
+                if not np.isfinite(heights).all():
+                    raise ValueError("roadside furniture ground contains non-finite heights")
+                P[needed, 2] = heights
+                if grounded_bases is not None:
+                    grounded_bases.update((tuple(q), float(z)) for q, z in zip(query, heights))
         run = []
         for k, (p, d) in enumerate(zip(P, D)):
             n = np.array([-d[1], d[0]]) * side
@@ -1068,9 +1110,31 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                                  round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
+        if trace is not None and fid in trace:
+            trace[fid].extend(rows[trace_start:])
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
     rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]
-    return under_decks(rows + lamp_lenses(rows), list(decks), wires)
+    result = under_decks(rows + lamp_lenses(rows), list(decks), wires)
+    if trace is not None:
+        retained = {id(row) for row in result}
+        for fid, attributed in trace.items():
+            spec = by_fid[fid][0]
+            light_rule = lighting_eligibility(spec, lighting.get(fid), region=region)["rule"]
+            objects = []
+            for row in attributed:
+                if id(row) not in retained:
+                    continue
+                obj = {"group": row[0], "position": row[1:4], "object_source": "procedural",
+                       "rule": light_rule if row[0] in (G_LAMP, G_POLELAMP) else "furniture." + row[0]}
+                if row[0] in (G_POLE, G_LAMP) and tuple(row[1:3]) in grounded_bases:
+                    ground_z = grounded_bases[tuple(row[1:3])]
+                    obj.update(support="final_drawn_ground_at_object_xy", base_z=row[3], ground_z=ground_z,
+                               base_minus_ground_m=round(row[3] - ground_z, 6))
+                objects.append(obj)
+            trace[fid] = {"stage": "furniture.place after ownership, carriageway and under-deck filters",
+                          "objects": objects, "count": len(objects),
+                          "note": "shared junction objects and lamp lenses are not attributed; building filtering occurs later"}
+    return result
 
 
 def _own_spans(run, box):

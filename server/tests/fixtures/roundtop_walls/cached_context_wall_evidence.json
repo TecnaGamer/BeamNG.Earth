@@ -1,0 +1,139 @@
+{
+  "note": "Exploratory whole-feature replay includes the mapped bridge range and is NOT a valid production wall-count baseline. Use cached_context_build_tile_evidence.json for the genuine ground-parts production replay (2 original northern parapets -> 0 corrected). Exact captured DEM plus active-world cached plan snapshot through production canonical _Planner.apply. This includes built neighbor/junction/bridge/tunnel context; not a fresh rebuild. All values frameUp metres unlesscoordinate.",
+  "baseline_roads_sha256": "a524112be7eb66d7eb71d803a4f7dbbc4b9d08e8f9ff1c006fbc89c098296a5a",
+  "cached_plan_signature": "w1s1",
+  "cached_plan_source_cells": [
+    [
+      14,
+      3418,
+      6132
+    ],
+    [
+      14,
+      3419,
+      6132
+    ],
+    [
+      14,
+      3418,
+      6133
+    ],
+    [
+      14,
+      3419,
+      6133
+    ]
+  ],
+  "before_wall_count": 4,
+  "after_wall_count": 0,
+  "before_wall_rows": [
+    {
+      "type": "parapet",
+      "start_latlon": [
+        41.15860767993062,
+        -104.88002768700285
+      ],
+      "end_latlon": [
+        41.15887780915674,
+        -104.88002918818013
+      ],
+      "sample_order": [
+        "road_center",
+        "wall_base"
+      ],
+      "raw_up_m": [
+        1870.8673395372682,
+        1870.84266000969
+      ],
+      "final_up_m": [
+        1870.8673395372682,
+        1870.84266000969
+      ],
+      "source_chord_road_z_m": 1875.6761904632538,
+      "wall_top_up_m": 1876.2761904632537,
+      "wall_foot_up_m": 1870.5426582645853,
+      "wall_top_over_final_ground_m": 5.433530453563662
+    },
+    {
+      "type": "parapet",
+      "start_latlon": [
+        41.160138329488575,
+        -104.88003809748157
+      ],
+      "end_latlon": [
+        41.16080464325866,
+        -104.88004308565635
+      ],
+      "sample_order": [
+        "road_center",
+        "wall_base"
+      ],
+      "raw_up_m": [
+        1874.911353427154,
+        1874.3371155494115
+      ],
+      "final_up_m": [
+        1874.9854913172755,
+        1874.9850525642398
+      ],
+      "source_chord_road_z_m": 1877.210606525582,
+      "wall_top_up_m": 1877.810606525582,
+      "wall_foot_up_m": 1874.6849250657278,
+      "wall_top_over_final_ground_m": 2.825553961342166
+    },
+    {
+      "type": "parapet",
+      "start_latlon": [
+        41.15860811475432,
+        -104.87989067444792
+      ],
+      "end_latlon": [
+        41.158878243982215,
+        -104.87989217506268
+      ],
+      "sample_order": [
+        "road_center",
+        "wall_base"
+      ],
+      "raw_up_m": [
+        1870.8673395372682,
+        1870.8406609215929
+      ],
+      "final_up_m": [
+        1870.8673395372682,
+        1870.8406609215929
+      ],
+      "source_chord_road_z_m": 1875.6761904632538,
+      "wall_top_up_m": 1876.2761904632537,
+      "wall_foot_up_m": 1870.5327217335187,
+      "wall_top_over_final_ground_m": 5.435529541660799
+    },
+    {
+      "type": "parapet",
+      "start_latlon": [
+        41.160138915249725,
+        -104.87990108272307
+      ],
+      "end_latlon": [
+        41.16080522902567,
+        -104.87990606951024
+      ],
+      "sample_order": [
+        "road_center",
+        "wall_base"
+      ],
+      "raw_up_m": [
+        1874.911353427154,
+        1874.7213612394448
+      ],
+      "final_up_m": [
+        1874.9854913172755,
+        1874.9850565472825
+      ],
+      "source_chord_road_z_m": 1877.210606525582,
+      "wall_top_up_m": 1877.810606525582,
+      "wall_foot_up_m": 1874.6849306407612,
+      "wall_top_over_final_ground_m": 2.8255499782994775
+    }
+  ]
+}

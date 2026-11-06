@@ -1644,6 +1644,10 @@ class Surface:
                     log.debug("surface: %s of %s: %s: %s", layer, key, type(e).__name__, e)
         return out
 
+    def urban_locations(self, lat, lon):
+        """WorldCover sample locations for roads' geographic pavement exclusion."""
+        return warp(np.asarray(lat), np.asarray(lon))
+
     def urban(self, lat, lon):
         """Built-up land cover (WorldCover 50) at the points: roads.road_specs's urban_fn. Uncached cells
         read as not built-up."""

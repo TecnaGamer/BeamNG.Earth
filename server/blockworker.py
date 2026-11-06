@@ -801,7 +801,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
         try:
             import worldprops
-            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev)
+            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev, include_communications=False)
             skip = frozenset(skip) | frozenset(barn_ids)
         except Exception as ex:
             log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
@@ -828,6 +828,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         return roadsmod.block_arch_raise(tunnels, cell_fn, frame, la, lo, elev(la, lo),
                                          (box[0] - 8, box[1] - 8, box[2] + 8, box[3] + 8))
     P.drawn = drawn
+    # Share the final terrain triangles with roadside furniture and mapped towers.
+    final_ground = lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q)
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
@@ -840,7 +842,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region, country=country,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
                                  tunnels=tunnels, walls=rwalls,
-                                 ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
+                                 raw_elev=lambda la, lo: _s.dem.sample(la, lo, zoom),
+                                 dem_source={"sampler": type(_s.dem).__name__, "zoom": int(zoom),
+                                             "dataset": "configured DEM chain; see raw tile provenance"},
+                                 ground=final_ground,
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
@@ -970,6 +975,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                               props, wires, clearance=clearance[0] if clearance else None)
+        try:
+            import antennas
+            props.extend(antennas.tile_rows(frame, tx, ty, _s.md, elev, final_ground))
+        except Exception as ex:
+            log.warning("mapped antennas: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import fences
         try:
             props.extend(fences.rows(frame, infra_fn, box, elev))

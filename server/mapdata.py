@@ -153,6 +153,38 @@ CREDIT_LINES = {
 THEME_OF = {name: spec["theme"] for name, spec in overture.LAYERS.items()}
 
 
+def pavement_hook(md):
+    """Source roads around geographic context probes, independent of the requesting road cell.
+
+    A whole road can occur in several source cells. Each copy must mask the same
+    nearby pavement, including a parallel road just across a source-cell edge.
+    Read geometry only: never invoke road classification or neighbor hooks.
+    """
+    def sources(points):
+        points = np.asarray(points, np.float64)
+        if not points.size:
+            return []
+        # Forty metres covers the supported source half widths plus the pavement
+        # margin, with room for rounding (explicit widths are capped at 40 m).
+        latitude, longitude = points[:, 1], points[:, 0]
+        pad_lat = 40.0 / 110540.0
+        pad_lon = 40.0 / (111320.0 * np.maximum(np.cos(np.radians(latitude)), 0.001))
+        keys = mapcells.cells_near_points(latitude, longitude, pad_lat, pad_lon)
+        layers = []
+        try:
+            for key in keys:
+                f = md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+                if f is None:
+                    raise RuntimeError(f"pavement context: road source unavailable for {key}")
+                if len(f):
+                    layers.append(f)
+        except Exception:
+            revisit.fault()
+            raise
+        return layers
+    return sources
+
+
 def _source(layer, release):
     if layer in VECTOR_LAYERS:
         return "overture", release
@@ -728,6 +760,7 @@ class MapData:
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
+                    f.__dict__["_bnge_pavement"] = pavement_hook(self)
                 f.__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(), sort_keys=True))
             else:
                 f = None if "missing" in arrays else _raster_from(arrays)

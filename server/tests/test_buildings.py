@@ -1283,6 +1283,32 @@ class FarLampTest(unittest.TestCase):
         country = bld.far_lamps(FRAME, [f], 0.0, 0.0, 256.0, {(5, 5)}, ground)
         self.assertTrue(country and all(abs(p[1] - 150) < 10 for p in country), "elsewhere built-up: the ramp only")
 
+    def test_explicit_road_lighting_overrides_far_inference(self):
+        from test_roads import features, rules, FRAME
+        f = features([[(-100, 50), (400, 50)], [(-100, 150), (400, 150)]], ["residential", "motorway"])
+        f.rules["subclass"] = rules([(1, "link")])
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        f.attrs["osm_lit"] = np.array([" no ", "NO"])
+        self.assertEqual(bld.far_lamps(FRAME, [f], 0., 0., 256., {(0, 0)}, ground), [],
+                         "lit=no overrides built-up squares and inferred interchange lights")
+        f.attrs["osm_lit"] = np.array(["unknown", ""])
+        self.assertTrue(bld.far_lamps(FRAME, [f], 0., 0., 256., {(0, 0)}, ground),
+                        "missing and unknown tags keep the existing inference")
+        self.assertEqual(bld.far_lamps(FRAME, [f], 0., 0., 256., set(), ground), [])
+
+    def test_explicitly_lit_rural_motorway_glows_without_buildings(self):
+        from test_roads import features, FRAME
+        f = features([[(-100, 50), (600, 50)]], ["motorway"])
+        f.attrs["osm_lit"] = np.array([" YES "])
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        # Wyoming's inferred mainline lighting is disabled; explicit lighting still works in both tiles.
+        a = bld.far_lamps(FRAME, [f], 0., 0., 256., set(), ground, "na:ramps")
+        b = bld.far_lamps(FRAME, [f], 256., 0., 256., set(), ground, "na:ramps")
+        self.assertTrue(a and b)
+        self.assertTrue(all(0. <= p[0] < 256. for p in a))
+        self.assertTrue(all(256. <= p[0] < 512. for p in b))
+        self.assertTrue(set(map(tuple, a)).isdisjoint(map(tuple, b)))
+
     def test_skyline_windows(self):
         spec = bld.plan(rect(0, 0, 30, 20), {"class": "", "height": 30.0}, 0)
         P, UV, T, M, mats, C = bld._sky_mesh([(spec, 0.0, 0.0)])

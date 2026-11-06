@@ -1,0 +1,1430 @@
+{
+  "captured": "2026-11-05",
+  "origin": [
+    41.15981,
+    -104.87994
+  ],
+  "active_cache_read_only": true,
+  "mapcell": "14/3418/6133",
+  "source_files": [
+    {
+      "file": "roads_3417_6132.npz",
+      "sha256": "038137b0f35088a1c3c0896660c39ab1bdbd5ffa4436053da8be27593bbf17d5",
+      "features": 29,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 67,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3417_6133.npz",
+      "sha256": "6794939c5ec126888b7f0e2124944994b48faa0af244a26dcc7797222ab709dd",
+      "features": 26,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 62,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3417_6134.npz",
+      "sha256": "46a8f93e0969552451bbb8122e80dddaf63c66277a4c791e2f6fbeb21f08671b",
+      "features": 23,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 64,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3418_6132.npz",
+      "sha256": "66d6e6c503b7f847ca22f85b52cb213a197040630bfa111282a549ed33b5998f",
+      "features": 37,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 80,
+            "license": "ODbL-1.0"
+          },
+          {
+            "dataset": "TomTom",
+            "features": 2,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3418_6133.npz",
+      "sha256": "c42a4fed1f66aac500e8e981caeaeb3dc93b12d38934796043e4f73b14771e3b",
+      "features": 86,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 130,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3418_6134.npz",
+      "sha256": "8e988db089be773ae6e67a41cf40d3e6985091938c87ab8e8fdb947dc201979e",
+      "features": 175,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 232,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3419_6132.npz",
+      "sha256": "1ed76b23a8db9803eabb584cc83534cddf74bf18aacf59faf3e02c40a5579d6c",
+      "features": 56,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 93,
+            "license": "ODbL-1.0"
+          },
+          {
+            "dataset": "TomTom",
+            "features": 1,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3419_6133.npz",
+      "sha256": "be2b35f29815a7c7aeb468bd711c5288abdb0761d9139fb9d6f802fd549992ff",
+      "features": 503,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 597,
+            "license": "ODbL-1.0"
+          },
+          {
+            "dataset": "TomTom",
+            "features": 1,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    },
+    {
+      "file": "roads_3419_6134.npz",
+      "sha256": "a910cb95aa54548afdec65774bdbea9e1b6bab1ca18b1352d72da1018a23c743",
+      "features": 213,
+      "provenance": {
+        "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+        "datasets": [
+          {
+            "dataset": "OpenStreetMap",
+            "features": 269,
+            "license": "ODbL-1.0"
+          }
+        ],
+        "id": "overture:transportation",
+        "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+        "name": "Overture Maps Foundation",
+        "release": "2026-09-23.1",
+        "url": "https://docs.overturemaps.org/attribution/"
+      }
+    }
+  ],
+  "dem_tiles": [
+    {
+      "key": [
+        16,
+        13671,
+        24528
+      ],
+      "sha256": "242e762a9710a7cb1d5e85e8bf736b11ed168bf7bce6a8524a4139de18e4b30a",
+      "minimum": 1896.84375,
+      "maximum": 1902.4375,
+      "raw_webp_sha256": "0f32f6b428d5f9b4110f11fef1378e1e416d083487d17ee903f8a0bac8df9c5b",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24529
+      ],
+      "sha256": "dc8bd940e59e5a711c2b96fbf64a3bfc4609ab186138accde3d069d5c15ef6de",
+      "minimum": 1885.15625,
+      "maximum": 1903.6875,
+      "raw_webp_sha256": "bdae5bcd4841a1bb9fb8d1d8bd60e1f2c433d0180bff7c6010b80bff2779283d",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24530
+      ],
+      "sha256": "1467767a96a023259a3f5679f7cc9385c3dc0ed379916398dead1f04a300be19",
+      "minimum": 1881.03125,
+      "maximum": 1893.21875,
+      "raw_webp_sha256": "d8def04a9c2c1e82a742bcecf823940a67490d0d66f40c4611db2a204419dfe1",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24531
+      ],
+      "sha256": "61d5abc54a4d4d906f049ce64c6f33f94d35d9d0bf40296731b20d12ab7b3799",
+      "minimum": 1883.53125,
+      "maximum": 1918.96875,
+      "raw_webp_sha256": "41d2d58465b8b643151baa8ee8ff7090cb88a3f4dba0403a7d13c5cdc6b27c43",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24532
+      ],
+      "sha256": "e6b7a9f5eda01bb0446821f1668276e6a3bf7f92caa5fd038d95f16d368c884c",
+      "minimum": 1888.59375,
+      "maximum": 1901.8125,
+      "raw_webp_sha256": "a4cc46c78b10122175fe56da3c860537062af7c3d0c03501f5d0dc4baa49124f",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24533
+      ],
+      "sha256": "4463c0ac4e33fa305248087ecdf58563a2023123fb449a9978157f90503c9b93",
+      "minimum": 1888.40625,
+      "maximum": 1898.0,
+      "raw_webp_sha256": "e9d3b76ef1be99dc52f252a3c09b271ae85c56bbc2e243f48388531b251b6b06",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24534
+      ],
+      "sha256": "084412c3081f5476a9efdad02dd76f3b00f18481d03fba6eabb0404c2adf93f4",
+      "minimum": 1891.15625,
+      "maximum": 1901.4375,
+      "raw_webp_sha256": "4517c85b662fbd026347fa941bcf97d06e7dea431ab8da2fd9b9a96e7e16bb15",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24535
+      ],
+      "sha256": "d73f307bda951e8e1f88659a2882c441a14ba404eaa0d733c2bbf6d00be5a667",
+      "minimum": 1893.03125,
+      "maximum": 1905.6875,
+      "raw_webp_sha256": "3d18e92e04e183137d46dc9a1fb8ebfeacbadc8a310bcc0ce209bfb0c9a5cb70",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24536
+      ],
+      "sha256": "b533045b83f5145355364c4482720c08e4d938a8119d1e7bac4ee34ecea09f8d",
+      "minimum": 1888.84375,
+      "maximum": 1901.15625,
+      "raw_webp_sha256": "bffee12204bd6a56d5b2dc11220501c3d80736c1244e4b3d1d0cc23a69b36bfc",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13671,
+        24537
+      ],
+      "sha256": "975e8c1b562e856be2be2e3b84625f59ef861bf77aa24240e2792990e5182ca3",
+      "minimum": 1894.03125,
+      "maximum": 1901.8125,
+      "raw_webp_sha256": "81703fc28441e2881b640705972585b30858e9615568f19b39ebb688c2d2e996",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24528
+      ],
+      "sha256": "c95f1ed8154ae7d39abe0886b15e43c50a9c297e6e8c6d1df8d296d1cbbad337",
+      "minimum": 1894.15625,
+      "maximum": 1899.1875,
+      "raw_webp_sha256": "b5ecacd29e3403b2090cece09d368bb7950b2c24aad0d57860826b30c90b2e29",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24529
+      ],
+      "sha256": "65f8852a7df716454f90e3dd1e30b6598866e09987ba42af28b467cb5cf1a2ee",
+      "minimum": 1888.4375,
+      "maximum": 1899.34375,
+      "raw_webp_sha256": "1483636bc23854a3004f8f9724fd4506508a48b954cef04247e5ec3e9765e9b6",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24530
+      ],
+      "sha256": "32d07a5e777ca97357d473d68e46a9a73006995b3772c10a5f00af53ca07c91d",
+      "minimum": 1877.96875,
+      "maximum": 1896.71875,
+      "raw_webp_sha256": "9aa80a0234a62ceb7394d45eb9c8d630b9c72c5127ed77a48069f952229ba796",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24531
+      ],
+      "sha256": "35e2df643f336a48a680a8bc4a4866ff7aad74e7e95f62ce3e0951e783d3a217",
+      "minimum": 1877.53125,
+      "maximum": 1899.6875,
+      "raw_webp_sha256": "598ae7f6cd45becb8de6c49e46d0655431e12284ddb336da92344f5ea867fc80",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24532
+      ],
+      "sha256": "51386277a94ea52d9b5712257d3da7a3137ab95286d7f0bb773a6dfdcc400b61",
+      "minimum": 1882.96875,
+      "maximum": 1896.96875,
+      "raw_webp_sha256": "713a12c5b715220cb24cc282e86ca7709785dc1d408b40a1b0544325df9c7243",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24533
+      ],
+      "sha256": "04759aa955dc7c1c7d23c9204db846d96b7d5327d5f17771fd656d61917d0af9",
+      "minimum": 1884.1875,
+      "maximum": 1896.25,
+      "raw_webp_sha256": "5e7f501a3293d0edd6b43b0531fa075f017e923ec022b6f4877fc3c86512523a",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24534
+      ],
+      "sha256": "05f90b52af18ebbb571fa8ab89098b1a51cf645207b04be5b68fead160c11556",
+      "minimum": 1889.8125,
+      "maximum": 1895.46875,
+      "raw_webp_sha256": "f607596e447733ee3d13704524ca61e4a53cc8b7e4922f98181afaafa68b8354",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24535
+      ],
+      "sha256": "282e932f780c51d199e2dcb85d5d8e403762e604cdc058327d8c45a251ddad05",
+      "minimum": 1888.53125,
+      "maximum": 1897.09375,
+      "raw_webp_sha256": "3b4b8893d72e837849bfc8228e3e16b2f7b75f6adf226511253189ac53f94465",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24536
+      ],
+      "sha256": "b460343acdf02ed0577be2570b9081643357f2910adecb748b77aa19ff75d073",
+      "minimum": 1885.40625,
+      "maximum": 1896.21875,
+      "raw_webp_sha256": "dca46dfb66803a17f4c1c5e30f5122abee4844a8023f8a073f007958fb13893a",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13672,
+        24537
+      ],
+      "sha256": "54d58ca4c38e1a5186d5451e3c23f12b19e3c72a9cc1001dde027c4d091c3f4a",
+      "minimum": 1891.25,
+      "maximum": 1899.84375,
+      "raw_webp_sha256": "b505094e321fa0e6d26d798fbdcc0457b7269c4cc5d4509f4bbca418cd40d021",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24528
+      ],
+      "sha256": "13400251ef041604e5bace0da1234104660c3fdd6c324647457b6ab268c7d1dd",
+      "minimum": 1892.78125,
+      "maximum": 1897.0625,
+      "raw_webp_sha256": "247f883d2b209cec5d4c4e77ccd072e90609f577dc962517af821f35a743e916",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24529
+      ],
+      "sha256": "9532ef5a5c81b7558ae076f48cbe553713c6399d95e923fd772587f2f4533ccf",
+      "minimum": 1892.15625,
+      "maximum": 1895.90625,
+      "raw_webp_sha256": "4ed3e3c08afd082b80102dac56bdbc78e8ae13307f7271e21470befce1eb7656",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24530
+      ],
+      "sha256": "8dc8407b9320fafe141e046ac9e9e4ab0b410997a428f00796afd0bf87ab1643",
+      "minimum": 1876.5,
+      "maximum": 1895.59375,
+      "raw_webp_sha256": "321a10e44854a1fc4add3db44a994f6f8c55c961a02dc4b381c31e0c5e9dc872",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24531
+      ],
+      "sha256": "9f65206451ca2230c65e14b4d5de6f23a20a5391634b4fe5e569d990c00dad16",
+      "minimum": 1874.0,
+      "maximum": 1891.625,
+      "raw_webp_sha256": "ea7f265d3ac997d5f2c1fac1d5d299c5e5e30851a5147c1239f481e143dce159",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24532
+      ],
+      "sha256": "f760ff2cc552c07ef6556c65b110c5cdb7a5ea6ec55fc80bcddf59cc13cc284d",
+      "minimum": 1874.1875,
+      "maximum": 1888.25,
+      "raw_webp_sha256": "db478f261a22c2f380ffda20f0a7532d7a83eb7d19eb8b5246ca17bbba8e90b3",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24533
+      ],
+      "sha256": "4f65c568b3c85093c4cfba7c4d85fdd93ad9bcb5ae90fcdda16a2a3bdb311c2d",
+      "minimum": 1882.25,
+      "maximum": 1892.53125,
+      "raw_webp_sha256": "80ea9b5f2e6503833f14e54e0871ce92a62458c3010bb074f68f61500921a2af",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24534
+      ],
+      "sha256": "0a3db5b5005d65167fec3e7a27977bdb9ae9c2b9593b80213857ae50eb68cae6",
+      "minimum": 1884.1875,
+      "maximum": 1890.90625,
+      "raw_webp_sha256": "6e9ee4fc27ff289009cdb626ee914b0b12e441266dcfebc6e61ada6de4502e42",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24535
+      ],
+      "sha256": "9c97cc3c71179a8dcb4e80f6c4bd4f3aad1e08ee41b77051b2d2faae67979e8e",
+      "minimum": 1885.03125,
+      "maximum": 1892.84375,
+      "raw_webp_sha256": "4b987a85169c05d0917f1109ae6ef28985815f0da7525a0eb5ba1b214b3de508",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24536
+      ],
+      "sha256": "81ae69edf6196840b538b793cf22945146f999fa16d363db37fe024e9658599f",
+      "minimum": 1885.0625,
+      "maximum": 1892.78125,
+      "raw_webp_sha256": "526aea8e1e25026b4e562b27f8e6eddeaa4d576364af4b693cff74101885b901",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13673,
+        24537
+      ],
+      "sha256": "31e52cd888e0f4eb3872b2855de91b6273876306d73b6a1c5d9eca5f68f3c774",
+      "minimum": 1888.4375,
+      "maximum": 1897.0,
+      "raw_webp_sha256": "f33a59050affb423fee8332d9f24b2e765b93b46f39996c8ad6db718d6b6b2cd",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24528
+      ],
+      "sha256": "813c7d4fef320b6b71fe27fa877e79f219b428c4db6f29481156e7274e82f67f",
+      "minimum": 1891.875,
+      "maximum": 1907.84375,
+      "raw_webp_sha256": "004059ca83d3b2e67833ab776c121222a15483eb35e0d86187cc4694eaf310a2",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24529
+      ],
+      "sha256": "c7f46c6ff3e83c5fc858e245944f166df032afd12ea4c907e05fe6982a83d435",
+      "minimum": 1888.65625,
+      "maximum": 1897.5,
+      "raw_webp_sha256": "eb4f8cf227b042d3a2e45438b48e65228e12a00a030161b036b753cad9ef0100",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24530
+      ],
+      "sha256": "c884e199cc9d7232d350ec883fc4d38f3c916ce1f4c46c4cddb85a27e57df4c9",
+      "minimum": 1888.03125,
+      "maximum": 1892.8125,
+      "raw_webp_sha256": "0261e85420987afcd9606d78f54e83405ca70867a059279c36bdaa3edfc4c4ff",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24531
+      ],
+      "sha256": "e512f29b407ac5c9289302c1ca7b4a92df69c09da9b125a42d30a3d53a8bbcff",
+      "minimum": 1873.03125,
+      "maximum": 1891.625,
+      "raw_webp_sha256": "cb3ed7c1f3cf5436b319fc95e8af9e4209320b293a7a46967eff6c3dfea1d230",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24532
+      ],
+      "sha256": "2eb2f92ec7f0e4bcf64957144c35bea42d13da5e642eb10f0b908bdaab94966e",
+      "minimum": 1871.0625,
+      "maximum": 1883.875,
+      "raw_webp_sha256": "3a7b7cdfce369b1eae7997bab2713e697aa47eb6a58336a80288f3a64987a585",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24533
+      ],
+      "sha256": "a0d0f6e3f5a49f383800d28e3c565b06e5490c43e094f4f123d879e42717cf1c",
+      "minimum": 1877.5625,
+      "maximum": 1888.0625,
+      "raw_webp_sha256": "90f63c6d75a76ae04571956d28d5e49ee442061e1ce5a643226e42e253ddef26",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24534
+      ],
+      "sha256": "2936f8f4b4a2dfb149797d458f381dd32c7c20890384904e239db2c0607d6b38",
+      "minimum": 1878.28125,
+      "maximum": 1890.0625,
+      "raw_webp_sha256": "5aea1f425ac4d97af65ebbf24579342cb645924e2732be7a2d3647edd2aa5ee5",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24535
+      ],
+      "sha256": "8d62300b13e813f7611dfd736139ecc6608c34ba2bfca1ecc1b42c9f7b691c46",
+      "minimum": 1879.71875,
+      "maximum": 1893.15625,
+      "raw_webp_sha256": "3ee0050df53e15c5291163e17692a4b1da4a899ea3f1df8bb229e2f3073198a2",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24536
+      ],
+      "sha256": "c174f7204abcdba580a8ef1a78633d63e17d1868c66476085720111c887e635b",
+      "minimum": 1876.5625,
+      "maximum": 1891.125,
+      "raw_webp_sha256": "d46333f73a1419c5ffd05319785b95b45641167b0904dbbecdbc2bfd3b9660af",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13674,
+        24537
+      ],
+      "sha256": "858ca636bdb52d68a2fd6d2a63adebb53f6e591d2a73d199ca17affdd754c4db",
+      "minimum": 1884.625,
+      "maximum": 1894.78125,
+      "raw_webp_sha256": "6e63db8f8f5c11f31055e9a42e9b92c2acfff66f4ec35319128339b9b4f80d50",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24528
+      ],
+      "sha256": "31a4b511fdb31868eb2a56b01371ab9b643257129500b4624ccdf6bc02e71b0b",
+      "minimum": 1889.0,
+      "maximum": 1906.09375,
+      "raw_webp_sha256": "687525def5de77481f229e7cf0c25bb6dfc1f384fda263041fd0ec3a11382222",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24529
+      ],
+      "sha256": "024226748a51f6b5bb0b9ed382c6cf82431ca89398a5adb332cc769447194a53",
+      "minimum": 1886.40625,
+      "maximum": 1904.59375,
+      "raw_webp_sha256": "ea61716f60a5865c2341fe4af32209353be2f783ed5417bce160360d1fb3b55b",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24530
+      ],
+      "sha256": "b7c2613199b3d05c9b1f65846a44d88bf28b653740fe24a40e33bc76cc2e003e",
+      "minimum": 1885.5,
+      "maximum": 1891.4375,
+      "raw_webp_sha256": "27c9339e6da80da9ad8ffee4025c60636913d68ff372fb58a588cd7852ed3042",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24531
+      ],
+      "sha256": "aef5292122357e8c1a7d0728b9fd6d8971fa33a234640c2f940f548cb2597c6d",
+      "minimum": 1875.65625,
+      "maximum": 1889.78125,
+      "raw_webp_sha256": "74a9c1b63f4e20e54d67f6b6ec3531d0ea27cd39112ddff4d6549887118acfec",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24532
+      ],
+      "sha256": "be3a654155b990603af640af3382cbc2a77e5838c9e72c2799d756902219dedf",
+      "minimum": 1869.5,
+      "maximum": 1887.65625,
+      "raw_webp_sha256": "a2b71505d4536477eb45c9338e6f26049309284de418b0dd7390e3a8ec926f6f",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24533
+      ],
+      "sha256": "73dfca78d9331dc56d395ff407e6150bc6ddb552c2ee56cb34196c64eee40c76",
+      "minimum": 1869.1875,
+      "maximum": 1881.4375,
+      "raw_webp_sha256": "0de21edf78e81e9c4ad01a2748faa207f212e59944a89c20765c2bff5096ed1f",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24534
+      ],
+      "sha256": "b330022f2ab8a9b3cee3207a58fb3b5a4024e717affe0083fdea254cf5d764e1",
+      "minimum": 1874.125,
+      "maximum": 1889.75,
+      "raw_webp_sha256": "f9e10d1d78fe869cad194ccd9adf0c3fdfec2d2dc1b70ea8052418c921feeb29",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24535
+      ],
+      "sha256": "095b282b826207b5a534bcdbb461e35f924d6d0836e1300aa083985621f90547",
+      "minimum": 1870.25,
+      "maximum": 1892.25,
+      "raw_webp_sha256": "0473d949a14a255df5a377200501882de4cb70763f1473ee6677d2aaded4d5ad",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24536
+      ],
+      "sha256": "0d713538e738437871b8fb85314a68e51d1591ae8cd74cbd5c18eef0ffae7fcc",
+      "minimum": 1873.0,
+      "maximum": 1890.8125,
+      "raw_webp_sha256": "c92cfe5c4da266907df7860a62d3c3f1afbdacc54a68bdc6ddaed650edf08cc7",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13675,
+        24537
+      ],
+      "sha256": "4442ec0d9df68b86c59209a61ab25a53739b06c21c56498f2db166536e21704f",
+      "minimum": 1882.0,
+      "maximum": 1901.15625,
+      "raw_webp_sha256": "340813f0a45152d02753d848e34cdcb297fa7b53d4e47ebb3c0119e3bbc5155b",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24528
+      ],
+      "sha256": "5b186b571b825351c876dc9b0d59b5f0f1f15b5081dfae2199d2b7bf5332c35f",
+      "minimum": 1888.5625,
+      "maximum": 1895.59375,
+      "raw_webp_sha256": "f2402f1f952f76f4b302fc7a747d551fe740ae81978f94aa9f401c3b7d3c8070",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24529
+      ],
+      "sha256": "9a95429762d1b7d5ef8e417f7d7b3083e363368f37e8fec77ada1fa89ce3b8de",
+      "minimum": 1885.6875,
+      "maximum": 1893.46875,
+      "raw_webp_sha256": "b381fc83c1816ecfa384caf0fbf73afa02c71b45397a2a881f155f624643a94b",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24530
+      ],
+      "sha256": "5fdec545c378480c02f362cd480d5879eb925cbe51a3c7cf7a5d82f11908ca10",
+      "minimum": 1882.5625,
+      "maximum": 1889.1875,
+      "raw_webp_sha256": "ccb0894ba6403a0072c561cc943488e87122c410a198a52924dcebaeada8f4d9",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24531
+      ],
+      "sha256": "ba27ceb696ea78792a09491d43466b11217c28efe118db08bd6f33b07fd3d5b8",
+      "minimum": 1881.96875,
+      "maximum": 1886.46875,
+      "raw_webp_sha256": "b27df110f944efebe591ff31ee98b66fbea287f050fabb072d3b2e829d1f6f28",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24532
+      ],
+      "sha256": "65e5186e1081d5beb74905350b397154c207ef733bd2a02e4207f9775fc4164c",
+      "minimum": 1869.46875,
+      "maximum": 1886.375,
+      "raw_webp_sha256": "c6b5f38d1322642a01a16bedeb96d4f517083a2861fd1d60a5f143f9e3e8f8e8",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24533
+      ],
+      "sha256": "3d4f2cbc016f1f0184ae9d6b9c8ec804f3f240d2681f762abd8a14287db2be86",
+      "minimum": 1865.40625,
+      "maximum": 1884.0625,
+      "raw_webp_sha256": "cba7355a0601462c68e469626dc5f0a131ee2a3eeae72565dcbaf484e975b079",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24534
+      ],
+      "sha256": "5478c9098f1fa4650f2ef539e2728f22ad0606fe74cc40c7fa97d6f52068c510",
+      "minimum": 1865.21875,
+      "maximum": 1881.46875,
+      "raw_webp_sha256": "ca81ba6b899f4e2f0901df6ddb0d8bbc4ea5c9135dd02e3358f1029464885ec4",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24535
+      ],
+      "sha256": "62dea52130cb46918d62e26622268e5c73fcf0c7a0e4080d7a3467d901914f37",
+      "minimum": 1865.15625,
+      "maximum": 1881.4375,
+      "raw_webp_sha256": "31dd1ed17655950985daf7bdaae6eb9881801d4f312d30e8cfd9848cc88f92f0",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24536
+      ],
+      "sha256": "af12254fb6f1b3f0ff9db4db64710273e5b11e996fcb656be182b60aa4d92606",
+      "minimum": 1875.40625,
+      "maximum": 1884.125,
+      "raw_webp_sha256": "64cdae689caef363532fd1bddd8b9795d6204eb2b761756b981089a8d4538d16",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13676,
+        24537
+      ],
+      "sha256": "ec0b820ab604d5cef4e402a28a41b843048718dc1513cb4f355335b59164ef83",
+      "minimum": 1875.9375,
+      "maximum": 1892.90625,
+      "raw_webp_sha256": "649dc6f1c0d281ab6623aa10b76fa726f2be3c7cc8d4b195bdff0638ade18d91",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24528
+      ],
+      "sha256": "bb4e1f9c394a9bb3d0183bf2f219d00ee7921a7ac5dbefd6eb5bd7eea2d24469",
+      "minimum": 1888.5625,
+      "maximum": 1901.5,
+      "raw_webp_sha256": "e4c03a6036897439f247283c0dfae33053eab6842164d13da996d4df140b3a36",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24529
+      ],
+      "sha256": "6f1194513cae28f507a1812b33cbcfbd555a631ebfa29182ba21f4bec7bd9624",
+      "minimum": 1885.59375,
+      "maximum": 1900.3125,
+      "raw_webp_sha256": "5dd6a172d5c685ede1e65463a3cf242e6b4a33d0d0dd7ee01b2b9c1719f1061a",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24530
+      ],
+      "sha256": "ef13447e7c3792c3ef63796e775ff9e4792dee4cfd3cecf575e67b76df9316bb",
+      "minimum": 1882.15625,
+      "maximum": 1889.4375,
+      "raw_webp_sha256": "de40721a616f76b024862865fddd189c3d55ac91500c4e59c9d7e0c7986f25b0",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24531
+      ],
+      "sha256": "a32a81afd95cd48aa8692f6e0df3fc9fab2149a232f5ce336d95caf4b2adcfda",
+      "minimum": 1879.59375,
+      "maximum": 1885.53125,
+      "raw_webp_sha256": "292e1971bc09c9c7ebe7f46d9c381ae6d7c03877996ec38dfe5840b7de1c92a3",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24532
+      ],
+      "sha256": "ca5daba100ef13f2f537aad4b59d7cddc9cd60b909ae11526ab497fbef3ed1c6",
+      "minimum": 1878.875,
+      "maximum": 1882.9375,
+      "raw_webp_sha256": "0204120efc2c7997ba868aba7533d0d3aadeae2d673db93ca6fdf52e202e3475",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24533
+      ],
+      "sha256": "c61f5ac5005131b746fe92ce86850b4790fd4f9c053c50d84cd27961a01ebff0",
+      "minimum": 1865.71875,
+      "maximum": 1883.0,
+      "raw_webp_sha256": "7b59ec1bff03937f1745f7250fdc06beb37b59154c93a0c00ecbf9bd0c0cec60",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24534
+      ],
+      "sha256": "17bd2bd2b090892b78a4bb1da091ec5f27d1a43a8d8b8ca76f325aed6f0832b7",
+      "minimum": 1863.0,
+      "maximum": 1880.6875,
+      "raw_webp_sha256": "6bbabdafa2f271182833fb406e39100017b6c61054ec0977234d4d3e4d7ab925",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24535
+      ],
+      "sha256": "237875f41cf0abe307e65da7a2165b98335bf04ed907fd70118979baa356d799",
+      "minimum": 1861.75,
+      "maximum": 1875.53125,
+      "raw_webp_sha256": "207462eb1510b3105533288a648fa3ff75484f73ef2cece4fb96e67bd2a9ee77",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24536
+      ],
+      "sha256": "025fe090478bbe81687c17b328541241b007ad07b5652f8fe9fad9595268e7c3",
+      "minimum": 1869.1875,
+      "maximum": 1880.8125,
+      "raw_webp_sha256": "50f58bd645651427f7e5194b6d2b4e18214658498107beddc265de2969fe73e5",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13677,
+        24537
+      ],
+      "sha256": "bd6d87a919fdc86507a4701861f1e7c64908b952ab36855c2f0976e72738fc15",
+      "minimum": 1873.875,
+      "maximum": 1880.75,
+      "raw_webp_sha256": "4b7cb3c024ec310493f64cb4385c4a7e9035fa45f82f6c0b876e7b4fc568ae3d",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24528
+      ],
+      "sha256": "2e27ea1ddc8a164162bf19d7d5ae3b0d3d4e7755a2187e1f741d56410e22f6c4",
+      "minimum": 1885.46875,
+      "maximum": 1899.46875,
+      "raw_webp_sha256": "79cea38186a765972a0275d97906bfa38c5d2b67c3aa5c130cb2bbda88c3b8d8",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24529
+      ],
+      "sha256": "a96e22412eb93781d201b98eb0452fcc2362ed1bb3c3b4132f19ab7097b45d35",
+      "minimum": 1883.71875,
+      "maximum": 1899.5625,
+      "raw_webp_sha256": "6fce21f27b47a27e057ab96b0994a2e6fecf4e6a6be051619d79fadd9783f613",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24530
+      ],
+      "sha256": "94d980b048ddfde8c4a67e12efe07bf32efac0c9a4373adc0defefaf6b9269ec",
+      "minimum": 1879.90625,
+      "maximum": 1890.5625,
+      "raw_webp_sha256": "0b2c7bee865305c65cc766a258c459f79c246c77cf172dccbb79f9ae973aba8d",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24531
+      ],
+      "sha256": "711a1887f97a096421e3dd2cdf3d0f7e45b6250c27c351d560fd4fc3f9f42e12",
+      "minimum": 1878.125,
+      "maximum": 1885.53125,
+      "raw_webp_sha256": "cae7a4c91bc8b42b4cf7b65b9a76ef298b25c83ec254419ba90dd746fc41c990",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24532
+      ],
+      "sha256": "7beaa43c6a7b9a79c0679ea05032db0e32a93349f8b65d2706800d1cfd9c7791",
+      "minimum": 1874.5625,
+      "maximum": 1880.46875,
+      "raw_webp_sha256": "f238affb585cc3f3cab348ababb963528ba775f3f3f36d10cd05ab45b31655fe",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24533
+      ],
+      "sha256": "7fcb3a8884a1d57378f228980fb229aab3d4c7beeb1e3d72cec772337cb00a5f",
+      "minimum": 1874.34375,
+      "maximum": 1879.34375,
+      "raw_webp_sha256": "71299ebdae5ce26a2385f54af85140e5fb6109dc304145c34ef009367c52f93a",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24534
+      ],
+      "sha256": "c8b2ce6ced166843fe75ad316594e7a09f4aaa25afbd7467fadfca010346ccdf",
+      "minimum": 1860.8125,
+      "maximum": 1878.40625,
+      "raw_webp_sha256": "d3dc37c5bba4185b17f085a39306d871c4a143523e2ed667b37bc84eb7aae27b",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24535
+      ],
+      "sha256": "055f8198ee27f4961cfa00a9b70fc79969078a303b33997876f8bf1fc5d5ce91",
+      "minimum": 1860.15625,
+      "maximum": 1873.46875,
+      "raw_webp_sha256": "2be775b8e84eb1ca568bdcc67cb47fa17410ea79e119f34e216414ad924d0deb",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24536
+      ],
+      "sha256": "d5147cdce528ada8cd26a039fddd18058074b374aa273bef7c8798e1af1d4926",
+      "minimum": 1862.1875,
+      "maximum": 1876.5625,
+      "raw_webp_sha256": "bfed7affac4b1b8a0c3ff44e66efcbda41db19d6c42f296e0124b2ba807fcf6e",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13678,
+        24537
+      ],
+      "sha256": "32f7284576e127ce0adc76915a298f902117ea1741a2324249c6023f71380917",
+      "minimum": 1867.28125,
+      "maximum": 1878.21875,
+      "raw_webp_sha256": "1a07f98e23ad1588a79dd569a2d4a2430c594fca5f486ecbdee148a670ca7b0e",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24528
+      ],
+      "sha256": "7a321018aa4251c94280882672a3bc677f9c56f82139dd5fa37f4eadfc925952",
+      "minimum": 1878.875,
+      "maximum": 1895.5625,
+      "raw_webp_sha256": "781af9e98cbe63504eee2257351273ae6b26263cc9977ff16936a60c9834cc98",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24529
+      ],
+      "sha256": "bc0c5f8716775abd1f8ea8a44052574364d8c3076161d3026b2d25dd79da6daa",
+      "minimum": 1883.53125,
+      "maximum": 1895.96875,
+      "raw_webp_sha256": "ea6047fcc15f71f857bee070bdd85355923c692e0d7de37ba8d2e6ef9d92706d",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24530
+      ],
+      "sha256": "c96de0adeaf0eb88af76c09b95b6ab944baf7419ac13a07038f4934813caed80",
+      "minimum": 1877.84375,
+      "maximum": 1888.53125,
+      "raw_webp_sha256": "36a62d6687445a18bedaa16eea3b405e1c4d2f07ddaf25de44d702d7d807fb7b",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24531
+      ],
+      "sha256": "fa8d8b5a0f31e98f4e53a36a1f164bd184f09d72a36a9aeba6a3c7609f1aaef7",
+      "minimum": 1876.9375,
+      "maximum": 1886.65625,
+      "raw_webp_sha256": "79302e46031d4aae8af08909daf0a7c0df401ca920ae9b2ec497a1ce8718e060",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24532
+      ],
+      "sha256": "4a6db8345b68bfa009dd67de186594e0fdd8f6475a7155d286c62223eb743d86",
+      "minimum": 1874.125,
+      "maximum": 1881.9375,
+      "raw_webp_sha256": "384da6a32b4b3b3d4094c4fc50e9a4c7b8bf6d010f1c08f41d2eb4984fc7fb00",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24533
+      ],
+      "sha256": "245b44f65f8d9c623f38706024ac40434faaf7364aa0d45561746b2412d442f3",
+      "minimum": 1871.34375,
+      "maximum": 1876.03125,
+      "raw_webp_sha256": "ed62b036d07209447d36d587cd91b5d124070995afff846253503cd894340a2d",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24534
+      ],
+      "sha256": "7b8c4917e2ffee09d631ae18ed54d55762e35c353b3203db4ea4d6e07ac2a63c",
+      "minimum": 1870.53125,
+      "maximum": 1875.4375,
+      "raw_webp_sha256": "69f632e1440f313727f87dba707bf5cc32434b4675c8d11c47e1596460ed5349",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24535
+      ],
+      "sha256": "752327e0b906bef47aceb962114e0d5a20231166430748a68b5f80b508a84e4e",
+      "minimum": 1858.53125,
+      "maximum": 1873.625,
+      "raw_webp_sha256": "e3da6c07a22ec26fc7830ea34f23759e419311a97a8c03e930292b96e005e144",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24536
+      ],
+      "sha256": "36ff7f492ddc3288c5b03651196b7403a34bf8d0dbec643140050d4d4b5537a9",
+      "minimum": 1855.59375,
+      "maximum": 1869.03125,
+      "raw_webp_sha256": "97c853a50388d52ec20caaf3f0c9a602e937bbd5e772ff272cc3167849baabcc",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13679,
+        24537
+      ],
+      "sha256": "d232ce3430044183e11ea9cc141a0266e84c9645e6fbb2068c2cd650c5eb1f61",
+      "minimum": 1857.875,
+      "maximum": 1879.1875,
+      "raw_webp_sha256": "d38d72947ce672688465b60434bb515425479958eb1e1b278275ca6e8c38f31f",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24528
+      ],
+      "sha256": "4f198eb2917f64d895ff9a5f6a768dc63a61e8128c48f3c742d58be627e1c56d",
+      "minimum": 1876.5,
+      "maximum": 1887.46875,
+      "raw_webp_sha256": "f39de1de2cdbb7d89b462a717b4eda9a5ccdf09615a309c19753999c300fc7cf",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24529
+      ],
+      "sha256": "4ad3305e1cd26130ce967dbe249207272b2e177c2f81e80102c2a02bb1d181a5",
+      "minimum": 1878.03125,
+      "maximum": 1893.0625,
+      "raw_webp_sha256": "392d3accb64494c6d881a94c8eb05cb6fe130b21d0fca3e9672353f1b14af39f",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24530
+      ],
+      "sha256": "cddd0dea79f01bdc41ce141c8c6cacad7fcc3469a0205d86e4e73f4cc5ea5cfe",
+      "minimum": 1877.84375,
+      "maximum": 1892.1875,
+      "raw_webp_sha256": "76e0c5fc8805413120a4cd51cbc140667f06b1c96b6e32a539df2364b3c9583a",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24531
+      ],
+      "sha256": "a6f6732e214f43ef0ffa9f120a5a8c003095eaa6470e6951a3a9e90b40645233",
+      "minimum": 1876.9375,
+      "maximum": 1885.4375,
+      "raw_webp_sha256": "a65eeadffb6432795f5a742542936b0f17cac2839de4a3f3a58ee5b9b7ad1340",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24532
+      ],
+      "sha256": "a5d8e6229a7d6d9e4ad5fe72e2614bccf9f9b3e9220975a395eb90d9e4270ea0",
+      "minimum": 1873.34375,
+      "maximum": 1882.9375,
+      "raw_webp_sha256": "9019e47b627d8c3ccc25e286a7c7ab57348d2022f4f964e52d67c7ffa123ea2e",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24533
+      ],
+      "sha256": "528cfac36ae556f43fc5e017d7dc525bd1b7ea39066473c09beb1a804f43934a",
+      "minimum": 1870.03125,
+      "maximum": 1880.09375,
+      "raw_webp_sha256": "69229596d914a1460dec1d7659899119d03264819f25bf18cee0e8010f983de3",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24534
+      ],
+      "sha256": "7220bd35287ba1d6450ce55d9087fa0394d03069b7c0a719c070059cbed5cbaf",
+      "minimum": 1868.0625,
+      "maximum": 1872.5,
+      "raw_webp_sha256": "6df1a5b3e60e241577019f7627e0aa104347e4d523c90bb259d39fea0f405ff0",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24535
+      ],
+      "sha256": "f2e1716595fcf9c7b8bf774d25cf1e8f98b6fe210a506e51c2af2c19850c8566",
+      "minimum": 1859.28125,
+      "maximum": 1871.78125,
+      "raw_webp_sha256": "923041afaf92bdca5e9829665ebdba83a3195b8bde2736a3ac27e73716f7fc4b",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24536
+      ],
+      "sha256": "1b2cb203735fb2701025049be6bbc1fd9a64ab673ff69d1c49ffe80eeeda9e53",
+      "minimum": 1855.03125,
+      "maximum": 1868.59375,
+      "raw_webp_sha256": "1ec85a64b75a1545bc0690ddd5800b8661868023765cef643348ed6846b55514",
+      "raw_matches_decoded": true
+    },
+    {
+      "key": [
+        16,
+        13680,
+        24537
+      ],
+      "sha256": "8960cd1f28ab4ee403c83b0770099594a9fbb43558d3100528c4a7843dea7108",
+      "minimum": 1852.71875,
+      "maximum": 1878.8125,
+      "raw_webp_sha256": "1af5c6f9310cfa1561c9ce6da0ca29969af04c7e920bec729073badef78b57b3",
+      "raw_matches_decoded": true
+    }
+  ],
+  "dem": {
+    "source": "Mapterhorn Terrarium WebP",
+    "decoded_version": 4,
+    "ground_filter": 1,
+    "zoom": 16,
+    "sample_method": "production dem.Dem.sample with captured decoded tiles",
+    "warning": "heights are absolute DEM metres; convert with EnuFrame for frame z",
+    "fixture_file": "dem.npz",
+    "sha256": "5596a9ed97236bf6a259d7fa17aa797eb849be813bacd8969688d58f5f8891c3"
+  },
+  "license_notes": [
+    "Roads: OpenStreetMap contributors, ODbL1.0; pinned Overture2026-09-23.1.",
+    "Elevation: Mapterhorn tiled DEM; https://mapterhorn.com. Per-tile hashes preserved."
+  ],
+  "official_osm": {
+    "file": "osm_15739626.json",
+    "source": "https://api.openstreetmap.org/api/0.6/way/15739626/full.json",
+    "sha256": "d6f1a68b1a0dbe97200c3c6901e0a6c58c832794b475f6e5ca0ea22c5e684618",
+    "license": "ODbL-1.0",
+    "way_id": 15739626,
+    "version": 11
+  }
+}

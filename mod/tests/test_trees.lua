@@ -629,4 +629,84 @@ do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is
   T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
 end
 
+-- Mapped lattice towers use the installed complete antenna, with the source's
+-- above-ground height converted to its full catalog height by antennas.py.
+-- Missing resources fail closed; a tower must never turn into a default tree.
+do
+  trees.clear()
+  trees.reset()
+  trees.FRAME_MS, trees.POOL_SPARE, trees.RECHECK_S = math.huge, 0, -1
+  local antenna = '/levels/west_coast_usa/art/shapes/buildings/antenna'
+  local catalogHeight, aboveGroundHeight = 62.94521, 61.14521
+  local shape, scale = trees.pick('antenna', catalogHeight, 0)
+  T.check(shape == antenna and math.abs(scale - 1) < 1e-9, 'antenna: installed complete tower at model scale')
+  local mappedHeight = catalogHeight * 80 / aboveGroundHeight
+  shape, scale = trees.pick('antenna', mappedHeight, 0)
+  T.near(scale, 80 / aboveGroundHeight, 1e-9, 'antenna: mapped height scales above its buried foundation')
+  T.check(trees.ONE_SPELLING.antenna and trees.GROUP_MAX_M.antenna == 4000,
+    'antenna: one shared shape spelling and bounded streaming range')
+
+  local exists, oldLog, warnings, probes = FS.fileExists, log, 0, 0
+  FS.fileExists = function(self, path)
+    if path == antenna .. '.dae' then probes = probes + 1; return false end
+    return exists(self, path)
+  end
+  log = function(level, tag, message)
+    if level == 'W' and tostring(message):find('mapped antenna asset unavailable', 1, true) then warnings = warnings + 1 end
+  end
+  local errors = trees.errors
+  trees.onRows(61, '0_0', { { 0, 10, 10, 5, 0, 1, catalogHeight, 0 } }, { 'antenna' })
+  trees.update(61, { x = 128, y = 128 })
+  trees.onRows(61, '1_0', { { 0, 300, 10, 5, 0, 1, catalogHeight, 0 } }, { 'antenna' })
+  trees.update(61, { x = 128, y = 128 })
+  T.check(count() == 0 and trees.errors >= errors + 2, 'missing antenna: no Forest item or fallback vegetation')
+  T.check(probes >= 2 and warnings == 1, 'missing antenna: checked per attempt, warning once across tiles')
+  FS.fileExists, log = exists, oldLog
+  trees.clear()
+  trees.reset()
+
+  -- A real geographic tile uses the same placement/rebase/drop lifecycle as
+  -- vegetation, including recreation at the new anchor for correct collision.
+  local gd = require('beamngEarth/geodesy')
+  local gt = require('beamngEarth/geotile')
+  local lat, lon = 41.1329323, -104.8398548
+  local gx, gy = gt.tileOf(lat, lon)
+  local key = gt.key(gx, gy)
+  local cl, cn = gt.centre(17, gx, gy)
+  local tf = gd.newAnchor(cl, cn)
+  local A = gd.newAnchor(cl - 0.02, cn - 0.1)
+  trees.onTile({ anchorId = 71, key = key, path = '/t/antenna-direct', n = 1, frame = { cl, cn }, pivot = 123,
+    data = { groups = { 'antenna' }, items = { { 0, 0, 0, 123, 30, 1, mappedHeight, 0 } } } }, 71, A)
+  local px, py = A:geodeticToWorld(cl, cn, 0)
+  for _ = 1, 3 do trees.update(71, { x = px, y = py }) end
+  local tower = next(items)
+  T.check(count() == 1 and tower and tower.d.fields.shapeFile == antenna .. '.dae',
+    'antenna: geotile loads exactly the installed shape, with no variant spelling')
+  T.near(tower.sc, 80 / aboveGroundHeight, 1e-9, 'antenna: emitted height survives Forest placement')
+  local ex, ey, ez = gt.apply(gt.placement(tf, A, 0, 0, 123), 0, 0, 123)
+  T.check(math.abs(tower.m.p.x - ex) + math.abs(tower.m.p.y - ey) + math.abs(tower.m.p.z - ez) < 1e-6,
+    'antenna: supplied final-ground position is placed without terrain resampling')
+  T.check(tower.d.fields.windScale == '0' and tower.d.fields.branchAmp == '0' and tower.d.fields.detailAmp == '0',
+    'antenna: rigid tower receives no foliage wind deformation')
+  T.check(solidCount() == 1, 'antenna: nearby item uses stock collision')
+  for _ = 1, 3 do trees.update(71, { x = px + trees.GROUP_MAX_M.antenna + 512, y = py }) end
+  T.check(count() == 0, 'antenna: range limit unloads the item')
+  for _ = 1, 3 do trees.update(71, { x = px, y = py }) end
+  T.check(count() == 1, 'antenna: returning into range recreates one item')
+
+  local B = gd.newAnchor(cl, cn)
+  local made = trees.made
+  trees.transform(A:worldTransformTo(B, px, py, 123), gd, B)
+  T.check(count() == 1 and trees.status().tiles == 1, 'antenna: rebase retains its geographic tile')
+  for _ = 1, 4 do trees.update(72, { x = 0, y = 0 }) end
+  tower = next(items)
+  T.check(count() == 1 and trees.made == made + 1, 'antenna: rebase recreates one item, without duplication')
+  T.check(math.abs(tower.m.p.x) + math.abs(tower.m.p.y) + math.abs(tower.m.p.z - 123) < 1e-6,
+    'antenna: rebased tower keeps the original final-ground datum')
+  trees.onDrop({ anchorId = 999, key = key })
+  for _ = 1, 3 do trees.update(72, { x = 0, y = 0 }) end
+  T.check(count() == 0 and trees.status().tiles == 0, 'antenna: key drop removes its item after a rebase')
+  trees.clear()
+  trees.FRAME_MS, trees.POOL_SPARE, trees.RECHECK_S = FRAME_MS, POOL_SPARE, 1.0
+end
 T.done('test_trees')

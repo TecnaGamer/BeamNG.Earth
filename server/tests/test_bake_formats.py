@@ -135,6 +135,31 @@ class PackTest(unittest.TestCase):
         self.assertTrue(np.array_equal(za, zb), "the same heights")
         self.assertGreater(b.shared.stats.get("baked", 0), 0, "read from the pack")
 
+    def test_baked_plans_require_current_road_facts_format(self):
+        """A plan's schema can be unchanged while the road facts it was built from changed."""
+        signature, key = "w0s0", (14, 4706, 6244)
+        for label, fact_format in (("old", roads.FACTS_FORMAT - 1), ("missing", None),
+                                   ("current", roads.FACTS_FORMAT)):
+            with self.subTest(facts=label):
+                cache = os.path.join(self.dir, label)
+                os.makedirs(os.path.join(cache, bakepack.SUBDIR))
+                pc = plancache.PlanCache(os.path.join(cache, "run"), signature)
+                pc.persist = (cache, (plancache.FRAMES, signature, {"overture": "fixture"}))
+                metadata = pc._bake_expect()
+                if fact_format is None:
+                    metadata.pop("facts_format", None)
+                else:
+                    metadata["facts_format"] = fact_format
+                writer = bakepack.Writer(os.path.join(cache, bakepack.SUBDIR, "plans" + bakepack.SUFFIX))
+                writer.add(bakepack.plans_key(signature, key), b"test plan payload")
+                writer.close(metadata)
+                self.assertEqual(pc.has(key), label == "current")
+                got = pc._baked(key)
+                if label == "current":
+                    self.assertEqual(got.read(), b"test plan payload")
+                else:
+                    self.assertIsNone(got, "old or unversioned road facts cannot supply cached plans")
+
 
 class SyncTest(unittest.TestCase):
     """bakepack.sync: the release's packs near the player and made for this server, fetched once."""

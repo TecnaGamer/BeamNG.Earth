@@ -1,0 +1,274 @@
+{
+  "buildings": {
+    "within_500m": 3,
+    "within_1000m": 15,
+    "features": [
+      {
+        "id": "05545a8e-0c5d-4e04-b35d-dd0b4a1bf571",
+        "distance_to_boundary_m": 977.09,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "11e9c4e9-aea2-4dc2-a810-82935389a4db",
+        "distance_to_boundary_m": 428.73,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "2a421989-a97f-4675-9471-166773a0d133",
+        "distance_to_boundary_m": 808.04,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "3920b0b9-d03e-4db4-9d3e-e77ec2c3245d",
+        "distance_to_boundary_m": 900.59,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "4bcd246b-c4e3-433f-aef3-9c085a5dad57",
+        "distance_to_boundary_m": 577.38,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "6e89c2e2-54d8-4637-b2dd-42ec5c109cc8",
+        "distance_to_boundary_m": 682.91,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "9b8a1f3a-736d-4563-bde0-c9daa219fe28",
+        "distance_to_boundary_m": 922.22,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "aff591e5-f3c6-45f1-a41b-07f13bc607d8",
+        "distance_to_boundary_m": 537.84,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "ccfd62bf-b279-4d2f-9f86-d4618599b9b0",
+        "distance_to_boundary_m": 455.93,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "d03fe58f-4283-4b0e-95c4-a6dd349e16dd",
+        "distance_to_boundary_m": 525.99,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "d11854cf-c639-4ab0-b957-d6d271f42658",
+        "distance_to_boundary_m": 820.66,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "e314fee1-9520-49a3-b205-c58f3696cf4b",
+        "distance_to_boundary_m": 567.65,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "e8a7ec3a-7e4d-48fa-9a6f-d6e2369db91a",
+        "distance_to_boundary_m": 823.52,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "f77414db-1f48-4516-b2c9-8366cac1cf16",
+        "distance_to_boundary_m": 429.1,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      },
+      {
+        "id": "fa04107b-1a5c-4b7e-a4b8-638045f85443",
+        "distance_to_boundary_m": 773.49,
+        "class": "",
+        "name": "",
+        "src_dataset": "Microsoft ML Buildings",
+        "src_record": "",
+        "subtype": ""
+      }
+    ]
+  },
+  "land_use": {
+    "within_500m": 0,
+    "within_1000m": 1,
+    "features": [
+      {
+        "id": "f311458b-109c-3761-80f4-4e831843d7e1",
+        "distance_to_boundary_m": 539.8,
+        "class": "farmyard",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w685503928@1",
+        "subtype": "agriculture",
+        "tags": "{\"farmyard\":\"feedlot\",\"landuse\":\"farmyard\"}"
+      }
+    ]
+  },
+  "infrastructure": {
+    "within_500m": 1,
+    "within_1000m": 10,
+    "features": [
+      {
+        "id": "09b459da-89b3-3886-98b0-76afcc3f82c9",
+        "distance_to_boundary_m": 338.98,
+        "class": "motorway_junction",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "n50999156@6",
+        "subtype": "transportation",
+        "tags": "{\"highway\":\"motorway_junction\",\"ref\":\"288\"}"
+      },
+      {
+        "id": "15f948ee-d356-305a-a75b-3960d3a7ff4b",
+        "distance_to_boundary_m": 817.75,
+        "class": "bridge",
+        "name": "Dwight D. Eisenhower Highway",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w88320089@14",
+        "subtype": "bridge",
+        "tags": "{\"bicycle\":\"no\",\"bridge\":\"yes\",\"hgv\":\"designated\",\"hgv:national_network\":\"yes\",\"highway\":\"motorway\",\"lanes\":\"2\",\"maxspeed\":\"75 mph\",\"oneway\":\"yes\",\"ref\":\"I 25\",\"source:hgv:national_network\":\"https://www.ecfr.gov/current/title-23/chapter-I/subchapter-G/part-658;https://hepgis-usdot.hub.arcgis.com/apps/usdot::national-network-conventional-combination-trucks-map\",\"tiger:cfcc\":\"A15\",\"tiger:county\":\"Larimer, CO\",\"tiger:name_base\":\"I-25\",\"unsigned_ref\":\"US 87\",\"wikipedia\":\"en:Dwight D. Eisenhower Highway\"}"
+      },
+      {
+        "id": "51aa58e1-6c98-3b62-b5bb-66d61e029491",
+        "distance_to_boundary_m": 841.41,
+        "class": "stop",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "n10900975607@1",
+        "subtype": "transportation",
+        "tags": "{\"highway\":\"stop\"}"
+      },
+      {
+        "id": "9afa31b3-ec14-31be-b742-710c0050f59b",
+        "distance_to_boundary_m": 846.47,
+        "class": "stop",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "n10900974502@1",
+        "subtype": "transportation",
+        "tags": "{\"highway\":\"stop\"}"
+      },
+      {
+        "id": "a0961da3-939d-3e40-9801-2331772d8d4e",
+        "distance_to_boundary_m": 842.67,
+        "class": "power_line",
+        "name": "Rawhide to Ault & Timberline",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w103629399@4",
+        "subtype": "power",
+        "tags": "{\"cables\":\"6\",\"check_date\":\"2024-06-13\",\"circuits\":\"2\",\"description\":\"Refer to page 60 for a regional map of the Greely Area. https://www.transmission.xcelenergy.com/staticfiles/microsites/Transmission/Files/PDF/Planning/PSCO/2020-Appendix-F-PSCo-Projects.pdf\\nPRPA Local 230kv map=https://www.prpa.org/severance-substation/\",\"note\":\"Refer to source 1 on page 8 map & source 2 on page 9-10. The Rawhide to Ault & Timberline 230kv line. Lines that cross named streets have added Tower attributes where street level photos are available 2023-2024. Line remapped via Bing Maps Aerial 2021.\",\"operator\":\"Platte River Power Authority\",\"operator:short\":\"PRPA\",\"power\":\"line\",\"source\":\"https://doc.westconnect.com/Documents.aspx?NID=21146;https://www.transmission.xcelenergy.com/staticfiles/microsites/Transmission/Files/PDF/Planning/PSCO/2020-Appendix-F-PSCo-Projects.pdf;Bing Maps Aerial 6/1/21-8/24/22;streetlevel imagery\",\"voltage\":\"230000;230000\",\"wires\":\"single\"}"
+      },
+      {
+        "id": "fc4a1dc3-7020-311a-9561-e4bd8dfc2389",
+        "distance_to_boundary_m": 822.38,
+        "class": "bridge",
+        "name": "Dwight D. Eisenhower Highway",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "w88320057@14",
+        "subtype": "bridge",
+        "tags": "{\"bicycle\":\"no\",\"bridge\":\"yes\",\"hgv\":\"designated\",\"hgv:national_network\":\"yes\",\"highway\":\"motorway\",\"lanes\":\"2\",\"maxspeed\":\"75 mph\",\"oneway\":\"yes\",\"ref\":\"I 25\",\"source:hgv:national_network\":\"https://www.ecfr.gov/current/title-23/chapter-I/subchapter-G/part-658;https://hepgis-usdot.hub.arcgis.com/apps/usdot::national-network-conventional-combination-trucks-map\",\"tiger:cfcc\":\"A15\",\"tiger:county\":\"Larimer, CO\",\"tiger:name_base\":\"I-25\",\"unsigned_ref\":\"US 87\",\"wikipedia\":\"en:Dwight D. Eisenhower Highway\"}"
+      },
+      {
+        "id": "58b0d1d4-0f9c-3b11-86ee-40152203fdda",
+        "distance_to_boundary_m": 844.05,
+        "class": "power_tower",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "n1196997472@3",
+        "subtype": "power",
+        "tags": "{\"design\":\"barrel\",\"material\":\"metal\",\"power\":\"tower\"}"
+      },
+      {
+        "id": "7347548c-7c37-39b7-bbd5-14e3f00bb7fb",
+        "distance_to_boundary_m": 918.56,
+        "class": "power_tower",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "n1196997223@3",
+        "subtype": "power",
+        "tags": "{\"design\":\"barrel\",\"material\":\"metal\",\"power\":\"tower\"}"
+      },
+      {
+        "id": "e8b7c72c-e6b3-3067-a5e2-4df05493096c",
+        "distance_to_boundary_m": 850.21,
+        "class": "power_tower",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "n1196997708@3",
+        "subtype": "power",
+        "tags": "{\"check_date\":\"2024-08-23\",\"design\":\"barrel\",\"line_attachment\":\"suspension\",\"line_management\":\"straight\",\"material\":\"steel\",\"note\":\"Tower design determined via street level photos.\",\"operator\":\"Platte River Power Authority\",\"operator:short\":\"PRPA\",\"power\":\"tower\",\"source\":\"streetlevel imagery;Bing Maps Aerial;Bing Maps Aerial 7/1-8/24/2021\",\"structure\":\"tubular\"}"
+      },
+      {
+        "id": "ee58eda9-728c-390c-9183-eac3b46799e3",
+        "distance_to_boundary_m": 898.89,
+        "class": "power_tower",
+        "name": "",
+        "src_dataset": "OpenStreetMap",
+        "src_record": "n1196998079@3",
+        "subtype": "power",
+        "tags": "{\"check_date\":\"2024-08-23\",\"design\":\"barrel\",\"line_attachment\":\"suspension\",\"line_management\":\"straight\",\"material\":\"steel\",\"note\":\"Tower design determined via street level photos.\",\"operator\":\"Platte River Power Authority\",\"operator:short\":\"PRPA\",\"power\":\"tower\",\"ref\":\"25\",\"source\":\"streetlevel imagery;Bing Maps Aerial;Bing Maps Aerial 7/1-8/24/2021\",\"structure\":\"tubular\"}"
+      }
+    ]
+  },
+  "administrative_context": {
+    "verified": false,
+    "reason": "The runtime has no administrative city-boundary input into urban context. Both public Overpass boundary queries failed (406 and timeout); no city-boundary claim is inferred from missing data. Official OSM frontage source tags identify Larimer, CO via tiger:county only."
+  },
+  "notes": [
+    "Read-only active cache snapshot; deduplicated GERS IDs over 3x3 z14 cells.",
+    "Distances in local metre approximation to polygon/polyline boundary; no containment correction.",
+    "No street_lamp mapped infrastructure features within1000m."
+  ]
+}

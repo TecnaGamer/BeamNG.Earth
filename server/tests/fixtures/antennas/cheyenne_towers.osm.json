@@ -1,0 +1,38 @@
+{
+  "version": "0.6",
+  "generator": "Selected OSM API elements; BeamNG Earth regression fixture",
+  "copyright": "OpenStreetMap and contributors",
+  "attribution": "https://www.openstreetmap.org/copyright",
+  "license": "https://opendatacommons.org/licenses/odbl/1-0/",
+  "elements": [
+    {
+      "type": "node",
+      "id": 3787038673,
+      "lat": 41.1329323,
+      "lon": -104.8398548,
+      "timestamp": "2026-07-19T15:11:49Z",
+      "version": 2,
+      "changeset": 186012653,
+      "tags": {
+        "man_made": "mast",
+        "tower:construction": "lattice",
+        "tower:type": "communication"
+      }
+    },
+    {
+      "type": "node",
+      "id": 12752446639,
+      "lat": 41.0997414,
+      "lon": -104.9374865,
+      "timestamp": "2025-04-13T14:30:15Z",
+      "version": 1,
+      "changeset": 164898029,
+      "tags": {
+        "communication:mobile_phone": "yes",
+        "man_made": "mast",
+        "tower:construction": "guyed_lattice",
+        "tower:type": "communication"
+      }
+    }
+  ]
+}

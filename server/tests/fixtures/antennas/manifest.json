@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "captured_local_date": "2026-11-05",
+  "attribution": "OpenStreetMap contributors",
+  "license": "https://opendatacommons.org/licenses/odbl/1-0/",
+  "copyright_url": "https://www.openstreetmap.org/copyright",
+  "purpose": "Regression fixture only. Runtime reads the existing worldwide Overture infrastructure source; no regional provider or runtime data bundle is added.",
+  "fixture": {
+    "file": "cheyenne_towers.osm.json",
+    "sha256": "15070854238bf00c81d6ef0cf536281fbbd0bc515e33df454b4cb062340f0632",
+    "elements": 2
+  },
+  "sources": [
+    {
+      "raw_file": "cheyenne-tower-node.json",
+      "url": "https://api.openstreetmap.org/api/0.6/node/3787038673.json",
+      "sha256": "4fe6ad06c7ebbccf042f0bec81c97c84767090b1d5dedc151c20b8f7e2ca0def",
+      "captured_utc": "2026-11-06T05:19:52.524255+00:00"
+    },
+    {
+      "raw_file": "cheyenne-guyed-tower-node.json",
+      "url": "https://api.openstreetmap.org/api/0.6/node/12752446639.json",
+      "sha256": "44945e04c9cdf034a67d0e5822a7049d6bc0d05509f42745c9120ae6bc89dec0",
+      "captured_utc": "2026-11-06T05:20:14.253207+00:00"
+    }
+  ],
+  "cases": [
+    {
+      "osm_id": "n3787038673@2",
+      "latitude": 41.1329323,
+      "longitude": -104.8398548,
+      "expected": "Compatible freestanding lattice communications mast. No mapped height; use the verified model default."
+    },
+    {
+      "osm_id": "n12752446639@1",
+      "latitude": 41.0997414,
+      "longitude": -104.9374865,
+      "expected": "Explicit guyed lattice mast; reject for a freestanding stock model."
+    }
+  ]
+}

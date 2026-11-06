@@ -1,0 +1,185 @@
+{
+  "note": "Exploratory whole-feature replay includes the mapped bridge range and is NOT a valid production wall-count baseline. Use cached_context_build_tile_evidence.json for the genuine ground-parts production replay (2 original northern parapets -> 0 corrected). Independent exactDEM+singleactualRoadplan replay; fullGrader withneighbors is root audit",
+  "rows": [
+    {
+      "lat": 41.158751966285486,
+      "lon": -104.87995998120195,
+      "geometry": "parapet",
+      "source_record": "w15739626@11",
+      "road_wrong_chord_up_m": 1875.478356979345,
+      "raw_up_m": [
+        1870.8673395372682,
+        1870.842660254562,
+        1870.86132830804,
+        1870.84266000969
+      ],
+      "final_up_m": [
+        1873.2251874167462,
+        1873.2188801556074,
+        1873.2207623115496,
+        1873.218629545049
+      ],
+      "sample_order": [
+        "center",
+        "edge",
+        "shoulder",
+        "wall_base"
+      ],
+      "wall_top_up_m": 1876.078356979345,
+      "wall_foot_up_m": 1872.9171750531762,
+      "top_over_final_ground_m": 2.859727434296019,
+      "false_drop_from_chord_m": 2.25972743429611
+    },
+    {
+      "lat": 41.16049879200621,
+      "lon": -104.87997228602575,
+      "geometry": "parapet",
+      "source_record": "w15739626@11",
+      "road_wrong_chord_up_m": 1877.1174636294563,
+      "raw_up_m": [
+        1874.9464775677302,
+        1874.3991863014114,
+        1874.1104877152106,
+        1874.3679194088206
+      ],
+      "final_up_m": [
+        1875.0184443092867,
+        1875.0180854482974,
+        1875.0178184431757,
+        1875.0180772283643
+      ],
+      "sample_order": [
+        "center",
+        "edge",
+        "shoulder",
+        "wall_base"
+      ],
+      "wall_top_up_m": 1877.7174636294562,
+      "wall_foot_up_m": 1874.717965291493,
+      "top_over_final_ground_m": 2.6993864010919424,
+      "false_drop_from_chord_m": 2.0993864010920333
+    },
+    {
+      "lat": 41.158751966285486,
+      "lon": -104.87995998120195,
+      "geometry": "parapet",
+      "source_record": "w15739626@11",
+      "road_wrong_chord_up_m": 1875.478356979345,
+      "raw_up_m": [
+        1870.8673395372682,
+        1870.8467102355823,
+        1870.896567303523,
+        1870.8406609215929
+      ],
+      "final_up_m": [
+        1873.2251874167462,
+        1873.2188839324322,
+        1873.2207681289983,
+        1873.218633456216
+      ],
+      "sample_order": [
+        "center",
+        "edge",
+        "shoulder",
+        "wall_base"
+      ],
+      "wall_top_up_m": 1876.078356979345,
+      "wall_foot_up_m": 1872.9171798492728,
+      "top_over_final_ground_m": 2.859723523129105,
+      "false_drop_from_chord_m": 2.259723523129196
+    },
+    {
+      "lat": 41.16049879200621,
+      "lon": -104.87997228602575,
+      "geometry": "parapet",
+      "source_record": "w15739626@11",
+      "road_wrong_chord_up_m": 1877.1174636294563,
+      "raw_up_m": [
+        1874.9464775677302,
+        1874.771758935234,
+        1874.2924046036414,
+        1874.7538966730926
+      ],
+      "final_up_m": [
+        1875.0184443092867,
+        1875.0180894026003,
+        1875.0178245371067,
+        1875.0180813265076
+      ],
+      "sample_order": [
+        "center",
+        "edge",
+        "shoulder",
+        "wall_base"
+      ],
+      "wall_top_up_m": 1877.7174636294562,
+      "wall_foot_up_m": 1874.7179710288524,
+      "top_over_final_ground_m": 2.6993823029486066,
+      "false_drop_from_chord_m": 2.0993823029486975
+    }
+  ],
+  "baseline_roads_sha256": "a524112be7eb66d7eb71d803a4f7dbbc4b9d08e8f9ff1c006fbc89c098296a5a",
+  "original_wall_count": 4,
+  "wall_bounds": [
+    {
+      "geometry_type": "parapet",
+      "start_latlon": [
+        41.15866170577686,
+        -104.88002798723731
+      ],
+      "end_latlon": [
+        41.15882378331253,
+        -104.88002888794368
+      ],
+      "height_m_range": [
+        2.9284614186378803,
+        3.1691725267576203
+      ]
+    },
+    {
+      "geometry_type": "parapet",
+      "start_latlon": [
+        41.160264388856454,
+        -104.88003904118257
+      ],
+      "end_latlon": [
+        41.16071460086184,
+        -104.88004241157277
+      ],
+      "height_m_range": [
+        2.9037347023745497,
+        2.9998058944863715
+      ]
+    },
+    {
+      "geometry_type": "parapet",
+      "start_latlon": [
+        41.15866214060091,
+        -104.87989097456988
+      ],
+      "end_latlon": [
+        41.158824218137646,
+        -104.87989187493872
+      ],
+      "height_m_range": [
+        2.9284566216922485,
+        3.169073565012013
+      ]
+    },
+    {
+      "geometry_type": "parapet",
+      "start_latlon": [
+        41.1602649746187,
+        -104.87990202616155
+      ],
+      "end_latlon": [
+        41.16071518662805,
+        -104.87990539561419
+      ],
+      "height_m_range": [
+        2.903729676761486,
+        2.9998008699851653
+      ]
+    }
+  ]
+}

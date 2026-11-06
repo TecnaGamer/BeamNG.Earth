@@ -84,7 +84,7 @@ M.SHAPE_VARIANTS = 4
 -- 2026-11-03: a new door / hydrant / sign / signal spelling nearly every tree frame). Vegetation, rocks, barriers,
 -- fences and lamps keep their variants (their populations reach thousands).
 M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshelter = true, billboard = true,
-  barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
+  barn = true, celltower = true, antenna = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
   picnicgrill = true, picnictable = true, pylon = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
   rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
@@ -276,6 +276,9 @@ M.GROUP_MAX_M.busshelter = 600
 -- (server worldprops.py).
 -- The height is the mesh's vertical size, so a row of that height is the model at 1:1.
 M.CATALOG.celltower = { { JV .. 'misc/celltower', 28.93 } }
+-- Complete ground lattice tower; foundation extends 1.8 m below its planting datum.
+-- server antennas.py maps above-ground OSM height to this total catalog height.
+M.CATALOG.antenna = { { WCA .. 'buildings/antenna', 62.94521 } }
 M.CATALOG.watertower = { { WCA .. 'objects/industrial_watertower', 26.16 } }
 M.CATALOG.container = {
   { WCA .. 'objects/s_containers_20_white', 2.59 }, { WCA .. 'objects/s_containers_20_brown', 2.59 },
@@ -284,6 +287,7 @@ M.CATALOG.container = {
 M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
 M.CATALOG.barn = { { '/levels/hirochi_raceway/art/shapes/buildings/farm_barn', 8.41 } }
 M.GROUP_MAX_M.celltower = 2500
+M.GROUP_MAX_M.antenna = 4000
 M.GROUP_MAX_M.watertower = 2000
 M.GROUP_MAX_M.container = 500
 M.GROUP_MAX_M.billboard = 900
@@ -311,6 +315,7 @@ local MATERIALS = {
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
   JV .. 'misc',     -- the cell tower
+  WCA .. 'buildings', '/art/shapes/common',     -- the lattice tower's installed materials
   '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
@@ -515,6 +520,8 @@ local function setup()
     local p = m .. '/main.materials.json'
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
+  local common = '/art/shapes/common/common.materials.json'   -- antenna LOD's lod_vertcol
+  if not FS or FS:fileExists(common) then pcall(loadJsonMaterialsFile, common) end
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
   if FS and readFile and writeFile then
     local ok, made = pcall(staticSignal)
@@ -533,10 +540,18 @@ function M.typeName(shape, solid)
   return 'bngEarthTree_' .. shape:gsub('[^%w]', '_') .. (solid and '' or '_n')
 end
 
+local missingShapes = {}
 local function itemType(shape, solid)
   local key = solid and shape or (shape .. '#n')
   local d = types[key]
   if d then return d end
+  if shape == WCA .. 'buildings/antenna' and FS and not FS:fileExists(shape .. '.dae') then
+    if not missingShapes[shape] then
+      missingShapes[shape] = true
+      log('W', 'beamngEarth.trees', 'mapped antenna asset unavailable: ' .. shape .. '.dae')
+    end
+    return nil
+  end
   local name = M.typeName(shape, solid)
   d = scenetree.findObject(name)
   if not d then
@@ -545,7 +560,9 @@ local function itemType(shape, solid)
     if not d then return nil end
     d:setField('shapeFile', 0, shape .. '.dae')
     d:setField('collidable', 0, solid and '1' or '0')
-    d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    local tower = shape == WCA .. 'buildings/antenna'
+    d:setField('windScale', 0, tower and '0' or '0.4')
+    d:setField('branchAmp', 0, tower and '0' or '0.1'); d:setField('detailAmp', 0, tower and '0' or '0.2')
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end

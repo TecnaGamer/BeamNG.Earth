@@ -270,6 +270,8 @@ URBAN_BESIDE_SHARE = float(os.environ.get("BNE_URBAN_BESIDE_SHARE", "0.35"))
 URBAN_BOTH_SHARE = 0.1          # a motorway or trunk needs built-up land on both
                                 # sides of this share of its samples: a roadhouse beside the Eyre Highway (Eucla: one
                                 # side 33 %, the other 0 %) is no town
+URBAN_PAVEMENT_MARGIN_M = 10.0  # WorldCover's 10 m pixels (half diagonal ~7 m) plus map alignment uncertainty
+URBAN_CONTEXT_OFFSETS_M = (URBAN_BESIDE_M, 2 * URBAN_BESIDE_M)
 
 
 def _beside(ll, counts, d):
@@ -445,7 +447,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 4      # 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 5      # 5: transportation pavement is not roadside development; 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -2432,7 +2434,7 @@ def _specs_from(data, n):
 
 # OpenStreetMap's sidewalk tag (osmtags.py) -> walk_sides' sides; "separate" (a footway mapped on its own beside the
 # road) and "no" give none. Other values (or none) leave the class and land-cover rule.
-SIDEWALK_TAG = {"both": (1, -1), "left": (1,), "right": (-1,), "no": (), "none": (), "separate": ()}
+SIDEWALK_TAG = {"yes": (1, -1), "both": (1, -1), "left": (1,), "right": (-1,), "no": (), "none": (), "separate": ()}
 
 
 def _osm_sidewalks(feats, specs):
@@ -2515,6 +2517,129 @@ def _urban_samples(lonlat):
     return np.column_stack([np.interp(stations, distance, ll[:, axis]) for axis in (0, 1)])
 
 
+def _transport_pavement(feats, points):
+    """Points within mapped carriageways, including raster/warp uncertainty.
+
+    WorldCover 50 includes roads. In a parallel highway/frontage-road corridor,
+    those pixels must not vote for roadside development. Widths here are rural
+    source/default widths, independent of the urban decision being made.
+    Geometry, surface classes and the land-cover raster itself are unchanged.
+    """
+    points = np.asarray(points, np.float64)
+    hook = feats.__dict__.get("_bnge_pavement")
+    if hook is None:
+        feats._pavement_context_status = "supplied_layer_only"
+        return _transport_pavement_layer(feats, points)
+    try:
+        layers = hook(points)
+    except Exception as exc:
+        import revisit
+        revisit.fault()
+        feats._pavement_context_status = "pending_source; conservative suppression; not memoized"
+        log.debug("road context pending: %s: %s", type(exc).__name__, exc)
+        return np.ones(len(points), bool)
+    feats._pavement_context_status = "source_hook_returned"
+    mask = np.zeros(len(points), bool)
+    for layer in layers:
+        candidates = np.flatnonzero(~mask)
+        if not len(candidates):
+            break
+        mask[candidates] |= _transport_pavement_layer(layer, points[candidates])
+    return mask
+
+
+def _transport_pavement_layer(feats, points):
+    """Geometric query against one source layer; no context/road-spec recursion."""
+    import fast
+    points = np.asarray(points, np.float64)
+    mask = np.zeros(len(points), bool)
+    if not len(points):
+        return mask
+    origin = points[0]
+    scale = np.array([111320. * math.cos(math.radians(float(points[:, 1].mean()))), 110540.])
+    q = (points - origin) * scale
+    xy = (feats.lonlat - origin) * scale
+    boxes = (_feature_boxes(feats) - np.tile(origin, 2)) * np.tile(scale, 2)
+    fast.require(0, "polyline_dist")
+    for i in range(len(feats)):
+        cls = str(feats.attrs.get("class", ["unknown"] * len(feats))[i])
+        if cls not in SIDEWALK_CLASSES | {"motorway", "trunk", "service"} or unbuilt(feats, i):
+            continue
+        kind = surface_kind(cls, _surface_value(feats, i))
+        if kind not in BUILT:
+            continue
+        width = _rule_value(feats.rules.get("width"), i)
+        width = float(width) if width is not None and 1.0 <= float(width) <= 40.0 else _osm(feats, "width", i, *OSM_WIDTH_M)
+        lanes = _osm(feats, "lanes", i, *OSM_LANES)
+        half = carriageway(cls, kind, False, width, _rule_value(feats.rules.get("oneway"), i) is not None,
+                           int(lanes) if lanes is not None else None) / 2 + URBAN_PAVEMENT_MARGIN_M
+        x0, y0, x1, y1 = boxes[i]
+        near = np.flatnonzero(~mask & (q[:, 0] >= x0 - half) & (q[:, 0] <= x1 + half)
+                              & (q[:, 1] >= y0 - half) & (q[:, 1] <= y1 + half))
+        if not len(near):
+            continue
+        for part in feats.parts(i, xy):
+            line = part[0]
+            if len(line) >= 2:
+                distance = np.asarray(fast._ef.polyline_dist(np.ascontiguousarray(line), np.ascontiguousarray(q[near])))
+                mask[near[distance <= half]] = True
+    return mask
+
+
+def _urban_votes(feats, urban_fn, sampled):
+    """Per-feature shares from exactly the evidence used by the urban decision."""
+    if not sampled or urban_fn is None:
+        return {}
+    counts = [len(samples) for _, samples in sampled]
+    ll = np.concatenate([samples for _, samples in sampled])
+    n = len(ll)
+    pairs = [_beside(ll, counts, offset) for offset in URBAN_CONTEXT_OFFSETS_M]
+    pts = np.concatenate([ll, *(points for pair in pairs for points in pair)])
+    values = np.asarray(urban_fn(pts[:, 1], pts[:, 0]), bool)
+    raw = values[n:].copy()
+    paved = np.zeros(len(raw), bool)
+    candidates = np.flatnonzero(raw)
+    probe_points = pts[n:][candidates]
+    locations = getattr(getattr(urban_fn, "__self__", None), "urban_locations", None)
+    if locations is not None:
+        # Surface.classes reads a warped location. Join pavement against that
+        # same location, rather than broadening exclusion corridors by the warp.
+        lat, lon = locations(probe_points[:, 1], probe_points[:, 0])
+        probe_points = np.column_stack([lon, lat])
+    paved[candidates] = _transport_pavement(feats, probe_points)
+    # Each side can use the nearest supporting probe outside mapped pavement.
+    # The second probe preserves developed divided roads when 30 m lands on the
+    # opposite carriageway; it cannot turn another road's asphalt into evidence.
+    available = (raw & ~paved).reshape(len(pairs), 2, n)
+    near_paved = paved[:2 * n].reshape(2, n)
+    beside = available[0] | (near_paved & available[1])
+    raw_near = raw[:2 * n]
+    out, k = {}, 0
+    for (i, _), count in zip(sampled, counts):
+        a, b = beside[0, k:k + count], beside[1, k:k + count]
+        ra, rb = raw_near[k:k + count], raw_near[n + k:n + k + count]
+        out[i] = {"samples": count, "centre_share": float(np.mean(values[k:k + count])),
+                  "raw_beside_share": float(np.mean(ra | rb)), "raw_both_share": float(np.mean(ra & rb)),
+                  "beside_share": float(np.mean(a | b)), "both_share": float(np.mean(a & b)),
+                  "pavement_excluded_share": float(np.mean(paved[k:k + count] | paved[n + k:n + k + count])),
+                  "source": "WorldCover 50 excluding mapped transportation pavement",
+                  "pavement_context_status": feats.__dict__.get("_pavement_context_status"),
+                  "thresholds": {"centre": URBAN_SHARE, "beside": URBAN_BESIDE_SHARE, "highway_both": URBAN_BOTH_SHARE},
+                  "offsets_m": list(URBAN_CONTEXT_OFFSETS_M), "pavement_margin_m": URBAN_PAVEMENT_MARGIN_M}
+        k += count
+    return out
+
+
+def urban_context(feats, urban_fn):
+    """Development-only diagnostics: re-evaluate context without changing source geometry or caches."""
+    sampled = []
+    for i in range(len(feats)):
+        parts = feats.parts(i)
+        if parts and len(parts[0][0]) >= 2:
+            sampled.append((i, _urban_samples(np.concatenate([p[0] for p in parts]))))
+    return _urban_votes(feats, urban_fn, sampled)
+
+
 def _road_specs(feats, urban_fn, left_hand):
     out = []
     rules = feats.rules
@@ -2565,21 +2690,14 @@ def _road_specs(feats, urban_fn, left_hand):
         out.append(Spec(carriageway(cls, kind, False, rule_w, ow, lanes), kind, False, cls, ow, 2.5, *dk,
                         lanes=lanes, surf=surface_token(surf), link=link))
     if ask:
-        ll = np.concatenate([samples for _, _, _, samples, *_ in ask])
-        left, right = _beside(ll, [len(samples) for _, _, _, samples, *_ in ask], URBAN_BESIDE_M)
-        n = len(ll)
-        pts = np.concatenate([ll, left, right])
-        u_all = np.asarray(urban_fn(pts[:, 1], pts[:, 0]), bool)      # (one call: its cost is per call)
-        u, by, both = u_all[:n], u_all[n:2 * n] | u_all[2 * n:], u_all[n:2 * n] & u_all[2 * n:]
-        k = 0
+        context = _urban_votes(feats, urban_fn, [(j, samples) for j, _, _, samples, *_ in ask])
         for j, cls, kind, samples, ow, dk, lanes, token, link, rule_w in ask:
-            count = len(samples)
-            developed_both[j] = float(np.mean(both[k:k + count])) >= URBAN_BOTH_SHARE
-            urban = (float(np.mean(u[k:k + count])) >= URBAN_SHARE
-                     and float(np.mean(by[k:k + count])) >= URBAN_BESIDE_SHARE
+            evidence = context[j]
+            developed_both[j] = evidence["both_share"] >= URBAN_BOTH_SHARE
+            urban = (evidence["centre_share"] >= URBAN_SHARE
+                     and evidence["beside_share"] >= URBAN_BESIDE_SHARE
                      and (cls not in ("motorway", "trunk")
-                          or float(np.mean(both[k:k + count])) >= URBAN_BOTH_SHARE))
-            k += count
+                          or evidence["both_share"] >= URBAN_BOTH_SHARE))
             if j in regional and not urban:
                 kind = "gravel"
             out[j] = Spec(carriageway(cls, kind, urban, rule_w, ow, lanes), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
@@ -7664,8 +7782,11 @@ def hairpin_extra(frame, spec, xy):
     return None if ws is None else (ws - spec.width) / 2
 
 
-def retaining_walls(frame, roads, elev, exact, decks=()):
-    """Stone retaining walls along the ground roads cut deeper than grading.WALL_CUT_M into the ground (the grading
+def retaining_walls(frame, roads, elev, exact, decks=(), ground=None):
+    """Retaining cuts and roadside-drop parapets from the final terrain support surface.
+
+    ground, when supplied, returns drawn terrain ENU z at x/y; otherwise elev supplies graded geodetic height.
+    Stone retaining walls along ground roads cut deeper than grading.WALL_CUT_M into the ground (the grading
     leaves the ground at its natural height right behind them): [dict(base (k, 2) the wall's face line, top (k,),
     foot (k,), toward (k, 2) unit vectors to the road)] of the walls in the tile box `exact`. The edge of the road's
     flat core (as grading plans it), from the road level up to the ground behind; none where another road comes in
@@ -7673,6 +7794,9 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     a motorway under an overpass is its abutment's fill, and the wall rose through the deck, the user's report on the
     Bruce Highway, 2026-10-21). Central Park's 86th Street Transverse between its stone walls (the user's photos,
     2026-10-17). Pure given elev."""
+    # Road-map vertices describe horizontal shape, not the final vertical profile.
+    # Use the same support surface for the resampled centerline and side probes.
+    support = ground
     import grading
     import roadmesh
     x0, y0, x1, y1 = exact
@@ -7697,7 +7821,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         steps = np.arange(width / 2 + 0.5, core + grading.WALL_FLAT_M + 1.51, 1.0)
         for side in (1.0, -1.0):
             probe = xy + nl * side * (core + grading.WALL_FLAT_M + grading.WALL_T_M + WALL_PROBE_M)
-            pts_all.append(probe)
+            pts_all.extend((xy, probe))
             info.append((xy, z, nl * side, core, inside, width / 2, steps, spec.cls in CONCRETE_WALL_CLASSES,
                          fid, not spec.urban,
                          # (parapets: (the drop that gets one, within m of the edge), None none)
@@ -7709,6 +7833,8 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         return []
 
     def ground(P):
+        if support is not None:
+            return np.asarray(support(P[:, 0], P[:, 1]), np.float64)
         la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
         return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
     g = ground(np.concatenate(pts_all))
@@ -7716,9 +7842,12 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     # finds no cutting (_wall_runs) and that gets no parapets has no use for them (most of a town's streets: 8 of 9 of
     # the ground lookups, 2026-10-25)
     probes, k = [], 0
-    for xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn, _hx in info:
-        gg = g[k:k + len(xy)]
-        k += len(xy)
+    for index, row in enumerate(info):
+        xy, _chord_z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn, _hx = row
+        z = g[k:k + len(xy)]
+        gg = g[k + len(xy):k + 2 * len(xy)]
+        k += 2 * len(xy)
+        info[index] = (xy, z, *row[2:])
         need = len(steps) and (parapets is not None or _wall_runs(gg - z).any())
         probes.append((gg, need))
     sp = []
@@ -7774,6 +7903,8 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                                                  for n, m in enumerate(idx)])
         if parapets is not None and need:
             par = _parapets(xy, z, out_n, rh, inside, steps, gs, others, fid, decks, *parapets)
+            for wall in par:
+                wall.update(fid=fid, rule="roadside_drop", geometry_type="stone_parapet")
             if hx is not None:          # (round a widened hairpin: at its edge there, hairpin_extra)
                 for w_ in par:
                     a_, b_ = w_["at"]
@@ -7818,6 +7949,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                 back_top = top if ground_at is None else np.maximum(top, np.minimum(
                     ground_at(face[sl] + th, range(i, j + 1)), z[sl] + max_h + BACK_TOP_OVER_M))
                 out.append({"base": base, "top": top, "back_top": back_top, "foot": z[sl] - WALL_FOOT_M,
+                            "fid": fid, "rule": "steep_cut", "geometry_type": "retaining_wall",
                             "mountain": bool(mountain),
                             "toward": -out_n[sl], "thick": th, "concrete": concrete, "rock": rural and tall,
                             "road_z": z[sl], "clear": _clear_depth(base, out_n[sl], np.full(len(base), CLIFF_REACH_M),
@@ -8721,7 +8853,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                buried=0.0, lamp_region=None, country=None,
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
-               clearance_out=None, development=None):
+               clearance_out=None, development=None, raw_elev=None, dem_source=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -8730,7 +8862,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     sidewalk mesh (sidewalks.py) and storm drains among the chunks; None: sidewalks as decals.
     bridges: a BridgeProfiles (deck heights of whole chains, shared by every tile); None: from the
     chains among these cells. ground(x, y) -> z: the terrain block's drawn ground in the frame, the sidewalks' heights
-    (drape_walks); None: elev's. walk_cuts: [(centreline (k, 2), half width)] where no sidewalk runs (a gas station's
+    (drape_walks), wall comparisons and roadside pole bases; None: elev's. raw_elev and dem_source are opt-in
+    diagnostic inputs, unused in normal generation. walk_cuts: [(centreline (k, 2), half width)] where no sidewalk runs (a gas station's
     made-up driveway: gasstations.tile_sites cuts). roads_out: a list that gets the ground carriageways near the tile
     ((fid, spec, centreline (k, 3), lon): the median barriers', medians.tile_rows). skin_margin (m, a geotile's content:
     blockworker.roads_geo): the draped surfaces' pieces (sidewalk runs and corners, markings, crosswalks, corner fills)
@@ -8899,8 +9032,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if sm:
             return wexact[0] <= px < wexact[2] and wexact[1] <= py < wexact[3]
         return box_owns(own_box, px, py)
+    tile_walls = []
     if walls is not None:                       # retaining walls where a road is cut into the ground (roadmesh.tunnel)
-        tile_walls = retaining_walls(frame, roads, elev, exact, decks=decks_near)
+        tile_walls = retaining_walls(frame, roads, elev, exact, decks=decks_near, ground=ground)
         if props is None:                       # (no props here: stone)
             for w in tile_walls:
                 w["rock"] = False
@@ -9157,12 +9291,39 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             clearance_out.append(clearance)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
         # (the speed-limit signs are the sign tiles' since 2026-10-28: speedsigns.py)
+        import roaddecor_debug
+        trace = ({fid: [] for fid, _sp, _pts, _lon in roads if roaddecor_debug.selected(*seen[fid][:2])}
+                 if roaddecor_debug.ENABLED else None)
+
+        def prop_ground(x, y):
+            if ground is not None:
+                return ground(x, y)
+            lat, lon, _ = frame.enu_to_geodetic(np.asarray(x), np.asarray(y), np.zeros(np.shape(x)))
+            return np.asarray(frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))[2])
+
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
                                      decks=[(p, h) for p, h, _depth in traffic_decks], clearance=clearance,
                                      signals=signals, buried=buried, region=lamp_region, country=country,
-                                     priority=priority, ground=ground, development=development,
+                                     priority=priority, ground=prop_ground, development=development, trace=trace,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
+        if roaddecor_debug.ENABLED:
+            for fid, spec, _line, _lon in roads:
+                f, i, _ = seen[fid]
+                if roaddecor_debug.selected(f, i):
+                    roaddecor_debug.emit(f, i, spec, urban_fn, region=lamp_region, town=bool(town),
+                                         buried=buried, walks=walks, tile=getattr(tx, "key", [tx, ty]),
+                                         left_hand=left_hand, cache_status="generated", placement=trace.get(fid))
+    import roadside_debug
+    if roadside_debug.ENABLED:
+        reported = set()
+        for fid, spec, _line, _lon in roads:
+            f, i, _ = seen[fid]
+            if fid not in reported and roadside_debug.selected(f, i):
+                reported.add(fid)
+                roadside_debug.emit(f, i, spec, frame, elev=elev, raw_elev=raw_elev, ground=ground,
+                                    walls=tile_walls, props=props or (), tile=getattr(tx, "key", [tx, ty]),
+                                    dem_source=dem_source, cache_status="generated")
     aisles = {fid for fid, (f, i, sp) in seen.items()
               if sp.kind == "paved" and _rule_value(f.rules.get("subclass"), i) == "parking_aisle"}
     if (park is not None and walks is not None) or (marks is not None and aisles):

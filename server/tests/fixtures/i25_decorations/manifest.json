@@ -1,0 +1,214 @@
+{
+  "captured": "2026-11-05",
+  "reproduction_latlon": [
+    40.83387,
+    -104.96816
+  ],
+  "source_cache_read_only": true,
+  "overture_release": "2026-09-23.1",
+  "mapdata_version": 2,
+  "worldcover_release": "v200-2021",
+  "sources": [
+    "https://overturemaps.org",
+    "https://esa-worldcover.org",
+    "https://www.openstreetmap.org/copyright",
+    "https://api.openstreetmap.org/api/0.6/way/6169603/full.json",
+    "https://api.openstreetmap.org/api/0.6/map.json?bbox=-104.958,40.878,-104.950,40.884"
+  ],
+  "roads": [
+    {
+      "cell": "14/3414/6152",
+      "file": "roads_3414_6152.npz",
+      "sha256": "1b7a9de6343f964e4763a7cc383116b6b7666f119f9b273fc1a10b08e18e9192",
+      "layer_version": 7,
+      "features": 32
+    },
+    {
+      "cell": "14/3415/6150",
+      "file": "roads_3415_6150.npz",
+      "sha256": "42aa0e4d785a966dc25d78184d9ee32796d58138a7858d546aee4afc3a8f8e85",
+      "layer_version": 7,
+      "features": 6
+    },
+    {
+      "cell": "14/3417/6142",
+      "file": "roads_3417_6142.npz",
+      "sha256": "766d7941139942314cf15d98c5098b76f66abab227f0388eac5371fbd5535458",
+      "layer_version": 7,
+      "features": 53
+    },
+    {
+      "cell": "14/3421/6134",
+      "file": "roads_3421_6134.npz",
+      "sha256": "53216d472411d7283481ed1427a72faf6dc1a953503815d8c3491d284741803f",
+      "layer_version": 7,
+      "features": 1668
+    },
+    {
+      "cell": "14/3414/6153",
+      "file": "roads_3414_6153.npz",
+      "sha256": "c986b9cf03fa3505c714a734e47e43c7adb154d9d67bc850c91bbf1cfc99fe48",
+      "layer_version": 7,
+      "features": 16
+    },
+    {
+      "cell": "14/3413/6155",
+      "file": "roads_3413_6155.npz",
+      "sha256": "2f526c7c727edd2ffa58d245f59dbb2d3354eb7635d6ae165f248a6cc887f071",
+      "layer_version": 7,
+      "features": 40,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3414/6154",
+      "file": "roads_3414_6154.npz",
+      "sha256": "36da15a523851a606903b95141b1c58c68715272c9224207e738b3d1afad174f",
+      "layer_version": 7,
+      "features": 8,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3414/6155",
+      "file": "roads_3414_6155.npz",
+      "sha256": "0ae2c138b6dc01eeda43686e6f5767290a46565bb27c0aa99077500224b9ebd7",
+      "layer_version": 7,
+      "features": 34,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3416/6144",
+      "file": "roads_3416_6144.npz",
+      "sha256": "55ff845d5585655afbe24d54110a3a2da0efd29f110479b5c9f969fa0de8cd13",
+      "layer_version": 7,
+      "features": 9,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3416/6145",
+      "file": "roads_3416_6145.npz",
+      "sha256": "1e3396025a4a232bf74a68850e5c523355eee1dee2cfb01bf08b442536e19dfa",
+      "layer_version": 7,
+      "features": 6,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3416/6146",
+      "file": "roads_3416_6146.npz",
+      "sha256": "ea34e300fdc617f0d5cebbfa22797fce4f4ebb966088a40f8a62df0ea002f687",
+      "layer_version": 7,
+      "features": 9,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3416/6147",
+      "file": "roads_3416_6147.npz",
+      "sha256": "05d45ba850f8ae6ac78fd989763e72b71b0e8dbf5b7cdf1ca36ceea253653d80",
+      "layer_version": 7,
+      "features": 13,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3417/6143",
+      "file": "roads_3417_6143.npz",
+      "sha256": "1b1106e557278fc3d95bfed2955f5d9ec54b2f7363e3fa7387a547d5f07f7a69",
+      "layer_version": 7,
+      "features": 12,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3417/6144",
+      "file": "roads_3417_6144.npz",
+      "sha256": "51fd8706f0c06f8521844e1382d001ab6d1abdc86e10a0b45e7745981ef408d9",
+      "layer_version": 7,
+      "features": 6,
+      "purpose": "canonical geographic pavement context"
+    },
+    {
+      "cell": "14/3422/6134",
+      "file": "roads_3422_6134.npz",
+      "sha256": "f7a55dcb06d557b80ccef01b83ea73586a995f505b87d4e90c1d8ae3148b1f68",
+      "layer_version": 7,
+      "features": 1011,
+      "purpose": "canonical geographic pavement context"
+    }
+  ],
+  "worldcover_cells": [
+    "14/3413/6152",
+    "14/3413/6155",
+    "14/3413/6156",
+    "14/3413/6157",
+    "14/3414/6151",
+    "14/3414/6152",
+    "14/3414/6153",
+    "14/3414/6154",
+    "14/3414/6155",
+    "14/3414/6156",
+    "14/3415/6148",
+    "14/3415/6149",
+    "14/3415/6150",
+    "14/3415/6151",
+    "14/3415/6152",
+    "14/3416/6144",
+    "14/3416/6145",
+    "14/3416/6146",
+    "14/3416/6147",
+    "14/3416/6148",
+    "14/3417/6140",
+    "14/3417/6141",
+    "14/3417/6142",
+    "14/3417/6143",
+    "14/3417/6144",
+    "14/3418/6140",
+    "14/3418/6141",
+    "14/3418/6142",
+    "14/3420/6133",
+    "14/3420/6134",
+    "14/3420/6135",
+    "14/3421/6133",
+    "14/3421/6134",
+    "14/3421/6135",
+    "14/3422/6133",
+    "14/3422/6134",
+    "14/3422/6135"
+  ],
+  "selected_features": {
+    "frontage": "a78eea09-d357-4e35-a893-37ad22f6bf47",
+    "mainline_south_repro": "a1c551c7-fefa-4e8f-99fe-5b22aed021ac",
+    "opposite_south_repro": "a18f6a47-bdef-4358-b8d1-a1d775bf904a",
+    "mainline_north_carr": "b2e7862d-2d20-4c41-9b41-b6b8b4247c5c",
+    "opposite_north_carr": "4aa565b1-a06d-48af-b48d-f8059ebdc6a7",
+    "border_mainline": "1491fa3f-6a83-4c43-97f7-ab9019cc7d28",
+    "cheyenne_sidewalk": "00ba1603-9f35-4908-99d2-260b36d4ea4f",
+    "mainline_rural_north": "5f43e7c5-0f0f-4c23-a95f-567fbbfb42de",
+    "mainline_wyoming": "e60c1ea3-f062-4c23-9bd7-d76ec65d0c0f"
+  },
+  "notes": [
+    "Exact cached source arrays copied; fixtures make no network calls.",
+    "OSM source records on historical Overture segments may identify route relations, not a road way. Do not interpret r-prefixed IDs as OSM ways.",
+    "All cached WorldCover cells touched by built-road vertices and uniform 20m stations at +/-30,60,90m captured. Missing cells recorded explicitly.",
+    "Road cache layer version 7 reproduces runtime source. Additional current OSM tags captured separately; do not fabricate missing values."
+  ],
+  "missing_worldcover_cells": [],
+  "license_notes": [
+    "OpenStreetMap road geometries/tags: ODbL 1.0, OpenStreetMap contributors.",
+    "WorldCover v200 2021: CC BY 4.0, ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.",
+    "Overture transportation snapshot: derived from OSM; exact per-source provenance is preserved in each .npz."
+  ],
+  "canonical_probe_source_cells": [
+    "14/3413/6155",
+    "14/3414/6152",
+    "14/3414/6153",
+    "14/3414/6154",
+    "14/3414/6155",
+    "14/3416/6144",
+    "14/3416/6145",
+    "14/3416/6146",
+    "14/3416/6147",
+    "14/3417/6142",
+    "14/3417/6143",
+    "14/3417/6144",
+    "14/3421/6134",
+    "14/3422/6134"
+  ],
+  "missing_canonical_probe_source_cells": []
+}

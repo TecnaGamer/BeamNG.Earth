@@ -1,0 +1,72 @@
+{
+  "note": "Production build_tile withactualselectedRoundtopFeature, realground_partsbridgeexclusions, capturedactiveworldgradedplans; fallbackbridgeprofile(noactiveBridgeProfilescache). Eightsourceanchortilescovercamera300mradius. Notfullworld/wholecellcontext.",
+  "source_way_id": 15739626,
+  "feature_id": "78de7c5f-612f-4f7f-8f28-9ee42f10eaeb",
+  "baseline_roads_sha256": "a524112be7eb66d7eb71d803a4f7dbbc4b9d08e8f9ff1c006fbc89c098296a5a",
+  "bridge_ranges": [
+    [
+      0.29218676686286926,
+      0.3967865109443665,
+      "bridge"
+    ]
+  ],
+  "runs": [
+    {
+      "generation": "original",
+      "wall_rows": [
+        {
+          "tile": [
+            -1,
+            0
+          ],
+          "type": "parapet",
+          "start_latlon": [
+            41.16012341126472,
+            -104.88003798580155
+          ],
+          "end_latlon": [
+            41.160807733515774,
+            -104.88004310879096
+          ],
+          "height_range_m": [
+            2.9010415607847335,
+            3.1258522609311967
+          ],
+          "midpoint_ground_up_m": 1874.9595946213058,
+          "midpoint_wrong_source_chord_m": 1877.1848783651253,
+          "midpoint_wall_top_up_m": 1877.7848783651252,
+          "midpoint_top_over_ground_m": 2.8252837438194547
+        },
+        {
+          "tile": [
+            -1,
+            0
+          ],
+          "type": "parapet",
+          "start_latlon": [
+            41.160123997025735,
+            -104.87990097107412
+          ],
+          "end_latlon": [
+            41.160808319282815,
+            -104.87990609263841
+          ],
+          "height_range_m": [
+            2.90103586899545,
+            3.1258473823190798
+          ],
+          "midpoint_ground_up_m": 1874.9595985973683,
+          "midpoint_wrong_source_chord_m": 1877.1848783651253,
+          "midpoint_wall_top_up_m": 1877.7848783651252,
+          "midpoint_top_over_ground_m": 2.8252797677569106
+        }
+      ],
+      "count": 2
+    },
+    {
+      "generation": "corrected",
+      "wall_rows": [],
+      "count": 0
+    }
+  ]
+}
