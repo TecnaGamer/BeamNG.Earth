@@ -177,6 +177,14 @@ These give the biggest visual change for the least code.
 | 1.5 | Grass: drier GroundCover mix for AU (more West Coast USA dry grass, less lawn) | `mod/.../groundcover.lua:57`, `surface.lawns()` | Ideally seasonal: green summer, brown winter | S |
 | 1.6 | Gas stations / plazas: stop AU falling to the US West Coast kit | `gasstations.py:849`, `plazas.py:76` | Pick the closest stock kit; real AU kits come in Phase 2 | S |
 
+**Where we stopped (2026-11-07, usage limit):** merged and pushed: 1.1–1.7, 2.2 boards plus AU places, 2.4 guide posts,
+the roof textures, gables, and 3.1 high-set houses. **Next up:** 3.1b house details (user chose ALL: eaves, soffit,
+fascia and gutters; solar on the north slope; whirlybirds; carports; window awnings; water tanks), with no other worker
+editing buildings.py. The real-sign-text research was stopped early. Partial finding from SE QLD OSM: 407
+motorway_junction nodes, 194 with ref (exit numbers), only 1 with exit_to, so sign text must come from `destination=*`
+on the link ways; those counts were not measured. Restart that research with a tight scope. Native module: use the
+upstream committed `earthfast.pyd` (a source build changes geometry digests).
+
 **From the in-game review and the reference photos (2026-11-07), still open:**
 - **1.7 Nature strips (high impact):** Brisbane suburban streets have a grass verge between the kerb and the footpath,
   and often no footpath at all, just grass to the fence. Today we get concrete footpath right against the kerb
