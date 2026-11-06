@@ -95,6 +95,12 @@ DEM LRU holds 512 decoded 512² tiles (~512 MB at most), the imagery LRU 512 dec
 
 ## Protocol 4 (as implemented)
 
+Subsea tunnels require `hello.waterguard = 1` from the mod when server water is enabled. The server echoes the
+negotiated version, or requests a mod update and starts no world jobs until a compatible hello arrives. Without
+water, older clients remain supported. Tunnel road JSON may contain `waterguard` records with stable IDs,
+geodetic floor nodes, conservative radius and vault height; their exclusions must outlive the actual colliders.
+See [subsea validation](../docs/SUBSEA_TUNNEL_VALIDATION.md).
+
 Changes from protocol 3 (V1_3_SPEC §E): `hello.protocol = 4`; the server's `hello` gains
 `nearVisual` and `attribution`; `far_tile` gains `material`, `texture`, `detail` (all three, or
 none when imagery is off or failed for that tile: then it is a v3-style tile with the static

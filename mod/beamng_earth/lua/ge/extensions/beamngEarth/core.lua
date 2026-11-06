@@ -598,7 +598,7 @@ local function finishRebase()
   -- road geotiles: their content placed exactly into the new anchor (its rows' modules after their transforms above),
   -- the skins moved and lifted until the new anchor's come (roads.lua M.replace)
   roads.replace(rb.newAnchor, msg.anchorId)
-  sea.transform(xf, msg.anchorId)
+  sea.transform(xf, msg.anchorId, rb.newAnchor)
   navgraph.transform(xf, msg.anchorId)    -- (the AI's road graph too: applied again at once, the AI planning afresh)
   -- a resync with a restarted server keeps the previous session's tiles the same way (st.sessionId
   -- is the new session's): they go once the new session's tiles cover them
@@ -921,6 +921,7 @@ local function onMessage(msg)
     end
     -- vegFlat: the vegetation tiles may come as one flat array of numbers (trees.lua onTile), no table per tree
     net.send({ type = 'hello', protocol = PROTOCOL, format = FORMAT, modVersion = MOD_VERSION,
+      waterguard = sea.GUARD_VERSION,
       sessions = roads.allHeldSessions(), slotSession = farfield.session(), slotsHeld = held, vegFlat = true,
       geoTiles = require('beamngEarth/geotile').Z,
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
