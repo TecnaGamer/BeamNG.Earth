@@ -67,6 +67,60 @@ class RegionStyleTest(unittest.TestCase):
         self.assertEqual(bld.brick_share(30.0, -90.0), 0.35)
         self.assertEqual(bld.brick_share(40.0, -110.0), 0.15)
 
+    def test_queensland_region_and_the_rest_unchanged(self):     # fork
+        self.assertEqual(bld.region_style(-27.47, 153.02).name, "queensland", "Brisbane")
+        self.assertEqual(bld.region_style(-16.92, 145.77).name, "queensland", "Cairns")
+        self.assertEqual(bld.region_style(-19.26, 146.82).name, "queensland", "Townsville")
+        self.assertEqual(bld.region_style(-28.0, 153.43).name, "queensland", "Gold Coast")
+        self.assertEqual(bld.region_style(-23.70, 133.88).name, "oceania", "Alice Springs")
+        self.assertEqual(bld.region_style(-33.87, 151.21).name, "oceania", "Sydney")
+        self.assertEqual(bld.region_style(-37.81, 144.96).name, "oceania", "Melbourne")
+        self.assertEqual(bld.region_style(-36.85, 174.76).name, "oceania", "Auckland")
+        self.assertEqual(bld.region_style(-9.44, 147.18).name, "warm", "Port Moresby: not Queensland")
+        self.assertEqual(bld.region_style(-10.31, 150.45).name, "oceania", "Milne Bay, PNG: as before, not Queensland")
+        # the shared tint tuples keep their length and order (styles, sheds and barns hash into them by position)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_METAL]), 5)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_SLATE]), 10)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_SHINGLE]), 8)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_FLAT]), 5)
+        self.assertEqual(len(bld.WALL_TINTS[bld.SIDING]), 9)
+        self.assertEqual(len(bld.WALL_TINTS[bld.STUCCO]), 11)
+        self.assertEqual(bld.ROOF_TINTS[bld.ROOF_METAL][:2], ((0.85, 0.86, 0.88), (0.55, 0.57, 0.60)))
+        self.assertEqual(bld.WALL_TINTS[bld.SIDING][-2:], ((0.62, 0.20, 0.17), (0.66, 0.24, 0.20)), "barn reds last")
+        self.assertEqual(bld.BRICK_TINTS, ("bne_bld_fac_white", "bne_bld_fac_brickdark", "bne_bld_fac_brickwarm"))
+        o = bld.STYLES["oceania"]
+        self.assertEqual((o.brick, o.walls, o.porch, o.flat, o.hipped, o.pitch, o.brick_house, o.brick_tints, o.looks),
+                         (0.55, ((bld.STUCCO, 0.5), (bld.SIDING, 0.3)), 0.25, 0.05, 0.7, 24.0, 0.35, None, None))
+
+    def test_queensland_houses(self):       # fork
+        hs = self.houses(-27.47, 153.02, n=1000)
+        self.assertTrue(all(h.pitch == 23.0 for h in hs))
+        pitched = [h for h in hs if h.roof != "flat"]
+        self.assertGreater(len(pitched), 0.95 * len(hs), "very few flat roofs")
+        hipped = sum(h.roof == "hipped" for h in pitched) / len(pitched)
+        self.assertAlmostEqual(hipped, 0.65, delta=0.07)
+        metal = sum(h.roof_mat.startswith(bld.ROOF_METAL) for h in pitched) / len(pitched)
+        self.assertAlmostEqual(metal, 0.65, delta=0.08, msg="Colorbond ~65 %, the rest tile")
+        self.assertEqual(sum(h.roof_mat.startswith((bld.ROOF_METAL, bld.ROOF_SLATE)) for h in pitched), len(pitched))
+        for h in hs:
+            for look in (h.roof_mat, h.facade, h.wall):
+                if look:
+                    self.assertIn(look, bld.LOOKS, "every colour the plan picks is a known look")
+        walls = [str(h.wall) for h in hs if h.wall]
+        self.assertTrue(any(w.startswith(f"{bld.SIDING}|q") for w in walls), "painted weatherboard")
+        self.assertTrue(any(w.startswith(bld.STUCCO) for w in walls), "render")
+        self.assertFalse(any(w.startswith(bld.SIDING) and "|q" not in w for w in walls), "no US siding colours, no barn red")
+        brick = sum(h.band is bld.BAND_BRICK for h in hs) / len(hs)
+        self.assertAlmostEqual(brick, 0.45, delta=0.07, msg="brick veneer ~45 % of detached houses")
+        self.assertTrue(all(str(h.facade).startswith("bne_bld_fac_qbrick") for h in hs if h.band is bld.BAND_BRICK))
+        porch = sum(bool(h.porch) for h in hs) / len(hs)
+        self.assertAlmostEqual(porch, 0.3, delta=0.06, msg="a modest share of verandahs (the porch)")
+        # the tints are multipliers: 0..1, the sheds' and barns' keep the shared ones
+        for k in (*[f"{bld.ROOF_METAL}|q{i}" for i in range(13)], *[f"{bld.ROOF_SLATE}|q{i}" for i in range(4)]):
+            self.assertTrue(all(0.0 <= v <= 1.0 for v in bld.LOOKS[k][1]), k)
+        barn = bld.plan(rect(0, 0, 12, 20), {"class": "barn"}, lat=-27.47, lon=153.02)
+        self.assertNotIn("|q", barn.roof_mat)
+
     def test_south_asia_houses(self):
         hs = self.houses(28.61, 77.21)                  # Delhi, India
         self.assertFalse(any(h.porch for h in hs), "no American porches in South Asia")
