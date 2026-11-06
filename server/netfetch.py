@@ -55,6 +55,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 import base64
+import errno
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -723,11 +724,40 @@ class HttpsTransport:
         return phost, pport, user, passw
 
     def request(self, url, headers, timeout):
-        """(status, {lower-case header: value}, body)."""
+        """(status, {lower-case header: value}, body). A public S3 source on an IPv6-only network (GitHub #763: its
+        hosts have no AAAA record) goes to the bucket's dual-stack endpoint (PR #808), but only once an IPv4 connection
+        to it found no route (_no_route), and from then on for this run: Python's http.client has no Happy Eyeballs, so
+        on the many networks where IPv6 is set up but broken, dual-stack hosts first would wait out every new
+        connection's IPv6 attempt. Source URLs stay the cache, quota and NO_PROXY identities; proxied requests are left
+        to the proxy."""
+        u = urlsplit(url)
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        host = (u.hostname or "").lower()
+        auth = any(k.lower() == "authorization" for k in headers)
+        if proxy is None and host in _DUALSTACK_HOSTS:
+            dual = _dualstack(url, auth)
+            if dual != url:
+                return self._request_once(dual, headers, timeout, proxy)
+        try:
+            return self._request_once(url, headers, timeout, proxy)
+        except OSError as e:
+            if proxy is not None or not _no_route(e):
+                raise
+            dual = _dualstack(url, auth)
+            if dual == url:
+                raise
+            got = self._request_once(dual, headers, timeout, proxy)
+            if host not in _DUALSTACK_HOSTS:
+                _DUALSTACK_HOSTS.add(host)
+                log.info("net: %s has no IPv4 route here: its dual-stack endpoint from now on (%s)", host,
+                         urlsplit(dual).hostname)
+            return got
+
+    def _request_once(self, url, headers, timeout, proxy):
+        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
         u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
         if proxy is None:
             key = (u.scheme, u.netloc, None)
         else:
@@ -786,6 +816,27 @@ class HttpsTransport:
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
                     raise               # Fetcher retries through the bucket, with backoff)
                 # else: the server may have closed the idle keep-alive connection; reconnect once
+
+
+# IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
+# their dual-stack endpoints since (transport request)
+_DUALSTACK_HOSTS = set()
+# errno / WinError of a connection with no route to the address (an IPv6-only network, no NAT64): ENETUNREACH,
+# EHOSTUNREACH, EADDRNOTAVAIL; WSAENETUNREACH 10051, WSAEHOSTUNREACH 10065, WSAEADDRNOTAVAIL 10049
+_NO_ROUTE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, 10051, 10065, 10049}
+
+
+def _no_route(e):
+    """Is OSError e a connection that found no route to the host's (IPv4) address?"""
+    return getattr(e, "winerror", None) in _NO_ROUTE or getattr(e, "errno", None) in _NO_ROUTE
+
+
+def _dualstack(url, authorized):
+    """The bucket's dual-stack endpoint URL for a known public S3 source (native earthfast s3_dualstack_url), else
+    url."""
+    import fast
+    fast.require(153, "S3 dual-stack endpoints")
+    return fast._ef.s3_dualstack_url(url, bool(authorized))
 
 
 # --- download speed ---------------------------------------------------------------------------

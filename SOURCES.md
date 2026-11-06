@@ -22,6 +22,11 @@ A few things hold for all of them:
 
 ## Map data: roads, buildings, water, land use
 
+Public AWS S3 downloads use the corresponding regional dual-stack endpoint (`s3.dualstack.<region>.amazonaws.com`),
+which supports both IPv4 and IPv6. The source names below remain the identities for download budgets, status,
+cached files and `NO_PROXY`. Signed URLs and requests with an Authorization header keep their original endpoint.
+This covers the known S3 buckets used here; other providers still need their own IPv6 support.
+
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
 | Overture Maps (map data releases) | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` | Every road and railway line, every building (footprint, height, roof shape where mapped), water areas, rivers, land use (parks, farmland, industrial areas), bridges and tunnels as mapped, gas stations, airports' surroundings, and the town, state and country names in the status bar. Read in small ranges of large files: only the part around you. | Places you have not visited before come without roads, buildings or water (and the status bar without the town name) until it answers. Places you have visited load from disk. | named |
