@@ -113,7 +113,8 @@ export const settingsSchema = [
     items: [
       { id: "reportOpen", type: "feedback", what: "report", label: "Report", name: "Report an issue or idea", desc: "Closes this page, takes a screenshot, the location, the frame rate and your hardware and graphics settings, then opens a window to pick the kind (map issue, performance issue, bug, idea), give a title and describe it. Saves a ready-to-post GitHub issue (issue.md). Also Ctrl+Shift+E while driving." },
       { id: "profilerOpen", type: "feedback", what: "profiler", label: "Start profiler", name: "Performance profiler", desc: "Closes this page and records 30 s of frame times while you drive (every hitch with its place), then opens the same window as a performance issue. Also Ctrl+Shift+Y while driving." },
-      { id: "reportPost", type: "text", name: "Posting it", desc: "After saving, the window shows the folder and opens the GitHub new-issue page. Edit issue.md and drag screenshot.jpg into the issue." },
+      { id: "reportPost", type: "links", name: "Posting it", desc: "After saving, the window shows the folder and opens the GitHub new-issue page. Edit issue.md and drag screenshot.jpg into the issue. GitHub issues opens the project's issues in your browser.",
+        links: [ { label: "GitHub issues", url: "https://github.com/TecnaGamer/BeamNG.Earth/issues" } ] },
     ],
   },
   {
@@ -248,7 +249,6 @@ export function infoValue(item) {
   if (item.id === "player") return (typeof s.playerLat === "number") ? `${fmt(s.playerLat, 5)}, ${fmt(s.playerLon, 5)}  (${fmt(s.dist / 1000, 1)} km from origin)` : "-"
   if (item.id === "attribution") return s.attribution || "-"
   if (item.id === "credits") return s.credits || "-"
-  if (item.id === "reportPost") return "github.com/TecnaGamer/BeamNG.Earth/issues"
   if (item.id === "weather") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
