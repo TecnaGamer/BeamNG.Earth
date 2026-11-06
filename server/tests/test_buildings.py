@@ -198,6 +198,118 @@ class RegionStyleTest(unittest.TestCase):
                     h.update(repr((spec.roof_mat, spec.facade, spec.wall, spec.roof)).encode())
         self.assertEqual(h.hexdigest(), "d21b52fc32318224baaf183ed90785d74ce5738c35f965db28365c84618a0815")
 
+    def test_other_regions_gables_unchanged(self):          # fork
+        """build() of buildings outside Queensland (gabled, hipped and flat; brick, wood and plain houses and barns, in
+        every other region's style, Perth, Melbourne and the NSW coast just south of Queensland's box too) is byte-for-byte
+        what it was before Queensland's gable ends continued the wall: vertices, UVs, triangles, materials, colours.
+        (digest taken on the code before the change.)"""
+        import hashlib
+        h = hashlib.sha256()
+        rng = np.random.default_rng(23)
+        places = ((39.29, -76.61), (37.36, -118.39), (46.59, 7.91), (52.37, 4.90), (40.42, -3.70), (28.61, 77.21),
+                  (19.43, -99.13), (-33.87, 151.21), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04), (59.33, 18.07),
+                  (-31.95, 115.86), (-37.81, 144.96), (-29.5, 153.9), (-29.3, 140.0))
+        roofs = set()
+        for lat, lon in places:
+            for _ in range(24):
+                w, l = rng.uniform(7, 12), rng.uniform(9, 16)
+                ring = np.array([[0, 0], [w, 0], [w, l], [0, l]], float) + rng.uniform(-900, 900, 2)
+                for attrs in ({"class": "house"}, {"class": "barn"}, {"class": "house", "facade_material": "brick"},
+                              {"class": "house", "facade_material": "wood"}):
+                    spec = bld.plan(ring, attrs, lat=lat, lon=lon)
+                    self.assertIsNone(spec.gable)
+                    roofs.add(spec.roof)
+                    m = bld.build([(spec, 0.0, 1.0)])
+                    for k in (0, 1, 2, 3, 5):
+                        h.update(np.ascontiguousarray(m[k]).tobytes())
+                    h.update(repr((spec.roof_mat, spec.facade, spec.wall, spec.roof)).encode())
+        self.assertEqual(roofs, {"gabled", "hipped", "flat"})
+        self.assertEqual(h.hexdigest(), "3d78998a558dfa2c514cea840887cff60c2178f36463a49398fb833def59a10e")
+
+    @staticmethod
+    def gable_ends(m):
+        """The gable-end triangles of a built single house: vertical isosceles triangles on a horizontal base whose apex
+        stands over the middle of the base (a wall's half-quad is right-angled): [(tri index, 3 vertex rows)]."""
+        P, tris = m[0], m[2]
+        out = []
+        for i, t in enumerate(tris):
+            p = P[t]
+            if abs(p[0, 2] - p[1, 2]) > 1e-6 or p[2, 2] <= p[0, 2] + 0.1:
+                continue
+            mid = (p[0] + p[1]) / 2
+            if np.allclose(mid[:2], p[2, :2], atol=1e-6) and abs(p[0, 0] - p[1, 0]) + abs(p[0, 1] - p[1, 1]) > 3.0:
+                out.append((i, t))
+        return out
+
+    def test_queensland_gable_ends_continue_the_wall(self):     # fork
+        """The user's in-game report (Brisbane): the gable end over a face-brick wall was a flat salmon triangle (one
+        pixel of the window sheet, times the brick tint). Now the gable continues the wall: weatherboard on a weatherboard
+        house, render on a rendered one, brick or a light weatherboard on a face-brick one."""
+        bi, si, ui = (bld.MATERIALS.index(x) for x in (bld.BRICK_WALL, bld.SIDING, bld.STUCCO))
+        seen = {"siding": 0, "stucco": 0, "brick": 0, "brick_siding": 0}
+        brick_tints = set()
+        n = 0
+        for h in self.houses(-27.47, 153.02, n=700):
+            if h.roof != "gabled":
+                continue
+            n += 1
+            m = bld.build([(h, 0.0, 1.0)])
+            ends = self.gable_ends(m)
+            self.assertEqual(len(ends), 2, "a gable end at each end")
+            look = bld._Looks(h.seed)
+            for i, t in ends:
+                mat, rgba = m[3][i], tuple(int(c) for c in m[5][t[0]])
+                self.assertTrue(all(tuple(int(c) for c in m[5][v]) == rgba for v in t), "one tint")
+                uv, z = m[1][t], m[0][t][:, 2]
+                if h.wall:                          # weatherboard / render: the wall's own material and tint
+                    self.assertEqual((mat, rgba), look[h.wall], h.wall)
+                    scale = bld.SIDING_UV_M
+                    seen["siding" if h.wall.startswith(bld.SIDING) else "stucco"] += 1
+                elif h.band is bld.BAND_BRICK:      # face brick: brick of the facade's tint, or a light weatherboard
+                    k = int(h.facade[len("bne_bld_fac_qbrick"):])
+                    if mat == bi:
+                        self.assertEqual(rgba, look[f"{bld.BRICK_WALL}|q{k}"][1])
+                        self.assertEqual(look[h.facade][1], rgba, "the very tint of the wall's brick")
+                        scale, brick_tints = bld.GABLE_BRICK_UV_M, brick_tints | {k}
+                        seen["brick"] += 1
+                    else:
+                        self.assertEqual(mat, si)
+                        self.assertIn(rgba, [look[f"{bld.SIDING}|q{j}"][1] for j in bld.QLD_GABLE_SIDING])
+                        scale = bld.SIDING_UV_M
+                        seen["brick_siding"] += 1
+                else:
+                    continue
+                # u along the base, v = height / scale like the walls (z / scale): courses run on across the corner
+                np.testing.assert_allclose(uv[:, 1] * scale, z, atol=1e-5)
+                base = np.linalg.norm(m[0][t][1, :2] - m[0][t][0, :2])
+                self.assertAlmostEqual(uv[1, 0] - uv[0, 0], base / scale, places=5)
+                self.assertAlmostEqual(uv[2, 0] - uv[0, 0], base / 2 / scale, places=5)
+        self.assertGreater(n, 150)
+        for k, v in seen.items():
+            self.assertGreater(v, 20, k)
+        share = seen["brick"] / (seen["brick"] + seen["brick_siding"])
+        self.assertAlmostEqual(share, bld.QLD_GABLE_BRICK, delta=0.1, msg="~60 % brick gables on brick houses")
+        self.assertGreaterEqual(len(brick_tints), 4, "the brick tints vary")
+        # the same house is the same every time (the hash is the building's seed)
+        h = next(x for x in self.houses(-27.47, 153.02, n=100) if x.roof == "gabled" and x.band is bld.BAND_BRICK)
+        a, b = bld.build([(h, 0.0, 1.0)]), bld.build([(h, 0.0, 1.0)])
+        self.assertTrue(all(np.array_equal(a[k], b[k]) for k in (0, 1, 2, 3, 5)))
+
+    def test_queensland_gable_ends_scope(self):             # fork
+        """Only gabled Queensland roofs carry a gable look; the other roofs and every other region have none; the new
+        looks are on existing materials (nothing added to MATERIALS)."""
+        self.assertEqual(len(bld.MATERIALS), 23)
+        for h in self.houses(-27.47, 153.02, n=300):
+            self.assertEqual(h.gable is not None, h.roof == "gabled" and (bool(h.wall) or h.band is bld.BAND_BRICK), h.roof)
+            if h.gable:
+                self.assertIn(h.gable[0], bld.LOOKS)
+        for k in range(len(bld.QLD_BRICK)):
+            mat, c = bld.LOOKS[f"{bld.BRICK_WALL}|q{k}"]
+            self.assertEqual((mat, c), (bld.BRICK_WALL, bld.QLD_BRICK[k]))
+        # sheds and barns (plain siding walls) continue theirs too
+        s = bld.plan(rect(0, 0, 8, 14), {"class": "barn"}, lat=-27.47, lon=153.02)
+        self.assertEqual(s.gable, (s.facade, bld.SIDING_UV_M) if s.roof == "gabled" else None)
+
     def test_south_asia_houses(self):
         hs = self.houses(28.61, 77.21)                  # Delhi, India
         self.assertFalse(any(h.porch for h in hs), "no American porches in South Asia")
