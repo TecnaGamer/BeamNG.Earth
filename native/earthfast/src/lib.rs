@@ -5488,6 +5488,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 151)?;
+    m.add("VERSION", 152)?;
     Ok(())
 }
