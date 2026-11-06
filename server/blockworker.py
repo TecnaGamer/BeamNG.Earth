@@ -742,6 +742,21 @@ class _Parts:
     the meshes and rows of everything else."""
 
 
+def _de_routes(md, keys):
+    """The road_routes layers of the map cells keys, for the German junction signs' ref ranks (designs.context), read
+    as dirsigns._route_rows reads them: a cell whose layer fails or is missing gives none (its roads rank by class)."""
+    out = []
+    for key in keys:
+        try:
+            layer = md.cell(key, layers=("road_routes",), kind="demand").layers.get("road_routes")
+        except Exception as error:      # (the refs are optional: the junction signs go on by the roads' classes)
+            log.debug("road routes of %s: %s", key, error)
+            continue
+        if layer is not None and len(layer):
+            out.append(layer)
+    return out
+
+
 @profile_step('Road tile assembly')
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                 q, rkey, centre, skin_margin=0.0, walks_raw=None, cache_dir=None, out_dir=None, vfs_dir=None, pole_profile=None,
@@ -766,9 +781,14 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     if buildings:                                   # (the props' side sources, read while the tile is built)
         _s.md.side_prefetch(roadsmod.cells_of_tile(frame, tx, ty))
     mark("warm")
-    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-             for k in roadsmod.cells_of_tile(frame, tx, ty,
-                 200 if poleprofiles.kit_enabled(pole_profile) else roadsmod.OVERLAP)]
+    cell_keys = roadsmod.cells_of_tile(frame, tx, ty,
+                                       200 if poleprofiles.kit_enabled(pole_profile) else roadsmod.OVERLAP)
+    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in cell_keys]
+    de_routes = ()
+    if de_junctions:                # (the German junction signs' ref ranks: only near Germany)
+        import designs
+        if designs.near(frame, roadsmod.tile_bbox(tx, ty)):
+            de_routes = _de_routes(_s.md, cell_keys)
     mark("anchor")
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
@@ -859,7 +879,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
-                                 clearance_out=clearance, towns=towns, de_on=de_junctions)
+                                 clearance_out=clearance, towns=towns, de_on=de_junctions, de_routes=de_routes)
     P.town_faces = town_faces
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground

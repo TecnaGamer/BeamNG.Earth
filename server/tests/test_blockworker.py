@@ -79,6 +79,64 @@ class RoadsTileTest(unittest.TestCase):
 
 
 
+class GermanRoutesTest(unittest.TestCase):
+    """The cells' road_routes for the German junctions' ref ranks (blockworker._de_routes) reach roads.build_tile the
+    same in a road process and in the server's own thread (earthd.Server's in-process path: --road-processes 0,
+    --block-process off): behind the same gate (a tile near Germany: designs.near) and over the same cells (the tile's,
+    200 m round it with the regional pole kit on), so a pool tile is the in-process tile there too (a tertiary
+    Kreisstraße a stretch in both)."""
+    MUNICH, SALZBURG, BALTIMORE = (48.137, 11.575), (47.800, 13.045), (39.2834, -76.5934)
+
+    def server(self, at, out, on, poles):
+        """earthd.Server's in-process stand-in for an anchor at at (test_highway_signs' server())."""
+        import earthd
+        frame = blockworker.geodesy.EnuFrame(at[0], at[1])
+        anchor = SimpleNamespace(id=1, lat=at[0], lon=at[1], frame=frame, zooms=[15], bridges=None, tunnels=None)
+        ns = SimpleNamespace(
+            mapdata=FakeMapData(None, None), anchors={1: anchor}, road_pool=None, far_bld_pool=None, sign_pool=None,
+            gas_stations=False, surface=None, grader_for=lambda a: None, ground=lambda f, la, lo, z: z, dem=FakeDem(),
+            grader_lock=threading.Lock(), sea=None, buildings=False, road_widths=None, left_hand=lambda a: False,
+            mph=lambda a: False, anchor_q=lambda a: None, buried=lambda a: 0.0, country=lambda a: "DE",
+            lamp_region=lambda a: None, keep_fuel_pads=lambda pads: None, airports=None, airports_db=None,
+            near_visual="detail", out_dir=out, vfs_dir="/temp/x", sidewalks=False, _tunnel_ground=lambda a, g: None,
+            dej_on=on, regional_poles=poles)
+        ns.chain_view = lambda *a, **kw: earthd.Server.chain_view(ns, *a, **kw)
+        return ns
+
+    def routes(self, kind, at, on=True, poles="off"):
+        """(the road process's de_routes, the server thread's) that roads.build_tile (kind "tile": tile (0, 0)) gets
+        for an anchor at at; _de_routes stands in as [its cells]."""
+        import earthd
+        import secrossings
+        from unittest import mock
+        got = []
+        blockworker._s = SimpleNamespace(md=FakeMapData(None, None), dem=FakeDem(), widths=None, surface=None,
+                                         airports=None, sea=None, lock=threading.Lock(), cache_dir=tmp_cache(self),
+                                         bridges={}, anchor=lambda aid, lat, lon: (None, None))
+        with mock.patch.object(blockworker, "_de_routes", lambda md, keys: [tuple(sorted(keys))]), \
+                mock.patch.object(secrossings, "read", lambda md, frame, keys: None), \
+                tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            ns = self.server(at, b, on, poles)
+            if kind == "tile":
+                with mock.patch.object(roads, "build_tile",
+                                       side_effect=lambda *p, **k: got.append(k.get("de_routes", ())) or []):
+                    blockworker.roads_tile(1, at[0], at[1], 15, 0, 0, a, "/temp/x", False, 0.0, country="DE",
+                                           mph=False, pole_profile=earthd.Server.pole_profile(ns), de_junctions=on)
+                    earthd.Server.build_roads_tile(ns, 1, 0, 0)
+        self.assertEqual(len(got), 2, kind)
+        return [list(g) for g in got]
+
+    def test_tile_routes_in_process_as_in_a_road_process(self):
+        for at, on, poles, near in ((self.MUNICH, True, "off", True), (self.MUNICH, True, "europe", True),
+                                    (self.MUNICH, False, "off", False), (self.SALZBURG, True, "off", True),
+                                    (self.BALTIMORE, True, "off", False)):
+            pool, here = self.routes("tile", at, on, poles)
+            self.assertEqual(here, pool, (at, on, poles))
+            self.assertEqual(bool(pool), near, (at, on, poles))
+        wide = self.routes("tile", self.MUNICH, poles="europe")[0][0]
+        self.assertGreater(len(wide), len(self.routes("tile", self.MUNICH)[0][0]), "the kit's 200 m: more cells")
+
+
 class NavgraphTest(unittest.TestCase):
     """blockworker.navgraph: the graph built in a road process is the one navgraph.build makes with the same inputs
     (the server's way), its file written and the rules passed through."""
