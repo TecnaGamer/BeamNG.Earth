@@ -133,6 +133,45 @@ for _m, _cs in list(ROOF_TINTS.items()) + list(WALL_TINTS.items()):
 WOOD_TINTS = ((0.62, 0.44, 0.30), (0.46, 0.33, 0.24), (0.58, 0.52, 0.46))
 for _k, _c in enumerate(WOOD_TINTS):
     LOOKS[f"{SIDING}|w{_k}"] = (SIDING, _c)
+# fork: Queensland (STYLES["queensland"]): Colorbond roofs, terracotta / concrete tiles, face brick and painted
+# weatherboards. Kept apart from the shared tint tuples (like WOOD_TINTS, looks "...|q<k>"): the other styles, sheds and
+# barns hash into those by their length, so appending to them would recolour the rest of the world. The tints are
+# multipliers on the base texture (vertex colours; MAT_MEAN is the texture's mean): each one is its APPROXIMATE sRGB
+# target / the mean, the whole colour scaled down just enough to stay within 1.0 (a pale roof cannot be brighter than its
+# texture's mean: Surfmist comes out a mid-light grey, hue kept). The tiles share one scale (they keep their order).
+# Colorbond (approximate sRGB): Monument (50,50,51), Surfmist (228,226,213), Shale Grey (189,191,186), Woodland Grey
+# (75,76,70), Basalt (109,108,110), Windspray (136,139,138), Dune (177,173,163), Classic Cream (233,220,184),
+# Paperbark (202,191,164), Jasper (108,97,83), Manor Red (94,29,14), Deep Ocean (54,65,82), Cottage Green (48,76,60)
+QLD_METAL = ((0.31, 0.31, 0.31), (1.0, 0.99, 0.93), (0.99, 1.0, 0.97), (0.46, 0.46, 0.43), (0.67, 0.66, 0.67),
+             (0.83, 0.85, 0.84), (1.0, 0.98, 0.92), (1.0, 0.94, 0.79), (1.0, 0.95, 0.81), (0.66, 0.59, 0.51),
+             (0.57, 0.18, 0.09), (0.33, 0.40, 0.50), (0.29, 0.46, 0.37))
+QLD_METAL_W = (3, 3, 2, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1)       # how common each is (by position above): Monument, Surfmist
+# terracotta (166,82,55), (148,70,48), (120,58,42) on the slate sheet; charcoal concrete tile (70,70,72)
+QLD_TILE = ((1.0, 0.49, 0.31), (0.89, 0.42, 0.27), (0.72, 0.35, 0.23), (0.76, 0.76, 0.73))
+QLD_TILE_W = (2, 2, 1, 2)
+# painted weatherboard (on the siding sheet, mean 0.82): white (240,238,230), cream (236,226,196), pale grey
+# (205,208,204), heritage green (110,130,105), pale blue (190,205,212)
+QLD_SIDING = ((1.0, 0.99, 0.96), (1.0, 0.96, 0.83), (0.98, 0.99, 0.97), (0.52, 0.62, 0.50), (0.90, 0.97, 1.0))
+QLD_SIDING_W = (4, 3, 2, 1, 1)
+# face brick on the sash-on-red-brick sheet (taken as red brick, BRICK_WALL's mean (0.72, 0.57, 0.51)): cream
+# (214,190,150), blond (196,170,128), red-brown (150,78,56), chocolate (98,62,48), salmon (190,120,95)
+QLD_BRICK = ((0.89, 1.0, 0.88), (0.91, 1.0, 0.84), (0.82, 0.54, 0.43), (0.54, 0.43, 0.37), (1.0, 0.80, 0.70))
+QLD_BRICK_W = (2, 2, 3, 1, 1)
+for _k, _c in enumerate(QLD_METAL):
+    LOOKS[f"{ROOF_METAL}|q{_k}"] = (ROOF_METAL, _c)
+for _k, _c in enumerate(QLD_TILE):
+    LOOKS[f"{ROOF_SLATE}|q{_k}"] = (ROOF_SLATE, _c)
+for _k, _c in enumerate(QLD_SIDING):
+    LOOKS[f"{SIDING}|q{_k}"] = (SIDING, _c)
+for _k, _c in enumerate(QLD_BRICK):
+    LOOKS[f"bne_bld_fac_qbrick{_k}"] = (FACADE, _c)
+
+
+def _weighted(names, weights):
+    """names repeated by their weights: a tint list to hash into (a common colour appears more often)."""
+    return tuple(n for n, w in zip(names, weights) for _ in range(w))
+
+
 # Shop signs (Bishop's and Moab's main streets: a painted sign band over every shopfront, each shop its own
 # colour): boxes over the ground floor of a shop's street wall, a colour per shop width (hashed).
 SIGN_TINTS = ((0.62, 0.16, 0.14), (0.16, 0.22, 0.42), (0.18, 0.36, 0.24), (0.95, 0.90, 0.75), (0.42, 0.30, 0.22),
@@ -352,16 +391,26 @@ class Style:
     Coarse boxes by region until a facade-material map; the US ones keep their earlier behaviour."""
 
     def __init__(self, name, brick, walls, porch, flat, hipped, roofs, pitch=None, paint=0.3, wall_tints=None,
-                 wood=False, attached=0.0, barn_red=0.0, stone=0.0):
+                 wood=False, attached=0.0, barn_red=0.0, stone=0.0, looks=None, brick_tints=None, brick_house=0.35):
         self.name, self.brick, self.walls, self.porch, self.flat = name, brick, walls, porch, flat
         self.barn_red, self.stone = barn_red, stone
         self.hipped, self.roofs, self.pitch, self.paint, self.wall_tints = hipped, roofs, pitch, paint, wall_tints
         self.wood, self.attached = wood, attached
+        # fork: looks: {wall kind: the region's own look suffixes} (Queensland's weatherboard colours); brick_tints: the
+        # region's face brick facades (None: BRICK_TINTS); brick_house: the share of brick on detached houses, as a
+        # fraction of brick (the default 0.35 is the older behaviour everywhere else)
+        self.looks, self.brick_tints, self.brick_house = looks, brick_tints, brick_house
 
 
 _US_ROOFS = ((ROOF_SLATE, (0, 1, 2, 3)), (ROOF_SHINGLE, (0, 1, 2, 3)))
 _CLAY = (ROOF_SLATE, (4, 5, 6))
 _DARK = (ROOF_SLATE, (7, 8, 9))
+# fork: Queensland's roofs: 13 of 20 entries Colorbond, 7 tile (the positions spread over 0..1: roofs are picked by the
+# seed, and so is gabled / hipped)
+_QLD_TILE_AT = (1, 4, 6, 9, 12, 14, 17)
+_QLD_ROOFS = tuple(
+    (ROOF_SLATE, _weighted([f"q{k}" for k in range(len(QLD_TILE))], QLD_TILE_W)) if i in _QLD_TILE_AT else
+    (ROOF_METAL, _weighted([f"q{k}" for k in range(len(QLD_METAL))], QLD_METAL_W)) for i in range(20))
 STYLES = {
     "us_east": Style("us_east", 0.75, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
     "us_south": Style("us_south", 0.35, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
@@ -386,6 +435,14 @@ STYLES = {
                        wall_tints=(0, 1, 6, 5), attached=0.3),
     "oceania": Style("oceania", 0.55, ((STUCCO, 0.5), (SIDING, 0.3)), 0.25, 0.05, 0.7, (_CLAY, (ROOF_METAL, (0, 1, 4))),
                      pitch=24.0, paint=0.1),
+    # fork: Queensland (south-east suburbs): pitched hipped and gabled roofs of Colorbond (65 %) or terracotta / concrete
+    # tile (35 %; interleaved so the gabled and the hipped both mix: the choice and the roof shape share the seed), face
+    # brick veneer on 45 % of the houses, painted weatherboard (35 %) and render (20 %), a few verandahs (the porch)
+    "queensland": Style("queensland", 0.45, ((SIDING, 0.64), (STUCCO, 0.36)), 0.3, 0.02, 0.65,
+                        _QLD_ROOFS, pitch=23.0, paint=0.1, wall_tints=(0, 1, 2, 3, 4), stone=0.02,
+                        looks={SIDING: _weighted([f"q{k}" for k in range(len(QLD_SIDING))], QLD_SIDING_W)},
+                        brick_tints=_weighted([f"bne_bld_fac_qbrick{k}" for k in range(len(QLD_BRICK))], QLD_BRICK_W),
+                        brick_house=1.0),
     # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal): a concrete frame and brick under plaster, flat terrace
     # roofs, pastel and whitewashed walls, metal roofs on sheds (OmdevShastri, PR #146)
     "south_asia": Style("south_asia", 0.08, ((STUCCO, 0.92),), 0.0, 0.94, 0.2, (_CLAY, (ROOF_METAL, (0, 1, 3))),
@@ -420,6 +477,10 @@ def region_style(lat, lon):
         return STYLES["mediterranean"]
     if 20.0 <= lat <= 46.0 and 100.0 <= lon <= 146.0:           # China, Korea, Japan, Taiwan
         return STYLES["east_asia"]
+    # fork: Queensland (and the NSW Northern Rivers to 29.2 S); not Papua New Guinea's Milne Bay (north of 12 S, east of
+    # 144 E)
+    if -29.2 <= lat <= -10.0 and 137.9 <= lon <= 153.7 and not (lat > -12.0 and lon > 144.0):
+        return STYLES["queensland"]
     if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia, New Zealand
         return STYLES["oceania"]
     if 6.0 <= lat <= 37.5 and 68.0 <= lon <= 92.5:              # South Asia (not Myanmar, east of 92.5)
@@ -676,10 +737,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             u_brick = _hash01(seed, "brick")
             detached = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not row and neighbours == 0
-            brick = u_brick < brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0)
+            # (fork: style.brick_house was 0.35)
+            brick = u_brick < brick_share(lat, lon) * (1.15 if row else style.brick_house if detached else 1.0)
             if brick:
                 band = BAND_BRICK
-                facade = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)]
+                bricks = style.brick_tints or BRICK_TINTS       # fork
+                facade = bricks[int(seed * 7919) % len(bricks)]
             else:
                 facade = FACADE_TINTS[int(seed * 7919) % len(FACADE_TINTS)]
                 if (row or cls in HOUSE_CLASSES) and _hash01(seed, "paint") < style.paint:
@@ -703,7 +766,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 break
         if kind is not None:
             tints = style.wall_tints
-            if style.wood and kind == SIDING:   # chalets: stained wood
+            if style.looks and kind in style.looks:     # fork: the region's own paints (Queensland weatherboard)
+                own = style.looks[kind]
+                wall = f"{kind}|{own[int(_hash01(seed, 'wc') * len(own))]}"
+            elif style.wood and kind == SIDING:   # chalets: stained wood
                 wall = f"{SIDING}|w{int(_hash01(seed, 'wc') * len(WOOD_TINTS))}"
             elif tints is not None:
                 tints = [t for t in tints if t < len(WALL_TINTS[kind]) - (BARN_REDS if kind == SIDING else 0)] or [0]
@@ -732,7 +798,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         wall = f"{STONE}|{int(_hash01(seed, 'stc') * len(WALL_TINTS[STONE]))}"
         facade, plain = wall, False
     elif fm == "brick" and not (barn or shed):
-        facade, band, plain, wall = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)], BAND_BRICK, False, None
+        bricks = style.brick_tints or BRICK_TINTS       # fork
+        facade, band, plain, wall = bricks[int(seed * 7919) % len(bricks)], BAND_BRICK, False, None
     elif fm == "glass":
         facade = f"{OFFICE}|{int(_hash01(seed, 'glass tint') * len(WALL_TINTS[OFFICE]))}"
         band, plain, wall = BAND_OFFICE, False, None
