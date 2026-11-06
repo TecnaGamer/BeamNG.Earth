@@ -361,6 +361,8 @@ SERVER_TO_MOD = {
     "terrain_patch": {"anchorId": F(int), "key": F(str), "parts": F(list, OPT),     # [{path, x, y}]: small meshes
                       "tris": F(int, OPT), "error": F(str, OPT)},
     # ... its answer: the shell's shape, colour and opacity DDS (game paths), the material's name, where it is round
+    # a teleport's spot in a tunnel: its floor, after anchor_ready (core.floorCheck: down onto it once the tube collides)
+    "tunnel_floor": {"anchorId": F(int), "floorZ": F(NUM), "x": F(NUM), "y": F(NUM)},
     "space_clouds": {"anchorId": F(int), "shape": F(str), "color": F(str), "opacity": F(str), "material": F(str),
                      "lat": F(NUM), "lon": F(NUM), "radius": F(NUM),
                      # ... and the night side's city lights over the ground (none: none could be had)
@@ -375,6 +377,7 @@ WEATHER_NESTED = {"cover": {"total", "low", "mid", "high"}, "wind": {"ms", "from
 # message types the plain session cannot produce (each has its own session test below)
 EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
                        "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
+                       "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)

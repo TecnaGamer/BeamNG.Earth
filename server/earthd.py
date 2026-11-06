@@ -204,6 +204,7 @@ NEAR_VISUALS = ("mesh", "terrain", "detail")
 # as in terrain mode. MESH_LAYOUT: the modes on the mesh-mode tile layout; BLOCK_DRAWN: the block is seen.
 MESH_LAYOUT = ("mesh", "detail")
 BLOCK_DRAWN = ("terrain", "detail")
+TUNNEL_NEAR_M = 40.0          # m round a teleport's spot searched for a tunnel's tube (tunnel_floor)
 TUNNEL_FLOOR_UNDER_M = 2.0     # a tunnel floor this far under the ground at a teleport's origin: the car goes on the floor
 SEA_CHECK_S = 15.0          # sea (--sea on): the water tiles planned again when the player enters another
                             # 512 m square, or after this long (cells built meanwhile; seatiles.py)
@@ -3031,23 +3032,28 @@ class Server:
                 anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
             return anchor.tunnels
 
-    def tunnel_floor(self, anchor):
-        """The floor of a tunnel tube at the anchor's origin (roads.tunnel_floor_at), or None: a teleport into a park
-        arch set the car down on the soil over it, where it hung on the arch's top (2026-10-17)."""
+    def tunnel_floor(self, anchor, e=0.0, n=0.0):
+        """The floor of a tunnel tube at (e, n) of the anchor's frame (roads.tunnel_floor_at), or None: a teleport into a
+        park arch set the car down on the soil over it, where it hung on the arch's top (2026-10-17). No tunnel in the
+        map data within TUNNEL_NEAR_M: None at once (no tunnel profiles made)."""
         if self.mapdata is None:
             return None
-        g = self.grader_for(anchor)
         cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
         try:
+            r = TUNNEL_NEAR_M
+            la, lo, _ = anchor.frame.enu_to_geodetic(np.array([e - r, e + r]), np.array([n - r, n + r]), np.zeros(2))
+            cells = [cell_fn(k) for k in mapcells.cells_for_bbox(float(la.min()), float(lo.min()),
+                                                                float(la.max()), float(lo.max()))]
+            if not any(c is not None and any(s is not None for s in roadsmod.tunnel_specs(c)) for c in cells):
+                return None
+            g = self.grader_for(anchor)
+
             def elev(la, lo):
                 z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                 return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
             self.tunnels_of(anchor, elev, g)
-            box = (-40.0, -40.0, 40.0, 40.0)
-            la, lo, _ = anchor.frame.enu_to_geodetic(np.array([-40.0, 40.0]), np.array([-40.0, 40.0]), np.zeros(2))
-            cells = [cell_fn(k) for k in mapcells.cells_for_bbox(float(la.min()), float(lo.min()),
-                                                                float(la.max()), float(lo.max()))]
-            return roadsmod.tunnel_floor_at(anchor.tunnels.parts(cells, box), 0.0, 0.0)
+            box = (e - r, n - r, e + r, n + r)
+            return roadsmod.tunnel_floor_at(anchor.tunnels.parts(cells, box), e, n)
         except Exception:
             log.exception("tunnel floor at anchor %s", anchor.id)
             return None
@@ -5884,13 +5890,10 @@ class Connection:
             # (a provisional block's groundZ is at the place already: ground_z_at carves the sea floor, which waits on
             # the water cells: 30 s of a fresh place's teleport, 2026-10-25)
             gz = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.ground_z_at, anchor, *place)
-        floor_z = None                  # in a tunnel: its floor under the ground (the mod moves the car down onto it
-        if gz is not None and not provisional and place is None:   # once the tube's collision is there: set down in
-                                                                   # it at once, it fell)
-            fl = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.tunnel_floor, anchor)
-            if fl is not None and fl < gz - TUNNEL_FLOOR_UNDER_M:
-                floor_z = round(fl + gradingmod.ROAD_LIFT, 3)
-                log.info("anchor %d: in a tunnel, its floor %.1f under the ground %.1f", anchor.id, floor_z, gz)
+        # in a tunnel: its floor under the ground, sent after (tunnel_floor_late: the mod moves the car down onto it once
+        # the tube's collision is there). It was asked only at the origin of a full block, and since snapped anchors and
+        # provisional first blocks (2026-10-25) a teleport into a tunnel left the car on the hill over it.
+        floor_z = None
         log.info("anchor %d (%.5f, %.5f) ready in %.2f s, terrain at (%.0f, %.0f), groundZ %s; dem %s",
                  anchor.id, lat, lon, time.perf_counter() - t0, cx, cy,
                  "n/a" if gz is None else f"{gz:.1f}",
@@ -5903,8 +5906,21 @@ class Connection:
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")
+        if gz is not None:
+            self.spawn(self.tunnel_floor_late(anchor, place or (0.0, 0.0), gz))
         if provisional:
             self.spawn(self.refine_first(anchor, cx, cy, info.get("ter"), t0))
+
+    async def tunnel_floor_late(self, anchor, place, gz):
+        """A teleport's spot in a tunnel: its floor (more than TUNNEL_FLOOR_UNDER_M under the ground gz there) sent as
+        'tunnel_floor' (core.floorCheck sets the car down on it once the tube collides); nothing when none."""
+        e, n = float(place[0]), float(place[1])
+        fl = await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.tunnel_floor, anchor, e, n)
+        if fl is None or fl >= gz - TUNNEL_FLOOR_UNDER_M:
+            return
+        z = round(fl + gradingmod.ROAD_LIFT, 3)
+        log.info("anchor %d: in a tunnel at (%.0f, %.0f), its floor %.1f under the ground %.1f", anchor.id, e, n, z, gz)
+        self.send({"type": "tunnel_floor", "anchorId": anchor.id, "floorZ": z, "x": round(e, 3), "y": round(n, 3)})
 
     async def refine_first(self, anchor, cx, cy, provisional_ter, t0):
         """The graded first block (roads levelled, tunnels, the sea floor) in place of the provisional one: built as
