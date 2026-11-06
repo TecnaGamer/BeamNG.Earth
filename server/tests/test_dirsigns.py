@@ -299,9 +299,30 @@ class StyleTest(unittest.TestCase):
         for name in ("Brisbane", "Gold Coast", "Toowoomba", "Caboolture", "Gympie", "Sunshine Coast"):
             self.assertTrue(any(n == name and c == "AU" for n, c in zip(pl.names, pl.cc)), name)
         au = [e for e, c in zip(pl.en, pl.cc) if c == "AU"]
-        self.assertGreater(len(au), 1000)
+        self.assertGreater(len(au), 3000)
+        self.assertLess(len(au), 5000, "towns and suburbs of 3000+ people, not every neighbourhood")
         self.assertEqual(set(au), {""}, "English is the local language: no doubled names")
         self.assertIn("Ковель", pl.names, "the upstream places are still there")
+
+    def test_au_towns_and_suburbs_that_real_signs_name_are_there_with_populations(self):
+        pl = dirsigns.places()
+        qld = {}    # name -> best population of the one in south-east / coastal Queensland (the same names exist in NSW, WA ...)
+        for n, c, row in zip(pl.names, pl.cc, pl.array):
+            if c == "AU" and 138.5 < row[0] < 154.0 and -29.3 < row[1] < -10.0:
+                qld[n] = max(qld.get(n, 0), row[2])
+        for name, least in (("Ipswich", 100000), ("Logan City", 100000), ("Bundaberg", 40000), ("Southport", 20000),
+                            ("Beenleigh", 5000), ("Coolangatta", 4000), ("Caloundra", 3000), ("Maroochydore", 10000),
+                            ("Noosa Heads", 3000), ("Redcliffe", 8000), ("Springfield", 5000), ("Strathpine", 8000),
+                            ("Cleveland", 10000), ("Capalaba", 10000), ("Robina", 15000), ("Nerang", 10000),
+                            ("Tweed Heads", 30000), ("Toowoomba", 100000), ("Warwick", 10000), ("Gatton", 5000),
+                            ("Dalby", 8000), ("Kingaroy", 8000), ("Maryborough", 15000), ("Hervey Bay", 50000),
+                            ("Rockhampton", 60000), ("Gladstone", 30000), ("Mackay", 70000), ("Townsville", 150000),
+                            ("Cairns", 150000), ("Mount Isa", 15000)):
+            self.assertGreaterEqual(qld.get(name, 0), least, name)
+        qld_places = sum(1 for c, row in zip(pl.cc, pl.array) if c == "AU" and 138.5 < row[0] < 154.0 and -29.3 < row[1] < -10.0)
+        self.assertGreater(qld_places, 500)
+        au_pops = [row[2] for c, row in zip(pl.cc, pl.array) if c == "AU"]
+        self.assertLess(sum(1 for p in au_pops if p <= 0) / len(au_pops), 0.02, "nearly every place has a population")
 
     def test_parse_routes(self):
         self.assertEqual(dirsigns.parse_routes("ua:international|М-07|0.19|1.0;e-road|E 373|0.0|1.0"),

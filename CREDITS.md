@@ -104,6 +104,7 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 | USGS 3DEP lidar point clouds | U.S. Geological Survey | building heights/roofs and canopy in the US | public domain | "USGS 3DEP" | planned |
 | LiDAR HD | IGN France | buildings, canopy heights | Etalab Open Licence 2.0 | "IGN - LiDAR HD" | planned |
 | Mapillary street-level imagery | Mapillary (Meta) | tuning the city generator against real photos | CC BY-SA 4.0, free API token | "Street-level imagery: Mapillary" | planned (reference) |
+| Wikidata (Wikidata Query Service): Australian human settlements with population (P1082, latest statement) and coordinates (P625) | Wikidata contributors (wikidata.org) | fork (Queensland): the Australian direction-board places (`server/data/places_au_<release>.json.gz`, built by `tools/build_places_au.py`): fills the populations Overture lacks and adds towns and suburbs of 3000+ people it has no locality for (Bundaberg ...; those entries carry `"src": "wikidata"`). OpenStreetMap `population` tags were not used | CC0 1.0 | none required (already in the map credit line for the Overture / OSM part) | fork (2026-11-07) |
 
 ## Software and libraries
 
