@@ -138,6 +138,20 @@ Suggested benchmark spots (each tests different things):
 
 ### Phase 1 — Quick wins: tables only, no new assets, no Rust
 
+**Batch 1 merged (2026-11-07):** 1.1 seasons, 1.3 Queensland buildings, 1.5 grass. **Check in game:**
+- **Seasons (1.1):** Brisbane/Sydney/Melbourne with the PC date in May–August: leaves stay green, no rust patches in
+  the ground photo. A northern city in October (e.g. London) should still show autumn colour.
+- **Buildings (1.3):** Brisbane suburbs (Indooroopilly, Chermside, Sunnybank, Carindale) and Cairns (Edge Hill):
+  - Mostly Colorbond roofs (dark grey, light grey, cream, green) with some terracotta or charcoal tile.
+  - Lower-pitched hipped roofs.
+  - Walls of cream, blond or red-brown brick, or white, cream or pale-grey weatherboard. No barn reds.
+  - Light roofs come out a little darker than real (a texture limit).
+- **Grass (1.5):** Brisbane should show clearly more pale, dry tufts and fewer lawns in suburbs (60% instead of 90%).
+  Longreach should be drier still. In the game console, `beamngEarth_groundcover.status()` shows `dryShare`
+  (Brisbane ≈ 0.5, rising to 0.6 in August). If it's too dry, lower `M.AU_DRY` in `groundcover.lua`. Watch the frame
+  time when blocks move.
+- Still the old look until batch 2: **trees** (oaks, not gums), markings, gas stations.
+
 These give the biggest visual change for the least code.
 
 | # | Task | Where | Notes | Effort |
