@@ -139,6 +139,7 @@ SEP_FULL_M = 4.0
 CORE_FADE_M = 2.0
 SIDE_FADE_M = 2.0           # m of (side - ahead) over which a segment counts as beside the point (ahead: its own road)
 RETRY_S = 60.0              # s before a cell whose road data failed is asked for again
+PLAN_SLOW_S = 60.0          # s: a cell's plans still being made this long: its process's stacks to the log (stackdump)
 
 # Junctions: a side road's end takes the height of the road it joins (snap_junctions; mpsteppe's PR #290)
 JUNCTION_SNAP_ON = os.environ.get("BNE_JUNCTION_SNAP", "1") != "0"
@@ -1690,7 +1691,15 @@ class _Planner:
             # (this thread's faults: the planning threads of a process plan cells side by side, and another's fault
             # kept this one's complete plans from later visits and baked packs: 2026-11-02)
             f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
-            got = shared if shared is not None else self._make_cell(key)
+            if shared is not None:
+                got = shared
+            else:
+                import stackdump    # (a slow plan holds every process waiting for it: say where it waits)
+                watch = stackdump.watch(PLAN_SLOW_S, f"cell {key}'s plans still being made after {PLAN_SLOW_S:.0f} s")
+                try:
+                    got = self._make_cell(key)
+                finally:
+                    watch.cancel()
             if got is None:
                 return []
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
