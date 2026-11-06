@@ -7677,6 +7677,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     import roadmesh
     x0, y0, x1, y1 = exact
     pts_all, info = [], []
+    centres = []                # (the road's own ground along it, read with the probes below)
     for fid, spec, pts, _ in roads:
         if spec.kind not in BUILT or len(pts) < 2:
             continue
@@ -7688,6 +7689,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         inside = (xy[:, 0] >= x0 - 2) & (xy[:, 0] < x1 + 2) & (xy[:, 1] >= y0 - 2) & (xy[:, 1] < y1 + 2)
         if not inside.any():
             continue
+        centres.append(xy)
         d = np.gradient(xy, axis=0)
         d /= np.maximum(np.hypot(*d.T), 1e-9)[:, None]
         nl = np.stack([-d[:, 1], d[:, 0]], axis=1)
@@ -7711,7 +7713,19 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     def ground(P):
         la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
         return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
-    g = ground(np.concatenate(pts_all))
+    nprobe = sum(len(P) for P in pts_all)
+    g_all = ground(np.concatenate(pts_all + centres))
+    g = g_all[:nprobe]
+    # the road's height along it from the ground it is painted into, not a straight line between its map points: those
+    # can be 100 m apart, and across a creek whose bridge has no deck the line ran 3 m over the drawn road, which read as
+    # a raised road and got parapets down to the ground (GitHub #782, Western Australia: 3.5 m stone walls both sides of
+    # Port Gregory Road at its creek crossings)
+    k = nprobe
+    for n, item in enumerate(info):
+        if n % 2 == 0:                  # (two sides a road: one centre line)
+            zc = g_all[k:k + len(item[0])]
+            k += len(item[0])
+        info[n] = (item[0], zc) + tuple(item[2:])
     # the graded ground at the steps out from the road only where a wall or a parapet can stand: a side whose probe
     # finds no cutting (_wall_runs) and that gets no parapets has no use for them (most of a town's streets: 8 of 9 of
     # the ground lookups, 2026-10-25)
