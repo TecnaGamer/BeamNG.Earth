@@ -1467,11 +1467,11 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
         for wk in walks:
             if "corner" in wk:
                 c = wk["corner"]
-                b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()))
+                b.add_corner(c["arc"], c["inward"], c["outer"], h=c.get("h", sidewalksmod.CURB_H), ramps=c.get("ramps", ()))   # fork: h
                 continue
             ww = wk.get("w", roadsmod.SIDEWALK["w"])
             curb, outv = sidewalksmod.run_geometry(wk["pts"], wk["side"], ww)
-            b.add_run(curb, outv, ww, caps=wk["caps"], ramps=wk.get("ramps", ()),
+            b.add_run(curb, outv, ww, h=wk.get("h", sidewalksmod.CURB_H), caps=wk["caps"], ramps=wk.get("ramps", ()),   # fork: h
                       slab=sidewalksmod.BRICK if wk.get("brick") else 1)
         mark("walks")
         if not b.empty():
