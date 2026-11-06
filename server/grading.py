@@ -365,6 +365,7 @@ XS_FLOOR_M = 150.0      # m round a solved crossing no road is dug under its tar
 # UNDER_RUN_MIN_M (a junction right by the bridge is part of the underpass) or is a ring.
 UNDER_RUN_ON = os.environ.get("BNE_UNDERPASS_RUN", "on") != "off"
 UNDER_RUN_MIN_M = 2.0
+ABUT_UNDER_GRADE = 0.08     # past a road's abutment end, over the deck, its ground falls at this grade (grade_points)
 ABUT_NEAR_M = 14.0          # m from the bridge end the road is checked ...
 ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
 ABUT_STEEP = 0.15           # a fall this much steeper than that grade, near the end: the valley's side, not the road
@@ -4392,19 +4393,28 @@ class PlanPack:
                     leg = np.searchsorted(np.asarray(apex), np.arange(nseg[n]), side="right")
                     self.rid[s0[n]:s0[n + 1]] += leg.astype(np.int64) << LEG_RID_SHIFT
         ab = np.zeros(int(s0[-1]), bool)
+        # per segment near a bridge abutment: the distance along its road from its start back to a start abutment
+        # (column 0) and from its end on to an end abutment (column 1), NaN if none: the ground past the abutment,
+        # over the deck, falls away at ABUT_UNDER_GRADE (grade_points), whichever of its road's segments reaches it
+        abd = np.full((int(s0[-1]), 2), np.nan)
         cut = np.full((int(s0[-1]), 6), np.nan)
         for n, (_k, p) in enumerate(rows):
             abut = getattr(p, "abut", (False, False))
-            if abut[0] or abut[1]:
+            if (abut[0] or abut[1]) and s0[n + 1] > s0[n]:
                 arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p.xy[:, :2], axis=0).T))]
                 if abut[0]:
-                    ab[s0[n]:s0[n + 1]] |= arc[:-1] < ABUT_NEAR_M
+                    near = arc[:-1] < ABUT_NEAR_M
+                    ab[s0[n]:s0[n + 1]] |= near
+                    abd[s0[n]:s0[n + 1], 0] = np.where(near, arc[:-1], np.nan)
                 if abut[1]:
-                    ab[s0[n]:s0[n + 1]] |= arc[-1] - arc[1:] < ABUT_NEAR_M
+                    near = arc[-1] - arc[1:] < ABUT_NEAR_M
+                    ab[s0[n]:s0[n + 1]] |= near
+                    abd[s0[n]:s0[n + 1], 1] = np.where(near, arc[-1] - arc[1:], np.nan)
             c = getattr(p, "cut", None)
             if c is not None:
                 cut[s0[n]:s0[n + 1]] = c
         self.ab = ab.astype(np.uint8)
+        self.abd = abd
         self.cut = cut
         self.st = np.repeat(np.array([bool(getattr(p, "steep", False)) for _k, p in rows], np.uint8), nseg)
         # each segment's link: bit 0 its plan goes on before it, bit 1 after it (grade_points' EXTRAP_M); a plan's end
@@ -4449,10 +4459,11 @@ class PlanPack:
             return None
         if keep.all():
             return self.a, self.b, self.za, self.zb, self.h, self.rh, self.rid, self.ab, self.cut, self.ba, self.bb, self.st, \
-                self.lk
+                self.lk, self.abd
         sk = keep[self.of]
         return tuple(np.ascontiguousarray(v[sk]) for v in (self.a, self.b, self.za, self.zb, self.h, self.rh, self.rid,
-                                                           self.ab, self.cut, self.ba, self.bb, self.st, self.lk))
+                                                           self.ab, self.cut, self.ba, self.bb, self.st, self.lk,
+                                                           self.abd))
 
 
 def grade_points(px, py, base, plans, lift=0.0):
@@ -4470,9 +4481,9 @@ def grade_points(px, py, base, plans, lift=0.0):
     got = pack.near(px.min(), py.min(), px.max(), py.max())
     if got is None:
         return out
-    A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK = got
+    A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK, ABD = got
     import fast
-    fast.require(134, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(152, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134)
     f64 = np.float64
@@ -4482,7 +4493,8 @@ def grade_points(px, py, base, plans, lift=0.0):
                                  float(STEEP_T_MIN), float(BLEND_R), float(BUCKET),
                                  float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M), float(WALL_AHEAD_M),
                                  bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
-                                 float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M))
+                                 float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(ABUT_UNDER_GRADE),
+                                 np.ascontiguousarray(ABD, f64))
 
 
 def bridge_chain(line, all_bridges):

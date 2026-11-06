@@ -1427,7 +1427,9 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
                      bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
                      sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
-                     yield_ramp: f64) -> Bound<'py, PyArray1<f64>> {
+                     yield_ramp: f64, abut_under: f64, abut_d: PyReadonlyArray2<'py, f64>)
+                     -> Bound<'py, PyArray1<f64>> {
+    let abut_d = abut_d.as_array();         // (segments, 2): along its road to a start / end abutment, NaN: none
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
     let (a, b, za, zb, h) = (a.as_array(), b.as_array(), za.as_array(), zb.as_array(), h.as_array());
     let (rh, rid) = (rh.as_array(), rid.as_array());
@@ -1537,6 +1539,23 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         let lo = if link[s] & 1 != 0 { -e } else { 0.0 };
                         let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
                         target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
+                    }
+                    // past a bridge abutment's end (abut_d: how far along the road it lies from this segment), over the
+                    // deck: falling away at abut_under, not held at the end's height (the core's round end reached
+                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
+                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
+                    if abut[s] != 0 && l2 > 1e-12 && abut_under > 0.0 {
+                        let len = l2.sqrt();
+                        let along = (qx * abx + qy * aby) / len;        // (from the segment's start, along it)
+                        let (da, db) = (abut_d[[s, 0]], abut_d[[s, 1]]);
+                        let mut beyond = 0.0f64;
+                        if da.is_finite() {
+                            beyond = beyond.max(-along - da);
+                        }
+                        if db.is_finite() {
+                            beyond = beyond.max(along - len - db);
+                        }
+                        target -= beyond * abut_under;
                     }
                     if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
                         let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
@@ -5488,6 +5507,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 151)?;
+    m.add("VERSION", 152)?;
     Ok(())
 }

@@ -262,6 +262,36 @@ class AbutmentTest(unittest.TestCase):
             self.assertGreater(grading.grade_points(px, py, base, [plain, lower])[0], 372.5)
 
 
+class AbutmentEndTest(unittest.TestCase):
+    """Discord 2026-11-05 (the I-405 by Santa Monica: a ledge at every few overpass ends): an approach's core reached half
+    its width past its abutment end, back over the deck, at the end's height; a deck climbing to that end stood under
+    the ground there (35 cm). Past the abutment end the ground now falls at ABUT_UNDER_GRADE; at the end it is kept."""
+
+    def test_ground_past_the_abutment_falls_away(self):
+        xy = np.stack([np.arange(0.0, 80.1, 4.0), np.zeros(21)], axis=1)    # the approach, its start the abutment
+        approach = grading.Plan(xy, np.full(21, 82.0), 9.0, abut=(True, False))
+        px = np.array([0.0, -2.0, -6.0, -9.0, 2.0])
+        py = np.zeros(len(px))
+        base = np.full(len(px), 73.3)                    # the ground under the deck (a road 8 m below)
+        out = grading.grade_points(px, py, base, [approach])
+        self.assertAlmostEqual(out[0], 82.0, delta=0.05, msg="the abutment end itself")
+        self.assertAlmostEqual(out[4], 82.0, delta=0.05, msg="the approach")
+        for x, z in zip(px[1:4], out[1:4]):
+            self.assertLessEqual(z, 82.0 + x * grading.ABUT_UNDER_GRADE + 0.05, f"past the end by {-x} m")
+        with unittest.mock.patch.object(grading, "ABUT_UNDER_GRADE", 0.0):
+            old = grading.grade_points(px, py, base, [approach])
+        self.assertGreater(old[2], 81.9, "before: held at the end's height 6 m back over the deck")
+        plain = grading.Plan(xy, np.full(21, 82.0), 9.0)    # an ordinary road end (no bridge): its round end as before
+        self.assertTrue(np.allclose(grading.grade_points(px, py, base, [plain]), old, atol=1e-9), "a plain road end: as before")
+
+    def test_end_abutment_too(self):
+        xy = np.stack([np.arange(-80.0, 0.1, 4.0), np.zeros(21)], axis=1)  # the approach, its end the abutment
+        approach = grading.Plan(xy, np.full(21, 50.0), 7.0, abut=(False, True))
+        out = grading.grade_points(np.array([0.0, 5.0]), np.zeros(2), np.full(2, 40.0), [approach])
+        self.assertAlmostEqual(out[0], 50.0, delta=0.05)
+        self.assertLessEqual(out[1], 50.0 - 5.0 * grading.ABUT_UNDER_GRADE + 0.05)
+
+
 class SeparationTest(unittest.TestCase):
     """GitHub #92: a street in a cutting, a service road on the bank 7.5 m above it beside its core."""
 
