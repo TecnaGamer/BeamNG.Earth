@@ -305,3 +305,102 @@ def inner_sides(found):
 def in_island(found, p):
     """Is point p (x, y) inside one of the loops?"""
     return any(_inside(f["poly"], p) for f in found)
+
+
+def _splitter_flow(point, into, lanes):
+    """A keep-right marker needs opposing traffic, with the incoming lane to its right."""
+    import furniture
+
+    left = np.array([-into[1], into[0]])
+    sides = set()
+    for spec, line in lanes:
+        q, tangent = furniture._at(line, furniture._project(line, point[None]))
+        delta = q[0, :2] - point
+        gap = np.linalg.norm(delta) - spec.width / 2
+        across = float(delta @ left)
+        if not .32 <= gap <= 7. or abs(across) <= .6:
+            continue
+        side = 1 if across > 0 else -1
+        forward = float(tangent[0] @ into)
+        if (spec.oneway and -side * forward * (spec.dir or 1) >= .48
+                or not spec.oneway and abs(forward) >= .65):
+            sides.add(side)
+    return len(sides) == 2
+
+
+def _splitter_noses(ring):
+    """A point inside each end of the raised curb and its inward approach axis."""
+    xy = ring[:, :2]
+    _, _, axes = np.linalg.svd(xy - xy.mean(axis=0), full_matrices=False)
+    along, across = (xy @ axes.T).T
+    if not 4. <= np.ptp(along) <= 115. or not .85 <= np.ptp(across) <= 16.:
+        return
+    for sign in (1, -1):
+        signed = sign * along
+        next_s = np.roll(signed, -1)
+        for depth in (.9, 1.5, 2.4, 3.2):
+            level = signed.min() + depth
+            cross = (signed <= level) != (next_s <= level)
+            u = (level - signed[cross]) / (next_s[cross] - signed[cross])
+            meets = across[cross] + u * (np.roll(across, -1)[cross] - across[cross])
+            if len(meets) == 2 and np.ptp(meets) >= .82:
+                yield np.array([sign * level, meets.mean()]) @ axes, sign * axes[0]
+                break
+
+
+def splitter_heads(found, runs, roads_list, box):
+    """Positions and approach axes for raised traffic separators, owned once per tile."""
+    import furniture
+    import geotiles
+    import roads
+
+    local = {"primary", "secondary", "tertiary", "unclassified", "residential", "living_street"}
+    streets = {fid: (spec, line) for fid, spec, line, _ in roads_list if spec.kind == "paved" and spec.cls in local}
+    if len(streets) < 2:
+        return []
+    bounds = roads._blocker_segments([(line[:, :2], max(.2, spec.width / 2 + .23))
+                                      for _, spec, line, _ in roads_list])
+    from streetfront import _road_overlap
+
+    candidates = []
+    for f in found:
+        if f["round"] or f["ring"] is None:
+            continue
+        roadsides = [streets[fid] for fid in f["inner"] if fid in streets]
+        if len(roadsides) >= 2:
+            candidates.extend((p, d) for p, d in _splitter_noses(f["ring"]) if _splitter_flow(p, d, roadsides))
+    medians = [w for w in runs if w.get("median") and w["fid"] in streets]
+    for walk in medians:
+        spec, road = streets[walk["fid"]]
+        run = walk["pts"]
+        s = furniture._project(road, run[[0, -1], :2]) * (spec.dir or 1)
+        start = int(s[1] < s[0])
+        if walk["open"][start]:
+            continue
+        run = run if start == 0 else run[::-1]
+        if furniture._arclen(run)[-1] < 3.:
+            continue
+        p, into = furniture._at(run, np.array([1.4]))
+        p, into = p[0, :2], into[0]
+        # Both raised bands must start at this physical opening, rather than at a split in the map data.
+        for other in medians:
+            if walk["fid"] == other["fid"] or not any(
+                    not is_open and np.linalg.norm(end[:2] - run[0, :2]) <= 5.
+                    for end, is_open in zip(other["pts"][[0, -1]], other["open"])):
+                continue
+            q, _ = furniture._at(other["pts"], furniture._project(other["pts"], p[None]))
+            q = q[0, :2]
+            if .35 <= np.linalg.norm(p - q) <= 5.:
+                middle = (p + q) / 2
+                if _splitter_flow(middle, into, [streets[walk["fid"]], streets[other["fid"]]]):
+                    candidates.append((middle, into))
+    placed = []
+    for point, into in candidates:
+        if not geotiles.box_owns(box, *point):
+            continue
+        if any(np.linalg.norm(point - q) < 3. and float(into @ d) > .5 for q, d in placed):
+            continue
+        across = .29 * np.array([into[1], -into[0]])
+        if not _road_overlap(np.array([[point - across, point + across]]), bounds)[0]:
+            placed.append((point, into))
+    return placed

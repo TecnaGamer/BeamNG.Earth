@@ -2077,6 +2077,8 @@ class Server:
         box = roadsmod.tile_bbox(tx, ty)
         import streetfront
         frontage_country = streetfront.country_at_tile(anchor.frame, box) if items is not None else None
+        if frontage_country == "FR" and signs is None:
+            signs = []
         cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")  # noqa: E731
 
         def drawn(la, lo):      # the block's ground: raised over the low arches as the terrain is (_make_heightmap_here)
@@ -2124,11 +2126,16 @@ class Server:
             park = parkingmod.clear_of(park, props, drives)
             park = parkingmod.tile_lot_spots(anchor.frame, tx, ty, self.mapdata, elev, items, park,
                                              separate_bays=bool(frontage_country))
+            front_grass = [] if self.surface is not None else None
             paving, spots = streetfront.finish(anchor.frame, tx, ty, self.mapdata, walks, rings, items, near_roads,
                                                mapped_drives, drives, lambda x, y: roadmeshmod.drawn_ground(
                                                    anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
-                                               frontage_country, self.left_hand(anchor), redrape=True)
+                                               frontage_country, self.left_hand(anchor), redrape=True, props=props,
+                                               grass=front_grass)
             chunks += paving
+            if frontage_country and front_grass is not None:
+                key = f"{anchor.frame.lat0:.8f}:{anchor.frame.lon0:.8f}:{tx}:{ty}"
+                self.keep_fuel_pads(streetfront.pad_items(anchor.frame, box, key, paving, front_grass))
             park += spots
             park = gasstationsmod.clear_park(park, fuel)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
@@ -2401,8 +2408,7 @@ class Server:
                     roads.again(again)
 
     def keep_fuel_pads(self, pads):
-        """A road tile's gas station pads kept for the ground's painters (surface.Surface.add_fuel_pads); the blocks
-        a new station's pad lies on get their photo rendered again (pads_stale)."""
+        """Keep the road tile's pads and refresh the material layers of the affected blocks."""
         if pads and self.surface is not None and hasattr(self.surface, "add_fuel_pads"):
             new = self.surface.add_fuel_pads(pads)
             if new:
@@ -2424,10 +2430,13 @@ class Server:
             if anchor is None:
                 continue
             _, cx, cy = key
-            if items is None or any(self._ring_meets(anchor, ring, cx - h, cy - h, cx + h, cy + h)
-                                    for _, rings in items for ring in rings):
+            affected = None if items is None else [
+                sid for sid, rings in items
+                if any(self._ring_meets(anchor, ring, cx - h, cy - h, cx + h, cy + h) for ring in rings)]
+            if affected is None or affected:
                 self.pads_rebuild.add(key)
-                if self.near_visual == "detail":
+                if self.near_visual == "detail" and (affected is None or any(
+                        not sid.startswith(surfacemod.FRONTAGE_PAD_PREFIX) for sid in affected)):
                     self.base_stale.add(key)
 
     @staticmethod
@@ -2438,12 +2447,12 @@ class Server:
         return bool(e.max() >= x0 and e.min() <= x1 and n.max() >= y0 and n.min() <= y1)
 
     def block_fuel_pads(self, anchor, cx, cy, size):
-        """The kept gas station pads around a block (its square and a margin) for its process's job: [(id, rings)]."""
-        if self.surface is None or not getattr(self.surface, "gas_pads", False):
+        """Fuel and frontage footprints around a block, for the worker's material layers."""
+        if self.surface is None or not hasattr(self.surface, "frontage_pad_items"):
             return []
         h = size / 2 + 64.0
         la, lo, _ = anchor.frame.enu_to_geodetic(np.array([cx - h, cx + h]), np.array([cy - h, cy + h]), np.zeros(2))
-        return self.surface.fuel_pad_items(np.asarray(la), np.asarray(lo))
+        return self.surface.fuel_pad_items(la, lo) + self.surface.frontage_pad_items(la, lo)
 
     def ground_z_at(self, anchor, e, n):
         """The ground's height (the frame's up) at (e, n) of anchor's frame, from the elevation data (not graded: the
@@ -2644,7 +2653,7 @@ class Server:
                 pfut = self.hm_proc[key] = pool.submit(
                     blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
-                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block))
+                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE))
                 try:
                     info = pfut.result()
                 finally:
@@ -2810,14 +2819,14 @@ class Server:
             lots = (self.surface.lots(keep["lat"], keep["lon"]) if hasattr(self.surface, "lots") else None)
             if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
                 idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
+                idx = surfacemod.paint_grass(idx, keep["lat"], keep["lon"], lots)
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
                                              blockworker._open_tunnels(g, keep))
             idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
-            if hasattr(self.surface, "fuel_pads"):      # gas station forecourts (--gas-stations on)
-                idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"],
-                                            self.surface.fuel_pads(keep["lat"], keep["lon"]))
+            if hasattr(self.surface, "paint_ground_pads"):
+                idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
             stages["roadPaint"] = time.perf_counter() - t1
             complete = complete and roads_complete
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])

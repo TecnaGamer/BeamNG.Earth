@@ -265,6 +265,12 @@ for group, asset in pairs(require('beamngEarth/frFenceAssets')) do
   M.GROUP_MAX_M[group] = 320
   M.ONE_SPELLING[group] = true
 end
+M.CATALOG.fr_hedge = { M.CATALOG.shrub[1] } -- Stock East Coast USA broadleaf shrub.
+M.CATALOG.fr_fence_hedge = M.CATALOG.fr_hedge -- Older server rows still use the same stock bush.
+M.GROUP_MAX_M.fr_hedge = 350
+M.GROUP_MAX_M.fr_fence_hedge = 350
+M.NO_COLLIDE.fr_hedge = true
+M.NO_COLLIDE.fr_fence_hedge = true
 -- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
 -- Coast's grill. The table's materials live with Utah's buildings.
 M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }

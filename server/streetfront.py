@@ -11,7 +11,7 @@ import polygon
 import roadwidth
 
 MAX_GAP_M = 2.4
-BUILT_FRONT_M = 10.0
+BUILT_FRONT_M = 15.0
 STEP_M = 1.5
 GREEN = {"garden", "grass", "flowerbed", "grassland", "meadow", "park", "village_green",
          "allotments", "hedge", "orchard", "wood", "forest", "cemetery", "farmland",
@@ -19,10 +19,11 @@ GREEN = {"garden", "grass", "flowerbed", "grassland", "meadow", "park", "village
 COMMERCIAL = {"retail", "commercial", "shopping_centre", "supermarket", "office"}
 PAVED_AREAS = {"footway", "pedestrian", "cycleway", "living_street", "service"}
 PHOTO_WIDTH_M = 5.5
+PAVER_SURFACES = {"pavers", "pavers_mixed", "slabs", "stone", "brick"}
 
 
 class PhotoPaving:
-    """Conservative evidence of continuous hard ground in the cached orthophoto."""
+    """Hard ground and vegetation signals from the cached regional orthophoto."""
 
     def __init__(self, rgb, x0, y0, size):
         self.x0, self.y0, self.size = x0, y0, size
@@ -31,18 +32,30 @@ class PhotoPaving:
         self.mask = ((r + g + b >= 3 * 62) & (r + g + b <= 3 * 224) &
                      (np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b) <= 26) &
                      (2 * g - r - b <= 13))
+        self.green = (g >= 38) & (g - r >= 6) & (2 * g - r - b >= 20)
+
+    def sample(self, mask, samples):
+        rows, cols = mask.shape
+        x = np.floor((samples[..., 0] - self.x0) * cols / self.size).astype(int)
+        y = np.floor((self.y0 + self.size - samples[..., 1]) * rows / self.size).astype(int)
+        inside = (x >= 0) & (x < cols) & (y >= 0) & (y < rows)
+        return mask[np.clip(y, 0, rows - 1), np.clip(x, 0, cols - 1)] & inside
 
     def depths(self, xy, outward):
         steps = np.arange(.5, PHOTO_WIDTH_M + .01, .5)
         tangent = np.c_[outward[:, 1], -outward[:, 0]]
         samples = xy[:, None, None, :] + steps[None, :, None, None] * outward[:, None, None, :]
         samples = samples + np.array([-.32, 0., .32])[None, None, :, None] * tangent[:, None, None, :]
-        rows, cols = self.mask.shape
-        x = np.floor((samples[..., 0] - self.x0) * cols / self.size).astype(int)
-        y = np.floor((self.y0 + self.size - samples[..., 1]) * rows / self.size).astype(int)
-        inside = (x >= 0) & (x < cols) & (y >= 0) & (y < rows)
-        valid = self.mask[np.clip(y, 0, rows - 1), np.clip(x, 0, cols - 1)] & inside
+        valid = self.sample(self.mask, samples)
         return .5 * np.logical_and.accumulate(valid.sum(axis=2) >= 2, axis=1).sum(axis=1)
+
+    def strip_share(self, strips, mask):
+        """Share of matching pixels over each four-corner strip, away from its edges."""
+        across = np.array([.18, .5, .82])[None, :, None]
+        along = np.linspace(.08, .92, 12)[None, None, :, None]
+        a = strips[:, :1] * (1 - across) + strips[:, 1:2] * across
+        b = strips[:, 3:] * (1 - across) + strips[:, 2:3] * across
+        return self.sample(mask, a[:, :, None] * (1 - along) + b[:, :, None] * along).mean(axis=(1, 2))
 
 
 @lru_cache(maxsize=6)
@@ -93,7 +106,7 @@ def _areas(frame, cells, box):
     import plazas
     import surface
 
-    paved, protected, explicit, commercial = [], [], [], []
+    paved, protected, explicit, commercial, residential = [], [], [], [], []
     seen = set()
     x0, y0, x1, y1 = box
     for feats in cells:
@@ -120,9 +133,10 @@ def _areas(frame, cells, box):
                 tags.get("area") == "yes" and tags.get("highway") in PAVED_AREAS)
             parking = parks is not None and parks[i]
             square = squares is not None and squares[i]
-            hard = (parking or square or area) and mat not in plazas.UNPAVED
+            courtyard = cls in {"courtyard", "driveway"} and bool(mat)
+            hard = (parking or square or area or courtyard) and mat not in plazas.UNPAVED
             green = feats.layer == "water" or cls in GREEN or mat in plazas.UNPAVED
-            if not (hard or green or cls in COMMERCIAL):
+            if not (hard or green or cls in COMMERCIAL or cls == "residential"):
                 continue
             for part in feats.parts(i):
                 if not part or len(part[0]) < 3:
@@ -133,11 +147,13 @@ def _areas(frame, cells, box):
                 elif hard:
                     paved.append(rings[0])
                     protected.extend(rings[1:])
-                    if area and not (parking or square):
+                    if (area or courtyard) and not (parking or square):
                         explicit.append((rings, mat))
                 elif cls in COMMERCIAL:
                     commercial.append(rings[0])
-    return paved, protected, explicit, commercial
+                else:
+                    residential.append(rings[0])
+    return paved, protected, explicit, commercial, residential
 
 
 def _walls(rings, lines=()):
@@ -212,7 +228,25 @@ def _paving(poly, surface):
     import sidewalks
     repeat = sidewalks.BRICK_REPEAT_M if surface == "brick" else 2.
     return {"m": sidewalks.MATERIALS[sidewalks.EU_SLAB[surface]], "w": 0., "tl": repeat, "u_m": repeat,
-            "p": 17, "layer": "edge", "poly": poly.tolist(), "n": []}
+            "p": 17, "layer": "edge", "poly": poly.tolist(), "n": [], "frontage": True}
+
+
+def pad_items(frame, box, tile_key, paving, grass=()):
+    """The paving and photographed grass footprints for the terrain's material layers."""
+    import surface
+
+    def rings_in_tile(polygons):
+        rings = [r for poly in polygons if (r := mapgeom.clip_ring(np.asarray(poly), box)) is not None]
+        if not rings:
+            return []
+        xy = np.concatenate(rings)
+        lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+        ends = np.cumsum([len(ring) for ring in rings])[:-1]
+        return list(zip(np.split(lat, ends), np.split(lon, ends)))
+
+    return [(surface.FRONTAGE_PAD_PREFIX + tile_key,
+             rings_in_tile(c["poly"] for c in paving if c.get("frontage"))),
+            (surface.FRONTAGE_GRASS_PREFIX + tile_key, rings_in_tile(grass))]
 
 
 def _mapped_paving(explicit, protected, road_blocks):
@@ -314,15 +348,47 @@ def widen_walks(walks, photo, buildings, excluded, barriers, carriageways):
     return changed
 
 
+def _road_edges(carriageways, box):
+    """A frontage can start at the road edge on a street with no drawn sidewalk."""
+    import europewalks
+    import roads
+
+    for fid, spec, points, _ in carriageways:
+        if (spec.cls not in europewalks.STREETS or spec.kind != "paved" or spec.link or spec.median
+                or not (spec.urban or spec.street and spec.street.village)):
+            continue
+        for side in (1, -1):
+            edge = roads.offset_polyline(points, side * (spec.width / 2 + .12))
+            for piece in roads.clip_polyline(edge, *box):
+                yield {"pts": piece, "side": side, "w": 0., "fid": fid, "road_edge": True}
+
+
+def _street_edge_distance(points, carriageways):
+    import furniture
+
+    distance = np.full(len(points), np.inf)
+    for _, spec, road, _ in carriageways:
+        if spec.cls == "service":
+            continue
+        lo, hi = road[:, :2].min(axis=0) - 9., road[:, :2].max(axis=0) + 9.
+        near = np.flatnonzero(np.all((points >= lo) & (points <= hi), axis=1))
+        if len(near):
+            p, _ = furniture._at(road, furniture._project(road, points[near]))
+            gap = np.abs(np.linalg.norm(p[:, :2] - points[near], axis=1) - spec.width / 2)
+            distance[near] = np.minimum(distance[near], gap)
+    return distance
+
+
 def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=(), barriers=(),
-           extend=True, residential=True, areas=None, photo=None):
-    """Draped paving for bounded gaps. Longer aprons require mapped commercial use or a paved destination."""
+           extend=True, residential=True, areas=None, photo=None, driveways=(), grass=None):
+    """Draped paving between a developed street edge and its buildings or mapped hard ground."""
+    import europewalks
     import roads
     import sidewalks
 
     candidates = [w for w in walks if w.get("surface") in sidewalks.EU_SLAB and "pts" in w
                   and (not w.get("detached") or w.get("mapped")) and not w.get("median")]
-    paved, green, explicit, retail = _areas(frame, lots, box) if areas is None else areas
+    paved, green, explicit, retail, _ = _areas(frame, lots, box) if areas is None else areas
     targets = (list(buildings) if residential else list(shops)) + paved
     walls = _walls(targets)
     hard_walls = _walls(list(shops) + paved)
@@ -330,10 +396,20 @@ def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=()
     blockers = [(p[:, :2], spec.width / 2) for _, spec, p, _ in carriageways]
     blockers += [(np.asarray(d["n"], np.float64)[:, :2], float(d["w"]) / 2) for d in drives]
     blocks = roads._blocker_segments(blockers) if blockers else None
+    walk_blocks = roads._blocker_segments([(w["pts"][:, :2], w["w"] / 2 + .13) for w in walks
+                                          if "pts" in w and not w.get("median")])
+    driveway_styles = {}
+    for _, spec, points in driveways:
+        style = europewalks.MAPPED_SURFACE.get(spec.surf)
+        if style in PAVER_SURFACES:
+            driveway_styles.setdefault(style, []).append((points[:, :2], spec.width / 2 + 1.2))
+    driveway_styles = {style: roads._blocker_segments(lines) for style, lines in driveway_styles.items()}
     result = _mapped_paving(explicit, green + list(buildings), blocks)
     result.extend(_access_chunks(candidates, paved, green, carriageways))
     if not targets:
         return result
+    if extend and residential:
+        candidates.extend(_road_edges(carriageways, box))
     for walk in candidates:
         line = roads.densify(np.asarray(walk["pts"]), STEP_M)
         side = _outside_side(line, carriageways) if walk.get("mapped") else walk["side"]
@@ -342,57 +418,61 @@ def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=()
         curb, normal = sidewalks.run_geometry(line, side, walk["w"])
         back = curb[:, :2] + walk["w"] * normal
         normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
-        limit = BUILT_FRONT_M if extend and (retail or shops or paved or photo is not None) else MAX_GAP_M
+        limit = BUILT_FRONT_M if extend else MAX_GAP_M
+        if walk.get("road_edge"):
+            limit = min(limit, 10.)
         dist = walls.rays(back, normal, limit)
-        end = back + normal * (np.minimum(dist, limit) - .02)[:, None]
-        long = dist > MAX_GAP_M
-        confirmed = ~long
+        limit_depth = green_walls.rays(back, normal, limit)
         hard_dist = hard_walls.rays(back, normal, limit) if shops or paved else np.full(len(back), np.inf)
         hard_target = np.isfinite(dist) & np.isclose(hard_dist, dist, rtol=0., atol=.08)
-        if long.any() and limit > MAX_GAP_M:
-            checked = np.flatnonzero(long)
-            confirmed[checked] = hard_target[checked] | (
-                _inside(back[checked], retail) & _inside(end[checked], retail))
-        valid = (dist >= .15) & (dist <= limit) & confirmed & ~_inside(back, targets)
+        free = ~_inside(back, targets + green)
+        valid = free & np.isfinite(dist) & (dist >= .18)
         if walk.get("mapped"):
-            # A park path with a nearby building is not evidence of a paved yard.
-            valid &= _inside(back, retail) | hard_target
+            # A mapped sidewalk's position must agree with the street edge.
+            road_edge = _street_edge_distance(back, carriageways)
+            valid &= _inside(back, retail) | hard_target | (road_edge <= 2.8)
+        observed = np.zeros(len(back), bool)
+        depth = np.fmin(dist, limit_depth)
         if photo is not None and extend:
-            # A hard strip must still be beside a mapped frontage or commercial land.
-            # The first garden, wall or building bounds the result even if the photo is pale beyond it.
-            bounds = green_walls.rays(back, normal, BUILT_FRONT_M)
-            next_edge = np.fmin(dist, bounds)
-            urban_edge = np.isfinite(dist) | np.isfinite(bounds) | _inside(back, retail)
-            depth = np.minimum(photo.depths(back, normal), np.where(np.isfinite(next_edge), next_edge, PHOTO_WIDTH_M))
-            observed = (depth >= .9) & urban_edge & ~_inside(back, targets)
-            extend_here = observed & (~valid | (depth > dist))
-            dist[extend_here] = depth[extend_here]
-            valid |= extend_here
-            end = back + normal * (np.minimum(dist, limit) - .04)[:, None]
-        else:
-            extend_here = np.zeros(len(back), bool)
-        i = np.flatnonzero(valid[:-1] & valid[1:] & (np.abs(np.diff(dist)) <= 1.1))
+            photo_depth = np.fmin(photo.depths(back, normal), depth)
+            observed = free & ~valid & (photo_depth >= .9) & (np.isfinite(dist) | _inside(back, retail))
+            depth[observed] = photo_depth[observed]
+            valid |= observed
+        valid &= (depth >= .18) & np.isfinite(depth)
+        depth = np.where(valid, depth, 0.)
+        end = back + normal * np.maximum(depth - .07, 0.)[:, None]
+        i = np.flatnonzero(valid[:-1] & valid[1:] & (np.abs(np.diff(depth)) <= 1.65))
         if not len(i):
             continue
         middle = (back[i] + back[i + 1]) * .5
         outward = (normal[i] + normal[i + 1]) * .5
         outward /= np.maximum(np.linalg.norm(outward, axis=1), 1e-9)[:, None]
-        mid_dist = walls.rays(middle, outward, limit)
-        # Avoid spanning a gap between two unrelated façades.
-        expected = .5 * (dist[i] + dist[i + 1])
-        connected = np.abs(mid_dist - expected) <= .45
-        if photo is not None and extend:
-            connected |= ((extend_here[i] | extend_here[i + 1]) &
-                          (photo.depths(middle, outward) + .15 >= expected))
+        mid_dist = np.fmin(walls.rays(middle, outward, limit), green_walls.rays(middle, outward, limit))
+        expected = np.minimum(depth[i], depth[i + 1])
+        connected = np.isfinite(mid_dist) & (np.abs(mid_dist - expected) <= 1.8)
+        if photo is not None and (observed[i] | observed[i + 1]).any():
+            connected |= ((observed[i] | observed[i + 1])
+                          & (photo.depths(middle, outward) + .15 >= expected))
         i = i[connected]
-        if not len(i):
-            continue
         quads = np.stack([back[i], back[i + 1], end[i + 1], end[i]], axis=1)
         if len(quads):
             quads = quads[~_road_overlap(quads, blocks)]
+        if len(quads) and walk.get("road_edge"):
+            quads = quads[~_road_overlap(quads, walk_blocks)]
         if len(quads) and (green or barriers):
             quads = quads[~_green_overlap(quads, green, green_walls, barriers)]
-        result.extend(_paving(quad, walk["surface"]) for quad in quads)
+        if len(quads) and photo is not None:
+            share = photo.strip_share(quads, photo.green)
+            if grass is not None:
+                grass.extend(quads[share >= .64])
+            quads = quads[share < .23]
+        if not len(quads):
+            continue
+        style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else "concrete"
+        styles = np.full(len(quads), style, dtype=object)
+        for driveway_style, bounds in driveway_styles.items():
+            styles[_road_overlap(quads, bounds)] = driveway_style
+        result.extend(_paving(quad, style) for quad, style in zip(quads, styles))
     return result
 
 
@@ -428,7 +508,7 @@ def barrier_lines(frame, features, box):
 
 
 def tile(frame, box, features, walks, rings, items, carriageways, driveways, drives, z_at, country, left_hand,
-         photo=None, redrape=False):
+         photo=None, redrape=False, props=None, grass=None):
     """Common street frontage pass for anchor tiles and retained geotiles."""
     import buildings
     import europewalks
@@ -439,7 +519,7 @@ def tile(frame, box, features, walks, rings, items, carriageways, driveways, dri
     margin = BUILT_FRONT_M + 2.
     near = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
     origin = np.array([x0, y0])
-    shops, homes = [], []
+    shops, homes, yards = [], [], []
     for spec, *_ in items:
         if getattr(spec, "deck", None) or (spec.min_h or 0.) > .5:
             continue
@@ -448,27 +528,35 @@ def tile(frame, box, features, walks, rings, items, carriageways, driveways, dri
             shops.append(ring)
         if (spec.cls or "") in HOUSE_CLASSES | UNTYPED and (spec.floors or 0) <= 3:
             homes.append(ring)
+            if (country == "FR" and props is not None and getattr(spec, "door", None) is not None
+                    and not spec.shop and spec.cls != "terrace" and (spec.cls in HOUSE_CLASSES or spec.roof != "flat")
+                    and 35. <= abs(buildings._area2(ring)) / 2 <= 340.):
+                yards.append((spec, ring))
     lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.)
-    _, locality = europewalks._locality(country, float(lon), float(lat))
-    rural_ro = country == "RO" and locality not in {"city", "town"}
+    open_verge = europewalks.grassy_verges(country, float(lon), float(lat))
     areas = _areas(frame, features, near)
     barriers = barrier_lines(frame, features, near)
     bays = list(streetparking.areas(frame, box, features))
     shifted = streetparking.adjust_walks(walks, bays, list(rings) + areas[1], barriers)
-    widened = widen_walks(walks, photo if not rural_ro else None, rings,
+    widened = widen_walks(walks, photo if not open_verge else None, rings,
                          areas[1] + [parts[0] for _, _, parts, _ in bays], barriers, carriageways)
     if (shifted or widened) and redrape:
         import roads
         roads.drape_walks(frame, None, walks, z_at)
     paved = chunks(frame, walks, rings, features, carriageways, drives, near, shops=shops, barriers=barriers,
-                   extend=not rural_ro, residential=not rural_ro, areas=areas, photo=photo)
+                   extend=not open_verge, residential=not open_verge, areas=areas, photo=photo, driveways=driveways,
+                   grass=grass)
     spots, marks = streetparking.tile_layout(frame, box, features, carriageways, driveways, walks, rings, homes,
                                             barriers, areas[1], z_at, left_hand, bays)
+    if yards:
+        import fences
+        props.extend(fences.inferred_rows(frame, yards, rings, walks, carriageways, barriers, areas[0],
+                                         areas[1], drives, z_at, photo, residential=areas[4]))
     return paved + marks, spots
 
 
 def finish(frame, tx, ty, md, walks, rings, items, carriageways, driveways, drives, z_at, country, left_hand,
-           redrape=False):
+           redrape=False, props=None, grass=None):
     import logging
     import roads
 
@@ -482,6 +570,6 @@ def finish(frame, tx, ty, md, walks, rings, items, carriageways, driveways, driv
         return [], []
     box = roads.tile_bbox(tx, ty)
     cache_dir = getattr(md, "cache_dir", None)
-    photo = cached_photo(frame, box, cache_dir) if cache_dir and walks and rings and country != "RO" else None
+    photo = cached_photo(frame, box, cache_dir) if cache_dir and rings else None
     return tile(frame, box, features, walks, rings, items, carriageways, driveways, drives, z_at, country,
-                left_hand, photo, redrape)
+                left_hand, photo, redrape, props, grass)

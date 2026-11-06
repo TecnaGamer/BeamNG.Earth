@@ -150,10 +150,10 @@ class EuropeanSidewalksTest(unittest.TestCase):
         self.assertTrue(ordinary)
         self.assertTrue(all(w["surface"] == "pavers" and w["europe"] for w in ordinary))
 
-    def test_frontage_paves_short_links_but_avoids_a_drive_and_a_planted_island(self):
+    def test_frontage_paves_setbacks_but_avoids_a_drive_and_a_planted_island(self):
         frame = geodesy.EnuFrame(49.02, 7.8)
         walk = {"pts": np.array([[0., 3.75, 0.], [36., 3.75, 0.]]),
-                "side": 1, "w": 1.5, "surface": "pavers"}
+                "side": 1, "w": 1.5, "surface": "pavers", "mapped": True}
         house = np.array([[0., 5.7], [12., 5.7], [12., 8.], [0., 8.]])
         set_back = house + [24., 4.]
         # The little flowerbed is fully inside one connector quad.
@@ -169,7 +169,7 @@ class EuropeanSidewalksTest(unittest.TestCase):
         quads = np.array([c["poly"] for c in chunks])
         self.assertTrue(np.any(quads[:, :, 0].max(axis=1) <= 12.))
         self.assertTrue(np.any(quads[:, :, 0].min(axis=1) >= 15.))
-        self.assertTrue(np.all(quads[:, :, 0] <= 24.))
+        self.assertTrue(np.any(quads[:, :, 0].min(axis=1) >= 24.), "pave up to the house set back 5.2 m")
         self.assertTrue(np.all(quads[:, :, 1].min(axis=1) == 4.5))
         for x in (4.5, 20.):
             self.assertFalse(np.any((quads[:, :, 0].min(axis=1) < x) & (quads[:, :, 0].max(axis=1) > x)))

@@ -8,5 +8,4 @@ return {
   fr_fence_wood = { '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences/bne_fr_fence_wood', 1.16 },
   fr_fence_slats = { '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences/bne_fr_fence_slats', 1.12 },
   fr_fence_rails = { '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences/bne_fr_fence_rails', 1.19 },
-  fr_fence_hedge = { '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences/bne_fr_fence_hedge', 1.36 },
 }

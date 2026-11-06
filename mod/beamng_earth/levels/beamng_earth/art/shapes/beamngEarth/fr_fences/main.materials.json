@@ -49,9 +49,9 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.98,
-          0.91,
-          0.86,
+          0.76,
+          0.43,
+          0.34,
           1.0
         ],
         "roughnessFactor": 0.88,
@@ -179,62 +179,5 @@
       }
     ],
     "persistentId": "a3806488-7537-5c7b-86ac-39fe75909602"
-  },
-  "bne_fr_fence_mat_leaf": {
-    "name": "bne_fr_fence_mat_leaf",
-    "mapTo": "bne_fr_fence_mat_leaf",
-    "class": "Material",
-    "version": 1.5,
-    "Stages": [
-      {
-        "baseColorFactor": [
-          0.18,
-          0.31,
-          0.1,
-          1.0
-        ],
-        "roughnessFactor": 0.88,
-        "metallicFactor": 0.0
-      }
-    ],
-    "persistentId": "48d2ae87-3c00-54bf-81e8-8abaef1595c7"
-  },
-  "bne_fr_fence_mat_leaf_dark": {
-    "name": "bne_fr_fence_mat_leaf_dark",
-    "mapTo": "bne_fr_fence_mat_leaf_dark",
-    "class": "Material",
-    "version": 1.5,
-    "Stages": [
-      {
-        "baseColorFactor": [
-          0.09,
-          0.18,
-          0.05,
-          1.0
-        ],
-        "roughnessFactor": 0.88,
-        "metallicFactor": 0.0
-      }
-    ],
-    "persistentId": "529d5829-b6e7-509c-b947-8776e0e3e6dd"
-  },
-  "bne_fr_fence_mat_leaf_tip": {
-    "name": "bne_fr_fence_mat_leaf_tip",
-    "mapTo": "bne_fr_fence_mat_leaf_tip",
-    "class": "Material",
-    "version": 1.5,
-    "Stages": [
-      {
-        "baseColorFactor": [
-          0.25,
-          0.36,
-          0.11,
-          1.0
-        ],
-        "roughnessFactor": 0.88,
-        "metallicFactor": 0.0
-      }
-    ],
-    "persistentId": "ef3110ce-3c90-5d09-b4cb-6c76a806abd0"
   }
 }

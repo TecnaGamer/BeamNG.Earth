@@ -100,6 +100,11 @@ def country_for(lon, lat):
     return country if country in COUNTRIES else None
 
 
+def grassy_verges(country, lon, lat):
+    """Rural streets whose roadside is normally open, even in built-up villages."""
+    return country in {"RO", "HU"} and _locality(country, lon, lat)[1] not in {"city", "town"}
+
+
 def finish_width(spec, width, *, measured_walk=None):
     """Use only spare space already present in a known or measured carriageway."""
     import parking

@@ -246,9 +246,11 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         c, r = grid(x, y)
         return c - dc, r - dr
     segs = {k: ([], []) for k in ROAD_ORDER}    # kind -> (segments (m, 4) in samples, half widths in samples)
-    lawn, verge = ([], []), ([], [])
+    lawn, verge, grass_verge = ([], []), ([], []), ([], [])
     footpaths = ([], [])
     seen = set()
+    # The rural grass treatment is local to Romania and Hungary.
+    eastern = european and 43. < la_c < 50. and 15. < lo_c < 31.
 
     def add(dst, c, r, half):
         if len(c) >= 2:
@@ -289,6 +291,11 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                 add(verge, c, r, width / 2 + ROAD_EDGE_M + .45)
         elif not walks:
             add(verge, c, r, width / 2 + ROAD_EDGE_M + VERGE_M)    # (VERGE_M past the road's material)
+        if eastern and kind == "paved" and spec.cls in europewalks.STREETS and not spec.link and not spec.median:
+            mid = len(x) // 2
+            country = europewalks.country_for(float(x[mid]), float(y[mid]))
+            if europewalks.grassy_verges(country, float(x[mid]), float(y[mid])):
+                add(grass_verge, c, r, width / 2 + ROAD_EDGE_M + 2.6)
 
     copies = roadsmod.copies_of(feats_list)     # (each joint's taper from its own cell: roads.joint_desc)
 
@@ -382,6 +389,11 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     if corner_verge is not None:
         v |= corner_verge
     out[v & np.isin(out, VERGE_FROM)] = VERGE
+    if grass_verge[0]:
+        # Material layers drive BeamNG's stock GroundCover. Keep the strip green
+        # even on WorldCover's built-up village pixels, while roads and footways
+        # still win below.
+        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT))] = GRASS
     if footpaths[0]:
         out[mask(footpaths)] = ROAD_MATERIAL["paved"]
     for k in ROAD_ORDER:
@@ -902,6 +914,27 @@ def paint_fields(idx, lat, lon, feats_list):
     return _paint(idx, lat, lon, feats_list, _farmland, DIRT)
 
 
+def paint_grass(idx, lat, lon, feats_list):
+    """Mapped lawns and grassy areas before roads, paved lots and footways."""
+    import europewalks
+
+    if not europewalks.enabled() or europewalks.country_for(float(lon[lon.shape[0] // 2, lon.shape[1] // 2]),
+                                                          float(lat[lat.shape[0] // 2, lat.shape[1] // 2])) is None:
+        return idx
+
+    def select(feats):
+        cls = feats.attrs.get("class")
+        mat = feats.attrs.get("surface")
+        grass = np.isin(cls, ("grass", "grassland", "meadow", "village_green", "lawn")) if cls is not None else False
+        return grass | np.isin(mat, ("grass", "grass_paver")) if mat is not None else grass
+
+    grass = _paint(idx, lat, lon, feats_list, select, GRASS)
+    if grass is not idx:
+        keep = np.isin(idx, (MUD, ROCK, SNOW))
+        grass[keep] = idx[keep]
+    return grass
+
+
 def paint_lots(idx, lat, lon, feats_list):
     """idx with the squares and pedestrian areas (land_use polygons of subtype "pedestrian") of feats_list
     drawn in as plain paving (the asphalt layer), then the parking lots (polygons of class "parking") as asphalt (Lancaster County's
@@ -915,6 +948,9 @@ def paint_lots(idx, lat, lon, feats_list):
 # Gas station forecourts (gasstations.forecourt_pad: Surface.fuel_pads, from the road tiles), asphalt in the ground
 # models, the photo (the paved roads' colour, under the roads) and the near tiles' asphalt mask
 FUEL_PAD_STATIONS = 4096        # stations' pads kept (a few small rings each)
+FRONTAGE_PAD_TILES = 512
+FRONTAGE_PAD_PREFIX = "frontage:"
+FRONTAGE_GRASS_PREFIX = FRONTAGE_PAD_PREFIX + "grass:"
 
 
 def paint_pads(idx, lat, lon, pads):
@@ -932,6 +968,31 @@ def paint_pads(idx, lat, lon, pads):
         draw.polygon(list(zip(c.tolist(), r.tolist())), fill=255)
     out = idx.copy()
     out[np.asarray(im) > 0] = ASPHALT
+    return out
+
+
+def paint_frontage_pads(idx, lat, lon, pads, material=ASPHALT):
+    """Select the terrain squares whose centres are inside an apron or a photographed lawn."""
+    import polygon
+
+    if not pads:
+        return idx
+    h, w = idx.shape
+    to_px = grid_affine(lat, lon)
+    out = idx.copy()
+    for la, lo in pads:
+        xy = np.column_stack(to_px(lo, la)) - .5
+        x0, y0 = np.maximum(np.ceil(xy.min(axis=0)).astype(int), [0, 0])
+        x1, y1 = np.minimum(np.floor(xy.max(axis=0)).astype(int), [w - 1, h - 1])
+        if x0 > x1 or y0 > y1:
+            continue
+        y, x = np.mgrid[y0:y1 + 1, x0:x1 + 1]
+        hit = polygon.contains_points(xy, np.c_[x.ravel(), y.ravel()])
+        y, x = y.ravel()[hit], x.ravel()[hit]
+        if material == GRASS:
+            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY))
+            y, x = y[keep], x[keep]
+        out[y, x] = material
     return out
 
 
@@ -1385,6 +1446,7 @@ class Surface:
         self.gas_pads = False       # gas station forecourts painted asphalt (earthd --gas-stations on: fuel_pads)
         self.extra_pads = None      # (lat, lon) -> more pads painted the same (airportgrade's runway_pads)
         self._fuel_pads = {}        # station id -> (rings [(lat (k,), lon (k,))], bbox), the last FUEL_PAD_STATIONS
+        self._frontage_pads = {}    # tile id and material -> (rings, bbox), for material layers only
 
     def close(self):
         self.pool.shutdown(wait=False)
@@ -1481,40 +1543,66 @@ class Surface:
         return out, complete
 
     def add_fuel_pads(self, items):
-        """Keep gas station forecourt pads [(station id, [(lat (k,), lon (k,))])]: the road tiles' own
-        (gasstations.tile_sites pads), handed over by earthd (and to a block's process with its job). No other process
-        lays the stations out again for them: that read every cell's buildings and places into the terrain blocks'
-        processes too (~60 MB a city cell, out of a Steam Deck's map data budget; the user, 2026-10-23: "this is meant
-        to run on steam decks too"). Returns the stations new to it [(id, rings)] (their ground to paint again)."""
+        """Keep the road tile's fuel and frontage pads. Return the changed footprints for refresh."""
         new = []
         with self._lock:
             for sid, rings in items:
+                frontage = sid.startswith(FRONTAGE_PAD_PREFIX)
+                store = self._frontage_pads if frontage else self._fuel_pads
+                previous = store.pop(sid, None)
                 rings = [(np.asarray(la, np.float64), np.asarray(lo, np.float64)) for la, lo in rings]
-                if not rings:
-                    continue
-                box = (min(float(la.min()) for la, _ in rings), min(float(lo.min()) for _, lo in rings),
-                       max(float(la.max()) for la, _ in rings), max(float(lo.max()) for _, lo in rings))
-                if self._fuel_pads.pop(sid, None) is None:
+                box = None
+                if rings:
+                    box = (min(float(la.min()) for la, _ in rings), min(float(lo.min()) for _, lo in rings),
+                           max(float(la.max()) for la, _ in rings), max(float(lo.max()) for _, lo in rings))
+                    store[sid] = rings, box
+                    cap = FRONTAGE_PAD_TILES if frontage else FUEL_PAD_STATIONS
+                    if len(store) > cap:
+                        store.pop(next(iter(store)))
+                if not frontage and rings and previous is None:
                     new.append((sid, rings))
-                self._fuel_pads[sid] = (rings, box)
-                while len(self._fuel_pads) > FUEL_PAD_STATIONS:
-                    self._fuel_pads.pop(next(iter(self._fuel_pads)))
+                if frontage and (box is not None or previous is not None):
+                    old, old_box = previous if previous is not None else ([], box)
+                    if len(rings) == len(old) and all(np.array_equal(a, b) and np.array_equal(c, d)
+                                                      for (a, c), (b, d) in zip(rings, old)):
+                        continue
+                    # One affected envelope per tile, even when it contains hundreds of small polygons.
+                    s, w, n, e = box if box is not None else old_box
+                    os_, ow, on, oe = old_box
+                    new.append((sid, [(np.array([min(s, os_), max(n, on)]),
+                                       np.array([min(w, ow), max(e, oe)]))]))
         return new
 
-    def clear_fuel_pads(self):
-        """Drop every kept pad (the server's gas stations switched off; a block's job brings its own)."""
+    def clear_fuel_pads(self, *, all_road_pads=False):
+        """A gas toggle keeps frontage pads. A terrain worker starts each job with the server's pads."""
         with self._lock:
             self._fuel_pads.clear()
+            if all_road_pads:
+                self._frontage_pads.clear()
 
-    def fuel_pad_items(self, lat, lon):
-        """[(station id, rings)] of the kept pads within the points' bounding box; [] when gas_pads is off."""
-        if not self.gas_pads or not self._fuel_pads:
+    def _pad_items(self, store, lat, lon):
+        if not store:
             return []
         lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
         la0, la1, lo0, lo1 = float(lat.min()), float(lat.max()), float(lon.min()), float(lon.max())
         with self._lock:
-            return [(sid, rings) for sid, (rings, (a0, b0, a1, b1)) in self._fuel_pads.items()
+            return [(sid, rings) for sid, (rings, (a0, b0, a1, b1)) in store.items()
                     if a1 >= la0 and a0 <= la1 and b1 >= lo0 and b0 <= lo1]
+
+    def fuel_pad_items(self, lat, lon):
+        """[(station id, rings)] within the points' bounding box, when gas stations are on."""
+        return self._pad_items(self._fuel_pads, lat, lon) if self.gas_pads else []
+
+    def frontage_pad_items(self, lat, lon):
+        return self._pad_items(self._frontage_pads, lat, lon)
+
+    def paint_ground_pads(self, idx, lat, lon):
+        idx = paint_pads(idx, lat, lon, self.fuel_pads(lat, lon))
+        hard, grass = [], []
+        for sid, rings in self.frontage_pad_items(lat, lon):
+            (grass if sid.startswith(FRONTAGE_GRASS_PREFIX) else hard).extend(rings)
+        idx = paint_frontage_pads(idx, lat, lon, grass, GRASS)
+        return paint_frontage_pads(idx, lat, lon, hard)
 
     def fuel_pads(self, lat, lon):
         """[(lat (k,), lon (k,))] of the kept pads within the points' bounding box (the painters'; never waits), and

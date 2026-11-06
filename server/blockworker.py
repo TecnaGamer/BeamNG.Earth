@@ -321,10 +321,9 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
 
 
 def _take_pads(fuel_pads):
-    """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
-    only these (none when the server's gas stations are switched off)."""
+    """Use only this job's fuel and frontage pads from earthd.Server.block_fuel_pads."""
     if getattr(_s, "surface", None) is not None and hasattr(_s.surface, "clear_fuel_pads"):
-        _s.surface.clear_fuel_pads()
+        _s.surface.clear_fuel_pads(all_road_pads=True)
         _s.surface.add_fuel_pads(fuel_pads or ())
 
 
@@ -395,6 +394,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         lots = _s.surface.lots(keep["lat"], keep["lon"]) if hasattr(_s.surface, "lots") else None
         if lots:                        # farmland under the carriageways (a field does not cover the asphalt)
             idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
+            idx = surfacemod.paint_grass(idx, keep["lat"], keep["lon"], lots)
         if road_feats:
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
@@ -419,8 +419,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
                     log.warning("block (%s, %s, %s): %d points of drawn roads in it (%d of them with ground parts) from "
                                 "%d cells, none painted", aid, cx, cy, over, n_ground, len(road_feats))
         idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
-        if hasattr(_s.surface, "fuel_pads"):    # gas station forecourts (--gas-stations on)
-            idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"], _s.surface.fuel_pads(keep["lat"], keep["lon"]))
+        if hasattr(_s.surface, "paint_ground_pads"):
+            idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
         stages["roadPaint"] = time.perf_counter() - t1
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
         info["surfaceComplete"] = complete and roads_complete
@@ -764,6 +764,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     _bridge_ends = {}
     box = roadsmod.tile_bbox(tx, ty)
     frontage_country = streetfront.country_at_tile(frame, box) if buildings else None
+    if frontage_country == "FR" and signs is None:
+        signs = []
     side = roadsmod.tile_side(tx, ty)
     if buildings:
         import buildings as buildingsmod
@@ -839,11 +841,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         chunks += drives
         park = parkingmod.clear_of(park, props, drives)
         park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park, separate_bays=bool(frontage_country))
+        front_grass = [] if _s.surface is not None else None
         paving, spots = streetfront.finish(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
                                            mapped_drives, drives, lambda x, y: roadmeshmod.drawn_ground(
                                                frame, drawn, np.c_[x, y], q), frontage_country, left_hand,
-                                           redrape=walks_raw is None)
+                                           redrape=walks_raw is None, props=props, grass=front_grass)
         chunks += paving
+        if frontage_country and front_grass is not None:
+            key = tx.key if hasattr(tx, "key") else f"{frame.lat0:.8f}:{frame.lon0:.8f}:{tx}:{ty}"
+            fuel_pads.extend(streetfront.pad_items(frame, box, key, paving, front_grass))
         park += spots
         if fuel:
             import gasstations

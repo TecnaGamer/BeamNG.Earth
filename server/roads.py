@@ -4906,7 +4906,7 @@ def join_walk_ends(runs, carriageways):
         if ki == kj:
             continue
         ri, rj = runs[ki], runs[kj]
-        if ri.get("footway") != rj.get("footway"):
+        if ri.get("footway") != rj.get("footway") or bool(ri.get("median")) != bool(rj.get("median")):
             continue                            # a change of kerb, width or surface ends the run
         # the pieces in travel order: ri toward its joined end, then rj away from its joined end
         pi_ = ri["pts"] if ei else ri["pts"][::-1]
@@ -4926,7 +4926,8 @@ def join_walk_ends(runs, carriageways):
         o0 = ri["open"][0] if ei else ri["open"][1]
         o1 = rj["open"][1] if not ej else rj["open"][0]
         runs[ki] = {"pts": densify(simplify(pts)), "side": si, "w": ri["w"], "fid": ri["fid"], "j": (j0, j1),
-                    "open": (o0, o1), "ramp_keys": sorted(set(ri.get("ramp_keys", [(ri["fid"], ri["side"])])
+                    "open": (o0, o1), "median": bool(ri.get("median")),
+                    "ramp_keys": sorted(set(ri.get("ramp_keys", [(ri["fid"], ri["side"])])
                                                                + rj.get("ramp_keys", [(rj["fid"], rj["side"])])))}
         if "footway" in ri:
             runs[ki]["footway"] = ri["footway"]
@@ -8861,7 +8862,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      sign_obstacles=sign_obstacles, defer_gore=detailed_signs,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
-    if signs is not None and props is not None:
+    sign_mesh, sign_records = None, []
+    if signs is not None and props is not None and poleprofiles.kit_enabled(pole_profile):
         import townsigns
         import osmtags
         way_ids = {fid: osmtags.way_id(str(f.attrs.get("src_record", [""] * len(f))[i]))
@@ -8926,6 +8928,22 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if sign_mesh is not None:
             signs.append((sign_mesh, sign_records))
         props.extend(sign_posts)
+    if signs is not None and european_walks and (isl or any(w.get("median") for w in runs_near)):
+        lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.)
+        if europewalks.country_for(float(lon), float(lat)) == "FR":
+            import signmesh
+
+            for point, into in islands.splitter_heads(isl, runs_near, roads, own_box):
+                la, lo, _ = frame.enu_to_geodetic(*point, 0.)
+                if europewalks.country_for(float(lo), float(la)) != "FR":
+                    continue
+                z = (np.asarray(ground(*point)).item() if ground is not None
+                     else frame.geodetic_to_enu(la, lo, elev(la, lo))[2])
+                if sign_mesh is None:
+                    sign_mesh = signmesh.Mesh((x0, y0, 0.))
+                    signs.append((sign_mesh, sign_records))
+                sign_mesh.island_marker((*point, z), into)
+                sign_records.append({"kind": "island_keep_right", "xy": point.tolist(), "into": into.tolist()})
     if detailed_signs:
         def finish_roadside(guardrail_rows, extra_pavement=()):
             import frgore

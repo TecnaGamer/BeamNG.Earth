@@ -70,6 +70,40 @@ class StreetParkingTest(unittest.TestCase):
 
 
 class PavementTest(unittest.TestCase):
+    def test_default_concrete_reaches_a_setback_without_a_sidewalk_but_spares_green(self):
+        house = rectangle(0., 11., 24., 21.)
+        args = (FRAME, [], [house], [], STREETS, [], BOX)
+        paved = streetfront.chunks(*args)
+        self.assertTrue(paved)
+        self.assertEqual({c["m"] for c in paved}, {"bne_eu_walk_concrete"})
+        self.assertAlmostEqual(max(max(y for _, y in c["poly"]) for c in paved), 11. - .07)
+        self.assertFalse(streetfront.chunks(*args, extend=False, residential=False))
+        green = streetfront.PhotoPaving(np.full((80, 80, 3), [65, 100, 60], np.uint8), -16., -16., 60.)
+        grass = []
+        self.assertFalse(streetfront.chunks(*args, photo=green, grass=grass))
+        self.assertTrue(grass)
+
+    def test_terrain_apron_pads_do_not_remove_lawn_outside_the_pavement(self):
+        rings = streetfront.pad_items(FRAME, BOX, "tile", [
+            streetfront._paving(rectangle(2., 4., 6., 8.)[:-1], "concrete")],
+            [rectangle(4., 4., 8., 8.)[:-1]])
+        y, x = np.mgrid[0:16:2., 0:16:2.]
+        lat, lon, _ = FRAME.enu_to_geodetic(x, y, 0.)
+        ground = np.full(x.shape, surface.DIRT, np.uint8)
+        sf = surface.Surface(None)
+        self.addCleanup(sf.close)
+        self.assertTrue(sf.add_fuel_pads(rings))
+        self.assertFalse(sf.add_fuel_pads(rings))
+        self.assertFalse(sf.fuel_pads(lat, lon))
+        sf.clear_fuel_pads()
+        paved = sf.paint_ground_pads(ground, lat, lon)
+        self.assertTrue(np.all(paved[2:4, 1:3] == surface.ASPHALT))
+        self.assertEqual(np.count_nonzero(paved == surface.ASPHALT), 4)
+        self.assertTrue(np.all(paved[2:4, 3] == surface.GRASS))
+        self.assertEqual(np.count_nonzero(paved == surface.GRASS), 2)
+        self.assertTrue(sf.add_fuel_pads([(key, []) for key, _ in rings]))
+        np.testing.assert_array_equal(sf.paint_ground_pads(ground, lat, lon), ground)
+
     def test_paved_widening_keeps_curb_position_and_respects_gardens(self):
         rgb = np.full((128, 128, 3), 139, np.uint8)
         photo = streetfront.PhotoPaving(rgb, -10., -12., 40.)
@@ -117,3 +151,20 @@ class FrenchBoundaryTest(unittest.TestCase):
             self.assertFalse(fences.rows(FRAME, lambda _: None, BOX, flat, french=True))
         self.assertEqual(fences.french_panel("wall", {}, "north", "one"), "brick")
         self.assertEqual(fences.french_panel("wall", {}, "central", "one"), "dark_stone")
+
+    def test_unmapped_garden_gets_a_boundary_but_an_access_stays_open(self):
+        ring = rectangle(4., 12., 17., 23.)[:-1]
+        house = SimpleNamespace(door=(0, 6.5), seed=99)
+        green = streetfront.PhotoPaving(np.full((80, 80, 3), [65, 100, 60], np.uint8), -16., -16., 60.)
+        args = (FRAME, [(house, ring)], [ring], [], STREETS, [], [], [])
+        with patch("furniture._h01", return_value=.3), patch("house_regions.profile", return_value="alsace"):
+            rows = fences.inferred_rows(*args, [], flat, green)
+            self.assertGreaterEqual(len(rows), 4)
+            self.assertTrue(all(abs(r[1] - 10.5) > 1.6 and r[2] == 4. for r in rows))
+            drive = {"n": [[6., 0., 0.], [6., 13., 0.]], "w": 2.8}
+            self.assertFalse(fences.inferred_rows(*args, [drive], flat, green))
+        hedge = feature([[0., 10.], [10., 10.]], "hedge", mapgeom.LINE)
+        with patch("house_regions.profile", return_value="alsace"):
+            rows = fences.rows(FRAME, lambda _: hedge, BOX, flat, french=True)
+        self.assertGreater(len(rows), 8)
+        self.assertEqual({row[0] for row in rows}, {fences.G_HEDGE})

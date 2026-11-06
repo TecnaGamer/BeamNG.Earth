@@ -1,7 +1,6 @@
 """Build the mapped French boundary panels with the project's COLLADA exporter."""
 
 import json
-import math
 from pathlib import Path
 import sys
 import uuid
@@ -21,16 +20,13 @@ HALF = PANEL_M / 2
 COLOURS = {
     "limestone": ((1.02, .98, .90), "stone", 0.),
     "dark_stone": ((.62, .61, .59), "stone", 0.),
-    "brick": ((.98, .91, .86), "brick", 0.),
+    "brick": ((.76, .43, .34), "brick", 0.),
     "render": ((.67, .63, .55), "stucco", 0.),
     "iron": ((.15, .19, .16), None, .45),
     "zinc": ((.47, .50, .48), None, .55),
     "anthracite": ((.18, .20, .21), None, .35),
     "wood": ((.67, .51, .42), "wood", 0.),
     "white": ((.85, .85, .81), None, 0.),
-    "leaf": ((.18, .31, .10), None, 0.),
-    "leaf_dark": ((.09, .18, .05), None, 0.),
-    "leaf_tip": ((.25, .36, .11), None, 0.),
 }
 
 
@@ -39,7 +35,14 @@ def material(name):
 
 
 def box(mesh, name, x, y, z, dx, dy, dz, axes=None):
+    start = len(mesh.p)
     mesh.box(material(name), (x, y, z), (dx, dy, dz), axes)
+    if COLOURS[name][1]:
+        # Project in the plane of each face to keep the masonry courses level.
+        for i in range(start, len(mesh.p), 4):
+            axis = int(np.argmax(np.abs(mesh.n[i])))
+            uv_axes = [(1, 2), (0, 2), (0, 1)][axis]
+            mesh.uv[i:i + 4] = [tuple(p[list(uv_axes)]) for p in mesh.p[i:i + 4]]
 
 
 def rail(mesh, name, a, b, radius):
@@ -52,28 +55,9 @@ def rail(mesh, name, a, b, radius):
     box(mesh, name, *centre, length / 2, radius, radius, (axis, across, normal))
 
 
-def hedge(mesh, far):
-    # Interleaved irregular crowns leave a broken silhouette at the top.
-    for i, x in enumerate(np.linspace(-.84, .84, 4 if far else 7)):
-        width = .27 if far else .22
-        height = 1.32 - .11 * (i % 3)
-        sides = 5 if far else 7
-        angles = np.arange(sides) * (math.tau / sides) + (i % 3) * .2
-        a = np.array([x + width * np.cos(angles), .32 * np.sin(angles), .20 + 0 * angles]).T
-        b = np.array([x + width * np.cos(angles), .32 * np.sin(angles), .79 * height + 0 * angles]).T
-        for k in range(sides):
-            j = (k + 1) % sides
-            tint = ("leaf", "leaf", "leaf_dark")[(k + i) % 3]
-            mesh.face(material(tint), [a[k], a[j], b[j], b[k]])
-            mesh.face(material("leaf_tip" if k % 2 else "leaf"), [b[k], b[j], [x, 0, height]])
-
-
 def panel(style, far=False):
     mesh = Mesh()
     h = FR_HEIGHTS[style]
-    if style == "hedge":
-        hedge(mesh, far)
-        return mesh
     if style in {"limestone", "dark_stone"}:
         box(mesh, style, 0., 0., h / 2 - .035, HALF, .135, h / 2 - .015)
         box(mesh, style, 0., 0., h - .027, HALF, .16, .027)
@@ -133,7 +117,7 @@ def build():
         group = f"fr_fence_{style}"
         name = "bne_" + group
         collision = Mesh()
-        box(collision, "render", 0., 0., height / 2, HALF, .25 if style == "hedge" else .10, height / 2)
+        box(collision, "render", 0., 0., height / 2, HALF, .10, height / 2)
         write_dae(OUT / f"{name}.dae", name, [(48, panel(style)), (2, panel(style, True))], collision)
         lua.append(f"  {group} = {{ '{VFS}/fr_fences/{name}', {height:g} }},")
     CATALOG.write_text("\n".join([*lua, "}", ""]), encoding="utf-8")
