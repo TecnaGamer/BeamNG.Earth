@@ -73,6 +73,22 @@
       "networks": [
         {"network": "bab", "plate": "a"}, {"network": "de:national", "plate": "b"},
         {"network": "", "ref": "^[LK]\\s?\\d", "plate": "l"}, {"network": "e-road", "plate": "e"}]
+    },
+    "AU": {
+      "_comment": "fork (Queensland): guide boards are green with white lettering and border on every kind of road (AS 1743 guide-sign green, about RAL 6024; the value here is approximate); route markers: alphanumeric M/A/B routes gold on green (a), the legacy National Route (n, white/black), State Route and Metroad (s, blue/white), tourist drives (t, brown/white; AS 1743 brown, approximate). Networks as Overture's road_routes carry them in release 2026-10-21.0 (probed over SE QLD: au:qld M1 A1 A2 A3 M3 ..., au:qld:nr 13, au:qld:mr 2 5, au:qld:s 1..95, au:qld:t 1..43, au:nsw M1; au:qld:sstr / au:qld:td:mb have text refs: no plate). English is the local language and the AU place snapshot has no 'en' names, so no second line. The board colours and plates are not checked against photographs.",
+      "verified": false,
+      "board": {"freeway": {"bg": [0, 104, 56], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "road":    {"bg": [0, 104, 56], "ink": [255, 255, 255], "trim": [255, 255, 255]},
+                "urban":   {"bg": [0, 104, 56], "ink": [255, 255, 255], "trim": [255, 255, 255]}},
+      "plates": {"a": [0, [0, 104, 56], [255, 200, 0], [255, 200, 0]],
+                 "n": [0, [255, 255, 255], [0, 0, 0], [0, 0, 0]],
+                 "s": [0, [0, 85, 165], [255, 255, 255], [255, 255, 255]],
+                 "t": [0, [110, 64, 28], [255, 255, 255], [255, 255, 255]]},
+      "networks": [
+        {"network": "au:qld", "ref": "^[MAB]\\d", "plate": "a"}, {"network": "au:nsw", "ref": "^[MAB]\\d", "plate": "a"},
+        {"network": "au:qld:nr", "plate": "n"}, {"network": "au:qld:mr", "plate": "s"},
+        {"network": "au:qld:s", "plate": "s"}, {"network": "au:nsw:s", "plate": "s"},
+        {"network": "au:qld:t", "plate": "t"}, {"network": "au:nsw:t", "plate": "t"}]
     }
   }
 }

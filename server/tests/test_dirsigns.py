@@ -231,6 +231,22 @@ class ContentTest(unittest.TestCase):
         self.assertIsNone(dirsigns._row_content(self.st["countries"]["UA"], row, dirsigns.RouteTable(), self.pl, 1.25,
                                                 self.st["distance_round"], True))
 
+    def test_an_au_board_row_has_the_m1_marker_and_the_one_name_in_green_and_white(self):
+        """fork: a board towards Brisbane on the M1: the alphanumeric marker, the name once (no English line), km."""
+        pl = dirsigns.Places({"places": [
+            {"id": "b", "cc": "AU", "class": "city", "pop": 2287896, "name": "Brisbane", "en": "", "lat": -27.47, "lon": 153.03},
+            {"id": "g", "cc": "AU", "class": "city", "pop": 607665, "name": "Gold Coast", "en": "", "lat": -28.0, "lon": 153.4}]})
+        table = dirsigns.RouteTable()
+        m1 = table.id("au:qld", "M1")
+        row = [0, 0.0, m1, -1, -1, 0, 24000.0, 1, 60000.0, 5, 0]
+        au = self.st["countries"]["AU"]
+        turn, marks, dests = dirsigns._row_content(au, row, table, pl, 1.25, self.st["distance_round"], True)
+        self.assertEqual(marks, [(0, "a", "M1")])
+        self.assertEqual(dests, [("Brisbane", "", "30"), ("Gold Coast", "", "75")])
+        for kind in ("freeway", "road", "urban"):
+            self.assertEqual((au["board"][kind]["bg"], au["board"][kind]["ink"]), ([0, 104, 56], [255, 255, 255]))
+        self.assertEqual(au["plates"]["a"][2], [255, 200, 0], "gold lettering")
+
     def test_a_board_names_the_best_class_and_the_european_road(self):
         marks = [(0, "m", "M-19"), (3, "t", "T-03-11"), (4, "e", "E 85")]
         self.assertEqual(dirsigns.best_plates(marks), [(0, "m", "M-19"), (4, "e", "E 85")])
@@ -254,6 +270,38 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(dirsigns.plate_for(st["CZ"], "cz:national", "35")[1], "i")
         self.assertEqual(dirsigns.plate_for(st["DE"], "", "L 3016")[1], "l")
         self.assertIsNone(dirsigns.plate_for(st["DE"], "", "XYZ"))
+
+    def test_au_routes_become_plates_as_overtures_queensland_networks_carry_them(self):
+        """fork: the networks and refs probed in Overture release 2026-10-21.0 over south-east Queensland."""
+        au = dirsigns.styles()["countries"]["AU"]
+        for network, ref, plate in (("au:qld", "M1", "a"), ("au:qld", "A3", "a"), ("au:qld", "B23", "a"),
+                                    ("au:nsw", "M1", "a"), ("au:qld:nr", "13", "n"), ("au:qld:mr", "5", "s"),
+                                    ("au:qld:s", "95", "s"), ("au:qld:t", "8", "t")):
+            self.assertEqual(dirsigns.plate_for(au, network, ref)[1], plate, (network, ref))
+        self.assertIsNone(dirsigns.plate_for(au, "au:qld:sstr", "ACW"), "a text ref has no plate")
+        self.assertIsNone(dirsigns.plate_for(au, "au:qld:td:mb", "Southern"))
+        self.assertIsNone(dirsigns.plate_for(au, "au:qld", "Bruce"), "only M/A/B and a number is a marker")
+        # M1 outranks the State Route of the same carriageway on a board (best class first)
+        marks = sorted({(dirsigns.plate_for(au, n, r)[0], dirsigns.plate_for(au, n, r)[1], r)
+                        for n, r in (("au:qld:s", "95"), ("au:qld", "M1"))})
+        self.assertEqual(dirsigns.best_plates(marks), [(0, "a", "M1")])
+
+    def test_au_boards_are_green_with_white_lettering_and_a_gold_on_green_marker(self):
+        au = dirsigns.styles()["countries"]["AU"]
+        for kind in ("freeway", "road", "urban"):
+            b = au["board"][kind]
+            self.assertEqual((b["bg"], b["ink"], b["trim"]), ([0, 104, 56], [255, 255, 255], [255, 255, 255]), kind)
+        shape, fill, ink, edge = au["plates"]["a"]
+        self.assertEqual((shape, fill, ink[:2], ink[2]), (0, [0, 104, 56], [255, 200], 0), "gold M/A/B on green")
+
+    def test_au_places_are_in_the_snapshot_and_have_no_second_line(self):
+        pl = dirsigns.places()
+        for name in ("Brisbane", "Gold Coast", "Toowoomba", "Caboolture", "Gympie", "Sunshine Coast"):
+            self.assertTrue(any(n == name and c == "AU" for n, c in zip(pl.names, pl.cc)), name)
+        au = [e for e, c in zip(pl.en, pl.cc) if c == "AU"]
+        self.assertGreater(len(au), 1000)
+        self.assertEqual(set(au), {""}, "English is the local language: no doubled names")
+        self.assertIn("Ковель", pl.names, "the upstream places are still there")
 
     def test_parse_routes(self):
         self.assertEqual(dirsigns.parse_routes("ua:international|М-07|0.19|1.0;e-road|E 373|0.0|1.0"),
