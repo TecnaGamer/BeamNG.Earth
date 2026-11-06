@@ -317,13 +317,16 @@ class MapData:
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
     def versions(self):
+        import europewalks
+
         rails = getattr(self, "rail_tags", None)
         lanes = getattr(self, "lane_tags", None)
         return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
                 "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
                 "lanes": lanes.known() if lanes is not None else None,
                 "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
-                "osmfuel": OSM_FUEL}
+                "osmfuel": OSM_FUEL,
+                **({"street_edges": europewalks.VERSION} if europewalks.enabled() else {})}
 
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.

@@ -86,6 +86,32 @@ class RegionalGeoTest(unittest.TestCase):
                             {m['name'] for m in shape['materials']})
         self.assertEqual((out / names['signs']).read_bytes(), sign_bytes)
 
+    def test_skin_renders_the_actual_material_and_height_from_walk_records(self):
+        out = self.root / 'retained'
+        out.mkdir()
+        paths = [
+            {"pts": np.array([[-25., -10., 0.], [25., -10., 0.]]), "w": 1.1, "height": .045,
+             "side": -1, "caps": (True, True), "europe": True, "surface": "pavers"},
+            {"pts": np.array([[-25., 10., 0.], [25., 10., 0.]]), "w": 1.4, "height": .13,
+             "side": 1, "caps": (True, True), "europe": True, "surface": "slabs"},
+        ]
+        lat, lon = self.tile.frame.lat0, self.tile.frame.lon0
+        bw._geo_inputs[self.tile.key] = {"walks": paths, "chunks": [], "ctx": []}
+        bw._geo_skin(1, lat, lon, 15, self.gx, self.gy, str(out), '/test',
+                     True, 0., 1 / 32, lambda: self.fail('already retained'))
+        names = bw.geo_names(self.tile.key, 1)
+        shape = cdae.read(out / names["walk"])
+        mesh = cdae.mesh_arrays(shape["meshes"][0])
+        z = {}
+        for start, count, flags in mesh["primitives"]:
+            mat = shape["materials"][int(flags) & 0x0fffffff]["name"]
+            vertices = mesh["verts"][mesh["indices"][start:start + count]]
+            z[mat] = float(vertices[:, 2].max())
+        self.assertIn("bne_eu_walk_pavers", z)
+        self.assertIn("bne_eu_walk_slabs", z)
+        self.assertNotIn("bne_eu_asphalt_walk", z)
+        self.assertAlmostEqual(z["bne_eu_walk_slabs"] - z["bne_eu_walk_pavers"], .085, delta=.015)
+
     def test_prebuilt_content_is_reused_and_off_has_separate_cache(self):
         scratch = self.root / 'prebuild'
         key = bw.prebuild_geo(self.gx, self.gy, 15, str(scratch), True, False, False,

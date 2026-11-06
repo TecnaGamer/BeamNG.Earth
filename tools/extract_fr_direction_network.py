@@ -45,6 +45,7 @@ SITE_KEYS = {
     "historic": {"castle"},
 }
 BARRIERS = {"bollard", "block", "gate", "lift_gate", "cycle_barrier", "bus_trap"}
+JUNCTION_POINTS = {"mini_roundabout", "stop", "give_way"}
 PUBLIC = {"yes", "permissive", "designated", "official"}
 RESTRICTED = {
     "no",
@@ -123,8 +124,9 @@ def destination_tags(tags):
     return {k: v for k, v in tags if k == "destination" or k.startswith("destination:")}
 
 
-def _source_entities(source):
-    filters = [("highway", c + suffix) for c in CLASSES for suffix in ("", "_link")]
+def _source_entities(source, priority=False):
+    classes = CLASSES[:-1] if priority else CLASSES
+    filters = [("highway", c + suffix) for c in classes for suffix in ("", "_link")]
     filters += [(key, value) for key, values in SITE_KEYS.items() for value in sorted(values)]
     filters += [("place", kind) for kind in sorted(PLACES)] + [
         ("barrier", kind) for kind in sorted(BARRIERS)
@@ -135,6 +137,9 @@ def _source_entities(source):
         ("type", "destinationsign"),
         ("type", "restriction"),
     ]
+    if priority:
+        filters.extend(("highway", kind) for kind in sorted(JUNCTION_POINTS))
+        filters.extend(("junction", kind) for kind in ("roundabout", "circular"))
     pool = osmium.io.ThreadPool(6, 24)
     osm = osmium.osm
     track = osmium.IdTracker()
@@ -168,7 +173,7 @@ def _source_entities(source):
     return timestamp, index, chain(tagged_nodes, roads)
 
 
-def extract(source, output):
+def extract(source, output, priority=False):
     output.mkdir(parents=True, exist_ok=True)
     nodes, xy, offsets = array("Q"), array("i"), array("I", [0])
     wayids, kinds, dirs, flags, refs = array("Q"), array("B"), array("b"), array("B"), array("I")
@@ -180,9 +185,10 @@ def extract(source, output):
         "relations": [],
         "restrictions": [],
         "barriers": [],
+        "junction_points": [],
     }
     counts = Counter()
-    notes["timestamp"], location_index, entities = _source_entities(source)
+    notes["timestamp"], location_index, entities = _source_entities(source, priority)
     for obj in entities:
         tags = obj.tags
         if obj.is_node():
@@ -192,6 +198,8 @@ def extract(source, output):
                 notes["targets"].append([*site, obj.location.x, obj.location.y, obj.id])
             if tags.get("traffic_sign") == "destination":
                 notes["mapped_nodes"].append([obj.id, obj.location.x, obj.location.y, dict(tags)])
+            if tags.get("highway") in JUNCTION_POINTS:
+                notes["junction_points"].append([tags.get("highway"), obj.location.x, obj.location.y])
             if tags.get("barrier") in BARRIERS and not any(
                 tags.get(k) in PUBLIC for k in ("motorcar", "motor_vehicle", "vehicle", "access")
             ):
@@ -206,6 +214,8 @@ def extract(source, output):
             continue
         highway = tags.get("highway", "")
         base = highway.removesuffix("_link")
+        junction = tags.get("junction")
+        ring = junction == "roundabout" or (priority and junction == "circular")
         if base not in CLASSES or not is_public(tags):
             # Named establishments are often polygons rather than POI nodes.
             site = target(tags)
@@ -220,6 +230,8 @@ def extract(source, output):
                             -obj.id,
                         ]
                     )
+            continue
+        if priority and base == "service" and not ring:
             continue
         if tags.get("oneway") in {"reversible", "alternating"} or tags.get("oneway:conditional"):
             continue
@@ -241,7 +253,7 @@ def extract(source, output):
         kinds.append(CLASSES.index(base))
         dirs.append(direction(tags, highway))
         flags.append(
-            (ROUNDABOUT if tags.get("junction") == "roundabout" else 0)
+            (ROUNDABOUT if ring else 0)
             | (LINK if highway != base else 0)
             | (
                 SEPARATED
@@ -304,5 +316,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--priority", action="store_true", help="omit service spurs and include junction controls")
     args = parser.parse_args()
-    extract(args.source, args.output)
+    extract(args.source, args.output, args.priority)

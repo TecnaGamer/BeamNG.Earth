@@ -644,7 +644,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             mats.append(c["m"])
         P.append(np.c_[pq[:, :2], z])
         UV.append(np.asarray(c["uvq"], np.float64) if c.get("uvq") is not None else       # (a decal sheet's cell:
-                  np.c_[pq[:, 0] / 8.0, pq[:, 1] / float(c.get("tl") or 10.0)])          # markings.arrow_quad)
+                  np.c_[pq[:, 0] / float(c.get("u_m") or 8.0),
+                        pq[:, 1] / float(c.get("tl") or 10.0)])          # markings.arrow_quad)
         fan = np.array([(nverts, nverts + a, nverts + a + 1) for a in range(1, k - 1)])
         pts = np.c_[pq[:, :2], z]
         nrm = np.cross(pts[fan[:, 1] - nverts] - pts[fan[:, 0] - nverts], pts[fan[:, 2] - nverts] - pts[fan[:, 0] - nverts])

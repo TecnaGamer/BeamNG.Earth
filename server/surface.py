@@ -230,6 +230,9 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     a wheel and the detail texture both: a car 1.4 m inside a 9 m road's edge was on dirt, and the dirt's grain lay over
     the asphalt along one edge; wheels swept across the edges in game, 2026-10-28): a sample is tested at the centre of
     the square north-east of it. Pure (a new array)."""
+    import europewalks
+
+    european = europewalks.enabled()
     h, w = idx.shape
     grid = grid_affine(lat, lon)
     la_c, lo_c = float(np.mean(lat)), float(np.mean(lon))
@@ -244,6 +247,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         return c - dc, r - dr
     segs = {k: ([], []) for k in ROAD_ORDER}    # kind -> (segments (m, 4) in samples, half widths in samples)
     lawn, verge = ([], []), ([], [])
+    footpaths = ([], [])
     seen = set()
 
     def add(dst, c, r, half):
@@ -260,17 +264,30 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         if aisle:
             width += 2 * AISLE_STALLS_M         # the stalls either side (parking.aisle_spots): no grass under cars
         walks = roadsmod.has_sidewalks(spec)
-        if walks:
+        street = getattr(spec, "street", None)
+        if walks and street is None:
             width += 2 * (spec.walk + square)   # the sidewalks (+ a sample: tufts at the outer edge): grass grew up
                                                 # through them (ground cover is the terrain's: Lauterbrunnen, Baltimore
                                                 # 2026-10-15)
         c, r = to_px(x, y)
         c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
-        reach = (float(np.max(width)) / 2 + ROAD_EDGE_M + (0 if walks else VERGE_M)) / square + 2
+        edge_reach = max((walk.setback + walk.width for _, walk in street.walks()), default=0.) if street else 0.
+        reach = (float(np.max(width)) / 2 + ROAD_EDGE_M + max(edge_reach, 0 if walks else VERGE_M)) / square + 2
         if c.max() < -reach or c.min() > w + reach or r.max() < -reach or r.min() > h + reach:
             return
         add(segs[kind], c, r, width / 2 + ROAD_EDGE_M)
-        if not walks:
+        if street is not None:
+            for side, walk in street.walks():
+                # Independent strips leave the setback to the original ground.
+                ll = np.c_[x, y]
+                scale = np.array([111320. * math.cos(math.radians(float(np.mean(y)))), 110540.])
+                offset = side * (width / 2 + walk.setback + walk.width / 2)
+                xy = roadsmod.offset_polyline(np.c_[(ll - ll[0]) * scale, np.zeros(len(ll))], offset)
+                wc, wr = to_px(*(xy[:, :2] / scale + ll[0]).T)
+                add(footpaths, wc, wr, walk.width / 2 + .15)
+            if not street.walks():
+                add(verge, c, r, width / 2 + ROAD_EDGE_M + .45)
+        elif not walks:
             add(verge, c, r, width / 2 + ROAD_EDGE_M + VERGE_M)    # (VERGE_M past the road's material)
 
     copies = roadsmod.copies_of(feats_list)     # (each joint's taper from its own cell: roads.joint_desc)
@@ -287,7 +304,18 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         ids = feats.ids.tolist()
         for i in range(len(feats)):
             fid = str(ids[i])
-            if specs[i] is None or fid in seen:
+            if fid in seen:
+                continue
+            if specs[i] is None:
+                m = 4. / square + 2.
+                if (european and c_hi[i] >= -m and c_lo[i] <= w + m
+                        and r_hi[i] >= -m and r_lo[i] <= h + m):
+                    walk = europewalks.mapped_walk(feats, i)
+                    if walk is not None:
+                        seen.add(fid)
+                        for ring in roadsmod.ground_parts(feats, i):
+                            c, r = to_px(ring[:, 0], ring[:, 1])
+                            add(footpaths, c, r, walk.width / 2 + .15)
                 continue
             seen.add(fid)
             # (all of it off the grid, with room for everything drawn beside it: no sample of it is painted)
@@ -354,6 +382,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     if corner_verge is not None:
         v |= corner_verge
     out[v & np.isin(out, VERGE_FROM)] = VERGE
+    if footpaths[0]:
+        out[mask(footpaths)] = ROAD_MATERIAL["paved"]
     for k in ROAD_ORDER:
         out[mask(segs[k])] = ROAD_MATERIAL[k]
     if corner is not None:

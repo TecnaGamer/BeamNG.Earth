@@ -429,6 +429,18 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if ri == rj and n == 2:
                 continue
             spi, spj = roads[ri][1], roads[rj][1]
+            fi = fj = None
+            if not pavement:
+                ei, ej = getattr(spi, "street", None), getattr(spj, "street", None)
+                if ei is not None:
+                    fi = ei.side(li)
+                    if fi is None or fi.setback:
+                        continue
+                if ej is not None:
+                    fj = ej.side(-lj)
+                    if fj is None or fj.setback:
+                        continue
+            footway = max((f for f in (fi, fj) if f), key=lambda f: (f.width, f.surface), default=None)
             na, nb = node_of[(ri, vi)], node_of[(rj, vj)]
             cr = connector.get(frozenset((na, nb))) if na != nb else None
             if cr is not None and has_walk(spi) and has_walk(spj) and not pavement:     # (a curb's: not pavement's)
@@ -437,6 +449,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 got = _across(roads, branches[i], branches[j], cr, X, walk_w, debug)
                 if got is not None:
                     corner, ci, cj = got
+                    if footway is not None:
+                        corner["footway"] = footway
                     corners.append(corner)
                     cuts.setdefault((roads[ri][0], li), []).append((Pi.copy(), ui, ci))
                     cuts.setdefault((roads[rj][0], -lj), []).append((Pj.copy(), uj, cj))
@@ -544,6 +558,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                         debug.append(('on carriageway', hit[:8], hit in internal, roads[ri][0][:8], roads[rj][0][:8], round(theta), X.round(1).tolist()))
                     continue
                 corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": fill, "ramps": []}
+                if footway is not None:
+                    corner["footway"] = footway
                 if pavement:
                     corner["road_sides"] = ((roads[ri][0], li), (roads[rj][0], -lj))
                     corner["edge_cuts"] = ((Pi.copy(), ui, ci), (Pj.copy(), uj, cj))

@@ -26,6 +26,12 @@ one support; up to four arrow boards are stacked without overlapping lettering.
 Unsupported/ambiguous mappings are skipped. Their provenance distinguishes
 surveyed sign positions from junction-based estimates.
 
+The priority directions catalogue uses mapped destinations first. Where those
+are sparse, it compares legal turns at the same junction and can pair a
+nearby village with a town or city farther along the route. These estimates
+are specific to the approach and use distance along the road. The existing
+checks for visible, unobstructed sign positions still apply.
+
 Street plaques use actual road names at suitable urban junctions. Both wall
 mounts and dedicated posts are supported, with up to 24 plaques per tile. The
 whole plaque must clear rendered road ribbons and nearby building footprints.
@@ -91,12 +97,26 @@ territories and countries use representative presets, not a surveyed inventory.
 Mixed A/B selection is stable, not rerolled when a tile loads. Country lookup
 uses the actual object's position and the existing country polygons.
 
-Paved, divided motorways and suitable one-way trunks also receive an estimated
-outer rail on the traffic-side edge of each carriageway. Ramps, carriageway
-crossings, bridge edges and nearby mapped barriers suppress it. Mapped concrete
-and cable barriers remain; a concrete central reservation is not automatically
-replaced with steel. The fallback deliberately adds rails where mapping is
-missing, so it cannot establish whether every real road edge has a barrier.
+Paved, one-way motorway mainlines can receive estimated rails on the outside
+edge of each carriageway throughout the supported European countries. The
+placement follows the local driving side. Mapped barriers take precedence on
+their own side, including those just across a tile boundary. Short openings
+between two facing mapped terminals stay open. Ramp carriageways, crossings
+and parallel bridge decks are excluded by the placement checks. Bridge and
+median generation follow their own rules.
+
+Autostrade per l'Italia reports about 4,161 km of replaced or upgraded lateral
+barriers on its network. The Norwegian NVDB and Dutch Rijkswaterstaat maintain
+geographic inventories. These sources have different network scopes, and the
+scenery uses a deterministic default where the loaded map has no local
+evidence. Some real open verges can still receive a generated rail.
+[ASPI Carta dei Servizi 2026](https://www.autostrade.it/documents/10279/48940298/0163BV6_Carta_servizi_Maggio29%401-82_v2_%2B29_05.pdf?item=pedaggio),
+[Norwegian NVDB](https://dataut.vegvesen.no/dataset/nasjonal-vegdatabank),
+[Rijkswaterstaat inventory](https://data.overheid.nl/en/dataset/80483-geografische-areaalregistratie-geleideconstructie).
+
+Italian motorway shoulders clear of mapped barriers can receive delineators
+with a yellow reflector facing traffic. The spacing is estimated. The shared
+Italian and Albanian rural model has a white body and a solid black sloped cap.
 
 63 original steel assets cover the profiles, reflectors and sloped ends. The
 reflectors fit into the middle corrugation of the steel face. The rails

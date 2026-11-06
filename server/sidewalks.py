@@ -35,8 +35,11 @@ CURB_W = 0.15           # m of curb top band
 CROSS_SLOPE = 0.015     # sidewalk cross slope, rising away from the road
 CURB_REPEAT_M = 9.0     # m of curb per texture width (3 joints of 3 m)
 SLAB_REPEAT_M = 45.0    # m of sidewalk per texture width (4096 px, a 205 px strip ~ 2.25 m)
+EU_SURFACES = ("light_asphalt", "concrete", "slabs", "pavers", "pavers_mixed", "stone", "gravel")
 MATERIALS = ("curbs", "sidewalk1", "tactile_indicator",  # West Coast USA (art/shapes/roads), loaded by the mod
-             "bne_sidewalk_brick", "bne_eu_curb", "bne_eu_asphalt_walk", "bne_eu_tactile")
+             "bne_sidewalk_brick", "bne_eu_curb", "bne_eu_asphalt_walk", "bne_eu_tactile",
+             *(f"bne_eu_walk_{name}" for name in EU_SURFACES))
+EU_SLAB = {"asphalt": 5, "brick": 3, **{name: i for i, name in enumerate(EU_SURFACES, 7)}}
 BRICK = 3
 BRICK_REPEAT_M = 1.2        # m per repeat of the brick paver texture
 
@@ -156,10 +159,27 @@ class Builder:
     def __init__(self, origin, collision=False):
         self.origin = np.asarray(origin, np.float64)
         self.pieces = []            # (kind 0 run / 1 corner, points (k, 3), dirs (k, 2), outer (m, 3), ramps, w, h, caps,
-        self._built = None          # slab, europe); the Rust meshes once built (full, lean)
+        self._built = None          # slab, europe, surface); the Rust meshes once built (full, lean)
         self.col = _Lean(self) if collision else None
 
-    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False):
+    def add_walk(self, walk, default_width):
+        """Render a walk record from roads.build_tile in either tile pipeline."""
+        from europewalks import LOW_EDGE_HEIGHT
+
+        style = {"h": walk.get("height", CURB_H), "europe": walk.get("europe", False),
+                 "surface": walk.get("surface")}
+        if "corner" in walk:
+            c = walk["corner"]
+            ramps = c.get("ramps", ()) if style["h"] > LOW_EDGE_HEIGHT else ()
+            self.add_corner(c["arc"], c["inward"], c["outer"], ramps=ramps, **style)
+            return
+        width = walk.get("w", default_width)
+        curb, out = run_geometry(walk["pts"], walk["side"], width)
+        slab = BRICK if walk.get("brick") and style["surface"] is None else 1
+        ramps = walk.get("ramps", ()) if style["h"] > LOW_EDGE_HEIGHT else ()
+        self.add_run(curb, out, width, caps=walk["caps"], ramps=ramps, slab=slab, **style)
+
+    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False, surface=None):
         """One sidewalk run: curb (k, 3) the curb line (z = the road there), toward_out (k, 2) unit
         vectors from the curb outwards (scaled by the miter), w its width; caps: end caps at the
         (start, end) (not where the run goes on in the next tile or meets a corner piece); ramps:
@@ -168,10 +188,10 @@ class Builder:
         if len(curb) < 2:
             return
         self.pieces.append((0, curb[:, :3], np.asarray(toward_out, np.float64)[:, :2], None, list(ramps), float(w),
-                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe)))
+                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe), surface))
         self._built = None
 
-    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False):
+    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False, surface=None):
         """A corner piece: the curb along the polyline arc (k, 3) (a curb return, with the straight
         runs and tapers of curb extensions; inward: unit vectors toward the sidewalk), the slab from
         the curb top to the outer corner points [(x, y, z) ...] (from the second sidewalk's end round
@@ -179,7 +199,7 @@ class Builder:
         where the curb is lowered (the slab then slopes up from it toward the outer corner)."""
         self.pieces.append((1, np.asarray(arc, np.float64)[:, :3], np.asarray(inward, np.float64)[:, :2],
                             np.asarray(outer, np.float64).reshape(-1, 3), list(ramps), 2.5, float(h), (False, False),
-                            1, bool(europe)))
+                            1, bool(europe), surface))
         self._built = None
 
     def empty(self):
@@ -215,25 +235,28 @@ class Builder:
 
     def _build(self):
         if self._built is None:
-            # Keep contiguous batches: one native call in the usual single-country case,
-            # identical vertex/triangle order even where a tile straddles a border.
+            # Keep contiguous batches to preserve the order of the mesh pieces.
             from itertools import groupby
-            batches = [(flag, list(ps)) for flag, ps in groupby(self.pieces, key=lambda p: p[9])]
+            batches = [(style, list(ps)) for style, ps in groupby(self.pieces, key=lambda p: p[9:11])]
             if not batches:
-                batches = [(False, [])]
+                batches = [((False, None), [])]
             full, lean = [], []
-            for european, ps in batches:
+            for (european, surface), ps in batches:
                 drawn, collision = self._native(ps)
                 if european:
                     P, T, UV, M = drawn
                     UV = UV.copy()
-                    # Original tactile/brick UVs stay intact. Asphalt uses metre-scale
-                    # planar coordinates, the neutral curb repeats every metre.
+                    # Tactile UVs stay intact. The continuous surfaces repeat
+                    # in metres with the same phase in neighbouring tiles.
                     curb = np.unique(T[M == 0])
                     slab = np.setdiff1d(np.unique(T[M == 1]), np.unique(T[M == 2]))
                     UV[curb, 0] *= CURB_REPEAT_M
-                    UV[slab] = P[slab, :2] / 2.0
-                    drawn = P, T, UV, np.take((4, 5, 6, 3), M)
+                    if surface is None:
+                        UV[slab] = P[slab, :2] / 2.
+                    else:
+                        repeat = BRICK_REPEAT_M if surface == "brick" else 2.
+                        UV[slab] = (P[slab, :2] + self.origin[:2]) / repeat
+                    drawn = P, T, UV, np.take((4, EU_SLAB.get(surface, 5), 6, 3), M)
                 full.append(drawn)
                 lean.append(collision)       # palette never changes collision geometry/materials
             self._built = self._join(full), self._join(lean)

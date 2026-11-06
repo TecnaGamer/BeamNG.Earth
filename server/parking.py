@@ -56,6 +56,9 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
         spec, line = by_fid[fid]
         if not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:
             continue
+        street = getattr(spec, "street", None)
+        if street is not None and (street.parking < SPOT_W_M or wk.get("detached") or wk.get("median")):
+            continue
         if furniture._h01(fid, "park") >= STREET_SHARE:
             continue
         side = wk["side"]

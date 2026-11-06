@@ -826,11 +826,29 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("airports")
     x0, y0, _, _ = box
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
-        props[:] = furniture.off_buildings(props, buildingsmod.near_rings(frame, tx, ty, _s.md, skip=skip))     # (no street tree in a house)
+        import europewalks
+        frontage_walks = walks if walks_raw is None else walks_raw
+        frontage = country == "FR" and europewalks.enabled() and any(
+            w.get("surface") and "pts" in w and not w.get("detached") and not w.get("median") for w in frontage_walks)
+        margin = 6. if frontage else 2.
+        rings = buildingsmod.near_rings(frame, tx, ty, _s.md, margin=margin, skip=skip)
+        props[:] = furniture.off_buildings(props, rings)     # (no street tree in a house)
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
+        if frontage:
+            import streetfront
+            x1, y1 = box[2:]
+            near = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
+            try:
+                lots = [_s.md.cell(k, layers=("land_use", "infrastructure"), kind="demand").layers
+                        for k in roadsmod.cells_of_tile(frame, tx, ty, margin)]
+            except Exception as ex:
+                log.debug("street frontage: missing lot or garden data for tile %s_%s: %s", tx, ty, ex)
+            else:
+                chunks += streetfront.chunks(frame, frontage_walks, rings, [f for ls in lots for f in ls.values()],
+                                             near_roads, drives, near)
         park = parkingmod.clear_of(park, props, drives)
         park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park)
         if fuel:
@@ -1413,14 +1431,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
         mark("drape")
         b = sidewalksmod.Builder(origin, collision=True)
         for wk in walks:
-            if "corner" in wk:
-                c = wk["corner"]
-                b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()), europe=wk.get("europe", False))
-                continue
-            ww = wk.get("w", roadsmod.SIDEWALK["w"])
-            curb, outv = sidewalksmod.run_geometry(wk["pts"], wk["side"], ww)
-            b.add_run(curb, outv, ww, caps=wk["caps"], ramps=wk.get("ramps", ()),
-                      slab=sidewalksmod.BRICK if wk.get("brick") else 1, europe=wk.get("europe", False))
+            b.add_walk(wk, roadsmod.SIDEWALK["w"])
         mark("walks")
         if not b.empty():
             P_, T_, UV_, M_ = b.arrays()

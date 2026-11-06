@@ -20,8 +20,8 @@ import townsigns
 DATA_PATH = Path(__file__).with_name('data') / 'fr_local_directions.zip'
 DATA_SHA256 = '60b6d6559a0f5ede340149835949d096dfa8fd010f0b753499c01a52470a6e2f'
 PRIORITY_PATH = DATA_PATH.with_name('fr_priority_directions.zip')
-PRIORITY_SHA256 = 'e7f401e7f14b6835f13cf6068da7d100e251d208a7618fdd3a944b2a4debd19a'
-SIGNATURE = 'fr-local-directions-3:' + DATA_SHA256 + ':' + PRIORITY_SHA256
+PRIORITY_SHA256 = '3eb34ca7b4b483d5c1b820b418dd2085089c1cf85efb76fac957e112d6fa0ec7'
+SIGNATURE = 'fr-local-directions-4:' + DATA_SHA256 + ':' + PRIORITY_SHA256
 SOURCE_ORDER = {'relation': 0, 'road': 1, 'route': 2}
 LOCAL = frozenset(
     ('primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'living_street')
@@ -80,14 +80,18 @@ def nearby(frame, box, margin=0.0):
     catalogs = (*_priority_catalogs(PRIORITY_PATH, PRIORITY_SHA256), (DATA_PATH, DATA_SHA256))
     for path, digest in catalogs:
         cell_size, cells = _catalog(path, digest)
-        result.extend(
-            row
-            for x in range(lo[0] // cell_size, hi[0] // cell_size + 1)
-            for y in range(lo[1] // cell_size, hi[1] // cell_size + 1)
-            if (x, y) in cells
-            for row in _cell(x, y, path)
-            if lo[0] <= row['at'][0] <= hi[0] + 1 and lo[1] <= row['at'][1] <= hi[1] + 1
-        )
+        for x in range(lo[0] // cell_size, hi[0] // cell_size + 1):
+            for y in range(lo[1] // cell_size, hi[1] // cell_size + 1):
+                if (x, y) not in cells:
+                    continue
+                for row in _cell(x, y, path):
+                    px, py = row['at']
+                    if lo[0] <= px <= hi[0] + 1 and lo[1] <= py <= hi[1] + 1:
+                        # The former short-range estimates did not compare
+                        # competing turns. Keep the surveyed and tagged faces.
+                        panels = [p for p in row['panels'] if p['source'] != 'route' or p.get('checked_route')]
+                        if panels:
+                            result.append(dict(row, panels=panels))
     return result
 
 
@@ -331,7 +335,7 @@ def _straight_labels(sites):
         pts, _ = furniture._at(arm.line, np.array([12.0]))
         incoming = arm.vertex[:2] - pts[0, :2]
         for leave, panel in site.outlets:
-            if panel.get('local') or panel.get('centre') or leave.spec.cls not in THROUGH:
+            if panel['source'] == 'route' or panel.get('local') or panel.get('centre') or leave.spec.cls not in THROUGH:
                 continue
             pts, _ = furniture._at(leave.line, np.array([12.0]))
             ray = pts[0, :2] - leave.vertex[:2]
@@ -424,7 +428,7 @@ def _sites(frame, graph, data, box, french):
             verified = {leave.key for leave, _ in site.outlets} if checked else None
             inherited = []
             for leave, panel in known:
-                if leave.key == arm.key or panel.get('local'):
+                if leave.key == arm.key or panel.get('local') or panel['source'] == 'route':
                     continue
                 if not ring and not _connected(arm, leave):
                     continue
@@ -514,6 +518,9 @@ def _settlement(at, urban, places):
 def _display(panel, urban, locality):
     names = ['Centre-ville'] if panel.get('centre') and urban else panel['names']
     distance = [frroadmesh.distance_label(m) for m in panel.get('distance', ())]
+    if not distance and not urban and panel.get('route_distances'):
+        distance = [frroadmesh.distance_label(m, estimated=True) if m else ''
+                    for m in panel['route_distances']]
     if not distance and not urban and panel.get('route_m'):
         distance = [frroadmesh.distance_label(panel['route_m'], estimated=True)]
     labels, distances = [], []
@@ -531,7 +538,8 @@ def _panels(at, approach, outlets, urban, locality):
     travel = approach.vertex[:2] - incoming[0, :2]
     result = []
     seen = set()
-    signed_names = set()
+    signed_names = {_name(name) for _, panel in outlets if panel['source'] != 'route' for name in panel['names']}
+    inferred_names = set()
     for leave, panel in sorted(outlets, key=lambda row: SOURCE_ORDER[row[1]['source']]):
         if approach.key == leave.key:
             continue
@@ -552,10 +560,10 @@ def _panels(at, approach, outlets, urban, locality):
         for name, distance in zip(panel['names'], panel['display_distance']):
             normal = _name(name)
             key = leave.key, normal
-            face = normal, turn == 'straight'
-            if key not in seen and (panel['source'] != 'route' or face not in signed_names):
+            if key not in seen and (panel['source'] != 'route' or normal not in signed_names | inferred_names):
                 seen.add(key)
-                signed_names.add(face)
+                if panel['source'] == 'route':
+                    inferred_names.add(normal)
                 labels.append(name)
                 distances.append(distance)
         if labels:
@@ -797,6 +805,8 @@ def _exit_boards(frame, graph, rings, places, urban_fn, mesh, clearance):
                 panel = dict(panel, names=[panel['names'][i] for i in indices])
                 if 'distance' in panel:
                     panel['distance'] = [panel['distance'][i] for i in indices if i < len(panel['distance'])]
+                if 'route_distances' in panel:
+                    panel['route_distances'] = [panel['route_distances'][i] for i in indices]
                 if 0 not in indices:
                     panel.pop('route_m', None)
             exits.setdefault(leave.key, (leave, []))[1].append(panel)

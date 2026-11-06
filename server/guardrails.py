@@ -1078,6 +1078,17 @@ def bridge_rows(parapets, frame=None):
 
 def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
                 supported_decks_out=None, roads=()):
-    rows=_mapped_forest_rows(frame,infra_fn,exact,elev,decks,parapets,bridge_rails,supported_decks_out,roads)
-    if not euguardrails.enabled():return rows
-    return euguardrails.extend(frame,roads,exact,elev,rows,decks)
+    enabled = euguardrails.enabled()
+    context_box = exact
+    if enabled and any(euguardrails.is_motorway_mainline(spec) for _, spec, *_ in roads):
+        # Inspect mapped verges and terminals across the tile seam. Ownership
+        # remains local, even when the neighbouring rail suppresses a fallback.
+        pad = euguardrails.VERGE_CONTEXT_M
+        x0, y0, x1, y1 = exact
+        context_box = x0 - pad, y0 - pad, x1 + pad, y1 + pad
+    context = _mapped_forest_rows(frame, infra_fn, context_box, elev, decks, parapets, bridge_rails,
+                                  supported_decks_out, roads)
+    if not enabled:
+        return context
+    rows = context if context_box is exact else [r for r in context if geotiles.box_owns(exact, *r[1:3])]
+    return euguardrails.extend(frame, roads, exact, elev, rows, decks, context=context)
