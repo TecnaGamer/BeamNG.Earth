@@ -368,27 +368,6 @@ def _layer_marks(feats):
     return out
 
 
-def cells_of_box(frame, box):
-    """The map cells rows() reads for box (prefetch them with picnicsource.Source.prefetch), or None (none)."""
-    x0, y0, x1, y1 = (float(v) for v in box)
-    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
-    try:
-        return mapcells.cells_for_points(la, lo, pad_lat=0.00005, pad_lon=0.00005, max_cells=64)
-    except (ValueError, OverflowError):
-        return None
-
-
-def prefetch(md, frame, box):
-    """A road tile's build start: the OpenStreetMap picnic reads of box's cells begun in the background
-    (picnicsource.Source.prefetch), so rows() at the end of the build finds them read and nothing waits."""
-    osm = getattr(md, "picnic_osm", None)
-    if osm is None:
-        return
-    keys = cells_of_box(frame, box)
-    if keys:
-        osm.prefetch(keys)
-
-
 def rows(frame, infra_fn, land_fn, box, elev, osm_fn=None, bld_fn=None):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of picnic tables and grills whose
     mapped spot is inside box and inside a park. osm_fn(keys) is the OpenStreetMap picnic features
@@ -397,8 +376,10 @@ def rows(frame, infra_fn, land_fn, box, elev, osm_fn=None, bld_fn=None):
     if infra_fn is None and land_fn is None:
         return []
     x0, y0, x1, y1 = (float(v) for v in box)
-    keys = cells_of_box(frame, box)
-    if keys is None:
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+    try:
+        keys = mapcells.cells_for_points(la, lo, pad_lat=0.00005, pad_lon=0.00005, max_cells=64)
+    except (ValueError, OverflowError):
         return []
     loaded = _load(land_fn, keys) + _load(infra_fn, keys)
     if osm_fn is not None:

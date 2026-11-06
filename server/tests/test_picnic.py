@@ -289,3 +289,22 @@ class NoWaitTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 0.2)
         src.prefetch([Key()])
         self.assertEqual(calls, [(14, 3, 4)], "read once")
+
+    def test_mapdata_side_prefetch_starts_every_side_source(self):
+        import mapdata
+
+        class Src:
+            def __init__(self):
+                self.got = []
+
+            def prefetch(self, keys):
+                self.got.append(list(keys))
+
+        class Broken:
+            def prefetch(self, keys):
+                raise OSError("down")
+        md = mapdata.MapData.__new__(mapdata.MapData)
+        a, b = Src(), Src()
+        md.side_sources = [a, Broken(), b]
+        md.side_prefetch(["k1", "k2"])
+        self.assertEqual((a.got, b.got), ([["k1", "k2"]], [["k1", "k2"]]), "one broken source stops none of the others")
