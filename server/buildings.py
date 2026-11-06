@@ -43,7 +43,14 @@ SIMPLIFY_M = 0.35           # m: vertices closer than this to the line of their 
 TILE_PX_M = 12.0            # m of wall per 1024 px of the window sheets (5 sash bays of 2.4 m)
 ROOF_UV_M = 6.0             # m per repeat of the roof textures
 SIDING_UV_M = 3.0           # m per repeat of the plain wall textures (sheds, garages)
-PITCH = {"gabled": 32.0, "hipped": 26.0}     # degrees
+PITCH = {"gabled": 32.0, "hipped": 26.0, "half-hipped": 32.0, "pyramidal": 26.0}     # degrees
+# roof:shape forms with pitches of their own, whatever the region's (roof_rise, _roof)
+SKILLION_PITCH = 12.0           # a lean-to: one shallow slope from wall to wall
+MANSARD_PITCHES = (68.0, 18.0)  # the steep lower slope, the shallow top
+MANSARD_INSET_M = 1.2           # how far the lower slope comes in, at most
+GAMBREL_PITCHES = (55.0, 25.0)  # a barn's: the same, on two sides only
+GAMBREL_BREAK = 0.55            # the slope breaks this far out from the ridge (of the half width)
+HALF_HIP = 0.35                 # the share of a half-hipped roof's height the small hips at its ends take
 EAVE_M = 0.35               # m a pitched roof overhangs its walls
 CORNICE_OUT_M = 0.28        # a flat roof's cornice: how far it stands out, its depth below and above the eave
 CORNICE_DOWN_M = 0.45
@@ -442,6 +449,21 @@ def roof_pitch(spec):
     return spec.pitch or PITCH.get(spec.roof, PITCH["gabled"])
 
 
+def roof_rise(roof, hw, pitch):
+    """How far a roof rises (m) over a box of half width hw, pitch: its region's or PITCH's (a form with its own
+    pitches keeps those). Pure."""
+    tan = lambda deg: math.tan(math.radians(deg))
+    if roof == "skillion":
+        return 2.0 * hw * tan(SKILLION_PITCH)
+    if roof == "mansard":
+        inset = min(0.3 * hw, MANSARD_INSET_M)
+        return inset * tan(MANSARD_PITCHES[0]) + (hw - inset) * tan(MANSARD_PITCHES[1])
+    if roof == "gambrel":
+        out = hw * (1.0 - GAMBREL_BREAK)
+        return out * tan(GAMBREL_PITCHES[0]) + (hw - out) * tan(GAMBREL_PITCHES[1])
+    return hw * tan(pitch)
+
+
 ALPINE_HUT_M2 = 120.0        # an isolated building this small above the tree line (a summit shelter, a mountain hut) ...
 ALPINE_COVER = 0.02          # ... in a tile this empty gets dressed stone walls (the user, 2026-10-14: Mount Whitney's
                              # stone summit hut was a plain grey box)
@@ -597,11 +619,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             nf = 2 + int(seed * 3)
     roof_given = (attrs.get("roof_shape") or "").lower()
-    if roof_given in ("gabled", "hipped", "flat"):
+    if roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
         roof = roof_given
-    elif roof_given in ("pyramidal", "half-hipped", "mansard", "gambrel"):
-        roof = "hipped"
-    elif roof_given in ("skillion", "dome", "onion", "round", "saltbox"):
+    elif roof_given in ("dome", "onion", "round", "saltbox"):
         roof = "gabled"
     else:
         detached_house = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not industrial and not row
@@ -643,7 +663,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         if attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
         elif roof != "flat":
-            h = max(2.5, h - hw * math.tan(math.radians(style.pitch or PITCH[roof])))
+            h = max(2.5, h - roof_rise(roof, hw, style.pitch or PITCH.get(roof, PITCH["gabled"])))
         if nf is None:
             # a church: one tall storey (Cluj's St. Michael's, 25 m, came out as three 8 m floors)
             nf = 1 if church else max(1, int(round(h / floor_h)))
@@ -1191,6 +1211,86 @@ def _roof(m, spec, ring, z_eave, mat_idx):
 
     def uv(s, t):            # along the ridge, up the slope (m / ROOF_UV_M)
         return (s / ROOF_UV_M, (hw2 - abs(t)) / hw2 * slope / ROOF_UV_M)
+
+    def end_wall(sgn, outline):
+        """The wall up to the roof at an end of the house: outline (t, z) left to right seen from outside, fanned; the
+        facade's plain colour, as a gable's."""
+        s = sgn * hl
+        pts = [at(s, sgn * t, z) for t, z in outline]
+        for b, c in zip(pts[1:], pts[2:]):
+            m.tri(pts[0], b, c, (0, 0.995), (0.02, 0.995), (0.01, 0.999), mat_idx[spec.facade])
+
+    if spec.roof == "skillion":
+        tan = math.tan(math.radians(SKILLION_PITCH))
+        hi = 1.0 if spec.seed < 0.5 else -1.0           # (no direction in the data: which side is high, per building)
+
+        def z(t):
+            return z_eave + (hi * t + hw) * tan
+        m.quad(at(-hl2, -hw2, z(-hw2)), at(hl2, -hw2, z(-hw2)), at(hl2, hw2, z(hw2)), at(-hl2, hw2, z(hw2)),
+               uv(-hl2, -hw2), uv(hl2, -hw2), (hl2 / ROOF_UV_M, 2 * hw2 / ROOF_UV_M), (-hl2 / ROOF_UV_M, 2 * hw2 / ROOF_UV_M),
+               rm)
+        top = z(hi * hw)
+        fac = mat_idx[spec.facade]
+        a, b = (hl, -hl) if hi > 0 else (-hl, hl)       # the high wall above the eave line
+        m.quad(at(a, hi * hw, z_eave), at(b, hi * hw, z_eave), at(b, hi * hw, top), at(a, hi * hw, top),
+               (0, 0.995), (0.02, 0.995), (0.02, 0.999), (0, 0.999), fac)
+        for sgn in (-1, 1):
+            end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (sgn * hi * hw, top)])
+        return
+    if spec.roof == "gambrel":
+        lo, up = (math.tan(math.radians(p)) for p in GAMBREL_PITCHES)
+        tb = hw * GAMBREL_BREAK                          # the break line, out from the ridge
+        ze = z_eave - EAVE_M * lo
+        zb = z_eave + (hw - tb) * lo
+        zr = zb + tb * up
+        for sgn in (-1, 1):                              # (the slopes of one side, counter-clockwise from above)
+            for t0, z0, t1, z1 in ((hw2, ze, tb, zb), (tb, zb, 0.0, zr)):
+                a, b = (-hl2, hl2) if sgn < 0 else (hl2, -hl2)
+                m.quad(at(a, sgn * t0, z0), at(b, sgn * t0, z0), at(b, sgn * t1, z1), at(a, sgn * t1, z1),
+                       uv(a, t0), uv(b, t0), uv(b, t1), uv(a, t1), rm)
+        for sgn in (-1, 1):
+            end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (tb, zb), (0.0, zr - EAVE_M * 0.2), (-tb, zb)])
+        return
+    if spec.roof == "mansard":
+        lo, up = (math.tan(math.radians(p)) for p in MANSARD_PITCHES)
+        inset = min(0.3 * hw, MANSARD_INSET_M)           # (from the walls: the overhang carries the slope on down)
+        ze = z_eave - EAVE_M * lo
+        zb = z_eave + inset * lo
+        il, iw = hl - inset, hw - inset
+        zr = zb + iw * up
+        r = max(il - iw, 0.0)
+        for (a, ta), (b, tb) in (((-1, -1), (1, -1)), ((1, -1), (1, 1)), ((1, 1), (-1, 1)), ((-1, 1), (-1, -1))):
+            m.quad(at(a * hl2, ta * hw2, ze), at(b * hl2, tb * hw2, ze), at(b * il, tb * iw, zb), at(a * il, ta * iw, zb),
+                   (0, 0), (2 * hl2 / ROOF_UV_M, 0), (2 * hl2 / ROOF_UV_M, (inset + EAVE_M) / ROOF_UV_M), (0, (inset + EAVE_M) / ROOF_UV_M), rm)
+        m.quad(at(-il, -iw, zb), at(il, -iw, zb), at(r, 0, zr), at(-r, 0, zr), uv(-il, -iw), uv(il, -iw), uv(r, 0), uv(-r, 0), rm)
+        m.quad(at(il, iw, zb), at(-il, iw, zb), at(-r, 0, zr), at(r, 0, zr), uv(il, iw), uv(-il, iw), uv(-r, 0), uv(r, 0), rm)
+        m.tri(at(il, -iw, zb), at(il, iw, zb), at(r, 0, zr), (-iw / ROOF_UV_M, 0), (iw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+        m.tri(at(-il, iw, zb), at(-il, -iw, zb), at(-r, 0, zr), (-iw / ROOF_UV_M, 0), (iw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+        return
+    if spec.roof == "pyramidal":
+        apex = at(0, 0, zr)
+        for (a, ta), (b, tb) in (((-1, -1), (1, -1)), ((1, -1), (1, 1)), ((1, 1), (-1, 1)), ((-1, 1), (-1, -1))):
+            m.tri(at(a * hl2, ta * hw2, ze), at(b * hl2, tb * hw2, ze), apex,
+                  (-hl2 / ROOF_UV_M, 0), (hl2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+        return
+    if spec.roof == "half-hipped":
+        tw = hw2 * HALF_HIP                              # where the small hip's foot meets the slopes
+        zc = zr - rise * HALF_HIP
+        r = max(hl2 - tw, 0.0)
+        m.quad(at(-hl2, -hw2, ze), at(hl2, -hw2, ze), at(hl2, -tw, zc), at(-hl2, -tw, zc),
+               uv(-hl2, -hw2), uv(hl2, -hw2), uv(hl2, -tw), uv(-hl2, -tw), rm)
+        m.quad(at(-hl2, -tw, zc), at(hl2, -tw, zc), at(r, 0, zr), at(-r, 0, zr),
+               uv(-hl2, -tw), uv(hl2, -tw), uv(r, 0), uv(-r, 0), rm)
+        m.quad(at(hl2, hw2, ze), at(-hl2, hw2, ze), at(-hl2, tw, zc), at(hl2, tw, zc),
+               uv(hl2, hw2), uv(-hl2, hw2), uv(-hl2, tw), uv(hl2, tw), rm)
+        m.quad(at(hl2, tw, zc), at(-hl2, tw, zc), at(-r, 0, zr), at(r, 0, zr),
+               uv(hl2, tw), uv(-hl2, tw), uv(-r, 0), uv(r, 0), rm)
+        m.tri(at(hl2, -tw, zc), at(hl2, tw, zc), at(r, 0, zr), (-tw / ROOF_UV_M, 0), (tw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+        m.tri(at(-hl2, tw, zc), at(-hl2, -tw, zc), at(-r, 0, zr), (-tw / ROOF_UV_M, 0), (tw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+        top = zc + EAVE_M * rise / hw2                   # (the wall reaches the hip above it, under the overhang)
+        for sgn in (-1, 1):
+            end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (tw, top), (-tw, top)])
+        return
     if spec.roof == "gabled":
         r = hl2
         m.quad(at(-hl2, -hw2, ze), at(hl2, -hw2, ze), at(r, 0, zr), at(-r, 0, zr),
