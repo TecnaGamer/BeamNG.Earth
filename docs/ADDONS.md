@@ -86,7 +86,7 @@ folder's real files:
 
 1. **Install / Update** the first time for an add-on shows a notice: who made it, that BeamNG.Earth did not make it
    (and whether it reviewed that version), that it runs like any mod with the same access, where it comes from, and
-   which older copies are removed. The agreement is kept per add-on and author (`/settings/beamngEarth/addons.json`);
+   which older copies are removed. The agreement is kept per add-on and author (`/settings/beamngEarth_addons.json`);
    a new author in the registry asks again. The server refuses an install without it too.
 2. The server picks the newest release that is not a pre-release and has the file (with `trust: reviewed`: a reviewed
    file only), downloads it to `<mods>/<modFile>.bnge-part`, checks its size and the SHA-256 digest GitHub publishes

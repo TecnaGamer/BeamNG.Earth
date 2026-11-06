@@ -21,7 +21,7 @@ local net = require('beamngEarth/net')
 
 local M = {}
 
-M.CONSENT_FILE = '/settings/beamngEarth/addons.json'
+M.CONSENT_FILE = '/settings/beamngEarth_addons.json'   -- (beside beamngEarth_places.json: no folder to make)
 M.APPLY_WAIT_S = 60          -- the mod manager busy (a level loading) this long: the hand-over fails
 M.MOUNT_CHECK_S = 3          -- after the rename the file watcher has this long to mount the file, then we ask
 M.FILE = '^[%w][%w%._%-]*%.zip$'
