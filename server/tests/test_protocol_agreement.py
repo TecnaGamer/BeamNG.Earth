@@ -140,6 +140,8 @@ MOD_TO_SERVER = {
     "app_path": {"what": F(str, OPT), "pick": F(bool, OPT), "path": F(str, OPT)},
     # the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)
     "terrain_patch": {"anchorId": F(int), "key": F(str), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM)},
+    # 2026-11-06: the camera far above the clouds: the cloud shell round the point under it (spaceclouds.lua / .py)
+    "space_clouds_req": {"anchorId": F(int), "lat": F(NUM), "lon": F(NUM), "alt": F(NUM)},
     # the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)
     "runtime_profiler": {"enabled": F(bool), "mode": F(str, OPT), "probe": F(int, OPT)},
     "perf_log": {"lines": F((list, dict))},
@@ -357,6 +359,9 @@ SERVER_TO_MOD = {
     # ... its answer: the patch's shape and centre, or an error (the mod asks again later)
     "terrain_patch": {"anchorId": F(int), "key": F(str), "parts": F(list, OPT),     # [{path, x, y}]: small meshes
                       "tris": F(int, OPT), "error": F(str, OPT)},
+    # ... its answer: the shell's shape, colour and opacity DDS (game paths), the material's name, where it is round
+    "space_clouds": {"anchorId": F(int), "shape": F(str), "color": F(str), "opacity": F(str), "material": F(str),
+                     "lat": F(NUM), "lon": F(NUM), "radius": F(NUM)},
     "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT),
@@ -366,6 +371,7 @@ WEATHER_NESTED = {"cover": {"total", "low", "mid", "high"}, "wind": {"ms", "from
                   "aloft": {"ms", "fromDeg"}}
 # message types the plain session cannot produce (each has its own session test below)
 EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
+                       "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
@@ -442,11 +448,11 @@ def top_keys(table):
 
 def mod_sends():
     """{type: (keys, nested)} of every net.send({...}) in core.lua, places.lua (the level select's pictures) and
-    mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua (core hands it
-    net.send)."""
+    mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua and spaceclouds.lua
+    (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua"), r"net(?:'\))?\.send\(\{"),
-                           (("terrainpatch.lua",), r"\bsend\(\{"),
+                           (("terrainpatch.lua", "spaceclouds.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
         for m in re.finditer(pattern, text):

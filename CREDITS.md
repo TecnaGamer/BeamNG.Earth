@@ -186,3 +186,5 @@ BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic 
 Dynamic Damage Particles, Dynamic Scratches, SparkMod: other authors' mods the project owner uses;
 BeamNG.Earth only coexists with them (e.g. the weather module backs off when BWM_Weather drives the
 weather). The pause-menu integration follows the pattern of the TAA Standalone mod.
+
+- **Clouds seen from space:** We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS) (VIIRS SNPP Corrected Reflectance, true colour; public domain).

@@ -5576,6 +5576,8 @@ class Connection:
         elif kind == "open_page":               # the update notice's button: the releases page (updates.open_page)
             if not updatesmod.open_page(msg.get("url")):
                 log.info("open_page: refused %r", msg.get("url"))
+        elif kind == "space_clouds_req":        # the camera above the clouds: today's clouds round it (spaceclouds.py)
+            self.spawn(self.space_clouds(msg))
         elif kind == "terrain_patch":           # ground under another vehicle's collision island (terrainpatch.lua)
             self.spawn(self.terrain_patch(msg))
         elif kind == "cache":
@@ -5667,6 +5669,28 @@ class Connection:
         """K(L) of this connection's far field: the server's times the mod's terrain detail (lodScale)."""
         k, s = self.s.kfun, self.lod_scale
         return k if s == 1.0 else (lambda lvl: k(lvl) * s)
+
+    async def space_clouds(self, msg):
+        """The mod's spaceclouds.lua: the cloud shell round the point under a camera far above the clouds (lat, lon,
+        alt m above sea level), in anchorId's frame; answered with its files (or nothing: no tile could be had)."""
+        aid = msg.get("anchorId")
+        try:
+            lat, lon, alt = float(msg["lat"]), float(msg["lon"]), float(msg["alt"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if (aid not in self.s.anchors or not all(math.isfinite(v) for v in (lat, lon, alt))
+                or abs(lat) > 90 or abs(lon) > 180 or not 0 <= alt <= 2_000_000):
+            return
+        import spaceclouds as spacecloudsmod
+        frame = self.s.anchors[aid].frame
+        try:
+            res = await asyncio.get_running_loop().run_in_executor(
+                None, spacecloudsmod.build, self.s.out_dir, self.s.vfs_dir, frame, lat, lon, alt, self.s.net)
+        except Exception as e:
+            log.warning("space clouds: %s: %s", type(e).__name__, e)
+            return
+        if res is not None:
+            self.send(dict(res, type="space_clouds", anchorId=aid))
 
     async def terrain_patch(self, msg):
         """The mod's terrainpatch.lua: the ground's collision patch over box (x0, y0, x1, y1, the active anchor's

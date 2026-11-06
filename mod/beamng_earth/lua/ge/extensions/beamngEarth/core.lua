@@ -1064,6 +1064,8 @@ local function onMessage(msg)
     pcall(mpsession.shareOut, msg)
   elseif t == 'terrain_patch' then
     pcall(terrainpatch.onPatch, msg)
+  elseif t == 'space_clouds' then        -- the clouds seen from space (spaceclouds.lua / server spaceclouds.py)
+    pcall(require('beamngEarth/spaceclouds').onMessage, msg, st.anchorId)
   elseif t == 'anchor_ready' then
     local p = st.pending
     if not p or msg.requestId ~= p.requestId then return end -- stale answer
@@ -2270,6 +2272,8 @@ local function onUpdate(dtReal, dtSim)
       t = mark('foci', t)
       ok, err = pcall(terrainpatch.update, dtReal, st.anchorId, collisionfoci.last, st.player, pb, net.send)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'terrain patches: ' .. tostring(err)) end
+      ok, err = pcall(require('beamngEarth/spaceclouds').update, dtReal, st.anchor, st.anchorId, net.send)
+      if not ok then log('E', 'beamngEarth', 'space clouds: ' .. tostring(err)) end
       ok, err = pcall(farcars.update, dtReal)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'far cars: ' .. tostring(err)) end
       t = mark('farcars', t)
@@ -2419,6 +2423,7 @@ local function onClientEndMission()
   postfx.restore()
   require('beamngEarth/enginepref').restore()
   pcall(terrainpatch.clear)
+  pcall(require('beamngEarth/spaceclouds').clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
   pcall(mpsession.reset)
