@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import climate     # fork: in_australia, koppen_grid (australian_trees)
 import fast
 
 import mapcells
@@ -36,7 +37,8 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 23          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 24          # (fork: 24: Australia's eucalypt / tropical / palm mix, australian_trees)
+                      # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -47,9 +49,9 @@ CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
-          "oak_west", "tropical")
+          "oak_west", "tropical", "eucalypt")     # fork: eucalypt appended (never reorder: the ids are the Rust kernel's)
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
- G_OAK_WEST, G_TROPICAL) = range(len(GROUPS))
+ G_OAK_WEST, G_TROPICAL, G_EUCALYPT) = range(len(GROUPS))
 ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
@@ -174,6 +176,43 @@ def _conifer_share(lat, lon):
     mediterranean = (lat > 30.0) & (lat < 46.0) & (lon > -10.0) & (lon < 40.0)
     other = np.where(mediterranean, 0.3, other)
     return np.where(_north_america(lat, lon), share, other)
+
+
+# fork: Australia's trees (regional()'s rules are North America's: Douglas firs and East Coast oaks in Brisbane)
+AU_EUCALYPT_P = {G_DECIDUOUS: 0.85, G_CONIFER: 0.85, G_OAK_WEST: 0.70}   # the rest: exotic street / park trees, pines
+AU_TROPICAL_P = 0.60        # rainforest (Koppen Af, Am) trees at least AU_TROPICAL_MIN_M tall
+AU_TROPICAL_MIN_M = 12.0
+AU_PALM_P = 0.15            # of a town's trees north of AU_PALM_LAT (Queensland's coast: Cairns to the Gold Coast)
+AU_PALM_LAT = -29.0
+AU_WET_TROPICS = (1, 2)     # Koppen Af, Am
+
+
+def australian_trees(generic, regional_group, height, lat, lon, lcls, u):
+    """fork: the groups of the trees inside Australia (climate.in_australia): eucalypts for most deciduous / conifer
+    items (the rest stay as exotic street trees and pines), rainforest trees in the wet tropics, palms in
+    Queensland's towns. generic: the group before regional() (deciduous / conifer / shrub / rock);
+    regional_group: after it (shrubs and rocks keep its desert variants); u: (n, 3) hashed [0, 1) per item (the
+    eucalypt, tropical and palm draws). Items outside Australia keep regional_group. Deterministic, pure."""
+    generic, out = np.asarray(generic, np.uint8), np.array(regional_group, np.uint8)
+    lat, lon, height = (np.asarray(a, np.float64) for a in (lat, lon, height))
+    u, lcls = np.asarray(u, np.float64), np.asarray(lcls)
+    au = climate.in_australia(lat, lon) & np.isin(generic, (G_DECIDUOUS, G_CONIFER, G_OAK_WEST))
+    if not au.any():
+        return out
+    ix = np.flatnonzero(au)
+    g = generic[ix].copy()              # (regional()'s American rules, its palms and tropical trees included, undone)
+    wet = np.isin(climate.koppen_grid(lat[ix], lon[ix]), AU_WET_TROPICS)
+    palm = (lcls[ix] == WC["built"]) & (lat[ix] > AU_PALM_LAT) & (u[ix, 2] < AU_PALM_P)
+    trop = ~palm & wet & (height[ix] >= AU_TROPICAL_MIN_M) & (u[ix, 1] < AU_TROPICAL_P)
+    share = np.zeros(len(GROUPS))
+    for k, p in AU_EUCALYPT_P.items():
+        share[k] = p
+    euc = ~palm & ~trop & (u[ix, 0] < share[g])
+    g[euc] = G_EUCALYPT
+    g[trop] = G_TROPICAL
+    g[palm] = G_PALM
+    out[ix] = g
+    return out
 
 
 class Vegetation:
@@ -385,7 +424,10 @@ class Vegetation:
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
         conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
+        generic = group
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7))
+        group = australian_trees(generic, group, th, tlat, tlon, lcls,       # fork: Australia's own mix
+                                 np.stack([_hash01(gx, gy, 8), _hash01(gx, gy, 9), _hash01(gx, gy, 10)], axis=1))
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)

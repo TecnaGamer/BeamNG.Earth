@@ -141,6 +141,11 @@ M.CATALOG = {
     { WCA .. 'trees/trees_oak/oak_a', 9.6 }, { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 },
   },
+  -- fork: Australia's trees (server vegetation.py G_EUCALYPT): West Coast USA's two eucalypts, the heights of oak_west's
+  -- entries above; M.eucalyptShapes swaps in the Mount Coot-tha pack (below) where it is installed and its materials load
+  eucalypt = {
+    { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 }, { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 },
+  },
   palm = {
     { JRI .. 'trees/trees_palm/palm_small', 8.9 }, { JRI .. 'trees/trees_palm/palm_short', 9.1 },
     { WCA .. 'trees/trees_palm/fanpalm_short', 10.6 }, { WCA .. 'trees/trees_palm/fanpalm_skirt', 11.7 },
@@ -218,6 +223,32 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
   },
 }
+-- fork: OPTIONAL, runtime-only Mount Coot-tha eucalypts. The map mod "mount_coottha" (author B25Mitch; no licence is
+-- stated, so nothing of it is copied or bundled here): where the player has it installed, its eucalyptus shapes stand
+-- in for the stock pair above. Heights are the meshes' vertical extents (m; measured from the .dae vertex positions,
+-- 2026-11-07); left out: the dead, fallen, stump, backdrop and extra-wide (brown_wide) ones, sapling3 (0.55 m).
+-- Its materials are TorqueScript (materials.cs, registered when that level loads), so the pack is used only while
+-- they are registered (M.COOTTHA_MATERIALS found in the scene tree); otherwise the stock shapes stay.
+local MC = '/levels/mount_coottha/art/shapes/trees/eucalyptus/'
+M.COOTTHA_PACK = {
+  { MC .. 'eucalyptus_sapling2', 1.56 }, { MC .. 'eucalyptus_sapling1', 2.09 }, { MC .. 'eucalyptus_thin2', 12.54 },
+  { MC .. 'eucalyptus_brown1', 16.27 }, { MC .. 'eucalyptus_dark1', 21.60 }, { MC .. 'eucalyptus_thin1', 27.47 },
+  { MC .. 'eucalyptus_grey1', 31.32 },
+}
+M.COOTTHA_MATERIALS = { 'eucalyptus', 'eucalyptus_bark', 'eucalyptus_bark_grey', 'eucalyptus_bark_brown', 'eucalyptus_sapling' }
+M.STOCK_EUCALYPT = M.CATALOG.eucalypt
+-- Pure: the "eucalypt" group's shapes: the Mount Coot-tha pack when every one of its files exists
+-- (fileExists(path_with_.dae)) and every material is registered (materialKnown(name)), else the stock pair.
+function M.eucalyptShapes(fileExists, materialKnown)
+  if type(fileExists) ~= 'function' or type(materialKnown) ~= 'function' then return M.STOCK_EUCALYPT end
+  for _, v in ipairs(M.COOTTHA_PACK) do
+    if not fileExists(v[1] .. '.dae') then return M.STOCK_EUCALYPT end
+  end
+  for _, name in ipairs(M.COOTTHA_MATERIALS) do
+    if not materialKnown(name) then return M.STOCK_EUCALYPT end
+  end
+  return M.COOTTHA_PACK
+end
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
 -- the same mesh with its longitudinal/lateral axes reversed; the caps are swapped to flare outwards.
 M.CATALOG.guardrail = { { '/art/shapes/objects/italy_guardrails_basic', 0.9 } }
@@ -516,6 +547,11 @@ local function setup()
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
+  if FS and scenetree then      -- fork: the Mount Coot-tha eucalypts, where installed and their materials are registered
+    local ok, shapes = pcall(M.eucalyptShapes, function(p) return FS:fileExists(p) end,
+      function(n) return scenetree.findObject(n) ~= nil end)
+    if ok and shapes then M.CATALOG.eucalypt = shapes end
+  end
   if FS and readFile and writeFile then
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL

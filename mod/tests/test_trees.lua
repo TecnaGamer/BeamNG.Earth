@@ -629,4 +629,44 @@ do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is
   T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
 end
 
+do -- fork: the "eucalypt" group (server vegetation.G_EUCALYPT): West Coast USA's eucalypts, or the optional Mount Coot-tha pack
+  local euc = trees.CATALOG.eucalypt
+  T.check(euc and #euc == 2 and euc[1][1]:find('trees_eucalyptus/eucalyptus_double', 1, true)
+    and euc[2][1]:find('trees_eucalyptus/eucalyptus_tall', 1, true), 'eucalypt: the stock eucalyptus pair')
+  local oak = trees.CATALOG.oak_west
+  T.check(euc[1][2] == oak[5][2] and euc[2][2] == oak[6][2], 'eucalypt: the same measured heights as oak_west\'s eucalypts')
+  local shape, sc = trees.pick('eucalypt', 22.5, 0.3)
+  T.check(shape:find('eucalyptus_tall', 1, true) and math.abs(sc - 1) < 1e-9, 'eucalypt: a 22.5 m tree is the tall one at 1:1')
+  T.check(trees.GROUP_MAX_M.eucalypt == nil and not trees.isBarrier('eucalypt'), 'eucalypt: a tree, not a barrier')
+  -- the stock West Coast eucalyptus materials are preloaded
+  local source = assert(io.open(dir .. '/../beamng_earth/lua/ge/extensions/beamngEarth/trees.lua')):read('*a')
+  T.check(source:find("WCA .. 'trees/trees_eucalyptus'", 1, true), 'eucalypt: its stock materials folder is preloaded')
+
+  -- the Mount Coot-tha pack: every file and material present, or the stock shapes (stubbed file system)
+  local present, known = {}, {}
+  for _, v in ipairs(trees.COOTTHA_PACK) do present[v[1] .. '.dae'] = true end
+  for _, n in ipairs(trees.COOTTHA_MATERIALS) do known[n] = true end
+  local function exists(p) return present[p] == true end
+  local function material(n) return known[n] == true end
+  T.check(trees.eucalyptShapes(exists, material) == trees.COOTTHA_PACK, 'pack: all files and materials: preferred')
+  T.check(trees.eucalyptShapes(function() return false end, material) == trees.STOCK_EUCALYPT, 'pack: not installed: stock')
+  T.check(trees.eucalyptShapes(exists, function() return false end) == trees.STOCK_EUCALYPT, 'pack: materials not registered: stock')
+  local saved = present[trees.COOTTHA_PACK[3][1] .. '.dae']
+  present[trees.COOTTHA_PACK[3][1] .. '.dae'] = nil
+  T.check(trees.eucalyptShapes(exists, material) == trees.STOCK_EUCALYPT, 'pack: one shape missing: stock')
+  present[trees.COOTTHA_PACK[3][1] .. '.dae'] = saved
+  T.check(trees.eucalyptShapes(nil, nil) == trees.STOCK_EUCALYPT, 'pack: no file system: stock')
+  T.check(#trees.COOTTHA_PACK >= 5 and trees.COOTTHA_PACK[1][2] < trees.COOTTHA_PACK[#trees.COOTTHA_PACK][2], 'pack: several sizes')
+  local sorted = true
+  for i = 2, #trees.COOTTHA_PACK do
+    if trees.COOTTHA_PACK[i][2] < trees.COOTTHA_PACK[i - 1][2] then sorted = false end
+    if trees.COOTTHA_PACK[i][1]:find('dead') or trees.COOTTHA_PACK[i][1]:find('fallen') or trees.COOTTHA_PACK[i][1]:find('stump')
+      or trees.COOTTHA_PACK[i][1]:find('backdrop') then sorted = false end
+  end
+  T.check(sorted, 'pack: by height, no dead / fallen / stump / backdrop shapes')
+  -- in this stubbed game (every file exists, no such materials registered) the stock pair stays
+  trees.update(31, { x = 0, y = 0 })
+  T.check(trees.CATALOG.eucalypt == trees.STOCK_EUCALYPT, 'setup: no Mount Coot-tha materials: stock shapes')
+end
+
 T.done('test_trees')
