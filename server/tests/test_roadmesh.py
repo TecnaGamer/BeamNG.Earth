@@ -578,6 +578,22 @@ class BridgeProfilesTest(unittest.TestCase):
         z_abut = P[at_abut, 2]
         self.assertLess(np.ptp(z_abut), 0.005, f"Step at abutment: {np.ptp(z_abut)}")
 
+    def test_a_ground_line_is_not_snapped_to_the_deck_asphalt(self):
+        """GitHub #739: a ground centre line ending at a deck's end takes the deck's line's edges (its layer, its width),
+        not the deck asphalt's 8 m ones (the nearest of any kind: the line fanned out at the bridge's end)."""
+        deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
+                "n": [[10, 0, 20.0], [50, 0, 20.0]]}
+        dline = {**chunk("line_yellow", 0.12, [[10, 0, 20.0], [50, 0, 20.0]]), "deck": True, "fixed": True,
+                 "layer": "mark"}
+        gline = {**chunk("line_yellow", 0.12, [[0, 0, 0], [10, 0, 0]]), "layer": "mark"}
+        elev = lambda la, lo: np.full(len(la), 20.0)
+        res = roadmesh.build(FRAME, [deck, dline, gline], elev, (0.0, 0.0, 0.0), lift=0.04)
+        P, T, UV, mats, M = res[:5]
+        ki = mats.index("line_yellow")
+        verts = np.unique(T[np.asarray(M) == ki].ravel())
+        ys = P[verts, 1]
+        self.assertLess(float(np.ptp(ys)), 0.5, f"the yellow line spread to {np.ptp(ys):.2f} m")
+
     def test_median_barrier_kept_when_facing_different_decks(self):
         # Two parallel decks side by side: when each side faces a different target, medians are not suppressed
         x = np.linspace(0.0, 50.0, 15)

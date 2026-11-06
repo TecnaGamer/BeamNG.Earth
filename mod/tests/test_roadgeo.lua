@@ -16,9 +16,12 @@ local function rec(mod)
     return function(...) calls[#calls + 1] = { mod, fn, ... } end
   end })
 end
-for _, m in ipairs({ 'trees', 'nightlights', 'parking', 'gasstations', 'pumpjacks', 'ambience' }) do
+for _, m in ipairs({ 'trees', 'nightlights', 'parking', 'gasstations', 'pumpjacks', 'windturbines', 'ambience' }) do
   package.loaded['beamngEarth/' .. m] = rec(m)
 end
+rawset(package.loaded['beamngEarth/windturbines'], 'placeRows', function(...)
+  calls[#calls + 1] = { 'windturbines', 'placeRows', ... }
+end)
 rawset(package.loaded['beamngEarth/gasstations'], 'MATERIAL_FILES', {})
 local function called(mod, fn)
   local out = {}
@@ -62,6 +65,8 @@ local content = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h
   cliff = { shape = "/s/rg_cliff.cdae", pos = { -118, -118, 0 }, pivot = 60, relief = 80 },
   colliders = { deck = { { -10, -10, 5, 10, 10, 15 } }, bldcol = { { 50, 50, 0, 60, 60, 30 } } },
   park = { { 10, 20, 3, 90 } }, wells = { { 30, 40, 3, 45 } },
+  turbines = { { id = "osm:node:1175681635", x = 8, y = 9, z = 1800, yaw = 30, scale = 1,
+    lat = 41.1397814, lon = -104.9978882, dimensions = { basis = "stock_model_default" } } },
   sound = { 1, 5, 6, 7, 20, 10, 5, 0.5 },
   talus = { groups = { "talus_c0a080" }, items = { { 0, 10, 20, 3, 0, 1, .8, .1, 1,0,0, 0,1,0, 0,0,1 } } },
   props = { groups = { "lamp" }, items = { { 0, 1, 2, 3, 0, 1, 6, 0 } } },
@@ -137,6 +142,14 @@ do
     'the bridge drawn without collision, its slab a collision mesh')
   T.check(placedAt(A, m[1]) and placedAt(A, d[1]) and m[1].rot ~= nil, '3dmr models placed into A (with the rotation)')
 end
+do
+  local r = called('windturbines', 'onRows')[1][4][1]
+  local ex, ey, ez = geotile.worldMap(frame, A, 8, 9, 1800)
+  T.check(r.id == 'osm:node:1175681635' and r.lat == 41.1397814 and r.dimensions.basis == 'stock_model_default',
+    'turbine identity and dimensions retained')
+  T.check(math.abs(r.x - ex) < 1e-3 and math.abs(r.y - ey) < 1e-3 and math.abs(r.z - ez) < 1e-3,
+    'turbine base mapped exactly at elevation')
+end
 
 -- its skin for A
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
@@ -178,6 +191,11 @@ T.check(#called('parking', 'onRows') == 1 and #called('trees', 'onGeoRows') == 0
 do
   local m, d = objsWith('threedmr_22.cdae'), objsWith('threedmr_22_deck')
   T.check(#m == 1 and #d == 1 and placedAt(B, m[1]) and placedAt(B, d[1]), '3dmr models moved into B, not made again')
+  local r = called('windturbines', 'placeRows')[1][4][1]
+  local ex, ey, ez = geotile.worldMap(frame, B, 8, 9, 1800)
+  T.check(math.abs(r.x - ex) < 1e-3 and math.abs(r.y - ey) < 1e-3 and math.abs(r.z - ez) < 1e-3,
+    'turbine placed again into the new anchor')
+  T.near(r.yaw, 30 + geotile.yawOf(geotile.placement(frame, B, 0, 0, 20)), 1e-9, 'turbine heading mapped')
 end
 do                          -- the kept skin: moved into B, lifted q/2 + 3 mm
   local o = objsWith('rs_1_road')[1]
@@ -244,11 +262,14 @@ end
 -- a server restart: the same content hash keeps the objects; another tile's content dropped once far
 roads.newSession()
 local made1 = S.calls['createObject_TSStatic'] or 0
+local turbineHandoffs = #called('windturbines', 'onRows') + #called('windturbines', 'placeRows')
 roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, B)
 run(1, B)
 T.check((S.calls['createObject_TSStatic'] or 0) == made1 and #objsWith('rg_bldcol') == 1,
   'same content hash after a restart: kept, nothing made again')
 T.check(roads.status().geoStats.kept == 1, 'counted as kept')
+T.check(#called('windturbines', 'onRows') + #called('windturbines', 'placeRows') == turbineHandoffs,
+  'same hash resend keeps the turbine owner and objects')
 
 -- a drop goes for good
 roads.onDrop({ anchorId = 1, key = key })
@@ -258,5 +279,13 @@ local droppedTalus = false
 for _, call in ipairs(called('trees','dropKey')) do if call[3]=='g:t'..key then droppedTalus=true end end
 T.check(droppedTalus,'dropping road content also removes its talus Forest instances')
 T.check(#objsWith('threedmr_') == 0, 'dropped: its 3dmr models gone')
+T.check(#called('windturbines', 'dropKey') == 1, 'dropping geotile releases its turbine owner')
+
+-- A newer content record without a turbine reconciles an empty list too.
+roads.onTile({ anchorId = 1, key = key, n = 0, frame = { clat, clon }, h = 'empty',
+  data = { key = key, frame = { clat, clon }, h = 'empty' } }, 1, B)
+local empty = called('windturbines', 'onRows')
+T.check(#empty[#empty][4] == 0, 'content with no turbine hands on an empty list')
+roads.reset()
 
 T.done('test_roadgeo')

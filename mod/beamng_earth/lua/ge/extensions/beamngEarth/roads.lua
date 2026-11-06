@@ -50,14 +50,15 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
-  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json' }
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/median.materials.json' }
 M.FADE = '450 150'          -- distanceFade: start, range (m)
 M.enabled = true
 -- the highway signs (server signstream.py, from cody196's PR #363) and the speed-limit signs (speedsigns.py): sign tiles
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
-M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds' }
+M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -338,7 +339,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs(M.withCliffParts({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol', 'cliff' })) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs(M.withCliffParts({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol', 'cliff' })) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
@@ -359,6 +360,7 @@ local function dropTile(key)
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
+  if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
   tiles[key] = nil
 end
 
@@ -701,6 +703,23 @@ function M.mapStations(pl, recs)
   return out
 end
 
+-- A mapped turbine's identity and dimensions stay intact; only its base and heading belong to the anchor.
+function M.mapTurbines(pl, recs)
+  local out, dyaw = {}, geotile.yawOf(pl)
+  for i, r in ipairs(type(recs) == 'table' and recs or {}) do
+    if type(r) == 'table' then
+      local n = {}
+      for k, v in pairs(r) do n[k] = v end
+      if type(r.x) == 'number' and type(r.y) == 'number' and type(r.z) == 'number' then
+        n.x, n.y, n.z = geotile.apply(pl, r.x, r.y, r.z)
+      end
+      if type(r.yaw) == 'number' then n.yaw = r.yaw + dyaw end
+      out[i] = n
+    end
+  end
+  return out
+end
+
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
@@ -742,6 +761,10 @@ local function geoRows(key, t, data, replacing)
     if t.wells and pj.placeRows then pj.placeRows(key, rows) else pj.onRows(key, rows) end
     t.wells = true
   end
+  local turbines = require('beamngEarth/windturbines')
+  local turbineRows = M.mapTurbines(pl, data.turbines)
+  if replacing then turbines.placeRows(key, turbineRows) else turbines.onRows(key, turbineRows) end
+  t.turbines = #turbineRows > 0
   if type(data.sound) == 'table' and data.sound[1] then
     local amb = require('beamngEarth/ambience')
     local flat = M.mapFlat(pl, data.sound, 8, 2, 8)
@@ -1119,8 +1142,8 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs(M.withCliffParts({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
-      'railcol', 'cliff', 'exits', 'mileposts', 'merges', 'speeds' })) do
+  for _, what in ipairs(M.withCliffParts({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'barrier', 'rail',
+      'railcol', 'cliff', 'exits', 'mileposts', 'merges', 'speeds', 'dirs' })) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1167,6 +1190,8 @@ function M.onTile(msg, currentAnchor, a)
     require('beamngEarth/pumpjacks').onRows(key, data.wells)
     tiles[key].wells = true
   end
+  require('beamngEarth/windturbines').onRows(key, type(data.turbines) == 'table' and data.turbines or {})
+  tiles[key].turbines = type(data.turbines) == 'table' and #data.turbines > 0
   if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
     require('beamngEarth/ambience').onSpaces(key, data.sound)
     tiles[key].sound = true
@@ -1177,6 +1202,9 @@ function M.onTile(msg, currentAnchor, a)
   -- a sign tile (key "s<tx>_<ty>"): its render-only sign shapes, kept in signData for setSignsEnabled
   tiles[key].signOnly = tostring(msg.key):match('^s%-?%d+_') ~= nil
   tiles[key].signData = {}
+  if type(data.dirs_faces) == 'table' then       -- the direction boards' Materials, before their shape (dirsigns.lua)
+    require('beamngEarth/dirsigns').register(data.dirs_faces)
+  end
   for _, what in ipairs(M.SIGN_WHATS) do
     local sign = data[what]
     if type(sign) == 'table' and sign.shape and type(sign.pos) == 'table' then
@@ -1202,7 +1230,7 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs(M.withCliffParts({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol', 'cliff' })) do
+  for _, what in ipairs(M.withCliffParts({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol', 'cliff' })) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
@@ -1623,8 +1651,8 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = M.withCliffParts({ 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'railcol', 'cliff',
-  'exits', 'mileposts', 'merges', 'speeds' })
+local WHATS = M.withCliffParts({ 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'barrier', 'rail', 'railcol', 'cliff',
+  'exits', 'mileposts', 'merges', 'speeds', 'dirs' })
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -1964,6 +1992,7 @@ playerIn = function(boxes, what, t)
     p = { x = x, y = y, z = z }
   end
   local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
+  if what == 'barrier' then r = 1.0 end -- only a car intersecting the narrow median holds its collision
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
       if what == 'deck' then

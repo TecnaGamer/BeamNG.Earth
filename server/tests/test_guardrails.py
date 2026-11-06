@@ -74,7 +74,8 @@ class GuardrailStockAssetTest(unittest.TestCase):
         self.assertIn("local isGuardrail = M.isBarrier(g)", source)
         # the median barriers' and mapped jersey / cable barriers' groups (guardrails.GROUPS)
         for g in guardrails.GROUPS:
-            self.assertIn("M.CATALOG." + g + " = ", source)
+            if not g.startswith("se_"):     # (a table's, test_sesigns)
+                self.assertIn("M.CATALOG." + g + " = ", source)
         self.assertIn("/art/shapes/objects/jerseybarrier_3m", source)
         self.assertTrue(os.path.isfile(os.path.join(root, "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes",
                                                     "beamngEarth", "bne_cable_barrier.dae")))
@@ -132,10 +133,10 @@ class GuardrailForestTest(unittest.TestCase):
                 data = json.load(f)
         self.assertEqual(count, 0)
         self.assertEqual(path, "vfs/roads_7_1_2.json")
-        self.assertEqual(data["guardrails"], {"items": rows,
-                                               "groups": ["guardrail", "guardrail_start", "guardrail_end",
-                                                          "guardrail_back", "guardrail_back_start", "guardrail_back_end",
-                                                          "jersey", "jersey_end", "cable"]})
+        self.assertEqual(data["guardrails"], {"items": rows, "groups": list(guardrails.GROUPS)})
+        self.assertEqual(list(guardrails.GROUPS[:10]), ["guardrail", "guardrail_start", "guardrail_end", "guardrail_back",
+                                                        "guardrail_back_start", "guardrail_back_end", "jersey",
+                                                        "jersey_end", "cable", "kantstolpe"])
         self.assertNotIn("guardrail", roads.shape_files(7, 1, 2))
 
     def test_stock_guardrail_rows_follow_ground_and_have_full_orientation(self):

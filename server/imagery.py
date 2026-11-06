@@ -1006,13 +1006,28 @@ class Imagery:
         """Fetch the lazy sources' tiles ahead of the player (one background thread, nearest first): the
         tiles at the zoom of `texel_m` m texels (the block's base photo) within `radius` m of the ENU
         points (the player's path, in order). Replaces the previous list (the player moved on)."""
-        lazy = [s for s in self.chain if s.lazy]
-        if not lazy or not points:
+        if not points:
             return
         pts = np.asarray(points, float)
         lat, lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
-        if np.abs(lat).max() > MAX_LAT:
+        want = self.route_keys(lat, lon, radius, texel_m)
+        if not want:
             return
+        with self._warm_cv:
+            self._warm_want = want
+            if self._warm_thread is None:
+                self._warm_thread = threading.Thread(target=self._warm_loop, name="img-warm", daemon=True)
+                self._warm_thread.start()
+            self._warm_cv.notify()
+
+    def route_keys(self, lat, lon, radius, texel_m):
+        """The lazy sources' tile keys (src, z, x, y: one per exported parent) at the zoom of `texel_m` m texels within
+        `radius` m of the points (lat, lon arrays, in order: nearest first along a path), each once. Pure on the
+        chain (warm; the route download, Connection.route_download)."""
+        lazy = [s for s in self.chain if s.lazy]
+        lat, lon = np.atleast_1d(np.asarray(lat, float)), np.atleast_1d(np.asarray(lon, float))
+        if not lazy or not len(lat) or np.abs(lat).max() > MAX_LAT:
+            return []
         want, seen = [], set()
         pad = radius / 111000.0 * 2         # deg: a generous margin for the bounds test below
         for la, lo in zip(np.atleast_1d(lat), np.atleast_1d(lon)):
@@ -1021,7 +1036,7 @@ class Imagery:
                     bs, bw, bn, be = src.bounds     # the regional chain: their per-tile loop cost the far field)
                     if la < bs - pad or la > bn + pad or lo < bw - pad or lo > be + pad:
                         continue
-                z = min(zoom_for(float(lat[0]), texel_m), src.max_zoom)
+                z = min(zoom_for(float(la), texel_m), src.max_zoom)     # (each point's: a route spans latitudes)
                 if z < src.min_zoom:
                     continue
                 k = src.export
@@ -1033,32 +1048,54 @@ class Imagery:
                         if key not in seen and in_bounds(*key):
                             seen.add(key)
                             want.append(key)
-        with self._warm_cv:
-            self._warm_want = want
-            if self._warm_thread is None:
-                self._warm_thread = threading.Thread(target=self._warm_loop, name="img-warm", daemon=True)
-                self._warm_thread.start()
-            self._warm_cv.notify()
+        return want
+
+    def key_done(self, key):
+        """Nothing (more) to fetch for a route_keys key (_warm_done, under the lock it needs)."""
+        return self._warm_done(key)
+
+    def fetch_key(self, key):
+        """Fetch one route_keys key now in the calling thread at "prefetch" priority (the route download's thread).
+        False: nothing was fetched (done already); raises ImageryError (deferred: the limiter has no room for a
+        prefetch now; ask again later)."""
+        if self._warm_done(key):
+            return False
+        src, z, x, y = key
+        last = (1 << src.export) - 1
+        old = getattr(self._local, "kind", None)
+        self._local.kind = "prefetch"
+        try:
+            self._download(src, z, x | last, y | last)
+            self._count(src.name + ":route")
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return True
 
     def _warm_loop(self):
         self._local.kind = "prefetch"
         done, want = set(), None    # keys of this list found done: not looked at on disk again at every wake
         while True:
             with self._warm_cv:
-                key = None
-                while key is None:
-                    if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
-                        done, want = set(), self._warm_want
-                    for k in self._warm_want:
-                        if k in done:
-                            continue
-                        if self._warm_done(k):
-                            done.add(k)
-                            continue
-                        key = k
-                        break
-                    if key is None:
+                if self._warm_want is not want:     # a new list (the player moved on): looked at afresh
+                    done, want = set(), self._warm_want
+            # (the disk looked at outside the lock: warm(), on the server's event loop, waits for it, and 28 of the 40
+            # stalls over a second at 200 mph were this list being read, A13 2026-11-04)
+            key = None
+            for k in want:
+                if self._warm_want is not want:
+                    break
+                if k in done:
+                    continue
+                if self._warm_done(k):
+                    done.add(k)
+                    continue
+                key = k
+                break
+            if key is None:
+                with self._warm_cv:
+                    if self._warm_want is want:
                         self._warm_cv.wait()
+                continue
             src, z, x, y = key
             last = (1 << src.export) - 1
             try:

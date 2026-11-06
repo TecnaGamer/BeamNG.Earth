@@ -177,10 +177,10 @@ function setGeoDirect(on) {
   $('location').textContent = ''
 }
 if (geoDirect) setGeoDirect(true)
-const geocodeQuery = (q, lat, lon) => geoDirect ? direct.query(q, lat, lon) : search.query(q, lat, lon)
+const geocodeQuery = (q, lat, lon, full) => geoDirect ? direct.query(q, lat, lon) : search.query(q, lat, lon, 15000, full)
 $('credit').textContent = gc.ATTRIBUTION
 const input = $('where'), list = $('results')
-let results = [], sel = -1, searchSeq = 0, searchTimer = null
+let results = [], sel = -1, searchSeq = 0, searchTimer = null, fullText = ''
 
 function biasPoint() {
   if (minimap.cam) return [minimap.cam.lat, minimap.cam.lon]
@@ -220,19 +220,21 @@ function choose(r) {
 }
 
 // 300 ms after the last key, 3+ characters (EarthMap.vue liveSearch): recent places at once, then earthd's answer
-function liveSearch() {
+function liveSearch(full = false) {
   const text = input.value.trim()
   const seq = ++searchSeq
+  fullText = ''
   $('searchMsg').textContent = ''
   const local = text ? gc.recentHits(text) : []
   showResults(local)
   if (text.length < gc.MIN_CHARS || gc.parseLatLon(text)) return
   $('searchMsg').textContent = 'Searching...'
   const [lat, lon] = biasPoint()
-  geocodeQuery(text, lat, lon).then(r => {
+  geocodeQuery(text, lat, lon, full === true).then(r => {
     if (seq !== searchSeq) return
+    if (full === true) fullText = text
     showResults([...local, ...r.results])
-    $('searchMsg').textContent = results.length ? '' : (r.error || r.text) ? gc.errorText(r) : 'Nothing found'
+    $('searchMsg').textContent = results.length ? '' : (r.error || r.text) ? gc.errorText(r) : full === true ? 'Nothing found' : 'Nothing yet: press Enter to search streets and addresses too'
     if (r.error) console.warn('geocode:', r.error)
   }, e => {
     if (seq !== searchSeq) return
@@ -259,7 +261,9 @@ $('goto').addEventListener('submit', e => {
   if (!text) return
   const ll = gc.parseLatLon(text)
   if (ll) { showResults([]); $('searchMsg').textContent = ''; teleport(ll[0], ll[1]); return }
-  if (results.length) { choose(results[Math.max(0, sel)]); return }
+  // Enter: the full search too (streets and house numbers), unless earthd is sure of the first line; then the first line
+  if (results.length && (sel >= 0 || fullText === text || results[0].sure)) { choose(results[Math.max(0, sel)]); return }
+  if (fullText !== text) { clearTimeout(searchTimer); liveSearch(true); return }
   clearTimeout(searchTimer)
   liveSearch()
 })

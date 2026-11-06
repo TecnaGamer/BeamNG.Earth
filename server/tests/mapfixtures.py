@@ -181,7 +181,7 @@ def chm_tiff(parent, cells, predictor=1):
 # --- Overture --------------------------------------------------------------------------------------
 SEG_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, subclass VARCHAR,
     names STRUCT("primary" VARCHAR), sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR,
-    record_id VARCHAR)[], road_surface STRUCT("value" VARCHAR, "between" DOUBLE[])[],
+    record_id VARCHAR, "between" DOUBLE[])[], road_surface STRUCT("value" VARCHAR, "between" DOUBLE[])[],
     road_flags STRUCT("values" VARCHAR[], "between" DOUBLE[])[],
     rail_flags STRUCT("values" VARCHAR[], "between" DOUBLE[])[], width_rules STRUCT("value" DOUBLE,
     "between" DOUBLE[])[], level_rules STRUCT("value" INTEGER, "between" DOUBLE[])[],
@@ -212,8 +212,11 @@ DIV_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, co
     record_id VARCHAR)[]"""
 DIV_AREA_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, country VARCHAR, region VARCHAR, division_id VARCHAR,
     {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
+DIV_BOUNDARY_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, sources STRUCT(property VARCHAR,
+    dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
 SCHEMAS = {
     ("divisions", "division"): DIV_SCHEMA,
+    ("divisions", "division_boundary"): DIV_BOUNDARY_SCHEMA,
     ("divisions", "division_area"): DIV_AREA_SCHEMA,
     ("transportation", "segment"): SEG_SCHEMA,
     ("transportation", "connector"): CON_SCHEMA,
@@ -224,10 +227,10 @@ SCHEMAS = {
     ("places", "place"): PLACE_SCHEMA,
 }
 OSM = {"property": "", "dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "w1@1"}
+ROUTE = dict(OSM, property="/routes", record_id="r67531@98")      # a numbered road's relation comes first in its sources
+# (seg-01: its relation, then its own ways, GitHub #683)
 MSFT_H = {"property": "/properties/height", "dataset": "Microsoft ML Buildings", "license": "ODbL-1.0",
           "record_id": None}
-# a road in a route relation: Overture lists the relation first, the road's own way after it (GitHub #683)
-ROUTE = {"property": "/routes", "dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "r7@3"}
 
 
 def _cell_xy(fx, fy, cell=CELL):
@@ -255,8 +258,12 @@ def features():
     for i, (cls, sub) in enumerate([("residential", None), ("primary", None), ("footway", "sidewalk"),
                                     ("service", "alley"), ("track", None)]):
         seg.append(dict(id=f"seg-{i:02d}", version=1, subtype="road", **{"class": cls}, subclass=sub,
-                        names={"primary": f"Street {i}"}, sources=[OSM],
+                        names={"primary": f"Street {i}"}, sources=[dict(OSM, between=None)],
                         wkt=_wkt_line([_cell_xy(0.1 + 0.15 * i, 0.2), _cell_xy(0.1 + 0.15 * i, 0.8)])))
+    seg[1]["sources"] = [dict(ROUTE, between=None), dict(OSM, record_id="w2@1", between=[0.0, 0.25]),
+                         dict(OSM, record_id="w3@1", between=[0.25, 1.0])]
+    seg[3]["sources"] = [dict(ROUTE, between=None), dict(OSM, record_id="w4@1", between=None)]
+    seg[4]["sources"] = [dict(ROUTE, between=None)]
     seg[0].update(road_surface=[{"value": "paved", "between": None}],
                   road_flags=[{"values": ["is_bridge", "is_link"], "between": [0.25, 0.5]}],
                   width_rules=[{"value": 9.5, "between": None}],
@@ -265,8 +272,7 @@ def features():
                                 {"max_speed": {"value": 15, "unit": "mph"}, "between": None,
                                  "when": {"heading": "forward"}}],
                   connectors=[{"connector_id": "con-a", "at": 0.0}, {"connector_id": "con-b", "at": 1.0}])
-    seg[1].update(sources=[ROUTE, dict(OSM, record_id="w2@5")],
-                  road_surface=[{"value": "paved", "between": [0.0, 0.5]},
+    seg[1].update(road_surface=[{"value": "paved", "between": [0.0, 0.5]},
                                 {"value": "gravel", "between": [0.5, 1.0]}],
                   speed_limits=[{"max_speed": {"value": 50, "unit": "km/h"}, "between": None, "when": None}],
                   # one-way along the geometry; a delivery-only restriction that must not count
@@ -274,10 +280,10 @@ def features():
                                        {"access_type": "denied", "when": {"heading": "forward", "using": ["as_customer"]},
                                         "between": None}])
     # crosses the east edge: listed here, owned by the east neighbour
-    seg.append(dict(id="seg-edge", version=1, subtype="road", **{"class": "secondary"}, sources=[OSM],
+    seg.append(dict(id="seg-edge", version=1, subtype="road", **{"class": "secondary"}, sources=[dict(OSM, between=None)],
                     wkt=_wkt_line([_cell_xy(0.9, 0.5), _cell_xy(1.6, 0.5)])))
     # an older version of seg-03 in the same file: dropped
-    seg.append(dict(id="seg-03", version=0, subtype="road", **{"class": "motorway"}, sources=[OSM],
+    seg.append(dict(id="seg-03", version=0, subtype="road", **{"class": "motorway"}, sources=[dict(OSM, between=None)],
                     wkt=_wkt_line([_cell_xy(0.5, 0.5), _cell_xy(0.6, 0.6)])))
     con = [dict(id=f"con-{c}", version=1, sources=[OSM], wkt=f"POINT({x!r} {y!r})")
            for c, (x, y) in (("a", _cell_xy(0.1, 0.2)), ("b", _cell_xy(0.1, 0.8)))]
@@ -326,10 +332,17 @@ def features():
                  sources=[OSM], wkt=_wkt_poly([_box(-200, -100, 200, 100)])),
             dict(id="area-county", version=1, subtype="county", country="US", region="US-MD", division_id="d-c",
                  names={"primary": "Baltimore County"}, sources=[OSM], wkt=_wkt_poly([_box(-5, -5, 5, 5)]))]
+    # a country border across the cell's far corner (placenames.pick: towns across it left out), and a region's
+    # border, which the layer's filter leaves out
+    bnd = [dict(id="bnd-us-ca", version=1, subtype="country", **{"class": "land"}, sources=[OSM],
+                wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.9, 0.0), *_cell_xy(1.0, 0.1))),
+           dict(id="bnd-md-pa", version=1, subtype="region", **{"class": "land"}, sources=[OSM],
+                wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.0, 0.9), *_cell_xy(1.0, 0.9)))]
     return {("transportation", "segment"): seg, ("transportation", "connector"): con,
             ("buildings", "building"): bld, ("base", "water"): wat, ("base", "land_use"): lu,
             ("base", "infrastructure"): inf, ("places", "place"): pla,
-            ("divisions", "division"): div, ("divisions", "division_area"): area}
+            ("divisions", "division"): div, ("divisions", "division_area"): area,
+            ("divisions", "division_boundary"): bnd}
 
 
 def _coords(wkt):

@@ -218,6 +218,16 @@ POLICIES = {
     # debounced and cached; a modest rate, a daily cap (fair use of a free public service)
     "photon.komoot.io": HostPolicy(rate=2.0, burst=4.0, max_conc=1, daily_budget=2000, daily_hard=3000,
                                    cache_ttl=7 * DAY, miss_ttl=None, max_wait=5.0, timeout=12.0, max_attempts=1, optional=True),
+    # Nominatim (OpenStreetMap's own geocoder; geocode.py): streets and house numbers when the player presses Enter.
+    # Its usage policy: one request a second at most, no autocomplete, a User-Agent that names the app
+    "nominatim.openstreetmap.org": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
+                                              cache_ttl=7 * DAY, miss_ttl=None, max_wait=2.5, timeout=8.0,
+                                              max_attempts=1, optional=True),
+    # Wikidata and Wikipedia (geocode.py): landmarks as you type, debounced by the map; a modest rate and a User-Agent
+    # that names the app, as their API etiquette asks (the Wikipedias: WIKIPEDIA_LANGS below)
+    "www.wikidata.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                   cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0, max_attempts=1,
+                                   optional=True),
     # OSRM on OpenStreetMap by FOSSGIS (routing.py): one request per GPS destination or re-route; their fair use:
     # ~1 request a second at most, no bulk
     "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=2.0, max_conc=1, daily_budget=300, daily_hard=500,
@@ -258,6 +268,12 @@ POLICIES = {
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
     "build.protomaps.com": HostPolicy(denied=True, daily_hard=0),
 }
+# The Wikipedias the map's search asks (geocode.wiki_langs): by the player's country and the computer's language
+WIKIPEDIA_LANGS = ("en", "de", "fr", "it", "es", "pt", "nl", "pl", "cs", "sk", "sv", "no", "da", "fi", "hu", "ro", "el",
+                   "tr", "ru", "uk", "ja", "ko", "zh", "hr", "sl", "bg", "sr")
+POLICIES.update({f"{lang}.wikipedia.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                                     cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0,
+                                                     max_attempts=1, optional=True) for lang in WIKIPEDIA_LANGS})
 # Any other host: the conservative WMS-type row of §5.2 (2/s, 2 at once, no prefetch).
 # Regional orthophoto services (imagery_regional.py): tile caches at a modest shared rate, exports one at a time.
 # Optional: the global imagery stands in while one is down (Lower Saxony's WMS answered a maintenance page for hours,
@@ -314,13 +330,18 @@ ROLES = {
     "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
-    "photon.komoot.io": "the map's address search",
+    "photon.komoot.io": "the map's address search (the other search sources stand in)",
+    "nominatim.openstreetmap.org": "street and address search on Enter",
+    "www.wikidata.org": "landmarks in the map's search",
     "routing.openstreetmap.de": "GPS routes",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
     "api.github.com": "one-click updates",
     "github.com": "one-click updates",
 }
+
+
+ROLES.update({f"{lang}.wikipedia.org": "landmarks in the map's search" for lang in WIKIPEDIA_LANGS})
 
 
 def role_of(host):

@@ -129,6 +129,37 @@ class SeaCarveTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as other:
             np.testing.assert_array_equal(a, seacarve.SeaCarver(BathyMapData(), other).depth(lat, lon))
 
+    def test_raw_copy_stores_only_the_blocks_with_water(self):
+        """The raw copy keeps the RAW_BLOCK_PX blocks with water (and one land block): a landlocked first visit's
+        cells were 9.4 MB each, 3 % of their pixels water (2026-11-05). Read back the same, lookups and all of it."""
+        n = 1026
+        rng = np.random.default_rng(3)
+        depth = np.zeros((n, n), np.float32)
+        level = np.full((n, n), np.nan, np.float32)
+        outline = np.zeros((n, n), bool)
+        depth[100:140, 600:700] = rng.random((40, 100), np.float32) * 3     # a pond
+        level[98:142, 598:702] = 212.3
+        outline[500:503, :] = True                                          # a river's outline across
+        level[1020:, 1020:] = 0.0                                           # (a level of 0: not land)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "c.rawb.npy")
+            seacarve._write_raw(p, (depth, level, outline))
+            self.assertLess(os.path.getsize(p), 0.15 * n * n * seacarve.RAW_DTYPE.itemsize)
+            got = seacarve._open_raw(p)
+            for a, b in zip(got, (depth, level, outline)):
+                self.assertEqual(a.shape, (n, n))
+                np.testing.assert_array_equal(np.asarray(a), b)
+                j, i = rng.integers(0, n, 3000), rng.integers(0, n, 3000)
+                np.testing.assert_array_equal(a[j, i], b[j, i])
+            self.assertEqual(float(got[1][1025, 1025]), 0.0)
+            del got
+            gc.collect()
+            with open(p, "r+b") as fh:          # damaged: not read (the npz serves, and the copy is written again)
+                fh.seek(-10, 2)
+                fh.truncate()
+            with self.assertRaises(ValueError):
+                seacarve._open_raw(p)
+
     def test_raw_copy_and_older_cells(self):
         """Read back memory-mapped (the raw copy) and from a cell cached before the raw copies (converted): the
         same water as the build."""
@@ -137,15 +168,15 @@ class SeaCarveTest(unittest.TestCase):
         lon = np.array([LON0, LON0 + 0.001, LON0])
         first = seacarve.SeaCarver(BathyMapData(), self.tmp.name)
         a = first.water(lat, lon)
-        raws = glob.glob(os.path.join(self.tmp.name, "**", "*.raw.npy"), recursive=True)
+        raws = glob.glob(os.path.join(self.tmp.name, "**", "*.rawb.npy"), recursive=True)
         self.assertFalse(raws, "no raw copy at a cell's first use (SeaCarver._second_use)")
         first._mem.clear()              # (out of the process's MEM_CELLS: needed again)
         first.water(lat, lon)
-        raws = glob.glob(os.path.join(self.tmp.name, "**", "*.raw.npy"), recursive=True)
+        raws = glob.glob(os.path.join(self.tmp.name, "**", "*.rawb.npy"), recursive=True)
         self.assertTrue(raws, "written at its second use")
         sc = seacarve.SeaCarver(BathyMapData(), self.tmp.name)
         b = sc.water(lat, lon)
-        mapped = next(r for r, _, _ in sc._mem.values() if r is not None)[0]
+        mapped = next(r for r, _, _ in sc._mem.values() if r is not None)[0].data
         self.assertFalse(mapped.flags.owndata or mapped.flags.writeable, "a view of the raw copy's mapping")
         del sc, mapped
         gc.collect()  # the mappings closed: Windows removes no mapped file
@@ -155,7 +186,7 @@ class SeaCarveTest(unittest.TestCase):
         c = csc.water(lat, lon)         # (from the npz, a cell cached before the raw copies)
         csc._mem.clear()
         csc.water(lat, lon)
-        self.assertTrue(glob.glob(os.path.join(self.tmp.name, "**", "*.raw.npy"), recursive=True))
+        self.assertTrue(glob.glob(os.path.join(self.tmp.name, "**", "*.rawb.npy"), recursive=True))
         for x in (b, c):
             np.testing.assert_array_equal(a[0], x[0])
             np.testing.assert_array_equal(a[1], x[1])

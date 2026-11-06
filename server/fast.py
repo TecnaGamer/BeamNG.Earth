@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 150 # robust cliff strip occlusion at coincident clipping vertices
+MIN_VERSION = 151 # combined upstream clearance and cliff strip kernels
 
 
 class NativeMissing(RuntimeError):

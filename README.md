@@ -52,6 +52,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   rivers and streams, waves along coasts and large lakes, the stock tunnel, under-bridge and parking garage echo, refinery
   machinery and power plants, and rain you can hear.
 - Pump jacks at oil wells (OpenStreetMap), animated, with their sounds.
+- Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
 - High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations.
 - The satellite map on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),
@@ -75,6 +76,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   and tram tracks (street track where trams run on the road).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
+- Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
+  (from AnthonyGraceffa's contribution).
+- Worn dirt and gravel roads: potholes, broken patches, the odd deep pit and a lean to one side on minor dirt roads,
+  rougher forest tracks, smoother main gravel roads (from RiDexSS's contribution).
+- Street trees, fire hydrants, benches and bins along sidewalks where the street is really built up (its buildings,
+  shops and land use; from wyo-backroads' contribution).
 - Highway signs on US freeways (from cody196's contribution): green exit signs at 1 mile, 1/2 mile and 1/4 mile and
   in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
   warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in
@@ -83,6 +90,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
+- Direction signs (on by default; Settings > World > Direction signs): a blue, green
+  or yellow advance board beside the road before junctions of major roads, with each way's road numbers (national
+  and European), the places it leads to, and their distances; Ukraine, Czechia, Poland and Germany for now. Cities
+  and towns are written in the local language with their English name under it, villages in the local language
+  only. The boards are drawn from the road network and Overture's places and route numbers, so they are a good
+  guess of a real board, not a copy: the distances are the straight ones scaled to a road's, and the colours and
+  plates follow each country's practice as best known.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
   road's two decks joined across a narrow median; tunnels through hills, with portals, lights and low arches where
@@ -144,8 +158,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 **Map and navigation**
 - A level select with famous places and a **Random location** button (it starts you on a road).
 - World map (**M**): pan and zoom the globe, satellite or street map (EOX) with a roads & labels overlay,
-  borders and place names (the **Layers** button), search for addresses and places as you type (names in the
-  local language in German-, French- and Italian-speaking countries), teleport anywhere. Works with a controller,
+  borders and place names (the **Layers** button), search for landmarks and places as you type and streets and
+  addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Works with a controller,
   laid out like the stock map.
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
@@ -436,6 +450,8 @@ The repository contains only code; all map data is downloaded at runtime and cac
 - Highway signs: OpenStreetMap contributors (ODbL; exit and overhead destinations and mile references, rebuilt
   weekly from the planet by the BeamNG.Earth-data repo); lettering: the Roadgeek 2014 font (MIT, Sammi De Guzman);
   US state outlines: U.S. Census Bureau TIGERweb (public domain).
+- Direction signs: place names, populations and road route numbers from Overture Maps / OpenStreetMap contributors
+  (ODbL); lettering: Overpass (SIL OFL 1.1) and Fira Sans Condensed (SIL OFL 1.1).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).

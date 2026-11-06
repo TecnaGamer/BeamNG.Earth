@@ -425,7 +425,12 @@ def start(exe, user_dir, log_path):
         # cannot find a Linux one by itself)
         args += ["--no-update", "--user-path", game_user_path(user_dir)]
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    kw = {"cwd": os.path.dirname(exe), "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
+    # (it writes Launcher.cfg, Launcher.log and its key in its working folder: a system package's /usr/bin is not
+    # writable, "Failed to write config on disk!" and it quit, 2026-11-04; then the log's folder)
+    cwd = os.path.dirname(exe)
+    if not os.access(cwd, os.W_OK):
+        cwd = os.path.dirname(log_path)
+    kw = {"cwd": cwd, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
     if IS_WIN:
         kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     else:

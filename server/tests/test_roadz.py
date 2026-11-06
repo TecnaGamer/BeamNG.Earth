@@ -428,3 +428,29 @@ class MeasuredRampFromPlanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlowGapsTest(unittest.TestCase):
+    """gap_answers: after one cell's lidar missed LIDAR_GAPS_WAIT_S, the next cells wait LIDAR_GAPS_SLOW_WAIT_S at most
+    (each call waited the full time anew: 43 s of one cold Denver road tile)."""
+
+    def test_second_call_waits_less(self):
+        import tempfile
+        import time
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(roadz, "LIDAR_GAPS_WAIT_S", 0.6), \
+                mock.patch.object(roadz, "LIDAR_GAPS_SLOW_WAIT_S", 0.1), \
+                mock.patch.object(roadz, "sources_at", lambda la, lo, lidar=None: ["lidar"]):
+            rz = roadz.RoadZ(d, object())
+            rz.enabled = rz.lidar = True
+            rz.lines = lambda src, key: time.sleep(3)       # (a slow lidar read: never in time)
+            t0 = time.monotonic()
+            first = rz.gap_answers([(14, 1, 1)])
+            t1 = time.monotonic()
+            second = rz.gap_answers([(14, 2, 2)])
+            t2 = time.monotonic()
+        self.assertEqual(list(first.values()), [None])
+        self.assertEqual(list(second.values()), [None])
+        self.assertGreaterEqual(t1 - t0, 0.55)
+        self.assertLess(t2 - t1, 0.4, "the second cell waited the full time again")

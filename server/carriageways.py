@@ -60,6 +60,9 @@ ROUNDS = 40             # active-set rounds at most
 # earthd's road-tile timeout (300 s) is restarted, its work lost, and the tile built again from the start.
 BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
+COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
+                        # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
+                        # deck 6 m up, and its surface pulled the ground under the deck's approach 2 m down)
 FAMILY = ("motorway", "trunk")
 # per class: steepest grade, K (m of vertical curve per 1 % of grade change: crest and sag alike)
 LIMITS = {"motorway": (0.05, 30.0), "trunk": (0.06, 25.0), "motorway_link": (0.07, 12.0), "trunk_link": (0.08, 10.0)}
@@ -155,6 +158,34 @@ def chains(parts):
         if keys[seq[0][0]] > keys[seq[-1][0]]:
             seq = [(a, not r) for a, r in seq[::-1]]
         out.append(seq)
+    return out
+
+
+def branch_ties(xys, brs, tol=COUPLE_M):
+    """[(chain a, its end sample, chain b, b's sample)]: each chain end (xys: per chain its samples (m, 2); brs: per chain
+    bool (m,), bridge) that lies within tol of another chain's inner sample on the ground (a slip road ending at the
+    joint of an overpass road's parts, or alongside the road it joins, at the road's node or a little short of it: no
+    other chain end meets it there, so the road is no branch point to `chains` and the slip road would be left at its
+    own ground). Held to that sample's height; its chain is solved with the one it meets. Pure."""
+    boxes = [(q.min(0) - tol, q.max(0) + tol) for q in xys]
+    out = []
+    for na, xy in enumerate(xys):
+        for ia in (0, len(xy) - 1):
+            p = xy[ia]
+            best = None
+            for nb, q in enumerate(xys):
+                if nb == na or len(q) < 3 or (p < boxes[nb][0]).any() or (p > boxes[nb][1]).any():
+                    continue
+                if float(np.min(np.hypot(*(q[[0, -1]] - p).T))) <= tol:
+                    continue                    # (an end meeting an end: a branch point, coupled as such)
+                d = np.hypot(*(q[1:-1] - p).T)
+                j = int(np.argmin(d)) + 1
+                if d[j - 1] > tol or (brs[nb][j - 1] and brs[nb][j] and brs[nb][j + 1]):
+                    continue                    # (too far, or on a deck: a road under a bridge is no branch of it)
+                if best is None or d[j - 1] < best[0]:
+                    best = (float(d[j - 1]), nb, j)
+            if best is not None:
+                out.append((na, ia, best[1], best[2]))
     return out
 
 

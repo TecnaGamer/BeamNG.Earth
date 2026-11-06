@@ -107,6 +107,9 @@ def apply(is_small=None):
             farfield.K_TABLE[cells] = {lvl: k * SMALL_FAR_K for lvl, k in table.items()}
         for cells, tex in farfield.TEX_DEFAULT.items():
             farfield.TEX_DEFAULT[cells] = tuple(min(t, SMALL_FAR_TEX) for t in tex)
+    if os.environ.get("BNGE_DEM_MEM_TILES"):        # (A/B: decoded DEM tiles kept per process)
+        import dem
+        dem.MEM_TILES = int(os.environ["BNGE_DEM_MEM_TILES"])
     # every machine: a desktop's server held 13-17 GB in its eleven processes (1-1.5 GB a worker, mostly freed memory
     # its 40-65 threads' arenas kept), next to the game; a 32 GB PC with 4 cores swapped (GitHub #496, 2026-10-30)
     _malloc_small()
@@ -270,6 +273,30 @@ def lower_priority(nice, worker=False):
     if not k32.SetPriorityClass(k32.GetCurrentProcess(), WIN_BELOW_NORMAL):
         raise OSError("SetPriorityClass(below normal) failed")
     return "below normal"
+
+
+# The server's event loop answers every message the game sends (a pose, a block request). In the "below normal" class
+# its thread waited for the interpreter lock like the ~20 busy others of the process: at 200 mph on a first visit (A13,
+# 2 server cores, Windows; 2026-11-04) it lagged 0.5-1 s in the median and up to 15 s (GitHub #725). One step above
+# them it is still inside the process's class, below the game's "normal".
+WIN_THREAD_ABOVE_NORMAL = 1     # THREAD_PRIORITY_ABOVE_NORMAL
+
+
+def raise_thread():
+    """The calling thread one step above the others of its process (Windows; the event loop's, earthd.LOOP_RAISE).
+    Returns the change made, for the log ("thread above normal", None: nothing to do elsewhere)."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # (64-bit handles, as lower_priority's)
+    k32.GetCurrentThread.restype = wintypes.HANDLE
+    k32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+    k32.SetThreadPriority.restype = wintypes.BOOL
+    if not k32.SetThreadPriority(k32.GetCurrentThread(), WIN_THREAD_ABOVE_NORMAL):
+        raise OSError("SetThreadPriority(above normal) failed")
+    return "thread above normal"
 
 
 def road_processes(cpus=None, gb=None):

@@ -502,6 +502,12 @@ class AreaMessagesTest(test_server.ServerHarness):
         self.assertTrue(s.live_busy())
         c.progress_sent = ((1, 1), (26, 26), (0, 0), (10, 10))
         self.assertFalse(s.live_busy())
+        # send_progress's counts as sent: the downloads [in flight, MB, MB/s] last, not a (done, wanted) pair (it
+        # raised "too many values to unpack" in the saved areas' thread, which then never downloaded)
+        c.progress_sent = ((1, 1), (26, 26), (0, 0), (10, 10), (3, 12.4, 1.1))
+        self.assertFalse(s.live_busy())
+        c.progress_sent = ((1, 1), (3, 26), (0, 0), (10, 10), (0, 0.0, 0.0))
+        self.assertTrue(s.live_busy())
         c.vel = (12.0, 5.0)
         self.assertTrue(s.driving())
 

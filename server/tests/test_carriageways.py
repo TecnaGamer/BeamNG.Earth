@@ -46,6 +46,39 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class BranchTieTest(unittest.TestCase):
+    """A slip road's end beside the joint of an overpass road's parts is held to it (branch_ties)."""
+
+    def setUp(self):
+        x = np.arange(0, 201, 4.0)
+        self.road = np.stack([x, np.zeros_like(x)], axis=1)         # (ground to x = 76, a deck from there to 124, ground)
+        self.br_road = (x >= 76) & (x <= 124)
+
+    def link(self, end):
+        return np.array([[end[0] - 60.0, end[1] - 30.0], [end[0] - 30.0, end[1] - 12.0], [end[0], end[1]]])
+
+    def ties(self, end):
+        link = self.link(end)
+        return cw.branch_ties([self.road, link], [self.br_road, np.zeros(len(link), bool)])
+
+    def test_end_short_of_the_joint_is_tied_to_it(self):
+        got = self.ties((76.0, 2.2))
+        self.assertEqual([(a, ia, b) for a, ia, b, _j in got], [(1, 2, 0)])
+        self.assertEqual(got[0][3], 19, "the joint's sample (x = 76)")
+
+    def test_end_beside_a_ground_road_is_tied(self):
+        self.assertEqual(len(self.ties((40.0, 2.0))), 1)
+
+    def test_end_far_off_is_not(self):
+        self.assertEqual(self.ties((76.0, 6.0)), [])
+
+    def test_end_under_a_deck_is_not(self):
+        self.assertEqual(self.ties((100.0, 2.0)), [])
+
+    def test_end_meeting_an_end_is_a_branch_point_not_a_tie(self):
+        self.assertEqual(self.ties((200.0, 1.0)), [])
+
+
 class RegionCacheTest(unittest.TestCase):
     def test_a_region_reads_back_as_written(self):
         import tempfile

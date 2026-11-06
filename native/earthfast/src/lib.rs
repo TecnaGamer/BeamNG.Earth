@@ -3,7 +3,9 @@
 mod cliffstream;
 mod cliffstrips;
 mod clifftransition;
+mod devraster;
 mod cdaez;
+mod clearance;
 mod f32z;
 mod gpu;
 mod traffic;
@@ -28,6 +30,8 @@ mod ribbons;
 mod groundpaint;
 mod medians;
 mod speedsigns;
+mod dirsigns;
+mod dirsigns_face;
 mod cachemap;
 mod areacover;
 mod geotiles;
@@ -1069,7 +1073,7 @@ fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py
     let (h, w, ch) = (a.shape()[0], a.shape()[1], a.shape()[2]);
     let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
     let mut out = vec![0u8; nby * nbx * 16];
-    // block rows in bands across the cores (a 4096² base photo was 0.46 s on one, 2026-10-28)
+    // block rows in bands across the cores (a 4096Â² base photo was 0.46 s on one, 2026-10-28)
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(nby.max(1));
     let rows_per = (nby + threads - 1) / threads.max(1);
     std::thread::scope(|sc| {
@@ -2322,7 +2326,7 @@ pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::n
     let mut out = Vec::new();
     let mut lin: Vec<f32>;
     if h > 1 && w > 1 {
-        // level 1 from the bytes at once (the level-0 floats were 268 MB for a 4096² RGBA photo): the vertical then the
+        // level 1 from the bytes at once (the level-0 floats were 268 MB for a 4096Â² RGBA photo): the vertical then the
         // horizontal averages, in that order, of the same floats
         let (nh, nw) = (h / 2, w / 2);
         let row0 = w * nc;
@@ -5169,7 +5173,7 @@ fn paint_lines<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, segs: PyRea
 }
 
 /// farfield.build_tile's adaptive mesh: the right-triangulated irregular network (RTIN, a 4-8 hierarchy, as Mapbox's
-/// Martini, but with each triangle's true error: every grid point inside it) of a (2^k + 1)² height grid h [j, i]
+/// Martini, but with each triangle's true error: every grid point inside it) of a (2^k + 1)Â² height grid h [j, i]
 /// (j north) whose surface is within max_err (m) of every grid height.
 /// Returns (tris (m, 3) int64: grid indices j * n + i, counter-clockwise from +Z; surf (n, n): the mesh's surface at
 /// every grid point; the largest |surf - h|). The top split is the SW-NE diagonal and the finest cells split SW-NE
@@ -5183,7 +5187,7 @@ fn rtin_mesh<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, f64>, max_err: f64)
     let n = g.nrows();
     let t = n.wrapping_sub(1);
     if g.ncols() != n || n < 3 || !t.is_power_of_two() {
-        return Err(pyo3::exceptions::PyValueError::new_err("rtin_mesh: a (2^k + 1)² grid"));
+        return Err(pyo3::exceptions::PyValueError::new_err("rtin_mesh: a (2^k + 1)Â² grid"));
     }
     let hv: Vec<f64> = g.iter().copied().collect();
     let (tris, surf, worst) = py.allow_threads(|| rtin_core(&hv, n, max_err));
@@ -5299,6 +5303,10 @@ pub(crate) fn rtin_core(hv: &[f64], n: usize, max_err: f64) -> (Vec<[i64; 3]>, V
 
 #[pymodule]
 fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(dirsigns::dirsign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
@@ -5340,6 +5348,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groundpaint::value_noises, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::pad_cover, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::paint_pads, m)?)?;
+    m.add_function(wrap_pyfunction!(devraster::fill_bits, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::photo_ghosts, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::dash_pieces, m)?)?;
     m.add_function(wrap_pyfunction!(power::substation_yard, m)?)?;
@@ -5484,6 +5493,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_normals, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_fill_gaps, m)?)?;
     m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_project, m)?)?;
-    m.add("VERSION", 150)?;
+    m.add_class::<clearance::Clearance>()?;
+    m.add_class::<clearance::DeckLevels>()?;
+    m.add("VERSION", 151)?;
     Ok(())
 }

@@ -86,6 +86,15 @@ local phys = nil        -- { id, x, y, z } of the physics block
 local physStale = false -- tiles were made since it was: made again once a frame makes none
 M.created, M.nudges, M.physMade, M.riversMade, M.riverErrors = 0, 0, 0, 0, 0
 M.RIVER_PREFIX = 'bngEarthRiver_'
+-- Rivers farther than RIVER_HIDE_M from the camera (their box) are hidden, shown again within RIVER_SHOW_M: each River
+-- is a WaterObject with its own per-frame render and reflection setup, ~18 % of the game's main thread at 70 mph on
+-- the A10 west of Genoa (404 Rivers in the 3 x 3 map cells, half of them over 2.4 km away; 2026-11-05). Far off, the
+-- ground photo shows the water. Checked every RIVER_CULL_S.
+M.RIVER_SHOW_M, M.RIVER_HIDE_M, M.RIVER_CULL_S = 1100, 1200, 0.5
+M.riversHidden = 0
+local riverBox = {}     -- key -> { x0, y0, z0, x1, y1, z1 } (the River's world box, read once)
+local riverHidden = {}  -- key -> true while hidden
+local lastCull = -1e9
 M.SUBDIVIDE_MIN, M.SUBDIVIDE_COLUMNS = 6, 8    -- a River's near mesh: at most 8 columns, cells >= 6 m
 
 local function exists(p)
@@ -110,6 +119,7 @@ local function removeAll()
     if o then o:delete() end
   end
   made, madeRivers, madeAnchor = {}, {}, nil
+  riverBox, riverHidden = {}, {}
   removePhys()
 end
 
@@ -259,6 +269,47 @@ end
 
 -- Every frame: the tiles of the server's set for the current anchor exist, the others are gone.
 -- player: { x, y, z, vx, vy, vz } in the anchor frame (or nil).
+-- The distance (m) from p to the box b ({ x0, y0, z0, x1, y1, z1 }): 0 inside it. Pure.
+function M.boxDistance(b, p)
+  local dx = math.max(b[1] - p.x, 0, p.x - b[4])
+  local dy = math.max(b[2] - p.y, 0, p.y - b[5])
+  local dz = math.max(b[3] - p.z, 0, p.z - b[6])
+  return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+-- Hide / show the made Rivers by their distance from the camera (RIVER_HIDE_M / RIVER_SHOW_M).
+local function cullRivers(now)
+  if now - lastCull < M.RIVER_CULL_S then return end
+  lastCull = now
+  local cam = getCameraPosition and getCameraPosition()
+  if not cam then return end
+  local hidden = 0
+  for key, id in pairs(madeRivers) do
+    local o = scenetree.findObjectById(id)
+    if o then
+      local b = riverBox[key]
+      if not b and o.getWorldBox then
+        local wb = o:getWorldBox()
+        if wb and wb.minExtents then
+          local lo, hi = wb.minExtents, wb.maxExtents
+          b = { lo.x, lo.y, lo.z, hi.x, hi.y, hi.z }
+          riverBox[key] = b
+        end
+      end
+      if b then
+        local d = M.boxDistance(b, cam)
+        if riverHidden[key] then
+          if d < M.RIVER_SHOW_M then o:setHidden(false); riverHidden[key] = nil end
+        elseif d > M.RIVER_HIDE_M then
+          o:setHidden(true); riverHidden[key] = true
+        end
+      end
+      if riverHidden[key] then hidden = hidden + 1 end
+    end
+  end
+  M.riversHidden = hidden
+end
+
 function M.update(anchorId, player)
   if want == nil or want.anchorId ~= anchorId then
     if madeAnchor ~= nil then removeAll() end
@@ -276,7 +327,7 @@ function M.update(anchorId, player)
     if not want.rivers[key] then
       local o = scenetree.findObjectById(id)
       if o then o:delete() end
-      madeRivers[key] = nil
+      madeRivers[key], riverBox[key], riverHidden[key] = nil, nil, nil
     end
   end
   local n, nudge = 0, false
@@ -320,6 +371,7 @@ function M.update(anchorId, player)
       M.nudges = M.nudges + 1
     end
   end
+  cullRivers(os.clock())
 end
 
 -- Origin rebase (core.lua finishRebase): the water moves into the new frame now instead of going until the server's
@@ -365,7 +417,7 @@ function M.transform(xf, newAnchorId)
     local o = scenetree.findObjectById(id)
     if o then o:delete() end
   end
-  madeRivers = {}
+  madeRivers, riverBox, riverHidden = {}, {}, {}
   if phys then
     phys.x, phys.y, phys.z = xf:apply(phys.x, phys.y, phys.z)
     local o = scenetree.findObjectById(phys.id)
@@ -384,6 +436,7 @@ end
 -- Level end: the level deletes its objects itself.
 function M.reset()
   want, made, madeRivers, madeAnchor, phys, physStale = nil, {}, {}, nil, nil, false
+  riverBox, riverHidden = {}, {}
   M.riversVersion = M.riversVersion + 1
 end
 
@@ -395,7 +448,8 @@ function M.status()
   local rv = 0
   for _ in pairs(madeRivers) do rv = rv + 1 end
   return { tiles = n, want = w, created = M.created, nudges = M.nudges, physMade = M.physMade,
-    phys = phys and phys.z or nil, rivers = rv, riversMade = M.riversMade, riverErrors = M.riverErrors }
+    phys = phys and phys.z or nil, rivers = rv, riversMade = M.riversMade, riverErrors = M.riverErrors,
+    riversHidden = M.riversHidden }
 end
 
 -- A reloaded module (extensions.reload) deletes the tiles (and the old WaterPlane) the old one left.

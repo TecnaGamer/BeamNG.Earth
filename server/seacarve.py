@@ -49,7 +49,7 @@ BATHY_DOWN = 4              # ~7.5 m pixels
 BATHY_MIN, BATHY_MAX = 1.0, 80.0    # m: a sea floor this deep at least / at most
 BATHY_RETRY_S = 120.0       # s: a cell built without bathymetry is built again after this (in memory)
 SHORE_SLOPE = 0.3           # m/m: with bathymetry, the floor reaches its depth from the shore this steeply
-RAW_MB = 1536               # the uncompressed rasters (memory-mapped; ~9.5 MB a cell) kept at most (earthd's start-up
+RAW_MB = 1536               # the uncompressed rasters (memory-mapped; up to ~9.5 MB a cell) kept at most (earthd's start-up
                             # prune: they grew to 13.7 GB on a Steam Deck beside 0.15 GB of the compressed ones they repeat)
 PX_ZOOM = 16                # raster pixels: Web-Mercator z16 (256 px tiles): 1024 px per z14 cell
 CELL_PX = 256 << (PX_ZOOM - mapcells.ZOOM)      # raster pixels per cell edge (1024)
@@ -117,23 +117,63 @@ EARTH_R = 6371000.0
 # from the compressed npz instead, every lookup of a cell out of a process's MEM_CELLS decoded ~10 MB again (the
 # far tiles near the player and the ground ahead take turns over more cells than that: ~30 s of a Baltimore
 # teleport on a Steam Deck, 2026-10-20).
+# Stored by RAW_BLOCK_PX blocks, only those with water (an index of the cell's blocks, slot 0 a land block they all
+# share): a whole 1026 px raster was 9.4 MB a cell, 3 % of its pixels water in a landlocked first visit (Czech D1,
+# 2026-11-05: 119 cells, 1.1 GB of SSD writes in 15 km; 10.7 % of the 32 px blocks hold any water).
 RAW_DTYPE = np.dtype([("depth", "<f4"), ("level", "<f4"), ("outline", "?")])
+RAW_BLOCK_PX = 32
+RAW_MAGIC = 0x53424b31          # "1KBS": the file's first int32 (then block px, blocks a side, slots, raster px)
+RAW_HEAD = 5                    # int32s before the index
 
 
 def _raw_path(p):
-    return p[:-4] + ".raw.npy" if p else None
+    return p[:-4] + ".rawb.npy" if p else None
+
+
+class _Blocks:
+    """One plane of a block-stored raster (_open_raw) read as the 2-D array it was: a[j, i] for integer (arrays of)
+    indices, .shape, np.asarray(a) for all of it (cell_shores)."""
+    __slots__ = ("idx", "data", "shape", "dtype")
+
+    def __init__(self, idx, data, shape):
+        self.idx, self.data, self.shape, self.dtype = idx, data, shape, data.dtype
+
+    def __getitem__(self, key):
+        j, i = key
+        j, i = np.asarray(j), np.asarray(i)
+        b = RAW_BLOCK_PX
+        return self.data[self.idx[j // b, i // b], j % b, i % b]
+
+    def __array__(self, dtype=None, copy=None):
+        m, b = self.idx.shape[0], RAW_BLOCK_PX
+        a = self.data[self.idx].transpose(0, 2, 1, 3).reshape(m * b, m * b)[:self.shape[0], :self.shape[1]]
+        return a if dtype is None else a.astype(dtype)
 
 
 def _write_raw(raw, r):
     if not raw:
         return
-    a = np.empty(r[0].shape, RAW_DTYPE)
-    a["depth"], a["level"], a["outline"] = r[0], r[1], r[2]
+    n = r[0].shape[0]
+    b = RAW_BLOCK_PX
+    m = -(-n // b)
+    full = np.zeros((m * b, m * b), RAW_DTYPE)
+    full["level"] = np.nan
+    full["depth"][:n, :n], full["level"][:n, :n], full["outline"][:n, :n] = r[0], r[1], r[2]
+    blocks = full.reshape(m, b, m, b).transpose(0, 2, 1, 3)        # (m, m, b, b)
+    used = ((blocks["depth"] != 0) | np.isfinite(blocks["level"]) | blocks["outline"]).any(axis=(2, 3))
+    idx = np.zeros((m, m), "<i4")
+    idx[used] = np.arange(1, int(used.sum()) + 1)
+    land = np.zeros((1, b, b), RAW_DTYPE)                          # (slot 0: land)
+    land["level"] = np.nan
+    data = np.concatenate([land, blocks[used]])
+    head = np.array([RAW_MAGIC, b, m, len(data), n], "<i4")
+    buf = np.concatenate([head.view(np.uint8), idx.view(np.uint8).ravel(),
+                          np.ascontiguousarray(data).view(np.uint8).ravel()])
     tmp = f"{raw}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(os.path.dirname(raw), exist_ok=True)
         with open(tmp, "wb") as fh:
-            np.save(fh, a)
+            np.save(fh, buf)
         staging.replace_cached(tmp, raw)
     except OSError as e:                # (the npz serves)
         log.debug("sea: %s: %s", raw, e)
@@ -144,10 +184,18 @@ def _write_raw(raw, r):
 
 
 def _open_raw(raw):
-    a = np.asarray(np.load(raw, mmap_mode="r", allow_pickle=False))     # (a plain view: np.memmap's per-slice hooks)
-    if a.dtype != RAW_DTYPE or a.ndim != 2:
-        raise ValueError(f"not a raster: {a.dtype} {a.shape}")
-    return a["depth"], a["level"], a["outline"]
+    buf = np.asarray(np.load(raw, mmap_mode="r", allow_pickle=False))   # (a plain view: np.memmap's per-slice hooks)
+    if buf.dtype != np.uint8 or buf.ndim != 1 or len(buf) < 4 * RAW_HEAD:
+        raise ValueError(f"not a raster: {buf.dtype} {buf.shape}")
+    magic, b, m, k, n = (int(v) for v in buf[:4 * RAW_HEAD].view("<i4"))
+    off = 4 * (RAW_HEAD + m * m)
+    if magic != RAW_MAGIC or b != RAW_BLOCK_PX or len(buf) != off + k * b * b * RAW_DTYPE.itemsize or not 0 < n <= m * b:
+        raise ValueError(f"not a raster: {magic:#x} {b} {m} {k} {n}")
+    idx = np.array(buf[4 * RAW_HEAD:off].view("<i4").reshape(m, m))     # (small: read in, not mapped)
+    if idx.min() < 0 or idx.max() >= k:
+        raise ValueError("raster index out of range")
+    data = buf[off:].view(RAW_DTYPE).reshape(k, b, b)
+    return tuple(_Blocks(idx, data[f], (n, n)) for f in ("depth", "level", "outline"))
 
 
 def _merc(lat, lon, z=PX_ZOOM):
@@ -1028,7 +1076,7 @@ def cell_shores(carver, x, y):
     r = carver.raster(x, y)
     if r is None:
         return []
-    depth, level, outline = r
+    depth, level, outline = (np.asarray(a) for a in r)     # (all of it: block-stored ones too, _Blocks)
     wet = (depth > 0) & np.isfinite(level) & ~outline
     sea = wet & (np.abs(level - SEA_E) < 0.01)
     kind = np.ascontiguousarray(np.where(sea, 2, np.where(wet, 1, 0)), np.uint8)

@@ -83,6 +83,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
+| OpenStreetMap wind turbines, distributed by GMWID / Geomermaids | Bundled index; no gameplay requests | Mapped individual turbines worldwide, with installed stock animated shapes. OSM snapshot 2026-10-31; source, license and refresh details in `server/wind_turbines.provenance.json`. | Gameplay uses the bundled copy offline. If the index is missing or damaged, only the verified Happy Jack fallback remains and the server logs a warning. | no runtime host |
 | BeamNG.Earth's weekly data (GitHub Pages) | `tecnagamer.github.io` | Built every week from the whole OpenStreetMap planet by this project: railway details (track gauge, electrification, disused and abandoned lines, level crossings and their barriers) and, in the US, the Federal Railroad Administration's list of the gates, lights and crossbucks at each level crossing. | Railways keep their basic class; level crossings get equipment by road size. | optional |
 | OurAirports | `davidmegginson.github.io` | Airports and their runways (position, length, width, surface), for paved runways and levelled airfields. Fetched about once a week. | The copy on disk is used. | named |
 | 3D Model Repository | `3dmr.eu` | 3D models of landmarks (the Eiffel Tower, the Dragon Bridge in Da Nang, ...) where the map links one: the models near you are looked up and downloaded once, then kept in the cache. Off on the settings page ("3D models from 3dmr.eu"). | The usual buildings and bridges stay there; asked again on a later visit. | optional |
@@ -94,6 +95,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 |---|---|---|---|---|---|
 | Open-Meteo | `api.open-meteo.com` | Real weather (clouds, rain, snow, wind, fog) and the local time zone. | The position you are at. | The weather stays as it is. | optional |
 | Photon (komoot) | `photon.komoot.io` | The map's address and place search. (The status bar's town names no longer come from it: they are read from the Overture Maps data.) | What you type, and your position (to rank nearby results first). | Search says it is unavailable for a moment. | optional |
+| Nominatim (OpenStreetMap) | `nominatim.openstreetmap.org` | The map's street and address search, only when you press Enter (its usage policy forbids autocomplete). What you typed is sent to it, with an area around your position as a bias. |
+| Wikipedia, Wikidata | `en.wikipedia.org`, `de.wikipedia.org`, `fr.wikipedia.org`, `it.wikipedia.org`, `es.wikipedia.org`, `pt.wikipedia.org`, `nl.wikipedia.org`, `pl.wikipedia.org`, `cs.wikipedia.org`, `sk.wikipedia.org`, `sv.wikipedia.org`, `no.wikipedia.org`, `da.wikipedia.org`, `fi.wikipedia.org`, `hu.wikipedia.org`, `ro.wikipedia.org`, `el.wikipedia.org`, `tr.wikipedia.org`, `ru.wikipedia.org`, `uk.wikipedia.org`, `ja.wikipedia.org`, `ko.wikipedia.org`, `zh.wikipedia.org`, `hr.wikipedia.org`, `sl.wikipedia.org`, `bg.wikipedia.org`, `sr.wikipedia.org`, `www.wikidata.org` | Landmarks in the map's search as you type (what you typed is sent; not your position). The answers to "highest bridge in Switzerland" ship with the app (`server/superlatives_data.py`, from Wikidata, CC0). |
 | OSRM routing (FOSSGIS) | `routing.openstreetmap.de` | GPS routes over long distances on the map. | The start and the destination of the route. | No new route until it answers. | optional |
 | EGM2008 gravity model (SourceForge) | `downloads.sourceforge.net` | Real gravity, which differs slightly from place to place (74 MB, downloaded once). | Nothing but the download. | Standard gravity is used. | optional |
 
@@ -113,6 +116,13 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed
   bridges, and their real spans and heights.
 - **The Overture Maps file index**: a copy for when its server does not answer.
+- **Interstate mile references** (`server/mile_markers_us.json`): the restored Michigan DOT and Kentucky
+  Transportation Cabinet inventory from the 1.7.0 custom build, dated 2026-10-23. Source URLs and calibration
+  metadata are included in the file. These supplement the weekly OSM sign shards.
+- **Kentucky I-65/I-75 and southern Indiana I-65 corridors** (`server/ky_interstate_medians.json`):
+  OpenStreetMap contributors (ODbL), Kentucky Transportation Cabinet and Indiana DOT reference posts.
+  The file retains the source credits, snapshot hashes and calibrated 0.2-mile stations. It identifies
+  the custom median treatments; placement uses the currently generated pavement.
 
 ## Never contacted
 

@@ -2,7 +2,7 @@
 
 The server is one Python process: its threads share one interpreter lock, so while three far-tile workers
 built, a physics block took 3-10x longer than alone (land cover 1.4 s instead of 0.1 s), too long to follow a
-car at 58 m/s, where the 512² block moves every 2.2 s. This process builds the blocks the follow and the
+car at 58 m/s, where the 512Â² block moves every 2.2 s. This process builds the blocks the follow and the
 prefetch ask for on a core of its own. It keeps its own DEM reader, road plans (grading.Grader per anchor),
 street widths, height chunks and land-cover reader over the same disk caches. All of them are deterministic,
 so a block built here is the one the server would build (the far tiles, graded in the server process, agree
@@ -21,7 +21,9 @@ import time
 
 import numpy as np
 
+import secrossings
 import dem as demmod
+import development as developmentmod
 import farfield
 import furniture
 import geodesy
@@ -298,7 +300,9 @@ def plan_ahead(g, frame, cx, cy, half):
 
 def ground(frame, la, lo, z):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
-    the sea floor carved in (--sea on)."""
+    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
+    import grading
+    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
     if _s.sea is not None:
@@ -414,6 +418,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         lots = _s.surface.lots(keep["lat"], keep["lon"]) if hasattr(_s.surface, "lots") else None
         if lots:                        # farmland under the carriageways (a field does not cover the asphalt)
             idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
+            idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], lots)   # (golf over it: courses win)
         if road_feats:
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
@@ -530,13 +535,25 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     try:
         # (its own deck heights, on that ground: the road tiles' profiles plan every cell they touch, and the graph's
         # 2.2 km window planned ~50 cells, minutes of a road process on a Windows PC, 2026-10-25)
-        for fid, _spec, xy, z, _lon in _nav_bridges(aid, frame, elev).parts(feats, (x - w, y - w, x + w, y + w)):
-            decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)))
+        bridges = _nav_bridges(aid, frame, elev)
+        for fid, _spec, xy, z, _lon in bridges.parts(feats, (x - w, y - w, x + w, y + w)):
+            decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64),
+                                             bridges.depth_of(fid)))
     except Exception as e:          # no decks: the graph follows the ground under bridges
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
+    tun = {}
+    try:            # (the tunnels the road tiles build: the AI drives through them, navgraph.build; off: AI_TUNNELS)
+        for fid, _spec, xy, z, _lon in () if not navgraphmod.AI_TUNNELS else tunnel_profiles(aid, frame, elev, g).parts(feats, (x - w, y - w, x + w, y + w)):
+            tun.setdefault(navgraphmod.part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2],
+                                                               np.asarray(z, np.float64)))
+    except Exception as e:          # no tunnels: their stretches stay the minimap's only
+        log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
-    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, widths=_s.widths, left_hand=left_hand,
-                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys))
+    nodes = secrossings.read(_s.md, frame, keys) if str(rules.get("country") or "").upper() == "SE" else None
+    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
+                              left_hand=left_hand,
+                              mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
+                              priority=None if nodes is None else nodes["priority"])
     graph["rules"] = rules
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])
@@ -574,7 +591,7 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
 STACK_DUMP_S = float(os.environ.get("BNGE_STACK_DUMP_S", "") or 75.0)   # s before a slow tile's stacks go to the log
 
 
-def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None):
+def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False):
     """signstream.build_tile here: the highway signs of a road tile the mod has (from cody196's PR #363), in a road
     process: its map cells are warm there. Returns (vfs path of the sign tile's JSON, number of meshes)."""
     import signstream
@@ -586,7 +603,7 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     return signstream.build_tile(_s.md, frame, aid, tx, ty, elev, out_dir, vfs_dir,
                                  _s.surface.urban if _s.surface is not None else None, _s.widths, left_hand, mph,
-                                 country)
+                                 country, dirs)
 
 
 def _stack_watch(what):
@@ -816,6 +833,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     cover = []                          # the ground carriageways for the decks' parapets (roadmesh.deck ground=)
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
+    near_cells = roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)
+    nodes = secrossings.read(_s.md, frame, near_cells) if str(country or "").upper() == "SE" else None
+    clearance = [] if buildings else None      # (build_tile's RoadClearance, PR #629: the powerlines' too)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
@@ -825,10 +845,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
-                                 signals=furniture.signals_for(_s.md, frame,
-                                                               roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
+                                 signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
+                                 development=developmentmod.for_tile(_s.md, frame, tx, ty),
+                                 clearance_out=clearance)
     mark("build_tile")
-    chunks += railsmod.tile_chunks(frame, tx, ty, cells)     # railway and tram tracks on the ground
+    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
     mark("rails")
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -893,8 +914,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         low_parapet_decks.clear()
         guardrail_rows = []
     mark("guardrails")
+    import medianbarriers
+    barrier_mesh, barrier_chunks = medianbarriers.tile(_s.md, frame, tx, ty, elev, urban, _s.widths, left_hand)
+    guardrail_rows = medianbarriers.mapped_rows(guardrail_rows, barrier_chunks)
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
-                                                   tx, ty, deck_parts)
+                                                   tx, ty, deck_parts, barrier_chunks)
+    wide = {}                           # (the wider cells' ways, both of these want the same)
+    guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
+                                                     country, guardrail_rows, tx, ty, chunks, wide)
+    guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
+    guardrail_rows = guardrail_rows + _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, _s.widths, left_hand,
+                                                 country, tx, ty, wide)
     mark("medians")
     _piers, _beams = bridges.piers_in(box), bridges.beams_in(box)
     if _bridge_fps:
@@ -946,7 +976,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # past the tile planned the grading of 12 more map cells per road tile (16 cells planned, 40 roads cells read
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                              props, wires)
+                              props, wires, clearance=clearance[0] if clearance else None)
         import fences
         try:
             props.extend(fences.rows(frame, infra_fn, box, elev))
@@ -970,10 +1000,23 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
         mark("powerlines")
+    import windturbines
+    turbine_rows = windturbines.tile_turbines(frame, tx, ty, elev)
+    if getattr(_s, "md", None) is not None:
+        import golf
+        try:
+            land_fn = lambda key: _s.md.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
+            flag_rows = golf.rows(frame, land_fn, box, elev)
+            if flag_rows:
+                props = (props or []) + flag_rows
+        except Exception as ex:
+            log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
+    P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
+    P.turbines = turbine_rows
     return P
 
 
@@ -996,7 +1039,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              custom_entries=P.custom_entries, wells=P.wells, cliff_mesh=P.cliff, bld_none=bool(buildings)) + (P.fuel_pads,)
+                              custom_entries=P.custom_entries, wells=P.wells, cliff_mesh=P.cliff, bld_none=bool(buildings),
+                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -1008,7 +1052,7 @@ GEO_FRAMES_KEPT = 64        # geotile frames' grading views kept per process (_f
 GEO_INPUTS_KEPT = 96        # geotiles' skin inputs kept in memory per process (_skin_inputs)
 EXACT_TOL_COL_M = 0.03      # m a colliding part placed rigidly may be off before it gets its exact variant ...
 EXACT_TOL_M = 0.10          # ... and a render-only part
-GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail")     # parts the car hits ("bld*" too without a bldcol)
+GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail", "barrier")    # parts the car hits ("bld*" too without a bldcol)
 _geo_lock = threading.Lock()
 _geo_graders = {}           # (lat0, lon0) -> grading.Grader view of a geotile's frame
 _geo_inputs = {}            # geotile key -> its skin inputs (dict), the most recently used last
@@ -1087,7 +1131,7 @@ def _content_hash(text, vfs_dir):
 @profile_step('Geometry serialization')
 def _write_geo_content(out_dir, vfs_dir, tile, P):
     """A geotile's content written to the session folder: its shapes (rg_<key>_<what>.cdae, each with its pivot and
-    relief), its rows (props, guard rails, parking, stations, wells, sound) and colliders in its own frame, and the
+    relief), its rows (props, guard rails, parking, stations, wells, turbines, sound) and colliders in its own frame, and the
     skin's inputs (rg_<key>.skin.pkl: the chunks, their deck context and the sidewalk pieces). Returns (vfs path of
     the JSON, chunk count, its info for the tracker: {"h", "parts": {what: {pivot, relief, col}}})."""
     import json
@@ -1106,7 +1150,9 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                                    custom_entries=getattr(P, "custom_entries", None), wells=P.wells, cliff_mesh=P.cliff,
-                                   decals=False)
+                                   decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
+                                   barrier_chunks=getattr(P, "barrier_chunks", ()),
+                                   turbines=getattr(P, "turbines", ()))
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)
@@ -1294,6 +1340,11 @@ def _map_chunks(src, dst, chunks):
         return []
     pts, idx = [], []
     for k, c in enumerate(chunks):
+        jn = c.get('jn')
+        if jn is not None and len(jn):
+            a = np.asarray(jn, np.float64)
+            pts.append(a[:, :3])
+            idx.append((k, 'jn', len(a), 3))
         n = c.get("n")
         if n is not None and len(n):
             a = np.asarray(n, np.float64)
@@ -1562,14 +1613,69 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         watch.cancel()
 
 
-def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, ty, decks=()):
+def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, ty, decks=(), custom=()):
     """The median barriers' Forest rows of a road tile (medians.tile_rows; none where the mapped rows have one; decks:
     the bridges' parts near it), [] if they fail (logged: the tile goes on without them)."""
     import medians
     try:
-        return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks)
+        return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks, custom)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
+    """Sweden's roadside posts' Forest rows of a road tile (kantstolpar.tile_rows), [] if they fail (logged)."""
+    import kantstolpar
+    try:
+        return kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
+    except Exception as ex:
+        log.warning("kantstolpar: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _wide_ways(wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty):
+    """motesfri._ways of a tile, read once in dict wide."""
+    import motesfri
+    import roads as roadsmod
+    if "ways" not in wide:
+        cells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, motesfri.REACH_M)]
+        wide["ways"] = motesfri._ways(frame, cells, box, urban, widths, left_hand)
+    return wide["ways"]
+
+
+def _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, widths, left_hand, country, tx, ty, wide=None):
+    """Sweden's signs' Forest rows of a road tile (sesigns.tile_rows; only there are the wider cells read), [] if they
+    fail (logged). After every barrier's rows: medians takes all that come before them for barriers."""
+    import sesigns
+    try:
+        if str(country or "").upper() not in sesigns.COUNTRIES:
+            return []
+        ways = None
+        if sesigns.wanted(country, near_roads):
+            ways = _wide_ways({} if wide is None else wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty)
+        return sesigns.tile_rows(frame, ways, near_roads, nodes, box, elev, country)
+    except Exception as ex:
+        log.warning("signs: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_hand, country, mapped, tx, ty, chunks=None,
+                   wide=None):
+    """The centre barriers' Forest rows of a road tile on Sweden's 2+1 roads (motesfri.tile_rows; only there are the
+    wider cells read), [] if they fail (logged: the tile goes on without them). chunks gets the lane drops' arrows and
+    its lines bent to them."""
+    import motesfri
+    try:
+        if not motesfri.wanted(country, near_roads):
+            return []
+        ways = _wide_ways({} if wide is None else wide, frame, cell_fn, box, urban, widths, left_hand, tx, ty)
+        if chunks is not None:
+            motesfri.bend_lines(chunks, ways)
+            chunks.extend(motesfri.drop_marks(ways, box))
+        return motesfri.tile_rows(frame, None, box, elev, urban, widths, left_hand, mapped, ways)
+    except Exception as ex:
+        log.warning("2+1 centre barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []
 
 

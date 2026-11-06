@@ -96,6 +96,7 @@ M.SCHEMA = {
   -- the 3D models of landmarks from the open library 3dmr.eu (server threedmr.py; cpupin.player_settings reads it from
   -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
   models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
+  directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -141,7 +142,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'cliffDetail', 'distantCliffFaces', 'cliffFaces', 'cliffRocks', 'cliffDecals', 'roads', 'highwaySigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'cliffDetail', 'distantCliffFaces', 'cliffFaces', 'cliffRocks', 'cliffDecals', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
@@ -496,6 +497,10 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end
   end,
+  directionSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setDirectionSigns then core.setDirectionSigns(v) end
+  end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
@@ -611,12 +616,10 @@ function M.uiState()
     banner = core and core.banner and core.banner() or nil,
     update = core and core.updateInfo and core.updateInfo() or nil,  -- a newer version on GitHub
   }
-  -- server features (status only): weather, gravity, imagery de-shadowing and colour seams
+  -- server features (status only): weather and gravity
   local w = ext('beamngEarth_weather')
   status.weather = w and w.statusLine and w.statusLine() or nil
   status.gravity = w and w.gravityLine and w.gravityLine() or nil
-  status.deshadow = st and st.deshadow or 'off'
-  status.colormatch = st and st.colormatch or 'off'
   -- the download cache: the server's last numbers, fresh ones asked every CACHE_POLL-th call (the page
   -- polls every 2 s while it is open)
   cachePolls = cachePolls + 1
@@ -806,7 +809,7 @@ local function localWeatherBadge()
     localTime = sst and sst.localTime or nil,
     code = m and m.code or nil,
     tempC = m and (m.tempC or m.slTempC) or nil,
-    metric = require('beamngEarth/gps').metric(),      -- (the game's unit: the badge's °C or °F)
+    metric = require('beamngEarth/gps').metric(),      -- (the game's unit: the badge's Â°C or Â°F)
   }
 end
 
@@ -858,13 +861,13 @@ end
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else
 -- { results = {{name, detail, kind, lat, lon}...}, error }). Biased toward the player.
 local geocodeId = 0
-function M.uiGeocode(q)
+function M.uiGeocode(q, full)
   local core = ext('beamngEarth_core')
   if not core or not core.requestGeocode then return { error = 'BeamNG.Earth is not loaded' } end
   local st = core._state and core._state() or nil
   local pl = st and st.player
   geocodeId = geocodeId + 1
-  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon) then
+  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon, full) then
     return { error = 'Companion server not connected' }
   end
   return { id = geocodeId }

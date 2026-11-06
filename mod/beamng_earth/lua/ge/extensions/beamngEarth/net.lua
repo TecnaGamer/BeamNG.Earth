@@ -20,6 +20,12 @@ do
   end
 end
 local RECONNECT_S = 2.0
+-- Off our level (M.setIdle): the retries back off, RECONNECT_S doubling up to IDLE_MAX_S, while no world server
+-- answers. The game with the mod installed and the app closed tried every 2 s on every map, its console full of
+-- connection attempts (GitHub #741); our level loaded (setIdle(false)): every RECONNECT_S again, at once.
+M.IDLE_MAX_S = 30.0
+local idle = false
+local wait = RECONNECT_S
 local CONNECT_TIMEOUT_S = 2.0
 local RECV_CHUNK = 65536
 local MAX_RECV_PER_FRAME = 64 -- chunks; 4 MiB per frame is plenty for JSON control traffic
@@ -70,7 +76,7 @@ local function startConnect()
   end
   if state == 'connected' then
     M.lastError = nil
-    attempts, everConnected = 0, true
+    attempts, everConnected, wait = 0, true, RECONNECT_S
     pcall(sock.setoption, sock, 'tcp-nodelay', true)
     events[#events + 1] = { type = '_connected' }
   end
@@ -80,7 +86,7 @@ local function pollConnect(dt)
   if sock:getpeername() then
     state = 'connected'
     M.lastError = nil
-    attempts, everConnected = 0, true
+    attempts, everConnected, wait = 0, true, RECONNECT_S
     pcall(sock.setoption, sock, 'tcp-nodelay', true)
     events[#events + 1] = { type = '_connected' }
     return
@@ -133,11 +139,25 @@ local function receive(out)
   end
 end
 
+-- Off our level (true): the reconnects back off up to IDLE_MAX_S; false: every RECONNECT_S, the next one at once.
+function M.setIdle(on)
+  on = on and true or false
+  if on == idle then return end
+  idle = on
+  if not on then
+    wait = RECONNECT_S
+    if state == 'disconnected' then timer = RECONNECT_S end
+  end
+end
+
 -- Call once per frame. Returns an array of messages (may be empty).
 function M.update(dt)
   if state == 'disconnected' then
     timer = timer + dt
-    if timer >= RECONNECT_S then startConnect() end
+    if timer >= (idle and wait or RECONNECT_S) then
+      if idle then wait = math.min(M.IDLE_MAX_S, wait * 2) end
+      startConnect()
+    end
   elseif state == 'connecting' then
     pollConnect(dt)
   end

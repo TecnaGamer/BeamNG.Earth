@@ -253,10 +253,40 @@ def ensure_mod_active(user_dir):
     return True
 
 
-def install_mod(user_dir, assume_yes, dry_run, quiet=False):
+def ensure_mods_not_disabled(user_dir):
+    """Undo the game's "mods disabled after an update" (settings/settings.json disableModsAfterUpdate): after a game
+    update BeamNG turns every mod off, and the setting keeps them all off at every start until the player turns them
+    back on in the main menu, so BeamNG.Earth's level was simply missing (Discord, 2026-11-04/05: "the mods were
+    disabled by the game itself after the update"). Clearing it is what the menu's button does
+    (core_modmanager.enableModsAfterUpdate): each mod comes back as its db.json entry says. Only while the game is not
+    running (it keeps its settings in memory and writes them back). True if it changed the file."""
+    path = os.path.join(user_dir, "settings", "settings.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("disableModsAfterUpdate") is not True:
+        return False
+    data["disableModsAfterUpdate"] = False
+    tmp = path + ".bnge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def install_mod(user_dir, assume_yes, dry_run, quiet=False, game_running=False):
     """Copy the mod into the user folder. Returns 'current', 'enabled' (current, but it had been turned off in the
     game's mod list), 'updated', 'installed', 'kept' or None (dry run); quiet: no messages but the notes (the launcher
-    prints one status line)."""
+    prints one status line); game_running: the game is open (its settings are not touched: ensure_mods_not_disabled)."""
     def note(msg):
         if not quiet:
             say(msg)
@@ -266,6 +296,9 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
     packed = os.path.join(user_dir, "mods", MOD_NAME + ".zip")
     if os.path.isfile(packed):
         say(f"Note: there is also a zipped copy at {packed}; remove it so the game does not load two versions.")
+    if not dry_run and not game_running and ensure_mods_not_disabled(user_dir):
+        say("Mods: BeamNG.drive had turned all mods off after its update; turned them back on (as its main menu's "
+            "\"enable mods\" button does).")
     enabled = not dry_run and ensure_mod_active(user_dir)
     if enabled:
         say("Mod: it had been turned off in the game's mod list (a BeamMP server does that); turned it back on.")
