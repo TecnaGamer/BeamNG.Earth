@@ -99,9 +99,9 @@ class RegionStyleTest(unittest.TestCase):
         self.assertGreater(len(pitched), 0.95 * len(hs), "very few flat roofs")
         hipped = sum(h.roof == "hipped" for h in pitched) / len(pitched)
         self.assertAlmostEqual(hipped, 0.65, delta=0.07)
-        metal = sum(h.roof_mat.startswith(bld.ROOF_METAL) for h in pitched) / len(pitched)
+        metal = sum(h.roof_mat.startswith(bld.ROOF_COLORBOND) for h in pitched) / len(pitched)
         self.assertAlmostEqual(metal, 0.65, delta=0.08, msg="Colorbond ~65 %, the rest tile")
-        self.assertEqual(sum(h.roof_mat.startswith((bld.ROOF_METAL, bld.ROOF_SLATE)) for h in pitched), len(pitched))
+        self.assertEqual(sum(h.roof_mat.startswith((bld.ROOF_COLORBOND, bld.ROOF_QTILE)) for h in pitched), len(pitched))
         for h in hs:
             for look in (h.roof_mat, h.facade, h.wall):
                 if look:
@@ -116,10 +116,87 @@ class RegionStyleTest(unittest.TestCase):
         porch = sum(bool(h.porch) for h in hs) / len(hs)
         self.assertAlmostEqual(porch, 0.3, delta=0.06, msg="a modest share of verandahs (the porch)")
         # the tints are multipliers: 0..1, the sheds' and barns' keep the shared ones
-        for k in (*[f"{bld.ROOF_METAL}|q{i}" for i in range(13)], *[f"{bld.ROOF_SLATE}|q{i}" for i in range(4)]):
+        for k in (*[f"{bld.ROOF_COLORBOND}|q{i}" for i in range(13)], *[f"{bld.ROOF_QTILE}|q{i}" for i in range(4)]):
             self.assertTrue(all(0.0 <= v <= 1.0 for v in bld.LOOKS[k][1]), k)
         barn = bld.plan(rect(0, 0, 12, 20), {"class": "barn"}, lat=-27.47, lon=153.02)
         self.assertNotIn("|q", barn.roof_mat)
+
+    def test_queensland_roof_materials_and_scale(self):     # fork
+        """Queensland's pitched roofs: the Colorbond rib sheet and the profiled tile, at their own real scale; the stock
+        roof materials (and the MATERIALS before them) untouched."""
+        self.assertEqual(bld.MATERIALS[:21].index(bld.ROOF_METAL), 8, "existing indices are unchanged: append only")
+        self.assertEqual(bld.MATERIALS[-2:], (bld.ROOF_COLORBOND, bld.ROOF_QTILE))
+        mats = json.loads((Path(__file__).resolve().parents[2] / "mod" / "beamng_earth" / "levels" / "beamng_earth" / "art"
+                           / "shapes" / "beamngEarth" / "buildings.materials.json").read_text(encoding="utf-8"))
+        for name in (bld.ROOF_COLORBOND, bld.ROOF_QTILE, bld.ROOF_METAL, bld.ROOF_SLATE):
+            self.assertIn(name, mats)
+        for name in (bld.ROOF_COLORBOND, bld.ROOF_QTILE):
+            st = mats[name]["Stages"][0]
+            self.assertTrue(st["baseColorMap"].startswith("/assets/materials/tileable/"), "a stock texture, not a copy")
+            self.assertTrue(st["vertColor"])
+            self.assertEqual(st["metallicFactor"], 0)
+        self.assertNotIn("metallicMap", mats[bld.ROOF_COLORBOND]["Stages"][0], "painted steel: not the glossy zinc")
+        # every Queensland house: its roof triangles are in the new materials, never the stock roof ones
+        ci, ti = bld.MATERIALS.index(bld.ROOF_COLORBOND), bld.MATERIALS.index(bld.ROOF_QTILE)
+        old = {bld.MATERIALS.index(bld.ROOF_METAL), bld.MATERIALS.index(bld.ROOF_SLATE)}
+        seen = set()
+        for h in self.houses(-27.47, 153.02, n=60):
+            m = bld.build([(h, 0.0, 1.0)])
+            used = set(m[3].tolist())
+            self.assertFalse(used & old, h.roof_mat)
+            if h.roof == "flat":        # (a few: the flat roof material)
+                continue
+            self.assertIn(ci if h.roof_mat.startswith(bld.ROOF_COLORBOND) else ti, used)
+            seen |= used & {ci, ti}
+        self.assertEqual(seen, {ci, ti}, "both a Colorbond and a tile roof turn up")
+        # the UVs: the same roof in the stock slate material is at ROOF_UV_M; the new ones at their metres per repeat
+        # (every other material's UVs are identical: test_other_regions_roofs_unchanged)
+        for kind, new_mat in (("hipped", bld.ROOF_COLORBOND), ("gabled", bld.ROOF_COLORBOND),
+                              ("hipped", bld.ROOF_QTILE), ("gabled", bld.ROOF_QTILE)):
+            h = bld.plan(rect(0, 0, 9, 14), {"class": "house"}, lat=-27.47, lon=153.02)
+            h.roof, h.roof_mat = kind, f"{new_mat}|q0"
+            mn = bld.build([(h, 0.0, 1.0)])
+            h.roof_mat = f"{bld.ROOF_SLATE}|0"
+            mo = bld.build([(h, 0.0, 1.0)])
+            ni, oi = bld.MATERIALS.index(new_mat), bld.MATERIALS.index(bld.ROOF_SLATE)
+            tn, to = mn[2][mn[3] == ni], mo[2][mo[3] == oi]
+            self.assertEqual(len(tn), len(to))
+            self.assertGreater(len(tn), 0)
+            un, uo = mn[1][tn.ravel()], mo[1][to.ravel()]
+            ru, rv = bld.ROOF_UV_M_OF[new_mat]
+            np.testing.assert_allclose(un[:, 0] * ru, uo[:, 0] * bld.ROOF_UV_M, atol=1e-5)
+            np.testing.assert_allclose(un[:, 1] * rv, uo[:, 1] * bld.ROOF_UV_M, atol=1e-5)
+        self.assertEqual(bld.ROOF_UV_M_OF[bld.ROOF_COLORBOND], (0.95, 0.95), "5 ribs at Trimdek's 190 mm")
+        self.assertEqual(bld.ROOF_UV_M_OF[bld.ROOF_QTILE], (1.32, 2.1), "4 columns of 0.33 m, 5 courses of 0.42 m")
+        # the tints are the target colour / the new texture's mean (MAT_MEAN): the colour they draw at a distance is the target
+        mean = bld.MAT_MEAN[bld.ROOF_COLORBOND]
+        r, g, b, _ = bld._sky_colour(f"{bld.ROOF_COLORBOND}|q2", 1.0)       # Shale Grey (189, 191, 186)
+        self.assertLessEqual(max(abs(r - 189), abs(g - 191), abs(b - 186)), 3)
+        r, g, b, _ = bld._sky_colour(f"{bld.ROOF_QTILE}|q3", 1.0)           # charcoal concrete tile (70, 70, 72)
+        self.assertLessEqual(max(abs(r - 70), abs(g - 70), abs(b - 72)), 3)
+        self.assertEqual(mean, (0.841, 0.841, 0.841))
+
+    def test_other_regions_roofs_unchanged(self):           # fork
+        """build() of buildings outside Queensland (every region's style, tagged metal / tile roofs, custom roof colours,
+        barns) is byte-for-byte what it was before the Queensland roof materials: vertices, UVs, triangles, materials,
+        colours. (digest taken on the code before the change.)"""
+        import hashlib
+        h = hashlib.sha256()
+        rng = np.random.default_rng(11)
+        places = ((39.29, -76.61), (37.36, -118.39), (46.59, 7.91), (52.37, 4.90), (40.42, -3.70), (28.61, 77.21),
+                  (19.43, -99.13), (-33.87, 151.21), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04))
+        for lat, lon in places:
+            for _ in range(8):
+                w, l = rng.uniform(7, 12), rng.uniform(9, 16)
+                ring = np.array([[0, 0], [w, 0], [w, l], [0, l]], float) + rng.uniform(-900, 900, 2)
+                for attrs in ({"class": "house"}, {"class": "barn"}, {"class": "house", "roof_material": "metal"},
+                              {"class": "house", "roof_material": "tile"}, {"class": "house", "roof_color": "#aa3322"}):
+                    spec = bld.plan(ring, attrs, lat=lat, lon=lon)
+                    m = bld.build([(spec, 0.0, 1.0)])
+                    for k in (0, 1, 2, 3, 5):
+                        h.update(np.ascontiguousarray(m[k]).tobytes())
+                    h.update(repr((spec.roof_mat, spec.facade, spec.wall, spec.roof)).encode())
+        self.assertEqual(h.hexdigest(), "d21b52fc32318224baaf183ed90785d74ce5738c35f965db28365c84618a0815")
 
     def test_south_asia_houses(self):
         hs = self.houses(28.61, 77.21)                  # Delhi, India
