@@ -36,6 +36,10 @@ KERNEL = 141                    # earthfast VERSION with dirsign_place / dirsign
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
 PLACES_SHA256 = "aea8360e2b1a5dc51c1b54700b355aa0dfb7e699fee5853f6a3ae0f0e223b989"
+# fork: the snapshot above has no Australian places; this is the same tool's output for AU alone (tools/build_places.py
+# --countries AU, release 2026-10-21.0), its own checksum, so the upstream snapshot stays byte-identical
+PLACES_EXTRA = ((os.path.join(DATA, "places_au_2026-10-21.0.json.gz"),
+                 "16b247288af8c6fc8e85b997b671e69a547c89eae4477381746bcbe1be073e2e"),)
 STYLES_FILE = os.path.join(DATA, "dirsigns_styles.json")
 FONTS = (os.path.join(DATA, "fonts", "Overpass-Bold.ttf"), os.path.join(DATA, "fonts", "FiraSansCondensed-Medium.ttf"))
 FACE_VERSION = 1                # (in every face's hash: a changed drawing is another file)
@@ -63,11 +67,14 @@ class Places:
 
 @lru_cache(maxsize=1)
 def places():
-    with open(PLACES_FILE, "rb") as f:
-        raw = f.read()
-    if hashlib.sha256(raw).hexdigest() != PLACES_SHA256:
-        raise ValueError("place snapshot checksum mismatch")
-    return Places(json.loads(gzip.decompress(raw)))
+    rows = []
+    for path, sha in ((PLACES_FILE, PLACES_SHA256), *PLACES_EXTRA):      # fork: + the extra snapshots
+        with open(path, "rb") as f:
+            raw = f.read()
+        if hashlib.sha256(raw).hexdigest() != sha:
+            raise ValueError("place snapshot checksum mismatch")
+        rows += json.loads(gzip.decompress(raw))["places"]
+    return Places({"places": rows})
 
 
 @lru_cache(maxsize=1)
