@@ -614,6 +614,19 @@ class OverRoadTest(unittest.TestCase):
         self.assertEqual(house.min_h, 0.0)
         self.assertAlmostEqual(bld.road_through(over.ring, [street - 0]), 80.0, delta=2.5)
 
+    def test_a_huge_footprint_with_streets_in_it_is_a_site_left_out(self):
+        # OSM's 1.35 km2 "Blueberry Commons" by I-94 (Huntley MT, 2026-11-05): a planned development tagged building,
+        # its streets inside, lifted over them as a 15 m wall over the prairie. A footprint over SITE_M2 that public
+        # roads run through is left out; the same size without a road in it (a real warehouse) stays
+        side = 400.0                                            # 16 ha
+        b = Feats(["S"], [self.ll(-72, -72, side, side)], **{"class": ["retail"], "height": [15.0]})
+        street = np.array([[-100.0, 128.0], [400.0, 128.0]])
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        self.assertGreater(side * side, bld.SITE_M2)
+        self.assertEqual(bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=[street]), [])
+        far = np.array([[-100.0, 600.0], [400.0, 600.0]])
+        self.assertEqual(len(bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=[far])), 1)
+
     def test_a_geosearch_hit_is_returned_as_custom(self):
         # a 3dmr.eu model found by geo-search (road_tile_items, threedmr.search_ids/model_info): the footprints
         # stay procedural, the model is returned alongside them as custom

@@ -1229,6 +1229,7 @@ local function onMessage(msg)
   elseif t == 'areas' then
     -- the saved areas downloaded ahead (server areas.py): the list and progress; result answers an area_add / area_cmd
     M._areas = msg
+    M.fastAreaPause(msg.fast)
     if type(msg.result) == 'table' and msg.result.id then M._areaResults = { [msg.result.id] = msg.result } end
   elseif t == 'area_plan_result' then
     if msg.id then M._areaPlans = { [msg.id] = msg } end
@@ -2778,9 +2779,10 @@ function M.requestRoutePlan(id, half, mode)
   net.send({ type = 'area_plan', id = id, route = 'current', half = half, mode = mode })
   return true
 end
-function M.routeAdd(id, half, name, mode)
+function M.routeAdd(id, half, name, mode, fastOn)
   if not net.isConnected() then return false end
-  net.send({ type = 'area_add', id = id, route = 'current', half = half, name = name, mode = mode })
+  net.send({ type = 'area_add', id = id, route = 'current', half = half, name = name, mode = mode,
+             fast = fastOn == true })
   return true
 end
 function M.takeAreaPlan(id)
@@ -2789,9 +2791,26 @@ function M.takeAreaPlan(id)
   all[id] = nil
   return r
 end
-function M.areaAdd(id, s, w, n, e, name, mode)
+-- Fast pre-cache (server areas.py fast mode; Tann2019, 2026-11-05: "use all my cores, pause the game physics"): while
+-- the 'areas' message names an area running fast the game's physics are paused (simhold: in BeamMP our own car held),
+-- and let go when it no longer does (done, waiting, stopped); only a pause we made is let go.
+M._fastHeld = false
+function M.fastAreaPause(fastId)
+  local on = type(fastId) == 'string' and fastId ~= ''
+  if on == M._fastHeld then return end
+  M._fastHeld = on
+  local simhold = require('beamngEarth/simhold')
+  if on then
+    log('I', 'beamngEarth', 'fast pre-cache of ' .. fastId .. ': the game paused while it runs')
+    simhold.pause(true)
+  else
+    log('I', 'beamngEarth', 'fast pre-cache over: the game goes on')
+    simhold.pause(false)
+  end
+end
+function M.areaAdd(id, s, w, n, e, name, mode, fastOn)
   if not net.isConnected() then return false end
-  net.send({ type = 'area_add', id = id, s = s, w = w, n = n, e = e, name = name, mode = mode })
+  net.send({ type = 'area_add', id = id, s = s, w = w, n = n, e = e, name = name, mode = mode, fast = fastOn == true })
   return true
 end
 function M.areaCmd(id, area, op)
