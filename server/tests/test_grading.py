@@ -411,7 +411,7 @@ class DirtTest(unittest.TestCase):
         xy = self.xy()
         lane = grading.dirt_bumps(xy, roads.Spec(4.0, "dirt", False, "residential"), len(xy))
         main = grading.dirt_bumps(xy, roads.Spec(7.0, "dirt", False, "secondary"), len(xy))
-        self.assertGreater(float(np.std(lane)), 0.05, "a lane has holes in it")
+        self.assertGreater(float(np.std(lane)), 0.005, "a lane keeps small holes in it")
         self.assertLess(float(np.std(main)), 0.5 * float(np.std(lane)), "a road signed as a main one stays smoother")
 
     @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
@@ -427,7 +427,7 @@ class DirtTest(unittest.TestCase):
         b = grading.dirt_bumps(xy, roads.Spec(3.5, "dirt", False, "residential"), len(xy))
         self.assertEqual(float(b[0]), 0.0)
         self.assertEqual(float(b[-1]), 0.0)
-        self.assertGreater(float(np.abs(b).max()), 0.1, "the middle still has its damage")
+        self.assertGreater(float(np.abs(b).max()), 0.015, "the middle still has its damage")
 
     @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_damage_does_not_sink_the_road(self):
@@ -443,7 +443,7 @@ class DirtTest(unittest.TestCase):
         b = grading.bank(xy, roads.Spec(3.5, "dirt", False, "track"))
         self.assertIsNotNone(b)
         self.assertEqual(len(b), len(xy))
-        self.assertGreater(float(np.std(b)), 0.01, "now the left side is low, now the right")
+        self.assertGreater(float(np.std(b)), 0.003, "now the left side is low, now the right")
         self.assertLessEqual(float(np.abs(b).max()), 2.0 * grading.DIRT_BANK_M, "a lean, not a wall")
 
     @unittest.skipIf(grading.DIRT_BANK_M <= 0.0, "BNE_DIRT_BANK 0")
@@ -499,8 +499,8 @@ class DirtTest(unittest.TestCase):
         with unittest.mock.patch.object(grading, "DIRT_ROUGH", 1.0):
             for offset in (0.0, 100.0, 500.0):
                 b = grading.dirt_bumps(self.xy() + [offset, 0.0], sp, 400)
-                self.assertGreaterEqual(float(b.min()), -0.5 - 1e-9, "overlapping pits do not become a trench")
-                self.assertLessEqual(float(b.max()), 0.15 + 1e-9, "removing the mean must not build hills")
+                self.assertGreaterEqual(float(b.min()), -0.08 - 1e-9, "overlapping pits do not become a trench")
+                self.assertLessEqual(float(b.max()), 0.025 + 1e-9, "removing the mean must not build hills")
 
     @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_damage_step_limit_uses_the_sample_distance(self):
@@ -511,6 +511,25 @@ class DirtTest(unittest.TestCase):
         plan = grading._plan(xy, ground, sp, step=step)
         limit = grading.DIRT_STEP_MAX_M * 1.6 * step / grading.PROFILE_STEP
         self.assertLessEqual(float(np.abs(np.diff(plan.z - ground)).max()), limit + 1e-9)
+
+    def test_a_flat_track_does_not_turn_into_hills_across_its_width(self):
+        # The first fix bounded the centreline alone. The unchanged random bank still tilted a 3.5 m track by
+        # ~0.8 m edge to edge at Mering (48.27726, 10.97645). Test the native grading output across the full width.
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        for offset in (0.0, 100.0, 500.0):
+            xy = self.xy() + [offset, 0.0]
+            plan = grading._plan(xy, np.full(len(xy), 100.0), sp)
+            x, y = np.meshgrid(np.arange(offset + 40.0, offset + 750.0, 1.0), np.linspace(-1.75, 1.75, 9))
+            z = grading.grade_points(x.ravel(), y.ravel(), np.full(x.size, 100.0), [plan])
+            self.assertLess(float(np.abs(z - 100.0).max()), 0.12,
+                            "the whole graded carriageway keeps centimetre-scale wear on flat ground")
+
+    def test_random_lean_is_bounded_in_metres_for_wide_roads_too(self):
+        xy = self.xy()
+        for width in (2.0, 3.5, 7.0, 12.0):
+            b = grading.dirt_bank(xy, roads.Spec(width, "gravel", False, "track"))
+            self.assertLessEqual(float(np.abs(b).max()) * width / 2, 0.04 + 1e-9,
+                                 "the synthetic tilt raises a road edge at most four centimetres")
 
 
 class GraderTest(unittest.TestCase):
