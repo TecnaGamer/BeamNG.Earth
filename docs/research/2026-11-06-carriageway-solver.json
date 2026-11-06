@@ -1,0 +1,416 @@
+{
+  "date": "2026-11-06",
+  "workload": "synthetic-v1",
+  "baseline_commit": "8a0165ce",
+  "machine": {
+    "os": "Windows",
+    "cpu": "Intel Core i5-10600 @ 3.30 GHz",
+    "python": "3.10.11",
+    "numpy": "2.2.3",
+    "scipy": "1.15.3"
+  },
+  "native_profile": "release",
+  "native_api": 153,
+  "repeats": 5,
+  "scope": "Offline solver calls, no game/audio/UI; sequential workloads, no concurrent benchmark runs.",
+  "baseline": [
+    {
+      "case": "coarse_profile",
+      "chains": 1,
+      "samples": 501,
+      "couplings": 0,
+      "median_s": 0.0006298999069258571,
+      "repeats": 5,
+      "timings_s": [
+        0.0008274000138044357,
+        0.0006336000515148044,
+        0.0006281000096350908,
+        0.0006298999069258571,
+        0.0006133000133559108
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true
+    },
+    {
+      "case": "long_profile",
+      "chains": 1,
+      "samples": 12001,
+      "couplings": 0,
+      "median_s": 0.013595900032669306,
+      "repeats": 5,
+      "timings_s": [
+        0.013586399960331619,
+        0.013749900041148067,
+        0.013616399955935776,
+        0.013595900032669306,
+        0.013591299997642636
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true
+    },
+    {
+      "case": "junctions_150",
+      "chains": 150,
+      "samples": 12150,
+      "couplings": 149,
+      "median_s": 0.035350300022400916,
+      "repeats": 5,
+      "timings_s": [
+        0.03775459993630648,
+        0.035350300022400916,
+        0.034821199951693416,
+        0.03485930000897497,
+        0.037571400054730475
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 6.247463341324533e-05,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true
+    },
+    {
+      "case": "redundant_junctions_150",
+      "chains": 150,
+      "samples": 12150,
+      "couplings": 297,
+      "median_s": 0.037890999927185476,
+      "repeats": 5,
+      "timings_s": [
+        0.0386228000279516,
+        0.03894860006403178,
+        0.037890999927185476,
+        0.03693329996895045,
+        0.03785520000383258
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 1.6850294208836658e-06,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true
+    },
+    {
+      "case": "stacked_corridor",
+      "chains": 5,
+      "samples": 1505,
+      "couplings": 28,
+      "median_s": 0.23913330002687871,
+      "repeats": 5,
+      "timings_s": [
+        0.2402132999850437,
+        0.24307450000196695,
+        0.23913330002687871,
+        0.23345549998339266,
+        0.23272570001427084
+      ],
+      "residuals": {
+        "grade_excess": 0.13490780502725103,
+        "curve_excess": 0.010878990027721488,
+        "bound_error_m": 11.13526087050559,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.028965093888109195
+      },
+      "finite": true
+    },
+    {
+      "case": "shallow_overlap",
+      "chains": 2,
+      "samples": 802,
+      "couplings": 161,
+      "median_s": 1.169733399990946,
+      "repeats": 5,
+      "timings_s": [
+        1.1603491998976097,
+        1.1607057000510395,
+        1.1760978000238538,
+        1.169733399990946,
+        1.224913700018078
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0006696105400678298,
+        "bound_error_m": 0.37764096515456913,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.018321843011881
+      },
+      "finite": true
+    }
+  ],
+  "native": [
+    {
+      "case": "coarse_profile",
+      "chains": 1,
+      "samples": 501,
+      "couplings": 0,
+      "median_s": 9.449990466237068e-05,
+      "repeats": 5,
+      "timings_s": [
+        0.003299199976027012,
+        0.00011620006989687681,
+        9.449990466237068e-05,
+        8.830009028315544e-05,
+        8.349993731826544e-05
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true,
+      "diagnostics": {
+        "rounds": 0,
+        "timed_out": false,
+        "converged": true,
+        "status": "Unconstrained",
+        "backend": "banded",
+        "infeasible": false,
+        "objective_nnz": 0,
+        "constraint_nnz": 0,
+        "constraint_rows": 0,
+        "factor_nnz": 0,
+        "feasible": true,
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "lower_shortfall_m": 0.0,
+        "upper_excess_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0,
+        "elapsed_s": 2.99e-05
+      }
+    },
+    {
+      "case": "long_profile",
+      "chains": 1,
+      "samples": 12001,
+      "couplings": 0,
+      "median_s": 0.0029715000418946147,
+      "repeats": 5,
+      "timings_s": [
+        0.003117699990980327,
+        0.0029715000418946147,
+        0.0028108999831601977,
+        0.0028355999384075403,
+        0.003294300055131316
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true,
+      "diagnostics": {
+        "rounds": 0,
+        "timed_out": false,
+        "converged": true,
+        "status": "Unconstrained",
+        "backend": "banded",
+        "infeasible": false,
+        "objective_nnz": 0,
+        "constraint_nnz": 0,
+        "constraint_rows": 0,
+        "factor_nnz": 0,
+        "feasible": true,
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "lower_shortfall_m": 0.0,
+        "upper_excess_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0,
+        "elapsed_s": 0.0026295
+      }
+    },
+    {
+      "case": "junctions_150",
+      "chains": 150,
+      "samples": 12150,
+      "couplings": 149,
+      "median_s": 0.14057899999897927,
+      "repeats": 5,
+      "timings_s": [
+        0.14610280003398657,
+        0.14471370005048811,
+        0.13745909999124706,
+        0.13932590000331402,
+        0.14057899999897927
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true,
+      "diagnostics": {
+        "rounds": 6,
+        "timed_out": false,
+        "converged": true,
+        "status": "Solved",
+        "backend": "sparse_qp",
+        "infeasible": false,
+        "objective_nnz": 36000,
+        "constraint_nnz": 119398,
+        "constraint_rows": 47849,
+        "factor_nnz": 143397,
+        "feasible": true,
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "lower_shortfall_m": 0.0,
+        "upper_excess_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0,
+        "elapsed_s": 0.1368816
+      }
+    },
+    {
+      "case": "redundant_junctions_150",
+      "chains": 150,
+      "samples": 12150,
+      "couplings": 297,
+      "median_s": 0.14104540005791932,
+      "repeats": 5,
+      "timings_s": [
+        0.1377640999853611,
+        0.14104540005791932,
+        0.14102699991781265,
+        0.14552400005050004,
+        0.14377949992194772
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true,
+      "diagnostics": {
+        "rounds": 6,
+        "timed_out": false,
+        "converged": true,
+        "status": "Solved",
+        "backend": "sparse_qp",
+        "infeasible": false,
+        "objective_nnz": 36000,
+        "constraint_nnz": 119694,
+        "constraint_rows": 47997,
+        "factor_nnz": 143841,
+        "feasible": true,
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "lower_shortfall_m": 0.0,
+        "upper_excess_m": 0.0,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0,
+        "elapsed_s": 0.1399721
+      }
+    },
+    {
+      "case": "stacked_corridor",
+      "chains": 5,
+      "samples": 1505,
+      "couplings": 28,
+      "median_s": 0.026683400035835803,
+      "repeats": 5,
+      "timings_s": [
+        0.026811899966560304,
+        0.026683400035835803,
+        0.026460999972186983,
+        0.028688599937595427,
+        0.026502700056880713
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "bound_error_m": 7.105427357601002e-15,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true,
+      "diagnostics": {
+        "rounds": 13,
+        "timed_out": false,
+        "converged": true,
+        "status": "Solved",
+        "backend": "sparse_qp",
+        "infeasible": false,
+        "objective_nnz": 4500,
+        "constraint_nnz": 15327,
+        "constraint_rows": 6319,
+        "factor_nnz": 18687,
+        "feasible": true,
+        "grade_excess": 0.0,
+        "curve_excess": 0.0,
+        "lower_shortfall_m": 7.105427357601002e-15,
+        "upper_excess_m": 3.552713678800501e-15,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0,
+        "elapsed_s": 0.0259312
+      }
+    },
+    {
+      "case": "shallow_overlap",
+      "chains": 2,
+      "samples": 802,
+      "couplings": 161,
+      "median_s": 0.023386499960906804,
+      "repeats": 5,
+      "timings_s": [
+        0.023440000019036233,
+        0.022966800024732947,
+        0.023363200016319752,
+        0.023386499960906804,
+        0.023636800004169345
+      ],
+      "residuals": {
+        "grade_excess": 0.0,
+        "curve_excess": 1.8534436138639698e-16,
+        "bound_error_m": 1.0658141036401503e-14,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0
+      },
+      "finite": true,
+      "diagnostics": {
+        "rounds": 23,
+        "timed_out": false,
+        "converged": true,
+        "status": "Solved",
+        "backend": "sparse_qp",
+        "infeasible": false,
+        "objective_nnz": 2400,
+        "constraint_nnz": 8711,
+        "constraint_rows": 3758,
+        "factor_nnz": 10947,
+        "feasible": true,
+        "grade_excess": 0.0,
+        "curve_excess": 1.8534436138639698e-16,
+        "lower_shortfall_m": 3.552713678800501e-15,
+        "upper_excess_m": 1.0658141036401503e-14,
+        "junction_gap_m": 0.0,
+        "clearance_shortfall_m": 0.0,
+        "elapsed_s": 0.0231535
+      }
+    }
+  ]
+}
