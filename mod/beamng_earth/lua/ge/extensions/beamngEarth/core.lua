@@ -912,16 +912,22 @@ function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
 local function onMessage(msg)
   local t = msg.type
   if t == '_connected' then
+    if not net.isCurrent(msg) then return end -- a queued event of an already-replaced transport cannot start a snapshot
     -- sessions: the session folders our far tiles still use (a restarted server keeps them)
     -- slotsHeld: the pooled shape slots our objects hold, if the server is the one that sent them (a reconnect)
-    local held
-    if farfield.session() then
-      held = farfield.slotsHeld(farfield.session())
-      for _, h in ipairs(roads.slotsHeld(farfield.session())) do held[#held + 1] = h end
+    local leaseSession, leaseId = net.lease()
+    local snapshotSession = leaseSession or farfield.session()
+    local held = {}
+    if snapshotSession then
+      held = farfield.slotsHeld(snapshotSession)
+      for _, h in ipairs(roads.slotsHeld(snapshotSession)) do held[#held + 1] = h end
     end
+    local anchors = (snapshotSession == farfield.session()) and farfield.heldAnchors() or {}
+    if snapshotSession and snapshotSession == farfield.session() and st.anchorId then anchors[#anchors + 1] = st.anchorId end
     -- vegFlat: the vegetation tiles may come as one flat array of numbers (trees.lua onTile), no table per tree
     net.send({ type = 'hello', protocol = PROTOCOL, format = FORMAT, modVersion = MOD_VERSION,
-      sessions = roads.allHeldSessions(), slotSession = farfield.session(), slotsHeld = held, vegFlat = true,
+      streamLease = 1, leaseSession = leaseSession, leaseId = leaseId,
+      sessions = roads.allHeldSessions(), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,
       geoTiles = require('beamngEarth/geotile').Z,
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
@@ -950,6 +956,11 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    if msg.streamLease == 1 and type(msg.leaseId) == 'string' then
+      net.serverHello(msg.sessionId, msg.leaseId, msg)
+    else
+      net.serverHello(nil, nil, msg)
+    end
     require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
     st.sessionId = msg.sessionId
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
@@ -1533,7 +1544,7 @@ local function updateWorld(dt)
   -- nor between a rebase's two phases (st.rebasing): the car is already in the new frame while st.anchorId is still the
   -- old one, and the server, reading that position in the old frame, dropped every road tile around the car at each
   -- rebase (2026-10-17, 100 mph on the salt flats: 42 road tiles -> 0 at the rebase)
-  if st.poseTimer >= POSE_INTERVAL and net.isConnected() and anchorKnown() and not st.rebasing then
+  if st.poseTimer >= POSE_INTERVAL and net.isReady() and anchorKnown() and not st.rebasing then
     st.poseTimer = 0
     local c = st.cam
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor

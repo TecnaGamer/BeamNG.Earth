@@ -93,6 +93,8 @@ MOD_TO_SERVER = {
     "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "sessions": F((list, dict), OPT),
               # a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session
               "slotSession": F(str, OPT), "slotsHeld": F((list, dict), OPT),
+              "streamLease": F(int, OPT), "leaseId": F(str, OPT), "leaseSession": F(str, OPT),
+              "held": F((list, dict), OPT),
               # the mod reads a vegetation tile as one flat array (veg_tile's data: {groups, stride, flat}; trees.lua)
               "vegFlat": F(bool, OPT),
               # the mod places geotiles itself (geotile.lua's zoom: 17): the server sends their content once, kept
@@ -235,6 +237,7 @@ SERVER_TO_MOD = {
     "runtime_profiler_pong": {"probe": F(int)},
     "runtime_profiler": {"profile": F(dict)},
     "hello": {"runtimeProfiler": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
+              "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
