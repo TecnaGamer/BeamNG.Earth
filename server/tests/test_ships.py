@@ -1,6 +1,7 @@
 """Moored ships drawn as hulls (ships.py), and the quay beside one kept flat."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,9 @@ class ShipTest(unittest.TestCase):
     def setUp(self):
         import geodesy
         self.f = geodesy.EnuFrame(33.742, -118.2775)
+        patcher = mock.patch.object(ships, "RIVER_ABOVE_M", 0.0)    # (flat ground 0: the waterline at 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def ll(self, pts):
         p = np.array(pts + pts[:1], np.float64)
@@ -54,6 +58,24 @@ class ShipTest(unittest.TestCase):
         # its collision is the hull to the deck, not the masts
         C = bld.collision_mesh([got[11]])[0]
         self.assertLess(C[:, 2].max(), ship.floor_h + 0.01)
+
+    def test_a_ship_floats_on_the_water_not_on_the_ground_under_it(self):
+        def run(ground):
+            b = Feats(["H"], [self.ll(HULL)], **{"class": [""], "height": [17.0], "name": [""],
+                                                 "src_dataset": ["OpenStreetMap"]})
+            return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, water_xy=WATER)[0]
+        uneven = lambda la, lo: np.linspace(-9.0, 6.0, np.size(la))     # a carved bed and a bank under one hull
+        self.addCleanup(setattr, ships, "water_at", None)
+        ships.water_at = lambda la, lo: (np.ones(np.shape(la)), np.where(np.arange(np.size(la)) % 3, 2.0, np.nan))
+        s, g0, g1 = run(uneven)
+        up = float(self.f.geodetic_to_enu(33.742, -118.2775, 2.0)[2])
+        self.assertEqual(s.cls, "ship")
+        self.assertAlmostEqual(g0, up, delta=0.05, msg="on the level, whatever the ground")
+        self.assertEqual(g0, g1)
+        ships.water_at = lambda la, lo: (np.zeros(np.shape(la)), np.full(np.shape(la), np.nan))
+        ships.RIVER_ABOVE_M = 0.25
+        s, g0, g1 = run(uneven)                 # no level known here: just over the channel, never on the bank
+        self.assertAlmostEqual(g0, -9.0 + ships.RIVER_ABOVE_M, delta=0.05)
 
     def test_on_land_unnamed_it_stays_a_building(self):
         got = self.items(water_xy=None)
