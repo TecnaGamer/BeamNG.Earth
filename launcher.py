@@ -331,6 +331,47 @@ def server_port_busy(port=SERVER_PORT):
         return False
 
 
+def _startup_tail(log_path):
+    """A bounded, complete-line tail: startup failures can produce very large tracebacks/logs."""
+    try:
+        with open(log_path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            start = max(0, stream.tell() - 65536)
+            stream.seek(start)
+            tail = stream.read(65536)
+        return tail.partition(b"\n")[2] if start else tail
+    except OSError:
+        return b""
+
+
+def _startup_phase(tail):
+    phase = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " INFO earthd: startup: " in line:
+            phase = line.split(" INFO earthd: startup: ", 1)[1][:180]
+    return phase
+
+
+def server_start_diagnostic(proc, log_path):
+    """Describe exit versus deadline and the last known step/error, without dumping the whole log."""
+    import re
+    tail = _startup_tail(log_path)
+    code = proc.poll()
+    text = (f"The companion stopped before it was ready (exit code {code})." if code is not None else
+            "The companion is still running but did not become ready before the startup deadline.")
+    phase = _startup_phase(tail)
+    if phase:
+        text += " Last startup step: " + phase + "."
+    error = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " ERROR " in line or " CRITICAL " in line or re.match(r"^[\w.]+(?:Error|Exception):", line):
+            error = line.split(": ", 1)[-1] if " ERROR " in line or " CRITICAL " in line else line
+    if error:
+        error = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", error)[:400]
+        text += " Last error: " + error
+    return text
+
+
 def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """Read the owned child's post-bind marker from its freshly truncated startup log.
 
@@ -339,17 +380,16 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """
     marker = b"earthd listening on 127.0.0.1:"
     deadline = time.monotonic() + timeout
+    last_phase = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             return False
         try:
-            with open(log_path, "rb") as log:
-                log.seek(0, os.SEEK_END)
-                start = max(0, log.tell() - 65536)
-                log.seek(start)
-                tail = log.read(65536)
-            if start:
-                tail = tail.partition(b"\n")[2]  # discard a potentially partial first line
+            tail = _startup_tail(log_path)
+            phase = _startup_phase(tail)
+            if phase and phase != last_phase:
+                row("World server", phase)
+                last_phase = phase
             for line in tail.splitlines():
                 if not line.startswith(marker):
                     continue
@@ -1767,7 +1807,7 @@ def run(args):
         row("Server log", log_path)
         if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
-                    f"See {log_path} for the startup error, then try again.")
+                    server_start_diagnostic(server, log_path) + f"\nFull startup log: {log_path}")
             raise SystemExit(1)
         row("World server", "running")
         try:
