@@ -13,6 +13,9 @@ What changed in each release of BeamNG.Earth, newest first.
   tunnels, highest passes and dams, by country or for the world) from a table that comes with the app.
 
 ### Fixed
+- **Pre-cached areas and routes never downloading** (development builds since the loading line shows downloads): the
+  pre-cache's check whether the game is busy failed while you were in the world ("too many values to unpack" in the
+  server's console, once a minute), so saved areas and routes stayed where they were. They download again.
 - **Roads under an overpass dug into trenches when the bridge's map line ends down its embankments:** the dip under a
   bridge took the deck's height from the ground at those ends, not from the embankment tops it stands on (#694), so it
   dug the road under up to 4 m too deep. Its slip roads beside it stayed at their own height, a step between them. Seen
