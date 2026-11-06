@@ -34,7 +34,7 @@ do
               { 'b', 's', 0, 1, 1, 11.2, 0.8, 3 }, { 's', 's2', 0, 1, 1, 11.2, 0.8, 3 } },
   }
   local box = { -500, -500, 500, 500 }
-  local fn, _, _, fcuts = N.toNodes(fg, box, 60, false, nil, 0, N.FAST_HALO_M)
+  local fn, _, _, fcuts = N.toNodes(fg, box, 60, false, nil, 0, 650)   -- (the halo when on: FAST_HALO_M is 0 by default)
   T.check(fn.m ~= nil and fn.m2 == nil, 'fast halo: the motorway node 200 m past the box kept, not one 700 m past')
   T.check(fn.b.links.m ~= nil, 'fast halo: its road too')
   T.check(fn.s2 == nil, 'fast halo: a street node past the box left out')

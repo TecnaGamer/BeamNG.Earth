@@ -24,7 +24,11 @@ M.HALO_M = 0
 -- front of the camera) braked for the dead end and turned round across the lanes: the cars standing sideways on I-94 /
 -- I-90 in Montana (Tann2019, 2026-11-05; PR #728's route halo, there for blocks over 1200 m only). A motorway's nodes are
 -- ~80 m apart: a few dozen nodes, not the tripled city graph of HALO_M.
-M.FAST_HALO_M = 650
+-- Off for now (0): PR #773's merge A/B (autodrive east of Billings with traffic, two warm runs each, 2026-11-06) had
+-- 87.9 / 84.5 fps with it at 650 m against 92.8 / 88.2 with it off and 91.7 / 88.5 before the merge, and 89 frames
+-- over 50 ms in PhysicsAndVLUA in one run (the traffic AI's planning on the longer graph); launch, oncoming spawns and
+-- overtaking cost nothing measurable. 650 to try it.
+M.FAST_HALO_M = 0
 M.FAST_HALO_MS = 24.5     -- (55 mph)
 -- An apply (or its signals' second step) waits for a light frame (governor roomFor: at most APPLY_ROOM_MS of streaming
 -- and other work spent in it, not a terrain commit's), APPLY_WAIT_FRAMES at most
