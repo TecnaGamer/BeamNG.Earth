@@ -557,12 +557,12 @@ class MapData:
         import mapgeom
         import osmtags
         tags, ways = got
-        buses = [w for w in ways if str(w.get("highway")) == "busway"]
-        races = [w for w in ways if str(w.get("highway") or "raceway") != "busway"]
-        if buses:
-            feats = mapgeom.concat(feats, osmtags.busway_features(buses))
-        if races:
-            feats = mapgeom.concat(feats, osmtags.raceway_features(races))
+        # Busways first: "osm-busway-..." sorts before "osm-raceway-...", which mapgeom.concat requires.
+        # A way with no highway tag is a raceway, as every extra way was before busways existed.
+        for cls, build in (("busway", osmtags.busway_features), ("raceway", osmtags.raceway_features)):
+            picked = [w for w in ways if str(w.get("highway") or "raceway") == cls]
+            if picked:
+                feats = mapgeom.concat(feats, build(picked))
         osmtags.join(feats, tags, geometry)
         import oneway_joins
         oneway_joins.apply(feats)

@@ -477,53 +477,18 @@ def raceway_features(ways):
     """The raceways (raceways()) as road Features: class "raceway", ids "osm-raceway-<way id>" (after every Overture
     GERS id: mapgeom.concat appends them), OSM's surface / width / lanes / layer / bridge / tunnel as Overture's rules
     and the osm_* columns."""
-    import mapgeom as mg
-    ways = sorted(ways, key=lambda w: int(w["id"]))
-    if not ways:
-        return mg.empty("roads")
-    coords, coord_off, flags, levels, surfaces, widths = [], [0], [], [], [], []
-    for i, w in enumerate(ways):
-        c = np.asarray(w["coords"], np.float64)
-        coords.append(c)
-        coord_off.append(coord_off[-1] + len(c))
-        if str(w.get("bridge") or "no") not in ("no", ""):
-            flags.append((i, "is_bridge", None))
-        if str(w.get("tunnel") or "no") not in ("no", ""):
-            flags.append((i, "is_tunnel", None))
-        try:
-            lv = float(w.get("layer"))
-            if lv:
-                levels.append((i, lv, None))
-        except (TypeError, ValueError):
-            pass
-        sf = str(w.get("surface") or "").lower()
-        surfaces.append((i, "paved" if sf in RACEWAY_PAVED else sf, None))
-        try:
-            wd = float(re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)", str(w.get("width") or "")).group(1))
-            widths.append((i, wd, None))
-        except (AttributeError, ValueError):
-            pass
-    n = len(ways)
-    lonlat = np.concatenate(coords)
-    f = mg.Features("roads", mg.text_column([f"osm-raceway-{int(w['id']):012d}" for w in ways]),
-                    np.full(n, mg.LINE, np.uint8), np.arange(n + 1, dtype=np.int64), np.arange(n + 1, dtype=np.int64),
-                    np.array(coord_off, np.int64), lonlat)
-    f.attrs = {"class": mg.text_column(["raceway"] * n), "subtype": mg.text_column(["road"] * n),
-               "subclass": mg.text_column([""] * n), "name": mg.text_column([w.get("name") for w in ways]),
-               "src_dataset": mg.text_column(["OpenStreetMap"] * n),
-               "src_record": mg.text_column([f"w{int(w['id'])}@0" for w in ways]),
-               "cx": np.array([float(c[:, 0].min() + c[:, 0].max()) / 2 for c in coords]),
-               "cy": np.array([float(c[:, 1].min() + c[:, 1].max()) / 2 for c in coords])}
-    f.rules = {"flags": mg.rule_table(flags), "level": mg.rule_table(levels, "float"),
-               "surface": mg.rule_table(surfaces), "width": mg.rule_table(widths, "float")}
-    f.clipped = np.zeros(n, bool)
-    return f
+    return _appended_features(ways, "raceway")
 
 
 def busway_features(ways):
     """The busways as road Features: class "busway", ids "osm-busway-<way id>" (these sort before osm-raceway ids, and
     both after an Overture id, so mapgeom.concat keeps the cell ascending). Seven metres unless a width is mapped.
     OSM's surface / width / lanes / layer / bridge / tunnel / oneway become Overture's rules."""
+    return _appended_features(ways, "busway", default_width=7.0, oneway=True)
+
+
+def _appended_features(ways, cls, default_width=None, oneway=False):
+    """OSM ways Overture does not emit, as road Features of class cls and ids "osm-<cls>-<way id>"."""
     import mapgeom as mg
     ways = sorted(ways, key=lambda w: int(w["id"]))
     if not ways:
@@ -548,25 +513,27 @@ def busway_features(ways):
         try:
             wd = float(re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)", str(w.get("width") or "")).group(1))
         except (AttributeError, ValueError):
-            wd = 7.0
-        widths.append((i, wd, None))
+            wd = default_width
+        if wd is not None:
+            widths.append((i, wd, None))
         ow = str(w.get("oneway") or "").lower()
-        if ow in ONEWAY_YES:
+        if oneway and ow in ONEWAY_YES:
             oneways.append((i, -1.0 if ow == "-1" else 1.0, None))
     n = len(ways)
     lonlat = np.concatenate(coords)
-    f = mg.Features("roads", mg.text_column([f"osm-busway-{int(w['id']):012d}" for w in ways]),
+    f = mg.Features("roads", mg.text_column([f"osm-{cls}-{int(w['id']):012d}" for w in ways]),
                     np.full(n, mg.LINE, np.uint8), np.arange(n + 1, dtype=np.int64), np.arange(n + 1, dtype=np.int64),
                     np.array(coord_off, np.int64), lonlat)
-    f.attrs = {"class": mg.text_column(["busway"] * n), "subtype": mg.text_column(["road"] * n),
+    f.attrs = {"class": mg.text_column([cls] * n), "subtype": mg.text_column(["road"] * n),
                "subclass": mg.text_column([""] * n), "name": mg.text_column([w.get("name") for w in ways]),
                "src_dataset": mg.text_column(["OpenStreetMap"] * n),
                "src_record": mg.text_column([f"w{int(w['id'])}@0" for w in ways]),
                "cx": np.array([float(c[:, 0].min() + c[:, 0].max()) / 2 for c in coords]),
                "cy": np.array([float(c[:, 1].min() + c[:, 1].max()) / 2 for c in coords])}
     f.rules = {"flags": mg.rule_table(flags), "level": mg.rule_table(levels, "float"),
-               "surface": mg.rule_table(surfaces), "width": mg.rule_table(widths, "float"),
-               "oneway": mg.rule_table(oneways, "float")}
+               "surface": mg.rule_table(surfaces), "width": mg.rule_table(widths, "float")}
+    if oneway:
+        f.rules["oneway"] = mg.rule_table(oneways, "float")
     f.clipped = np.zeros(n, bool)
     return f
 
