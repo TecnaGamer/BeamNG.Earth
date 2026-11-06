@@ -55,8 +55,12 @@ SIGMA_MAJOR_M = float(os.environ.get("BNE_GRADE_MAJOR", "40"))
 # once its dip under I-80 (underpass_offsets) was laid on the longer smoothing; the ramps' pins need a look first)
 MAJOR_CLASSES = ("motorway", "trunk", "primary")      # (not their slip roads: Overture's subclass "link", Spec.link)
 DIRT_SIGMA_M = 8.0          # m, profile smoothing of gravel / dirt roads (the main ones: they stay smooth)
+# Toned down 2026-11-06 after 1.8.2 (GitHub #783, #784: "like a motocross track", "easier to drive beside the road
+# than on it"): as merged, a forest track had dips to 1.5 m and 66 % grades between samples, a minor dirt road 65 cm
+# dips, and every dirt road leaned up to 20 % sideways. Now a worn country road everyday cars drive: potholes of 5-12
+# cm, a step of at most 15 cm per 2 m, a camber of a few percent, the elevation data's own noise smoothed over 6 m.
 # a minor dirt road follows the elevation data closely instead, so it is bumpy and cannot be taken flat out
-DIRT_SIGMA_MINOR_M = float(os.environ.get("BNE_DIRT_SIGMA", "2.5"))   # (5 followed the DEM's bumps: GitHub #414)
+DIRT_SIGMA_MINOR_M = float(os.environ.get("BNE_DIRT_SIGMA", "6.0"))   # (5 followed the DEM's bumps: GitHub #414)
 # longer smoothing for the mid classes too (mpsteppe's PR #289: real roads have long vertical curves, the larger the
 # longer; 12 m left bumps the roads do not have); MAJOR_CLASSES keep SIGMA_MAJOR_M
 CLASS_SIGMA_M = {"secondary": 25.0, "tertiary": 20.0, "unclassified": 16.0, "residential": 14.0}
@@ -730,27 +734,28 @@ def profile_sigma(spec):
 
 
 DIRT_ROUGH = float(os.environ.get("BNE_DIRT_BUMP", "1.0"))    # strength of a minor dirt road's damage (1: as below)
-DIRT_MAJOR_SHARE = float(os.environ.get("BNE_DIRT_MAJOR", "0.2"))  # a MAIN dirt road is this much of it (softer)
+DIRT_MAJOR_SHARE = float(os.environ.get("BNE_DIRT_MAJOR", "0.15"))  # a MAIN dirt road is this much of it (softer)
 # which dirt roads count as "main" (the ones kept soft): the classes a country road is signed as, not just the
 # motorway ones (a mapped `secondary` gravel road is a main road where you drive it at 80 km/h)
 DIRT_SOFT_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
 # a forest track (highway=track) is worse than any of them: "you cannot even get up to speed on it" (the user, 2026-11-02)
-DIRT_TRACK_SHARE = float(os.environ.get("BNE_DIRT_TRACK", "2.5"))
+DIRT_TRACK_SHARE = float(os.environ.get("BNE_DIRT_TRACK", "1.3"))
 DIRT_TRACK_WAVE_SHARE = float(os.environ.get("BNE_DIRT_TRACK_WAVE", "0.5"))   # ... but less of the soft undulation:
                                                                               # waves read as a pattern, holes do not
 DIRT_VERTEX_STEP = 2.0          # m between a dirt road's plan vertices (4 m smoothed a pothole away)
-DIRT_UNDULATION_M = 0.15        # m: the soft rise and fall a country road keeps between its potholes
+DIRT_UNDULATION_M = 0.06        # m: the soft rise and fall a country road keeps between its potholes
 DIRT_UNDULATION_WAVES = ((10.0, 1.0), (6.0, 0.8))
-DIRT_POTHOLE_EVERY_M = 5.0      # m of road per pothole, on average
-DIRT_POTHOLE_W_M = (3.0, 6.0)   # m: a pothole's width
-DIRT_POTHOLE_D_M = (0.18, 0.32)  # m: its depth
-DIRT_PATCH_EVERY_M = 10.0       # m of road per broken patch (a step of a few cm with soft edges)
+DIRT_POTHOLE_EVERY_M = 12.0     # m of road per pothole, on average
+DIRT_POTHOLE_W_M = (2.0, 4.0)   # m: a pothole's width
+DIRT_POTHOLE_D_M = (0.05, 0.12)  # m: its depth
+DIRT_PATCH_EVERY_M = 25.0       # m of road per broken patch (a step of a few cm with soft edges)
 DIRT_PATCH_W_M = (3.0, 7.0)
-DIRT_PATCH_D_M = (0.12, 0.22)
-DIRT_PIT_EVERY_M = 150.0        # m of road per deep pit
+DIRT_PATCH_D_M = (0.03, 0.07)
+DIRT_PIT_EVERY_M = 400.0        # m of road per deep pit
 DIRT_PIT_W_M = (2.0, 4.5)
-DIRT_PIT_D_M = (0.30, 0.50)
-DIRT_STEP_MAX_M = float(os.environ.get("BNE_DIRT_STEP", "0.35"))   # m: the steepest step between two 2 m samples
+DIRT_PIT_D_M = (0.12, 0.20)
+DIRT_STEP_MAX_M = float(os.environ.get("BNE_DIRT_STEP", "0.15"))   # m: the steepest step between two 2 m samples
+DIRT_MAX_DIP_M = 0.25          # m: overlapping holes are eased into this depth at most (a pit in a pothole was 40 cm)
 DIRT_BASE_M = 25.0             # m: the bump pattern's own long waves are removed over this length, so a road keeps
                                # the terrain's course instead of sinking into it (the roads sat in a ditch, further in
                                # the worse it got: the damage's mean pulled them down along their length)
@@ -835,6 +840,9 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
             pad = k // 2
             padded = np.r_[np.full(pad, out[0]), out, np.full(k - pad - 1, out[-1])]
             out = out - np.convolve(padded, np.ones(k) / k, mode="valid")[:len(out)]
+    if DIRT_MAX_DIP_M > 0.0:            # (overlapping holes eased, not cut: the shape stays, its depth is bounded)
+        deep = out < 0.0
+        out[deep] = -DIRT_MAX_DIP_M * np.tanh(-out[deep] / DIRT_MAX_DIP_M)
     out *= dirt_taper(s_, length)       # (nothing right at a junction, short parts too: that road sets the height)
     return out
 
@@ -918,7 +926,7 @@ BANK_SIGMA_M = 12.0         # remove discrete box-window steps in cross slope, n
 RING_LEVEL_ON = os.environ.get("BNE_RING_LEVEL", "on") != "off"
 
 
-DIRT_BANK_M = float(os.environ.get("BNE_DIRT_BANK", "0.2"))   # cross slope a broken dirt road leans to (m per m)
+DIRT_BANK_M = float(os.environ.get("BNE_DIRT_BANK", "0.035"))   # cross slope a broken dirt road leans to (m per m)
 DIRT_BANK_WAVES = ((27.0, 1.0), (13.0, 0.6), (7.0, 0.35))      # how often the lean changes sides (m)
 
 

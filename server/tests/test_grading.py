@@ -411,8 +411,21 @@ class DirtTest(unittest.TestCase):
         xy = self.xy()
         lane = grading.dirt_bumps(xy, roads.Spec(4.0, "dirt", False, "residential"), len(xy))
         main = grading.dirt_bumps(xy, roads.Spec(7.0, "dirt", False, "secondary"), len(xy))
-        self.assertGreater(float(np.std(lane)), 0.05, "a lane has holes in it")
+        self.assertGreater(float(np.std(lane)), 0.02, "a lane has holes in it")
         self.assertLess(float(np.std(main)), 0.5 * float(np.std(lane)), "a road signed as a main one stays smoother")
+
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
+    def test_everyday_cars_can_drive_it(self):
+        """GitHub #783 / #784 (1.8.2): "like a motocross track", dips to 1.5 m and 66 % grades on a track. Even a forest
+        track stays a road an everyday car drives: dips of a quarter metre at most, no step over 20 % (the plan caps
+        it at DIRT_STEP_MAX_M), a lean of a few percent."""
+        xy = self.xy()
+        for cls in ("track", "unclassified", "residential"):
+            b = grading.dirt_bumps(xy, roads.Spec(3.5, "dirt", False, cls), len(xy))
+            self.assertLess(float(-b.min()), 0.3, cls)
+            self.assertLess(float(np.abs(np.diff(b)).max()) / grading.PROFILE_STEP, 0.2, cls)   # (the plan caps it more)
+        lean = grading.dirt_bank(xy, roads.Spec(3.5, "dirt", False, "track"))
+        self.assertLess(float(np.abs(lean).max()), 0.06, "a camber, not a tilt")
 
     @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_a_forest_track_is_the_worst(self):
