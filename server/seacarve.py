@@ -329,7 +329,6 @@ class SeaCarver:
         self._cell_locks = {}
         self._land = OrderedDict()      # (x, y) -> raster without the sea's bathymetry (land_raster)
         self._pre = OrderedDict()       # (x, y) -> such a cell's state before its sea floor (_build, _finish)
-        self._land_locks = {}
         self._full_ex = None            # (land_raster's background builds with it)
         self._full_asked = set()
         self._warm, self._warm_thread = [], None    # cells to build in the background (warm)
@@ -393,12 +392,17 @@ class SeaCarver:
             if got is not None:
                 self._land.move_to_end(k)
                 return got, False
-            lock = self._land_locks.setdefault(k, threading.Lock())
+            # (the cell's own lock, raster()'s: the warm loop's or a far tile's raster() and this never build one
+            # cell at once, each the whole of it; the second takes the first's)
+            lock = self._cell_locks.setdefault(k, threading.Lock())
         p = self._path(x, y)
         if p and (os.path.exists(p) or os.path.exists(_raw_path(p) or "")):
             return self.raster(x, y), True      # (on disk: whole)
         with lock:
             with self._lock:
+                hit = self._mem.get(k)
+                if hit is not None and (hit[1] or time.monotonic() - hit[2] < BATHY_RETRY_S):
+                    return hit[0], True
                 got = self._land.get(k)
                 if got is not None:
                     return got, False
