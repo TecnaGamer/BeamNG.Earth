@@ -88,6 +88,7 @@ import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
 import credits as creditsmod  # noqa: E402
 import secrossings  # noqa: E402
+import season as seasonmod  # noqa: E402  # fork:
 import covermap as covermapmod  # noqa: E402
 import areas as areasmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
@@ -5836,6 +5837,8 @@ class Connection:
                  "groundZ": gz, "floorZ": floor_z, "terrain": self.terrain_msg(key, info), "provisional": provisional}
         if place is not None:           # (the player's spot off the origin, echoed: core places the car there)
             ready["px"], ready["py"] = place
+        if seasonmod.evergreen(lat, lon):   # fork: no autumn colour in the trees' leaves here (seasonlook.setEvergreen)
+            ready["evergreen"] = True
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
         self.send(ready)

@@ -72,14 +72,20 @@ local lastCheck = -math.huge
 
 function M.setMode(m) mode = m end
 
+-- fork: the anchor is in an evergreen region (the server's anchor_ready evergreen: season.evergreen: the tropics, Koppen A,
+-- Australia): in 'auto' the leaves keep their summer look
+local evergreen = false
+function M.setEvergreen(e) evergreen = e == true end
+
 -- Pure: the tint of a species {tint, days, winter} on day doy at lat for mode: the strongest of its fall (its own
--- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount.
-function M.speciesTint(sp, mode_, doy, lat)
+-- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount. ever (fork): evergreen region,
+-- 'auto' gives no tint.
+function M.speciesTint(sp, mode_, doy, lat, ever)
   local f, w, s
   if mode_ == 'fall' then f, w, s = 1, 0, 0
   elseif mode_ == 'winter' then f, w, s = 0, 1, 0
   elseif mode_ == 'spring' then f, w, s = 0, 0, 1
-  elseif mode_ == 'auto' and lat then
+  elseif mode_ == 'auto' and lat and not ever then   -- fork: and not ever
     f = M.fallAmount(doy + (sp.days or 0), lat) ^ M.EASE
     w, s = M.winterAmount(doy, lat), M.springAmount(doy, lat)
   else
@@ -136,7 +142,7 @@ function M.update(inOurLevel, lat)
   lastCheck = now
   local doy = tonumber(os.date('*t').yday)
   for _, sp in ipairs(M.SPECIES) do
-    local tint, t = M.speciesTint(sp, mode, doy, lat)
+    local tint, t = M.speciesTint(sp, mode, doy, lat, evergreen)   -- fork: evergreen
     for _, n in ipairs(sp.mats) do pcall(tintOne, n, 'baseColorFactor', tint, t) end
     for _, n in ipairs(sp.merged) do pcall(tintOne, n, 'diffuseColor', tint, t) end
   end
@@ -147,7 +153,7 @@ function M.update(inOurLevel, lat)
   -- first); 1.7.1 never tinted them)
   if not M.IMPOSTERS then return end
   for _, e in ipairs(imposters()) do
-    local tint, t = M.speciesTint(e[2], mode, doy, lat)
+    local tint, t = M.speciesTint(e[2], mode, doy, lat, evergreen)   -- fork: evergreen
     pcall(tintOne, e[1], 'baseColorFactor', tint, t)
   end
 end

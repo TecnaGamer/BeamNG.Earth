@@ -51,11 +51,36 @@ SPRING_PEAK_DOY_40N = 112           # ~Apr 22: the fresh flush
 SPRING_HALF_DAYS = 22.0
 
 
-def season_amounts(date, lat):
+# fork: where the vegetation is evergreen there is no autumn colour, leaf-fall or flush to grade: the tropics, the
+# Koppen A (tropical) climates, and Australia (its native flora is evergreen: Brisbane has no autumn colour)
+EVERGREEN_LAT = 23.0
+AUSTRALIA_BOX = (-44.0, -10.0, 112.0, 154.0)    # (south, north, west, east): the mainland and Tasmania
+KOPPEN_TROPICAL = (1, 2, 3)                      # Af, Am, Aw (climate.py's classes)
+
+
+def evergreen(lat, lon=None):  # fork:
+    """Whether the vegetation at (lat, lon) is evergreen, so no season grade: |lat| < 23 (the tropics), a Koppen
+    tropical (A) climate, or Australia's box. Without lon only the latitude rule applies. Pure."""
+    if abs(lat) < EVERGREEN_LAT:
+        return True
+    if lon is None:
+        return False
+    s, n, w, e = AUSTRALIA_BOX
+    if s <= lat <= n and w <= lon <= e:
+        return True
+    try:
+        import climate
+        return climate.koppen_at(float(lat), float(lon)) in KOPPEN_TROPICAL
+    except Exception:       # (the climate map unreadable: the other rules stand)
+        return False
+
+
+def season_amounts(date, lat, lon=None):  # fork: lon
     """{"fall", "winter", "spring": 0..1} at a date (datetime.date) and latitude: how far the leaves have turned,
-    how bare the deciduous canopy is, how fresh the spring flush is (0 in the tropics; the southern hemisphere half a
-    year later; 2.5 days earlier per degree north for fall, later for spring). Pure."""
-    if abs(lat) < 23.0:
+    how bare the deciduous canopy is, how fresh the spring flush is (0 where the vegetation is evergreen: the
+    tropics, Koppen A, Australia (evergreen(); needs lon for the last two); the southern hemisphere half a year
+    later; 2.5 days earlier per degree north for fall, later for spring). Pure."""
+    if evergreen(lat, lon):     # fork: was abs(lat) < 23.0
         return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
     doy = date.timetuple().tm_yday
     if lat < 0:
@@ -70,12 +95,12 @@ def season_amounts(date, lat):
     return {"fall": float(fall), "winter": float(winter), "spring": float(spring)}
 
 
-def amounts_for(mode, lat, today=None):
+def amounts_for(mode, lat, today=None, lon=None):  # fork: lon
     """season_amounts for --season: "auto" (today's date), "off" (none), "fall" / "winter" / "spring" (full)."""
     if mode in ("fall", "winter", "spring"):
         return {"fall": 0.0, "winter": 0.0, "spring": 0.0, mode: 1.0}
     if mode == "auto":
-        return season_amounts(today or datetime.date.today(), lat)
+        return season_amounts(today or datetime.date.today(), lat, lon)  # fork: lon
     return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
 
 
