@@ -188,7 +188,15 @@ def _french_panels(style, line):
 
 
 def _forest_rows(pending, z):
-    return [[group, round(x, 2), round(y, 2), round(float(zz) + lift, 2), round(yaw, 1) % 360.0, 1., height, 0.]
+    def drawn_yaw(group, x, y, yaw):
+        if group == G_HEDGE:
+            # Rotate the stock shrub independently of the row. The road clearance
+            # is calculated beforehand with the unrotated tangent and a circular crown.
+            seed = (round(x * 16) * 73856093) ^ (round(y * 16) * 19349663)
+            yaw += seed % 360
+        return round(yaw, 1) % 360.
+
+    return [[group, round(x, 2), round(y, 2), round(float(zz) + lift, 2), drawn_yaw(group, x, y, yaw), 1., height, 0.]
             for (group, x, y, yaw, height, lift), zz in zip(pending, z)]
 
 

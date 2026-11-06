@@ -271,6 +271,12 @@ M.GROUP_MAX_M.fr_hedge = 350
 M.GROUP_MAX_M.fr_fence_hedge = 350
 M.NO_COLLIDE.fr_hedge = true
 M.NO_COLLIDE.fr_fence_hedge = true
+for group, asset in pairs(require('beamngEarth/frRadarAssets')) do
+  M.CATALOG[group] = { { asset[1], asset[2] } }
+  M.GROUP_MAX_M[group] = asset[3]
+  M.ONE_SPELLING[group] = true
+  M.NO_COLLIDE[group] = true
+end
 -- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
 -- Coast's grill. The table's materials live with Utah's buildings.
 M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
@@ -329,6 +335,7 @@ for group, a in pairs(require('beamngEarth/europeStopAssets')) do
   M.ONE_SPELLING[group] = true
 end
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_radars',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_stops',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_road_details',

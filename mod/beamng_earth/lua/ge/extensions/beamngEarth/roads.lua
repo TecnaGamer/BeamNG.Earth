@@ -20,6 +20,7 @@
 -- Console: beamngEarth_roads.status(), .setEnabled(bool)
 
 local stopwatch = require('beamngEarth/stopwatch')
+local speedtraps = require('beamngEarth/speedtraps')
 
 local M = {}
 
@@ -337,6 +338,7 @@ local function dropTile(key)
   if t.guardrails then require('beamngEarth/trees').dropKey((key:gsub(':', ':g', 1))) end
   if t.props then require('beamngEarth/nightlights').dropKey(key) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
+  if t.speedTraps then speedtraps.dropKey(key) end
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
@@ -376,6 +378,7 @@ end
 local function switchAnchor(aid)
   if aid == anchorId then return end
   anchorId = aid
+  speedtraps.resetMotion()
   for key, t in pairs(tiles) do
     if t.anchor ~= aid and not t.ghost and not t.geo then dropTile(key) end   -- (geotiles: M.replace)
   end
@@ -666,6 +669,11 @@ local function geoRows(key, t, data, replacing)
     require('beamngEarth/parking').onRows(t.anchor, key, M.mapRows(pl, data.park, 1, 4))
     t.park = true
   end
+  if type(data.speedTraps) == 'table' and data.speedTraps[1] then
+    local rows = M.mapRows(pl, data.speedTraps, 2, 5)
+    speedtraps.onRows(key, M.mapRows(pl, rows, 8))
+    t.speedTraps = true
+  end
   if type(data.fuel) == 'table' and data.fuel[1] then
     require('beamngEarth/gasstations').onRows(t.anchor, key, M.mapStations(pl, data.fuel))
     t.fuel = true
@@ -924,6 +932,7 @@ end
 -- the tiles moved.
 function M.replace(a, aid)
   if not a then return 0 end
+  speedtraps.resetMotion()
   anchorObj = a
   local n = 0
   for key, t in pairs(tiles) do
@@ -1068,6 +1077,10 @@ function M.onTile(msg, currentAnchor, a)
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
+  if type(data.speedTraps) == 'table' and data.speedTraps[1] then
+    speedtraps.onRows(key, data.speedTraps)
+    tiles[key].speedTraps = true
+  end
   sinceChange = stopwatch.new()
   if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
     walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
@@ -1709,7 +1722,7 @@ local function step(name)
   M.steps[name] = t - stepT0
   stepT0 = t
 end
-function M.update(gov, currentAnchor, player, view, a)
+function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   stepT0 = stepClock()
   viewAt = view
   if a then anchorObj = a end
@@ -1718,6 +1731,7 @@ function M.update(gov, currentAnchor, player, view, a)
     prewarmId, prewarmWant = nil, prewarmPath
   end
   if currentAnchor then switchAnchor(currentAnchor) end
+  if dtReal then speedtraps.update(not holdActive and player or nil, dtSim, dtReal) end
   step('anchor')
   releaseGhosts(player)
   step('ghosts')
@@ -2136,6 +2150,7 @@ end
 
 function M.clear()
   for key in pairs(tiles) do dropTile(key) end
+  speedtraps.clear()
   for key, f in pairs(far) do
     if f.geo then M.dropFarGeo(key) end
     if f.id then deleteQ[#deleteQ + 1] = f.id end

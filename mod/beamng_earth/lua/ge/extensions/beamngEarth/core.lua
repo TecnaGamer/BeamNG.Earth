@@ -1320,7 +1320,7 @@ local function updatePlayer(dt)
   local v = veh:getVelocity()
   local lat, lon = st.anchor:worldToGeodetic(p.x, p.y, p.z)
   st.player = { x = p.x, y = p.y, z = p.z, vx = v.x, vy = v.y, vz = v.z, lat = lat, lon = lon, dist = hypot(p.x, p.y),
-    speed = v:length() }
+    speed = v:length(), vehicleId = veh:getID() }
   st.slowFor = st.player.speed < SLOW_SPEED and (st.slowFor + dt) or 0
 end
 
@@ -2204,7 +2204,7 @@ local function onUpdate(dtReal, dtSim)
     -- the roads before the far tiles: they share the governor's budget and the first to ask gets it; after a
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
-    roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor)
+    roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor, dtSim or dtReal, dtReal)
     gasstations.update(gov)
     t = mark('roads', t)
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
