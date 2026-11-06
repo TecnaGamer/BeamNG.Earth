@@ -22,10 +22,11 @@ A few things hold for all of them:
 
 ## Map data: roads, buildings, water, land use
 
-Public AWS S3 downloads use the corresponding regional dual-stack endpoint (`s3.dualstack.<region>.amazonaws.com`),
-which supports both IPv4 and IPv6. The source names below remain the identities for download budgets, status,
-cached files and `NO_PROXY`. Signed URLs and requests with an Authorization header keep their original endpoint.
-This covers the known S3 buckets used here; other providers still need their own IPv6 support.
+On a network with no IPv4 route (IPv6-only, no NAT64), the public AWS S3 sources below switch to their regional
+dual-stack endpoint (`s3.dualstack.<region>.amazonaws.com`, IPv4 and IPv6) after the first IPv4 connection finds no
+route; everywhere else they are used as listed. The source names remain the identities for download budgets, status,
+cached files and `NO_PROXY`. Signed URLs, requests with an Authorization header and proxied requests keep their
+original endpoint. Other providers still need their own IPv6 support.
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
