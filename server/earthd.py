@@ -354,6 +354,13 @@ FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40
 FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
 NAV_LEAD_S, NAV_LEAD_MAX_M = 12.0, 500.0     # the nav graph's centre ahead of a moving car (navgraph.WINDOW_M 1100)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
+# The event loop's thread a step above the server's other threads (budget.raise_thread, Windows): a block built 17 s
+# earlier held the car at the edge until the loop answered its request (A13 at 200 mph, 2 server cores, 2026-11-04;
+# GitHub #725). BNGE_LOOP_RAISE=0: as the others, as before
+LOOP_RAISE = os.environ.get("BNGE_LOOP_RAISE", "1") != "0"
+# ms the interpreter lock is held before a waiting thread is let in (Python's own: 5): the event loop waits up to this
+# long behind each busy thread. BNGE_SWITCH_MS=0: Python's own, as before
+SWITCH_MS = float(os.environ.get("BNGE_SWITCH_MS", "2") or 0)
 ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roads on)
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
@@ -7348,6 +7355,16 @@ async def main_async(args):
     # logs the main thread's stack when a beat is late, so the stall names its cause.
     beat = [time.perf_counter()]
     main_ident = threading.get_ident()
+    if LOOP_RAISE:          # (this thread: the event loop's)
+        import budget
+        try:
+            how = budget.raise_thread()
+            if how:
+                log.info("event loop priority: %s", how)
+        except (OSError, AttributeError) as e:
+            log.warning("could not raise the event loop's priority: %s", e)
+    if SWITCH_MS:
+        sys.setswitchinterval(SWITCH_MS / 1000.0)
 
     async def loop_beat():
         while True:
