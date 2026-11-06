@@ -723,6 +723,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import roadmesh as roadmeshmod
     import roads as roadsmod
     import poleprofiles
+    import streetfront
     tx, ty = (tile, None) if hasattr(tile, "box") else tile
     P = _Parts()
     # everything the tile will ask for, fetched at once (one after another, a fresh place's first tile took ~1 min)
@@ -762,6 +763,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
     _bridge_ends = {}
     box = roadsmod.tile_bbox(tx, ty)
+    frontage_country = streetfront.country_at_tile(frame, box) if buildings else None
     side = roadsmod.tile_side(tx, ty)
     if buildings:
         import buildings as buildingsmod
@@ -800,6 +802,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
     roadside_jobs = []                  # sign placement after the rendered barriers and driveways
     drives = []
+    mapped_drives = [] if frontage_country else None
     import euguardrails
     sign_obstacles=None
     if buildings and euguardrails.enabled():
@@ -815,7 +818,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  ground=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
-                                 pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
+                                 pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs, driveways_out=mapped_drives,
                                  signals=furniture.signals_for(_s.md, frame,
                                                                roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)))
     mark("build_tile")
@@ -826,31 +829,22 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("airports")
     x0, y0, _, _ = box
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
-        import europewalks
         frontage_walks = walks if walks_raw is None else walks_raw
-        frontage = country == "FR" and europewalks.enabled() and any(
-            w.get("surface") and "pts" in w and not w.get("detached") and not w.get("median") for w in frontage_walks)
-        margin = 6. if frontage else 2.
+        margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else 2.
         rings = buildingsmod.near_rings(frame, tx, ty, _s.md, margin=margin, skip=skip)
         props[:] = furniture.off_buildings(props, rings)     # (no street tree in a house)
-        props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
+        props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
-        if frontage:
-            import streetfront
-            x1, y1 = box[2:]
-            near = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
-            try:
-                lots = [_s.md.cell(k, layers=("land_use", "infrastructure"), kind="demand").layers
-                        for k in roadsmod.cells_of_tile(frame, tx, ty, margin)]
-            except Exception as ex:
-                log.debug("street frontage: missing lot or garden data for tile %s_%s: %s", tx, ty, ex)
-            else:
-                chunks += streetfront.chunks(frame, frontage_walks, rings, [f for ls in lots for f in ls.values()],
-                                             near_roads, drives, near)
         park = parkingmod.clear_of(park, props, drives)
-        park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park)
+        park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park, separate_bays=bool(frontage_country))
+        paving, spots = streetfront.finish(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
+                                           mapped_drives, drives, lambda x, y: roadmeshmod.drawn_ground(
+                                               frame, drawn, np.c_[x, y], q), frontage_country, left_hand,
+                                           redrape=walks_raw is None)
+        chunks += paving
+        park += spots
         if fuel:
             import gasstations
             park = gasstations.clear_park(park, fuel)
@@ -858,7 +852,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         if walks_raw is not None:
             buildingsmod.brick_walks(walks_raw, items, centre[0], centre[1], side)
     mark("doors_park")
-    chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks)
+    chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks, separate_bays=bool(frontage_country))
     mark("markings")
     if _bridge_fps:                 # (the model bridge is the road there: its deck slab, threedmr.write_bridge_deck)
         _n0 = len(chunks)
@@ -958,7 +952,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban)
         import fences
         try:
-            props.extend(fences.rows(frame, infra_fn, box, elev))
+            props.extend(fences.rows(frame, infra_fn, box, elev, french=frontage_country == "FR",
+                                     carriageways=near_roads))
         except Exception as ex:
             log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import picnic
@@ -2071,8 +2066,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     rgb = surfacemod.enlarge(rgb, out_px or px)
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.write_base)
         try:
-            import surface as surfacemod
-            rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths)
+            rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths,
+                                          pending=pending)
         except Exception as e:      # the photo stays as it is
             log.info("base photo: roads: %s", e)
     try:            # (earthd.Server.write_base)

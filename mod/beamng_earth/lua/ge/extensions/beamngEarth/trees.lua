@@ -260,6 +260,11 @@ M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
 M.CATALOG.noisewall = { { WCA .. 'objects/s_concrete_noiseblocker', 2.4 } }
 M.GROUP_MAX_M.chainlink = 800
 M.GROUP_MAX_M.noisewall = 2000
+for group, asset in pairs(require('beamngEarth/frFenceAssets')) do
+  M.CATALOG[group] = { asset }
+  M.GROUP_MAX_M[group] = 320
+  M.ONE_SPELLING[group] = true
+end
 -- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
 -- Coast's grill. The table's materials live with Utah's buildings.
 M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
@@ -318,6 +323,7 @@ for group, a in pairs(require('beamngEarth/europeStopAssets')) do
   M.ONE_SPELLING[group] = true
 end
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_stops',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_road_details',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic',

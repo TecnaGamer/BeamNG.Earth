@@ -759,12 +759,15 @@ def corner_pads(frame, x0, y0, size, feats_list, urban_fn=None, widths=None):
                                                                           y0 + size + 4.0), grow=PHOTO_ROAD_EDGE_M)
 
 
-def _square_roads(frame, x0, y0, size, surface):
+PHOTO_ROADS_PENDING = ("surface_roads",)
+
+
+def _square_roads(frame, x0, y0, size, surface, pending=None):
     """The road Features of surface's cached cells around [x0, x0 + size]² of frame (never waits)."""
-    gx = x0 + np.array([0.0, size, 0.0, size, size / 2])
-    gy = y0 + np.array([0.0, 0.0, size, size, size / 2])
-    la, lo, _ = frame.enu_to_geodetic(gx, gy, np.zeros(5))
-    feats, _ = surface.roads(np.asarray(la), np.asarray(lo))
+    la, lo = _square_pts(frame, x0, y0, size)
+    feats, complete = surface.roads(la, lo)
+    if not complete and pending is not None:
+        pending.add(PHOTO_ROADS_PENDING)
     return feats
 
 
@@ -793,7 +796,7 @@ def _square_lots(frame, x0, y0, size, surface):
 
 
 @profile_step('Photo road paint')
-def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False):
+def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, pending=None):
     """photo_roads for a ground photo over [x0, x0 + size]² of frame with the roads of surface's cached cells (a
     Surface; never waits); as it was when its texels are coarser than PHOTO_ROADS_MAX_TEXEL or no cell is cached.
     Crop rows are painted first (photo_fields: dirt furrows, the photo left between them; a dirt road is left bare,
@@ -801,7 +804,7 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False):
     simple: the carriageways alone (a stand-in photo)."""
     if surface is None or size / max(rgb.shape[1], 1) > PHOTO_ROADS_MAX_TEXEL:
         return rgb
-    roads = _square_roads(frame, x0, y0, size, surface)
+    roads = _square_roads(frame, x0, y0, size, surface, pending)
     if not simple:          # (simple, a stand-in's: the carriageways alone, photo_roads)
         feats = _square_lots(frame, x0, y0, size, surface)
         rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)

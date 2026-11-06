@@ -7,7 +7,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-VERSION = "european-street-edges-v2"
+VERSION = "european-street-edges-v3"
 STREETS = {"primary", "secondary", "tertiary", "unclassified", "residential", "living_street"}
 VILLAGE_WIDTH = dict(primary=6.1, secondary=5.8, tertiary=5.2, unclassified=4.9,
                      residential=4.6, living_street=4.0)
@@ -223,7 +223,9 @@ def mapped_walk(feats, i):
     classes, subclasses = feats.attrs.get("class"), feats.attrs.get("subclass")
     if classes is None or str(classes[i]) != "footway" or int(feats.kind[i]) != mapgeom.LINE:
         return None
+    footways = feats.attrs.get("osm_footway")
     if not ((subclasses is not None and str(subclasses[i]) == "sidewalk")
+            or (footways is not None and str(footways[i]) == "sidewalk")
             or roads._rule_value(feats.rules.get("subclass"), i) == "sidewalk"):
         return None
     if roads.unbuilt(feats, i):
@@ -232,10 +234,10 @@ def mapped_walk(feats, i):
     b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
     if b <= a or country_for(*feats.lonlat[(a + b) // 2]) is None:
         return None
-    width = roads._osm(feats, "width", i, .55, 7.)
+    width = roads._osm(feats, "width", i, .55, 12.)
     if width is None:
         width = roads._rule_value(feats.rules.get("width"), i)
-    width = float(width) if width is not None and .55 <= float(width) <= 7. else 1.4
+    width = float(width) if width is not None and .55 <= float(width) <= 12. else 1.4
     raw = str(roads._surface_value(feats, i) or "").strip().lower()
     surface = MAPPED_SURFACE.get(raw, MAPPED_SURFACE.get(roads.surface_token(raw), "light_asphalt"))
     return Walk(width, .2, .035, surface)

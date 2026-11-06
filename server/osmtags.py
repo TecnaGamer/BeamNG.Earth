@@ -50,6 +50,8 @@ COLUMNS = {
     "maxspeed": (f"TRY_CAST(regexp_extract(maxspeed, {_NUM}, 1) AS DOUBLE) * "
                  "CASE WHEN maxspeed LIKE '%mph%' THEN 1.609344 ELSE 1.0 END"),
     "sidewalk": "sidewalk",
+    "footway": "footway",
+    "service": "service",
     "lit": "lit",
     "smoothness": "smoothness",
     "osm_surface": "surface",
@@ -63,16 +65,17 @@ COLUMNS = {
     "osm_highway": "CASE WHEN highway IN ('construction', 'proposed') THEN highway END",
     "bx0": "bbox.xmin", "by0": "bbox.ymin", "bx1": "bbox.xmax", "by1": "bbox.ymax",
 }
-TEXT_COLUMNS = {"sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "name", "osm_highway"}
+TEXT_COLUMNS = {"sidewalk", "footway", "service", "lit", "smoothness", "osm_surface", "osm_oneway", "name", "osm_highway"}
 INT_COLUMNS = {"lanes", "osm_layer"}
 GROUPS_FILE = "groups.json"     # the version's parsed row groups (OsmTags._groups)
-TABLE_DIR = "rg"        # a row group's decoded ways (OsmTags._table), in the version's folder
+TABLE_DIR = "rg-frontages"  # includes footway and service, absent from older decoded tables
 TABLE_MEM = 6           # decoded row groups kept in memory (~6 MB each; a place's cells share 3-5)
 EXACT32 = {"bx0", "by0", "bx1", "by1", "lanes", "osm_layer"}   # float32 (the file's bbox; small integers)
 TABLE_WAIT_S = 60.0     # a row group another process decodes is waited for this long
-USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name"}
+USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "footway", "service", "lit",
+        "smoothness", "surface", "oneway", "layer", "name"}
 FLOATS = ("lanes", "width", "maxspeed", "osm_layer")
-TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_highway")
+TEXTS = ("sidewalk", "footway", "service", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_highway")
 UNBUILT = ("construction", "proposed")      # osm_highway's values: not drawn (roads.unbuilt)
 NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the same-named way it takes the tags of
 ONEWAY_YES = ("yes", "1", "-1", "true")
@@ -499,7 +502,7 @@ def join(feats, tags):
         feats.attrs["osm_" + c if not c.startswith("osm_") else c] = np.array(
             [float(tags.get(w, {}).get(c, np.nan)) if w is not None else np.nan for w in named], np.float64)
     for c in TEXTS:
-        src = ids if c == "osm_oneway" else named
+        src = ids if c in {"osm_oneway", "footway", "service"} else named
         feats.attrs[c if c.startswith("osm_") else "osm_" + c] = mg.text_column(
             [str(tags.get(w, {}).get(c, "")) if w is not None else "" for w in src])
     # A way without a lane count takes the count of the same-named way around it going the same way (one-way or

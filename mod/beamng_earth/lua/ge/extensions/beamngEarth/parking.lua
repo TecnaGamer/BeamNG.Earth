@@ -105,7 +105,7 @@ local function makeSpot(r)
   local ps = sites.parkingSpots.objectConstructor(sites)
   local h = math.rad(r[4])
   ps:set(vec3(r[1], r[2], r[3]), quatFromDir(vec3(math.cos(h), math.sin(h), 0), vec3(0, 0, 1)),
-    vec3(M.SPOT_SCL[1], M.SPOT_SCL[2], M.SPOT_SCL[3]))
+    vec3(r[6] or M.SPOT_SCL[1], r[7] or M.SPOT_SCL[2], M.SPOT_SCL[3]))
   if r[5] ~= 1 then                       -- curbside (lot stalls: either way in, not on a street)
     ps.customFields:addTag('street')      -- mapmgr tracks the car (traffic dodges it)
     ps.customFields:addTag('forwards')    -- parallel parking: nose in the direction of travel
@@ -123,7 +123,7 @@ local newAnchor = false   -- the next rebuild is the first of an anchor
 local function rebuild(player)
   sites = sites or newSites()
   local list = sites.parkingSpots
-  local keep, near = {}, 0
+  local keep, near, mappedNear = {}, 0, 0
   local k2, s2 = M.KEEP_M * M.KEEP_M, M.START_M * M.START_M
   local kx, ky = M.KEEP_M, M.KEEP_M
   local cand, nc = {}, 0           -- rows within KEEP_M on the block, then the MAX_SPOTS nearest of them
@@ -136,7 +136,10 @@ local function rebuild(player)
         if d2 < k2 and M.inside(box, r[1], r[2], M.EDGE_M) then
           nc = nc + 1
           cand[nc] = { d2, r }
-          if d2 < s2 then near = near + 1 end
+          if d2 < s2 then
+            near = near + 1
+            if r[6] and r[7] then mappedNear = mappedNear + 1 end
+          end
         end
       end
     end
@@ -169,7 +172,7 @@ local function rebuild(player)
     end
   end
   newAnchor = false
-  return near
+  return near, mappedNear
 end
 
 -- Pure: a parked car at p is off its spot ps (none, gone with its anchor or tile, or more than OFF_SPOT_M away)
@@ -290,20 +293,25 @@ function M.update(aid, player, blk, gov)
   waited = 0
   lastBuild, dirty = t, false
   local sw = stopwatch.new()
-  local ok, near = pcall(rebuild, player)
+  local ok, near, mappedNear = pcall(rebuild, player)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if not ok then
     log('W', 'beamngEarth', 'parking: ' .. tostring(near))
     return
   end
   local gp = gameplay_parking
-  if not gp or near < M.START_MIN then return end
+  if not gp or (near < M.START_MIN and mappedNear == 0) then return end
   if not started then
     started = true
     -- the player's level-start choice (navgraph.choice; the radial menu works at any time)
     local c = require('beamngEarth/navgraph').choice
     if c.parked and not gp.getState() then
       local amount = (c.parkedAmount and c.parkedAmount > 0) and c.parkedAmount or -1
+      -- A small village can have just a few known driveways. Start within their actual capacity.
+      if near < M.START_MIN then
+        local small = math.max(1, math.floor(near * 0.6))
+        amount = amount > 0 and math.min(amount, small) or small
+      end
       local okS, err = pcall(gp.setupVehicles, amount, { pos = vec3(player.x, player.y, player.z) })
       if not okS then log('W', 'beamngEarth', 'parking: setupVehicles: ' .. tostring(err)) end
     end
