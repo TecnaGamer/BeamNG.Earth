@@ -72,6 +72,58 @@ pub fn shell(lat0: f64, lon0: f64, radius: f64, rings: usize, segs: usize) -> (V
     (pts, tris)
 }
 
+/// night_lights(rgb (h, w, 3) u8, lat (h,) per row, lon (w,) per column, sun_lat, sun_lon) -> (h, w, 3) u8: a night-
+/// lights map's lights alone (its bright pixels: smoothstep of brightness over [L0, L1]; the dark base it is drawn on
+/// goes) times how dark it is there (the sun's elevation over the point: 1 below N0 degrees, 0 above N1), for an
+/// additive emissive layer that shows the lit cities on the night side and fades across the terminator.
+const L0: f32 = 0.16;
+const L1: f32 = 0.55;
+const N0: f64 = -6.0;
+const N1: f64 = 3.0;
+
+pub fn lights(rgb: &[u8], lat: &[f64], lon: &[f64], sun_lat: f64, sun_lon: f64) -> Vec<u8> {
+    let (h, w) = (lat.len(), lon.len());
+    let mut out = vec![0u8; h * w * 3];
+    let (sd, cd) = (sun_lat.to_radians().sin(), sun_lat.to_radians().cos());
+    for r in 0..h {
+        let (sl, cl) = (lat[r].to_radians().sin(), lat[r].to_radians().cos());
+        for c in 0..w {
+            let i = r * w + c;
+            if 3 * i + 2 >= rgb.len() {
+                break;
+            }
+            let el = (sl * sd + cl * cd * (lon[c] - sun_lon).to_radians().cos()).clamp(-1.0, 1.0).asin().to_degrees();
+            let night = 1.0 - smooth(el as f32, N0 as f32, N1 as f32);
+            if night <= 0.0 {
+                continue;
+            }
+            let (pr, pg, pb) = (rgb[3 * i] as f32 / 255.0, rgb[3 * i + 1] as f32 / 255.0, rgb[3 * i + 2] as f32 / 255.0);
+            let k = smooth((pr + pg + pb) / 3.0, L0, L1) * night;
+            out[3 * i] = (pr * k * 255.0).round() as u8;
+            out[3 * i + 1] = (pg * k * 255.0).round() as u8;
+            out[3 * i + 2] = (pb * k * 255.0).round() as u8;
+        }
+    }
+    out
+}
+
+#[pyfunction]
+pub fn night_lights<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lat: numpy::PyReadonlyArray1<'py, f64>,
+                         lon: numpy::PyReadonlyArray1<'py, f64>, sun_lat: f64, sun_lon: f64)
+                         -> PyResult<Bound<'py, PyArray3<u8>>> {
+    let a = rgb.as_array();
+    let (h, w) = (a.shape()[0], a.shape()[1]);
+    let (la, lo) = (lat.as_slice()?.to_vec(), lon.as_slice()?.to_vec());
+    if a.shape()[2] != 3 || la.len() != h || lo.len() != w {
+        return Err(pyo3::exceptions::PyValueError::new_err("rgb (h, w, 3), lat (h,), lon (w,)"));
+    }
+    let flat: Vec<u8> = a.iter().copied().collect();
+    let out = py.allow_threads(|| lights(&flat, &la, &lo, sun_lat, sun_lon));
+    let out = numpy::ndarray::Array3::from_shape_vec((h, w, 3), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(PyArray3::from_owned_array(py, out))
+}
+
 #[pyfunction]
 pub fn cloud_layer<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>)
                         -> PyResult<(Bound<'py, PyArray3<u8>>, Bound<'py, PyArray2<u8>>)> {
@@ -114,6 +166,15 @@ mod tests {
         assert_eq!(op[1], 0, "dark sea");
         assert_eq!(op[2], 0, "green ground");
         assert!(op[3] < 40, "bright sand is coloured: {}", op[3]);
+    }
+
+    #[test]
+    fn lights_only_at_night() {
+        let rgb = [255u8, 220, 150, 20, 20, 40];          // a city light, the dark base
+        let night = lights(&rgb, &[45.0], &[10.0, 10.0], 0.0, -170.0);   // the sun on the far side: night
+        assert!(night[0] > 200 && night[3] == 0, "{:?}", night);
+        let day = lights(&rgb, &[45.0], &[10.0, 10.0], 0.0, 10.0);       // the sun nearly overhead: day
+        assert_eq!(day[0], 0);
     }
 
     #[test]

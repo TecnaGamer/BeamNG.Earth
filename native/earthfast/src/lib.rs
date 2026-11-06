@@ -5349,6 +5349,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(devraster::fill_bits, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::cloud_layer, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::shell_lonlat, m)?)?;
+    m.add_function(wrap_pyfunction!(spaceclouds::night_lights, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::photo_ghosts, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::dash_pieces, m)?)?;
     m.add_function(wrap_pyfunction!(power::substation_yard, m)?)?;
@@ -5487,6 +5488,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 150)?;
+    m.add("VERSION", 151)?;
     Ok(())
 }

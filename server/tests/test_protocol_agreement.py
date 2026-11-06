@@ -361,7 +361,9 @@ SERVER_TO_MOD = {
                       "tris": F(int, OPT), "error": F(str, OPT)},
     # ... its answer: the shell's shape, colour and opacity DDS (game paths), the material's name, where it is round
     "space_clouds": {"anchorId": F(int), "shape": F(str), "color": F(str), "opacity": F(str), "material": F(str),
-                     "lat": F(NUM), "lon": F(NUM), "radius": F(NUM)},
+                     "lat": F(NUM), "lon": F(NUM), "radius": F(NUM),
+                     # ... and the night side's city lights over the ground (none: none could be had)
+                     "lightsShape": F(str, OPT), "lights": F(str, OPT), "lightsMaterial": F(str, OPT)},
     "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT),

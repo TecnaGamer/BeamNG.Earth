@@ -11,7 +11,8 @@ local M = {}
 M.SHOW_M = 12000
 M.HIDE_M = 10000
 M.CHECK_S = 1.0
-M.REFRESH_S = 30 * 60
+M.REFRESH_S = 15 * 60       -- (the night side's edge moves ~4 degrees in that time: its lights are baked in)
+M.LIGHTS_NITS = 40
 M.RETRY_S = 60
 M.MOVE_SHARE = 0.25
 M.GROW_SHARE = 1.2          -- ... or when the camera's reach (it rose) is this much the shell's
@@ -26,10 +27,46 @@ local clock = 0
 
 local function deleteShell()
   if not shell then return end
-  if shell.obj then pcall(function() shell.obj:delete() end) end
-  local m = scenetree.findObject(shell.material)
-  if m then pcall(function() m:delete() end) end
+  for _, o in ipairs({ shell.obj, shell.lights }) do pcall(function() o:delete() end) end
+  for _, name in ipairs({ shell.material, shell.lightsMaterial }) do
+    local m = name and scenetree.findObject(name)
+    if m then pcall(function() m:delete() end) end
+  end
   shell = nil
+end
+
+-- The night side's city lights (server spaceclouds._lights): emissive, added to what is under them (black adds nothing,
+-- and the server darkened the day side already).
+local function makeLightsMaterial(name, lights)
+  local m = scenetree.findObject(name)
+  if m then return m end
+  m = createObject('Material')
+  m:setField('mapTo', 0, name)
+  m:setField('version', 0, '1.5')
+  m:setField('baseColorFactor', 0, '0 0 0 1')
+  m:setField('emissiveMap', 0, lights)
+  m:setField('emissiveFactor', 0, '1 1 1')
+  m:setField('emissiveIntensityNits', 0, tostring(M.LIGHTS_NITS))
+  m:setField('translucent', 0, '1')
+  m:setField('translucentBlendOp', 0, 'Add')
+  m:setField('translucentZWrite', 0, '0')
+  m:setField('castShadows', 0, '0')
+  m.canSave = false
+  m:registerObject(name)
+  return m
+end
+
+local function spawn(shape, name)
+  local o = createObject('TSStatic')
+  o:setField('shapeName', 0, shape)
+  o:setField('collisionType', 0, 'None')
+  o:setField('decalType', 0, 'None')
+  o:setField('castShadows', 0, '0')
+  o:setPosRot(0, 0, 0, 0, 0, 0, 1)
+  o.canSave = false
+  o:registerObject(name)
+  if scenetree.MissionGroup then scenetree.MissionGroup:addObject(o) end
+  return o
 end
 
 local function makeMaterial(name, color, opacity)
@@ -92,7 +129,11 @@ function M.update(dt, anchor, anchorId, send)
   shown = M.shownAt(p.z, shown)
   if shell and shell.obj then
     local hide = not shown or shell.anchorId ~= anchorId
-    if shell.hidden ~= hide then shell.obj:setHidden(hide); shell.hidden = hide end
+    if shell.hidden ~= hide then
+      shell.obj:setHidden(hide)
+      if shell.lights then shell.lights:setHidden(hide) end
+      shell.hidden = hide
+    end
   end
   if not shown or not anchorId then return end
   local lat, lon = anchor:enuToGeodetic(p.x, p.y, 0)
@@ -109,19 +150,20 @@ function M.onMessage(msg, anchorId)
   pending = nil
   if msg.anchorId ~= anchorId or not FS:fileExists(msg.shape) then return end
   makeMaterial(msg.material, msg.color, msg.opacity)
-  local o = createObject('TSStatic')
-  o:setField('shapeName', 0, msg.shape)
-  o:setField('collisionType', 0, 'None')
-  o:setField('decalType', 0, 'None')
-  o:setField('castShadows', 0, '0')
-  o:setPosRot(0, 0, 0, 0, 0, 0, 1)
-  o.canSave = false
-  o:registerObject('bngEarthSpaceClouds_' .. tostring(msg.material))
-  if scenetree.MissionGroup then scenetree.MissionGroup:addObject(o) end
+  local o = spawn(msg.shape, 'bngEarthSpaceClouds_' .. tostring(msg.material))
+  local lo = nil
+  if msg.lightsShape and msg.lights and msg.lightsMaterial and FS:fileExists(msg.lightsShape) then
+    makeLightsMaterial(msg.lightsMaterial, msg.lights)
+    lo = spawn(msg.lightsShape, 'bngEarthSpaceLights_' .. tostring(msg.lightsMaterial))
+  end
   deleteShell()
-  shell = { obj = o, material = msg.material, anchorId = msg.anchorId, lat = msg.lat, lon = msg.lon,
-            radius = msg.radius or 1e6, at = clock, hidden = false }
-  if not shown then o:setHidden(true); shell.hidden = true end
+  shell = { obj = o, lights = lo, material = msg.material, lightsMaterial = lo and msg.lightsMaterial or nil,
+            anchorId = msg.anchorId, lat = msg.lat, lon = msg.lon, radius = msg.radius or 1e6, at = clock, hidden = false }
+  if not shown then
+    o:setHidden(true)
+    if lo then lo:setHidden(true) end
+    shell.hidden = true
+  end
   log('I', 'beamngEarth', string.format('space clouds: %.0f km round %.2f, %.2f', (msg.radius or 0) / 1000, msg.lat or 0,
     msg.lon or 0))
 end

@@ -25,6 +25,12 @@ LAYER = "VIIRS_SNPP_CorrectedReflectance_TrueColor"
 TILE_URL = ("https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/" + LAYER
             + "/default/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg")     # ("default" time: the latest day)
 MAX_ZOOM = 9                # the layer's finest (~300 m a pixel at the equator)
+# ... and the night side's city lights: NASA's Black Marble (VIIRS, 2016; public domain), its lit pixels as an additive
+# emissive layer on a second shell just over the ground, darkened where the sun is up (earthfast.night_lights)
+LIGHTS_URL = ("https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/default/"
+              "GoogleMapsCompatible_Level8/{z}/{y}/{x}.png")
+LIGHTS_MAX_ZOOM = 8
+LIGHTS_H_M = 300.0
 TEX_PX = 2048               # the mosaic's side
 MAX_TILES = 144             # a coarser zoom past this many tiles
 SHELL_H_M = 6000.0          # the shell's height above sea level (a cloud deck's middle)
@@ -67,7 +73,28 @@ def pick_zoom(lat0, lon0, radius):
             return z, float(x0), float(y0), float(x1), float(y1)
 
 
-def mosaic(fetcher, z, x0, y0, x1, y1):
+def subsolar(t=None):
+    """(lat, lon) degrees of the point the sun stands over at unix time t (now): the declination and the equation of
+    time from the day of the year (NOAA's low-precision formulae, ~0.1 degree)."""
+    t = time.time() if t is None else float(t)
+    tm = time.gmtime(t)
+    g = 2 * math.pi / 365.0 * (tm.tm_yday - 1 + (tm.tm_hour - 12) / 24.0)
+    decl = (0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g) - 0.006758 * math.cos(2 * g)
+            + 0.000907 * math.sin(2 * g) - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g))
+    eqt = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g) - 0.014615 * math.cos(2 * g)
+                    - 0.040849 * math.sin(2 * g))
+    minutes = tm.tm_hour * 60 + tm.tm_min + tm.tm_sec / 60.0
+    lon = -(minutes + eqt - 720.0) / 4.0
+    return math.degrees(decl), (lon + 540.0) % 360.0 - 180.0
+
+
+def merc_lat(y, z):
+    """Latitudes (deg) of global pixel rows y at zoom z."""
+    n = 256.0 * 2 ** z
+    return np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * np.asarray(y, np.float64) / n))))
+
+
+def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL):
     """The (TEX_PX, TEX_PX, 3) uint8 image of the global pixel box at zoom z from the layer's tiles (black where a tile
     could not be had), and how many tiles came."""
     from PIL import Image
@@ -80,7 +107,7 @@ def mosaic(fetcher, z, x0, y0, x1, y1):
         if not 0 <= ty < n:
             return tx, ty, None
         try:
-            body = fetcher.get(TILE_URL.format(z=z, x=tx % n, y=ty), kind="demand").body
+            body = fetcher.get(url.format(z=z, x=tx % n, y=ty), kind="demand").body
             return tx, ty, np.asarray(Image.open(io.BytesIO(body)).convert("RGB"))
         except Exception as e:          # (a tile the day has no pass over yet, offline: no clouds there)
             log.debug("space clouds tile %s/%s/%s: %s", z, tx, ty, e)
@@ -103,7 +130,7 @@ def build(out_dir, vfs_dir, frame, lat0, lon0, cam_alt, fetcher):
     the 'space_clouds' message's fields (game paths under vfs_dir, the material's name), or None without any tile."""
     import cdae
     import imagery
-    fast.require(150, "space clouds")
+    fast.require(151, "space clouds")
     radius = radius_for(cam_alt)
     z, x0, y0, x1, y1 = pick_zoom(lat0, lon0, radius)
     img, got = mosaic(fetcher, z, x0, y0, x1, y1)
@@ -129,5 +156,39 @@ def build(out_dir, vfs_dir, frame, lat0, lon0, cam_alt, fetcher):
                object_name="clouds")
     log.info("space clouds: %d tiles at zoom %d, %.0f km round %.3f, %.3f (camera %.0f km up)", got, z,
              radius / 1000, lat0, lon0, cam_alt / 1000)
-    return {"shape": f"{vfs_dir}/{name}.cdae", "color": f"{vfs_dir}/{name}_c.dds", "opacity": f"{vfs_dir}/{name}_o.dds",
-            "material": material, "lat": float(lat0), "lon": float(lon0), "radius": float(radius)}
+    out = {"shape": f"{vfs_dir}/{name}.cdae", "color": f"{vfs_dir}/{name}_c.dds", "opacity": f"{vfs_dir}/{name}_o.dds",
+           "material": material, "lat": float(lat0), "lon": float(lon0), "radius": float(radius)}
+    try:
+        out.update(_lights(out_dir, vfs_dir, frame, name, ll, tris, z, x0, y0, x1, y1, fetcher))
+    except Exception as e:                  # (the clouds without the lights)
+        log.debug("space clouds: night lights: %s: %s", type(e).__name__, e)
+    return out
+
+
+def _lights(out_dir, vfs_dir, frame, name, ll, tris, z, x0, y0, x1, y1, fetcher):
+    """The night-lights shell over the clouds' box: Black Marble at zoom min(z, LIGHTS_MAX_ZOOM), the lit pixels where
+    the sun is down now; {} without any tile."""
+    import cdae
+    import imagery
+    zl = min(z, LIGHTS_MAX_ZOOM)
+    k = 2.0 ** (zl - z)
+    img, got = mosaic(fetcher, zl, x0 * k, y0 * k, x1 * k, y1 * k, LIGHTS_URL)
+    if not got:
+        return {}
+    rows = y0 * k + (np.arange(TEX_PX) + 0.5) * (y1 - y0) * k / TEX_PX
+    cols = x0 * k + (np.arange(TEX_PX) + 0.5) * (x1 - x0) * k / TEX_PX
+    lon = cols / (256.0 * 2 ** zl) * 360.0 - 180.0
+    slat, slon = subsolar()
+    lit = fast._ef.night_lights(np.ascontiguousarray(img), np.ascontiguousarray(merc_lat(rows, zl)),
+                                np.ascontiguousarray(lon), slat, slon)
+    imagery.write_dds(os.path.join(out_dir, name + "_l.dds"), np.asarray(lit))
+    e, nn, u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.full(len(ll), LIGHTS_H_M))
+    mx, my = merc(ll[:, 1], ll[:, 0], z)
+    w = 256.0 * 2 ** z
+    mx = np.where(mx < x0 - w / 2, mx + w, np.where(mx > x1 + w / 2, mx - w, mx))
+    uv = np.stack([(mx - x0) / (x1 - x0), (y1 - my) / (y1 - y0)], axis=1)
+    material = "bne_" + name + "_lights"
+    cdae.write(os.path.join(out_dir, name + "_lights.cdae"), np.stack([e, nn, u], axis=1).astype(np.float64),
+               np.asarray(tris, np.int64), uvs=uv, material=material, object_name="lights")
+    return {"lightsShape": f"{vfs_dir}/{name}_lights.cdae", "lights": f"{vfs_dir}/{name}_l.dds",
+            "lightsMaterial": material}

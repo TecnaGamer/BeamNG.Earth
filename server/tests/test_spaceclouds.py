@@ -68,6 +68,9 @@ class BuildTest(unittest.TestCase):
             shape = cdae.read(os.path.join(d, os.path.basename(res["shape"])))
             self.assertIsInstance(shape, dict)
             self.assertAlmostEqual(res["radius"], spaceclouds.radius_for(100_000.0))
+            self.assertTrue(res["lightsShape"].endswith("_lights.cdae") and res["lightsMaterial"].endswith("_lights"))
+            self.assertTrue(os.path.exists(os.path.join(d, os.path.basename(res["lights"]))))
+            self.assertTrue(any("VIIRS_Black_Marble" in u for u in net.asked), "the night lights asked for too")
 
     def test_no_tile_no_shell(self):
         class Dead:
@@ -75,6 +78,17 @@ class BuildTest(unittest.TestCase):
                 raise OSError("offline")
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(spaceclouds.build(d, "/temp/x", geodesy.EnuFrame(0, 0), 0.0, 0.0, 50_000.0, Dead()))
+
+
+class SunTest(unittest.TestCase):
+    def test_subsolar(self):
+        import calendar
+        lat, lon = spaceclouds.subsolar(calendar.timegm((2026, 6, 21, 12, 0, 0)))
+        self.assertAlmostEqual(lat, 23.4, delta=0.3)
+        self.assertAlmostEqual(lon, 0.0, delta=1.0)
+        lat, lon = spaceclouds.subsolar(calendar.timegm((2026, 12, 21, 18, 0, 0)))
+        self.assertAlmostEqual(lat, -23.4, delta=0.3)
+        self.assertAlmostEqual(lon, -90.0, delta=1.5)
 
 
 class LayerTest(unittest.TestCase):
