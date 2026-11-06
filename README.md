@@ -62,6 +62,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   and tram tracks (street track where trams run on the road).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
+- Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
+  (from AnthonyGraceffa's contribution).
+- Worn dirt and gravel roads: potholes, broken patches, the odd deep pit and a lean to one side on minor dirt roads,
+  rougher forest tracks, smoother main gravel roads (from RiDexSS's contribution).
+- Street trees, fire hydrants, benches and bins along sidewalks where the street is really built up (its buildings,
+  shops and land use; from wyo-backroads' contribution).
 - Highway signs on US freeways (from cody196's contribution): green exit signs at 1 mile, 1/2 mile and 1/4 mile and
   in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
   warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in
