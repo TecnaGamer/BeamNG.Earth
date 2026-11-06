@@ -80,6 +80,18 @@ M.FOG_HEIGHT = 1000        -- fogAtmosphereHeight, m (the menu's range is 1-1000
 M.FOG_HEIGHT_FOG = 500     -- with fog codes; lower makes valleys below the player opaque
 M.FOG_FOLLOW_GROUND = true
 M.FOG_DENSITY_MAX = 0.05   -- the menu's maximum (50 / 1000)
+-- High above the ground (the free camera, a plane): the engine's fog is a height fog over the flat world's z, ever denser
+-- below z = 0, and our ground is the curved Earth's, kilometres under z = 0 a few hundred km out (7 km at 300 km): from
+-- 100 km up everything past ~150 km was one white-grey wall (2026-11-06, the user: "improve how the earth looks at
+-- extremely high altitudes"). The fog fades out between FOG_FADE_FROM_M and FOG_FADE_TO_M of the camera over the
+-- ground; above, the sky's own atmosphere (ScatterSky, physical, curved: horizon.lua) draws the haze.
+M.FOG_FADE_FROM_M = 1500
+M.FOG_FADE_TO_M = 6000
+-- ... and the cloud layer goes above CLOUD_HIDE_M (back below CLOUD_SHOW_M): far over the clouds the engine's
+-- volumetric clouds composite a stale picture of themselves into the sky (the same clouds at the same place on screen
+-- whichever way the camera looks, Nice from 15 and 100 km, 2026-11-06)
+M.CLOUD_HIDE_M = 12000
+M.CLOUD_SHOW_M = 10000
 -- Clouds drift with the wind aloft; CloudLayer.windSpeed is a texture-scroll scalar (levels 0.1-0.2).
 M.CLOUD_WIND_SCALE, M.CLOUD_WIND_MIN, M.CLOUD_WIND_MAX = 0.02, 0.02, 0.5
 M.CLOUD_ABOVE_MIN_KM, M.CLOUD_ABOVE_MAX_KM = 0.3, 6
@@ -175,6 +187,22 @@ function M.fogDensityFor(sigma, groundZ, height)
   if M.FOG_FOLLOW_GROUND and groundZ then d = sigma * math.exp(groundZ / height) end
   return math.min(d, M.FOG_DENSITY_MAX)
 end
+
+-- Pure: the share of the fog kept with the camera h m over the ground (1 low down, 0 high up; FOG_FADE_*).
+function M.fogAltitudeShare(h)
+  h = tonumber(h)
+  if not h then return 1 end
+  return clamp(1 - (h - M.FOG_FADE_FROM_M) / (M.FOG_FADE_TO_M - M.FOG_FADE_FROM_M), 0, 1)
+end
+
+-- Pure: whether the cloud layer is hidden with the camera h m over the ground, given whether it is now (hysteresis).
+function M.cloudsHiddenAt(h, hiddenNow)
+  h = tonumber(h)
+  if not h then return hiddenNow or false end
+  if hiddenNow then return h > M.CLOUD_SHOW_M end
+  return h > M.CLOUD_HIDE_M
+end
+
 
 -- Ground wind: meteorological "from" direction (deg clockwise from north) and speed -> the world
 -- vector the air moves along (ENU: +x east, +y north; the UI's x = s sin(dir), y = s cos(dir) with
@@ -565,6 +593,28 @@ local function restoreSun()
 end
 M._restoreSun = function() restoreSun() end -- tests
 
+-- The camera's height over the ground under the player (nil without one): what the fog and clouds go by.
+local function cameraOverGround()
+  local cam = rawget(_G, 'core_camera')
+  local p = cam and cam.getPosition and cam.getPosition()
+  if not p or not S.groundZ then return nil end
+  return p.z - S.groundZ
+end
+
+local cloudsHidden = false
+local function hideCloudsHigh(h)
+  local want = M.cloudsHiddenAt(h, cloudsHidden)
+  if want == cloudsHidden then return end
+  local names = scenetree.findClassObjects and scenetree.findClassObjects('CloudLayer')
+  for _, nm in ipairs(names or {}) do
+    local o = scenetree.findObject(nm)
+    if o and o.setHidden then o:setHidden(want) end
+  end
+  cloudsHidden = want
+  log('I', 'beamngEarth', want and 'clouds hidden: the camera far above them' or 'clouds shown again')
+end
+M._cloudsHidden = function() return cloudsHidden end -- tests
+
 local function apply(e)
   local c = S.cur
   setIf(e.getCloudCover, e.setCloudCover, c.coverage, 0.005)
@@ -578,8 +628,10 @@ local function apply(e)
     if not (have and have.x and (have.x * x + have.y * y) > 0.9986) then envCall(e.setCloudWindDirection, x, y, 0) end -- 3 deg
   end
   setIf(e.getWindSpeed, e.setWindSpeed, c.cloudWindSpeed, 0.005)
+  local camH = cameraOverGround()
+  hideCloudsHigh(camH)
   if S.groundZ then
-    local want = M.fogDensityFor(c.fogSigma, S.groundZ, c.fogHeight)
+    local want = M.fogDensityFor(c.fogSigma, S.groundZ, c.fogHeight) * M.fogAltitudeShare(camH)
     local have = e.getFogDensity and tonumber((e.getFogDensity()))
     if not have or math.abs(have - want) > 0.02 * want then envCall(e.setFogDensity, want) end
     setIf(e.getFogAtmosphereHeight, e.setFogAtmosphereHeight, c.fogHeight, 1)
