@@ -283,6 +283,84 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_SHRUB, 1, 52.0, 5.0, 20), veg.G_SHRUB, "Dutch shrubland: no desert")
 
 
+class AustralianTreesTest(unittest.TestCase):
+    """fork: australian_trees, the eucalypt / rainforest / palm mix inside Australia (regional() is North America's)."""
+    N = 20000
+
+    def run_at(self, generic, h, lat, lon, lcls=10, seed=1):
+        u = np.random.default_rng(seed).random((self.N, 3))
+        gen = np.full(self.N, generic, np.uint8)
+        height = np.full(self.N, float(h))
+        la, lo = np.full(self.N, lat), np.full(self.N, lon)
+        cl = np.full(self.N, lcls, np.uint8)
+        reg = veg.regional(gen, height, la, lo, cl, u[:, 0])
+        return veg.australian_trees(gen, reg, height, la, lo, cl, u), reg
+
+    def share(self, out, group):
+        return float((out == group).mean())
+
+    def test_group_ids_unchanged_eucalypt_last(self):
+        self.assertEqual(veg.GROUPS[:11], ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper",
+                                           "desert_shrub", "desert_rock", "oak_west", "tropical"))
+        self.assertEqual((veg.GROUPS[11], veg.G_EUCALYPT), ("eucalypt", 11))
+
+    def test_brisbane_mostly_eucalypt(self):
+        for generic, want in ((veg.G_DECIDUOUS, 0.85), (veg.G_CONIFER, 0.85), (veg.G_OAK_WEST, 0.70)):
+            out, _ = self.run_at(generic, 15.0, -27.47, 153.03)
+            self.assertAlmostEqual(self.share(out, veg.G_EUCALYPT), want, delta=0.02, msg=veg.GROUPS[generic])
+            self.assertEqual(self.share(out, veg.G_EUCALYPT) + self.share(out, generic), 1.0, "the rest stay")
+            self.assertEqual(self.share(out, veg.G_PALM) + self.share(out, veg.G_TROPICAL), 0.0, "Cfa, not in town")
+
+    def test_cairns_tall_trees_partly_tropical(self):
+        out, _ = self.run_at(veg.G_DECIDUOUS, 20.0, -16.92, 145.77)
+        self.assertAlmostEqual(self.share(out, veg.G_TROPICAL), 0.60, delta=0.02)
+        self.assertAlmostEqual(self.share(out, veg.G_EUCALYPT), 0.40 * 0.85, delta=0.02)
+        low, _ = self.run_at(veg.G_DECIDUOUS, 8.0, -16.92, 145.77)
+        self.assertEqual(self.share(low, veg.G_TROPICAL), 0.0, "under 12 m: no rainforest tree")
+        self.assertAlmostEqual(self.share(low, veg.G_EUCALYPT), 0.85, delta=0.02)
+        dry, _ = self.run_at(veg.G_DECIDUOUS, 20.0, -23.7, 133.88)      # Alice Springs (arid): none
+        self.assertEqual(self.share(dry, veg.G_TROPICAL), 0.0)
+
+    def test_queensland_towns_have_palms(self):
+        wc_built = veg.WC["built"]
+        out, _ = self.run_at(veg.G_DECIDUOUS, 8.0, -27.47, 153.03, wc_built)
+        self.assertAlmostEqual(self.share(out, veg.G_PALM), 0.15, delta=0.02)
+        south, _ = self.run_at(veg.G_DECIDUOUS, 8.0, -33.87, 151.2, wc_built)        # Sydney, south of -29: none
+        self.assertEqual(self.share(south, veg.G_PALM), 0.0)
+        self.assertGreater(self.share(south, veg.G_EUCALYPT), 0.8)
+
+    def test_shrubs_and_rocks_keep_regional(self):
+        for generic in (veg.G_SHRUB, veg.G_ROCK):
+            for lat, lon, lcls in ((-27.47, 153.03, 20), (-25.0, 133.0, 20), (-25.0, 133.0, 60)):
+                out, reg = self.run_at(generic, 1.0, lat, lon, lcls)
+                self.assertTrue((out == reg).all(), (generic, lat, lon))
+
+    def test_outside_australia_unchanged(self):
+        # London, Seattle, Baltimore, Miami, Auckland, Jakarta: byte-identical to regional()
+        for lat, lon in ((51.5, -0.12), (47.6, -122.3), (39.29, -76.58), (25.8, -80.2), (-36.85, 174.76), (-6.2, 106.8)):
+            for generic in (veg.G_DECIDUOUS, veg.G_CONIFER, veg.G_SHRUB):
+                for lcls in (10, veg.WC["built"]):
+                    out, reg = self.run_at(generic, 15.0, lat, lon, lcls)
+                    self.assertEqual(out.tobytes(), reg.tobytes(), (lat, lon, generic, lcls))
+                    self.assertEqual(int((out == veg.G_EUCALYPT).sum()), 0)
+
+    def test_mixed_batch_and_deterministic(self):
+        lat = np.array([-27.47, 51.5, -16.92, 47.6]).repeat(1000)
+        lon = np.array([153.03, -0.12, 145.77, -122.3]).repeat(1000)
+        n = len(lat)
+        u = np.random.default_rng(3).random((n, 3))
+        gen = np.full(n, veg.G_DECIDUOUS, np.uint8)
+        h = np.full(n, 15.0)
+        cl = np.full(n, 10, np.uint8)
+        reg = veg.regional(gen, h, lat, lon, cl, u[:, 0])
+        a = veg.australian_trees(gen, reg, h, lat, lon, cl, u)
+        self.assertEqual(a.tobytes(), veg.australian_trees(gen, reg, h, lat, lon, cl, u).tobytes())
+        self.assertEqual(a[1000:2000].tobytes(), reg[1000:2000].tobytes(), "London in the same batch: unchanged")
+        self.assertEqual(a[3000:].tobytes(), reg[3000:].tobytes(), "Seattle")
+        self.assertGreater(float((a[:1000] == veg.G_EUCALYPT).mean()), 0.8)
+        self.assertGreater(float((a[2000:3000] == veg.G_TROPICAL).mean()), 0.5)
+
+
 class DilateTest(unittest.TestCase):
     def test_grows_by_r_in_both_axes(self):
         m = np.zeros((9, 9), bool)
