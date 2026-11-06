@@ -201,7 +201,7 @@ def ribbons(chunks, keep_none=False):
         pts.append(p[:, :3])
         half.append(float(c["w"]) / 2)
     if batch:
-        fast.require(90, "ribbon_edges")
+        fast.require(155, "ribbon_edges")
         off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
         L, R, S, Z, o = fast._ef.ribbon_edges(np.ascontiguousarray(np.concatenate(pts)), off,
                                              np.asarray(half, np.float64), float(DRAPE_STEP))

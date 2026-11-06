@@ -5516,7 +5516,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 154)?;
+    m.add("VERSION", 155)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     Ok(())
 }
