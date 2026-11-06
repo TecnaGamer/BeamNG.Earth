@@ -248,13 +248,9 @@ T.check(s.settings.rebaseDistance == settings.get('rebaseDistance') and #s.schem
 T.check(s.status.connection == 'disconnected' and s.status.session == 'abc' and s.status.anchorId == 3
   and s.status.attribution == 'credits' and s.status.dist == 500, 'uiState: status from the core')
 T.check(s.dev and s.dev.active, 'uiState: dev state')
-T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008') and s.status.deshadow == 'off',
-  'uiState: server features (weather, gravity, de-shadowing off)')
-stTbl.deshadow = 'full'
-T.check(settings.uiState().status.deshadow == 'full', 'uiState: de-shadowing mode from the hello')
-T.check(s.status.colormatch == 'off', 'uiState: colour seams off without hello.colormatch')
-stTbl.colormatch = 's2'
-T.check(settings.uiState().status.colormatch == 's2', 'uiState: colour-seam mode from the hello')
+T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008'),
+  'uiState: server features (weather, gravity)')
+T.check(s.status.deshadow == nil and s.status.colormatch == nil, 'uiState: no imagery rows (left the About page)')
 T.check(settings.uiDevSet('tint', true).active and devCalls[1] == 'tint=true', 'uiDevSet forwards')
 settings.uiDevPreset('lod')
 T.check(devCalls[2] == 'preset lod', 'uiDevPreset forwards')

@@ -600,12 +600,10 @@ function M.uiState()
     banner = core and core.banner and core.banner() or nil,
     update = core and core.updateInfo and core.updateInfo() or nil,  -- a newer version on GitHub
   }
-  -- server features (status only): weather, gravity, imagery de-shadowing and colour seams
+  -- server features (status only): weather and gravity
   local w = ext('beamngEarth_weather')
   status.weather = w and w.statusLine and w.statusLine() or nil
   status.gravity = w and w.gravityLine and w.gravityLine() or nil
-  status.deshadow = st and st.deshadow or 'off'
-  status.colormatch = st and st.colormatch or 'off'
   -- the download cache: the server's last numbers, fresh ones asked every CACHE_POLL-th call (the page
   -- polls every 2 s while it is open)
   cachePolls = cachePolls + 1

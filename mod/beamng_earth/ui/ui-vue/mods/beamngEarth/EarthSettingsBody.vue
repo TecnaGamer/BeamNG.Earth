@@ -29,7 +29,7 @@
       v-for="item in rows"
       :key="item.id"
       class="earth-row"
-      :vertical="item.type === 'text' || item.type === 'path'"
+      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors'"
       @mouseenter="setHelp(item)"
       @focusin="setHelp(item)"
     >
@@ -74,6 +74,20 @@
       />
       <span v-else-if="item.type === 'info'" class="earth-value">{{ infoValue(item) }}</span>
       <div v-else-if="item.type === 'text'" class="earth-text">{{ infoValue(item) }}</div>
+      <div v-else-if="item.type === 'links'" class="earth-inline">
+        <BngButton v-for="l in item.links" :key="l.url" :accent="ACCENTS.outlined" @click="openLink(l.url)">{{ l.label }}</BngButton>
+      </div>
+      <div v-else-if="item.type === 'contributors'" class="earth-people">
+        <span
+          v-for="c in CONTRIBUTORS"
+          :key="c.login"
+          class="earth-person"
+          tabindex="0"
+          :title="'github.com/' + c.login + ' (' + c.prs.length + (c.prs.length === 1 ? ' pull request)' : ' pull requests)')"
+          @click="openLink('https://github.com/' + c.login)"
+          @keydown.enter="openLink('https://github.com/' + c.login)"
+        >{{ c.login }}</span>
+      </div>
       <BngButton v-else-if="item.type === 'feedback'" :accent="ACCENTS.outlined" @click="openFeedback(item.what)">{{ item.label }}</BngButton>
 
       <!-- Clear cache: asks in the row first -->
@@ -122,9 +136,10 @@ import {
   config, dev, help, qualityPresets, devPresets, presetLine, detectedPick, optionConfig, categoryNamed, visibleItems,
   cacheConfirm, cacheBusy, cacheResult, pathText, pathBusy, pathPick, pathMsg,
   setQuality, presetName, valueOf, selectOption, onSwitchChange, onSliderChange, onNumberEnter, onDevChange, infoValue,
-  openFeedback,
+  openFeedback, openLink,
   confirmClearCache, askClearCache, usePath, sendPath, pathNote, typing, applyDevPreset,
 } from "./earthSettingsStore.js"
+import { CONTRIBUTORS } from "./contributors.js"
 
 const props = defineProps({
   page: { type: String, default: "Graphics" },     // the page's name (settingsSchema's)
@@ -174,6 +189,21 @@ function applyNumber(item) {
 }
 
 .earth-value { color: var(--bng-cool-gray-200, #ccc); text-align: right; }
+
+.earth-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em 0.5em;
+}
+.earth-person {
+  padding: 0.15em 0.55em;
+  border-radius: 0.3em;
+  font-size: 0.9em;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--bng-cool-gray-100, #e6e6e6);
+  cursor: pointer;
+}
+.earth-person:hover, .earth-person:focus { background: rgba(255, 102, 0, 0.35); outline: none; }
 
 .earth-text {
   white-space: pre-wrap;

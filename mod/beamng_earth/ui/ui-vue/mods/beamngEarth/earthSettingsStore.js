@@ -119,15 +119,16 @@ export const settingsSchema = [
   {
     name: "About",
     items: [
+      { id: "links", type: "links", name: "BeamNG.Earth", desc: "The project on GitHub (code, releases, issues), the TGForever Discord (help and news) and Ko-fi (support the development). Opens in your browser.",
+        links: [ { label: "GitHub", url: "https://github.com/TecnaGamer/BeamNG.Earth" }, { label: "Discord", url: "https://discord.gg/tgf" }, { label: "Ko-fi", url: "https://ko-fi.com/tecnagamer" } ] },
       { id: "connection", type: "info", name: "Companion app", desc: "The connection to the BeamNG.Earth app (127.0.0.1:47613) that builds the world, and the session id it gave this game." },
       { id: "anchor", type: "info", name: "World origin", desc: "The current world origin (anchor) and its latitude / longitude. A rebase moves it under you." },
       { id: "player", type: "info", name: "Your position", desc: "Your latitude / longitude and the distance from the world origin." },
       { id: "weather", type: "info", name: "Weather data", desc: "Real weather from Open-Meteo.com, every 10 min or 25 km." },
       { id: "gravity", type: "info", name: "Gravity", desc: "The gravity in use: the real value (WGS84 normal plus EGM2008) or normal gravity by latitude." },
-      { id: "deshadow", type: "info", name: "Imagery de-shadowing", desc: "The app's relighting of the shadows baked into the aerial photos." },
-      { id: "colormatch", type: "info", name: "Imagery colour seams", desc: "The app's removal of the colour steps between photo flights, e.g. at state lines." },
       { id: "credits", type: "text", name: "Data credits now", desc: "The data credits for what is around you now, as drawn in the screen corner." },
       { id: "attribution", type: "text", name: "Data sources", desc: "Credits for the elevation and imagery sources in use." },
+      { id: "contributors", type: "contributors", name: "Contributors", desc: "The GitHub users whose code is merged into this version. Thank you! Click a name to open their GitHub page." },
     ],
   },
   {
@@ -222,6 +223,12 @@ export const bannerText = computed(() => (status.value.banner && status.value.ba
 export const bannerLevel = computed(() => (status.value.banner && status.value.banner.level) || "info")
 // a newer version on GitHub: { current, latest, url } (core.updateInfo)
 export const update = computed(() => status.value.update || null)
+// a link from the About page, in the system's browser (only the page's own links: the settings schema's and the
+// contributors' GitHub pages)
+export function openLink(url) {
+  if (typeof url === "string" && url.startsWith("https://")) engineLua(`openWebBrowser(${JSON.stringify(url)})`)
+}
+
 export function openUpdate() {
   const url = update.value && update.value.url
   if (url) engineLua(`openWebBrowser(${JSON.stringify(url)})`)
@@ -241,8 +248,6 @@ export function infoValue(item) {
   if (item.id === "reportPost") return "github.com/TecnaGamer/BeamNG.Earth/issues"
   if (item.id === "weather") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"
-  if (item.id === "deshadow") return s.deshadow || "off"
-  if (item.id === "colormatch") return s.colormatch || "off"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
   return ""
 }

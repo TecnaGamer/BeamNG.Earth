@@ -34,6 +34,9 @@ Works with BeamNG.drive 0.40.4.
 - **Sidewalk decoration that follows the street** (PR #670, wyo-backroads): street trees, hydrants, benches and bins
   now go where a street is really built up (buildings, shops, land use around it) instead of on every town street.
 
+- **About page**: buttons to open the GitHub project, the TGForever Discord and Ko-fi, and a list of everyone whose
+  code is merged into this version (click a name to open their GitHub page). The two imagery lines that always
+  said "off" are gone.
 - **Update prompt in the launcher** (PR #737, dejvidku): when a newer BeamNG.Earth is out, the launcher asks whether to install it before the game starts.
 
 ### Fixed
