@@ -219,7 +219,7 @@ roads.setCliffsEnabled(false)
 T.check(cliff.hidden and cliff.fields.decalType == 'None' and cliff.fields.collisionType == 'None',
   'disabled cliff does not render, receive decals or collide')
 roads.setCliffsEnabled(true)
-T.check(not cliff.hidden and cliff.fields.decalType == 'Visible Mesh Final' and cliff.fields.collisionType == 'Visible Mesh Final',
+T.check(not cliff.hidden and cliff.fields.decalType == 'None' and cliff.fields.collisionType == 'Visible Mesh Final',
   'cliff restores drawing and collision without replacing its mesh')
 roads.setCliffsEnabled(false)
 roads.onTile({ anchorId = 2, key = '7_6', path = '/t/cliff.json', n = 0 }, 2)
@@ -493,6 +493,33 @@ T.check(#statics() == 2 and roads.status().tiles == 2, 'covered: the ghost goes,
 roads.onDrop({ anchorId = 3, key = '0_0' }); roads.onDrop({ anchorId = 3, key = '0_-1' })
 roads.update(gov, 3)
 
+-- Contact strips share tile lifetime but never collision or DecalMgr receivers.
+do
+  roads.reset(); roads.setCliffsEnabled(true); roads.setCliffStripsEnabled(true)
+  files['/t/strip.json'] = '{chunks={},cliffStrip1={shape="/t/strip.cdae",pos={0,0,0}},cliffStrip24={shape="/t/end.cdae",pos={0,0,0}}}'
+  roads.onTile({anchorId=3,key='8_8',path='/t/strip.json',n=0},3)
+  for i=1,5 do roads.update(gov,3) end
+  T.check(#statics()==2,'both first and last strip slots load')
+  for _,o in ipairs(statics()) do
+    T.check(o.fields.collisionType=='None' and o.fields.decalType=='None','strip has no collision or decal receiver')
+    T.check(not o.hidden,'enabled strip is visible')
+  end
+  roads.setCliffStripsEnabled(false)
+  for _,o in ipairs(statics()) do T.check(o.hidden,'strip toggle hides existing objects') end
+  roads.onTile({anchorId=3,key='9_8',path='/t/strip.json',n=0},3)
+  for i=1,5 do roads.update(gov,3) end
+  T.check(#statics()==4,'new strip tile arrives while hidden')
+  for _,o in ipairs(statics()) do T.check(o.hidden,'new strips respect disabled setting') end
+  roads.setCliffsEnabled(false); roads.setCliffStripsEnabled(true)
+  for _,o in ipairs(statics()) do T.check(o.hidden,'strips cannot outlive hidden cliff faces') end
+  roads.setCliffsEnabled(true)
+  for _,o in ipairs(statics()) do T.check(not o.hidden and o.fields.collisionType=='None','restored strip remains render-only') end
+  roads.onDrop({anchorId=3,key='8_8'}); roads.onDrop({anchorId=3,key='9_8'})
+  for i=1,5 do roads.update(gov,3) end
+  T.check(#statics()==0,'tile drops remove every strip')
+  roads.reset()
+end
+
 -- a Lua reload: the new module state deletes the objects the old one left
 roads.onTile({ anchorId = 2, key = '0_0', path = '/t/a.json', n = 2 }, 2)
 roads.update(gov, 2)
@@ -547,20 +574,10 @@ do
   T.check(a:getField('translucent') == '0' and a:getField('castShadows') == '0', 'asphalt: opaque, no shadow')
   T.check(c:getField('castShadows') == '0' and c:getField('translucent') == '1', 'concrete streets: no shadow')
   T.check(k:getField('castShadows') == nil, 'the curbs keep their shadow')
+  T.check(table.concat(roads.NO_SHADOW, ','):find('bne_cliff_contact_strip',1,true) ~= nil, 'contact material explicitly excluded from shadow passes')
   T.check(S.calls.reload_Material == 2, 'one reload a changed material')
   for _, m in pairs(made) do m:delete() end
   roads.reset()
-end
--- Decals can be toggled back on after all road streaming has finished.
--- Their pending queue must wake the governor or they never get creation tokens.
-do
-  local decals=require('beamngEarth/cliffdecals')
-  local hasWork=decals.hasWork
-  decals.hasWork=function() return true end
-  T.check(roads.hasWork(),'pending decals wake idle road streaming')
-  decals.hasWork=function() return false end
-  T.check(not roads.hasWork(),'completed decals allow idle road streaming')
-  decals.hasWork=hasWork
 end
 -- the materials' prewarm shape, and its sibling in the dirt and gravel strips' vertex format when the server wrote one
 do

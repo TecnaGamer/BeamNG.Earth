@@ -1,0 +1,6 @@
+{
+  "source": "assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_h.png",
+  "sha256": "c6ad9e9a44fb9a1b26a5880d9780cb7822f85fc01c56de6eaa08f978386ebcdb",
+  "encoding": "H=.51+.49*h; D(t)=(128/255)*.5/(.505+.52*t)",
+  "notes": "Linear coverage maps; source height is embedded in the generated DDS. Albedo and PBR reuse bundled rocky-dirt assets."
+}

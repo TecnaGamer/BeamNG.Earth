@@ -70,19 +70,23 @@ class NearGenerationTest(unittest.TestCase):
                 fail=Mock(side_effect=AssertionError('disabled face construction'))
                 with patch.object(cliffrocks,'_refine',fail), patch.object(cliffrocks,'mesh',fail), \
                      patch('clifftalus.rows',return_value=[['talus_test',1]]) as rubble, \
-                     patch('cliffdecals.rows',return_value=[{'patch':1}]) as patches:
+                     patch('cliffstrips.tile_parts',side_effect=AssertionError('no strips without faces')) as patches:
                     result=cliffrocks.build(frame,(0,0,160,160),elev,Surface(),features=(False,rocks,decals))
+                if not rocks:
+                    self.assertIsNone(result)
+                    patches.assert_not_called()
+                    continue
                 self.assertIsNotNone(result)
                 fail.assert_not_called()
                 self.assertEqual(rubble.call_count,int(rocks))
-                self.assertEqual(patches.call_count,int(decals))
+                self.assertEqual(patches.call_count,0)
                 with patch('cliffrocks.write',fail):
                     with tempfile.TemporaryDirectory() as tmp:
                         roads.write_tile(tmp,'/x',0,0,0,[],cliff_mesh=result,decals=False)
                         data=json.loads(Path(tmp,'roads_0_0_0.json').read_text())
                         self.assertFalse(list(Path(tmp).glob('*.cdae')))
                 self.assertEqual('talus' in data,rocks)
-                self.assertEqual('cliffDecals' in data,decals)
+                self.assertNotIn('cliffDecals',data)
 
     def test_enabled_faces_do_not_generate_disabled_props(self):
         class Surface:
@@ -94,11 +98,11 @@ class NearGenerationTest(unittest.TestCase):
         def elev(lat,lon):
             return 100+(np.asarray(lon)-7)*111320*np.cos(np.radians(46))*2
         fail=Mock(side_effect=AssertionError('disabled prop generation'))
-        with patch('clifftalus.rows',fail), patch('cliffdecals.rows',fail):
+        with patch('clifftalus.rows',fail), patch('cliffstrips.tile_parts',fail):
             result=cliffrocks.build(frame,(0,0,80,80),elev,Surface(),features=(True,False,False))
         self.assertIsNotNone(result)
         self.assertGreater(len(result.tris),0)
-        self.assertEqual((result.talus,result.decals),([],[]))
+        self.assertEqual((result.talus,result.strips),([],[]))
         fail.assert_not_called()
 
     def test_worker_revisit_cache_keeps_disabled_and_enabled_builds_separate(self):

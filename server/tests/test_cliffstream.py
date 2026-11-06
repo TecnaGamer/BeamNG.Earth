@@ -73,14 +73,13 @@ class CliffStreamTest(unittest.TestCase):
 
     def test_all_piece_paths_are_declared(self):
         files = roads.shape_files(1,2,3)
-        self.assertEqual(len([k for k in files if k.startswith('cliff')]),cliffrocks.STREAM_PARTS_MAX)
+        self.assertEqual(len([k for k in files if k.startswith('cliff') and not k.startswith('cliffStrip')]),cliffrocks.STREAM_PARTS_MAX)
         self.assertTrue(files['cliff'].endswith('cliff_1_2_3.cdae'))
         self.assertTrue(files['cliff64'].endswith('cliff_1_2_3_64.cdae'))
 
     def test_tile_publishes_every_piece_with_rows_only_once(self):
         import json
         rock = surface(15)
-        rock.decals = [[1,2,3]]
         rock.talus = [['talus_test',1,2,3]]
         with tempfile.TemporaryDirectory() as tmp, patch.object(cliffrocks,'STREAM_TRIANGLES',128):
             roads.write_tile(tmp,'/test',1,2,3,[],cliff_mesh=rock)
@@ -88,5 +87,5 @@ class CliffStreamTest(unittest.TestCase):
             parts = [v for k,v in data.items() if k.startswith('cliff') and k!='cliffDecals']
             self.assertGreater(len(parts),1)
             self.assertTrue(all(Path(tmp,Path(v['shape']).name).is_file() for v in parts))
-            self.assertEqual(data['cliffDecals'],rock.decals)
+            self.assertNotIn('cliffDecals',data)
             self.assertEqual(len(data['talus']['items']),1)

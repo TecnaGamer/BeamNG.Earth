@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod cliffstream;
+mod cliffstrips;
 mod clifftransition;
 mod cdaez;
 mod f32z;
@@ -5482,6 +5483,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_relief_weights, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_normals, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_fill_gaps, m)?)?;
-    m.add("VERSION", 148)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_project, m)?)?;
+    m.add("VERSION", 150)?;
     Ok(())
 }

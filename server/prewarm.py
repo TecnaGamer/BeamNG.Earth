@@ -91,7 +91,9 @@ def road_materials():
     import roads
     import cliffmaterial
     import clifftransition
+    import cliffstrips
     out = set(EXTRA[:2]) | set(roads.DIRT_MATERIALS) | set(cliffmaterial.MATERIALS) | set(clifftransition.MATERIALS)
+    out.add(cliffstrips.MATERIAL)
     for mod in (roads, roadmesh, junctions, airportgrade, plazas):
         for name, v in vars(mod).items():
             if name.isupper():

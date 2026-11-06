@@ -57,7 +57,7 @@ class PrewarmTest(unittest.TestCase):
         for m in roads.DIRT_MATERIALS:
             self.assertIn(m, prewarm.materials())
         rm = prewarm.road_materials()
-        for m in (*roads.DIRT_MATERIALS, "line_white", "line_yellow", "road_asphalt_2lane"):
+        for m in (*roads.DIRT_MATERIALS, "line_white", "line_yellow", "road_asphalt_2lane", "bne_cliff_contact_strip"):
             self.assertIn(m, rm)
         was = roads.DIRT_STRIPS
         try:

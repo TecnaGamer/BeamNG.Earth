@@ -907,7 +907,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import cliffrocks
     P.cliff = cliffrocks.tile_mesh(frame, box, drawn, _s.surface, cells, _s.widths, cache_dir=_s.cache_dir,
                                   source_elev=lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                  features=cliffs)
+                                  features=cliffs, defer_strips=hasattr(tile, "box"))
     mark("cliff_rocks")
     import railways
     rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
@@ -1048,11 +1048,14 @@ def geo_names(key, aid=None):
     if aid is None:
         out = {"json": f"rg_{key}.json", "inputs": f"rg_{key}.skin.pkl"}
         for what in roadsmod.shape_files(0, 0, 0):
-            if what not in ("road", "walk", "walkcol"):
+            if what not in ("road", "walk", "walkcol") and not what.startswith("cliffStrip"):
                 out[what] = f"rg_{key}_{what}.cdae"
         return out
-    return {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
-            "walkcol": f"rs_{aid}_{key}_walkcol.cdae"}
+    names = {"json": f"rs_{aid}_{key}.json", "road": f"rs_{aid}_{key}_road.cdae", "walk": f"rs_{aid}_{key}_walk.cdae",
+             "walkcol": f"rs_{aid}_{key}_walkcol.cdae"}
+    import cliffstrips
+    names.update({f"cliffStrip{i}": f"rs_{aid}_{key}_cliffStrip{i}.cdae" for i in range(1,cliffstrips.PARTS_MAX+1)})
+    return names
 
 
 def _shape_info(path, pos, what):
@@ -1142,7 +1145,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         data["h"] = h
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)
         _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
-        inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h}
+        inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h,
+                  "cliff_strips": getattr(P.cliff, "strip_inputs", [])}
         _write_bytes(os.path.join(out_dir, names["inputs"]), pickle.dumps(inputs, protocol=4))
         with _geo_lock:
             _geo_inputs[tile.key] = inputs
@@ -1368,7 +1372,7 @@ def _clip_mesh(mesh, origin, quad):
     return P2[used], remap[T2], UV2[used], mats, np.asarray(M)[src]
 
 
-def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content):
+def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, strips=True):
     """Anchor aid's skin of geotile (gx, gy): the draped road surfaces (the road mesh and plazas: roadmesh.build on the
     anchor's lattice and height quantum q, follow) and the sidewalks (curbs on the drawn ground, their lean collision
     mesh), from the content's skin inputs mapped into the anchor's world, cut exactly at the tile's quad there (its
@@ -1457,6 +1461,19 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
                     data["colliders"] = {"walk": boxes["walk"]}
                     if "walkcol" in data:
                         data["colliders"]["walkcol"] = boxes["walk"]
+    if strips and inputs.get("cliff_strips"):
+        import cliffstrips
+        try:
+            patches = cliffstrips.map_patches(inputs["cliff_strips"], tile.frame, frame,
+                                              np.array((tile.box[0],tile.box[1],0)))
+            surface = cliffstrips.TerrainSurface(frame, drawn, q)
+            for i, part in enumerate(cliffstrips.project_parts(patches, surface), 1):
+                what = f"cliffStrip{i}"
+                cliffstrips.write(os.path.join(out_dir, names[what]), part)
+                data[what] = {"shape": f"{vfs_dir}/{names[what]}", "pos": [0,0,0]}
+        except Exception:
+            log.exception("cliff contact strips omitted; keeping road skin")
+    mark("cliff_strips")
     mark("write")
     _write_bytes(os.path.join(out_dir, names["json"]), json.dumps(data, separators=(",", ":")).encode("utf-8"))
     _geo_stats["skins"] += 1
@@ -1527,7 +1544,8 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
             out["stages"]["content"] = last_tile_stages()
         t1, c1 = time.perf_counter(), time.process_time()
         if skin:
-            out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content)
+            out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content,
+                                      strips=bool(cliffs[0] and cliffs[2]))
             out["stages"]["skin"] = last_tile_stages()
         t2, c2 = time.perf_counter(), time.process_time()
         if exact == "auto":             # (a fresh content: the parts its anchor needs exact, roads.geo_exact_auto)

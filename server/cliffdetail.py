@@ -42,6 +42,7 @@ def refine_canyon(rock, *, full_relief=False):
     uv, colors = np.asarray(rock.uvs,float), np.asarray(rock.colors,float)
     normals = np.asarray(rock.normals,float).copy()
     uv2 = None if rock.uvs2 is None else np.asarray(rock.uvs2,float)
+    strip_colors = None if rock.strip_colors is None else np.asarray(rock.strip_colors, float)
     material = rock.tri_materials
     # Fade the correction to all existing chart/tile/material boundaries.
     e = np.sort(np.stack((t[:,[0,1]],t[:,[1,2]],t[:,[2,0]]),axis=1).reshape(-1,2),axis=1)
@@ -72,6 +73,8 @@ def refine_canyon(rock, *, full_relief=False):
         if uv2 is not None:
             uv2 = np.concatenate((uv2,uv2[pair].mean(1)))
         colors = np.concatenate((colors,colors[pair].mean(1)))
+        if strip_colors is not None:
+            strip_colors = np.concatenate((strip_colors,strip_colors[pair].mean(1)))
         normals = np.concatenate((normals,normals[pair].mean(1)))
         weight = np.concatenate((weight,weight[pair].mean(1)))
         coarse_height = np.concatenate((coarse_height,coarse_height[pair].mean(1)))
@@ -125,6 +128,7 @@ def refine_canyon(rock, *, full_relief=False):
     rock.uvs = uv.astype(np.float32)
     rock.uvs2 = None if uv2 is None else uv2.astype(np.float32)
     rock.colors = np.rint(colors).astype(np.uint8)
+    rock.strip_colors = None if strip_colors is None else np.rint(strip_colors).astype(np.uint8)
     rock.normals = shaded.astype(np.float32)
     rock.tri_materials = material
     return rock

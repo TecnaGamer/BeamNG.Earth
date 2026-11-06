@@ -308,13 +308,15 @@ class Mesh:
     colors: np.ndarray
     normals: np.ndarray | None = None
     talus: list = field(default_factory=list)
-    decals: list = field(default_factory=list)
+    strips: list = field(default_factory=list)
+    strip_inputs: list = field(default_factory=list)
     tri_materials: np.ndarray | None = None
     # Ephemeral build-only sampler; never serialized or sent to the engine.
     lod_ground: object = field(default=None, repr=False)
     uvs2: np.ndarray | None = None
     lod_scale: float = 1.0  # projected piece radius / original tile radius
     terrain_blend: bool = False  # UV1 is the opaque terrain rim; PBR uses UV0
+    strip_colors: np.ndarray | None = None  # Build-only rock tint before satellite rim blending
 
 
 def _surface_fade(h, touches, dx, dy):
@@ -469,7 +471,7 @@ def displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale=1.0, cuts=
 
 def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
          horizontal_scale=1.0, project=None, clip_box=None, surface_data=None, road_segments=None, cuts=None,
-         road_clearance=None, natural_family=cliffmaterial.NATURAL, cache_dir=None):
+         road_clearance=None, natural_family=cliffmaterial.NATURAL, cache_dir=None, strip_tint=False):
     """Continuous sampled rock surface with shared positions and smooth normals.
 
     A positive normal clearance separates the interior from the terrain, while
@@ -511,7 +513,7 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     # and duplicate UVs only where the plane changes; geometric normals stay shared.
     axis = np.abs(gx[j, i]) >= np.abs(gy[j, i])
     out_p, out_t, out_uv, out_c, out_n, out_uv2 = [], [], [], [], [], []
-    out_mat = []
+    out_mat = []; out_strip_c = []
     cut_cells = np.zeros(len(j), bool) if cuts is None else cuts[j, i]
     families = np.where(cut_cells, cliffmaterial.cut_family(biomes[j, i]), natural_family)
     count = 0
@@ -537,10 +539,16 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
             chart_colors = colors
         # Contact attributes must be evaluated at full terrain weight. Interpolating
         # a partially faded endpoint leaves a bright lip and reintroduces relief.
+        strip_source_colors = chart_colors.reshape(-1, 4)
         edge_colors, edge_uv = clifftransition.attributes(chart_colors, np.ones_like(rim_weights), rim_rgb, family)
         boundary = np.column_stack((uv, terrain_normals, edge_colors, edge_uv))
         chart_colors, rim_uv = clifftransition.attributes(chart_colors, rim_weights, rim_rgb, family)
         attributes = np.column_stack((uv, normals.reshape(-1, 3), chart_colors.reshape(-1, 4), rim_uv))
+        if strip_tint:
+            # Preserve the mineral tint through both contour and tile clipping.
+            # Contact strips must not inherit the satellite/shadow-painted rim.
+            attributes = np.column_stack((attributes, strip_source_colors))
+            boundary = np.column_stack((boundary, strip_source_colors))
         material_points, selected, attributes = clifftransition.clip(p, selected, attributes, contour, rim_ground, boundary)
         if road_segments is not None:
             import cliffcuts
@@ -562,13 +570,16 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
         out_t.append(inverse.reshape(-1, 3) + count)
         out_mat.append(np.full(len(tt), family, np.int32))
         out_uv.append(attrs[:, :2]); out_n.append(nn); out_c.append(attrs[:, 5:9]); out_uv2.append(attrs[:, 9:11])
+        if strip_tint:
+            out_strip_c.append(attrs[:, 11:15])
         count += len(used)
     if not out_t:
         return None
     return Mesh(np.concatenate(out_p).astype(np.float32), np.concatenate(out_t).astype(np.int32),
                 np.concatenate(out_uv).astype(np.float32), np.concatenate(out_c).astype(np.uint8),
                 np.concatenate(out_n).astype(np.float32), tri_materials=np.concatenate(out_mat),
-                uvs2=np.concatenate(out_uv2).astype(np.float32), terrain_blend=True)
+                uvs2=np.concatenate(out_uv2).astype(np.float32), terrain_blend=True,
+                strip_colors=np.concatenate(out_strip_c).astype(np.uint8) if strip_tint else None)
 
 
 def _fit_cut_toes(h, seed, allowed, dx, dy, *, fit_crest=False):
@@ -668,14 +679,14 @@ def _refine(xs, ys, keep, biomes, box, elev, color_at, shore=None, horizontal_sc
 
 
 def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, cache_dir=None, source_elev=None,
-          features=(True, True, True)):
+          features=(True, True, True), defer_strips=False):
     """Build one streamed tile, or None. Missing classification never permits rocks.
 
     color_at(lat, lon) can override the cached regional imagery sampler. No
     imagery download is added to the critical road build.
     """
     faces, rocks, decals = features
-    if surface is None or not any(features):
+    if surface is None or not (faces or rocks):
         return None
     import climate
     import surface as surfacemod
@@ -785,9 +796,6 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
                       np.empty((0, 2)), np.empty((0, 4)))
         if rocks:
             result.talus = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at)
-        if decals:
-            import cliffdecals
-            result.decals = cliffdecals.rows(frame, box, *coarse, elev, rubble_color_at)
         return result
     shore = (classes[:-1, :-1] == 80) | (classes[:-1, 1:] == 80) | (classes[1:, :-1] == 80) | (classes[1:, 1:] == 80)
     natural_family = int(cliffmaterial.natural_family(float(la.mean()), float(lo.mean())))
@@ -853,7 +861,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     result = mesh(h, keep, xs, ys, b, world_box, (box[0], box[1], 0), colors,
                   horizontal_scale=scale, project=project, clip_box=box, surface_data=surface_data,
                   road_segments=road_segments, cuts=fine_cuts, road_clearance=road_clearance,
-                  natural_family=natural_family, cache_dir=cache_dir)
+                  natural_family=natural_family, cache_dir=cache_dir, strip_tint=decals)
     if result is not None:
         envelope = _terrain_envelope(h, (xs[1]-xs[0])*scale, ys[1]-ys[0])
         def lod_ground(points):
@@ -869,8 +877,21 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
             result = cliffdetail.refine_canyon(result, full_relief=True)
         result.talus = rubble
         if decals:
-            import cliffdecals
-            result.decals = cliffdecals.rows(frame, box, *coarse, elev, rubble_color_at)
+            import cliffstrips
+            def strip_ground(xy):
+                world = np.column_stack((xy + np.array((box[0], box[1])), np.zeros(len(xy))))
+                la, lo, _ = frame.enu_to_geodetic(*world.T)
+                z = elev(la, lo)
+                return frame.geodetic_to_enu(la, lo, z)[2]
+            try:
+                if defer_strips:
+                    result.strip_inputs = cliffstrips.prepare(result, strip_ground)
+                else:
+                    result.strips = cliffstrips.tile_parts(result, strip_ground)
+            except Exception:
+                log.exception("cliff contact strips omitted; keeping parent cliff")
+                import revisit
+                revisit.fault()
     return result
 
 

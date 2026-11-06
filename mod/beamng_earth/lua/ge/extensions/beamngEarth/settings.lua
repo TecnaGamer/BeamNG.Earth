@@ -87,7 +87,7 @@ M.SCHEMA = {
   distantCliffFaces = { kind = 'bool', default = true, label = 'Distant cliff faces' },
   cliffFaces = { kind = 'bool', default = true, label = 'Cliff faces' },
   cliffRocks = { kind = 'bool', default = true, label = 'Scattered cliff rocks' },
-  cliffDecals = { kind = 'bool', default = true, label = 'Cliff transition decals' },
+  cliffDecals = { kind = 'bool', default = true, label = 'Cliff transition strips' },
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
@@ -491,7 +491,7 @@ M.APPLY = {
   distantCliffFaces = sendGraphics,
   cliffFaces = function(v) require('beamngEarth/roads').setCliffsEnabled(v); sendGraphics() end,
   cliffRocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'cliff_rock' }, v); sendGraphics() end,
-  cliffDecals = function(v) require('beamngEarth/cliffdecals').setEnabled(v); sendGraphics() end,
+  cliffDecals = function(v) require('beamngEarth/roads').setCliffStripsEnabled(v); sendGraphics() end,
   highwaySigns = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end

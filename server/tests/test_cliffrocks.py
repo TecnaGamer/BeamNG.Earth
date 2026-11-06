@@ -34,10 +34,13 @@ class CliffRocksTest(unittest.TestCase):
         import clifflod
         keep = np.ones((20,20),bool)
         rock = cr.mesh(self.h,keep,self.x,self.x,np.zeros(keep.shape,int),
-                       (0,0,160,160),(0,0,0),natural_family=cm.CANYON)
+                       (0,0,160,160),(0,0,0),natural_family=cm.CANYON,strip_tint=True)
         self.assertTrue(rock.terrain_blend)
         self.assertTrue(np.all((rock.uvs2[:,0]>=0) & (rock.uvs2[:,0]<=1)))
+        self.assertEqual(rock.strip_colors.shape,rock.colors.shape)
         cliffdetail.refine_canyon(rock, full_relief=True)
+        self.assertEqual(rock.strip_colors.shape,rock.colors.shape)
+        self.assertTrue(np.isfinite(rock.strip_colors).all())
         self.assertTrue(rock.terrain_blend)
         self.assertTrue(np.all((rock.uvs2[:,0]>=0) & (rock.uvs2[:,0]<=1)))
         for _,lod in clifflod.levels(rock):

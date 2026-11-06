@@ -72,11 +72,12 @@ local skin = [[{ key = "]] .. key .. [[", anchorId = %d, q = 0.03125, pivot = { 
   road = { shape = "/s/rs_%d_road.cdae", pos = { %f, %f, 0 } },
   walk = { shape = "/s/rs_%d_walk.cdae", pos = { %f, %f, 0 } },
   walkcol = { shape = "/s/rs_%d_walkcol.cdae", pos = { %f, %f, 0 } },
+  cliffStrip24 = { shape = "/s/rs_%d_strip.cdae", pos = { 0, 0, 0 } },
   colliders = { walk = { { 0, 0, 0, 1, 1, 1 } }, walkcol = { { 0, 0, 0, 1, 1, 1 } } } }]]
 local function skinOf(aid, a)
   local x, y = a:geodeticToWorld(clat, clon, 0)
   files['/s/rs_' .. aid .. '.json'] = string.format(skin, aid, x, y, aid, x - 118, y - 118, aid, x - 118, y - 118,
-    aid, x - 118, y - 118)
+    aid, x - 118, y - 118, aid)
   return { type = 'roads_skin', anchorId = aid, key = key, path = '/s/rs_' .. aid .. '.json' }
 end
 local function objsWith(pat)
@@ -141,6 +142,14 @@ end
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
 run(1, A)
 T.check(#objsWith('rs_1_road') == 1 and #objsWith('rs_1_walk.') == 1, 'skin made')
+local strip = objsWith('rs_1_strip')[1]
+T.check(strip and strip.fields.collisionType == 'None' and strip.fields.decalType == 'None',
+  'terrain-dependent strip is installed without collision or a decal receiver')
+roads.setCliffStripsEnabled(false)
+T.check(strip.hidden, 'skin strip respects the graphics switch')
+roads.setCliffStripsEnabled(true)
+T.check(not strip.hidden, 'skin strip restored')
+
 roads.collisionRebuilt()
 T.check(roads.settledFor(1, car.x, car.y), 'settled: the geotile under the car made with its skin')
 T.check(roads.readyAround(1, car.x, car.y, 50) == false or true, 'readyAround runs')
@@ -184,6 +193,10 @@ roads.onSkin(skinOf(2, B), 2)
 run(2, B)
 T.check(#objsWith('rs_2_road') == 1 and #objsWith('rs_1_road') == 0 and #objsWith('rs_1_walk') == 0,
   'skin swapped: the new made, the old gone')
+T.check(#objsWith('rs_2_strip') == 1 and #objsWith('rs_1_strip') == 0,
+  'contact strips swap with the new anchor terrain, without retaining the old grid')
+T.check(objsWith('rs_2_strip')[1].fields.collisionType == 'None', 'replacement strip stays render-only')
+
 roads.collisionRebuilt()
 T.check(roads.settledFor(2, car.x, car.y), 'settled again with the new skin')
 

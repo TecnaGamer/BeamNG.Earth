@@ -9154,6 +9154,9 @@ def shape_files(aid, tx, ty):
     import cliffrocks
     for k in range(2, cliffrocks.STREAM_PARTS_MAX + 1):
         out[f"cliff{k}"] = f"cliff_{aid}_{tx}_{ty}_{k}.cdae"
+    import cliffstrips
+    for k in range(1, cliffstrips.PARTS_MAX + 1):
+        out[f"cliffStrip{k}"] = f"cliff_strip_{aid}_{tx}_{ty}_{k}.cdae"
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -9271,8 +9274,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             shape = files[what]
             cliffrocks.write(os.path.join(out_dir, shape), part)
             data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
-        if cliff_mesh.decals:
-            data["cliffDecals"] = cliff_mesh.decals
+        import cliffstrips
+        for k, part in enumerate(cliff_mesh.strips, 1):
+            what = f"cliffStrip{k}"
+            shape = files[what]
+            cliffstrips.write(os.path.join(out_dir, shape), part)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         if cliff_mesh.talus:
             groups = sorted({r[0] for r in cliff_mesh.talus})
             data["talus"] = {"groups": groups, "items": [[groups.index(r[0])] + r[1:] for r in cliff_mesh.talus]}

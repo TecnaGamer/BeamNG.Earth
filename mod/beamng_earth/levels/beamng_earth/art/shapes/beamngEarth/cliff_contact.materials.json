@@ -1,0 +1,48 @@
+{
+  "bne_cliff_contact_strip": {
+    "name": "bne_cliff_contact_strip",
+    "mapTo": "bne_cliff_contact_strip",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 255,
+    "translucent": true,
+    "doubleSided": true,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_source.color.dds",
+        "baseColorFactor": [
+          2.0149472750337,
+          2.019102716547563,
+          2.022117369328646,
+          1
+        ],
+        "vertColor": true,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.normal.dds",
+        "normalMapStrength": 0.65,
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_source_r.data.dds",
+        "roughnessFactor": 1,
+        "metallicFactor": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_source_ao.data.dds",
+        "ambientOcclusionFactor": 0.35,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/contact_height.data.dds",
+        "opacityFactor": 1.9921875,
+        "opacityMapUseUV": 0,
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/contact_threshold.data.dds",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "translucentRecvShadows": true
+  }
+}

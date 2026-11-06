@@ -75,7 +75,6 @@ M.ENGINE_MAX_DEBT_MS = 50.0
 M.PRIOR = { cdae = 3.0, dae = 8.0, reveal = 0.05, delete = 0.3, cdaeTex = 3.0, material = 0.3, matDelete = 0.2, cdaeTex128 = 3.9, cdaeTex256 = 4.0, cdaeTex512 = 4.2, retex = 1.0, roadChunk = 0.5, roadDelete = 0.05, roadWalk = 3.0, fuel = 3.0 }
 -- A projected patch is much cheaper than loading a sidewalk/cliff TSStatic.
 -- Learn its own cost so creating decals cannot distort the road-mesh estimate.
-M.PRIOR.cliffDecal = .3
 -- Independently streamed cliff batches must not inherit the cheap road-surface EMA.
 M.PRIOR.cliffMesh = 10.0
 M.PRIOR.cliffContact = 3.0
