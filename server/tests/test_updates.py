@@ -117,7 +117,7 @@ class OpenPageTest(unittest.TestCase):
     def test_the_about_page_links(self):
         """The settings page's About buttons and contributors (the game's openWebBrowser refuses other sites): the
         Discord, Ko-fi, the project and a user's profile; nothing after a profile, nothing else on those sites."""
-        for ok in ("https://discord.gg/tgf", "https://ko-fi.com/tecnagamer", "https://github.com/TecnaGamer/BeamNG.Earth",
+        for ok in ("https://discord.gg/tgf", "https://ko-fi.com/tecnagamer", "https://github.com/XavierCraggs/BeamNG.Earth",   # fork: was TecnaGamer
                    "https://github.com/brechtknecht", "https://github.com/wyo-backroads"):
             self.assertTrue(updates.openable(ok), ok)
         for bad in ("https://discord.gg/other", "https://ko-fi.com/someoneelse", "https://github.com/someone/repo",
@@ -127,6 +127,6 @@ class OpenPageTest(unittest.TestCase):
 
     def test_downloads_stay_on_upstream(self):
         import selfupdate
-        self.assertEqual(updates.REPO, "TecnaGamer/BeamNG.Earth")
+        self.assertEqual(updates.REPO, "XavierCraggs/BeamNG.Earth")   # fork: was TecnaGamer
         self.assertEqual(selfupdate.API_URL, updates.LATEST_API)
-        self.assertEqual(selfupdate.ASSET_PREFIX, "https://github.com/TecnaGamer/BeamNG.Earth/releases/download/")
+        self.assertEqual(selfupdate.ASSET_PREFIX, "https://github.com/XavierCraggs/BeamNG.Earth/releases/download/")   # fork: was TecnaGamer

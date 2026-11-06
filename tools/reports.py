@@ -22,7 +22,7 @@ import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
-REPO = "TecnaGamer/BeamNG.Earth"
+REPO = "XavierCraggs/BeamNG.Earth"   # fork: was TecnaGamer/BeamNG.Earth
 URL_MAX = 7000          # characters of the whole new-issue URL (GitHub refuses ~8 KB)
 TRUNCATED = "\n\n_(Truncated: paste the rest from issue.md in the report folder.)_"
 

@@ -49,7 +49,7 @@ class ReportsTool(unittest.TestCase):
     def test_url_and_truncation(self):
         url, cut = reports.issue_url("A b", "x&y", "map")
         self.assertFalse(cut)
-        self.assertEqual(url, "https://github.com/TecnaGamer/BeamNG.Earth/issues/new?title=A%20b&labels=map&body=x%26y")
+        self.assertEqual(url, "https://github.com/XavierCraggs/BeamNG.Earth/issues/new?title=A%20b&labels=map&body=x%26y")   # fork: was TecnaGamer
         body = "é line\n" * 3000
         url, cut = reports.issue_url("t", body, "bug")
         self.assertTrue(cut)

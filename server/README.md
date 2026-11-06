@@ -480,7 +480,7 @@ built in `main_async` and handed to `Dem`, `Imagery`, `weather.fetch` and `gravi
   text ends in " | Degraded: <hosts> unreachable; <n> tiles without imagery"; with `--offline`, or
   when every imagery and DEM host is open, in " | Offline - using cached data". The note is re-sent
   as soon as it changes (on the next pose, or within a minute). The text is unchanged otherwise.
-- **User-Agent**: `BeamNG.Earth/<server version> (+https://github.com/TecnaGamer/BeamNG.Earth)`
+- **User-Agent**: `BeamNG.Earth-QLD-fork/<server version> (+https://github.com/XavierCraggs/BeamNG.Earth)` (fork)
   (`netfetch.USER_AGENT`, the only one); no user name, e-mail, machine name, location or session id.
 
 ## Timings v1.3 (this machine, warm DEM cache, 2026-10-10, real server process)

@@ -114,14 +114,14 @@ export const settingsSchema = [
       { id: "reportOpen", type: "feedback", what: "report", label: "Report", name: "Report an issue or idea", desc: "Closes this page, takes a screenshot, the location, the frame rate and your hardware and graphics settings, then opens a window to pick the kind (map issue, performance issue, bug, idea), give a title and describe it. Saves a ready-to-post GitHub issue (issue.md). Also Ctrl+Shift+E while driving." },
       { id: "profilerOpen", type: "feedback", what: "profiler", label: "Start profiler", name: "Performance profiler", desc: "Closes this page and records 30 s of frame times while you drive (every hitch with its place), then opens the same window as a performance issue. Also Ctrl+Shift+Y while driving." },
       { id: "reportPost", type: "links", name: "Posting it", desc: "After saving, the window shows the folder and opens the GitHub new-issue page. Edit issue.md and drag screenshot.jpg into the issue. GitHub issues opens the project's issues in your browser.",
-        links: [ { label: "GitHub issues", url: "https://github.com/TecnaGamer/BeamNG.Earth/issues" } ] },
+        links: [ { label: "GitHub issues", url: "https://github.com/XavierCraggs/BeamNG.Earth/issues" } ] },   // fork: was TecnaGamer
     ],
   },
   {
     name: "About",
     items: [
       { id: "links", type: "links", name: "BeamNG.Earth", desc: "The project on GitHub (code, releases, issues), the TGForever Discord (help and news) and Ko-fi (support the development). Opens in your browser.",
-        links: [ { label: "GitHub", url: "https://github.com/TecnaGamer/BeamNG.Earth" }, { label: "Discord", url: "https://discord.gg/tgf" }, { label: "Ko-fi", url: "https://ko-fi.com/tecnagamer" } ] },
+        links: [ { label: "GitHub", url: "https://github.com/XavierCraggs/BeamNG.Earth" }, { label: "Discord", url: "https://discord.gg/tgf" }, { label: "Ko-fi", url: "https://ko-fi.com/tecnagamer" } ] },   // fork: GitHub button was TecnaGamer (the open_page allow-list follows updates.REPO)
       { id: "connection", type: "info", name: "Companion app", desc: "The connection to the BeamNG.Earth app (127.0.0.1:47613) that builds the world, and the session id it gave this game." },
       { id: "anchor", type: "info", name: "World origin", desc: "The current world origin (anchor) and its latitude / longitude. A rebase moves it under you." },
       { id: "player", type: "info", name: "Your position", desc: "Your latitude / longitude and the distance from the world origin." },

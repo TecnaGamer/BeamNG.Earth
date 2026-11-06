@@ -22,7 +22,7 @@ import time
 
 import netfetch
 
-REPO = "TecnaGamer/BeamNG.Earth"
+REPO = "XavierCraggs/BeamNG.Earth"   # fork: was TecnaGamer/BeamNG.Earth (selfupdate.py, the open_page allow-list and the update check all derive from this)
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PAGE_URL = f"https://github.com/{REPO}/releases"      # the downloads (.exe / AppImage)
 # the folder with VERSION: above server/, or the packaged app's bundle (launcher.py frozen by PyInstaller, where

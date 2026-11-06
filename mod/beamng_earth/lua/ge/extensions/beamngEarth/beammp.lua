@@ -6,7 +6,7 @@
 local M = {}
 
 M.RECOMMEND_WAIT_S = 15     -- in our level this long in a BeamMP session with no world generator: the window
-M.INSTALL_URL = 'https://github.com/TecnaGamer/BeamNG.Earth/releases/latest'
+M.INSTALL_URL = 'https://github.com/XavierCraggs/BeamNG.Earth/releases/latest'   -- fork: was TecnaGamer
 M.TITLE = 'This server uses BeamNG.Earth'
 M.TEXT = 'BeamNG.Earth builds the real world around you.<br><br>For the best experience, install the free BeamNG.Earth app: '
   .. 'it builds the world on your own PC, so it loads much faster and in full detail. Without it, the world comes from '

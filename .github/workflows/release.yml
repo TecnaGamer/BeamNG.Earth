@@ -9,8 +9,7 @@
 name: release
 
 on:
-  push:
-    branches: [main, dev]
+  # fork: no automatic releases on push; builds/releases only via "Run workflow" (upstream: push to [main, dev])
   workflow_dispatch:
     inputs:
       release:

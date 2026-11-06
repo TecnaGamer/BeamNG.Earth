@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-UA = "BeamNG.Earth superlatives builder (+https://github.com/TecnaGamer/BeamNG.Earth)"
+UA = "BeamNG.Earth superlatives builder (+https://github.com/XavierCraggs/BeamNG.Earth)"   # fork: was TecnaGamer
 ENDPOINT = "https://query.wikidata.org/sparql"
 OUT = Path(__file__).resolve().parents[1] / "server" / "superlatives_data.py"
 TOP = 5

@@ -4,7 +4,7 @@
 -- kinds, labels and the URL truncation.
 local M = {}
 
-M.REPO = 'TecnaGamer/BeamNG.Earth'
+M.REPO = 'XavierCraggs/BeamNG.Earth'   -- fork: was TecnaGamer/BeamNG.Earth
 M.URL_MAX = 7000        -- characters of the whole new-issue URL (GitHub refuses ~8 KB)
 -- ... on Windows less: the game opens the browser through the shell, which takes ~2083 characters of a URL; a longer
 -- one opened nothing (GitHub #743, Windows 11: neither the command nor the in-game report opened the issue)

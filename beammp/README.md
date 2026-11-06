@@ -45,7 +45,8 @@ with the normal BeamMP launcher.
      BeamNG.Earth never see it.
    - `Private = true`, or no AuthKey: on no list. Players join with Direct Connect and your address.
    - To keep a public server off the BeamNG.Earth list too, set `G.LISTED = false` near the top of
-     `Resources/Server/BeamNGEarth/main.lua`.
+     `Resources/Server/BeamNGEarth/main.lua`. (This fork ships with `G.LISTED = false`: set it to `true` to announce the
+     server to the upstream list, earth.tgforever.net.)
 
    The server lists itself once a minute with `curl` (built into Linux and Windows 10 and later).
 

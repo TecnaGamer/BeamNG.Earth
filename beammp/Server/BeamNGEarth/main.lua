@@ -26,7 +26,7 @@ local G = {}
 -- it off BeamMP's own public list (every BeamMP player sees that one, with or without BeamNG.Earth) by switching
 -- BeamMP's Private setting on while the server runs (the file is not changed). Private = true, or no AuthKey: on
 -- neither list, players join with Direct Connect. G.LISTED = false keeps a public server off our list too.
-G.LISTED = true
+G.LISTED = false   -- fork: was true; set true to announce this server to the upstream list (earth.tgforever.net)
 -- Time of day for everyone on the server: 'real' (each player's real local time where they are, the default), or a
 -- fixed local time 'HH:MM' (e.g. '20:30' for a night server).
 G.TIME = 'real'

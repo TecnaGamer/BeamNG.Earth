@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))       # (server/: selfupdate)
 import launcher
 
-NEWER = {"current": "1.0.0", "latest": "1.1.0", "url": "https://github.com/TecnaGamer/BeamNG.Earth/releases/tag/v1.1.0"}
+NEWER = {"current": "1.0.0", "latest": "1.1.0", "url": "https://github.com/XavierCraggs/BeamNG.Earth/releases/tag/v1.1.0"}   # fork: was TecnaGamer
 
 
 class UpdateAtStart(unittest.TestCase):

@@ -19,7 +19,7 @@ import urllib.request
 URL = "https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/resources.geojson"
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server", "usgs3dep_index.json.gz")
 TOL = 0.006         # deg (~600 m): the footprints' simplification
-UA = "BeamNG.Earth-build (+https://github.com/TecnaGamer/BeamNG.Earth)"
+UA = "BeamNG.Earth-build (+https://github.com/XavierCraggs/BeamNG.Earth)"   # fork: was TecnaGamer
 
 
 def year(name):

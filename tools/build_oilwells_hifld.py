@@ -26,7 +26,7 @@ LAYER = "https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/Feat
 CACHE = os.path.expanduser("~/.cache/beamng-earth/hifld_wells")
 PAGE = 2000
 PAUSE_S = 0.5               # between requests (a public mirror)
-UA = "BeamNG.Earth/build_oilwells_hifld (github.com/TecnaGamer/BeamNG.Earth)"
+UA = "BeamNG.Earth/build_oilwells_hifld (github.com/XavierCraggs/BeamNG.Earth)"   # fork: was TecnaGamer
 KEEP_STATUS = ("PRODUCING", "ACTIVE", "FLOWING", "PUMPING", "COMPLETED", "SHUT-IN", "SHUT IN", "TEMPORARILY ABANDONED")
 DROP_STATUS = ("PLUGGED", "ABANDONED", "DRY", "PERMIT", "CANCEL", "INJECT", "DISPOSAL", "STORAGE", "OBSERVATION",
                "MONITOR", "WATER", "ORPHAN", "LOCATION", "EXPIRED", "INACTIVE")

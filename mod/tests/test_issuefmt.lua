@@ -87,7 +87,7 @@ T.check(#fmt.title({ kind = 'idea', title = string.rep('a', 200) }) < 110, 'long
 -- URL encoding and truncation
 T.check(fmt.urlEncode('a b&c=d/é') == 'a%20b%26c%3Dd%2F%C3%A9', 'urlEncode: ' .. fmt.urlEncode('a b&c=d/é'))
 local url, cut = fmt.issueUrl('t', 'short', 'map')
-T.check(not cut and url == 'https://github.com/TecnaGamer/BeamNG.Earth/issues/new?title=t&labels=map&body=short', 'short url')
+T.check(not cut and url == 'https://github.com/XavierCraggs/BeamNG.Earth/issues/new?title=t&labels=map&body=short', 'short url')   -- fork: was TecnaGamer
 local long = string.rep('é line\n', 3000)
 -- (Windows: the shell opens ~2083 characters of a URL; GitHub #743)
 T.check(fmt.urlMax('Windows') == 2000 and fmt.urlMax('Linux') == fmt.URL_MAX, 'the URL cap per system')

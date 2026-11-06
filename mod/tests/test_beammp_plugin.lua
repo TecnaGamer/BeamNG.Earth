@@ -122,6 +122,8 @@ local leak = false
 for _, v in pairs(full) do if tostring(v):find('hunter2', 1, true) then leak = true end end
 T.check(not leak, 'announcement: never the password')
 T.check(G.readConfig('Password = ""').pass == false, 'readConfig: no password')
+T.check(G.LISTED == false and not G.listable({ private = false, authKey = key }), 'listable: off by default in this fork')  -- fork
+G.LISTED = true  -- fork: the checks below are for the opted-in list
 T.check(G.listable({ private = false, authKey = key }), 'listable: public with a key')
 T.check(not G.listable({ private = true, authKey = key }), 'listable: Private = true: direct connect only')
 T.check(not G.listable({ private = false, authKey = zeros }), 'listable: no key: direct connect only')

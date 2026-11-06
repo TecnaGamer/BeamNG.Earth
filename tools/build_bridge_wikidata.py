@@ -25,7 +25,7 @@ import bridgetypes as bt  # noqa: E402
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server", "bridges_wd.npz")
 ENDPOINT = "https://query.wikidata.org/sparql"
-UA = "BeamNG.Earth/1.4 (bridge types build tool; https://github.com/TecnaGamer)"
+UA = "BeamNG.Earth/1.4 (bridge types build tool; https://github.com/XavierCraggs)"   # fork: was TecnaGamer
 # class -> code, in order of precedence (earlier wins for an item in two classes)
 CLASSES = [
     ("Q12570", bt.NBI_SUSPENSION),      # suspension bridge

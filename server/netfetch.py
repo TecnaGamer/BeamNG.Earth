@@ -61,8 +61,8 @@ from urllib.parse import urlsplit
 log = logging.getLogger("earthd.net")
 
 SERVER_VERSION = "0.4.0"
-PROJECT_URL = "https://github.com/TecnaGamer/BeamNG.Earth"
-USER_AGENT = f"BeamNG.Earth/{SERVER_VERSION} (+{PROJECT_URL})"
+PROJECT_URL = "https://github.com/XavierCraggs/BeamNG.Earth"   # fork: was TecnaGamer/BeamNG.Earth
+USER_AGENT = f"BeamNG.Earth-QLD-fork/{SERVER_VERSION} (+{PROJECT_URL})"   # fork: was BeamNG.Earth/{SERVER_VERSION}
 KINDS = ("demand", "prefetch", "background", "predownload", "urgent")
 # "urgent": demand that goes first (the block the player waits on: its base photo). Demand takes a token only while
 # URGENT_TOKENS more stay in the bucket and leaves URGENT_CONC request slots of its own to urgent, so with a host at

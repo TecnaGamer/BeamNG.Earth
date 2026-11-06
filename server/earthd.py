@@ -153,6 +153,8 @@ import weather as weathermod  # noqa: E402
 PROTOCOL = 4
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
 SERVER_LIST_URL = "https://earth.tgforever.net/servers"
+# fork: the upstream list service is not asked unless BNE_SERVER_LIST=on (the tab then shows an empty list)
+SERVER_LIST_ON = os.environ.get("BNE_SERVER_LIST", "").strip().lower() in ("on", "1", "true", "yes")
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
 # 32-cell tiles), 4 = 64-cell tiles down to L-1 (farfield.CONTENT_FORMAT). A mod's hello.format is
 # the newest format it reads (it reads every older one from 3: core.lua FORMATS), so a mod older
@@ -4940,6 +4942,9 @@ class Connection:
         """The BeamNG.Earth server list (native/serverlist, SERVER_LIST_URL) for the mod's tab in BeamMP's server browser
         (serverlist.lua): fetched here, as the game's Lua may only open connections to local addresses ("connect
         restricted"). A 'server_list' message with the servers, or with an error."""
+        if not SERVER_LIST_ON:          # fork: no request to the upstream list service unless opted in
+            self.send({"type": "server_list", "servers": []})
+            return
         def get():
             return json.loads(self.s.net.get(SERVER_LIST_URL, kind="demand").body.decode("utf-8", "replace"))
         try:
