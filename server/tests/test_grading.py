@@ -463,6 +463,55 @@ class DirtTest(unittest.TestCase):
             self.assertIsNotNone(plan.bank)
             self.assertEqual(len(plan.bank), len(plan.xy))
 
+    def test_a_local_hole_does_not_make_long_waves(self):
+        xy = self.xy(n=200)
+        ground = 100.0 + 0.12 * xy[:, 0]
+        damage = np.zeros(len(xy))
+        damage[100] = -0.8
+        with unittest.mock.patch.object(grading, "dirt_bumps", return_value=damage):
+            plan = grading._plan(xy, ground, roads.Spec(3.5, "dirt", False, "track"))
+        residual = plan.z - ground
+        self.assertGreater(abs(float(residual[100])), 0.1, "the hole remains")
+        self.assertLess(float(np.abs(residual[np.abs(np.arange(len(xy)) - 100) > 2]).max()), 1e-9,
+                        "limiting a hole must not spread its height error over 40 m")
+
+    def test_damage_is_independent_of_the_natural_grade(self):
+        xy = self.xy()
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        flat = grading._plan(xy, np.full(len(xy), 100.0), sp)
+        ground = 100.0 + 0.20 * xy[:, 0]
+        uphill = grading._plan(xy, ground, sp)
+        self.assertTrue(np.allclose(uphill.z - ground, flat.z - 100.0, atol=1e-9),
+                        "limit artificial damage, keeping the road's real climb")
+
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
+    def test_smoothing_extensions_do_not_change_the_damage(self):
+        xy = self.xy()
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        plain = grading.dirt_bumps(xy, sp, len(xy))
+        extended = grading.dirt_bumps(xy, sp, len(xy) + 10, ext=(5, 5))
+        self.assertTrue(np.array_equal(plain, extended[5:-5]), "only the DEM uses the neighbouring road's samples")
+        self.assertTrue(np.all(extended[:5] == 0.0))
+        self.assertTrue(np.all(extended[-5:] == 0.0))
+
+    def test_overlapping_damage_has_bounded_height(self):
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        with unittest.mock.patch.object(grading, "DIRT_ROUGH", 1.0):
+            for offset in (0.0, 100.0, 500.0):
+                b = grading.dirt_bumps(self.xy() + [offset, 0.0], sp, 400)
+                self.assertGreaterEqual(float(b.min()), -0.5 - 1e-9, "overlapping pits do not become a trench")
+                self.assertLessEqual(float(b.max()), 0.15 + 1e-9, "removing the mean must not build hills")
+
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
+    def test_damage_step_limit_uses_the_sample_distance(self):
+        step = 1.0
+        xy = self.xy(step=step)
+        sp = roads.Spec(3.5, "dirt", False, "track")
+        ground = 100.0 + 0.20 * xy[:, 0]
+        plan = grading._plan(xy, ground, sp, step=step)
+        limit = grading.DIRT_STEP_MAX_M * 1.6 * step / grading.PROFILE_STEP
+        self.assertLessEqual(float(np.abs(np.diff(plan.z - ground)).max()), limit + 1e-9)
+
 
 class GraderTest(unittest.TestCase):
     def setUp(self):
