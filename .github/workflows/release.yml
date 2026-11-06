@@ -102,6 +102,8 @@ jobs:
     needs: [check, quality]
     if: needs.check.outputs.build == 'true'
     runs-on: windows-latest
+    env:
+      SIGN_PFX_SET: ${{ secrets.BNGE_SIGN_PFX != '' }}     # (the signing step's condition: secrets cannot be in an if)
     steps:
       - uses: actions/checkout@v4
       - name: Development build's version
@@ -121,6 +123,44 @@ jobs:
         run: python tools/build_bootloader.py
       - name: Build the .exe
         run: python tools/build_app.py --require-own-bootloader
+      # Signed with the project's own self-signed certificate (CN=BeamNG.Earth), as BeamMP signs its launcher: the
+      # publisher in the file's Properties and a tamper check on every copy. Not from a CA in Microsoft's trusted roots,
+      # so SmartScreen / Smart App Control still treat it as unsigned (GitHub #823). Skipped without the secrets
+      # (forks). Before the smoke tests, so they run the signed file. Timestamped (DigiCert) so a signature outlives
+      # the certificate; a timestamp server that does not answer three times: signed without one.
+      - name: Sign the .exe
+        if: env.SIGN_PFX_SET == 'true'
+        shell: pwsh
+        env:
+          SIGN_PFX: ${{ secrets.BNGE_SIGN_PFX }}
+          SIGN_PFX_PASSWORD: ${{ secrets.BNGE_SIGN_PFX_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX))
+          try {
+            $pw = ConvertTo-SecureString $env:SIGN_PFX_PASSWORD -AsPlainText -Force
+            $cert = (Get-PfxData -FilePath $pfx -Password $pw).EndEntityCertificates[0]
+            foreach ($f in Get-ChildItem dist\*.exe) {
+              $r = $null
+              foreach ($i in 1..3) {
+                $r = Set-AuthenticodeSignature -FilePath $f.FullName -Certificate $cert -HashAlgorithm SHA256 `
+                       -TimestampServer "http://timestamp.digicert.com"
+                if ((Get-AuthenticodeSignature $f.FullName).TimeStamperCertificate) { break }
+                Start-Sleep -Seconds 10
+              }
+              if (-not (Get-AuthenticodeSignature $f.FullName).TimeStamperCertificate) {
+                Write-Warning "no timestamp for $($f.Name): signed without one"
+                $r = Set-AuthenticodeSignature -FilePath $f.FullName -Certificate $cert -HashAlgorithm SHA256
+              }
+              $s = Get-AuthenticodeSignature $f.FullName
+              if (-not $s.SignerCertificate -or $s.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+                throw "signing $($f.Name) failed: $($r.StatusMessage)"
+              }
+              "signed $($f.Name) as $($s.SignerCertificate.Subject)"
+            }
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
       - name: Smoke test (the packaged server starts and answers --help)
         shell: bash
         run: |
