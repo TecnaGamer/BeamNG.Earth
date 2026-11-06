@@ -296,6 +296,7 @@ FAST_KEEP_S = 20.0              # ... and this long after it last was: a car the
                                 # again (5-10 s at 500 mph on a first visit, Indianapolis 2026-10-30: held half the time)
 TRASH_DIR = "trash"         # in the cache: folders of the game's user folder moved out to be deleted (_rmtree_outside)
 PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_progress)
+ANCHOR_PROGRESS_S = 2.0     # first ground: phase heartbeat, independent of the worker's optional tile counts
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
 PERF_LOG_LINES, PERF_LOG_CHARS = 40, 2000   # a perf_log message's lines and characters a line, at most
 SLOW_BASE_S = 3.0               # a base photo slower than this is logged with its stages
@@ -5861,6 +5862,41 @@ class Connection:
         return out
 
     async def prepare_anchor(self, msg):
+        """Every first-ground preparation has progress and a terminal reply, including setup/finalization errors."""
+        req = msg.get("requestId")
+        progress = {"stage": "preparing", "done": False}
+        started = time.monotonic()
+
+        def report():
+            self.send({"type": "anchor_progress", "requestId": req, "stage": progress["stage"],
+                       "elapsed": round(time.monotonic() - started, 1)})
+
+        async def heartbeat():
+            while True:
+                await asyncio.sleep(ANCHOR_PROGRESS_S)
+                report()
+
+        report()
+        tick = asyncio.create_task(heartbeat())
+        try:
+            await self._prepare_anchor(msg, progress)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception("anchor request %s failed during %s", req, progress["stage"])
+            if not progress["done"]:
+                self.teleport_pending = False
+                self.wake.set()
+                self.send({"type": "anchor_error", "requestId": req, "stage": progress["stage"],
+                           "error": f"{type(e).__name__}: {e}"})
+        finally:
+            tick.cancel()
+            try:
+                await tick
+            except asyncio.CancelledError:
+                pass
+
+    async def _prepare_anchor(self, msg, progress):
         req = msg.get("requestId")
         try:
             lat, lon = float(msg["lat"]), float(msg["lon"])
@@ -5911,8 +5947,10 @@ class Connection:
             # (on the map's threads: the default pool is full of the old place's road / vegetation builds after a
             # teleport, and this 2 s wait queued behind them for ~25 s, 2026-10-14)
             tw = time.perf_counter()
+            progress["stage"] = "land_cover"
             await asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.surface.ready, lat, lon)
             log.info("anchor %s: land cover wait %.2f s", anchor.id, time.perf_counter() - tw)
+        progress["stage"] = "terrain"
         pacer.foreground_begin()        # the player waits for this block: the background loops hold (pacer.hold)
         try:
             if provisional:
@@ -5920,14 +5958,9 @@ class Connection:
                     self.s.hm_pool, self.s.make_provisional, anchor, cx, cy, self._progress(), place or (0.0, 0.0))
             else:
                 info = await self.s.terrain(anchor, cx, cy, self._progress())
-        except Exception as e:
-            log.exception("terrain for anchor request %s failed", req)
-            self.teleport_pending = False
-            self.wake.set()
-            self.send({"type": "anchor_error", "requestId": req, "error": f"{type(e).__name__}: {e}"})
-            return
         finally:
             pacer.foreground_end()
+        progress["stage"] = "finalizing"
         key = (anchor.id, cx, cy)
         anchor.first_terrain = (cx, cy)
         self.s.anchors[anchor.id] = anchor
@@ -5955,6 +5988,7 @@ class Connection:
             ready["px"], ready["py"] = place
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
+        progress["done"] = True
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")
         if gz is not None and declared:     # (a player's teleport: not a rebase while driving, nor the level start)
@@ -7300,6 +7334,7 @@ class Connection:
 
 
 async def main_async(args):
+    log.info("startup: initializing data services")
     if os.environ.get("BNGE_WORLD_BUNDLE") and (args.roads != "on" or args.grading != "on"):
         from worldbundle import BundleError
         raise BundleError("BNGE_WORLD_BUNDLE requires --roads on --grading on")
@@ -7339,6 +7374,7 @@ async def main_async(args):
         finally:
             net.close()
         raise
+    log.info("startup: opening the download cache")
     disk = cachemod.Cache(args.cache_dir, args.cache_cap)
     threading.Thread(target=prune_own_caches, args=(args.cache_dir, time.time()), daemon=True,
                      name="cache-prune").start()
@@ -7352,6 +7388,7 @@ async def main_async(args):
     if netstatemod.init():
         import atexit
         atexit.register(netstatemod.close)
+    log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
@@ -7423,6 +7460,7 @@ async def main_async(args):
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_FAR_BUILDINGS, roadsmod.ROADS_IN_GROUND))
+    log.info("startup: preparing world folders and services")
     server = Server(args.user_dir, args.cache_dir, args.workers, kfun, args.hysteresis, args.far_radius, fmt,
                     imagery=args.imagery, near_visual=args.near_visual, tex_near=args.tex_near,
                     tex_far=args.tex_far, tone=args.tone, near_radii=radii,
@@ -7574,6 +7612,7 @@ async def main_async(args):
             log.info("map tiles on http://127.0.0.1:%d/tiles/{z}/{x}/{y}.jpg", server.map_port)
         except OSError as e:
             log.warning("map tiles off: %s", e)
+    log.info("startup: opening the local connection")
     srv = await asyncio.start_server(
         lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
     port = srv.sockets[0].getsockname()[1]

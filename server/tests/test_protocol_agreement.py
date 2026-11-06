@@ -265,7 +265,8 @@ SERVER_TO_MOD = {
                      "provisional": F(bool, OPT),          # 2026-10-22: a teleport's ungraded first block
                      "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
                      "fuelShapes": F(list, OPT)},          # 2026-10-23: the region's gas station shapes (--gas-stations)
-    "anchor_error": {"requestId": F(int, NULL), "error": F(str)},
+    "anchor_progress": {"requestId": F(int, NULL), "stage": F(str), "elapsed": F(NUM)},
+    "anchor_error": {"requestId": F(int, NULL), "error": F(str), "stage": F(str, OPT)},
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
     # building, commented out 2026-10-27)
     "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},
