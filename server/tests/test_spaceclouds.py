@@ -91,6 +91,15 @@ class SunTest(unittest.TestCase):
         self.assertAlmostEqual(lon, -90.0, delta=1.5)
 
 
+class GameSunTest(unittest.TestCase):
+    def test_subsolar_from_the_sky(self):
+        lat, lon = spaceclouds.subsolar_from(40.0, -80.0, 0.0, 90.0)
+        self.assertAlmostEqual(lat, 40.0, places=6)          # overhead: right there
+        lat, lon = spaceclouds.subsolar_from(0.0, 0.0, 90.0, 0.0)
+        self.assertAlmostEqual(lat, 0.0, places=6)           # on the eastern horizon at the equator: 90 degrees east
+        self.assertAlmostEqual(lon, 90.0, places=6)
+
+
 class LayerTest(unittest.TestCase):
     def test_clouds_opaque_sea_clear(self):
         import fast

@@ -141,7 +141,8 @@ MOD_TO_SERVER = {
     # the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)
     "terrain_patch": {"anchorId": F(int), "key": F(str), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM)},
     # 2026-11-06: the camera far above the clouds: the cloud shell round the point under it (spaceclouds.lua / .py)
-    "space_clouds_req": {"anchorId": F(int), "lat": F(NUM), "lon": F(NUM), "alt": F(NUM)},
+    "space_clouds_req": {"anchorId": F(int), "lat": F(NUM), "lon": F(NUM), "alt": F(NUM),
+                         "sunAz": F(NUM, OPT), "sunEl": F(NUM, OPT)},     # (the game sky's sun seen from there)
     # the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)
     "runtime_profiler": {"enabled": F(bool), "mode": F(str, OPT), "probe": F(int, OPT)},
     "perf_log": {"lines": F((list, dict))},

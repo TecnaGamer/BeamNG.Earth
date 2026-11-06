@@ -88,6 +88,17 @@ def subsolar(t=None):
     return math.degrees(decl), (lon + 540.0) % 360.0 - 180.0
 
 
+def subsolar_from(lat0, lon0, az_deg, el_deg):
+    """(lat, lon) of the point the sun stands over, from its azimuth (deg clockwise from north) and elevation seen at
+    (lat0, lon0): the great-circle step of 90 - elevation degrees along the azimuth (the game's own sun, whatever its
+    clock)."""
+    d = math.radians(90.0 - float(el_deg))
+    p1, l1, th = math.radians(lat0), math.radians(lon0), math.radians(float(az_deg))
+    p2 = math.asin(max(-1.0, min(1.0, math.sin(p1) * math.cos(d) + math.cos(p1) * math.sin(d) * math.cos(th))))
+    l2 = l1 + math.atan2(math.sin(th) * math.sin(d) * math.cos(p1), math.cos(d) - math.sin(p1) * math.sin(p2))
+    return math.degrees(p2), (math.degrees(l2) + 540.0) % 360.0 - 180.0
+
+
 def merc_lat(y, z):
     """Latitudes (deg) of global pixel rows y at zoom z."""
     n = 256.0 * 2 ** z
@@ -125,7 +136,7 @@ def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL):
     return np.asarray(crop.resize((TEX_PX, TEX_PX), Image.BILINEAR)), got
 
 
-def build(out_dir, vfs_dir, frame, lat0, lon0, cam_alt, fetcher):
+def build(out_dir, vfs_dir, frame, lat0, lon0, cam_alt, fetcher, sun=None):
     """Write the cloud shell (shape, colour and opacity DDS) for a camera cam_alt m over (lat0, lon0) into out_dir;
     the 'space_clouds' message's fields (game paths under vfs_dir, the material's name), or None without any tile."""
     import cdae
@@ -159,15 +170,15 @@ def build(out_dir, vfs_dir, frame, lat0, lon0, cam_alt, fetcher):
     out = {"shape": f"{vfs_dir}/{name}.cdae", "color": f"{vfs_dir}/{name}_c.dds", "opacity": f"{vfs_dir}/{name}_o.dds",
            "material": material, "lat": float(lat0), "lon": float(lon0), "radius": float(radius)}
     try:
-        out.update(_lights(out_dir, vfs_dir, frame, name, ll, tris, z, x0, y0, x1, y1, fetcher))
+        out.update(_lights(out_dir, vfs_dir, frame, name, ll, tris, z, x0, y0, x1, y1, fetcher, sun))
     except Exception as e:                  # (the clouds without the lights)
         log.debug("space clouds: night lights: %s: %s", type(e).__name__, e)
     return out
 
 
-def _lights(out_dir, vfs_dir, frame, name, ll, tris, z, x0, y0, x1, y1, fetcher):
+def _lights(out_dir, vfs_dir, frame, name, ll, tris, z, x0, y0, x1, y1, fetcher, sun=None):
     """The night-lights shell over the clouds' box: Black Marble at zoom min(z, LIGHTS_MAX_ZOOM), the lit pixels where
-    the sun is down now; {} without any tile."""
+    the sun is down (sun: its (lat, lon) subsolar point, the game's; None: the real one now); {} without any tile."""
     import cdae
     import imagery
     zl = min(z, LIGHTS_MAX_ZOOM)
@@ -178,7 +189,7 @@ def _lights(out_dir, vfs_dir, frame, name, ll, tris, z, x0, y0, x1, y1, fetcher)
     rows = y0 * k + (np.arange(TEX_PX) + 0.5) * (y1 - y0) * k / TEX_PX
     cols = x0 * k + (np.arange(TEX_PX) + 0.5) * (x1 - x0) * k / TEX_PX
     lon = cols / (256.0 * 2 ** zl) * 360.0 - 180.0
-    slat, slon = subsolar()
+    slat, slon = sun if sun is not None else subsolar()
     lit = fast._ef.night_lights(np.ascontiguousarray(img), np.ascontiguousarray(merc_lat(rows, zl)),
                                 np.ascontiguousarray(lon), slat, slon)
     imagery.write_dds(os.path.join(out_dir, name + "_l.dds"), np.asarray(lit))

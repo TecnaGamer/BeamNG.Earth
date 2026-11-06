@@ -73,13 +73,16 @@ pub fn shell(lat0: f64, lon0: f64, radius: f64, rings: usize, segs: usize) -> (V
 }
 
 /// night_lights(rgb (h, w, 3) u8, lat (h,) per row, lon (w,) per column, sun_lat, sun_lon) -> (h, w, 3) u8: a night-
-/// lights map's lights alone (its bright pixels: smoothstep of brightness over [L0, L1]; the dark base it is drawn on
-/// goes) times how dark it is there (the sun's elevation over the point: 1 below N0 degrees, 0 above N1), for an
+/// lights map's lights alone (its brightness over the dark base L0 it is drawn on, eased by LGAMMA so a town's faint
+/// glow stays and a city's core still outshines its suburbs) times how dark it is there (the sun's elevation over the point: 1 below N0 degrees, 0 above N1), for an
 /// additive emissive layer that shows the lit cities on the night side and fades across the terminator.
-const L0: f32 = 0.16;
-const L1: f32 = 0.55;
+const L0: f32 = 0.11;
+const LGAMMA: f32 = 0.6;
 const N0: f64 = -6.0;
 const N1: f64 = 3.0;
+/// (the map's lights are a grey-white; from orbit the streets glow sodium orange: half the pixel's own colour, half its
+/// brightness in this tint)
+const WARM: [f32; 3] = [1.0, 0.72, 0.38];
 
 pub fn lights(rgb: &[u8], lat: &[f64], lon: &[f64], sun_lat: f64, sun_lon: f64) -> Vec<u8> {
     let (h, w) = (lat.len(), lon.len());
@@ -98,10 +101,12 @@ pub fn lights(rgb: &[u8], lat: &[f64], lon: &[f64], sun_lat: f64, sun_lon: f64) 
                 continue;
             }
             let (pr, pg, pb) = (rgb[3 * i] as f32 / 255.0, rgb[3 * i + 1] as f32 / 255.0, rgb[3 * i + 2] as f32 / 255.0);
-            let k = smooth((pr + pg + pb) / 3.0, L0, L1) * night;
-            out[3 * i] = (pr * k * 255.0).round() as u8;
-            out[3 * i + 1] = (pg * k * 255.0).round() as u8;
-            out[3 * i + 2] = (pb * k * 255.0).round() as u8;
+            let lum = (pr + pg + pb) / 3.0;
+            let k = ((lum - L0) / (1.0 - L0)).clamp(0.0, 1.0).powf(LGAMMA) * night;
+            for (j, v) in [pr, pg, pb].iter().enumerate() {
+                let c = 0.5 * v + 0.5 * lum * WARM[j];
+                out[3 * i + j] = (c * k * 255.0).round().min(255.0) as u8;
+            }
         }
     }
     out
@@ -172,7 +177,8 @@ mod tests {
     fn lights_only_at_night() {
         let rgb = [255u8, 220, 150, 20, 20, 40];          // a city light, the dark base
         let night = lights(&rgb, &[45.0], &[10.0, 10.0], 0.0, -170.0);   // the sun on the far side: night
-        assert!(night[0] > 200 && night[3] == 0, "{:?}", night);
+        assert!(night[0] > 180 && night[3] == 0, "{:?}", night);
+        assert!(night[0] > night[1] && night[1] > night[2], "warm: {:?}", night);
         let day = lights(&rgb, &[45.0], &[10.0, 10.0], 0.0, 10.0);       // the sun nearly overhead: day
         assert_eq!(day[0], 0);
     }

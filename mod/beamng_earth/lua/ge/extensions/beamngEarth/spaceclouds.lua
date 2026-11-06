@@ -12,7 +12,7 @@ M.SHOW_M = 12000
 M.HIDE_M = 10000
 M.CHECK_S = 1.0
 M.REFRESH_S = 15 * 60       -- (the night side's edge moves ~4 degrees in that time: its lights are baked in)
-M.LIGHTS_NITS = 40
+M.LIGHTS_NITS = 150
 M.RETRY_S = 60
 M.MOVE_SHARE = 0.25
 M.GROW_SHARE = 1.2          -- ... or when the camera's reach (it rose) is this much the shell's
@@ -141,7 +141,11 @@ function M.update(dt, anchor, anchorId, send)
   if pending and clock - pending.at < M.RETRY_S then return end
   if M.stale(shell, anchorId, lat, lon, clock, p.z) then
     pending = { at = clock }
-    send({ type = 'space_clouds_req', anchorId = anchorId, lat = lat, lon = lon, alt = p.z })
+    -- (the game's own sun, whatever its clock: the night side's lights follow the sky drawn, a manual time of day too)
+    local sky = scenetree.findObject('sunsky')
+    local az = sky and tonumber(sky:getField('azimuth', 0))
+    local el = sky and tonumber(sky:getField('elevation', 0))
+    send({ type = 'space_clouds_req', anchorId = anchorId, lat = lat, lon = lon, alt = p.z, sunAz = az, sunEl = el })
   end
 end
 

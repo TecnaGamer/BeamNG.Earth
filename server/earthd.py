@@ -5683,9 +5683,16 @@ class Connection:
             return
         import spaceclouds as spacecloudsmod
         frame = self.s.anchors[aid].frame
+        sun = None                              # (the game's sun seen from there: its night side's lights follow it)
+        try:
+            az, el = float(msg["sunAz"]), float(msg["sunEl"])
+            if math.isfinite(az) and math.isfinite(el) and -90 <= el <= 90:
+                sun = spacecloudsmod.subsolar_from(lat, lon, az, el)
+        except (KeyError, TypeError, ValueError):
+            pass
         try:
             res = await asyncio.get_running_loop().run_in_executor(
-                None, spacecloudsmod.build, self.s.out_dir, self.s.vfs_dir, frame, lat, lon, alt, self.s.net)
+                None, spacecloudsmod.build, self.s.out_dir, self.s.vfs_dir, frame, lat, lon, alt, self.s.net, sun)
         except Exception as e:
             log.warning("space clouds: %s: %s", type(e).__name__, e)
             return
