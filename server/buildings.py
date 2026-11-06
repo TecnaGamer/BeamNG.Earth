@@ -82,9 +82,19 @@ LANDMARK_STONE = "bne_lm_stone"     # ... its stone (vertex colours), dark at ni
 LANDMARK_FLOODLIT = "bne_lm_floodlit"   # ... its floodlit stone, glowing at night (the Arc de Triomphe, Big Ben)
 LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosseum's arches): points of light at night
 LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
+# fork: Queensland's roofs (the stock materials stay for every other region): Colorbond Trimdek-style ribbed sheet (satin,
+# painted: not the zinc cladding's glossy panels) and profiled terracotta / concrete tiles (not the slate shingles), each at
+# its real-world scale (ROOF_UV_M_OF)
+ROOF_COLORBOND = "bne_bld_roof_colorbond"
+ROOF_QTILE = "bne_bld_roof_qtile"
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
-             LANDMARK_FLOODLIT, LANDMARK_DIAL)
+             LANDMARK_FLOODLIT, LANDMARK_DIAL, ROOF_COLORBOND, ROOF_QTILE)
+# fork: the metres per repeat (along the ridge, up the slope) of the roof materials that are not at ROOF_UV_M (their
+# textures' own real size). Colorbond: the stock "wall corrugated" sheet, 5 ribs across 512 px, the ribs along V (down the
+# slope) at Trimdek's 190 mm pitch: 0.95 m each way. Tiles: the Italy barrel tile, 4 columns x 5 courses per repeat, a
+# Marseille-sized 0.33 m column and 0.42 m course: 1.32 m x 2.10 m.
+ROOF_UV_M_OF = {ROOF_COLORBOND: (0.95, 0.95), ROOF_QTILE: (1.32, 2.1)}
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -142,12 +152,13 @@ for _k, _c in enumerate(WOOD_TINTS):
 # Colorbond (approximate sRGB): Monument (50,50,51), Surfmist (228,226,213), Shale Grey (189,191,186), Woodland Grey
 # (75,76,70), Basalt (109,108,110), Windspray (136,139,138), Dune (177,173,163), Classic Cream (233,220,184),
 # Paperbark (202,191,164), Jasper (108,97,83), Manor Red (94,29,14), Deep Ocean (54,65,82), Cottage Green (48,76,60)
-QLD_METAL = ((0.31, 0.31, 0.31), (1.0, 0.99, 0.93), (0.99, 1.0, 0.97), (0.46, 0.46, 0.43), (0.67, 0.66, 0.67),
-             (0.83, 0.85, 0.84), (1.0, 0.98, 0.92), (1.0, 0.94, 0.79), (1.0, 0.95, 0.81), (0.66, 0.59, 0.51),
-             (0.57, 0.18, 0.09), (0.33, 0.40, 0.50), (0.29, 0.46, 0.37))
+QLD_METAL = ((0.23, 0.23, 0.24), (1.0, 0.99, 0.93), (0.88, 0.89, 0.87), (0.35, 0.35, 0.33), (0.51, 0.50, 0.51),
+             (0.63, 0.65, 0.64), (0.82, 0.81, 0.76), (1.0, 0.94, 0.79), (0.94, 0.89, 0.76), (0.50, 0.45, 0.39),
+             (0.44, 0.14, 0.07), (0.25, 0.30, 0.38), (0.22, 0.35, 0.28))
 QLD_METAL_W = (3, 3, 2, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1)       # how common each is (by position above): Monument, Surfmist
-# terracotta (166,82,55), (148,70,48), (120,58,42) on the slate sheet; charcoal concrete tile (70,70,72)
-QLD_TILE = ((1.0, 0.49, 0.31), (0.89, 0.42, 0.27), (0.72, 0.35, 0.23), (0.76, 0.76, 0.73))
+# terracotta (166,82,55), (148,70,48), (120,58,42) on the Italy tile sheet (mean (0.625, 0.465, 0.361): the first one's red
+# would need 1.04, so the three share a scale of 1/1.04); charcoal concrete tile (70,70,72), unscaled
+QLD_TILE = ((1.0, 0.66, 0.57), (0.89, 0.57, 0.50), (0.72, 0.47, 0.44), (0.44, 0.59, 0.78))
 QLD_TILE_W = (2, 2, 1, 2)
 # painted weatherboard (on the siding sheet, mean 0.82): white (240,238,230), cream (236,226,196), pale grey
 # (205,208,204), heritage green (110,130,105), pale blue (190,205,212)
@@ -158,9 +169,9 @@ QLD_SIDING_W = (4, 3, 2, 1, 1)
 QLD_BRICK = ((0.89, 1.0, 0.88), (0.91, 1.0, 0.84), (0.82, 0.54, 0.43), (0.54, 0.43, 0.37), (1.0, 0.80, 0.70))
 QLD_BRICK_W = (2, 2, 3, 1, 1)
 for _k, _c in enumerate(QLD_METAL):
-    LOOKS[f"{ROOF_METAL}|q{_k}"] = (ROOF_METAL, _c)
+    LOOKS[f"{ROOF_COLORBOND}|q{_k}"] = (ROOF_COLORBOND, _c)
 for _k, _c in enumerate(QLD_TILE):
-    LOOKS[f"{ROOF_SLATE}|q{_k}"] = (ROOF_SLATE, _c)
+    LOOKS[f"{ROOF_QTILE}|q{_k}"] = (ROOF_QTILE, _c)
 for _k, _c in enumerate(QLD_SIDING):
     LOOKS[f"{SIDING}|q{_k}"] = (SIDING, _c)
 for _k, _c in enumerate(QLD_BRICK):
@@ -409,8 +420,8 @@ _DARK = (ROOF_SLATE, (7, 8, 9))
 # seed, and so is gabled / hipped)
 _QLD_TILE_AT = (1, 4, 6, 9, 12, 14, 17)
 _QLD_ROOFS = tuple(
-    (ROOF_SLATE, _weighted([f"q{k}" for k in range(len(QLD_TILE))], QLD_TILE_W)) if i in _QLD_TILE_AT else
-    (ROOF_METAL, _weighted([f"q{k}" for k in range(len(QLD_METAL))], QLD_METAL_W)) for i in range(20))
+    (ROOF_QTILE, _weighted([f"q{k}" for k in range(len(QLD_TILE))], QLD_TILE_W)) if i in _QLD_TILE_AT else
+    (ROOF_COLORBOND, _weighted([f"q{k}" for k in range(len(QLD_METAL))], QLD_METAL_W)) for i in range(20))
 STYLES = {
     "us_east": Style("us_east", 0.75, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
     "us_south": Style("us_south", 0.35, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
@@ -1239,9 +1250,10 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
 
 def _roof(m, spec, ring, z_eave, mat_idx):
     rm = mat_idx[spec.roof_mat]
+    ru, rv = ROOF_UV_M_OF.get(spec.roof_mat.split("|")[0], (ROOF_UV_M, ROOF_UV_M))     # fork: m per repeat of U and V
     if spec.roof == "flat":
         pts = [(p[0], p[1], z_eave) for p in ring]
-        uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
+        uv = [(p[0] / ru, p[1] / rv) for p in ring]
         m.poly(pts, uv, rm)
         return
     c, u, hl, hw = oriented_box(ring)
@@ -1257,7 +1269,7 @@ def _roof(m, spec, ring, z_eave, mat_idx):
     slope = math.hypot(hw2, rise)
 
     def uv(s, t):            # along the ridge, up the slope (m / ROOF_UV_M)
-        return (s / ROOF_UV_M, (hw2 - abs(t)) / hw2 * slope / ROOF_UV_M)
+        return (s / ru, (hw2 - abs(t)) / hw2 * slope / rv)
     if spec.roof == "gabled":
         r = hl2
         m.quad(at(-hl2, -hw2, ze), at(hl2, -hw2, ze), at(r, 0, zr), at(-r, 0, zr),
@@ -1280,9 +1292,9 @@ def _roof(m, spec, ring, z_eave, mat_idx):
         m.quad(at(hl2, hw2, ze), at(-hl2, hw2, ze), at(-r, 0, zr), at(r, 0, zr),
                uv(hl2, hw2), uv(-hl2, hw2), uv(-r, 0), uv(r, 0), rm)
         m.tri(at(hl2, -hw2, ze), at(hl2, hw2, ze), at(r, 0, zr),
-              (-hw2 / ROOF_UV_M, 0), (hw2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+              (-hw2 / ru, 0), (hw2 / ru, 0), (0, slope / rv), rm)
         m.tri(at(-hl2, hw2, ze), at(-hl2, -hw2, ze), at(-r, 0, zr),
-              (-hw2 / ROOF_UV_M, 0), (hw2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+              (-hw2 / ru, 0), (hw2 / ru, 0), (0, slope / rv), rm)
 
 
 # The engine draws a shape's mesh with 16-bit indices: past 65,535 vertices they wrap and triangles join far-apart
@@ -3989,7 +4001,9 @@ MAT_MEAN = {"bne_bld_facade": (0.679, 0.676, 0.683), "bne_bld_shop": (0.669, 0.6
             "bne_bld_siding": (0.822, 0.822, 0.822), "bne_bld_stucco": (0.795, 0.795, 0.795),
             "bne_bld_roof_metal": (0.642, 0.642, 0.642), "bne_bld_panel": (0.815, 0.815, 0.814),
             "bne_bld_metalwall": (0.841, 0.841, 0.841), "bne_bld_stone": (0.83, 0.818, 0.803),
-            "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513)}
+            "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513),
+            # fork (the same 64 x 64 resize of the new materials' base textures, 2026-11-07)
+            "bne_bld_roof_colorbond": (0.841, 0.841, 0.841), "bne_bld_roof_qtile": (0.625, 0.465, 0.361)}
 SKY_UV = (0.5, 0.5)
 # the skyline walls' windows (tools/build_sky_windows.py: SKY_WIN_BAYS x SKY_WIN_FLOORS of them in its map), lit at
 # night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")

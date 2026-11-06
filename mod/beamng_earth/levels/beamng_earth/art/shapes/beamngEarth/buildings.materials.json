@@ -281,6 +281,60 @@
     ],
     "translucent": false
   },
+  "bne_bld_roof_colorbond": {
+    "name": "bne_bld_roof_colorbond",
+    "mapTo": "bne_bld_roof_colorbond",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "51dc2813-e9e1-56f6-8a42-c30399237f24",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/metal/m_metal_wall_corrugate/t_metal_wall_corrugated_b.color.png",
+        "normalMap": "/assets/materials/tileable/metal/m_metal_wall_corrugate/t_metal_wall_corrugated_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/metal/m_metal_wall_corrugate/t_metal_wall_corrugated_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/metal/m_metal_wall_corrugate/t_metal_wall_corrugated_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_roof_qtile": {
+    "name": "bne_bld_roof_qtile",
+    "mapTo": "bne_bld_roof_qtile",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9f25f0a5-a78f-5e16-a085-45894f4795a1",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/roofing/t_italy_bld_roof_tiles/t_italy_bld_roof_tiles_b.color.png",
+        "normalMap": "/assets/materials/tileable/roofing/t_italy_bld_roof_tiles/t_italy_bld_roof_tiles_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/roofing/t_italy_bld_roof_tiles/t_italy_bld_roof_tiles_r.data.png",
+        "roughnessFactor": 0.85,
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
   "bne_bld_panel": {
     "name": "bne_bld_panel",
     "mapTo": "bne_bld_panel",
