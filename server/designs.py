@@ -3,8 +3,10 @@ message, Server.dej_on, or BNE_DEJUNCTIONS=on / off to force it whatever the pag
 kernel (native/earthfast dejunction.rs: de_stretch, de_junction): context() reads a tile's roads once (route ref
 ranks, mapped priority roads and 30 zones, the Vorfahrtstraße stretches), controls() gives each arm of one junction
 its sign (a code of the kernel, EXIT, or a furniture group for roundabouts and signals) and the 1002 plate,
-junction_rows() stands them where VwV-StVO says (furniture.junction_props' rows); and the signs' catalogue,
-designsigns.py's (re-exported here): GROUPS, their sizes (size_suffix) and shapes, HEIGHTS."""
+junction_rows() stands them where VwV-StVO says (furniture.junction_props' rows), decide() makes that decision once
+per junction of a road tile for its signs and its paint, junction_paint() paints the junctions as their signs say
+(roads.build_tile: the Wartelinie, the Haltlinie, the map's zebras); and the signs' catalogue, designsigns.py's
+(re-exported here): GROUPS, their sizes (size_suffix) and shapes, HEIGHTS."""
 import os
 import re
 from collections import namedtuple
@@ -237,6 +239,144 @@ def controls(arms, k, link_ok=None, ring=None, signals=None, country=None, prior
     for j, i in enumerate(idx):
         out[i] = (arms[i], 0 if int(what[j]) == Z301 and not yields else int(what[j]), int(plate[j]))
     return out
+
+
+def _de(frame, pts):
+    """germany.de_at of points (n, 2) at once (one codes_at for them all, not one per point)."""
+    p = np.asarray(pts, np.float64).reshape(-1, 2)
+    return np.asarray(germany.de_at(frame, p[:, 0], p[:, 1]), bool).ravel() if len(p) else np.zeros(0, bool)
+
+
+def decide(roads, ctx, box, signals=None, country=None, priority=None):
+    """{junction key: (arms, controls' answer, or None outside Germany)} of the junctions of three or more arms among
+    roads (build_tile's: furniture._arms' keys and arms) whose point is in box (x0, y0, x1, y1): the one decision of a
+    junction for its signs (furniture.junction_props) and its paint (junction_paint), the junction's point deciding the
+    country (inside's, for all of them at once)."""
+    junctions = furniture._arms(roads)
+    x0, y0, x1, y1 = box[:4]
+    keys = [k for k, arms in junctions.items()
+            if len(arms) >= 3 and x0 <= arms[0][3][0] <= x1 and y0 <= arms[0][3][1] <= y1]
+    de = _de(ctx.frame, [junctions[k][0][3][:2] for k in keys])
+    if not de.any():
+        return {k: (junctions[k], None) for k in keys}
+    import islands
+    link_ok, ring = furniture._link_check(junctions, signals), islands.ring_fids(roads)
+    return {k: (junctions[k], controls(junctions[k], k, link_ok, ring, signals, country, priority, ctx) if d else None)
+            for k, d in zip(keys, de)}
+
+
+def line_arms(decided, roads):
+    """(the Wartelinie's arms, the Haltlinie's arms) of decide's junctions, as furniture.give_way_arms gives Sweden's:
+    [(fid, spec, centreline from the junction (k, 3), half the junction's widest arm's width)] of the paved 205 arms and
+    a roundabout's entries (controls' G_YIELD), and those of the paved 206 arms with furniture.G_STOP fifth
+    (markings.wait_lines, markings.stop_lines). None on right before left, an EXIT arm or a junction not decided. The
+    centreline: the piece of its road that ends at the junction (build_tile has a road once per ground part)."""
+    pieces = {}
+    for fid, _, pts, _ in roads:
+        pieces.setdefault(fid, []).append(np.asarray(pts, np.float64))
+    wait, stop = [], []
+    for arms, ctl in decided.values():
+        if ctl is None:
+            continue
+        wide = max(a[1].width for a in arms) / 2
+        for a, what, _ in ctl:
+            if a[1].kind != "paved" or what not in (Z205, Z206, furniture.G_YIELD):
+                continue
+            pts = min(pieces[a[0]], key=lambda q: float(np.hypot(*(q[0 if a[4] else -1, :2] - a[3][:2]))))
+            arm = (a[0], a[1], pts if a[4] else pts[::-1], wide)
+            if what == Z206:
+                stop.append(arm + (furniture.G_STOP,))
+            else:
+                wait.append(arm)
+    return wait, stop
+
+
+JUNCTION_PAINT_M = 50.0     # m from its junction a crosswalk or stop line of junctions.find lies at most (a corner's
+                            # tangent up to 40 m out, the crosswalk and its stop line past it): the nearest junction
+                            # this near is its own
+
+
+def _within(points, anchors, reach):
+    """[bool] of points (n, 2): within reach m of any of anchors (m, 2)."""
+    p = np.asarray(points, np.float64).reshape(-1, 2)
+    q = np.asarray(anchors, np.float64).reshape(-1, 2)
+    if not len(p) or not len(q):
+        return np.zeros(len(p), bool)
+    return (np.hypot(p[:, None, 0] - q[None, :, 0], p[:, None, 1] - q[None, :, 1]) <= reach).any(axis=1)
+
+
+def junction_paint(decided, roads, ctx, crosswalks, cuts, ramps, nodes=None, signals=None, left_hand=False):
+    """Germany's paint at its junctions (roads.build_tile, de_on), in place of junctions.find's US crosswalks and stop
+    lines: (crosswalks and stop lines [{"a", "b", "w"[, "stop"][, "look"]}], line cuts {fid: [(point, u, t)]}, kerb
+    ramps {(fid, side): [...]}, the Wartelinie's dashes [(4, 3)], the mapped zebras the road's lines stop at [(ends
+    (2, 2), half width)]). decided: decide's; crosswalks, cuts, ramps: junctions.find's (crosswalks with its stop lines,
+    line_cuts, ramps); nodes: secrossings.nodes' (None: no crossing mapped, no zebra); signals: the mapped traffic
+    signals (furniture.mapped_signals). Outside Germany all as it was.
+    - A crosswalk or stop line of junctions.find is its nearest junction's of decided within JUNCTION_PAINT_M (none
+      there: its midpoint's country, and a mapped signal within furniture.SIGNAL_NEAR_M): it stays where that junction
+      is outside Germany or signalised (controls' G_SIGNAL: a mapped signal within SIGNAL_NEAR_M of its widest arm's
+      edge, furniture._is_signalled, as its signal heads: today's paint there), else it goes, and its line cut with it.
+      The kerb ramps all stay: German streets have lowered kerbs at junctions with or without paint.
+    - The map's crossings inside Germany (secrossings.place): a zebra (Fußgängerüberweg, Z 293: bars 0.50 m wide,
+      0.50 m apart, RMS 4.9: secrossings.M15_LOOK's) where it is painted and no signal (a mapped one, or a signalised
+      junction's point) is within SIGNAL_NEAR_M (VwV-StVO zu § 26 Rn. 5: none near traffic lights; today's paint stands
+      there), and every one's kerb ramps added to the junctions'. Sweden's M16 squares are no German marking: none.
+    - The Wartelinie (Z 341) on the 205 arms and a roundabout's entries (R26), the Haltlinie (Z 294) on the 206 arms,
+      at the map's stop line where it has one (line_arms; markings.wait_lines, markings.stop_lines): the road's lines
+      end at them. Nothing on right before left, an EXIT arm or a junction not decided."""
+    import junctions
+    import markings
+    import secrossings
+    vals = list(decided.values())
+    at = np.array([arms[0][3][:2] for arms, _ in vals], np.float64).reshape(-1, 2)
+    german = np.array([ctl is not None for _, ctl in vals], bool)
+    lit = np.array([ctl is not None and any(w == furniture.G_SIGNAL for _, w, _ in ctl) for _, ctl in vals], bool)
+    mapped = np.asarray(signals, np.float64).reshape(-1, 2) if signals is not None else np.zeros((0, 2))
+    mids = np.array([0.5 * (np.asarray(cw["a"][:2], np.float64) + cw["b"][:2]) for cw in crosswalks]).reshape(-1, 2)
+    keep = np.ones(len(mids), bool)
+    by_junction = np.ones(len(mids), bool)  # (a junction of decided near: it decides)
+    for i, m in enumerate(mids):
+        d = np.hypot(at[:, 0] - m[0], at[:, 1] - m[1]) if len(at) else np.zeros(0)
+        j = int(np.argmin(d)) if len(d) else -1
+        if j >= 0 and d[j] <= JUNCTION_PAINT_M:
+            keep[i] = not german[j] or lit[j]
+        else:
+            by_junction[i] = False
+    if not by_junction.all():
+        alone = mids[~by_junction]
+        keep[~by_junction] = ~_de(ctx.frame, alone) | _within(alone, mapped, furniture.SIGNAL_NEAR_M)
+    gone = np.array([m for m, k, cw in zip(mids, keep, crosswalks) if not k and not cw.get("stop")]).reshape(-1, 2)
+    half = junctions.CROSSWALK["w"] / 2     # (a line cut of junctions.find is at its crosswalk's far edge)
+    out_cuts = {}
+    for fid, cs in cuts.items():
+        got = [c for c in cs if not _within([np.asarray(c[0][:2]) + np.asarray(c[1]) * (c[2] - half)], gone, 0.5)[0]]
+        if got:
+            out_cuts[fid] = got
+    out = [cw for cw, k in zip(crosswalks, keep) if k]
+    out_ramps = {key: list(r) for key, r in ramps.items()}
+    zebras = []
+    if nodes is not None:
+        found, _, mapped_ramps = secrossings.place(roads, nodes)
+        painted = [cw for cw in found if cw.get("paint", True)]
+        if painted:
+            pm = np.array([0.5 * (cw["a"][:2] + cw["b"][:2]) for cw in painted])
+            near = _within(pm, np.vstack([mapped, at[lit]]), furniture.SIGNAL_NEAR_M)
+            zebras = [dict(cw, look=secrossings.M15_LOOK) for cw, de, s in zip(painted, _de(ctx.frame, pm), near)
+                      if de and not s]
+        rows = [(key, r) for key, rs in mapped_ramps.items() for r in rs]
+        for (key, r), de in zip(rows, _de(ctx.frame, [r[0][:2] for _, r in rows])):
+            if de:
+                out_ramps.setdefault(key, []).append(r)
+    wait, stop = line_arms(decided, roads)
+    crossings = out + zebras
+    halt, halt_cuts = markings.stop_lines(stop, crossings, nodes["stop_lines"] if nodes is not None else None,
+                                          left_hand, markings.Z294_W)
+    dashes, wait_cuts = markings.wait_lines(wait, crossings, left_hand)
+    for got in (halt_cuts, wait_cuts):
+        for fid, cs in got.items():
+            out_cuts.setdefault(fid, []).extend(cs)
+    return (out + zebras + halt, out_cuts, out_ramps, dashes,
+            [(np.array([cw["a"], cw["b"]])[:, :2], cw["w"] / 2) for cw in zebras])
 
 
 def stretch_flags(arms, ctx=None):

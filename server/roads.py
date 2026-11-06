@@ -8969,8 +8969,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     furniture.place for the street trees, hydrants, benches and bins on these sidewalks. towns(roads, box,
     left_hand, rings) -> prop rows: the town entry and exit signs among props (townentry.Towns.maker; BNE_TOWNSIGNS;
     rings: the roundabout rings' ids, which have none). de_on: Germany's junction signs (designs.context of these
-    cells, de_routes their road_routes layers for the ref ranks, road_towns' town). Pure given its inputs (sorted by
-    feature id)."""
+    cells, de_routes their road_routes layers for the ref ranks, road_towns' town) and their paint
+    (designs.junction_paint in place of the US crosswalks and stop lines, one designs.decide per junction for both),
+    and the line style by Germany's border (markings.style of germany.effective_country at the tile's middle).
+    Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
     import furniture
@@ -9138,9 +9140,26 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if props is not None:                   # a rural cut: rock-face pieces instead (cliff_rows)
             props.extend(cliff_rows([w for w in tile_walls if w["rock"]], roads))
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
+    de_ctx = de_ctl = None                      # Germany's junctions (de_on): the tile's roads read once
+    line_country = country                      # (designs.context), the line style by its border (markings.style)
+    if de_on:
+        import designs
+        if designs.near(frame, own_box):
+            import germany
+            line_country = germany.effective_country(
+                country, bool(germany.de_at(frame, (x0 + x1) / 2, (y0 + y1) / 2)[0]))
+            if walks is not None:
+                de_towns, by_cell = {}, {}      # (not towns: build_tile's town entry signs, PR #597)
+                for fid, (f, i, _sp) in seen.items():
+                    if id(f) not in by_cell:
+                        by_cell[id(f)] = road_towns(f, urban_fn, left_hand)
+                    if by_cell[id(f)] is not None:
+                        de_towns[fid] = by_cell[id(f)][i]
+                de_ctx = designs.context(frame, cells, de_routes, towns=de_towns)
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
         junctions.find(roads, has_sidewalks, None)
-    teeth = []                                  # Sweden's give-way lines (markings.give_way_lines), M16's squares
+    teeth = []                                  # Sweden's give-way lines (markings.give_way_lines), M16's squares;
+                                                # Germany's Wartelinie (markings.wait_lines)
     zebras = []                                 # ... and its crossings, which a road's lines stop at (secrossings.place)
     crosswalk_look = junctions.CROSSWALK
     priority = None if nodes is None else nodes["priority"]
@@ -9161,6 +9180,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         m14, gone = _gw.give_way_lines(furniture.give_way_arms(roads, signals, country, priority), crosswalks, left_hand)
         teeth = teeth + m14
         crosswalks = [cw for j, cw in enumerate(crosswalks) if j not in gone] + stops
+    elif de_ctx is not None:
+        # Germany: each junction's paint as its signs (one decision, designs.decide, shared with furniture.place): the
+        # Wartelinie at 205, the Haltlinie at 206, the map's zebras only, the kerb ramps kept, signals as today
+        reach = (max(near[0], wexact[0] - NEAR_M), max(near[1], wexact[1] - NEAR_M), min(near[2], wexact[2] + NEAR_M),
+                 min(near[3], wexact[3] + NEAR_M))  # (the junctions whose paint can be in the tile)
+        de_ctl = designs.decide(roads, de_ctx, reach, signals, country, priority)
+        crosswalks, jlines, jramps, teeth, zebras = designs.junction_paint(
+            de_ctl, roads, de_ctx, crosswalks, jlines, jramps, nodes, signals, left_hand)
     # (no curb extensions: they were on every town street with parking, after Fells Point's, and most streets have none:
     # the corners stuck out into the road in Tustin's suburbs, GitHub #208)
     # small road loops (roundabouts, turnaround loops): no sidewalks facing their inside, a curbed island instead
@@ -9208,11 +9235,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     chunks.append({"m": fill_look["m"], "w": 0.0, "tl": fill_look["tl"], "p": fill_look["p"],
                                    "poly": [[round(float(v), 3) for v in q] for q in fill], "n": []})
         import markings as _mk
-        ladder = _mk.style(country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
+        ladder = _mk.style(line_country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
         for cw in crosswalks:                   # crosswalks and stop lines
             mid = 0.5 * (cw["a"] + cw["b"])
             if skin_own(mid[0], mid[1]) and cw.get("paint", True):
-                look = junctions.STOP_LINE if cw.get("stop") else crosswalk_look
+                look = junctions.STOP_LINE if cw.get("stop") else cw.get("look", crosswalk_look)
                 ab = np.array([cw["a"], cw["b"]])
                 chunks.append(_chunk(look, cw["w"], ab))
                 if ladder and not cw.get("stop"):
@@ -9260,7 +9287,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     # where both roads have them; corner_cuts end those road sides' straight edge lines and decals at the tangents
     import roadcorners
     corner_chunks, corner_cuts = roadcorners.tile(
-        roads, box, not ROADS_IN_GROUND, country, left_hand,
+        roads, box, not ROADS_IN_GROUND, line_country, left_hand,
         rings={fid for fid, (f, i, sp) in seen.items() if is_ring(f, i)}, no_decal=lot_aisles, exact=wexact)
     chunks.extend(corner_chunks)
     import rampmerges, roadmarkings
@@ -9287,8 +9314,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if ls:
                 sla, slo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
                 sh = shift_at(ls, slo, sla)
-        ex = extras(spec, pts, lon, left_hand, country, lane_tags(*seen[fid][:2]) if fid in seen else None, ws, sh, defer_dashes=True) \
-            if fid not in jinternal or fid in whole else []    # inside a junction: none
+        ex = extras(spec, pts, lon, left_hand, line_country, lane_tags(*seen[fid][:2]) if fid in seen else None, ws,
+                    sh, defer_dashes=True) if fid not in jinternal or fid in whole else []    # inside a junction: none
         if fid in jinternal:                    # (a through road's piece between two close junctions: its lines only)
             ex = [e for e in ex if e[0].get("kind")]
         if not ex:
@@ -9444,17 +9471,6 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import poleprofiles
         detailed_signs = euguardrails.enabled() and poleprofiles.kit_enabled(pole_profile)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
-        de_ctx = None
-        if de_on:                                   # Germany's junction signs: the tile's roads read once
-            import designs
-            if designs.near(frame, own_box):
-                de_towns, by_cell = {}, {}      # (not towns: build_tile's town entry signs, PR #597)
-                for fid, (f, i, _sp) in seen.items():
-                    if id(f) not in by_cell:
-                        by_cell[id(f)] = road_towns(f, urban_fn, left_hand)
-                    if by_cell[id(f)] is not None:
-                        de_towns[fid] = by_cell[id(f)][i]
-                de_ctx = designs.context(frame, cells, de_routes, towns=de_towns)
         # (the speed-limit signs are the sign tiles' since 2026-10-28: speedsigns.py)
         if sign_obstacles is not None:
             sign_obstacles.ground = ground
@@ -9463,7 +9479,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      signals=signals, buried=buried, region=lamp_region, country=country,
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
-                                     defer_gore=detailed_signs, de_on=de_on, de_ctx=de_ctx,
+                                     defer_gore=detailed_signs, de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     if signs is not None and props is not None:

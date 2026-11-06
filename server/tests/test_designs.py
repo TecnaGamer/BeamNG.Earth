@@ -799,3 +799,326 @@ class RoutesReadTest(unittest.TestCase):
         md = Md()
         self.assertEqual(blockworker._de_routes(md, ["has", "none", "boom"]), [layer])
         self.assertEqual(md.asked[0], ("has", ("road_routes",), "demand"))
+
+
+# today's junction paint of test_roads' US 4-way (test_junction_corners_crosswalks_ramps) at Schrobenhausen, country DE,
+# no signal mapped: (material, width, texture length, ends) of its crosswalks and stop lines, recorded from the road
+# tiles before Germany's paint (literals, no git show); "stretch": its west and east arms secondary
+TODAY_PAINT = {
+    "residential": [("crossing_white", 3.0, 4.8, [[125.3, 109.7], [114.7, 109.7]]),
+                    ("crossing_white", 3.0, 4.8, [[130.3, 125.3], [130.3, 114.7]]),
+                    ("crossing_white", 3.0, 4.8, [[114.7, 130.3], [125.3, 130.3]]),
+                    ("crossing_white", 3.0, 4.8, [[109.7, 114.7], [109.7, 125.3]]),
+                    ("line_white", 0.45, 6.4, [[120.2, 106.97], [125.0, 106.97]]),
+                    ("line_white", 0.45, 6.4, [[133.03, 120.2], [133.03, 125.0]]),
+                    ("line_white", 0.45, 6.4, [[119.8, 133.03], [115.0, 133.03]]),
+                    ("line_white", 0.45, 6.4, [[106.97, 119.8], [106.97, 115.0]])],
+    "stretch": [("crossing_white", 3.0, 4.8, [[125.3, 105.95], [114.7, 105.95]]),
+                ("crossing_white", 3.0, 4.8, [[133.3, 126.05], [133.3, 113.95]]),
+                ("crossing_white", 3.0, 4.8, [[114.7, 134.05], [125.3, 134.05]]),
+                ("crossing_white", 3.0, 4.8, [[106.7, 113.95], [106.7, 126.05]]),
+                ("line_white", 0.45, 6.4, [[120.2, 103.22], [125.0, 103.22]]),
+                ("line_white", 0.45, 6.4, [[136.03, 120.2], [136.03, 125.75]]),
+                ("line_white", 0.45, 6.4, [[119.8, 136.78], [115.0, 136.78]]),
+                ("line_white", 0.45, 6.4, [[103.97, 119.8], [103.97, 114.25]])],
+}
+
+
+def _flat(la, lo):
+    return np.full(np.shape(la), 10.0)
+
+
+class MarkingsTest(unittest.TestCase):
+    """Germany's junction paint in the road tiles (roads.build_tile, de_on, the junction inside Germany), as its signs
+    say (one designs.controls decision for both): test_roads' US 4-way (four streets meeting at X, 180 m each) at
+    Schrobenhausen. Wartelinie (Z 341) at 205, Haltlinie (Z 294) at 206, nothing at right before left, zebras only
+    where mapped, the kerb ramps kept, signalised junctions as today."""
+    FRAME = JunctionGlueTest.FRAME
+    X = (120.0, 120.0)
+    ENDS = {"e": (300.0, 120.0), "n": (120.0, 300.0), "w": (-60.0, 120.0), "s": (120.0, -60.0)}
+    DIRS = {"e": (1, 0), "n": (0, 1), "w": (-1, 0), "s": (0, -1)}
+    NO_SIGNALS = np.zeros((0, 2))
+    RES = dict.fromkeys("enws", "residential")
+    STRETCH = {"e": "secondary", "w": "secondary", "n": "residential", "s": "residential"}
+
+    def layer(self, classes, at=(0.0, 0.0), lines=None):
+        """The 4-way's roads layer, classes {arm: class}, moved by at; lines: [(fid, class, [(x, y) ...])] instead."""
+        lines = lines or [(f, c, [self.X, self.ENDS[f]]) for f, c in classes.items()]
+        coords, offs = [], [0]
+        for _, _, ln in lines:
+            e, n = (np.array(ln, np.float64) + at).T
+            lat, lon, _ = self.FRAME.enu_to_geodetic(e, n, 0.0)
+            coords += list(zip(np.asarray(lon), np.asarray(lat)))
+            offs.append(len(coords))
+        k = len(lines)
+        return mapgeom.Features(layer="roads", ids=np.array([f for f, _, _ in lines]),
+                                kind=np.full(k, mapgeom.LINE, np.uint8), part_off=np.arange(k + 1, dtype=np.int64),
+                                ring_off=np.arange(k + 1, dtype=np.int64), coord_off=np.array(offs, np.int64),
+                                lonlat=np.array(coords, np.float64),
+                                attrs={"class": np.array([c for _, c, _ in lines]), "subtype": np.array(["road"] * k)},
+                                rules={})
+
+    def build(self, feats, de_on=True, signals=NO_SIGNALS, country="DE", props=None, nodes=None, tile=(0, 0)):
+        walks = []
+        ch = roads.build_tile(self.FRAME, tile[0], tile[1], [feats], _flat, _everywhere, walks=walks, signals=signals,
+                              country=country, props=props, nodes=nodes, de_on=de_on)
+        return ch, walks
+
+    @staticmethod
+    def paint(ch):
+        """junctions.find's crosswalks and US stop lines, as TODAY_PAINT has them."""
+        import junctions
+        return [(c["m"], c["w"], c["tl"], [[round(v, 2) for v in p[:2]] for p in c["n"]]) for c in ch
+                if c["m"] == junctions.CROSSWALK["m"]
+                or (c["m"] == junctions.STOP_LINE["m"] and c["w"] == junctions.STOP_LINE["w"] and c.get("n"))]
+
+    @staticmethod
+    def z341(ch):
+        return [np.array(c["poly"]) for c in ch if c.get("layer") == "mark" and c["m"] == "line_white"
+                and len(c["poly"]) == 4]
+
+    @staticmethod
+    def z294(ch):
+        return [np.array(c["n"]) for c in ch if c["m"] == "line_white" and c["w"] == 0.5 and len(c.get("n", ())) == 2]
+
+    @staticmethod
+    def ramps(walks):
+        return sum(len(w["ramps"]) for w in walks if "corner" not in w) + \
+            sum(len(w["corner"]["ramps"]) for w in walks if "corner" in w)
+
+    def arm(self, p, centre=None):
+        """The arm of the 4-way a point lies on (its direction from X), and m along it from X."""
+        v = np.asarray(p, np.float64)[:2] - (centre if centre is not None else self.X)
+        d = max(self.DIRS, key=lambda k: float(np.dot(self.DIRS[k], v)))
+        return d, float(np.dot(self.DIRS[d], v))
+
+    def sets(self, dashes, centre=None):
+        """{arm: number of Z 341 dashes on it}."""
+        out = {}
+        for q in dashes:
+            d = self.arm(q.mean(0), centre)[0]
+            out[d] = out.get(d, 0) + 1
+        return out
+
+    def wide(self, feats):
+        """Half the widest arm's width: the crossing road's edge, which the line stands 1 m from."""
+        return max(sp.width for sp in roads.road_specs(feats, _everywhere) if sp is not None) / 2
+
+    def per_set(self, feats, fid):
+        """Whole dashes across the half of arm fid coming in (0.2 m off the middle, 0.3 m off the edge)."""
+        sp = roads.road_specs(feats, _everywhere)[list(feats.ids).index(fid)]
+        return int((sp.width / 2 - 0.5 + 0.25) // 0.75)
+
+    def test_rvl_has_no_paint(self):
+        ch, walks = self.build(self.layer(self.RES), props=[])
+        self.assertFalse(self.paint(ch), "no crossing_white, no US stop line")
+        self.assertFalse(self.z341(ch))
+        self.assertFalse(self.z294(ch))
+        self.assertGreaterEqual(self.ramps(walks), 8, "the kerb ramps as today")
+        self.assertEqual(sum(1 for w in walks if "corner" in w), 4)
+
+    def test_give_way_has_wait_line(self):
+        feats = self.layer(self.STRETCH)
+        props = []
+        ch, walks = self.build(feats, props=props)
+        self.assertFalse(self.paint(ch), "no crosswalk, no US stop line")
+        dashes = self.z341(ch)
+        self.assertEqual(self.sets(dashes), {"n": self.per_set(feats, "n"), "s": self.per_set(feats, "s")},
+                         "one Z 341 set on each minor arm")
+        signs = {self.arm(r[1:3])[0] for r in props if r[0].startswith("de_z205")}
+        self.assertEqual(signs, {"n", "s"}, "where the 205s stand")
+        at = self.wide(feats) + 1.0
+        for q in dashes:
+            d, along = self.arm(q.mean(0))
+            self.assertAlmostEqual(along, at, delta=0.002, msg="1 m from the crossing road's edge (chunks: mm)")
+            self.assertAlmostEqual(float(np.ptp(q[:, 0])), 0.5, delta=0.002)
+            self.assertAlmostEqual(float(np.ptp(q[:, 1])), 0.5, delta=0.002)
+            across = float(q.mean(0)[0] - self.X[0])
+            self.assertGreater(across if d == "s" else -across, 0.0, "on the half coming in")
+        self.assertGreaterEqual(self.ramps(walks), 8)
+
+    def test_lines_end_at_the_wait_line(self):
+        """The stem's centre line (3 m dashes, 6 m gaps from its far end: drawn toward the junction, one spans the
+        Wartelinie's spot) ends at the Wartelinie, not where today's crosswalk was."""
+        lines = [(f, c, [self.X, self.ENDS[f]]) for f, c in (("e", "secondary"), ("w", "secondary"), ("n", "tertiary"))]
+        feats = self.layer(None, lines=lines + [("s", "tertiary", [self.ENDS["s"], self.X])])
+        at, half = self.wide(feats) + 1.0, roads.road_specs(feats, _everywhere)[list(feats.ids).index("s")].width / 2
+
+        def start(ch):
+            stem = [p for c in ch if c["m"] == "line_white" and c["w"] < 0.3 and c.get("n")
+                    for p in c["n"] if abs(p[0] - self.X[0]) < half and self.X[1] - p[1] > self.wide(feats)]
+            self.assertTrue(stem, "the stem has lines")
+            return min(self.X[1] - p[1] for p in stem)
+        self.assertGreater(start(self.build(feats, False)[0]), at + 3.0, "(today: from past its crosswalk)")
+        self.assertAlmostEqual(start(self.build(feats)[0]), at, delta=0.01)
+
+    def test_stop_has_a_haltlinie(self):
+        """A 206 (from the map's stops; here controls patched to give it the stem): a Haltlinie 0.50 m wide
+        (Z 294, RMS 4.6; VwV-StVO zu Zeichen 206 Rn. 4) where its 206 stands, the Wartelinie on the other minor arm."""
+        real = designs.controls
+
+        def stop_on_s(arms, *a, **kw):
+            return [(x, designs.Z206 if x[0] == "s" and w == designs.Z205 else w, p)
+                    for x, w, p in real(arms, *a, **kw)]
+        feats = self.layer(self.STRETCH)
+        props = []
+        with mock.patch.object(designs, "controls", stop_on_s):
+            ch, _ = self.build(feats, props=props)
+        self.assertEqual({self.arm(r[1:3])[0]: r[0] for r in props if r[0].startswith(("de_z205", "de_z206"))},
+                         {"n": "de_z205", "s": "de_z206"})
+        halt = self.z294(ch)
+        self.assertEqual(len(halt), 1)
+        d, along = self.arm(halt[0].mean(0))
+        self.assertEqual(d, "s")
+        self.assertAlmostEqual(along, self.wide(feats) + 1.0, delta=0.002)
+        self.assertGreater(float(halt[0][:, 0].min()), self.X[0], "across the half coming in")
+        self.assertEqual(set(self.sets(self.z341(ch))), {"n"})
+        self.assertFalse(self.paint(ch))
+
+    def test_one_decision_for_signs_and_paint(self):
+        """The tile decides each junction once (designs.decide): its signs (furniture.junction_props) take that answer,
+        no second kernel call."""
+        real, calls = designs.controls, []
+
+        def counted(arms, k, *a, **kw):
+            calls.append(k)
+            return real(arms, k, *a, **kw)
+        props = []
+        with mock.patch.object(designs, "controls", counted):
+            self.build(self.layer(self.STRETCH), props=props)
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(sorted(r[0] for r in props if r[0].startswith("de_")), ["de_z205", "de_z205", "de_z306",
+                                                                               "de_z306"])
+
+    def test_signalised_keeps_today(self):
+        at = np.array([self.X])
+        for name, classes in (("residential", self.RES), ("stretch", self.STRETCH)):
+            ch, walks = self.build(self.layer(classes), signals=at)
+            self.assertEqual(self.paint(ch), TODAY_PAINT[name], name)
+            self.assertEqual(self.paint(ch), self.paint(self.build(self.layer(classes), False, signals=at)[0]), name)
+            self.assertFalse(self.z341(ch))
+            self.assertFalse(self.z294(ch))
+            self.assertGreaterEqual(self.ramps(walks), 8)
+
+    def test_a_junction_near_signals_is_its_own(self):
+        """J1, a signalised crossroads (signals mapped at its node and 12 m up its east approach), and J2 46 m east of
+        it (secondary through, residential N-S): J2's crosswalk and stop line lie within SIGNAL_NEAR_M of a signal, but
+        J2 has no signals (furniture._is_signalled: none within its reach), so they go with its 205s; J1 keeps
+        today's."""
+        j2 = (166.0, 120.0)
+        lines = [("w", "secondary", [self.X, (-60.0, 120.0)]), ("n", "secondary", [self.X, (120.0, 300.0)]),
+                 ("s", "secondary", [self.X, (120.0, -60.0)]), ("e1", "secondary", [self.X, j2]),
+                 ("e2", "secondary", [j2, (300.0, 120.0)]), ("n2", "residential", [j2, (166.0, 300.0)]),
+                 ("s2", "residential", [j2, (166.0, -60.0)])]
+        feats = self.layer(None, lines=lines)
+        signals = np.array([self.X, (132.0, 120.0)])
+        today = self.paint(self.build(feats, False, signals=signals)[0])
+        at_j2 = [p for p in today if np.hypot(*(np.mean(p[3], 0) - j2)) < np.hypot(*(np.mean(p[3], 0) - self.X))]
+        self.assertTrue(any(np.hypot(*(signals - np.mean(p[3], 0)).T).min() < furniture.SIGNAL_NEAR_M for p in at_j2),
+                        "(J2's paint within SIGNAL_NEAR_M of a signal)")
+        props = []
+        ch, _ = self.build(feats, signals=signals, props=props)
+        self.assertEqual(self.paint(ch), [p for p in today if p not in at_j2], "J1 as today, J2's gone")
+        self.assertEqual(self.sets(self.z341(ch), j2), {"n": self.per_set(feats, "n2"), "s": self.per_set(feats, "s2")})
+        near_j2 = [r[0] for r in props if np.hypot(r[1] - j2[0], r[2] - j2[1]) < 20]
+        self.assertNotIn(furniture.G_SIGNAL, near_j2, "(no signal heads at J2)")
+        self.assertIn("de_z205", near_j2)
+
+    def test_off_is_todays(self):
+        """The setting off: today's chunks (the recorded paint, test_roads' counts); on, outside Germany: the same
+        chunks and sidewalks byte for byte."""
+        nowhere = lambda lon, lat: np.zeros(np.size(lon), bool)     # noqa: E731
+        for name, classes in (("residential", self.RES), ("stretch", self.STRETCH)):
+            feats = self.layer(classes)
+            off, walks = self.build(feats, False)
+            self.assertEqual(self.paint(off), TODAY_PAINT[name], name)
+            self.assertEqual(self.ramps(walks), 8, name)
+            self.assertFalse(self.z341(off))
+            default = roads.build_tile(self.FRAME, 0, 0, [feats], _flat, _everywhere, walks=[], signals=self.NO_SIGNALS,
+                                       country="DE")
+            self.assertEqual(default, off, name)
+            with mock.patch.object(germany, "contains", nowhere):
+                on, on_walks = self.build(feats)
+            self.assertEqual(on, off, name)
+            self.assertEqual(repr(on_walks), repr(walks), name)
+
+    def test_roundabout_entries_have_a_wait_line(self):
+        """A roundabout's entries are 205 arms (Z 341 at a Kreisverkehr's entry); today nothing is painted there
+        (no US crosswalk: the ring has no sidewalks; Sweden's M14 only in Sweden)."""
+        import math
+        c = np.array(self.X)
+
+        def arc(k):
+            t = np.linspace(k * math.pi / 3, (k + 1) * math.pi / 3, 9)
+            return [tuple(c + 18 * np.array([math.cos(a), math.sin(a)])) for a in t]
+        lines = [(f"r{k}", "tertiary", arc(k)) for k in range(6)]
+        lines += [("east", "secondary", [tuple(c + (18, 0)), tuple(c + (140, 0))]),
+                  ("west", "residential", [tuple(c - (18, 0)), tuple(c - (140, 0))])]
+        feats = self.layer(None, lines=lines)
+        off, _ = self.build(feats, False)
+        self.assertFalse(self.z341(off), "today: nothing at the entries")
+        self.assertFalse(self.paint(off))
+        ch, _ = self.build(feats)
+        got = {}
+        for q in self.z341(ch):
+            side = "east" if q.mean(0)[0] > c[0] else "west"
+            got[side] = got.get(side, 0) + 1
+            self.assertGreater(abs(float(q.mean(0)[0] - c[0])), 18.0, "outside the ring")
+        self.assertEqual(sorted(got), ["east", "west"], "a Wartelinie on each entry")
+
+    def test_mapped_zebras_only(self):
+        """nodes (secrossings.nodes): a mapped zebra on the stem is painted Z 293 (bars 0.50 m, 0.50 m apart: Sweden's
+        M15_LOOK) and its kerb ramps added to the junction's; one near signals is not (VwV-StVO zu § 26 Rn. 5), nor an
+        unmarked one (its ramps are), nor Sweden's M16 squares; outside Germany none."""
+        import secrossings
+        feats = self.layer(self.STRETCH)
+        nodes = {"crossings": [(120.0, 80.0, secrossings.M15), (120.0, 190.0, secrossings.M15),
+                               (40.0, 120.0, 0), (200.0, 120.0, secrossings.M16)],
+                 "stop_lines": np.zeros((0, 2)), "priority": np.zeros((0, 3))}
+        signals = np.array([(120.0, 200.0)])
+        ch, walks = self.build(feats, signals=signals, nodes=nodes)
+        zebra = [c for c in ch if c["m"] == "crossing_white"]
+        self.assertEqual(len(zebra), 1, "the stem's, not the one under signals, the unmarked or the cycle crossing")
+        self.assertEqual((zebra[0]["tl"], zebra[0]["w"]), (secrossings.M15_LOOK["tl"], 3.0))
+        self.assertAlmostEqual(float(np.mean(np.array(zebra[0]["n"])[:, 1])), 80.0, 1)
+        self.assertEqual(self.sets(self.z341(ch)), {"n": self.per_set(feats, "n"), "s": self.per_set(feats, "s")},
+                         "(no M16 squares)")
+        base = self.ramps(self.build(feats, signals=signals)[1])
+        self.assertEqual(self.ramps(walks), base + 8, "two ramps for each of the four mapped crossings, added")
+        nowhere = lambda lon, lat: np.zeros(np.size(lon), bool)     # noqa: E731
+        with mock.patch.object(germany, "contains", nowhere):
+            out, _ = self.build(feats, signals=signals, nodes=nodes)
+        self.assertEqual(out, self.build(feats, False, signals=signals, nodes=nodes)[0], "outside Germany: as today")
+
+    def test_a_junction_at_a_tile_edge(self):
+        """The junction 2 m west of the tiles' seam: its stem's Wartelinie straddles it; each dash is drawn by one tile
+        (the one that owns its middle, as today's crosswalks), none twice, none lost."""
+        shift = (roads.TILE - 2.0 - self.X[0], 0.0)
+        feats = self.layer(self.STRETCH, at=shift)
+        centre = np.array(self.X) + shift
+        a = self.z341(self.build(feats)[0])
+        b = self.z341(self.build(feats, tile=(1, 0))[0])
+        sa = {self.arm(q.mean(0), centre)[0] for q in a}
+        self.assertTrue(a and b, "both tiles draw some")
+        mids = sorted(tuple(np.round(q.mean(0)[:2], 3)) for q in a + b)
+        self.assertEqual(len(mids), len(set(mids)), "none twice")
+        self.assertEqual(self.sets(a + b, centre), {"n": self.per_set(feats, "n"), "s": self.per_set(feats, "s")})
+        self.assertIn("s", sa)
+
+    def test_line_style_from_the_border(self):
+        """markings.style by Germany's border (de_on): a French country code inside Germany paints Germany's lines (a
+        town's centre line 3 m dashes, not France's 1.5 m); off, or outside Germany, the code's."""
+        feats = self.layer(None, lines=[("road", "secondary", [(-60.0, 120.0), (300.0, 120.0)])])
+
+        def centre(ch):
+            return {round(float(np.hypot(*np.subtract(c["n"][-1], c["n"][0])[:2])), 1) for c in ch
+                    if c["m"] == "line_white" and c["w"] == 0.12 and c.get("n")
+                    and abs(np.mean(np.array(c["n"])[:, 1]) - 120.0) < 0.5}
+        on = centre(self.build(feats, country="FR")[0])
+        off = centre(self.build(feats, False, country="FR")[0])
+        self.assertIn(3.0, on)
+        self.assertNotIn(1.5, on)
+        self.assertIn(1.5, off)
+        nowhere = lambda lon, lat: np.zeros(np.size(lon), bool)     # noqa: E731
+        with mock.patch.object(germany, "contains", nowhere):
+            self.assertEqual(self.build(feats, country="FR")[0], self.build(feats, False, country="FR")[0])

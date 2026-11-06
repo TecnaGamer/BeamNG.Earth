@@ -468,7 +468,7 @@ def give_way_arms(roads, signals=None, country=None, priority=None, stops=False)
 
 
 def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None, country=None, priority=None,
-                   ground=None, clearance=None, sign_obstacles=None, de_on=False, de_ctx=None):
+                   ground=None, clearance=None, sign_obstacles=None, de_on=False, de_ctx=None, de_ctl=None):
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
@@ -479,7 +479,9 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     Germany (de_on, de_ctx: the tile's designs.context, and the junction's point inside Germany: designs.inside): the
     kernel's signs (designs.controls, designs.junction_rows) in town and out of town, and none where it decides none
     (right before left, a driveway, a ramp, a carriageway split, no junction); a 205 at a roundabout's entries,
-    signals as elsewhere. A junction's rows are the tile's whose box holds its point, wherever they stand."""
+    signals as elsewhere. A junction's rows are the tile's whose box holds its point, wherever they stand. de_ctl:
+    designs.decide's decisions of the tile's junctions (made once for the signs and the paint, roads.build_tile); a
+    junction of three arms or more it has not is decided here."""
     x0, y0, x1, y1 = box
     sweden = str(country or "").upper() == "SE"
     rows = []
@@ -513,16 +515,25 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
         q = signal_spot(c, u, side, wide + back, spec.width / 2, lines, group, float(c[2] + curb_h), support,
                         clearance, yaw)
         return None if q is None else (round(float(q[0]), 2), round(float(q[1]), 2), round(support(q[0], q[1]), 2))
+
+    def decided(k, arms, p):
+        """(arms, controls' answer) of a junction inside Germany (de_ctl's where the tile decided it), else None."""
+        if de_ctl is not None and k in de_ctl:
+            return de_ctl[k] if de_ctl[k][1] is not None else None
+        if not designs.inside(de_ctx, p[0], p[1]):
+            return None
+        return arms, (designs.controls(arms, k, link_ok, ring, signals, country, priority, de_ctx) if len(arms) >= 3
+                      else [(a, 0, -1) for a in arms])      # (a node of two ways: only a priority_road=end's 307)
     for k, arms in junctions.items():
         p = arms[0][3]
         put = None
-        if german and (len(arms) >= 3 or designs.end_way_starts(arms, de_ctx)) and _owns(box, p[0], p[1]) \
-                and designs.inside(de_ctx, p[0], p[1]):
-            ctl = (designs.controls(arms, k, link_ok, ring, signals, country, priority, de_ctx) if len(arms) >= 3
-                   else [(a, 0, -1) for a in arms])         # (a node of two ways: only a priority_road=end's 307)
-            ring_fid = next((a[0] for a in arms if a[0] in ring), None)
-            rows.extend(designs.junction_rows(arms, ctl, de_ctx, designs.in_town(arms, de_ctx), left_hand,
-                                              functools.partial(spot, wide=max(a[1].width for a in arms) / 2),
+        got = decided(k, arms, p) if german and (len(arms) >= 3 or designs.end_way_starts(arms, de_ctx)) \
+            and _owns(box, p[0], p[1]) else None
+        if got is not None:
+            arms_k, ctl = got                               # (de_ctl's arms: the ones its answer names)
+            ring_fid = next((a[0] for a in arms_k if a[0] in ring), None)
+            rows.extend(designs.junction_rows(arms_k, ctl, de_ctx, designs.in_town(arms_k, de_ctx), left_hand,
+                                              functools.partial(spot, wide=max(a[1].width for a in arms_k) / 2),
                                               exits.get(ring_fid, ())))
             put = [(a, what) for a, what, _ in ctl if what == G_SIGNAL]     # (signals: today's, below)
             if not put:
@@ -960,7 +971,7 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
-          sign_obstacles=None, defer_gore=False, de_on=False, de_ctx=None):
+          sign_obstacles=None, defer_gore=False, de_on=False, de_ctx=None, de_ctl=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -971,8 +982,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     development: local built-environment samples (development.py) for the street trees, hydrants, benches and bins;
     None: none of those. Lighting and mapped infrastructure stay independent. pole_profile: optional
     poleprofiles profile (PR #505); changes the pole shape and its wire attachment geometry, never its placement or
-    lamp spacing. pole_frame: ENU frame for the position-based country profiles. de_on, de_ctx: Germany's junction
-    signs (junction_props)."""
+    lamp spacing. pole_frame: ENU frame for the position-based country profiles. de_on, de_ctx, de_ctl: Germany's
+    junction signs (junction_props)."""
     pole_at = poleprofiles.selector(pole_profile, pole_frame)
     kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
     spacing_of = lamp_spacing(region, dense=not town)
@@ -1100,7 +1111,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1,
                 lambda out: _yaw(-out[0], -out[1]), optional=True)
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals, country, priority, ground, clearance,
-                                sign_obstacles=sign_obstacles, de_on=de_on, de_ctx=de_ctx))
+                                sign_obstacles=sign_obstacles, de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl))
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
