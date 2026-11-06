@@ -981,7 +981,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban)
         import fences
         try:
-            props.extend(fences.rows(frame, infra_fn, box, elev))
+            props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
+                                                                        for _f, spec, xy, z, _l in deck_parts]))
         except Exception as ex:
             log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import picnic
