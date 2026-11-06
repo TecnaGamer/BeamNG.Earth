@@ -138,4 +138,5 @@ class StackTest(unittest.TestCase):
         self.assertGreater(z_1[0] - z_m[1], clear, "level 1 over the ground")
         self.assertGreater(z_4[1] - z_1[1], clear, "level 4 over level 1")
         self.assertGreater(z_4[0] - z_m[0], clear, "level 4 over the ground")
-        self.assertLess(abs(z_m[0] - 10.0), 0.5, "the ground road left on the ground")
+        # (it dips under the decks over it by its share at most, the decks rising for the rest)
+        self.assertLess(abs(z_m[0] - 10.0), grading.CW_FAMILY_DIG_M + 0.3, "the ground road near its ground")

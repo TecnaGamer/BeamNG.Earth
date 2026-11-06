@@ -327,7 +327,7 @@ CW_MAX_M = 8000.0       # m: a carriageway chain is cut here (a branch point or 
 CW_HEADROOM_M = roadsmod.MIN_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN_M   # m of headroom the carriageways
                         # keep over one another, the roads and the tracks under them (+ the deck's depth): the decks' own
                         # (roads.deck_road_clear), so their girders clear what they span
-CW_NONFAM_HI = False    # other roads' decks over a carriageway bound it: off (their decks rise over it as before; from their
+CW_NONFAM_HI = os.environ.get("BNE_CW_NONFAM_HI", "on") == "on"    # other roads' decks over a carriageway bound it: off (their decks rise over it as before; from their
                         # ends' ground a deck read low and dipped the Mitchell Freeway ~1 m under each street bridge)
 CW_MIN_SIN = 0.3        # two carriageways crossing at a flatter angle are not a grade separation (lines along each other)
 CW_STACK_SIN = 0.03      # decks at different levels crossing more steeply than this (2 degrees) are separated
@@ -344,6 +344,25 @@ def _cw_level(q):
 def _cw_half(q):
     return float(q[6]) if len(q) > 6 else 5.0
 CW_MAX_DIG_M = 2.5      # m a carriageway is lowered at most under another road's deck (the deck is low for the rest)
+CW_DIP_UNDER = os.environ.get("BNE_CW_DIP_UNDER", "on") != "off"   # a carriageway under a later-built deck dips toward it
+CW_STREET_DIG_M = float(os.environ.get("BNE_CW_STREET_DIG", "1.5"))   # m a street under a carriageway deck dips before the deck rises (99: never rises, as before)
+CW_UNDER_PROFILE = os.environ.get("BNE_CW_UNDER_PROFILE", "on") != "off"   # a street deck clears a carriageway at its solved profile
+CW_NONFAM_TRUSTED = os.environ.get("BNE_CW_NONFAM_TRUSTED", "on") != "off"   # a street deck's ends over a carriageway at the street's own level
+CW_NONFAM_MIN_RISE = 0.5   # x its clearance: a street deck's ends this far over a carriageway already bound it (less: the deck rises)
+CW_DIG_FLOOR = os.environ.get("BNE_CW_DIG_FLOOR", "off") == "on"   # a carriageway on the ground dug CW_MAX_DIG_M at most
+CW_SEP_MIN_M = float(os.environ.get("BNE_CW_SEP_MIN", "6.0"))   # m road over road at least where something forces it
+CW_SEP_MIN_T = CW_SEP_MIN_M + ROAD_LIFT
+CW_PREF_W = float(os.environ.get("BNE_CW_PREF_W", "1.0"))   # weight pulling a carriageway to the full clearance (ground's 0.2)
+CW_PEER_SHARE = os.environ.get("BNE_CW_PEER_SHARE", "on") != "off"   # a carriageway region solved once per process, mapped into each planner's frame
+_CW_SOLVING = threading.local()   # set while a carriageway region is being solved (no profile lookups from inside it)
+CW_DIP_REACH_M = 20.0   # m either side of a dip's bound the carriageway is held no deeper than CW_FAMILY_DIG_M
+CW_FAMILY_DIG_M = float(os.environ.get("BNE_CW_FAMILY_DIG", "1.5"))   # m a carriageway dips under a later-built one's deck at most
+
+
+def _cw_street_reach(half):
+    """m either side of a street's crossing a carriageway deck holds its clearance: the street's half width and a
+    verge (the deck flat over it, its curve beyond). Pure."""
+    return float(half) + 6.0
 CW_UNDER_M = 10.0       # m from a deck's line the ground under it is not trusted, rising to trusted at twice that
 CW_MARGIN_M = 1200.0    # m past its home cell a cluster's chains reach (the farthest barely move the cell's)
 CW_CLUSTER_M = 30000.0  # m of carriageways solved together at most (the far ones barely move the near)
@@ -2475,8 +2494,8 @@ class _Planner:
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
                 decks.append((deck, fixed))
                 cand_xs.append((bi, pt))
-                cand_cw.append(None if cz is None else deck - (CW_HEADROOM_M + roadsmod.deck_depth(
-                    roadsmod.geom_span([b])) + ROAD_LIFT))
+                cand_cw.append(None if cz is None else deck - min(CW_HEADROOM_M + roadsmod.deck_depth(
+                    roadsmod.geom_span([b])) + ROAD_LIFT, CW_SEP_MIN_T))
         if not cands:
             return
         # (over as _Decks: its boxes and segments made once for every road's test, not per deck per road)
@@ -2708,6 +2727,16 @@ class _Planner:
             got = memo.get(hk)
         if got is not None:
             return got
+        # (the process's other planners, each in its own planning region's frame: one solve, mapped into this frame;
+        # where two planning regions meet each solved every carriageway region near the seam again, 9 of a Perth
+        # pair of cells' 22 region solves, 2026-11-06)
+        got = self._cw_region_from_peer(hk)
+        if got is not None:
+            with self.lock:
+                if len(memo) > 64:
+                    memo.clear()
+                memo[hk] = got
+            return got
         # (the run's other processes: the first to need a region solves it, the rest read it; each road-tile process
         # solving the same regions for itself, a worker's tiles waited past earthd's 300 s, 2026-11-02)
         sh, mine = self.shared, False
@@ -2738,7 +2767,39 @@ class _Planner:
             memo[hk] = got
         return got
 
+    def _cw_region_from_peer(self, hk):
+        """Region hk as another planner of the store solved it, mapped into this frame, or None."""
+        st = self.store
+        if st is None or not CW_PEER_SHARE:
+            return None
+        with st.lock:
+            peers = list(getattr(st, "planners", {}).values())
+        import geotiles
+        for pl in peers:
+            if pl is self:
+                continue
+            with pl.lock:
+                got = pl.__dict__.get("_cw_regions", {}).get(hk)
+            if got is None or got.get("failed"):
+                continue
+
+            def m(xy, pl=pl):
+                return geotiles.world_xy_map(pl.frame, self.frame, np.asarray(xy, np.float64)[:, :2])
+            parts = [(q[0], m(q[1])) + tuple(q[2:]) for q in got["parts"]]
+            prof = {k: (m(xy), z) for k, (xy, z) in got["prof"].items()}
+            return {"parts": parts, "prof": prof}
+        return None
+
     def _cw_region_calc(self, home, hk):
+        # (its decks' crossing solves read the ground under them, not a carriageway's profile: that is being solved)
+        prev = getattr(_CW_SOLVING, "on", False)
+        _CW_SOLVING.on = True
+        try:
+            return self._cw_region_calc_(home, hk)
+        finally:
+            _CW_SOLVING.on = prev
+
+    def _cw_region_calc_(self, home, hk):
         f64 = np.float64
         lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
         ce, cn, _ = self.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]),
@@ -2872,22 +2933,72 @@ class _Planner:
                         q = np.asarray(c[2], f64)
                         sl = min(streets_n, key=lambda st: _seg_dist(st[0], q))[0]
                         tl = _xs.trusted_under(q, _xs.dir_at(sl, q), 8.0, zat)
-                        if tl is None or tl >= seatiles.SEA_E + _xs.LOW_M:
+                        if tl is None:
                             continue
+                        # (low ground: the deck clears the street at its own level, a dug road there is under the water
+                        # table; elsewhere the street dips CW_STREET_DIG_M at most and the deck rises for the rest: with
+                        # no bound the Mitchell Freeway stayed flat 2 m under its own ground and dug Murray and
+                        # Wellington Streets 4 m into trenches, 2026-11-06)
+                        dig = 0.0 if tl < seatiles.SEA_E + _xs.LOW_M else CW_STREET_DIG_M
+                        if dig >= 99.0:
+                            continue
+                        # (held over the street's width and a little either side, not at one sample: a bound at a
+                        # point made a crest 4 m/s2 sharp at 80 km/h)
                         j = nearest(n, i, q)
-                        data[n]["lo"][j] = max(data[n]["lo"][j], tl + clear)
+                        s_n = samples[n][1]
+                        reach = _cw_street_reach(min(streets_n, key=lambda st: _seg_dist(st[0], q))[1])
+                        near_ = (np.abs(s_n - s_n[j]) <= reach) & (samples[n][2] == i)
+                        near_[j] = True
+                        # (hard: CW_SEP_MIN_M over the street dipped its share; aimed for: the full clearance over it
+                        # where it lies, which nothing else pulls against, the user 2026-11-06)
+                        data[n]["lo"][near_] = np.maximum(data[n]["lo"][near_], tl - dig + min(clear, CW_SEP_MIN_T))
+                        data[n]["t"][near_] = np.maximum(data[n]["t"][near_], tl + clear)
+                        data[n]["w"][near_] = np.maximum(data[n]["w"][near_], CW_PREF_W)
                 if not p_[2] and nonfam and CW_NONFAM_HI:
                     for c in roadsmod._crossings(nonfam, [p_[1]]):
                         b = nonfam[c[0]]
                         L = float(np.hypot(*np.diff(b, axis=0).T).sum())
                         if c[1] < APPROACH_MIN_CROSS_M or c[1] > L - APPROACH_MIN_CROSS_M:
                             continue
-                        ze = np.array([zraw(b[0]) + self._end_raised(b[0]), zraw(b[-1]) + self._end_raised(b[-1])])
-                        deck = float(ze[0] + (ze[1] - ze[0]) * c[1] / max(L, 1e-9))
+                        if CW_NONFAM_TRUSTED:
+                            # (each end at the street's own level past it, as the deck's crossing solve takes it, not
+                            # the ground at the mapped end, often part-way down its embankment: read there, the decks
+                            # sat low and the freeway dipped ~1 m under every street bridge; nor its solve, which reads
+                            # this profile, 2026-11-06)
+                            ze = np.array([max(self._street_end(b, 0, zat), zraw(b[0]) + self._end_raised(b[0])),
+                                           max(self._street_end(b, -1, zat), zraw(b[-1]) + self._end_raised(b[-1]))])
+                        else:
+                            ze = np.array([zraw(b[0]) + self._end_raised(b[0]), zraw(b[-1]) + self._end_raised(b[-1])])
+                        if CW_NONFAM_TRUSTED:
+                            # (its higher end's level: a street deck is built level or crowned over a carriageway, and
+                            # one read between a high and a low end dug the freeway 2.5 m under a deck it cleared by 11)
+                            deck = float(np.max(ze))
+                        else:
+                            deck = float(ze[0] + (ze[1] - ze[0]) * c[1] / max(L, 1e-9))
                         bc = roadsmod.deck_road_clear(roadsmod.deck_depth(roadsmod.geom_span([b]))) + ROAD_LIFT
                         j = nearest(n, i, np.asarray(c[2], f64))
+                        if os.environ.get("BNE_CW_DEBUG"):
+                            _la, _lo, _ = self.frame.enu_to_geodetic(np.array([c[2][0]]), np.array([c[2][1]]), 0.0)
+                            log.debug("grading: CWHI at %.6f,%.6f: deck %.1f (ends %s, ground %s) bc %.1f t %.1f",
+                                      float(_la[0]), float(_lo[0]), deck, np.round(ze, 1),
+                                      np.round([zraw(b[0]), zraw(b[-1])], 1), bc, float(data[n]["t"][j]))
+                        # (only under a street the ground already carries over it, a deck most of its clearance up:
+                        # one at the carriageway's own level rises on its ramps, the carriageway staying, BR-381)
+                        if CW_NONFAM_TRUSTED and deck - float(data[n]["t"][j]) < CW_NONFAM_MIN_RISE * bc:
+                            continue
                         # (lowered under it CW_MAX_DIG_M at most: past that the deck is too low, as before)
-                        data[n]["hi"][j] = min(data[n]["hi"][j], max(deck - bc, data[n]["t"][j] - CW_MAX_DIG_M))
+                        # (hard at the minimum separation; aimed for: the deck's full clearance)
+                        data[n]["hi"][j] = min(data[n]["hi"][j], max(deck - min(bc, CW_SEP_MIN_T),
+                                                                     data[n]["t"][j] - CW_MAX_DIG_M))
+                        if deck - bc < data[n]["t"][j]:
+                            data[n]["t"][j] = max(deck - bc, data[n]["t"][j] - CW_MAX_DIG_M)
+                            data[n]["w"][j] = max(data[n]["w"][j], CW_PREF_W)
+        if CW_DIG_FLOOR:
+            # (a carriageway on the ground is never dug more than CW_MAX_DIG_M under its smoothed ground: between two
+            # street bridges bounding it, the smoothing alone carried the Mitchell Freeway 3 m down for 200 m)
+            for n, (xy, s_, pi, br, raw) in enumerate(samples):
+                g_ = ~br
+                data[n]["lo"][g_] = np.maximum(data[n]["lo"][g_], data[n]["t"][g_] - CW_MAX_DIG_M)
         # the ground under any deck (and beside it, its abutments' fill) is not the road's: the elevation fills the gap
         # under a bridge at about the deck's height (a freeway read 2 m up under each street bridge over it)
         decks_all = [np.asarray(line, f64)[:, :2] for c in cs for line in c["bridges"] if len(line) >= 2]
@@ -3027,6 +3138,20 @@ class _Planner:
                     elif nl in loc and zs[nu] is not None:      # (under a kept chain's deck)
                         d_[loc[nl]]["hi"][jl] = min(d_[loc[nl]]["hi"][jl], zs[nu][ju] - clear)
             bound(seps, cp)
+            if CW_DIP_UNDER:
+                # (a carriageway under a deck built later, a level up: dipped toward the clearance under that deck's
+                # ground-trusted height, CW_MAX_DIG_M at most, as the streets under it are. Solved on the elevation
+                # and kept, a ramp under the Mitchell Freeway lifted it 6 m over Murray Street, 2026-11-06)
+                for nu, ju, nl, jl, clear in seps:
+                    if nl in loc and nu not in loc and zs[nu] is None:
+                        h_ = d_[loc[nl]]
+                        h_["hi"][jl] = min(h_["hi"][jl], max(float(data[nu]["t"][ju]) - clear,
+                                                             float(data[nl]["t"][jl]) - CW_FAMILY_DIG_M))
+                        # (and no deeper than that around it: under the deck its ground holds it nowhere, and the
+                        # smoothing alone carried a dip 1.6 m past the bound)
+                        s_l = samples[nl][1]
+                        near_ = np.abs(s_l - s_l[jl]) <= CW_DIP_REACH_M
+                        h_["lo"][near_] = np.maximum(h_["lo"][near_], data[nl]["t"][near_] - CW_FAMILY_DIG_M)
             mine = [t_ for t_ in ties if t_[0] in loc]
             if mine:
                 pre = _cw.solve(d_, cp, deadline=deadline)
@@ -3128,6 +3253,55 @@ class _Planner:
             out[n] = z[j] + (z[j + 1] - z[j]) * t[j]
         return out
 
+    def _street_end(self, deck, k, zat):
+        """The level of a street deck's end k (0 or -1): the ground there, brought up to the street's own trusted
+        level past the end (crossings.trusted_over), FILL_MAX_M at most, as _crossing_solve's base. Pure of the
+        carriageways (no profile is read)."""
+        deck = np.asarray(deck, np.float64)[:, :2]
+        end = deck[0] if k == 0 else deck[-1]
+        g = float(zat(end)[0])
+        u = _xs.end_dirs(deck)[0 if k == 0 else 1]
+        t = _xs.trusted_over(end, u, zat)
+        return g if t is None else max(g, min(t, g + _xs.FILL_MAX_M))
+
+    def _cw_z_near(self, q, tol=3.0):
+        """The carriageway profile's height at point q (2,) of this frame: the family part nearest it (tol m at most), or
+        None. By the point, not a line's middle: a road crossing under a deck is often a cell's clipped piece of it."""
+        q = np.asarray(q, np.float64).reshape(2)
+
+        def region_at(p):
+            la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
+            return self._cw_region(mapcells.cell_of(float(la[0]), float(lo[0])))
+        try:
+            reg = region_at(q)
+        except Exception as e:      # (the rules as before)
+            log.debug("grading: carriageway at %s: %s: %s", np.round(q, 1), type(e).__name__, e)
+            return None
+        best = None
+        for part in reg["parts"]:
+            if (part[1].max(0) < q - tol).any() or (part[1].min(0) > q + tol).any():
+                continue
+            d = _seg_dist(part[1], q)
+            if d <= tol and (best is None or d < best[0]):
+                best = (d, part)
+        if best is None:
+            return None
+        # (the part answered by the region of the cell holding its middle, as its plan is: another region's solve of
+        # the same road differs by metres, and a deck cleared a freeway 2.6 m over the one drawn)
+        try:
+            reg = region_at(best[1][1][len(best[1][1]) // 2])
+        except Exception:
+            return None
+        if reg["prof"].get(best[1][0]) is None:
+            return None
+        xy, z = reg["prof"][best[1][0]]
+        a, b = xy[:-1], xy[1:]
+        ab = b - a
+        t = np.clip(((q - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+        d = np.hypot(*(a + t[:, None] * ab - q).T)
+        j = int(np.argmin(d))
+        return None if d[j] > tol else float(z[j] + (z[j + 1] - z[j]) * t[j])
+
     def _apply_carriageways(self, plans, specs):
         """CW_ON: the plans of motorway- and trunk-family roads set to their carriageways' profiles (in place)."""
         for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
@@ -3213,18 +3387,20 @@ class _Planner:
         road end xy is a bridge abutment to raise, else None. A pure function of the map around the bridge (its cells,
         fetched as needed), cached per point."""
         k = (round(float(xy[0]) * 2), round(float(xy[1]) * 2))
+        inner = getattr(_CW_SOLVING, "on", False)
         with self.lock:
             if not hasattr(self, "end_cache"):
-                self.end_cache = {}
-            if k in self.end_cache:
-                return self.end_cache[k]
+                self.end_cache, self.end_cache_inner = {}, {}
+            cache = self.end_cache_inner if inner else self.end_cache     # (as _xsolve's)
+            if k in cache:
+                return cache[k]
         res = None
         try:
             res = self._end_lift_calc(np.asarray(xy, np.float64))
         except Exception as e:      # no ramp rather than no grading
             log.debug("grading: approach at %s: %s: %s", k, type(e).__name__, e)
         with self.lock:
-            return self.end_cache.setdefault(k, res)
+            return cache.setdefault(k, res)
 
     def _cell_enu(self, k, ground=True):
         """Cell k's road parts in the anchor frame, made once: {"bridges": [line (k, 2)], "ends": (n, 2) bridge end
@@ -3469,8 +3645,12 @@ class _Planner:
         bridge = np.asarray(bridge, np.float64)[:, :2]
         k = (round(float(bridge[0, 0]), 1), round(float(bridge[0, 1]), 1), round(float(bridge[-1, 0]), 1),
              round(float(bridge[-1, 1]), 1), len(bridge))
+        inner = getattr(_CW_SOLVING, "on", False)
         with self.lock:
-            memo = self.__dict__.setdefault("_xsolve_cache", {})
+            # (from inside a carriageway solve: read without its profile, kept apart from the solves after it; each
+            # solved once per process all the same, not again for every carriageway part near it: 13 s of a Perth
+            # cell's 56, 2026-11-06)
+            memo = self.__dict__.setdefault("_xsolve_inner" if inner else "_xsolve_cache", {})
             if k in memo:
                 return memo[k]
         res = None
@@ -3558,6 +3738,7 @@ class _Planner:
         # slopes, the freeway dipped 1-2 m into each bridge and humped over the street, the user 2026-11-01)
         roads_ = [ln for ln, gc in zip(lines, classes) if gc not in xs.PATHS]
         deck, low, w_down, drop_max, pts = [], [], [], [], []
+        n_cw = 0
         floor = seatiles.SEA_E + UNDER_SEA_M
         for c, li in zip(crs, cr_line):
             pt = np.asarray(c[2], f64)
@@ -3568,11 +3749,25 @@ class _Planner:
             here = float(z_at(pt)[0])
             # (a real cutting the DEM has keeps its depth: the trusted height is never over the road's own there)
             tl = here if t_low is None else min(t_low, here)
+            # (a carriageway under it: at its own profile, which this deck clears and does not move. From the ground
+            # the deck cleared a Mitchell Freeway its profile had since raised 2 m, its girders in the traffic,
+            # 2026-11-06)
+            cw_z = None
+            if CW_ON and CW_UNDER_PROFILE and _cw.family(classes[li]) is not None and not getattr(_CW_SOLVING, "on", False):
+                got = self._cw_z_near(pt)
+                if os.environ.get("BNE_CW_DEBUG"):
+                    _la, _lo, _ = self.frame.enu_to_geodetic(np.array([pt[0]]), np.array([pt[1]]), 0.0)
+                    log.debug("grading: CWUNDER %s at %.6f,%.6f: profile %s, ground %.1f", classes[li], float(_la[0]),
+                              float(_lo[0]), got, tl)
+                if got is not None and np.isfinite(got):
+                    cw_z = float(got)
+                    tl = cw_z
             deck.append(base[0] + (base[1] - base[0]) * arc / max(L, 1e-9))
             low.append(tl)
             nt = 0 if classes[li] in xs.PATHS else xs.ties(pt, roads_, ln)
             w_down.append(xs.down_cost(classes[li], nt, low_ground))
-            dm = UNDER_MAX_DROP_M
+            dm = 0.0 if cw_z is not None else UNDER_MAX_DROP_M
+            n_cw += cw_z is not None
             if UNDER_SEA_ON and tl >= floor:
                 dm = min(dm, max(0.0, tl - floor))
             drop_max.append(dm)

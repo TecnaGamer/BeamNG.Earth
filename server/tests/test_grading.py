@@ -852,8 +852,11 @@ class UnderpassShortfallTest(unittest.TestCase):
                            lambda la, lo: np.full(np.shape(la), 10.0))
         g.dem = Dem()
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
-        self.assertLess(float(g.apply(la, lo, np.full(1, 10.0))[0]), 10.0 - 0.6 * grading.UNDER_CLEAR_M,
-                        "lidar, a motorway's deck: the road under dips")
+        z = float(g.apply(la, lo, np.full(1, 10.0))[0])
+        if grading.CW_ON:       # (the carriageway's deck rises over it, the street dipping its share: CW_STREET_DIG_M)
+            self.assertLess(z, 10.0 - 0.6 * grading.CW_STREET_DIG_M, "lidar, a motorway's deck: the road under dips")
+            return
+        self.assertLess(z, 10.0 - 0.6 * grading.UNDER_CLEAR_M, "lidar, a motorway's deck: the road under dips")
 
     def test_a_deck_on_its_embankments_is_not_taken_for_one_down_their_slopes(self):
         """Tartu mnt's decks over the Jüri roundabout and Kurna - Tuhala over Tallinna ringtee (Estonia): the decks'
