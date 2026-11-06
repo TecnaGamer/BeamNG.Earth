@@ -26,10 +26,6 @@ URL = "https://data.openstreetmap.us/layercake/pois.parquet"
 PATH = "osm/pois.parquet"
 VERSION_TTL_S = 7 * 86400
 RETRY_S = 3600
-# A road tile waits this long for a cell's picnic rows (cells(wait=False)). 0: never; the cells' reads start when the
-# tile's build starts (prefetch), so they are mostly there by the time the tile asks. At 0.5 s a 200 mph first visit's
-# road tile processes spent 34 s waiting here (A13, 2026-11-05). BNGE_PICNIC_WAIT_S=0.5: as before.
-LATER_WAIT_S = float(os.environ.get("BNGE_PICNIC_WAIT_S", "0") or 0)
 COLUMNS = ("id", "leisure", "amenity", "tourism")
 TABLES = {"picnic_table"}
 SITES = {"picnic_site"}
@@ -63,9 +59,7 @@ class Source:
                 k = (key.z, key.x, key.y)
                 feats = self._ready.get(k)
                 if feats is None:
-                    t = self._later(key)
-                    if t is not None and LATER_WAIT_S > 0:
-                        t.join(LATER_WAIT_S)    # (on disk already: read at once; a download: the next build)
+                    self._later(key)        # never waited for: the next build (its read began at the build's start)
                     feats = self._ready.get(k)
             if feats is not None and len(feats):
                 found.append(feats)

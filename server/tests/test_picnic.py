@@ -257,7 +257,7 @@ class NoWaitTest(unittest.TestCase):
             z, x, y = 14, 1, 2
         t0 = time.monotonic()
         self.assertEqual(src.cells([Key()], wait=False), [], "not there yet: none, no long wait")
-        self.assertLess(time.monotonic() - t0, picnicsource.LATER_WAIT_S + 0.5)
+        self.assertLess(time.monotonic() - t0, 0.5)
         gate.set()
         src._threads[(14, 1, 2)].join(5)
         self.assertEqual(src.cells([Key()], wait=False), [["feats"]], "read in the background: used next time")
