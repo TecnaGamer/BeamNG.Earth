@@ -26,6 +26,36 @@ class AmountsTest(unittest.TestCase):
         self.assertGreater(season.season_amounts(datetime.date(2026, 4, 22), 39.2)["spring"], 0.8)
         self.assertEqual(season.season_amounts(datetime.date(2026, 7, 1), 39.2)["winter"], 0.0)
 
+    # fork: evergreen regions (season.evergreen): the tropics, Koppen A, Australia
+    def test_evergreen_regions_have_no_season(self):
+        none = {"fall": 0.0, "winter": 0.0, "spring": 0.0}
+        brisbane, sydney, hobart, perth = (-27.47, 153.03), (-33.87, 151.2), (-42.88, 147.33), (-31.95, 115.86)
+        miami = (25.77, -80.19)                 # Koppen Am, north of 23
+        for name, (lat, lon) in (("Brisbane", brisbane), ("Sydney", sydney), ("Hobart", hobart), ("Perth", perth),
+                                 ("Miami", miami), ("equator", (0.0, 30.0))):
+            self.assertTrue(season.evergreen(lat, lon), name)
+            for month in range(1, 13):
+                self.assertEqual(season.season_amounts(datetime.date(2026, month, 15), lat, lon), none, (name, month))
+            self.assertEqual(season.amounts_for("auto", lat, datetime.date(2026, 5, 10), lon), none, name)
+        # without a longitude only the latitude rule applies (callers that know none)
+        self.assertGreater(season.season_amounts(datetime.date(2026, 5, 10), -27.47)["fall"], 0.0)
+        self.assertTrue(season.evergreen(10.0))
+        # an explicit --season fall is still full anywhere
+        self.assertEqual(season.amounts_for("fall", -27.47, lon=153.03)["fall"], 1.0)
+
+    def test_deciduous_regions_keep_their_seasons(self):
+        may = datetime.date(2026, 5, 10)
+        self.assertFalse(season.evergreen(39.2, -76.8))          # Maryland
+        self.assertGreater(season.season_amounts(datetime.date(2026, 10, 14), 39.2, -76.8)["fall"], 0.3)
+        self.assertGreater(season.season_amounts(datetime.date(2026, 10, 14), 51.5, -0.1)["fall"], 0.3, "London")
+        # southern hemisphere: autumn is March - May (Santiago, Auckland, Durban peak in May), October is spring
+        for lat, lon in ((-33.45, -70.67), (-36.85, 174.76), (-29.85, 31.0)):
+            self.assertFalse(season.evergreen(lat, lon))
+            self.assertGreater(season.season_amounts(may, lat, lon)["fall"], 0.5, (lat, lon))
+            self.assertEqual(season.season_amounts(datetime.date(2026, 10, 14), lat, lon)["fall"], 0.0, (lat, lon))
+            self.assertEqual(season.season_amounts(datetime.date(2026, 11, 14), lat, lon)["fall"], 0.0, (lat, lon))
+        self.assertGreater(season.season_amounts(datetime.date(2026, 7, 15), -33.45, -70.67)["winter"], 0.9)
+
 
 def _hsv(rgb):
     """(hue deg, saturation, value) of uint8 rgb (..., 3): the tests' measure of the grade."""

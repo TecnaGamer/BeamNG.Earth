@@ -1421,7 +1421,7 @@ class Imagery:
         if self.season_mode in (None, "off", "summer"):
             return rgb
         lat, lon = where.grid(self.SEASON_GRID - 1)             # row 0 = north
-        amounts = season.amounts_for(self.season_mode, float(np.mean(lat)))
+        amounts = season.amounts_for(self.season_mode, float(np.mean(lat)), lon=float(np.mean(lon)))  # fork: lon (evergreen regions)
         if not any(v > 0 for v in amounts.values()):
             return rgb
         xm, ym = season.world_metres(lat, lon)
