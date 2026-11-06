@@ -30,5 +30,11 @@ dist/
 native/earthfast/target/
 build/
 native/serverlist/target/
+
+# Unused alternative source discovery cache (production catalogue has its own pinned cache)
+tools/nl_catalog_source/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof
+
+# Re-downloadable catalogue inputs; retain sources.json with pinned URLs/hashes.
+tools/nl_site_source/*.png

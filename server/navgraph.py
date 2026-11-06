@@ -52,6 +52,14 @@ MOUNTAIN_EDGE_M = 0.4
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
 
 
+def _set_out_radius(edge, radius):
+    """Preserve optional attributes following the two endpoint radii."""
+    if len(edge) > 8:
+        edge[8] = radius
+    else:
+        edge.append(radius)
+
+
 def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
@@ -373,13 +381,19 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         pending_by[nm] = (-w, fid)
                 legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
+                at = (full[j] + full[j + 1]) / (2 * L)
+                mapped = speed is not None and any(speed.start[r] <= at <= speed.end[r] and
+                         math.isfinite(float(speed.value[r])) and float(speed.value[r]) > 0 for r in speed.rows(i))
                 half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
                 if in_tunnel:
                     # (the AI keeps TUNNEL_AI_WALL_M off the tube's walls, roadmesh.tunnel's road + shoulders: with the
                     # road's half width it ran 5.3 m off its line at 56 mph into the Fort Pitt Tunnel's portal frame)
                     import roadmesh
                     half = max(1.5, min(half, spec.width / 2 + roadmesh.TUNNEL_SHOULDER - TUNNEL_AI_WALL_M))
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2)])
+                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv,
+                              round(half, 2), round(half, 2),
+                              {'road_class': spec.cls, 'max_speed_kmh': round(legal * 3.6, 1),
+                               'speed_source': 'mapped_max_speed' if mapped else 'road_class_default'}])
                 edge_fids.append(fid)
                 if in_tunnel:
                     tube_edges.add(id(edges[-1]))
@@ -518,7 +532,7 @@ def portal_taper(nodes, edges, tube_edges, inside):
         r0, r1 = at(e[0], e[7]), at(e[1], e[7])
         if r0 != e[7] or r1 != e[7]:
             e[7] = r0
-            e.append(r1)
+            _set_out_radius(e, r1)
     for nm, r in portal.items():
         nodes[nm][3] = min(nodes[nm][3], r)
 

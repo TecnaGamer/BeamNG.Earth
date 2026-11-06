@@ -1,2 +1,7 @@
 *.bat text eol=crlf
 *.sh text eol=lf
+# Cached NL sources and generated assets have byte hashes in their manifests.
+# Preserve their exact bytes on Windows as well as Linux.
+tools/nl_test_source/** -text whitespace=cr-at-eol
+tools/nl_site_source/** -text whitespace=cr-at-eol
+mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/nl_*/** -text whitespace=cr-at-eol

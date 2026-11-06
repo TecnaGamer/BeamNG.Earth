@@ -619,8 +619,43 @@ do
   table.sort(ks)
   local at = {}
   for i, k in ipairs(ks) do at[i] = k % 2 ^ 20 end
-  T.check(table.concat(at, ',') == '4,2,5,3,1', 'pass order: ' .. table.concat(at, ','))
+  T.check(#at==5 and at[1]==4 and at[2]==2 and at[3]==5 and at[4]==3 and at[5]==1, 'pass order: ' .. table.concat(at, ','))
   T.check(trees.orderKey(1e9, 7) % 2 ^ 20 == 7 and trees.orderKey(1e9, 7) < 2 ^ 53, 'pass order: far tiles capped')
+end
+do -- Source replacements remove only the nearby same-facing inferred sign, then restore it.
+  trees.clear();trees.EVERY_N=1;trees.FRAME_MS=math.huge;trees.POOL_SPARE=0
+  trees.onRows(99,'source-test',{{0,0,0,0,0,1,3,0},{0,0,0,0,180,1,3,0},{0,30,0,0,0,1,3,0}}, {'giveway'})
+  for i=1,4 do trees.update(99,{x=0,y=0})end
+  T.check(count()==3,'replacement baseline: three inferred signs')
+  trees.setSourceSignReplacements({{x=0,y=0,fx=0,fy=-1,kind='control'}})
+  for i=1,4 do trees.update(99,{x=0,y=0})end
+  T.check(count()==2,'replacement: remove nearby same-facing sign only')
+  trees.setSourceSignReplacements({})
+  for i=1,4 do trees.update(99,{x=0,y=0})end
+  T.check(count()==3,'replacement: restore inferred sign when source set clears')
+  trees.clear()
+end
+do -- RVV-only mode removes all old traffic-sign groups, independently of source coverage.
+  trees.clear();trees.setLegacyTrafficSignsSuppressed(false)
+  local groups={'giveway','stop','speed50','deciduous','signal','wallsign_logistics'}
+  local rows={};for i=0,#groups-1 do rows[#rows+1]={i,i*4,0,0,0,1,3,0}end
+  trees.onRows(100,'all-legacy',rows,groups)
+  for i=1,8 do trees.update(100,{x=0,y=0})end
+  local baseline=count();T.check(baseline==6,'legacy mode baseline: signs plus unrelated scenery')
+  local removed=trees.removed
+  T.check(trees.setLegacyTrafficSignsSuppressed(true),'enable complete traffic-sign suppression')
+  T.check(count()==3 and trees.removed==removed+3,'old signs immediately removed, vegetation/lights/company signs retained')
+  trees.setSourceSignReplacements({})
+  for i=1,8 do trees.update(100,{x=0,y=0})end
+  T.check(count()==3,'no fallback when no source RVV signs are present')
+  trees.onRows(100,'late-legacy',{{0,20,0,0,0,1,3,0}}, {'giveway'})
+  for i=1,8 do trees.update(100,{x=0,y=0})end
+  T.check(count()==3,'late streamed tiles cannot reintroduce old signs')
+  T.check(not trees.setLegacyTrafficSignsSuppressed(true),'unchanged policy does no extra work')
+  trees.setLegacyTrafficSignsSuppressed(false)
+  for i=1,8 do trees.update(100,{x=0,y=0})end
+  T.check(count()==7,'optional policy reset restores normal source groups')
+  trees.clear()
 end
 do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is not a barrier
   local shape, sc = trees.pick('golfflag', 2.05, 0.3)

@@ -448,3 +448,7 @@ it affects).
 ## License
 Code: MIT, see [LICENSE](LICENSE). BeamNG.drive is a trademark of BeamNG GmbH; this is an unofficial
 fan project and contains no BeamNG assets.
+
+## Dutch RVV traffic signs
+
+This branch adds shared Dutch sign assets and bounded NDW/George streaming from a separately supplied nationwide dataset. Replacement applies only within the Netherlands. See the [setup, review map and known limits](docs/NL_RVV.md) before enabling the dataset.

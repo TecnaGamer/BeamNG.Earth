@@ -43,7 +43,10 @@ M.enabled = true
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
+M.legacySignsSuppressed = false
 M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
+M._legacySignKinds={exits=true,mileposts=true,merges=true,speeds=true,dirs=true}
+M._legacySignObjects={}
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -1140,7 +1143,7 @@ function M.onTile(msg, currentAnchor, a)
     local sign = data[what]
     if type(sign) == 'table' and sign.shape and type(sign.pos) == 'table' then
       tiles[key].signData[what] = sign
-      if M.signsEnabled then
+      if M.signsEnabled and not M.legacySignsSuppressed then
         walkQ[#walkQ + 1] = { key = key, walk = sign, what = what, tile = tiles[key], renderOnly = true }
       end
     end
@@ -1760,6 +1763,7 @@ function M.update(gov, currentAnchor, player, view, a)
       o:delete()
     end
     slotObjGone(did)
+    M._legacySignObjects[did]=nil
     local ms = now() - t0
     gov:charge('roadDelete', ms)
     noteUnit('delete', ms)
@@ -1813,6 +1817,7 @@ function M.update(gov, currentAnchor, player, view, a)
       local ok, id = pcall(createWalk, walk,
         (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
       if ok then slotMade(id, walk.shape) end
+      if ok and M._legacySignKinds[q.what] then M._legacySignObjects[id]=true end
       if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
         M.dropOldSkin(t, q.what)
@@ -2145,12 +2150,14 @@ function M.clear()
     slotObjGone(id)
   end
   deleteQ = {}
+  M._legacySignObjects={}
   walkQ, parked = {}, {}
   if collisionDirty then be:reloadCollision(); collisionDirty = false end
 end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  M._legacySignObjects={}
   -- (the level took the objects: every slot goes)
   for _, t in pairs(tiles) do for _, sl in pairs(t.slots or {}) do slotsGone[#slotsGone + 1] = { sl[1], sl[2], sl[3] } end end
   for _, f in pairs(far) do
@@ -2178,10 +2185,8 @@ end
 -- The highway signs on / off (the settings page's highwaySigns, through core.setHighwaySigns): only the sign objects
 -- go or come back (from each tile's signData); the roads, their colliders and the held shape slots stay. Returns true
 -- if it changed.
-function M.setSignsEnabled(on)
-  on = on and true or false
-  if M.signsEnabled == on then return false end
-  M.signsEnabled = on
+local function refreshSignVisibility()
+  local on=M.signsEnabled and not M.legacySignsSuppressed
   local isSign = {}
   for _, w in ipairs(M.SIGN_WHATS) do isSign[w] = true end
   local keep = {}
@@ -2189,7 +2194,12 @@ function M.setSignsEnabled(on)
   walkQ = keep
   for key, t in pairs(tiles) do
     for _, what in ipairs(M.SIGN_WHATS) do
-      if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
+      if t[what] then
+        local object=scenetree.findObjectById(t[what]);if object then object:delete()end
+        slotObjGone(t[what])
+        M._legacySignObjects[t[what]]=nil
+        t[what] = nil
+      end
       local sign = t.signData and t.signData[what]
       if on and M.enabled and not t.ghost and sign then
         walkQ[#walkQ + 1] = { key = key, walk = sign, what = what, tile = t, renderOnly = true }
@@ -2197,6 +2207,29 @@ function M.setSignsEnabled(on)
     end
   end
   return true
+end
+function M.setSignsEnabled(on)
+  on=on and true or false
+  if M.signsEnabled==on then return false end
+  M.signsEnabled=on
+  return refreshSignVisibility()
+end
+function M.setLegacySignsSuppressed(on)
+  on=on and true or false
+  if M.legacySignsSuppressed==on then return false end
+  M.legacySignsSuppressed=on
+  local changed=refreshSignVisibility()
+  if on then
+    -- A replaced/dropped tile may already be off the tile table while its old
+    -- sign meshes still await a deletion budget. Retire those owners too.
+    local retired={}
+    for id in pairs(M._legacySignObjects)do
+      local object=scenetree.findObjectById(id);if object then object:delete()end
+      slotObjGone(id);M._legacySignObjects[id]=nil;retired[id]=true
+    end
+    local keep={};for _,id in ipairs(deleteQ)do if not retired[id]then keep[#keep+1]=id end end;deleteQ=keep
+  end
+  return changed
 end
 
 -- The state of the road tiles along a line (tools: how far ahead of a fast car its tiles are ready). From (x, y)

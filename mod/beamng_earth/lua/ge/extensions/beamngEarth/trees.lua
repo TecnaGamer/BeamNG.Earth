@@ -6,6 +6,9 @@
 -- (ROADMAP "deterministic generation": a level shows the same trees, thinned), made and removed a few
 -- hundred per frame (~19 us each, 2026-10-13 probe).
 local M = {}
+local nlReplacement=require('beamngEarth/nl_replacements')
+local nlSourcePoints={}
+local nlSourceSignature=''
 local vienna = require('beamngEarth/vienna_convention_speed_signs')
 local geotile = require('beamngEarth/geotile')
 -- Geotiles (server --geo-tiles on, hello.geoTiles): a tile keyed 'g17_x_y' holds its items in its own frame (msg.frame,
@@ -888,6 +891,7 @@ M.tileThreshold = tileThreshold
 -- its graph changes, a few times a minute while driving: all 5,300 tiles of a drive through LA rescanned each time
 -- kept the tree passes at their time limit, the new tiles' trees waiting behind (2026-11-02).
 M.suppress = nil
+M._legacyTrafficGroup = require('beamngEarth/nl_legacy').trafficGroup
 -- Pure but for its cache (t.hasGroup): does tile t hold an item of group g?
 function M.tileHasGroup(t, g)
   t.hasGroup = t.hasGroup or {}
@@ -905,6 +909,39 @@ function M.tileHasGroup(t, g)
     t.hasGroup[g] = has
   end
   return has
+end
+function M.setSourceSignReplacements(points)
+  local parts={};for _,p in ipairs(points or {})do parts[#parts+1]=string.format('%s:%.4f:%.4f:%.5f:%.5f',p.kind,p.x,p.y,p.fx,p.fy)end;table.sort(parts)
+  local signature=table.concat(parts,'|');if signature==nlSourceSignature then return false end;nlSourceSignature=signature
+  nlSourcePoints=points or {}
+  if M.legacyTrafficSignsSuppressed then return true end
+  for g in pairs(M.CATALOG)do if g=='stop' or g=='giveway' or g:match('^speed')then M.refresh(g)end end
+  local roads=package.loaded['beamngEarth/roads'];if roads and roads.requestCollision then roads.requestCollision()end
+end
+function M.setLegacyTrafficSignsSuppressed(on)
+  on=on and true or false
+  if (M.legacyTrafficSignsSuppressed or false)==on then return false end
+  M.legacyTrafficSignsSuppressed=on
+  local classify=M._legacyTrafficGroup
+  local solidRemoved=false
+  for _,t in pairs(tiles)do
+    if on then
+      local forest=t.forestId and scenetree.findObjectById(t.forestId)
+      local fd=forest and forest:getData()
+      local names=t.groups or GROUPS
+      for i,it in pairs(t.made)do
+        local group=names[t.f[(i-1)*t.s+F_GROUP]+1]
+        if classify(group)then
+          if fd then removeItem(fd,it,t.madeShape[i])end
+          solidRemoved=solidRemoved or t.solid[i]==true
+          t.made[i],t.solid[i],t.madeShape[i]=nil,nil,nil
+          t.legacyHidden=true
+        end
+      end
+    elseif t.legacyHidden then t.pending=true;t.scan=nil;t.legacyHidden=nil;dirty=true end
+  end
+  if solidRemoved then local roads=package.loaded['beamngEarth/roads'];if roads and roads.requestCollision then roads.requestCollision()end end
+  return true
 end
 function M.refresh(group)
   for _, t in pairs(tiles) do
@@ -1243,7 +1280,13 @@ function M.update(anchorId, player, view, frameMs)
         elseif cap and dist > cap then
           r = 2     -- this group is not shown this far out
         end
+        if #nlSourcePoints>0 and(g=='stop'or g=='giveway'or g and g:match('^speed'))then
+          local px,py=f[b+F_X],f[b+F_Y];local yaw=f[b+F_YAW]
+          if t.geo and t.madePl then px,py=geotile.apply(t.madePl,px,py,f[b+F_Z]);yaw=yaw+geotile.yawOf(t.madePl)end
+          if nlReplacement.hidden(g,px,py,yaw,nlSourcePoints)then r=2 end
+        end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
+        if M.legacyTrafficSignsSuppressed and M._legacyTrafficGroup(g)then r=2;t.legacyHidden=true end
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
         if g and not M.CATALOG[g] then
           r = 2
