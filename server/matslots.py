@@ -12,8 +12,10 @@ A name is taken when a tile is built (its shape file names it). It goes back to 
 of it (the tile's files are deleted, or reclaim() takes it from an idle tile while the pool runs short, least
 recently used first) AND no game holds it: every far_tile with a pooled name carries a serial, the mod reports
 [slot, serial] when the object (or the never-spawned instance) of that message is gone, and a slot is held by a
-connection until its latest send is reported gone (Connection.slot_holds; a reconnecting mod lists what it
-still holds in hello). No timing guess: a name is never reused while a game may still draw it.
+game lease until its latest send is reported gone (Connection.slot_holds aliases the current lease). TCP EOF
+retains that lease; the reconnecting mod names its server-issued leaseId and lists its complete held snapshot
+in hello. An older client without a resumable identity is retained conservatively until server shutdown.
+No timing guess: a name is never reused while a game may still draw it.
 A reclaimed tile sent again gets a new name and a copy of its shape with that name (Server.reslot).
 The event loop releases names, checks them at send time and records holds; tile workers only take names.
 
@@ -130,6 +132,11 @@ class MatSlots:
         """Every tile holding a name (a copy)."""
         with self.lock:
             return list(self.slot)
+
+    def held_owners(self):
+        """Tile owners whose pooled files a game still holds, including during a reconnect."""
+        with self.lock:
+            return {ck for n, ck in self.owner.items() if self.held(n)}
 
     def stats(self):
         with self.lock:

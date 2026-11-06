@@ -12,6 +12,7 @@ jsonEncode=function() return '{}' end
 jsonDecode=function() return {type='notice'} end
 local N=require('beamngEarth/net')
 N.setProfiling(true);N.update(0)
+N.serverHello(nil,nil) -- the fixture's handshake completes before application sends
 N.send({type='test'})
 T.check(N.profileState().sentBytes==3,'partial socket send counted once')
 chunks={frame:sub(1,2),frame:sub(3)}

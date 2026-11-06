@@ -790,7 +790,12 @@ class MeshServerTest(ServerHarness):
             t0 = time.monotonic()
             while conn.focus != (float(x), 10.0) and time.monotonic() - t0 < 10:   # pose handled
                 time.sleep(0.005)
-            if set(conn.desired) == far.keys(aid):
+            # focus changes before selection, which can release the GIL. Observe the result on its owner loop,
+            # after the pose handler, rather than mistaking the old set for a quiet step mid-selection.
+            async def selected():
+                return set(conn.desired)
+            desired = asyncio.run_coroutine_threadsafe(selected(), self.loop).result(10)
+            if desired == far.keys(aid):
                 # a step inside the hysteresis band changes nothing (64 cells: 60 m is under half the
                 # exact tile), so no far_done follows; nothing may be streamed either
                 seen = c.drain(0.3)
