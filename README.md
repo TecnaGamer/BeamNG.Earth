@@ -236,6 +236,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   with the downloaded app (.exe / AppImage), **Update now** downloads it next to your copy, checks it against
   GitHub's checksum, and the next time you start BeamNG.Earth the new version starts (your old file and shortcut
   keep working).
+- **Add-ons** settings page: mods and tools other people made for BeamNG.Earth (a short list we keep: for now
+  Worldwide Trucking Career: Dangerous Contracts and BeamNG.Earth Live GPS), each with its description and changelog
+  from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
+  own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
+  author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
+  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads
