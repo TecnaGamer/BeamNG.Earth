@@ -267,6 +267,9 @@ class MapData:
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
         self.billboard_osm = billboardsource.Source()
+        # the per-cell sources a road tile's props read without waiting (cells(keys, wait=False)): side_prefetch starts
+        # their reads at the tile's build start, so they are mostly there when the props ask at its end
+        self.side_sources = [self.picnic_osm]
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
@@ -876,6 +879,14 @@ class MapData:
         for k, key, layer in todo:
             self._warm_ex.submit(run, k, key, layer)
         return len(todo)
+
+    def side_prefetch(self, keys):
+        """The side_sources' background reads of these cells (a road tile's own) started now, without waiting."""
+        for src in self.side_sources:
+            try:
+                src.prefetch(keys)
+            except Exception as e:      # (the props' own read later says why)
+                log.debug("mapdata side prefetch %s: %s: %s", type(src).__name__, type(e).__name__, e)
 
     def predownload(self, key, layer):
         """A saved area's cell layer (areas.py): built from its sources at netfetch "predownload" and stored, unless it
