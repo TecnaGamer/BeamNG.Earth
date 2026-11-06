@@ -1004,6 +1004,7 @@ class Server:
         self.fin_worker_tries = 0
         self.base_worker = 0                # base photos the block processes rendered (blockworker.base_photo)
         self.map_port = None                # the in-game map's tile endpoint (maptiles.py), hello.mapPort
+        self.feed = None                    # the companion feed (companionfeed.py), when on
         self.map_tiles = None               # its MapTiles: also written as files on request (map_tiles message)
         self.map_files = None               # the maptiles.TileFiles writing them (made by the first request)
         # (anchorId, key) of cached tiles built with the palette because the imagery failed; shown in
@@ -4076,6 +4077,15 @@ class Server:
         pc.persist = (self.cache_dir, (plancachemod.FRAMES, sig, md))
         return pc
 
+    def addons(self):
+        """The Add-ons page's service (addons.py: the registry, GitHub's pages for it, the installed add-ons), made at
+        its first use."""
+        if getattr(self, "_addons", None) is None:
+            import addons as addonsmod
+            self._addons = addonsmod.Addons(self.user_dir, self.cache_dir, self.net,
+                                            version=updatesmod.local_version() or "")
+        return self._addons
+
     def share_hub(self, send):
         """The BeamMP sharing hub (one per server: the session's mod connection sends through it; a new connection takes
         it over). -> (hub, created now)."""
@@ -5528,6 +5538,69 @@ class Connection:
                    "text": f"BeamNG.Earth {version} is downloaded. Close the game: the next time you start "
                            f"BeamNG.Earth it starts {os.path.basename(path)}."})
 
+    async def addons_list(self, refresh=False):
+        """The Add-ons page's list: 'addons' {addons: [card...], error?} (addons.Addons.cards)."""
+        try:
+            # (the loop's own pool, not ui_pool: GitHub can take seconds, the map's tiles must not wait behind it)
+            cards = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().cards, refresh)
+            self.send({"type": "addons", "addons": cards})
+        except Exception as e:          # never a reason to drop the connection
+            log.warning("add-ons: list: %s: %s", type(e).__name__, e)
+            self.send({"type": "addons", "addons": [], "error": f"{type(e).__name__}: {e}"[:200]})
+
+    async def addon_detail(self, aid, refresh=False):
+        """One add-on's page: 'addon_detail' {id, card, readme, readmeLinks, releases, error} (addons.Addons.detail)."""
+        if not isinstance(aid, str):
+            return
+        try:
+            d = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().detail, aid, refresh)
+        except Exception as e:
+            log.info("add-ons: detail %r: %s: %s", aid, type(e).__name__, e)
+            d = {"id": aid, "readme": "", "readmeLinks": [], "releases": [], "error": str(e)[:200]}
+        self.send({"type": "addon_detail", **d})
+
+    async def addon_install(self, aid, consent, mp):
+        """Install / Update: the release downloaded into the mods folder and checked (addons.Addons.stage), with
+        addon_status {id, state: progress | ready | error, text, done, total}; then addon_apply for the mod, which hands
+        it to the game's mod manager."""
+        if not isinstance(aid, str):
+            return
+        loop = asyncio.get_running_loop()
+        last = [0.0]
+
+        def progress(done, total):
+            now = time.monotonic()
+            if now - last[0] >= 0.5:
+                last[0] = now
+                loop.call_soon_threadsafe(self.send, {"type": "addon_status", "id": aid, "state": "progress",
+                                                      "done": done, "total": total, "text": "Downloading..."})
+        self.send({"type": "addon_status", "id": aid, "state": "progress", "done": 0, "total": 0,
+                   "text": "Asking GitHub..."})
+        import addons as addonsmod
+        try:
+            apply = await loop.run_in_executor(None, lambda: self.s.addons().stage(aid, consent, mp, progress))
+        except addonsmod.AddonError as e:
+            log.info("add-ons: install %s: %s", aid, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+            return
+        except Exception as e:
+            log.warning("add-ons: install %s: %s: %s", aid, type(e).__name__, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": f"{type(e).__name__}: {e}"[:200]})
+            return
+        self.send({"type": "addon_status", "id": aid, "state": "ready", "text": "Downloaded and checked: installing..."})
+        self.send(apply)
+
+    async def addon_applied(self, aid, op, ok, error):
+        """The mod's answer after the game's mod manager installed / updated / enabled / disabled / removed the add-on:
+        logged (addons.Addons.applied), then the list again."""
+        if not isinstance(aid, str) or op not in ("install", "update", "uninstall", "enable", "disable"):
+            return
+        try:
+            self.s.addons().applied(aid, op, ok, error if isinstance(error, str) else "")
+        except Exception as e:
+            log.info("add-ons: applied %r: %s", aid, e)
+        await self.addons_list()
+
     async def place_previews(self, msg):
         """{"places": [{"key", "lat", "lon"}]} -> place_previews_ready {"keys"}: each place's picture for the level
         select, written into the game's user folder (placepreview.write) when the server has imagery."""
@@ -6239,12 +6312,22 @@ class Connection:
         elif kind == "update_now":              # the update notice's "Update now" (selfupdate.py)
             self.spawn(self.update_now())
         elif kind == "open_page":               # the update notice's button: the releases page (updates.open_page)
-            if not updatesmod.open_page(msg.get("url")):
+            # (and the Add-ons page's links: an add-on's own text or repo, addons.Addons.openable)
+            allow = self.s._addons.openable if getattr(self.s, "_addons", None) is not None else None
+            if not updatesmod.open_page(msg.get("url"), allow=allow):
                 log.info("open_page: refused %r", msg.get("url"))
         elif kind == "globe_req":               # the 3D map's whole-earth globe for an anchor (globe.py)
             self.spawn(self.globe(msg))
         elif kind == "space_clouds_req":        # the camera above the clouds: today's clouds round it (spaceclouds.py)
             self.spawn(self.space_clouds(msg))
+        elif kind == "addons_list":             # the Add-ons page: the list (addons.py)
+            self.spawn(self.addons_list(msg.get("refresh") is True))
+        elif kind == "addon_detail":            # ... one add-on's README and changelog
+            self.spawn(self.addon_detail(msg.get("id"), msg.get("refresh") is True))
+        elif kind == "addon_install":           # ... Install / Update: downloaded and checked, then addon_apply
+            self.spawn(self.addon_install(msg.get("id"), msg.get("consent") is True, msg.get("mp") is True))
+        elif kind == "addon_applied":           # ... the game's mod manager did it (or not): logged, the list again
+            self.spawn(self.addon_applied(msg.get("id"), msg.get("op"), msg.get("ok") is True, msg.get("error")))
         elif kind == "terrain_patch":           # ground under another vehicle's collision island (terrainpatch.lua)
             self.spawn(self.terrain_patch(msg))
         elif kind == "cache":
@@ -7014,6 +7097,10 @@ class Connection:
             self.held = {int(a) for a in held if isinstance(a, (int, float)) and not isinstance(a, bool)}
         self.s.claim_sessions(self, msg.get("sessions"))   # earlier runs' folders still in use (or released)
         self.weather.on_pose(self, msg.get("lat"), msg.get("lon"))
+        feed = getattr(self.s, "feed", None)
+        if feed is not None:            # the companion feed (companionfeed.py)
+            feed.publish(msg.get("lat"), msg.get("lon"), msg.get("speed"), msg.get("vx"), msg.get("vy"),
+                         msg.get("anchorId"))
         if isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
             self.pose_ll = (float(msg["lat"]), float(msg["lon"]))     # (the BeamMP share hub's prefetch)
         if self.s.surface is not None and isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
@@ -8435,6 +8522,19 @@ async def main_async(args):
             keep_id=not privacyregionmod.region()[1]).start()
         log.info("telemetry: on (anonymous: install id, version, OS, players online, data-source request counts; "
                  "BNE_TELEMETRY=off turns it off)")
+    feed_srv = None
+    if getattr(args, "companion_feed", "off") != "off":
+        # the player's position for programs beside the game (companionfeed.py; docs/ADDONS.md), read-only
+        import addons as addonsmod
+        import companionfeed
+        server.feed = companionfeed.Feed(updatesmod.local_version() or "", addonsmod.feed_origins(), args.companion_feed)
+        try:
+            feed_srv, fport = await server.feed.start(args.companion_port)
+            log.info("companion feed on %s:%d/v1/ (read-only)",
+                     "0.0.0.0" if args.companion_feed == "lan" else "127.0.0.1", fport)
+        except OSError as e:
+            server.feed = None
+            log.warning("companion feed off: %s", e)
     log.info("startup: opening the local connection")
     srv = await asyncio.start_server(
         lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
@@ -8886,6 +8986,10 @@ def main():
     ap.add_argument("--map-tiles", choices=("on", "off"), default="on",
                     help="serve the in-game world map's tiles (the imagery chain, z/x/y JPEG) over HTTP on "
                          "127.0.0.1; its port goes in hello.mapPort (needs imagery)")
+    ap.add_argument("--companion-feed", choices=("off", "local", "lan"), default="local",
+                    help="the player's position, read-only, for programs beside the game (companionfeed.py, "
+                         "docs/ADDONS.md): local = this computer only (default), lan = also the local network")
+    ap.add_argument("--companion-port", type=int, default=47615, help="the companion feed's port")
     ap.add_argument("--map-port", type=int, default=0,
                     help="port of the map tile endpoint (default 0: any free port, sent in hello.mapPort)")
     ap.add_argument("--credits", choices=("on", "off"), default="on",

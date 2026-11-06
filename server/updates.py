@@ -147,12 +147,14 @@ def openable(url):
     return url.startswith(OPEN_PREFIX) or url in OPEN_EXACT or _PROFILE.fullmatch(url) is not None
 
 
-def open_page(url, popen=None):
-    """Open url (openable: this project's pages and the About page's links) in the player's browser, without waiting.
+def open_page(url, popen=None, allow=None):
+    """Open url (openable: this project's pages and the About page's links; or allow(url): the Add-ons page's links,
+    addons.Addons.openable) in the player's browser, without waiting.
     Returns True if a browser was asked. On Linux xdg-open runs with the packaged app's library and Python paths taken out of its
     environment (the AppImage's own libraries broke the browser it starts)."""
     import subprocess
-    if not openable(url):
+    if not openable(url) and not (allow is not None and isinstance(url, str) and url.startswith("https://")
+                                  and not any(c in url for c in ' "\'<>`\\\n\r') and allow(url)):
         return False
     popen = popen or subprocess.Popen
     try:

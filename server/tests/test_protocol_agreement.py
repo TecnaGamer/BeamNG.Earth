@@ -199,6 +199,13 @@ MOD_TO_SERVER = {
     # the update notice's button: the server opens the releases page (updates.open_page; additive)
     "open_page": {"url": F(str)},
     "update_now": {},                   # the update notice's "Update now" (selfupdate.py)
+    # the Add-ons page (addons.lua <-> addons.py; additive): the list, one add-on's page, Install / Update (consent: the
+    # player agreed to its notice; mp: a BeamMP session, refused), and the mod's answer after the game's mod manager
+    # took the file or enabled / disabled / removed the mod
+    "addons_list": {"refresh": F(bool, OPT)},
+    "addon_detail": {"id": F(str), "refresh": F(bool, OPT)},
+    "addon_install": {"id": F(str), "consent": F(bool), "mp": F(bool, OPT)},
+    "addon_applied": {"id": F(str), "op": F(str), "ok": F(bool), "error": F(str, OPT)},
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
@@ -238,6 +245,14 @@ SERVER_TO_MOD = {
                "dev": F(bool, OPT)},        # (a development build's check: whether the newer one is one too)
     "update_status": {"state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT),
                       "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
+    # the Add-ons page (addons.py): the cards; one add-on's README and changelog as safe HTML (fast.md_html); a
+    # download's progress; the checked file for the game's mod manager (addons.lua hands it over)
+    "addons": {"addons": F(list), "error": F(str, OPT)},
+    "addon_detail": {"id": F(str), "card": F(dict, OPT), "readme": F(str), "readmeLinks": F(list), "releases": F(list),
+                     "error": F(str)},
+    "addon_status": {"id": F(str), "state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT)},
+    "addon_apply": {"id": F(str), "op": F(str), "file": F(str), "tmp": F(str), "old": F(list), "tag": F(str),
+                    "active": F(bool), "uiApps": F(list)},
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
                      "country": F(str, OPT)},   # the status bar's location
     "map_labels_result": {"id": F(int), "rows": F(list)},   # the 3D map's labels: maplabels.py rows
@@ -416,6 +431,8 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "traffic_far_tile", "traffic_far_drop",        # major roads beyond the detailed stream
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
+                       "addons", "addon_detail", "addon_status",     # the Add-ons page: only when it asks (online;
+                       "addon_apply",                                # test_addons, test_addons.lua)
                        "geocode_result", "route_result",             # only when the map / GPS asks
                        "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)
@@ -476,7 +493,8 @@ def mod_sends():
     mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua and spaceclouds.lua
     (core hands them net.send)."""
     out = {}
-    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua"), r"net(?:'\))?\.send\(\{"),
+    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
+                              "addons.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
@@ -491,7 +509,8 @@ def mod_sends():
 def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
-    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua"):
+    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
+                 "addons.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}

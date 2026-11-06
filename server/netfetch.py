@@ -1223,6 +1223,9 @@ class Fetcher:
             else:
                 self._succeeded(h)
             return Response(status, body, rh, elapsed)
+        if status == 304:                   # "not modified": the answer to a request with If-None-Match (addons.py's
+            self._succeeded(h)              # GitHub pages); only such a request gets one
+            return Response(status, body or b"", rh, elapsed)
         if status in (404, 410):
             self._count(h, "s404")
             self._succeeded(h)              # the host answered: it is healthy
@@ -1257,12 +1260,12 @@ class Fetcher:
 
     @ioprofiler.session_request
     @contextmanager
-    def session(self, url, kind="demand"):
+    def session(self, url, kind="demand", lane=None):
         """For a caller that does its own HTTP (gravity.py's resumable download through urllib, which
         follows SourceForge's mirror redirects): admission, a slot and a token for one request. Inside,
         set `s.status` and `s.nbytes`; an exception counts as a failure (an HTTPError's status and
-        Retry-After are honoured) and is re-raised."""
-        h, probe = self._admit(url, kind)
+        Retry-After are honoured) and is re-raised. lane: as get's."""
+        h, probe = self._admit(url, kind, lane)
         try:
             sem = self._acquire(h, url, kind)
         except FetchError:
