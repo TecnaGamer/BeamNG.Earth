@@ -326,7 +326,6 @@ class SeaCarver:
         self._lock = threading.Lock()
         self._cell_locks = {}
         self._land = OrderedDict()      # (x, y) -> raster without the sea's bathymetry (land_raster)
-        self._pre = OrderedDict()       # (x, y) -> such a cell's state before its sea floor (_build, _finish)
         self._land_locks = {}
         self._full_ex = None            # (land_raster's background builds with it)
         self._full_asked = set()
@@ -481,11 +480,6 @@ class SeaCarver:
             seen.add((x, y))
 
     def _build(self, x, y, with_bathy=True):
-        if with_bathy:
-            with self._lock:
-                pre = self._pre.pop((x, y), None)
-            if pre is not None:
-                return self._finish(*pre, with_bathy=True)
         own = self._water((mapcells.ZOOM, x, y))
         if own is None or not (self._sea_rows(own).size
                                or (self.dem is not None and (self._lake_rows(own).size
@@ -574,18 +568,6 @@ class SeaCarver:
                 outline &= ~wide
         if self.dem is not None:        # streams and the rivers the DEM does not flatten: their lines
             self._carve_lines(x, y, ox, oy, n, px, depth, level, outline)
-        if not with_bathy and sea.any():
-            # (kept for the build with the bathymetry, land_raster's in the background: only the sea's floor is left to
-            # do, not the whole cell twice)
-            with self._lock:
-                self._pre[(x, y)] = (sea.copy(), depth.copy(), level.copy(), outline.copy(), ox, oy, n, px)
-                while len(self._pre) > LAND_CELLS:
-                    self._pre.popitem(last=False)
-        return self._finish(sea, depth, level, outline, ox, oy, n, px, with_bathy)
-
-    def _finish(self, sea, depth, level, outline, ox, oy, n, px, with_bathy):
-        """_build's last steps: the sea's floor (with its bathymetry when with_bathy and it can be had), the outline
-        and level pads, the cell cut out. (depth, level, outline, complete) or None."""
         complete = True
         if sea.any():
             bathy = self._bathy(ox, oy, n) if with_bathy else None
