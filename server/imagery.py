@@ -1475,6 +1475,14 @@ class Imagery:
             if m is None:
                 continue
             tx0, ty0, nx, ny, keys = m
+            if filled.any():
+                # a later source: only the tiles under the texels still unfilled (an all-sea tile of the first is
+                # one colour, "missing", and the whole footprint was fetched again from the next: at Bergen EOX's
+                # 2016 layer was fetched for 1347 of the 1792 tiles of its 2023 one, on the far field's slowest host)
+                need = _unfilled_tiles(filled, cells, cw, fx, fy)
+                keys = {t: kk for t, kk in keys.items() if t in need}
+                if not keys:
+                    continue
             try:
                 fin = self.finished(keys.values(), pending)
             except ImageryError as e:       # this source is unreachable: the next one may do
@@ -1563,6 +1571,25 @@ class EnuSquare:
         t = self.size / px
         la, _, _ = self.frame.enu_to_geodetic(self.x0 + (j + 0.5) * t, self.y0 + self.size - (i + 0.5) * t, 0.0)
         return la
+
+
+def _unfilled_tiles(filled, cells, cw, fx, fy):
+    """{(tx, ty)} of the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as _mosaic_keys)
+    under the render cells (cw texels each, the last taking the rest) that still have unfilled texels, with the
+    bilinear taps' pixel round them. Pure."""
+    px = filled.shape[0]
+    out = set()
+    for r in range(cells):
+        r1 = px if r == cells - 1 else (r + 1) * cw
+        for c in range(cells):
+            c1 = px if c == cells - 1 else (c + 1) * cw
+            if filled[r * cw:r1, c * cw:c1].all():
+                continue
+            xs, ys = fx[r:r + 2, c:c + 2], fy[r:r + 2, c:c + 2]
+            for ty in range(int(math.floor(ys.min() - 1)) // TILE, int(math.floor(ys.max() + 1)) // TILE + 1):
+                for tx in range(int(math.floor(xs.min() - 1)) // TILE, int(math.floor(xs.max() + 1)) // TILE + 1):
+                    out.add((tx, ty))
+    return out
 
 
 class MercSquare:
