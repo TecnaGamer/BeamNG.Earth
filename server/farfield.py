@@ -148,7 +148,10 @@ REFRACTION_K = 0.13             # standard terrestrial refraction; the cull's ef
 R_REFRACTED = R_EARTH / (1.0 - REFRACTION_K)    # 7323 km. The geometry (and the sky) have no refraction,
                                                 # so using R' only makes the cull generous (~7 % farther).
 HORIZON_MIN = RADIUS            # the disc is never smaller than today's radius, and nothing within it is culled
-HORIZON_MAX = 1500000.0         # radius cap (spec: raised from 700 km so planes see far; eyes up to ~40 km)
+HORIZON_MAX = 2600000.0         # radius cap (spec: raised from 700 km so planes see far; 2026-11-06 from 1500 km: an eye
+                                # at 400 km, the ISS's height, sees 2290 km: the ground ended in a blue band short of it)
+HORIZON_GRID_MAX = 1500000.0    # ... the zmax grid stays this big (nodes past it are kept, never culled: zmax inf), so a
+                                # camera in space does not read the DEM's block maxima of a 5000 km square
 HORIZON_MAX_LEVEL = 10          # L10 = 262 km, 4 km vertex spacing with 64 cells: a silhouette at 300+ km
 # Texture px of the coarse levels in horizon mode (a 256 px L9 is 512 m/px; at 300 km one screen
 # pixel is ~100 m, so the texture is never the limit); imagery.render picks the low source zoom.
@@ -825,7 +828,7 @@ def horizon_extent(h_eye, margin=0.0):
     """Half-size of the zmax grid an eye h_eye m above sea level needs: everything that can rise
     above its horizon (terrain up to Z_TOP) within the radius cap, plus `margin` (how far the player
     can be from the anchor), rounded up to whole L10 nodes (the pyramid's top level)."""
-    e = min(HORIZON_MAX, horizon_distance(h_eye) + horizon_distance(Z_TOP)) + margin
+    e = min(HORIZON_GRID_MAX, horizon_distance(h_eye) + horizon_distance(Z_TOP)) + margin
     s = level_size(HORIZON_MAX_LEVEL)
     return max(1, math.ceil(e / s)) * s
 

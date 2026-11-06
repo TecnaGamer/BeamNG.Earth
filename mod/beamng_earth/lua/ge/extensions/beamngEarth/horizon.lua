@@ -27,6 +27,17 @@ local M = {}
 M.PLANET_RADIUS_KM = 6371     -- the tiles' sphere (server farfield.R_EARTH / 1000)
 M.VISIBLE_MARGIN = 1.1        -- visibleDistance = radius + 10 % (server farfield.VISIBLE_MARGIN)
 M.VISIBLE_HYSTERESIS = 0.1    -- re-set only when the target moved by more than 10 % of the current value
+-- The sky's atmosphere is ATMO_THICK_KM thick (the level's ScatterSky.atmoThickness); a camera at or above its top
+-- drew every object black (the aerial perspective's transmittance with the eye outside the shell: 400 km over Nice, and
+-- 100 km looking level, 2026-11-06). Above ATMO_LIFT_SHARE of it the shell is raised to ATMO_HEADROOM_KM over the
+-- camera, in ATMO_STEP_KM steps: the air up there is next to nothing (8 km and 1.2 km scale heights), so the sky looks
+-- the same, the eye just stays inside it. At most ATMO_MAX_KM: the engine's tables broke past ~600 km (the limb black,
+-- the far ground white at 700 and 1000 km; 500 and 600 drew the same blue limb), so eyes up to ~500 km.
+M.ATMO_THICK_KM = 100
+M.ATMO_LIFT_SHARE = 0.6
+M.ATMO_HEADROOM_KM = 100
+M.ATMO_STEP_KM = 100
+M.ATMO_MAX_KM = 600
 
 -- Pure: the visibleDistance (m) to set for a far-field radius (m), given the current value and the
 -- minimum; nil to keep the current one (within the hysteresis, or no usable radius).
@@ -48,7 +59,16 @@ function M.setVisibleDistance(v)
   return true
 end
 
-local saved = nil -- { id, radius }: the sky object and its atmoPlanetRadius before applySky
+local saved = nil -- { id, radius, thickness }: the sky object and its atmoPlanetRadius / atmoThickness before applySky
+
+-- Pure: the atmosphere's thickness (km) for a camera camKm km above sea level, the level's base (ATMO_*).
+function M.thicknessFor(camKm, base)
+  base = tonumber(base) or M.ATMO_THICK_KM
+  camKm = tonumber(camKm)
+  if not camKm or camKm <= M.ATMO_LIFT_SHARE * base then return base end
+  local want = math.ceil((camKm + M.ATMO_HEADROOM_KM) / M.ATMO_STEP_KM) * M.ATMO_STEP_KM
+  return math.max(base, math.min(M.ATMO_MAX_KM, want))
+end
 
 local function sky()
   local names = scenetree.findClassObjects('ScatterSky')
@@ -60,8 +80,14 @@ end
 function M.applySky()
   local s = sky()
   if not s then return false end
-  if not saved or saved.id ~= s:getID() then saved = { id = s:getID(), radius = tonumber(s.atmoPlanetRadius) } end
+  if not saved or saved.id ~= s:getID() then
+    saved = { id = s:getID(), radius = tonumber(s.atmoPlanetRadius), thickness = tonumber(s.atmoThickness) }
+  end
   if tonumber(s.atmoPlanetRadius) ~= M.PLANET_RADIUS_KM then s.atmoPlanetRadius = M.PLANET_RADIUS_KM end
+  local cam = rawget(_G, 'core_camera')
+  local p = cam and cam.getPosition and cam.getPosition()
+  local want = M.thicknessFor(p and p.z / 1000, saved.thickness or M.ATMO_THICK_KM)
+  if tonumber(s.atmoThickness) ~= want then s.atmoThickness = want end
   return true
 end
 
@@ -70,6 +96,7 @@ function M.restoreSky()
   if not saved then return false end
   local s = scenetree.findObjectById(saved.id)
   if s and saved.radius then s.atmoPlanetRadius = saved.radius end
+  if s and saved.thickness then s.atmoThickness = saved.thickness end
   saved = nil
   return s ~= nil
 end
