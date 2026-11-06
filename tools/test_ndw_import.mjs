@@ -1,0 +1,30 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import {normalize,normalizeSubplates,importArea,tileKey} from './import_ndw_signs.mjs';
+const make=(id='one',props={})=>({type:'Feature',id,geometry:{type:'Point',coordinates:[6.14178,51.36711]},properties:{rvvCode:'A1',blackCode:'50',status:'PLACED',textSigns:[],placement:'L',bearing:0,...props}});
+assert.equal(normalize(make()).asset,'A1-50');
+for(const code of ['C4','D5','D6'])for(const direction of ['L','R'])assert.equal(normalize(make('direction',{rvvCode:code,blackCode:direction})).asset,code+direction);
+for(const [value,asset]of [['LO','D2L'],['RO','D2R']])assert.equal(normalize(make('d2',{rvvCode:'D2',blackCode:value})).asset,asset);
+for(const value of ['LB','RB','L','R','UNKNOWN',''])assert.equal(normalize(make('d2-unknown',{rvvCode:'D2',blackCode:value})).reason,'asset_missing');
+for(const [props,reason]of [[{bearing:null},'bearing_missing_or_invalid'],[{bearing:''},'bearing_missing_or_invalid'],[{blackCode:'13'},'asset_missing'],[{zoneCode:'ZB'},'zone_asset_missing'],[{textSigns:[{text:'except cyclists'}]},'supplementary_plate_not_supported'],[{placement:'B'},'mounting_not_roadside'],[{status:'REMOVED'},'not_placed']])assert.equal(normalize(make('one',props)).reason,reason);
+const box=[6.13278,51.36111,6.15078,51.37311],features=[make('a'),make('a'),make('b')];
+let r=importArea({type:'FeatureCollection',features},{bbox:box});assert.equal(r.records.length,1);assert.equal(r.report.reasons.duplicate_source_id,2);assert.equal(r.records[0].id,'b');assert.equal(r.records[0].tile,tileKey(51.36711,6.14178));
+assert.deepEqual(r,importArea({type:'FeatureCollection',features:features.toReversed()},{bbox:box}));
+assert.throws(()=>importArea({type:'FeatureCollection',features},{bbox:[3,50,8,54]}));
+assert.throws(()=>importArea({type:'FeatureCollection',features,crs:{properties:{name:'EPSG:28992'}}},{bbox:box}));
+assert.equal(importArea({type:'FeatureCollection',features:Array.from({length:50},(_,i)=>make(String(i)))},{bbox:box}).records.length,40);
+console.log('PASS: exact assets, variants, zone/subplate rejection, missing/zero bearing, status, CRS, duplicate IDs, bounded area/count, tiles and deterministic selection.');
+
+assert.equal(normalize(make('zb',{blackCode:'30',zoneCode:'ZB'})).asset,'A1-30-ZB');
+assert.equal(normalize(make('ze',{rvvCode:'A2',blackCode:'30',zoneCode:'ZE'})).asset,'A2-30-ZE');
+assert.equal(normalize(make('alias',{rvvCode:'A1(Zone)',blackCode:'30',zoneCode:'ZB'})).asset,'A1-30-ZB');
+assert.equal(normalize(make('wrong',{rvvCode:'A1',blackCode:'30',zoneCode:'ZE'})).reason,'zone_asset_missing');
+assert.equal(normalize(make('repeat',{blackCode:'30',zoneCode:'ZH'})).reason,'zone_asset_missing');
+assert.equal(normalizeSubplates([{type:'VRIJ',text:''}])[0].status,'missing_text_or_symbol');
+assert.equal(normalizeSubplates([{type:'UIT',text:'uitgezonderd'}])[0].status,'exception_target_missing');
+assert.equal(normalizeSubplates([{type:'VOOR',text:'1,5 km'}])[0].distance_m,1500);
+assert.equal(normalizeSubplates([{type:'TIJD',text:'ma-vr 9-17',openingHours:'Mo-Fr 09:00-17:00'}])[0].opening_hours,'Mo-Fr 09:00-17:00');
+console.log('PASS: exact zone start/end and alias mapping, ambiguous zones rejected, incomplete exceptions retained, distance/time subplate normalization without invented artwork.');
+
+const actualManifest=JSON.parse(fs.readFileSync(new URL('../mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/nl_testset/manifest.json',import.meta.url)));
+for(const props of [{rvvCode:'A1',blackCode:'50'},{rvvCode:'A1',blackCode:'30',zoneCode:'ZB'},{rvvCode:'A2',blackCode:'30',zoneCode:'ZE'},{rvvCode:'B6',blackCode:''}])assert.ok(actualManifest.signs[normalize(make('asset',props)).asset],'Importer asset must exist in generated manifest');

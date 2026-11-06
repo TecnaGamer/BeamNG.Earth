@@ -1,0 +1,450 @@
+{
+  "bne_nl_cat_a7f773ff8aa1a422": {
+    "name": "bne_nl_cat_a7f773ff8aa1a422",
+    "mapTo": "bne_nl_cat_a7f773ff8aa1a422",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_a7f773ff8aa1a422.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_a865a75f3e87e950": {
+    "name": "bne_nl_cat_a865a75f3e87e950",
+    "mapTo": "bne_nl_cat_a865a75f3e87e950",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_a865a75f3e87e950.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_a87eb59ac7b5f341": {
+    "name": "bne_nl_cat_a87eb59ac7b5f341",
+    "mapTo": "bne_nl_cat_a87eb59ac7b5f341",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_a87eb59ac7b5f341.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_a8e044472e738a9b": {
+    "name": "bne_nl_cat_a8e044472e738a9b",
+    "mapTo": "bne_nl_cat_a8e044472e738a9b",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_a8e044472e738a9b.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_a93ec26a8088004d": {
+    "name": "bne_nl_cat_a93ec26a8088004d",
+    "mapTo": "bne_nl_cat_a93ec26a8088004d",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_a93ec26a8088004d.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_a9f6417a981069bc": {
+    "name": "bne_nl_cat_a9f6417a981069bc",
+    "mapTo": "bne_nl_cat_a9f6417a981069bc",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_a9f6417a981069bc.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ab13269f0aef3988": {
+    "name": "bne_nl_cat_ab13269f0aef3988",
+    "mapTo": "bne_nl_cat_ab13269f0aef3988",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ab13269f0aef3988.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ab31d0d96852c05e": {
+    "name": "bne_nl_cat_ab31d0d96852c05e",
+    "mapTo": "bne_nl_cat_ab31d0d96852c05e",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ab31d0d96852c05e.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ab6812c92dae68c5": {
+    "name": "bne_nl_cat_ab6812c92dae68c5",
+    "mapTo": "bne_nl_cat_ab6812c92dae68c5",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ab6812c92dae68c5.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ab9e6733a4029287": {
+    "name": "bne_nl_cat_ab9e6733a4029287",
+    "mapTo": "bne_nl_cat_ab9e6733a4029287",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ab9e6733a4029287.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_abe411f7fe0d337f": {
+    "name": "bne_nl_cat_abe411f7fe0d337f",
+    "mapTo": "bne_nl_cat_abe411f7fe0d337f",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_abe411f7fe0d337f.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ac03b556cb3f5029": {
+    "name": "bne_nl_cat_ac03b556cb3f5029",
+    "mapTo": "bne_nl_cat_ac03b556cb3f5029",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ac03b556cb3f5029.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ac1db8291fc129d5": {
+    "name": "bne_nl_cat_ac1db8291fc129d5",
+    "mapTo": "bne_nl_cat_ac1db8291fc129d5",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ac1db8291fc129d5.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ac8bc92573922f1a": {
+    "name": "bne_nl_cat_ac8bc92573922f1a",
+    "mapTo": "bne_nl_cat_ac8bc92573922f1a",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ac8bc92573922f1a.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ac9696adcb906ff4": {
+    "name": "bne_nl_cat_ac9696adcb906ff4",
+    "mapTo": "bne_nl_cat_ac9696adcb906ff4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ac9696adcb906ff4.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_acc166c28863eb3f": {
+    "name": "bne_nl_cat_acc166c28863eb3f",
+    "mapTo": "bne_nl_cat_acc166c28863eb3f",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_acc166c28863eb3f.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_acc978ac6cf6e302": {
+    "name": "bne_nl_cat_acc978ac6cf6e302",
+    "mapTo": "bne_nl_cat_acc978ac6cf6e302",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_acc978ac6cf6e302.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_acfece39b564385d": {
+    "name": "bne_nl_cat_acfece39b564385d",
+    "mapTo": "bne_nl_cat_acfece39b564385d",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_acfece39b564385d.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ad421df2865c132b": {
+    "name": "bne_nl_cat_ad421df2865c132b",
+    "mapTo": "bne_nl_cat_ad421df2865c132b",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ad421df2865c132b.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ad4c7f85fb6c7d9e": {
+    "name": "bne_nl_cat_ad4c7f85fb6c7d9e",
+    "mapTo": "bne_nl_cat_ad4c7f85fb6c7d9e",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ad4c7f85fb6c7d9e.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ad68d773be8138fe": {
+    "name": "bne_nl_cat_ad68d773be8138fe",
+    "mapTo": "bne_nl_cat_ad68d773be8138fe",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ad68d773be8138fe.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ad844b25a0bfdc38": {
+    "name": "bne_nl_cat_ad844b25a0bfdc38",
+    "mapTo": "bne_nl_cat_ad844b25a0bfdc38",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ad844b25a0bfdc38.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ad9750862518992b": {
+    "name": "bne_nl_cat_ad9750862518992b",
+    "mapTo": "bne_nl_cat_ad9750862518992b",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ad9750862518992b.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_adce1c9b173d6273": {
+    "name": "bne_nl_cat_adce1c9b173d6273",
+    "mapTo": "bne_nl_cat_adce1c9b173d6273",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_adce1c9b173d6273.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_add08b1f3ea9c250": {
+    "name": "bne_nl_cat_add08b1f3ea9c250",
+    "mapTo": "bne_nl_cat_add08b1f3ea9c250",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_add08b1f3ea9c250.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_adf92b2b84e16bca": {
+    "name": "bne_nl_cat_adf92b2b84e16bca",
+    "mapTo": "bne_nl_cat_adf92b2b84e16bca",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_adf92b2b84e16bca.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ae1ee0861a27028f": {
+    "name": "bne_nl_cat_ae1ee0861a27028f",
+    "mapTo": "bne_nl_cat_ae1ee0861a27028f",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ae1ee0861a27028f.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ae4eae7810ef1447": {
+    "name": "bne_nl_cat_ae4eae7810ef1447",
+    "mapTo": "bne_nl_cat_ae4eae7810ef1447",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ae4eae7810ef1447.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_ae94a475d7dc072b": {
+    "name": "bne_nl_cat_ae94a475d7dc072b",
+    "mapTo": "bne_nl_cat_ae94a475d7dc072b",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_ae94a475d7dc072b.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_b074b6b47a0d1e0a": {
+    "name": "bne_nl_cat_b074b6b47a0d1e0a",
+    "mapTo": "bne_nl_cat_b074b6b47a0d1e0a",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_b074b6b47a0d1e0a.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_b0aa5d3d1085edf2": {
+    "name": "bne_nl_cat_b0aa5d3d1085edf2",
+    "mapTo": "bne_nl_cat_b0aa5d3d1085edf2",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_b0aa5d3d1085edf2.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_nl_cat_b0c080cb6ff3af27": {
+    "name": "bne_nl_cat_b0c080cb6ff3af27",
+    "mapTo": "bne_nl_cat_b0c080cb6ff3af27",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/nl_catalog/cat_b0c080cb6ff3af27.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0
+      }
+    ],
+    "doubleSided": false
+  }
+}

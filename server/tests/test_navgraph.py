@@ -24,6 +24,24 @@ def graph(lines, classes, connectors=(), oneway=(), speeds=(), subclass=(), cent
 
 
 class GraphTest(unittest.TestCase):
+    def test_original_road_metadata_separate_from_ai_profile(self):
+        g = graph([[(0, 0), (30, 0), (30, 30)]], ['motorway'], speeds=[(0, 100.0)])
+        self.assertTrue(g['edges'])
+        self.assertTrue(any(e[5]*3.6<90 for e in g['edges']), 'Fixture includes a slower AI bend target')
+        for e in g['edges']:
+            self.assertEqual(e[9]['road_class'], 'motorway')
+            self.assertEqual(e[9]['max_speed_kmh'], 100.0)
+            self.assertEqual(e[9]['speed_source'], 'mapped_max_speed')
+            self.assertLessEqual(e[5] * 3.6, 100.01)
+
+    def test_endpoint_radius_keeps_context_column(self):
+        meta={'road_class':'motorway'}
+        edge=['a','b',1,1,0,20,1,5,5,meta]
+        navgraph._set_out_radius(edge,2)
+        self.assertEqual(edge[8],2)
+        self.assertIs(edge[9],meta)
+        self.assertEqual(len(edge),10)
+
     def test_junction_shares_the_connector(self):
         g = graph([[(0, 0), (100, 0)], [(100, 0), (100, 100)]], ["residential", "residential"],
                   connectors=[(0, "A", 0.0, 0.0), (0, "J", 1.0, 1.0), (1, "J", 0.0, 0.0), (1, "B", 1.0, 1.0)])

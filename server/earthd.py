@@ -148,6 +148,7 @@ import cpupin  # noqa: E402
 import netstate as netstatemod  # noqa: E402
 import netfetch  # noqa: E402
 import protocol  # noqa: E402
+import nlsigns as nlsignsmod  # noqa: E402
 import weather as weathermod  # noqa: E402
 
 PROTOCOL = 4
@@ -795,7 +796,7 @@ class Server:
                  colormatch="off", credits=None, cache=None, retex_rate=RETEX_RATE, surface=None,
                  mapdata=None, grading=False, road_widths=False, block_pools=(), sidewalks=True, buildings=False, traffic=False, far_pool=None,
                  road_pool=None, airports_db=None, sea=None, vegetation=None, leaf_on=True, season_mode="off",
-                 far_bld_pool=None, gas_stations=False):
+                 far_bld_pool=None, gas_stations=False, nl_signs_store=None):
         """kfun: K(L) for every level (default: the layout's K table); near_radii: the min-level
         radii (default: the layout's); cells: 32 (v1.3.1) or 64 (M1, mesh mode only); tex: texture
         px per level from the finest (default: tex_near, tex_near, tex_far with 32 cells,
@@ -825,6 +826,12 @@ class Server:
         self.cdae_dir = os.path.join(user_dir, *CDAE_ROOT, self.sid.lower())
         self.vfs_dir = f"/temp/beamngEarth/{self.sid}"
         self.prewarm_vfs = None             # the materials' prewarm shape (prewarm.py), written at the first hello
+        self.nl_signs = None
+        if nl_signs_store:
+            try:
+                self.nl_signs = nlsignsmod.Store(nl_signs_store)
+            except Exception as e:
+                log.warning('NL traffic signs disabled: %s', e)
         self.matslots = matslotsmod.MatSlots(self.sid[-4:], held=self.slot_held)    # pooled names and shape files
         self.reslot_serial = itertools.count(1)
         self.slot_serial = itertools.count(1)      # far_tile slotSerial (matslots.py)
@@ -4076,7 +4083,15 @@ class Server:
                               self.tone, im.leaf_on, im.season_mode, self.tex_modes, roadsmod.ROADS_IN_GROUND,
                               self.mapdata.versions() if self.mapdata is not None else None,
                               self.road_widths is not None, self.surface is not None, self.layout.cells,
-                              anchor.zooms[max(tile.level, 0)])
+                              anchor.zooms[max(tile.level, 0)],
+                              *self.bgt_texture_signature(anchor, tile, px))
+
+    def bgt_texture_signature(self, anchor, tile, px):
+        import bgt
+        if not bgt.enabled() or self.surface is None or not roadsmod.ROADS_IN_GROUND:
+            return ()
+        x0, y0, _, _ = tile.bbox
+        return bgt.signature(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, px))
 
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region
@@ -4673,6 +4688,8 @@ class Connection:
         # (its far tiles, road / tree / building tiles, prefetch) until it commits or fails (2026-10-16: the anchor's
         # first block waited 30 s for the CPU after a level load, 3.6 s alone)
         self.teleport_pending = False
+        self.nl_signs_busy = False
+        self.nl_signs_last_request = -float('inf')
         self.sessions = set()           # hello / pose `sessions`: earlier runs' folders the mod still uses
         self.groups = []                # [(adds, removes)] still to emit
         # their swap deltas, computed off the event loop: (adds, removes) as tuples -> Future of (dIn, dOut)
@@ -4704,6 +4721,7 @@ class Connection:
         self.roads = roadsmod.Tracker()         # road tiles sent to the mod (--roads on)
         self.signs = signstream.Tracker()       # their highway signs (key "s<tx>_<ty>")
         self.signs_on = True                    # the mod's highwaySigns setting (message highway_signs)
+        self.rvv_only = False
         self.refining = set()                   # graded first blocks on their way (refine_first; send_progress)
         self.ground_wait = {}                   # block key -> when its photo was first seen waiting (ground_progress)
         self.veg = vegetationmod.Tracker()      # vegetation tiles sent to the mod (--trees on)
@@ -4753,6 +4771,37 @@ class Connection:
         # (treeScale) and the far buildings', skyline's and far bridges' (buildingScale); 1 = the defaults
         self.lod_scale = self.tree_scale = self.building_scale = 1.0
         self.view_cap = None                    # the far field's radius at most (m): the mod's fixed view distance
+
+    def set_rvv_only(self, on):
+        on = on is True
+        if self.rvv_only == on:
+            return False
+        self.rvv_only = on
+        old = self.signs
+        old.close()  # late worker results cannot reintroduce legacy sign meshes
+        if on:
+            for tx, ty in sorted(old.sent):
+                self.send({'type': 'roads_drop', 'anchorId': old.aid, 'key': f's{tx}_{ty}'})
+        self.signs = signstream.Tracker()
+        self.wake.set()
+        return True
+
+    async def nl_sign_tiles(self, msg):
+        try:
+            now = time.monotonic()
+            if now - self.nl_signs_last_request < 0.5:
+                raise ValueError('request_rate_limited')
+            self.nl_signs_last_request = now
+            store = getattr(self.s, 'nl_signs', None)
+            if store is None:
+                raise ValueError('dataset_unavailable')
+            self.send(await store.query(msg))
+            await self.writer.drain()
+        except (ValueError, OSError, KeyError, nlsignsmod.zipfile.BadZipFile) as error:
+            log.warning('NL traffic signs: %s', error)
+            self.send({'type': 'nl_sign_tiles', 'v': 1, 'id': msg['id'], 'error': 'data_unavailable'})
+        finally:
+            self.nl_signs_busy = False
 
     async def map_tiles(self, msg):
         """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels"; the
@@ -5369,13 +5418,19 @@ class Connection:
 
     def dispatch(self, msg):
         kind = msg["type"]
-        if kind == "traffic_visuals":
+        if kind == "nl_sign_tiles":
+            nlsignsmod.request_keys(msg)
+            if not self.nl_signs_busy:
+                self.nl_signs_busy = True
+                self.spawn(self.nl_sign_tiles(msg))
+        elif kind == "traffic_visuals":
             self.traffic_on = self.traffic_visuals and msg.get("enabled") is True
             if self.traffic_on and msg.get("reset") is True:
                 # The connection outlives levels; a reloaded client discarded its route cache.
                 self.distant_traffic.sent.clear()
                 self.distant_traffic_far.sent.clear()
         elif kind == "hello":
+            self.set_rvv_only(msg.get('rvvOnly') is True)
             self.s.check_user_dir(self, msg.get("userPath"))
             lay = self.s.layout
             fmt = msg.get("format", lay.format)
@@ -5388,6 +5443,10 @@ class Connection:
                  "runtimeProfiler": 2, "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
                  "sessionId": self.s.sid, "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
+            m['rvvOnly'] = self.rvv_only
+            if getattr(self.s, 'nl_signs', None) is not None:
+                m['nlSigns'] = 1
+                m['nlSignsRevision'] = self.s.nl_signs.revision
             if self.s.imagery is not None:      # the world map credits the sources its view shows
                 m["imageryCredits"] = self.s.imagery.credits_by_area()
                 m["otherCredits"] = self.s.attribution_rest()
@@ -5574,6 +5633,8 @@ class Connection:
             self.signs = signstream.Tracker()
         elif kind == "highway_signs":           # the settings page's switch: no sign tiles built while it is off
             self.signs_on = bool(msg.get("on", True))
+        elif kind == 'rvv_only':
+            self.set_rvv_only(msg.get('on') is True)
         elif kind == "direction_signs":         # the settings page's switch: the sign tiles again, with or without
             if self.s.set_dirs(msg.get("on")):
                 self.signs.refresh()
@@ -6303,7 +6364,7 @@ class Connection:
                 ready = self.roads.sent
             self.s.osm_fuel_want(self, aid, getattr(self.roads, "car", ()))   # (OpenStreetMap's fuel stations)
             source = getattr(self.s.mapdata, "highway_signs", None)
-            if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
+            if source is not None and self.signs_on and not self.rvv_only:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
                                    ready, version=source.tags.known())
         if self.turbine_geo and aid == self.active:
@@ -7304,6 +7365,7 @@ async def main_async(args):
                     sidewalks=args.sidewalks == "on",
                     buildings=args.buildings == "on" and args.roads == "on",
                     gas_stations=args.gas_stations == "on" and args.roads == "on",
+                    nl_signs_store=getattr(args, 'nl_signs_store', None),
                     traffic=args.traffic == "on" and args.roads == "on",
                     block_pools=block_pools, far_pool=far_pool, road_pool=road_pool, airports_db=airports_db,
                     far_bld_pool=far_bld_pool,
@@ -7465,6 +7527,8 @@ async def main_async(args):
             map_srv.close()
         if server.areas is not None:
             server.areas.close()
+        if server.nl_signs is not None:
+            server.nl_signs.close()
         net.close()                 # today's request counters
         disk.close()                # the cache's last uses
 
@@ -7826,6 +7890,8 @@ def main():
     ap.add_argument("--gas-stations", choices=("on", "off"), default="off",
                     help="gas stations with refuelling at real stations (gasstations.py; Overture places, needs "
                          "--roads on): West Coast USA's pumps and canopies, the stock refuel prompt")
+    ap.add_argument('--nl-signs-store', default=os.environ.get('BNE_NL_SIGNS_STORE'),
+                    help='George NL store: directory with manifest/render or the four unextracted v9 data ZIP parts')
     ap.add_argument("--traffic", choices=("on", "off"), default="on",
                     help="the AI road graph around the player for BeamNG's own traffic and AI (navgraph.py; needs "
                          "--roads on): the mod hands it to map.reset. On by default since 2026-10-14: whether cars "
@@ -7858,7 +7924,12 @@ def main():
                          f"mod's settings page, else {cachemod.DEFAULT_CAP_GB:g}); least recently used files go, "
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--bgt-roads-nl", action="store_true", default=False,
+                    help="optional local Netherlands BGT surface masks (default off)")
+    ap.add_argument("--bgt-file", default="", help="prepared local CRS84 BGT GeoJSON file")
     args = ap.parse_args()
+    os.environ["BNGE_BGT_ROADS_NL"] = "1" if args.bgt_roads_nl else "0"
+    os.environ["BNGE_BGT_FILE"] = os.path.abspath(args.bgt_file) if args.bgt_file else ""
     os.environ["BNE_BRIDGE_PROFILE"] = args.bridge_profile     # read by roads.py here and in the block workers
     args.cells = resolve_cells(args.cells, args.near_visual)
     args.block = resolve_block(args.block, args.near_visual)

@@ -1,0 +1,7 @@
+<?xml version="1.0" standalone="no"?>
+<svg id="Nederlands_verkeersbord_B6_2023" width="672" height="587" xmlns="http://www.w3.org/2000/svg" version="1.1">
+	<path id="bord_rood" style="fill:#c1121c;stroke:#c1121c;stroke-width:40;stroke-linejoin:round" d="M 20.641,20 651.359,20 336,566.218 Z"/>
+	<path id="bies_wit" style="fill:#f7fbf5;stroke:#f7fbf5;stroke-width:20;stroke-linejoin:round" d="M 20.641,20 651.359,20 336,566.218 Z"/>
+	<path id="driehoek_rood" fill="#c1121c" d="M 20.641,20 651.359,20 336,566.218 Z"/>
+	<path id="driehoek_wit" fill="#f7fbf5" d="M 137.208,87.3 534.792,87.3 336,431.618 Z"/>
+</svg>

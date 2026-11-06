@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "george_v5_tile_store",
+  "zoom": 17,
+  "file_pattern": "g17_{x}_{y}.json",
+  "runtime_file_pattern": "render/g17_{x}_{y}.json",
+  "source": {
+    "provider": "NDW George public current-state v5",
+    "status_filter": "PLACED",
+    "url": null,
+    "format": "WGS84 GeoJSON",
+    "schema_url": "https://wegkenmerken.ndw.nu/api/open-api/api-docs/v5",
+    "sha256": "f08edd6755010716ec45211f9a5781c6daeaaca426ecfa684d904a9942ea1079"
+  },
+  "totals": {
+    "input": 798,
+    "valid": 798,
+    "invalid": 0,
+    "duplicate_ids": 0,
+    "tiles": 56,
+    "preview_eligible": 526,
+    "subplates": 212,
+    "unresolved_OTHER": 203
+  },
+  "issues": {
+    "structured_supplementary_asset_missing": 186,
+    "asset_missing": 72,
+    "zone_asset_missing": 14
+  },
+  "runtime_policy": {
+    "network": false,
+    "photos": false,
+    "ocr": false,
+    "national_scan": false
+  },
+  "limitations": [
+    "Opt-in tile loader retains a 40-sign simultaneous preview cap; full-density production performance is not yet validated.",
+    "Existing preview still limited to 40 signs.",
+    "Missing source values and unsupported artwork stay unresolved."
+  ]
+}

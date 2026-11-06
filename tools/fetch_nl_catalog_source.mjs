@@ -1,0 +1,10 @@
+// One-time catalogue cache. Game code never imports this downloader.
+import fs from 'node:fs';import path from 'node:path';import{fileURLToPath}from'node:url';import{createHash}from'node:crypto';
+const dir=path.join(path.dirname(fileURLToPath(import.meta.url)),'nl_site_source'),overview='https://www.informatiebord.nl/oefenen/verkeersborden-overzicht/';fs.mkdirSync(dir,{recursive:true});
+let rows;if(fs.existsSync(dir+'/sources.json'))rows=JSON.parse(fs.readFileSync(dir+'/sources.json')).records;else{const r=await fetch(overview);if(!r.ok)throw Error('Overview HTTP '+r.status);const html=await r.text();rows=[...html.matchAll(/<a class="listing-item"[\s\S]*?<\/a>/g)].map(([b])=>({code:b.match(/title="Verkeersteken ([^"]+)/)?.[1],url:b.match(/href="([^"]+)/)?.[1],image:b.match(/src="([^"]+)/)?.[1]})).filter(r=>r.code&&r.image);}
+const records=[];for(const row of rows){const image=row.image_url||row.image.replace('/250/250/','/500/500/'),name=createHash('sha256').update(image).digest('hex').slice(0,16)+'.png',file=dir+'/'+name;
+ if(!fs.existsSync(file)){const r=await fetch(image,{headers:{'User-Agent':'BeamNG.Earth-RVV-AssetImport/1.0'},signal:AbortSignal.timeout(30000)});if(!r.ok)throw Error('Image HTTP '+r.status+'; cache preserved; retry later');const bytes=Buffer.from(await r.arrayBuffer());if(bytes.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Expected PNG');fs.writeFileSync(file,bytes);await new Promise(r=>setTimeout(r,500));}
+ const sha=createHash('sha256').update(fs.readFileSync(file)).digest('hex');if(row.sha256&&sha!==row.sha256)throw Error('Cached source hash mismatch: '+row.code);
+ records.push({code:row.code,url:new URL(row.url,overview).href,image_url:image,file:name,sha256:sha,status:'cached_source_unreviewed',rights:'Standard RVV artwork requested by user; no separate site license grant asserted'});
+}
+fs.writeFileSync(dir+'/sources.json',JSON.stringify({overview,catalog_count:rows.length,records},null,2));console.log('Source records verified:',records.length);

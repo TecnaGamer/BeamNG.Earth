@@ -910,7 +910,9 @@ function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
 
 local function onMessage(msg)
   local t = msg.type
-  if t == '_connected' then
+  if t == 'nl_sign_tiles' then
+    M._nlsigns.onMessage(msg)
+  elseif t == '_connected' then
     -- sessions: the session folders our far tiles still use (a restarted server keeps them)
     -- slotsHeld: the pooled shape slots our objects hold, if the server is the one that sent them (a reconnect)
     local held
@@ -928,11 +930,13 @@ local function onMessage(msg)
       turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
+      rvvOnly = M._nlsigns.rvvOnly(),
       -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
       userPath = (FS and FS.getUserPath) and FS:getUserPath() or nil,
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
+    M._nlsigns.session(nil)
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
     cacheInfo = nil
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
@@ -948,6 +952,7 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    M._nlsigns.session(msg)
     require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
     st.sessionId = msg.sessionId
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
@@ -2082,6 +2087,7 @@ end
 
 local function onUpdate(dtReal, dtSim)
   dtReal = dtReal or 0
+  M._nlsigns.update(dtReal, st)
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
   net.setIdle(not st.inOurLevel and not st.active)
   if not st.inOurLevel and not st.active then
@@ -2471,6 +2477,7 @@ end
 M.onFilesChanged = onFilesChanged
 
 local function onExtensionUnloaded()
+  M._nlsigns.close()
   M._trafficvisuals.reset()
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
@@ -2917,5 +2924,6 @@ M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded
 
 M._trafficvisuals = require('beamngEarth/trafficvisuals')
+M._nlsigns = require('beamngEarth/nlremote')
 
 return M

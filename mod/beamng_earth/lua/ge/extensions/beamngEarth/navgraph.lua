@@ -9,6 +9,12 @@
 -- edge carries its speed limit and lanes; the road rules come from a file of ours (the level's info.json has none);
 -- a reset by someone else (map.reset() with no graph rebuilds an empty one from our level) is undone next frame.
 local M = {}
+M.nlRevision=0
+M.nlContexts={}
+function M.nlContextFor(a,b)
+  a,b=tostring(a),tostring(b)
+  return M.nlContexts[a<b and a..'\0'..b or b..'\0'..a]
+end
 local localplayers = require('beamngEarth/localplayers')
 local controlled = {}
 
@@ -149,6 +155,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
+          nlRoadContext = e[10],
           inRadius = e[8], outRadius = e[9] or e[8] }     -- (e[9]: a road narrowing to a tunnel's portal)
         A.links[bb] = edge
         B.links[a] = edge
@@ -309,6 +316,10 @@ local function apply(b, pre, moved)
   if pre then nodes, nn, ne, cl = pre[1], pre[2], pre[3], pre[4]
   else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.HALO_M) end
   stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
+  local nlContexts={}
+  for a,node in pairs(nodes)do for b,edge in pairs(node.links)do if edge.nlRoadContext then
+    local x,y=tostring(a),tostring(b);nlContexts[x<y and x..'\0'..y or y..'\0'..x]=edge.nlRoadContext
+  end end end
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
   if ts then pcall(ts.resetSignals) end
@@ -337,6 +348,7 @@ local function apply(b, pre, moved)
     return false
   end
   stats.resetMs = (os.clock() - t0) * 1000
+  M.nlContexts=nlContexts;M.nlRevision=M.nlRevision+1
   local m = map.getMap()
   if persistent and persistent ~= m.nodes then
     table.clear(persistent)
@@ -838,6 +850,7 @@ function M.status()
 end
 
 function M.reset()
+  M.nlContexts={};M.nlRevision=M.nlRevision+1
   local gt = gameplay_traffic
   if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
     syncTrafficPool(gt)

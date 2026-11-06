@@ -1,0 +1,1 @@
+{"private":true,"description":"Optional offline source preparation only; runtime assets need no Node packages","dependencies":{"@resvg/resvg-js":"2.6.2","pngjs":"7.0.0"}}
