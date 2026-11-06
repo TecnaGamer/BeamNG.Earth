@@ -44,6 +44,8 @@ GRID = GRID_BY_M[SIZE * SQUARE]     # block centres are multiples of this
 CHUNK_ROWS = 256                    # bounds the geodesy temporaries
 CHUNK = 128                         # samples: ChunkCache's chunk, 128 m (the block's follow grid)
 CHUNK_CACHE = 512                   # chunks kept per frame (128 KB each: 64 MB, 8 blocks)
+CHUNK_GEO_CACHE = 128               # ... and their lat / lon this many (256 KB each: 32 MB, 2 blocks; PR #786: a moved
+                                    # block's own chunks are all it reads them for, and all 512 were +128 MB a process)
 # Height quanta (m), finest first: 65536 Q = 256 ... 4096 m of range per block.
 Q_LADDER = (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16)
 Q_DEFAULT = 1 / 64
@@ -153,11 +155,16 @@ class ChunkCache:
                 self.geo.move_to_end(k)
             return got
 
+    def _trim_geo(self):
+        while len(self.geo) > CHUNK_GEO_CACHE:
+            self.geo.popitem(last=False)
+
     def put_geo(self, k, geo):
         with self.lock:
             if k in self.chunks and geo is not None:
                 self.geo[k] = geo
                 self.geo.move_to_end(k)
+                self._trim_geo()
 
     def put(self, k, u, geo=None):
         with self.lock:
@@ -169,6 +176,7 @@ class ChunkCache:
             while len(self.chunks) > self.cap:
                 evicted, _ = self.chunks.popitem(last=False)
                 self.geo.pop(evicted, None)
+            self._trim_geo()
 
     def clear(self):
         with self.lock:
