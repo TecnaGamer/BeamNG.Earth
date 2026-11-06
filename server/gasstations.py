@@ -848,14 +848,21 @@ def _walled(c, q, blds):
 # italy assets for europe") ---------------------------------------------------------------------------------------
 EUROPE = {"alpine", "europe_north", "nordic", "mediterranean"}    # buildings.region_style's names
 US_EAST = {"us_east", "us_south"}       # East Coast USA's units (the user, 2026-10-23: "check the east coast etc.")
+# fork: Australia and New Zealand ("queensland", "oceania"): a servo (Ampol, BP, Shell, 7-Eleven) is a broad flat canopy
+# over the pumps, a small shop and a price pylon, so West Coast's kit (a flat 14 x 17.2 m slab roof on pillars, stretched
+# over the islands, plus the pump pairs) is the closest stock one: Italy's awning is a European roadside look and East
+# Coast's unit a US convenience-store forecourt. It is the "default" kit's code path under its own style name, so a
+# real Australian kit (new .dae assets) has one place to hook in; that kit has no US-only prop (flag, diner) to filter.
+OCEANIA = {"queensland", "oceania"}
 
 
 def style_of(lat, lon):
-    """"europe" (Italy's petrol station set), "us_east" (East Coast USA's) or "default" (West Coast USA's) for a
-    station at (lat, lon)."""
+    """"europe" (Italy's petrol station set), "us_east" (East Coast USA's), "oceania" (fork: Australia and New Zealand;
+    West Coast USA's kit, see OCEANIA) or "default" (West Coast USA's) for a station at (lat, lon)."""
     import buildings
     name = buildings.region_style(lat, lon).name
-    return "europe" if name in EUROPE else "us_east" if name in US_EAST else "default"
+    return ("europe" if name in EUROPE else "us_east" if name in US_EAST else "oceania" if name in OCEANIA
+            else "default")
 
 
 _ITA = "/levels/italy/art/shapes/buildings/italy_petrolstation_"
@@ -996,7 +1003,7 @@ def style_shapes(style):
         return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD, *ev]
     if style == "us_east":
         return [ECA_UNIT, *west, *ev]           # (West Coast's islands under a small canopy, and the pump pairs)
-    return west + ev
+    return west + ev                            # (fork: and "oceania", West Coast's kit: OCEANIA)
 
 
 def _lanes_box(lanes):
