@@ -110,7 +110,9 @@ LEVEL_SAMPLES = 4000
 LEVEL_PAD_PX = 2            # the level raster spread this far onto the shore (lookups beside the water)
 MEM_CELLS = 24              # rasters kept per process
 LAND_CELLS = 24             # rasters without the sea's bathymetry kept per process (land_raster)
-FULL_THREADS = 2            # cells built with their bathymetry in the background at once (land_raster; NOAA's max_conc)
+FULL_THREADS = 8                # (FETCH_THREADS) cells built with their bathymetry in the background at once (land_raster): as many as
+                                # water() built side by side before (2 queued them: a far field waited, its non-waiting
+                                # lookups by the sea are unknown till then); NOAA's own max_conc still limits the requests
 EARTH_R = 6371000.0
 
 
