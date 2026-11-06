@@ -259,7 +259,8 @@ SERVER_TO_MOD = {
                      "anchorKey": F(str, OPT),             # phase 5 (lattice anchors): not sent yet
                      "provisional": F(bool, OPT),          # 2026-10-22: a teleport's ungraded first block
                      "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
-                     "fuelShapes": F(list, OPT)},          # 2026-10-23: the region's gas station shapes (--gas-stations)
+                     "fuelShapes": F(list, OPT),           # 2026-10-23: the region's gas station shapes (--gas-stations)
+                     "koppen": F(int, OPT)},               # fork: the anchor's Koppen-Geiger class (climate.py), the grass mix
     "anchor_error": {"requestId": F(int, NULL), "error": F(str)},
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
     # building, commented out 2026-10-27)

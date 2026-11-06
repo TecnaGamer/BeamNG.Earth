@@ -29,6 +29,7 @@ from runtimeprofiler import ThreadPoolExecutor
 import numpy as np
 from PIL import Image, ImageDraw
 
+import climate      # fork: Australian lawns (dry_australia)
 import fast
 import mapgeom
 import heightmap
@@ -39,7 +40,7 @@ import staging
 
 log = logging.getLogger("earthd.surface")
 
-VERSION = 1
+VERSION = 2   # fork: 2 = Australian lawns (LAWN_SHARE_AU); (nothing keys on it yet: for whoever caches masks)
 # (TerrainMaterial name, BeamNG ground model). The last one is the level's own dirt material: the
 # default, and the one every block had before (an all-zero sample falls to the later layer on ties,
 # docs/research/2026-10-10-world-data-sources.md §4.4, so DIRT goes last).
@@ -76,6 +77,7 @@ CLASS_MATERIAL = {0: DIRT, 10: GRASS, 20: DUSTY, 30: GRASS, 40: DIRT, 50: DIRT, 
 # of gravel and dirt there). The rest stays dirt (lots, gravel, bare yards); roads and lots paint over both.
 LAWN_SHARE_HUMID = 0.9
 LAWN_SHARE_DRY = 0.75
+LAWN_SHARE_AU = 0.6     # fork: Australia's towns (climate.dry_australia): more bare, brown yards than the humid 90 %
 LAWN_PATCH_M = 30.0
 # Past Web Mercator's limit (+-85.05 deg) there are no map cells: all of it is ice, Antarctica's ice sheet and the
 # Arctic Ocean's year-round sea ice (the user, 2026-10-22: "add polar support"), WorldCover's "snow and ice".
@@ -110,6 +112,7 @@ def lawns(lat, lon):
     n = 0.65 * _value_noise(xm / LAWN_PATCH_M, ym / LAWN_PATCH_M, 5) \
         + 0.35 * _value_noise(xm / (LAWN_PATCH_M / 3), ym / (LAWN_PATCH_M / 3), 6)
     share = np.where(dry_west(lat, lon), LAWN_SHARE_DRY, LAWN_SHARE_HUMID)
+    share = np.where(climate.dry_australia(lat, lon), LAWN_SHARE_AU, share)    # fork
     # threshold near the noise sum's share quantile (see the test)
     return n > (0.5 - share) * 1.1
 

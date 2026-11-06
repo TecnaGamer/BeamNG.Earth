@@ -92,6 +92,7 @@ import season as seasonmod  # noqa: E402  # fork:
 import covermap as covermapmod  # noqa: E402
 import areas as areasmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
+import climate as climatemod  # noqa: E402  fork: anchor_ready.koppen
 import navgraph as navgraphmod  # noqa: E402
 import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
@@ -5846,6 +5847,10 @@ class Connection:
             ready["evergreen"] = True
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
+        try:                            # fork (protocol addition, optional): the Koppen-Geiger class (1-30, 0 = sea) at the anchor,
+            ready["koppen"] = int(climatemod.koppen_at(lat, lon))   # for the mod's grass mix (groundcover.setClimate)
+        except Exception as e:          # (the mod behaves as before without it)
+            log.debug("anchor %d: no climate class: %s: %s", anchor.id, type(e).__name__, e)
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")
         if provisional:
