@@ -2,6 +2,12 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Added
+- **More roof shapes:** lean-to, half-hipped, pyramid, mansard and gambrel roofs are drawn as OpenStreetMap maps them, not
+  bent to a gable or a hip.
+
 ## 1.8.2 beta (2026-11-05)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
