@@ -136,6 +136,7 @@ import groundahead as groundaheadmod  # noqa: E402
 import routeahead as routeaheadmod  # noqa: E402
 import furniture as furnituremod  # noqa: E402
 import development as developmentmod  # noqa: E402
+import townentry as townentrymod  # noqa: E402     (PR #597's town entry and exit signs)
 import heightmap  # noqa: E402
 import staging  # noqa: E402
 import imagery as imagerymod  # noqa: E402
@@ -2285,6 +2286,14 @@ class Server:
         if self.buildings and euguardrails.enabled():
             import signplacement
             sign_obstacles=signplacement.for_tile(anchor.frame,tx,ty,self.mapdata,items,skip)
+        town_faces = {}                 # the town signs' faces the tile's props use (BNE_TOWNSIGNS)
+        towns = None
+        if props is not None and townentrymod.ON and self.mapdata is not None and self.surface is not None:
+            if getattr(self, "towns", None) is None:
+                self.towns = townentrymod.Towns(self.mapdata, self.surface)
+            towns = self.towns.maker(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
+                                                                          blockworker.TOWNS_MARGIN_M),
+                                     self.out_dir, self.vfs_dir, town_faces)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      sign_obstacles=sign_obstacles,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
@@ -2298,7 +2307,7 @@ class Server:
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
                                      roads_out=near_roads, roadside_jobs=roadside_jobs, signals=furnituremod.signals_for(self.mapdata, anchor.frame, nkeys),
                                      nodes=sign_nodes, clearance_out=clearance,
-                                     development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty))
+                                     development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty), towns=towns)
         # (railway and tram tracks on the ground)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
@@ -2453,7 +2462,7 @@ class Server:
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, signs=signs, wells=oil_wells, bld_none=bool(self.buildings),
                                    barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,
-                                   turbines=turbine_rows)
+                                   turbines=turbine_rows, towns=town_faces)
 
     def set_dirs(self, on):
         """The settings page's Direction signs switch (message direction_signs): True when it changed."""
