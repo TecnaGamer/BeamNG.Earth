@@ -115,10 +115,6 @@ LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
 # wait this long at most: each call of a road tile's cells waited 8 s anew, 43 s of one cold Denver road tile's 132 s
 # (2026-11-05); those left to the rule are faults (built again with their lidar on a later visit)
 LIDAR_GAPS_SLOW_WAIT_S = 1.0
-# a dropped cell's background read refused while the host is busy (netfetch Deferred: a first visit's burst of demand
-# reads): tried again this long after, up to LIDAR_RETRY_TRIES times, one cell at a time per process, then kept on disk
-LIDAR_RETRY_S = (15.0, 30.0, 60.0, 120.0, 240.0)
-LIDAR_BG_TRIES, LIDAR_BG_WAIT_S = 120, 0.5      # a refused background node read: tried again (0.5-2 s apart)
 GAP_NATIVE = 107            # earthfast.VERSION of lidar_gap_stretch
 # The approaches (the user, 2026-10-31: "use the lidar data to improve how ramps connect"): every drawn road going on
 # from a measured deck end (the gap candidates) is measured too, from that end while its surface starts within
@@ -132,12 +128,6 @@ APPROACH_REJOIN_M = 0.3
 APPROACH_MIN_DEV_M = 0.5
 SESSION_ENV = "BNGE_ROADZ_SESSION"      # (not BNE_: those are part of the revisit cache's code key)
 SESSION_KEEP_S = 86400.0
-
-def _deferred(e):
-    """Was e netfetch's "host busy, background request dropped"?"""
-    import netfetch
-    return isinstance(e, netfetch.Deferred)
-
 
 class LidarDropped(Exception):
     """A cell's lidar read stopped: this run goes without it (RoadZ._read)."""
@@ -498,9 +488,7 @@ class RoadZ:
         self._mem = OrderedDict()           # (source, cell) -> Lines
         self._enu = OrderedDict()           # (frame, source, cell) -> segment arrays
         self._off = {}                      # (source, cell) -> the cell's datum offset (None: none)
-        self._dropped = set()               # cells this run goes without the lidar of: read on in the background (_read)
-        self._retry_due, self._retry_tries = {}, {}     # dropped cells read again later (_retry_later)
-        self._retry_thread = None
+        self._dropped = set()               # cells this run goes without the lidar of: their reads stop (_read)
         self._names = {}                    # (source, cell, map name) -> name_ok per line
         self._ept = {}                      # dataset name -> Ept
         self._lock = threading.Lock()
@@ -560,8 +548,6 @@ class RoadZ:
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
                     import revisit
                     revisit.fault()
-                    if src == "lidar" and str(key) in self._dropped and _deferred(e):
-                        self._retry_later(key)
                     return None
                 if got is None:
                     return None
@@ -586,41 +572,8 @@ class RoadZ:
                     self._mem.popitem(last=False)
             return got
 
-    def _retry_later(self, key):
-        """A dropped cell's background read was refused (the host busy): read it again later (LIDAR_RETRY_S), so it is
-        on disk for the next run; one thread per process, one cell at a time."""
-        k = str(key)
-        with self._lock:
-            n = self._retry_tries.get(k, 0)
-            if n >= len(LIDAR_RETRY_S):
-                return
-            self._retry_tries[k] = n + 1
-            self._retry_due[k] = time.monotonic() + LIDAR_RETRY_S[n]
-            if self._retry_thread is None or not self._retry_thread.is_alive():
-                self._retry_thread = threading.Thread(target=self._retry_loop, name="roadz-retry", daemon=True)
-                self._retry_thread.start()
-
-    def _retry_loop(self):
-        while True:
-            with self._lock:
-                if not self._retry_due:
-                    self._retry_thread = None
-                    return
-                k, due = min(self._retry_due.items(), key=lambda kv: kv[1])
-            wait = due - time.monotonic()
-            if wait > 0:
-                time.sleep(min(wait, 5.0))
-                continue
-            with self._lock:
-                self._retry_due.pop(k, None)
-            z, x, y = (int(v) for v in k.split("/"))
-            try:
-                self.lines("lidar", mapcells.CellKey(z, x, y))      # (refused again: lines schedules the next try)
-            except Exception as e:
-                log.debug("roadz lidar retry %s: %s", k, e)
-
-    def _fetch(self, url, headers=None, lane=None, kind="demand"):
-        res = self.fetcher.get(url, kind=kind, headers=headers, lane=lane)
+    def _fetch(self, url, headers=None, lane=None):
+        res = self.fetcher.get(url, kind="demand", headers=headers, lane=lane)
         with self._lock:
             self.stats["requests"] += 1
             self.stats["bytes"] += len(res.body)
@@ -799,26 +752,9 @@ class RoadZ:
                  int((b[0] - bb[0]) // MASK_M):int((b[2] - bb[0]) // MASK_M) + 1] = True
 
         def read(k):
-            # (a cell this run goes without, gap_answers' decision: its remaining nodes at background priority, after
-            # every demand and prefetch read (netfetch's reserves), and the cell kept for the next run. Stopped instead,
-            # nothing was ever kept: on a normal connection a Baltimore cell takes 1.3-8 s, past the 1 s wait once one
-            # cell missed, so the same cells were read and thrown away at every first tile of every session, ~33 s of
-            # it, 2026-11-05)
-            kind = "background" if key is not None and str(key) in self._dropped else "demand"
-            url = f"{EPT_BASE}{name}/ept-data/{k}.laz"
-            if kind == "demand":
-                body = self._fetch(url)
-            else:               # (a refused background request - the host's slots taken, often by this cell's own
-                import netfetch  # reads - waits and tries again, never ahead of a demand read; a few minutes at most)
-                for attempt in range(LIDAR_BG_TRIES):
-                    try:
-                        body = self._fetch(url, kind=kind)
-                        break
-                    except netfetch.Deferred:
-                        if attempt == LIDAR_BG_TRIES - 1:
-                            raise
-                        time.sleep(LIDAR_BG_WAIT_S * (1 + attempt % 4))
-            p, c = fast._ef.las_decode(body, bb)
+            if key is not None and str(key) in self._dropped:
+                raise LidarDropped(str(key))
+            p, c = fast._ef.las_decode(self._fetch(f"{EPT_BASE}{name}/ept-data/{k}.laz"), bb)
             if not len(p):
                 return p, c
             keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
@@ -1112,7 +1048,7 @@ class RoadZ:
                 if got is None:
                     import revisit
                     revisit.fault(lidar=True)
-                    self._dropped.add(str(key))     # (its read goes on at background priority and is kept: _read)
+                    self._dropped.add(str(key))     # (its read, still going, stops: _read)
                 with self._lock:
                     self._off[("gapans", str(key))] = got
                 out[key] = got
