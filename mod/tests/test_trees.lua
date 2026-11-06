@@ -490,6 +490,14 @@ do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1,
   T.check(trees.isBarrier('guardrail_back_end') and not trees.isBarrier('deciduous') and not trees.isBarrier(nil),
     'guard rails are barriers, trees not')
 end
+do -- fork: Australia's guide posts (server kantstolpar.py, tools/build_au_guideposts.py): 1.05 m models at 1:1, barriers
+  for _, g in ipairs({ 'au_guidepost_red', 'au_guidepost_white' }) do
+    local shape, sc = trees.pick(g, 1.05, 0.3)
+    T.check(trees.CATALOG[g] and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1')
+    T.check(trees.isBarrier(g) and trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0, g .. ': never thinned, a draw distance')
+  end
+end
 do -- stock world props (server worldprops.py): the catalog height is the mesh, so that height is 1:1
   local props = {
     { 'celltower', 28.93 }, { 'watertower', 26.16 }, { 'barn', 8.41 }, { 'container', 2.59 }, { 'billboard', 11.95 },

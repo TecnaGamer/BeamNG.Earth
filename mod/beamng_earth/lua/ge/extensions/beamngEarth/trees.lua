@@ -277,6 +277,12 @@ M.GROUP_MAX_M.jersey_end = 4000
 M.GROUP_MAX_M.cable = 1500
 M.CATALOG.kantstolpe = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_kantstolpe', 1.05 } }   -- (Sweden's post)
 M.GROUP_MAX_M.kantstolpe = 800
+-- fork: Australia's guide posts (server kantstolpar.py, tools/build_au_guideposts.py): 1.05 m, a red reflector on the face
+-- towards the traffic (local -X) and a white one on the back, or the white way round (a post on a driver's right).
+M.CATALOG.au_guidepost_red = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_guidepost_red', 1.05 } }
+M.CATALOG.au_guidepost_white = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_guidepost_white', 1.05 } }
+M.GROUP_MAX_M.au_guidepost_red = 800
+M.GROUP_MAX_M.au_guidepost_white = 800
 M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.30 } }   -- (Sweden's yellow give-way)
 M.GROUP_MAX_M.giveway_b1 = 300
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
@@ -324,7 +330,7 @@ M.GROUP_MAX_M.golfflag = 400
 -- below the tile cap.
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
-    or g:sub(1, 3) == 'se_')      -- (a sign thinned away is a rule gone, not a tree fewer)
+    or g:sub(1, 3) == 'se_' or g:sub(1, 12) == 'au_guidepost')      -- (a sign thinned away is a rule gone, not a tree fewer)
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
@@ -547,6 +553,7 @@ local function setup()
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_guideposts.materials.json')   -- fork
   if FS and scenetree then      -- fork: the Mount Coot-tha eucalypts, where installed and their materials are registered
     local ok, shapes = pcall(M.eucalyptShapes, function(p) return FS:fileExists(p) end,
       function(n) return scenetree.findObject(n) ~= nil end)
