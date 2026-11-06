@@ -109,6 +109,7 @@ LEVEL_Q = 0.1               # m: lake levels quantised (the same in every cell f
 LEVEL_SAMPLES = 4000
 LEVEL_PAD_PX = 2            # the level raster spread this far onto the shore (lookups beside the water)
 MEM_CELLS = 24              # rasters kept per process
+PREFETCH_THREADS = 2        # a teleport's cells built whole at once (prefetch_full: NOAA's max_conc; a Deck's 4 cores)
 LAND_CELLS = 24             # rasters without the sea's bathymetry kept per process (land_raster)
 FULL_THREADS = 8                # (FETCH_THREADS) cells built with their bathymetry in the background at once (land_raster): as many as
                                 # water() built side by side before (2 queued them: a far field waited, its non-waiting
@@ -330,6 +331,7 @@ class SeaCarver:
         self._land = OrderedDict()      # (x, y) -> raster without the sea's bathymetry (land_raster)
         self._pre = OrderedDict()       # (x, y) -> such a cell's state before its sea floor (_build, _finish)
         self._full_ex = None            # (land_raster's background builds with it)
+        self._prefetch_ex = None        # (prefetch_full's)
         self._full_asked = set()
         self._warm, self._warm_thread = [], None    # cells to build in the background (warm)
         self.warm_asked = 0             # warm() calls with cells: a lookup met a cell not at hand (earthd's water plans)
@@ -424,6 +426,22 @@ class SeaCarver:
         if ask:
             self._full_ex.submit(self._full_bg, x, y)
         return r, False
+
+    def prefetch_full(self, keys):
+        """Cells (x, y) built whole (with the sea's bathymetry) in the background now, nearest first as given: a
+        teleport's (earthd.warm_place), so NOAA's slow requests start at once and the road processes find the rasters on
+        disk (a bridge over the sea waits for its floor). PREFETCH_THREADS at a time. Returns how many were queued."""
+        with self._lock:
+            new = [(int(x), int(y)) for x, y in keys if (int(x), int(y)) not in self._full_asked
+                   and (int(x), int(y)) not in self._mem]
+            if not new:
+                return 0
+            self._full_asked.update(new)
+            if self._prefetch_ex is None:
+                self._prefetch_ex = ThreadPoolExecutor(PREFETCH_THREADS, thread_name_prefix="sea-prefetch")
+        for x, y in new:
+            self._prefetch_ex.submit(self._full_bg, x, y)
+        return len(new)
 
     def _full_bg(self, x, y):
         try:

@@ -362,6 +362,26 @@ class LandLookupTest(unittest.TestCase):
             self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
 
 
+class PrefetchTest(unittest.TestCase):
+    def test_prefetched_cells_whole_on_disk(self):
+        """A teleport's cells (earthd.warm_place) built whole with their sea floor in the background: on disk for the
+        road processes, nobody asked yet."""
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            sc = seacarve.SeaCarver(BathyMapData(), d)
+            mx, my = seacarve._merc(np.array([south(100)]), np.array([LON0]))
+            k = (int(mx[0] // seacarve.CELL_PX), int(my[0] // seacarve.CELL_PX))
+            self.assertEqual(sc.prefetch_full([k]), 1)
+            self.assertEqual(sc.prefetch_full([k]), 0, "asked once")
+            t0 = time.monotonic()
+            while not (sc.ready(*k) and sc._mem.get(k, (None, False))[1]) and time.monotonic() - t0 < 10:
+                time.sleep(0.05)
+            self.assertTrue(os.path.exists(sc._path(*k)), "whole, on disk")
+            other = seacarve.SeaCarver(FakeMapData(fail=True), d)
+            self.assertAlmostEqual(float(other.depth(np.array([south(100)]), np.array([LON0]))[0]), -FakeBathy.BATHY,
+                                   places=1)
+
+
 class LakeTest(unittest.TestCase):
     def setUp(self):
         self.sc = seacarve.SeaCarver(LakeMapData(), None, dem=LakeDem())
