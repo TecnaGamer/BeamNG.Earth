@@ -314,6 +314,74 @@ class LakeDem:
         return e
 
 
+class GatedBathy(FakeBathy):
+    """NOAA's export held until the gate opens (a slow server)."""
+
+    def __init__(self):
+        super().__init__()
+        import threading
+        self.gate = threading.Event()
+
+    def get(self, url, kind="demand"):
+        self.gate.wait(10)
+        return super().get(url, kind)
+
+
+class LandLookupTest(unittest.TestCase):
+    """Lookups on land in a coastal cell do not wait for the sea's bathymetry (a coastal first visit's road tiles
+    waited minutes for NOAA, 2026-11-06), and get what they would have got after it; a lookup by the sea waits."""
+
+    def run_bg(self, fn):
+        import threading
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("r", fn()), daemon=True)
+        t.start()
+        return t, out
+
+    def test_land_without_waiting_sea_waits(self):
+        md = BathyMapData()
+        md.fetcher = GatedBathy()
+        land = (np.array([south(-200), south(-40), south(-10)]), np.array([LON0, LON0 + 0.002, LON0]))
+        sea = (np.array([south(100)]), np.array([LON0]))
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as d2:
+            sc = seacarve.SeaCarver(md, d)
+            t, out = self.run_bg(lambda: sc.water(*land))
+            t.join(5)
+            self.assertFalse(t.is_alive(), "land: answered with the bathymetry still out")
+            calls = md.calls
+            ts, outs = self.run_bg(lambda: sc.water(*sea))
+            ts.join(0.5)
+            self.assertTrue(ts.is_alive(), "by the sea: waits for it")
+            md.fetcher.gate.set()
+            ts.join(10)
+            self.assertAlmostEqual(float(outs["r"][0][0]), -FakeBathy.BATHY, places=1)
+            ref = seacarve.SeaCarver(BathyMapData(), d2).water(*land)
+            for a, b in zip(out["r"], ref):
+                np.testing.assert_array_equal(a, b)
+            self.assertFalse(sc._land, "the whole raster replaced the one without bathymetry")
+            self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
+
+
+class PrefetchTest(unittest.TestCase):
+    def test_prefetched_cells_whole_on_disk(self):
+        """A teleport's cells (earthd.warm_place) built whole with their sea floor in the background: on disk for the
+        road processes, nobody asked yet."""
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            sc = seacarve.SeaCarver(BathyMapData(), d)
+            mx, my = seacarve._merc(np.array([south(100)]), np.array([LON0]))
+            k = (int(mx[0] // seacarve.CELL_PX), int(my[0] // seacarve.CELL_PX))
+            self.assertEqual(sc.prefetch_full([k]), 1)
+            self.assertEqual(sc.prefetch_full([k]), 0, "asked once")
+            t0 = time.monotonic()
+            while not (sc.ready(*k) and sc._mem.get(k, (None, False))[1]) and time.monotonic() - t0 < 10:
+                time.sleep(0.05)
+            self.assertTrue(os.path.exists(sc._path(*k)), "whole, on disk")
+            other = seacarve.SeaCarver(FakeMapData(fail=True), d)
+            self.assertAlmostEqual(float(other.depth(np.array([south(100)]), np.array([LON0]))[0]), -FakeBathy.BATHY,
+                                   places=1)
+
+
 class LakeTest(unittest.TestCase):
     def setUp(self):
         self.sc = seacarve.SeaCarver(LakeMapData(), None, dem=LakeDem())

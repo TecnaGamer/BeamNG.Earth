@@ -181,6 +181,10 @@ POLICIES = {
     "tecnagamer.github.io": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=2000, allow_prefetch=True,
                                        offline_ok=True, miss_ttl=7 * DAY, timeout=20.0, max_attempts=2,
                                        base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True),
+    # the clouds seen from space (spaceclouds.py: NASA GIBS's latest VIIRS true-colour day, up to 144 small tiles when a
+    # camera rises above the clouds; public domain, no key)
+    "gibs.earthdata.nasa.gov": HostPolicy(rate=8.0, burst=40.0, max_conc=6, daily_budget=6000, cache_ttl=3 * 3600.0,
+                                          miss_ttl=3600.0, timeout=20.0, max_attempts=2, optional=True, **TILE_HOST),
     # 20 variables a request = 2 Open-Meteo calls: 500 requests = 1,000 calls a day, hard
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
                                      cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True),
@@ -328,6 +332,7 @@ ROLES = {
     "s3-us-west-2.amazonaws.com": "US lidar for bridge deck heights; estimated meanwhile",
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
+    "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
     "photon.komoot.io": "the map's address search (the other search sources stand in)",

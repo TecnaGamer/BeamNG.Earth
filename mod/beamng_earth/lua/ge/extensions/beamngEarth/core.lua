@@ -124,7 +124,7 @@ local SKY_INTERVAL = 5.0       -- TimeOfDay lat/lon follow
 local VISIBLE_DISTANCE = 100000
 local LAG_PROBE_FRAMES = 10   -- simulated frames to watch for a rebase's vehicle move to show up
 local PLACE_DELAY_FRAMES = 2   -- let the collision rebuild settle before placing the vehicle
-local FLOOR_WAIT_S = 60        -- s a teleport into a tunnel waits for the tube's floor before giving up (car stays on top)
+local FLOOR_WAIT_S = 180       -- s a teleport into a tunnel waits for the tube's floor before giving up (car stays on top)
 local TELEPORT_RETRY_MAX_S = 60 -- s at most between the tries of a teleport whose first block failed (anchor_error)
 local FLOOR_HIT_M = 0.8        -- m the static collision found under floorZ + 2 may differ from floorZ: the tube is there
 local PRE_LIFT = 5             -- m above groundZ + 1 to hold the vehicle until it is placed
@@ -851,10 +851,11 @@ function M.floorCheck()
     st.floorZ, st.floorUntil = nil, nil
     return
   end
-  if not roads.settledFor(st.anchorId, 0, 0) then return end
+  local x, y = st.placeX or 0, st.placeY or 0     -- (the teleport's spot: a snapped anchor's is off the origin)
+  if not roads.settledFor(st.anchorId, x, y) then return end
   local ray = rawget(_G, 'castRayStatic')
   if not ray then return end
-  local from = vec3(0, 0, st.floorZ + 2)
+  local from = vec3(x, y, st.floorZ + 2)
   local d = ray(from, vec3(0, 0, -1), 6)
   if d and math.abs((from.z - d) - st.floorZ) < FLOOR_HIT_M then
     local z = st.floorZ
@@ -934,6 +935,7 @@ local function onMessage(msg)
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
+    M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
     cacheInfo = nil
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
@@ -1063,6 +1065,16 @@ local function onMessage(msg)
     pcall(mpsession.shareOut, msg)
   elseif t == 'terrain_patch' then
     pcall(terrainpatch.onPatch, msg)
+  elseif t == 'tunnel_floor' then        -- the teleport's spot is in a tunnel: down onto its floor once it collides
+    -- (only while the car is still at that spot: sent after anchor_ready, its tube's chains solved first)
+    local veh = getPlayerVehicle(0)
+    local vp = veh and veh:getPosition()
+    if msg.anchorId == st.anchorId and tonumber(msg.floorZ) and (not vp
+        or math.abs(vp.x - (st.placeX or 0)) + math.abs(vp.y - (st.placeY or 0)) < 15) then
+      st.floorZ, st.floorUntil = tonumber(msg.floorZ), st.clock + FLOOR_WAIT_S
+    end
+  elseif t == 'space_clouds' then        -- the clouds seen from space (spaceclouds.lua / server spaceclouds.py)
+    pcall(require('beamngEarth/spaceclouds').onMessage, msg, st.anchorId)
   elseif t == 'anchor_ready' then
     local p = st.pending
     if not p or msg.requestId ~= p.requestId then return end -- stale answer
@@ -2269,6 +2281,8 @@ local function onUpdate(dtReal, dtSim)
       t = mark('foci', t)
       ok, err = pcall(terrainpatch.update, dtReal, st.anchorId, collisionfoci.last, st.player, pb, net.send)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'terrain patches: ' .. tostring(err)) end
+      ok, err = pcall(require('beamngEarth/spaceclouds').update, dtReal, st.anchor, st.anchorId, net.send)
+      if not ok then log('E', 'beamngEarth', 'space clouds: ' .. tostring(err)) end
       ok, err = pcall(farcars.update, dtReal)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'far cars: ' .. tostring(err)) end
       t = mark('farcars', t)
@@ -2418,6 +2432,7 @@ local function onClientEndMission()
   postfx.restore()
   require('beamngEarth/enginepref').restore()
   pcall(terrainpatch.clear)
+  pcall(require('beamngEarth/spaceclouds').clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
   pcall(mpsession.reset)
@@ -2797,18 +2812,30 @@ end
 -- Fast pre-cache (server areas.py fast mode; Tann2019, 2026-11-05: "use all my cores, pause the game physics"): while
 -- the 'areas' message names an area running fast the game's physics are paused (simhold: in BeamMP our own car held),
 -- and let go when it no longer does (done, waiting, stopped); only a pause we made is let go.
+-- (M._fastPaused: whether the pause is ours; one the player or a drop hold already made is left as it was when fast
+-- mode ends, and the app going away ends it too: '_disconnected', PR #773's merge review 2026-11-06)
 M._fastHeld = false
+M._fastPaused = false
 function M.fastAreaPause(fastId)
   local on = type(fastId) == 'string' and fastId ~= ''
   if on == M._fastHeld then return end
   M._fastHeld = on
   local simhold = require('beamngEarth/simhold')
   if on then
-    log('I', 'beamngEarth', 'fast pre-cache of ' .. fastId .. ': the game paused while it runs')
-    simhold.pause(true)
+    if simhold.paused() then
+      M._fastPaused = false
+      log('I', 'beamngEarth', 'fast pre-cache of ' .. fastId .. ': the game was paused already')
+    else
+      M._fastPaused = true
+      log('I', 'beamngEarth', 'fast pre-cache of ' .. fastId .. ': the game paused while it runs')
+      simhold.pause(true)
+    end
   else
-    log('I', 'beamngEarth', 'fast pre-cache over: the game goes on')
-    simhold.pause(false)
+    if M._fastPaused and simhold.paused() then
+      log('I', 'beamngEarth', 'fast pre-cache over: the game goes on')
+      simhold.pause(false)
+    end
+    M._fastPaused = false
   end
 end
 function M.areaAdd(id, s, w, n, e, name, mode, fastOn)

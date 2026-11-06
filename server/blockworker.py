@@ -102,8 +102,7 @@ class _State:
     def _clear_chunks(self):
         with self.lock:
             for c in self.chunks.values():
-                with c.lock:
-                    c.chunks.clear()
+                c.clear()
 
     def anchor(self, aid, lat, lon):
         """(Grader or None, ChunkCache) of an anchor; only the last few anchors are kept."""
@@ -606,26 +605,11 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
 
 
 def _stack_watch(what):
-    """A timer that writes every thread's stack of this worker to the server log (stderr) when what is still running
-    after STACK_DUMP_S: where a hung road tile waits (the server's own stuck warning says only that it waits)."""
-    def dump():
-        import faulthandler
-        import sys
-        out = sys.stderr
-        if out is None:
-            return
-        try:
-            log.warning("%s still building after %.0f s in worker %d: its threads' stacks follow", what,
-                        STACK_DUMP_S, os.getpid())
-            out.flush()
-            faulthandler.dump_traceback(file=out, all_threads=True)
-            out.flush()
-        except Exception:               # (diagnostics only)
-            pass
-    t = threading.Timer(STACK_DUMP_S, dump)
-    t.daemon = True
-    t.start()
-    return t
+    """A timer that writes every thread's stack of this worker to the server log when what is still running after
+    STACK_DUMP_S: where a hung road tile waits (the server's own stuck warning says only that it waits). One log record
+    (stackdump: several workers dumping at once had interleaved unreadably)."""
+    import stackdump
+    return stackdump.watch(STACK_DUMP_S, f"{what} still building after {STACK_DUMP_S:.0f} s")
 
 
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
@@ -765,6 +749,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                    1 + seacarvemod.LINE_CELLS if _s.sea is not None else 0))
     if getattr(_s, "fra", None) is not None:       # (the US's level crossings' devices, alongside)
         _s.fra.prefetch(roadsmod.cells_of_tile(frame, tx, ty))
+    if buildings:                                   # (the props' side sources, read while the tile is built)
+        _s.md.side_prefetch(roadsmod.cells_of_tile(frame, tx, ty))
     mark("warm")
     cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
              for k in roadsmod.cells_of_tile(frame, tx, ty)]

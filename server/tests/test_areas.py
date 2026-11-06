@@ -586,5 +586,17 @@ class PredownloadShareTest(unittest.TestCase):
             f.get("https://closed.example/1.png", kind="predownload")
 
 
+
+class FastPoolSizeTest(unittest.TestCase):
+    """The fast pre-cache's road processes (PR #773): by CPU threads, total memory and the memory free when it starts
+    (each holds ~1-1.5 GB; the paused game keeps its own)."""
+
+    def test_free_memory_bounds_it(self):
+        import earthd
+        self.assertEqual(earthd.fast_pool_size(cpus=32, gb=64.0, free=6.0), 4)
+        self.assertEqual(earthd.fast_pool_size(cpus=32, gb=64.0, free=60.0), 24)
+        self.assertEqual(earthd.fast_pool_size(cpus=8, gb=64.0, free=60.0), 6)
+        self.assertEqual(earthd.fast_pool_size(cpus=32, gb=16.0, free=1.0), 2, "never under two")
+
 if __name__ == "__main__":
     unittest.main()

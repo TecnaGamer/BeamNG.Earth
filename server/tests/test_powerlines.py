@@ -141,6 +141,20 @@ class YardTest(unittest.TestCase):
         self.assertEqual(yaws, {30.0})
 
 
+
+class VoltageTest(unittest.TestCase):
+    """Lines under HV_MIN_V go on poles (GitHub #787: a 66 kV line on street poles in Shepparton drawn as lattice pylons)."""
+
+    def test_low_voltage(self):
+        import powerlines as pl
+        self.assertTrue(pl.low_voltage('{"power":"line","voltage":"66000"}'))
+        self.assertTrue(pl.low_voltage('{"voltage":"33000;11000"}'))
+        self.assertFalse(pl.low_voltage('{"voltage":"132000;66000"}'), "a circuit at 132 kV: the towers")
+        self.assertFalse(pl.low_voltage('{"voltage":"220000"}'))
+        self.assertFalse(pl.low_voltage('{"power":"line"}'), "no voltage mapped: the towers")
+        self.assertFalse(pl.low_voltage('{"voltage":"high"}'))
+        self.assertFalse(pl.low_voltage(""))
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -205,7 +219,7 @@ class OffRoadsTest(unittest.TestCase):
 class TowerFootprintTest(unittest.TestCase):
     """The native layout decides yaw; check its emitted rows against the tile's authoritative solved roads."""
 
-    def place(self, lines=(), decks=(), clearance=None):
+    def place(self, lines=(), decks=(), clearance=None, tags=None):
         import furniture
         import mapgeom
         from test_roads import FRAME
@@ -214,7 +228,8 @@ class TowerFootprintTest(unittest.TestCase):
             layer="infrastructure", ids=np.array(["line"]), kind=np.array([mapgeom.LINE], np.uint8),
             part_off=np.array([0, 1], np.int64), ring_off=np.array([0, 1], np.int64),
             coord_off=np.array([0, 2], np.int64), lonlat=np.column_stack([lo, la]),
-            attrs={"class": np.array(["power_line"])}, rules={})
+            attrs={"class": np.array(["power_line"]), **({"tags": np.array([tags], object)} if tags else {})},
+            rules={})
 
         class Md:
             def cell(self, key, layers, kind):
@@ -240,6 +255,20 @@ class TowerFootprintTest(unittest.TestCase):
         for (a, ar), (b, br) in zip(wires, old_wires):
             np.testing.assert_array_equal(a, b)
             self.assertEqual(ar, br)
+
+    def test_low_voltage_on_poles(self):
+        """A 66 kV line: the wooden poles with three conductors, not left out (GitHub #797) nor pylons (#787)."""
+        props, wires = self.place(tags='{"power":"line","voltage":"66000"}')
+        self.assertEqual({r[0] for r in props}, {powerlines.G_POLE})
+        self.assertEqual(len(props), 2)
+        self.assertEqual(props[0][6], powerlines.POLE_H)
+        self.assertEqual(len(wires), 3)
+        self.assertTrue(all(r == powerlines.POLE_WIRE_R for _, r in wires))
+        top = max(float(np.asarray(w)[:, 2].max()) for w, _ in wires)
+        self.assertAlmostEqual(top, 9.21 * powerlines.POLE_H / powerlines.POLE_SHAPE_H, delta=0.05)
+        hv, hw = self.place(tags='{"power":"line","voltage":"220000"}')
+        self.assertEqual({r[0] for r in hv}, {powerlines.G_PYLON})
+        self.assertEqual(len(hw), 6)
 
     def test_uses_actual_mapped_width(self):
         # The pivot is outside the class-default 8 m road, but not a source-mapped 24 m carriageway.

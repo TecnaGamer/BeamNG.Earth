@@ -93,6 +93,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 | Source | Address | What it does | What is sent | If it does not answer | Status line |
 |---|---|---|---|---|---|
+| NASA GIBS (VIIRS true colour) | `gibs.earthdata.nasa.gov` | The clouds you see from space: the latest satellite day round the point under you, only while the camera is far above the clouds. | Which map tiles round your position (no other data). | No clouds from orbit until it answers. | optional |
 | Open-Meteo | `api.open-meteo.com` | Real weather (clouds, rain, snow, wind, fog) and the local time zone. | The position you are at. | The weather stays as it is. | optional |
 | Photon (komoot) | `photon.komoot.io` | The map's address and place search. (The status bar's town names no longer come from it: they are read from the Overture Maps data.) | What you type, and your position (to rank nearby results first). | Search says it is unavailable for a moment. | optional |
 | Nominatim (OpenStreetMap) | `nominatim.openstreetmap.org` | The map's street and address search, only when you press Enter (its usage policy forbids autocomplete). What you typed is sent to it, with an area around your position as a bias. |

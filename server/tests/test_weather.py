@@ -352,6 +352,13 @@ class LevelObjectsTest(unittest.TestCase):
             out += [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()]
         return out
 
+    def test_a_real_day(self):
+        tod = [o for o in self.objects() if o["class"] == "TimeOfDay"][0]
+        self.assertEqual(tod["dayLength"], 86400, "#791: the engine's 30-minute day ran in Manual")
+        line = [ln for ln in (LEVEL / "main/MissionGroup/Sky/items.level.json").read_text().splitlines()
+                if '"TimeOfDay"' in ln][0]
+        self.assertRegex(line, r'"dayLength"\s*:\s*86400', "core_environment reads it per line (authoredDayLength)")
+
     def test_classes(self):
         objs = self.objects()
         by_class = {}

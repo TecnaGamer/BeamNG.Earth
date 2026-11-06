@@ -109,6 +109,12 @@ local function onRoad(m, o, p, f)
   return { n = n, k = k, w = w, lat = lat, limit = e.speedLimit or 0, dir = d, right = r }
 end
 
+-- Is a scan due (navgraph's overtakeScan asks first: the traffic list and the snapshots it builds for a scan are
+-- worth making only every SCAN_S, not every frame)?
+function M.due(now)
+  return M.enabled and now - lastScan >= M.SCAN_S
+end
+
 -- One scan (navgraph.update calls it every frame; it runs every SCAN_S). cars: {id = true} of the traffic cars; player:
 -- the player's car id while it autodrives, else nil. nearJunction(x, y, r) -> bool. leftHand: traffic on the left.
 function M.update(now, carIds, playerAuto, nearJunction, leftHand, controlledFn)

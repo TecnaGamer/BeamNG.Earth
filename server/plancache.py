@@ -14,6 +14,7 @@ while some elevation was missing stays out of the next run. A stale lock (xproc.
 is taken over; a wait longer than WAIT_S plans the cell here as before; a process waits only for a planner at least as
 favoured as itself (xproc.once). Old runs' folders go at server start (prune).
 """
+import logging
 import json
 import hashlib
 import os
@@ -25,7 +26,10 @@ import numpy as np
 
 import xproc
 
+log = logging.getLogger("earthd.plancache")
+
 WAIT_S = 90.0
+LONG_WAIT_S = 20.0          # s: a wait for another process's plans this long is logged (claim)
 KEEP_S = 6 * 3600.0         # run folders untouched this long are removed (prune)
 RUN_ENV = "BNGE_PLAN_RUN"
 
@@ -61,7 +65,7 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 11     # 11: pass roads with two lanes graded as mountain roads again (the Stelvio); 10: worn dirt roads (PR #677: damage, lean, 2 m vertices, 2.5 m smoothing of minor dirt); 9: roundabout rings level across (RING_LEVEL_ON); 8: PR #753 (a deck end's approaches rise with it, slip roads tied to their overpass road); 7: PR #471 and #686 lanes (wider / narrower roads graded); 6: the dip under a deck takes its ends on their embankments (#684's fill); 5: one half width a bridge (each was appended twice: under-deck ground and carriageways read the wrong bridge's); 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
+PLANS_FORMAT = 12     # 12: dirt roads toned down (#783, #784); 11: pass roads with two lanes graded as mountain roads again (the Stelvio); 10: worn dirt roads (PR #677: damage, lean, 2 m vertices, 2.5 m smoothing of minor dirt); 9: roundabout rings level across (RING_LEVEL_ON); 8: PR #753 (a deck end's approaches rise with it, slip roads tied to their overpass road); 7: PR #471 and #686 lanes (wider / narrower roads graded); 6: the dip under a deck takes its ends on their embankments (#684's fill); 5: one half width a bridge (each was appended twice: under-deck ground and carriageways read the wrong bridge's); 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
                       # bridge ends on embankments (#694), the ground under decks (#698), junction corridors (#682)
 
 
@@ -290,13 +294,21 @@ class PlanCache:
                         break   # (missed: planned here)
                     time.sleep(0.1)
 
+        holder = []
+
         def waiting():
             with self._lock:
                 self.stats["waited"] += 1
+            h = xproc._holder(self._path(key) + ".lock")
+            holder.append(h[2] if h else None)
         got, mine = xproc.once(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting)
-        if got is not None and time.monotonic() - t0 > xproc.POLL_S:
+        waited = time.monotonic() - t0
+        if got is not None and waited > xproc.POLL_S:
             with self._lock:
-                self.stats["wait_s"] += time.monotonic() - t0
+                self.stats["wait_s"] += waited
+        if waited > LONG_WAIT_S:            # (a road tile "may be stuck": whose plan it waited for)
+            log.warning("cell %s's plans: waited %.0f s for process %s making them (%s)", key, waited,
+                        holder[0] if holder else "?", "they came" if got is not None else "made here after all")
         return got, mine
 
     def release(self, key):

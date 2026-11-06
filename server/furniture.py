@@ -651,6 +651,9 @@ COLLISION_BOXES = {
     # Both catalog variants: each is scaled against its own catalog height (both 1.1 m).
     G_BIN: (1.1, ((-0.264, -0.264, -0.003, 0.264, 0.264, 1.111),)),
     "pylon": (35.8, ((-3.893, -4.152, -5.873, 3.893, 4.152, 29.818),)),
+    # the game's wooden power pole (powerlines.G_POLE): its Colmesh, the trunk and the cross-arm's head
+    "hvpole": (9.96, ((-0.162, -0.162, -0.083, 0.162, 0.162, 5.803),
+                      (-0.731, -0.189, 5.803, 0.769, 0.162, 9.948))),
 }
 ROAD_PROP_GAP_M = 0.15
 
