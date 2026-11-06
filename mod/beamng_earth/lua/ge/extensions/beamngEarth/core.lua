@@ -1817,6 +1817,15 @@ end
 -- a 15 s toast (the user, 2026-10-18: "Make it persistant and add a dismiss buttion or a buttion to open the releases
 -- page").
 M.RELEASES_URL = 'https://github.com/TecnaGamer/BeamNG.Earth/releases/latest'
+-- A web page in the player's browser through the server (updates.open_page: only this project's pages, its Discord and
+-- Ko-fi, a GitHub profile): the game's openWebBrowser refuses every site outside its own domain filter, and does
+-- nothing in the native Linux build. Without a server, the game's own call. The settings page's About links.
+function M.openPage(url)
+  if type(url) ~= 'string' or url == '' then return false end
+  if net.isConnected() then net.send({ type = 'open_page', url = url }) return true end
+  if openWebBrowser then pcall(openWebBrowser, url) end
+  return false
+end
 local function drawUpdateNotice()
   if updateHidden or not updateInfo or settings.get('updateDismissed') == tostring(updateInfo.latest) then return end
   local im = ui_imgui
@@ -1851,8 +1860,7 @@ local function drawUpdateNotice()
       local url = (updateInfo.url ~= '' and updateInfo.url) or M.RELEASES_URL
       -- the server opens it (the game's openWebBrowser does nothing in the native Linux build); the game's own
       -- call only without a server
-      if net.isConnected() then net.send({ type = 'open_page', url = url })
-      elseif openWebBrowser then pcall(openWebBrowser, url) end
+      M.openPage(url)
       updateHidden = true
     end
     im.SameLine()

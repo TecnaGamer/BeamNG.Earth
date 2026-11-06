@@ -223,10 +223,13 @@ export const bannerText = computed(() => (status.value.banner && status.value.ba
 export const bannerLevel = computed(() => (status.value.banner && status.value.banner.level) || "info")
 // a newer version on GitHub: { current, latest, url } (core.updateInfo)
 export const update = computed(() => status.value.update || null)
-// a link from the About page, in the system's browser (only the page's own links: the settings schema's and the
-// contributors' GitHub pages)
+// a link from the About page, in the system's browser through the server (core.openPage: the game's openWebBrowser
+// refuses GitHub, Discord and Ko-fi, "unable to open webpage due to domain filter"; the server opens only the
+// page's own links and GitHub profiles, updates.openable)
 export function openLink(url) {
-  if (typeof url === "string" && url.startsWith("https://")) engineLua(`openWebBrowser(${JSON.stringify(url)})`)
+  if (typeof url === "string" && url.startsWith("https://")) {
+    engineLua(`if beamngEarth_core and beamngEarth_core.openPage then beamngEarth_core.openPage(${JSON.stringify(url)}) end`)
+  }
 }
 
 export function openUpdate() {

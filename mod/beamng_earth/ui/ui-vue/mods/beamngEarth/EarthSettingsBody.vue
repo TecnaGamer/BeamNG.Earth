@@ -215,7 +215,7 @@ function applyNumber(item) {
 /* the pause menu's card is the game's (layoutMenu.vue: clamp(21em, 25vw, 28em)): ours wider, so the rows' values and
    the About page's buttons fit beside their labels (the user, 2026-11-05: "Buttons overlap with text") */
 :global(.menu-content-card-1:has(.earth-main)) {
-  width: clamp(28em, 40vw, 42em);
+  width: clamp(28em, 40vw, 42em) !important;   /* (the game's rule is more specific: its scoped layout selectors) */
 }
 
 .earth-links {

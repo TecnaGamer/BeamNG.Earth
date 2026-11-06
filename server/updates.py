@@ -133,14 +133,26 @@ def newest_release(net, fresh=False):
 # native Linux build (the user, 2026-10-18: "i clicked open releases page but it never opened my browser"). Only this
 # project's GitHub pages are opened (a message from the mod cannot open anything else).
 OPEN_PREFIX = f"https://github.com/{REPO}/"
+# ... and the settings page's About links (the game's openWebBrowser refuses every site outside its own domain filter:
+# "unable to open webpage due to domain filter", 2026-11-05): the project's Discord and Ko-fi, exactly, and a
+# contributor's GitHub profile (github.com/<login>, nothing after it)
+OPEN_EXACT = ("https://discord.gg/tgf", "https://ko-fi.com/tecnagamer", f"https://github.com/{REPO}")
+_PROFILE = re.compile(r"https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
+
+
+def openable(url):
+    """Whether open_page may open url: this project's GitHub pages, OPEN_EXACT, or a GitHub user's profile."""
+    if not isinstance(url, str) or any(c in url for c in ' "\'<>`\\\n\r'):
+        return False
+    return url.startswith(OPEN_PREFIX) or url in OPEN_EXACT or _PROFILE.fullmatch(url) is not None
 
 
 def open_page(url, popen=None):
-    """Open url (this project's GitHub pages only) in the player's browser, without waiting. Returns True if a
-    browser was asked. On Linux xdg-open runs with the packaged app's library and Python paths taken out of its
+    """Open url (openable: this project's pages and the About page's links) in the player's browser, without waiting.
+    Returns True if a browser was asked. On Linux xdg-open runs with the packaged app's library and Python paths taken out of its
     environment (the AppImage's own libraries broke the browser it starts)."""
     import subprocess
-    if not isinstance(url, str) or not url.startswith(OPEN_PREFIX) or any(c in url for c in ' "\'<>`\\\n\r'):
+    if not openable(url):
         return False
     popen = popen or subprocess.Popen
     try:
