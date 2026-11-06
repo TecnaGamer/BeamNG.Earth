@@ -30,7 +30,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -85,7 +85,7 @@ M.SHAPE_VARIANTS = 4
 -- fences and lamps keep their variants (their populations reach thousands).
 M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshelter = true, billboard = true,
   barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
-  picnicgrill = true, picnictable = true, pylon = true, tollbooth = true, watertower = true, cable = true,
+  picnicgrill = true, picnictable = true, pylon = true, hvpole = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
   rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
@@ -195,6 +195,8 @@ M.CATALOG = {
   pole = { { '/levels/automation_test_track/art/shapes/objects/s_powerpole_3wire', 9.2 } },
   -- high-voltage lines' towers (server powerlines.py): the stock lattice tower (West Coast USA's is the same shape)
   pylon = { { '/levels/automation_test_track/art/shapes/objects/pylon', 35.8 } },
+  -- lines under 100 kV (server powerlines.G_POLE): the game's own wooden power pole (its procedural power lines')
+  hvpole = { { '/art/shapes/common/power_lines_procedural/electric_pole_wood_old_01', 9.96 } },
   -- substations (server powerlines.py): West Coast USA's switchgear (its yard's parts), the gantries the lines end at,
   -- the chain-link fence around them (2.04 m panels)
   gantry = { { WCA .. 'objects/substation_truss', 12.73 } },
