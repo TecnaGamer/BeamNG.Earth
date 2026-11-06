@@ -73,6 +73,9 @@ STYLE = {
     # width is mapped; no markings, sidewalks, furniture or traffic (not in those classes' sets nor navgraph.DRIVE),
     # and graded by the terrain alone (grading.UNGRADED: an oval's banking stays)
     "raceway": (12.0, True),
+    # OSM highway=busway (osmtags.busway_features): its own carriageway. Overture's transportation
+    # segments omit it (the Dutch Zuidtangent is absent), so the class stays idle until that append.
+    "busway": (7.0, True),
 }
 PAVED = {"paved", "asphalt", "concrete", "metal", "wood", "tar", "bitumen"}
 COBBLE = {"paving_stones", "sett", "cobblestone", "unhewn_cobblestone", "bricks",   # Overture: "paving_stones"

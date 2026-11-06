@@ -104,7 +104,8 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
 # the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
 # (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
-LAYER_VERSIONS = {"roads": 8}
+# roads 9: OpenStreetMap's busways appended (osmtags.busway_features). Overture emits none, as with raceways.
+LAYER_VERSIONS = {"roads": 9}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
@@ -473,8 +474,8 @@ class MapData:
             return self._osm_ex
 
     def _osm_cell(self, key, kind):
-        """(tags, raceways) of the cell's OpenStreetMap highways (osmtags.py); none when the source fails (the roads
-        keep their width guesses)."""
+        """(tags, extra ways) of the cell's OpenStreetMap highways (osmtags.py); none when the source fails (the roads
+        keep their width guesses). Extra ways are the raceways and busways Overture does not emit."""
         import osmtags
         if self.fetcher is None:
             return {}, []
@@ -551,13 +552,17 @@ class MapData:
 
     @staticmethod
     def _osm(feats, got, geometry=None):
-        """The roads with the cell's OpenStreetMap tags joined in and its raceways appended (Overture has none,
-        GitHub #143)."""
+        """The roads with the cell's OpenStreetMap tags joined in and its raceways and busways appended (Overture has
+        neither, GitHub #143). Busway ids sort before raceway ids, and both sort after an Overture id."""
         import mapgeom
         import osmtags
         tags, ways = got
-        if ways:
-            feats = mapgeom.concat(feats, osmtags.raceway_features(ways))
+        buses = [w for w in ways if str(w.get("highway")) == "busway"]
+        races = [w for w in ways if str(w.get("highway") or "raceway") != "busway"]
+        if buses:
+            feats = mapgeom.concat(feats, osmtags.busway_features(buses))
+        if races:
+            feats = mapgeom.concat(feats, osmtags.raceway_features(races))
         osmtags.join(feats, tags, geometry)
         import oneway_joins
         oneway_joins.apply(feats)
