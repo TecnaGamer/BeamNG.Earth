@@ -22,18 +22,36 @@ def edges(tris):
     return np.sort(np.concatenate((tris[:, :2], tris[:, 1:], tris[:, ::2])), axis=1)
 
 
-def simplify(rock, cell_m):
-    """Return one coarser mesh; all attributes follow the same vertex mapping."""
+def _edge_groups(tris, vertex_count):
+    """Sort integer edge keys rather than NumPy's slower structured row keys."""
+    e = edges(tris)
+    keys, inverse, counts = np.unique(e[:, 0].astype(np.int64)*vertex_count+e[:, 1],
+                                     return_inverse=True, return_counts=True)
+    return np.column_stack((keys//vertex_count, keys % vertex_count)), inverse, counts
+
+
+def _prepare(rock):
+    """Topology and original terrain clearance shared by the three LOD trials."""
     p, t = np.asarray(rock.positions), np.asarray(rock.tris)
     n = len(p)
     material = np.zeros(len(t), np.int32) if rock.tri_materials is None else rock.tri_materials
-    e, inv, counts = np.unique(edges(t), axis=0, return_inverse=True, return_counts=True)
+    e, inv, counts = _edge_groups(t, n)
     locked = np.zeros(n, bool)
     locked[e[counts != 2].ravel()] = True
     emin, emax = np.full(len(e), np.iinfo(np.int32).max), np.full(len(e), -1)
     np.minimum.at(emin, inv, np.tile(material, 3))
     np.maximum.at(emax, inv, np.tile(material, 3))
     locked[e[emin != emax].ravel()] = True
+    return dict(edges=e, locked=locked, material=material, clearance={},
+                normal=np.cross(p[t[:, 1]]-p[t[:, 0]], p[t[:, 2]]-p[t[:, 0]]))
+
+
+def simplify(rock, cell_m, prepared=None):
+    """Return one coarser mesh; all attributes follow the same vertex mapping."""
+    p, t = np.asarray(rock.positions), np.asarray(rock.tris)
+    n = len(p)
+    prepared = _prepare(rock) if prepared is None else prepared
+    e, locked, material = (prepared[k] for k in ('edges', 'locked', 'material'))
     cells = np.floor((p-p.min(axis=0))/cell_m).astype(np.int64)
     join = e[np.all(cells[e[:, 0]] == cells[e[:, 1]], axis=1) & ~locked[e].any(axis=1)]
     labels = np.arange(n)
@@ -46,15 +64,14 @@ def simplify(rock, cell_m):
         labels = labels[labels]
         if np.array_equal(old, labels):
             break
-    original_normal = np.cross(p[t[:, 1]]-p[t[:, 0]], p[t[:, 2]]-p[t[:, 0]])
+    original_normal = prepared["normal"]
     for _ in range(8):
         _, mapping = np.unique(labels, return_inverse=True)
         weights = np.bincount(mapping)
         def average(a):
             a = np.asarray(a)
-            out = np.zeros((len(weights), a.shape[1]), float)
-            np.add.at(out, mapping, a)
-            return out/weights[:, None]
+            return np.column_stack([np.bincount(mapping, weights=a[:, axis], minlength=len(weights))
+                                    for axis in range(a.shape[1])])/weights[:, None]
         pos = average(p)
         tri = mapping[t]
         keep = (tri[:, 0] != tri[:, 1]) & (tri[:, 1] != tri[:, 2]) & (tri[:, 0] != tri[:, 2])
@@ -68,13 +85,15 @@ def simplify(rock, cell_m):
             # sunken edges so simplification cannot widen their existing blend.
             changed = keep & np.any(weights[tri] > 1, axis=1)
             ids = np.flatnonzero(changed)
-            new, source = pos[tri[ids]], p[t[ids]]
+            new = pos[tri[ids]]
             for bary in ((1,0,0),(0,1,0),(0,0,1),(.5,.5,0),
                          (0,.5,.5),(.5,0,.5),(1/3,1/3,1/3)):
                 q = np.einsum('ijk,j->ik', new, bary)
-                old = np.einsum('ijk,j->ik', source, bary)
                 clearance = q[:,2]-ground(q)
-                previous = old[:,2]-ground(old)
+                if bary not in prepared['clearance']:
+                    old = np.einsum('ijk,j->ik', p[t], bary)
+                    prepared['clearance'][bary] = old[:, 2]-ground(old)
+                previous = prepared['clearance'][bary][ids]
                 bad[ids] |= (~np.isfinite(clearance) |
                              (clearance < np.minimum(previous, 0)-MAX_INWARD_ERROR_M))
         else:
@@ -90,7 +109,7 @@ def simplify(rock, cell_m):
         # A collapse must not create duplicate faces or more than two faces per edge.
         _, ti, tc = np.unique(np.sort(tri[keep], axis=1), axis=0, return_inverse=True, return_counts=True)
         bad[np.flatnonzero(keep)[tc[ti] > 1]] = True
-        ue, ec = np.unique(edges(tri[keep]), axis=0, return_counts=True)
+        ue, _, ec = _edge_groups(tri[keep], len(weights))
         bad_vertices = np.unique(ue[ec > 2])
         if len(bad_vertices):
             bad |= keep & np.isin(tri, bad_vertices).any(axis=1)
@@ -117,8 +136,9 @@ def levels(rock):
     result, previous = [], len(rock.tris)
     if previous < MIN_TRIANGLES:
         return result
+    prepared = _prepare(rock)
     for pixels, cell in LEVELS:
-        coarse = simplify(rock, cell)
+        coarse = simplify(rock, cell, prepared)
         count = len(coarse['tris'])
         if count < previous * (1-MIN_REDUCTION) and count:
             result.append((pixels, coarse))

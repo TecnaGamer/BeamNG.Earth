@@ -880,6 +880,50 @@ do
   T.check(seen.id == 'traffic-reload' and seen.available, 'level start restores the live connection capability')
   core._trafficvisuals = actual
 end
+-- A stationary car must not trigger the larger loading budget while the user
+-- is inspecting newly generated cliffs with a moving camera.
+do
+  local oldPosition, oldForward = core_camera.getPositionXYZ, core_camera.getForwardXYZ
+  local oldVelocity = veh.vel
+  local state = core._state()
+  local oldAnchor, oldActive = state.anchor, state.active
+  state.anchor, state.active = geodesy.newAnchor(36.06, -112.15), false
+  veh.vel = vec3(0, 0, 0)
+  local x, angle = 0, 0
+  core_camera.getPositionXYZ = function() return x, 0, 100 end
+  core_camera.getForwardXYZ = function() return math.cos(angle), math.sin(angle), 0 end
+  core._state().stillCam = nil
+  frame()
+  core._state().slowFor = 4
+  x = 1; frame()
+  T.check(core._state().slowFor == 0, 'free camera translation cancels idle loading with a parked car')
+  core._state().slowFor = 4
+  angle = .01; frame()
+  T.check(core._state().slowFor == 0, 'camera rotation cancels idle loading with a parked car')
+  frames(65)
+  T.check(core._state().slowFor > 3, 'still view returns to idle loading after the existing delay')
+  local slow = core._state().slowFor
+  x = x + .001; frame()
+  T.check(core._state().slowFor > slow, 'sub-threshold camera jitter does not keep loading interactive')
+  for i=1,30 do x=x+.001;frame() end
+  T.check(core._state().slowFor < 1, 'slow camera movement accumulates against the still pose')
+  core_camera.getPositionXYZ, core_camera.getForwardXYZ = oldPosition, oldForward
+  veh.vel = oldVelocity
+  state.anchor, state.active = oldAnchor, oldActive
+end
+do
+  local trees = require('beamngEarth/trees')
+  local g = { frameSpent = trees.FRAME_MS, isHeavyFrame = function() return false end }
+  T.check(core.treeFrameBudget(g) == 0, 'mesh work consumes the interactive forest allowance')
+  g.frameSpent = trees.FRAME_MS / 2
+  T.check(core.treeFrameBudget(g) == trees.FRAME_MS / 2, 'forest work receives the remaining frame time')
+  g.frameSpent = 0
+  T.check(core.treeFrameBudget(g) == trees.FRAME_MS, 'quiet frames preserve normal forest throughput')
+  g.loading = true
+  T.check(core.treeFrameBudget(g) == trees.LOADING_FRAME_MS, 'stationary loading keeps its forest allowance')
+  g.blocked = true
+  T.check(core.treeFrameBudget(g) == 0, 'heavy-slot quiet frames do not stream forest items')
+end
 core.reconnect()
 T.check(core.cacheState() == nil and not core.cacheClear(), 'disconnected: numbers gone, no request sent')
 beamngEarth_settings = nil

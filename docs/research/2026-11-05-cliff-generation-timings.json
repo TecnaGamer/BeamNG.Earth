@@ -1,0 +1,172 @@
+{
+  "cap_control_spin": {
+    "frames": 1800,
+    "seconds": 30.006707599997767,
+    "fps": 59.98658779879383,
+    "p95Ms": 16.932789988641552,
+    "p99Ms": 17.51560400400194,
+    "maxMs": 20.590100000845,
+    "over25": 0,
+    "over33": 0,
+    "over50": 0,
+    "units": {},
+    "limits": {
+      "backgroundCap": 30,
+      "backgroundActive": false,
+      "fpsCap": 59.999996185303,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 60,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "pendingMeshes": 0
+  },
+  "cap_control_travel": {
+    "frames": 2607,
+    "seconds": 45.01664439999149,
+    "fps": 57.91191313230119,
+    "p95Ms": 20.687720003479583,
+    "p99Ms": 28.814835996600227,
+    "maxMs": 199.17680000071,
+    "over25": 55,
+    "over33": 12,
+    "over50": 5,
+    "units": {
+      "cliff": {
+        "n": 146,
+        "ms": 526.7286999747158,
+        "maxFrameMs": 5.29810000211
+      },
+      "road": {
+        "n": 1,
+        "ms": 2.4239000082016,
+        "maxFrameMs": 2.4239000082016
+      },
+      "delete": {
+        "n": 63,
+        "ms": 1.9867000207304781,
+        "maxFrameMs": 0.83370003849268
+      }
+    },
+    "limits": {
+      "backgroundCap": 30,
+      "backgroundActive": false,
+      "fpsCap": 59.999996185303,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 60,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "pendingMeshes": 0
+  },
+  "cap_control_drain": {
+    "frames": 1800,
+    "seconds": 30.01547490000665,
+    "fps": 59.969066156591154,
+    "p95Ms": 16.9065399932154,
+    "p99Ms": 17.51634899497707,
+    "maxMs": 31.642299989471,
+    "over25": 1,
+    "over33": 0,
+    "over50": 0,
+    "units": {},
+    "limits": {
+      "backgroundCap": 30,
+      "backgroundActive": false,
+      "fpsCap": 59.999996185303,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 60,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "pendingMeshes": 0
+  },
+  "cap_final_spin": {
+    "frames": 1800,
+    "seconds": 30.006297599997183,
+    "fps": 59.98740744343511,
+    "p95Ms": 16.9119699970909,
+    "p99Ms": 17.460301004248702,
+    "maxMs": 19.709899999725,
+    "over25": 0,
+    "over33": 0,
+    "over50": 0,
+    "units": {},
+    "limits": {
+      "backgroundCap": 30,
+      "backgroundActive": false,
+      "fpsCap": 59.999996185303,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 60,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "pendingMeshes": 0
+  },
+  "cap_final_travel": {
+    "frames": 2617,
+    "seconds": 45.00028629999723,
+    "fps": 58.15518555934524,
+    "p95Ms": 20.65262000251098,
+    "p99Ms": 28.119619999197234,
+    "maxMs": 93.347700007143,
+    "over25": 40,
+    "over33": 12,
+    "over50": 4,
+    "units": {
+      "cliff": {
+        "n": 257,
+        "ms": 958.5458000525828,
+        "maxFrameMs": 7.2722000032663
+      },
+      "road": {
+        "n": 1,
+        "ms": 2.6126000061631,
+        "maxFrameMs": 2.6126000061631
+      },
+      "delete": {
+        "n": 174,
+        "ms": 5.755899943411363,
+        "maxFrameMs": 0.61910001933575
+      }
+    },
+    "limits": {
+      "backgroundCap": 30,
+      "backgroundActive": false,
+      "fpsCap": 59.999996185303,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 60,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "pendingMeshes": 0
+  },
+  "cap_final_drain": {
+    "frames": 1800,
+    "seconds": 30.000111100001956,
+    "fps": 59.99977780081897,
+    "p95Ms": 16.929690007964,
+    "p99Ms": 17.50223300317909,
+    "maxMs": 18.0177000002,
+    "over25": 0,
+    "over33": 0,
+    "over50": 0,
+    "units": {},
+    "limits": {
+      "backgroundCap": 30,
+      "backgroundActive": false,
+      "fpsCap": 59.999996185303,
+      "windowFocused": false,
+      "vr": false,
+      "foregroundCap": 60,
+      "foregroundActive": true,
+      "vsync": false
+    },
+    "pendingMeshes": 0
+  }
+}

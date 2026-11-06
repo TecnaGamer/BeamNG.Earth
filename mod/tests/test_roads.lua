@@ -174,9 +174,11 @@ roads.update(gov, 2)
 
 -- Cliff contacts use the displaced visible mesh and leave with their owning tile.
 files['/t/cliff.json'] = '{ chunks = {}, cliff = { shape = "/t/cliff.cdae", pos = { 0, 0, 0 } } }'
+local cliffApplies = S.calls.postApply_TSStatic
 roads.onTile({ anchorId = 2, key = '6_6', path = '/t/cliff.json', n = 0 }, 2)
 roads.update(gov, 2)
 T.check(#statics() == 1 and statics()[1].fields.collisionType == 'Visible Mesh Final', 'cliff collides with its displaced mesh')
+T.check(S.calls.postApply_TSStatic == cliffApplies, 'initial cliff collision does not reload the registered shape')
 local cliff = statics()[1]
 do
   local oldVehicle, oldCheck = getPlayerVehicle, roads.COLLIDE_CHECK_S
@@ -262,9 +264,13 @@ do
   local oldVehicle,oldCheck=getPlayerVehicle,roads.COLLIDE_CHECK_S
   getPlayerVehicle=function() return {getPosition=function() return vec3(100000,100000,0) end} end
   roads.COLLIDE_CHECK_S=0
+  local oldNear, nearCalls = roads.collideNear, 0
+  roads.collideNear=function(...) nearCalls=nearCalls+1;return oldNear(...) end
   function budget:try(kind) return kind~='cliffContact' end
   roads.update(budget,2)
   T.check(roads.cliffContactsPending and roads.hasWork(),'deferred cliff contact remains scheduled')
+  T.check(nearCalls==1,'all active pieces share one tile hysteresis range query')
+  roads.collideNear=oldNear
   roads.COLLIDE_CHECK_S=1000
   function budget:try() return true end
   roads.update(budget,2)

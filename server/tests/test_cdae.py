@@ -294,6 +294,19 @@ class BoundedMeshTest(unittest.TestCase):
                               for t in decoded[start//3:(start+count)//3])
         self.assertCountEqual(actual, [(tuple(t), int(m)) for t, m in zip(tri, tm)])
 
+    def test_small_split_preserves_unused_vertices_and_all_attribute_channels(self):
+        pos, uv, tri = dae.grid(5, 1.)
+        pos, uv, tri = (np.asarray(pos).reshape(-1, 3), np.asarray(uv).reshape(-1, 2),
+                        np.asarray(tri).reshape(-1, 3))
+        pos = np.vstack((pos, (500, 500, 500)))
+        uv = np.vstack((uv, (0, 0)))
+        kwargs = dict(uvs=uv, uvs2=uv*3, tangent_uvs=uv*2,
+                      normals=cdae.face_normal_sum(pos, tri),
+                      colors=np.arange(len(pos)*4, dtype=np.uint8).reshape(-1, 4),
+                      material=['rock', 'rim'], tri_materials=np.arange(len(tri)) % 2)
+        self.assertEqual(cdae.encode(pos, tri, **kwargs),
+                         cdae.encode(pos, tri, split_meshes=True, **kwargs))
+
     def test_small_split_export_is_byte_identical_and_unsupported_modes_fail(self):
         pos, uv, tri = dae.grid(2, 1.)
         self.assertEqual(cdae.encode(pos, tri, uvs=uv), cdae.encode(pos, tri, uvs=uv, split_meshes=True))

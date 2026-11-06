@@ -73,6 +73,36 @@ class CliffLodTest(unittest.TestCase):
         nn=coarse['normals'][coarse['tris']]
         self.assertTrue(((nn[:,:,2]>0).all(axis=1)|(nn[:,:,2]<0).all(axis=1)).all())
 
+    def test_shared_preparation_preserves_each_lod_and_reuses_source_clearance(self):
+        rock = surface(65)
+        rock.uvs2 = rock.uvs*3
+        rock.lod_ground = lambda p: 2*p[:, 1]+2*np.cos(.6*p[:, 0])
+        rock.positions[:, 2] = rock.lod_ground(rock.positions)+.35
+        rock.normals = cdae.face_normal_sum(rock.positions, rock.tris)
+        prepared = clifflod._prepare(rock)
+        source_arrays = None
+        for _, cell in clifflod.LEVELS:
+            shared = clifflod.simplify(rock, cell, prepared)
+            independent = clifflod.simplify(rock, cell)
+            for name, value in independent.items():
+                if value is not None:
+                    np.testing.assert_array_equal(shared[name], value)
+            if source_arrays is None:
+                source_arrays = dict(prepared['clearance'])
+            else:
+                for key, value in source_arrays.items():
+                    self.assertIs(prepared['clearance'][key], value)
+        self.assertEqual(len(source_arrays), 7)
+
+    def test_integer_edge_grouping_matches_row_sorting(self):
+        rock = surface(25)
+        # Include reversed, duplicated and open triangles; all affect locks.
+        tris = np.concatenate((rock.tris, rock.tris[:20, ::-1]))
+        expected = np.unique(clifflod.edges(tris), axis=0, return_inverse=True, return_counts=True)
+        actual = clifflod._edge_groups(tris, len(rock.positions))
+        for old, new in zip(expected, actual):
+            np.testing.assert_array_equal(old, new)
+
     def test_tiny_mesh_stays_single_detail(self):
         self.assertEqual(clifflod.levels(surface(3)),[])
 

@@ -56,6 +56,23 @@ function M.step(frameMs)
   return wait >= M.MIN_WAIT_MS and wait or 0
 end
 
+-- The engine limiter already spaces capped frames. Adding our adaptive sleep
+-- after a streaming spike can lower the effective cap and extend recovery.
+-- Poll infrequently; the engine query creates a table and need not run per frame.
+M.LIMIT_POLL_MS = 1000
+local nextLimitPoll, enginePaced = 0, false
+function M.externallyPaced(now, engine)
+  if now < nextLimitPoll then return enginePaced end
+  nextLimitPoll = now + M.LIMIT_POLL_MS
+  local query = engine and engine.getCurrentFpsLimitReason
+  local ok, limits = false, nil
+  if query then ok, limits = pcall(query) end
+  enginePaced = ok and type(limits) == 'table' and
+    (limits.vsync == true or ((limits.foregroundActive == true or limits.backgroundActive == true)
+      and (tonumber(limits.fpsCap) or 0) > 0)) or false
+  return enginePaced
+end
+
 local socket = nil
 function M.sleep(ms)
   if socket == nil then

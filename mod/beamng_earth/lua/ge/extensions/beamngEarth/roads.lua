@@ -463,11 +463,25 @@ function M.setFoci(f) foci = f or {} end
 -- Cliff scenery stays drawn beyond the physics radius. Reuse its displaced mesh for
 -- contact near vehicles, with the same range hysteresis as the other tile colliders.
 -- No duplicate shape or simplified plane: collision follows the visible relief exactly.
-local function syncCliffCollision(key, t, id, what, gov)
+local function noteCliffContact(key, t, id, what)
+  collisionDirty = true
+  t.colAt = t.colAt or {}; t.colAt[what] = now()
+  newColliders[#newColliders + 1] = { id, { key = key, what = what, tile = t, renderOnly = true } }
+end
+
+local function syncCliffCollision(key, t, id, what, gov, range)
   local o = id and scenetree.findObjectById(id)
   if not o then return end
   local active = o:getField('collisionType', 0) ~= 'None'
-  local wanted = M.cliffsEnabled and M.collideNear(t, active and M.UNCOLLIDE_M or 0)
+  local wanted = false
+  if M.cliffsEnabled then
+    -- Every piece of a tile has the same range. Query the player/foci once for
+    -- each hysteresis state instead of allocating vectors for every piece.
+    if range then
+      if range[active] == nil then range[active] = M.collideNear(t, active and M.UNCOLLIDE_M or 0) end
+      wanted = range[active]
+    else wanted = M.collideNear(t, active and M.UNCOLLIDE_M or 0) end
+  end
   what = what or 'cliff'
   if id == t[what] then t.colWant[what] = wanted or nil end
   if active == wanted then return end
@@ -476,10 +490,7 @@ local function syncCliffCollision(key, t, id, what, gov)
   o:setField('collisionType', 0, wanted and 'Visible Mesh Final' or 'None')
   o:postApply()
   collisionDirty = true
-  if wanted then
-    t.colAt = t.colAt or {}; t.colAt[what] = now()
-    newColliders[#newColliders + 1] = { id, { key = key, what = what, tile = t, renderOnly = true } }
-  end
+  if wanted then noteCliffContact(key, t, id, what) end
   if gov then gov:charge('cliffContact', now() - started) end
 end
 
@@ -505,7 +516,8 @@ local function updateCollideRange(gov)
     parked = keep
   end
   for key, t in pairs(tiles) do
-    for _, what in ipairs(M.CLIFF_WHATS) do syncCliffCollision(key, t, t[what], what, gov) end
+    local range = {}
+    for _, what in ipairs(M.CLIFF_WHATS) do syncCliffCollision(key, t, t[what], what, gov, range) end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
         if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
@@ -1846,9 +1858,12 @@ function M.update(gov, currentAnchor, player, view, a)
       local t0 = now()
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
+      -- Choose contact before registration. Switching it immediately afterwards
+      -- calls postApply and repeats native shape setup on the same frame.
+      local cliffContact = M.isCliff(q.what) and M.cliffsEnabled and M.collideNear(t)
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
-        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
+        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or (cliffContact or not isRoad))
       if ok then slotMade(id, walk.shape) end
       if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
@@ -1866,7 +1881,10 @@ function M.update(gov, currentAnchor, player, view, a)
           t[q.what] = id; collisionDirty = true; newColliders[#newColliders + 1] = { id, q }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
-        if M.isCliff(q.what) then syncCliffCollision(q.key, t, id, q.what) end
+        if M.isCliff(q.what) then
+          t.colWant[q.what] = cliffContact or nil
+          if cliffContact then noteCliffContact(q.key, t, id, q.what) end
+        end
       else lastError = tostring(id) end
       local ms = now() - t0
       gov:charge(kind, ms)

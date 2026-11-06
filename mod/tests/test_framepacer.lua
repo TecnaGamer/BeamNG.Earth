@@ -37,4 +37,22 @@ T.check(P.target() >= P.MIN_MS, 'at least MIN_MS')
 P.reset()
 for _ = 1, 200 do P.step(40.0) end
 T.check(P.target() == nil and P.step(20.0) == 0, 'slower than 30 fps (a Steam Deck): no pacing')
+local now, calls, limits = 0, 0, {foregroundActive=true,fpsCap=60}
+local engine = {getCurrentFpsLimitReason=function() calls=calls+1;return limits end}
+T.check(P.externallyPaced(now,engine),'active engine cap supplies pacing')
+limits = {}
+T.check(P.externallyPaced(1,engine) and calls==1,'limiter query is cached between polls')
+now=now+P.LIMIT_POLL_MS
+T.check(not P.externallyPaced(now,engine),'uncapped game keeps adaptive pacing')
+limits={backgroundActive=true,fpsCap=30};now=now+P.LIMIT_POLL_MS
+T.check(P.externallyPaced(now,engine),'background engine cap also supplies pacing')
+limits={vsync=true};now=now+P.LIMIT_POLL_MS
+T.check(P.externallyPaced(now,engine),'vsync supplies pacing')
+limits={foregroundActive=false,foregroundCap=60,fpsCap=60};now=now+P.LIMIT_POLL_MS
+T.check(not P.externallyPaced(now,engine),'configured but inactive cap does not disable pacing')
+now=now+P.LIMIT_POLL_MS
+T.check(not P.externallyPaced(now,{}),'older engine without limiter API preserves pacing')
+now=now+P.LIMIT_POLL_MS
+T.check(not P.externallyPaced(now,{getCurrentFpsLimitReason=function() error('unavailable') end}),
+  'unavailable limiter query preserves pacing')
 T.done('test_framepacer')

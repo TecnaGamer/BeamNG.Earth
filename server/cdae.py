@@ -427,6 +427,10 @@ def _bounded_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
     the complete surface before splitting so chunk seams do not affect lighting.
     Material sorting and first-use ordering remain local to each output mesh.
     """
+    # Streaming cliff pieces already fit the runtime index range. Avoid walking
+    # every face into Python sets and remapping the same vertices again.
+    if len(P) <= RENDER_VERTEX_LIMIT:
+        return [_mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)]
     N = face_normal_sum(P, T) if normals is None else np.asarray(normals)
     attributes = (N, uvs, uvs2, tangent_uvs, colors)
     start, used = 0, set()

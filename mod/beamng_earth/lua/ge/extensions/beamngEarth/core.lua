@@ -1298,9 +1298,26 @@ function M.viewAway()
   return { x = c.x, y = c.y }
 end
 
+-- A parked car does not mean the view is idle: free-camera travel and looking
+-- around must retain the smaller interactive streaming budget. Compare against
+-- the last still pose so slow movement accumulates instead of escaping detection.
+M.CAMERA_STILL_M = .02
+M.CAMERA_STILL_DIRECTION = math.rad(.05)
+M.CAMERA_STILL_FOV_DEG = .05
+function M.cameraMoved(a, b)
+  if not a or not b then return a ~= b end
+  local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
+  local fx, fy, fz = b.fx-a.fx, b.fy-a.fy, b.fz-a.fz
+  return dx*dx+dy*dy+dz*dz > M.CAMERA_STILL_M*M.CAMERA_STILL_M
+    or fx*fx+fy*fy+fz*fz > M.CAMERA_STILL_DIRECTION*M.CAMERA_STILL_DIRECTION
+    or math.abs(b.fovDeg-a.fovDeg) > M.CAMERA_STILL_FOV_DEG
+end
+
 local function updatePlayer(dt)
   st.player = nil
   st.cam = cameraState()
+  local viewMoved = M.cameraMoved(st.stillCam, st.cam)
+  if viewMoved then st.stillCam = st.cam end
   local veh = getPlayerVehicle(0)
   if not st.anchor then return end
   if not veh then
@@ -1312,7 +1329,7 @@ local function updatePlayer(dt)
     local lat, lon = st.anchor:worldToGeodetic(c.x, c.y, c.z)
     st.player = { x = c.x, y = c.y, z = c.z, vx = 0, vy = 0, vz = 0, lat = lat, lon = lon, dist = hypot(c.x, c.y),
       speed = 0, camera = true }
-    st.slowFor = st.slowFor + dt
+    st.slowFor = not viewMoved and (st.slowFor + dt) or 0
     return
   end
   st.camAt = nil              -- (a car now: the player is the car)
@@ -1321,7 +1338,7 @@ local function updatePlayer(dt)
   local lat, lon = st.anchor:worldToGeodetic(p.x, p.y, p.z)
   st.player = { x = p.x, y = p.y, z = p.z, vx = v.x, vy = v.y, vz = v.z, lat = lat, lon = lon, dist = hypot(p.x, p.y),
     speed = v:length() }
-  st.slowFor = st.player.speed < SLOW_SPEED and (st.slowFor + dt) or 0
+  st.slowFor = not viewMoved and st.player.speed < SLOW_SPEED and (st.slowFor + dt) or 0
 end
 
 -- Drop hold (drophold.lua): a car dropped far off the block (the game's drop-at-camera) is held at rest where it was
@@ -2203,6 +2220,9 @@ local function onUpdate(dtReal, dtSim)
     t = mark('player', t)
     updateWorld(dtReal)
     t = mark('world', t)
+    -- Network/world work can already consume this frame before shape imports begin.
+    -- Count it for admission without creating persistent token debt.
+    if not gov.loading then gov:noteFrame((marks.net or 0) + (marks.world or 0)) end
     -- the roads before the far tiles: they share the governor's budget and the first to ask gets it; after a
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
@@ -2214,8 +2234,7 @@ local function onUpdate(dtReal, dtSim)
     sea.update(st.anchorId, st.player)
     -- the trees' own Lua time a frame (trees.lua FRAME_MS), more while the world loads, none in a heavy frame or the
     -- quiet frames round it (governor.lua: a heavy frame stays a lone spike)
-    trees.update(st.anchorId, st.player, M.viewAway(), (gov.blocked or gov:isHeavyFrame()) and 0
-      or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
+    trees.update(st.anchorId, st.player, M.viewAway(), M.treeFrameBudget(gov))
     pcall(ambience.update, st.anchorId, sea)      -- (sound never stops the world's updates)
     pcall(pumpjacks.update)
     pcall(nightlights.update)
@@ -2256,6 +2275,15 @@ local function onUpdate(dtReal, dtSim)
   mark('beammp', t)
 end
 
+-- Forest items and imported cliff shapes run on the same main thread. During
+-- movement, spend only what remains after mesh/network/world work; stationary
+-- loading keeps its larger allowance. A deferred pass retains its pending items.
+function M.treeFrameBudget(g)
+  if g.blocked or g:isHeavyFrame() then return 0 end
+  if g.loading then return trees.LOADING_FRAME_MS end
+  return math.max(0, trees.FRAME_MS - (g.frameSpent or 0))
+end
+
 -- After physics, before rendering (main.lua:819-824): measure when a rebase's vehicle move became
 -- visible. Hook order relative to core_camera does not matter here; this only measures.
 M._devbuild = require('beamngEarth/devbuild')    -- the development build's notice (a field: the 200-local limit)
@@ -2266,7 +2294,7 @@ local function onPreRender(dtReal, dtSim)
   local now = M._paceClock()
   if M._paceLast then
     local on = st.inOurLevel and (dtSim or 0) > 0 and not gov.loading and not beammp.inSession()
-      and settings.get('framePacing') ~= false
+      and settings.get('framePacing') ~= false and not M._pacer.externallyPaced(now, Engine)
     if on then
       local wait = M._pacer.step(now - M._paceLast)
       if wait > 0 then pcall(M._pacer.sleep, wait); now = M._paceClock() end
