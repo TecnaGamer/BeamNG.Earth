@@ -4828,7 +4828,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             elif how == "double" or (sweden and lanes >= 4 and how is None):     # (TSFS 2010:171 2 kap. 17 §)
                 if st.warning and w < markings.WARNING_BELOW_M:
                     mark("centre", st.centre, lw_, at(off), st.warning)
-                elif st.centre == "line_yellow" or sweden or st is markings.STYLES.get("GB"):
+                elif st.double_barrier:         # fork: (was yellow / SE / GB here; now the Style's, AU too)
                     for sd in (1, -1):
                         mark("centre", st.centre, lw_, at(off + sd * d))
                 else:
@@ -4846,7 +4846,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
         # more get a solid line (the Americas: double solid yellow), and in the US a town's street a double solid one;
         # otherwise one broken line in the country's colour and town / country pattern
         solid = lanes >= 4 or (st.double_centre_urban and urban)
-        if solid and (st.centre == "line_yellow" or sweden):
+        if solid and st.double_multilane:       # fork: (was yellow / SE here; now the Style's, AU too)
             for side in (1, -1):
                 mark("centre", st.centre, lw_, offset_polyline(pts, side * (st.double_gap + lw_) / 2))
         elif solid:

@@ -1,4 +1,5 @@
 """markings: country styles, real dashes and the lines lane by lane from OpenStreetMap's lane tags."""
+import hashlib
 import sys
 import unittest
 from unittest import mock
@@ -228,3 +229,70 @@ class ArrowTest(unittest.TestCase):
         self.assertEqual(uv.min(0).tolist(), [0.25, 0.75])
         self.assertEqual(uv.max(0).tolist(), [0.5, 1.0])
         self.assertEqual(uv[0][1], 1.0)
+
+
+# fork: Australian line paint (barrier lines double, edge lines 0.15 m) must not touch any other country's.
+class AustraliaPaintTest(unittest.TestCase):
+    LINE = np.array([[0.0, 0, 0], [118, 0, 0]])
+    S = roads.Spec
+    CASES = {
+        "rural2": (S(7.0, "paved", False, "primary", False), None),
+        "rural4": (S(14.0, "paved", False, "primary", False)._replace(lanes=4), None),
+        "urban2": (S(8.0, "paved", True, "secondary", False), None),
+        "urban4": (S(14.0, "paved", True, "primary", False)._replace(lanes=4), None),
+        "noovertake": (S(7.0, "paved", False, "primary", False),
+                       {"lanes:forward": "1", "lanes:backward": "1", "overtaking": "no"}),
+        "narrow_noovertake": (S(6.0, "paved", False, "primary", False),
+                              {"lanes:forward": "1", "lanes:backward": "1", "overtaking": "no"}),
+        "one_way_no": (S(7.0, "paved", False, "primary", False),
+                       {"lanes:forward": "1", "lanes:backward": "1", "overtaking:forward": "no"}),
+        "twltl": (S(15.0, "paved", True, "primary", False)._replace(lanes=5), {"lanes:both_ways": "1"}),
+        "plan4": (S(14.0, "paved", False, "primary", False)._replace(lanes=4),
+                  {"lanes:forward": "2", "lanes:backward": "2"}),
+        "motorway": (S(14.0, "paved", False, "motorway", True)._replace(lanes=3), None),
+        "tertiary": (S(6.5, "paved", False, "tertiary", False), None),
+    }
+    # digests of every country's rendered paint (both traffic sides) on the code before the Australian change
+    UNCHANGED = {"US": "3759a8a5a471", "CA": "5ed5c0883a5f", "GB": "56b047bccd2c", "IE": "56b047bccd2c",
+                 "DE": "eb537500cd79", "SE": "f7360d2fb492", "NZ": "17564a9da691", "FR": "18afa8012bf9",
+                 "JP": "8012e19da97e", "NL": "a41a7a7ffc42", "NO": "6ee93290384a", "BR": "6ee93290384a"}
+
+    def digest(self, country):
+        h = hashlib.sha1()
+        for name, (sp, osm) in self.CASES.items():
+            for lh in (False, True):
+                ex = roads.extras(sp, self.LINE, 12.0, left_hand=lh, country=country, osm=osm)
+                h.update(repr((name, lh, [(sorted(lk.items()), round(float(w), 4),
+                                           [[round(float(v), 4) for v in p] for p in (ln[0], ln[-1])], len(ln))
+                                          for lk, w, ln in ex])).encode())
+        return h.hexdigest()[:12]
+
+    def test_other_countries_paint_is_unchanged(self):
+        for country, want in self.UNCHANGED.items():
+            self.assertEqual(self.digest(country), want, f"{country}'s paint changed")
+
+    def lines(self, country, kind, spec, osm=None):
+        ex = roads.extras(spec, self.LINE, 150.0, country=country, osm=osm)
+        return [(round(float(w), 2), round(float(ln[0][1]), 2), len(ln)) for lk, w, ln in ex
+                if lk.get("kind") == kind and not lk.get("dash")]
+
+    def test_a_no_overtaking_line_is_double_solid_white_in_australia(self):
+        osm = {"lanes:forward": "1", "lanes:backward": "1", "overtaking": "no"}
+        sp = self.S(7.0, "paved", False, "primary", False)
+        ex = roads.extras(sp, self.LINE, 150.0, country="AU", osm=osm)
+        centre = [(lk["m"], w, round(float(ln[0][1]), 2)) for lk, w, ln in ex if lk.get("kind") == "centre"]
+        self.assertEqual(sorted(centre), [("line_white", 0.10, -0.10), ("line_white", 0.10, 0.10)],
+                         "two 0.10 m lines 0.10 m apart (centre to centre 0.20 m)")
+        self.assertEqual(self.lines("NZ", "centre", sp, osm), [(0.10, 0.0, 2)], "New Zealand keeps its single line")
+
+    def test_an_undivided_four_lane_road_has_a_double_solid_line(self):
+        sp = self.S(14.0, "paved", False, "primary", False)._replace(lanes=4)
+        self.assertEqual(sorted(self.lines("AU", "centre", sp)), [(0.10, -0.10, 2), (0.10, 0.10, 2)])
+
+    def test_a_two_lane_road_keeps_its_broken_centre_line_and_gets_0_15_edge_lines(self):
+        sp = self.S(7.0, "paved", False, "primary", False)
+        ex = roads.extras(sp, self.LINE, 150.0, country="AU")
+        self.assertEqual({(w, lk.get("dash")) for lk, w, _ in ex if lk.get("kind") == "centre"}, {(0.10, True)})
+        self.assertEqual({w for lk, w, _ in ex if lk.get("kind") == "edge"}, {0.15})
+        self.assertEqual({w for lk, w, _ in roads.extras(sp, self.LINE, 150.0, country="NZ") if lk.get("kind") == "edge"},
+                         {0.12})
