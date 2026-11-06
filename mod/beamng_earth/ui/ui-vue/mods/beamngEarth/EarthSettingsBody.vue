@@ -219,6 +219,10 @@ function applyNumber(item) {
 }
 
 .earth-links {
+  /* the game's buttons are 6em wide at least, with a margin: three of them took 320 px of the label's 313 (Ko-fi went
+     to a second line, 2026-11-05); 4.5em and no margin fit all three in one line */
+  --bng-button-min-width: 4.5em;
+  --bng-button-custom-margin: 0;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
