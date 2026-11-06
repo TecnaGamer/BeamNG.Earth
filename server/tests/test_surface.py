@@ -53,6 +53,19 @@ class ClassifyTest(unittest.TestCase):
         grass = np.full((2, 2), 30, np.uint8)
         self.assertTrue((sf.classify(grass, np.zeros((2, 2)), 2.0, np.full((2, 2), 39.3), np.full((2, 2), -76.6)) == sf.GRASS).all())
 
+    def test_australian_towns_have_fewer_lawns(self):       # fork
+        def share(lat, lon):
+            la, lo = np.meshgrid(np.linspace(lat, lat + 0.02, 200), np.linspace(lon, lon + 0.02, 200))
+            idx = sf.classify(np.full(la.shape, 50, np.uint8), np.zeros(la.shape), 2.0, la, lo)
+            return float((idx == sf.LAWN).mean())
+        brisbane, longreach, townsville = share(-27.48, 153.00), share(-23.45, 144.25), share(-19.27, 146.80)
+        cairns, melbourne, baltimore = share(-16.93, 145.75), share(-37.82, 144.95), share(39.28, -76.60)
+        for name, v in (("Brisbane Cfa", brisbane), ("Longreach BSh", longreach), ("Townsville Aw", townsville)):
+            self.assertAlmostEqual(v, sf.LAWN_SHARE_AU, delta=0.08, msg=name)
+        self.assertGreater(cairns, 0.8, "Cairns (Af / Am) keeps the humid share")
+        self.assertGreater(melbourne, 0.8, "Melbourne (Cfb) keeps the humid share")
+        self.assertGreater(baltimore, 0.8, "outside Australia unchanged")
+
     def test_photo_lawns_only_where_the_photo_is_green(self):
         import tempfile
         n = 16

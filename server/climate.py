@@ -36,3 +36,34 @@ def koppen_at(lat, lon):
     win = g[max(j - NEAR_PX, 0):j + NEAR_PX + 1, np.arange(i - NEAR_PX, i + NEAR_PX + 1) % g.shape[1]]
     vals = win[win > 0]
     return int(np.bincount(vals).argmax()) if vals.size else 0
+
+
+# fork: Australia (mainland + Tasmania, a coarse box; Timor, New Guinea and the NZ islands lie outside it)
+AU_LAT = (-44.0, -10.0)
+AU_LON = (112.0, 154.0)
+# fork: its classes with green lawns and grass all year: rainforest (Af, Am), cool oceanic (Cfb, Cfc)
+AU_GREEN = (1, 2, 15, 16)
+
+
+def in_australia(lat, lon):
+    """fork: True where (lat, lon) (scalars or arrays) lies in the Australian box."""
+    lat, lon = np.asarray(lat), np.asarray(lon)
+    return (lat >= AU_LAT[0]) & (lat <= AU_LAT[1]) & (lon >= AU_LON[0]) & (lon <= AU_LON[1])
+
+
+def koppen_grid(lat, lon):
+    """fork: the class (1-30; 0 the sea) at every (lat, lon) of two arrays, without koppen_at's coast search."""
+    g = _load()
+    j = np.clip(((90.0 - np.asarray(lat, np.float64)) / RES).astype(np.int64), 0, g.shape[0] - 1)
+    i = (((np.asarray(lon, np.float64) + 180.0) % 360.0) / RES).astype(np.int64) % g.shape[1]
+    return g[j, i]
+
+
+def dry_australia(lat, lon):
+    """fork: True in Australia except its rainforest and cool oceanic climates (AU_GREEN): the country's dry,
+    summer-brown grass and thin lawns (the Cfa of Brisbane, the Aw of Townsville and the arid interior included)."""
+    box = in_australia(lat, lon)
+    out = np.zeros(box.shape, bool)
+    if box.any():
+        out[box] = ~np.isin(koppen_grid(np.asarray(lat)[box], np.asarray(lon)[box]), AU_GREEN)
+    return out

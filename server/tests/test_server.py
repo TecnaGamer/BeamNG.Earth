@@ -27,6 +27,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
+import climate  # noqa: E402  fork
 import earthd  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
@@ -272,7 +273,8 @@ class ServerTest(ServerHarness):
         # --- teleport: anchor 1 with its first terrain at (0, 0) ---
         a1 = self.prepare_anchor(1, LAT, LON)
         self.assertEqual(set(a1), {"type", "requestId", "anchorId", "lat", "lon", "groundZ", "floorZ", "terrain",
-                                   "provisional"})
+                                   "provisional", "koppen"})     # fork: koppen
+        self.assertEqual(a1["koppen"], climate.koppen_at(LAT, LON))
         self.assertFalse(a1["provisional"], "no grading here: the first block is the graded one")
         self.assertIsNone(a1["floorZ"], "not in a tunnel")
         aid = a1["anchorId"]

@@ -686,6 +686,7 @@ end
 
 local function commitAnchor(msg, purpose)
   if st.rebasing then finishRebase() end -- never mix two frame changes
+  groundcover.setClimate(msg.koppen, msg.lat, msg.lon) -- fork: the grass's dry / green mix (koppen: nil from an older server)
   -- the anchor's region's gas station shapes loaded now (in this heavy slot), not at its first station
   if msg.fuelShapes then
     local gt = stopwatch.new()
@@ -974,6 +975,7 @@ local function onMessage(msg)
     st.deshadow = msg.deshadow -- server-side imagery de-shadowing ('lambert' / 'full'; nil = off), shown on the settings page
     st.colormatch = msg.colormatch -- server-side imagery colour-seam removal ('s2'; nil = off), likewise
     seasonlook.setMode(msg.season) -- the imagery's season (server --season): the leaves follow it
+    groundcover.setSeasonal(msg.season == 'auto') -- fork: and the grass's dry share (southern hemisphere)
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
     -- server keeps it for its next start too)
@@ -2113,6 +2115,7 @@ local function onUpdate(dtReal, dtSim)
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   if st.inOurLevel then gps.update(st.anchor, st.player) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
+  groundcover.update(st.inOurLevel)  -- fork: the grass's dry share follows the season
   t = mark('ui', t)
   local frameMs = frameMs0
   statusbar.frame(frameMs0)
