@@ -27,7 +27,8 @@ BBOX_PAD_M = 2.0
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
           "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
           "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
-          "se_b3", "se_e1", "se_e2", "se_a19")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+          "se_b3", "se_e1", "se_e2", "se_a19",      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+          "au_guidepost_red", "au_guidepost_white")      # fork: Australia's guide posts (kantstolpar.py)
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
