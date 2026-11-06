@@ -90,7 +90,7 @@ class HandOver(unittest.TestCase):
     """hand_over: the downloaded newer copy starts instead of this one, unless it dies at once (an antivirus, a damaged
     download: every start flashed a window and closed, Discord 2026-11-05)."""
 
-    def go(self, wait=None, popen_error=None):
+    def go(self, wait=None, popen_error=None, sac=False):
         import subprocess
         import selfupdate
         proc = mock.Mock()
@@ -101,11 +101,16 @@ class HandOver(unittest.TestCase):
         dropped = []
         with mock.patch.object(launcher, "FROZEN", True), \
                 mock.patch.object(selfupdate, "staged", lambda current: "/x/BeamNG.Earth-new.exe"), \
-                mock.patch.object(selfupdate, "drop_staged", lambda path=None: dropped.append(1)), \
+                mock.patch.object(selfupdate, "drop_staged",
+                                  lambda path=None, blocked_by=None: dropped.append(blocked_by or 1)), \
+                mock.patch.object(launcher, "smart_app_control_on", lambda: sac), \
                 mock.patch.object(subprocess, "Popen", side_effect=popen_error, return_value=proc) as popen, \
-                mock.patch.object(launcher, "problem", lambda *a, **k: None):
+                mock.patch.object(launcher, "problem", lambda *a, **k: self.said.append(a)):
             r = launcher.hand_over()
         return r, dropped, popen
+
+    def setUp(self):
+        self.said = []
 
     def test_the_new_copy_running_takes_over(self):
         import subprocess
@@ -118,6 +123,16 @@ class HandOver(unittest.TestCase):
         r, dropped, _ = self.go(wait=1)
         self.assertFalse(r)
         self.assertEqual(dropped, [1])
+
+    def test_smart_app_control_block_remembered(self):
+        """GitHub #823: Windows 11 Smart App Control blocks an unsigned new copy with no "run anyway": this copy runs,
+        the player is told why, and that version is remembered so it is not offered (and blocked) again."""
+        r, dropped, _ = self.go(popen_error=OSError("[WinError 4551] An Application Control policy has blocked this file"))
+        self.assertFalse(r)
+        self.assertEqual(dropped, ["smart_app_control"])
+        self.assertIn("Smart App Control", self.said[-1][0])
+        r, dropped, _ = self.go(wait=1, sac=True)
+        self.assertEqual(dropped, ["smart_app_control"], "Smart App Control on, the new copy closed at once")
 
     def test_a_new_copy_that_cannot_start(self):
         r, dropped, _ = self.go(popen_error=OSError("blocked"))

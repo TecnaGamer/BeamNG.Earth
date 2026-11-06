@@ -107,6 +107,16 @@ class DownloadTest(unittest.TestCase):
             with self.assertRaises(selfupdate.UpdateError):
                 selfupdate.download(FakeNet(), "1.5.5-beta")
 
+    def test_blocked_version_remembered(self):
+        """GitHub #823: a downloaded copy Windows would not start (Smart App Control) is dropped and its version kept,
+        so the update check does not offer it again; a plain drop remembers nothing."""
+        with mock.patch("urllib.request.urlopen", opener(release())):
+            selfupdate.download(FakeNet(), "1.5.5-beta", self.me)
+        self.assertIsNone(selfupdate.blocked(self.me))
+        selfupdate.drop_staged(self.me, blocked_by="smart_app_control")
+        self.assertIsNone(selfupdate.staged("1.5.5-beta", self.me), "dropped")
+        self.assertEqual(selfupdate.blocked(self.me), {"version": "9.9.9-beta", "by": "smart_app_control"})
+
     def test_changed_file_not_run(self):
         with mock.patch("urllib.request.urlopen", opener(release())):
             _v, path = selfupdate.download(FakeNet(), "1.5.5-beta", self.me)

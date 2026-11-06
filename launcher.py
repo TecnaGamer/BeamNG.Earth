@@ -1357,14 +1357,33 @@ def hand_over():
             return True
         if code == 0:
             return True
-    problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
-            "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
-            "About) downloads it again.")
+    sac = smart_app_control_on() or "4551" in str(code)
+    if sac:
+        problem(f"Windows Smart App Control blocked the updated BeamNG.Earth ({os.path.basename(new)}).",
+                "It only runs apps from a verified publisher, and BeamNG.Earth is not code-signed yet (it is "
+                "planned). This version keeps working, and that version will not be offered again.")
+    else:
+        problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
+                "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
+                "About) downloads it again.")
     try:
-        selfupdate.drop_staged()
+        selfupdate.drop_staged(blocked_by="smart_app_control" if sac else None)
     except Exception:
         pass
     return False
+
+
+def smart_app_control_on():
+    """Is Windows 11's Smart App Control enforcing (it blocks unsigned apps without a "run anyway"; GitHub #823)?
+    HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy VerifiedAndReputablePolicyState: 0 off, 1 on, 2 evaluation."""
+    if not IS_WIN:
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\CI\Policy") as k:
+            return int(winreg.QueryValueEx(k, "VerifiedAndReputablePolicyState")[0]) == 1
+    except (OSError, ValueError):
+        return False
 
 
 HANDOVER_CHECK_S = 5.0          # hand_over: the new copy must still run this long after its start (else: this one)

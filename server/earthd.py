@@ -5002,6 +5002,12 @@ class Connection:
             log.debug("update check: %s: %s", type(e).__name__, e)
             return
         if r:
+            import selfupdate
+            b = selfupdate.blocked()
+            if b and not updatesmod.newer(r["latest"], b["version"]):
+                # (Windows would not start that version: offered again, it would be downloaded and blocked again)
+                log.info("update %s not offered: Windows blocked it (%s)", r["latest"], b["by"] or "?")
+                return
             log.info("update available: %s -> %s (%s)", r["current"], r["latest"], r["url"])
             self.send({"type": "update", **r})
 
