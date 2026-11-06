@@ -150,7 +150,21 @@ Suggested benchmark spots (each tests different things):
   Longreach should be drier still. In the game console, `beamngEarth_groundcover.status()` shows `dryShare`
   (Brisbane ≈ 0.5, rising to 0.6 in August). If it's too dry, lower `M.AU_DRY` in `groundcover.lua`. Watch the frame
   time when blocks move.
-- Still the old look until batch 2: **trees** (oaks, not gums), markings, gas stations.
+
+
+**Batch 2 merged (2026-11-07):** 1.2 trees, 1.4 markings, 1.6 gas stations. **Check in game:**
+- **Trees (1.2):** Brisbane and the Gold Coast should be mostly eucalypts, with a few oaks and firs left as street
+  trees, and palms in town areas. Cairns and the Daintree should have mostly rainforest trees in the tall canopy. London
+  and Seattle should be unchanged. Tree cache v24 rebuilds by itself.
+  - Variety is low: only 2 stock eucalyptus models.
+  - The **Mount Coot-tha gums are wired in but off.** Its materials are a TorqueScript `materials.cs` that loads only
+    with that map, so using them would mean our mod running that third-party script. **Your decision.**
+- **Markings (1.4):** on a QLD no-overtaking section or an undivided road with 4+ lanes, the centre should be two solid
+  white lines. Edge lines are 0.15 m. An ordinary two-lane road is still 3 m / 9 m dashed white.
+  - Skipped: continuity lines (the code has no turn-lane concept yet) and yellow no-stopping lines (need new rules).
+  - Open: QLD_REFERENCE says multi-lane lane lines are 9 m / 3 m; the code and research doc use 3 m / 9 m.
+- **Gas stations (1.6):** AU/NZ use the West Coast flat-canopy kit under their own style name, `oceania` (the same
+  look as before). A real Australian servo kit needs new models.
 
 These give the biggest visual change for the least code.
 
