@@ -206,7 +206,8 @@ These give the biggest visual change for the least code.
 
 | # | Task | Notes | Effort |
 |---|---|---|---|
-| 3.1 | **Queenslander houses**: raised floor on stumps (~2.8 m) with battened under-floor, wraparound verandah, steep corrugated roof, front stair | New geometry in `buildings.py` modelled on `_porch` (:1048) and `_roof` (:1173); fix door/stoop height logic (`doors()` :2967) and collision. Choose by hash share + era/suburb hints | L |
+| 3.1 | **Realism rules (user, 2026-11-07):** stumps/posts ONLY under timber houses (weatherboard/fibro: Queenslanders, post-war). Brick houses on sloping blocks get a brick base: an enclosed lower level, garage under, or split level ("highset brick"); never open stumps. Rendered houses follow the brick rule. Slope is the trigger for raising: steep block → high-set. Keep wall, gable, base and roof materials consistent per house. | — | — |
+| 3.1a | **Queenslander houses**: raised floor on stumps (~2.8 m) with battened under-floor, wraparound verandah, steep corrugated roof, front stair | New geometry in `buildings.py` modelled on `_porch` (:1048) and `_roof` (:1173); fix door/stoop height logic (`doors()` :2967) and collision. Choose by hash share + era/suburb hints | L |
 | 3.2 | Footpath awnings on commercial strips | New box geometry next to `_signs`/`_cornice`; must avoid road/footpath meshes | M |
 | 3.3 | AU freeway/exit/gantry signs + route shields (M1 etc.) | `exitsigns.py` is US-only and 915 lines of imperative layout; generalise or write `exitsigns_au.py`. Needs a sign-tag data source for AU | L |
 | 3.4 | AS 1744-style font | Find a **freely licensed** Highway-Gothic-like face, then rebuild the atlas with `tools/build_sign_glyphs.py` | M |
