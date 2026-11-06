@@ -114,7 +114,7 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
     return ([s for s in exits if signlayout.owns(box, s)], [s for s in overheads if signlayout.owns(box, s)])
 
 
-def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None):
+def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None, french=False):
     """Return (exit mesh, mile-marker mesh); optional scenery cannot stop road generation."""
     source = getattr(md, 'highway_signs', None)
     if source is None:
@@ -131,6 +131,12 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
             pavements = milemarkers.source_pavements(frame, obj, context, left_hand)
             miles.extend(milemarkers.place(frame, [obj], pavements, box, elev, chunks))
         origin = (box[0], box[1], 0.)
+        if french:
+            import frroadmesh
+            import euguardrails
+            exits=[s for s in exits if euguardrails.country_at(frame,s['centre'])=='FR']
+            overheads=[s for s in overheads if euguardrails.country_at(frame,s['centre'])=='FR']
+            return frroadmesh.build_highways(exits,overheads,origin),None
         return throughsigns.build(exits, overheads, origin), milemarkers.build(miles, origin)
     except CancelledError:
         raise

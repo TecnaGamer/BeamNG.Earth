@@ -28,6 +28,13 @@ GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "gu
           "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
           "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
           "se_b3", "se_e1", "se_e2", "se_a19")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+STOCK_GROUPS = GROUPS
+import euguardrails
+ALL_GROUPS = GROUPS + euguardrails.GROUPS
+
+
+def groups_for(rows):
+    return ALL_GROUPS if any(int(r[0])>=len(STOCK_GROUPS)for r in rows) else STOCK_GROUPS
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
@@ -679,7 +686,7 @@ def _self_doubles(rows, dist=0.9, dot=0.8, dz=1.5):
 
 
 
-def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
                 supported_decks_out=None, roads=()):
     """Return Forest-item rows for the stock Italy guardrail model.
 
@@ -1069,3 +1076,10 @@ def bridge_rows(parapets, frame=None):
                          float(back[0]), float(back[1]), float(back[2]),
                          float(up[0]), float(up[1]), float(up[2])])
     return rows
+
+
+def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+                supported_decks_out=None, roads=()):
+    rows=_mapped_forest_rows(frame,infra_fn,exact,elev,decks,parapets,bridge_rails,supported_decks_out,roads)
+    if not euguardrails.enabled():return rows
+    return euguardrails.extend(frame,roads,exact,elev,rows,decks)

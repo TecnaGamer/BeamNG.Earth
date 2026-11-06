@@ -2,6 +2,7 @@
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devraster;
 mod s3url;
+mod countrymap;
 mod spaceclouds;
 mod cdaez;
 mod clearance;
@@ -5326,6 +5327,8 @@ pub(crate) fn rtin_core(hv: &[f64], n: usize, max_err: f64) -> (Vec<[i64; 3]>, V
 
 #[pymodule]
 fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(countrymap::country_codes, m)?)?;
+    m.add_function(wrap_pyfunction!(countrymap::country_index, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_place, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
@@ -5513,7 +5516,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 153)?;
+    m.add("VERSION", 154)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     Ok(())
 }

@@ -1,0 +1,266 @@
+{
+  "eu_chevron_black_white_l": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_black_white_l"
+  },
+  "eu_chevron_black_white_r": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_black_white_r"
+  },
+  "eu_chevron_red_white_l": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_red_white_l"
+  },
+  "eu_chevron_red_white_r": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_red_white_r"
+  },
+  "eu_chevron_white_black_l": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_white_black_l"
+  },
+  "eu_chevron_white_black_r": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_white_black_r"
+  },
+  "eu_chevron_white_blue_l": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_white_blue_l"
+  },
+  "eu_chevron_white_blue_r": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_white_blue_r"
+  },
+  "eu_chevron_white_red_l": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_white_red_l"
+  },
+  "eu_chevron_white_red_r": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_white_red_r"
+  },
+  "eu_chevron_yellow_black_l": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_yellow_black_l"
+  },
+  "eu_chevron_yellow_black_r": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_yellow_black_r"
+  },
+  "eu_chevron_yellow_blue_l": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_yellow_blue_l"
+  },
+  "eu_chevron_yellow_blue_r": {
+    "distance": 400,
+    "height": 1.85,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_chevron_yellow_blue_r"
+  },
+  "eu_marker_ad": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_ad"
+  },
+  "eu_marker_at": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_at"
+  },
+  "eu_marker_be": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_be"
+  },
+  "eu_marker_ch": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_ch"
+  },
+  "eu_marker_cz": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_cz"
+  },
+  "eu_marker_de": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_de"
+  },
+  "eu_marker_dk": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_dk"
+  },
+  "eu_marker_es": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_es"
+  },
+  "eu_marker_fo": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_fo"
+  },
+  "eu_marker_gb": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_gb"
+  },
+  "eu_marker_ie": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_ie"
+  },
+  "eu_marker_is": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_is"
+  },
+  "eu_marker_nl": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_nl"
+  },
+  "eu_marker_nordic": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_nordic"
+  },
+  "eu_marker_pl": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_pl"
+  },
+  "eu_marker_red_black": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_red_black"
+  },
+  "eu_marker_rs": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_rs"
+  },
+  "eu_marker_si": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_si"
+  },
+  "eu_marker_tr": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_tr"
+  },
+  "eu_pole_concrete_open": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_concrete_open"
+  },
+  "eu_pole_concrete_pair": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_concrete_pair"
+  },
+  "eu_pole_concrete_round": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_concrete_round"
+  },
+  "eu_pole_concrete_three": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_concrete_three"
+  },
+  "eu_pole_steel_lattice": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_steel_lattice"
+  },
+  "eu_pole_wood_a": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_wood_a"
+  },
+  "eu_pole_wood_h": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_wood_h"
+  },
+  "eu_pole_wood_side": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_wood_side"
+  },
+  "eu_pole_wood_t": {
+    "distance": 800,
+    "height": 8.5,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_pole_wood_t"
+  },
+  "stop_arret": {
+    "distance": 300,
+    "height": 3.0,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_stop_arret"
+  },
+  "stop_dur": {
+    "distance": 300,
+    "height": 3.0,
+    "no_collision": false,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_stop_dur"
+  }
+}
