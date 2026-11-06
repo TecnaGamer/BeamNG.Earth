@@ -15,6 +15,7 @@ import numpy as np
 
 import mapcells
 import mapgeom
+from guardrails import _deck_level_hint, _surface_info
 
 log = logging.getLogger("earthd.fences")
 
@@ -96,9 +97,13 @@ def _place(group, centre, tangent):
             _yaw(ty, -tx))
 
 
-def rows(frame, infra_fn, box, elev):
+def rows(frame, infra_fn, box, elev, decks=()):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the chain-link fences and noise walls whose
-    centre is inside box (x0, y0, x1, y1)."""
+    centre is inside box (x0, y0, x1, y1). decks ([{"n": (k, 3) XYZ, "w": road width}], as guardrails.forest_rows
+    takes them): a wall or fence on a bridge stands on its deck, not on the ground under it (GitHub #775: a noise
+    wall tagged layer=1 on the B 29's bridge stood on the road under it and blocked it). Which panels are on a deck
+    is decided as for the mapped guardrails (guardrails._deck_level_hint / _surface_info): the way's own bridge /
+    layer tags, else only where the ground already agrees with the deck."""
     if infra_fn is None:
         return []
     x0, y0, x1, y1 = map(float, box)
@@ -129,6 +134,7 @@ def rows(frame, infra_fn, box, elev):
             if b[2] < x0 - BBOX_PAD_M or b[0] > x1 + BBOX_PAD_M or b[3] < y0 - BBOX_PAD_M or b[1] > y1 + BBOX_PAD_M:
                 continue
             seen.add(fid)
+            hint = _deck_level_hint(feats, i) if decks else None
             length = CHAIN_LEN if group == G_CHAIN else WALL_LEN
             for part in feats.parts(i):
                 if not part or len(part[0]) < 2:
@@ -138,14 +144,21 @@ def rows(frame, infra_fn, box, elev):
                     if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1):
                         continue
                     px, py, yaw = _place(group, centre, tangent)
-                    pending.append((group, px, py, yaw))
+                    pending.append((group, px, py, yaw, float(centre[0]), float(centre[1]), hint))
     if not pending:
         return []
     xy = np.array([[p[1], p[2]] for p in pending], np.float64)
     lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
     _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    z = np.asarray(z, np.float64)
+    if decks:
+        # (the deck's height under the panel's centre on the mapped line: the panel's origin is beside it)
+        mid = np.array([[p[4], p[5]] for p in pending], np.float64)
+        surf, ground, _wide = _surface_info(frame, mid, elev, decks, [p[6] for p in pending])
+        on = np.abs(surf - ground) > 1e-6
+        z = np.where(on, surf, z)
     out = []
-    for (group, px, py, yaw), zz in zip(pending, np.asarray(z, np.float64)):
+    for (group, px, py, yaw, _cx, _cy, _hint), zz in zip(pending, z):
         lift = CHAIN_LIFT if group == G_CHAIN else 0.0
         height = CHAIN_H if group == G_CHAIN else WALL_H
         out.append([group, round(px, 2), round(py, 2), round(float(zz) + lift, 2), round(yaw, 1) % 360.0,
