@@ -121,43 +121,71 @@ def _second_pass(src, ids):
     return i[o], np.asarray(got_lon, np.float64)[o], np.asarray(got_lat, np.float64)[o]
 
 
-def write(out, ways, nodes, nid, nlon, nlat):
+def _tiles(refs, nid, nlon, nlat, shift):
+    """The SHARD_ZOOM tiles (x, y) the node refs' places fall in, None when no place is known."""
+    j = np.searchsorted(nid, refs)
+    ok = (j < len(nid)) & (nid[np.minimum(j, len(nid) - 1)] == refs)
+    if not ok.any():
+        return None
+    j = j[ok]
+    x, y = cell_xy(nlat[j], nlon[j])
+    return set(zip((x >> shift).tolist(), (y >> shift).tolist()))
+
+
+def _deltas(ids):
+    """[ids[0], ids[1] - ids[0], ...]: sorted ids as the lane shards' "rules" keep them (small numbers gzip well)."""
+    return [i - p for i, p in zip(ids, [0] + ids)]
+
+
+def write(out, ways, nodes, nid, nlon, nlat, rules=None):
     """The shards: <out>/<x>/<y>.json.gz per SHARD_ZOOM tile with rails, {"ways": {id: tags}, "nodes": [[id, lon,
-    lat, tags]]} (a way in every shard its cells are in), and <out>/manifest.json."""
+    lat, tags]]} (a way in every shard its cells are in), and <out>/manifest.json. rules (the lane shards' road rules,
+    tools/build_lane_tags.py: [(way id, {key: value}, node refs)], placed as the ways are) add "rules": {key: {value:
+    [way ids, sorted, delta-coded: the first, then each minus the one before]}} to the shards that have any; None (the
+    rail shards): no "rules" anywhere."""
     import gzip
     import json
     shards = {}
     shift = ZOOM - SHARD_ZOOM
     missing = 0
     for oid, tags, refs in ways:
-        j = np.searchsorted(nid, refs)
-        ok = (j < len(nid)) & (nid[np.minimum(j, len(nid) - 1)] == refs)
-        if not ok.any():
+        at = _tiles(refs, nid, nlon, nlat, shift)
+        if at is None:
             missing += 1
             continue
-        j = j[ok]
-        x, y = cell_xy(nlat[j], nlon[j])
-        for sx, sy in set(zip((x >> shift).tolist(), (y >> shift).tolist())):
-            shards.setdefault((sx, sy), ({}, []))[0][str(oid)] = tags
+        for sx, sy in at:
+            shards.setdefault((sx, sy), ({}, [], {}))[0][str(oid)] = tags
+    for oid, tags, refs in rules or ():
+        for sx, sy in _tiles(refs, nid, nlon, nlat, shift) or ():
+            by = shards.setdefault((sx, sy), ({}, [], {}))[2]
+            for k, v in tags.items():
+                by.setdefault(k, {}).setdefault(v, []).append(int(oid))
     for oid, lon, lat, tags in nodes:
         x, y = cell_xy(np.array([lat]), np.array([lon]))
-        shards.setdefault((int(x[0]) >> shift, int(y[0]) >> shift), ({}, []))[1].append(
+        shards.setdefault((int(x[0]) >> shift, int(y[0]) >> shift), ({}, [], {}))[1].append(
             [oid, round(lon, 7), round(lat, 7), tags])
     total = 0
-    for (sx, sy), (w, n) in shards.items():
+    for (sx, sy), (w, n, r) in shards.items():
         d = os.path.join(out, str(sx))
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"{sy}.json.gz")
+        doc = {"ways": w, "nodes": n}
+        if r:
+            doc["rules"] = {k: {v: _deltas(sorted(ids)) for v, ids in sorted(by.items())}
+                            for k, by in sorted(r.items())}
         with gzip.open(path + ".part", "wt", encoding="utf-8", compresslevel=9) as fh:
-            json.dump({"ways": w, "nodes": n}, fh, separators=(",", ":"), ensure_ascii=False)
+            json.dump(doc, fh, separators=(",", ":"), ensure_ascii=False)
         os.replace(path + ".part", path)
         total += os.path.getsize(path)
+    counts = {"ways": len(ways), "nodes": len(nodes), "shards": len(shards)}
+    if rules is not None:
+        counts["rules"] = len(rules)
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump({"format": 1, "zoom": SHARD_ZOOM, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                   "ways": len(ways), "nodes": len(nodes), "shards": len(shards),
-                   "license": "ODbL 1.0, (c) OpenStreetMap contributors"}, fh)
-    print(f"{len(ways):,} ways ({missing} without nodes), {len(nodes):,} nodes, {len(shards):,} shards, "
-          f"{total / 1e6:.1f} MB", flush=True)
+                   **counts, "license": "ODbL 1.0, (c) OpenStreetMap contributors"}, fh)
+    print(f"{len(ways):,} ways ({missing} without nodes), "
+          + (f"{len(rules):,} with road rules, " if rules is not None else "")
+          + f"{len(nodes):,} nodes, {len(shards):,} shards, {total / 1e6:.1f} MB", flush=True)
 
 
 def main():

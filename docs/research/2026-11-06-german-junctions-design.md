@@ -183,6 +183,24 @@ this "a stand-in until a border map"). That gets border towns wrong.
   (project rule), a commit credit ("from PR #505 by exencendre"), and a memory check. Its snapshot is 5.7 M vertices,
   and with its LRU cache it must not cost a Deck hundreds of MB across processes.
 
+*As built:* the second option, with no port: PR #505 was merged into `dev` meanwhile. `server/germany.py` is a thin
+DE-only API (`contains`, `de_at`, `effective_country`, `signature`) over upstream's `server/countrybounds.py`
+(Overture's divisions, the territories with their waters, simplified to ~10 m and looked up natively by
+`countrymap.rs`; the band file fetched once from BeamNG.Earth-data, the project's own data host, by `regionaldata`
+and kept on disk). A point is in Germany where `countrybounds.bundled().codes_at` says "DE".
+- `germany.BOX` (5.81-15.10 E, 47.22-55.11 N; A2) is a quick reject: outside it nothing is looked up or fetched. The
+  setting is on by default the world over, and a player in Baltimore downloads no borders.
+- No border data (not downloaded yet, offline, a failed fetch or checksum), or no single territory at the point, is
+  not Germany: today's output, never an error.
+- The cache keys of German output gain the border data's signature (`germany.signature()`, marked `:absent` where
+  there is none) only with the setting on and the tile's reach meeting `germany.BOX`, so a tile built without the
+  data is built again once it is there. (The road tiles' keys also carry the setting's own bool, False when off.)
+- A lookup that raises marks the builds running then incomplete (`revisit.fault`: none of them is kept), drops
+  countrybounds' cached index and is not tried again for 60 s, doubled with each failure in a row up to 30 min.
+- A box's read gate (whether a road tile or the road graph reads the map's stop and give-way points, crossings and
+  sign nodes, and a speed-sign tile builds zone signs: `designs.reads_here`) asks the box's corners and centre, then
+  a 25 m grid over it. A strip of Germany narrower than about 35 m inside the box can be missed (`designs.GRID_M`).
+
 **How far it reaches (decided):**
 - The new lookup decides "this is Germany" for every Germany-specific output of this project:
   - the junction signs and markings, each by the junction's own point;
@@ -226,13 +244,29 @@ that tool goes live the week after the maintainer merges it, with no change to t
   change their output outside Germany.
 - `"rules"`: `{"priority_road": {"designated": [way ids], "end": [...], "yes_unposted": [...]}, "zone:maxspeed":
   {"DE:30": [...], "DE:20": [...], "DE:10": [...]}}`, a way in every shard its nodes fall in, as with `"ways"`;
-  left out where a shard has none. Worldwide, no country filter (`priority_road` is mapped elsewhere too; part B
-  reads it in Germany only). The server keeps it as sorted id arrays (`railtags.Rules`), never a dict per way.
+  left out where a shard has none. Each id list is sorted and delta-coded (the first id, then each minus the one
+  before: 100, 105, 230 is `[100, 5, 125]`). The server decodes it with a cumulative sum and keeps sorted id arrays
+  (`railtags.Rules`), never a dict per way.
 - `"nodes"`: `[[id, lon, lat, {"traffic_sign", "direction"?, "traffic_sign:direction"?}]]`, the sign nodes above.
+- **Only around Germany** (the user's decision, 2026-11-06, on the measured growth: Sweden's ~41k `priority_road`
+  ways, none of them used, grew its shards 29.9 %). `GERMANY_BOX = (5.81, 47.22, 15.10, 55.11)` (lon_min, lat_min,
+  lon_max, lat_max) is the server's `germany.BOX`: every point the border data calls Germany, its territorial waters
+  included (5.870 .. 15.035 E, 47.275 .. 55.095 N), lies inside it with 0.015 degrees or more to spare. It is a
+  constant in the tool because the Action curls the tool alone (`test_lane_rules` keeps the two equal). A rule way is
+  written when at least one of its first / middle / last nodes lies in the box (a way without any node place is
+  dropped, as in `"ways"`); a sign node when it lies in the box. Both filters run in `build_lane_tags.py`;
+  `build_rail_tags.py`'s rail path is unchanged. A shard outside the box holds what the tool wrote before the road
+  rules; only a shard touched by a rule way that also reaches inside the box differs (a way across the box's edge,
+  with a node inside, can put a rules-only shard in the tile next door, which a reader of `"ways"` reads like no
+  shard).
 
 **Budget:** `railtags.Ways` already notes 57 MB per dense shard and 1–2 GB across a Deck's processes. The added
 columns are measured on a dense German shard (the Munich z7 tile) and on a dense non-German one. The PR reports
-the growth, and it has to stay small; this is why the values are normalised.
+the growth, and it has to stay small; this is why the values are normalised. Measured with the box and the delta
+coding (Geofabrik extracts, against `dev`'s tool): Oberbayern, 19,176 rule ways and 1,030 sign nodes (all inside
+the box, as before it); the Munich shard 68/44 grows from 308,333 to 353,102 B gzipped (+14.5 %; +22.5 % without
+the delta coding), all four Oberbayern shards +15.6 %. Sweden: every one of the 37 shards decodes identical to
+`dev`'s, the total stays 430,799 B (+0 %; +29.9 % without the box), and no rule or sign node is written.
 
 **Testing before it's live:** build the shards locally from a Geofabrik extract (Oberbayern, or all of Bavaria)
 with the same tool, serve them locally, and point `BNE_DATA_PAGES` at them.
