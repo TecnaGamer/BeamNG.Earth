@@ -2,7 +2,8 @@
 message, Server.dej_on, or BNE_DEJUNCTIONS=on / off to force it whatever the page says) and the glue to the Rust
 kernel (native/earthfast dejunction.rs: de_stretch, de_junction): context() reads a tile's roads once (route ref
 ranks, mapped priority roads and 30 zones, the Vorfahrtstraße stretches), controls() gives each arm of one junction
-its sign (a code of the kernel, EXIT, or a furniture group for roundabouts and signals) and the 1002 plate."""
+its sign (a code of the kernel, EXIT, or a furniture group for roundabouts and signals) and the 1002 plate; and the
+signs' catalogue, designsigns.py's (re-exported here): GROUPS, their sizes (size_suffix) and shapes, HEIGHTS."""
 import os
 import re
 from collections import namedtuple
@@ -12,6 +13,9 @@ import numpy as np
 import fast
 import furniture
 import germany
+from designsigns import (  # noqa: F401 (the signs' catalogue, re-exported: designs.GROUPS, .PLATES ...)
+    ASSEMBLIES, BOXES, DEPTH_M, FACES, GAP_M, GROUPS, HEIGHTS, LOW_M, PARTS, PLATED, PLATES, POST_R_M, SHAPES, SINK_M,
+    SIZE, SIZES, WIDTHS, edge, extent, panels, rounded, size_suffix)
 
 ENV = os.environ.get("BNE_DEJUNCTIONS", "")
 
@@ -31,9 +35,6 @@ CLS = {"living_street": 0, "residential": 1, "unclassified": 2, "tertiary": 3, "
        "trunk": 6, "motorway": 7}                       # the kernel's class codes (anything else is no street)
 PRIO = {"designated": 1, "end": 2, "yes_unposted": 3}   # osm_priority_road
 ZONES = ("DE:30", "DE:20", "DE:10")                     # osm_zone_maxspeed: the Tempo 30 zone family
-# the kernel's 1002 pictures in its order (PATTERNS): the other arms' slots, then the priority pair's; D the approach
-# (down on the plate), L left, A ahead, R right
-PLATES = ("LR:DL", "LR:DR", "LA:DL", "LA:LA", "RA:DR", "RA:RA", "LAR:DL", "LAR:DR", "LAR:LA", "LAR:AR")
 Z205, Z206, Z306, Z301, RVL = 1, 2, 3, 4, 5             # the kernel's what codes (0: no sign)
 EXIT = 6                # glue only: an arm that is no street of the junction (a driveway, a service road, a living
                         # street leaving its zone): no sign, and the AI gives way there (StVO § 10: whoever comes from
@@ -169,3 +170,4 @@ def controls(arms, k, link_ok=None, ring=None, signals=None, country=None, prior
     for j, i in enumerate(idx):
         out[i] = (arms[i], int(what[j]), int(plate[j]))
     return out
+

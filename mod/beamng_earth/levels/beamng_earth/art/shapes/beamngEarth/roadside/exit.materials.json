@@ -311,5 +311,22 @@
       {}
     ],
     "castShadows": false
+  },
+  "bne_de_signs": {
+    "name": "bne_de_signs",
+    "mapTo": "bne_de_signs",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_signs.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
   }
 }

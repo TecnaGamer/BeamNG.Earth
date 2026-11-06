@@ -14,6 +14,7 @@ import math
 
 import numpy as np
 
+import designsigns
 import poleprofiles
 
 # class: (spacing m along one side, both sides staggered: a lamp every half that along the road). Measured (the user,
@@ -633,6 +634,8 @@ BENCH_YAW = 90.0            # the bench model's front is its local +y (the yaw p
 # outwards to 1 mm. Lamps/poles split at the first overhead member, not at an invented vehicle-height cut:
 # the complete collider is covered while their legal high arms can overhang a carriageway.
 # STOP/give-way/polelamp have no Colmesh: use all transformed visual bounds (matching the native ObjectBox).
+# Germany's junction signs (the mod's own meshes): designsigns.BOXES, one each, its widest panel from the face's
+# front to the post's back, the post's foot to its top.
 COLLISION_BOXES = {
     G_LAMP: (9.0, ((-0.203, -0.200, -0.420, 0.144, 0.201, 7.124),
                    (-0.203, -0.200, 7.124, 1.775, 0.201, 8.271))),
@@ -651,6 +654,7 @@ COLLISION_BOXES = {
     "hvpole": (9.96, ((-0.162, -0.162, -0.083, 0.162, 0.162, 5.803),
                       (-0.731, -0.189, 5.803, 0.769, 0.162, 9.948))),
 }
+COLLISION_BOXES.update(designsigns.BOXES)
 ROAD_PROP_GAP_M = 0.15
 
 
