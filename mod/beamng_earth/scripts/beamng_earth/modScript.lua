@@ -15,3 +15,5 @@ setExtensionUnloadMode('beamngEarth_report', 'manual')
 setExtensionUnloadMode('beamngEarth_serverlist', 'manual')
 -- The 3D map mode (map3d.lua: the orbit camera core/cameraModes/earthGlobe.lua, its fly-up / fly-down paths).
 setExtensionUnloadMode('beamngEarth_map3d', 'manual')
+-- The modding API for other mods (api.lua: beamngEarth_api; docs/ADDONS.md).
+setExtensionUnloadMode('beamngEarth_api', 'manual')
