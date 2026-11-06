@@ -177,6 +177,16 @@ These give the biggest visual change for the least code.
 | 1.5 | Grass: drier GroundCover mix for AU (more West Coast USA dry grass, less lawn) | `mod/.../groundcover.lua:57`, `surface.lawns()` | Ideally seasonal: green summer, brown winter | S |
 | 1.6 | Gas stations / plazas: stop AU falling to the US West Coast kit | `gasstations.py:849`, `plazas.py:76` | Pick the closest stock kit; real AU kits come in Phase 2 | S |
 
+**From the in-game review and the reference photos (2026-11-07), still open:**
+- **1.7 Nature strips (high impact):** Brisbane suburban streets have a grass verge between the kerb and the footpath,
+  and often no footpath at all, just grass to the fence. Today we get concrete footpath right against the kerb
+  (`roads.SIDEWALK`). Make it AU-aware: a grass verge ~2–4 m, the footpath set back or absent on minor residential
+  streets, and roll-top (mountable) kerbs. See `fork/reference/contact_streets.jpg`.
+- **Grass on asphalt (Bruce Hwy):** probably upstream (grass clump spread is larger than the 1.5 m verge). Confirm in
+  game with the stock-mix console command, then cap `clumpRadius` in `groundcover.lua` `fieldsFor`.
+- **Roof variety:** sheds, barns and OSM-tagged roof materials in QLD still use the stock zinc/slate.
+- **Brisbane yards:** dark bare dirt with 60% lawn. Check whether this is too low.
+
 ### Phase 2 — New assets + data (moderate)
 
 | # | Task | Where | Notes | Effort |
