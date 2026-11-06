@@ -362,6 +362,246 @@ class RegionStyleTest(unittest.TestCase):
             self.assertIsNone(h.pitch)
 
 
+class HighSetTest(unittest.TestCase):       # fork
+    """High-set and low-set Queensland houses: stumps under timber houses only, a masonry base under brick and
+    rendered ones, the door and stair at the raised floor, every other region as before."""
+    LAT, LON = -27.47, 153.02
+
+    def plan(self, i, w=9.0, l=12.0, **attrs):
+        return bld.plan(rect(0, 0, w, l), {"class": "house", "seed_id": i, **attrs}, lat=self.LAT, lon=self.LON)
+
+    def house(self, kind, pred=lambda s: True, n=800):
+        for i in range(n):
+            spec = self.plan(i)
+            if spec.hs and spec.hs[0] == kind and pred(spec):
+                return spec
+        self.fail(f"no {kind} house in {n}")
+
+    @staticmethod
+    def slope(spec, drop):
+        """The block rises to the north (+y) by drop; the door on the lowest wall of the drawn footprint."""
+        spec.gring = np.array([0.0, 0.0, drop, drop])
+        dr = bld.drawn_ring(spec)
+        mids = [(dr[k][1] + dr[(k + 1) % len(dr)][1]) / 2 for k in range(len(dr))]
+        e = int(np.argmin(mids))
+        spec.door = (e, float(np.hypot(*(dr[(e + 1) % len(dr)] - dr[e]))) * 0.5)
+        return 0.0, float(drop)
+
+    @staticmethod
+    def under(spec, gmin, gmax, stair=False):
+        """(the HighSet, P, T, tri materials, each tri's colour) of the under-floor geometry (the stair only if asked)."""
+        hs = bld.highset(spec, gmin, gmax)
+        door = spec.door
+        if not stair:
+            spec.door = None
+        m = bld.Mesh()
+        bld._hs_draw(m, spec, hs, bld.drawn_ring(spec), bld._Looks(spec.seed))
+        spec.door = door
+        P, UV, T, M, C = m.arrays()
+        return hs, P, T, M, C[T[:, 0]]
+
+    def test_plan_marks_detached_queensland_houses_by_their_wall(self):
+        kinds = set()
+        for i in range(600):
+            s = self.plan(i)
+            if not s.hs:
+                self.assertTrue(s.roof == "flat" or s.floors > 2, "only a pitched one or two storey house is left out")
+                continue
+            self.assertLessEqual(s.floors, 2)
+            self.assertNotEqual(s.roof, "flat")
+            k, look, uv = s.hs
+            if k == bld.HS_TIMBER:      # weatherboard / fibro look: SIDING walls, any paint
+                self.assertTrue(s.wall.startswith(bld.SIDING))
+            elif k == bld.HS_RENDER:
+                self.assertTrue(s.wall.startswith(bld.STUCCO))
+                self.assertEqual((look, uv), (s.wall, bld.SIDING_UV_M), "its base is its own render")
+            else:
+                self.assertIs(s.band, bld.BAND_BRICK)
+                self.assertTrue(look.startswith(bld.BRICK_WALL) and look in bld.LOOKS)
+                self.assertEqual(bld.LOOKS[look][1], bld.LOOKS[s.facade][1], "brick of the very tint of the wall")
+            kinds.add(k)
+        self.assertEqual(kinds, {bld.HS_TIMBER, bld.HS_RENDER, bld.HS_BRICK})
+        # a barn, three storeys and every other region: none
+        self.assertIsNone(bld.plan(rect(0, 0, 9, 12), {"class": "barn"}, lat=self.LAT, lon=self.LON).hs)
+        self.assertIsNone(self.plan(1, num_floors=3).hs)
+        for lat, lon in ((39.29, -76.61), (-33.87, 151.21), (-37.81, 144.96), (-29.5, 153.9), (46.59, 7.91), (-9.44, 147.18)):
+            for i in range(60):
+                s = bld.plan(rect(0, 0, 9, 12), {"class": "house", "seed_id": i}, lat=lat, lon=lon)
+                self.assertIsNone(s.hs)
+
+    def test_timber_house_on_a_slope_is_high_set_on_stumps_or_battens(self):
+        bi = bld.MATERIALS.index(bld.BRICK_WALL)
+        seen = set()
+        for battens in (False, True):
+            spec = self.house(bld.HS_TIMBER, pred=lambda s: bld.highset(s, 0.0, 2.0).battens == battens)
+            gmin, gmax = self.slope(spec, 2.0)
+            hs, P, T, M, C = self.under(spec, gmin, gmax)
+            self.assertGreaterEqual(hs.floor, gmin + 2.2, "at least 2.2 m over the lowest ground")
+            self.assertLessEqual(hs.floor, gmin + 3.2, "and no more than 3.2 m on a 2 m fall")
+            self.assertGreaterEqual(hs.floor, gmax + bld.HS_UPHILL_MIN_M, "clear of the uphill ground too")
+            self.assertNotIn(bi, M, "no brick under a timber house")
+            zb = hs.floor - bld.HS_BEARER_M
+            self.assertEqual(len(P) % 4, 0)
+            sides = P[4:]           # (the first four vertices: the floor's dark underside)
+            self.assertAlmostEqual(float(sides[:, 2].max()), zb, places=6, msg="up to the bearers")
+            self.assertLess(float(sides[:, 2].min()), gmin, "down into the ground")
+            if battens:             # a screen on each wall
+                self.assertEqual(len(P), 4 + 4 * 4)
+            else:                   # square stumps: 16 vertices each, at most HS_STUMP_MAX, all round the footprint
+                posts = (len(P) - 4) // 16
+                self.assertEqual(len(P), 4 + 16 * posts)
+                self.assertTrue(4 <= posts <= bld.HS_STUMP_MAX, posts)
+                span = sides[:, :2].max(0) - sides[:, :2].min(0)
+                self.assertTrue(span[0] > 8.5 and span[1] > 11.5, "round the whole footprint")
+            seen.add(battens)
+            full = bld.build([(spec, gmin, gmax)])          # the whole house: no brick, its roof over the raised floor
+            self.assertNotIn(bi, full[3])
+            self.assertGreaterEqual(float(full[0][:, 2].max()), hs.floor + spec.height)
+        self.assertEqual(seen, {False, True})
+
+    def test_timber_stumps_are_square_and_thin(self):
+        spec = self.house(bld.HS_TIMBER, pred=lambda s: not bld.highset(s, 0.0, 2.0).battens)
+        hs, P, T, M, C = self.under(spec, *self.slope(spec, 2.0))
+        for q in P[4:].reshape(-1, 16, 3):          # one stump: four sides round a 0.17 m square
+            self.assertAlmostEqual(float(np.linalg.norm(q[1, :2] - q[0, :2])), bld.HS_POST_M, places=6)
+            self.assertLess(float(np.ptp(q[:, :2], axis=0).max()), bld.HS_POST_M + 1e-6)
+
+    def test_brick_and_render_houses_get_a_base_never_stumps(self):
+        bi, mi = bld.MATERIALS.index(bld.BRICK_WALL), bld.MATERIALS.index(bld.METALWALL)
+        for kind in (bld.HS_BRICK, bld.HS_RENDER):
+            spec = self.house(kind)
+            gmin, gmax = self.slope(spec, 2.0)
+            hs, P, T, M, C = self.under(spec, gmin, gmax)
+            lk = bld._Looks(spec.seed)
+            self.assertGreaterEqual(hs.floor, gmin + 2.4)
+            colours = {tuple(int(v) for v in c) for c in C}
+            for name in ("qhs_stump_conc", "qhs_stump_wood", bld.HS_UNDER, bld.HS_BATTEN_DARK):
+                self.assertNotIn(lk[name][1], colours, f"no {name}: no stumps, no timber floor underside")
+            self.assertIn(mi, M, "a roller door in a base this tall")
+            if kind == bld.HS_BRICK:
+                tris = np.where(M == bi)[0]
+                self.assertEqual(len(tris), 8, "a brick wall on each side")
+                self.assertEqual({tuple(int(v) for v in C[t]) for t in tris}, {lk[spec.hs[1]][1]}, "the house's brick tint")
+                wall = P[T[tris]]
+                self.assertAlmostEqual(float(wall[:, :, 2].max()), hs.floor, places=6)
+                self.assertLess(float(wall[:, :, 2].min()), gmin)
+            else:
+                self.assertNotIn(bi, M, "a render house's lower level is its own render (its wall runs down)")
+            full = bld.build([(spec, gmin, gmax)])
+            self.assertGreater(float(full[0][:, 2].max()), hs.floor + spec.height)
+        # a brick house on a gentle fall: its base up to the floor at the highest ground; render keeps its wall
+        spec = self.house(bld.HS_BRICK)
+        self.assertEqual(bld.highset(spec, 0.0, 0.8).floor, 0.8)
+        self.assertIsNone(bld.highset(spec, 0.0, 0.3))
+        self.assertIsNone(bld.highset(self.house(bld.HS_RENDER), 0.0, 0.8))
+
+    def test_flat_ground_timber_houses_a_share_low_set(self):
+        timber = low = 0
+        for i in range(500):
+            spec = self.plan(i)
+            if not spec.hs:
+                continue
+            f = bld._hs_floor(spec, 0.0, 0.0)
+            if spec.hs[0] != bld.HS_TIMBER:
+                self.assertIsNone(f, "brick and render stand on the ground on flat ground")
+                continue
+            timber += 1
+            if f is not None:
+                low += 1
+                self.assertTrue(0.6 <= f <= 1.0, "low-set on 0.6 to 1.0 m stumps")
+        self.assertAlmostEqual(low / timber, bld.HS_LOWSET_SHARE, delta=0.08)
+        # a fall beyond HS_MAX_DROP_M (a cliff, a ground model's error) is left as it was
+        self.assertIsNone(bld.highset(self.house(bld.HS_TIMBER), 0.0, bld.HS_MAX_DROP_M + 0.5))
+
+    def test_door_and_stair_at_the_raised_floor(self):
+        road = (np.array([(-50.0, -6.0), (50.0, -6.0)]), 4.0)        # south of the house, the low side
+        for kind in (bld.HS_TIMBER, bld.HS_BRICK, bld.HS_RENDER):
+            for porch in (False, True):
+                spec = self.house(kind, pred=lambda s: bool(s.porch) == porch)
+                spec.gring = np.array([0.0, 0.0, 2.0, 2.0])
+                rows = bld.doors([(spec, 0.0, 2.0)], [road], 0.0, 0.0)
+                hs = bld.highset(spec, 0.0, 2.0)
+                top = hs.floor + (bld.PORCH_DECK_M if porch else 0.0)
+                self.assertEqual(rows[0][0], "door")
+                self.assertAlmostEqual(rows[0][3], round(top, 2), msg="the door prop on the raised floor, not the ground")
+                m = bld.Mesh()
+                bld._hs_stair(m, spec, hs, bld.drawn_ring(spec), bld._Looks(spec.seed))
+                P = m.arrays()[0]
+                self.assertAlmostEqual(float(P[:, 2].max()), top, places=6, msg="down from the door's level")
+                self.assertLess(float(P[:, 2].min()), 0.0, "to the ground in front of the low side")
+                self.assertLess(m.n, 8 * bld.HS_MAX_STEPS + 4 + 60, "a modest number of vertices")
+                if porch:           # (the deck's own stumps / screen under it)
+                    pm = bld.Mesh()
+                    bld._porch(pm, spec, hs.floor, bld._Looks(spec.seed), hs)
+                    plain = bld.Mesh()
+                    bld._porch(plain, spec, hs.floor, bld._Looks(spec.seed))
+                    self.assertGreater(pm.n, plain.n, "the verandah deck is not left in the air")
+
+    def test_collision_and_boxes_follow_the_raised_floor(self):
+        spec = self.house(bld.HS_TIMBER)
+        gmin, gmax = self.slope(spec, 2.0)
+        hf = bld._hs_floor(spec, gmin, gmax)
+        col = bld.collision_mesh([(spec, gmin, gmax)])
+        self.assertAlmostEqual(float(col[0][:, 2].max()), hf + spec.height, places=6, msg="a raised box")
+        self.assertAlmostEqual(float(col[0][:, 2].min()), gmin - bld.FOUNDATION_M, places=6, msg="solid from the ground up")
+        box = bld.collider_boxes([(spec, gmin, gmax)], 0.0, 0.0)[0]
+        self.assertAlmostEqual(box[5], round(hf + spec.height + 6.0, 2))
+        flat = self.house(bld.HS_TIMBER, pred=lambda s: bld._hs_floor(s, 0.0, 0.0) is None)    # (not low-set)
+        self.assertAlmostEqual(bld.collider_boxes([(flat, 0.0, 0.0)], 0.0, 0.0)[0][5], round(flat.height + 6.0, 2))
+
+    def test_far_mesh_keeps_the_skirt_with_the_roof_raised(self):
+        spec = self.house(bld.HS_TIMBER)
+        gmin, gmax = self.slope(spec, 2.0)
+        hf = bld._hs_floor(spec, gmin, gmax)
+        up = bld.build([(spec, gmin, gmax)], lite=True)
+        hs, spec.hs = spec.hs, None
+        down = bld.build([(spec, gmin, gmax)], lite=True)
+        spec.hs = hs
+        self.assertAlmostEqual(float(up[0][:, 2].max() - down[0][:, 2].max()), hf - gmax, places=6)
+        self.assertAlmostEqual(float(up[0][:, 2].min()), gmin - bld.SKIRT_LITE_M, places=6, msg="the solid skirt")
+
+    def test_deterministic_and_vertex_budget(self):
+        worst = 0
+        for i in range(200):
+            spec = bld.plan(rect(0, 0, 10, 13), {"class": "house", "seed_id": i}, lat=self.LAT, lon=self.LON)
+            if not spec.hs:
+                continue
+            gmin, gmax = self.slope(spec, 2.5)
+            a, b = bld.build([(spec, gmin, gmax)]), bld.build([(spec, gmin, gmax)])
+            self.assertTrue(all(np.array_equal(a[k], b[k]) for k in (0, 1, 2, 3, 5)))
+            hs, P, T, M, C = self.under(spec, gmin, gmax, stair=True)
+            worst = max(worst, len(P))
+            self.assertLess(len(P), 480, "stumps, stair and landing together")
+        self.assertGreater(worst, 100)
+
+    def test_other_regions_unchanged_on_a_slope(self):
+        """build(), collision and boxes outside Queensland on sloping ground, with a door (Spec.hs stays None): byte-for-byte
+        what they were before high-set houses. (digest taken on the code before the change.)"""
+        import hashlib
+        h = hashlib.sha256()
+        rng = np.random.default_rng(31)
+        places = ((39.29, -76.61), (-33.87, 151.21), (-36.85, 174.76), (-29.5, 153.9), (-26.2, 28.04), (-9.44, 147.18),
+                  (46.59, 7.91), (-31.95, 115.86))
+        road = (np.array([(-900.0, -900.0), (900.0, -900.0)]), 4.0)
+        for lat, lon in places:
+            for _ in range(12):
+                w, l = rng.uniform(7, 12), rng.uniform(9, 16)
+                ring = np.array([[0, 0], [w, 0], [w, l], [0, l]], float) + rng.uniform(-900, 900, 2)
+                for attrs in ({"class": "house"}, {"class": "house", "facade_material": "brick"},
+                              {"class": "house", "facade_material": "wood"}):
+                    spec = bld.plan(ring, attrs, lat=lat, lon=lon)
+                    self.assertIsNone(spec.hs)
+                    spec.gring = np.array([0.0, 0.0, 2.0, 2.0])
+                    rows = bld.doors([(spec, 0.0, 2.0)], [road], 0.0, 0.0)
+                    h.update(repr(rows).encode())
+                    m = bld.build([(spec, 0.0, 2.0)])
+                    for k in (0, 1, 2, 3, 5):
+                        h.update(np.ascontiguousarray(m[k]).tobytes())
+                    h.update(np.ascontiguousarray(bld.collision_mesh([(spec, 0.0, 2.0)])[0]).tobytes())
+                    h.update(repr(bld.collider_boxes([(spec, 0.0, 2.0)], 0.0, 0.0)).encode())
+        self.assertEqual(h.hexdigest(), "ea4fd10c2b12c2d30b91b234269ac21d59d2b02f76266fb5a5aeb02d8a50c21a")
+
+
 class PlanTest(unittest.TestCase):
     def test_hut_above_the_tree_line_is_stone(self):
         # the user, 2026-10-14: Mount Whitney's stone summit shelter was a plain grey box

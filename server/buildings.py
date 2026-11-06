@@ -184,6 +184,19 @@ for _k, _c in enumerate(QLD_BRICK):
 QLD_GABLE_BRICK = 0.6       # of face-brick houses: brick gable ends
 QLD_GABLE_SIDING = (0, 1, 2)    # (indices into QLD_SIDING)
 GABLE_BRICK_UV_M = 2.0      # m per repeat of the stock red brick texture (a gable end's brick courses)
+# fork: high-set and low-set Queensland houses (highset(), _hs_*): timber houses (weatherboard walls, fibro look too) stand
+# on stumps, face-brick and rendered ones get a masonry base, never stumps. The looks are on existing materials.
+HS_TIMBER, HS_BRICK, HS_RENDER = "timber", "brick", "render"
+HS_UNDER = "qhs_under"
+HS_BATTEN_DARK = "qhs_batten_dark"
+LOOKS["qhs_stump_conc"] = (CONCRETE, (0.60, 0.60, 0.58))        # concrete stumps
+LOOKS["qhs_stump_wood"] = (SIDING, (0.55, 0.46, 0.38))          # weathered hardwood stumps, stair and landing
+LOOKS[HS_UNDER] = (CONCRETE, (0.12, 0.12, 0.12))                # the shadowed underside of the floor
+LOOKS[HS_BATTEN_DARK] = (SIDING, (0.40, 0.34, 0.29))            # stained battens (the other battens match the wall)
+LOOKS["qhs_stair_conc"] = (CONCRETE, (0.78, 0.77, 0.75))        # a masonry house's entry steps
+HS_ROLLER = ((0.30, 0.30, 0.31), (0.55, 0.56, 0.57), (0.88, 0.88, 0.84), (0.70, 0.70, 0.68))   # roller doors
+for _k, _c in enumerate(HS_ROLLER):
+    LOOKS[f"qhs_roller|{_k}"] = (METALWALL, _c)
 
 
 def _weighted(names, weights):
@@ -388,7 +401,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "gable")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "gable", "hs")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -909,10 +922,20 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             else:
                 gable = (f"{SIDING}|q{QLD_GABLE_SIDING[int(_hash01(seed, 'gable tint') * len(QLD_GABLE_SIDING))]}",
                          SIDING_UV_M)
+    hs = None
+    if style.name == "queensland" and house and nf <= 2 and roof != "flat" and not (shed or barn or church or garage):
+        # fork: a detached house on stumps (timber: SIDING walls) or on a masonry base (brick, render): see highset()
+        wk = wall.split("|")[0] if wall else None
+        if wk == SIDING:
+            hs = (HS_TIMBER, None, 0.0)
+        elif wk == STUCCO:
+            hs = (HS_RENDER, wall, SIDING_UV_M)
+        elif band is BAND_BRICK and facade.startswith("bne_bld_fac_qbrick"):
+            hs = (HS_BRICK, f"{BRICK_WALL}|q{int(facade[len('bne_bld_fac_qbrick'):])}", GABLE_BRICK_UV_M)
     return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch, gable=gable)
+                deck=garage and roof == "flat", pitch=style.pitch, gable=gable, hs=hs)
 
 
 class Mesh:
@@ -1142,7 +1165,292 @@ def drawn_ring(spec):
     return ring
 
 
-def _porch(m, spec, base, mat_idx):
+# fork: High-set and low-set houses (Queensland: Spec.hs, set by plan() for detached houses of up to two storeys with a
+# pitched roof). Timber houses (SIDING walls: weatherboard, the fibro look) stand on stumps: on a sloping block (HS_DROP_M
+# of fall across the footprint) the floor at HS_FLOOR_M above the lowest ground, otherwise a share of them (older
+# houses) low-set on a short stump; the under-floor is open stumps or timber battens, with a front stair. Face-brick and
+# rendered houses never get stumps: on a slope their under-floor is a masonry lower level (brick of the house's tint,
+# or its own render), with a roller door when it is tall enough and a few small windows. Walls are drawn from the
+# floor up (the Rust kernel's quads, moved up: z_eave and z0), the rest is extra geometry (a stump is 16 vertices,
+# at most HS_STUMP_MAX of them, a stair ~100).
+HS_DROP_M = 1.2             # m of fall across the footprint: a house is high-set
+HS_BASE_DROP_M = 0.5        # a brick house from this fall has a brick base (its floor at the highest ground)
+HS_MAX_DROP_M = 5.0         # a steeper footprint is left as it was (a ground model's error, a cliff)
+HS_FLOOR_M = 2.3            # timber: the floor this far over the lowest ground, plus up to HS_FLOOR_SPAN_M (hashed)
+HS_FLOOR_SPAN_M = 0.7
+HS_MASONRY_FLOOR_M = (2.4, 0.4)     # brick / render: the lower level's height over the lowest ground (+ hashed part)
+HS_UPHILL_MIN_M = 0.45      # m the floor stands over the highest ground at least (a timber house's uphill stumps)
+HS_LOWSET_SHARE = 0.25      # of timber houses on a gentle slope or flat ground: low-set on stumps
+HS_LOWSET_M = (0.6, 0.4)    # their floor over the highest ground (+ hashed part)
+HS_BEARER_M = 0.2           # m the walls reach under the floor (the bearers and the floor edge)
+HS_POST_M = 0.17            # m: a stump's square side
+HS_STUMP_SPACING = 2.4      # m between stumps along the outline (wider when HS_STUMP_MAX would be passed)
+HS_STUMP_MAX = 12           # stumps of one house (16 vertices each)
+HS_BATTEN_SHARE = 0.6       # of timber houses that have a battened under-floor
+HS_BATTEN_UV_M = 1.2        # m per repeat of the weatherboard texture turned upright: the battens' spacing
+HS_BURY_M = 0.8             # m the stumps, battens and base reach under the ground at their foot
+HS_STAIR_W = 1.1
+HS_TREAD = 0.27
+HS_RISE = 0.19
+HS_MAX_STEPS = 20
+HS_LANDING_M = 1.0          # a stair's landing at the door when there is no verandah
+HS_LANDING_W = 1.5
+HS_GARAGE = (2.5, 4.8, 2.1)         # roller door: single width, double width, height
+HS_GARAGE_MIN_BASE_M = 2.2          # the base this tall (over the ground at the door): a roller door in it
+HS_BASE_WIN = (0.9, 0.55)           # m: a small window in the base
+
+
+def _hs_floor(spec, gmin, gmax):
+    """The floor (z) of a house standing on stumps or a base (Spec.hs), None when it stands on the ground as before
+    (the footprint's highest ground, gmax)."""
+    hs = getattr(spec, "hs", None)
+    if not hs or (spec.min_h or 0.0) > 0.5 or getattr(spec, "portal", False):
+        return None
+    drop = gmax - gmin
+    if drop > HS_MAX_DROP_M:
+        return None
+    seed = spec.seed
+    if hs[0] == HS_TIMBER:
+        if drop >= HS_DROP_M:
+            return max(gmin + HS_FLOOR_M + HS_FLOOR_SPAN_M * _hash01(seed, "hsfloor"), gmax + HS_UPHILL_MIN_M)
+        if _hash01(seed, "lowset") < HS_LOWSET_SHARE:
+            return gmax + HS_LOWSET_M[0] + HS_LOWSET_M[1] * _hash01(seed, "lowsetm")
+        return None
+    if drop >= HS_DROP_M:
+        return max(gmin + HS_MASONRY_FLOOR_M[0] + HS_MASONRY_FLOOR_M[1] * _hash01(seed, "hsfloor"), gmax + 0.3)
+    if hs[0] == HS_BRICK and drop >= HS_BASE_DROP_M:
+        return gmax
+    return None
+
+
+class _HighSet:
+    """A house's raised floor and the ground under it: kind (HS_*), floor z, the footprint's ground plane (fitted to
+    its corners' ground; flat at the lowest when that is not known), the looks of its battens / stumps / base."""
+    __slots__ = ("kind", "floor", "gmin", "gmax", "c0", "coef", "battens", "skirt", "skirt_uv", "post")
+
+    def ground(self, x, y):
+        z = self.coef[0] + self.coef[1] * (x - self.c0[0]) + self.coef[2] * (y - self.c0[1])
+        return float(min(max(z, self.gmin - 1.5), self.gmax + 1.0))
+
+
+def highset(spec, gmin, gmax):
+    """The _HighSet of a house (see _hs_floor), None when it stands as before."""
+    floor = _hs_floor(spec, gmin, gmax)
+    if floor is None:
+        return None
+    hs = _HighSet()
+    hs.kind, hs.floor, hs.gmin, hs.gmax = spec.hs[0], float(floor), float(gmin), float(gmax)
+    r = np.asarray(spec.ring, np.float64)
+    g = getattr(spec, "gring", None)
+    hs.c0 = r.mean(0)
+    if g is not None and len(g) == len(r) and len(r) >= 3:
+        A = np.column_stack([np.ones(len(r)), r[:, 0] - hs.c0[0], r[:, 1] - hs.c0[1]])
+        hs.coef = np.linalg.lstsq(A, np.asarray(g, np.float64), rcond=None)[0]
+    else:
+        hs.coef = np.array([gmin, 0.0, 0.0])
+    seed = spec.seed
+    hs.battens = hs.kind == HS_TIMBER and _hash01(seed, "battens") < HS_BATTEN_SHARE
+    if hs.kind == HS_TIMBER:
+        hs.skirt = spec.wall if _hash01(seed, "battenc") < 0.55 else HS_BATTEN_DARK     # painted like the house, or stained
+        hs.skirt_uv = HS_BATTEN_UV_M
+        hs.post = "qhs_stump_conc" if _hash01(seed, "stump") < 0.5 else "qhs_stump_wood"
+    else:
+        hs.skirt, hs.skirt_uv = spec.hs[1], spec.hs[2]
+        hs.post = "qhs_stump_conc"
+    return hs
+
+
+def _hs_skirt(m, hs, p, q, z_top, mat_idx):
+    """A screen from p to q (counter-clockwise ring: the outside on the right) from the ground up to z_top: timber
+    battens (the weatherboard texture turned upright) or the base's masonry (brick of the house's tint, its render)."""
+    L = float(math.hypot(q[0] - p[0], q[1] - p[1]))
+    if L < 0.05:
+        return
+    zp = min(hs.ground(p[0], p[1]) - HS_BURY_M, z_top - 0.05)
+    zq = min(hs.ground(q[0], q[1]) - HS_BURY_M, z_top - 0.05)
+    su = hs.skirt_uv
+    if hs.kind == HS_TIMBER:
+        uv = ((zp / su, 0.0), (zq / su, L / su), (z_top / su, L / su), (z_top / su, 0.0))
+    else:
+        uv = ((0.0, zp / su), (L / su, zq / su), (L / su, z_top / su), (0.0, z_top / su))
+    m.quad((p[0], p[1], zp), (q[0], q[1], zq), (q[0], q[1], z_top), (p[0], p[1], z_top), *uv, mat_idx[hs.skirt])
+
+
+def _hs_post(m, hs, c, d, z_top, mat_idx):
+    """A square stump at c (axis d), from under the ground up to z_top: four sides (its top is under the floor)."""
+    z0 = hs.ground(c[0], c[1]) - HS_BURY_M
+    if z_top - z0 < 0.3:
+        return
+    h = HS_POST_M / 2
+    v = np.array([-d[1], d[0]])
+    k = [c + d * sx * h + v * sy * h for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    mat = mat_idx[hs.post]
+    for i in range(4):
+        a, b = k[i], k[(i + 1) % 4]
+        m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z_top), (a[0], a[1], z_top),
+               (0.0, z0), (HS_POST_M, z0), (HS_POST_M, z_top), (0.0, z_top), mat)
+
+
+def _hs_draw(m, spec, hs, ring, mat_idx):
+    """What goes under a raised house (near mesh): a timber house's shadowed floor underside and its battens or
+    stumps; a brick house's base; both: the front stair; a masonry house's roller door and small windows."""
+    n = len(ring)
+    if hs.kind == HS_TIMBER:
+        zb = hs.floor - HS_BEARER_M
+        m.poly([(p[0], p[1], zb) for p in ring[::-1]], [(p[0] / 3.0, p[1] / 3.0) for p in ring[::-1]], mat_idx[HS_UNDER])
+        if hs.battens:
+            for i in range(n):
+                _hs_skirt(m, hs, ring[i], ring[(i + 1) % n], zb, mat_idx)
+        else:
+            lens = [float(math.hypot(*(ring[(i + 1) % n] - ring[i]))) for i in range(n)]
+            s = HS_STUMP_SPACING
+            while sum(max(1, math.ceil(L / s)) for L in lens) > HS_STUMP_MAX and s < 12.0:
+                s *= 1.1
+            for i in range(n):
+                a, L = ring[i], lens[i]
+                if L < 0.05:
+                    continue
+                d = (ring[(i + 1) % n] - a) / L
+                inward = np.array([-d[1], d[0]])
+                k = max(1, math.ceil(L / s))
+                for j in range(k):
+                    _hs_post(m, hs, a + d * (L * j / k + HS_POST_M / 2) + inward * HS_POST_M / 2, d, zb, mat_idx)
+    elif hs.kind == HS_BRICK:
+        for i in range(n):
+            _hs_skirt(m, hs, ring[i], ring[(i + 1) % n], hs.floor, mat_idx)
+    if hs.kind != HS_TIMBER:
+        _hs_openings(m, spec, hs, ring, mat_idx)
+    if spec.door:
+        _hs_stair(m, spec, hs, ring, mat_idx)
+
+
+def _hs_edge(ring, i):
+    """(start, unit direction, length, outward unit normal) of edge i of the counter-clockwise ring."""
+    a, b = ring[i], ring[(i + 1) % len(ring)]
+    L = float(math.hypot(*(b - a)))
+    d = (b - a) / max(L, 1e-9)
+    return a, d, L, np.array([d[1], -d[0]])
+
+
+def _hs_openings(m, spec, hs, ring, mat_idx):
+    """The masonry base's roller door (on the front wall if the base is tall enough there, else on the base's tallest
+    wall; a third are double) and small windows on its walls where it is tall enough."""
+    n = len(ring)
+    best, door_edge = None, spec.door[0] if spec.door else -1
+    for i in range(n):
+        a, d, L, out = _hs_edge(ring, i)
+        if L < 4.5:
+            continue
+        hm = hs.floor - hs.ground(*(a + d * L / 2))
+        if hm < HS_GARAGE_MIN_BASE_M:
+            continue
+        rank = (i == door_edge, hm, L)
+        if best is None or rank > best[0]:
+            best = (rank, i)
+    garage = best[1] if best else -1
+    gw = 0.0
+    if garage >= 0:
+        a, d, L, out = _hs_edge(ring, garage)
+        gw = HS_GARAGE[1] if (L >= 9.0 and _hash01(spec.seed, "garage2") < 0.33) else HS_GARAGE[0]
+        sd = spec.door[1] if spec.door and spec.door[0] == garage else None
+        mid = L / 2 if sd is None else (sd + L) / 2 if sd < L / 2 else sd / 2      # (away from the front door)
+        mid = float(np.clip(mid, gw / 2 + 0.4, L - gw / 2 - 0.4))
+        pa, pb = a + d * (mid - gw / 2) + out * WIN_OUT_M, a + d * (mid + gw / 2) + out * WIN_OUT_M
+        zb = hs.ground(*(a + d * mid))
+        zt = min(zb + HS_GARAGE[2], hs.floor - 0.3)
+        su = 1.5
+        m.quad((pa[0], pa[1], zb), (pb[0], pb[1], zb), (pb[0], pb[1], zt), (pa[0], pa[1], zt),
+               (0.0, zb / su), (gw / su, zb / su), (gw / su, zt / su), (0.0, zt / su),
+               mat_idx[f"qhs_roller|{int(_hash01(spec.seed, 'roller') * len(HS_ROLLER))}"])
+        gmid = a + d * mid
+    white = mat_idx["bne_bld_fac_white"]
+    for i in range(n):
+        a, d, L, out = _hs_edge(ring, i)
+        if L < 3.0:
+            continue
+        for t in ((0.5,) if L < 7.0 else (0.3, 0.7)):
+            c = a + d * (L * t)
+            if i == garage and abs(float((c - gmid) @ d)) < gw / 2 + HS_BASE_WIN[0]:
+                continue
+            zs = hs.ground(*c) + 1.0
+            if hs.floor - 0.3 < zs + HS_BASE_WIN[1]:
+                continue
+            p, q = c - d * HS_BASE_WIN[0] / 2 + out * WIN_OUT_M, c + d * HS_BASE_WIN[0] / 2 + out * WIN_OUT_M
+            zt = zs + HS_BASE_WIN[1]
+            m.quad((p[0], p[1], zs), (q[0], q[1], zs), (q[0], q[1], zt), (p[0], p[1], zt),
+                   (WIN_UV[0], WIN_UV[2]), (WIN_UV[1], WIN_UV[2]), (WIN_UV[1], WIN_UV[3]), (WIN_UV[0], WIN_UV[3]), white)
+
+
+def _hs_porch_under(m, hs, c, d, out, w, D, z_top, mat_idx):
+    """Under a verandah deck (c: the middle of its back edge on the wall, w wide, D deep, its underside z_top): the
+    house's own screen on its front and sides, or a stump at each front corner."""
+    corners = [c - d * w / 2, c - d * w / 2 + out * D, c + d * w / 2 + out * D, c + d * w / 2]
+    if z_top - min(hs.ground(p[0], p[1]) for p in corners) < 0.25:
+        return
+    if hs.kind == HS_TIMBER and not hs.battens:
+        for t in (-1, 1):
+            _hs_post(m, hs, c + d * t * (w / 2 - 0.15) + out * (D - 0.15), d, z_top, mat_idx)
+        return
+    for p, q in ((corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[3])):
+        _hs_skirt(m, hs, p, q, z_top, mat_idx)
+
+
+def _hs_stair(m, spec, hs, ring, mat_idx):
+    """The front stair of a raised house, down from its door (spec.door) to the ground: a landing at the door (none
+    under a verandah: the stair starts at the deck, beside its middle post), risers and treads between two stringers."""
+    edge, sd = spec.door
+    if edge >= len(ring):
+        return
+    a, d, L, out = _hs_edge(ring, edge)
+    if L < 3.0:
+        return
+    porch = bool(spec.porch) and L >= 4.0
+    if porch:
+        w = min(L * 0.75, 7.5)
+        sd = float(np.clip(sd, w / 2, L - w / 2)) + w / 4
+    else:
+        sd = float(np.clip(sd, HS_LANDING_W / 2 + 0.3, L - HS_LANDING_W / 2 - 0.3))
+    c = a + d * sd
+    top = hs.floor + (PORCH_DECK_M if porch else 0.0)
+    s0 = PORCH_DEPTH_M if porch else HS_LANDING_M
+    timber = hs.kind == HS_TIMBER
+    mat = mat_idx["qhs_stump_wood" if timber else "qhs_stair_conc"]
+    if not porch:           # the landing at the door
+        ctr = c + out * s0 / 2
+        _box_tiled(m, ctr, d, HS_LANDING_W / 2, s0 / 2, top - 0.15 if timber else hs.ground(ctr[0], ctr[1]) - HS_BURY_M,
+                   top - 0.02, mat, 1.0)
+        if timber and top - hs.ground(*(c + out * s0)) > 0.5:
+            for t in (-1, 1):
+                _hs_post(m, hs, c + d * t * (HS_LANDING_W / 2 - 0.12) + out * (s0 - 0.12), d, top - 0.15, mat_idx)
+    g = hs.ground(*(c + out * (s0 + 2.0)))
+    k = int(np.clip(math.ceil((top - g) / HS_RISE), 1, HS_MAX_STEPS))
+    g = hs.ground(*(c + out * (s0 + (k - 1) * HS_TREAD)))
+    k = int(np.clip(math.ceil((top - g) / HS_RISE), 1, HS_MAX_STEPS))
+    if top - g < 0.12:
+        return
+    rise = (top - g) / k
+    w2 = HS_STAIR_W / 2
+
+    def P(s, z, t):
+        p = c + out * s + d * t
+        return float(p[0]), float(p[1]), float(z)
+    for i in range(1, k + 1):
+        s = s0 + (i - 1) * HS_TREAD
+        zh, zl = top - (i - 1) * rise, top - i * rise
+        m.quad(P(s, zl, -w2), P(s, zl, w2), P(s, zh, w2), P(s, zh, -w2),
+               (0.0, zl), (HS_STAIR_W, zl), (HS_STAIR_W, zh), (0.0, zh), mat)             # riser (faces out)
+        if i < k:
+            m.quad(P(s, zl, -w2), P(s + HS_TREAD, zl, -w2), P(s + HS_TREAD, zl, w2), P(s, zl, w2),
+                   (0.0, s), (HS_TREAD, s), (HS_TREAD, s + HS_STAIR_W), (0.0, s + HS_STAIR_W), mat)    # tread (faces up)
+    s1 = s0 + (k - 1) * HS_TREAD
+    zf = g + rise                                       # the last nose
+    m.quad(P(s0, top - 0.3, w2), P(s0, top, w2), P(s1, zf, w2), P(s1, g, w2),
+           (0.0, 0.0), (0.0, 0.3), (HS_TREAD * k, 0.3), (HS_TREAD * k, 0.0), mat)            # stringer, +d side
+    m.quad(P(s0, top - 0.3, -w2), P(s1, g, -w2), P(s1, zf, -w2), P(s0, top, -w2),
+           (0.0, 0.0), (HS_TREAD * k, 0.0), (HS_TREAD * k, 0.3), (0.0, 0.3), mat)            # stringer, -d side
+
+
+def _porch(m, spec, base, mat_idx, hs=None):
     """A front porch on the front door's wall (spec.door: (edge, distance along it) of spec.ring): a deck, three
     posts and a shallow roof, the house's trim white and its roof's colour."""
     edge, sd = spec.door
@@ -1164,6 +1472,8 @@ def _porch(m, spec, base, mat_idx):
         _box(m, c + d * t + out * (D - 0.15), d, 0.08, 0.08, base + PORCH_DECK_M, top, white)
     roof = mat_idx[spec.roof_mat] if spec.roof_mat else white
     _box(m, c + out * (D / 2 + 0.1), d, w / 2 + 0.15, D / 2 + 0.1, top, top + 0.18, roof)          # roof
+    if hs is not None:      # fork: a raised house's verandah deck on stumps / its screen / its base
+        _hs_porch_under(m, hs, c, d, out, w, D, base - 0.3, mat_idx)
 
 
 def door_ground(spec, edge, along, gmax):
@@ -1641,9 +1951,19 @@ def build(specs_and_ground, lite=False):
         mh = spec.min_h or 0.0
         if spec.deck and not lite and _parking_deck(m, spec, gmin, gmax, mat_idx):
             continue
+        hs = highset(spec, gmin, gmax)      # fork: a Queensland house on stumps / a masonry base: its floor raised
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
-        z_eave = base_z(spec, gmin, gmax) + mh + spec.height
+        if hs is not None:
+            # the walls (the kernel's quads) start at the floor, the under-floor is drawn by _hs_draw (the far mesh keeps
+            # the solid skirt; a render house's wall runs down to the ground as its lower level)
+            if not lite and hs.kind != HS_RENDER:
+                z0 = hs.floor - (HS_BEARER_M if hs.kind == HS_TIMBER else 0.0)
+            z_eave = hs.floor + mh + spec.height
+        else:
+            z_eave = base_z(spec, gmin, gmax) + mh + spec.height
         _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        if hs is not None and not lite:
+            _hs_draw(m, spec, hs, ring, mat_idx)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx)
@@ -1656,7 +1976,7 @@ def build(specs_and_ground, lite=False):
         if spec.stoop and not lite:
             _stoop(m, spec, ring, gmin, gmax, mat_idx)
         if spec.porch and spec.door and not lite:
-            _porch(m, spec, gmax, mat_idx)
+            _porch(m, spec, gmax if hs is None else hs.floor, mat_idx, hs)
         if spec.sign is not None and spec.roof == "flat" and not lite:
             if spec.windows is False:           # a big box: over its storefront band (_plain_wall_with_windows)
                 z_top = min(gmax + GROUND_FLOOR_SHOP_M + 1.15, z_eave)
@@ -1732,7 +2052,8 @@ def collision_mesh(specs_and_ground):
             ring = ring[::-1]
         mh = spec.min_h or 0.0
         z0 = gmin - FOUNDATION_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
-        z1 = base_z(spec, gmin, gmax) + mh + (spec.floor_h if spec.cls == "ship" else spec.height)  # (a ship: its deck)
+        hf = _hs_floor(spec, gmin, gmax)        # fork: a raised house: its walls as a solid box from the ground up
+        z1 = (base_z(spec, gmin, gmax) if hf is None else hf) + mh + (spec.floor_h if spec.cls == "ship" else spec.height)  # (a ship: its deck)
         for i in range(len(ring)):
             a, b = ring[i], ring[(i + 1) % len(ring)]
             m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), zero, zero, zero, zero, tok)
@@ -2871,9 +3192,11 @@ def collider_boxes(items, x0, y0):
         if spec.cls in BRIDGE_CLASSES or spec.cls == landmarks.LANDMARK:   # a frame: driven through between its legs
             continue
         r = spec.ring
+        hf = _hs_floor(spec, gmin, gmax)        # fork: a raised house
         out.append([round(float(r[:, 0].min() + x0), 2), round(float(r[:, 1].min() + y0), 2),
                     round(gmin - FOUNDATION_M, 2), round(float(r[:, 0].max() + x0), 2),
-                    round(float(r[:, 1].max() + y0), 2), round(gmax + spec.height + 6.0, 2)])
+                    round(float(r[:, 1].max() + y0), 2),
+                    round((gmax if hf is None else hf) + spec.height + 6.0, 2)])
     return out
 
 
@@ -3071,6 +3394,9 @@ def doors(items, lines, x0, y0, drives=None):
         p = a + d * (Le * f) + out * DOOR_OUT_M
         gd = door_ground(spec, edge, Le * f, gmax) if spec.stoop else gmax     # a stoop's door: over its own ground
         base = gd + (STOOP_H if spec.stoop else 0.0) + (PORCH_DECK_M if spec.porch else 0.0)   # (the deck / stoop)
+        hf = _hs_floor(spec, gmin, gmax)
+        if hf is not None:      # fork: a raised house: the door at its floor (its landing / verandah deck)
+            base = hf + (PORCH_DECK_M if spec.porch else 0.0)
         rows.append([G_DOOR, round(float(p[0]), 2), round(float(p[1]), 2), round(base, 2),
                      round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1), 1.0, 2.2,
                      round(_hash01(spec.seed, "dv"), 3)])
