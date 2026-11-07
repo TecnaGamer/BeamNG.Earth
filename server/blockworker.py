@@ -595,9 +595,11 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
 STACK_DUMP_S = float(os.environ.get("BNGE_STACK_DUMP_S", "") or 75.0)   # s before a slow tile's stacks go to the log
 
 
-def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False):
+def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False,
+               towns_on=False):
     """signstream.build_tile here: the highway signs of a road tile the mod has (from cody196's PR #363), in a road
-    process: its map cells are warm there. Returns (vfs path of the sign tile's JSON, number of meshes)."""
+    process: its map cells are warm there (and its town signs' towns: towns_on, the speed-limit signs then without
+    Germany's general limits). Returns (vfs path of the sign tile's JSON, number of meshes)."""
     import signstream
     g, _ = _s.anchor(aid, lat, lon)
     frame = geodesy.EnuFrame(lat, lon)
@@ -605,9 +607,15 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
     def elev(la, lo):           # the graded ground, as the road tile's
         z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    towns = None
+    if towns_on and _s.md is not None and _s.surface is not None:
+        if getattr(_s, "towns", None) is None:
+            _s.towns = townsignsmod.Towns(_s.md, _s.surface)
+        import roads as roadsmod
+        towns = _s.towns.town_state(frame, roadsmod.cells_of_tile(frame, tx, ty, TOWNS_MARGIN_M))
     return signstream.build_tile(_s.md, frame, aid, tx, ty, elev, out_dir, vfs_dir,
                                  _s.surface.urban if _s.surface is not None else None, _s.widths, left_hand, mph,
-                                 country, dirs)
+                                 country, dirs, towns)
 
 
 def _stack_watch(what):

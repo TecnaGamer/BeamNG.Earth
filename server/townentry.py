@@ -3018,6 +3018,27 @@ class Towns:
             return out
         return rows
 
+    def town_state(self, frame, keys):
+        """f(xy (n, 2) frame metres) -> (n, 2) bool [in a German town (its agglomeration: state), on a German
+        commune's land] of the communes of the map cells keys, for the speed-limit signs (speedsigns.general: Germany's
+        general limits); None while they are not at hand, or none is German (the signs then all kept)."""
+        try:
+            communes = self.communes(frame, keys)
+        except Exception as e:      # (every speed sign rather than no sign tile)
+            log.warning("town signs: speed signs' towns: %s: %s", type(e).__name__, e, exc_info=True)
+            return None
+        de = [c for c in communes or () if c.country == "DE"]
+        if not de:
+            return None
+
+        def towns(xy):
+            xy = np.asarray(xy, np.float64).reshape(-1, 2)
+            land = np.zeros(len(xy), bool)
+            for c in de:
+                land |= inside(c.parts, xy)
+            return np.c_[state(xy, de, frame) >= 0, land]
+        return towns
+
     def mapped_nodes(self, frame, keys):
         """[(x, y, name)] in frame metres of the mapped Ortstafeln (TOWN_SIGN_CODE) the lane shards have in the road
         cells keys (railtags.sign_nodes: the roads layer joined with them), each once (a node near a cell's edge is in

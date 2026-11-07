@@ -241,6 +241,7 @@ struct Cand {
     e: usize,
     u: f64,
     kind: u8,
+    before: f64,        // a CHANGE's limit before it (0: not known, or not a change)
     key: u64,
     xy: [f64; 2],
     dir: [f64; 2],
@@ -337,7 +338,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
     };
 
     // candidates
-    let mut cands: Vec<(usize, f64, u8)> = Vec::new();
+    let mut cands: Vec<(usize, f64, u8, f64)> = Vec::new();
     for e in 0..net.edges.len() {
         let ed = &net.edges[e];
         let rd = &net.roads[ed.road];
@@ -348,9 +349,11 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
         let arms = *ends.get(&ed.from).unwrap_or(&0);
         let p = pred(&net, e);
         let mut changed = false;
+        let mut before = 0.0;
         if let Some(p) = p {
             let pv = net.limit_at(p, (net.len(p) - 0.5).max(0.0));
             changed = (pv - v).abs() > 0.5;
+            before = pv;
         }
         let into = if arms <= 2 { CHANGE_IN_M } else if rd.urban { JUNCTION_IN_URBAN_M } else { JUNCTION_IN_RURAL_M };
         // the roads meeting here besides this one and its straight on continuation
@@ -369,16 +372,16 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
             if p.is_none() && rd.rank >= TERTIARY { changed = changed || major; }
         }
         if changed {
-            cands.push((e, into.min(len * 0.5), CHANGE));
+            cands.push((e, into.min(len * 0.5), CHANGE, before));
         } else if major && rd.rank >= TERTIARY {
-            cands.push((e, into.min(len * 0.5), JUNCTION));
+            cands.push((e, into.min(len * 0.5), JUNCTION, 0.0));
         }
         if ramp_in && rd.rank >= TRUNK && rd.dir != 0 {
             // MERGE_M on, along the straight on continuation
             let (mut cur, mut left, mut hops) = (e, MERGE_M, 0);
             loop {
                 let l = net.len(cur);
-                if left <= l - 1.0 { cands.push((cur, left, MERGE)); break; }
+                if left <= l - 1.0 { cands.push((cur, left, MERGE, 0.0)); break; }
                 left -= l;
                 hops += 1;
                 match succ(&net, cur) { Some(n) if hops < 12 => cur = n, _ => break }
@@ -394,7 +397,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
             let after = net.limit(ed.road, f, ed.fwd);
             if (before - after).abs() > 0.5 && after > 0.0 {
                 let u = (if ed.fwd { f - fa } else { fb - f }) * (rd.s[rd.b - rd.a - 1]) + CHANGE_IN_M;
-                if u < len - 1.0 { cands.push((e, u, CHANGE)); }
+                if u < len - 1.0 { cands.push((e, u, CHANGE, before)); }
             }
         }
         // reminders where the road crosses the lat/lon grid
@@ -422,7 +425,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
                         let s = sk + t * (sk1 - sk);
                         if s <= ed.sa || s >= ed.sb { continue; }
                         let u = if ed.fwd { s - base } else { ed.sb - s };
-                        cands.push((e, u, REPEAT));
+                        cands.push((e, u, REPEAT, 0.0));
                     }
                 }
             }
@@ -430,7 +433,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
     }
 
     // keep the first of each cluster (same value, same way), in a fixed order
-    let mut full: Vec<Cand> = cands.into_iter().filter_map(|(e, u, kind)| {
+    let mut full: Vec<Cand> = cands.into_iter().filter_map(|(e, u, kind, before)| {
         let ed = &net.edges[e];
         let rd = &net.roads[ed.road];
         let u = u.clamp(0.0, net.len(e));
@@ -445,7 +448,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
             JUNCTION => if rd.urban { GAP_JUNCTION_URBAN_M } else { GAP_JUNCTION_RURAL_M },
             _ => GAP_REPEAT_SHARE * if rd.urban { repeat[0] } else { repeat[1] },
         };
-        Some(Cand { e, u, kind, key, xy, dir: net.tangent(e, u), value, gap })
+        Some(Cand { e, u, kind, before, key, xy, dir: net.tangent(e, u), value, gap })
     }).collect();
     full.sort_by(|a, b| (a.kind, a.key).cmp(&(b.kind, b.key)));
     let cell = 250.0;
@@ -555,10 +558,42 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
         placed.push((q, t));
         if !(q[0] >= bx[0] && q[0] < bx[2] && q[1] >= bx[1] && q[1] < bx[3]) { continue; }
         out.extend_from_slice(&[q[0], q[1], t[0], t[1], c.value, size as f64, road_xy[0], road_xy[1],
-                                if rd.urban { 1.0 } else { 0.0 }]);
+                                if rd.urban { 1.0 } else { 0.0 }, c.kind as f64, c.before, rd.rank as f64]);
     }
-    let n = out.len() / 9;
-    numpy::ndarray::Array2::from_shape_vec((n, 9), out).unwrap().into_pyarray(py)
+    let n = out.len() / COLS;
+    numpy::ndarray::Array2::from_shape_vec((n, COLS), out).unwrap().into_pyarray(py)
+}
+
+const COLS: usize = 12;             // speed_sign_place's row
+// Germany's general limits (StVO § 3 Abs. 3: 50 km/h in a geschlossene Ortschaft, which its Zeichen 310 begins, and
+// 100 km/h out of town), which no sign posts (§ 39 Abs. 1: signs only where the circumstances make them imperative)
+const DE_TOWN_KMH: f64 = 50.0;
+const DE_RURAL_KMH: f64 = 100.0;
+
+/// Which speed-limit signs (rows: speed_sign_place's) post a limit other than Germany's general one at their place:
+/// town (k, 3) [the sign stands in a town, a town lies within reach ahead of it, the sign is in Germany] (server
+/// speedsigns.build_tile's towns). In Germany a 50 in a town or before one (its Ortstafel's, not a sign of its own)
+/// and a 100 out of town are left out, but for the end of a lower limit (a change from 30 to 50, from 70 to 100: no
+/// end sign is drawn); a 100 after a 50 is a town's end (its Zeichen 311's). A motorway's are all kept (no general
+/// limit there), and every sign outside Germany.
+pub fn general_keep(rows: &numpy::ndarray::ArrayView2<'_, f64>, town: &numpy::ndarray::ArrayView2<'_, bool>) -> Vec<bool> {
+    (0..rows.nrows()).map(|i| {
+        let (v, kind, before, rank) = (rows[[i, 4]], rows[[i, 9]] as u8, rows[[i, 10]], rows[[i, 11]] as i64);
+        if rank >= MOTORWAY || !town[[i, 2]] { return true; }
+        let town_end = kind == CHANGE && (v - DE_RURAL_KMH).abs() < 0.5 && (before - DE_TOWN_KMH).abs() < 0.5;
+        if town_end { return false; }      // (wherever the estimate's town ends: the mapped 311 may stand before it)
+        if kind == CHANGE && before > 0.0 && before < v - 0.5 { return true; }
+        if (v - DE_TOWN_KMH).abs() < 0.5 && (town[[i, 0]] || town[[i, 1]]) { return false; }
+        if (v - DE_RURAL_KMH).abs() < 0.5 && !town[[i, 0]] { return false; }
+        true
+    }).collect()
+}
+
+/// Python: speed_sign_general(rows (k, 12), town (k, 3) bool) -> keep (k) bool (general_keep).
+#[pyfunction]
+pub fn speed_sign_general<'py>(py: Python<'py>, rows: PyReadonlyArray2<'py, f64>, town: PyReadonlyArray2<'py, bool>)
+                               -> Bound<'py, numpy::PyArray1<bool>> {
+    general_keep(&rows.as_array(), &town.as_array()).into_pyarray(py)
 }
 
 // ---- the mesh ----
@@ -792,4 +827,38 @@ pub fn speed_sign_mesh<'py>(py: Python<'py>, signs: PyReadonlyArray2<'py, f64>, 
     let tri = numpy::ndarray::Array2::from_shape_vec((t, 3), m.t.into_iter().flatten().collect()).unwrap();
     let uv = numpy::ndarray::Array2::from_shape_vec((n, 2), m.uv.into_iter().flatten().collect()).unwrap();
     (p.into_pyarray(py), tri.into_pyarray(py), uv.into_pyarray(py), m.mi.into_pyarray(py))
+}
+
+#[cfg(test)]
+mod general_tests {
+    use super::*;
+    use numpy::ndarray::{array, Array2};
+
+    fn row(v: f64, kind: u8, before: f64, rank: f64) -> [f64; 12] {
+        [0.0, 0.0, 1.0, 0.0, v, 0.0, 0.0, 0.0, 0.0, kind as f64, before, rank]
+    }
+
+    #[test]
+    fn germanys_general_limits_not_posted() {
+        let rows: Vec<[f64; 12]> = vec![
+            row(50.0, CHANGE, 100.0, 4.0),   // the town's entry: its Ortstafel's (ahead)
+            row(50.0, REPEAT, 0.0, 4.0),     // a repeater in town
+            row(50.0, CHANGE, 30.0, 4.0),    // the end of a 30: kept
+            row(100.0, CHANGE, 50.0, 4.0),   // the town's end: its 311's
+            row(100.0, JUNCTION, 0.0, 4.0),  // out of town after a junction
+            row(100.0, CHANGE, 70.0, 4.0),   // the end of a 70: kept
+            row(70.0, CHANGE, 100.0, 4.0),   // a lower limit: kept
+            row(100.0, CHANGE, 120.0, 7.0),  // a motorway's: kept
+            row(50.0, REPEAT, 0.0, 4.0),     // ... out of town and no town ahead: a 50 of its own, kept
+            row(100.0, JUNCTION, 0.0, 4.0),  // outside Germany: kept
+            row(100.0, CHANGE, 50.0, 4.0),   // a town's end inside the estimate's town: still its 311's
+        ];
+        let flat: Vec<f64> = rows.iter().flatten().copied().collect();
+        let a = Array2::from_shape_vec((rows.len(), 12), flat).unwrap();
+        let town = array![[false, true, true], [true, false, true], [true, false, true], [false, false, true],
+                          [false, false, true], [false, false, true], [false, true, true], [false, false, true],
+                          [false, false, true], [false, false, false], [true, false, true]];
+        assert_eq!(general_keep(&a.view(), &town.view()),
+                   vec![false, false, true, false, false, true, true, true, true, true, false]);
+    }
 }

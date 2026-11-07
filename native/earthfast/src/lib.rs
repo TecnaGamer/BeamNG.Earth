@@ -5491,6 +5491,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(medians::median_rows, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(speedsigns::speed_sign_general, m)?)?;
     m.add_class::<cachemap::CoverIndex>()?;
     m.add_function(wrap_pyfunction!(cachemap::cover_rect_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(areacover::area_tiles, m)?)?;
