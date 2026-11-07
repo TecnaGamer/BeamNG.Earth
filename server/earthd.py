@@ -7488,6 +7488,13 @@ async def main_async(args):
     if netstatemod.init():
         import atexit
         atexit.register(netstatemod.close)
+    # (telemetry: every process's per-host download counts, summed by telemetry.Reporter; set before the workers start
+    # so they inherit it)
+    telemetry_on = args.telemetry == "on" and not args.offline
+    if telemetry_on:
+        proc_dir = os.path.join(args.cache_dir, "netstats", "proc")
+        os.environ["BNE_NETSTATS_PROC"] = proc_dir
+        netfetch._PROC_DIR = proc_dir
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
@@ -7712,6 +7719,14 @@ async def main_async(args):
             log.info("map tiles on http://127.0.0.1:%d/tiles/{z}/{x}/{y}.jpg", server.map_port)
         except OSError as e:
             log.warning("map tiles off: %s", e)
+    if telemetry_on:            # anonymous player count and data-source load (telemetry.py; BNE_TELEMETRY=off)
+        import telemetry
+        server.telemetry = telemetry.Reporter(
+            args.cache_dir, updatesmod.local_version() or SERVER_VERSION,
+            lambda: (bool(server.connections), getattr(server, "_share_hub", None) is not None),
+            proc_dir=os.environ.get("BNE_NETSTATS_PROC")).start()
+        log.info("telemetry: on (anonymous: install id, version, OS, players online, data-source request counts; "
+                 "BNE_TELEMETRY=off turns it off)")
     log.info("startup: opening the local connection")
     srv = await asyncio.start_server(
         lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
@@ -8077,6 +8092,10 @@ def main():
     ap.add_argument("--bridge-profile", choices=("curve", "legacy"), default="curve",
                     help="bridge decks: curve (grades of 5 %% up to what they must clear, joined by vertical curves, "
                          "a chain solved as one line) or legacy (deck_heights' line, tents, smoothing)")
+    ap.add_argument("--telemetry", choices=("on", "off"),
+                    default="off",      # (the launcher turns it on for players: tests and direct runs never report)
+                    help="anonymous usage reports (telemetry.py: players online, data-source load; default on, "
+                         "BNE_TELEMETRY=off; never in --offline)")
     ap.add_argument("--offline", action="store_true",
                     help="no network: serve elevation and imagery from the disk cache only (uncached tiles get "
                          "the palette, uncached terrain fails); the status says 'Offline - using cached data'")

@@ -239,9 +239,16 @@ def run_server(argv):
     earthd.main()
 
 
+def telemetry_on():
+    """Anonymous usage reports (server/telemetry.py): on for players unless BNE_TELEMETRY=off."""
+    return os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
+
+
 def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
+    if telemetry_on() and "--offline" not in extra:
+        cmd += ["--telemetry", "on"]
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
@@ -1824,6 +1831,8 @@ def run(args):
     try:
         row("World server", "starting")
         row("Server log", log_path)
+        row("Telemetry", "on: anonymous player count and data-source load, no location (BNE_TELEMETRY=off turns it off)"
+            if telemetry_on() else "off")
         if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
                     server_start_diagnostic(server, log_path) + f"\nFull startup log: {log_path}")

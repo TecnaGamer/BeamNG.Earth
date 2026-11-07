@@ -50,6 +50,7 @@ import os
 import random
 import ssl
 import threading
+import weakref
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -862,10 +863,64 @@ class Host:
         self.breaker = CircuitBreaker(policy.breaker_threshold, policy.breaker_window, policy.breaker_open,
                                       policy.breaker_max, clock)
         self.day = dict.fromkeys(COUNTERS, 0)       # this UTC day (persisted)
+        self.total = dict.fromkeys(COUNTERS, 0)     # this process's lifetime (telemetry.py sums every process's)
         self.minute = dict.fromkeys(COUNTERS, 0)    # since the last summary
         self.warned = 0.0                           # wall time of the 80 % budget warning (0 = none)
         self.warned_over = 0.0                      # ... and of the last over-budget one
         self.half_rate = False
+
+
+# --- every process's totals, for telemetry.py -------------------------------------------------------------------------
+# BNE_NETSTATS_PROC (earthd sets it before its worker processes start, so they inherit it): a folder where every process
+# writes its fetchers' lifetime per-host counters (<pid>.json, at most every PROC_WRITE_S, and at exit); the main
+# process's telemetry sums what changed. The worker processes' fetchers keep no stats_dir of their own.
+_PROC_DIR = os.environ.get("BNE_NETSTATS_PROC") or None
+PROC_WRITE_S = 30.0
+_ALL = weakref.WeakSet()            # this process's fetchers
+_proc_state = {"at": 0.0, "lock": threading.Lock(), "exit": False}
+
+
+def process_totals():
+    """{host: {counter: n}} of every fetcher of this process, over its lifetime."""
+    out = {}
+    for f in list(_ALL):
+        with f._lock:
+            for name, h in f._hosts.items():
+                d = out.setdefault(name, dict.fromkeys(COUNTERS, 0))
+                for k, v in h.total.items():
+                    d[k] += v
+    return out
+
+
+def write_process_totals():
+    """This process's totals to <BNE_NETSTATS_PROC>/<pid>.json (atomic)."""
+    if not _PROC_DIR:
+        return
+    try:
+        os.makedirs(_PROC_DIR, exist_ok=True)
+        path = os.path.join(_PROC_DIR, f"{os.getpid()}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"pid": os.getpid(), "at": time.time(), "hosts": process_totals()}, fh)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("net: process totals: %s", e)
+
+
+def _proc_writer():
+    st = _proc_state
+    now = time.monotonic()
+    if now - st["at"] < PROC_WRITE_S or not st["lock"].acquire(blocking=False):
+        return
+    try:
+        st["at"] = now
+        if not st["exit"]:
+            import atexit
+            atexit.register(write_process_totals)
+            st["exit"] = True
+        write_process_totals()
+    finally:
+        st["lock"].release()
 
 
 class Fetcher:
@@ -888,6 +943,7 @@ class Fetcher:
         self._flushed = clock()
         self._load_stats()
         self._rates = collections.deque(maxlen=64)     # (clock, MB/s) of the large responses (throughput)
+        _ALL.add(self)
 
     def throughput(self):
         """The median speed (MB/s) the large responses of the last RATE_WINDOW_S came in at, or None (too few)."""
@@ -1229,6 +1285,9 @@ class Fetcher:
         with self._lock:
             h.day[what] += n
             h.minute[what] += n
+            h.total[what] += n
+        if _PROC_DIR and what == "requests":
+            _proc_writer()
 
     def _count(self, h, what, n=1):
         self._rollover()

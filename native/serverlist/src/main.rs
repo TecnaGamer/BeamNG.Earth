@@ -17,6 +17,8 @@
 //! In memory only (servers announce again within a minute of a restart). Env: BNGE_LIST_ADDR (default 0.0.0.0:47640),
 //! BNGE_LIST_GEOIP (the table's path; default dbip-country-lite.csv.gz next to the binary).
 
+mod telemetry;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -305,7 +307,20 @@ fn main() {
     let geo = Arc::new(Mutex::new(Arc::new(Geo::default())));
     let keep = geo.clone();
     std::thread::spawn(move || keep_geo(keep));
-    for mut req in server.incoming_requests() {
+    // usage telemetry (telemetry.rs): its files next to the binary unless BNGE_TELEMETRY_DIR
+    let tel_dir = std::env::var("BNGE_TELEMETRY_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("telemetry"))).unwrap_or_else(|| PathBuf::from("telemetry"))
+    });
+    let token = std::env::var("BNGE_TELEMETRY_TOKEN").ok().filter(|t| t.len() >= 16);
+    let mut tel = telemetry::Telemetry::new(Some(tel_dir));
+    loop {
+        let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        tel.tick(Instant::now(), unix_now);
+        let mut req = match server.recv_timeout(Duration::from_secs(5)) {
+            Ok(Some(r)) => r,
+            Ok(None) => continue,
+            Err(_) => continue,
+        };
         let now = Instant::now();
         let path = req.url().split('?').next().unwrap_or("").to_string();
         let resp = match (req.method(), path.as_str()) {
@@ -328,10 +343,44 @@ fn main() {
                     _ => json(400, "{\"error\":\"bad request\"}".into()),
                 }
             }
+            (Method::Post, "/telemetry") => {
+                let mut body = Vec::new();
+                let read = req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body);
+                match (read, client_ip(&req)) {
+                    (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
+                    (Ok(_), Some(ip)) => match serde_json::from_slice::<telemetry::Report>(&body) {
+                        Ok(r) => {
+                            let cc = geo.lock().unwrap().country(ip);     // (the address itself is not kept)
+                            match tel.report(ip, cc, r, now, unix_now) {
+                                Ok(()) => json(200, "{\"ok\":true}".into()),
+                                Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                            }
+                        }
+                        Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
+                    },
+                    _ => json(400, "{\"error\":\"bad request\"}".into()),
+                }
+            }
+            (Method::Get, "/stats") => json(200, tel.public(now, unix_now).to_string()),
+            (Method::Get, "/stats/private") => {
+                let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
+                match (&token, auth) {
+                    (Some(t), Some(a)) if a == format!("Bearer {t}") => json(200, tel.private(now, unix_now).to_string()),
+                    (Some(_), _) => json(401, "{\"error\":\"token\"}".into()),
+                    (None, _) => json(404, "{\"error\":\"not found\"}".into()),
+                }
+            }
+            (Method::Get, "/players") | (Method::Get, "/players/") => html(include_str!("players.html")),
+            (Method::Get, "/players/private") => html(include_str!("private.html")),
             _ => json(404, "{\"error\":\"not found\"}".into()),
         };
         let _ = req.respond(resp);
     }
+}
+
+fn html(body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    Response::from_string(body.to_string())
+        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap())
 }
 
 #[cfg(test)]
