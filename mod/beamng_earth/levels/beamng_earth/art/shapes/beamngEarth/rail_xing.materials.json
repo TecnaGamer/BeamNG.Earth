@@ -1,0 +1,54 @@
+{
+  "bne_rail_xing_rubber": {
+    "name": "bne_rail_xing_rubber",
+    "mapTo": "bne_rail_xing_rubber",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "dd77c00b-c791-5d10-9297-276e2e159cc5",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rail_xing_rubber_b.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rail_xing_rubber_nm.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rail_xing_rubber_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ASPHALT",
+    "translucent": false
+  },
+  "bne_rail_ballast_stone": {
+    "name": "bne_rail_ballast_stone",
+    "mapTo": "bne_rail_ballast_stone",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "02bc12cd-23c5-54bf-8178-f13e98efef5d",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rail_ballast_stone_b.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rail_ballast_stone_nm.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rail_ballast_stone_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          0.95,
+          0.93,
+          0.9,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "GRAVEL",
+    "translucent": false
+  }
+}
