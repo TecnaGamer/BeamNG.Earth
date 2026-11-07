@@ -158,6 +158,10 @@ class Tracker:
             self.stale.clear()
             self.retry.clear()
         self.wanted = set(ready)
+        # Readiness gates the first build, not the lifetime of visible signs.
+        # A road retry/refresh temporarily loses readiness; keep its signs until
+        # the player leaves, with the same unloading margin as the roads.
+        self.wanted.update(k for k in self.sent if roads.tile_distance(*k, x, y) <= roads.DROP_M)
         for key in self.sent - self.wanted:
             conn.send({'type': 'roads_drop', 'anchorId': aid, 'key': f's{key[0]}_{key[1]}'})
         self.sent.intersection_update(self.wanted)

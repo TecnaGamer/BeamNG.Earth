@@ -80,6 +80,44 @@ def test_index_records_uses_real_destination_tags_and_skips_entries():
 
 
 class ExitSignsTest(unittest.TestCase):
+    def test_support_height_follows_ground_far_from_anchor_and_below_sea_level(self):
+        frame = geodesy.EnuFrame(30.25, -92.22)
+        for offset in (0., -14000.):
+            for elevation in (-25., 0., 10., 250.):
+                with self.subTest(offset=offset, elevation=elevation):
+                    rows, obj = fixture()
+                    rows = [(fid, sp, line + [offset, 0., 0.], lon) for fid, sp, line, lon in rows]
+                    def lonlat(xy):
+                        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.)
+                        return np.c_[lo, la].tolist()
+                    obj['exit']['approach'] = lonlat(np.array([[-1900.+offset, 0.], [offset, 0.]]))
+                    obj['exit']['ramp'] = lonlat(rows[1][2])
+                    obj['exit']['label'] = dict(ref='80', names=['Crowley', 'Eunice'], routes=['LA 13'])
+                    box = (-1800.+offset, -300., 256.+offset, 100.)
+                    signs = exitsigns.place(frame, [obj], rows, box,
+                        lambda la, lo: np.full_like(la, elevation), link_ids={'ramp'})
+                    self.assertEqual({s['kind'] for s in signs}, {'advance', 'decision', 'ramp'})
+                    for sign in signs:
+                        # Constant terrain elevation needs ordinary roadside clearance,
+                        # regardless of the anchor plane or sea-level elevation.
+                        self.assertAlmostEqual(sign['bottom'] - max(sign['bases']), 2.4, places=2)
+                        mesh = exitsigns.build([sign], sign['centre'])
+                        self.assertTrue(np.isfinite(mesh[0]).all())
+                        self.assertLess(np.ptp(mesh[0][:, 2]), sign['height'] + 3.5)
+
+    def test_panel_clears_raised_road_beside_lower_support_ground(self):
+        rows, obj = fixture()
+        def embankment(la, lo):
+            _, north, _ = FRAME.geodetic_to_enu(la, lo, 0.)
+            return np.where(np.abs(north) < 6., 5., 0.)
+        signs = exitsigns.place(FRAME, [obj], rows, (-1800., -300., 256., 100.),
+                               embankment, link_ids={'ramp'})
+        self.assertTrue(signs)
+        for sign in signs:
+            road_z = exitsigns._ground_z(FRAME, embankment, sign['road_point'])
+            self.assertGreaterEqual(sign['bottom'] - road_z, 2.2 - 1e-6)
+            self.assertGreaterEqual(sign['bottom'] - max(sign['bases']), 2.4 - 1e-6)
+
     def test_existing_sign_mesh_and_advance_distances(self):
         test_advance_and_gore_signs_follow_existing_road_geometry()
 
