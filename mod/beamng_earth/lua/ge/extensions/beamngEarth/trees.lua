@@ -283,6 +283,17 @@ M.CATALOG.au_guidepost_red = { { '/levels/beamng_earth/art/shapes/beamngEarth/bn
 M.CATALOG.au_guidepost_white = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_guidepost_white', 1.05 } }
 M.GROUP_MAX_M.au_guidepost_red = 800
 M.GROUP_MAX_M.au_guidepost_white = 800
+-- fork: Australia's boundary fences (server buildings.au_fence, tools/build_au_streetscape.py): Colorbond sheet in six colours and
+-- timber paling in two, 5.4 m along x like the stock yard fence, 1.8 m high (a row's height scales it)
+for _, g in ipairs({ 'au_fence_monument', 'au_fence_woodland', 'au_fence_surfmist', 'au_fence_basalt', 'au_fence_shale',
+    'au_fence_dune', 'au_fence_paling_pine', 'au_fence_paling_grey' }) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, 1.8 } }
+  M.GROUP_MAX_M[g] = 150
+  M.ONE_SPELLING[g] = true
+end
+-- ... and the concrete pole of Australia's main roads' lines (server furniture.pole_group): 9.2 m, the cross-arm along x at
+-- the wires' height (furniture.WIRE_Z), like the stock pole it stands in for
+M.CATALOG.au_pole_conc = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_pole_conc', 9.2 } }
 M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.30 } }   -- (Sweden's yellow give-way)
 M.GROUP_MAX_M.giveway_b1 = 300
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
@@ -554,6 +565,7 @@ local function setup()
   end
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_guideposts.materials.json')   -- fork
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_streetscape.materials.json')  -- fork: fences, pole
   if FS and scenetree then      -- fork: the Mount Coot-tha eucalypts, where installed and their materials are registered
     local ok, shapes = pcall(M.eucalyptShapes, function(p) return FS:fileExists(p) end,
       function(n) return scenetree.findObject(n) ~= nil end)

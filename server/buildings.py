@@ -20,6 +20,7 @@ import math
 
 import numpy as np
 
+import climate      # fork: Australia's fences (Spec.au)
 import fast
 import landmarks
 import mapgeom
@@ -407,7 +408,8 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "gable", "hs", "qld", "awn")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "gable", "hs", "qld", "awn",
+                 "au")      # fork: au: the footprint lies in Australia (climate.in_australia): its fence is Colorbond / paling
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -962,7 +964,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 deck=garage and roof == "flat", pitch=style.pitch, gable=gable, hs=hs, qld=qld,
                 # fork: a Queensland building that may stand on a main street: doors() decides its footpath awning (Spec.awn)
                 awn={} if style.name == "queensland" and qld is None and roof == "flat" and not (
-                    shed or barn or church or garage or industrial or terminal or plain) else None)
+                    shed or barn or church or garage or industrial or terminal or plain) else None,
+                au=bool(lat is not None and lon is not None and climate.in_australia(lat, lon)) or None)    # fork
 
 
 class Mesh:
@@ -4165,6 +4168,7 @@ G_FENCE = "fence"           # trees.lua: East Coast USA's low wooden fence (eca_
 FENCE_SEG_M = 5.4
 FENCE_SHARE = 0.3           # detached houses with a fence along the front of their yard (hashed)
 FENCE_BACK_M = 3.2          # m from the road's edge (the back of the sidewalk)
+FENCE_BACK_AU_M = 4.1       # fork: ... in Australia behind the verge and its footpath (roads.AU_CORRIDOR_M 3.9) on the property line
 FENCE_MIN_YARD_M = 2.5      # the front yard at least this deep between the fence and the house
 FENCE_CLEAR_M = 2.0         # m every piece keeps from any road's edge (a house on a bend or a corner: its fence ran
                             # along one road out across another, GitHub #105 Falcon Drive, Coquitlam)
@@ -4179,16 +4183,21 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
     q = A + t * D
     v = mid - q
     dist = float(np.hypot(*v))
-    if dist - (half + FENCE_BACK_M) < FENCE_MIN_YARD_M:
+    au = getattr(spec, "au", None)       # fork: Australia's fence (a test's spec may not carry it)
+    back = FENCE_BACK_AU_M if au else FENCE_BACK_M
+    if dist - (half + back) < FENCE_MIN_YARD_M:
         return []
     nv = v / dist
     dr = D / math.sqrt(L2)
-    centre = q + nv * (half + FENCE_BACK_M)
+    centre = q + nv * (half + back)
     yaw = round(math.degrees(math.atan2(dr[1], dr[0])) % 360.0, 1)
     gaps = [float((a + d * (Le * f) - centre) @ dr)]                          # the path to the door
     if driveway:
         gaps.append(float((a + d * (Le * (0.82 if f <= 0.5 else 0.18)) - centre) @ dr))
     n = max(1, int(math.ceil((Le + 3.0) / FENCE_SEG_M)))
+    group, height = G_FENCE, 1.3
+    if au:     # fork: Australia: a Colorbond or timber paling boundary fence, one kind and colour a house
+        group, height = au_fence(spec.seed)
     rows = []
     for k in range(n):
         sk = (k - (n - 1) / 2) * FENCE_SEG_M
@@ -4202,9 +4211,34 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
                                                         np.ascontiguousarray(roads[1], np.float64),
                                                         np.asarray(roads[2], np.float64) + FENCE_CLEAR_M)).any():
                 continue
-        rows.append([G_FENCE, round(float(p[0]), 2), round(float(p[1]), 2), round(float(z), 2), yaw, 1.0, 1.3,
+        rows.append([group, round(float(p[0]), 2), round(float(p[1]), 2), round(float(z), 2), yaw, 1.0, height,
                      round(_hash01(spec.seed, "fr", k), 3)])
     return rows
+
+
+# fork: Australia's boundary fences (tools/build_au_streetscape.py: 5.4 m models along x, FENCE_SEG_M like the stock one, 1.8 m
+# high): ~60 % Colorbond (flat-ribbed steel sheet) in the muted colours of the range, ~40 % timber paling (new pine or
+# weathered grey); one kind and colour per house (hashed on its seed), a quarter of them a lower 1.35 m fence (front fences
+# are often lower than the 1.8 m of the boundaries)
+AU_FENCE_COLORBOND = (("au_fence_monument", 3), ("au_fence_woodland", 3), ("au_fence_surfmist", 3),
+                      ("au_fence_basalt", 1), ("au_fence_shale", 1), ("au_fence_dune", 1))
+AU_FENCE_PALING = (("au_fence_paling_pine", 1), ("au_fence_paling_grey", 1))
+AU_FENCE_COLORBOND_SHARE = 0.6
+AU_FENCE_H = 1.8
+AU_FENCE_LOW_SHARE, AU_FENCE_LOW_H = 0.25, 1.35
+
+
+def au_fence(seed):
+    """fork: (group, height m) of an Australian house's fence, from its seed (stable across runs and machines)."""
+    table = AU_FENCE_COLORBOND if _hash01(seed, "au fence kind") < AU_FENCE_COLORBOND_SHARE else AU_FENCE_PALING
+    u = _hash01(seed, "au fence colour") * sum(w for _, w in table)
+    group = table[-1][0]
+    for name, w in table:
+        if u < w:
+            group = name
+            break
+        u -= w
+    return group, (AU_FENCE_LOW_H if _hash01(seed, "au fence low") < AU_FENCE_LOW_SHARE else AU_FENCE_H)
 
 
 def _suppress_under_models(items, radii, x0, y0):

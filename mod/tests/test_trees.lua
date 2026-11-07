@@ -498,6 +498,20 @@ do -- fork: Australia's guide posts (server kantstolpar.py, tools/build_au_guide
     T.check(trees.isBarrier(g) and trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0, g .. ': never thinned, a draw distance')
   end
 end
+do -- fork: Australia's fences (server buildings.au_fence, tools/build_au_streetscape.py) and the concrete pole (furniture.pole_group)
+  for _, g in ipairs({ 'au_fence_monument', 'au_fence_woodland', 'au_fence_surfmist', 'au_fence_basalt', 'au_fence_shale',
+      'au_fence_dune', 'au_fence_paling_pine', 'au_fence_paling_grey' }) do
+    local shape, sc = trees.pick(g, 1.8, 0.3)
+    T.check(trees.CATALOG[g] and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1 at 1.8 m')
+    local _, low = trees.pick(g, 1.35, 0.3)
+    T.check(math.abs(low - 0.75) < 1e-9, g .. ': the lower 1.35 m fence is the model scaled')
+    T.check(trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0, g .. ': a draw distance')
+  end
+  local shape, sc = trees.pick('au_pole_conc', 9.2, 0.3)
+  T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_pole_conc' and math.abs(sc - 1) < 1e-9,
+    'au_pole_conc: its model at 1:1')
+end
 do -- stock world props (server worldprops.py): the catalog height is the mesh, so that height is 1:1
   local props = {
     { 'celltower', 28.93 }, { 'watertower', 26.16 }, { 'barn', 8.41 }, { 'container', 2.59 }, { 'billboard', 11.95 },

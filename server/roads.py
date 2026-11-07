@@ -4724,7 +4724,23 @@ AU_KERB_W = 0.3             # m: the kerb's concrete band at the road's edge (it
 AU_KERB_H = 0.10            # m: a low roll-over kerb on residential streets (the US curb: sidewalks.CURB_H 0.15)
 AU_FOOT_H = 0.03            # m: the footpath's slab above the grass (nearly flush: footpaths are poured level)
 AU_CORNER_NEAR_M = 12.0     # a curb return this near only roads with verges has the low kerb too
+# fork: Australia's kerb and channel: the kerb band above (the stock curb sheet's light concrete: the layback kerb 0.10 m on
+# a residential street, the barrier kerb 0.15 m elsewhere, sidewalks.CURB_H) and, in front of it on the carriageway, a flat
+# concrete channel (the gutter strip, 0.45 m: Brisbane's 450 mm kerb and channel) in the mod's own light grey concrete
+# (au_roads.materials.json) instead of the US gutter decal. Only the chunk's material and width change (_chunk, _gutter:
+# the look keeps GUTTER's "m", so every cut and clip rule keyed on it still applies).
+AU_CHANNEL_M = "bne_au_channel"
+AU_CHANNEL_W = 0.45
 WALK_LOOK_KEYS = ("foot", "h", "strip")   # the keys of a sidewalk look that its run and its walks entry carry on
+
+
+def _gutter(side, pts, wv, au=False):
+    """fork: The gutter row (look, width, line) of one side of a carriageway of width wv (a scalar, or an array where it
+    tapers) with centreline pts: Australia's concrete channel (AU_CHANNEL_W wide, look key "au_m") where au, else the
+    usual decal, exactly as extras wrote it."""
+    w = AU_CHANNEL_W if au else GUTTER["w"]
+    look = {**GUTTER, "side": side, "au_m": AU_CHANNEL_M} if au else {**GUTTER, "side": side}
+    return look, w, offset_polyline(pts, side * (wv / 2 - w / 2))
 AU_FOOT_BOTH, AU_FOOT_ONE = 0.4, 0.7    # no tag: a hash under the first has a footpath each side, under the second
                                         # one side, else none (~40 % / 30 % / 30 %)
 
@@ -4811,6 +4827,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     wv = w if ws is None else np.asarray(ws, np.float64)     # (offsets: tapered; decisions: its width)
     if kind not in BUILT:
         return out
+    au = str(country or "").upper() == "AU"         # fork: Australia's kerb and channel (_gutter)
     if has_sidewalks(spec):
         verge = au_verge(spec, country, fid)        # fork: Australia's nature strip, else None
         for side in walk_sides(spec, left_hand):
@@ -4826,7 +4843,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             else:
                 out.append(({**SIDEWALK, "side": side}, spec.walk,
                             offset_polyline(pts, side * (wv / 2 + spec.walk / 2))))
-            out.append(({**GUTTER, "side": side}, GUTTER["w"], offset_polyline(pts, side * (wv / 2 - GUTTER["w"] / 2))))
+            out.append(_gutter(side, pts, wv, au))      # fork: Australia's concrete channel
         ms = median_side(spec, left_hand)
         if ms is not None:
             # the median: a curbed band, lawn beyond it (two sidewalks back to back made a concrete strip, the user's
@@ -4842,7 +4859,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 for k in ((0,) if st.centre == "line_white" else (0, 1)):
                     out.append((look, st.w, offset_polyline(
                         pts, ms * (wv / 2 - EDGE_LINE["inset"] - k * (st.w + st.double_gap)))))
-            out.append(({**GUTTER, "side": ms}, GUTTER["w"], offset_polyline(pts, ms * (wv / 2 - GUTTER["w"] / 2))))
+            out.append(_gutter(ms, pts, wv, au))        # fork
     base = pts                              # (the asphalt's own line: its edge decal)
     if shift is not None:                   # (the markings from here on: shifted at a merge / split)
         pts = offset_polyline(pts, shift)
@@ -5451,8 +5468,10 @@ def mark_poly(pts):
 
 
 def _chunk(look, w, c):
-    out = {"m": look["m"], "w": round(float(w), 2), "tl": look["tl"], "p": look["p"],
+    out = {"m": look.get("au_m") or look["m"], "w": round(float(w), 2), "tl": look["tl"], "p": look["p"],     # fork: au_m
            "n": [[round(float(v), 3) for v in p] for p in c]}
+    if look.get("au_m"):
+        out["layer"] = "gutter"        # (layer_of: the channel is a gutter, whatever its material's name)
     if look.get("layer"):
         out["layer"] = look["layer"]
     return out
@@ -9008,6 +9027,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     import islands
     isl = islands.find(roads, structures=structures) if walks is not None else []
     inner = islands.inner_sides(isl)
+    if props is not None and isl and str(country or "").upper() == "AU":     # fork: Australia's roundabout gardens
+        import furniture as _furniture
+        props.extend(islands.au_garden_rows(isl, own_box, ground, _furniture._owns))
     if walks is not None:
         for f in isl:
             if f["ring"] is None:
