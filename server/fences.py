@@ -27,6 +27,7 @@ WALL_LEN, WALL_ALONG, WALL_ACROSS, WALL_H = 4.0, 2.0, 1.25, 2.4
 CHAIN_TYPES = {"chain_link", "chainlink", "chain-link", "chain"}
 NOISE_TYPES = {"noise_barrier", "noisebarrier", "sound_barrier"}
 BBOX_PAD_M = 8.0
+OUTLINE_PAD_M = 1.0     # m past a bridge outline's edge a barrier along it still counts as on it (both mapped by hand)
 
 
 def _tags(feats, i):
@@ -97,13 +98,50 @@ def _place(group, centre, tangent):
             _yaw(ty, -tx))
 
 
+def _level_hint(feats, i):
+    """guardrails._deck_level_hint, else the feature's level (Overture's: OSM's layer, not kept in source_tags; the
+    Stelling Road Overcrossing's wall and fence came with level 1.0 and no layer tag): True above 0, False below."""
+    hint = _deck_level_hint(feats, i)
+    lv = feats.attrs.get("level")
+    if hint is not None or lv is None or i >= len(lv):
+        return hint
+    try:
+        v = float(lv[i])
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(v) or v == 0:
+        return None
+    return v > 0
+
+
+def _in_outlines(rings, pts):
+    """Which points lie in one of the rings ((k, 2) bridge outlines) or within OUTLINE_PAD_M of its edge."""
+    from polygon import contains_points
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    m = np.zeros(len(pts), bool)
+    for ring in rings:
+        m |= np.asarray(contains_points(ring, pts), bool)
+        a, b = ring[:-1], ring[1:]
+        d = b - a
+        l2 = np.maximum(np.sum(d * d, axis=1), 1e-12)
+        t = np.clip(np.sum((pts[:, None, :] - a[None]) * d[None], axis=2) / l2[None], 0.0, 1.0)
+        near = a[None] + t[:, :, None] * d[None]
+        m |= np.hypot(pts[:, None, 0] - near[:, :, 0], pts[:, None, 1] - near[:, :, 1]).min(axis=1) <= OUTLINE_PAD_M
+    return m
+
+
 def rows(frame, infra_fn, box, elev, decks=()):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the chain-link fences and noise walls whose
     centre is inside box (x0, y0, x1, y1). decks ([{"n": (k, 3) XYZ, "w": road width}], as guardrails.forest_rows
     takes them): a wall or fence on a bridge stands on its deck, not on the ground under it (GitHub #775: a noise
     wall tagged layer=1 on the B 29's bridge stood on the road under it and blocked it). Which panels are on a deck
     is decided as for the mapped guardrails (guardrails._deck_level_hint / _surface_info): the way's own bridge /
-    layer tags, else only where the ground already agrees with the deck."""
+    layer tags, else only where the ground already agrees with the deck. A way tagged on a bridge past its road
+    deck's edge but in the bridge's mapped outline (man_made=bridge, the infrastructure's class bridge) stands at
+    the nearest deck's height (guardrails.DECK_WIDE_REACH_M): the Stelling Road Overcrossing's noise wall and
+    chain-link fence (OSM ways 921088133 / 921088134, layer=1) run along its outline (way 921088131) about 10 m
+    from the 6.6 m road deck's centreline, its sidewalks mapped as footways (no deck), and stood on the road
+    under it."""
     if infra_fn is None:
         return []
     x0, y0, x1, y1 = map(float, box)
@@ -113,7 +151,7 @@ def rows(frame, infra_fn, box, elev, decks=()):
     except (ValueError, OverflowError):
         return []
     pending = []
-    seen = set()
+    seen, outlines, seen_outlines = set(), [], set()
     for key in keys:
         try:
             feats = infra_fn(key)
@@ -127,6 +165,15 @@ def rows(frame, infra_fn, box, elev, decks=()):
             fid = str(feats.ids[i])
             if fid in seen or int(feats.kind[i]) not in (mapgeom.LINE, mapgeom.POLYGON):
                 continue
+            classes = feats.attrs.get("class")
+            if (decks and int(feats.kind[i]) == mapgeom.POLYGON and classes is not None
+                    and str(classes[i]).strip().lower() == "bridge" and fid not in seen_outlines):
+                seen_outlines.add(fid)
+                for part in feats.parts(i):
+                    if part and len(part[0]) >= 4:
+                        e, n = mapgeom.enu_xy(feats, frame, np.asarray(part[0], np.float64))
+                        outlines.append(np.column_stack((e, n)))
+                continue
             group = kind_of(feats, i)
             if group is None:
                 continue
@@ -134,7 +181,7 @@ def rows(frame, infra_fn, box, elev, decks=()):
             if b[2] < x0 - BBOX_PAD_M or b[0] > x1 + BBOX_PAD_M or b[3] < y0 - BBOX_PAD_M or b[1] > y1 + BBOX_PAD_M:
                 continue
             seen.add(fid)
-            hint = _deck_level_hint(feats, i) if decks else None
+            hint = _level_hint(feats, i) if decks else None
             length = CHAIN_LEN if group == G_CHAIN else WALL_LEN
             for part in feats.parts(i):
                 if not part or len(part[0]) < 2:
@@ -154,8 +201,13 @@ def rows(frame, infra_fn, box, elev, decks=()):
     if decks:
         # (the deck's height under the panel's centre on the mapped line: the panel's origin is beside it)
         mid = np.array([[p[4], p[5]] for p in pending], np.float64)
-        surf, ground, _wide = _surface_info(frame, mid, elev, decks, [p[6] for p in pending])
+        surf, ground, wide = _surface_info(frame, mid, elev, decks, [p[6] for p in pending])
         on = np.abs(surf - ground) > 1e-6
+        if outlines:
+            edge = ~on & np.isfinite(wide) & np.array([p[6] is True for p in pending])
+            if edge.any():
+                edge[edge] = _in_outlines(outlines, mid[edge])
+            surf, on = np.where(edge, wide, surf), on | edge
         z = np.where(on, surf, z)
     out = []
     for (group, px, py, yaw, _cx, _cy, _hint), zz in zip(pending, z):
