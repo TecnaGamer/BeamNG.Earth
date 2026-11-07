@@ -117,6 +117,24 @@ def _no_change(a, b):
     return a in ("no", "not_right", "only_left") or b in ("no", "not_left", "only_right")
 
 
+_BUS_LANE = {"designated", "yes"}
+
+
+def _bus_flags(osm, n, *keys):
+    """Which of n lanes (left to right in their travel direction) are bus lanes, from the first of keys whose value
+    has n entries (bus:lanes / psv:lanes, designated or yes), else None."""
+    for key in keys:
+        vals = _vals(osm.get(key))
+        if vals is not None and len(vals) == n:
+            return [v.lower() in _BUS_LANE for v in vals]
+    return None
+
+
+def _bus_boundary(flags, a, b):
+    """A solid line where a bus lane meets a general lane (the two flags differ)."""
+    return flags is not None and bool(flags[a]) != bool(flags[b])
+
+
 def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     """The lines across a carriageway from OpenStreetMap's lane tags (osm: {key: value} of railtags.LANE_COLUMNS, may
     be empty): [(offset m, left of the line's direction, positive left; role, solid)]. role: "centre" (between the
@@ -130,10 +148,12 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     if not two_way:
         n = lanes
         ch = _vals(osm.get("change:lanes"))
+        bus = _bus_flags(osm, n, "bus:lanes", "psv:lanes")
         lw = drive / max(n, 1)
         out = []
         for k in range(1, n):
-            solid = ch is not None and len(ch) == n and _no_change(ch[k - 1], ch[k])
+            solid = (ch is not None and len(ch) == n and _no_change(ch[k - 1], ch[k])
+                     or _bus_boundary(bus, k - 1, k))
             # lanes left to right in travel: lane k's left edge at -drive/2 + k * lw from the right? (offsets are left
             # positive: the leftmost lane starts at +drive/2)
             out.append((drive / 2 - k * lw, "lane", solid))
@@ -154,12 +174,16 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     left_n, right_n = (bwd, fwd) if not left_hand else (fwd, bwd)
     out = []
     edge = drive / 2
-    ch_l = _vals(osm.get("change:lanes:backward" if not left_hand else "change:lanes:forward"))
-    ch_r = _vals(osm.get("change:lanes:forward" if not left_hand else "change:lanes:backward"))
+    back, fore = ("backward", "forward") if not left_hand else ("forward", "backward")
+    ch_l = _vals(osm.get("change:lanes:" + back))
+    ch_r = _vals(osm.get("change:lanes:" + fore))
+    bus_l = _bus_flags(osm, left_n, "bus:lanes:" + back, "psv:lanes:" + back, "bus:lanes", "psv:lanes")
+    bus_r = _bus_flags(osm, right_n, "bus:lanes:" + fore, "psv:lanes:" + fore, "bus:lanes", "psv:lanes")
     # the left-side lanes (travel against the way in right-hand traffic: their left to right is the way's right to left)
     for k in range(1, left_n):
         off = edge - k * lw
-        solid = ch_l is not None and len(ch_l) == left_n and _no_change(ch_l[left_n - k - 1], ch_l[left_n - k])
+        solid = (ch_l is not None and len(ch_l) == left_n and _no_change(ch_l[left_n - k - 1], ch_l[left_n - k])
+                 or _bus_boundary(bus_l, left_n - k - 1, left_n - k))
         out.append((off, "lane", solid))
     c_left = edge - left_n * lw
     no_pass = osm.get("overtaking") == "no"
@@ -177,7 +201,8 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     c_right = c_left - both * lw
     for k in range(1, right_n):
         off = c_right - k * lw
-        solid = ch_r is not None and len(ch_r) == right_n and _no_change(ch_r[k - 1], ch_r[k])
+        solid = (ch_r is not None and len(ch_r) == right_n and _no_change(ch_r[k - 1], ch_r[k])
+                 or _bus_boundary(bus_r, k - 1, k))
         out.append((off, "lane", solid))
     return out
 

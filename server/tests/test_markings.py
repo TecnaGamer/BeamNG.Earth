@@ -56,6 +56,17 @@ class LanePlanTest(unittest.TestCase):
         plan = markings.lane_plan({"change:lanes": "no|yes|yes"}, False, 10.5, 3)
         self.assertEqual([h for _, _, h in plan], [True, False])
 
+    def test_a_bus_lane_boundary_is_solid(self):
+        plan = markings.lane_plan({"bus:lanes": "designated|no"}, False, 7.0, 2)
+        self.assertEqual([h for _, _, h in plan], [True])
+        same = markings.lane_plan({"bus:lanes": "designated|designated"}, False, 7.0, 2)
+        self.assertEqual([h for _, _, h in same], [False], "two bus lanes share the ordinary broken line")
+        psv = markings.lane_plan({"psv:lanes": "yes|no"}, False, 7.0, 2)
+        self.assertEqual([h for _, _, h in psv], [True])
+        two = markings.lane_plan({"lanes:forward": "2", "lanes:backward": "1",
+                                  "bus:lanes:forward": "designated|no"}, True, 9.9, 3)
+        self.assertEqual([(r, h) for _, r, h in two if r == "lane"], [("lane", True)])
+
     def test_extras_draws_the_plan(self):
         sp = roads.Spec(10.0, "paved", False, "primary", False)
         line = np.array([[0.0, 0, 0], [100, 0, 0]])
@@ -63,6 +74,45 @@ class LanePlanTest(unittest.TestCase):
               roads.extras(sp, line, -76.0, country="US", osm={"lanes:forward": "1", "lanes:backward": "1",
                                                                 "overtaking": "no"}) if lk.get("kind") == "centre"]
         self.assertEqual(sorted(set(lk)), [("centre", -0.12), ("centre", 0.12)], "a double solid yellow line")
+
+
+class BuswayStripeTest(unittest.TestCase):
+    LINE = np.array([[0.0, 0, 0], [80.0, 0, 0]])
+
+    def kinds(self, spec, country="NL", osm=None):
+        return {lk.get("kind") for lk, _, _ in roads.extras(spec, self.LINE, 4.67, country=country, osm=osm)}
+
+    def test_a_busway_is_edge_lined_where_a_style_lists_its_own_classes(self):
+        us = markings.style("US")
+        self.assertNotIn("busway", us.edge_classes)
+        self.assertTrue(roads.paints_edge_line("busway", us))
+        self.assertFalse(roads.paints_edge_line("tertiary", us))
+        self.assertTrue(roads.paints_edge_line("busway", markings.style("NL")))
+
+    def test_a_one_lane_busway_has_edge_lines_and_no_invented_dash(self):
+        one = roads.Spec(7.0, "paved", False, "busway", True)
+        for country in ("NL", "US"):
+            kinds = self.kinds(one, country)
+            self.assertIn("edge", kinds, country)
+            self.assertNotIn("centre", kinds, country)
+            self.assertNotIn("lane", kinds, country)
+        town = self.kinds(roads.Spec(7.0, "paved", True, "busway", True))
+        self.assertNotIn("lane", town, "the 7 m default is not a second lane")
+
+    def test_a_two_way_busway_has_a_centre_line(self):
+        kinds = self.kinds(roads.Spec(7.0, "paved", False, "busway", False))
+        self.assertIn("centre", kinds)
+        self.assertIn("edge", kinds)
+        self.assertNotIn("lane", kinds)
+
+    def test_mapped_lanes_are_dashed_and_a_bus_lane_on_a_road_is_solid(self):
+        dashed = self.kinds(roads.Spec(7.0, "paved", False, "busway", True)._replace(lanes=2))
+        self.assertIn("lane", dashed)
+        self.assertNotIn("centre", dashed)
+        sp = roads.Spec(10.0, "paved", False, "primary", True)._replace(lanes=2)
+        drawn = [(lk.get("kind"), lk.get("dash", False)) for lk, _, _ in
+                 roads.extras(sp, self.LINE, 4.67, country="NL", osm={"bus:lanes": "designated|no"})]
+        self.assertIn(("lane", False), drawn, "the bus lane's boundary is solid")
 
 
 class SwedenTest(unittest.TestCase):

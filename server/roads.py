@@ -201,9 +201,19 @@ EDGE_DECAL_GAP_M = 1.5          # ... none where another carriageway's edge is t
 MEASURE_SKIP = {"service"}      # classes not measured between buildings (lots, alleys: far walls)
 MEASURE_MAX = 3.0               # a measured carriageway at most this times the class default
 SIDEWALK_CLASSES = {"residential", "tertiary", "secondary", "primary", "unclassified", "living_street"}
-CENTRE_CLASSES = {"primary", "secondary", "tertiary", "trunk"}
-EDGE_LINE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "motorway"}
-LANE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "motorway"}
+# busway (osmtags.busway_features): edge lines in every country (paints_edge_line), a centre line only when
+# two-way, dashes only from a mapped count (lane_layout). A painted bus lane on a normal road is markings.lane_plan.
+CENTRE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "busway"}
+EDGE_LINE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "motorway", "busway"}
+LANE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "motorway", "busway"}
+
+
+def paints_edge_line(cls, style):
+    """Whether a carriageway of this class gets edge lines in this country style. A busway does in every country:
+    a style that lists its own classes (the US) would otherwise leave it out of the corners as well as the straights."""
+    return cls == "busway" or cls in (style.edge_classes or EDGE_LINE_CLASSES)
+
+
 # urban arterials not lined by buildings (roadwidth.py measures those): 4 lanes (Moab's Main Street, US-191,
 # 4 lanes + a turn lane in the photos, was drawn 9 m)
 # Ramps and slip roads (Overture subclass "link", any class): one lane and its shoulders, whatever the class
@@ -4986,7 +4996,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             # (u runs from the ribbon's left to its right: the road is on the right of the left side's, so the right
             # side's runs backwards)
             out.append(({**EDGE_DECAL, "side": side}, dw, line if side > 0 else line[::-1].copy()))
-    if kind == "paved" and (not urban or not has_sidewalks(spec)) and cls in (st.edge_classes or EDGE_LINE_CLASSES):
+    if kind == "paved" and (not urban or not has_sidewalks(spec)) and paints_edge_line(cls, st):
         # no curb: edge lines
         # the right edge white; a one-way carriageway's left edge yellow where the country says so (MUTCD 3B.09:
         # divided roads, ramps); wider on motorways (TSRGD 1012, RMS: 0.20-0.30 m)
@@ -5458,7 +5468,8 @@ def lane_layout(spec):
         return drive, lanes
     parked = spec.urban and spec.parking and cls in PARKING_CLASSES and not (not spec.oneway and cls in URBAN_ARTERIAL)
     drive = w - ((PARKING_M if spec.oneway else 2 * PARKING_M) if parked else 2 * edge_margin(spec))
-    lanes = int(spec.lanes) if spec.lanes else int(drive // LANE_M)
+    # a busway with no mapped count is one lane: the class's 7 m is the carriageway, not two stripes
+    lanes = int(spec.lanes) if spec.lanes else (1 if spec.cls == "busway" else int(drive // LANE_M))
     import markings
     if lanes > 1 and w / lanes < markings.MIN_LANE_M:   # (a count the road has no room for: a tag, or a way of a stretch)
         lanes = int(w // markings.MIN_LANE_M)

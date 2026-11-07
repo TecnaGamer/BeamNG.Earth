@@ -535,6 +535,10 @@ def _appended_features(ways, cls, default_width=None, oneway=False):
     if oneway:
         f.rules["oneway"] = mg.rule_table(oneways, "float")
     f.clipped = np.zeros(n, bool)
+    # the mapped lane count, so a busway's dashes can see it. join() writes this same column from the cell's tags.
+    import roadlanes
+    counted = [roadlanes.count(w.get("lanes")) for w in ways]
+    f.attrs["osm_lanes"] = np.array([np.nan if v is None else float(v) for v in counted], np.float64)
     return f
 
 
