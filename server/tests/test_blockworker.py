@@ -282,6 +282,29 @@ class GermanReadGateTest(unittest.TestCase):
         self.assertFalse(self.reads("graph", self.MUNICH, west_of=-(w + 50.0)))
 
 
+class SkinInputsTest(unittest.TestCase):
+    """A geotile's skin inputs kept in memory hold only while its session file is the one they came from: a content
+    restored from the revisit cache (the German junction signs switched back), by this road process or another,
+    replaces the file, and the skin reads the restored inputs, not the other setting's."""
+
+    def test_a_replaced_session_file_is_read_again(self):
+        import pickle
+        out = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(out, ignore_errors=True))
+        key = "test_skin_inputs"
+        p = os.path.join(out, blockworker.geo_names(key)["inputs"])
+        self.addCleanup(lambda: blockworker._geo_inputs.pop(key, None))
+        built = []
+        blockworker._write_bytes(p, pickle.dumps({"h": "us"}))
+        self.assertEqual(blockworker._skin_inputs(key, out, lambda: built.append(1))["h"], "us")
+        self.assertEqual(blockworker._skin_inputs(key, out, lambda: built.append(1))["h"], "us", "kept")
+        blockworker._write_bytes(p, pickle.dumps({"h": "de"}))    # (restored: the other setting's, as large)
+        self.assertEqual(blockworker._skin_inputs(key, out, lambda: built.append(1))["h"], "de")
+        os.remove(p)
+        self.assertIsNone(blockworker._skin_inputs(key, out, lambda: built.append(1)), "gone: built again")
+        self.assertEqual(built, [1])
+
+
 class GermanCacheKeyTest(unittest.TestCase):
     """The revisit keys of a road tile and of a geotile's content with the German junction signs: off, or on away
     from germany.BOX, the key's parts exactly as before (the setting's bool last; the border data not asked);

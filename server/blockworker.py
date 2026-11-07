@@ -1106,7 +1106,7 @@ EXACT_TOL_M = 0.10          # ... and a render-only part
 GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail", "barrier")    # parts the car hits ("bld*" too without a bldcol)
 _geo_lock = threading.Lock()
 _geo_graders = {}           # (lat0, lon0) -> grading.Grader view of a geotile's frame
-_geo_inputs = {}            # geotile key -> its skin inputs (dict), the most recently used last
+_geo_inputs = {}            # geotile key -> (its session file's _file_sig, its skin inputs), the most recently used last
 
 
 def _frame_grader(frame):
@@ -1236,8 +1236,9 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
         inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h}
         _write_bytes(os.path.join(out_dir, names["inputs"]), pickle.dumps(inputs, protocol=4))
+        sig = _file_sig(os.path.join(out_dir, names["inputs"]))
         with _geo_lock:
-            _geo_inputs[tile.key] = inputs
+            _geo_inputs[tile.key] = (sig, inputs)
             while len(_geo_inputs) > GEO_INPUTS_KEPT:
                 _geo_inputs.pop(next(iter(_geo_inputs)))
         return f"{vfs_dir}/{names['json']}", n, {"h": h, "parts": parts}
@@ -1362,24 +1363,37 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
     return path, n, info, P.fuel_pads
 
 
+def _file_sig(path):
+    """(mtime ns, size, inode) of path, or None when it is missing."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
 def _skin_inputs(key, out_dir, content):
-    """The skin inputs of geotile key (_write_geo_content): kept in memory, else its session file, else content()
-    (its content built or loaded again, which writes the file). None when there are none."""
+    """The skin inputs of geotile key (_write_geo_content): kept in memory while its session file is the one they came
+    from (a content restored from the revisit cache or built again, by any road process, replaces it: the German
+    junction signs switched back and forth), else its session file, else content() (its content built or loaded
+    again, which writes the file). None when there are none."""
     import pickle
+    p = os.path.join(out_dir, geo_names(key)["inputs"])
+    sig = _file_sig(p)
     with _geo_lock:
         got = _geo_inputs.get(key)
-    if got is not None:
-        return got
-    p = os.path.join(out_dir, geo_names(key)["inputs"])
-    if not os.path.exists(p):
+    if got is not None and sig is not None and got[0] == sig:
+        return got[1]
+    if sig is None:
         content()
     try:
         with open(p, "rb") as f:
+            st = os.fstat(f.fileno())
             got = pickle.load(f)
     except (OSError, EOFError, pickle.UnpicklingError):
         return None
     with _geo_lock:
-        _geo_inputs[key] = got
+        _geo_inputs[key] = ((st.st_mtime_ns, st.st_size, st.st_ino), got)
         while len(_geo_inputs) > GEO_INPUTS_KEPT:
             _geo_inputs.pop(next(iter(_geo_inputs)))
     return got
