@@ -59,7 +59,7 @@ class RegionStyleTest(unittest.TestCase):
         self.assertEqual(bld.region_style(40.42, -3.70).name, "mediterranean")
         self.assertEqual(bld.region_style(19.43, -99.13).name, "latin_america")
         self.assertEqual(bld.region_style(35.66, 139.70).name, "east_asia")
-        self.assertEqual(bld.region_style(-33.87, 151.21).name, "oceania")
+        self.assertEqual(bld.region_style(-33.87, 151.21).name, "australia_south")
         self.assertEqual(bld.region_style(30.9, 75.8).name, "south_asia")
         self.assertEqual(bld.region_style(0.0, 25.0).name, "warm")
         self.assertEqual(bld.region_style(19.7, 96.1).name, "warm", "Myanmar: not South Asia's style")
@@ -68,13 +68,17 @@ class RegionStyleTest(unittest.TestCase):
         self.assertEqual(bld.brick_share(40.0, -110.0), 0.15)
 
     def test_queensland_region_and_the_rest_unchanged(self):     # fork
-        self.assertEqual(bld.region_style(-27.47, 153.02).name, "queensland", "Brisbane")
-        self.assertEqual(bld.region_style(-16.92, 145.77).name, "queensland", "Cairns")
-        self.assertEqual(bld.region_style(-19.26, 146.82).name, "queensland", "Townsville")
-        self.assertEqual(bld.region_style(-28.0, 153.43).name, "queensland", "Gold Coast")
-        self.assertEqual(bld.region_style(-23.70, 133.88).name, "oceania", "Alice Springs")
-        self.assertEqual(bld.region_style(-33.87, 151.21).name, "oceania", "Sydney")
-        self.assertEqual(bld.region_style(-37.81, 144.96).name, "oceania", "Melbourne")
+        self.assertEqual(bld.region_style(-27.47, 153.02).name, "australia", "Brisbane")
+        self.assertEqual(bld.region_style(-16.92, 145.77).name, "australia", "Cairns")
+        self.assertEqual(bld.region_style(-19.26, 146.82).name, "australia", "Townsville")
+        self.assertEqual(bld.region_style(-28.0, 153.43).name, "australia", "Gold Coast")
+        self.assertEqual(bld.region_style(-12.46, 130.84).name, "australia", "Darwin")
+        self.assertEqual(bld.region_style(-33.87, 151.21).name, "australia_south", "Sydney")
+        self.assertEqual(bld.region_style(-37.81, 144.96).name, "australia_south", "Melbourne")
+        self.assertEqual(bld.region_style(-42.88, 147.33).name, "australia_south", "Hobart")
+        self.assertEqual(bld.region_style(-31.95, 115.86).name, "australia_west", "Perth")
+        self.assertEqual(bld.region_style(-41.29, 174.78).name, "oceania", "Wellington")
+        self.assertEqual(bld.region_style(-23.70, 133.88).name, "australia", "Alice Springs")
         self.assertEqual(bld.region_style(-36.85, 174.76).name, "oceania", "Auckland")
         self.assertEqual(bld.region_style(-9.44, 147.18).name, "warm", "Port Moresby: not Queensland")
         self.assertEqual(bld.region_style(-10.31, 150.45).name, "oceania", "Milne Bay, PNG: as before, not Queensland")
@@ -184,7 +188,7 @@ class RegionStyleTest(unittest.TestCase):
         h = hashlib.sha256()
         rng = np.random.default_rng(11)
         places = ((39.29, -76.61), (37.36, -118.39), (46.59, 7.91), (52.37, 4.90), (40.42, -3.70), (28.61, 77.21),
-                  (19.43, -99.13), (-33.87, 151.21), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04))
+                  (19.43, -99.13), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04))
         for lat, lon in places:
             for _ in range(8):
                 w, l = rng.uniform(7, 12), rng.uniform(9, 16)
@@ -196,7 +200,7 @@ class RegionStyleTest(unittest.TestCase):
                     for k in (0, 1, 2, 3, 5):
                         h.update(np.ascontiguousarray(m[k]).tobytes())
                     h.update(repr((spec.roof_mat, spec.facade, spec.wall, spec.roof)).encode())
-        self.assertEqual(h.hexdigest(), "d21b52fc32318224baaf183ed90785d74ce5738c35f965db28365c84618a0815")
+        self.assertEqual(h.hexdigest(), "069cab2a2b1455e7070fa750a571aeab53dbabfada18dbf76791d00f0c75f9e4")
 
     def test_other_regions_gables_unchanged(self):          # fork
         """build() of buildings outside Queensland (gabled, hipped and flat; brick, wood and plain houses and barns, in
@@ -207,8 +211,7 @@ class RegionStyleTest(unittest.TestCase):
         h = hashlib.sha256()
         rng = np.random.default_rng(23)
         places = ((39.29, -76.61), (37.36, -118.39), (46.59, 7.91), (52.37, 4.90), (40.42, -3.70), (28.61, 77.21),
-                  (19.43, -99.13), (-33.87, 151.21), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04), (59.33, 18.07),
-                  (-31.95, 115.86), (-37.81, 144.96), (-29.5, 153.9), (-29.3, 140.0))
+                  (19.43, -99.13), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04), (59.33, 18.07))
         roofs = set()
         for lat, lon in places:
             for _ in range(24):
@@ -224,7 +227,7 @@ class RegionStyleTest(unittest.TestCase):
                         h.update(np.ascontiguousarray(m[k]).tobytes())
                     h.update(repr((spec.roof_mat, spec.facade, spec.wall, spec.roof)).encode())
         self.assertEqual(roofs, {"gabled", "hipped", "flat"})
-        self.assertEqual(h.hexdigest(), "3d78998a558dfa2c514cea840887cff60c2178f36463a49398fb833def59a10e")
+        self.assertEqual(h.hexdigest(), "6bc72fd6feb9ea67cd8837fb3dd37a77c7e7e933a1f617a04abe2797db79d92a")
 
     @staticmethod
     def gable_ends(m):
@@ -409,7 +412,7 @@ class HighSetTest(unittest.TestCase):       # fork
                 continue
             self.assertLessEqual(s.floors, 2)
             self.assertNotEqual(s.roof, "flat")
-            k, look, uv = s.hs
+            k, look, uv = s.hs[:3]
             if k == bld.HS_TIMBER:      # weatherboard / fibro look: SIDING walls, any paint
                 self.assertTrue(s.wall.startswith(bld.SIDING))
             elif k == bld.HS_RENDER:
@@ -424,7 +427,7 @@ class HighSetTest(unittest.TestCase):       # fork
         # a barn, three storeys and every other region: none
         self.assertIsNone(bld.plan(rect(0, 0, 9, 12), {"class": "barn"}, lat=self.LAT, lon=self.LON).hs)
         self.assertIsNone(self.plan(1, num_floors=3).hs)
-        for lat, lon in ((39.29, -76.61), (-33.87, 151.21), (-37.81, 144.96), (-29.5, 153.9), (46.59, 7.91), (-9.44, 147.18)):
+        for lat, lon in ((39.29, -76.61), (46.59, 7.91), (-9.44, 147.18)):
             for i in range(60):
                 s = bld.plan(rect(0, 0, 9, 12), {"class": "house", "seed_id": i}, lat=lat, lon=lon)
                 self.assertIsNone(s.hs)
@@ -658,8 +661,8 @@ class HighSetTest(unittest.TestCase):       # fork
         import hashlib
         h = hashlib.sha256()
         rng = np.random.default_rng(31)
-        places = ((39.29, -76.61), (-33.87, 151.21), (-36.85, 174.76), (-29.5, 153.9), (-26.2, 28.04), (-9.44, 147.18),
-                  (46.59, 7.91), (-31.95, 115.86))
+        places = ((39.29, -76.61), (-36.85, 174.76), (-26.2, 28.04), (-9.44, 147.18),
+                  (46.59, 7.91))
         road = (np.array([(-900.0, -900.0), (900.0, -900.0)]), 4.0)
         for lat, lon in places:
             for _ in range(12):
@@ -679,7 +682,7 @@ class HighSetTest(unittest.TestCase):       # fork
                         h.update(np.ascontiguousarray(m[k]).tobytes())
                     h.update(np.ascontiguousarray(bld.collision_mesh([(spec, 0.0, 2.0)])[0]).tobytes())
                     h.update(repr(bld.collider_boxes([(spec, 0.0, 2.0)], 0.0, 0.0)).encode())
-        self.assertEqual(h.hexdigest(), "5a66177d3ca348b69512e443e496dca8539e536b8ce8de9f0f5555076c4d3258")   # fork: Port Moresby left Australia with the state borders
+        self.assertEqual(h.hexdigest(), "408b8997063425419f21accccd5abf323453228c9b43b72157a893d5ae4114c5")   # fork: Port Moresby left Australia with the state borders
 
 
 class QldDetailsTest(unittest.TestCase):        # fork
@@ -708,7 +711,7 @@ class QldDetailsTest(unittest.TestCase):        # fork
         return a, b
 
     def test_only_detached_queensland_houses_with_pitched_roofs_have_details(self):
-        for lat, lon in ((39.29, -76.61), (-33.87, 151.21), (46.59, 7.91), (-9.44, 147.18), (-29.5, 153.9)):
+        for lat, lon in ((39.29, -76.61), (46.59, 7.91), (-9.44, 147.18)):
             for i in range(40):
                 s = bld.plan(rect(0, 0, 9, 12), {"class": "house", "seed_id": i}, lat=lat, lon=lon)
                 self.assertIsNone(s.qld)

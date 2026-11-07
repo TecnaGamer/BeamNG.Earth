@@ -451,6 +451,17 @@ _QLD_TILE_AT = (1, 4, 6, 9, 12, 14, 17)
 _QLD_ROOFS = tuple(
     (ROOF_QTILE, _weighted([f"q{k}" for k in range(len(QLD_TILE))], QLD_TILE_W)) if i in _QLD_TILE_AT else
     (ROOF_COLORBOND, _weighted([f"q{k}" for k in range(len(QLD_METAL))], QLD_METAL_W)) for i in range(20))
+
+
+def _au_style(name, brick):
+    """fork: an Australian style (Colorbond and tile roofs, brick veneer, weatherboard, render); brick: the share of
+    brick facades, by state (AU_STATE_STYLE)."""
+    return Style(name, brick, ((SIDING, 0.64), (STUCCO, 0.36)), 0.3, 0.02, 0.65,
+                        _QLD_ROOFS, pitch=23.0, paint=0.1, wall_tints=(0, 1, 2, 3, 4), stone=0.02,
+                        looks={SIDING: _weighted([f"q{k}" for k in range(len(QLD_SIDING))], QLD_SIDING_W)},
+                        brick_tints=_weighted([f"bne_bld_fac_qbrick{k}" for k in range(len(QLD_BRICK))], QLD_BRICK_W),
+                        brick_house=1.0)
+
 STYLES = {
     "us_east": Style("us_east", 0.75, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
     "us_south": Style("us_south", 0.35, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
@@ -478,11 +489,9 @@ STYLES = {
     # fork: Queensland (south-east suburbs): pitched hipped and gabled roofs of Colorbond (65 %) or terracotta / concrete
     # tile (35 %; interleaved so the gabled and the hipped both mix: the choice and the roof shape share the seed), face
     # brick veneer on 45 % of the houses, painted weatherboard (35 %) and render (20 %), a few verandahs (the porch)
-    "queensland": Style("queensland", 0.45, ((SIDING, 0.64), (STUCCO, 0.36)), 0.3, 0.02, 0.65,
-                        _QLD_ROOFS, pitch=23.0, paint=0.1, wall_tints=(0, 1, 2, 3, 4), stone=0.02,
-                        looks={SIDING: _weighted([f"q{k}" for k in range(len(QLD_SIDING))], QLD_SIDING_W)},
-                        brick_tints=_weighted([f"bne_bld_fac_qbrick{k}" for k in range(len(QLD_BRICK))], QLD_BRICK_W),
-                        brick_house=1.0),
+    "australia": _au_style("australia", 0.45),     # fork: QLD and the NT
+    "australia_south": _au_style("australia_south", 0.70),     # fork: NSW, ACT, VIC, SA, TAS: mostly brick veneer
+    "australia_west": _au_style("australia_west", 0.88),       # fork: WA: double brick almost everywhere
     # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal): a concrete frame and brick under plaster, flat terrace
     # roofs, pastel and whitewashed walls, metal roofs on sheds (OmdevShastri, PR #146)
     "south_asia": Style("south_asia", 0.08, ((STUCCO, 0.92),), 0.0, 0.94, 0.2, (_CLAY, (ROOF_METAL, (0, 1, 3))),
@@ -493,6 +502,11 @@ STYLES = {
     "cool": Style("cool", 0.3, ((SIDING, 0.4),), 0.05, 0.1, 0.3, (_DARK, (ROOF_METAL, (0, 1, 2, 3))), pitch=30.0,
                   paint=0.3, barn_red=0.5),
 }
+# fork: Australia by state (climate.au_state; others "australia_south"). The tropical north keeps the timber houses on
+# stumps on flat ground (HS_LOWSET_SHARE); the south raises them only on a slope (AU_LOWSET_SOUTH)
+AU_STATE_STYLE = {"QLD": "australia", "NT": "australia", "WA": "australia_west"}
+AU_STYLES = frozenset(("australia", "australia_south", "australia_west"))
+AU_LOWSET_SOUTH = 0.03
 
 
 def region_style(lat, lon):
@@ -518,8 +532,9 @@ def region_style(lat, lon):
     if 20.0 <= lat <= 46.0 and 100.0 <= lon <= 146.0:           # China, Korea, Japan, Taiwan
         return STYLES["east_asia"]
     # fork: Queensland (climate.au_state: the state's outline, so neither the NSW Northern Rivers nor Papua New Guinea)
-    if climate.au_state(lat, lon) == "QLD":
-        return STYLES["queensland"]
+    st = climate.au_state(lat, lon)
+    if st is not None:
+        return STYLES[AU_STATE_STYLE.get(st, "australia_south")]
     if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia, New Zealand
         return STYLES["oceania"]
     if 6.0 <= lat <= 37.5 and 68.0 <= lon <= 92.5:              # South Asia (not Myanmar, east of 92.5)
@@ -684,7 +699,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         elif west_town and not industrial and cls != "apartments":
             # Bishop's and Moab's photos (2026-10-14): one-storey shops with false fronts, ranch houses
             nf = 1 if seed < WEST_TOWN_ONE_STOREY else 2
-        elif style.name == "queensland" and cls != "apartments" and (
+        elif style.name in AU_STYLES and cls != "apartments" and (
                 cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)):
             # fork: a Queensland suburb's untagged detached houses are mostly single-storey low-set (Yeppoon, Rockhampton,
             # Brisbane's outer suburbs): QLD_ONE_STOREY of them one storey (hashed on the footprint's own seed), the rest two;
@@ -925,7 +940,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         _, _, hl, hw = oriented_box(ring)
         porch = area >= 0.9 * 4 * hl * hw
     gable = None
-    if style.name == "queensland" and roof == "gabled":     # fork: the gable end continues the wall (_roof)
+    if style.name in AU_STYLES and roof == "gabled":     # fork: the gable end continues the wall (_roof)
         if (wall is not None and facade == wall) or (plain and facade.startswith(SIDING)):
             gable = (facade, SIDING_UV_M)                   # weatherboard, render, ...: the wall's own plain look
         elif band is BAND_BRICK and facade.startswith("bne_bld_fac_qbrick"):
@@ -936,17 +951,17 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 gable = (f"{SIDING}|q{QLD_GABLE_SIDING[int(_hash01(seed, 'gable tint') * len(QLD_GABLE_SIDING))]}",
                          SIDING_UV_M)
     hs = None
-    if style.name == "queensland" and house and nf <= 2 and roof != "flat" and not (shed or barn or church or garage):
+    if style.name in AU_STYLES and house and nf <= 2 and roof != "flat" and not (shed or barn or church or garage):
         # fork: a detached house on stumps (timber: SIDING walls) or on a masonry base (brick, render): see highset()
         wk = wall.split("|")[0] if wall else None
         if wk == SIDING:
-            hs = (HS_TIMBER, None, 0.0)
+            hs = (HS_TIMBER, None, 0.0, HS_LOWSET_SHARE if style.name == "australia" else AU_LOWSET_SOUTH)
         elif wk == STUCCO:
             hs = (HS_RENDER, wall, SIDING_UV_M)
         elif band is BAND_BRICK and facade.startswith("bne_bld_fac_qbrick"):
             hs = (HS_BRICK, f"{BRICK_WALL}|q{int(facade[len('bne_bld_fac_qbrick'):])}", GABLE_BRICK_UV_M)
     qld = None
-    if style.name == "queensland" and house and nf <= 2 and roof != "flat" and not (shed or barn or church or garage):
+    if style.name in AU_STYLES and house and nf <= 2 and roof != "flat" and not (shed or barn or church or garage):
         # fork: a detached pitched-roof house's details (_qld_extras): wider eaves with soffit, fascia, gutters and
         # downpipes (all of them), solar panels, whirlybirds, window awnings (older brick / weatherboard houses);
         # doors() adds the carport and the water tank (they need the neighbours and the road)
@@ -962,7 +977,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
                 deck=garage and roof == "flat", pitch=style.pitch, gable=gable, hs=hs, qld=qld,
                 # fork: a Queensland building that may stand on a main street: doors() decides its footpath awning (Spec.awn)
-                awn={} if style.name == "queensland" and qld is None and roof == "flat" and not (
+                awn={} if style.name in AU_STYLES and qld is None and roof == "flat" and not (
                     shed or barn or church or garage or industrial or terminal or plain) else None,
                 au=bool(lat is not None and lon is not None and climate.in_australia(lat, lon)) or None)    # fork
 
@@ -1313,7 +1328,7 @@ def _hs_floor(spec, gmin, gmax):
     if hs[0] == HS_TIMBER:
         if drop >= HS_DROP_M:
             return max(gmin + HS_FLOOR_M + HS_FLOOR_SPAN_M * _hash01(seed, "hsfloor"), gmax + HS_UPHILL_MIN_M)
-        if _hash01(seed, "lowset") < HS_LOWSET_SHARE:
+        if _hash01(seed, "lowset") < (hs[3] if len(hs) > 3 else HS_LOWSET_SHARE):
             return gmax + HS_LOWSET_M[0] + HS_LOWSET_M[1] * _hash01(seed, "lowsetm")
         return None
     if drop >= HS_DROP_M:

@@ -853,7 +853,7 @@ US_EAST = {"us_east", "us_south"}       # East Coast USA's units (the user, 2026
 # over the islands, plus the pump pairs) is the closest stock one: Italy's awning is a European roadside look and East
 # Coast's unit a US convenience-store forecourt. It is the "default" kit's code path under its own style name, so a
 # real Australian kit (new .dae assets) has one place to hook in; that kit has no US-only prop (flag, diner) to filter.
-OCEANIA = {"queensland", "oceania"}
+OCEANIA = {"australia", "australia_south", "australia_west", "oceania"}
 
 
 def style_of(lat, lon):
