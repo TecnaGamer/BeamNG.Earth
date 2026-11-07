@@ -15,7 +15,7 @@ import os
 
 import numpy as np
 
-MOUNT_EXTRA = ("streetlight", "catmast", "catmast_eu")
+MOUNT_EXTRA = ("streetlight", "eu_lamp_steel", "eu_lamp_concrete", "catmast", "catmast_eu")
 SHIFT_M = 40.0              # m either way along the approach from the kernel's spot a pole may be
 LATERAL_M = (2.0, 14.0)     # m from the approach's road centre: a roadside pole, not a median's or a far one
 JUNCTION_CLEAR_M = 20.0     # m a board stays short of the junction it names
