@@ -35,6 +35,9 @@ local external = cam({ camPos = vec3(P[1] + 40, P[2] + 20, P[3] + 3), smooth = c
 -- free camera far from the car (must move anyway) + transition filter
 local free = cam({ pos = vec3(P[1] - 4000, P[2] + 3000, P[3] + 500), rot = vec3(0.3, 0.1, 0), velocity = vec3(1, 2, 3) })
 local transition = cam({ camLastPosAbs = vec3(P[1] - 6, P[2], P[3] + 2.5), camLastPosRel = vec3(-6, 0, 1.5) })
+-- the 3D map's ground target, far from the car (the near-player walk would leave it behind)
+local globe = cam({ target = vec3(P[1] + 20000, P[2] - 8000, 40), dist = 5000, heading = 0.4, pitch = 0.8,
+  groundSmooth = 40, fov = 55 })
 
 local camData = { pos = vec3(P[1], P[2], P[3]), prevPos = vec3(P[1] - 0.5, P[2], P[3]), vehPos = vec3(P[1], P[2], P[3]),
   prevVehPos = vec3(P[1] - 0.5, P[2], P[3]), vel = vec3(30, 0, 0) }
@@ -43,7 +46,7 @@ camData.res = { pos = camData.resPos }
 local contexts = { main = {
   camData = camData, finalCameraData = { pos = vec3(P[1] - 6, P[2], P[3] + 2.5) }, lastValidData = { pos = vec3(P[1] - 6, P[2], P[3] + 2.5) },
   vehicleCamerasCache = { [1] = { focusedCamName = 'orbit', cameras = { orbit = orbit, chase = chase, topDown = topDown, external = external } } },
-  globalCamerasCache = { free = free, transition = transition },
+  globalCamerasCache = { free = free, transition = transition, earthGlobe = globe },
 } }
 package.loaded['core/cameraUpdate'] = { onPreRender = function() return contexts end }
 
@@ -98,6 +101,9 @@ x = xf:apply(P[1] + 40, P[2] + 20, P[3] + 3)
 T.near(external.smooth.posX.state, x, 1e-6, 'external.smooth spring x (nested filter)')
 expect(free.pos, oldFree, 'free camera (4 km away) moved anyway')
 same(free.rot, { 0.3, 0.1, 0 }, 'free.rot'); same(free.velocity, { 1, 2, 3 }, 'free.velocity')
+expect(globe.target, { P[1] + 20000, P[2] - 8000, 40 }, '3D map target (20 km from the car) moved once')
+T.check(globe.groundSmooth == nil and globe.dist == 5000 and globe.heading == 0.4 and globe.pitch == 0.8,
+  '3D map: old ground smooth cleared, the orbit itself unchanged')
 expect(transition.camLastPosAbs, { P[1] - 6, P[2], P[3] + 2.5 }, 'transition.camLastPosAbs')
 same(transition.camLastPosRel, { -6, 0, 1.5 }, 'transition.camLastPosRel')
 expect(camData.pos, oldCam, 'camData.pos'); expect(camData.vehPos, oldCam, 'camData.vehPos')
@@ -116,14 +122,17 @@ T.check(jump < 1.5, 'no teleport detected next frame (moved ' .. string.format('
 package.loaded['core/cameraUpdate'] = nil
 local orbit2 = cam({ camLastPos2 = vec3(P[1] - 3, P[2], P[3] + 1) })
 local free2 = cam({ pos = vec3(1, 2, 3) })
+local globe2 = cam({ target = vec3(P[1] + 20000, P[2], 10), groundSmooth = 10, dist = 4000 })
 core_camera = {
   getCameraDataById = function(id) return id == 1 and { orbit = orbit2 } or nil end,
-  getGlobalCameras = function() return { free = free2 } end,
+  getGlobalCameras = function() return { free = free2, earthGlobe = globe2 } end,
 }
 getAllVehicles = function() return { { getID = function() return 1 end } } end
 stats = camshift.shift(xf, P[1], P[2], P[3])
 T.check(not stats.viaDebug, 'fallback path')
 expect(orbit2.camLastPos2, { P[1] - 3, P[2], P[3] + 1 }, 'fallback: vehicle camera mapped')
 expect(free2.pos, { 1, 2, 3 }, 'fallback: free camera mapped')
+expect(globe2.target, { P[1] + 20000, P[2], 10 }, 'fallback: 3D map target mapped')
+T.check(globe2.groundSmooth == nil and globe2.dist == 4000, 'fallback: 3D map ground smooth cleared')
 
 T.done('test_camshift')
