@@ -34,7 +34,7 @@ def enabled(server_flag):
     return bool(server_flag)
 
 
-KERNEL = 160            # the earthfast version with de_stretch / de_junction (160: every tertiary a stretch)
+KERNEL = 162            # the earthfast version with de_stretch / de_junction (162: over dev's 161; every tertiary a stretch)
 CLS = {"living_street": 0, "residential": 1, "unclassified": 2, "tertiary": 3, "secondary": 4, "primary": 5,
        "trunk": 6, "motorway": 7}                       # the kernel's class codes (anything else is no street)
 PRIO = {"designated": 1, "end": 2, "yes_unposted": 3}   # osm_priority_road

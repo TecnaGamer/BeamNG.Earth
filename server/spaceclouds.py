@@ -105,9 +105,9 @@ def merc_lat(y, z):
     return np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * np.asarray(y, np.float64) / n))))
 
 
-def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL):
-    """The (TEX_PX, TEX_PX, 3) uint8 image of the global pixel box at zoom z from the layer's tiles (black where a tile
-    could not be had), and how many tiles came."""
+def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL, px=TEX_PX, kind="demand"):
+    """The (px, px, 3) uint8 image of the global pixel box at zoom z from the layer's tiles (black where a tile could
+    not be had), and how many tiles came (globe.py: the whole world from EOX)."""
     from PIL import Image
     tx0, tx1 = int(math.floor(x0 / 256)), int(math.floor(x1 / 256))
     ty0, ty1 = int(math.floor(y0 / 256)), int(math.floor(y1 / 256))
@@ -118,7 +118,7 @@ def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL):
         if not 0 <= ty < n:
             return tx, ty, None
         try:
-            body = fetcher.get(url.format(z=z, x=tx % n, y=ty), kind="demand").body
+            body = fetcher.get(url.format(z=z, x=tx % n, y=ty), kind=kind).body
             return tx, ty, np.asarray(Image.open(io.BytesIO(body)).convert("RGB"))
         except Exception as e:          # (a tile the day has no pass over yet, offline: no clouds there)
             log.debug("space clouds tile %s/%s/%s: %s", z, tx, ty, e)
@@ -133,7 +133,7 @@ def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL):
     cx0, cy0 = int(round(x0 - tx0 * 256)), int(round(y0 - ty0 * 256))
     cx1, cy1 = int(round(x1 - tx0 * 256)), int(round(y1 - ty0 * 256))
     crop = Image.fromarray(canvas[cy0:max(cy1, cy0 + 1), cx0:max(cx1, cx0 + 1)])
-    return np.asarray(crop.resize((TEX_PX, TEX_PX), Image.BILINEAR)), got
+    return np.asarray(crop if crop.size == (px, px) else crop.resize((px, px), Image.BILINEAR)), got
 
 
 def build(out_dir, vfs_dir, frame, lat0, lon0, cam_alt, fetcher, sun=None):
