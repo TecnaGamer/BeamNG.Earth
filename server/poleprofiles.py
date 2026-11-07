@@ -36,6 +36,8 @@ FR_ALL = "fr-recessed-all-v1"
 def profile_for(country, mode="off"):
     """Unknown/unsupported countries fail closed to stock. No geographic override."""
     country = str(country or "").strip().upper()
+    if mode == "poles" and country in EUROPE_COUNTRIES:
+        return EU_KIT+':'+country
     if mode == "europe" and country in EUROPE_COUNTRIES:
         return FR_KIT if country == "FR" else EU_KIT+':'+country
     if country != "FR":
@@ -71,9 +73,13 @@ def choose(profile, road_id):
 
 def geographic_profile(mode):
     """Serializable worker/cache token, including algorithm AND boundary data version."""
-    if mode not in ("fr-demo", "fr-all", "fr-varied", "europe"):
+    if mode not in ("fr-demo", "fr-all", "fr-varied", "europe", "poles"):
         return None
     import countrybounds
+    if mode == "poles":
+        # the country's own poles only (the user, 2026-11-07: "the poles we have are not the local ones"): no town or
+        # direction signs, stops, guard rails or French kit, so no data of theirs in the cache token either
+        return (countrybounds.ALGORITHM, mode, countrybounds.signature() + ":" + EU_KIT)
     import townlayout
     fingerprint = countrybounds.signature()+":"+townlayout.VERSION
     if mode in ("fr-varied", "europe"):
