@@ -30,6 +30,7 @@ import geodesy
 import grading as gradingmod
 import heightmap
 import mapdata as mapdatamod
+import mappedpoles
 import netfetch
 import plancache
 import roadwidth as roadwidthmod
@@ -892,7 +893,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
-                                 clearance_out=clearance, towns=towns)
+                                 clearance_out=clearance, towns=towns,
+                                 # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
+                                 mapped_poles=(mappedpoles.road_points(_s.md, frame, tx, ty, pole_profile)
+                                               if props is not None else None))
     P.town_faces = town_faces
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
@@ -1021,7 +1025,6 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                               props, wires, clearance=clearance[0] if clearance else None)
-        import mappedpoles
         mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban)
         import fences
         try:

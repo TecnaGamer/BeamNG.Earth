@@ -133,8 +133,9 @@ class MappedPoleTest(unittest.TestCase):
             def cell(self, *a, **kw):
                 raise AssertionError("must not read")
         for on, profile in ((False, self.profile), (True, None)):
-            with patch.object(franceroads, "ON", on):
+            with patch.object(franceroads, "ON", on), patch.object(mappedpoles, "EVERYWHERE", False):
                 mappedpoles.tile_poles(self.frame, 0, 0, Unreadable(), None, [], [], profile)
+                self.assertIsNone(mappedpoles.road_points(Unreadable(), self.frame, 0, 0, profile))
 
     def test_high_voltage_vertices_do_not_receive_duplicate_small_poles(self):
         self.assertEqual(self.build([pole("n1", -20), pole("n2", 20),
@@ -245,3 +246,74 @@ class PipelineTest(unittest.TestCase):
             bw._geo_skin(aid, 49.026, lon, 15, self.gx, self.gy, str(out), "/test",
                           True, 0., 1 / 32, lambda: self.fail("content already present"))
             self.assertEqual(json.loads((out / names["json"]).read_text())["props"], original_props)
+
+
+class EverywhereTest(unittest.TestCase):
+    """Mapped poles outside the French scenery (BNE_MAPPED_POLES, on by default): every country, in town too, the
+    stock pole and its stock wires; France's left to its own scenery while that places them."""
+
+    def setUp(self):
+        m = patch.object(franceroads, "ON", False)
+        m.start()
+        self.addCleanup(m.stop)
+        self.frame = geodesy.EnuFrame(48.55, 11.50)      # Bavaria
+        self.box = (-100., -100., 100., 100.)
+
+    def build(self, records, frame=None, profile=None):
+        frame = frame or self.frame
+        props, wires = [], []
+        mappedpoles.place(frame, self.box, [infrastructure(frame, records)], lambda la, lo: np.zeros(np.shape(la)),
+                          props, wires, profile, everywhere=True)
+        return props, wires
+
+    def test_stock_poles_at_their_mapped_places_with_stock_wires(self):
+        props, wires = self.build([pole("n1", -20., height="12"), pole("n2", 20.), line([[-20., 10.], [20., 10.]])])
+        self.assertEqual([r[0] for r in props], [poleprofiles.STOCK.group] * 2)
+        self.assertEqual([r[6] for r in props], [poleprofiles.STOCK.height] * 2, "the stock pole's own height")
+        np.testing.assert_allclose([r[1:3] for r in props], [[-20, 10], [20, 10]], atol=.01)
+        self.assertEqual(len(wires), len(furniture.WIRE_ARMS), "the stock pole's wires, as between guessed ones")
+        self.assertTrue(all(isinstance(w, np.ndarray) for w in wires))
+        self.assertIsNotNone(furniture.wire_mesh(wires, (0., 0., 0.)))
+
+    def test_other_countries_too_and_nothing_invented(self):
+        for la, lo in ((39., -76.), (45., -73.), (59.9, 10.7)):
+            props, wires = self.build([pole("n1", 0)], frame=geodesy.EnuFrame(la, lo))
+            self.assertEqual((len(props), wires), (1, []))
+        self.assertEqual(self.build([line([[-60., 10], [60., 10]])]), ([], []))
+        self.assertEqual(len(self.build([pole("n1", 0, disused="yes")])[0]), 0)
+
+    def test_urban_poles_are_drawn(self):
+        props, _ = [], []
+        mappedpoles.place(self.frame, self.box, [infrastructure(self.frame, [pole("n1", 0)])],
+                          lambda la, lo: np.zeros(np.shape(la)), props, [], None,
+                          lambda la, lo: np.ones(np.shape(la), bool), everywhere=True)
+        self.assertEqual(len(props), 1)
+
+    def test_france_is_left_to_its_scenery_while_that_places_its_poles(self):
+        fr = geodesy.EnuFrame(48.91623, 7.78231)
+        profile = poleprofiles.geographic_profile("europe")
+        self.assertEqual(len(self.build([pole("n1", 0)], frame=fr, profile=profile)[0]), 1, "scenery off: drawn")
+        with patch.object(franceroads, "ON", True):
+            self.assertEqual(self.build([pole("n1", 0)], frame=fr, profile=profile), ([], []))
+            self.assertEqual(len(self.build([pole("n1", 0)], profile=profile)[0]), 1, "Germany: still drawn")
+
+    def test_road_points_are_the_drawn_poles(self):
+        records = [pole("n1", -20.), pole("n2", 20.), pole("n3", 0., location="underground"),
+                   ("n4", "utility_pole", [[0., 40.]], {"utility": "street_lighting"}), line([[-20., 10], [20., 10]])]
+        f = infrastructure(self.frame, records)
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return SimpleNamespace(layers={"infrastructure": f})
+        with patch("roads.cells_of_tile", return_value=["a"]):
+            pts = mappedpoles.road_points(Md(), self.frame, 0, 0)
+        np.testing.assert_allclose(sorted(map(tuple, pts)), [(-20., 10.), (20., 10.)], atol=.01)
+
+    def test_field_lines_get_their_long_spans(self):
+        """OpenStreetMap's minor_line is mostly the 10-30 kV line across the fields, 90-160 m between mapped poles:
+        wired here (up to EVERYWHERE_MAX_SPAN_M), never past it."""
+        props, wires = self.build([pole("n1", -75.), pole("n2", 75.), line([[-75., 10.], [75., 10.]])])
+        self.assertEqual((len(props), len(wires)), (2, len(furniture.WIRE_ARMS)))
+        self.assertGreater(min(float(w[:, 2].min()) for w in wires), 4.5, "sagging, not on the ground")
+        far = mappedpoles.EVERYWHERE_MAX_SPAN_M / 2 + 10.
+        self.assertEqual(self.build([pole("n1", -far), pole("n2", far), line([[-far, 10.], [far, 10.]])])[1], [])
