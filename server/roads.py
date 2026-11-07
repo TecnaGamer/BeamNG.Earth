@@ -7515,6 +7515,33 @@ def _wall_runs(cut):
 
 WALL_DECK_MARGIN_M = 3.0    # m beyond a bridge deck's edge where a road under it gets no retaining wall ...
 WALL_DECK_OVER_M = 2.0      # ... a deck this far over the road (an overpass, not the road's own approach)
+WALL_UNDER_DECK_ON = os.environ.get("BNE_WALL_UNDER_DECK", "on") != "off"   # walls under a deck, up to its underside
+WALL_DECK_UNDER_M = 2.2     # m a deck's girders and slab reach under its surface (roadmesh.DECK_DEPTH + GIRDER_D)
+WALL_DECK_REACH_M = 1.0     # m beyond a deck's edge its underside caps a wall (the face line, not the road's centre)
+WALL_UNDER_MIN_H_M = 2.0    # m: a wall under a deck stands at least this over the road, else none (a low deck)
+
+
+def _deck_floor(xy, z, decks):
+    """Per point xy (k, 2) at road heights z (k,): the underside (m) of the lowest bridge deck over it (deck chunks:
+    "n" points [x, y, z], "w" m; within half its width + WALL_DECK_REACH_M of its nearest segment, WALL_DECK_OVER_M
+    or more over z), +inf where none. Pure."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    z = np.asarray(z, np.float64)
+    floor = np.full(len(xy), np.inf)
+    for ch in decks or ():
+        n = np.asarray(ch["n"], np.float64)[:, :3]
+        if len(n) < 2 or not len(xy):
+            continue
+        a, ab = n[:-1], n[1:] - n[:-1]
+        L2 = np.maximum((ab[:, :2] ** 2).sum(1), 1e-12)
+        t = np.clip(((xy[:, None, :] - a[None, :, :2]) * ab[None, :, :2]).sum(2) / L2, 0.0, 1.0)     # (k, segs)
+        d = np.hypot(*(a[None, :, :2] + t[:, :, None] * ab[None, :, :2] - xy[:, None, :]).transpose(2, 0, 1))
+        k = np.argmin(d, axis=1)
+        r = np.arange(len(xy))
+        zd = a[k, 2] + t[r, k] * ab[k, 2]
+        near = (d[r, k] <= float(ch.get("w") or 0) / 2 + WALL_DECK_REACH_M) & (zd - z >= WALL_DECK_OVER_M)
+        floor = np.where(near, np.minimum(floor, zd - WALL_DECK_UNDER_M), floor)
+    return floor
 
 
 def _under_decks(xy, z, decks):
@@ -7954,7 +7981,15 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                     a_, b_ = w_["at"]
                     w_["base"] = w_["base"] + out_n[a_:b_] * hx[a_:b_, None]
             out.extend(par)
-        full = _wall_runs(gg - z) & ~_under_decks(xy + out_n * core, z, decks) & ~bends
+        # (under a bridge deck: up to its underside, the wall of the cutting the deck spans, the real abutment's; it
+        # stood nowhere there, the ground beside the road bare under the deck, Assaku. None under a low deck.)
+        if WALL_UNDER_DECK_ON:
+            floor = _deck_floor(xy + out_n * face[:, None], z, decks)
+            deck_ok = ~np.isfinite(floor) | (floor - z >= WALL_UNDER_MIN_H_M)
+        else:
+            floor = np.full(len(xy), np.inf)
+            deck_ok = ~_under_decks(xy + out_n * core, z, decks)
+        full = _wall_runs(gg - z) & deck_ok & ~bends
         # (no face standing on a carriageway: a hairpin's other leg, the same road, the Stelvio Pass 2026-10-21)
         full &= ~_on_carriageways(xy + out_n * face[:, None], others, 0.0)
         # (its ends lowered over WALL_TAPER_M toward the road, the whole wall's ends, not a tile edge's)
@@ -7981,8 +8016,10 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                 # (never over another road: a hairpin's wall top covered the road above, the Stelvio Pass, the user's
                 # report 2026-10-21)
                 th = np.minimum(th, _clear_depth(base, out_n[sl], th, others, fid))
-                tp = np.minimum(top_g[sl], z[sl] + max_h) + WALL_TOP_M      # (no taller than that)
+                # (no taller than that; under a deck up to its underside: no slope above the wall there to grade)
+                tp = np.minimum(top_g[sl], z[sl] + np.where(np.isfinite(floor[sl]), floor[sl] - z[sl], max_h)) + WALL_TOP_M
                 tp = z[sl] + WALL_TAPER_LOW_M + (tp - z[sl] - WALL_TAPER_LOW_M).clip(0) * taper[sl]
+                tp = np.minimum(tp, floor[sl])              # (under a deck: not through it)
                 # (rock faces only as an experiment, BNE_CLIFF_WALLS=on, for tall rural cuts: the Stelvio's hairpins are
                 # walled in dry stone, tall cuts too, Mapillary 2026-10-21; the user chose stone walls for passes)
                 tall = CLIFF_WALLS_ON and float(np.max(top_g[sl] - z[sl])) > CLIFF_MIN_CUT_M
@@ -7990,8 +8027,8 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                 # (its top behind the coping rises to the graded ground at its back edge, never under the coping: the
                 # slope above goes on from the wall's top, held up by it; flat at the top's height, a band of grass
                 # standing out in front of the slope read as a thick freestanding wall, the user 2026-10-31)
-                back_top = top if ground_at is None else np.maximum(top, np.minimum(
-                    ground_at(face[sl] + th, range(i, j + 1)), z[sl] + max_h + BACK_TOP_OVER_M))
+                back_top = top if ground_at is None else np.maximum(top, np.minimum(np.minimum(
+                    ground_at(face[sl] + th, range(i, j + 1)), z[sl] + max_h + BACK_TOP_OVER_M), floor[sl]))
                 out.append({"base": base, "top": top, "back_top": back_top, "foot": z[sl] - WALL_FOOT_M,
                             "mountain": bool(mountain),
                             "toward": -out_n[sl], "thick": th, "concrete": concrete, "rock": rural and tall,
