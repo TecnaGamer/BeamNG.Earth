@@ -10,6 +10,15 @@
 //!   A track at the end (the road goes on, unpaved) is the caller's `open_ends`: no sign.
 //! - CROSSING: at a marked crossing without signals (the caller's `crossings`, points on the road's centre line), each
 //!   way of travel, at the crossing's near side.
+//! - CURVE, DOUBLE: a sharp bend (or two opposite ones close together) on a country road of tertiary rank or better, far from
+//!   any junction: the warning `warn_m` before it, in the lane's direction of travel, left or right by the turn's sign.
+//! - ROUNDABOUT: on every road entering a ring (the caller's geometric rings): the mandatory sign at the entry, and in the
+//!   country the warning `warn_m` before it.
+//! - SIGNALS: on a country road of secondary rank or better, `warn_m` before the signals the map has on it.
+//! - MOTORWAY, MOTORWAY_END: where a motorway carriageway begins (no motorway before it, traffic joining) and `motorway_end`
+//!   m before it ends (traffic leaves onto a lesser road).
+//! - LIVING, LIVING_END: entering and leaving a living street from a road that is not one.
+//! - ONEWAY: at the start of a town one-way street where traffic can join and none comes along it as a one-way.
 //! A rule's signs are thinned per direction; signs stand beside the carriageway on the driving side, clear of every
 //! road's pavement, never on a bridge or in a tunnel.
 //!
@@ -27,10 +36,42 @@ use crate::speedsigns::{clear, splitmix, Mesh};
 pub const NO_ENTRY: u8 = 0;
 pub const DEAD_END: u8 = 1;
 pub const CROSSING: u8 = 2;
+pub const CURVE_RIGHT: u8 = 3;
+pub const CURVE_LEFT: u8 = 4;
+pub const DOUBLE_RIGHT: u8 = 5;
+pub const DOUBLE_LEFT: u8 = 6;
+pub const ROUNDABOUT_WARN: u8 = 7;
+pub const ROUNDABOUT: u8 = 8;
+pub const SIGNALS: u8 = 9;
+pub const MOTORWAY: u8 = 10;
+pub const MOTORWAY_END: u8 = 11;
+pub const LIVING: u8 = 12;
+pub const LIVING_END: u8 = 13;
+pub const ONEWAY: u8 = 14;
+pub const RULES: usize = 15;
+
+/// What the caller says about a road beside its rank (meta column 5).
+pub const FLAG_RING: i64 = 1;
+pub const FLAG_LIVING: i64 = 2;
+
+/// The thresholds (Input::params, sign_systems.json "params"): [warn m, curve turn deg, curve window m, curve min rank,
+/// double curve gap m, motorway end m, living street min m, min m before the hazard].
+pub const N_PARAMS: usize = 8;
 
 const PRIMARY: i64 = 5;         // ranks (speedsigns.RANK)
 const TRUNK: i64 = 6;
 const TERTIARY: i64 = 3;
+const SECONDARY: i64 = 4;
+const MOTORWAY_RANK: i64 = 7;
+const BEND_STEP_M: f64 = 5.0;            // the heading is sampled this often along a piece
+const BEND_EDGE_M: f64 = 15.0;           // a bend ending this near a piece's end is a junction's corner, not a curve
+const MIN_PIECE_M: f64 = 80.0;           // a piece shorter than this holds no curve sign
+const SIGN_AFTER_M: f64 = 15.0;          // a sign stands at least this far past its piece's start
+const ROUNDABOUT_IN_M: f64 = 8.0;        // the mandatory sign this far before the ring
+const MOTORWAY_IN_M: f64 = 20.0;
+const LIVING_IN_M: f64 = 6.0;
+const ONEWAY_IN_M: f64 = 8.0;
+const PANEL_GAP_M: f64 = 5.0;            // no two signs facing the same way closer than this, whatever their rules
 
 const NO_ENTRY_IN_M: f64 = 6.0;         // m inside the road's end
 const DEAD_END_IN_M: f64 = 10.0;        // m past the junction
@@ -44,7 +85,7 @@ const STRAIGHT_COS: f64 = 0.7;
 const SPLIT_COS: f64 = -0.85;           // a one-way leaving nearly opposite to the one arriving: a divided road's split
 const TANGENT_M: f64 = 10.0;
 const SAME_WAY_COS: f64 = 0.7;
-const GAPS_M: [f64; 3] = [15.0, 30.0, 12.0];        // the same rule, the same way, within this: one sign
+const GAPS_M: [f64; RULES] = [15.0, 30.0, 12.0, 150.0, 150.0, 150.0, 150.0, 100.0, 20.0, 150.0, 200.0, 200.0, 25.0, 25.0, 60.0];        // the same rule, the same way, within this: one sign
 const ALONG_STEPS_M: [f64; 5] = [0.0, 2.0, 4.0, 6.0, 8.0];  // a blocked spot: tried farther along
 const OUT_STEP_M: f64 = 0.5;
 const OUT_MAX_M: f64 = 2.0;
@@ -59,6 +100,8 @@ struct Road {
     rank: i64,
     urban: bool,
     link: bool,
+    ring: bool,
+    living: bool,
 }
 
 struct Edge {
@@ -154,6 +197,7 @@ pub struct Input<'a> {
     pub skip: ArrayView2<'a, f64>,
     pub skip_off: ArrayView1<'a, i64>,
     pub crossings: ArrayView2<'a, f64>,
+    pub signals: ArrayView2<'a, f64>,
     pub open_ends: ArrayView2<'a, f64>,
     pub poly: ArrayView2<'a, f64>,
     pub poly_off: ArrayView1<'a, i64>,
@@ -161,6 +205,7 @@ pub struct Input<'a> {
     pub left_hand: bool,
     pub lateral: [f64; 2],      // m from the carriageway's edge to the sign's near edge: town, country
     pub widest: f64,            // m: the widest sign, for the clearance of a spot
+    pub params: [f64; N_PARAMS],
 }
 
 fn no_entry(net: &Net, incoming: &HashMap<i64, Vec<usize>>, outgoing: &HashMap<i64, Vec<usize>>, out: &mut Vec<Cand>) {
@@ -168,7 +213,7 @@ fn no_entry(net: &Net, incoming: &HashMap<i64, Vec<usize>>, outgoing: &HashMap<i
     for e in 0..net.edges.len() {
         let ed = &net.edges[e];
         let rd = &net.roads[ed.road];
-        if rd.dir == 0 || rd.link || rd.rank < 1 || rd.rank >= TRUNK { continue; }
+        if rd.dir == 0 || rd.link || rd.ring || rd.rank < 1 || rd.rank >= TRUNK { continue; }
         let d = net.end_dir(e);
         let mut onward = false;
         for &o in outgoing.get(&ed.to).unwrap_or(&none) {
@@ -221,7 +266,7 @@ fn dead_ends(net: &Net, ends: &HashMap<i64, usize>, outgoing: &HashMap<i64, Vec<
     for e in 0..net.edges.len() {
         let ed = &net.edges[e];
         let rd = &net.roads[ed.road];
-        if rd.dir != 0 || rd.link || rd.rank < 1 || rd.rank > TERTIARY { continue; }
+        if rd.dir != 0 || rd.link || rd.ring || rd.rank < 1 || rd.rank > TERTIARY { continue; }
         if *ends.get(&ed.from).unwrap_or(&0) < 3 { continue; }
         let Some(total) = dead_length(net, e, ends, outgoing, open) else { continue };
         if total < DEAD_END_MIN_M { continue; }
@@ -235,7 +280,7 @@ fn dead_ends(net: &Net, ends: &HashMap<i64, usize>, outgoing: &HashMap<i64, Vec<
 fn on_road(net: &Net, q: [f64; 2]) -> Option<(usize, f64)> {
     let mut best: Option<(usize, f64, f64)> = None;
     for (r, rd) in net.roads.iter().enumerate() {
-        if rd.rank < 1 || rd.rank > TRUNK || rd.link { continue; }
+        if rd.rank < 1 || rd.rank > TRUNK || rd.link || rd.ring { continue; }
         for k in rd.a..rd.b.saturating_sub(1) {
             let (ax, ay, bx, by) = (net.pts[[k, 0]], net.pts[[k, 1]], net.pts[[k + 1, 0]], net.pts[[k + 1, 1]]);
             let (dx, dy) = (bx - ax, by - ay);
@@ -274,6 +319,187 @@ fn cand(net: &Net, rule: u8, road: usize, s: f64, fwd: bool, back: bool) -> Cand
     Cand { rule, road, s, fwd, back, key, xy, dir }
 }
 
+/// The arc length on edge e's road at u m from the edge's start in its direction of travel.
+fn arc_at(net: &Net, e: usize, u: f64) -> f64 {
+    let ed = &net.edges[e];
+    if ed.fwd { ed.sa + u } else { ed.sb - u }
+}
+
+/// The unit direction of travel on edge e between u0 and u1.
+fn travel(net: &Net, e: usize, u0: f64, u1: f64) -> [f64; 2] {
+    let r = net.edges[e].road;
+    let (p, _) = net.at(r, arc_at(net, e, u0));
+    let (q, _) = net.at(r, arc_at(net, e, u1));
+    let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+    let l = (dx * dx + dy * dy).sqrt().max(1e-9);
+    [dx / l, dy / l]
+}
+
+/// A warning for a hazard at u_hazard m along edge e: `warn` m before it, but past the edge's start by SIGN_AFTER_M, and
+/// at least min_before m before it; nothing where the piece leaves no room.
+fn before(net: &Net, e: usize, u_hazard: f64, p: &[f64; N_PARAMS], out: &mut Vec<Cand>, rule: u8) {
+    let u = (u_hazard - p[0]).max(SIGN_AFTER_M);
+    if u_hazard - u < p[7] { return; }
+    let ed = &net.edges[e];
+    out.push(cand(net, rule, ed.road, arc_at(net, e, u), ed.fwd, false));
+}
+
+struct Bend {
+    from: f64,      // u of its first sample
+    to: f64,
+    turn: f64,      // radians, positive to the left
+}
+
+/// The bends of edge e: windows of `window` m turning at least `min_turn` radians, the sharpest of each run, in travel order.
+fn bends(net: &Net, e: usize, window: f64, min_turn: f64) -> Vec<Bend> {
+    let len = net.len(e);
+    let steps = (len / BEND_STEP_M).floor() as usize;
+    let w = ((window / BEND_STEP_M).round() as usize).max(2);
+    if steps < w + 2 { return Vec::new(); }
+    let head: Vec<f64> = (0..steps).map(|k| {
+        let d = travel(net, e, k as f64 * BEND_STEP_M, (k + 1) as f64 * BEND_STEP_M);
+        d[1].atan2(d[0])
+    }).collect();
+    let tau = std::f64::consts::TAU;
+    let dh: Vec<f64> = head.windows(2).map(|h| (h[1] - h[0] + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI).collect();
+    if dh.len() < w { return Vec::new(); }
+    let sums: Vec<f64> = (0..=dh.len() - w).map(|i| dh[i..i + w].iter().sum()).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < sums.len() {
+        if sums[i].abs() < min_turn { i += 1; continue; }
+        let sign = sums[i].signum();
+        let (mut best, mut k) = (i, i);
+        while k < sums.len() && sums[k].abs() >= min_turn && sums[k].signum() == sign {
+            if sums[k].abs() > sums[best].abs() { best = k; }
+            k += 1;
+        }
+        out.push(Bend { from: best as f64 * BEND_STEP_M, to: (best + w + 1) as f64 * BEND_STEP_M, turn: sums[best] });
+        i = best + w;
+    }
+    out
+}
+
+fn curves(net: &Net, p: &[f64; N_PARAMS], out: &mut Vec<Cand>) {
+    for e in 0..net.edges.len() {
+        let ed = &net.edges[e];
+        let rd = &net.roads[ed.road];
+        if rd.urban || rd.link || rd.ring || rd.rank < p[3] as i64 { continue; }
+        let len = net.len(e);
+        if len < MIN_PIECE_M { continue; }
+        let list: Vec<Bend> = bends(net, e, p[2], p[1].to_radians()).into_iter()
+            .filter(|b| b.from >= BEND_EDGE_M && b.to <= len - BEND_EDGE_M).collect();
+        let mut k = 0;
+        while k < list.len() {
+            let b = &list[k];
+            let double = list.get(k + 1).map_or(false, |n| n.turn * b.turn < 0.0 && n.from - b.to <= p[4]);
+            let rule = match (b.turn > 0.0, double) {
+                (false, false) => CURVE_RIGHT,
+                (true, false) => CURVE_LEFT,
+                (false, true) => DOUBLE_RIGHT,
+                (true, true) => DOUBLE_LEFT,
+            };
+            before(net, e, b.from, p, out, rule);
+            k += if double { 2 } else { 1 };
+        }
+    }
+}
+
+fn roundabouts(net: &Net, p: &[f64; N_PARAMS], out: &mut Vec<Cand>) {
+    let mut ring_at: HashMap<i64, bool> = HashMap::new();
+    for ed in &net.edges {
+        if net.roads[ed.road].ring {
+            ring_at.insert(ed.from, true);
+            ring_at.insert(ed.to, true);
+        }
+    }
+    for e in 0..net.edges.len() {
+        let ed = &net.edges[e];
+        let rd = &net.roads[ed.road];
+        if rd.ring || rd.link || rd.rank < 1 || !ring_at.contains_key(&ed.to) { continue; }
+        let len = net.len(e);
+        let u = (len - ROUNDABOUT_IN_M).max(len * 0.5);
+        out.push(cand(net, ROUNDABOUT, ed.road, arc_at(net, e, u), ed.fwd, true));
+        if !rd.urban && rd.rank >= TERTIARY && len >= MIN_PIECE_M {
+            before(net, e, len, p, out, ROUNDABOUT_WARN);
+        }
+    }
+}
+
+fn signal_warnings(net: &Net, nodes: &ArrayView2<f64>, p: &[f64; N_PARAMS], out: &mut Vec<Cand>) {
+    for k in 0..nodes.nrows() {
+        let Some((r, s)) = on_road(net, [nodes[[k, 0]], nodes[[k, 1]]]) else { continue };
+        let rd = &net.roads[r];
+        if rd.urban || rd.ring || rd.rank < SECONDARY { continue; }
+        let total = rd.s[rd.b - rd.a - 1];
+        for fwd in [true, false] {
+            if (rd.dir > 0 && !fwd) || (rd.dir < 0 && fwd) { continue; }
+            let at = if fwd { (s - p[0]).max(SIGN_AFTER_M) } else { (s + p[0]).min(total - SIGN_AFTER_M) };
+            if (s - at).abs() < p[7] { continue; }
+            out.push(cand(net, SIGNALS, r, at, fwd, false));
+        }
+    }
+}
+
+fn motorways(net: &Net, ends: &HashMap<i64, usize>, incoming: &HashMap<i64, Vec<usize>>,
+             outgoing: &HashMap<i64, Vec<usize>>, p: &[f64; N_PARAMS], out: &mut Vec<Cand>) {
+    let none: Vec<usize> = Vec::new();
+    let is_mw = |i: usize| { let r = &net.roads[net.edges[i].road]; r.rank == MOTORWAY_RANK && !r.link };
+    for e in 0..net.edges.len() {
+        let ed = &net.edges[e];
+        let rd = &net.roads[ed.road];
+        if !is_mw(e) || rd.dir == 0 { continue; }
+        let len = net.len(e);
+        let same = |i: usize| net.edges[i].road == ed.road && net.edges[i].piece == ed.piece;
+        let inn = incoming.get(&ed.from).unwrap_or(&none);
+        if *ends.get(&ed.from).unwrap_or(&0) >= 2 && !inn.is_empty() && !inn.iter().any(|&i| !same(i) && is_mw(i)) {
+            out.push(cand(net, MOTORWAY, ed.road, arc_at(net, e, MOTORWAY_IN_M.min(len * 0.5)), ed.fwd, false));
+        }
+        let outg = outgoing.get(&ed.to).unwrap_or(&none);
+        if *ends.get(&ed.to).unwrap_or(&0) >= 2 && !outg.is_empty() && !outg.iter().any(|&i| !same(i) && is_mw(i)) && len >= 60.0 {
+            out.push(cand(net, MOTORWAY_END, ed.road, arc_at(net, e, (len - p[5]).max(10.0)), ed.fwd, false));
+        }
+    }
+}
+
+fn living_streets(net: &Net, incoming: &HashMap<i64, Vec<usize>>, outgoing: &HashMap<i64, Vec<usize>>,
+                  p: &[f64; N_PARAMS], out: &mut Vec<Cand>) {
+    let none: Vec<usize> = Vec::new();
+    let plain = |i: usize| { let r = &net.roads[net.edges[i].road]; !r.living && !r.link && !r.ring && r.rank >= 1 };
+    for e in 0..net.edges.len() {
+        let ed = &net.edges[e];
+        if !net.roads[ed.road].living { continue; }
+        let len = net.len(e);
+        if len < p[6] { continue; }
+        if incoming.get(&ed.from).unwrap_or(&none).iter().any(|&i| plain(i)) {
+            out.push(cand(net, LIVING, ed.road, arc_at(net, e, LIVING_IN_M.min(len * 0.5)), ed.fwd, false));
+        }
+        if outgoing.get(&ed.to).unwrap_or(&none).iter().any(|&i| plain(i)) {
+            out.push(cand(net, LIVING_END, ed.road, arc_at(net, e, (len - LIVING_IN_M).max(len * 0.5)), ed.fwd, true));
+        }
+    }
+}
+
+fn one_ways(net: &Net, ends: &HashMap<i64, usize>, incoming: &HashMap<i64, Vec<usize>>, out: &mut Vec<Cand>) {
+    let none: Vec<usize> = Vec::new();
+    for e in 0..net.edges.len() {
+        let ed = &net.edges[e];
+        let rd = &net.roads[ed.road];
+        if rd.dir == 0 || rd.link || rd.ring || rd.living || !rd.urban || rd.rank < 1 || rd.rank > SECONDARY { continue; }
+        if *ends.get(&ed.from).unwrap_or(&0) < 3 { continue; }
+        let inn = incoming.get(&ed.from).unwrap_or(&none);
+        let d = net.start_dir(e);
+        let joins = inn.iter().any(|&i| { let o = &net.edges[i]; o.road != ed.road && net.roads[o.road].rank >= 1 });
+        let carries = inn.iter().any(|&i| {
+            let o = &net.edges[i];
+            o.road != ed.road && net.roads[o.road].dir != 0 && dot(net.end_dir(i), d) > STRAIGHT_COS
+        });
+        if joins && !carries {
+            out.push(cand(net, ONEWAY, ed.road, arc_at(net, e, ONEWAY_IN_M.min(net.len(e) * 0.5)), ed.fwd, false));
+        }
+    }
+}
+
 /// The signs of a box. Arrays as speed_sign_place's; see Input.
 pub fn plan(a: &Input) -> Vec<Sign> {
     let mut net = Net { pts: a.pts, ll: a.ll, roads: Vec::new(), edges: Vec::new() };
@@ -285,8 +511,10 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         for k in p + 1..q {
             s[k - p] = s[k - p - 1] + ((a.pts[[k, 0]] - a.pts[[k - 1, 0]]).powi(2) + (a.pts[[k, 1]] - a.pts[[k - 1, 1]]).powi(2)).sqrt();
         }
+        let flags = if a.meta.ncols() > 5 { a.meta[[r, 5]] as i64 } else { 0 };
         let road = Road { a: p, b: q, s, hw: a.meta[[r, 0]], dir: a.meta[[r, 1]] as i64, rank: a.meta[[r, 2]] as i64,
-                          urban: a.meta[[r, 3]] != 0.0, link: a.meta[[r, 4]] != 0.0 };
+                          urban: a.meta[[r, 3]] != 0.0, link: a.meta[[r, 4]] != 0.0, ring: flags & FLAG_RING != 0,
+                          living: flags & FLAG_LIVING != 0 };
         let total = if q >= p + 2 { road.s[q - p - 1] } else { 0.0 };
         net.roads.push(road);
         if total < 1.0 { continue; }
@@ -324,6 +552,12 @@ pub fn plan(a: &Input) -> Vec<Sign> {
     no_entry(&net, &incoming, &outgoing, &mut cands);
     dead_ends(&net, &ends, &outgoing, &open, &mut cands);
     crossings(&net, &a.crossings, &mut cands);
+    curves(&net, &a.params, &mut cands);
+    roundabouts(&net, &a.params, &mut cands);
+    signal_warnings(&net, &a.signals, &a.params, &mut cands);
+    motorways(&net, &ends, &incoming, &outgoing, &a.params, &mut cands);
+    living_streets(&net, &incoming, &outgoing, &a.params, &mut cands);
+    one_ways(&net, &ends, &incoming, &mut cands);
     cands.sort_by(|x, y| (x.rule, x.key).cmp(&(y.rule, y.key)));
 
     // one a place, per rule and direction, in a fixed order
@@ -361,7 +595,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         b
     }).collect();
     let side = if a.left_hand { -1.0 } else { 1.0 };
-    let mut out = Vec::new();
+    let mut out: Vec<Sign> = Vec::new();
     for &i in &kept {
         let c = &cands[i];
         let rd = &net.roads[c.road];
@@ -389,15 +623,21 @@ pub fn plan(a: &Input) -> Vec<Sign> {
             }
         }
         let Some((q, t, road_xy)) = found else { continue };
-        if !(q[0] >= a.bx[0] && q[0] < a.bx[2] && q[1] >= a.bx[1] && q[1] < a.bx[3]) { continue; }
+        // (the margin's signs count too: a sign in the next tile keeps this one off its spot, the same in both)
+        if out.iter().any(|o| dot(o.dir, t) > SAME_WAY_COS
+                           && (o.xy[0] - q[0]).powi(2) + (o.xy[1] - q[1]).powi(2) < PANEL_GAP_M * PANEL_GAP_M) {
+            continue;
+        }
         let size = if rd.urban { 0 } else if rd.rank >= PRIMARY { 2 } else { 1 };
         out.push(Sign { xy: q, dir: t, rule: c.rule, size, road: road_xy, urban: rd.urban });
     }
+    out.retain(|o| o.xy[0] >= a.bx[0] && o.xy[0] < a.bx[2] && o.xy[1] >= a.bx[1] && o.xy[1] < a.bx[3]);
     out
 }
 
 /// The road signs of a box (x0, y0, x1, y1). Roads, junctions and bridge / tunnel ranges as speed_sign_place's; crossings
-/// (c, 2) points on the roads' centre lines; open_ends (o, 2) where a road goes on unpaved. lateral: m from the
+/// (c, 2) points on the roads' centre lines, signals the same for traffic signals; meta (r, 6) as speed_sign_place's with the flags
+/// (FLAG_RING, FLAG_LIVING) in column 5; params: see N_PARAMS; open_ends (o, 2) where a road goes on unpaved. lateral: m from the
 /// carriageway's edge to the sign's near edge [town, country]; widest: m, the widest sign's width.
 /// Returns (k, 9) [x, y, travel x, travel y, rule, size class, road x, road y, urban].
 #[pyfunction]
@@ -407,14 +647,15 @@ pub fn road_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll
                             con_at: PyReadonlyArray1<'py, f64>, con_id: PyReadonlyArray1<'py, i64>,
                             con_off: PyReadonlyArray1<'py, i64>, skip: PyReadonlyArray2<'py, f64>,
                             skip_off: PyReadonlyArray1<'py, i64>, crossings: PyReadonlyArray2<'py, f64>,
-                            open_ends: PyReadonlyArray2<'py, f64>, poly: PyReadonlyArray2<'py, f64>,
-                            poly_off: PyReadonlyArray1<'py, i64>, bx: [f64; 4], left_hand: bool, lateral: [f64; 2],
-                            widest: f64) -> Bound<'py, PyArray2<f64>> {
+                            signals: PyReadonlyArray2<'py, f64>, open_ends: PyReadonlyArray2<'py, f64>,
+                            poly: PyReadonlyArray2<'py, f64>, poly_off: PyReadonlyArray1<'py, i64>, bx: [f64; 4],
+                            left_hand: bool, lateral: [f64; 2], widest: f64, params: [f64; N_PARAMS])
+                            -> Bound<'py, PyArray2<f64>> {
     let signs = plan(&Input { pts: pts.as_array(), ll: ll.as_array(), off: off.as_array(), meta: meta.as_array(),
                               con_at: con_at.as_array(), con_id: con_id.as_array(), con_off: con_off.as_array(),
                               skip: skip.as_array(), skip_off: skip_off.as_array(), crossings: crossings.as_array(),
-                              open_ends: open_ends.as_array(), poly: poly.as_array(), poly_off: poly_off.as_array(),
-                              bx, left_hand, lateral, widest });
+                              signals: signals.as_array(), open_ends: open_ends.as_array(), poly: poly.as_array(),
+                              poly_off: poly_off.as_array(), bx, left_hand, lateral, widest, params });
     let n = signs.len();
     let rows: Vec<f64> = signs.iter().flat_map(|s| [s.xy[0], s.xy[1], s.dir[0], s.dir[1], s.rule as f64, s.size as f64,
                                                     s.road[0], s.road[1], if s.urban { 1.0 } else { 0.0 }]).collect();
@@ -545,12 +786,21 @@ mod tests {
         con_off: Array1<i64>,
     }
 
-    fn roads(list: &[(&[[f64; 2]], f64, f64, [i64; 2])]) -> T {
+    type Line<'a> = (&'a [[f64; 2]], f64, f64, [i64; 2]);
+
+    fn roads(list: &[Line]) -> T {
+        let x: Vec<_> = list.iter().map(|(l, d, r, e)| (*l, *d, *r, *e, 1.0, 0, 0.0)).collect();
+        roads_x(&x)
+    }
+
+    /// Roads as (points, direction, rank, junction ids at their two ends, urban, flags, link), half width 4 m.
+    #[allow(clippy::type_complexity)]
+    fn roads_x(list: &[(&[[f64; 2]], f64, f64, [i64; 2], f64, i64, f64)]) -> T {
         let (mut p, mut off, mut meta, mut at, mut id, mut co) = (vec![], vec![0i64], vec![], vec![], vec![], vec![0i64]);
-        for (line, dir, rank, ends) in list {
+        for (line, dir, rank, ends, urban, flags, link) in list {
             p.extend(line.iter().flatten().copied());
             off.push(p.len() as i64 / 2);
-            meta.extend([4.0, *dir, *rank, 1.0, 0.0]);
+            meta.extend([4.0, *dir, *rank, *urban, *link, *flags as f64]);
             for (f, c) in [(0.0, ends[0]), (1.0, ends[1])] {
                 if c >= 0 { at.push(f); id.push(c); }
             }
@@ -558,19 +808,26 @@ mod tests {
         }
         let n = p.len() / 2;
         T { pts: Array2::from_shape_vec((n, 2), p).unwrap(), off: Array1::from(off),
-            meta: Array2::from_shape_vec((list.len(), 5), meta).unwrap(), con_at: Array1::from(at),
+            meta: Array2::from_shape_vec((list.len(), 6), meta).unwrap(), con_at: Array1::from(at),
             con_id: Array1::from(id), con_off: Array1::from(co) }
     }
 
+    const PARAMS: [f64; N_PARAMS] = [150.0, 55.0, 60.0, 3.0, 100.0, 150.0, 40.0, 50.0];
+
     fn run(t: &T, cross: Array2<f64>, open: Array2<f64>, left: bool) -> Vec<Sign> {
+        run_x(t, cross, none(), open, left)
+    }
+
+    fn run_x(t: &T, cross: Array2<f64>, signals: Array2<f64>, open: Array2<f64>, left: bool) -> Vec<Sign> {
         let skip = Array2::<f64>::zeros((0, 2));
         let skip_off = Array1::<i64>::zeros(t.off.len());
         let poly = Array2::<f64>::zeros((0, 2));
         let poly_off = arr1(&[0i64]);
         plan(&Input { pts: t.pts.view(), ll: t.pts.view(), off: t.off.view(), meta: t.meta.view(), con_at: t.con_at.view(),
                       con_id: t.con_id.view(), con_off: t.con_off.view(), skip: skip.view(), skip_off: skip_off.view(),
-                      crossings: cross.view(), open_ends: open.view(), poly: poly.view(), poly_off: poly_off.view(),
-                      bx: [-1e4, -1e4, 1e4, 1e4], left_hand: left, lateral: [0.5, 1.2], widest: 0.75 })
+                      crossings: cross.view(), signals: signals.view(), open_ends: open.view(), poly: poly.view(),
+                      poly_off: poly_off.view(), bx: [-1e4, -1e4, 1e4, 1e4], left_hand: left, lateral: [0.5, 1.2],
+                      widest: 0.75, params: PARAMS })
     }
 
     fn none() -> Array2<f64> { Array2::zeros((0, 2)) }
@@ -665,6 +922,157 @@ mod tests {
         let a: Vec<String> = run(&t, arr2(&[[50.0, 0.0]]), none(), false).iter().map(|s| format!("{s:?}")).collect();
         let b: Vec<String> = run(&t, arr2(&[[50.0, 0.0]]), none(), false).iter().map(|s| format!("{s:?}")).collect();
         assert_eq!(a, b);
+    }
+
+    /// Points of a circular arc round (cx, cy) of radius r from angle a0 to a1 (degrees).
+    fn arc(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> Vec<[f64; 2]> {
+        let n = ((a1 - a0).abs() / 5.0).ceil().max(2.0) as usize;
+        (0..=n).map(|k| {
+            let a = (a0 + (a1 - a0) * k as f64 / n as f64).to_radians();
+            [cx + r * a.cos(), cy + r * a.sin()]
+        }).collect()
+    }
+
+    fn of(s: &[Sign], rule: u8) -> Vec<&Sign> { s.iter().filter(|x| x.rule == rule).collect() }
+
+    fn country(line: &[[f64; 2]], dir: f64, rank: f64) -> T {
+        roads_x(&[(line, dir, rank, [1, 2], 0.0, 0, 0.0)])
+    }
+
+    #[test]
+    fn a_sharp_bend_gets_a_warning_each_way_with_the_turns_own_side() {
+        // east 250 m, a left arc of radius 50 m (90 degrees), north 250 m
+        let mut line: Vec<[f64; 2]> = vec![[-300.0, 0.0]];
+        line.extend(arc(-50.0, 50.0, 50.0, -90.0, 0.0));
+        line.push([0.0, 300.0]);
+        let s = run(&country(&line, 0.0, 4.0), none(), none(), false);
+        let l = of(&s, CURVE_LEFT);
+        assert_eq!(l.len(), 1, "{s:?}");
+        assert!(l[0].dir[0] > 0.99 && l[0].xy[0] > -215.0 && l[0].xy[0] < -185.0, "150 m before the bend: {:?}", l[0]);
+        let r = of(&s, CURVE_RIGHT);
+        assert_eq!(r.len(), 1, "{s:?}");
+        assert!(r[0].dir[1] < -0.99, "coming back it turns right: {:?}", r[0]);
+        assert!(s.iter().all(|x| x.rule == CURVE_LEFT || x.rule == CURVE_RIGHT), "{s:?}");
+    }
+
+    #[test]
+    fn gentle_bends_town_roads_small_roads_and_junction_corners_get_none() {
+        let mut gentle: Vec<[f64; 2]> = vec![[-300.0, 0.0]];
+        gentle.extend(arc(-50.0, 300.0, 300.0, -90.0, -70.0));
+        gentle.push([200.0, 90.0]);
+        assert!(run(&country(&gentle, 0.0, 4.0), none(), none(), false).is_empty());
+        let mut sharp: Vec<[f64; 2]> = vec![[-300.0, 0.0]];
+        sharp.extend(arc(-50.0, 50.0, 50.0, -90.0, 0.0));
+        sharp.push([0.0, 300.0]);
+        assert!(run(&roads_x(&[(&sharp, 0.0, 4.0, [1, 2], 1.0, 0, 0.0)]), none(), none(), false).is_empty(), "in town");
+        assert!(run(&country(&sharp, 0.0, 2.0), none(), none(), false).is_empty(), "a residential road");
+        let corner = roads_x(&[(&[[-300.0, 0.0], [0.0, 0.0]], 0.0, 4.0, [1, 2], 0.0, 0, 0.0),
+                               (&[[0.0, 0.0], [0.0, 300.0]], 0.0, 4.0, [2, 3], 0.0, 0, 0.0)]);
+        assert!(run(&corner, none(), none(), false).is_empty(), "a junction's corner");
+    }
+
+    #[test]
+    fn a_real_s_bend_is_a_double_curve_not_two_curves() {
+        let mut line: Vec<[f64; 2]> = vec![[-300.0, 0.0]];
+        line.extend(arc(-50.0, 50.0, 50.0, -90.0, 0.0));            // left, ends at (0, 50) heading north
+        line.extend(arc(50.0, 50.0, 50.0, 180.0, 90.0));            // then right, back to heading east
+        line.push([400.0, 100.0]);
+        let s = run(&country(&line, 1.0, 4.0), none(), none(), false);
+        let d = of(&s, DOUBLE_LEFT);
+        assert_eq!(d.len(), 1, "{s:?}");
+        assert!(of(&s, CURVE_LEFT).is_empty() && of(&s, CURVE_RIGHT).is_empty() && of(&s, DOUBLE_RIGHT).is_empty(), "{s:?}");
+    }
+
+    #[test]
+    fn signals_in_the_country_are_warned_of_before_and_in_town_not() {
+        let line: &[[f64; 2]] = &[[0.0, 0.0], [800.0, 0.0]];
+        let at = arr2(&[[500.0, 0.5]]);
+        let s = run_x(&country(line, 0.0, 4.0), none(), at.clone(), none(), false);
+        let w = of(&s, SIGNALS);
+        assert_eq!(w.len(), 2, "{s:?}");
+        let east = w.iter().find(|x| x.dir[0] > 0.0).unwrap();
+        let west = w.iter().find(|x| x.dir[0] < 0.0).unwrap();
+        assert!(east.xy[0] > 335.0 && east.xy[0] < 365.0 && west.xy[0] > 635.0 && west.xy[0] < 665.0, "{s:?}");
+        let town = roads_x(&[(line, 0.0, 4.0, [1, 2], 1.0, 0, 0.0)]);
+        assert!(run_x(&town, none(), at.clone(), none(), false).is_empty());
+        assert!(run_x(&country(line, 0.0, 3.0), none(), at, none(), false).is_empty(), "a tertiary road");
+    }
+
+    #[test]
+    fn a_roundabout_gets_its_entry_sign_and_in_the_country_a_warning() {
+        let ring = arc(0.0, 0.0, 30.0, 180.0, 540.0);
+        let t = roads_x(&[(&ring, 0.0, 4.0, [10, 10], 0.0, FLAG_RING, 0.0),
+                          (&[[-330.0, 0.0], [-30.0, 0.0]], 0.0, 4.0, [11, 10], 0.0, 0, 0.0)]);
+        let s = run(&t, none(), none(), false);
+        let m = of(&s, ROUNDABOUT);
+        assert_eq!(m.len(), 1, "{s:?}");
+        assert!(m[0].dir[0] > 0.99 && m[0].xy[0] < -30.0 && m[0].xy[0] > -45.0, "{:?}", m[0]);
+        let w = of(&s, ROUNDABOUT_WARN);
+        assert_eq!(w.len(), 1, "{s:?}");
+        assert!(w[0].xy[0] > -195.0 && w[0].xy[0] < -165.0, "{:?}", w[0]);
+        assert!(s.iter().all(|x| x.rule == ROUNDABOUT || x.rule == ROUNDABOUT_WARN), "no sign on the ring: {s:?}");
+        let town = roads_x(&[(&ring, 0.0, 4.0, [10, 10], 1.0, FLAG_RING, 0.0),
+                             (&[[-330.0, 0.0], [-30.0, 0.0]], 0.0, 4.0, [11, 10], 1.0, 0, 0.0)]);
+        assert!(of(&run(&town, none(), none(), false), ROUNDABOUT_WARN).is_empty(), "no warning in town");
+    }
+
+    #[test]
+    fn a_motorway_is_signed_where_it_begins_and_before_it_ends() {
+        let t = roads_x(&[(&[[-300.0, 0.0], [0.0, 0.0]], 1.0, 3.0, [5, 1], 0.0, 0, 0.0),
+                          (&[[0.0, 0.0], [1000.0, 0.0]], 1.0, 7.0, [1, 6], 0.0, 0, 0.0),
+                          (&[[1000.0, 0.0], [1300.0, 0.0]], 1.0, 3.0, [6, 7], 0.0, 0, 0.0)]);
+        let s = run(&t, none(), none(), false);
+        let a = of(&s, MOTORWAY);
+        let b = of(&s, MOTORWAY_END);
+        assert_eq!((a.len(), b.len()), (1, 1), "{s:?}");
+        assert!(a[0].xy[0] > 5.0 && a[0].xy[0] < 40.0 && a[0].dir[0] > 0.99, "{:?}", a[0]);
+        assert!(b[0].xy[0] > 830.0 && b[0].xy[0] < 870.0, "{:?}", b[0]);
+    }
+
+    #[test]
+    fn a_motorway_that_carries_on_as_one_has_no_signs_at_the_join() {
+        let t = roads_x(&[(&[[0.0, 0.0], [500.0, 0.0]], 1.0, 7.0, [1, 2], 0.0, 0, 0.0),
+                          (&[[500.0, 0.0], [1000.0, 0.0]], 1.0, 7.0, [2, 3], 0.0, 0, 0.0)]);
+        assert!(run(&t, none(), none(), false).iter().all(|x| x.rule != MOTORWAY && x.rule != MOTORWAY_END));
+    }
+
+    #[test]
+    fn a_living_street_is_signed_at_both_ends_of_its_junction() {
+        let t = roads_x(&[(&[[-200.0, 0.0], [0.0, 0.0]], 0.0, 2.0, [1, 2], 1.0, 0, 0.0),
+                          (&[[0.0, 0.0], [200.0, 0.0]], 0.0, 1.0, [2, 3], 1.0, FLAG_LIVING, 0.0)]);
+        let s = run(&t, none(), none(), false);
+        let (e, x) = (of(&s, LIVING), of(&s, LIVING_END));
+        assert_eq!((e.len(), x.len()), (1, 1), "{s:?}");
+        assert!(e[0].dir[0] > 0.99 && x[0].dir[0] < -0.99, "{s:?}");
+        assert!(e[0].xy[0] < 15.0 && x[0].xy[0] < 15.0, "{s:?}");
+    }
+
+    #[test]
+    fn a_one_way_street_is_signed_where_it_starts_but_not_where_one_way_runs_on() {
+        let cross = [(&[[-200.0, 0.0], [0.0, 0.0]][..], 0.0, 2.0, [1, 2], 1.0, 0, 0.0),
+                     (&[[0.0, 0.0], [200.0, 0.0]][..], 0.0, 2.0, [2, 3], 1.0, 0, 0.0),
+                     (&[[0.0, 0.0], [0.0, 200.0]][..], 1.0, 2.0, [2, 4], 1.0, 0, 0.0)];
+        let s = run(&roads_x(&cross), none(), none(), false);
+        let o = of(&s, ONEWAY);
+        assert_eq!(o.len(), 1, "{s:?}");
+        assert!(o[0].dir[1] > 0.99 && o[0].xy[1] < 15.0, "{:?}", o[0]);
+        let mut with_feeder = cross.to_vec();
+        with_feeder.push((&[[0.0, -200.0], [0.0, 0.0]][..], 1.0, 2.0, [8, 2], 1.0, 0, 0.0));
+        assert!(of(&run(&roads_x(&with_feeder), none(), none(), false), ONEWAY).is_empty(), "one-way carried straight on");
+    }
+
+    #[test]
+    fn signs_of_different_rules_keep_apart() {
+        let line: &[[f64; 2]] = &[[0.0, 0.0], [800.0, 0.0]];
+        let t = country(line, 0.0, 4.0);
+        let s = run_x(&t, arr2(&[[350.0, 0.5], [352.0, 0.5]]), arr2(&[[500.0, 0.5]]), none(), false);
+        for (i, a) in s.iter().enumerate() {
+            for b in &s[i + 1..] {
+                if dot(a.dir, b.dir) > SAME_WAY_COS {
+                    assert!((a.xy[0] - b.xy[0]).powi(2) + (a.xy[1] - b.xy[1]).powi(2) >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
+                }
+            }
+        }
     }
 
     #[test]

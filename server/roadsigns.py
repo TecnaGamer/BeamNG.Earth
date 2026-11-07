@@ -7,6 +7,8 @@ Off unless BNE_ROADSIGNS=on or the settings page's Road signs is on with the fea
 from functools import lru_cache
 import json
 import os
+import threading
+import types
 
 import numpy as np
 
@@ -14,7 +16,9 @@ import exitsigns
 import fast
 import mapcells
 import mapgeom
+import islands
 import roads
+import signroads
 import speedsigns
 
 KERNEL = 153                    # earthfast VERSION with road_sign_place / road_sign_mesh
@@ -22,6 +26,10 @@ ON = os.environ.get("BNE_ROADSIGNS", "off") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5}
 METAL = "bne_exit_metal"
+FLAG_RING, FLAG_LIVING = 1, 2     # roadsigns.rs
+PARAM_KEYS = ("warn_m", "curve_turn_deg", "curve_window_m", "curve_min_rank", "double_gap_m", "motorway_end_m",
+              "living_min_m", "min_before_m")
+_lock = threading.Lock()
 OPEN_CLASSES = {"track", "unknown"}     # a road ending on one of these goes on
 CROSSING_KINDS = {"zebra", "marked", "uncontrolled"}
 
@@ -64,21 +72,31 @@ def is_marked_crossing(tags):
     return t.get("crossing") in CROSSING_KINDS or t.get("crossing_ref") == "zebra"
 
 
-def crossings(frame, cells):
-    """(n, 2) of the marked crossings of infrastructure cells, in frame, each once."""
+def points(frame, cells, wanted):
+    """(n, 2) of the infrastructure points of class `wanted` (a set) that pass the filter wanted[class](tags), in frame, once."""
     ll = []
     for feats in cells:
         if feats is None or not len(feats):
             continue
         cls, tags, own = feats.attrs["class"], feats.attrs["tags"], feats.own
-        for i in np.flatnonzero((feats.kind == mapgeom.POINT) & (cls == "crossing") & own):
-            if is_marked_crossing(str(tags[i])):
+        for i in np.flatnonzero((feats.kind == mapgeom.POINT) & np.isin(cls, sorted(wanted)) & own):
+            if wanted[str(cls[i])](str(tags[i])):
                 ll.append(np.asarray(feats.parts(int(i))[0][0], np.float64)[0, :2])
     if not ll:
         return np.zeros((0, 2))
     ll = np.array(ll, np.float64)
     e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
     return np.ascontiguousarray(np.column_stack([e, n]), np.float64)
+
+
+def crossings(frame, cells):
+    """(n, 2) of the marked crossings of infrastructure cells, in frame, each once."""
+    return points(frame, cells, {"crossing": is_marked_crossing})
+
+
+def signals(frame, cells):
+    """(n, 2) of the traffic signals of infrastructure cells, in frame, each once."""
+    return points(frame, cells, {"traffic_signals": lambda _tags: True})
 
 
 def open_ends(frame, cells):
@@ -98,35 +116,105 @@ def open_ends(frame, cells):
     return np.ascontiguousarray(np.column_stack([e, n]), np.float64)
 
 
+def living_ids(feats, frame, urban, widths, left_hand):
+    """The ids of the cell's living streets (road_specs' class), kept on the cell."""
+    key = (frame.lat0, frame.lon0, urban, widths, bool(left_hand))
+    with _lock:
+        memo = feats.__dict__.setdefault('_rsign_living', {})
+        got = memo.get(key)
+    if got is None:
+        specs = signroads.cell_specs(feats, urban, widths, left_hand)
+        got = frozenset(str(feats.ids[i]) for i, sp in enumerate(specs) if sp is not None and sp.cls == "living_street")
+        with _lock:
+            if len(memo) >= speedsigns.CELL_FRAMES:
+                memo.pop(next(iter(memo)))
+            memo[key] = got
+    return got
+
+
+def with_flags(rows, living, left_hand):
+    """[(row, flags)] of {fid: speedsigns row}: the roundabout rings (islands.ring_directions: the same loops the road tiles
+    and the graph see, with the ring's way round) and the living streets, a living street ranked as a street."""
+    roads_list = [(fid, types.SimpleNamespace(oneway=bool(r[2][1]), dir=int(r[2][1])), r[1], 0.0) for fid, r in rows.items()]
+    ring = islands.ring_directions(roads_list, left_hand) if roads_list else {}
+    out = []
+    for fid, row in rows.items():
+        meta = list(row[2])
+        flags = 0
+        if fid in ring:
+            flags |= FLAG_RING
+            meta[1] = float(ring[fid])
+        if fid in living:
+            flags |= FLAG_LIVING
+            meta[2] = max(meta[2], 1.0)
+        out.append((row, meta, flags))
+    return out
+
+
+def arrays(rows, box):
+    """road_sign_place's road arrays of rows [(row, meta, flags)] near box (x0, y0, x1, y1; MARGIN_M round it)."""
+    x0, y0, x1, y1 = box
+    m = speedsigns.MARGIN_M
+    ll, xy, off, meta, flags = [], [], [0], [], []
+    con_at, con_id, con_off = [], [], [0]
+    skip, skip_off = [], [0]
+    ids = {}
+    for (line, pts, _m, cons, _lims, skips), mt, fl in rows:
+        if (pts[:, 0].max() < x0 - m or pts[:, 0].min() > x1 + m or pts[:, 1].max() < y0 - m or pts[:, 1].min() > y1 + m):
+            continue
+        ll.append(line)
+        xy.append(pts)
+        off.append(off[-1] + len(pts))
+        meta.append(list(mt) + [float(fl)])
+        for f, c in cons:
+            con_at.append(f)
+            con_id.append(ids.setdefault(c, len(ids)))
+        con_off.append(len(con_at))
+        skip.extend(skips)
+        skip_off.append(len(skip))
+    if not xy:
+        return None
+    f64 = lambda a, *shape: np.ascontiguousarray(np.asarray(a, np.float64).reshape(*shape))    # noqa: E731
+    i64 = lambda a: np.ascontiguousarray(np.asarray(a, np.int64))                              # noqa: E731
+    return (f64(np.concatenate(xy), -1, 2), f64(np.concatenate(ll), -1, 2), i64(off), f64(meta, -1, 6), f64(con_at, -1),
+            i64(con_id), i64(con_off), f64(skip, -1, 2), i64(skip_off))
+
+
+def params(sys_row):
+    """The kernel's thresholds: the shared ones with the country's own over them."""
+    p = {**tables()[1]["params"], **sys_row.get("params", {})}
+    return [float(p[k]) for k in PARAM_KEYS]
+
+
 def place(md, frame, box, context, left_hand, mph, sys_row):
     """(k, 9) of road_sign_place's rows in box (x0, y0, x1, y1)."""
     fast.require(KERNEL, "road signs")
     x0, y0, x1, y1 = box
     m = speedsigns.MARGIN_M
     la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
-    rows, seen, cells = [], set(), []
+    rows, cells, living = {}, [], set()
     for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):
         feats = context.cell(key)
         if feats is None or not len(feats):
             continue
         cells.append(feats)
+        living |= living_ids(feats, frame, context.urban, context.widths, left_hand)
         for fid, row in speedsigns._cell_rows(feats, frame, context.urban, context.widths, left_hand, mph).items():
-            if fid not in seen:
-                seen.add(fid)
-                rows.append(row)
-    arrays = speedsigns._arrays(rows, box)
-    if arrays is None:
+            rows.setdefault(fid, row)           # (a line is whole in every cell it crosses)
+    got = arrays(with_flags(rows, living, left_hand), box)
+    if got is None:
         return np.zeros((0, 9))
-    pts, ll, off, meta, con_at, con_id, con_off, _lim_at, _lim_val, _lim_off, skip, skip_off = arrays
-    b_la, b_lo, _ = frame.enu_to_geodetic(np.array([x0 - 5, x1 + 5]), np.array([y0 - 5, y1 + 5]), 0.0)
+    pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off = got
+    b_la, b_lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
     infra = [md.cell(k, layers=("infrastructure",), kind="prefetch").layers.get("infrastructure")
              for k in mapcells.cells_for_bbox(float(b_la.min()), float(b_lo.min()), float(b_la.max()), float(b_lo.max()))]
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     poly, poly_off = speedsigns._outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
     sizes = tables()[1]["sizes"]["default"]
     return fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
-                                    open_ends(frame, cells), poly, poly_off, [float(v) for v in box], bool(left_hand),
-                                    [float(v) for v in sys_row["lateral"]], float(widest(sizes)))
+                                    signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
+                                    bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
+                                    params(sys_row))
 
 
 def table(signs, z_ground, z_road, sys_row):
@@ -149,6 +237,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
         return None
     box = roads.tile_bbox(tx, ty)
     signs = place(md, frame, box, context, left_hand, mph, sys_row)
+    signs = signs[[tables()[1]["rules"][int(r)] not in sys_row.get("off", ()) for r in signs[:, 4]]] if len(signs) else signs
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
         return None

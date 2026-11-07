@@ -50,6 +50,58 @@ class Tables(unittest.TestCase):
         self.assertEqual(ids, set(build_sign_atlas.DRAW))
 
 
+class Rules(unittest.TestCase):
+    def test_the_rule_numbers_are_the_kernels(self):
+        _, systems, by_id = roadsigns.tables()
+        self.assertEqual(len(systems["rules"]), 15)
+        self.assertEqual(len(set(systems["rules"])), 15)
+        names = ["reg.no_entry", "info.dead_end", "info.crossing_right", "warn.curve_right", "warn.curve_left",
+                 "warn.double_right", "warn.double_left", "warn.roundabout", "mand.roundabout", "warn.signals",
+                 "info.motorway", "info.motorway_end", "info.living_street", "info.living_street_end", "info.oneway"]
+        self.assertEqual(systems["rules"], names)
+
+    def test_every_threshold_is_given_and_a_country_may_override(self):
+        _, systems, _ = roadsigns.tables()
+        self.assertEqual(set(systems["params"]), set(roadsigns.PARAM_KEYS))
+        base = roadsigns.params({})
+        self.assertEqual(len(base), 8)
+        over = roadsigns.params({"params": {"warn_m": 200}})
+        self.assertEqual(over[0], 200.0)
+        self.assertEqual(over[1:], base[1:])
+
+    def test_ukraine_has_no_living_street_signs(self):
+        _, systems, by_id = roadsigns.tables()
+        for code, row in systems["countries"].items():
+            for role in row.get("off", ()):
+                self.assertIn(role, by_id, code)
+        self.assertEqual(roadsigns.system("UA")["off"], ["info.living_street", "info.living_street_end"])
+        self.assertNotIn("off", roadsigns.system("CZ"))
+
+    def row(self, pts, direction=0.0):
+        pts = np.asarray(pts, np.float64)
+        return (pts, pts, (4.0, direction, 3.0, 0.0, 0.0), [], [], [])
+
+    def test_a_round_loop_is_a_ring_and_its_approach_is_not(self):
+        t = np.radians(np.arange(0, 361, 10.0))
+        circle = np.column_stack([30.0 * np.cos(t), 30.0 * np.sin(t)])
+        quarter = lambda a, b: circle[(a // 10):(b // 10) + 1]       # noqa: E731
+        rows = {"a": self.row(quarter(0, 90), 1.0), "b": self.row(quarter(90, 180), 1.0),
+                "c": self.row(quarter(180, 270), 1.0), "d": self.row(quarter(270, 360), 1.0),
+                "in": self.row([[-330.0, 0.0], [-30.0, 0.0]])}
+        got = {id(r[0]): (m, f) for r, m, f in roadsigns.with_flags(rows, set(), False)}
+        flags = {fid: got[id(rows[fid][0])][1] for fid in rows}
+        self.assertEqual({k for k, v in flags.items() if v & roadsigns.FLAG_RING}, {"a", "b", "c", "d"})
+        self.assertEqual(flags["in"], 0)
+
+    def test_a_living_street_ranks_as_a_street(self):
+        rows = {"x": (np.zeros((2, 2)), np.array([[0.0, 0.0], [50.0, 0.0]]), (3.0, 0.0, 0.0, 1.0, 0.0), [], [], [])}
+        (row, meta, flags), = roadsigns.with_flags(rows, {"x"}, False)
+        self.assertEqual(flags, roadsigns.FLAG_LIVING)
+        self.assertGreaterEqual(meta[2], 1.0)
+        (row, meta, flags), = roadsigns.with_flags(rows, set(), False)
+        self.assertEqual((flags, meta[2]), (0, 0.0))
+
+
 class Crossings(unittest.TestCase):
     def tags(self, **kw):
         return json.dumps({"highway": "crossing", **kw})
