@@ -50,6 +50,33 @@ def rows(entry=False, reverse=False, side=-1, state='MI', count=1):
 
 
 class MergeTest(unittest.TestCase):
+    def test_ground_taper_outside_sampled_part_keeps_normal_width(self):
+        from roadlayoutcache import LayoutCache
+        from test_roads import flat
+        # A source road can have a taper on a different ground/bridge part.
+        # Its descriptor exists, but taper_widths legitimately returns None here.
+        for entry in (False, True):
+            for feature in range(4):
+                with self.subTest(entry=entry, feature=feature), \
+                        patch.object(rampmerges, '_cache', LayoutCache()):
+                    frame, feats = fixture(entry)
+                    tapers = [[] for _ in range(len(feats))]
+                    with patch.object(roads, 'road_tapers', return_value=tapers):
+                        expected = rampmerges.ground(frame, [feats])
+                    self.assertEqual(len(expected), 1)
+                    tapers[feature] = [(-84., 42., 8., 20.)]
+                    self.assertIsNone(roads.taper_widths(6., tapers[feature], [-85.], [42.]))
+                    feats._road_revision = 1
+                    with patch.object(roads, 'road_tapers', return_value=tapers):
+                        actual = rampmerges.ground(frame, [feats])
+                        self.assertEqual(len(actual), 1)
+                        for key in ('guide', 'outer', 'span'):
+                            np.testing.assert_allclose(actual[0][key], expected[0][key])
+                        mid = actual[0]['guide'][len(actual[0]['guide']) // 2]
+                        tx, ty = int(mid[0] // roads.TILE), int(mid[1] // roads.TILE)
+                        chunks = roads.build_tile(frame, tx, ty, [feats], flat, terrain_paint=False)
+                        self.assertTrue(any('ramp_merge' in c for c in chunks))
+
     def test_mainline_edges_are_continuous_at_source_joins_beside_a_ramp(self):
         from test_roads import flat
         for entry in (False,True):

@@ -445,6 +445,10 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
             tp = roads.joint_desc(copies[fid], lambda f: roads.road_tapers(f, urban, widths, left_hand))
             ls = roads.joint_desc(copies[fid], lambda f: roads.lane_shifts(f, urban, widths, left_hand))
             w = roads.taper_widths(spec.width, tp, lon, lat) if tp else spec.width
+            # A taper elsewhere on this source road may not reach this part.
+            # None means constant width, not missing geometry.
+            if w is None:
+                w = spec.width
             sh = roads.shift_at(ls, lon, lat) if ls else None
             return (roads.offset_polyline(pts, sh) if sh is not None else pts), w
         def pavement(fid, spec, pts):
@@ -452,7 +456,8 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
             # also changes asphalt. A bridge shifts its whole deck instead.
             lat, lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.)
             tp = roads.joint_desc(copies[fid], lambda f: roads.road_tapers(f, urban, widths, left_hand))
-            return pts, roads.taper_widths(spec.width, tp, lon, lat) if tp else spec.width
+            w = roads.taper_widths(spec.width, tp, lon, lat) if tp else spec.width
+            return pts, spec.width if w is None else w
         return plans(rows, terminals, geometry, pavement)
     owner = getattr(urban, '__self__', None)
     return _cache.get(frame, cells, (urban, widths, bool(left_hand), getattr(owner, 'epoch', 0)), build)
