@@ -141,6 +141,9 @@ import townentry as townentrymod  # noqa: E402     (PR #597's town entry and exi
 import heightmap  # noqa: E402
 import staging  # noqa: E402
 import imagery as imagerymod  # noqa: E402
+import grass_exclusions
+import grass_imagery
+import grass_layers
 import matslots as matslotsmod  # noqa: E402
 import maptiles as maptilesmod  # noqa: E402
 import geocode as geocodemod  # noqa: E402
@@ -1033,6 +1036,7 @@ class Server:
         self.photo_pool = None          # requested blocks' photos and stand-ins (main(): PHOTO_PROCESS_MIN_CPUS)
         self.recent_full = collections.deque(maxlen=RECENT_FULL)    # (anchorId, cx, cy, rgb) of the last full photos
         self.base_lock = threading.Lock()
+        self.grass_lock = threading.Lock()    # a late photo and a refresh must not patch the same .ter together
         self.pads_rebuild = set()       # blocks built without gas station pads that lie on them (pads_stale)
         self.roads_rebuild = set()      # blocks built before every road cell under them was on disk (roads_refresh)
         self.pads_changed_at = 0.0      # (time.monotonic) the last new pad: Connection.pads_refresh waits a little
@@ -3081,17 +3085,29 @@ class Server:
             if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
                 idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
                 idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], lots)   # (golf over it: courses win)
+            crops_pre = crops_with = None
+            crop_unsure = []
+            if surfacemod.CROPS_ON:     # the crop map's fields (BNE_CROPS): a layer per crop, for its plants
+                crops_pre = idx
+                idx = crops_with = surfacemod.paint_crops(idx, anchor.frame, keep["lat"], keep["lon"], self.surface,
+                                                          crop_unsure)
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
                                              blockworker._open_tunnels(g, keep))
+            if crops_with is not None:  # no crop layer (soil, plants) within a few metres of a road
+                idx = surfacemod.crop_road_margin(idx, crops_with, crops_pre)
             idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
             if hasattr(self.surface, "fuel_pads"):      # gas station forecourts (--gas-stations on)
                 idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"],
                                             self.surface.fuel_pads(keep["lat"], keep["lon"]))
             stages["roadPaint"] = time.perf_counter() - t1
             complete = complete and roads_complete
+            eligible = (idx == surfacemod.GRASS) | (idx == surfacemod.DUSTY) | (idx == surfacemod.LAWN)
+            idx[grass_exclusions.blocked(self.mapdata, keep["lat"], keep["lon"], eligible)] = surfacemod.DIRT
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
+            if crop_unsure:             # (the samples whose crop the map is not sure of: photo_lawns lets the photo overrule)
+                info["cropUnsure"] = crop_unsure[0]
             info["surfaceComplete"] = complete
             info["roadsComplete"] = roads_complete
         if not provisional:
@@ -3197,7 +3213,8 @@ class Server:
 
     def _base_photo(self, anchor, cx, cy, pool=None, urgent=False, quick=False):
         """base_pool: the block's base photo (write_base; in the block process pool when given and its imagery
-        tiles are on disk) while its heights are built: (file name or None, [rgb] or [], seconds). urgent: the
+        tiles are on disk) while its heights are built: (file name or None, [rgb, grass colors] or [], seconds).
+        Without surface generation the photo list contains only rgb. urgent: the
         player waits on this block (a teleport's first, or one the mod asked for): its missing photo tiles are
         fetched ahead of the far field's (Imagery.urgent, netfetch "urgent"). quick: write_base's."""
         t1 = time.perf_counter()
@@ -3239,19 +3256,22 @@ class Server:
                               BASE_RENDER_PX, tex, bool(self.buildings and self.mapdata is not None), anchor.zooms[0],
                               os.path.join(self.out_dir, name),
                               (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), BASE_AO),
-                              fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px).result()
+                              fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px,
+                              with_grass=self.surface is not None).result()
         except Exception as e:
             log.info("base photo %s in the block process: %s", key, e)
             return None
         if got is None:
             return None
-        rgb, _, pending = got
+        rgb, _, pending = got[:3]
         self._base_kept(anchor, cx, cy, pending)
         if not fin and (self.deshadow is not None or self.colormatch is not None):
             # (rendered without the imagery analyses, which live in this process: rendered again here with them,
             # base_refresh, as a photo rendered before they were done)
             self.base_stale.add(key)
         photo.append(rgb)
+        if len(got) > 3:
+            photo.append(got[3])
         self.base_worker += 1
         return name
 
@@ -3321,7 +3341,8 @@ class Server:
             info["stages"]["baseWait"] = time.perf_counter() - t1
             if photo and info.get("layers") and info.get("ter"):
                 try:                # lawns only where the photo is green (before the game reads the block)
-                    surfacemod.photo_lawns(self.out_dir, info["ter"], info["layers"], photo[0])
+                    self._photo_lawns((anchor.id, cx, cy), info["ter"], info["layers"], photo[0],
+                                      photo[1] if len(photo) > 1 else None, info)
                 except Exception as e:
                     log.info("photo lawns %s: %s", (anchor.id, cx, cy), e)
         elif (anchor.id, cx, cy) in self.base_skipped and self.near_visual == "detail" and self.imagery is not None:
@@ -3351,11 +3372,35 @@ class Server:
         info["zoom"] = anchor.hm_zoom
         return info
 
-    def _photo_lawns(self, key, ter, layers, rgb):
+    def _photo_lawns(self, key, ter, layers, rgb, colors=None, info=None, refresh=False):
         try:
-            surfacemod.photo_lawns(self.out_dir, ter, layers, rgb)
+            with self.grass_lock:
+                anchor = self.anchors.get(key[0])
+                unsure = None if info is None else info.get("cropUnsure")
+                if colors is None or anchor is None:
+                    surfacemod.photo_lawns(self.out_dir, ter, layers, rgb, unsure)
+                else:
+                    target = ter
+                    if refresh and info is not None:
+                        # A fresh filename lets TerrainBlock swap the layers;
+                        # reusing its current file would force importMaps.
+                        stem = os.path.splitext(ter)[0].split("_grass", 1)[0]
+                        target = stem + f"_grass{next(self.ter_serial)}.ter"
+                        with open(os.path.join(self.out_dir, ter), "rb") as source:
+                            raw = source.read()
+                        temp = staging.tmp_for(os.path.join(self.out_dir, target))
+                        with open(temp, "wb") as output:
+                            output.write(raw)
+                        staging.replace(temp, os.path.join(self.out_dir, target))
+                    mats = grass_layers.apply(self.out_dir, target, layers, rgb, colors, anchor.frame,
+                                              key[1], key[2], self.layout.block * heightmap.SQUARE, unsure)
+                    if info is not None:
+                        info["mats"] = mats
+                        info["ter"] = target
+                        if target != ter:
+                            info.setdefault("grassOldTers", []).append(ter)
         except Exception as e:
-            log.info("photo lawns %s: %s", key, e)
+            log.info("photo vegetation %s: %s", key, e)
 
     def _quick_later(self, anchor, cx, cy):
         """quick_pool: a block sent without its photo gets its stand-in (write_quick_base) onto its entry and to the mod
@@ -3406,16 +3451,34 @@ class Server:
             if info is None and left > 0:       # (the block's entry is stored just after it is built)
                 loop.call_later(0.25, apply, left - 1)
                 return
+            if info is not None and info.get("base") not in (None, self.quick_base_name(key), name):
+                return                          # a newer full photo already replaced this one
+            def send():
+                if info is not None and self.hm.get(key) is not info:
+                    return                      # roads/pads rebuilt this generation while it was patched
+                if info is not None:
+                    info["base"] = name
+                for c in list(self.connections):
+                    message = {"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
+                               "base": f"{self.vfs_dir}/{name}", "baseSize": size}
+                    if info is not None and len(photo) > 1 and info.get("layers"):
+                        message["terrain"] = {"anchorId": key[0], "grassRefresh": True, **c.terrain_msg(key, info)}
+                    c.send(message)
+
             if info is not None and (not info.get("base") or info["base"] == self.quick_base_name(key)):
-                info["base"] = name
                 if photo and info.get("layers") and info.get("ter"):
-                    # lawns only where the photo is green (_finish_heightmap), in time for a block not committed
-                    # yet (the mod reads its .ter at the commit; one in use keeps its lawns until it is read again);
-                    # off the event loop (7.6 s of a Steam Deck's loop in a drive)
-                    self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0])
-            for c in list(self.connections):    # (the mod drops another anchor's)
-                c.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
-                        "base": f"{self.vfs_dir}/{name}", "baseSize": size})
+                    # Publish the compact material table only after its .ter/masks
+                    # are complete, including for a block already in use.
+                    job = self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0],
+                                                 photo[1] if len(photo) > 1 else None, info, True)
+                    def patched(_):
+                        try:
+                            loop.call_soon_threadsafe(send)
+                        except RuntimeError:
+                            pass
+                    job.add_done_callback(patched)
+                    return
+            send()
         try:
             loop.call_soon_threadsafe(apply)
         except RuntimeError:
@@ -3596,10 +3659,15 @@ class Server:
         x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
         quick = quick and not self._photo_data_cached(anchor, x0, y0, size)
         t0 = time.perf_counter()
+        colors = None
         try:
             pending = set()
             with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
-                rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
+                if self.surface is not None:
+                    rgb, used, colors = grass_imagery.render_base(
+                        self.imagery, anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
+                else:
+                    rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
             log.debug("base photo %s r%d: %s", (anchor.id, cx, cy), rev,
                       {k: round(v / BASE_RENDER_PX ** 2, 3) for k, v in used.items()})
         except Exception as e:      # an imagery failure must not cost the terrain
@@ -3646,6 +3714,8 @@ class Server:
             self.base_stale.add(key)
         if photo is not None:
             photo.append(rgb)
+            if colors is not None:
+                photo.append(colors)
         with self.base_lock:    # (the stand-ins of the blocks after it take its overlap: write_quick_base)
             self.recent_full.append((anchor.id, cx, cy, rgb))
         t1 = time.perf_counter()
@@ -3754,6 +3824,8 @@ class Server:
                 self._remove_base(name)
             if info.get("ter"):
                 self._remove(os.path.join(self.out_dir, info["ter"]))
+            for old_ter in info.get("grassOldTers", ()):
+                self._remove(os.path.join(self.out_dir, old_ter))
             if self.surface is not None:        # its surface masks (only read at import)
                 for name in surfacemod.mask_names(self.hm_name(key)[:-4]):
                     self._remove(os.path.join(self.out_dir, name))
@@ -6711,17 +6783,23 @@ class Connection:
                 # behind it and came late, 2026-11-05)
                 pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
+                photo = []
                 name = None
                 if pool is not None:
                     # (in the block process: from the finished tiles with the analyses on; they were all rendered
                     # here, 121 of a warm 8 min drive at 150 mph, beside the event loop, 2026-11-04)
                     name = await self.loop.run_in_executor(s.hm_pool, s._base_elsewhere, anchor, key[1], key[2],
-                                                           pool, [], False, rev)
+                                                           pool, photo, False, rev)
                 if name is None:
                     name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
-                                                           rev)
+                                                           rev, photo)
                 info = s.hm.get(key)
                 if name is None or info is None:
+                    return
+                if photo and info.get("ter") and info.get("layers"):
+                    await self.loop.run_in_executor(s.quick_pool, s._photo_lawns, key, info["ter"], info["layers"],
+                                                    photo[0], photo[1] if len(photo) > 1 else None, info, True)
+                if s.hm.get(key) is not info:
                     return
                 old, info["base"] = info.get("base"), name
                 if old and old != name and old != s.base_name(key):
@@ -6730,8 +6808,11 @@ class Connection:
                     # deleted here, the game packed the photo again on its main thread, ~0.75 s frames, 2026-11-03)
                     info.setdefault("old_bases", []).append(old)
                 log.info("base photo of %s rendered again with its NAIP (%s)", key, name)
-                self.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
-                           "base": f"{s.vfs_dir}/{name}", "baseSize": size})
+                message = {"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
+                           "base": f"{s.vfs_dir}/{name}", "baseSize": size}
+                if len(photo) > 1 and info.get("layers"):
+                    message["terrain"] = {"anchorId": key[0], "grassRefresh": True, **self.terrain_msg(key, info)}
+                self.send(message)
                 s.base_skipped.discard(key)
             except Exception:
                 log.exception("base photo refresh %s", key)
@@ -6782,6 +6863,8 @@ class Connection:
             if old_ter and old_ter != info.get("ter"):
                 await asyncio.sleep(PROVISIONAL_KEEP_S)
                 s._remove(os.path.join(s.out_dir, old_ter))
+            for previous in (old or {}).get("grassOldTers", ()):
+                s._remove(os.path.join(s.out_dir, previous))
         self.spawn(run())
 
     def pads_refresh(self, aid, now=None):
@@ -6823,6 +6906,8 @@ class Connection:
             if old_ter and old_ter != info.get("ter"):
                 await asyncio.sleep(PROVISIONAL_KEEP_S)
                 s._remove(os.path.join(s.out_dir, old_ter))
+            for previous in (old or {}).get("grassOldTers", ()):
+                s._remove(os.path.join(s.out_dir, previous))
         self.spawn(run())
 
     def ground_ahead(self, aid, x, y, vx, vy):

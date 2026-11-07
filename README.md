@@ -31,6 +31,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes.
+- Crop fields (opt-in, `BNE_CROPS=1`; Europe and Ukraine): the EU crop map (JRC EUCROPMAP 2022, 10 m) says what each
+  field grows, so wheat, barley, maize, sunflower, rape and beet fields get their own rows, tramlines or ploughed
+  furrows in the ground photo (the photo's colours are kept) and their own 3D plants near the car; where the map is not
+  sure of a field's crop the plants stand only where the photo is green or ripe. Elsewhere fields look as before.
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
   shrubs), autumn colours in season.
 - Forest and river sounds: the stock maps' wind in the trees (louder and fuller in dense, tall forest) and background

@@ -84,6 +84,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
 | ESA WorldCover (10 m land cover) | `esa-worldcover.s3.eu-central-1.amazonaws.com` | What covers the ground: forest, grass, fields, bare rock, sand, built-up land. It picks the ground materials (and their grip), rocks, which streets count as town streets, and the sounds of the landscape. | Places not visited before get a plain default ground until it answers; they are painted again once it does. | named |
+| EU crop map (JRC EUCROPMAP 2022, 10 m) | `jeodpp.jrc.ec.europa.eu` | Which crop each field grows in Europe and Ukraine (wheat, maize, sunflower, rape, beet ...): fields get planted rows, tramlines or ploughed furrows and crop plants instead of plain photo. Off by default (`BNE_CROPS=1`). | Fields stay as the plain photo meanwhile; painted once it answers. | named |
 | Meta / WRI canopy heights | `dataforgood-fb-data.s3.amazonaws.com` | The trees: where each one stands and how tall it is, from a map of tree heights metre by metre (forests, gaps, clearings, street trees). | Places not visited before have no trees until it answers. | named |
 | NOAA NCEI bathymetry | `gis.ngdc.noaa.gov` | The depth of the sea along coasts (down to about 3 m detail along US coasts): the sea floor you can drive or sink into. | New coasts get a plain, evenly sloping sea floor. | named |
 

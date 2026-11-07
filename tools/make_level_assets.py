@@ -136,6 +136,13 @@ FLAT_H = B + "bngEarth_flat_h_1024.png"     # neutral height for the detail / ma
 # photo base in detail mode.
 TEX_SQ = 2          # samples per 2 m (the square is heightmap.SQUARE = 1 m)
 T_ = "/assets/materials/terrain/"
+CROP_SUF = {"baseColor": "_b.png", "normal": "_nm.normal.png", "roughness": "_r.data.png", "ao": "_ao.data.png"}
+CROP_DIST = [0, 0, 40, 70]       # a crop's soil: close (where the plants are)
+CROP_MACRO_DIST = [35, 75, 600, 2000]   # its canopy: from where the plants thin out to far away
+GG = "/art/beamngEarth/grass/ground/"      # grass tones (docs/new/013_grass-underlay, tools/make_grass_ai_assets.py)
+GRASS_DIST = [0, 0, 50, 90]
+
+
 def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
     m = {"name": name, "internalName": name, "class": "TerrainMaterial", "persistentId": pid, "groundmodelName": gm,
          "detailDistances": [0, 0, 50, 80], "macroDistances": [0, 0, 150, 1500],
@@ -145,17 +152,27 @@ def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
     for key, suf, base in (("baseColor", "_b", "bngEarth_base_b.png"), ("normal", "_nm", "bngEarth_base_nm.png"),
                            ("roughness", "_r", "bngEarth_base_r.png"), ("ao", "_ao", "bngEarth_base_ao.png")):
         m[key + "BaseTex"], m[key + "BaseTexSize"] = B + base, 128 * TEX_SQ
-        m[key + "DetailTex"], m[key + "DetailTexSize"] = T_ + detail + suf + ".png", dsize * TEX_SQ
-        m[key + "MacroTex"], m[key + "MacroTexSize"] = T_ + macro + suf + ".png", msize * TEX_SQ
+        dpath = (detail + CROP_SUF[key]) if detail.startswith("/") else T_ + detail + suf + ".png"   # (a crop's own canopy)
+        m[key + "DetailTex"], m[key + "DetailTexSize"] = dpath, dsize * TEX_SQ
+        mpath = (macro + CROP_SUF[key]) if macro.startswith("/") else T_ + macro + suf + ".png"
+        m[key + "MacroTex"], m[key + "MacroTexSize"] = mpath, msize * TEX_SQ
     m["heightBaseTex"], m["heightBaseTexSize"] = B + "bngEarth_base_h.png", 128 * TEX_SQ
     # flat (no height-blended borders: they swirled across whole blocks, in-game 2026-10-12), never empty
     m["heightDetailTex"], m["heightDetailTexSize"] = FLAT_H, dsize * TEX_SQ
     m["heightMacroTex"], m["heightMacroTexSize"] = FLAT_H, msize * TEX_SQ
+    if detail.startswith("/"):
+        # a crop: its soil near (detail, gone by 40-70 m, where the plants end), its canopy far (macro, in from 35-75 m)
+        m["detailDistances"], m["macroDistances"] = CROP_DIST, CROP_MACRO_DIST
+        m["baseColorDetailStrength"] = [0.7, 0.08]
+        m["baseColorMacroStrength"], m["normalMacroStrength"] = [strength, strength], [0.8, 0.5]
+        if detail.startswith(GG):
+            m["detailDistances"] = GRASS_DIST      # the grass objects reach 20-45 m: the dense detail grass a little further
     return {name: m}
+CG = "/art/beamngEarth/crops/ground/"
 SURFACES = {}
 for i, args in enumerate((
         ("bngEarthGroundAsphalt", "ASPHALT_OLD", "asphalt/asphalt/t_asphalt", 2, "asphalt/macro_asphalt/t_macro_asphalt", 16, 0.3),
-        ("bngEarthGroundGrass", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32),
+        ("bngEarthGroundGrass", "GRASS", GG + "close", 1, GG + "lush", 4, 0.5),
         ("bngEarthGroundDusty", "DIRT_DUSTY", "soil/dirt_loose_dusty/t_dirt_loose_dusty", 1, "soil/macro_clumply/t_macro_clumpy", 32),
         ("bngEarthGroundLoose", "DIRT_DUSTY_LOOSE", "soil/t_gravel/t_gravel", 1, "soil/macro_clumply/t_macro_clumpy", 32),
         ("bngEarthGroundRock", "ROCK", "rock/t_dirt_rocky/t_dirt_rocky", 2, "rock/macro_rocky/t_macro_rocky", 32),
@@ -163,7 +180,17 @@ for i, args in enumerate((
         ("bngEarthGroundMud", "MUD", "mud/mud/t_mud", 1, "soil/macro_clumply/t_macro_clumpy", 32),
         ("bngEarthGroundCobble", "COBBLESTONE", "asphalt/t_asphalt_02/t_asphalt_02", 1, "asphalt/macro_asphalt/t_macro_asphalt", 16, 0.3),
         # mown town yards (server/surface.py LAWN): the grass detail, finer grain
-        ("bngEarthGroundLawn", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):
+        ("bngEarthGroundLawn", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2),
+        # crop fields (server/surface.py CROP_*): the dirt look, a layer each for the plants groundcover.lua grows on them
+        ("bngEarthCropCereal", "DIRT", CG + "soil_straw", 1, CG + "cereal", 4, 0.62),
+        ("bngEarthCropMaize", "DIRT", CG + "soil_dark", 1, CG + "maize", 4, 0.62),
+        ("bngEarthCropSunflower", "DIRT", CG + "soil_dark", 1, CG + "sunflower", 4, 0.62),
+        ("bngEarthCropBroad", "DIRT", CG + "soil_dark", 1, CG + "rape", 4, 0.62),
+        ("bngEarthCropRoot", "DIRT", CG + "soil_dark", 1, CG + "root", 4, 0.62),
+        # grass tones (server/surface.py GRASS_LIGHT / GRASS_DRY / PASTURE; grass_layers.apply: the photo's colour picks one)
+        ("bngEarthGroundGrassLight", "GRASS", GG + "close_dry", 1, GG + "dry", 4, 0.6),
+        ("bngEarthGroundGrassDry", "GRASS", GG + "close_dry", 1, GG + "hay", 4, 0.6),
+        ("bngEarthGroundPasture", "GRASS", GG + "close", 1, GG + "pasture", 4, 0.45))):
     name, gm, detail, dsize, macro, msize, *st = args
     SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{30 + i}", detail, dsize, macro, msize, *st))
 
@@ -177,6 +204,15 @@ for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
     mat = made[name]
     mat["baseColorDetailStrength"] = [strength, far]
     SURFACES.update(made)
+
+# The shrub palettes (server/surface.py DUSTY_LIGHT / DUSTY_LUSH) look like the dusty layer; the environment picks the
+# GroundCover family through separate terrain masks. Static definitions avoid slow runtime TerrainMaterial texture
+# rebuilds. (The grass palettes have their own pictures, above.)
+for i, (name, source) in enumerate((
+        ("bngEarthGroundDustyLight", "bngEarthGroundDusty"),
+        ("bngEarthGroundDustyLush", "bngEarthGroundDusty"))):
+    SURFACES[name] = dict(SURFACES[source], name=name, internalName=name,
+                          persistentId=f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{60 + i}")
 
 pretty(os.path.join(T, "main.materials.json"), {
     "beamngEarthDirt": {

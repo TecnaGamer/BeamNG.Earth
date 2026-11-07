@@ -22,9 +22,11 @@
 -- into the mod; Polish Roads is not used, CREDITS.md): their materials are loaded first (a shape whose
 -- material is missing when it is first drawn stays "no material"), then each GroundCover is recreated
 -- with its plant types' layer pointed at ours and its element count scaled by `share`. Green Hirochi
--- Raceway grass with a little of West Coast USA's dry grass on grassland, West Coast scrub with sparse
--- green grass between on dusty ground. Generic: one rule for every place; per-biome / per-climate /
--- per-season variants are a later step. Console: beamngEarth_groundcover.setEnabled(bool), .status()
+-- Raceway grass on lush layers, Italy's lighter grass on transitional layers, and golden Small Island /
+-- West Coast grass with Johnson Valley tufts on dry layers. The server chooses layers using smoothed
+-- imagery and existing surface exclusions; density and streaming stay here. Stock materials are read,
+-- validated and registered with source-specific names: Italy and Hirochi use the same material names
+-- for different textures. Console: beamngEarth_groundcover.setEnabled(bool), .status()
 
 local M = {}
 
@@ -48,24 +50,118 @@ M.SOURCES = {
               items = HIROCHI .. 'main/MissionGroup/vegetation/terrain_grass/items.level.json' },
   wcusa = { materials = WCUSA .. 'art/groundcover/main.materials.json',
             items = WCUSA .. 'main/MissionGroup/vegetation/items.level.json' },
+  italy = { materials = '/levels/italy/art/shapes/groundcover/main.materials.json',
+            items = '/levels/italy/main/MissionGroup/Level_objects/vegetation/terrain_Grass/items.level.json' },
+  island = { materials = '/levels/small_island/art/shapes/groundcover/main.materials.json',
+             items = '/levels/small_island/main/MissionGroup/Level_objects/vegetation/items.level.json' },
+  johnson = { materials = '/levels/johnson_valley/art/shapes/groundcover/main.materials.json',
+              items = '/levels/johnson_valley/main/MissionGroup/level_object/vegetation/items.level.json' },
 }
 -- stock GroundCover (source, src name) -> our layer, element share; `name` (default src) names our
 -- object, for a stock definition used on two layers; `fields` override stock fields. The shares keep
 -- the block-move rebuild near +15 ms (in-game at Serengeti grassland 2026-10-11: stock-ish shares
 -- +30 ms; the dense near grass costs most, the long grass is kept close, radius 70 m instead of 120).
-local LONG_NEAR = { radius = 70, dissolveRadius = 45 }
+local LONG_NEAR = { radius = 70, dissolveRadius = 45, gridSize = 8 }
+local SHORT_NEAR = { radius = 50, dissolveRadius = 30, gridSize = 6 }
+local ACCENT_NEAR = { radius = 60, dissolveRadius = 30, gridSize = 8 }
+local SHRUB_NEAR = { radius = 100, gridSize = 8 }
+local DRY_SHORT = { { 'island', 'small_grass_close' }, { 'wcusa', 'grass_dry_1' }, { 'hirochi', 'small_grass_close' } }
+local DRY_LONG = { { 'wcusa', 'grass_dry_1' }, { 'island', 'medium_grass_close' }, { 'hirochi', 'long_grass_distant' } }
+local DRY_TUFT = { { 'johnson', 'Grass' }, { 'wcusa', 'grass_dry_1' }, { 'hirochi', 'small_grass_close' } }
+local LIGHT_SHORT = { { 'italy', 'small_grass_green_close' }, { 'hirochi', 'small_grass_close' }, { 'wcusa', 'grass_dry_1' } }
+local LIGHT_LONG = { { 'italy', 'long_grass_green_distant' }, { 'hirochi', 'long_grass_distant' }, { 'wcusa', 'grass_dry_1' } }
+local LUSH_SHORT = { { 'hirochi', 'small_grass_close' }, { 'italy', 'small_grass_green_close' }, { 'wcusa', 'grass_dry_1' } }
+local LAWN_SHORT = { { 'hirochi', 'small_grass_close' }, { 'italy', 'small_grass_green_close' },
+  { 'island', 'small_grass_close' }, { 'wcusa', 'mown_grass_close' } }
+local LUSH_LONG = { { 'hirochi', 'long_grass_distant' }, { 'italy', 'long_grass_green_distant' }, { 'wcusa', 'grass_dry_1' } }
+local SCRUB = { { 'wcusa', 'shrubs_near' }, { 'johnson', 'Grass' }, { 'island', 'small_grass_close' }, { 'hirochi', 'small_grass_close' } }
 M.DEFS = {
-  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25 },
-  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, fields = LONG_NEAR },
-  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05 },
+  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25, alternatives = LUSH_SHORT },
+  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, fields = LONG_NEAR, alternatives = LUSH_LONG },
+  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05, alternatives = DRY_LONG },
   -- mown town yards: a little short grass, nothing long (server/surface.py LAWN)
-  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_lawn', layer = 'bngEarthGroundLawn', share = 0.1 },
-  { source = 'wcusa', src = 'shrubs_near', layer = 'bngEarthGroundDusty', share = 0.15 },
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_lawn', layer = 'bngEarthGroundLawn', share = 0.1, alternatives = LAWN_SHORT, maxTypeHeight = 0.3 },
+  { source = 'wcusa', src = 'shrubs_near', layer = 'bngEarthGroundDusty', share = 0.15, alternatives = SCRUB },
   -- sparse grass between the shrubs (user 2026-10-11: a hard line between grassland and shrubland)
-  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08 },
-  { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
-    fields = LONG_NEAR },
+  { source = 'island', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08, alternatives = DRY_SHORT },
+  { source = 'johnson', src = 'Grass', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
+    fields = LONG_NEAR, alternatives = DRY_TUFT },
 }
+-- Crop plants (docs/new/008_crop-fields; server BNE_CROPS: surface.py puts a field on one of four crop layers, and only
+-- where the ground photo is green or ripe). Our own atlas (tools/make_crop_atlas.py: 4 x 2 cells of 512 x 1024 px, a
+-- clump of plants each) as one billboard material; ONE object, each plant type bound to its own layer, so a block
+-- pays for the crops it has. Made when a block lists a crop layer (M.ensureCrops), not before.
+M.CROP_MATERIALS = '/art/beamngEarth/crops/main.materials.json'
+M.CROP_MATERIAL = 'bngEarthCropPlants'
+-- billboard rectangles in the atlas (x y w h, top-left origin) as tools/make_crop_ai_assets.py wrote them (crops_v3_cells.json)
+local CELL_UV = {
+  '0 0.13477 0.25 0.36523',
+  '0.25 0.13477 0.25 0.36523',
+  '0.5 0.12305 0.25 0.37695',
+  '0.75 0.12305 0.25 0.37695',
+  '0 0.58594 0.25 0.41406',
+  '0.25 0.61816 0.25 0.38184',
+  '0.5 0.62891 0.25 0.37109',
+  '0.75 0.83691 0.25 0.16309',
+}
+local function plant(layer, i, p, smin, smax, clump, nmin, nmax)
+  return { layer = layer, billboardUVs = CELL_UV[i + 1], probability = p, sizeMin = smin, sizeMax = smax,
+           clumpRadius = clump or 1.2, minClumpCount = nmin or 1, maxClumpCount = nmax or 3, windScale = 0.25 }
+end
+-- sizes in metres, each by its picture: wheat ~0.9 m, maize ~2.3 m (grown, not ripe), sunflower ~1.8 m, rape ~1.4 m, beet ~0.6 m
+M.CROP_DEF = {
+  name = 'crops', keepLayers = true, material = M.CROP_MATERIAL, gridSize = 4, maxElements = 120000, radius = 45,
+  dissolveRadius = 30, shapeCullRadius = 40, seed = 11, maxBillboardTiltAngle = 30, shapesCastShadows = false,
+  windGustFrequency = 0.1, windGustLength = 0.5, windGustStrength = 0.15, windTurbulenceFrequency = 0.6,
+  windTurbulenceStrength = 0.1,
+  Types = {
+    -- (a cereal clump is a small billboard: wide and full clumps, 8-14 of them over 2.2 m, make wheat stand thick; the user,
+    -- 2026-11-07, "more wheat". The fields are read from the object in game, a table patched after it is made was not.)
+    plant('bngEarthCropCereal', 0, 1, 0.9, 1.1, 2.2, 8, 14), plant('bngEarthCropCereal', 1, 1, 0.9, 1.1, 2.2, 8, 14),
+    plant('bngEarthCropMaize', 2, 1, 2.1, 2.5, 1.6), plant('bngEarthCropMaize', 3, 1, 2.1, 2.5, 1.6),
+    plant('bngEarthCropSunflower', 4, 1, 1.6, 1.9, 1.5), plant('bngEarthCropSunflower', 5, 1, 1.6, 1.9, 1.5),
+    plant('bngEarthCropBroad', 6, 1, 1.2, 1.5),
+    plant('bngEarthCropRoot', 7, 1, 0.55, 0.7),
+  },
+}
+-- Close to the camera (the road through a field, a clearing) the ground between the plants is bare; a heap of the stock short
+-- grass on every crop layer covers it (the user, 2026-11-05). One object per crop layer, a small radius, the stock definition
+-- read for the grass already (M.DEFS); made with the crop plants.
+M.CROP_GRASS = { src = 'small_grass_close', source = 'hirochi', share = 0.1, radius = 26, dissolveRadius = 16,
+  alternatives = { { 'hirochi', 'small_grass_close' }, { 'italy', 'small_grass_green_close' }, { 'wcusa', 'grass_dry_1' } },
+  layers = { 'bngEarthCropCereal', 'bngEarthCropMaize', 'bngEarthCropSunflower', 'bngEarthCropBroad', 'bngEarthCropRoot' } }
+M.cropsWanted = false
+-- Every environmental variant has the same share budget. A brown prairie is not thinned simply
+-- because its grass has dried. The lawn remains short-only, as before.
+local function variant(name, layer, share, alternatives, fields)
+  M.DEFS[#M.DEFS + 1] = { name = name, layer = layer, share = share, source = alternatives[1][1],
+    src = alternatives[1][2], alternatives = alternatives, fields = fields }
+end
+variant('grass_dry_short', 'bngEarthGroundGrassDry', 0.25, DRY_SHORT)
+variant('grass_dry_long', 'bngEarthGroundGrassDry', 0.17, DRY_LONG, LONG_NEAR)
+variant('grass_dry_tuft', 'bngEarthGroundGrassDry', 0.05, DRY_TUFT, LONG_NEAR)
+variant('grass_light_short', 'bngEarthGroundGrassLight', 0.25, LIGHT_SHORT)
+variant('grass_light_long', 'bngEarthGroundGrassLight', 0.17, LIGHT_LONG, LONG_NEAR)
+variant('grass_light_dry', 'bngEarthGroundGrassLight', 0.05, DRY_LONG)
+variant('scrub_light_shrubs', 'bngEarthGroundDustyLight', 0.15, SCRUB)
+variant('scrub_light_short', 'bngEarthGroundDustyLight', 0.08, LIGHT_SHORT)
+variant('scrub_light_long', 'bngEarthGroundDustyLight', 0.05, LIGHT_LONG, LONG_NEAR)
+variant('scrub_lush_shrubs', 'bngEarthGroundDustyLush', 0.15, SCRUB)
+variant('scrub_lush_short', 'bngEarthGroundDustyLush', 0.08, LUSH_SHORT)
+variant('scrub_lush_long', 'bngEarthGroundDustyLush', 0.05, LUSH_LONG, LONG_NEAR)
+-- Asset providers have very different stock populations (100k to 400k). Keep our old populations
+-- per role instead of letting an asset swap silently change the user's grass quantity.
+for _, d in ipairs(M.DEFS) do
+  if d.share == 0.15 then d.elements, d.fields = 160000, SHRUB_NEAR
+  elseif d.share == 0.17 then d.elements, d.fields = 192000, LONG_NEAR
+  elseif d.share == 0.05 and d.layer:find('Dusty', 1, true) then d.elements, d.fields = 192000, LONG_NEAR
+  elseif d.share == 0.05 then d.elements, d.fields = 256000, ACCENT_NEAR
+  else d.elements, d.fields = 306000, SHORT_NEAR end
+end
+-- A mapped grass field (server/surface.py PASTURE, EUCROPMAP grassland): short mown grass, like a lawn's but in the
+-- open; the stock short grass of the lush family
+M.DEFS[#M.DEFS + 1] = { name = 'small_grass_close_pasture', layer = 'bngEarthGroundPasture', share = 0.2,
+  source = LUSH_SHORT[1][1], src = LUSH_SHORT[1][2], alternatives = LUSH_SHORT, elements = 200000, fields = SHORT_NEAR }
 M.PREFIX = 'bngEarthGC_'
 -- set on every object after the stock fields (see the header)
 M.PLACEMENT = { { 'useNewPlacement', '1' }, { 'useNewPlacementGpu', '0' } }
@@ -84,10 +180,12 @@ local created = {}        -- object names we made
 local layered = false     -- a block with surface layers was loaded this level (objects can exist)
 local defsCache = {}      -- source -> stock definitions by name (read once per level)
 local loadedMaterials = {} -- source -> true
+local materialDocs = {}   -- source -> parsed stock material document, or false
+local selected = {}       -- our object name -> actual source/definition (including fallback)
 local lastError = nil
 
 local SKIP = { name = true, class = true, persistentId = true, __parent = true, position = true, Types = true,
-  internalName = true, canSave = true }
+  internalName = true, canSave = true, keepLayers = true }
 
 local function fieldValue(v)
   if type(v) == 'table' then
@@ -104,16 +202,102 @@ local function readDefs(source)
   local file = M.SOURCES[source].items
   local text = readFile and readFile(file)
   if type(text) ~= 'string' then return nil, 'cannot read ' .. file end
-  local want = {}
-  for _, d in ipairs(M.DEFS) do if d.source == source then want[d.src] = true end end
   local out = {}
   for line in text:gmatch('[^\r\n]+') do
     if line:find('"GroundCover"', 1, true) then
       local ok, d = pcall(jsonDecode, line)
-      if ok and type(d) == 'table' and want[d.name] then out[d.name] = d end
+      if ok and type(d) == 'table' and d.name then out[d.name] = d end
     end
   end
   return out
+end
+
+-- Material JSON declares .png while installed releases package the compiled .dds; both are
+-- valid VFS texture names. Check once while resolving a definition, never per plant or frame.
+function M.textureExists(path)
+  if type(path) ~= 'string' or path == '' then return true end
+  if not FS or not FS.fileExists then return true end
+  return FS:fileExists(path) or (path:sub(-4) == '.png' and FS:fileExists(path:sub(1, -5) .. '.dds')) or false
+end
+
+function M.materialName(source, name) return M.PREFIX .. source .. '_' .. name end
+
+function M.resourcePath(source, path)
+  if path:sub(1, 1) == '/' then return path end
+  if path:match('^assets/') or path:match('^levels/') then return '/' .. path end
+  return M.SOURCES[source].materials:match('^(.*/)') .. path
+end
+
+-- Read the installed material and recreate its fields under a private name. Loading another
+-- level's whole materials file would overwrite Hirochi's grass with Italy's identically named
+-- lighter material, and would change all already created GroundCover objects.
+local function materialFor(source, def)
+  if type(def.material) ~= 'string' or def.material == '' then return nil, 'no billboard material' end
+  if materialDocs[source] == nil then
+    local text = readFile and readFile(M.SOURCES[source].materials)
+    local ok, doc = pcall(jsonDecode, text or '')
+    materialDocs[source] = ok and type(doc) == 'table' and doc or false
+  end
+  local doc = materialDocs[source]
+  local mat = doc and doc[def.material]
+  if type(mat) ~= 'table' then return nil, 'missing material ' .. def.material end
+  for _, stage in ipairs(mat.Stages or {}) do
+    for k, v in pairs(stage) do
+      if k:sub(-3) == 'Map' and type(v) == 'string' and v ~= '' and not M.textureExists(M.resourcePath(source, v)) then
+        return nil, 'missing texture ' .. v
+      end
+    end
+  end
+  for _, t in ipairs(def.Types or {}) do
+    local shape = t.shapeFilename
+    if type(shape) == 'string' and shape ~= '' and FS and not FS:fileExists(shape) then
+      return nil, 'missing shape ' .. shape
+    end
+  end
+  local name = M.materialName(source, def.material)
+  if not scenetree.findObject(name) then
+    local m = createObject('Material')
+    local ok, err = pcall(function()
+      for k, v in pairs(mat) do
+        if k ~= 'name' and k ~= 'mapTo' and k ~= 'class' and k ~= 'persistentId' and k ~= 'Stages'
+            and v ~= jsonNull and (type(v) ~= 'table' or #v > 0) then
+          m:setField(k, 0, fieldValue(v))
+        end
+      end
+      for i, stage in ipairs(mat.Stages or {}) do
+        for k, v in pairs(stage) do
+          if v ~= jsonNull then
+            if k:sub(-3) == 'Map' and type(v) == 'string' and v ~= '' then v = M.resourcePath(source, v) end
+            m:setField(k, i - 1, fieldValue(v))
+          end
+        end
+      end
+      m:setField('mapTo', 0, name)
+      m.canSave = false
+      m:registerObject(name)
+    end)
+    if not ok then pcall(function() m:delete() end); return nil, tostring(err) end
+  end
+  loadedMaterials[name] = true
+  return name
+end
+
+local function resolve(d)
+  local errors = {}
+  for _, candidate in ipairs(d.alternatives or { { d.source, d.src } }) do
+    local source, src = candidate[1], candidate[2]
+    local ok, def, material = pcall(function()
+      if defsCache[source] == nil then defsCache[source] = readDefs(source) or false end
+      local stock = defsCache[source] and defsCache[source][src]
+      if not stock then return nil, 'missing definition ' .. source .. '/' .. src end
+      local name, err = materialFor(source, stock)
+      if not name then return nil, err end
+      return stock, name
+    end)
+    if ok and def then return def, material, source .. '/' .. src end
+    errors[#errors + 1] = tostring(ok and material or def)
+  end
+  return nil, table.concat(errors, '; ')
 end
 
 -- Pure: the setField calls (name, index, value) that recreate a stock definition on `layer`, its
@@ -132,7 +316,7 @@ function M.fieldsFor(def, layer, share, dist)
     for i, t in ipairs(def.Types) do
       for k, v in pairs(t) do
         if v ~= nil and v ~= jsonNull then
-          if k == 'layer' then v = (v ~= '' and layer or '') end
+          if k == 'layer' and not def.keepLayers then v = (v ~= '' and layer or '') end
           calls[#calls + 1] = { k, i - 1, fieldValue(v) }
         end
       end
@@ -150,34 +334,113 @@ local function removeAll()
   created = {}
 end
 
+local cropsMaterialsLoaded = false
+-- One object for all the crop plants (M.CROP_DEF), at the density / distance of the settings. Returns true if made.
+local function makeCrops()
+  local name = M.PREFIX .. M.CROP_DEF.name
+  local old = scenetree.findObject(name)
+  if old then old:delete() end
+  if not cropsMaterialsLoaded then
+    loadJsonMaterialsFile(M.CROP_MATERIALS)
+    cropsMaterialsLoaded = true
+  end
+  local gc = createObject('GroundCover')
+  local dist = M.distance
+  for _, c in ipairs(M.fieldsFor(M.CROP_DEF, nil, M.density * dist * dist, dist)) do
+    gc:setField(c[1], c[2], c[3])
+  end
+  for _, f in ipairs(M.PLACEMENT) do gc:setField(f[1], 0, f[2]) end
+  gc.canSave = false
+  gc:registerObject(name)
+  scenetree.MissionGroup:addObject(gc)
+  pcall(function() gc:postApply() end)
+  created[#created + 1] = name
+  -- the heap of stock grass on the crop layers, near only
+  local cg = M.CROP_GRASS
+  local stock, stockMaterial = resolve(cg)
+  if stock then
+    local def = {}
+    for k, v in pairs(stock) do def[k] = v end
+    def.material = stockMaterial
+    for _, layer in ipairs(cg.layers) do
+      local gname = M.PREFIX .. 'crop_grass_' .. layer
+      local o = scenetree.findObject(gname)
+      if o then o:delete() end
+      local g = createObject('GroundCover')
+      for _, c in ipairs(M.fieldsFor(def, layer, cg.share * M.density * dist * dist, dist)) do g:setField(c[1], c[2], c[3]) end
+      g:setField('radius', 0, tostring(cg.radius * dist))
+      g:setField('dissolveRadius', 0, tostring(cg.dissolveRadius * dist))
+      for _, f in ipairs(M.PLACEMENT) do g:setField(f[1], 0, f[2]) end
+      g.canSave = false
+      g:registerObject(gname)
+      scenetree.MissionGroup:addObject(g)
+      pcall(function() g:postApply() end)
+      created[#created + 1] = gname
+    end
+  end
+  return true
+end
+
+-- A block was loaded with these terrain materials ({ name, groundmodel } pairs): make the crop plants the first time
+-- one of them is a crop layer (server BNE_CROPS). Cheap when there is none.
+function M.ensureCrops(materials)
+  if not M.enabled or not scenetree.MissionGroup then return false end
+  if not M.cropsWanted then
+    for _, m in ipairs(materials or {}) do
+      if type(m) == 'table' and type(m[1]) == 'string' and m[1]:sub(1, 12) == 'bngEarthCrop' then
+        M.cropsWanted = true
+        break
+      end
+    end
+    if not M.cropsWanted then return false end
+  end
+  local present = false
+  for _, n in ipairs(created) do if n == M.PREFIX .. M.CROP_DEF.name then present = true; break end end
+  if present then return false end
+  local ok, err = pcall(makeCrops)
+  if not ok then
+    lastError = tostring(err)
+    log('W', 'beamngEarth', 'crop plants: ' .. lastError)
+    return false
+  end
+  M.afterBlockChange()
+  return true
+end
+
 -- Create the GroundCovers (once per level; the surface layers exist). Returns true if made.
 function M.ensure()
   layered = true
   if not M.enabled or #created > 0 then return #created > 0 end
   if not scenetree.MissionGroup then return false end
-  local ok, err = pcall(function()
-    local defs = defsCache
-    for _, d in ipairs(M.DEFS) do
-      if not defs[d.source] then
-        if not loadedMaterials[d.source] then
-          loadJsonMaterialsFile(M.SOURCES[d.source].materials)
-          loadedMaterials[d.source] = true
-        end
-        local e
-        defs[d.source], e = readDefs(d.source)
-        if not defs[d.source] then error(e) end
-      end
-      local def = defs[d.source][d.src]
-      if def then
-        local name = M.PREFIX .. (d.name or d.src)
+  lastError = nil
+  selected = {}
+  for _, d in ipairs(M.DEFS) do
+    local def, material, choice = resolve(d)
+    local name = M.PREFIX .. (d.name or d.src)
+    if def then
+      local gc
+      local ok, err = pcall(function()
         -- one left by an earlier module instance (a GE Lua reload keeps the level's objects) may
         -- have older fields, e.g. GPU placement: made again from the current definition
         local old = scenetree.findObject(name)
         if old then old:delete() end
         do
-          local gc = createObject('GroundCover')
+          gc = createObject('GroundCover')
           local dist = M.distance
-          for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * dist * dist, dist)) do
+          local own = {}
+          for k, v in pairs(def) do own[k] = v end
+          own.material, own.maxElements = material, d.elements or def.maxElements
+          -- Match the old role's covered area and cell population even when a fallback stock
+          -- definition has a different radius/grid. Preserve the species' UVs, sizes and clumps.
+          own.radius, own.dissolveRadius, own.gridSize = nil, nil, nil
+          if d.maxTypeHeight then
+            own.Types = {}
+            for _, t in ipairs(def.Types or {}) do
+              local hi = tonumber(t.sizeMax)
+              if hi and hi <= d.maxTypeHeight + 1e-6 then own.Types[#own.Types + 1] = t end
+            end
+          end
+          for _, c in ipairs(M.fieldsFor(own, d.layer, d.share * M.density * dist * dist, dist)) do
             gc:setField(c[1], c[2], c[3])
           end
           for k, v in pairs(d.fields or {}) do
@@ -189,16 +452,28 @@ function M.ensure()
           scenetree.MissionGroup:addObject(gc)
           pcall(function() gc:postApply() end) -- the first layered GroundCover once showed nothing until this
         end
+      end)
+      if ok then
         created[#created + 1] = name
+        selected[name] = choice
       else
-        log('W', 'beamngEarth', 'ground cover: no ' .. d.src .. ' in ' .. d.source)
+        if gc then pcall(function() gc:delete() end) end
+        lastError = tostring(err)
+        log('W', 'beamngEarth', 'ground cover ' .. name .. ': ' .. lastError)
       end
+    else
+      local old = scenetree.findObject(name)
+      if old then old:delete() end
+      lastError = tostring(material)
+      log('W', 'beamngEarth', 'ground cover ' .. name .. ': ' .. lastError)
     end
-  end)
-  if not ok then
-    lastError = tostring(err)
-    log('W', 'beamngEarth', 'ground cover: ' .. lastError)
-    removeAll()
+  end
+  if M.cropsWanted then      -- (ours, from the mod's own atlas: independent of the stock definitions above)
+    local okc, errc = pcall(makeCrops)
+    if not okc then
+      lastError = tostring(errc)
+      log('W', 'beamngEarth', 'crop plants: ' .. lastError)
+    end
   end
   return #created > 0
 end
@@ -250,6 +525,11 @@ function M.reset()
   created = {}
   defsCache = {}
   loadedMaterials = {}
+  cropsMaterialsLoaded = false
+  M.cropsWanted = false
+  materialDocs = {}
+  selected = {}
+  lastError = nil
   layered = false
 end
 
@@ -263,7 +543,8 @@ function M.rebuild()
 end
 
 function M.status()
-  return { enabled = M.enabled, density = M.density, distance = M.distance, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError }
+  return { enabled = M.enabled, density = M.density, distance = M.distance, objects = #created,
+    materialsLoaded = next(loadedMaterials) ~= nil, selected = selected, error = lastError }
 end
 
 return M

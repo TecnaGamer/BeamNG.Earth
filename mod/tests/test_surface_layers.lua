@@ -71,20 +71,9 @@ do
   _G.flushGroundCoverGrids = function() flushes = flushes + 1 end
   T.check(gc.afterBlockChange() == false and flushes == 0, 'no grass objects: no rebuild')
   -- one items-file line per stock definition; jsonDecode stubbed by line
-  local lines, byLine = {}, {}
-  for _, d in ipairs(gc.DEFS) do
-    local line = '{"class":"GroundCover","name":"' .. d.src .. '"}'
-    lines[#lines + 1] = line
-    byLine[line] = { name = d.src, class = 'GroundCover', material = 'm_' .. d.src, maxElements = 1000,
-      useNewPlacement = true, useNewPlacementGpu = true, Types = { { layer = 'Grass', billboardUVs = { 0, 0, 1, 1 } } } }
-  end
   local realDecode = _G.jsonDecode
-  _G.jsonDecode = function(line) return byLine[line] end
   local realRead = _G.readFile
-  _G.readFile = function(p)
-    for _, src in pairs(gc.SOURCES) do if p == src.items then return table.concat(lines, '\n') end end
-    return realRead and realRead(p)
-  end
+  dofile(dir .. '/groundcover_fixture.lua')(gc)
   T.check(gc.ensure() == true, 'ensure makes the objects')
   local o = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src)
   T.check(o and o.fields.useNewPlacement == '1' and o.fields.useNewPlacementGpu == '0', 'CPU placement over the stock GPU setting')
@@ -101,13 +90,11 @@ do
   T.check(gc.afterBlockChange() == true and flushes == 1, 'a block change rebuilds the grass in the same tick')
   -- a GE Lua reload: the module starts over, the level's objects stay (here with an old field)
   o.fields.useNewPlacementGpu = '1'
-  local matLoads, realLoad = {}, _G.loadJsonMaterialsFile
-  _G.loadJsonMaterialsFile = function(p) matLoads[#matLoads + 1] = p end
   gc.reset()
   T.check(gc.ensure() == true, 'ensure after a module reload')
   -- the level started again: its stock grass materials went with the old one and are loaded again
-  T.check(#matLoads >= 1, 'the stock grass materials loaded again after a reset (' .. #matLoads .. ' files)')
-  _G.loadJsonMaterialsFile = realLoad
+  T.check(gc.status().materialsLoaded and o.fields.material:find(gc.PREFIX, 1, true) == 1,
+    'the stock grass materials registered under private names after a reset')
   local o2 = scenetree.findObject(gc.PREFIX .. gc.DEFS[1].src)
   T.check(o2 ~= o and o2.fields.useNewPlacementGpu == '0' and scenetree.findObjectById(o.id) == nil,
     'a leftover object is made again from the current definition')
@@ -167,6 +154,57 @@ do
     names[n] = true
   end
   T.check(unique, 'one object name per definition (a stock one on two layers gets its own name)')
+end
+
+-- crop plants (server BNE_CROPS): one object, each plant type on its own crop layer, made when a block lists one
+do
+  local gc = require('beamngEarth/groundcover')
+  gc.reset()
+  local flushes = 0
+  _G.flushGroundCoverGrids = function() flushes = flushes + 1 end
+  local loads = {}
+  local realLoad = _G.loadJsonMaterialsFile
+  _G.loadJsonMaterialsFile = function(p) loads[#loads + 1] = p end
+  local name = gc.PREFIX .. gc.CROP_DEF.name
+  -- the definition: per-type layers survive fieldsFor (the stock path points every type at one layer)
+  local f = {}
+  for _, c in ipairs(gc.fieldsFor(gc.CROP_DEF, nil, 1, 1)) do f[c[1] .. '#' .. c[2]] = c[3] end
+  T.check(f['material#0'] == gc.CROP_MATERIAL and f['keepLayers#0'] == nil and f['name#0'] == nil, 'crops: object fields, no identity or helper keys')
+  T.check(f['layer#0'] == 'bngEarthCropCereal' and f['layer#2'] == 'bngEarthCropMaize' and f['layer#4'] == 'bngEarthCropSunflower'
+    and f['layer#6'] == 'bngEarthCropBroad' and f['layer#7'] == 'bngEarthCropRoot', 'crops: every type keeps its own crop layer')
+  T.check(f['billboardUVs#0'] == '0 0.13477 0.25 0.36523' and f['billboardUVs#7'] == '0.75 0.83691 0.25 0.16309',
+    'crops: atlas cells as x y w h')
+  -- nothing happens for blocks without a crop layer
+  T.check(gc.ensureCrops({ { 'bngEarthGroundGrass', 'GRASS' }, { 'beamngEarthDirt', 'DIRT' } }) == false
+    and scenetree.findObject(name) == nil and #loads == 0, 'no crop layer: nothing made, no material loaded')
+  T.check(gc.ensureCrops(nil) == false, 'no materials: nothing')
+  -- the first block with one makes it, loads the plants' material once, flushes the grids
+  T.check(gc.ensureCrops({ { 'bngEarthGroundGrass', 'GRASS' }, { 'bngEarthCropMaize', 'DIRT' } }) == true, 'a crop layer: made')
+  local o = scenetree.findObject(name)
+  T.check(o ~= nil and o.canSave == false and o.fields.useNewPlacement == '1' and o.fields.useNewPlacementGpu == '0',
+    'crops: not saved, CPU placement')
+  T.check(#loads == 1 and loads[1] == gc.CROP_MATERIALS and flushes == 1, 'crops: material loaded once, grids flushed')
+  T.check(gc.ensureCrops({ { 'bngEarthCropMaize', 'DIRT' } }) == false and #loads == 1, 'crops: not made twice')
+  -- the settings page: density scales its elements, remade with the grass
+  local n1 = tonumber(o.fields.maxElements)
+  gc.setDensity('low')
+  T.check(math.abs(tonumber(scenetree.findObject(name).fields.maxElements) - n1 / 2) <= 1 or gc.status().objects == 0,
+    'crops follow the density setting')
+  gc.setDensity('normal')
+  -- off removes it; on again with a layered block brings it back (cropsWanted survives)
+  gc.setEnabled(false)
+  T.check(scenetree.findObject(name) == nil, 'off: crops gone')
+  gc.setEnabled(true)
+  T.check(scenetree.findObject(name) ~= nil, 'on again: crops back at once with the grass (cropsWanted survives)')
+  T.check(gc.ensureCrops({ { 'bngEarthCropMaize', 'DIRT' } }) == false, 'on again: and not made a second time')
+  -- a new level: the flags start over
+  gc.reset()
+  T.check(gc.ensureCrops({ { 'beamngEarthDirt', 'DIRT' } }) == false, 'after reset: no crop layer, nothing made')
+  gc.setEnabled(false)
+  T.check(gc.ensureCrops({ { 'bngEarthCropMaize', 'DIRT' } }) == false, 'disabled: nothing made')
+  gc.setEnabled(true)
+  gc.reset()
+  _G.loadJsonMaterialsFile = realLoad
 end
 
 T.done('test_surface_layers')

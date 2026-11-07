@@ -1,0 +1,24 @@
+{
+  "bngEarthCropPlants": {
+    "name": "bngEarthCropPlants",
+    "mapTo": "bngEarthCropPlants",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/art/beamngEarth/crops/crops_v5_b.color.png",
+        "opacityMap": "/art/beamngEarth/crops/crops_v5_o.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 60,
+    "alphaTest": true,
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "dynamicCubemap": false,
+    "subSurface": true,
+    "subSurfaceIntensity": 0.6
+  }
+}
