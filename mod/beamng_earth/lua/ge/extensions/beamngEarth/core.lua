@@ -687,7 +687,7 @@ end
 local function commitAnchor(msg, purpose)
   if st.rebasing then finishRebase() end -- never mix two frame changes
   seasonlook.setEvergreen(msg.evergreen) -- fork: the server's season.evergreen at this anchor (tropics, Koppen A, Australia): no leaf colour
-  groundcover.setClimate(msg.koppen, msg.lat, msg.lon) -- fork: the grass's dry / green mix (koppen: nil from an older server)
+  groundcover.setClimate(msg.koppen, msg.lat, msg.lon, msg.grassDry) -- fork: the grass's dry / green mix (koppen, grassDry: nil from an older server)
   -- the anchor's region's gas station shapes loaded now (in this heavy slot), not at its first station
   if msg.fuelShapes then
     local gt = stopwatch.new()

@@ -62,3 +62,6 @@ Upstream already expects this. `vegetation.regional()` describes its rules as "a
 1. **No data needed:** add the unused eucalyptus_group; vary the eucalypt scale; switch the AU ground cover to the long dry grass set. This is a quick, visible win, and fits PR 3 (vegetation).
 2. Build the NVIS grid and select tree groups by class. This goes in a separate PR, with the data, tool and credit.
 3. Season swap for grass.
+
+## Status (2026-11-07)
+Built with NVIS **7.0** (CC BY 4.0 on FED; data.gov.au says "Not Specified"): the download is an Esri file geodatabase (read with rasterio/GDAL), the legend is its VAT (`tools/build_au_vegetation.py` LEGEND). The group numbers above were right except: 4 low open forest, 6 acacia forest, 13 acacia open woodland, 31/32 other/mallee open woodland, 15 tall closed shrubland (thicket), 22 chenopod, 29 regrowth. The grid is `server/data/au_mvg_v7.npz` (0.01 degree, 1.1 MB); `server/vegclass.py` + `server/data/veg_palettes.json` map class to palette; `vegetation.apply_palette`, `surface.au_cover` (a DRY_LONG ground layer), `season.grass_dry_months`. Shape heights for the new groups in `trees.lua` are estimates, to measure in game.

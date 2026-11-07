@@ -27,9 +27,9 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(idx.tolist(), [[sf.DIRT, sf.GRASS, sf.DUSTY, sf.GRASS], [sf.DIRT, sf.DIRT, sf.LOOSE, sf.SNOW],
                                         [sf.MUD, sf.MUD, sf.MUD, sf.GRASS]])
         self.assertEqual(sf.MATERIALS[sf.DIRT], ("beamngEarthDirt", "DIRT"))
-        # fork: the default dirt is the last of the stock materials; RED_DIRT and CANE follow it (appended: no stock mask changes its name)
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 3, "the default material goes last of the stock ones")
-        self.assertEqual((sf.RED_DIRT, sf.CANE), (len(sf.MATERIALS) - 2, len(sf.MATERIALS) - 1))
+        # fork: the default dirt is the last of the stock materials; RED_DIRT, CANE and DRY_LONG follow it (appended: no stock mask changes its name)
+        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 4, "the default material goes last of the stock ones")
+        self.assertEqual((sf.RED_DIRT, sf.CANE, sf.DRY_LONG), (len(sf.MATERIALS) - 3, len(sf.MATERIALS) - 2, len(sf.MATERIALS) - 1))
 
     def test_unknown_class_is_dirt(self):
         self.assertEqual(sf.classify(np.array([[7, 255]], np.uint8), np.zeros((1, 2)), 2.0).tolist(), [[sf.DIRT, sf.DIRT]])
@@ -859,6 +859,23 @@ class AustraliaGroundTest(unittest.TestCase):
             idx[0, 0] = sf.CANE
             sf.write_masks(idx, d, "t")
             self.assertTrue(os.path.exists(os.path.join(d, names[sf.CANE])))
+
+    def test_palette_ground_cover(self):
+        """fork: au_cover: the NVIS palette's ground on vegetated land (woodland: long dry grass, shrubland: dusty,
+        rainforest: none); other land covers, other countries and unclassified (cleared) land stay as classify made them."""
+        tree = np.full((4, 4), 10, np.uint8)
+        u = np.zeros((4, 4))
+        cases = (((-23.31, 150.60), sf.DRY_LONG), ((-23.70, 133.88), sf.DUSTY),      # Mt Archer (woodland), Alice Springs
+                 ((-16.17, 145.40), sf.DIRT))                                       # the Daintree: rainforest
+        for (lat, lon), want in cases:
+            la, lo = self.grid(lat, lon)
+            self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == want).all(), (lat, lon))
+            built = sf.classify(np.full((4, 4), 50, np.uint8), u, 2.0, la, lo)
+            self.assertFalse(np.isin(built, (sf.DRY_LONG, sf.DUSTY)).any(), "built-up land keeps its own")
+        for lat, lon in ((-23.38, 150.51), (36.5, -118.3), (51.5, -0.1)):        # Rockhampton (cleared), the US, England
+            la, lo = self.grid(lat, lon)
+            self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == sf.GRASS).all(), (lat, lon))
+        self.assertIn(sf.DRY_LONG, sf.VERGE_FROM)
 
 
 if __name__ == "__main__":

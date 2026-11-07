@@ -73,6 +73,13 @@ M.DEFS = {
     fields = LONG_NEAR, typeScale = 2.4 },
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_cane', layer = 'bngEarthGroundCane', share = 0.1,
     typeScale = 1.6 },
+  -- fork: long grass (server/surface.py DRY_LONG: the NVIS palettes' woodlands, forests and grasslands): the stock long dry grasses
+  -- (West Coast USA's grass_dry_1 and weed1, the Johnson Valley dry grass texture) and Hirochi's long green grass, their shares
+  -- trading off by the dry share at a constant total (`mix2`, M.longMix): brown most of the year, green in the palette's wet months
+  { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_long', layer = 'bngEarthGroundDryLong', share = 0.14, mix2 = 'dry', typeScale = 1.3 },
+  { source = 'wcusa', src = 'weed1', name = 'weed1_long', layer = 'bngEarthGroundDryLong', share = 0.06, mix2 = 'dry', typeScale = 1.3 },
+  { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_long', layer = 'bngEarthGroundDryLong', share = 0.2,
+    fields = LONG_NEAR, mix2 = 'green', typeScale = 1.3 },
 }
 M.PREFIX = 'bngEarthGC_'
 
@@ -102,8 +109,20 @@ M.STOCK_DRY = stockDry()
 
 -- Pure: the dry share of the grass layer's elements (0..1, in DRY_STEP steps) at a place, or nil for the stock mix.
 -- koppen: the anchor's class (nil = unknown); doy: day of the year when the season counts (nil = no season).
-function M.dryShare(koppen, lat, lon, doy)
+function M.dryShare(koppen, lat, lon, doy, months)
   if not (lat and lon) then return nil end
+  if type(months) == 'table' and #months == 12 then      -- fork: the vegetation palette's own month by month shares (server season.grass_dry_months)
+    local v = 0
+    if doy then          -- between the months' middles (a month's value is at its centre)
+      local x = (doy - 1) / 365 * 12 - 0.5
+      local i = math.floor(x)
+      local a, b = months[i % 12 + 1], months[(i + 1) % 12 + 1]
+      v = a + (b - a) * (x - i)
+    else
+      for i = 1, 12 do v = v + months[i] / 12 end
+    end
+    return math.floor(math.min(math.max(v, 0), 0.9) * M.DRY_STEP + 0.5) / M.DRY_STEP
+  end
   local au = lat >= M.AU.latMin and lat <= M.AU.latMax and lon >= M.AU.lonMin and lon <= M.AU.lonMax
   local base = koppen and M.KOPPEN_DRY[koppen]
   if au and not (koppen and M.AU_GREEN[koppen]) then base = math.max(base or 0, M.AU_DRY) end
@@ -120,6 +139,12 @@ function M.mixFactors(dry)
   if not dry then return 1, 1 end
   local sd = M.STOCK_DRY
   return (1 - dry) / (1 - sd), dry / sd
+end
+-- fork: the factors (green, dry) on the shares of the DRY_LONG layer's `mix2` entries for a dry share (nil: the Australian default):
+-- they trade at a constant total, each entry's own share being its share at a dry share of 1/2.
+function M.longMix(dry)
+  local d = dry or M.AU_DRY
+  return 2 * (1 - d), 2 * d
 end
 -- set on every object after the stock fields (see the header)
 M.PLACEMENT = { { 'useNewPlacement', '1' }, { 'useNewPlacementGpu', '0' } }
@@ -238,7 +263,9 @@ function M.ensure()
           local gc = createObject('GroundCover')
           local dist = M.distance
           local fg, fd = M.mixFactors(wantDry)      -- fork: the grass layer's green / dry mix
-          local share = d.share * (d.mix == 'dry' and fd or d.mix == 'green' and fg or 1)
+          local lg, ld = M.longMix(wantDry)         -- fork: and the long grass layer's
+          local share = d.share * (d.mix == 'dry' and fd or d.mix == 'green' and fg or d.mix2 == 'dry' and ld
+            or d.mix2 == 'green' and lg or 1)
           for _, c in ipairs(M.fieldsFor(def, d.layer, share * M.density * dist * dist, dist, d.typeScale)) do
             gc:setField(c[1], c[2], c[3])
           end
@@ -270,13 +297,14 @@ end
 function M.today() return tonumber(os.date('*t').yday) end
 
 local function refreshDry()
-  wantDry = M.dryShare(climate.koppen, climate.lat, climate.lon, seasonal and M.today() or nil)
+  wantDry = M.dryShare(climate.koppen, climate.lat, climate.lon, seasonal and M.today() or nil, climate.months)
 end
 
 -- fork: where the grass is (core, at each anchor commit: the anchor_ready's koppen class, absent from an older server,
 -- and its lat / lon). Sets what the next build (the teleport's / rebase's rebuild, the level's first block) uses.
-function M.setClimate(koppen, lat, lon)
+function M.setClimate(koppen, lat, lon, months)
   climate.koppen, climate.lat, climate.lon = tonumber(koppen), tonumber(lat), tonumber(lon)
+  climate.months = type(months) == 'table' and months or nil      -- (anchor_ready.grassDry: the 12 monthly dry shares, if any)
   refreshDry()
 end
 

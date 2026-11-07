@@ -261,6 +261,7 @@ SERVER_TO_MOD = {
                      "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
                      "fuelShapes": F(list, OPT),           # 2026-10-23: the region's gas station shapes (--gas-stations)
                      "koppen": F(int, OPT),                # fork: the anchor's Koppen-Geiger class (climate.py), the grass mix
+                     "grassDry": F(list, OPT),             # fork: 12 monthly dry-grass shares (season.grass_dry_months), the grass mix
                      "evergreen": F(bool, OPT)},           # fork: season.evergreen at the anchor (seasonlook.setEvergreen)
     "anchor_error": {"requestId": F(int, NULL), "error": F(str)},
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world

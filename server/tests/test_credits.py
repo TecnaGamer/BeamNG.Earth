@@ -110,6 +110,15 @@ class WordingTest(unittest.TestCase):
         for name in (demmod.MAPTERHORN["name"], demmod.AWS["name"]):
             self.assertIn(credits.ELEVATION[name], earthd.ELEVATION_CREDIT, name)
 
+    def test_nvis_credit(self):
+        """fork: the NVIS vegetation credit (Australia's palettes): in the overlay's Vegetation group, worded as CREDITS.md lists it."""
+        self.assertIn("veg:nvis", credits.ORDER)
+        self.assertEqual(credits.line({"veg:nvis"}), "Vegetation: NVIS 7.0 (DCCEEW, CC BY 4.0)")
+        full = credits.full_label("veg:nvis")
+        self.assertIn("resampled", full)
+        text = (Path(__file__).resolve().parents[2] / "CREDITS.md").read_text(encoding="utf-8")
+        self.assertIn(f'"Vegetation: {full}"', text)
+
     def test_ascii_only(self):
         """The game's UI font lacks most non-ASCII glyphs (the settings page found it): the overlay
         text is plain ASCII."""
