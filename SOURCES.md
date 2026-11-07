@@ -27,6 +27,8 @@ dual-stack endpoint (`s3.dualstack.<region>.amazonaws.com`, IPv4 and IPv6) after
 route; everywhere else they are used as listed. The source names remain the identities for download budgets, status,
 cached files and `NO_PROXY`. Signed URLs, requests with an Authorization header and proxied requests keep their
 original endpoint. Other providers still need their own IPv6 support.
+For the OpenStreetMap keys read by the server and weekly data builders, see the
+[OSM tag inventory](docs/OSM_TAGS.md) and [Taginfo project file](docs/taginfo.json).
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
