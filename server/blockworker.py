@@ -1594,7 +1594,11 @@ def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
     """Sweden's roadside posts' Forest rows of a road tile (kantstolpar.tile_rows), [] if they fail (logged)."""
     import kantstolpar
     try:
-        return kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
+        rows = kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
+        if str(country or "").upper() == "AU":      # fork: Australia's curve warning signs (warnsigns.py)
+            import warnsigns
+            rows = rows + warnsigns.tile_rows(frame, near_roads, box, elev, country, mapped)
+        return rows
     except Exception as ex:
         log.warning("kantstolpar: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []

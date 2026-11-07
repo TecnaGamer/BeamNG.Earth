@@ -4731,6 +4731,7 @@ AU_CORNER_NEAR_M = 12.0     # a curb return this near only roads with verges has
 # the look keeps GUTTER's "m", so every cut and clip rule keyed on it still applies).
 AU_CHANNEL_M = "bne_au_channel"
 AU_CHANNEL_W = 0.45
+NOSTOP_INSET_M = 0.2           # fork: m of road between a yellow no-stopping line's middle and the channel's inner edge
 WALK_LOOK_KEYS = ("foot", "h", "strip")   # the keys of a sidewalk look that its run and its walks entry carry on
 
 
@@ -9132,6 +9133,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     chunks.extend(corner_chunks)
     going_on = _going_on(roads)
     straight, stems, whole = line_through(roads)
+    nostop = {}                                 # fork: Australia's yellow no-stopping lines before signalised junctions
+    if str(country or "").upper() == "AU" and signals is not None:
+        import nostopping
+        nostop = nostopping.approaches(roads, signals, has_sidewalks, islands.ring_fids(roads))
     traffic_lines = []
     for fid, spec, pts, lon in roads:
         ws = None                               # (tapered where it meets a road of another width: road_tapers)
@@ -9152,6 +9157,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     fid) if fid not in jinternal or fid in whole else []    # inside a junction: none
         if fid in jinternal:                    # (a through road's piece between two close junctions: its lines only)
             ex = [e for e in ex if e[0].get("kind")]
+        elif fid in nostop:                     # fork: a solid yellow line just inside the kerb's channel (AU_CHANNEL_W)
+            ex = ex + [({"m": "line_yellow", "tl": EDGE_LINE["tl"], "p": CENTRE["p"], "kind": "edge", "side": side},
+                        markings.STYLES["AU"].edge,
+                        offset_polyline(piece, side * (spec.width / 2 - AU_CHANNEL_W - NOSTOP_INSET_M)))
+                       for side, piece in nostop[fid]]
         if not ex:
             continue
         if fid in seen and str(country or "").upper() == "SE":

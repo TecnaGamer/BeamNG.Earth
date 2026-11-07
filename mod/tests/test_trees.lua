@@ -512,6 +512,16 @@ do -- fork: Australia's fences (server buildings.au_fence, tools/build_au_street
   T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_pole_conc' and math.abs(sc - 1) < 1e-9,
     'au_pole_conc: its model at 1:1')
 end
+do -- fork: Australia's warning signs (server warnsigns.py, tools/build_au_warnsigns.py): 2.56 m models at 1:1, never thinned
+  for _, g in ipairs({ 'au_warn_curve_l', 'au_warn_curve_r', 'au_warn_turn_l', 'au_warn_turn_r' }) do
+    local shape, sc = trees.pick(g, 2.56, 0.3)
+    T.check(trees.CATALOG[g] and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1')
+    T.check(trees.isBarrier(g) and trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0, g .. ': never thinned, a draw distance')
+  end
+  T.check(trees.isBarrier('au_guidepost_red') and not trees.isBarrier('au_warning') and not trees.isBarrier('deciduous'),
+    'the stock barrier rule still holds beside the signs')
+end
 do -- stock world props (server worldprops.py): the catalog height is the mesh, so that height is 1:1
   local props = {
     { 'celltower', 28.93 }, { 'watertower', 26.16 }, { 'barn', 8.41 }, { 'container', 2.59 }, { 'billboard', 11.95 },
